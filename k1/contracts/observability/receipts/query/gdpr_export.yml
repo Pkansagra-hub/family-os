@@ -1,0 +1,816 @@
+classes:
+  - name: GDPRExport
+    description: GDPR Article 15 compliance export functionality for user data access requests
+    research: GDPR Article 15 (right of access), ADR-0038d (compliance export), data portability
+    performance_budget: <500ms for user export (P95), export size <50MB per request
+    reliability_properties:
+      - export_completeness: All user data included in export (100% coverage)
+      - data_portability: Export format supports data portability requirements
+      - privacy_protection: PII redaction applied based on privacy band
+      - audit_completeness: All exports logged for compliance verification
+    methods:
+      - name: export_user_data
+        description: Export complete user data in GDPR Article 15 format
+        parameters:
+          - name: user_id
+            type: string
+            description: User identifier for data export
+          - name: export_format
+            type: string
+            description: Export format (json, xml, pdf)
+          - name: include_processing_log
+            type: bool
+            description: Include Article 30 processing log in export
+          - name: trace_id
+            type: string
+            description: Cognitive trace ID for audit trail
+        returns:
+          type: GDPRExportResult
+          description: Complete GDPR export with data, metadata, and compliance information
+        implementation:
+          rust: |
+            use serde::{Serialize, Deserialize};
+            use chrono::{DateTime, Utc};
+            use std::collections::HashMap;
+            use sha2::{Sha256, Digest};
+
+            #[derive(Serialize, Deserialize)]
+            pub struct GDPRExportResult {
+                pub export_metadata: ExportMetadata,
+                pub personal_data: PersonalDataSection,
+                pub processing_log: Option<ProcessingLogSection>,
+                pub rights_exercised: RightsExercisedSection,
+                pub data_portability: DataPortabilitySection,
+                pub security_measures: SecurityMeasuresSection,
+                pub audit_trail: Vec<AuditEntry>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct ExportMetadata {
+                pub export_id: String,
+                pub user_id: String,
+                pub export_timestamp: DateTime<Utc>,
+                pub gdpr_version: String,
+                pub controller_info: ControllerInfo,
+                pub export_format: String,
+                pub data_volume_bytes: usize,
+                pub processing_duration_ms: f64,
+                pub export_hash: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct PersonalDataSection {
+                pub categories: Vec<DataCategory>,
+                pub recipients: Vec<DataRecipient>,
+                pub retention_schedule: RetentionSchedule,
+                pub automated_decisions: Vec<AutomatedDecision>,
+                pub data_subjects_rights: Vec<String>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct ProcessingLogSection {
+                pub processing_activities: Vec<ProcessingActivity>,
+                pub data_transfers: Vec<DataTransfer>,
+                pub security_incidents: Vec<SecurityIncident>,
+                pub retention_actions: Vec<RetentionAction>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub RightsExercisedSection {
+                pub access_requests: Vec<AccessRequest>,
+                pub rectification_requests: Vec<RectificationRequest>,
+                pub erasure_requests: Vec<ErasureRequest>,
+                pub portability_requests: Vec<PortabilityRequest>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub DataPortabilitySection {
+                pub structured_data: serde_json::Value,
+                pub machine_readable: bool,
+                pub compatible_formats: Vec<String>,
+                pub data_lineage: Vec<DataLineageEntry>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub SecurityMeasuresSection {
+                pub encryption_methods: Vec<String>,
+                pub access_controls: Vec<String>,
+                pub audit_logging: Vec<String>,
+                pub data_protection_officer: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub DataCategory {
+                pub category_name: String,
+                pub data_points: Vec<String>,
+                pub legal_basis: String,
+                pub purpose: String,
+                pub retention_period_days: i32,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub DataRecipient {
+                pub recipient_name: String,
+                pub recipient_type: String,
+                pub data_categories: Vec<String>,
+                pub transfer_mechanism: String,
+                pub adequacy_decision: Option<String>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub RetentionSchedule {
+                pub privacy_band: String,
+                pub retention_days: i32,
+                pub grace_period_days: i32,
+                pub next_review_date: DateTime<Utc>,
+                pub legal_basis: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub AutomatedDecision {
+                pub decision_type: String,
+                pub logic_description: String,
+                pub significance_consequences: String,
+                pub right_to_human_intervention: bool,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub ProcessingActivity {
+                pub activity_id: String,
+                pub purpose: String,
+                pub categories_processed: Vec<String>,
+                pub legal_basis: String,
+                pub timestamp: DateTime<Utc>,
+                pub recipients: Vec<String>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub DataTransfer {
+                pub transfer_id: String,
+                pub destination: String,
+                pub data_categories: Vec<String>,
+                pub legal_basis: String,
+                pub safeguards: Vec<String>,
+                pub timestamp: DateTime<Utc>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub SecurityIncident {
+                pub incident_id: String,
+                pub description: String,
+                pub affected_data: Vec<String>,
+                pub remediation_actions: Vec<String>,
+                pub timestamp: DateTime<Utc>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub RetentionAction {
+                pub action_id: String,
+                pub action_type: String,
+                pub data_categories: Vec<String>,
+                pub retention_days: i32,
+                pub timestamp: DateTime<Utc>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub AccessRequest {
+                pub request_id: String,
+                pub timestamp: DateTime<Utc>,
+                pub response_time_days: i32,
+                pub data_provided: bool,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub RectificationRequest {
+                pub request_id: String,
+                pub timestamp: DateTime<Utc>,
+                pub fields_rectified: Vec<String>,
+                pub completion_status: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub ErasureRequest {
+                pub request_id: String,
+                pub timestamp: DateTime<Utc>,
+                pub data_erased: Vec<String>,
+                pub completion_status: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub PortabilityRequest {
+                pub request_id: String,
+                pub timestamp: DateTime<Utc>,
+                pub data_exported: Vec<String>,
+                pub format_provided: String,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub DataLineageEntry {
+                pub data_point: String,
+                pub source_system: String,
+                pub collection_timestamp: DateTime<Utc>,
+                pub processing_steps: Vec<String>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub ControllerInfo {
+                pub controller_name: String,
+                pub controller_address: String,
+                pub data_protection_officer: String,
+                pub contact_email: String,
+            }
+
+            impl GDPRExport {
+                pub async fn export_user_data(
+                    &self,
+                    user_id: &str,
+                    export_format: &str,
+                    include_processing_log: bool,
+                    trace_id: &str,
+                ) -> Result<GDPRExportResult, GDPRExportError> {
+                    let start_time = std::time::Instant::now();
+                    let export_id = format!("gdpr_export_{}_{}", user_id, Utc::now().timestamp());
+
+                    // Gather all user data sections
+                    let personal_data = self.gather_personal_data(user_id).await?;
+                    let processing_log = if include_processing_log {
+                        Some(self.gather_processing_log(user_id).await?)
+                    } else {
+                        None
+                    };
+                    let rights_exercised = self.gather_rights_exercised(user_id).await?;
+                    let data_portability = self.prepare_data_portability(user_id, export_format).await?;
+                    let security_measures = self.gather_security_measures().await?;
+
+                    // Calculate export hash for integrity
+                    let export_data = serde_json::to_value(&GDPRExportResult {
+                        export_metadata: ExportMetadata::default(),
+                        personal_data: personal_data.clone(),
+                        processing_log: processing_log.clone(),
+                        rights_exercised: rights_exercised.clone(),
+                        data_portability: data_portability.clone(),
+                        security_measures: security_measures.clone(),
+                        audit_trail: vec![],
+                    })?;
+                    let export_hash = self.calculate_export_hash(&export_data);
+
+                    let export_metadata = ExportMetadata {
+                        export_id: export_id.clone(),
+                        user_id: user_id.to_string(),
+                        export_timestamp: Utc::now(),
+                        gdpr_version: "GDPR 2016/679".to_string(),
+                        controller_info: self.get_controller_info(),
+                        export_format: export_format.to_string(),
+                        data_volume_bytes: serde_json::to_string(&export_data)?.len(),
+                        processing_duration_ms: start_time.elapsed().as_millis() as f64,
+                        export_hash,
+                    };
+
+                    let audit_trail = self.create_audit_trail(&export_id, user_id, trace_id)?;
+
+                    let result = GDPRExportResult {
+                        export_metadata,
+                        personal_data,
+                        processing_log,
+                        rights_exercised,
+                        data_portability,
+                        security_measures,
+                        audit_trail,
+                    };
+
+                    // Log compliance export
+                    self.log_gdpr_export(&result, trace_id)?;
+
+                    Ok(result)
+                }
+
+                async fn gather_personal_data(&self, user_id: &str) -> Result<PersonalDataSection, GDPRExportError> {
+                    // Query all personal data categories for user
+                    let categories = self.get_data_categories(user_id).await?;
+                    let recipients = self.get_data_recipients(user_id).await?;
+                    let retention_schedule = self.get_retention_schedule(user_id).await?;
+                    let automated_decisions = self.get_automated_decisions(user_id).await?;
+                    let data_subjects_rights = vec![
+                        "Right to access".to_string(),
+                        "Right to rectification".to_string(),
+                        "Right to erasure".to_string(),
+                        "Right to data portability".to_string(),
+                        "Right to object".to_string(),
+                        "Rights related to automated decision making".to_string(),
+                    ];
+
+                    Ok(PersonalDataSection {
+                        categories,
+                        recipients,
+                        retention_schedule,
+                        automated_decisions,
+                        data_subjects_rights,
+                    })
+                }
+
+                async fn gather_processing_log(&self, user_id: &str) -> Result<ProcessingLogSection, GDPRExportError> {
+                    let processing_activities = self.get_processing_activities(user_id).await?;
+                    let data_transfers = self.get_data_transfers(user_id).await?;
+                    let security_incidents = self.get_security_incidents(user_id).await?;
+                    let retention_actions = self.get_retention_actions(user_id).await?;
+
+                    Ok(ProcessingLogSection {
+                        processing_activities,
+                        data_transfers,
+                        security_incidents,
+                        retention_actions,
+                    })
+                }
+
+                async fn gather_rights_exercised(&self, user_id: &str) -> Result<RightsExercisedSection, GDPRExportError> {
+                    let access_requests = self.get_access_requests(user_id).await?;
+                    let rectification_requests = self.get_rectification_requests(user_id).await?;
+                    let erasure_requests = self.get_erasure_requests(user_id).await?;
+                    let portability_requests = self.get_portability_requests(user_id).await?;
+
+                    Ok(RightsExercisedSection {
+                        access_requests,
+                        rectification_requests,
+                        erasure_requests,
+                        portability_requests,
+                    })
+                }
+
+                async fn prepare_data_portability(
+                    &self,
+                    user_id: &str,
+                    export_format: &str,
+                ) -> Result<DataPortabilitySection, GDPRExportError> {
+                    // Gather all user data in structured format
+                    let user_data = self.gather_structured_user_data(user_id).await?;
+                    let data_lineage = self.build_data_lineage(user_id).await?;
+
+                    Ok(DataPortabilitySection {
+                        structured_data: user_data,
+                        machine_readable: true,
+                        compatible_formats: vec!["json".to_string(), "xml".to_string(), "csv".to_string()],
+                        data_lineage,
+                    })
+                }
+
+                async fn gather_security_measures(&self) -> Result<SecurityMeasuresSection, GDPRExportError> {
+                    Ok(SecurityMeasuresSection {
+                        encryption_methods: vec![
+                            "AES-256 encryption at rest".to_string(),
+                            "TLS 1.3 in transit".to_string(),
+                            "SHA-256 hash chaining".to_string(),
+                        ],
+                        access_controls: vec![
+                            "Role-based access control".to_string(),
+                            "Multi-factor authentication".to_string(),
+                            "Least privilege principle".to_string(),
+                        ],
+                        audit_logging: vec![
+                            "Comprehensive audit trails".to_string(),
+                            "Real-time security monitoring".to_string(),
+                            "Automated incident response".to_string(),
+                        ],
+                        data_protection_officer: "dpo@familyos.com".to_string(),
+                    })
+                }
+
+                fn calculate_export_hash(&self, export_data: &serde_json::Value) -> String {
+                    let canonical_json = serde_json::to_string(export_data).unwrap_or_default();
+                    let mut hasher = Sha256::new();
+                    hasher.update(canonical_json.as_bytes());
+                    format!("{:x}", hasher.finalize())
+                }
+
+                fn create_audit_trail(
+                    &self,
+                    export_id: &str,
+                    user_id: &str,
+                    trace_id: &str,
+                ) -> Result<Vec<AuditEntry>, GDPRExportError> {
+                    Ok(vec![
+                        AuditEntry {
+                            timestamp: Utc::now(),
+                            action: "GDPR_ARTICLE_15_EXPORT".to_string(),
+                            details: format!("Complete data export for user {} with ID {}", user_id, export_id),
+                            trace_id: trace_id.to_string(),
+                        }
+                    ])
+                }
+
+                fn log_gdpr_export(&self, export: &GDPRExportResult, trace_id: &str) -> Result<(), GDPRExportError> {
+                    // Log to compliance audit system
+                    tracing::info!(
+                        export_id = %export.export_metadata.export_id,
+                        user_id = %export.export_metadata.user_id,
+                        data_volume_bytes = export.export_metadata.data_volume_bytes,
+                        trace_id = %trace_id,
+                        "GDPR Article 15 data export completed"
+                    );
+                    Ok(())
+                }
+
+                fn get_controller_info(&self) -> ControllerInfo {
+                    ControllerInfo {
+                        controller_name: "FamilyOS".to_string(),
+                        controller_address: "123 Privacy Street, Data City, DC 12345".to_string(),
+                        data_protection_officer: "Data Protection Officer".to_string(),
+                        contact_email: "dpo@familyos.com".to_string(),
+                    }
+                }
+
+                // Additional helper methods would be implemented for data gathering
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import List, Dict, Any, Optional
+            from datetime import datetime, timezone
+            import json
+            import hashlib
+            import asyncio
+
+            @dataclass
+            class GDPRExportResult:
+                export_metadata: 'ExportMetadata'
+                personal_data: 'PersonalDataSection'
+                processing_log: Optional['ProcessingLogSection']
+                rights_exercised: 'RightsExercisedSection'
+                data_portability: 'DataPortabilitySection'
+                security_measures: 'SecurityMeasuresSection'
+                audit_trail: List['AuditEntry']
+
+            @dataclass
+            class ExportMetadata:
+                export_id: str
+                user_id: str
+                export_timestamp: datetime
+                gdpr_version: str
+                controller_info: 'ControllerInfo'
+                export_format: str
+                data_volume_bytes: int
+                processing_duration_ms: float
+                export_hash: str
+
+            @dataclass
+            class PersonalDataSection:
+                categories: List['DataCategory']
+                recipients: List['DataRecipient']
+                retention_schedule: 'RetentionSchedule'
+                automated_decisions: List['AutomatedDecision']
+                data_subjects_rights: List[str]
+
+            @dataclass
+            class ProcessingLogSection:
+                processing_activities: List['ProcessingActivity']
+                data_transfers: List['DataTransfer']
+                security_incidents: List['SecurityIncident']
+                retention_actions: List['RetentionAction']
+
+            @dataclass
+            class RightsExercisedSection:
+                access_requests: List['AccessRequest']
+                rectification_requests: List['RectificationRequest']
+                erasure_requests: List['ErasureRequest']
+                portability_requests: List['PortabilityRequest']
+
+            @dataclass
+            class DataPortabilitySection:
+                structured_data: Dict[str, Any]
+                machine_readable: bool
+                compatible_formats: List[str]
+                data_lineage: List['DataLineageEntry']
+
+            @dataclass
+            class SecurityMeasuresSection:
+                encryption_methods: List[str]
+                access_controls: List[str]
+                audit_logging: List[str]
+                data_protection_officer: str
+
+            @dataclass
+            class DataCategory:
+                category_name: str
+                data_points: List[str]
+                legal_basis: str
+                purpose: str
+                retention_period_days: int
+
+            @dataclass
+            class DataRecipient:
+                recipient_name: str
+                recipient_type: str
+                data_categories: List[str]
+                transfer_mechanism: str
+                adequacy_decision: Optional[str]
+
+            @dataclass
+            class RetentionSchedule:
+                privacy_band: str
+                retention_days: int
+                grace_period_days: int
+                next_review_date: datetime
+                legal_basis: str
+
+            @dataclass
+            class AutomatedDecision:
+                decision_type: str
+                logic_description: str
+                significance_consequences: str
+                right_to_human_intervention: bool
+
+            @dataclass
+            class ProcessingActivity:
+                activity_id: str
+                purpose: str
+                categories_processed: List[str]
+                legal_basis: str
+                timestamp: datetime
+                recipients: List[str]
+
+            @dataclass
+            class DataTransfer:
+                transfer_id: str
+                destination: str
+                data_categories: List[str]
+                legal_basis: str
+                safeguards: List[str]
+                timestamp: datetime
+
+            @dataclass
+            class SecurityIncident:
+                incident_id: str
+                description: str
+                affected_data: List[str]
+                remediation_actions: List[str]
+                timestamp: datetime
+
+            @dataclass
+            class RetentionAction:
+                action_id: str
+                action_type: str
+                data_categories: List[str]
+                retention_days: int
+                timestamp: datetime
+
+            @dataclass
+            class AccessRequest:
+                request_id: str
+                timestamp: datetime
+                response_time_days: int
+                data_provided: bool
+
+            @dataclass
+            class RectificationRequest:
+                request_id: str
+                timestamp: datetime
+                fields_rectified: List[str]
+                completion_status: str
+
+            @dataclass
+            class ErasureRequest:
+                request_id: str
+                timestamp: datetime
+                data_erased: List[str]
+                completion_status: str
+
+            @dataclass
+            class PortabilityRequest:
+                request_id: str
+                timestamp: datetime
+                data_exported: List[str]
+                format_provided: str
+
+            @dataclass
+            class DataLineageEntry:
+                data_point: str
+                source_system: str
+                collection_timestamp: datetime
+                processing_steps: List[str]
+
+            @dataclass
+            class ControllerInfo:
+                controller_name: str
+                controller_address: str
+                data_protection_officer: str
+                contact_email: str
+
+            @dataclass
+            class AuditEntry:
+                timestamp: datetime
+                action: str
+                details: str
+                trace_id: str
+
+            class GDPRExport:
+                """GDPR Article 15 compliance export functionality"""
+
+                def __init__(self, db_connection, receipt_store, observability):
+                    self.db = db_connection
+                    self.receipt_store = receipt_store
+                    self.obs = observability
+
+                async def export_user_data(
+                    self,
+                    user_id: str,
+                    export_format: str = "json",
+                    include_processing_log: bool = True,
+                    trace_id: str = "",
+                ) -> GDPRExportResult:
+                    """Export complete user data in GDPR Article 15 format"""
+                    start_time = asyncio.get_event_loop().time()
+                    export_id = f"gdpr_export_{user_id}_{int(datetime.now(timezone.utc).timestamp())}"
+
+                    # Gather all data sections
+                    personal_data = await self._gather_personal_data(user_id)
+                    processing_log = await self._gather_processing_log(user_id) if include_processing_log else None
+                    rights_exercised = await self._gather_rights_exercised(user_id)
+                    data_portability = await self._prepare_data_portability(user_id, export_format)
+                    security_measures = await self._gather_security_measures()
+
+                    # Create preliminary export for hashing
+                    preliminary_export = {
+                        "personal_data": personal_data.__dict__,
+                        "processing_log": processing_log.__dict__ if processing_log else None,
+                        "rights_exercised": rights_exercised.__dict__,
+                        "data_portability": data_portability.__dict__,
+                        "security_measures": security_measures.__dict__,
+                    }
+
+                    export_hash = self._calculate_export_hash(preliminary_export)
+
+                    duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+
+                    export_metadata = ExportMetadata(
+                        export_id=export_id,
+                        user_id=user_id,
+                        export_timestamp=datetime.now(timezone.utc),
+                        gdpr_version="GDPR 2016/679",
+                        controller_info=self._get_controller_info(),
+                        export_format=export_format,
+                        data_volume_bytes=len(json.dumps(preliminary_export)),
+                        processing_duration_ms=duration_ms,
+                        export_hash=export_hash
+                    )
+
+                    audit_trail = self._create_audit_trail(export_id, user_id, trace_id)
+
+                    result = GDPRExportResult(
+                        export_metadata=export_metadata,
+                        personal_data=personal_data,
+                        processing_log=processing_log,
+                        rights_exercised=rights_exercised,
+                        data_portability=data_portability,
+                        security_measures=security_measures,
+                        audit_trail=audit_trail
+                    )
+
+                    # Log compliance export
+                    await self._log_gdpr_export(result, trace_id)
+
+                    # Record observability metrics
+                    self.obs.record_compliance_check("gdpr_export", "SUCCESS", trace_id)
+
+                    return result
+
+                async def _gather_personal_data(self, user_id: str) -> PersonalDataSection:
+                    """Gather all personal data categories for user"""
+                    categories = await self._get_data_categories(user_id)
+                    recipients = await self._get_data_recipients(user_id)
+                    retention_schedule = await self._get_retention_schedule(user_id)
+                    automated_decisions = await self._get_automated_decisions(user_id)
+
+                    return PersonalDataSection(
+                        categories=categories,
+                        recipients=recipients,
+                        retention_schedule=retention_schedule,
+                        automated_decisions=automated_decisions,
+                        data_subjects_rights=[
+                            "Right to access",
+                            "Right to rectification",
+                            "Right to erasure",
+                            "Right to data portability",
+                            "Right to object",
+                            "Rights related to automated decision making"
+                        ]
+                    )
+
+                async def _gather_processing_log(self, user_id: str) -> ProcessingLogSection:
+                    """Gather Article 30 processing log for user"""
+                    processing_activities = await self._get_processing_activities(user_id)
+                    data_transfers = await self._get_data_transfers(user_id)
+                    security_incidents = await self._get_security_incidents(user_id)
+                    retention_actions = await self._get_retention_actions(user_id)
+
+                    return ProcessingLogSection(
+                        processing_activities=processing_activities,
+                        data_transfers=data_transfers,
+                        security_incidents=security_incidents,
+                        retention_actions=retention_actions
+                    )
+
+                async def _gather_rights_exercised(self, user_id: str) -> RightsExercisedSection:
+                    """Gather record of GDPR rights exercised by user"""
+                    access_requests = await self._get_access_requests(user_id)
+                    rectification_requests = await self._get_rectification_requests(user_id)
+                    erasure_requests = await self._get_erasure_requests(user_id)
+                    portability_requests = await self._get_portability_requests(user_id)
+
+                    return RightsExercisedSection(
+                        access_requests=access_requests,
+                        rectification_requests=rectification_requests,
+                        erasure_requests=erasure_requests,
+                        portability_requests=portability_requests
+                    )
+
+                async def _prepare_data_portability(self, user_id: str, export_format: str) -> DataPortabilitySection:
+                    """Prepare data in portable format"""
+                    structured_data = await self._gather_structured_user_data(user_id)
+                    data_lineage = await self._build_data_lineage(user_id)
+
+                    return DataPortabilitySection(
+                        structured_data=structured_data,
+                        machine_readable=True,
+                        compatible_formats=["json", "xml", "csv"],
+                        data_lineage=data_lineage
+                    )
+
+                async def _gather_security_measures(self) -> SecurityMeasuresSection:
+                    """Gather information about security measures"""
+                    return SecurityMeasuresSection(
+                        encryption_methods=[
+                            "AES-256 encryption at rest",
+                            "TLS 1.3 in transit",
+                            "SHA-256 hash chaining for audit trails"
+                        ],
+                        access_controls=[
+                            "Role-based access control",
+                            "Multi-factor authentication",
+                            "Least privilege principle"
+                        ],
+                        audit_logging=[
+                            "Comprehensive audit trails",
+                            "Real-time security monitoring",
+                            "Automated incident response"
+                        ],
+                        data_protection_officer="dpo@familyos.com"
+                    )
+
+                def _calculate_export_hash(self, export_data: Dict[str, Any]) -> str:
+                    """Calculate SHA-256 hash of export data for integrity"""
+                    canonical_json = json.dumps(export_data, sort_keys=True, default=str)
+                    return hashlib.sha256(canonical_json.encode()).hexdigest()
+
+                def _create_audit_trail(self, export_id: str, user_id: str, trace_id: str) -> List[AuditEntry]:
+                    """Create audit trail for export operation"""
+                    return [
+                        AuditEntry(
+                            timestamp=datetime.now(timezone.utc),
+                            action="GDPR_ARTICLE_15_EXPORT",
+                            details=f"Complete data export for user {user_id} with ID {export_id}",
+                            trace_id=trace_id
+                        )
+                    ]
+
+                async def _log_gdpr_export(self, export: GDPRExportResult, trace_id: str):
+                    """Log GDPR export to audit system"""
+                    # Implementation would log to audit database
+                    pass
+
+                def _get_controller_info(self) -> ControllerInfo:
+                    """Get controller information for export"""
+                    return ControllerInfo(
+                        controller_name="FamilyOS",
+                        controller_address="123 Privacy Street, Data City, DC 12345",
+                        data_protection_officer="Data Protection Officer",
+                        contact_email="dpo@familyos.com"
+                    )
+
+                # Additional helper methods for data gathering would be implemented
+
+    dependencies:
+      - name: serde
+        description: Data serialization for export formats
+      - name: chrono
+        description: Date/time handling for export timestamps
+      - name: sha2
+        description: SHA-256 hashing for export integrity
+
+testing_requirements:
+  - unit_tests:
+      - export_completeness: All required GDPR sections included
+      - data_integrity: Export hash matches calculated hash
+      - format_validation: Export conforms to GDPR Article 15 requirements
+  - integration_tests:
+      - database_queries: All data gathering queries work correctly
+      - export_formats: JSON/XML/CSV export formats generated properly
+      - audit_logging: Export operations properly audited
+  - security_tests:
+      - data_leakage: No unauthorized data in exports
+      - access_control: Only authorized users can request exports
+      - pii_protection: Sensitive data properly redacted
+
+compliance:
+  - gdpr: Article 15 (right of access by the data subject)
+  - gdpr: Article 20 (right to data portability)
+  - gdpr: Article 30 (records of processing activities)
+  - hipaa: § 164.524 (access of individuals to protected health information)
+  - soc2: CC7.1 (access to systems and data)

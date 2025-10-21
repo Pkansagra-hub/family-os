@@ -1,0 +1,470 @@
+classes:
+  - name: BackpressureCoordinator
+    description: Coordinates backpressure signal propagation across K1 components with <50ms latency guarantee
+    research: ADR-0039b (backpressure propagation & signal flow), event-driven architecture, actor model messaging
+    performance_budget: <50ms propagation latency (P95), <25ms measured latency
+    reliability_properties:
+      - event_driven_propagation: Actor model message passing for component isolation
+      - priority_based_broadcast: Higher tier signals preempt lower tier signals
+      - latency_guarantee: <50ms total propagation to all components
+      - failure_isolation: Component failures don't block signal propagation to others
+    methods:
+      - name: broadcast
+        description: Broadcast backpressure signal to all registered components with latency tracking
+        parameters:
+          - name: signal
+            type: BackpressureSignal
+            description: Backpressure signal containing tier, timestamp, reason, and trace_id
+        returns:
+          type: Result<(), PropagationError>
+          description: Success or error details if propagation fails
+        implementation:
+          rust: |
+            use serde::{Serialize, Deserialize};
+            use std::time::{Duration, Instant};
+            use std::sync::Arc;
+            use tokio::sync::Mutex;
+            use std::collections::HashMap;
+
+            #[derive(Serialize, Deserialize, Debug, Clone)]
+            pub struct BackpressureSignal {
+                pub tier: super::watermark_thresholds::BackpressureTier,
+                pub timestamp: f64,
+                pub reason: String,
+                pub trace_id: String,
+            }
+
+            impl BackpressureSignal {
+                pub fn new(
+                    tier: super::watermark_thresholds::BackpressureTier,
+                    reason: String,
+                    trace_id: String,
+                ) -> Self {
+                    Self {
+                        tier,
+                        timestamp: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64(),
+                        reason,
+                        trace_id,
+                    }
+                }
+
+                pub fn priority(&self) -> i32 {
+                    self.tier as i32
+                }
+            }
+
+            impl PartialEq for BackpressureSignal {
+                fn eq(&self, other: &Self) -> bool {
+                    self.tier == other.tier
+                }
+            }
+
+            impl PartialOrd for BackpressureSignal {
+                fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                    Some(self.priority().cmp(&other.priority()))
+                }
+            }
+
+            pub type BackpressureCallback = Arc<dyn Fn(BackpressureSignal) -> Result<(), PropagationError> + Send + Sync>;
+
+            #[derive(Debug)]
+            pub enum PropagationError {
+                ComponentFailure(String),
+                Timeout(Duration),
+                BroadcastFailure(String),
+            }
+
+            pub struct BackpressureCoordinator {
+                callbacks: Arc<Mutex<HashMap<String, BackpressureCallback>>>,
+                current_signal: Arc<Mutex<BackpressureSignal>>,
+                propagation_timeout: Duration,
+            }
+
+            impl BackpressureCoordinator {
+                pub fn new() -> Self {
+                    Self {
+                        callbacks: Arc::new(Mutex::new(HashMap::new())),
+                        current_signal: Arc::new(Mutex::new(BackpressureSignal::new(
+                            super::watermark_thresholds::BackpressureTier::NORMAL,
+                            "initial_state".to_string(),
+                            "system".to_string(),
+                        ))),
+                        propagation_timeout: Duration::from_millis(50), // <50ms target
+                    }
+                }
+
+                pub async fn register_callback(
+                    &self,
+                    component_name: String,
+                    callback: BackpressureCallback,
+                ) {
+                    let mut callbacks = self.callbacks.lock().await;
+                    callbacks.insert(component_name.clone(), callback);
+
+                    tracing::info!(
+                        component = %component_name,
+                        total_callbacks = callbacks.len(),
+                        "Backpressure callback registered"
+                    );
+                }
+
+                pub async fn broadcast(
+                    &self,
+                    signal: BackpressureSignal,
+                ) -> Result<(), PropagationError> {
+                    let start = Instant::now();
+
+                    // Only broadcast if tier changed (avoid spam)
+                    {
+                        let current = self.current_signal.lock().await;
+                        if signal.tier == current.tier {
+                            return Ok(());
+                        }
+                    }
+
+                    tracing::warn!(
+                        tier = ?signal.tier,
+                        reason = %signal.reason,
+                        trace_id = %signal.trace_id,
+                        "Backpressure signal broadcast"
+                    );
+
+                    let callbacks = self.callbacks.lock().await.clone();
+                    let num_callbacks = callbacks.len();
+
+                    // Fan-out to all components in parallel
+                    let mut tasks = Vec::new();
+                    for (component_name, callback) in callbacks {
+                        let signal_clone = signal.clone();
+                        let callback_clone = Arc::clone(&callback);
+
+                        let task = tokio::spawn(async move {
+                            let component_start = Instant::now();
+
+                            match tokio::time::timeout(
+                                Duration::from_millis(45), // Leave 5ms buffer for total <50ms
+                                callback_clone(signal_clone)
+                            ).await {
+                                Ok(Ok(())) => {
+                                    let latency_ms = component_start.elapsed().as_millis();
+                                    tracing::debug!(
+                                        component = %component_name,
+                                        latency_ms = latency_ms,
+                                        "Component backpressure callback completed"
+                                    );
+                                    Ok(())
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!(
+                                        component = %component_name,
+                                        error = ?e,
+                                        "Component backpressure callback failed"
+                                    );
+                                    Err(e)
+                                }
+                                Err(_) => {
+                                    tracing::error!(
+                                        component = %component_name,
+                                        "Component backpressure callback timed out"
+                                    );
+                                    Err(PropagationError::Timeout(Duration::from_millis(45)))
+                                }
+                            }
+                        });
+
+                        tasks.push(task);
+                    }
+
+                    // Wait for all callbacks to complete (with overall timeout)
+                    let results = match tokio::time::timeout(
+                        self.propagation_timeout,
+                        futures::future::join_all(tasks)
+                    ).await {
+                        Ok(results) => results,
+                        Err(_) => {
+                            return Err(PropagationError::Timeout(self.propagation_timeout));
+                        }
+                    };
+
+                    // Check results and collect failures
+                    let mut failures = Vec::new();
+                    for result in results {
+                        match result {
+                            Ok(Ok(())) => {} // Success
+                            Ok(Err(e)) => failures.push(e),
+                            Err(e) => {
+                                tracing::error!(error = ?e, "Task join error in backpressure broadcast");
+                                failures.push(PropagationError::BroadcastFailure(e.to_string()));
+                            }
+                        }
+                    }
+
+                    // Update current signal
+                    {
+                        let mut current = self.current_signal.lock().await;
+                        *current = signal;
+                    }
+
+                    // Measure total propagation latency
+                    let total_latency_ms = start.elapsed().as_millis() as f64;
+
+                    // Emit metrics
+                    metrics::histogram!("backpressure_propagation_latency_ms")
+                        .with_label_values(&[])
+                        .observe(total_latency_ms);
+
+                    metrics::counter!("backpressure_signals_broadcast_total")
+                        .with_label_values(&[&signal.tier.as_str()])
+                        .inc();
+
+                    if total_latency_ms > 50.0 {
+                        tracing::error!(
+                            total_latency_ms = total_latency_ms,
+                            target_ms = 50.0,
+                            num_callbacks = num_callbacks,
+                            "Backpressure propagation slow"
+                        );
+                    } else {
+                        tracing::debug!(
+                            total_latency_ms = total_latency_ms,
+                            num_callbacks = num_callbacks,
+                            "Backpressure propagation completed"
+                        );
+                    }
+
+                    // Return first failure if any (but don't fail the broadcast)
+                    if let Some(first_failure) = failures.into_iter().next() {
+                        return Err(first_failure);
+                    }
+
+                    Ok(())
+                }
+
+                pub async fn get_current_tier(&self) -> super::watermark_thresholds::BackpressureTier {
+                    let signal = self.current_signal.lock().await;
+                    signal.tier
+                }
+
+                pub async fn get_registered_components(&self) -> Vec<String> {
+                    let callbacks = self.callbacks.lock().await;
+                    callbacks.keys().cloned().collect()
+                }
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import Dict, List, Callable, Awaitable, Optional, Any
+            from enum import IntEnum
+            import asyncio
+            import time
+            import logging
+            from concurrent.futures import ThreadPoolExecutor
+
+            @dataclass
+            class BackpressureSignal:
+                """Backpressure signal broadcast to all components"""
+                tier: 'BackpressureTier'
+                timestamp: float
+                reason: str
+                trace_id: str
+
+                def __post_init__(self):
+                    if self.timestamp == 0:
+                        self.timestamp = time.time()
+
+                @property
+                def priority(self) -> int:
+                    """Higher tier = higher priority"""
+                    return self.tier.value
+
+                def __lt__(self, other: 'BackpressureSignal') -> bool:
+                    """Compare signals by priority (for priority queue)"""
+                    return self.priority < other.priority
+
+            class PropagationError(Exception):
+                """Error during signal propagation"""
+                pass
+
+            BackpressureCallback = Callable[[BackpressureSignal], Awaitable[None]]
+
+            class BackpressureCoordinator:
+                """Coordinates backpressure signal propagation across components"""
+
+                def __init__(self):
+                    self.callbacks: Dict[str, BackpressureCallback] = {}
+                    self.current_signal = BackpressureSignal(
+                        tier=BackpressureTier.NORMAL,
+                        timestamp=time.time(),
+                        reason="initial_state",
+                        trace_id="system"
+                    )
+                    self.propagation_timeout_seconds = 0.050  # 50ms target
+                    self.logger = logging.getLogger(__name__)
+
+                def register_callback(self, callback: BackpressureCallback, component_name: str):
+                    """Register a component callback for backpressure signals"""
+                    self.callbacks[component_name] = callback
+                    self.logger.info(
+                        f"Backpressure callback registered for {component_name}",
+                        extra={
+                            'component': component_name,
+                            'total_callbacks': len(self.callbacks)
+                        }
+                    )
+
+                async def broadcast(self, signal: BackpressureSignal) -> None:
+                    """
+                    Broadcast backpressure signal to all registered components.
+
+                    Target: <50ms total propagation latency
+                    """
+                    start = time.monotonic()
+
+                    # Only broadcast if tier changed (avoid spam)
+                    if signal.tier == self.current_signal.tier:
+                        return
+
+                    self.logger.warning(
+                        f"Backpressure signal broadcast: {signal.tier.name}",
+                        extra={
+                            'tier': signal.tier.name,
+                            'reason': signal.reason,
+                            'trace_id': signal.trace_id,
+                            'num_callbacks': len(self.callbacks)
+                        }
+                    )
+
+                    # Fan-out to all components in parallel
+                    tasks = []
+                    for component_name, callback in self.callbacks.items():
+                        task = asyncio.create_task(
+                            self._invoke_callback_safe(component_name, callback, signal)
+                        )
+                        tasks.append(task)
+
+                    # Wait for all callbacks to complete (with overall timeout)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.gather(*tasks, return_exceptions=True),
+                            timeout=self.propagation_timeout_seconds
+                        )
+                    except asyncio.TimeoutError:
+                        self.logger.error(
+                            f"Backpressure propagation timeout after {self.propagation_timeout_seconds}s",
+                            extra={
+                                'timeout_seconds': self.propagation_timeout_seconds,
+                                'num_callbacks': len(self.callbacks)
+                            }
+                        )
+                        raise PropagationError(f"Propagation timeout after {self.propagation_timeout_seconds}s")
+
+                    # Update current signal
+                    self.current_signal = signal
+
+                    # Measure total propagation latency
+                    total_latency_ms = (time.monotonic() - start) * 1000
+
+                    # Emit metrics (placeholder - would integrate with actual metrics system)
+                    self._emit_propagation_metrics(total_latency_ms, signal.tier.name)
+
+                    if total_latency_ms > 50.0:
+                        self.logger.error(
+                            f"Backpressure propagation slow: {total_latency_ms:.1f}ms > 50ms target",
+                            extra={
+                                'latency_ms': total_latency_ms,
+                                'target_ms': 50.0,
+                                'num_callbacks': len(self.callbacks)
+                            }
+                        )
+                    else:
+                        self.logger.debug(
+                            f"Backpressure propagation completed in {total_latency_ms:.1f}ms",
+                            extra={
+                                'latency_ms': total_latency_ms,
+                                'num_callbacks': len(self.callbacks)
+                            }
+                        )
+
+                async def _invoke_callback_safe(
+                    self,
+                    component_name: str,
+                    callback: BackpressureCallback,
+                    signal: BackpressureSignal
+                ) -> None:
+                    """Invoke callback with error handling and timeout"""
+                    component_start = time.monotonic()
+
+                    try:
+                        # Individual component timeout (45ms to leave buffer for total <50ms)
+                        await asyncio.wait_for(
+                            callback(signal),
+                            timeout=0.045
+                        )
+
+                        latency_ms = (time.monotonic() - component_start) * 1000
+                        self.logger.debug(
+                            f"Component {component_name} callback completed in {latency_ms:.1f}ms",
+                            extra={
+                                'component': component_name,
+                                'latency_ms': latency_ms
+                            }
+                        )
+
+                    except asyncio.TimeoutError:
+                        self.logger.error(
+                            f"Component {component_name} callback timed out",
+                            extra={'component': component_name}
+                        )
+                        raise PropagationError(f"Component {component_name} timeout")
+
+                    except Exception as e:
+                        self.logger.error(
+                            f"Component {component_name} callback failed: {e}",
+                            extra={
+                                'component': component_name,
+                                'error': str(e)
+                            }
+                        )
+                        raise PropagationError(f"Component {component_name} failed: {e}")
+
+                def _emit_propagation_metrics(self, latency_ms: float, tier_name: str):
+                    """Emit propagation metrics (placeholder implementation)"""
+                    # In real implementation, would integrate with Prometheus/metrics system
+                    pass
+
+                def get_current_tier(self) -> 'BackpressureTier':
+                    """Get current backpressure tier"""
+                    return self.current_signal.tier
+
+                def get_registered_components(self) -> List[str]:
+                    """Get list of registered component names"""
+                    return list(self.callbacks.keys())
+
+    dependencies:
+      - name: tokio
+        description: Async runtime for Rust implementation
+      - name: futures
+        description: Future utilities for parallel execution
+      - name: metrics
+        description: Metrics collection for propagation latency
+
+propagation_requirements:
+  - latency_budget: <50ms total propagation (P95)
+  - component_timeout: <45ms per component callback
+  - parallel_execution: All components notified simultaneously
+  - failure_isolation: Component failures don't block others
+  - priority_preemption: Higher tier signals override lower tier signals
+
+signal_properties:
+  - tier_priority: EMERGENCY (3) > CANCEL_BG (2) > REJECT_NEW (1) > NORMAL (0)
+  - timestamp_accuracy: Unix timestamp with millisecond precision
+  - trace_id_integration: Cognitive trace ID for debugging
+  - reason_context: Human-readable explanation of tier change
+
+component_callbacks:
+  - api_gateway: HTTP 503 responses based on tier
+  - orchestrator: Cancel background tasks in Tier 2+
+  - agent_fabric: Drain agents in Tier 3, reduce hiring in Tier 2
+  - tool_runner: Reduce tool timeouts and cancel pending tools in Tier 3

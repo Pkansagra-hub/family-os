@@ -1,0 +1,342 @@
+// Connection Message Types FlatBuffers Schema
+// Purpose: Connection lifecycle messages (7 types)
+// Research: RFC 6455 WebSocket connection management, JWT refresh flow (ADR-0037)
+
+namespace K1.WebSocket;
+
+// ============================================================================
+// 1. ConnectionEstablished
+// ============================================================================
+
+table ConnectionEstablished {
+  session_id: string (required);               // Unique session ID (UUID)
+  user_id: string (required);                  // User ID from JWT claims
+  space_id: string (required);                 // Space ID from JWT claims
+  server_version: string (required);           // Server version (e.g., "1.0.0")
+  protocol_version: uint8 = 1;                 // WebSocket protocol version
+  capabilities: [string];                      // Enabled capabilities (TOOL_CALL, MULTIMODAL, etc.)
+  privacy_band: string (required);             // Privacy band (GREEN, AMBER, RED, BLACK)
+  max_message_size_bytes: uint32 = 10485760;  // Max message size (10MB)
+  heartbeat_interval_ms: uint32 = 30000;       // Heartbeat interval (30 seconds)
+  token_refresh_before_ms: uint32 = 300000;    // Refresh token 5 minutes before expiry
+}
+
+// ============================================================================
+// 2. Heartbeat
+// ============================================================================
+
+table Heartbeat {
+  timestamp_ms: int64 (required);              // Server timestamp (Unix milliseconds)
+  sequence_number: uint32 (required);          // Monotonic sequence number (detect missed heartbeats)
+}
+
+// ============================================================================
+// 3. HeartbeatAck
+// ============================================================================
+
+table HeartbeatAck {
+  timestamp_ms: int64 (required);              // Client timestamp (Unix milliseconds)
+  sequence_number: uint32 (required);          // Echo sequence number from Heartbeat
+  client_latency_ms: uint32;                   // Optional client-side latency measurement
+}
+
+// ============================================================================
+// 4. RefreshToken
+// ============================================================================
+
+table RefreshToken {
+  reason: string (required);                   // Reason for refresh (expiring_soon, user_requested)
+  expires_in_ms: uint32 (required);            // Current token expires in X milliseconds
+  refresh_token: string (required);            // Refresh token from initial authentication
+}
+
+// ============================================================================
+// 5. TokenRefreshed
+// ============================================================================
+
+table TokenRefreshed {
+  access_token: string (required);             // New access token (JWT)
+  refresh_token: string (required);            // New refresh token (rotated)
+  expires_in_seconds: uint32 (required);       // New token expires in X seconds (3600)
+  token_type: string = "Bearer";               // Token type
+}
+
+// ============================================================================
+// 6. Disconnect
+// ============================================================================
+
+table Disconnect {
+  reason: string (required);                   // Disconnect reason (user_requested, session_expired, server_shutdown)
+  close_code: uint16 (required);               // RFC 6455 close code (1000, 1008, 1011)
+  reconnect_allowed: bool = true;              // Whether client can reconnect
+  retry_after_ms: uint32;                      // Optional retry delay (exponential backoff)
+}
+
+// ============================================================================
+// 7. Goodbye
+// ============================================================================
+
+table Goodbye {
+  message: string = "Connection closing";      // Goodbye message
+  close_code: uint16 (required);               // RFC 6455 close code
+  session_saved: bool (required);              // Whether SessionState was saved to K0
+  final_turn_number: uint32;                   // Last completed turn number
+}
+
+// ============================================================================
+// Usage Examples
+// ============================================================================
+
+// Rust ConnectionEstablished serialization:
+/*
+use flatbuffers::FlatBufferBuilder;
+use k1_websocket::{ConnectionEstablished, ConnectionEstablishedArgs};
+
+fn send_connection_established(
+    session_id: &str,
+    user_id: &str,
+    space_id: &str,
+    capabilities: Vec<&str>,
+    privacy_band: &str,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    // Create strings
+    let session_id_offset = builder.create_string(session_id);
+    let user_id_offset = builder.create_string(user_id);
+    let space_id_offset = builder.create_string(space_id);
+    let server_version_offset = builder.create_string("1.0.0");
+    let privacy_band_offset = builder.create_string(privacy_band);
+
+    // Create capabilities vector
+    let capabilities_offsets: Vec<_> = capabilities
+        .iter()
+        .map(|cap| builder.create_string(cap))
+        .collect();
+    let capabilities_vector = builder.create_vector(&capabilities_offsets);
+
+    // Create ConnectionEstablished table
+    let established = ConnectionEstablishedArgs {
+        session_id: Some(session_id_offset),
+        user_id: Some(user_id_offset),
+        space_id: Some(space_id_offset),
+        server_version: Some(server_version_offset),
+        protocol_version: 1,
+        capabilities: Some(capabilities_vector),
+        privacy_band: Some(privacy_band_offset),
+        max_message_size_bytes: 10485760,
+        heartbeat_interval_ms: 30000,
+        token_refresh_before_ms: 300000,
+    };
+
+    let msg_offset = ConnectionEstablished::create(&mut builder, &established);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Rust Heartbeat serialization:
+/*
+fn send_heartbeat(sequence_number: u32) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let heartbeat = HeartbeatArgs {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence_number,
+    };
+
+    let msg_offset = Heartbeat::create(&mut builder, &heartbeat);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Rust TokenRefreshed serialization:
+/*
+fn send_token_refreshed(
+    access_token: &str,
+    refresh_token: &str,
+    expires_in_seconds: u32,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let access_token_offset = builder.create_string(access_token);
+    let refresh_token_offset = builder.create_string(refresh_token);
+    let token_type_offset = builder.create_string("Bearer");
+
+    let refreshed = TokenRefreshedArgs {
+        access_token: Some(access_token_offset),
+        refresh_token: Some(refresh_token_offset),
+        expires_in_seconds,
+        token_type: Some(token_type_offset),
+    };
+
+    let msg_offset = TokenRefreshed::create(&mut builder, &refreshed);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Python ConnectionEstablished deserialization:
+/*
+from k1_websocket import ConnectionEstablished
+
+def handle_connection_established(binary_data: bytes):
+    established = ConnectionEstablished.GetRootAs(binary_data)
+
+    session_id = established.SessionId().decode('utf-8')
+    user_id = established.UserId().decode('utf-8')
+    space_id = established.SpaceId().decode('utf-8')
+    server_version = established.ServerVersion().decode('utf-8')
+    protocol_version = established.ProtocolVersion()
+
+    # Extract capabilities
+    capabilities = []
+    for i in range(established.CapabilitiesLength()):
+        cap = established.Capabilities(i).decode('utf-8')
+        capabilities.append(cap)
+
+    privacy_band = established.PrivacyBand().decode('utf-8')
+    heartbeat_interval_ms = established.HeartbeatIntervalMs()
+
+    print(f"Connected: session={session_id}, user={user_id}, band={privacy_band}")
+    return session_id, capabilities
+*/
+
+// Python Heartbeat handling:
+/*
+from k1_websocket import Heartbeat, HeartbeatAck, HeartbeatAckArgs
+import time
+
+def handle_heartbeat(binary_data: bytes) -> bytes:
+    heartbeat = Heartbeat.GetRootAs(binary_data)
+
+    server_timestamp = heartbeat.TimestampMs()
+    sequence_number = heartbeat.SequenceNumber()
+
+    # Calculate client-side latency
+    client_timestamp = int(time.time() * 1000)
+    client_latency_ms = client_timestamp - server_timestamp
+
+    # Build HeartbeatAck response
+    builder = flatbuffers.Builder(256)
+
+    HeartbeatAck.Start(builder)
+    HeartbeatAck.AddTimestampMs(builder, client_timestamp)
+    HeartbeatAck.AddSequenceNumber(builder, sequence_number)
+    HeartbeatAck.AddClientLatencyMs(builder, client_latency_ms)
+    ack_offset = HeartbeatAck.End(builder)
+
+    builder.Finish(ack_offset)
+    return bytes(builder.Output())
+*/
+
+// ============================================================================
+// Connection Lifecycle Sequences
+// ============================================================================
+
+connection_lifecycle:
+  establishment:
+    - client: Send HTTP Upgrade request with JWT in query param
+    - server: Validate JWT, upgrade to WebSocket
+    - server: Send ConnectionEstablished message
+    - client: Receive ConnectionEstablished, store session_id and capabilities
+    - timing: <500ms total (TLS + JWT + upgrade + message)
+
+  heartbeat_cycle:
+    - server: Send Heartbeat every 30 seconds (heartbeat_interval_ms)
+    - client: Respond with HeartbeatAck within 5 seconds
+    - server: Update last_heartbeat timestamp in ConnectionRegistry
+    - server: Detect stale connection if no HeartbeatAck in 90 seconds (3× interval)
+    - timing: <100ms round-trip for Heartbeat/HeartbeatAck
+
+  token_refresh:
+    - server: Detect token expires in <5 minutes (token_refresh_before_ms)
+    - server: Send RefreshToken message
+    - client: Call refresh token endpoint (POST /auth/refresh)
+    - server: Issue new token pair (access + refresh)
+    - server: Send TokenRefreshed message
+    - client: Update stored tokens
+    - timing: <2000ms total (refresh endpoint + TokenRefreshed message)
+
+  graceful_disconnect:
+    - server: Send Goodbye message (with session_saved=true)
+    - server: Send WebSocket close frame (RFC 6455 close code)
+    - server: Remove connection from ConnectionRegistry
+    - client: Receive Goodbye, display message
+    - client: Close WebSocket connection
+    - timing: <50ms total
+
+// ============================================================================
+// RFC 6455 Close Codes
+// ============================================================================
+
+rfc_6455_close_codes:
+  1000: # Normal Closure
+    description: Normal graceful disconnect (user logout, session complete)
+    reconnect_allowed: true
+  1001: # Going Away
+    description: Client navigating away or server shutting down
+    reconnect_allowed: true
+  1008: # Policy Violation
+    description: Authentication failure, rate limit exceeded, policy breach
+    reconnect_allowed: false
+  1011: # Server Error
+    description: Internal server error, unexpected condition
+    reconnect_allowed: true
+  1012: # Service Restart
+    description: Server restarting (graceful reload)
+    reconnect_allowed: true
+
+// ============================================================================
+// Performance Budgets
+// ============================================================================
+
+performance_budgets:
+  connection_established_message:
+    serialization: <1ms
+    size: ~500 bytes (session_id + user_id + space_id + capabilities)
+  heartbeat_message:
+    serialization: <0.1ms
+    size: ~50 bytes (timestamp + sequence_number)
+  token_refreshed_message:
+    serialization: <1ms
+    size: ~1KB (JWT tokens)
+  goodbye_message:
+    serialization: <0.5ms
+    size: ~200 bytes (message + close_code + session_saved)
+
+// ============================================================================
+// Security Considerations
+// ============================================================================
+
+security:
+  connection_established:
+    - Never include JWT access token in message (already validated during handshake)
+    - Include privacy_band to inform client of SessionState encryption status
+    - Validate capabilities match JWT claims (prevent privilege escalation)
+  token_refresh:
+    - Refresh token sent in RefreshToken message (encrypted over wss://)
+    - Server validates refresh token before issuing new pair
+    - Rotated refresh token prevents reuse attacks (ADR-0037c)
+  disconnect:
+    - Log disconnect reason to audit trail (ADR-0038)
+    - Include close_code for debugging and compliance
+    - Cleanup connection from registry to prevent resource leaks
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+metrics:
+  - connection_established_total (counter)
+  - heartbeats_sent_total (counter)
+  - heartbeat_acks_received_total (counter)
+  - token_refreshes_total (counter)
+  - token_refresh_failures_total (counter)
+  - graceful_disconnects_total (counter by close_code)
+  - heartbeat_latency_ms (histogram, client_latency_ms from HeartbeatAck)
+  - missed_heartbeats_total (counter, no HeartbeatAck received)

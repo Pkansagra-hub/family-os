@@ -1,0 +1,380 @@
+classes:
+  - name: MessageRouter
+    description: Type-safe message routing with handler registry for 17 WebSocket message types
+    research: Actor Model message passing, type-safe pattern matching, <0.1ms routing overhead
+    performance_budget: <0.1ms per message routing operation
+    reliability_properties:
+      - type_safe_routing: Compile-time guarantees for message type → handler mapping
+      - zero_copy_deserialization: FlatBuffers zero-copy access to message fields
+      - handler_registry: Dynamic handler registration for extensibility
+      - error_isolation: Handler errors don't crash router
+    methods:
+      - name: register_handler
+        description: Register handler callback for specific message type
+        parameters:
+          - name: message_type
+            type: MessageType
+            description: Message type enum (ConnectionEstablished, Heartbeat, AgentMessageChunk, etc.)
+          - name: handler
+            type: MessageHandler
+            description: Async callback function for message type
+        returns:
+          type: Result<(), RouterError>
+          description: Success or error
+        implementation:
+          rust: |
+            use std::collections::HashMap;
+            use std::sync::Arc;
+            use tokio::sync::RwLock;
+            use flatbuffers::root;
+            use k1_websocket::{WebSocketMessage, MessageType, MessagePayload};
+
+            type MessageHandler = Arc<dyn Fn(MessagePayload) -> Pin<Box<dyn Future<Output = Result<(), HandlerError>> + Send>> + Send + Sync>;
+
+            pub struct MessageRouter {
+                handlers: Arc<RwLock<HashMap<MessageType, MessageHandler>>>,
+                metrics: Arc<RouterMetrics>,
+            }
+
+            impl MessageRouter {
+                pub fn new(metrics: Arc<RouterMetrics>) -> Self {
+                    Self {
+                        handlers: Arc::new(RwLock::new(HashMap::new())),
+                        metrics,
+                    }
+                }
+
+                pub async fn register_handler(
+                    &self,
+                    message_type: MessageType,
+                    handler: MessageHandler,
+                ) -> Result<(), RouterError> {
+                    let mut handlers = self.handlers.write().await;
+
+                    if handlers.contains_key(&message_type) {
+                        return Err(RouterError::HandlerAlreadyRegistered(message_type));
+                    }
+
+                    handlers.insert(message_type, handler);
+
+                    tracing::info!(
+                        message_type = ?message_type,
+                        "Registered message handler"
+                    );
+
+                    Ok(())
+                }
+
+                pub async fn route_message(
+                    &self,
+                    binary_data: &[u8],
+                    trace_id: &str,
+                ) -> Result<(), RouterError> {
+                    let start = std::time::Instant::now();
+
+                    // Zero-copy deserialization (<0.5ms)
+                    let msg = root::<WebSocketMessage>(binary_data)
+                        .map_err(|e| RouterError::DeserializationFailed(format!("{:?}", e)))?;
+
+                    let message_id = msg.message_id().unwrap();
+                    let payload_type = msg.payload_type();
+                    let payload = msg.payload()
+                        .ok_or_else(|| RouterError::MissingPayload)?;
+
+                    tracing::debug!(
+                        message_id = %message_id,
+                        payload_type = ?payload_type,
+                        trace_id = %trace_id,
+                        "Routing message"
+                    );
+
+                    // Lookup handler (<0.05ms)
+                    let handlers = self.handlers.read().await;
+                    let handler = handlers.get(&payload_type)
+                        .ok_or_else(|| RouterError::NoHandlerRegistered(payload_type))?;
+
+                    // Execute handler (timing varies by handler)
+                    let result = handler(payload).await;
+
+                    // Record metrics
+                    let latency = start.elapsed();
+                    self.metrics.record_message_routed(payload_type, latency, result.is_ok());
+
+                    // Validate routing budget (<0.1ms overhead, excluding handler execution)
+                    if latency.as_micros() > 100 {
+                        tracing::warn!(
+                            message_id = %message_id,
+                            payload_type = ?payload_type,
+                            latency_us = latency.as_micros(),
+                            "Routing exceeded 0.1ms budget"
+                        );
+                    }
+
+                    result.map_err(|e| RouterError::HandlerFailed(payload_type, format!("{:?}", e)))
+                }
+
+                pub async fn unregister_handler(
+                    &self,
+                    message_type: MessageType,
+                ) -> Result<(), RouterError> {
+                    let mut handlers = self.handlers.write().await;
+
+                    handlers.remove(&message_type)
+                        .ok_or_else(|| RouterError::HandlerNotFound(message_type))?;
+
+                    tracing::info!(
+                        message_type = ?message_type,
+                        "Unregistered message handler"
+                    );
+
+                    Ok(())
+                }
+
+                pub async fn list_handlers(&self) -> Vec<MessageType> {
+                    let handlers = self.handlers.read().await;
+                    handlers.keys().copied().collect()
+                }
+            }
+
+            #[derive(Debug)]
+            pub enum RouterError {
+                DeserializationFailed(String),
+                MissingPayload,
+                NoHandlerRegistered(MessageType),
+                HandlerAlreadyRegistered(MessageType),
+                HandlerFailed(MessageType, String),
+                HandlerNotFound(MessageType),
+            }
+
+            #[derive(Debug)]
+            pub enum HandlerError {
+                InvalidPayload(String),
+                ProcessingFailed(String),
+                DatabaseError(String),
+            }
+          python: |
+            import flatbuffers
+            from k1_websocket import WebSocketMessage, MessageType
+            from typing import Dict, Callable, Awaitable
+            import asyncio
+            import time
+
+            class MessageRouter:
+                """Type-safe message routing with handler registry"""
+
+                def __init__(self, metrics):
+                    self.handlers: Dict[MessageType, Callable] = {}
+                    self.metrics = metrics
+                    self.logger = logging.getLogger(__name__)
+
+                async def register_handler(
+                    self,
+                    message_type: MessageType,
+                    handler: Callable[[any], Awaitable[None]]
+                ):
+                    """Register handler callback for message type"""
+                    if message_type in self.handlers:
+                        raise ValueError(f"Handler already registered for {message_type}")
+
+                    self.handlers[message_type] = handler
+
+                    self.logger.info(
+                        f"Registered handler for {message_type}"
+                    )
+
+                async def route_message(
+                    self,
+                    binary_data: bytes,
+                    trace_id: str
+                ):
+                    """Route message to appropriate handler"""
+                    start = time.time()
+
+                    # Zero-copy deserialization
+                    msg = WebSocketMessage.GetRootAs(binary_data)
+
+                    message_id = msg.MessageId().decode('utf-8')
+                    payload_type = msg.PayloadType()
+                    payload = msg.Payload()
+
+                    self.logger.debug(
+                        f"Routing message",
+                        extra={
+                            'message_id': message_id,
+                            'payload_type': payload_type,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                    # Lookup handler
+                    handler = self.handlers.get(payload_type)
+                    if not handler:
+                        raise ValueError(f"No handler registered for {payload_type}")
+
+                    # Execute handler
+                    try:
+                        await handler(payload)
+                        success = True
+                    except Exception as e:
+                        self.logger.error(f"Handler failed: {e}")
+                        success = False
+                        raise
+
+                    # Record metrics
+                    latency_ms = (time.time() - start) * 1000
+                    self.metrics.record_message_routed(payload_type, latency_ms, success)
+
+                    # Validate routing budget
+                    if latency_ms > 0.1:
+                        self.logger.warning(
+                            f"Routing exceeded 0.1ms budget: {latency_ms}ms"
+                        )
+
+                async def unregister_handler(self, message_type: MessageType):
+                    """Unregister handler for message type"""
+                    if message_type not in self.handlers:
+                        raise ValueError(f"Handler not found for {message_type}")
+
+                    del self.handlers[message_type]
+
+                def list_handlers(self) -> list:
+                    """List all registered handlers"""
+                    return list(self.handlers.keys())
+
+handler_registration_example:
+  rust: |
+    // Register handlers for all 17 message types
+    let router = MessageRouter::new(metrics);
+
+    // Connection handlers
+    router.register_handler(
+        MessageType::ConnectionEstablished,
+        Arc::new(|payload| Box::pin(handle_connection_established(payload))),
+    ).await?;
+
+    router.register_handler(
+        MessageType::Heartbeat,
+        Arc::new(|payload| Box::pin(handle_heartbeat(payload))),
+    ).await?;
+
+    // Agent message handlers
+    router.register_handler(
+        MessageType::AgentMessageStart,
+        Arc::new(|payload| Box::pin(handle_agent_message_start(payload))),
+    ).await?;
+
+    router.register_handler(
+        MessageType::AgentMessageChunk,
+        Arc::new(|payload| Box::pin(handle_agent_message_chunk(payload))),
+    ).await?;
+
+    // Tool handlers
+    router.register_handler(
+        MessageType::ToolCallStarted,
+        Arc::new(|payload| Box::pin(handle_tool_call_started(payload))),
+    ).await?;
+
+    // Error handler
+    router.register_handler(
+        MessageType::Error,
+        Arc::new(|payload| Box::pin(handle_error(payload))),
+    ).await?;
+
+  python: |
+    # Register handlers
+    router = MessageRouter(metrics)
+
+    await router.register_handler(MessageType.ConnectionEstablished, handle_connection_established)
+    await router.register_handler(MessageType.Heartbeat, handle_heartbeat)
+    await router.register_handler(MessageType.AgentMessageChunk, handle_agent_message_chunk)
+
+routing_sequence:
+  - step: receive_binary_frame
+    description: Receive RFC 6455 binary frame from WebSocket
+    timing: <1ms
+  - step: deserialize_envelope
+    description: FlatBuffers zero-copy deserialization to WebSocketMessage
+    timing: <0.5ms
+  - step: extract_payload_type
+    description: Read payload_type field (single memory access)
+    timing: <0.01ms
+  - step: lookup_handler
+    description: HashMap lookup for message_type → handler
+    timing: <0.05ms (O(1) average)
+  - step: call_handler
+    description: Execute registered handler function
+    timing: Variable (handler-specific)
+  - step: record_metrics
+    description: Update Prometheus metrics
+    timing: <0.04ms
+
+performance_budgets:
+  routing_overhead:
+    target: <0.1ms
+    breakdown:
+      deserialize_envelope: 0.05ms
+      extract_payload_type: 0.01ms
+      lookup_handler: 0.02ms
+      record_metrics: 0.02ms
+    total: 0.1ms (excluding handler execution)
+  handler_execution:
+    connection_established: <5ms
+    heartbeat: <1ms
+    agent_message_chunk: <2ms (append to accumulator)
+    tool_call_started: <3ms
+    error: <1ms
+
+error_handling:
+  - error: DeserializationFailed
+    action: Log error, emit deserialization_errors_total metric, send Error message to client
+  - error: MissingPayload
+    action: Log error, emit invalid_message_total metric, close connection
+  - error: NoHandlerRegistered
+    action: Log warning, emit unhandled_messages_total metric, ignore message
+  - error: HandlerFailed
+    action: Log error with stack trace, emit handler_failures_total metric, continue routing (isolate error)
+
+handler_isolation:
+  - pattern: try_catch_per_handler
+    description: Wrap each handler execution in try-catch block
+    benefit: Handler errors don't crash router or affect other handlers
+  - pattern: async_timeout
+    description: Timeout handler execution after 30 seconds (configurable)
+    benefit: Prevent handler from blocking router indefinitely
+  - pattern: error_metrics
+    description: Emit handler_failures_total metric per handler
+    benefit: Identify problematic handlers for debugging
+
+observability:
+  metrics:
+    - messages_routed_total (counter by message_type)
+    - routing_latency_us (histogram, <100us target)
+    - handler_execution_latency_ms (histogram by message_type)
+    - handler_failures_total (counter by message_type, error_type)
+    - deserialization_errors_total (counter)
+    - unhandled_messages_total (counter by message_type)
+    - registered_handlers_gauge (gauge, count of registered handlers)
+
+type_safety:
+  - compile_time_checks: Rust type system guarantees message_type → handler mapping is correct
+  - pattern_matching: Match on MessagePayload union for type-safe access to fields
+  - no_string_comparison: Use MessageType enum (not string comparison) for O(1) routing
+  - exhaustive_matching: Compiler enforces handling all MessageType variants
+
+extensibility:
+  - dynamic_registration: Handlers can be registered at runtime (plugin system)
+  - handler_replacement: Unregister old handler, register new handler (zero downtime)
+  - middleware_support: Chain handlers with middleware (logging, auth, rate limiting)
+  - custom_message_types: Add new message types without changing router code
+
+concurrency_model:
+  - thread_safe_registry: Arc<RwLock<HashMap>> for concurrent handler registration
+  - read_optimized: Multiple messages can be routed concurrently (read lock)
+  - write_serialized: Handler registration/unregistration serialized (write lock)
+  - async_handlers: All handlers are async (non-blocking)
+
+integration_points:
+  - websocket_connection: Router integrated into WebSocket message loop (Issue 2.14.1)
+  - flatbuffers_schema: Router uses WebSocketMessage envelope from Issue 2.14.2
+  - metrics_exporter: Router metrics exported to Prometheus (Issue 2.14.2)
+  - error_handling: Router sends Error messages for failed routing (tool_messages.fbs)

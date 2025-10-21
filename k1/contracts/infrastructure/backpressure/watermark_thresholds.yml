@@ -1,0 +1,827 @@
+classes:
+  - name: WatermarkManager
+    description: Manages watermark thresholds and hysteresis for backpressure tier transitions
+    research: ADR-0039a (tier triggers & watermark thresholds), hysteresis patterns, overload detection
+    performance_budget: <5µs per evaluation (P95), <0.001% CPU overhead
+    reliability_properties:
+      - hysteresis_stability: Prevents oscillation between tiers with 10% buffer
+      - sustained_detection: Requires sustained conditions before tier transitions
+      - multi_condition_logic: Evaluates all relevant metrics for accurate tier decisions
+      - priority_ordering: Higher tiers (EMERGENCY) preempt lower tiers
+    methods:
+      - name: evaluate
+        description: Evaluate current metrics against watermarks and return recommended backpressure tier
+        parameters:
+          - name: queue_depth
+            type: int
+            description: Current turn queue depth
+          - name: e2e_latency_p95_ms
+            type: int
+            description: P95 end-to-end latency in milliseconds
+          - name: active_turns
+            type: int
+            description: Number of active turns being processed
+          - name: k1_memory_mb
+            type: int
+            description: Current K1 memory usage in MB
+          - name: cpu_utilization_percent
+            type: int
+            description: CPU utilization percentage
+          - name: thermal_state
+            type: int
+            description: Thermal state (0=COOL, 1=WARM, 2=HOT, 3=CRITICAL, 4=EMERGENCY)
+        returns:
+          type: BackpressureTier
+          description: Recommended backpressure tier based on current metrics
+        implementation:
+          rust: |
+            use serde::{Serialize, Deserialize};
+            use std::time::{Duration, Instant};
+            use std::collections::HashMap;
+
+            #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+            pub enum BackpressureTier {
+                NORMAL = 0,
+                TIER_1_REJECT_NEW = 1,
+                TIER_2_CANCEL_BG = 2,
+                TIER_3_EMERGENCY = 3,
+            }
+
+            impl BackpressureTier {
+                pub fn as_str(&self) -> &'static str {
+                    match self {
+                        BackpressureTier::NORMAL => "NORMAL",
+                        BackpressureTier::TIER_1_REJECT_NEW => "TIER_1_REJECT_NEW",
+                        BackpressureTier::TIER_2_CANCEL_BG => "TIER_2_CANCEL_BG",
+                        BackpressureTier::TIER_3_EMERGENCY => "TIER_3_EMERGENCY",
+                    }
+                }
+
+                pub fn severity(&self) -> &'static str {
+                    match self {
+                        BackpressureTier::NORMAL => "Normal",
+                        BackpressureTier::TIER_1_REJECT_NEW => "Soft Overload",
+                        BackpressureTier::TIER_2_CANCEL_BG => "Medium Overload",
+                        BackpressureTier::TIER_3_EMERGENCY => "Critical Overload",
+                    }
+                }
+            }
+
+            #[derive(Serialize, Deserialize, Debug)]
+            pub struct WatermarkThresholds {
+                // Activation thresholds
+                pub queue_depth: u32,
+                pub e2e_latency_p95_ms: Option<u32>,
+                pub active_turns: Option<u32>,
+                pub k1_memory_mb: Option<u32>,
+                pub cpu_utilization_percent: Option<u32>,
+                pub thermal_state: Option<u32>,
+                pub sustained_seconds: u32,
+
+                // Deactivation thresholds (with hysteresis)
+                pub deactivation_queue_depth: Option<u32>,
+                pub deactivation_e2e_latency_p95_ms: Option<u32>,
+                pub deactivation_active_turns: Option<u32>,
+                pub deactivation_k1_memory_mb: Option<u32>,
+                pub deactivation_cpu_utilization_percent: Option<u32>,
+                pub deactivation_thermal_state: Option<u32>,
+                pub deactivation_sustained_seconds: u32,
+            }
+
+            impl WatermarkThresholds {
+                pub fn new() -> Self {
+                    Self {
+                        queue_depth: 50,
+                        e2e_latency_p95_ms: Some(2500),
+                        active_turns: Some(80),
+                        k1_memory_mb: None,
+                        cpu_utilization_percent: None,
+                        thermal_state: None,
+                        sustained_seconds: 5,
+                        deactivation_queue_depth: Some(45),
+                        deactivation_e2e_latency_p95_ms: Some(2250),
+                        deactivation_active_turns: Some(72),
+                        deactivation_k1_memory_mb: None,
+                        deactivation_cpu_utilization_percent: None,
+                        deactivation_thermal_state: None,
+                        deactivation_sustained_seconds: 10,
+                    }
+                }
+
+                pub fn tier_1_thresholds() -> Self {
+                    Self {
+                        queue_depth: 50,
+                        e2e_latency_p95_ms: Some(2500),
+                        active_turns: Some(80),
+                        k1_memory_mb: None,
+                        cpu_utilization_percent: None,
+                        thermal_state: None,
+                        sustained_seconds: 5,
+                        deactivation_queue_depth: Some(45),
+                        deactivation_e2e_latency_p95_ms: Some(2250),
+                        deactivation_active_turns: Some(72),
+                        deactivation_k1_memory_mb: None,
+                        deactivation_cpu_utilization_percent: None,
+                        deactivation_thermal_state: None,
+                        deactivation_sustained_seconds: 10,
+                    }
+                }
+
+                pub fn tier_2_thresholds() -> Self {
+                    Self {
+                        queue_depth: 100,
+                        e2e_latency_p95_ms: None,
+                        active_turns: None,
+                        k1_memory_mb: Some(450),
+                        cpu_utilization_percent: Some(85),
+                        thermal_state: None,
+                        sustained_seconds: 5,
+                        deactivation_queue_depth: Some(90),
+                        deactivation_e2e_latency_p95_ms: None,
+                        deactivation_active_turns: None,
+                        deactivation_k1_memory_mb: Some(405),
+                        deactivation_cpu_utilization_percent: Some(77),
+                        deactivation_thermal_state: None,
+                        deactivation_sustained_seconds: 10,
+                    }
+                }
+
+                pub fn tier_3_thresholds() -> Self {
+                    Self {
+                        queue_depth: 200,
+                        e2e_latency_p95_ms: None,
+                        active_turns: None,
+                        k1_memory_mb: Some(480),
+                        cpu_utilization_percent: None,
+                        thermal_state: Some(3), // CRITICAL
+                        sustained_seconds: 3,
+                        deactivation_queue_depth: Some(180),
+                        deactivation_e2e_latency_p95_ms: None,
+                        deactivation_active_turns: None,
+                        deactivation_k1_memory_mb: Some(432),
+                        deactivation_cpu_utilization_percent: None,
+                        deactivation_thermal_state: Some(1), // WARM
+                        deactivation_sustained_seconds: 30,
+                    }
+                }
+            }
+
+            pub struct WatermarkManager {
+                tier_1_thresholds: WatermarkThresholds,
+                tier_2_thresholds: WatermarkThresholds,
+                tier_3_thresholds: WatermarkThresholds,
+                current_tier: BackpressureTier,
+
+                // Sustained condition tracking
+                tier_1_activation_start: Option<Instant>,
+                tier_1_deactivation_start: Option<Instant>,
+                tier_2_activation_start: Option<Instant>,
+                tier_2_deactivation_start: Option<Instant>,
+                tier_3_activation_start: Option<Instant>,
+                tier_3_deactivation_start: Option<Instant>,
+            }
+
+            impl WatermarkManager {
+                pub fn new() -> Self {
+                    Self {
+                        tier_1_thresholds: WatermarkThresholds::tier_1_thresholds(),
+                        tier_2_thresholds: WatermarkThresholds::tier_2_thresholds(),
+                        tier_3_thresholds: WatermarkThresholds::tier_3_thresholds(),
+                        current_tier: BackpressureTier::NORMAL,
+                        tier_1_activation_start: None,
+                        tier_1_deactivation_start: None,
+                        tier_2_activation_start: None,
+                        tier_2_deactivation_start: None,
+                        tier_3_activation_start: None,
+                        tier_3_deactivation_start: None,
+                    }
+                }
+
+                pub fn evaluate(
+                    &mut self,
+                    queue_depth: u32,
+                    e2e_latency_p95_ms: u32,
+                    active_turns: u32,
+                    k1_memory_mb: u32,
+                    cpu_utilization_percent: u32,
+                    thermal_state: u32,
+                ) -> BackpressureTier {
+                    let now = Instant::now();
+
+                    // Check Tier 3 (highest priority) first
+                    if self.should_activate_tier_3(queue_depth, k1_memory_mb, thermal_state, now) {
+                        return self.transition_to_tier(BackpressureTier::TIER_3_EMERGENCY, now);
+                    } else if self.current_tier == BackpressureTier::TIER_3_EMERGENCY {
+                        if self.should_deactivate_tier_3(queue_depth, k1_memory_mb, thermal_state, now) {
+                            return self.transition_to_tier(BackpressureTier::TIER_2_CANCEL_BG, now);
+                        }
+                    }
+
+                    // Check Tier 2
+                    if self.should_activate_tier_2(queue_depth, k1_memory_mb, cpu_utilization_percent, now) {
+                        return self.transition_to_tier(BackpressureTier::TIER_2_CANCEL_BG, now);
+                    } else if self.current_tier == BackpressureTier::TIER_2_CANCEL_BG {
+                        if self.should_deactivate_tier_2(queue_depth, k1_memory_mb, cpu_utilization_percent, now) {
+                            return self.transition_to_tier(BackpressureTier::TIER_1_REJECT_NEW, now);
+                        }
+                    }
+
+                    // Check Tier 1
+                    if self.should_activate_tier_1(queue_depth, e2e_latency_p95_ms, active_turns, now) {
+                        return self.transition_to_tier(BackpressureTier::TIER_1_REJECT_NEW, now);
+                    } else if self.current_tier == BackpressureTier::TIER_1_REJECT_NEW {
+                        if self.should_deactivate_tier_1(queue_depth, e2e_latency_p95_ms, active_turns, now) {
+                            return self.transition_to_tier(BackpressureTier::NORMAL, now);
+                        }
+                    }
+
+                    // No change needed
+                    self.current_tier
+                }
+
+                fn should_activate_tier_1(
+                    &mut self,
+                    queue_depth: u32,
+                    e2e_latency_p95_ms: u32,
+                    active_turns: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_1_thresholds;
+
+                    let activation_met = queue_depth >= thresholds.queue_depth ||
+                        (thresholds.e2e_latency_p95_ms.is_some() && e2e_latency_p95_ms >= thresholds.e2e_latency_p95_ms.unwrap()) ||
+                        (thresholds.active_turns.is_some() && active_turns >= thresholds.active_turns.unwrap());
+
+                    if activation_met {
+                        if self.tier_1_activation_start.is_none() {
+                            self.tier_1_activation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_1_activation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_1_activation_start = None;
+                    }
+
+                    false
+                }
+
+                fn should_deactivate_tier_1(
+                    &mut self,
+                    queue_depth: u32,
+                    e2e_latency_p95_ms: u32,
+                    active_turns: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_1_thresholds;
+
+                    let deactivation_met = queue_depth <= thresholds.deactivation_queue_depth.unwrap_or(0) &&
+                        (thresholds.deactivation_e2e_latency_p95_ms.is_none() || e2e_latency_p95_ms <= thresholds.deactivation_e2e_latency_p95_ms.unwrap()) &&
+                        (thresholds.deactivation_active_turns.is_none() || active_turns <= thresholds.deactivation_active_turns.unwrap());
+
+                    if deactivation_met {
+                        if self.tier_1_deactivation_start.is_none() {
+                            self.tier_1_deactivation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_1_deactivation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.deactivation_sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_1_deactivation_start = None;
+                    }
+
+                    false
+                }
+
+                fn should_activate_tier_2(
+                    &mut self,
+                    queue_depth: u32,
+                    k1_memory_mb: u32,
+                    cpu_utilization_percent: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_2_thresholds;
+
+                    let activation_met = queue_depth >= thresholds.queue_depth ||
+                        (thresholds.k1_memory_mb.is_some() && k1_memory_mb >= thresholds.k1_memory_mb.unwrap()) ||
+                        (thresholds.cpu_utilization_percent.is_some() && cpu_utilization_percent >= thresholds.cpu_utilization_percent.unwrap());
+
+                    if activation_met {
+                        if self.tier_2_activation_start.is_none() {
+                            self.tier_2_activation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_2_activation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_2_activation_start = None;
+                    }
+
+                    false
+                }
+
+                fn should_deactivate_tier_2(
+                    &mut self,
+                    queue_depth: u32,
+                    k1_memory_mb: u32,
+                    cpu_utilization_percent: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_2_thresholds;
+
+                    let deactivation_met = queue_depth <= thresholds.deactivation_queue_depth.unwrap_or(0) &&
+                        (thresholds.deactivation_k1_memory_mb.is_none() || k1_memory_mb <= thresholds.deactivation_k1_memory_mb.unwrap()) &&
+                        (thresholds.deactivation_cpu_utilization_percent.is_none() || cpu_utilization_percent <= thresholds.deactivation_cpu_utilization_percent.unwrap());
+
+                    if deactivation_met {
+                        if self.tier_2_deactivation_start.is_none() {
+                            self.tier_2_deactivation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_2_deactivation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.deactivation_sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_2_deactivation_start = None;
+                    }
+
+                    false
+                }
+
+                fn should_activate_tier_3(
+                    &mut self,
+                    queue_depth: u32,
+                    k1_memory_mb: u32,
+                    thermal_state: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_3_thresholds;
+
+                    let activation_met = queue_depth >= thresholds.queue_depth ||
+                        (thresholds.k1_memory_mb.is_some() && k1_memory_mb >= thresholds.k1_memory_mb.unwrap()) ||
+                        (thresholds.thermal_state.is_some() && thermal_state >= thresholds.thermal_state.unwrap());
+
+                    if activation_met {
+                        if self.tier_3_activation_start.is_none() {
+                            self.tier_3_activation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_3_activation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_3_activation_start = None;
+                    }
+
+                    false
+                }
+
+                fn should_deactivate_tier_3(
+                    &mut self,
+                    queue_depth: u32,
+                    k1_memory_mb: u32,
+                    thermal_state: u32,
+                    now: Instant,
+                ) -> bool {
+                    let thresholds = &self.tier_3_thresholds;
+
+                    let deactivation_met = queue_depth <= thresholds.deactivation_queue_depth.unwrap_or(0) &&
+                        (thresholds.deactivation_k1_memory_mb.is_none() || k1_memory_mb <= thresholds.deactivation_k1_memory_mb.unwrap()) &&
+                        (thresholds.deactivation_thermal_state.is_none() || thermal_state <= thresholds.deactivation_thermal_state.unwrap());
+
+                    if deactivation_met {
+                        if self.tier_3_deactivation_start.is_none() {
+                            self.tier_3_deactivation_start = Some(now);
+                        }
+
+                        if let Some(start) = self.tier_3_deactivation_start {
+                            if now.duration_since(start) >= Duration::from_secs(thresholds.deactivation_sustained_seconds as u64) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        self.tier_3_deactivation_start = None;
+                    }
+
+                    false
+                }
+
+                fn transition_to_tier(&mut self, new_tier: BackpressureTier, now: Instant) -> BackpressureTier {
+                    if new_tier != self.current_tier {
+                        tracing::warn!(
+                            tier_transition = ?(self.current_tier, new_tier),
+                            severity = new_tier.severity(),
+                            "Backpressure tier transition"
+                        );
+
+                        // Reset all sustained timers on transition
+                        self.tier_1_activation_start = None;
+                        self.tier_1_deactivation_start = None;
+                        self.tier_2_activation_start = None;
+                        self.tier_2_deactivation_start = None;
+                        self.tier_3_activation_start = None;
+                        self.tier_3_deactivation_start = None;
+
+                        self.current_tier = new_tier;
+                    }
+
+                    new_tier
+                }
+
+                pub fn get_current_tier(&self) -> BackpressureTier {
+                    self.current_tier
+                }
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import Optional, Dict, Any
+            from enum import IntEnum
+            import time
+            import logging
+
+            class BackpressureTier(IntEnum):
+                """Backpressure tiers with priority ordering"""
+                NORMAL = 0
+                TIER_1_REJECT_NEW = 1
+                TIER_2_CANCEL_BG = 2
+                TIER_3_EMERGENCY = 3
+
+                def severity(self) -> str:
+                    """Human-readable severity"""
+                    return {
+                        0: "Normal",
+                        1: "Soft Overload",
+                        2: "Medium Overload",
+                        3: "Critical Overload"
+                    }[self.value]
+
+            @dataclass
+            class WatermarkThresholds:
+                """Watermark thresholds for a single tier"""
+                # Activation thresholds
+                queue_depth: int
+                e2e_latency_p95_ms: Optional[int] = None
+                active_turns: Optional[int] = None
+                k1_memory_mb: Optional[int] = None
+                cpu_utilization_percent: Optional[int] = None
+                thermal_state: Optional[int] = None
+                sustained_seconds: int = 5
+
+                # Deactivation thresholds (with hysteresis)
+                deactivation_queue_depth: Optional[int] = None
+                deactivation_e2e_latency_p95_ms: Optional[int] = None
+                deactivation_active_turns: Optional[int] = None
+                deactivation_k1_memory_mb: Optional[int] = None
+                deactivation_cpu_utilization_percent: Optional[int] = None
+                deactivation_thermal_state: Optional[int] = None
+                deactivation_sustained_seconds: int = 10
+
+                def __post_init__(self):
+                    """Apply hysteresis defaults if not specified"""
+                    hysteresis_percent = 0.10  # 10% hysteresis
+
+                    if self.deactivation_queue_depth is None:
+                        self.deactivation_queue_depth = int(self.queue_depth * (1 - hysteresis_percent))
+                    if self.e2e_latency_p95_ms and self.deactivation_e2e_latency_p95_ms is None:
+                        self.deactivation_e2e_latency_p95_ms = int(self.e2e_latency_p95_ms * (1 - hysteresis_percent))
+                    if self.active_turns and self.deactivation_active_turns is None:
+                        self.deactivation_active_turns = int(self.active_turns * (1 - hysteresis_percent))
+                    if self.k1_memory_mb and self.deactivation_k1_memory_mb is None:
+                        self.deactivation_k1_memory_mb = int(self.k1_memory_mb * (1 - hysteresis_percent))
+                    if self.cpu_utilization_percent and self.deactivation_cpu_utilization_percent is None:
+                        self.deactivation_cpu_utilization_percent = int(self.cpu_utilization_percent * (1 - hysteresis_percent))
+
+            class WatermarkManager:
+                """Manages watermark thresholds and hysteresis for backpressure tier transitions"""
+
+                def __init__(self):
+                    self.logger = logging.getLogger(__name__)
+
+                    # Initialize thresholds for each tier
+                    self.tier_1_thresholds = WatermarkThresholds(
+                        queue_depth=50,
+                        e2e_latency_p95_ms=2500,
+                        active_turns=80,
+                        sustained_seconds=5,
+                        deactivation_sustained_seconds=10
+                    )
+
+                    self.tier_2_thresholds = WatermarkThresholds(
+                        queue_depth=100,
+                        k1_memory_mb=450,
+                        cpu_utilization_percent=85,
+                        sustained_seconds=5,
+                        deactivation_sustained_seconds=10
+                    )
+
+                    self.tier_3_thresholds = WatermarkThresholds(
+                        queue_depth=200,
+                        k1_memory_mb=480,
+                        thermal_state=3,  # CRITICAL
+                        sustained_seconds=3,
+                        deactivation_sustained_seconds=30
+                    )
+
+                    self.current_tier = BackpressureTier.NORMAL
+
+                    # Sustained condition tracking
+                    self.tier_1_activation_start: Optional[float] = None
+                    self.tier_1_deactivation_start: Optional[float] = None
+                    self.tier_2_activation_start: Optional[float] = None
+                    self.tier_2_deactivation_start: Optional[float] = None
+                    self.tier_3_activation_start: Optional[float] = None
+                    self.tier_3_deactivation_start: Optional[float] = None
+
+                def evaluate(
+                    self,
+                    queue_depth: int,
+                    e2e_latency_p95_ms: int,
+                    active_turns: int,
+                    k1_memory_mb: int,
+                    cpu_utilization_percent: int,
+                    thermal_state: int,
+                ) -> BackpressureTier:
+                    """
+                    Evaluate current metrics against watermarks and return recommended tier.
+
+                    Uses sustained condition tracking to prevent flapping:
+                    - Activation requires conditions sustained for N seconds
+                    - Deactivation requires conditions sustained for M seconds
+                    """
+                    now = time.monotonic()
+
+                    # Check Tier 3 (highest priority) first
+                    if self._should_activate_tier_3(queue_depth, k1_memory_mb, thermal_state, now):
+                        return self._transition_to_tier(BackpressureTier.TIER_3_EMERGENCY, now)
+                    elif self.current_tier == BackpressureTier.TIER_3_EMERGENCY:
+                        if self._should_deactivate_tier_3(queue_depth, k1_memory_mb, thermal_state, now):
+                            return self._transition_to_tier(BackpressureTier.TIER_2_CANCEL_BG, now)
+
+                    # Check Tier 2
+                    if self._should_activate_tier_2(queue_depth, k1_memory_mb, cpu_utilization_percent, now):
+                        return self._transition_to_tier(BackpressureTier.TIER_2_CANCEL_BG, now)
+                    elif self.current_tier == BackpressureTier.TIER_2_CANCEL_BG:
+                        if self._should_deactivate_tier_2(queue_depth, k1_memory_mb, cpu_utilization_percent, now):
+                            return self._transition_to_tier(BackpressureTier.TIER_1_REJECT_NEW, now)
+
+                    # Check Tier 1
+                    if self._should_activate_tier_1(queue_depth, e2e_latency_p95_ms, active_turns, now):
+                        return self._transition_to_tier(BackpressureTier.TIER_1_REJECT_NEW, now)
+                    elif self.current_tier == BackpressureTier.TIER_1_REJECT_NEW:
+                        if self._should_deactivate_tier_1(queue_depth, e2e_latency_p95_ms, active_turns, now):
+                            return self._transition_to_tier(BackpressureTier.NORMAL, now)
+
+                    return self.current_tier
+
+                def _should_activate_tier_1(
+                    self, queue_depth: int, e2e_latency_p95_ms: int, active_turns: int, now: float
+                ) -> bool:
+                    """Check if Tier 1 activation conditions met (with sustained check)"""
+                    thresholds = self.tier_1_thresholds
+
+                    # Check if any activation condition met
+                    activation_met = (
+                        queue_depth >= thresholds.queue_depth or
+                        (thresholds.e2e_latency_p95_ms and e2e_latency_p95_ms >= thresholds.e2e_latency_p95_ms) or
+                        (thresholds.active_turns and active_turns >= thresholds.active_turns)
+                    )
+
+                    if activation_met:
+                        if self.tier_1_activation_start is None:
+                            self.tier_1_activation_start = now
+
+                        # Check if sustained for required duration
+                        if now - self.tier_1_activation_start >= thresholds.sustained_seconds:
+                            return True
+                    else:
+                        # Reset sustained timer if conditions no longer met
+                        self.tier_1_activation_start = None
+
+                    return False
+
+                def _should_deactivate_tier_1(
+                    self, queue_depth: int, e2e_latency_p95_ms: int, active_turns: int, now: float
+                ) -> bool:
+                    """Check if Tier 1 deactivation conditions met (with sustained check)"""
+                    thresholds = self.tier_1_thresholds
+
+                    # Check if all deactivation conditions met
+                    deactivation_met = (
+                        queue_depth <= thresholds.deactivation_queue_depth and
+                        (not thresholds.deactivation_e2e_latency_p95_ms or
+                         e2e_latency_p95_ms <= thresholds.deactivation_e2e_latency_p95_ms) and
+                        (not thresholds.deactivation_active_turns or
+                         active_turns <= thresholds.deactivation_active_turns)
+                    )
+
+                    if deactivation_met:
+                        if self.tier_1_deactivation_start is None:
+                            self.tier_1_deactivation_start = now
+
+                        # Check if sustained for required duration
+                        if now - self.tier_1_deactivation_start >= thresholds.deactivation_sustained_seconds:
+                            return True
+                    else:
+                        # Reset sustained timer if conditions no longer met
+                        self.tier_1_deactivation_start = None
+
+                    return False
+
+                def _should_activate_tier_2(
+                    self, queue_depth: int, k1_memory_mb: int, cpu_utilization_percent: int, now: float
+                ) -> bool:
+                    """Check if Tier 2 activation conditions met (with sustained check)"""
+                    thresholds = self.tier_2_thresholds
+
+                    activation_met = (
+                        queue_depth >= thresholds.queue_depth or
+                        (thresholds.k1_memory_mb and k1_memory_mb >= thresholds.k1_memory_mb) or
+                        (thresholds.cpu_utilization_percent and cpu_utilization_percent >= thresholds.cpu_utilization_percent)
+                    )
+
+                    if activation_met:
+                        if self.tier_2_activation_start is None:
+                            self.tier_2_activation_start = now
+
+                        if now - self.tier_2_activation_start >= thresholds.sustained_seconds:
+                            return True
+                    else:
+                        self.tier_2_activation_start = None
+
+                    return False
+
+                def _should_deactivate_tier_2(
+                    self, queue_depth: int, k1_memory_mb: int, cpu_utilization_percent: int, now: float
+                ) -> bool:
+                    """Check if Tier 2 deactivation conditions met (with sustained check)"""
+                    thresholds = self.tier_2_thresholds
+
+                    deactivation_met = (
+                        queue_depth <= thresholds.deactivation_queue_depth and
+                        (not thresholds.deactivation_k1_memory_mb or
+                         k1_memory_mb <= thresholds.deactivation_k1_memory_mb) and
+                        (not thresholds.deactivation_cpu_utilization_percent or
+                         cpu_utilization_percent <= thresholds.deactivation_cpu_utilization_percent)
+                    )
+
+                    if deactivation_met:
+                        if self.tier_2_deactivation_start is None:
+                            self.tier_2_deactivation_start = now
+
+                        if now - self.tier_2_deactivation_start >= thresholds.deactivation_sustained_seconds:
+                            return True
+                    else:
+                        self.tier_2_deactivation_start = None
+
+                    return False
+
+                def _should_activate_tier_3(
+                    self, queue_depth: int, k1_memory_mb: int, thermal_state: int, now: float
+                ) -> bool:
+                    """Check if Tier 3 activation conditions met (with sustained check)"""
+                    thresholds = self.tier_3_thresholds
+
+                    activation_met = (
+                        queue_depth >= thresholds.queue_depth or
+                        (thresholds.k1_memory_mb and k1_memory_mb >= thresholds.k1_memory_mb) or
+                        (thresholds.thermal_state and thermal_state >= thresholds.thermal_state)
+                    )
+
+                    if activation_met:
+                        if self.tier_3_activation_start is None:
+                            self.tier_3_activation_start = now
+
+                        # Tier 3 has shorter sustained duration (3s) due to urgency
+                        if now - self.tier_3_activation_start >= thresholds.sustained_seconds:
+                            return True
+                    else:
+                        self.tier_3_activation_start = None
+
+                    return False
+
+                def _should_deactivate_tier_3(
+                    self, queue_depth: int, k1_memory_mb: int, thermal_state: int, now: float
+                ) -> bool:
+                    """Check if Tier 3 deactivation conditions met (with sustained check)"""
+                    thresholds = self.tier_3_thresholds
+
+                    deactivation_met = (
+                        queue_depth <= thresholds.deactivation_queue_depth and
+                        (not thresholds.deactivation_k1_memory_mb or
+                         k1_memory_mb <= thresholds.deactivation_k1_memory_mb) and
+                        (not thresholds.deactivation_thermal_state or
+                         thermal_state <= thresholds.deactivation_thermal_state)
+                    )
+
+                    if deactivation_met:
+                        if self.tier_3_deactivation_start is None:
+                            self.tier_3_deactivation_start = now
+
+                        # Tier 3 has longer sustained duration (30s) to ensure stability
+                        if now - self.tier_3_deactivation_start >= thresholds.deactivation_sustained_seconds:
+                            return True
+                    else:
+                        self.tier_3_deactivation_start = None
+
+                    return False
+
+                def _transition_to_tier(self, new_tier: BackpressureTier, now: float) -> BackpressureTier:
+                    """Transition to new tier and emit metrics"""
+                    if new_tier != self.current_tier:
+                        self.logger.warning(
+                            f"Backpressure tier transition: {self.current_tier.name} -> {new_tier.name}",
+                            extra={
+                                'from_tier': self.current_tier.name,
+                                'to_tier': new_tier.name,
+                                'severity': new_tier.severity(),
+                                'transition_time': now
+                            }
+                        )
+
+                        # Reset all sustained timers on transition
+                        self.tier_1_activation_start = None
+                        self.tier_1_deactivation_start = None
+                        self.tier_2_activation_start = None
+                        self.tier_2_deactivation_start = None
+                        self.tier_3_activation_start = None
+                        self.tier_3_deactivation_start = None
+
+                        self.current_tier = new_tier
+
+                    return new_tier
+
+                def get_current_tier(self) -> BackpressureTier:
+                    """Get current backpressure tier"""
+                    return self.current_tier
+
+    dependencies:
+      - name: serde
+        description: Serialization for Rust implementation
+      - name: tracing
+        description: Structured logging for tier transitions
+
+testing_requirements:
+  - unit_tests:
+      - tier_transitions: All tier activation/deactivation logic works correctly
+      - hysteresis_prevention: 10% hysteresis prevents oscillation between tiers
+      - sustained_conditions: Activation requires sustained conditions for N seconds
+      - priority_ordering: Higher tiers preempt lower tiers correctly
+  - integration_tests:
+      - metric_evaluation: WatermarkManager correctly evaluates real metrics
+      - sustained_tracking: Sustained condition timers work across multiple evaluations
+      - tier_stability: No oscillation under stable but high load conditions
+  - performance_tests:
+      - evaluation_latency: <5µs per evaluation (P95)
+      - memory_overhead: <1KB additional memory usage
+      - concurrent_access: Thread-safe evaluation under concurrent load
+
+watermark_thresholds:
+  - tier_1_activation:
+      queue_depth: 50
+      e2e_latency_p95_ms: 2500
+      active_turns: 80
+      sustained_seconds: 5
+  - tier_1_deactivation:
+      queue_depth: 45
+      e2e_latency_p95_ms: 2250
+      active_turns: 72
+      sustained_seconds: 10
+  - tier_2_activation:
+      queue_depth: 100
+      k1_memory_mb: 450
+      cpu_utilization_percent: 85
+      sustained_seconds: 5
+  - tier_2_deactivation:
+      queue_depth: 90
+      k1_memory_mb: 405
+      cpu_utilization_percent: 77
+      sustained_seconds: 10
+  - tier_3_activation:
+      queue_depth: 200
+      k1_memory_mb: 480
+      thermal_state: 3
+      sustained_seconds: 3
+  - tier_3_deactivation:
+      queue_depth: 180
+      k1_memory_mb: 432
+      thermal_state: 1
+      sustained_seconds: 30
+
+hysteresis_properties:
+  - buffer_percentage: 0.10
+  - prevents_oscillation: True
+  - stable_transitions: True
+  - sustained_requirements: True

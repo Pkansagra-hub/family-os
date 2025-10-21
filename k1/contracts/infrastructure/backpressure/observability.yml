@@ -1,0 +1,963 @@
+classes:
+  - name: BackpressureMetrics
+    description: Prometheus metrics collection for backpressure system monitoring with P95 latency tracking and tier transition counters
+    research: ADR-0039 (privacy band overrides), observability patterns, Prometheus metrics design
+    performance_budget: <1ms metrics recording latency, <10MB memory overhead, <100ms metrics export latency
+    reliability_properties:
+      - low_overhead: Minimal performance impact on backpressure operations
+      - comprehensive_coverage: All backpressure events and state changes metered
+      - alert_driven: Metrics designed for alerting on backpressure conditions
+      - trace_correlation: Metrics correlated with cognitive trace IDs
+    methods:
+      - name: record_tier_transition
+        description: Record backpressure tier transition with hysteresis tracking
+        parameters:
+          - name: from_tier
+            type: BackpressureTier
+            description: Previous backpressure tier
+          - name: to_tier
+            type: BackpressureTier
+            description: New backpressure tier
+          - name: reason
+            type: String
+            description: Reason for tier transition
+          - name: trace_id
+            type: String
+            description: Cognitive trace ID for correlation
+        returns:
+          type: ()
+          description: Records metrics for tier transition
+        implementation:
+          rust: |
+            use prometheus::{Encoder, TextEncoder, register_counter_vec, register_histogram_vec, register_gauge_vec};
+            use lazy_static::lazy_static;
+            use std::collections::HashMap;
+
+            lazy_static! {
+                static ref TIER_TRANSITIONS_TOTAL: prometheus::CounterVec = register_counter_vec!(
+                    "backpressure_tier_transitions_total",
+                    "Total number of backpressure tier transitions",
+                    &["from_tier", "to_tier", "reason"]
+                ).unwrap();
+
+                static ref CURRENT_BACKPRESSURE_TIER: prometheus::GaugeVec = register_gauge_vec!(
+                    "backpressure_current_tier",
+                    "Current backpressure tier (0=NORMAL, 1=REJECT_NEW, 2=CANCEL_BG, 3=EMERGENCY)",
+                    &["component"]
+                ).unwrap();
+
+                static ref PROPAGATION_LATENCY_MS: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_propagation_latency_ms",
+                    "Latency of backpressure signal propagation",
+                    &["component"],
+                    prometheus::exponential_buckets(1.0, 2.0, 10).unwrap()
+                ).unwrap();
+
+                static ref RECOVERY_STEP_DURATION_SECONDS: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_recovery_step_duration_seconds",
+                    "Duration of each recovery step",
+                    &["recovery_id", "step"],
+                    prometheus::linear_buckets(0.1, 0.1, 50).unwrap()
+                ).unwrap();
+
+                static ref RECOVERY_HEALTH_SCORE: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_recovery_health_score",
+                    "Health score during recovery process",
+                    &["recovery_id"],
+                    prometheus::linear_buckets(0.0, 0.1, 10).unwrap()
+                ).unwrap();
+
+                static ref ADMISSION_RATE_PERCENT: prometheus::GaugeVec = register_gauge_vec!(
+                    "backpressure_admission_rate_percent",
+                    "Current admission rate percentage during recovery",
+                    &["recovery_id"]
+                ).unwrap();
+
+                static ref BACKPRESSURE_SIGNALS_BROADCAST_TOTAL: prometheus::CounterVec = register_counter_vec!(
+                    "backpressure_signals_broadcast_total",
+                    "Total number of backpressure signals broadcast",
+                    &["tier"]
+                ).unwrap();
+
+                static ref WATERMARK_EVALUATION_DURATION_MS: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_watermark_evaluation_duration_ms",
+                    "Duration of watermark threshold evaluations",
+                    &["component"],
+                    prometheus::exponential_buckets(0.1, 2.0, 8).unwrap()
+                ).unwrap();
+            }
+
+            pub struct BackpressureMetrics;
+
+            impl BackpressureMetrics {
+                pub fn record_tier_transition(
+                    from_tier: &super::watermark_thresholds::BackpressureTier,
+                    to_tier: &super::watermark_thresholds::BackpressureTier,
+                    reason: &str,
+                    trace_id: &str,
+                ) {
+                    TIER_TRANSITIONS_TOTAL
+                        .with_label_values(&[&from_tier.as_str(), &to_tier.as_str(), reason])
+                        .inc();
+
+                    tracing::info!(
+                        from_tier = %from_tier.as_str(),
+                        to_tier = %to_tier.as_str(),
+                        reason = %reason,
+                        trace_id = %trace_id,
+                        "Backpressure tier transition recorded"
+                    );
+                }
+
+                pub fn set_current_tier(component: &str, tier: &super::watermark_thresholds::BackpressureTier) {
+                    CURRENT_BACKPRESSURE_TIER
+                        .with_label_values(&[component])
+                        .set(tier.as_value() as f64);
+                }
+
+                pub fn record_propagation_latency(component: &str, latency_ms: f64) {
+                    PROPAGATION_LATENCY_MS
+                        .with_label_values(&[component])
+                        .observe(latency_ms);
+
+                    if latency_ms > 50.0 {
+                        tracing::warn!(
+                            component = %component,
+                            latency_ms = latency_ms,
+                            "Backpressure propagation latency exceeded 50ms target"
+                        );
+                    }
+                }
+
+                pub fn record_recovery_step_duration(recovery_id: &str, step: u32, duration_seconds: f64) {
+                    RECOVERY_STEP_DURATION_SECONDS
+                        .with_label_values(&[recovery_id, &step.to_string()])
+                        .observe(duration_seconds);
+                }
+
+                pub fn record_recovery_health_score(recovery_id: &str, health_score: f64) {
+                    RECOVERY_HEALTH_SCORE
+                        .with_label_values(&[recovery_id])
+                        .observe(health_score);
+                }
+
+                pub fn set_admission_rate(recovery_id: &str, rate_percent: f64) {
+                    ADMISSION_RATE_PERCENT
+                        .with_label_values(&[recovery_id])
+                        .set(rate_percent);
+                }
+
+                pub fn record_signal_broadcast(tier: &super::watermark_thresholds::BackpressureTier) {
+                    BACKPRESSURE_SIGNALS_BROADCAST_TOTAL
+                        .with_label_values(&[&tier.as_str()])
+                        .inc();
+                }
+
+                pub fn record_watermark_evaluation_duration(component: &str, duration_ms: f64) {
+                    WATERMARK_EVALUATION_DURATION_MS
+                        .with_label_values(&[component])
+                        .observe(duration_ms);
+                }
+
+                pub fn export_metrics() -> Result<String, Box<dyn std::error::Error>> {
+                    let encoder = TextEncoder::new();
+                    let metric_families = prometheus::gather();
+                    let mut buffer = Vec::new();
+                    encoder.encode(&metric_families, &mut buffer)?;
+                    Ok(String::from_utf8(buffer)?)
+                }
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import Dict, Optional, Any
+            import time
+            import logging
+            from enum import Enum
+
+            class MetricType(Enum):
+                COUNTER = "counter"
+                GAUGE = "gauge"
+                HISTOGRAM = "histogram"
+
+            @dataclass
+            class MetricDefinition:
+                name: str
+                help: str
+                metric_type: MetricType
+                labels: list[str] = field(default_factory=list)
+                buckets: Optional[list[float]] = None
+
+            class BackpressureMetrics:
+                """
+                Prometheus-style metrics collection for backpressure system.
+
+                Provides comprehensive monitoring of backpressure events, tier transitions,
+                propagation latency, and recovery progress.
+                """
+
+                def __init__(self):
+                    self.logger = logging.getLogger(__name__)
+                    self._metrics_store: Dict[str, Dict[str, Any]] = {}
+                    self._counters: Dict[str, Dict[tuple, int]] = {}
+                    self._gauges: Dict[str, Dict[tuple, float]] = {}
+                    self._histograms: Dict[str, Dict[tuple, list[float]]] = {}
+
+                    # Initialize metric definitions
+                    self._init_metric_definitions()
+
+                def _init_metric_definitions(self):
+                    """Initialize metric definitions with proper buckets and labels"""
+                    self._metric_defs = {
+                        "tier_transitions_total": MetricDefinition(
+                            name="backpressure_tier_transitions_total",
+                            help="Total number of backpressure tier transitions",
+                            metric_type=MetricType.COUNTER,
+                            labels=["from_tier", "to_tier", "reason"]
+                        ),
+                        "current_tier": MetricDefinition(
+                            name="backpressure_current_tier",
+                            help="Current backpressure tier (0=NORMAL, 1=REJECT_NEW, 2=CANCEL_BG, 3=EMERGENCY)",
+                            metric_type=MetricType.GAUGE,
+                            labels=["component"]
+                        ),
+                        "propagation_latency_ms": MetricDefinition(
+                            name="backpressure_propagation_latency_ms",
+                            help="Latency of backpressure signal propagation",
+                            metric_type=MetricType.HISTOGRAM,
+                            labels=["component"],
+                            buckets=[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0]
+                        ),
+                        "recovery_step_duration_seconds": MetricDefinition(
+                            name="backpressure_recovery_step_duration_seconds",
+                            help="Duration of each recovery step",
+                            metric_type=MetricType.HISTOGRAM,
+                            labels=["recovery_id", "step"],
+                            buckets=[i * 0.1 for i in range(1, 51)]  # 0.1 to 5.0 seconds
+                        ),
+                        "recovery_health_score": MetricDefinition(
+                            name="backpressure_recovery_health_score",
+                            help="Health score during recovery process",
+                            metric_type=MetricType.HISTOGRAM,
+                            labels=["recovery_id"],
+                            buckets=[i * 0.1 for i in range(11)]  # 0.0 to 1.0
+                        ),
+                        "admission_rate_percent": MetricDefinition(
+                            name="backpressure_admission_rate_percent",
+                            help="Current admission rate percentage during recovery",
+                            metric_type=MetricType.GAUGE,
+                            labels=["recovery_id"]
+                        ),
+                        "signals_broadcast_total": MetricDefinition(
+                            name="backpressure_signals_broadcast_total",
+                            help="Total number of backpressure signals broadcast",
+                            metric_type=MetricType.COUNTER,
+                            labels=["tier"]
+                        ),
+                        "watermark_evaluation_duration_ms": MetricDefinition(
+                            name="backpressure_watermark_evaluation_duration_ms",
+                            help="Duration of watermark threshold evaluations",
+                            metric_type=MetricType.HISTOGRAM,
+                            labels=["component"],
+                            buckets=[0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0]
+                        )
+                    }
+
+                def record_tier_transition(
+                    self,
+                    from_tier: 'BackpressureTier',
+                    to_tier: 'BackpressureTier',
+                    reason: str,
+                    trace_id: str
+                ) -> None:
+                    """Record backpressure tier transition"""
+                    key = ("tier_transitions_total", (from_tier.name, to_tier.name, reason))
+                    self._increment_counter(key)
+
+                    self.logger.info(
+                        f"Backpressure tier transition: {from_tier.name} -> {to_tier.name}",
+                        extra={
+                            'from_tier': from_tier.name,
+                            'to_tier': to_tier.name,
+                            'reason': reason,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                def set_current_tier(self, component: str, tier: 'BackpressureTier') -> None:
+                    """Set current backpressure tier for a component"""
+                    key = ("current_tier", (component,))
+                    self._set_gauge(key, tier.value)
+
+                def record_propagation_latency(self, component: str, latency_ms: float) -> None:
+                    """Record backpressure signal propagation latency"""
+                    key = ("propagation_latency_ms", (component,))
+                    self._observe_histogram(key, latency_ms)
+
+                    if latency_ms > 50.0:
+                        self.logger.warning(
+                            f"Backpressure propagation latency exceeded target: {latency_ms:.1f}ms",
+                            extra={
+                                'component': component,
+                                'latency_ms': latency_ms,
+                                'target_ms': 50.0
+                            }
+                        )
+
+                def record_recovery_step_duration(
+                    self,
+                    recovery_id: str,
+                    step: int,
+                    duration_seconds: float
+                ) -> None:
+                    """Record duration of a recovery step"""
+                    key = ("recovery_step_duration_seconds", (recovery_id, str(step)))
+                    self._observe_histogram(key, duration_seconds)
+
+                def record_recovery_health_score(self, recovery_id: str, health_score: float) -> None:
+                    """Record health score during recovery"""
+                    key = ("recovery_health_score", (recovery_id,))
+                    self._observe_histogram(key, health_score)
+
+                def set_admission_rate(self, recovery_id: str, rate_percent: float) -> None:
+                    """Set current admission rate during recovery"""
+                    key = ("admission_rate_percent", (recovery_id,))
+                    self._set_gauge(key, rate_percent)
+
+                def record_signal_broadcast(self, tier: 'BackpressureTier') -> None:
+                    """Record backpressure signal broadcast"""
+                    key = ("signals_broadcast_total", (tier.name,))
+                    self._increment_counter(key)
+
+                def record_watermark_evaluation_duration(self, component: str, duration_ms: float) -> None:
+                    """Record duration of watermark threshold evaluation"""
+                    key = ("watermark_evaluation_duration_ms", (component,))
+                    self._observe_histogram(key, duration_ms)
+
+                def _increment_counter(self, key: tuple) -> None:
+                    """Increment a counter metric"""
+                    metric_name, labels = key
+                    if metric_name not in self._counters:
+                        self._counters[metric_name] = {}
+                    self._counters[metric_name][labels] = self._counters[metric_name].get(labels, 0) + 1
+
+                def _set_gauge(self, key: tuple, value: float) -> None:
+                    """Set a gauge metric value"""
+                    metric_name, labels = key
+                    if metric_name not in self._gauges:
+                        self._gauges[metric_name] = {}
+                    self._gauges[metric_name][labels] = value
+
+                def _observe_histogram(self, key: tuple, value: float) -> None:
+                    """Observe a value in a histogram metric"""
+                    metric_name, labels = key
+                    if metric_name not in self._histograms:
+                        self._histograms[metric_name] = {}
+                    if labels not in self._histograms[metric_name]:
+                        self._histograms[metric_name][labels] = []
+                    self._histograms[metric_name][labels].append(value)
+
+                def export_metrics(self) -> str:
+                    """Export metrics in Prometheus format"""
+                    lines = []
+
+                    # Export counters
+                    for metric_name, counters in self._counters.items():
+                        metric_def = self._metric_defs.get(metric_name)
+                        if not metric_def:
+                            continue
+
+                        lines.append(f"# HELP {metric_def.name} {metric_def.help}")
+                        lines.append(f"# TYPE {metric_def.name} counter")
+
+                        for labels, value in counters.items():
+                            label_str = ",".join(f'{k}="{v}"' for k, v in zip(metric_def.labels, labels))
+                            lines.append(f"{metric_def.name}{{{label_str}}} {value}")
+
+                    # Export gauges
+                    for metric_name, gauges in self._gauges.items():
+                        metric_def = self._metric_defs.get(metric_name)
+                        if not metric_def:
+                            continue
+
+                        lines.append(f"# HELP {metric_def.name} {metric_def.help}")
+                        lines.append(f"# TYPE {metric_def.name} gauge")
+
+                        for labels, value in gauges.items():
+                            label_str = ",".join(f'{k}="{v}"' for k, v in zip(metric_def.labels, labels))
+                            lines.append(f"{metric_def.name}{{{label_str}}} {value}")
+
+                    # Export histograms
+                    for metric_name, histograms in self._histograms.items():
+                        metric_def = self._metric_defs.get(metric_name)
+                        if not metric_def:
+                            continue
+
+                        lines.append(f"# HELP {metric_def.name} {metric_def.help}")
+                        lines.append(f"# TYPE {metric_def.name} histogram")
+
+                        for labels, values in histograms.items():
+                            if not values:
+                                continue
+
+                            label_str = ",".join(f'{k}="{v}"' for k, v in zip(metric_def.labels, labels))
+
+                            # Calculate histogram buckets
+                            buckets = metric_def.buckets or []
+                            bucket_counts = {}
+                            sum_val = 0.0
+                            count = 0
+
+                            for val in values:
+                                sum_val += val
+                                count += 1
+                                for bucket in buckets:
+                                    if val <= bucket:
+                                        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+                            # Export bucket counts
+                            for bucket in buckets:
+                                bucket_count = bucket_counts.get(bucket, 0)
+                                lines.append(f"{metric_def.name}_bucket{{le=\"{bucket}\",{label_str}}} {bucket_count}")
+
+                            lines.append(f"{metric_def.name}_bucket{{le=\"+Inf\",{label_str}}} {count}")
+                            lines.append(f"{metric_def.name}_count{{{label_str}}} {count}")
+                            lines.append(f"{metric_def.name}_sum{{{label_str}}} {sum_val}")
+
+                    return "\n".join(lines)
+
+  - name: BackpressureTracing
+    description: OpenTelemetry tracing integration for backpressure operations with cognitive trace ID correlation
+    research: OpenTelemetry tracing, distributed tracing patterns, cognitive trace correlation
+    performance_budget: <5ms span creation overhead, <1MB memory per active trace, <100 spans per backpressure event
+    reliability_properties:
+      - trace_correlation: All backpressure events linked by cognitive trace IDs
+      - span_hierarchy: Hierarchical spans for watermark evaluation → signal propagation → recovery steps
+      - baggage_propagation: Trace context propagated across component boundaries
+      - sampling_control: Intelligent sampling based on backpressure tier severity
+    methods:
+      - name: start_backpressure_trace
+        description: Start a new trace for backpressure event with cognitive trace ID
+        parameters:
+          - name: trace_id
+            type: String
+            description: Cognitive trace ID for correlation
+          - name: operation
+            type: String
+            description: Backpressure operation being traced
+          - name: tier
+            type: BackpressureTier
+            description: Current backpressure tier
+        returns:
+          type: TraceContext
+          description: Trace context for span correlation
+        implementation:
+          rust: |
+            use opentelemetry::{global, trace::{Tracer, Span, SpanBuilder, Status}};
+            use opentelemetry::trace::{TraceContextExt, TracerProvider};
+            use std::collections::HashMap;
+            use std::sync::Arc;
+
+            pub struct TraceContext {
+                pub span: opentelemetry::trace::Span,
+                pub trace_id: String,
+                pub attributes: HashMap<String, String>,
+            }
+
+            impl TraceContext {
+                pub fn new(span: opentelemetry::trace::Span, trace_id: String) -> Self {
+                    Self {
+                        span,
+                        trace_id,
+                        attributes: HashMap::new(),
+                    }
+                }
+
+                pub fn add_attribute(&mut self, key: &str, value: &str) {
+                    self.attributes.insert(key.to_string(), value.to_string());
+                    self.span.set_attribute(key, value);
+                }
+
+                pub fn set_status(&mut self, status: Status) {
+                    self.span.set_status(status);
+                }
+
+                pub fn end(self) {
+                    self.span.end();
+                }
+            }
+
+            pub struct BackpressureTracing {
+                tracer: opentelemetry::trace::Tracer,
+            }
+
+            impl BackpressureTracing {
+                pub fn new() -> Self {
+                    let tracer = global::tracer("backpressure");
+                    Self { tracer }
+                }
+
+                pub fn start_backpressure_trace(
+                    &self,
+                    trace_id: &str,
+                    operation: &str,
+                    tier: &super::watermark_thresholds::BackpressureTier,
+                ) -> TraceContext {
+                    let mut span = self.tracer
+                        .span_builder(&format!("backpressure.{}", operation))
+                        .with_trace_id(opentelemetry::trace::TraceId::from_hex(trace_id).unwrap_or_default())
+                        .start(&self.tracer);
+
+                    span.set_attribute("backpressure.tier", tier.as_str());
+                    span.set_attribute("backpressure.operation", operation);
+                    span.set_attribute("cognitive.trace_id", trace_id);
+
+                    let mut context = TraceContext::new(span, trace_id.to_string());
+                    context.add_attribute("component", "backpressure_system");
+
+                    tracing::debug!(
+                        trace_id = %trace_id,
+                        operation = %operation,
+                        tier = %tier.as_str(),
+                        "Backpressure trace started"
+                    );
+
+                    context
+                }
+
+                pub fn create_child_span(
+                    &self,
+                    parent_context: &TraceContext,
+                    operation: &str,
+                    attributes: HashMap<&str, &str>,
+                ) -> TraceContext {
+                    let mut span = self.tracer
+                        .span_builder(&format!("backpressure.{}", operation))
+                        .child_of(parent_context.span.context())
+                        .start(&self.tracer);
+
+                    // Set attributes
+                    for (key, value) in attributes {
+                        span.set_attribute(key, value);
+                    }
+
+                    span.set_attribute("cognitive.trace_id", &parent_context.trace_id);
+
+                    let mut context = TraceContext::new(span, parent_context.trace_id.clone());
+
+                    // Copy parent attributes
+                    for (key, value) in &parent_context.attributes {
+                        context.add_attribute(key, value);
+                    }
+
+                    context
+                }
+
+                pub fn record_watermark_evaluation(
+                    &self,
+                    context: &mut TraceContext,
+                    component: &str,
+                    evaluation_duration_ms: f64,
+                    new_tier: &super::watermark_thresholds::BackpressureTier,
+                    triggered_watermarks: Vec<String>,
+                ) {
+                    context.add_attribute("watermark.component", component);
+                    context.add_attribute("watermark.duration_ms", &evaluation_duration_ms.to_string());
+                    context.add_attribute("watermark.new_tier", new_tier.as_str());
+                    context.add_attribute("watermark.triggered_count", &triggered_watermarks.len().to_string());
+
+                    for (i, watermark) in triggered_watermarks.iter().enumerate() {
+                        context.add_attribute(&format!("watermark.triggered_{}", i), watermark);
+                    }
+
+                    tracing::debug!(
+                        trace_id = %context.trace_id,
+                        component = %component,
+                        duration_ms = evaluation_duration_ms,
+                        new_tier = %new_tier.as_str(),
+                        triggered_count = triggered_watermarks.len(),
+                        "Watermark evaluation traced"
+                    );
+                }
+
+                pub fn record_signal_propagation(
+                    &self,
+                    context: &mut TraceContext,
+                    propagation_latency_ms: f64,
+                    component_count: usize,
+                    failed_components: Vec<String>,
+                ) {
+                    context.add_attribute("propagation.latency_ms", &propagation_latency_ms.to_string());
+                    context.add_attribute("propagation.component_count", &component_count.to_string());
+                    context.add_attribute("propagation.failed_count", &failed_components.len().to_string());
+
+                    for (i, failed) in failed_components.iter().enumerate() {
+                        context.add_attribute(&format!("propagation.failed_{}", i), failed);
+                    }
+
+                    if propagation_latency_ms > 50.0 {
+                        context.set_status(Status::error("Propagation latency exceeded 50ms target"));
+                    }
+
+                    tracing::debug!(
+                        trace_id = %context.trace_id,
+                        latency_ms = propagation_latency_ms,
+                        component_count = component_count,
+                        failed_count = failed_components.len(),
+                        "Signal propagation traced"
+                    );
+                }
+
+                pub fn record_recovery_step(
+                    &self,
+                    context: &mut TraceContext,
+                    recovery_id: &str,
+                    step: u32,
+                    admission_rate_percent: f64,
+                    health_score: f64,
+                    step_duration_seconds: f64,
+                ) {
+                    context.add_attribute("recovery.id", recovery_id);
+                    context.add_attribute("recovery.step", &step.to_string());
+                    context.add_attribute("recovery.admission_rate_percent", &admission_rate_percent.to_string());
+                    context.add_attribute("recovery.health_score", &health_score.to_string());
+                    context.add_attribute("recovery.step_duration_seconds", &step_duration_seconds.to_string());
+
+                    tracing::debug!(
+                        trace_id = %context.trace_id,
+                        recovery_id = %recovery_id,
+                        step = step,
+                        admission_rate_percent = admission_rate_percent,
+                        health_score = health_score,
+                        step_duration_seconds = step_duration_seconds,
+                        "Recovery step traced"
+                    );
+                }
+
+                pub fn record_backpressure_event(
+                    &self,
+                    context: &mut TraceContext,
+                    event_type: &str,
+                    severity: &str,
+                    details: HashMap<&str, &str>,
+                ) {
+                    context.add_attribute("event.type", event_type);
+                    context.add_attribute("event.severity", severity);
+
+                    for (key, value) in details {
+                        context.add_attribute(&format!("event.{}", key), value);
+                    }
+
+                    tracing::info!(
+                        trace_id = %context.trace_id,
+                        event_type = %event_type,
+                        severity = %severity,
+                        "Backpressure event recorded"
+                    );
+                }
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import Dict, Optional, Any, List
+            import time
+            import logging
+            import uuid
+
+            @dataclass
+            class TraceContext:
+                """Context for tracing backpressure operations"""
+                trace_id: str
+                span_id: str
+                parent_span_id: Optional[str] = None
+                attributes: Dict[str, str] = field(default_factory=dict)
+                start_time: float = field(default_factory=time.time)
+
+                def add_attribute(self, key: str, value: str) -> None:
+                    """Add an attribute to the trace context"""
+                    self.attributes[key] = value
+
+                def set_status(self, status: str, description: Optional[str] = None) -> None:
+                    """Set the status of the trace span"""
+                    self.add_attribute("status", status)
+                    if description:
+                        self.add_attribute("status_description", description)
+
+                def end(self) -> float:
+                    """End the trace span and return duration"""
+                    duration = time.time() - self.start_time
+                    self.add_attribute("duration_seconds", str(duration))
+                    return duration
+
+            class BackpressureTracing:
+                """
+                OpenTelemetry-style tracing for backpressure operations.
+
+                Provides hierarchical tracing of backpressure events with cognitive
+                trace ID correlation across the distributed system.
+                """
+
+                def __init__(self):
+                    self.logger = logging.getLogger(__name__)
+                    self.active_traces: Dict[str, TraceContext] = {}
+
+                def start_backpressure_trace(
+                    self,
+                    trace_id: str,
+                    operation: str,
+                    tier: 'BackpressureTier'
+                ) -> TraceContext:
+                    """
+                    Start a new trace for backpressure event.
+
+                    Args:
+                        trace_id: Cognitive trace ID for correlation
+                        operation: Backpressure operation being traced
+                        tier: Current backpressure tier
+
+                    Returns:
+                        TraceContext for span correlation
+                    """
+                    span_id = str(uuid.uuid4())
+
+                    context = TraceContext(
+                        trace_id=trace_id,
+                        span_id=span_id,
+                        attributes={
+                            "backpressure.tier": tier.name,
+                            "backpressure.operation": operation,
+                            "cognitive.trace_id": trace_id,
+                            "component": "backpressure_system"
+                        }
+                    )
+
+                    self.active_traces[span_id] = context
+
+                    self.logger.debug(
+                        f"Backpressure trace started: {operation}",
+                        extra={
+                            'trace_id': trace_id,
+                            'span_id': span_id,
+                            'operation': operation,
+                            'tier': tier.name
+                        }
+                    )
+
+                    return context
+
+                def create_child_span(
+                    self,
+                    parent_context: TraceContext,
+                    operation: str,
+                    attributes: Optional[Dict[str, str]] = None
+                ) -> TraceContext:
+                    """
+                    Create a child span under an existing trace context.
+
+                    Args:
+                        parent_context: Parent trace context
+                        operation: Child operation name
+                        attributes: Additional attributes for the child span
+
+                    Returns:
+                        New child TraceContext
+                    """
+                    span_id = str(uuid.uuid4())
+
+                    child_attributes = {
+                        "cognitive.trace_id": parent_context.trace_id,
+                        "parent_span_id": parent_context.span_id,
+                        **parent_context.attributes.copy()
+                    }
+
+                    if attributes:
+                        child_attributes.update(attributes)
+
+                    context = TraceContext(
+                        trace_id=parent_context.trace_id,
+                        span_id=span_id,
+                        parent_span_id=parent_context.span_id,
+                        attributes=child_attributes
+                    )
+
+                    self.active_traces[span_id] = context
+
+                    return context
+
+                def record_watermark_evaluation(
+                    self,
+                    context: TraceContext,
+                    component: str,
+                    evaluation_duration_ms: float,
+                    new_tier: 'BackpressureTier',
+                    triggered_watermarks: List[str]
+                ) -> None:
+                    """Record watermark threshold evaluation in trace"""
+                    context.add_attribute("watermark.component", component)
+                    context.add_attribute("watermark.duration_ms", str(evaluation_duration_ms))
+                    context.add_attribute("watermark.new_tier", new_tier.name)
+                    context.add_attribute("watermark.triggered_count", str(len(triggered_watermarks)))
+
+                    for i, watermark in enumerate(triggered_watermarks):
+                        context.add_attribute(f"watermark.triggered_{i}", watermark)
+
+                    self.logger.debug(
+                        f"Watermark evaluation traced: {component}",
+                        extra={
+                            'trace_id': context.trace_id,
+                            'span_id': context.span_id,
+                            'component': component,
+                            'duration_ms': evaluation_duration_ms,
+                            'new_tier': new_tier.name,
+                            'triggered_count': len(triggered_watermarks)
+                        }
+                    )
+
+                def record_signal_propagation(
+                    self,
+                    context: TraceContext,
+                    propagation_latency_ms: float,
+                    component_count: int,
+                    failed_components: List[str]
+                ) -> None:
+                    """Record signal propagation in trace"""
+                    context.add_attribute("propagation.latency_ms", str(propagation_latency_ms))
+                    context.add_attribute("propagation.component_count", str(component_count))
+                    context.add_attribute("propagation.failed_count", str(len(failed_components)))
+
+                    for i, failed in enumerate(failed_components):
+                        context.add_attribute(f"propagation.failed_{i}", failed)
+
+                    if propagation_latency_ms > 50.0:
+                        context.set_status("error", "Propagation latency exceeded 50ms target")
+
+                    self.logger.debug(
+                        f"Signal propagation traced",
+                        extra={
+                            'trace_id': context.trace_id,
+                            'span_id': context.span_id,
+                            'latency_ms': propagation_latency_ms,
+                            'component_count': component_count,
+                            'failed_count': len(failed_components)
+                        }
+                    )
+
+                def record_recovery_step(
+                    self,
+                    context: TraceContext,
+                    recovery_id: str,
+                    step: int,
+                    admission_rate_percent: float,
+                    health_score: float,
+                    step_duration_seconds: float
+                ) -> None:
+                    """Record recovery step in trace"""
+                    context.add_attribute("recovery.id", recovery_id)
+                    context.add_attribute("recovery.step", str(step))
+                    context.add_attribute("recovery.admission_rate_percent", str(admission_rate_percent))
+                    context.add_attribute("recovery.health_score", str(health_score))
+                    context.add_attribute("recovery.step_duration_seconds", str(step_duration_seconds))
+
+                    self.logger.debug(
+                        f"Recovery step traced: {recovery_id} step {step}",
+                        extra={
+                            'trace_id': context.trace_id,
+                            'span_id': context.span_id,
+                            'recovery_id': recovery_id,
+                            'step': step,
+                            'admission_rate_percent': admission_rate_percent,
+                            'health_score': health_score,
+                            'step_duration_seconds': step_duration_seconds
+                        }
+                    )
+
+                def record_backpressure_event(
+                    self,
+                    context: TraceContext,
+                    event_type: str,
+                    severity: str,
+                    details: Optional[Dict[str, str]] = None
+                ) -> None:
+                    """Record general backpressure event in trace"""
+                    context.add_attribute("event.type", event_type)
+                    context.add_attribute("event.severity", severity)
+
+                    if details:
+                        for key, value in details.items():
+                            context.add_attribute(f"event.{key}", value)
+
+                    self.logger.info(
+                        f"Backpressure event recorded: {event_type}",
+                        extra={
+                            'trace_id': context.trace_id,
+                            'span_id': context.span_id,
+                            'event_type': event_type,
+                            'severity': severity,
+                            **(details or {})
+                        }
+                    )
+
+                def get_active_traces(self) -> Dict[str, TraceContext]:
+                    """Get all active trace contexts"""
+                    return self.active_traces.copy()
+
+                def export_trace_data(self, span_id: str) -> Optional[Dict[str, Any]]:
+                    """Export trace data for external analysis"""
+                    if span_id in self.active_traces:
+                        context = self.active_traces[span_id]
+                        return {
+                            "trace_id": context.trace_id,
+                            "span_id": context.span_id,
+                            "parent_span_id": context.parent_span_id,
+                            "attributes": context.attributes.copy(),
+                            "start_time": context.start_time,
+                            "duration_seconds": time.time() - context.start_time
+                        }
+                    return None
+
+alert_rules:
+  - name: BackpressureTierTransition
+    condition: increase(backpressure_tier_transitions_total[5m]) > 0
+    severity: warning
+    description: Backpressure tier transition detected
+    annotations:
+      summary: "Backpressure tier changed from {{ $labels.from_tier }} to {{ $labels.to_tier }}"
+      description: "Reason: {{ $labels.reason }}"
+
+  - name: BackpressurePropagationLatencyHigh
+    condition: histogram_quantile(0.95, rate(backpressure_propagation_latency_ms_bucket[5m])) > 50
+    severity: warning
+    description: Backpressure propagation latency above 50ms P95
+    annotations:
+      summary: "Backpressure propagation latency: {{ $value }}ms P95"
+      description: "Component: {{ $labels.component }}"
+
+  - name: BackpressureEmergencyTier
+    condition: backpressure_current_tier{component="orchestrator"} == 3
+    severity: critical
+    description: System in emergency backpressure tier
+    annotations:
+      summary: "CRITICAL: System in EMERGENCY backpressure tier"
+      description: "All non-critical operations suspended"
+
+  - name: BackpressureRecoveryFailed
+    condition: increase(backpressure_recovery_health_score{quantile="0.5"}[10m]) < 0.7
+    severity: error
+    description: Backpressure recovery health score degraded
+    annotations:
+      summary: "Recovery health degraded: {{ $value }}"
+      description: "Recovery ID: {{ $labels.recovery_id }}"
+
+  - name: BackpressureCircuitBreakerOpen
+    condition: up{job="backpressure-coordinator"} == 0
+    severity: critical
+    description: Backpressure coordinator circuit breaker open
+    annotations:
+      summary: "CRITICAL: Backpressure system unavailable"
+      description: "Manual intervention required"
+
+dependencies:
+  - name: prometheus
+    description: Metrics collection for Rust implementation
+  - name: opentelemetry
+    description: Distributed tracing for Rust implementation
+  - name: lazy_static
+    description: Static initialization for Rust metrics

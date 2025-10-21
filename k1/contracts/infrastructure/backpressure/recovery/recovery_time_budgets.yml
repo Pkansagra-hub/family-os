@@ -1,0 +1,289 @@
+classes:
+  - name: RecoveryTimeBudgets
+    description: Defines target recovery times and budgets for each tier transition with monitoring and alerting
+    research: ADR-0039c (backpressure recovery), SLA management, performance budgeting
+    performance_budget: <1ms budget checks, <10ms time tracking, <100ms budget validation
+    reliability_properties:
+      - time_bounded_recovery: Maximum time limits prevent infinite recovery attempts
+      - progressive_targets: Different time budgets for each tier transition
+      - monitoring_integration: Recovery times tracked and alerted upon
+      - budget_enforcement: Recovery pauses or escalates when budgets exceeded
+    methods:
+      - name: validate_recovery_budget
+        description: Check if recovery is within time budget for current transition
+        parameters:
+          - name: transition
+            type: TierTransition
+            description: Current tier transition being attempted
+          - name: elapsed_time
+            type: Duration
+            description: Time elapsed since transition started
+        returns:
+          type: BudgetValidationResult
+          description: Whether budget is valid or exceeded
+        implementation:
+          rust: |
+            use std::time::Duration;
+            use std::collections::HashMap;
+
+            pub struct RecoveryTimeBudgets {
+                budgets: HashMap<TierTransition, Duration>,
+                alerts_enabled: bool,
+            }
+
+            impl RecoveryTimeBudgets {
+                pub fn new() -> Self {
+                    let mut budgets = HashMap::new();
+
+                    // Define recovery time budgets per ADR-0039c
+                    budgets.insert(TierTransition::Tier3ToTier2, Duration::from_secs(60));  // 1 minute
+                    budgets.insert(TierTransition::Tier2ToTier1, Duration::from_secs(30));  // 30 seconds
+                    budgets.insert(TierTransition::Tier1ToNormal, Duration::from_secs(30));  // 30 seconds
+                    budgets.insert(TierTransition::EmergencyToNormal, Duration::from_secs(120)); // 2 minutes
+
+                    Self {
+                        budgets,
+                        alerts_enabled: true,
+                    }
+                }
+
+                pub fn validate_recovery_budget(
+                    &self,
+                    transition: TierTransition,
+                    elapsed_time: Duration,
+                ) -> BudgetValidationResult {
+                    let budget = self.budgets.get(&transition)
+                        .copied()
+                        .unwrap_or(Duration::from_secs(300)); // 5 minute default
+
+                    let is_within_budget = elapsed_time <= budget;
+                    let budget_utilization_percent = (elapsed_time.as_secs_f64() / budget.as_secs_f64() * 100.0) as u32;
+
+                    if !is_within_budget {
+                        tracing::error!(
+                            transition = ?transition,
+                            elapsed_seconds = elapsed_time.as_secs(),
+                            budget_seconds = budget.as_secs(),
+                            utilization_percent = budget_utilization_percent,
+                            "Recovery time budget exceeded"
+                        );
+                    } else if budget_utilization_percent >= 80 {
+                        tracing::warn!(
+                            transition = ?transition,
+                            elapsed_seconds = elapsed_time.as_secs(),
+                            budget_seconds = budget.as_secs(),
+                            utilization_percent = budget_utilization_percent,
+                            "Recovery time budget utilization high"
+                        );
+                    }
+
+                    BudgetValidationResult {
+                        is_within_budget,
+                        budget_utilization_percent,
+                        recommended_action: if !is_within_budget {
+                            BudgetAction::EscalateToEmergency
+                        } else if budget_utilization_percent >= 90 {
+                            BudgetAction::IncreaseMonitoring
+                        } else {
+                            BudgetAction::Continue
+                        },
+                    }
+                }
+
+                pub fn get_budget_for_transition(&self, transition: TierTransition) -> Duration {
+                    self.budgets.get(&transition)
+                        .copied()
+                        .unwrap_or(Duration::from_secs(300))
+                }
+
+                pub fn get_all_budgets(&self) -> &HashMap<TierTransition, Duration> {
+                    &self.budgets
+                }
+
+                pub fn calculate_total_recovery_budget(&self) -> Duration {
+                    // Sum of all individual transition budgets
+                    self.budgets.values().sum()
+                }
+
+                pub fn is_critical_budget_exceeded(
+                    &self,
+                    transition: TierTransition,
+                    elapsed_time: Duration,
+                ) -> bool {
+                    let budget = self.get_budget_for_transition(transition);
+                    let critical_threshold = budget.saturating_mul(2); // 200% of budget = critical
+                    elapsed_time > critical_threshold
+                }
+            }
+
+            impl Default for RecoveryTimeBudgets {
+                fn default() -> Self {
+                    Self::new()
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import Dict, Optional, Any
+            import time
+            import logging
+
+            class RecoveryTimeBudgets:
+                """
+                Defines and validates recovery time budgets for tier transitions.
+
+                Ensures recovery processes complete within acceptable time limits
+                and provides monitoring for budget utilization.
+                """
+
+                def __init__(self):
+                    self.logger = logging.getLogger(__name__)
+                    self.alerts_enabled = True
+
+                    # Recovery time budgets per ADR-0039c (in seconds)
+                    self.budgets = {
+                        'TIER_3_TO_TIER_2': 60,    # 1 minute
+                        'TIER_2_TO_TIER_1': 30,    # 30 seconds
+                        'TIER_1_TO_NORMAL': 30,    # 30 seconds
+                        'EMERGENCY_TO_NORMAL': 120, # 2 minutes total
+                    }
+
+                    # Default budget for unknown transitions
+                    self.default_budget = 300  # 5 minutes
+
+                def validate_recovery_budget(
+                    self,
+                    transition: str,
+                    elapsed_time: float
+                ) -> 'BudgetValidationResult':
+                    """Validate if recovery is within time budget"""
+                    budget_seconds = self.budgets.get(transition, self.default_budget)
+                    budget_duration = budget_seconds
+
+                    is_within_budget = elapsed_time <= budget_duration
+                    budget_utilization_percent = min(100.0, (elapsed_time / budget_duration) * 100.0)
+
+                    if not is_within_budget:
+                        self.logger.error(
+                            f"Recovery time budget exceeded for {transition}",
+                            extra={
+                                'transition': transition,
+                                'elapsed_seconds': elapsed_time,
+                                'budget_seconds': budget_duration,
+                                'utilization_percent': budget_utilization_percent
+                            }
+                        )
+                    elif budget_utilization_percent >= 80.0:
+                        self.logger.warning(
+                            f"Recovery time budget utilization high for {transition}",
+                            extra={
+                                'transition': transition,
+                                'elapsed_seconds': elapsed_time,
+                                'budget_seconds': budget_duration,
+                                'utilization_percent': budget_utilization_percent
+                            }
+                        )
+
+                    # Determine recommended action
+                    if not is_within_budget:
+                        recommended_action = 'ESCALATE_TO_EMERGENCY'
+                    elif budget_utilization_percent >= 90.0:
+                        recommended_action = 'INCREASE_MONITORING'
+                    else:
+                        recommended_action = 'CONTINUE'
+
+                    return BudgetValidationResult(
+                        is_within_budget=is_within_budget,
+                        budget_utilization_percent=budget_utilization_percent,
+                        recommended_action=recommended_action
+                    )
+
+                def get_budget_for_transition(self, transition: str) -> float:
+                    """Get time budget for a specific transition"""
+                    return self.budgets.get(transition, self.default_budget)
+
+                def get_all_budgets(self) -> Dict[str, float]:
+                    """Get all recovery time budgets"""
+                    return self.budgets.copy()
+
+                def calculate_total_recovery_budget(self) -> float:
+                    """Calculate total time budget for complete recovery"""
+                    return sum(self.budgets.values())
+
+                def is_critical_budget_exceeded(self, transition: str, elapsed_time: float) -> bool:
+                    """Check if critical budget threshold exceeded (200% of budget)"""
+                    budget = self.get_budget_for_transition(transition)
+                    critical_threshold = budget * 2.0
+                    return elapsed_time > critical_threshold
+
+                def get_budget_status(self, transition: str, elapsed_time: float) -> Dict[str, Any]:
+                    """Get detailed budget status information"""
+                    budget = self.get_budget_for_transition(transition)
+                    utilization = (elapsed_time / budget) * 100.0 if budget > 0 else 0.0
+
+                    status = 'WITHIN_BUDGET'
+                    if utilization >= 100.0:
+                        status = 'BUDGET_EXCEEDED'
+                    elif utilization >= 80.0:
+                        status = 'BUDGET_WARNING'
+
+                    return {
+                        'transition': transition,
+                        'elapsed_seconds': elapsed_time,
+                        'budget_seconds': budget,
+                        'utilization_percent': utilization,
+                        'status': status,
+                        'remaining_seconds': max(0.0, budget - elapsed_time)
+                    }
+
+recovery_time_targets:
+  - transition: TIER_3_TO_TIER_2
+    target_seconds: 60
+    description: Recovery from emergency tier to cancel-background tier
+    sustained_health_checks: 12
+    admission_rate_increase: "10% every 5s over 60s"
+  - transition: TIER_2_TO_TIER_1
+    target_seconds: 30
+    description: Recovery from cancel-background to reject-new tier
+    sustained_health_checks: 6
+    admission_rate_increase: "10% every 5s over 30s"
+  - transition: TIER_1_TO_NORMAL
+    target_seconds: 30
+    description: Recovery from reject-new tier to normal operation
+    sustained_health_checks: 6
+    admission_rate_increase: "10% every 5s over 30s"
+  - transition: EMERGENCY_TO_NORMAL
+    target_seconds: 120
+    description: Complete recovery from emergency to normal (total budget)
+    sustained_health_checks: 24
+    admission_rate_increase: "10% every 5s over 120s"
+
+budget_monitoring:
+  - threshold: 80%
+    action: warning_alert
+    description: Log warning when budget utilization reaches 80%
+  - threshold: 100%
+    action: error_alert
+    description: Log error and consider escalation when budget exceeded
+  - threshold: 200%
+    action: critical_escalation
+    description: Escalate to emergency tier when 200% of budget exceeded
+
+budget_enforcement:
+  - exceeded_action: pause_recovery
+    description: Pause recovery process when budget exceeded
+  - exceeded_action: reduce_admission_rate
+    description: Reduce admission rate to stabilize system
+  - exceeded_action: rollback_tier
+    description: Rollback to previous tier if budget significantly exceeded
+  - exceeded_action: emergency_escalation
+    description: Escalate to emergency tier for critical budget violations
+
+performance_requirements:
+  - budget_check_latency: <1ms
+    description: Budget validation must be fast to avoid impacting recovery
+  - time_tracking_accuracy: <100ms
+    description: Time measurements accurate to within 100ms
+  - monitoring_overhead: <10ms per transition
+    description: Budget monitoring adds minimal overhead
+  - alert_delivery: <1s
+    description: Budget alerts delivered within 1 second

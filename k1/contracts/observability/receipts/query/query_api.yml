@@ -1,0 +1,481 @@
+classes:
+  - name: QueryAPI
+    description: REST API endpoints for receipt queries with performance budgets and security controls
+    research: ADR-0038d (query interface), REST API design, GDPR Article 15 compliance
+    performance_budget: <50ms for session queries (P95), <500ms for user queries (P95)
+    reliability_properties:
+      - query_performance: All queries meet performance budgets
+      - data_consistency: Query results reflect current receipt state
+      - security_enforcement: All queries properly authenticated and authorized
+      - audit_logging: All queries logged for compliance verification
+    methods:
+      - name: get_session_receipts
+        description: Get all receipts for a specific session with hash verification
+        parameters:
+          - name: session_id
+            type: string
+            description: Session identifier to query receipts for
+          - name: include_deleted
+            type: bool
+            description: Include receipts marked for deletion
+          - name: verify_hashes
+            type: bool
+            description: Verify hash chain integrity for returned receipts
+          - name: trace_id
+            type: string
+            description: Cognitive trace ID for audit trail
+        returns:
+          type: SessionReceiptsResponse
+          description: Session receipts with metadata and hash verification status
+        implementation:
+          rust: |
+            use axum::{extract::Path, http::StatusCode, Json};
+            use serde::{Deserialize, Serialize};
+            use std::collections::HashMap;
+
+            #[derive(Deserialize)]
+            pub struct SessionQueryParams {
+                pub include_deleted: Option<bool>,
+                pub verify_hashes: Option<bool>,
+            }
+
+            #[derive(Serialize)]
+            pub struct SessionReceiptsResponse {
+                pub session_id: String,
+                pub total_receipts: usize,
+                pub receipts: Vec<ReceiptSummary>,
+                pub hash_chain_status: HashChainStatus,
+                pub query_metadata: QueryMetadata,
+                pub audit_trail: Vec<AuditEntry>,
+            }
+
+            #[derive(Serialize)]
+            pub struct ReceiptSummary {
+                pub receipt_id: String,
+                pub receipt_type: String,
+                pub timestamp: DateTime<Utc>,
+                pub hash_verified: bool,
+                pub privacy_band: String,
+                pub data_size_bytes: usize,
+            }
+
+            #[derive(Serialize)]
+            pub struct HashChainStatus {
+                pub chain_verified: bool,
+                pub total_links: usize,
+                pub broken_links: usize,
+                pub verification_errors: Vec<String>,
+            }
+
+            #[derive(Serialize)]
+            pub struct QueryMetadata {
+                pub query_duration_ms: f64,
+                pub cache_hit: bool,
+                pub cache_age_seconds: Option<f64>,
+                pub result_size_bytes: usize,
+            }
+
+            #[axum::debug_handler]
+            pub async fn get_session_receipts(
+                Path(session_id): Path<String>,
+                Query(params): Query<SessionQueryParams>,
+                Extension(state): Extension<AppState>,
+                trace_id: TraceId,
+            ) -> Result<Json<SessionReceiptsResponse>, StatusCode> {
+                let start_time = std::time::Instant::now();
+                let include_deleted = params.include_deleted.unwrap_or(false);
+                let verify_hashes = params.verify_hashes.unwrap_or(true);
+
+                // Check cache first
+                if let Some(cached) = state.lru_cache.get(&format!("session:{}", session_id)).await {
+                    if verify_hashes && !cached.hash_chain_status.chain_verified {
+                        // Cache invalid, re-query
+                    } else {
+                        let duration_ms = start_time.elapsed().as_millis() as f64;
+                        state.observability.record_query_metrics(
+                            "session_receipts",
+                            duration_ms,
+                            true, // cache hit
+                            cached.query_metadata.result_size_bytes,
+                            trace_id.as_str(),
+                        ).await;
+
+                        return Ok(Json(cached));
+                    }
+                }
+
+                // Query receipts from database
+                let receipts = state.receipt_store
+                    .get_session_receipts(&session_id, include_deleted)
+                    .await
+                    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+                // Verify hash chains if requested
+                let hash_status = if verify_hashes {
+                    verify_session_hash_chain(&receipts).await
+                } else {
+                    HashChainStatus {
+                        chain_verified: false,
+                        total_links: receipts.len(),
+                        broken_links: 0,
+                        verification_errors: vec![],
+                    }
+                };
+
+                // Create receipt summaries
+                let receipt_summaries = receipts
+                    .iter()
+                    .map(|r| ReceiptSummary {
+                        receipt_id: r.id.clone(),
+                        receipt_type: r.receipt_type.clone(),
+                        timestamp: r.timestamp,
+                        hash_verified: hash_status.chain_verified,
+                        privacy_band: r.privacy_band.clone(),
+                        data_size_bytes: serde_json::to_string(&r.data)
+                            .unwrap_or_default()
+                            .len(),
+                    })
+                    .collect::<Vec<_>>();
+
+                // Calculate response metadata
+                let result_size = serde_json::to_string(&receipt_summaries)
+                    .unwrap_or_default()
+                    .len();
+                let duration_ms = start_time.elapsed().as_millis() as f64;
+
+                let response = SessionReceiptsResponse {
+                    session_id: session_id.clone(),
+                    total_receipts: receipts.len(),
+                    receipts: receipt_summaries,
+                    hash_chain_status: hash_status,
+                    query_metadata: QueryMetadata {
+                        query_duration_ms: duration_ms,
+                        cache_hit: false,
+                        cache_age_seconds: None,
+                        result_size_bytes: result_size,
+                    },
+                    audit_trail: vec![AuditEntry {
+                        timestamp: Utc::now(),
+                        action: "SESSION_RECEIPTS_QUERY".to_string(),
+                        details: format!("Queried {} receipts for session {}", receipts.len(), session_id),
+                        trace_id: trace_id.to_string(),
+                    }],
+                };
+
+                // Cache response
+                state.lru_cache
+                    .put(format!("session:{}", session_id), response.clone(), Duration::minutes(10))
+                    .await;
+
+                // Record observability metrics
+                state.observability.record_query_metrics(
+                    "session_receipts",
+                    duration_ms,
+                    false, // cache miss
+                    result_size,
+                    trace_id.as_str(),
+                ).await;
+
+                // Log audit event
+                state.audit_logger.log_query(
+                    "session_receipts",
+                    &session_id,
+                    receipts.len(),
+                    duration_ms,
+                    trace_id.as_str(),
+                ).await;
+
+                Ok(Json(response))
+            }
+
+            async fn verify_session_hash_chain(receipts: &[Receipt]) -> HashChainStatus {
+                let mut broken_links = 0;
+                let mut errors = Vec::new();
+
+                for (i, receipt) in receipts.iter().enumerate() {
+                    if i == 0 {
+                        // First receipt should have no previous hash
+                        if receipt.previous_hash.is_some() {
+                            broken_links += 1;
+                            errors.push(format!("Receipt {} has unexpected previous_hash", receipt.id));
+                        }
+                    } else {
+                        let prev_receipt = &receipts[i - 1];
+                        if receipt.previous_hash.as_ref() != Some(&prev_receipt.current_hash) {
+                            broken_links += 1;
+                            errors.push(format!(
+                                "Receipt {} hash chain broken at link {}",
+                                receipt.id, i
+                            ));
+                        }
+                    }
+
+                    // Verify current hash matches data
+                    let computed_hash = compute_receipt_hash(receipt);
+                    if computed_hash != receipt.current_hash {
+                        broken_links += 1;
+                        errors.push(format!(
+                            "Receipt {} hash verification failed",
+                            receipt.id
+                        ));
+                    }
+                }
+
+                HashChainStatus {
+                    chain_verified: broken_links == 0,
+                    total_links: receipts.len(),
+                    broken_links,
+                    verification_errors: errors,
+                }
+            }
+
+            fn compute_receipt_hash(receipt: &Receipt) -> String {
+                use sha2::{Sha256, Digest};
+                let data = format!(
+                    "{}{}{}{}",
+                    receipt.id,
+                    receipt.timestamp.timestamp(),
+                    serde_json::to_string(&receipt.data).unwrap_or_default(),
+                    receipt.previous_hash.as_deref().unwrap_or("")
+                );
+                let mut hasher = Sha256::new();
+                hasher.update(data.as_bytes());
+                format!("{:x}", hasher.finalize())
+            }
+          python: |
+            from fastapi import APIRouter, Depends, HTTPException, Query
+            from pydantic import BaseModel
+            from typing import List, Optional, Dict, Any
+            from datetime import datetime, timezone
+            import asyncio
+            import hashlib
+            import json
+
+            router = APIRouter(prefix="/api/receipts", tags=["receipts"])
+
+            class SessionQueryParams(BaseModel):
+                include_deleted: bool = False
+                verify_hashes: bool = True
+
+            class ReceiptSummary(BaseModel):
+                receipt_id: str
+                receipt_type: str
+                timestamp: datetime
+                hash_verified: bool
+                privacy_band: str
+                data_size_bytes: int
+
+            class HashChainStatus(BaseModel):
+                chain_verified: bool
+                total_links: int
+                broken_links: int
+                verification_errors: List[str]
+
+            class QueryMetadata(BaseModel):
+                query_duration_ms: float
+                cache_hit: bool
+                cache_age_seconds: Optional[float]
+                result_size_bytes: int
+
+            class AuditEntry(BaseModel):
+                timestamp: datetime
+                action: str
+                details: str
+                trace_id: str
+
+            class SessionReceiptsResponse(BaseModel):
+                session_id: str
+                total_receipts: int
+                receipts: List[ReceiptSummary]
+                hash_chain_status: HashChainStatus
+                query_metadata: QueryMetadata
+                audit_trail: List[AuditEntry]
+
+            @router.get("/session/{session_id}", response_model=SessionReceiptsResponse)
+            async def get_session_receipts(
+                session_id: str,
+                params: SessionQueryParams = Depends(),
+                current_user: str = Depends(get_current_user),
+                trace_id: str = Depends(get_trace_id),
+                receipt_store: ReceiptStore = Depends(get_receipt_store),
+                lru_cache: LRUCache = Depends(get_lru_cache),
+                observability: QueryObservability = Depends(get_query_observability),
+                audit_logger: AuditLogger = Depends(get_audit_logger),
+            ):
+                """Get all receipts for a specific session with hash verification"""
+                start_time = asyncio.get_event_loop().time()
+
+                # Check cache first
+                cache_key = f"session:{session_id}"
+                cached_result = await lru_cache.get(cache_key)
+
+                if cached_result and (not params.verify_hashes or cached_result.hash_chain_status.chain_verified):
+                    duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+                    await observability.record_query_metrics(
+                        "session_receipts", duration_ms, True, cached_result.query_metadata.result_size_bytes, trace_id
+                    )
+                    return cached_result
+
+                # Query receipts from database
+                try:
+                    receipts = await receipt_store.get_session_receipts(session_id, params.include_deleted)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
+
+                # Verify hash chains if requested
+                if params.verify_hashes:
+                    hash_status = await verify_session_hash_chain(receipts)
+                else:
+                    hash_status = HashChainStatus(
+                        chain_verified=False,
+                        total_links=len(receipts),
+                        broken_links=0,
+                        verification_errors=[]
+                    )
+
+                # Create receipt summaries
+                receipt_summaries = []
+                for receipt in receipts:
+                    data_str = json.dumps(receipt.data, default=str)
+                    receipt_summaries.append(ReceiptSummary(
+                        receipt_id=receipt.id,
+                        receipt_type=receipt.receipt_type,
+                        timestamp=receipt.timestamp,
+                        hash_verified=hash_status.chain_verified,
+                        privacy_band=receipt.privacy_band,
+                        data_size_bytes=len(data_str)
+                    ))
+
+                # Calculate response metadata
+                result_size = len(json.dumps([r.dict() for r in receipt_summaries]))
+                duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+
+                response = SessionReceiptsResponse(
+                    session_id=session_id,
+                    total_receipts=len(receipts),
+                    receipts=receipt_summaries,
+                    hash_chain_status=hash_status,
+                    query_metadata=QueryMetadata(
+                        query_duration_ms=duration_ms,
+                        cache_hit=False,
+                        cache_age_seconds=None,
+                        result_size_bytes=result_size
+                    ),
+                    audit_trail=[AuditEntry(
+                        timestamp=datetime.now(timezone.utc),
+                        action="SESSION_RECEIPTS_QUERY",
+                        details=f"Queried {len(receipts)} receipts for session {session_id}",
+                        trace_id=trace_id
+                    )]
+                )
+
+                # Cache response for 10 minutes
+                await lru_cache.set(cache_key, response, ttl_seconds=600)
+
+                # Record observability metrics
+                await observability.record_query_metrics(
+                    "session_receipts", duration_ms, False, result_size, trace_id
+                )
+
+                # Log audit event
+                await audit_logger.log_query(
+                    "session_receipts", session_id, len(receipts), duration_ms, trace_id
+                )
+
+                return response
+
+            async def verify_session_hash_chain(receipts: List[Dict[str, Any]]) -> HashChainStatus:
+                """Verify hash chain integrity for session receipts"""
+                broken_links = 0
+                errors = []
+
+                for i, receipt in enumerate(receipts):
+                    if i == 0:
+                        # First receipt should have no previous hash
+                        if receipt.get('previous_hash'):
+                            broken_links += 1
+                            errors.append(f"Receipt {receipt['id']} has unexpected previous_hash")
+                    else:
+                        prev_receipt = receipts[i - 1]
+                        if receipt.get('previous_hash') != prev_receipt.get('current_hash'):
+                            broken_links += 1
+                            errors.append(f"Receipt {receipt['id']} hash chain broken at link {i}")
+
+                    # Verify current hash matches data
+                    computed_hash = compute_receipt_hash(receipt)
+                    if computed_hash != receipt.get('current_hash'):
+                        broken_links += 1
+                        errors.append(f"Receipt {receipt['id']} hash verification failed")
+
+                return HashChainStatus(
+                    chain_verified=broken_links == 0,
+                    total_links=len(receipts),
+                    broken_links=broken_links,
+                    verification_errors=errors
+                )
+
+            def compute_receipt_hash(receipt: Dict[str, Any]) -> str:
+                """Compute SHA-256 hash for receipt data"""
+                data = f"{receipt['id']}{receipt['timestamp'].timestamp()}{json.dumps(receipt['data'], sort_keys=True)}{receipt.get('previous_hash', '')}"
+                return hashlib.sha256(data.encode()).hexdigest()
+
+            @router.get("/user/{user_id}", response_model=UserReceiptsResponse)
+            async def get_user_receipts(
+                user_id: str,
+                privacy_band: str = Query(..., description="User's privacy band"),
+                include_deleted: bool = Query(False, description="Include deleted receipts"),
+                limit: int = Query(100, description="Maximum receipts to return"),
+                offset: int = Query(0, description="Pagination offset"),
+                current_user: str = Depends(get_current_user),
+                trace_id: str = Depends(get_trace_id),
+                receipt_store: ReceiptStore = Depends(get_receipt_store),
+                observability: QueryObservability = Depends(get_query_observability),
+                audit_logger: AuditLogger = Depends(get_audit_logger),
+            ):
+                """Get receipts for a user with pagination and privacy controls"""
+                # Implementation follows similar pattern to session receipts
+                # but with user-based filtering and pagination
+                pass
+
+    dependencies:
+      - name: axum
+        description: Web framework for REST API endpoints
+      - name: fastapi
+        description: Python web framework for API endpoints
+      - name: serde
+        description: Serialization for API responses
+      - name: tokio
+        description: Async runtime for API handlers
+
+testing_requirements:
+  - unit_tests:
+      - endpoint_responses: All endpoints return correct response schemas
+      - parameter_validation: Query parameters properly validated
+      - error_handling: Proper HTTP status codes for error conditions
+  - integration_tests:
+      - database_queries: API calls result in correct database queries
+      - cache_behavior: LRU cache properly utilized and invalidated
+      - observability: Metrics and tracing collected for all requests
+  - security_tests:
+      - authentication: All endpoints require valid authentication
+      - authorization: Users can only access their own receipts
+      - rate_limiting: Query endpoints properly rate limited
+  - performance_tests:
+      - response_time: Session queries <50ms P95, user queries <500ms P95
+      - concurrent_requests: API handles multiple concurrent queries
+      - memory_usage: No memory leaks under load
+
+rate_limits:
+  - session_receipts: 100 requests per minute per user
+  - user_receipts: 10 requests per minute per user
+  - export_requests: 1 request per hour per user
+
+authentication:
+  - bearer_token: JWT token with user identity and permissions
+  - api_key: Service-to-service authentication for internal queries
+
+compliance:
+  - gdpr: Article 15 (right of access by data subject)
+  - gdpr: Article 30 (records of processing activities)
+  - hipaa: § 164.524 (access of individuals to protected health information)
+  - soc2: CC7.1 (access to systems and data)

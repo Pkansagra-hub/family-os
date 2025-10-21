@@ -2743,7 +2743,7 @@ k1_module_manifest:
 
 ---
 
-### Epic 2.13: Backpressure Cascade 3-Tier Contracts
+## Epic 2.13: Backpressure Cascade 3-Tier Contracts
 
 **Source ADR:** ADR-0039 (Backpressure Cascade) + sub-ADRs (0039a-c)
 **Priority:** CRITICAL (Reliability & Performance)
@@ -2751,7 +2751,7 @@ k1_module_manifest:
 
 **Context:** ADR-0039 requires 3-tier backpressure cascade for system overload protection with graduated responses (Tier 1: reject new turns at 50 queue depth, Tier 2: cancel background tasks at 100 queue depth, Tier 3: emergency throttle at 200 queue depth), watermark thresholds with 10% hysteresis (prevents oscillation), <50ms signal propagation to all components via Actor Model message passing, and gradual recovery with rate-limited admission (10% every 5s) to prevent thundering herd.
 
-#### Issue 2.13.1: Watermark Thresholds & Tier Triggers Contracts
+### Issue 2.13.1: Watermark Thresholds & Tier Triggers Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/watermarks/` (8 files)
 
@@ -2770,7 +2770,7 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.13.2: Signal Propagation & Component Response Contracts
+### Issue 2.13.2: Signal Propagation & Component Response Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/propagation/` (7 files)
 
@@ -2788,7 +2788,7 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.13.3: Recovery & Gradual Resume Contracts
+### Issue 2.13.3: Recovery & Gradual Resume Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/recovery/` (7 files)
 
@@ -2806,7 +2806,7 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.13.4: Privacy Band Retention Override Contracts
+### Issue 2.13.4: Privacy Band Retention Override Contracts
 
 **Expected Output:** `contracts/privacy/retention_overrides/` (6 files)
 
@@ -2825,7 +2825,7 @@ k1_module_manifest:
 
 ---
 
-### Epic 2.14: WebSocket Real-Time Chat Contracts
+## Epic 2.14: WebSocket Real-Time Chat Contracts
 
 **Source ADR:** ADR-0040 (WebSocket Chat) + sub-ADRs (0040a-d)
 **Priority:** CRITICAL (Communication & Real-Time)

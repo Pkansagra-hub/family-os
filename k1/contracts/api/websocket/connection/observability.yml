@@ -1,0 +1,481 @@
+classes:
+  - name: ConnectionMetrics
+    description: Prometheus metrics for WebSocket connection management and performance monitoring
+    research: Prometheus best practices, RED method (Rate, Errors, Duration), USE method (Utilization, Saturation, Errors)
+    performance_impact: Minimal (<1ms per metric operation)
+    reliability_properties:
+      - comprehensive_coverage: All connection lifecycle events tracked
+      - performance_budgets_validated: Histogram buckets aligned with <500ms budget
+      - error_tracking: Authentication failures, upgrade failures, disconnects by code
+      - cardinality_control: Limited labels to prevent metric explosion
+    methods:
+      - name: record_connection_established
+        description: Record successful connection establishment with latency
+        parameters:
+          - name: duration
+            type: Duration
+            description: Total connection establishment time
+          - name: success
+            type: bool
+            description: Whether connection succeeded
+        implementation:
+          rust: |
+            use prometheus::{IntGauge, IntCounter, HistogramVec, Histogram, Registry};
+            use std::time::Duration;
+
+            pub struct ConnectionMetrics {
+                // Gauges (current state)
+                connections_total: IntGauge,
+                connections_by_space: IntGaugeVec,
+
+                // Counters (monotonic)
+                connection_attempts_total: IntCounter,
+                connection_established_total: IntCounter,
+                connection_failed_total: IntCounterVec,
+                authentication_failures_total: IntCounterVec,
+                graceful_disconnects_total: IntCounterVec,
+                websocket_messages_sent_total: IntCounterVec,
+                websocket_messages_received_total: IntCounterVec,
+
+                // Histograms (distributions)
+                connection_latency_ms: Histogram,
+                tls_handshake_latency_ms: Histogram,
+                jwt_validation_latency_ms: Histogram,
+                websocket_upgrade_latency_ms: Histogram,
+                message_latency_ms: HistogramVec,
+            }
+
+            impl ConnectionMetrics {
+                pub fn new(registry: &Registry) -> Self {
+                    let connections_total = IntGauge::new(
+                        "websocket_connections_total",
+                        "Total number of active WebSocket connections"
+                    ).unwrap();
+
+                    let connections_by_space = IntGaugeVec::new(
+                        prometheus::Opts::new("websocket_connections_by_space", "Active connections by space_id"),
+                        &["space_id"]
+                    ).unwrap();
+
+                    let connection_attempts_total = IntCounter::new(
+                        "websocket_connection_attempts_total",
+                        "Total number of WebSocket connection attempts"
+                    ).unwrap();
+
+                    let connection_established_total = IntCounter::new(
+                        "websocket_connection_established_total",
+                        "Total number of successful WebSocket connections"
+                    ).unwrap();
+
+                    let connection_failed_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_connection_failed_total", "Total failed connections"),
+                        &["reason"]
+                    ).unwrap();
+
+                    let authentication_failures_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_authentication_failures_total", "JWT authentication failures"),
+                        &["reason"]
+                    ).unwrap();
+
+                    let graceful_disconnects_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_graceful_disconnects_total", "Graceful disconnects by close code"),
+                        &["close_code", "reason"]
+                    ).unwrap();
+
+                    let websocket_messages_sent_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_messages_sent_total", "Messages sent to clients"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let websocket_messages_received_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_messages_received_total", "Messages received from clients"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let connection_latency_ms = Histogram::with_opts(
+                        prometheus::HistogramOpts::new(
+                            "websocket_connection_latency_ms",
+                            "Total connection establishment latency in milliseconds"
+                        ).buckets(vec![10.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0])
+                    ).unwrap();
+
+                    let tls_handshake_latency_ms = Histogram::with_opts(
+                        prometheus::HistogramOpts::new(
+                            "websocket_tls_handshake_latency_ms",
+                            "TLS handshake latency in milliseconds"
+                        ).buckets(vec![10.0, 50.0, 100.0, 200.0, 500.0])
+                    ).unwrap();
+
+                    let jwt_validation_latency_ms = Histogram::with_opts(
+                        prometheus::HistogramOpts::new(
+                            "websocket_jwt_validation_latency_ms",
+                            "JWT validation latency in milliseconds"
+                        ).buckets(vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0])
+                    ).unwrap();
+
+                    let websocket_upgrade_latency_ms = Histogram::with_opts(
+                        prometheus::HistogramOpts::new(
+                            "websocket_upgrade_latency_ms",
+                            "HTTP→WebSocket upgrade latency in milliseconds"
+                        ).buckets(vec![5.0, 10.0, 25.0, 50.0, 100.0, 200.0])
+                    ).unwrap();
+
+                    let message_latency_ms = HistogramVec::new(
+                        prometheus::HistogramOpts::new(
+                            "websocket_message_latency_ms",
+                            "Message processing latency in milliseconds"
+                        ).buckets(vec![1.0, 5.0, 10.0, 25.0, 50.0, 100.0]),
+                        &["message_type", "direction"]
+                    ).unwrap();
+
+                    // Register all metrics
+                    registry.register(Box::new(connections_total.clone())).unwrap();
+                    registry.register(Box::new(connections_by_space.clone())).unwrap();
+                    registry.register(Box::new(connection_attempts_total.clone())).unwrap();
+                    registry.register(Box::new(connection_established_total.clone())).unwrap();
+                    registry.register(Box::new(connection_failed_total.clone())).unwrap();
+                    registry.register(Box::new(authentication_failures_total.clone())).unwrap();
+                    registry.register(Box::new(graceful_disconnects_total.clone())).unwrap();
+                    registry.register(Box::new(websocket_messages_sent_total.clone())).unwrap();
+                    registry.register(Box::new(websocket_messages_received_total.clone())).unwrap();
+                    registry.register(Box::new(connection_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(tls_handshake_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(jwt_validation_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(websocket_upgrade_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(message_latency_ms.clone())).unwrap();
+
+                    Self {
+                        connections_total,
+                        connections_by_space,
+                        connection_attempts_total,
+                        connection_established_total,
+                        connection_failed_total,
+                        authentication_failures_total,
+                        graceful_disconnects_total,
+                        websocket_messages_sent_total,
+                        websocket_messages_received_total,
+                        connection_latency_ms,
+                        tls_handshake_latency_ms,
+                        jwt_validation_latency_ms,
+                        websocket_upgrade_latency_ms,
+                        message_latency_ms,
+                    }
+                }
+
+                pub fn record_connection_established(&self, duration: Duration, success: bool) {
+                    self.connection_attempts_total.inc();
+                    if success {
+                        self.connection_established_total.inc();
+                        self.connections_total.inc();
+                        self.connection_latency_ms.observe(duration.as_secs_f64() * 1000.0);
+                    }
+                }
+
+                pub fn record_connection_failed(&self, reason: &str) {
+                    self.connection_attempts_total.inc();
+                    self.connection_failed_total.with_label_values(&[reason]).inc();
+                }
+
+                pub fn record_authentication_failure(&self, reason: &str) {
+                    self.authentication_failures_total.with_label_values(&[reason]).inc();
+                }
+
+                pub fn record_graceful_disconnect(&self, close_code: u16, reason: &str) {
+                    self.connections_total.dec();
+                    self.graceful_disconnects_total.with_label_values(&[&close_code.to_string(), reason]).inc();
+                }
+
+                pub fn record_tls_handshake(&self, duration: Duration) {
+                    self.tls_handshake_latency_ms.observe(duration.as_secs_f64() * 1000.0);
+                }
+
+                pub fn record_jwt_validation(&self, duration: Duration) {
+                    self.jwt_validation_latency_ms.observe(duration.as_secs_f64() * 1000.0);
+                }
+
+                pub fn record_websocket_upgrade(&self, duration: Duration) {
+                    self.websocket_upgrade_latency_ms.observe(duration.as_secs_f64() * 1000.0);
+                }
+
+                pub fn record_message_sent(&self, message_type: &str, latency: Duration) {
+                    self.websocket_messages_sent_total.with_label_values(&[message_type]).inc();
+                    self.message_latency_ms.with_label_values(&[message_type, "outbound"]).observe(latency.as_secs_f64() * 1000.0);
+                }
+
+                pub fn record_message_received(&self, message_type: &str, latency: Duration) {
+                    self.websocket_messages_received_total.with_label_values(&[message_type]).inc();
+                    self.message_latency_ms.with_label_values(&[message_type, "inbound"]).observe(latency.as_secs_f64() * 1000.0);
+                }
+
+                pub fn record_connection_by_space(&self, space_id: &str, delta: i64) {
+                    if delta > 0 {
+                        self.connections_by_space.with_label_values(&[space_id]).inc();
+                    } else {
+                        self.connections_by_space.with_label_values(&[space_id]).dec();
+                    }
+                }
+            }
+          python: |
+            from prometheus_client import Gauge, Counter, Histogram, CollectorRegistry
+            import time
+
+            class ConnectionMetrics:
+                """Prometheus metrics for WebSocket connections"""
+
+                def __init__(self, registry: CollectorRegistry):
+                    # Gauges
+                    self.connections_total = Gauge(
+                        'websocket_connections_total',
+                        'Total number of active WebSocket connections',
+                        registry=registry
+                    )
+                    self.connections_by_space = Gauge(
+                        'websocket_connections_by_space',
+                        'Active connections by space_id',
+                        ['space_id'],
+                        registry=registry
+                    )
+
+                    # Counters
+                    self.connection_attempts_total = Counter(
+                        'websocket_connection_attempts_total',
+                        'Total number of WebSocket connection attempts',
+                        registry=registry
+                    )
+                    self.connection_established_total = Counter(
+                        'websocket_connection_established_total',
+                        'Total number of successful WebSocket connections',
+                        registry=registry
+                    )
+                    self.connection_failed_total = Counter(
+                        'websocket_connection_failed_total',
+                        'Total failed connections',
+                        ['reason'],
+                        registry=registry
+                    )
+                    self.authentication_failures_total = Counter(
+                        'websocket_authentication_failures_total',
+                        'JWT authentication failures',
+                        ['reason'],
+                        registry=registry
+                    )
+                    self.graceful_disconnects_total = Counter(
+                        'websocket_graceful_disconnects_total',
+                        'Graceful disconnects by close code',
+                        ['close_code', 'reason'],
+                        registry=registry
+                    )
+
+                    # Histograms
+                    self.connection_latency_ms = Histogram(
+                        'websocket_connection_latency_ms',
+                        'Total connection establishment latency in milliseconds',
+                        buckets=[10, 50, 100, 200, 500, 1000, 2000],
+                        registry=registry
+                    )
+                    self.tls_handshake_latency_ms = Histogram(
+                        'websocket_tls_handshake_latency_ms',
+                        'TLS handshake latency in milliseconds',
+                        buckets=[10, 50, 100, 200, 500],
+                        registry=registry
+                    )
+                    self.jwt_validation_latency_ms = Histogram(
+                        'websocket_jwt_validation_latency_ms',
+                        'JWT validation latency in milliseconds',
+                        buckets=[1, 5, 10, 25, 50, 100],
+                        registry=registry
+                    )
+
+                def record_connection_established(self, duration_ms: float, success: bool):
+                    """Record connection establishment"""
+                    self.connection_attempts_total.inc()
+                    if success:
+                        self.connection_established_total.inc()
+                        self.connections_total.inc()
+                        self.connection_latency_ms.observe(duration_ms)
+
+                def record_connection_failed(self, reason: str):
+                    """Record failed connection"""
+                    self.connection_attempts_total.inc()
+                    self.connection_failed_total.labels(reason=reason).inc()
+
+                def record_graceful_disconnect(self, close_code: int, reason: str):
+                    """Record graceful disconnect"""
+                    self.connections_total.dec()
+                    self.graceful_disconnects_total.labels(close_code=str(close_code), reason=reason).inc()
+
+prometheus_metrics:
+  gauges:
+    - name: websocket_connections_total
+      description: Current number of active WebSocket connections
+      type: Gauge
+      purpose: Track connection saturation
+      alerts:
+        - condition: value > 10000
+          severity: warning
+          message: High connection count (>10K)
+    - name: websocket_connections_by_space
+      description: Active connections per space_id
+      type: Gauge
+      labels: [space_id]
+      purpose: Track per-space connection distribution
+      cardinality_limit: 1000
+
+  counters:
+    - name: websocket_connection_attempts_total
+      description: Total connection attempts (successful + failed)
+      type: Counter
+      purpose: Track overall connection rate
+    - name: websocket_connection_established_total
+      description: Total successful connections
+      type: Counter
+      purpose: Track success rate
+    - name: websocket_connection_failed_total
+      description: Total failed connections
+      type: Counter
+      labels: [reason]
+      values: [authentication_failed, upgrade_failed, registration_failed, tls_failed]
+      purpose: Track failure reasons
+    - name: websocket_authentication_failures_total
+      description: JWT authentication failures
+      type: Counter
+      labels: [reason]
+      values: [invalid_token, expired_token, missing_token, invalid_signature]
+      purpose: Track security issues
+    - name: websocket_graceful_disconnects_total
+      description: Graceful disconnections by close code
+      type: Counter
+      labels: [close_code, reason]
+      values:
+        close_codes: [1000, 1001, 1008, 1011]
+        reasons: [normal_closure, going_away, policy_violation, server_error]
+      purpose: Track disconnect patterns
+    - name: websocket_messages_sent_total
+      description: Total messages sent to clients
+      type: Counter
+      labels: [message_type]
+      purpose: Track message throughput
+    - name: websocket_messages_received_total
+      description: Total messages received from clients
+      type: Counter
+      labels: [message_type]
+      purpose: Track inbound message rate
+
+  histograms:
+    - name: websocket_connection_latency_ms
+      description: Total connection establishment latency
+      type: Histogram
+      buckets: [10, 50, 100, 200, 500, 1000, 2000]
+      purpose: Validate <500ms budget
+      slo_target: P95 < 500ms
+      alerts:
+        - condition: histogram_quantile(0.95, rate(websocket_connection_latency_ms_bucket[5m])) > 500
+          severity: warning
+          message: P95 connection latency >500ms
+    - name: websocket_tls_handshake_latency_ms
+      description: TLS 1.3 handshake latency
+      type: Histogram
+      buckets: [10, 50, 100, 200, 500]
+      purpose: Validate <200ms budget
+      slo_target: P95 < 200ms
+    - name: websocket_jwt_validation_latency_ms
+      description: JWT signature verification latency
+      type: Histogram
+      buckets: [1, 5, 10, 25, 50, 100]
+      purpose: Validate <50ms budget
+      slo_target: P95 < 50ms
+    - name: websocket_upgrade_latency_ms
+      description: HTTP→WebSocket upgrade latency
+      type: Histogram
+      buckets: [5, 10, 25, 50, 100, 200]
+      purpose: Validate <100ms budget
+      slo_target: P95 < 100ms
+    - name: websocket_message_latency_ms
+      description: Message processing latency
+      type: Histogram
+      labels: [message_type, direction]
+      buckets: [1, 5, 10, 25, 50, 100]
+      purpose: Track message handling performance
+
+grafana_dashboard:
+  title: WebSocket Connection Management
+  panels:
+    - title: Active Connections
+      type: graph
+      query: websocket_connections_total
+      description: Current number of active WebSocket connections
+    - title: Connection Rate
+      type: graph
+      query: rate(websocket_connection_established_total[1m])
+      description: Connections per second
+    - title: Connection Latency (P50/P95/P99)
+      type: graph
+      queries:
+        - histogram_quantile(0.50, rate(websocket_connection_latency_ms_bucket[5m]))
+        - histogram_quantile(0.95, rate(websocket_connection_latency_ms_bucket[5m]))
+        - histogram_quantile(0.99, rate(websocket_connection_latency_ms_bucket[5m]))
+      thresholds:
+        - value: 500
+          color: orange
+          label: P95 budget
+    - title: Authentication Failures
+      type: graph
+      query: rate(websocket_authentication_failures_total[1m])
+      description: Authentication failures per second by reason
+    - title: Connection Failures by Reason
+      type: pie
+      query: sum by (reason) (websocket_connection_failed_total)
+      description: Distribution of connection failures
+    - title: Graceful Disconnects by Close Code
+      type: graph
+      query: rate(websocket_graceful_disconnects_total[1m])
+      description: Disconnect rate by RFC 6455 close code
+    - title: TLS Handshake Latency
+      type: graph
+      query: histogram_quantile(0.95, rate(websocket_tls_handshake_latency_ms_bucket[5m]))
+      threshold: 200
+    - title: JWT Validation Latency
+      type: graph
+      query: histogram_quantile(0.95, rate(websocket_jwt_validation_latency_ms_bucket[5m]))
+      threshold: 50
+    - title: Message Throughput (In/Out)
+      type: graph
+      queries:
+        - rate(websocket_messages_sent_total[1m])
+        - rate(websocket_messages_received_total[1m])
+    - title: Connections by Space
+      type: table
+      query: topk(10, websocket_connections_by_space)
+
+alerting_rules:
+  - alert: HighConnectionLatency
+    expr: histogram_quantile(0.95, rate(websocket_connection_latency_ms_bucket[5m])) > 500
+    for: 5m
+    severity: warning
+    description: P95 connection latency exceeds 500ms budget
+  - alert: HighAuthenticationFailureRate
+    expr: rate(websocket_authentication_failures_total[5m]) > 10
+    for: 2m
+    severity: critical
+    description: High authentication failure rate (>10/sec)
+  - alert: ConnectionSaturation
+    expr: websocket_connections_total > 10000
+    for: 5m
+    severity: warning
+    description: Connection count exceeds 10K
+  - alert: TLSHandshakeLatency
+    expr: histogram_quantile(0.95, rate(websocket_tls_handshake_latency_ms_bucket[5m])) > 200
+    for: 5m
+    severity: warning
+    description: TLS handshake latency exceeds 200ms budget
+
+cardinality_control:
+  - metric: websocket_connections_by_space
+    max_labels: 1000
+    strategy: Drop least recently used spaces after 1000 unique space_ids
+  - metric: websocket_messages_sent_total
+    max_labels: 20
+    strategy: Limit message_type labels to 17 defined types + 3 custom
+  - metric: websocket_graceful_disconnects_total
+    max_labels: 8
+    strategy: Limit to RFC 6455 defined close codes (4 primary codes)

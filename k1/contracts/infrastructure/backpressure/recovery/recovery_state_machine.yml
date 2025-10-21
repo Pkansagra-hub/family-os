@@ -1,0 +1,259 @@
+classes:
+  - name: RecoveryStateMachine
+    description: Finite state machine for backpressure recovery with tier transitions and health check validation
+    research: ADR-0039c (backpressure recovery), state machine patterns, gradual recovery algorithms
+    performance_budget: <1ms state transitions, <5s health check validation, <10ms recovery decisions
+    reliability_properties:
+      - automatic_rollback: Health check failures trigger immediate rollback to previous tier
+      - sustained_validation: All tier transitions require sustained health check success
+      - gradual_progression: Recovery proceeds through tiers with increasing admission rates
+      - safety_first: Any health degradation causes immediate escalation
+    methods:
+      - name: transition_to_tier
+        description: Attempt tier transition with health check validation
+        parameters:
+          - name: target_tier
+            type: BackpressureTier
+            description: Target tier to transition to
+          - name: sustained_duration
+            type: Duration
+            description: Required sustained health check success duration
+        returns:
+          type: Result<(), RecoveryError>
+          description: Success or error with rollback reason
+        implementation:
+          rust: |
+            use std::time::{Duration, Instant};
+            use tokio::time::sleep;
+
+            pub struct RecoveryStateMachine {
+                current_tier: BackpressureTier,
+                health_checker: Arc<dyn HealthChecker>,
+                recovery_start: Instant,
+                last_health_check: Instant,
+                sustained_success_count: u32,
+                required_sustained_checks: u32,
+            }
+
+            impl RecoveryStateMachine {
+                pub async fn transition_to_tier(
+                    &mut self,
+                    target_tier: BackpressureTier,
+                    sustained_duration: Duration,
+                ) -> Result<(), RecoveryError> {
+                    let required_checks = (sustained_duration.as_secs() / 5) as u32; // 5s intervals
+                    self.required_sustained_checks = required_checks;
+
+                    // Reset counters for new transition attempt
+                    self.sustained_success_count = 0;
+                    self.last_health_check = Instant::now();
+
+                    loop {
+                        // Run health check
+                        let health_result = self.health_checker.check_health().await;
+
+                        match health_result {
+                            Ok(health) if health.is_healthy() => {
+                                self.sustained_success_count += 1;
+                                self.last_health_check = Instant::now();
+
+                                // Check if we've sustained health for required duration
+                                if self.sustained_success_count >= required_checks {
+                                    // Transition successful
+                                    let old_tier = self.current_tier;
+                                    self.current_tier = target_tier;
+                                    self.recovery_start = Instant::now();
+
+                                    tracing::info!(
+                                        old_tier = %old_tier,
+                                        new_tier = %target_tier,
+                                        sustained_duration = ?sustained_duration,
+                                        "Recovery tier transition successful"
+                                    );
+
+                                    return Ok(());
+                                }
+                            }
+                            Ok(health) => {
+                                // Health check passed but not healthy enough
+                                tracing::warn!(
+                                    health_status = ?health,
+                                    sustained_count = self.sustained_success_count,
+                                    required = required_checks,
+                                    "Health check passed but not healthy for transition"
+                                );
+                                self.sustained_success_count = 0; // Reset on any failure
+                            }
+                            Err(e) => {
+                                // Health check failed - rollback
+                                tracing::error!(
+                                    error = %e,
+                                    current_tier = %self.current_tier,
+                                    "Health check failed during recovery - rolling back"
+                                );
+                                return Err(RecoveryError::HealthCheckFailed(e));
+                            }
+                        }
+
+                        // Wait 5 seconds before next check
+                        sleep(Duration::from_secs(5)).await;
+                    }
+                }
+
+                pub fn get_current_tier(&self) -> BackpressureTier {
+                    self.current_tier
+                }
+
+                pub fn get_recovery_progress(&self) -> RecoveryProgress {
+                    let elapsed = self.recovery_start.elapsed();
+                    RecoveryProgress {
+                        current_tier: self.current_tier,
+                        sustained_success_count: self.sustained_success_count,
+                        required_sustained_checks: self.required_sustained_checks,
+                        time_in_recovery: elapsed,
+                    }
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import Optional, Any
+            import asyncio
+            import time
+            import logging
+
+            class RecoveryStateMachine:
+                """
+                Finite state machine for backpressure recovery transitions.
+
+                Manages tier transitions with sustained health check validation
+                and automatic rollback on health degradation.
+                """
+
+                def __init__(self, health_checker: Any, initial_tier: Any = None):
+                    self.logger = logging.getLogger(__name__)
+                    self.current_tier = initial_tier or BackpressureTier.TIER_3_EMERGENCY
+                    self.health_checker = health_checker
+                    self.recovery_start = time.time()
+                    self.last_health_check = 0
+                    self.sustained_success_count = 0
+                    self.required_sustained_checks = 0
+
+                async def transition_to_tier(self, target_tier: Any, sustained_duration: float) -> None:
+                    """Attempt tier transition with health check validation"""
+                    required_checks = int(sustained_duration / 5.0)  # 5s intervals
+                    self.required_sustained_checks = required_checks
+
+                    # Reset counters for new transition attempt
+                    self.sustained_success_count = 0
+                    self.last_health_check = time.time()
+
+                    while True:
+                        try:
+                            # Run health check
+                            health = await self.health_checker.check_health()
+
+                            if health.is_healthy():
+                                self.sustained_success_count += 1
+                                self.last_health_check = time.time()
+
+                                # Check if we've sustained health for required duration
+                                if self.sustained_success_count >= required_checks:
+                                    # Transition successful
+                                    old_tier = self.current_tier
+                                    self.current_tier = target_tier
+                                    self.recovery_start = time.time()
+
+                                    self.logger.info(
+                                        f"Recovery tier transition successful: {old_tier} -> {target_tier}",
+                                        extra={
+                                            'old_tier': str(old_tier),
+                                            'new_tier': str(target_tier),
+                                            'sustained_duration': sustained_duration,
+                                            'sustained_checks': self.sustained_success_count
+                                        }
+                                    )
+                                    return
+                            else:
+                                # Health check passed but not healthy enough
+                                self.logger.warning(
+                                    f"Health check passed but not healthy for transition",
+                                    extra={
+                                        'health_status': str(health),
+                                        'sustained_count': self.sustained_success_count,
+                                        'required': required_checks
+                                    }
+                                )
+                                self.sustained_success_count = 0  # Reset on any failure
+
+                        except Exception as e:
+                            # Health check failed - rollback
+                            self.logger.error(
+                                f"Health check failed during recovery - rolling back: {e}",
+                                extra={
+                                    'current_tier': str(self.current_tier),
+                                    'error': str(e)
+                                }
+                            )
+                            raise RecoveryError(f"Health check failed: {e}")
+
+                        # Wait 5 seconds before next check
+                        await asyncio.sleep(5.0)
+
+                def get_current_tier(self) -> Any:
+                    """Get current recovery tier"""
+                    return self.current_tier
+
+                def get_recovery_progress(self) -> dict:
+                    """Get recovery progress information"""
+                    elapsed = time.time() - self.recovery_start
+                    return {
+                        'current_tier': str(self.current_tier),
+                        'sustained_success_count': self.sustained_success_count,
+                        'required_sustained_checks': self.required_sustained_checks,
+                        'time_in_recovery': elapsed,
+                        'progress_percent': min(100.0, (self.sustained_success_count / max(1, self.required_sustained_checks)) * 100)
+                    }
+
+recovery_transitions:
+  - from_tier: TIER_3_EMERGENCY
+    to_tier: TIER_2_CANCEL_BG
+    sustained_duration_seconds: 30
+    health_criteria:
+      - queue_depth: "< 180"
+      - memory_mb: "< 432"
+      - thermal_status: "WARM"
+      - error_rate: "< 0.05"
+  - from_tier: TIER_2_CANCEL_BG
+    to_tier: TIER_1_REJECT_NEW
+    sustained_duration_seconds: 10
+    health_criteria:
+      - queue_depth: "< 90"
+      - memory_mb: "< 405"
+      - cpu_percent: "< 77"
+      - latency_ms: "< 2250"
+  - from_tier: TIER_1_REJECT_NEW
+    to_tier: NORMAL
+    sustained_duration_seconds: 10
+    health_criteria:
+      - queue_depth: "< 45"
+      - latency_ms: "< 2250"
+      - active_turns: "< 72"
+      - error_rate: "< 0.01"
+
+rollback_triggers:
+  - condition: health_check_failure
+    action: immediate_escalation
+    description: Any health check failure during recovery triggers rollback to previous tier
+  - condition: metric_degradation
+    action: automatic_rollback
+    description: Significant metric degradation (>20% increase) triggers rollback
+  - condition: timeout_exceeded
+    action: emergency_escalation
+    description: Recovery taking longer than 5 minutes triggers emergency escalation
+
+state_machine_properties:
+  - deterministic_transitions: Each transition has clear success/failure criteria
+  - health_driven: All transitions require sustained health check success
+  - safety_first: Any health degradation causes immediate rollback
+  - gradual_recovery: Recovery proceeds through tiers with increasing capacity
+  - timeout_protection: Maximum recovery time limits prevent infinite recovery attempts
