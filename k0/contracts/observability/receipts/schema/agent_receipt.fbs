@@ -1,0 +1,37 @@
+// k0/contracts/observability/receipts/schema/agent_receipt.fbs
+// AgentReceipt FlatBuffers schema for agent lifecycle audit logging
+// SOC2 CC7.2: System monitoring
+// ADR-0038a: Receipt Generation & Schema
+
+namespace K1.Receipts;
+
+table AgentReceipt {
+  // Receipt metadata
+  receipt_id: string;
+  receipt_type: string = "AGENT";
+
+  // Session context
+  session_id: string;
+  space_id: string;
+  user_id: string;
+
+  // Agent lifecycle
+  agent_id: string;
+  agent_type: string;             // HealthAgent | FinanceAgent | ...
+  event: string;                  // HIRE | FIRE | TRANSITION
+  from_state: string;             // Previous state (empty if HIRE)
+  to_state: string;               // New state
+
+  // Capabilities
+  capabilities: [string];         // TOOL_CALL | AGENT_HIRE | ...
+
+  // Tracing
+  trace_id: string;
+  timestamp: long;                // Unix timestamp (ms)
+
+  // Hash chain for tamper-evident audit trail
+  previous_receipt_hash: string;
+  current_hash: string;
+}
+
+root_type AgentReceipt;

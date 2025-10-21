@@ -1,0 +1,942 @@
+---
+# ADR-0037: Authorization Audit Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Authorization Audit Contract
+# Defines comprehensive authorization auditing
+
+contract:
+  name: authorization_audit
+  version: "1.0.0"
+  description: "Comprehensive authorization auditing"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "1.5 days"
+
+# Authorization Audit Concept
+authorization_audit_concept:
+  description: "Complete audit trail for authorization decisions"
+  objectives:
+    - "Audit all authorization decisions"
+    - "Track access patterns and anomalies"
+    - "Support compliance reporting"
+    - "Enable security investigations"
+
+  audit_principles:
+    comprehensive_logging: "Log all authorization events"
+    tamper_evidence: "Cryptographically signed audit logs"
+    retention_compliance: "Meet regulatory retention requirements"
+    privacy_protection: "Protect PII in audit logs"
+
+# Audit Event Types
+audit_event_types:
+  access_events:
+    authorization_request:
+      description: "Authorization decision request"
+      fields: ["user_id", "resource_id", "operation", "context", "timestamp"]
+      sensitivity: "standard"
+
+    access_granted:
+      description: "Access successfully granted"
+      fields: ["decision_details", "granted_permissions", "session_info"]
+      sensitivity: "standard"
+
+    access_denied:
+      description: "Access denied"
+      fields: ["denial_reason", "required_permissions", "user_permissions"]
+      sensitivity: "high"
+
+    access_error:
+      description: "Authorization system error"
+      fields: ["error_type", "error_details", "system_state"]
+      sensitivity: "critical"
+
+  administrative_events:
+    role_assignment:
+      description: "User role assignment/revocation"
+      fields: ["target_user", "role", "action", "performed_by", "justification"]
+      sensitivity: "high"
+
+    capability_grant:
+      description: "Capability granting/revocation"
+      fields: ["target_user", "capability", "action", "performed_by", "scope"]
+      sensitivity: "high"
+
+    policy_change:
+      description: "Authorization policy modification"
+      fields: ["policy_id", "change_type", "old_value", "new_value", "performed_by"]
+      sensitivity: "critical"
+
+  security_events:
+    privilege_escalation_attempt:
+      description: "Attempted privilege escalation"
+      fields: ["user_id", "attempted_action", "detection_method", "severity"]
+      sensitivity: "critical"
+
+    anomalous_access:
+      description: "Anomalous access pattern detected"
+      fields: ["user_id", "pattern_type", "baseline_deviation", "risk_score"]
+      sensitivity: "high"
+
+    session_anomaly:
+      description: "Session-related security anomaly"
+      fields: ["session_id", "anomaly_type", "user_id", "severity"]
+      sensitivity: "high"
+
+# Audit Data Structure
+audit_data_structure:
+  audit_record:
+    required_fields:
+      event_id: "Unique audit event identifier (UUID)"
+      timestamp: "Event timestamp (ISO 8601)"
+      event_type: "Categorization of the event"
+      user_id: "User performing the action"
+      session_id: "Associated session identifier"
+      source_ip: "Client IP address"
+      user_agent: "Client user agent string"
+
+    event_specific_fields:
+      authorization_events:
+        resource_id: "Target resource identifier"
+        operation: "Requested operation"
+        decision: "allow|deny|error"
+        reason: "Decision rationale"
+        context: "Additional context data"
+
+      administrative_events:
+        target_user: "User being administered"
+        action: "assign|revoke|modify"
+        target_resource: "Resource being modified"
+        justification: "Administrative justification"
+
+      security_events:
+        severity: "low|medium|high|critical"
+        detection_method: "How the event was detected"
+        risk_score: "Numerical risk assessment"
+        mitigation_actions: "Automatic responses taken"
+
+  audit_metadata:
+    system_context:
+      service_name: "Service generating the audit"
+      service_version: "Service version"
+      environment: "production|staging|development"
+      region: "Geographic region"
+
+    compliance_tags:
+      data_classification: "public|internal|confidential|restricted"
+      retention_period: "Duration to retain the audit record"
+      regulatory_requirements: "GDPR|HIPAA|SOX|PCI-DSS"
+
+# Audit Storage and Retention
+audit_storage:
+  storage_architecture:
+    primary_storage:
+      description: "High-performance audit storage"
+      backend: "Time-series database (InfluxDB/ClickHouse)"
+      retention: "90 days hot storage"
+      indexing: "Optimized for time-range queries"
+
+    archival_storage:
+      description: "Long-term audit archival"
+      backend: "Object storage (S3/compatible)"
+      retention: "7 years archival storage"
+      compression: "High compression ratios"
+      encryption: "Client-side encryption"
+
+    backup_storage:
+      description: "Disaster recovery audit backups"
+      backend: "Geo-redundant object storage"
+      retention: "Indefinite retention"
+      integrity_checking: "Cryptographic integrity verification"
+
+  retention_policies:
+    standard_events: "90 days primary, 2 years archival"
+    security_events: "2 years primary, 7 years archival"
+    compliance_events: "7 years primary, indefinite archival"
+    deletion_process: "Secure deletion with verification"
+
+# Audit Integrity and Security
+audit_integrity:
+  tamper_evidence:
+    cryptographic_signing:
+      description: "Cryptographically sign all audit records"
+      algorithm: "Ed25519 digital signatures"
+      key_management: "Hardware Security Module (HSM) protection"
+      verification: "Independent signature verification"
+
+    hash_chains:
+      description: "Link audit records in tamper-evident chains"
+      implementation: "Each record includes previous record hash"
+      verification: "Chain integrity validation"
+      reconstruction: "Chain reconstruction from backups"
+
+  access_control:
+    audit_log_access:
+      description: "Strict controls on audit log access"
+      principle: "Read-only access for authorized personnel"
+      authentication: "Multi-factor authentication required"
+      authorization: "Role-based access with audit logging"
+      monitoring: "All audit access is itself audited"
+
+    audit_administration:
+      description: "Controls for audit system administration"
+      segregation: "Separate audit administration roles"
+      approval_workflows: "Dual authorization for changes"
+      change_tracking: "All administrative changes audited"
+
+# Audit Analysis and Monitoring
+audit_analysis:
+  real_time_monitoring:
+    anomaly_detection:
+      description: "Real-time detection of anomalous patterns"
+      methods: ["statistical_analysis", "machine_learning", "rule_based"]
+      alerting: "Automated alerts for security incidents"
+      thresholds: "Configurable detection thresholds"
+
+    compliance_monitoring:
+      description: "Continuous compliance validation"
+      checks: ["access_patterns", "retention_policies", "integrity_verification"]
+      reporting: "Automated compliance reports"
+      remediation: "Automated remediation actions"
+
+  forensic_analysis:
+    investigation_support:
+      description: "Support for security investigations"
+      query_capabilities: "Advanced audit log querying"
+      timeline_reconstruction: "Event timeline reconstruction"
+      evidence_export: "Court-admissible evidence export"
+
+    threat_hunting:
+      description: "Proactive threat identification"
+      pattern_analysis: "Advanced pattern recognition"
+      correlation_engine: "Cross-system event correlation"
+      intelligence_feeding: "Integration with threat intelligence"
+
+# Audit Reporting and Compliance
+audit_reporting:
+  compliance_reporting:
+    regulatory_reports:
+      description: "Automated regulatory compliance reports"
+      standards: ["GDPR", "HIPAA", "SOX", "PCI-DSS"]
+      frequency: "Monthly/quarterly/annual reports"
+      distribution: "Automated distribution to regulators"
+
+    operational_reports:
+      description: "Internal operational audit reports"
+      metrics: ["access_denials", "privilege_changes", "security_incidents"]
+      dashboards: "Real-time audit dashboards"
+      alerting: "Automated alerting for key metrics"
+
+  audit_certification:
+    third_party_audits:
+      description: "Support for external audit examinations"
+      evidence_provision: "Secure evidence provision"
+      audit_trail_integrity: "Demonstrable audit integrity"
+      compliance_documentation: "Comprehensive compliance documentation"
+
+# Performance and Scalability
+audit_performance:
+  performance_requirements:
+    logging_latency: "<1ms audit logging overhead"
+    query_performance: "<100ms for common queries"
+    storage_scalability: "Support 1B+ audit events"
+    retention_scalability: "Efficient long-term retention"
+
+  optimization_strategies:
+    asynchronous_logging: "Non-blocking audit logging"
+    batch_processing: "Batch audit record processing"
+    indexing_strategy: "Optimized indexing for query patterns"
+    compression_techniques: "High-efficiency compression"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "chrono = { version = \"0.4\", features = [\"serde\"] }"
+      - "ring = \"0.16\""
+      - "uuid = { version = \"1.0\", features = [\"v4\"] }"
+
+    code_example: |
+      use serde::{Deserialize, Serialize};
+      use std::collections::HashMap;
+      use uuid::Uuid;
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub enum AuditEventType {
+          AuthorizationRequest,
+          AccessGranted,
+          AccessDenied,
+          AccessError,
+          RoleAssignment,
+          CapabilityGrant,
+          PolicyChange,
+          PrivilegeEscalation,
+          AnomalousAccess,
+          SessionAnomaly,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub enum EventSeverity {
+          Low,
+          Medium,
+          High,
+          Critical,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct AuditEvent {
+          pub event_id: String,
+          pub timestamp: chrono::DateTime<chrono::Utc>,
+          pub event_type: AuditEventType,
+          pub user_id: String,
+          pub session_id: Option<String>,
+          pub source_ip: String,
+          pub user_agent: String,
+          pub resource_id: Option<String>,
+          pub operation: Option<String>,
+          pub decision: Option<String>,
+          pub reason: Option<String>,
+          pub severity: EventSeverity,
+          pub context: HashMap<String, serde_json::Value>,
+          pub signature: String,
+          pub previous_hash: String,
+      }
+
+      #[derive(Debug)]
+      pub struct AuditLogger {
+          audit_store: Box<dyn AuditStore>,
+          signing_key: ring::signature::Ed25519KeyPair,
+          previous_hash: String,
+      }
+
+      #[trait_variant::make(Send)]
+      pub trait AuditStore: Send + Sync {
+          async fn store_event(&self, event: AuditEvent) -> Result<(), AuditError>;
+          async fn query_events(&self, query: AuditQuery) -> Result<Vec<AuditEvent>, AuditError>;
+          async fn get_event_chain(&self, start_event_id: &str, limit: usize) -> Result<Vec<AuditEvent>, AuditError>;
+      }
+
+      #[derive(Debug)]
+      pub struct AuditQuery {
+          pub user_id: Option<String>,
+          pub event_type: Option<AuditEventType>,
+          pub start_time: Option<chrono::DateTime<chrono::Utc>>,
+          pub end_time: Option<chrono::DateTime<chrono::Utc>>,
+          pub severity: Option<EventSeverity>,
+          pub limit: usize,
+      }
+
+      impl AuditLogger {
+          pub fn new(store: Box<dyn AuditStore>, signing_key: ring::signature::Ed25519KeyPair) -> Self {
+              Self {
+                  audit_store: store,
+                  signing_key,
+                  previous_hash: String::new(),
+              }
+          }
+
+          pub async fn log_authorization_request(
+              &mut self,
+              user_id: &str,
+              session_id: Option<&str>,
+              source_ip: &str,
+              user_agent: &str,
+              resource_id: &str,
+              operation: &str,
+              context: HashMap<String, serde_json::Value>,
+          ) -> Result<String, AuditError> {
+              let event = self.create_event(
+                  AuditEventType::AuthorizationRequest,
+                  EventSeverity::Low,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  Some(resource_id),
+                  Some(operation),
+                  None,
+                  None,
+                  context,
+              );
+
+              self.store_event(event).await
+          }
+
+          pub async fn log_access_decision(
+              &mut self,
+              user_id: &str,
+              session_id: Option<&str>,
+              source_ip: &str,
+              user_agent: &str,
+              resource_id: &str,
+              operation: &str,
+              granted: bool,
+              reason: &str,
+              context: HashMap<String, serde_json::Value>,
+          ) -> Result<String, AuditError> {
+              let (event_type, severity) = if granted {
+                  (AuditEventType::AccessGranted, EventSeverity::Low)
+              } else {
+                  (AuditEventType::AccessDenied, EventSeverity::Medium)
+              };
+
+              let event = self.create_event(
+                  event_type,
+                  severity,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  Some(resource_id),
+                  Some(operation),
+                  Some(if granted { "allow" } else { "deny" }),
+                  Some(reason),
+                  context,
+              );
+
+              self.store_event(event).await
+          }
+
+          pub async fn log_security_event(
+              &mut self,
+              event_type: AuditEventType,
+              severity: EventSeverity,
+              user_id: &str,
+              session_id: Option<&str>,
+              source_ip: &str,
+              user_agent: &str,
+              description: &str,
+              context: HashMap<String, serde_json::Value>,
+          ) -> Result<String, AuditError> {
+              let mut security_context = context.clone();
+              security_context.insert("description".to_string(), description.into());
+
+              let event = self.create_event(
+                  event_type,
+                  severity,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  None,
+                  None,
+                  None,
+                  None,
+                  security_context,
+              );
+
+              self.store_event(event).await
+          }
+
+          pub async fn query_events(&self, query: AuditQuery) -> Result<Vec<AuditEvent>, AuditError> {
+              self.audit_store.query_events(query).await
+          }
+
+          pub async fn verify_chain_integrity(&self, start_event_id: &str, limit: usize) -> Result<bool, AuditError> {
+              let events = self.audit_store.get_event_chain(start_event_id, limit).await?;
+
+              let mut previous_hash = String::new();
+              for event in events {
+                  if event.previous_hash != previous_hash {
+                      return Ok(false);
+                  }
+
+                  // Verify signature
+                  if !self.verify_event_signature(&event) {
+                      return Ok(false);
+                  }
+
+                  previous_hash = self.calculate_event_hash(&event);
+              }
+
+              Ok(true)
+          }
+
+          fn create_event(
+              &self,
+              event_type: AuditEventType,
+              severity: EventSeverity,
+              user_id: &str,
+              session_id: Option<&str>,
+              source_ip: &str,
+              user_agent: &str,
+              resource_id: Option<&str>,
+              operation: Option<&str>,
+              decision: Option<&str>,
+              reason: Option<&str>,
+              context: HashMap<String, serde_json::Value>,
+          ) -> AuditEvent {
+              let event_id = Uuid::new_v4().to_string();
+              let timestamp = chrono::Utc::now();
+
+              AuditEvent {
+                  event_id,
+                  timestamp,
+                  event_type,
+                  user_id: user_id.to_string(),
+                  session_id: session_id.map(|s| s.to_string()),
+                  source_ip: source_ip.to_string(),
+                  user_agent: user_agent.to_string(),
+                  resource_id: resource_id.map(|s| s.to_string()),
+                  operation: operation.map(|s| s.to_string()),
+                  decision: decision.map(|s| s.to_string()),
+                  reason: reason.map(|s| s.to_string()),
+                  severity,
+                  context,
+                  signature: String::new(), // Will be set during signing
+                  previous_hash: self.previous_hash.clone(),
+              }
+          }
+
+          async fn store_event(&mut self, mut event: AuditEvent) -> Result<String, AuditError> {
+              // Sign the event
+              event.signature = self.sign_event(&event)?;
+
+              // Calculate hash for next event
+              self.previous_hash = self.calculate_event_hash(&event);
+
+              // Store the event
+              self.audit_store.store_event(event.clone()).await?;
+
+              Ok(event.event_id)
+          }
+
+          fn sign_event(&self, event: &AuditEvent) -> Result<String, AuditError> {
+              let event_data = serde_json::to_string(event)?;
+              let signature = self.signing_key.sign(event_data.as_bytes());
+              Ok(hex::encode(signature.as_ref()))
+          }
+
+          fn verify_event_signature(&self, event: &AuditEvent) -> bool {
+              let event_data = serde_json::to_string(event).unwrap_or_default();
+              let signature_bytes = hex::decode(&event.signature).unwrap_or_default();
+
+              self.signing_key.public_key()
+                  .verify(event_data.as_bytes(), ring::signature::UnparsedPublicKey::new(
+                      &ring::signature::ED25519,
+                      signature_bytes
+                  ))
+                  .is_ok()
+          }
+
+          fn calculate_event_hash(&self, event: &AuditEvent) -> String {
+              let event_data = serde_json::to_string(event).unwrap_or_default();
+              let hash = ring::digest::digest(&ring::digest::SHA256, event_data.as_bytes());
+              hex::encode(hash.as_ref())
+          }
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+      - "cryptography==41.0.0"
+      - "asyncpg==0.29.0"
+
+    code_example: |
+      from pydantic import BaseModel
+      from typing import Dict, List, Optional, Any
+      from enum import Enum
+      import json
+      import time
+      import uuid
+      from cryptography.hazmat.primitives import hashes, serialization
+      from cryptography.hazmat.primitives.asymmetric import ed25519
+
+      class AuditEventType(str, Enum):
+          AUTHORIZATION_REQUEST = "authorization_request"
+          ACCESS_GRANTED = "access_granted"
+          ACCESS_DENIED = "access_denied"
+          ACCESS_ERROR = "access_error"
+          ROLE_ASSIGNMENT = "role_assignment"
+          CAPABILITY_GRANT = "capability_grant"
+          POLICY_CHANGE = "policy_change"
+          PRIVILEGE_ESCALATION = "privilege_escalation"
+          ANOMALOUS_ACCESS = "anomalous_access"
+          SESSION_ANOMALY = "session_anomaly"
+
+      class EventSeverity(str, Enum):
+          LOW = "low"
+          MEDIUM = "medium"
+          HIGH = "high"
+          CRITICAL = "critical"
+
+      class AuditEvent(BaseModel):
+          event_id: str
+          timestamp: int
+          event_type: AuditEventType
+          user_id: str
+          session_id: Optional[str] = None
+          source_ip: str
+          user_agent: str
+          resource_id: Optional[str] = None
+          operation: Optional[str] = None
+          decision: Optional[str] = None
+          reason: Optional[str] = None
+          severity: EventSeverity
+          context: Dict[str, Any]
+          signature: str = ""
+          previous_hash: str = ""
+
+      class AuditQuery(BaseModel):
+          user_id: Optional[str] = None
+          event_type: Optional[AuditEventType] = None
+          start_time: Optional[int] = None
+          end_time: Optional[int] = None
+          severity: Optional[EventSeverity] = None
+          limit: int = 100
+
+      class AuditLogger:
+          def __init__(self, connection_string: str):
+              self.connection_string = connection_string
+              self.private_key = ed25519.Ed25519PrivateKey.generate()
+              self.public_key = self.private_key.public_key()
+              self.previous_hash = ""
+
+          async def log_authorization_request(
+              self,
+              user_id: str,
+              session_id: Optional[str],
+              source_ip: str,
+              user_agent: str,
+              resource_id: str,
+              operation: str,
+              context: Dict[str, Any]
+          ) -> str:
+              """Log authorization request"""
+              event = self._create_event(
+                  AuditEventType.AUTHORIZATION_REQUEST,
+                  EventSeverity.LOW,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  resource_id,
+                  operation,
+                  None,
+                  None,
+                  context
+              )
+
+              return await self._store_event(event)
+
+          async def log_access_decision(
+              self,
+              user_id: str,
+              session_id: Optional[str],
+              source_ip: str,
+              user_agent: str,
+              resource_id: str,
+              operation: str,
+              granted: bool,
+              reason: str,
+              context: Dict[str, Any]
+          ) -> str:
+              """Log access decision"""
+              event_type = AuditEventType.ACCESS_GRANTED if granted else AuditEventType.ACCESS_DENIED
+              severity = EventSeverity.LOW if granted else EventSeverity.MEDIUM
+
+              event = self._create_event(
+                  event_type,
+                  severity,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  resource_id,
+                  operation,
+                  "allow" if granted else "deny",
+                  reason,
+                  context
+              )
+
+              return await self._store_event(event)
+
+          async def log_security_event(
+              self,
+              event_type: AuditEventType,
+              severity: EventSeverity,
+              user_id: str,
+              session_id: Optional[str],
+              source_ip: str,
+              user_agent: str,
+              description: str,
+              context: Dict[str, Any]
+          ) -> str:
+              """Log security event"""
+              security_context = context.copy()
+              security_context["description"] = description
+
+              event = self._create_event(
+                  event_type,
+                  severity,
+                  user_id,
+                  session_id,
+                  source_ip,
+                  user_agent,
+                  None,
+                  None,
+                  None,
+                  None,
+                  security_context
+              )
+
+              return await self._store_event(event)
+
+          async def query_events(self, query: AuditQuery) -> List[AuditEvent]:
+              """Query audit events"""
+              conn = await asyncpg.connect(self.connection_string)
+
+              try:
+                  # Build query conditions
+                  conditions = []
+                  params = []
+                  param_count = 0
+
+                  if query.user_id:
+                      param_count += 1
+                      conditions.append(f"user_id = ${param_count}")
+                      params.append(query.user_id)
+
+                  if query.event_type:
+                      param_count += 1
+                      conditions.append(f"event_type = ${param_count}")
+                      params.append(query.event_type.value)
+
+                  if query.start_time:
+                      param_count += 1
+                      conditions.append(f"timestamp >= ${param_count}")
+                      params.append(query.start_time)
+
+                  if query.end_time:
+                      param_count += 1
+                      conditions.append(f"timestamp <= ${param_count}")
+                      params.append(query.end_time)
+
+                  if query.severity:
+                      param_count += 1
+                      conditions.append(f"severity = ${param_count}")
+                      params.append(query.severity.value)
+
+                  where_clause = " AND ".join(conditions) if conditions else "TRUE"
+
+                  sql = f"""
+                      SELECT * FROM audit_events
+                      WHERE {where_clause}
+                      ORDER BY timestamp DESC
+                      LIMIT ${param_count + 1}
+                  """
+                  params.append(query.limit)
+
+                  rows = await conn.fetch(sql, *params)
+
+                  events = []
+                  for row in rows:
+                      event_data = dict(row)
+                      # Convert JSON fields
+                      event_data["context"] = json.loads(event_data["context"])
+                      events.append(AuditEvent(**event_data))
+
+                  return events
+
+              finally:
+                  await conn.close()
+
+          async def verify_chain_integrity(self, start_event_id: str, limit: int = 100) -> bool:
+              """Verify audit chain integrity"""
+              conn = await asyncpg.connect(self.connection_string)
+
+              try:
+                  rows = await conn.fetch(
+                      """
+                      SELECT * FROM audit_events
+                      WHERE event_id >= $1
+                      ORDER BY timestamp ASC
+                      LIMIT $2
+                      """,
+                      start_event_id, limit
+                  )
+
+                  previous_hash = ""
+                  for row in rows:
+                      event_data = dict(row)
+                      event_data["context"] = json.loads(event_data["context"])
+                      event = AuditEvent(**event_data)
+
+                      if event.previous_hash != previous_hash:
+                          return False
+
+                      if not self._verify_event_signature(event):
+                          return False
+
+                      previous_hash = self._calculate_event_hash(event)
+
+                  return True
+
+              finally:
+                  await conn.close()
+
+          def _create_event(
+              self,
+              event_type: AuditEventType,
+              severity: EventSeverity,
+              user_id: str,
+              session_id: Optional[str],
+              source_ip: str,
+              user_agent: str,
+              resource_id: Optional[str],
+              operation: Optional[str],
+              decision: Optional[str],
+              reason: Optional[str],
+              context: Dict[str, Any]
+          ) -> AuditEvent:
+              """Create audit event"""
+              return AuditEvent(
+                  event_id=str(uuid.uuid4()),
+                  timestamp=int(time.time()),
+                  event_type=event_type,
+                  user_id=user_id,
+                  session_id=session_id,
+                  source_ip=source_ip,
+                  user_agent=user_agent,
+                  resource_id=resource_id,
+                  operation=operation,
+                  decision=decision,
+                  reason=reason,
+                  severity=severity,
+                  context=context,
+                  signature="",
+                  previous_hash=self.previous_hash
+              )
+
+          async def _store_event(self, mut_event: AuditEvent) -> str:
+              """Store audit event with signing"""
+              # Sign the event
+              mut_event.signature = self._sign_event(mut_event)
+
+              # Calculate hash for next event
+              self.previous_hash = self._calculate_event_hash(mut_event)
+
+              # Store in database
+              conn = await asyncpg.connect(self.connection_string)
+
+              try:
+                  await conn.execute(
+                      """
+                      INSERT INTO audit_events (
+                          event_id, timestamp, event_type, user_id, session_id,
+                          source_ip, user_agent, resource_id, operation, decision,
+                          reason, severity, context, signature, previous_hash
+                      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                      """,
+                      mut_event.event_id,
+                      mut_event.timestamp,
+                      mut_event.event_type.value,
+                      mut_event.user_id,
+                      mut_event.session_id,
+                      mut_event.source_ip,
+                      mut_event.user_agent,
+                      mut_event.resource_id,
+                      mut_event.operation,
+                      mut_event.decision,
+                      mut_event.reason,
+                      mut_event.severity.value,
+                      json.dumps(mut_event.context),
+                      mut_event.signature,
+                      mut_event.previous_hash
+                  )
+
+              finally:
+                  await conn.close()
+
+              return mut_event.event_id
+
+          def _sign_event(self, event: AuditEvent) -> str:
+              """Sign audit event"""
+              event_data = event.json().encode()
+              signature = self.private_key.sign(event_data)
+              return signature.hex()
+
+          def _verify_event_signature(self, event: AuditEvent) -> bool:
+              """Verify event signature"""
+              try:
+                  event_data = event.json().encode()
+                  signature_bytes = bytes.fromhex(event.signature)
+                  self.public_key.verify(signature_bytes, event_data)
+                  return True
+              except:
+                  return False
+
+          def _calculate_event_hash(self, event: AuditEvent) -> str:
+              """Calculate event hash"""
+              import hashlib
+              event_data = event.json().encode()
+              return hashlib.sha256(event_data).hexdigest()
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Audit event creation and signing"
+    - "Event type categorization"
+    - "Chain integrity verification"
+    - "Query building and execution"
+
+  integration_tests:
+    - "Full audit workflow"
+    - "Database storage and retrieval"
+    - "Chain integrity across restarts"
+    - "Performance under load"
+
+  security_tests:
+    - "Signature verification"
+    - "Tamper detection"
+    - "Access control enforcement"
+    - "Chain integrity attacks"
+
+  performance_tests:
+    - "Audit logging latency"
+    - "Query performance"
+    - "Chain verification speed"
+    - "Storage scalability"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "authorization_cache.yml: Provides cached decisions to audit"
+    - "session_binding.yml: Provides session context"
+    - "role_based_access.yml: Provides RBAC decisions"
+    - "capability_checking.yml: Provides capability decisions"
+    - "privacy_band_enforcement.yml: Provides privacy decisions"
+    - "space_isolation.yml: Provides space decisions"
+  downstream:
+    - "None - final contract in authorization chain"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All authorization events audited"
+    - "Audit chain integrity maintained"
+    - "Comprehensive event querying"
+    - "Regulatory compliance met"
+
+  performance:
+    - "Audit logging <1ms overhead"
+    - "Queries <100ms response"
+    - "Scalable to 1B+ events"
+    - "Efficient retention management"
+
+  security:
+    - "Cryptographic audit integrity"
+    - "Tamper-evident logging"
+    - "Secure access controls"
+    - "Complete audit trail"
+
+  reliability:
+    - "Audit system high availability"
+    - "Data integrity under failure"
+    - "Graceful degradation"
+    - "Backup and recovery"

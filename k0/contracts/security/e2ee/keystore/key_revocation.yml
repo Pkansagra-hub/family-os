@@ -1,0 +1,223 @@
+---
+# ADR-0036b: Key Revocation Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Key Revocation Contract
+# Defines immediate revocation of compromised encryption keys
+
+contract:
+  name: key_revocation
+  version: "1.0.0"
+  description: "Immediate revocation of AES-256 encryption keys on compromise"
+  parent_adr: "ADR-0036b"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# Revocation Policy
+revocation_policy:
+  immediate: true
+  reason_required: true
+  audit_logged: true
+  user_notification: true
+  compliance: "GDPR right to erasure, security incident response"
+
+# Revocation Triggers
+revocation_triggers:
+  security_incident:
+    description: "Authentication tag verification failure"
+    severity: "CRITICAL"
+    automatic: true
+
+  user_request:
+    description: "User requests key revocation"
+    severity: "HIGH"
+    manual: true
+    gdpr_compliant: true
+
+  key_compromise:
+    description: "Suspected key compromise"
+    severity: "CRITICAL"
+    manual: true
+
+  account_deletion:
+    description: "User account deletion (GDPR)"
+    severity: "HIGH"
+    automatic: true
+
+# Revocation Process
+revocation_process:
+  1:
+    name: "Validate revocation request"
+    description: "Check authorization and reason"
+    security: "Only key owner or administrator can revoke"
+
+  2:
+    name: "Mark key as revoked"
+    description: "Update key metadata with revocation status"
+    timestamp: "Record revocation time"
+    reason: "Store revocation reason"
+
+  3:
+    name: "Invalidate key in storage"
+    description: "Remove key from OS keychain/encrypted file"
+    immediate: "No grace period for revocation"
+    permanent: "Cannot be undone"
+
+  4:
+    name: "Generate emergency key"
+    description: "Create new key for continued operation"
+    automatic: "If revocation was for active key"
+
+  5:
+    name: "Re-encrypt affected data"
+    description: "Move data to new key"
+    scope: "All data encrypted with revoked key"
+    priority: "HIGH"
+
+  6:
+    name: "Update key references"
+    description: "Update K0 database with new key_id"
+    atomicity: "All-or-nothing update"
+
+  7:
+    name: "Audit revocation"
+    description: "Log revocation with full context"
+    compliance: "GDPR/HIPAA audit requirements"
+
+  8:
+    name: "Notify user"
+    description: "Inform user of key revocation"
+    details: "Reason, new key generation, data migration"
+
+# Emergency Key Generation
+emergency_key_generation:
+  automatic: true
+  naming: "space-{space_id}-emergency-{timestamp}"
+  validity: "Same as regular keys (90 days)"
+  transition: "Immediate switch to emergency key"
+
+# Data Migration
+data_migration:
+  scope: "All SessionState encrypted with revoked key"
+  method: "Background re-encryption job"
+  priority: "HIGH"
+  monitoring: "Track migration progress"
+  completion: "Verify all data migrated before cleanup"
+
+# Revocation Reasons
+revocation_reasons:
+  security_incident: "Authentication failure detected"
+  user_request: "User requested revocation"
+  key_compromise: "Key suspected compromised"
+  account_deletion: "User account deleted (GDPR)"
+  policy_violation: "Key usage violates policy"
+
+# Security Considerations
+security_considerations:
+  immediate_effect:
+    description: "Revocation takes effect immediately"
+    impact: "Data encrypted with revoked key becomes inaccessible"
+    recovery: "Only through emergency key generation"
+
+  audit_trail:
+    description: "All revocation operations logged"
+    retention: "7 years for compliance"
+    access: "Security team and user (GDPR)"
+
+  user_impact:
+    description: "Minimize disruption to user"
+    communication: "Clear explanation of revocation reason"
+    support: "Provide user assistance during transition"
+
+# Performance Budget
+performance_budget:
+  revocation_ms: 100
+  emergency_key_generation_ms: 50
+  data_migration_start_delay_ms: 1000
+
+# Error Handling
+error_handling:
+  revocation_failure:
+    error_code: "KEY_REVOCATION_FAILED"
+    description: "Cannot revoke key"
+    recovery: "Retry revocation, alert security team"
+
+  emergency_key_failure:
+    error_code: "EMERGENCY_KEY_FAILED"
+    description: "Cannot generate emergency key"
+    recovery: "Manual key generation, extended downtime"
+
+  data_migration_failure:
+    error_code: "MIGRATION_FAILED"
+    description: "Cannot migrate data to new key"
+    recovery: "Partial migration, data recovery procedures"
+
+# Implementation Interface
+implementation:
+  rust:
+    function: "revoke_encryption_key(key_id: &str, reason: RevocationReason) -> Result<(), RevocationError>"
+    async: true
+    emergency_key: "Option<GenerateEmergencyKey>"
+
+  python:
+    function: "revoke_encryption_key(key_id: str, reason: str) -> dict"
+    async: true
+    emergency_generation: "Automatic emergency key creation"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Key revocation marks key as revoked"
+    - "Revoked keys cannot be used for encryption"
+    - "Emergency key generation works"
+    - "Revocation reasons properly recorded"
+
+  security_tests:
+    - "Revoked keys truly inaccessible"
+    - "Emergency keys secure and functional"
+    - "Revocation operations properly audited"
+    - "User authorization verified"
+
+  integration_tests:
+    - "Full revocation workflow: revoke → emergency key → data migration"
+    - "User notification sent correctly"
+    - "Audit trail complete and accurate"
+
+  performance_tests:
+    - "Revocation completes within budget"
+    - "Emergency key generation fast"
+    - "Data migration starts promptly"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "key_storage.yml: Revokes keys from storage"
+  downstream:
+    - "key_deletion.yml: Schedules final deletion"
+    - "ADR-0036c: Handles revoked key errors"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Keys revoked immediately on trigger"
+    - "Emergency keys generated automatically"
+    - "Data migrated to new keys"
+    - "Users notified of revocation"
+
+  security:
+    - "Revoked keys completely inaccessible"
+    - "Security incidents trigger automatic revocation"
+    - "Audit trail maintained for compliance"
+
+  performance:
+    - "Revocation operations within time budget"
+    - "Minimal disruption to user operations"
+    - "Background data migration"
+
+  compliance:
+    - "GDPR right to erasure implemented"
+    - "Security incident response procedures"
+    - "Complete audit trail for all revocations"

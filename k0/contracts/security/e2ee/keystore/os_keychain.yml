@@ -1,0 +1,310 @@
+---
+# ADR-0036b: OS Keychain Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# OS Keychain Contract
+# Defines integration with OS-specific keychain/keyring services
+
+contract:
+  name: os_keychain
+  version: "1.0.0"
+  description: "OS-specific keychain integration for secure key storage"
+  parent_adr: "ADR-0036b"
+  priority: "HIGH"
+  effort: "2 weeks"
+
+# Supported Platforms
+supported_platforms:
+  windows:
+    service: "Windows Credential Manager"
+    api: "Win32 CredWrite/CredRead"
+    security: "DPAPI encryption"
+    namespace: "FamilyOS/K1/E2EE"
+
+  macos:
+    service: "Keychain Services"
+    api: "Security.framework"
+    security: "AES-256 encryption"
+    namespace: "com.familyos.k1.e2ee"
+
+  linux:
+    service: "Secret Service API (GNOME Keyring/FreeDesktop)"
+    api: "libsecret"
+    security: "AES-256 encryption"
+    namespace: "org.familyos.k1.e2ee"
+
+# Keychain Operations
+keychain_operations:
+  store_key:
+    function: "store_key(key_id: str, key_material: bytes, metadata: dict)"
+    description: "Store encrypted key in OS keychain"
+    parameters:
+      key_id: "Unique identifier for the key"
+      key_material: "Raw AES-256 key bytes (32 bytes)"
+      metadata: "Key metadata (JSON serializable)"
+    security: "Key material encrypted by OS before storage"
+    error_handling: "KeyExists, PermissionDenied, StorageFull"
+
+  retrieve_key:
+    function: "retrieve_key(key_id: str) -> (bytes, dict)"
+    description: "Retrieve key from OS keychain"
+    parameters:
+      key_id: "Unique identifier for the key"
+    returns:
+      key_material: "Raw AES-256 key bytes"
+      metadata: "Key metadata dictionary"
+    security: "OS decrypts key material on retrieval"
+    error_handling: "KeyNotFound, PermissionDenied, CorruptedData"
+
+  delete_key:
+    function: "delete_key(key_id: str) -> bool"
+    description: "Delete key from OS keychain"
+    parameters:
+      key_id: "Unique identifier for the key"
+    returns: "True if deleted, False if not found"
+    security: "Secure deletion (overwrite before delete)"
+    error_handling: "PermissionDenied, KeyInUse"
+
+  list_keys:
+    function: "list_keys(user_id: str, space_id: str) -> list[str]"
+    description: "List key IDs for user/space"
+    parameters:
+      user_id: "Filter by user ownership"
+      space_id: "Filter by space membership"
+    returns: "List of key IDs"
+    security: "Only returns keys user has access to"
+    performance: "Cached for performance"
+
+  update_metadata:
+    function: "update_metadata(key_id: str, metadata: dict)"
+    description: "Update key metadata without touching key material"
+    parameters:
+      key_id: "Unique identifier for the key"
+      metadata: "Updated metadata dictionary"
+    security: "Metadata updates logged"
+    error_handling: "KeyNotFound, PermissionDenied"
+
+# Security Model
+security_model:
+  encryption:
+    windows: "DPAPI with user credentials"
+    macos: "AES-256 with Keychain password"
+    linux: "AES-256 with user login password"
+    hardware: "TPM/Apple Secure Enclave when available"
+
+  access_control:
+    user_isolation: "Keys isolated by user account"
+    space_isolation: "Keys tagged by space membership"
+    permission_model: "Owner-only access (no sharing)"
+
+  authentication:
+    unlock_required: "Keychain unlocked with user credentials"
+    session_timeout: "Keys remain accessible during session"
+    lock_on_idle: "Keychain locked after inactivity"
+
+  audit_logging:
+    all_operations: "Store, retrieve, delete, list operations logged"
+    sensitive_data: "Never log key material"
+    compliance: "GDPR/HIPAA audit requirements"
+
+# Platform-Specific Implementation
+platform_implementations:
+  windows_credential_manager:
+    library: "pywin32"  # Python
+    crate: "windows-security"  # Rust
+    api_calls:
+      - "CredWriteW: Store credential"
+      - "CredReadW: Retrieve credential"
+      - "CredDeleteW: Delete credential"
+      - "CredEnumerateW: List credentials"
+    credential_type: "CRED_TYPE_GENERIC"
+    persistence: "Local machine store"
+
+  macos_keychain:
+    library: "keyring"  # Python
+    crate: "security-framework"  # Rust
+    api_calls:
+      - "SecItemAdd: Store keychain item"
+      - "SecItemCopyMatching: Retrieve item"
+      - "SecItemDelete: Delete item"
+      - "SecItemUpdate: Update item"
+    keychain_path: "~/Library/Keychains/login.keychain"
+    access_group: "com.familyos.k1.e2ee"
+
+  linux_secret_service:
+    library: "keyring"  # Python
+    crate: "secret-service"  # Rust
+    api_calls:
+      - "create_item: Store secret"
+      - "search_items: Find secrets"
+      - "delete_item: Delete secret"
+      - "update_item: Update secret"
+    service_name: "org.familyos.k1.e2ee"
+    collection: "default"
+
+# Error Handling
+error_handling:
+  keychain_locked:
+    error_code: "KEYCHAIN_LOCKED"
+    description: "Keychain requires unlock"
+    recovery: "Prompt user for credentials"
+    fallback: "Use encrypted file backend"
+
+  keychain_unavailable:
+    error_code: "KEYCHAIN_UNAVAILABLE"
+    description: "OS keychain service not running"
+    recovery: "Start service or use fallback"
+    fallback: "Use encrypted file backend"
+
+  permission_denied:
+    error_code: "PERMISSION_DENIED"
+    description: "No access to keychain"
+    recovery: "Check user permissions"
+    fallback: "Use encrypted file backend"
+
+  storage_full:
+    error_code: "STORAGE_FULL"
+    description: "Keychain storage limit reached"
+    recovery: "Clean up old keys"
+    fallback: "Use encrypted file backend"
+
+  corrupted_data:
+    error_code: "CORRUPTED_DATA"
+    description: "Key data corrupted"
+    recovery: "Attempt recovery, alert user"
+    fallback: "Mark key as compromised"
+
+# Performance Requirements
+performance_requirements:
+  store_key: "< 50ms"
+  retrieve_key: "< 20ms"
+  delete_key: "< 30ms"
+  list_keys: "< 100ms"
+  update_metadata: "< 40ms"
+
+  concurrent_access: "Thread-safe operations"
+  memory_usage: "< 10MB resident"
+  startup_time: "< 100ms initialization"
+
+# Fallback Strategy
+fallback_strategy:
+  primary_backend: "OS keychain"
+  secondary_backend: "Encrypted file storage"
+  tertiary_backend: "Local HSM (if available)"
+
+  automatic_fallback:
+    trigger: "Keychain operations fail"
+    condition: "3 consecutive failures"
+    recovery: "Switch to next backend"
+    user_notification: "Alert user of security degradation"
+
+  backend_selection:
+    criteria: ["security_level", "availability", "performance"]
+    preference: "OS keychain > encrypted file > HSM"
+    dynamic_switching: "Switch back when primary available"
+
+# Monitoring and Alerting
+monitoring_alerting:
+  operation_metrics:
+    metric: "keychain_operations_total"
+    labels: ["operation", "platform", "success"]
+    alerting: "High failure rates trigger alert"
+
+  performance_metrics:
+    metric: "keychain_operation_duration_seconds"
+    labels: ["operation", "platform"]
+    alerting: "Performance degradation alerts"
+
+  security_events:
+    metric: "keychain_security_events_total"
+    labels: ["event_type", "platform"]
+    alerting: "Security events trigger immediate alert"
+
+  backend_switches:
+    metric: "keychain_backend_switches_total"
+    labels: ["from_backend", "to_backend", "reason"]
+    alerting: "Backend switches logged and alerted"
+
+# Implementation Interface
+implementation:
+  rust:
+    trait: "KeychainBackend"
+    struct: "OsKeychainBackend"
+    functions:
+      - "new() -> Result<Self, KeychainError>"
+      - "store_key(key_id: &str, key_material: &[u8], metadata: &Value) -> Result<(), KeychainError>"
+      - "retrieve_key(key_id: &str) -> Result<(Vec<u8>, Value), KeychainError>"
+      - "delete_key(key_id: &str) -> Result<bool, KeychainError>"
+      - "list_keys(user_id: &str, space_id: &str) -> Result<Vec<String>, KeychainError>"
+      - "update_metadata(key_id: &str, metadata: &Value) -> Result<(), KeychainError>"
+
+  python:
+    class: "OSKeychainBackend"
+    methods:
+      - "__init__(self)"
+      - "store_key(self, key_id: str, key_material: bytes, metadata: dict)"
+      - "retrieve_key(self, key_id: str) -> tuple[bytes, dict]"
+      - "delete_key(self, key_id: str) -> bool"
+      - "list_keys(self, user_id: str, space_id: str) -> list[str]"
+      - "update_metadata(self, key_id: str, metadata: dict)"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "All operations work on each platform"
+    - "Error conditions handled correctly"
+    - "Fallback to secondary backend works"
+    - "Performance within budgets"
+
+  integration_tests:
+    - "Full key lifecycle in keychain"
+    - "Cross-platform compatibility"
+    - "Concurrent access handling"
+    - "Keychain lock/unlock scenarios"
+
+  security_tests:
+    - "Key material properly encrypted"
+    - "Access controls enforced"
+    - "Secure deletion verified"
+    - "Audit logging complete"
+
+  platform_tests:
+    - "Windows Credential Manager integration"
+    - "macOS Keychain Services integration"
+    - "Linux Secret Service integration"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "key_storage.yml: Uses OS keychain as primary backend"
+  downstream:
+    - "encrypted_file.yml: Fallback backend"
+    - "local_hsm.yml: Tertiary backend"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Keys stored/retrieved securely on all platforms"
+    - "Fallback to secondary backend works"
+    - "Performance within requirements"
+    - "Error handling robust"
+
+  security:
+    - "Key material encrypted by OS"
+    - "Access controls properly enforced"
+    - "Secure deletion implemented"
+    - "Complete audit trail"
+
+  reliability:
+    - "Operations work across OS updates"
+    - "Fallback prevents data loss"
+    - "Concurrent access safe"
+    - "Recovery from failures"
+
+  compatibility:
+    - "Works on Windows 10+"
+    - "Works on macOS 10.15+"
+    - "Works on Linux with Secret Service"

@@ -1,0 +1,115 @@
+# Contract: Error Propagation & Logging
+# Source: ADR-0034d (MCP Error Handling & Recovery Strategies)
+# Purpose: Log all errors to K0 with trace_id, error_code, tool_id, retry_count for debugging and observability
+# Version: 1.0.0
+# Last Updated: 2025-10-21
+
+contract:
+  name: "error_propagation_logging"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  owner: "K1 Tool Runner"
+  source_adr: "ADR-0034d"
+  adr_lines: "4751-5000 (error propagation), 5001-5250 (K0 logging)"
+
+overview:
+  purpose: |
+    Log all errors to K0 for debugging and observability:
+    - Developer-facing: Detailed error codes, stack traces, trace_id
+    - User-facing: Friendly messages (from user_facing_error_messages.yml)
+    - K0 logging: Comprehensive error logs with all context
+
+    Benefits:
+    - Debugging: trace_id correlates errors across logs/metrics
+    - Observability: Error rate, retry rate, fallback rate
+    - Production analysis: Which errors most common, which tiers most successful
+
+k0_logging_schema:
+  error_log_entry:
+    fields:
+      - name: "error_code"
+        type: "str"
+        example: "NETWORK_TIMEOUT"
+
+      - name: "message"
+        type: "str"
+        example: "Tool execution timed out"
+
+      - name: "tool_id"
+        type: "str"
+        example: "weather_api"
+
+      - name: "trace_id"
+        type: "str"
+        example: "trace_123"
+
+      - name: "retry_count"
+        type: "int"
+        example: 3
+
+      - name: "timestamp"
+        type: "float"
+        example: 1697890000.0
+
+      - name: "category"
+        type: "str"
+        example: "TRANSIENT"
+
+      - name: "tier"
+        type: "str"
+        example: "retry"
+        description: "Fallback tier that handled error (retry, alternative, cached, graceful)"
+
+      - name: "final_outcome"
+        type: "str"
+        example: "SUCCESS"
+        description: "SUCCESS, FAILURE, GRACEFUL"
+
+logging_integration:
+  tool_executor_method:
+    implementation: |
+      async def _log_error_to_k0(self, error: ToolError):
+          await self.k0_client.log_error({
+              "error_code": error.error_code.code,
+              "message": error.message,
+              "tool_id": error.tool_id,
+              "trace_id": error.trace_id,
+              "retry_count": error.retry_count,
+              "timestamp": error.timestamp,
+              "category": error.error_code.category.value
+          })
+
+observability:
+  prometheus_metrics:
+    - metric: "tool_errors_total"
+      type: "Counter"
+      labels: ["tool_id", "error_code", "category"]
+
+    - metric: "tool_retries_total"
+      type: "Counter"
+      labels: ["tool_id", "retry_count"]
+
+    - metric: "tool_fallback_tier_total"
+      type: "Counter"
+      labels: ["tool_id", "tier"]
+
+    - metric: "tool_fallback_success_total"
+      type: "Counter"
+      labels: ["tool_id", "tier"]
+
+    - metric: "tool_error_latency_seconds"
+      type: "Histogram"
+      labels: ["tool_id", "recovery_method"]
+      buckets: [1, 5, 10, 30, 60, 120]
+
+references:
+  adr:
+    - id: "ADR-0034d"
+      title: "MCP Error Handling & Recovery Strategies"
+      lines: "4751-5000 (error propagation), 5001-5250 (K0 logging)"
+
+  related_contracts:
+    - error_classification_3_categories.yml: "ToolError dataclass"
+    - retry_strategy_exponential_backoff.yml: "Logs retry attempts"
+    - fallback_tier1_retry.yml: "Logs Tier 1 attempts"
+    - fallback_tier2_alternative_tool.yml: "Logs Tier 2 attempts"

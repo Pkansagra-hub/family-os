@@ -1,0 +1,488 @@
+# Retention Policies Contract
+# Source ADR: 0035d-audit-trail-gdpr-compliance.md
+# Epic 2.9, Issue 2.9.4
+# Purpose: Automated cleanup and retention management for audit trails and PII data
+
+contract:
+  name: retention_policies
+  version: "1.0.0"
+  source_adr: "0035d-audit-trail-gdpr-compliance.md"
+  epic: "2.9"
+  issue: "2.9.4"
+
+retention_policies_overview:
+  purpose: "Automated cleanup and retention management for audit trails and PII data"
+  integration: "K0 SQLite automated cleanup jobs with compliance verification"
+  legal_basis: "GDPR Article 5(1)(e), HIPAA Security Rule retention requirements"
+
+retention_schedules:
+  gdpr_operational_data: |
+    - Audit logs: 90 days (operational retention)
+    - GDPR request metadata: 90 days after fulfillment
+    - Compliance metrics: 90 days
+    - Anomaly detection data: 90 days
+
+  hipaa_audit_trail: |
+    - PHI access logs: 6 years minimum
+    - Accounting of disclosures: 6 years minimum
+    - Security incident logs: 6 years minimum
+    - Audit control logs: 6 years minimum
+
+  pii_vault_data: |
+    - Encrypted PII values: Until user deletion or legal requirement
+    - PII detection metadata: 90 days
+    - Detection confidence scores: 90 days
+    - Pattern matching results: 90 days
+
+retention_policy_manager:
+  purpose: "Automated retention policy enforcement and cleanup"
+  integration: "Scheduled cleanup jobs with compliance verification"
+
+  rust_implementation: |
+    use crate::privacy::audit_logger::AuditLogger;
+    use std::sync::Arc;
+    use tokio::time::{self, Duration};
+
+    /// Retention policy configuration
+    #[derive(Debug, Clone)]
+    pub struct RetentionPolicies {
+        pub gdpr_audit_logs_days: u32,
+        pub gdpr_requests_days: u32,
+        pub gdpr_metrics_days: u32,
+        pub hipaa_logs_years: u32,
+        pub anomaly_data_days: u32,
+        pub pii_metadata_days: u32,
+    }
+
+    impl Default for RetentionPolicies {
+        fn default() -> Self {
+            Self {
+                gdpr_audit_logs_days: 90,
+                gdpr_requests_days: 90,
+                gdpr_metrics_days: 90,
+                hipaa_logs_years: 6,
+                anomaly_data_days: 90,
+                pii_metadata_days: 90,
+            }
+        }
+    }
+
+    /// Cleanup operation result
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct CleanupResult {
+        pub operation: String,
+        pub records_deleted: u64,
+        pub errors: Vec<String>,
+        pub duration_ms: u64,
+        pub compliance_verified: bool,
+    }
+
+    /// Retention policy manager
+    pub struct RetentionPolicyManager {
+        audit_logger: Arc<AuditLogger>,
+        policies: Arc<std::sync::RwLock<RetentionPolicies>>,
+        cleanup_interval_hours: u64,
+    }
+
+    impl RetentionPolicyManager {
+        /// Initialize retention policy manager
+        pub fn new(audit_logger: Arc<AuditLogger>, cleanup_interval_hours: u64) -> Self {
+            Self {
+                audit_logger,
+                policies: Arc::new(std::sync::RwLock::new(RetentionPolicies::default())),
+                cleanup_interval_hours,
+            }
+        }
+
+        /// Start automated cleanup scheduler
+        pub async fn start_cleanup_scheduler(&self) -> Result<(), Box<dyn std::error::Error>> {
+            let cleanup_interval = Duration::from_secs(self.cleanup_interval_hours * 3600);
+            let mut interval = time::interval(cleanup_interval);
+
+            println!("[RetentionPolicyManager] Started cleanup scheduler (every {} hours)",
+                    self.cleanup_interval_hours);
+
+            loop {
+                interval.tick().await;
+                if let Err(e) = self.run_cleanup_cycle().await {
+                    println!("[RetentionPolicyManager] Cleanup cycle failed: {}", e);
+                    metrics::counter!("retention_cleanup_failures_total").increment(1);
+                }
+            }
+        }
+
+        /// Run complete cleanup cycle
+        pub async fn run_cleanup_cycle(&self) -> Result<Vec<CleanupResult>, Box<dyn std::error::Error>> {
+            let start_time = std::time::SystemTime::now();
+            let mut results = Vec::new();
+
+            println!("[RetentionPolicyManager] Starting cleanup cycle");
+
+            // GDPR audit logs cleanup
+            let gdpr_audit_result = self.cleanup_gdpr_audit_logs().await?;
+            results.push(gdpr_audit_result);
+
+            // GDPR requests cleanup
+            let gdpr_requests_result = self.cleanup_gdpr_requests().await?;
+            results.push(gdpr_requests_result);
+
+            // GDPR metrics cleanup
+            let gdpr_metrics_result = self.cleanup_gdpr_metrics().await?;
+            results.push(gdpr_metrics_result);
+
+            // HIPAA logs retention verification (no deletion)
+            let hipaa_verification_result = self.verify_hipaa_retention().await?;
+            results.push(hipaa_verification_result);
+
+            // Anomaly data cleanup
+            let anomaly_result = self.cleanup_anomaly_data().await?;
+            results.push(anomaly_result);
+
+            // PII metadata cleanup
+            let pii_metadata_result = self.cleanup_pii_metadata().await?;
+            results.push(pii_metadata_result);
+
+            let duration = start_time.elapsed().unwrap().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] Cleanup cycle completed in {}ms", duration);
+            metrics::histogram!("retention_cleanup_cycle_duration_ms").record(duration as f64);
+
+            Ok(results)
+        }
+
+        /// Cleanup GDPR audit logs (>90 days)
+        async fn cleanup_gdpr_audit_logs(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            // Calculate cutoff timestamp (90 days ago)
+            let cutoff_days = policies.gdpr_audit_logs_days as i64;
+            let cutoff_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (cutoff_days * 86400);
+
+            // Query records to be deleted for verification
+            let records_to_delete = self.audit_logger.query_old_gdpr_audit_logs(cutoff_timestamp).await?;
+
+            // Verify compliance before deletion
+            let compliance_verified = self.verify_gdpr_cleanup_compliance(&records_to_delete).await?;
+
+            let mut errors = Vec::new();
+            let records_deleted = if compliance_verified {
+                match self.audit_logger.delete_old_gdpr_audit_logs(cutoff_timestamp).await {
+                    Ok(count) => count,
+                    Err(e) => {
+                        errors.push(format!("Failed to delete GDPR audit logs: {}", e));
+                        0
+                    }
+                }
+            } else {
+                errors.push("GDPR cleanup compliance verification failed".to_string());
+                0
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] GDPR audit logs cleanup: {} records deleted, {} errors",
+                    records_deleted, errors.len());
+
+            Ok(CleanupResult {
+                operation: "gdpr_audit_logs_cleanup".to_string(),
+                records_deleted,
+                errors,
+                duration_ms: duration,
+                compliance_verified,
+            })
+        }
+
+        /// Cleanup GDPR requests (>90 days after fulfillment)
+        async fn cleanup_gdpr_requests(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            let cutoff_days = policies.gdpr_requests_days as i64;
+            let cutoff_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (cutoff_days * 86400);
+
+            let records_to_delete = self.audit_logger.query_old_gdpr_requests(cutoff_timestamp).await?;
+            let compliance_verified = self.verify_gdpr_cleanup_compliance(&records_to_delete).await?;
+
+            let mut errors = Vec::new();
+            let records_deleted = if compliance_verified {
+                match self.audit_logger.delete_old_gdpr_requests(cutoff_timestamp).await {
+                    Ok(count) => count,
+                    Err(e) => {
+                        errors.push(format!("Failed to delete GDPR requests: {}", e));
+                        0
+                    }
+                }
+            } else {
+                errors.push("GDPR requests cleanup compliance verification failed".to_string());
+                0
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] GDPR requests cleanup: {} records deleted, {} errors",
+                    records_deleted, errors.len());
+
+            Ok(CleanupResult {
+                operation: "gdpr_requests_cleanup".to_string(),
+                records_deleted,
+                errors,
+                duration_ms: duration,
+                compliance_verified,
+            })
+        }
+
+        /// Cleanup GDPR compliance metrics (>90 days)
+        async fn cleanup_gdpr_metrics(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            let cutoff_days = policies.gdpr_metrics_days as i64;
+            let cutoff_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (cutoff_days * 86400);
+
+            let mut errors = Vec::new();
+            let records_deleted = match self.audit_logger.delete_old_gdpr_metrics(cutoff_timestamp).await {
+                Ok(count) => count,
+                Err(e) => {
+                    errors.push(format!("Failed to delete GDPR metrics: {}", e));
+                    0
+                }
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] GDPR metrics cleanup: {} records deleted, {} errors",
+                    records_deleted, errors.len());
+
+            Ok(CleanupResult {
+                operation: "gdpr_metrics_cleanup".to_string(),
+                records_deleted,
+                errors,
+                duration_ms: duration,
+                compliance_verified: true, // Metrics cleanup is always compliant
+            })
+        }
+
+        /// Verify HIPAA retention compliance (no deletion, just verification)
+        async fn verify_hipaa_retention(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            let retention_years = policies.hipaa_logs_years as i64;
+            let retention_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (retention_years * 365 * 86400);
+
+            // Verify all HIPAA-required logs are retained
+            let verification_result = self.audit_logger.verify_hipaa_retention(retention_timestamp).await?;
+
+            let duration = start_time.elapsed().as_millis() as u64;
+            let errors = if verification_result.compliant {
+                Vec::new()
+            } else {
+                vec![format!("HIPAA retention violation: {}", verification_result.details)]
+            };
+
+            println!("[RetentionPolicyManager] HIPAA retention verification: compliant={}, errors={}",
+                    verification_result.compliant, errors.len());
+
+            Ok(CleanupResult {
+                operation: "hipaa_retention_verification".to_string(),
+                records_deleted: 0, // No deletion for HIPAA
+                errors,
+                duration_ms: duration,
+                compliance_verified: verification_result.compliant,
+            })
+        }
+
+        /// Cleanup anomaly detection data (>90 days)
+        async fn cleanup_anomaly_data(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            let cutoff_days = policies.anomaly_data_days as i64;
+            let cutoff_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (cutoff_days * 86400);
+
+            let mut errors = Vec::new();
+            let records_deleted = match self.audit_logger.delete_old_anomaly_data(cutoff_timestamp).await {
+                Ok(count) => count,
+                Err(e) => {
+                    errors.push(format!("Failed to delete anomaly data: {}", e));
+                    0
+                }
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] Anomaly data cleanup: {} records deleted, {} errors",
+                    records_deleted, errors.len());
+
+            Ok(CleanupResult {
+                operation: "anomaly_data_cleanup".to_string(),
+                records_deleted,
+                errors,
+                duration_ms: duration,
+                compliance_verified: true,
+            })
+        }
+
+        /// Cleanup PII detection metadata (>90 days)
+        async fn cleanup_pii_metadata(&self) -> Result<CleanupResult, Box<dyn std::error::Error>> {
+            let start_time = std::time::Instant::now();
+            let policies = self.policies.read().unwrap();
+
+            let cutoff_days = policies.pii_metadata_days as i64;
+            let cutoff_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64 - (cutoff_days * 86400);
+
+            let mut errors = Vec::new();
+            let records_deleted = match self.audit_logger.delete_old_pii_metadata(cutoff_timestamp).await {
+                Ok(count) => count,
+                Err(e) => {
+                    errors.push(format!("Failed to delete PII metadata: {}", e));
+                    0
+                }
+            };
+
+            let duration = start_time.elapsed().as_millis() as u64;
+
+            println!("[RetentionPolicyManager] PII metadata cleanup: {} records deleted, {} errors",
+                    records_deleted, errors.len());
+
+            Ok(CleanupResult {
+                operation: "pii_metadata_cleanup".to_string(),
+                records_deleted,
+                errors,
+                duration_ms: duration,
+                compliance_verified: true,
+            })
+        }
+
+        /// Verify GDPR cleanup compliance before deletion
+        async fn verify_gdpr_cleanup_compliance(
+            &self,
+            records: &[AuditLogEntry],
+        ) -> Result<bool, Box<dyn std::error::Error>> {
+            // Verify no ongoing legal holds
+            for record in records {
+                if self.audit_logger.has_legal_hold(&record.user_id).await? {
+                    return Ok(false);
+                }
+            }
+
+            // Verify retention periods met
+            // Additional compliance checks can be added here
+
+            Ok(true)
+        }
+
+        /// Update retention policies
+        pub async fn update_policies(&self, new_policies: RetentionPolicies) {
+            let mut policies = self.policies.write().unwrap();
+            *policies = new_policies;
+
+            println!("[RetentionPolicyManager] Updated retention policies");
+        }
+
+        /// Get current retention policies
+        pub fn get_policies(&self) -> RetentionPolicies {
+            self.policies.read().unwrap().clone()
+        }
+    }
+
+retention_policy_api:
+  get_policies_endpoint: "GET /api/v1/privacy/retention/policies"
+  update_policies_endpoint: "PUT /api/v1/privacy/retention/policies"
+  cleanup_status_endpoint: "GET /api/v1/privacy/retention/cleanup-status"
+
+  policies_response: |
+    {
+      "gdpr_audit_logs_days": 90,
+      "gdpr_requests_days": 90,
+      "gdpr_metrics_days": 90,
+      "hipaa_logs_years": 6,
+      "anomaly_data_days": 90,
+      "pii_metadata_days": 90
+    }
+
+cleanup_status_response: |
+    {
+      "last_cleanup_cycle": 1698765432000,
+      "next_cleanup_cycle": 1698851832000,
+      "results": [
+        {
+          "operation": "gdpr_audit_logs_cleanup",
+          "records_deleted": 1250,
+          "errors": [],
+          "duration_ms": 4500,
+          "compliance_verified": true
+        },
+        {
+          "operation": "hipaa_retention_verification",
+          "records_deleted": 0,
+          "errors": [],
+          "duration_ms": 1200,
+          "compliance_verified": true
+        }
+      ]
+    }
+
+legal_hold_procedures:
+  description: "Legal hold procedures for retention policy suspension"
+  triggers: |
+    - Court order or legal subpoena
+    - Regulatory investigation
+    - Internal compliance review
+
+  implementation: |
+    - Mark user/space with legal hold flag
+    - Suspend automated cleanup for affected data
+    - Log legal hold establishment
+    - Manual review required for hold release
+
+compliance_auditing:
+  retention_audit_checks: |
+    - Verify HIPAA 6-year retention compliance
+    - Verify GDPR 90-day operational retention
+    - Check for unauthorized early deletion
+    - Validate legal hold enforcement
+
+  audit_report_generation: |
+    - Monthly retention compliance report
+    - Annual regulatory audit preparation
+    - Automated violation alerts
+    - Manual audit trail review
+
+testing_scenarios:
+  unit_tests:
+    - test_retention_policy_calculation
+    - test_cleanup_cycle_execution
+    - test_compliance_verification
+    - test_legal_hold_enforcement
+
+  integration_tests:
+    - test_full_cleanup_workflow
+    - test_retention_policy_api
+    - test_hipaa_retention_verification
+    - test_gdpr_cleanup_compliance
+
+  compliance_tests:
+    - test_hipaa_6_year_retention
+    - test_gdpr_90_day_operational_retention
+    - test_legal_hold_prevents_cleanup
+    - test_cleanup_audit_trail_integrity

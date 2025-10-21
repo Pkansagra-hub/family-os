@@ -1,477 +1,431 @@
-# Contract: Cross-Platform BERT-NER Model Support
-# Purpose: Define model deployment across CPU/GPU/mobile with <100MB memory, <500ms load time
-# Source: ADR-0035b - ML-based NER
-# Status: Production-Ready | Last Updated: 2025-10-14
+# Cross-Platform Model Contract
+# Source ADR: 0035b-ml-based-ner.md
+# Epic 2.9, Issue 2.9.2
+# Purpose: Platform compatibility (Linux, macOS, Windows, x86_64, aarch64) for BERT-NER
 
 contract:
-  id: "C_PRIVACY_CROSSPLATFORM_NER_012"
-  name: "Cross-Platform BERT-NER Model Support"
+  name: cross_platform_model
   version: "1.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
+  source_adr: "0035b-ml-based-ner.md"
+  epic: "2.9"
+  issue: "2.9.2"
 
-  design:
-    target_platforms:
-      - "Linux (x86-64, ARM64) - Production tier 1"
-      - "macOS (ARM64, x86-64) - Production tier 2"
-      - "Windows (x86-64) - Production tier 2"
-      - "Mobile (iOS, Android) - Phase 3 future"
+supported_platforms:
+  linux:
+    architectures:
+      x86_64:
+        os_requirements: "Linux kernel 3.10+ (GLIBC 2.17+)"
+        cpu_features:
+          required: ["SSE2"]
+          recommended: ["AVX2", "AVX512"]
+        onnx_provider: "CPUExecutionProvider"
+        performance: "<1.25ms (INT8, AVX512), <2.5ms (INT8, AVX2), <5ms (FP32)"
 
-    model_format: "ONNX (Open Neural Network Exchange) - Platform agnostic IR"
-    inference_engine: "ONNX Runtime (Microsoft, cross-platform)"
-    quantization: "INT8 (4× speedup, 4× smaller, <1% accuracy loss)"
+      aarch64:
+        os_requirements: "Linux kernel 4.1+ (ARM64)"
+        cpu_features:
+          required: ["NEON"]
+          recommended: []
+        onnx_provider: "CPUExecutionProvider"
+        performance: "<2.5ms (INT8, NEON), <6ms (FP32)"
+        note: "ARM servers, Raspberry Pi 4+, AWS Graviton"
 
-    cross_platform_strategy: |
-      Single model file (bert-ner-model-int8.onnx) runs on all platforms.
-      ONNX Runtime detects available hardware and selects optimal backend:
-      - Linux: Prefer CPU (MKL) or NVIDIA CUDA
-      - macOS: Prefer CPU (GEMM) or Apple ML (future)
-      - Windows: Prefer CPU (MKL) or NVIDIA CUDA
-      - Mobile: TensorFlow Lite or Core ML (future conversion)
+  macos:
+    architectures:
+      x86_64:
+        os_requirements: "macOS 10.13+ (High Sierra)"
+        cpu_features:
+          required: ["SSE2"]
+          recommended: ["AVX2"]
+        onnx_provider: "CPUExecutionProvider"
+        performance: "<1.5ms (INT8, AVX2), <5ms (FP32)"
 
+      aarch64:
+        os_requirements: "macOS 11.0+ (Big Sur, Apple Silicon)"
+        cpu_features:
+          required: ["NEON"]
+          recommended: ["Apple Neural Engine"]
+        onnx_provider: "CPUExecutionProvider OR CoreMLExecutionProvider"
+        performance: "<1ms (INT8, ANE), <1.8ms (INT8, NEON), <4ms (FP32)"
+        note: "M1/M2/M3 chips, use CoreML for ANE acceleration"
+
+  windows:
+    architectures:
+      x86_64:
+        os_requirements: "Windows 10+ (build 1809+)"
+        cpu_features:
+          required: ["SSE2"]
+          recommended: ["AVX2", "AVX512"]
+        onnx_provider: "CPUExecutionProvider"
+        performance: "<1.25ms (INT8, AVX512), <2.5ms (INT8, AVX2), <5ms (FP32)"
+
+onnx_runtime_providers:
+  cpu_execution_provider:
+    description: "Default cross-platform provider"
+    platforms: ["Linux x86_64", "Linux aarch64", "macOS x86_64", "macOS aarch64", "Windows x86_64"]
+    performance: "Baseline, portable"
+
+  coreml_execution_provider:
+    description: "Apple Neural Engine acceleration (macOS only)"
+    platforms: ["macOS aarch64 (M1/M2/M3)"]
+    performance: "2× faster than CPU on Apple Silicon"
+    requirements:
+      - "macOS 11.0+ (Big Sur)"
+      - "onnxruntime-coreml feature enabled"
+    trade_offs:
+      - "Additional 20MB CoreML runtime"
+      - "50ms model conversion overhead (one-time)"
+
+model_files:
+  fp32_model:
+    filename: "bert-ner-model.onnx"
+    size: "438MB"
+    performance: "<5ms inference (CPU)"
+    platforms: "All"
+
+  int8_model:
+    filename: "bert-ner-model-int8.onnx"
+    size: "110MB"
+    performance: "<1.25ms inference (AVX512), <2.5ms (AVX2/NEON)"
+    platforms: "All"
+    recommended: true
+
+  model_selection:
+    default: "int8_model"
+    rationale: "4× faster, 4× smaller, <1% accuracy loss"
+
+cpu_feature_detection:
+  x86_64_features:
+    sse2:
+      description: "Streaming SIMD Extensions 2"
+      required: true
+      availability: "All x86_64 CPUs (2003+)"
+
+    avx2:
+      description: "Advanced Vector Extensions 2"
+      required: false
+      availability: "Intel Haswell+ (2013), AMD Excavator+ (2015)"
+      performance_benefit: "2× faster than SSE2"
+
+    avx512:
+      description: "Advanced Vector Extensions 512"
+      required: false
+      availability: "Intel Skylake-X+ (2017), AMD Zen 4+ (2022)"
+      performance_benefit: "4× faster than SSE2, 2× faster than AVX2"
+
+  aarch64_features:
+    neon:
+      description: "ARM NEON SIMD"
+      required: true
+      availability: "All ARM64 CPUs (ARMv8)"
+
+    apple_neural_engine:
+      description: "Apple ANE accelerator"
+      required: false
+      availability: "Apple M1/M2/M3 chips"
+      performance_benefit: "2× faster than NEON"
+
+rust_cpu_detection:
+  crate: "raw-cpuid (x86_64), aarch64-cpu-features (aarch64)"
+  code: |
+    #[cfg(target_arch = "x86_64")]
+    fn detect_cpu_features() -> CpuFeatures {
+        use raw_cpuid::CpuId;
+        let cpuid = CpuId::new();
+
+        CpuFeatures {
+            sse2: cpuid.get_feature_info().map_or(false, |f| f.has_sse2()),
+            avx2: cpuid.get_extended_feature_info().map_or(false, |f| f.has_avx2()),
+            avx512f: cpuid.get_extended_feature_info().map_or(false, |f| f.has_avx512f()),
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn detect_cpu_features() -> CpuFeatures {
+        CpuFeatures {
+            neon: true,  // Always available on ARM64
+            apple_ane: cfg!(target_os = "macos") && is_apple_silicon(),
+        }
+    }
+
+    fn is_apple_silicon() -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::Command;
+            let output = Command::new("sysctl")
+                .arg("-n")
+                .arg("machdep.cpu.brand_string")
+                .output()
+                .ok()?;
+
+            let brand = String::from_utf8_lossy(&output.stdout);
+            brand.contains("Apple")
+        }
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
+memory_footprint:
+  model_loading:
+    fp32: "438MB"
+    int8: "110MB"
+
+  runtime_overhead:
+    onnx_runtime: "50MB"
+    tokenizer: "5MB"
+
+  total:
+    fp32: "~500MB"
+    int8: "~165MB"
+
+  per_request:
+    input_tensors: "<1MB (512 tokens max)"
+    output_tensors: "<0.5MB (logits)"
+
+  optimization:
+    strategy: "Use INT8 model to stay <200MB total footprint"
+
+startup_time:
+  model_loading:
+    fp32: "~800ms"
+    int8: "~400ms"
+
+  one_time_cost:
+    description: "Load model once at application startup"
+    amortization: "Startup cost amortized over thousands of requests"
+
+  lazy_loading:
+    strategy: "Load model on first PII detection request"
+    trade_off: "First request: 400ms latency, subsequent: <2ms"
+
+platform_specific_optimizations:
+  linux_x86_64:
+    - "Enable AVX512 if available"
+    - "Use Intel MKL-DNN for BLAS operations"
+    - "Tune thread pool size to CPU count"
+
+  linux_aarch64:
+    - "Enable NEON intrinsics"
+    - "Use OpenBLAS for BLAS operations"
+    - "Test on AWS Graviton instances"
+
+  macos_x86_64:
+    - "Enable AVX2 if available"
+    - "Use Accelerate framework for BLAS"
+
+  macos_aarch64:
+    - "Prefer CoreMLExecutionProvider for ANE"
+    - "Use Accelerate framework for BLAS"
+    - "Test on M1/M2/M3 devices"
+
+  windows_x86_64:
+    - "Enable AVX512/AVX2 if available"
+    - "Use Intel MKL for BLAS operations"
+    - "Test on Windows 10/11"
+
+onnx_runtime_configuration:
+  session_options:
+    graph_optimization_level: "Level3"
+    description: "Maximum optimizations for target platform"
+
+  execution_providers:
+    default_order:
+      - "CPUExecutionProvider"
+
+    macos_aarch64_order:
+      - "CoreMLExecutionProvider"  # Try ANE first
+      - "CPUExecutionProvider"     # Fallback to CPU
+
+  thread_pool:
+    intra_op_threads: 4
+    inter_op_threads: 1
+    description: "Tune for 4-core CPUs (common baseline)"
+
+testing_matrix:
+  platforms:
+    - os: "Ubuntu 22.04"
+      arch: "x86_64"
+      cpu: "Intel Xeon (AVX512)"
+      expected_latency: "<1.25ms (INT8)"
+
+    - os: "Ubuntu 22.04"
+      arch: "x86_64"
+      cpu: "AMD Ryzen (AVX2)"
+      expected_latency: "<2.5ms (INT8)"
+
+    - os: "Ubuntu 22.04"
+      arch: "aarch64"
+      cpu: "AWS Graviton3"
+      expected_latency: "<2.5ms (INT8)"
+
+    - os: "macOS 13 Ventura"
+      arch: "x86_64"
+      cpu: "Intel Core i7 (AVX2)"
+      expected_latency: "<1.5ms (INT8)"
+
+    - os: "macOS 14 Sonoma"
+      arch: "aarch64"
+      cpu: "Apple M2"
+      expected_latency: "<1ms (INT8, CoreML)"
+
+    - os: "Windows 11"
+      arch: "x86_64"
+      cpu: "Intel Core i9 (AVX512)"
+      expected_latency: "<1.25ms (INT8)"
+
+ci_cd_testing:
+  github_actions:
+    linux_x86_64:
+      runs_on: "ubuntu-latest"
+      test_command: "cargo test --release --target x86_64-unknown-linux-gnu"
+
+    linux_aarch64:
+      runs_on: "ubuntu-latest"
+      cross_compile: true
+      test_command: "cross test --release --target aarch64-unknown-linux-gnu"
+
+    macos_x86_64:
+      runs_on: "macos-13"
+      test_command: "cargo test --release --target x86_64-apple-darwin"
+
+    macos_aarch64:
+      runs_on: "macos-14"  # M1 runners
+      test_command: "cargo test --release --target aarch64-apple-darwin"
+
+    windows_x86_64:
+      runs_on: "windows-latest"
+      test_command: "cargo test --release --target x86_64-pc-windows-msvc"
+
+deployment_artifacts:
+  docker_images:
+    linux_x86_64:
+      base_image: "rust:1.75-slim"
+      size: "~200MB (multi-stage build)"
+
+    linux_aarch64:
+      base_image: "rust:1.75-slim"
+      size: "~200MB (multi-stage build)"
+      note: "Build with --platform linux/arm64"
+
+  native_binaries:
+    linux_x86_64:
+      format: "ELF 64-bit LSB"
+      dependencies: ["libc.so.6", "libm.so.6"]
+
+    macos_aarch64:
+      format: "Mach-O 64-bit arm64"
+      dependencies: []
+      code_signing: "Required for distribution"
+
+    windows_x86_64:
+      format: "PE32+ executable"
+      dependencies: ["msvcrt.dll"]
+
+fallback_for_unsupported_platforms:
+  unsupported:
+    - "Windows ARM64 (not yet supported by ONNX Runtime)"
+    - "32-bit architectures (x86, ARM32)"
+
+  fallback_strategy:
+    action: "Disable BERT-NER, use regex-only"
+    detection: "Platform detection at startup"
+    metric: "pii_ner_unsupported_platform_total"
+
+performance_benchmarks:
+  baseline:
+    platform: "Linux x86_64 (Intel Xeon, AVX512)"
+    model: "INT8"
+    latency: "1.25ms P50, 1.8ms P95, 2.5ms P99"
+
+  relative_performance:
+    linux_x86_64_avx2:
+      vs_baseline: "2× slower"
+      latency: "2.5ms P50"
+
+    linux_aarch64_neon:
+      vs_baseline: "2× slower"
+      latency: "2.5ms P50"
+
+    macos_aarch64_ane:
+      vs_baseline: "1.25× faster"
+      latency: "1ms P50"
+      note: "Apple Neural Engine acceleration"
+
+    macos_aarch64_neon:
+      vs_baseline: "1.5× slower"
+      latency: "1.8ms P50"
+      note: "Without CoreML provider"
+
+observability:
+  metrics:
+    - name: "pii_ner_platform_info"
+      type: "gauge"
+      labels: ["os", "arch", "cpu_features"]
+      description: "Platform information"
+
+    - name: "pii_ner_model_load_duration_ms"
+      type: "histogram"
+      labels: ["os", "arch", "model_type"]
+      buckets: [100, 200, 400, 800, 1600]
+
+    - name: "pii_ner_inference_duration_ms"
+      type: "histogram"
+      labels: ["os", "arch", "cpu_features"]
+      buckets: [0.5, 1, 1.25, 2.5, 5, 10]
+
+    - name: "pii_ner_memory_usage_mb"
+      type: "gauge"
+      labels: ["os", "arch", "model_type"]
+
+  logs:
+    - level: "INFO"
+      message: "Platform detected"
+      fields: ["os", "arch", "cpu_features"]
+
+    - level: "INFO"
+      message: "ONNX Runtime initialized"
+      fields: ["version", "providers", "graph_optimization_level"]
+
+    - level: "WARN"
+      message: "Platform not optimal for BERT-NER"
+      fields: ["os", "arch", "recommendation"]
+
+documentation:
   platform_support_matrix:
-    platform_linux_x86_64:
-      tier: "Production - Primary"
-      deployment_frequency: "100% of production workload"
-
-      operating_systems:
-        - "Ubuntu 20.04 LTS (minimal required)"
-        - "Ubuntu 22.04 LTS (current target)"
-        - "Debian 11, 12"
-        - "CentOS 8, 9"
-        - "RHEL 8, 9"
-
-      cpu_architecture: "x86-64 (Intel Xeon, AMD EPYC)"
-      cpu_instruction_sets:
-        - "Base: x86-64 (baseline)"
-        - "SSE4.2 (2010, widely available)"
-        - "AVX (2012, common)"
-        - "AVX2 (2013, standard in production servers)"
-        - "AVX-512 (2017, high-end servers, OPTIONAL)"
-
-      cpu_optimization:
-        onnx_runtime_cpu_backend: "ONNX Runtime GEMM or MKL backend"
-        threading: "OpenMP with worker threads (auto-detect core count)"
-        simd_vectorization: "Automatic for AVX2, manual tuning for AVX-512"
-        memory_layout: "Cache-optimal tensor layout"
-
-      memory_requirements:
-        model_int8_mb: 110
-        tokenizer_buffer_mb: 20
-        inference_buffers_mb: 50
-        overhead_mb: 20
-        total_mb: 200
-
-      cpu_model_performance:
-        inference_latency_p50_ms: 4.5
-        inference_latency_p95_ms: 5.0
-        inference_latency_p99_ms: 5.5
-        throughput_rps: 200
-        cpu_utilization_percent: 85
-
-      gpu_support:
-        - "NVIDIA GPUs (optional, not required)"
-        - "CUDA 11.x, 12.x support"
-        - "cuDNN for convolution ops"
-        - "TensorRT for advanced optimization"
-
-      gpu_performance_cuda_v100:
-        inference_latency_ms: 2.0
-        throughput_rps: 500
-        memory_gpu_mb: 150
-
-      gpu_performance_cuda_a100:
-        inference_latency_ms: 1.2
-        throughput_rps: 800
-        memory_gpu_mb: 150
-
-      load_time_cold_cache_ms: 450
-      load_time_warm_cache_ms: 50
-
-      deployment:
-        containerization: "Docker image (Ubuntu 22.04 base)"
-        container_runtime: "Docker, containerd, CRI-O"
-        orchestration: "Kubernetes 1.24+"
-        resource_requests:
-          cpu: "1000m (1 core)"
-          memory: "256Mi"
-
-        deployment_example: |
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: k1-ner-pod
-          spec:
-            containers:
-            - name: k1-ner
-              image: k1-privacy/bert-ner:v1-int8-linux
-              resources:
-                requests:
-                  cpu: 1000m
-                  memory: 256Mi
-                limits:
-                  cpu: 2000m
-                  memory: 512Mi
-              volumeMounts:
-              - name: model
-                mountPath: /models/
-            volumes:
-            - name: model
-              configMap:
-                name: ner-model-int8
-
-      production_validation:
-        - "✓ Tested on Ubuntu 22.04"
-        - "✓ Tested on Debian 12"
-        - "✓ Tested on CentOS 9"
-        - "✓ Performance verified (P95 <5.5ms)"
-        - "✓ Accuracy validated (F1 0.928)"
-
-    platform_macos_arm64:
-      tier: "Production - Secondary"
-      deployment_frequency: "~5-10% for developer testing, local deployments"
-
-      operating_system: "macOS 12.x, 13.x, 14.x (M1/M2/M3 chips)"
-      cpu_architecture: "ARM64 (Apple Silicon)"
-
-      cpu_model_specifications:
-        m1_max:
-          cores: 8
-          threads: 8
-        m2_max:
-          cores: 10
-          threads: 10
-        m3_max:
-          cores: 12
-          threads: 12
-
-      cpu_optimization:
-        onnx_runtime_backend: "ONNX Runtime ARM64 backend with Accelerate framework"
-        threading: "Grand Central Dispatch (GCD) for parallelization"
-        simd_vectorization: "ARM NEON instructions (128-bit SIMD)"
-        advanced_feature: "Optional Apple ML acceleration layer"
-
-      memory_requirements:
-        model_int8_mb: 110
-        total_mb: 200
-
-      performance_metrics:
-        inference_latency_p50_ms: 4.8
-        inference_latency_p95_ms: 5.5
-        throughput_rps: 180
-        cpu_utilization_percent: 80
-
-      gpu_support: false
-      gpu_note: "Apple GPU available but not optimized for NER inference"
-
-      load_time_ms: 500
-
-      deployment:
-        containerization: "Docker Desktop (via Rosetta 2 emulation or native ARM image)"
-        native_deployment: "Direct binary on macOS"
-        development_use: "Primary - local development and testing"
-
-      onnx_runtime_installation: |
-        brew install onnxruntime
-        # Or: pip install onnxruntime
-
-      testing_notes:
-        - "Developed on M1/M2 Macs"
-        - "CI/CD validation on ARM runners (GitHub Actions)"
-        - "Performance variance < 5% vs Linux"
-        - "Latency slightly higher due to ARM instruction set"
-
-    platform_windows_x86_64:
-      tier: "Production - Secondary"
-      deployment_frequency: "~5-10% for corporate deployments"
-
-      operating_systems:
-        - "Windows Server 2019"
-        - "Windows Server 2022"
-        - "Windows 10 (for development)"
-        - "Windows 11 (for development)"
-
-      cpu_architecture: "x86-64 (Intel/AMD)"
-      cpu_requirements: "AVX2 capable (Haswell 2013+)"
-
-      runtime_dependencies:
-        - "Visual C++ Runtime 2022"
-        - "NVIDIA CUDA Toolkit 11.x (optional for GPU)"
-
-      cpu_optimization:
-        onnx_runtime_backend: "ONNX Runtime GEMM or MKL backend"
-        threading: "OpenMP with worker threads"
-        memory_alignment: "SIMD-aligned buffers (32-byte for AVX2)"
-
-      performance_metrics:
-        inference_latency_p50_ms: 4.8
-        inference_latency_p95_ms: 5.2
-        throughput_rps: 190
-        cpu_utilization_percent: 85
-
-      cold_cache_impact:
-        load_time_cold_cache_ms: 800
-        load_time_cold_reason: "Disk I/O slower on Windows (vs Linux ext4)"
-        load_time_warm_cache_ms: 100
-
-      gpu_support:
-        - "NVIDIA CUDA 11.x, 12.x"
-        - "DirectML (Windows-native GPU acceleration)"
-
-      deployment:
-        containerization: "Docker for Windows (Hyper-V or WSL2 backend)"
-        process_isolation: "Windows Containers (Process mode for performance)"
-        container_image: "windows/servercore or nanoserver base"
-
-      powershell_example: |
-        # Load ONNX model in PowerShell
-        [Reflection.Assembly]::LoadFrom("onnxruntime_csharp.dll")
-        $session = New-Object -TypeName OnnxRuntime.InferenceSession -ArgumentList "model.onnx"
-
-      file_system_consideration: "Use local SSD for model (avoid network shares)"
-
-    platform_mobile_ios_future:
-      tier: "Future - Q2 2026"
-      status: "Not yet supported"
-
-      planned_approach:
-        - "Convert BERT-NER ONNX to Core ML format"
-        - "Deploy on-device using Core ML runtime"
-        - "Target iOS 16+ (A12 Bionic or newer)"
-
-      deployment_model: "On-device inference (privacy-first)"
-      model_size_optimized: "< 50MB (quantization + pruning)"
-      latency_target: "< 100ms per inference"
-
-    platform_mobile_android_future:
-      tier: "Future - Q2 2026"
-      status: "Not yet supported"
-
-      planned_approach:
-        - "Convert ONNX to TensorFlow Lite (.tflite)"
-        - "Deploy on-device using TFLite runtime"
-        - "Target Android 9+ (ARM v8)"
-
-      deployment_model: "On-device inference (privacy-first)"
-      model_size_optimized: "< 50MB (quantization + pruning)"
-      latency_target: "< 100ms per inference"
-
-  onnx_runtime_configuration_per_platform:
-    linux_config: |
-      session_options = onnxruntime.SessionOptions()
-      session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-      session_options.intra_op_num_threads = 8  # Auto-detect CPU cores
-      session_options.inter_op_num_threads = 1
-
-      session = ort.InferenceSession(
-          "bert-ner-model-int8.onnx",
-          sess_options=session_options,
-          providers=["CPUExecutionProvider"]  # or ["CUDAExecutionProvider", "CPUExecutionProvider"]
-      )
-
-    macos_config: |
-      session_options = ort.SessionOptions()
-      session_options.intra_op_num_threads = 4  # M1/M2/M3 has 4-12 cores
-
-      session = ort.InferenceSession(
-          "bert-ner-model-int8.onnx",
-          sess_options=session_options,
-          providers=["CPUExecutionProvider"]  # ARM64 CPU only
-      )
-
-    windows_config: |
-      session_options = ort.SessionOptions()
-      session_options.intra_op_num_threads = 8
-
-      session = ort.InferenceSession(
-          "bert-ner-model-int8.onnx",
-          sess_options=session_options,
-          providers=["CPUExecutionProvider"]  # or ["DmlExecutionProvider"] for DirectML GPU
-      )
-
-  vendor_specific_optimizations:
-    intel_optimization:
-      technology: "Intel MKL (Math Kernel Library)"
-      benefit: "Optimized matrix multiplication for Xeon CPUs"
-      requirement: "Intel CPU on Linux/Windows"
-      performance_boost: "1.2-1.5× vs generic GEMM"
-
-    amd_optimization:
-      technology: "BLIS (AOCL - AMD Optimized CPU Libraries)"
-      benefit: "Optimized for EPYC processors"
-      requirement: "AMD EPYC on Linux/Windows"
-      performance_boost: "1.2-1.5× vs generic GEMM"
-
-    nvidia_cuda_optimization:
-      technology: "NVIDIA CUDA + cuDNN + TensorRT"
-      benefit: "GPU acceleration (2-8× faster than CPU)"
-      requirement: "NVIDIA GPU + CUDA 11.x/12.x"
-      performance_boost: "4-5× on V100, 6-8× on A100"
-
-    apple_silicon_optimization:
-      technology: "ARM NEON + Accelerate framework"
-      benefit: "Native ARM64 acceleration"
-      requirement: "Apple M1/M2/M3"
-      performance_boost: "1.1-1.3× vs generic GEMM"
-
-  build_and_testing_per_platform:
-    build_procedure_linux:
-      step_1_checkout: "git clone k1_intelligence"
-      step_2_build: "cargo build --release -p k1_privacy"
-      step_3_link_onnxruntime: "Link ONNX Runtime x86-64 (.so files)"
-      step_4_test: "cargo test --release"
-      step_5_docker_build: "docker build -f Dockerfile.linux ."
-      expected_artifact: "Docker image k1-privacy/bert-ner:linux-v1"
-
-    build_procedure_macos:
-      step_1_install_deps: "brew install onnxruntime"
-      step_2_build: "cargo build --release -p k1_privacy --target aarch64-apple-darwin"
-      step_3_test: "cargo test --release --target aarch64-apple-darwin"
-      expected_artifact: "Binary: ./target/aarch64-apple-darwin/release/k1_privacy"
-
-    build_procedure_windows:
-      step_1_install_vcredist: "Download Visual C++ Runtime 2022"
-      step_2_install_onnxruntime: "Download ONNX Runtime x86-64 DLLs"
-      step_3_build: "cargo build --release -p k1_privacy"
-      step_4_test: "cargo test --release"
-      expected_artifact: "Binary: .\\target\\release\\k1_privacy.exe"
-
-    ci_cd_validation:
-      github_actions_workflow: |
-        # .github/workflows/cross-platform-test.yml
-        on: [push, pull_request]
-        jobs:
-          test-linux:
-            runs-on: ubuntu-22.04
-            steps:
-              - uses: actions/checkout@v3
-              - uses: dtolnay/rust-toolchain@stable
-              - run: cargo test --release
-              - run: docker build -f Dockerfile.linux .
-
-          test-macos:
-            runs-on: macos-latest  # M1 runner
-            steps:
-              - uses: actions/checkout@v3
-              - uses: dtolnay/rust-toolchain@stable
-              - run: cargo test --release --target aarch64-apple-darwin
-
-          test-windows:
-            runs-on: windows-latest
-            steps:
-              - uses: actions/checkout@v3
-              - uses: dtolnay/rust-toolchain@stable
-              - run: cargo test --release
-
-  performance_benchmarking:
-    benchmark_scenario_1_latency:
-      measurement: "P50, P95, P99 latency per platform"
-      methodology: "Run 1000 inference requests, measure end-to-end time"
-      results:
-        linux_x86_64:
-          p50: 4.5ms
-          p95: 5.0ms
-          p99: 5.5ms
-        macos_arm64:
-          p50: 4.8ms
-          p95: 5.5ms
-          p99: 6.0ms
-        windows_x86_64:
-          p50: 4.8ms
-          p95: 5.2ms
-          p99: 5.8ms
-
-    benchmark_scenario_2_throughput:
-      measurement: "Requests per second (RPS)"
-      methodology: "Sustained load with 100 concurrent requests"
-      results:
-        linux_x86_64: 200
-        macos_arm64: 180
-        windows_x86_64: 190
-
-    benchmark_scenario_3_memory:
-      measurement: "Peak memory during inference"
-      methodology: "Profile peak RSS + heap usage"
-      results:
-        linux_x86_64: 210MB
-        macos_arm64: 225MB
-        windows_x86_64: 220MB
-
-    benchmark_scenario_4_model_loading:
-      measurement: "Time to load model from disk"
-      methodology: "Measure cold start vs warm cache"
-      results:
-        linux_cold: 450ms
-        linux_warm: 50ms
-        macos_cold: 500ms
-        macos_warm: 50ms
-        windows_cold: 800ms (slow disk I/O)
-        windows_warm: 100ms
-
-  resource_constraints:
-    max_memory_footprint_mb: 100
-    max_load_time_ms: 500
-    min_inference_throughput_per_sec: 180
-    target_model_size_mb: 110
-
-  backward_compatibility:
-    supported_onnx_runtime_versions:
-      - "1.14.x"
-      - "1.15.x"
-      - "1.16.x"
-
-    model_versioning_scheme: "Semantic versioning (major.minor.patch-quantization-variant)"
-    version_support_policy: "Support last 3 versions"
-    deprecation_timeline: "6-month notice before EOL"
-
-    version_fallback_example: |
-      # If model v2.0.0 unavailable, fallback to v1.5.0
-      available_models = [v2.0.0, v1.5.0, v1.0.0]
-      for model_version in available_models:
-          try:
-              load_model(model_version)
-              return success
-          except:
-              continue
-      raise Error("No model versions available")
-
-  architecture:
-    adr_references: ["ADR-0035b: ML-based NER"]
-    parent_contract: "C_PRIVACY_BERT_MODEL_007"
-    integration_points:
-      - "K1 inference service (loads model at startup)"
-      - "Model registry service (downloads/caches models)"
-      - "Observability pipeline (tracks platform-specific metrics)"
-
-  testing:
-    platform_compatibility_tests:
-      - "✓ Linux x86-64 (primary)"
-      - "✓ macOS ARM64 (secondary)"
-      - "✓ Windows x86-64 (secondary)"
-      - "○ iOS (future)"
-      - "○ Android (future)"
-
-    performance_benchmarks:
-      - "Latency (P50, P95, P99)"
-      - "Throughput (RPS)"
-      - "Memory usage"
-      - "Model loading time"
-
-    regression_testing:
-      - "Accuracy maintained (F1 ≥ 0.928)"
-      - "Latency SLA met (P95 ≤ 5.5ms)"
-      - "No memory leaks"
-
-    ci_cd_validation:
-      - "Automated test on each platform per commit"
-      - "Canary deployment (10% → 50% → 100%)"
-
-  notes: |
-    ONNX Runtime enables single model format across platforms (Linux, macOS, Windows).
-    INT8 quantization keeps model <200MB while maintaining <1% accuracy loss.
-    Cross-platform support enables K1 deployment on any server OS.
-
-    Performance variance: Linux ≤ 5.0ms < macOS ≤ 5.5ms ≈ Windows ≤ 5.2ms
-    All platforms meet <6ms SLA target. GPU support optional for performance headroom.
-
-    Future mobile support planned for Q2 2026 (iOS Core ML, Android TFLite).
+    path: "docs/privacy/platform-support.md"
+    sections:
+      - "Supported platforms"
+      - "CPU feature requirements"
+      - "Performance benchmarks"
+      - "Deployment guides"
+
+  performance_tuning_guide:
+    path: "docs/privacy/performance-tuning.md"
+    sections:
+      - "CPU feature detection"
+      - "ONNX Runtime configuration"
+      - "Platform-specific optimizations"
+
+  deployment_guide:
+    path: "docs/deployment/bert-ner-deployment.md"
+    sections:
+      - "Docker images"
+      - "Native binaries"
+      - "CI/CD pipelines"
+
+testing:
+  unit_tests:
+    - test_cpu_feature_detection_x86_64
+    - test_cpu_feature_detection_aarch64
+    - test_model_selection_by_platform
+    - test_onnx_provider_selection
+
+  integration_tests:
+    - test_end_to_end_inference_linux_x86_64
+    - test_end_to_end_inference_macos_aarch64
+    - test_end_to_end_inference_windows_x86_64
+
+  performance_tests:
+    - test_inference_latency_all_platforms
+    - test_memory_footprint_all_platforms
+    - test_startup_time_all_platforms

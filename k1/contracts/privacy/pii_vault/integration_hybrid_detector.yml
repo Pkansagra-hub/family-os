@@ -1,0 +1,369 @@
+# Integration with Hybrid Detector Contract
+# Source ADR: 0035c-encrypted-vault-key-management.md
+# Epic 2.9, Issue 2.9.3
+# Purpose: End-to-end integration - detect PII → encrypt → vault → retrieve → decrypt
+
+contract:
+  name: integration_hybrid_detector
+  version: "1.0.0"
+  source_adr: "0035c-encrypted-vault-key-management.md"
+  epic: "2.9"
+  issue: "2.9.3"
+
+integration_overview:
+  components:
+    1_hybrid_detector: "Detects PII using regex (85%) + BERT-NER (10%)"
+    2_pii_vault: "Encrypts and stores PII"
+    3_redaction: "Replaces PII with placeholders"
+    4_session_state: "Stores redacted text + vault keys"
+
+  flow:
+    detect: "User input → HybridDetector → PII detections"
+    vault: "PII plaintext → PIIVault.store() → vault_key"
+    redact: "Replace PII with placeholder [SSN], [EMAIL], etc."
+    store_session: "Store redacted text + vault_keys in SessionState"
+    retrieve: "vault_key → PIIVault.retrieve() → PII plaintext"
+
+end_to_end_pipeline:
+  step_1_detect:
+    component: "HybridDetector"
+    input: "User message: 'My SSN is 123-45-6789 and email is john@example.com'"
+    operation: "Detect PII using regex + BERT-NER"
+    output: |
+      [
+        PiiDetection {
+          pii_type: "ssn",
+          value: "123-45-6789",
+          placeholder: "[SSN]",
+          start_pos: 10,
+          end_pos: 21,
+          confidence: 1.0,
+          detection_method: "regex"
+        },
+        PiiDetection {
+          pii_type: "email",
+          value: "john@example.com",
+          placeholder: "[EMAIL]",
+          start_pos: 35,
+          end_pos: 51,
+          confidence: 1.0,
+          detection_method: "regex"
+        }
+      ]
+    latency: "<7ms (5ms NER + 1ms regex + 1ms dedup)"
+
+  step_2_vault:
+    component: "PIIVault"
+    operation: "Encrypt and store each PII value"
+
+    vault_ssn:
+      input: "123-45-6789"
+      vault_key: "ssn_user001_abc123_1698765432000"
+      latency: "2.3ms (local keystore)"
+
+    vault_email:
+      input: "john@example.com"
+      vault_key: "email_user001_def456_1698765433000"
+      latency: "2.3ms (local keystore)"
+
+    total_latency: "4.6ms (2 PII values)"
+
+  step_3_redact:
+    component: "Redactor"
+    input: "My SSN is 123-45-6789 and email is john@example.com"
+    operation: "Replace PII with placeholders"
+    output: "My SSN is [SSN] and email is [EMAIL]"
+    latency: "<0.5ms"
+
+  step_4_store_session:
+    component: "SessionState"
+    operation: "Store redacted text + vault keys"
+    data:
+      redacted_text: "My SSN is [SSN] and email is [EMAIL]"
+      vault_keys: ["ssn_user001_abc123_1698765432000", "email_user001_def456_1698765433000"]
+    latency: "<1ms"
+
+  total_pipeline_latency: "<13ms (detect 7ms + vault 4.6ms + redact 0.5ms + store 1ms)"
+
+rust_integration_code:
+  full_pipeline: |
+    use crate::privacy::hybrid_detector::HybridDetector;
+    use crate::privacy::pii_vault::PIIVault;
+    use crate::privacy::redactor::Redactor;
+
+    pub struct PiiPipeline {
+        detector: HybridDetector,
+        vault: Arc<PIIVault>,
+        redactor: Redactor,
+    }
+
+    impl PiiPipeline {
+        pub async fn process_message(
+            &self,
+            user_message: &str,
+            user_id: &str,
+            space_id: &str,
+            trace_id: &str,
+        ) -> Result<ProcessedMessage, Box<dyn std::error::Error>> {
+            let start = std::time::Instant::now();
+
+            // Step 1: Detect PII (7ms)
+            let detection_result = self.detector.detect(user_message, trace_id)?;
+
+            // Step 2: Vault PII (4.6ms for 2 PII values)
+            let mut vault_keys = Vec::new();
+            for detection in &detection_result.detections {
+                let vault_key = self.vault.store(
+                    &detection.value,
+                    &detection.pii_type,
+                    user_id,
+                    space_id,
+                    trace_id,
+                ).await?;
+
+                vault_keys.push(vault_key);
+            }
+
+            // Step 3: Redact PII (0.5ms)
+            let redacted_text = self.redactor.redact(
+                user_message,
+                &detection_result.detections,
+            )?;
+
+            let pipeline_ms = start.elapsed().as_micros() as f64 / 1000.0;
+
+            println!(
+                "[PiiPipeline] Processed message in {:.2}ms (trace: {})",
+                pipeline_ms,
+                trace_id
+            );
+
+            // Emit metrics
+            metrics::histogram!("pii_pipeline_latency_ms").record(pipeline_ms);
+            metrics::counter!("pii_pipeline_messages_processed_total").increment(1);
+            metrics::histogram!("pii_pipeline_detections_per_message").record(detection_result.detections.len() as f64);
+
+            Ok(ProcessedMessage {
+                redacted_text,
+                vault_keys,
+                detection_count: detection_result.detections.len(),
+                latency_ms: pipeline_ms,
+            })
+        }
+
+        pub async fn restore_message(
+            &self,
+            redacted_text: &str,
+            vault_keys: &[String],
+            user_id: &str,
+            space_id: &str,
+            trace_id: &str,
+        ) -> Result<String, Box<dyn std::error::Error>> {
+            let start = std::time::Instant::now();
+
+            // Retrieve PII from vault
+            let mut plaintext_values = Vec::new();
+            for vault_key in vault_keys {
+                let plaintext = self.vault.retrieve(
+                    vault_key,
+                    user_id,
+                    space_id,
+                    trace_id,
+                ).await?;
+
+                plaintext_values.push(plaintext);
+            }
+
+            // Replace placeholders with original PII
+            let restored_text = self.redactor.restore(
+                redacted_text,
+                &plaintext_values,
+            )?;
+
+            let restore_ms = start.elapsed().as_micros() as f64 / 1000.0;
+
+            println!(
+                "[PiiPipeline] Restored message in {:.2}ms (trace: {})",
+                restore_ms,
+                trace_id
+            );
+
+            // Emit metrics
+            metrics::histogram!("pii_pipeline_restore_latency_ms").record(restore_ms);
+
+            Ok(restored_text)
+        }
+    }
+
+    pub struct ProcessedMessage {
+        pub redacted_text: String,
+        pub vault_keys: Vec<String>,
+        pub detection_count: usize,
+        pub latency_ms: f64,
+    }
+
+retrieve_and_restore:
+  scenario: "User requests GDPR data subject access (restore original message)"
+
+  input:
+    redacted_text: "My SSN is [SSN] and email is [EMAIL]"
+    vault_keys: ["ssn_user001_abc123_1698765432000", "email_user001_def456_1698765433000"]
+
+  process:
+    step_1_retrieve_ssn:
+      vault_key: "ssn_user001_abc123_1698765432000"
+      operation: "PIIVault.retrieve()"
+      plaintext: "123-45-6789"
+      latency: "2.6ms"
+
+    step_2_retrieve_email:
+      vault_key: "email_user001_def456_1698765433000"
+      operation: "PIIVault.retrieve()"
+      plaintext: "john@example.com"
+      latency: "2.6ms"
+
+    step_3_restore:
+      operation: "Replace [SSN] → 123-45-6789, [EMAIL] → john@example.com"
+      output: "My SSN is 123-45-6789 and email is john@example.com"
+      latency: "<0.5ms"
+
+  total_latency: "<6ms (retrieve 5.2ms + restore 0.5ms)"
+
+session_state_integration:
+  schema:
+    session_id: "Unique session identifier"
+    user_id: "User identifier"
+    space_id: "Space identifier"
+    turn_number: "Turn number in conversation"
+    redacted_user_message: "User message with PII redacted"
+    vault_keys: "JSON array of vault keys"
+    created_at: "Timestamp"
+
+  example:
+    session_id: "sess_abc123"
+    user_id: "user001"
+    space_id: "space001"
+    turn_number: 5
+    redacted_user_message: "My SSN is [SSN] and email is [EMAIL]"
+    vault_keys: '["ssn_user001_abc123_1698765432000", "email_user001_def456_1698765433000"]'
+    created_at: 1698765432000
+
+error_handling:
+  vault_store_failure:
+    cause: "Encryption failed or K0 database unavailable"
+    behavior: "Return error, do not store redacted message"
+    user_experience: "Display error message, retry"
+
+  vault_retrieve_failure:
+    cause: "Vault key not found or decryption failed"
+    behavior: "Return redacted text with placeholders (partial failure)"
+    user_experience: "Display '[SSN]' instead of plaintext SSN"
+
+  authorization_failure:
+    cause: "User doesn't own PII"
+    behavior: "Return error, do not reveal PII"
+    user_experience: "Display error message 'Unauthorized access'"
+
+observability:
+  metrics:
+    - name: "pii_pipeline_latency_ms"
+      type: "histogram"
+      buckets: [5, 10, 15, 20, 30, 50]
+      description: "End-to-end pipeline latency"
+
+    - name: "pii_pipeline_messages_processed_total"
+      type: "counter"
+      description: "Total messages processed"
+
+    - name: "pii_pipeline_detections_per_message"
+      type: "histogram"
+      buckets: [0, 1, 2, 3, 5, 10]
+      description: "PII detections per message"
+
+    - name: "pii_pipeline_restore_latency_ms"
+      type: "histogram"
+      buckets: [2, 5, 10, 15, 20]
+      description: "Message restoration latency"
+
+  tracing:
+    spans:
+      - "pii_pipeline.process_message"
+      - "pii_pipeline.detect_pii"
+      - "pii_pipeline.vault_pii"
+      - "pii_pipeline.redact_message"
+      - "pii_pipeline.restore_message"
+
+compliance_integration:
+  gdpr_right_to_access:
+    request: "User requests all their PII"
+    operation: "gdpr_access_request(user_id, space_id)"
+    response: "List of vault_keys + pii_types"
+    restore: "Retrieve each vault_key to get plaintext PII"
+
+  gdpr_right_to_erasure:
+    request: "User requests deletion of all their PII"
+    operation: "gdpr_erasure_request(user_id, space_id)"
+    effect: "Soft delete all vault entries, redacted messages remain"
+
+  hipaa_audit_trail:
+    logged_operations: ["store", "retrieve", "delete"]
+    retention: "6 years (HIPAA standard)"
+    query: "SELECT * FROM vault_audit_log WHERE user_id = ? AND timestamp > ?"
+
+testing:
+  unit_tests:
+    - test_process_message_with_pii
+    - test_process_message_no_pii
+    - test_restore_message
+    - test_vault_store_failure_handling
+    - test_vault_retrieve_failure_handling
+
+  integration_tests:
+    - test_end_to_end_pipeline
+    - test_gdpr_access_request_with_restore
+    - test_gdpr_erasure_request_deletes_vault
+    - test_audit_trail_logs_all_operations
+
+  performance_tests:
+    - test_pipeline_latency_budget_13ms
+    - test_restore_latency_budget_6ms
+    - test_batch_process_100_messages
+
+example_scenarios:
+  scenario_1_healthcare_message:
+    input: "Patient SSN: 123-45-6789, DOB: 01/01/1980, diagnosis: diabetes"
+    detections: ["SSN", "DOB (partial PII)"]
+    redacted: "Patient SSN: [SSN], DOB: [DATE], diagnosis: diabetes"
+    vault_keys: ["ssn_user001_...", "date_user001_..."]
+    compliance: "HIPAA encryption + audit trail"
+
+  scenario_2_finance_message:
+    input: "Credit card 4532-1234-5678-9010, CVV 123, exp 12/25"
+    detections: ["credit_card", "cvv (not vaulted)", "exp_date"]
+    redacted: "Credit card [CREDIT_CARD], CVV [REDACTED], exp [DATE]"
+    vault_keys: ["credit_card_user001_...", "date_user001_..."]
+    compliance: "PCI-DSS encryption"
+
+  scenario_3_gdpr_request:
+    request: "User requests all their data (GDPR Article 15)"
+    operation: "List all vault_keys for user"
+    restore: "Retrieve plaintext PII from vault"
+    response: |
+      {
+        "pii_entries": [
+          {"pii_type": "ssn", "value": "123-45-6789", "created_at": "2024-10-31T12:00:00Z"},
+          {"pii_type": "email", "value": "john@example.com", "created_at": "2024-10-31T12:00:01Z"}
+        ]
+      }
+
+documentation:
+  integration_guide:
+    path: "docs/privacy/integration-hybrid-detector.md"
+    sections:
+      - "Integration overview"
+      - "End-to-end pipeline"
+      - "Retrieve and restore"
+      - "Session state integration"
+      - "Error handling"
+      - "Compliance integration"
+      - "Example scenarios"

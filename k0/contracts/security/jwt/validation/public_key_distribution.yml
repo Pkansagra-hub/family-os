@@ -1,0 +1,417 @@
+---
+# ADR-0037: Public Key Distribution Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Public Key Distribution Contract
+# Defines public key caching and rotation handling for JWT verification
+
+contract:
+  name: public_key_distribution
+  version: "1.0.0"
+  description: "Public key caching and distribution for JWT signature verification"
+  parent_adr: "ADR-0037"
+  priority: "HIGH"
+  effort: "1.5 days"
+
+# Public Key Management
+public_key_management:
+  key_format: "PEM-encoded RSA public key"
+  key_size: "2048-bit RSA"
+  storage: "Hardware-backed keystore"
+  distribution: "Cached distribution to validators"
+
+  key_metadata:
+    key_id: "Unique identifier (kid in JWT header)"
+    algorithm: "RS256"
+    issuer: "k1.auth.service"
+    created_at: "Key creation timestamp"
+    expires_at: "Key expiration timestamp"
+    status: "active|rotated|expired"
+
+  rotation_policy:
+    rotation_interval: "90 days"
+    overlap_period: "24 hours"
+    old_key_retention: "7 days"
+    notification: "Event-driven updates"
+
+# Public Key Cache
+public_key_cache:
+  cache_strategy: "Multi-level caching"
+  cache_levels:
+    memory_cache:
+      description: "In-process memory cache"
+      size: "10 active keys"
+      ttl: "Until key rotation"
+      eviction: "LRU on size limit"
+
+    distributed_cache:
+      description: "Redis-based distributed cache"
+      key_pattern: "jwt:pubkey:{kid}"
+      ttl: "Until key rotation + 1 hour"
+      consistency: "Eventual consistency"
+
+  cache_invalidation:
+    invalidation_events:
+      - "Key rotation event"
+      - "Key compromise event"
+      - "Manual key rollover"
+    invalidation_strategy: "Immediate cache flush"
+    notification: "Pub/sub to all validators"
+
+# Key Distribution Process
+key_distribution_process:
+  key_retrieval:
+    description: "Retrieve public key for verification"
+    steps:
+      - "Extract kid from JWT header"
+      - "Check memory cache"
+      - "Check distributed cache"
+      - "Fetch from keystore if missing"
+      - "Validate key format and status"
+    performance: "<1ms for cached keys"
+
+  key_validation:
+    description: "Validate retrieved public key"
+    validations:
+      - "PEM format validation"
+      - "RSA key size (2048-bit)"
+      - "Key not expired"
+      - "Key status is active"
+    error_handling: "Invalid key rejection"
+
+  cache_population:
+    description: "Populate caches with new keys"
+    operations:
+      - "Store in memory cache"
+      - "Store in distributed cache"
+      - "Set appropriate TTL"
+    atomicity: "All-or-nothing updates"
+
+# Key Rotation Handling
+key_rotation_handling:
+  rotation_detection:
+    description: "Detect key rotation events"
+    mechanisms:
+      - "Event subscription (preferred)"
+      - "Cache miss with keystore check"
+      - "Periodic refresh (fallback)"
+    event_types:
+      - "key_rotated"
+      - "key_compromised"
+      - "key_expired"
+
+  rotation_process:
+    steps:
+      - "Receive rotation event"
+      - "Flush affected cache entries"
+      - "Fetch new key from keystore"
+      - "Populate caches with new key"
+      - "Verify old signatures still work (overlap period)"
+    downtime: "Zero downtime during rotation"
+
+  overlap_period:
+    description: "Support old signatures during transition"
+    duration: "24 hours"
+    mechanism: "Cache both old and new keys"
+    cleanup: "Remove old key after overlap expires"
+
+# Performance Requirements
+performance_requirements:
+  cache_hit_latency: "<0.1ms"
+  cache_miss_latency: "<5ms"
+  key_fetch_latency: "<10ms (keystore)"
+  throughput: "1000+ key retrievals per second"
+  memory_usage: "<10MB for key cache"
+
+  cache_hit_ratio:
+    target: ">99.9%"
+    monitoring: "Cache hit/miss metrics"
+    alerting: "Hit ratio < 99%"
+
+# Error Handling
+error_handling:
+  keystore_unavailable:
+    error: "KeystoreUnavailable"
+    handling: "Use cached keys, fail after cache expiry"
+    logging: "Error level, alert on"
+    fallback: "Circuit breaker pattern"
+
+  invalid_key_format:
+    error: "InvalidKeyFormat"
+    handling: "Reject key, log security event"
+    logging: "Warning level"
+    recovery: "Retry with different key"
+
+  cache_corruption:
+    error: "CacheCorruption"
+    handling: "Flush cache, reload from keystore"
+    logging: "Error level"
+    monitoring: "Corruption detection"
+
+  rotation_event_failed:
+    error: "RotationEventFailed"
+    handling: "Retry with exponential backoff"
+    logging: "Warning level"
+    alerting: "Failed rotation events"
+
+# Security Considerations
+security_considerations:
+  key_confidentiality:
+    description: "Public keys are not secret"
+    rationale: "RSA public keys can be safely distributed"
+    validation: "No sensitive data in public keys"
+
+  key_integrity:
+    description: "Ensure key authenticity"
+    mechanisms:
+      - "Cryptographic signatures on key metadata"
+      - "TLS for key distribution"
+      - "Trusted keystore source"
+    monitoring: "Key tampering detection"
+
+  key_expiry:
+    description: "Prevent use of expired keys"
+    enforcement: "Strict expiry checking"
+    monitoring: "Expired key usage attempts"
+    alerting: "Any expired key usage"
+
+  audit_logging:
+    events:
+      - "Key retrieval"
+      - "Cache hit/miss"
+      - "Key rotation"
+      - "Cache invalidation"
+    retention: "90 days"
+    compliance: "Security auditing requirements"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "redis = \"0.23\""
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "lru = \"0.10\""
+      - "rsa = \"0.9\""
+
+    code_example: |
+      use std::collections::HashMap;
+      use lru::LruCache;
+      use tokio::sync::RwLock;
+
+      pub struct PublicKeyCache {
+          memory_cache: RwLock<LruCache<String, rsa::RsaPublicKey>>,
+          redis_client: redis::Client,
+          keystore_client: Box<dyn KeystoreClient>,
+      }
+
+      impl PublicKeyCache {
+          pub async fn get_public_key(
+              &self,
+              key_id: &str
+          ) -> Result<rsa::RsaPublicKey, KeyDistributionError> {
+              // Check memory cache first
+              {
+                  let cache = self.memory_cache.read().await;
+                  if let Some(key) = cache.get(key_id) {
+                      return Ok(key.clone());
+                  }
+              }
+
+              // Check Redis cache
+              let redis_key = format!("jwt:pubkey:{}", key_id);
+              let mut conn = self.redis_client.get_async_connection().await?;
+              let cached_pem: Option<String> = redis::cmd("GET")
+                  .arg(&redis_key)
+                  .query_async(&mut conn)
+                  .await?;
+
+              if let Some(pem) = cached_pem {
+                  let key = rsa::RsaPublicKey::from_public_key_pem(&pem)?;
+                  // Populate memory cache
+                  let mut cache = self.memory_cache.write().await;
+                  cache.put(key_id.to_string(), key.clone());
+                  return Ok(key);
+              }
+
+              // Fetch from keystore
+              let key_info = self.keystore_client.get_public_key(key_id).await?;
+              let key = rsa::RsaPublicKey::from_public_key_pem(&key_info.pem)?;
+
+              // Validate key
+              self.validate_key(&key_info)?;
+
+              // Populate caches
+              self.populate_caches(key_id, &key_info.pem).await?;
+
+              Ok(key)
+          }
+
+          async fn populate_caches(
+              &self,
+              key_id: &str,
+              pem: &str
+          ) -> Result<(), KeyDistributionError> {
+              // Memory cache
+              let key = rsa::RsaPublicKey::from_public_key_pem(pem)?;
+              let mut cache = self.memory_cache.write().await;
+              cache.put(key_id.to_string(), key);
+
+              // Redis cache (TTL = 90 days)
+              let redis_key = format!("jwt:pubkey:{}", key_id);
+              let mut conn = self.redis_client.get_async_connection().await?;
+              redis::cmd("SETEX")
+                  .arg(&redis_key)
+                  .arg(90 * 24 * 3600)  // 90 days
+                  .arg(pem)
+                  .query_async(&mut conn)
+                  .await?;
+
+              Ok(())
+          }
+
+          fn validate_key(&self, key_info: &PublicKeyInfo) -> Result<(), KeyDistributionError> {
+              // Check expiry
+              let now = chrono::Utc::now().timestamp();
+              if key_info.expires_at <= now {
+                  return Err(KeyDistributionError::KeyExpired);
+              }
+
+              // Check status
+              if key_info.status != "active" {
+                  return Err(KeyDistributionError::KeyInactive);
+              }
+
+              Ok(())
+          }
+      }
+
+  python:
+    dependencies:
+      - "redis==4.5.0"
+      - "cryptography==41.0.0"
+      - "cachetools==5.3.0"
+
+    code_example: |
+      import redis.asyncio as redis
+      from cryptography.hazmat.primitives import serialization
+      from cachetools import TTLCache
+      import asyncio
+
+      class PublicKeyCache:
+          def __init__(self, redis_url: str, keystore_client):
+              self.redis = redis.from_url(redis_url)
+              self.keystore_client = keystore_client
+              self.memory_cache = TTLCache(maxsize=10, ttl=90*24*3600)  # 90 days
+
+          async def get_public_key(self, key_id: str):
+              """Get public key with caching"""
+              # Check memory cache
+              if key_id in self.memory_cache:
+                  return self.memory_cache[key_id]
+
+              # Check Redis cache
+              redis_key = f"jwt:pubkey:{key_id}"
+              cached_pem = await self.redis.get(redis_key)
+
+              if cached_pem:
+                  key = serialization.load_pem_public_key(cached_pem)
+                  self.memory_cache[key_id] = key
+                  return key
+
+              # Fetch from keystore
+              key_info = await self.keystore_client.get_public_key(key_id)
+
+              # Validate key
+              self._validate_key(key_info)
+
+              # Load key
+              key = serialization.load_pem_public_key(
+                  key_info['pem'].encode()
+              )
+
+              # Populate caches
+              await self._populate_caches(key_id, key_info['pem'])
+
+              return key
+
+          async def _populate_caches(self, key_id: str, pem: str):
+              """Populate memory and Redis caches"""
+              # Memory cache
+              key = serialization.load_pem_public_key(pem.encode())
+              self.memory_cache[key_id] = key
+
+              # Redis cache
+              redis_key = f"jwt:pubkey:{key_id}"
+              await self.redis.setex(redis_key, 90*24*3600, pem)  # 90 days
+
+          def _validate_key(self, key_info: dict):
+              """Validate key metadata"""
+              import time
+              now = int(time.time())
+
+              if key_info['expires_at'] <= now:
+                  raise KeyDistributionError('Key expired')
+
+              if key_info['status'] != 'active':
+                  raise KeyDistributionError('Key inactive')
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Cache hit/miss logic"
+    - "Key validation"
+    - "Cache population"
+    - "Error handling"
+
+  integration_tests:
+    - "Full key distribution workflow"
+    - "Redis integration"
+    - "Keystore integration"
+    - "Key rotation handling"
+
+  security_tests:
+    - "Key validation bypass attempts"
+    - "Cache poisoning"
+    - "Expired key handling"
+    - "Invalid key format handling"
+
+  performance_tests:
+    - "Cache hit latency"
+    - "Cache miss latency"
+    - "Key rotation performance"
+    - "Concurrent access"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "private_key_security.yml: Provides keystore access"
+    - "signature_verification.yml: Uses public keys"
+  downstream:
+    - "jwt_validator.yml: Uses key cache"
+    - "observability.yml: Monitors cache performance"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Public keys properly cached"
+    - "Key rotation handled seamlessly"
+    - "Invalid keys rejected"
+    - "Cache consistency maintained"
+
+  performance:
+    - "Cache hit <0.1ms"
+    - "High cache hit ratio"
+    - "Efficient key distribution"
+
+  security:
+    - "Key integrity maintained"
+    - "Expired keys not used"
+    - "Proper audit logging"
+
+  reliability:
+    - "Consistent key retrieval"
+    - "Graceful error handling"
+    - "Cache resilience"

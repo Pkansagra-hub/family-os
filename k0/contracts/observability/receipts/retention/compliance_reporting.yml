@@ -1,0 +1,592 @@
+classes:
+  - name: ComplianceReporting
+    description: GDPR Article 15 compliance export functionality for user data access requests
+    research: GDPR Article 15 (right of access), ADR-0038c (compliance export), HIPAA § 164.524 (access reports)
+    performance_budget: <500ms for user export (P95), <50ms for session export (P95)
+    reliability_properties:
+      - export_completeness: All user receipts included in export (100% coverage)
+      - data_integrity: Exported data matches original receipts (SHA-256 verification)
+      - privacy_protection: PII redaction applied based on privacy band
+      - audit_trail: All exports logged for compliance verification
+    methods:
+      - name: export_user_receipts
+        description: Export all receipts for a user in GDPR Article 15 format
+        parameters:
+          - name: user_id
+            type: string
+            description: User identifier for export
+          - name: privacy_band
+            type: string
+            description: User's privacy band (determines retention and redaction)
+          - name: export_format
+            type: string
+            description: Export format (json, csv, pdf)
+          - name: include_deleted
+            type: bool
+            description: Include receipts marked for deletion but not yet processed
+          - name: trace_id
+            type: string
+            description: Cognitive trace ID for audit trail
+        returns:
+          type: ExportResult
+          description: Export result with data, metadata, and audit information
+        implementation:
+          rust: |
+            use serde::{Serialize, Deserialize};
+            use chrono::{DateTime, Utc};
+            use sha2::{Sha256, Digest};
+            use std::collections::HashMap;
+
+            #[derive(Serialize, Deserialize)]
+            pub struct ExportResult {
+                pub user_id: String,
+                pub export_timestamp: DateTime<Utc>,
+                pub privacy_band: String,
+                pub total_receipts: usize,
+                pub export_hash: String,
+                pub receipts: Vec<ReceiptExport>,
+                pub metadata: ExportMetadata,
+                pub audit_trail: Vec<AuditEntry>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct ReceiptExport {
+                pub receipt_id: String,
+                pub receipt_type: String,
+                pub timestamp: DateTime<Utc>,
+                pub session_id: String,
+                pub data: serde_json::Value,
+                pub hash_chain: HashChainInfo,
+                pub privacy_applied: Vec<String>, // Redaction rules applied
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct HashChainInfo {
+                pub current_hash: String,
+                pub previous_hash: Option<String>,
+                pub chain_verified: bool,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct ExportMetadata {
+                pub export_duration_ms: f64,
+                pub data_size_bytes: usize,
+                pub compression_ratio: f64,
+                pub retention_status: HashMap<String, RetentionInfo>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct RetentionInfo {
+                pub days_retained: i32,
+                pub eligible_for_deletion: bool,
+                pub deletion_date: Option<DateTime<Utc>>,
+            }
+
+            #[derive(Serialize, Deserialize)]
+            pub struct AuditEntry {
+                pub timestamp: DateTime<Utc>,
+                pub action: String,
+                pub details: String,
+                pub trace_id: String,
+            }
+
+            impl ComplianceReporting {
+                pub async fn export_user_receipts(
+                    &self,
+                    user_id: &str,
+                    privacy_band: &str,
+                    export_format: &str,
+                    include_deleted: bool,
+                    trace_id: &str,
+                ) -> Result<ExportResult, ComplianceError> {
+                    let start_time = std::time::Instant::now();
+
+                    // Query all receipts for user
+                    let receipts = self.query_user_receipts(user_id, include_deleted).await?;
+
+                    // Apply privacy band redaction
+                    let redacted_receipts = self.apply_privacy_redaction(receipts, privacy_band)?;
+
+                    // Verify hash chains
+                    let verified_receipts = self.verify_hash_chains(redacted_receipts)?;
+
+                    // Generate export data
+                    let export_data = self.format_export_data(verified_receipts, export_format)?;
+
+                    // Calculate export hash for integrity
+                    let export_hash = self.calculate_export_hash(&export_data);
+
+                    // Generate retention metadata
+                    let retention_metadata = self.generate_retention_metadata(user_id, privacy_band)?;
+
+                    // Create audit trail
+                    let audit_trail = self.create_audit_trail(user_id, trace_id)?;
+
+                    let export_result = ExportResult {
+                        user_id: user_id.to_string(),
+                        export_timestamp: Utc::now(),
+                        privacy_band: privacy_band.to_string(),
+                        total_receipts: export_data.len(),
+                        export_hash,
+                        receipts: export_data,
+                        metadata: ExportMetadata {
+                            export_duration_ms: start_time.elapsed().as_millis() as f64,
+                            data_size_bytes: serde_json::to_string(&export_data)?.len(),
+                            compression_ratio: 1.0, // No compression in base format
+                            retention_status: retention_metadata,
+                        },
+                        audit_trail,
+                    };
+
+                    // Log compliance export
+                    self.log_compliance_export(&export_result, trace_id)?;
+
+                    Ok(export_result)
+                }
+
+                async fn query_user_receipts(
+                    &self,
+                    user_id: &str,
+                    include_deleted: bool,
+                ) -> Result<Vec<Receipt>, ComplianceError> {
+                    // Query receipts table with user filter
+                    let query = if include_deleted {
+                        "SELECT * FROM k0_receipts WHERE user_id = $1"
+                    } else {
+                        "SELECT * FROM k0_receipts WHERE user_id = $1 AND deleted_at IS NULL"
+                    };
+
+                    // Execute query and deserialize receipts
+                    // Implementation would use actual database connection
+                    Ok(vec![]) // Placeholder
+                }
+
+                fn apply_privacy_redaction(
+                    &self,
+                    receipts: Vec<Receipt>,
+                    privacy_band: &str,
+                ) -> Result<Vec<Receipt>, ComplianceError> {
+                    let mut redacted = Vec::new();
+
+                    for receipt in receipts {
+                        let mut redaction_rules = Vec::new();
+
+                        // Apply band-specific redaction
+                        match privacy_band {
+                            "GREEN" => {
+                                // Minimal redaction for GREEN band
+                                redaction_rules.push("email_masked".to_string());
+                                redaction_rules.push("phone_masked".to_string());
+                            }
+                            "AMBER" => {
+                                // Moderate redaction for AMBER band
+                                redaction_rules.push("email_removed".to_string());
+                                redaction_rules.push("phone_removed".to_string());
+                                redaction_rules.push("location_anonymized".to_string());
+                            }
+                            "RED" => {
+                                // Maximum redaction for RED band
+                                redaction_rules.push("all_pii_removed".to_string());
+                                redaction_rules.push("content_sanitized".to_string());
+                            }
+                            _ => return Err(ComplianceError::InvalidPrivacyBand),
+                        }
+
+                        // Apply redaction rules to receipt data
+                        let redacted_receipt = self.redact_receipt_data(receipt, &redaction_rules)?;
+                        redacted.push(redacted_receipt);
+                    }
+
+                    Ok(redacted)
+                }
+
+                fn verify_hash_chains(&self, receipts: Vec<Receipt>) -> Result<Vec<ReceiptExport>, ComplianceError> {
+                    let mut verified = Vec::new();
+
+                    for receipt in receipts {
+                        let chain_verified = self.verify_receipt_hash_chain(&receipt)?;
+
+                        verified.push(ReceiptExport {
+                            receipt_id: receipt.id,
+                            receipt_type: receipt.receipt_type,
+                            timestamp: receipt.timestamp,
+                            session_id: receipt.session_id,
+                            data: receipt.data,
+                            hash_chain: HashChainInfo {
+                                current_hash: receipt.current_hash,
+                                previous_hash: receipt.previous_hash,
+                                chain_verified,
+                            },
+                            privacy_applied: receipt.privacy_applied,
+                        });
+                    }
+
+                    Ok(verified)
+                }
+
+                fn format_export_data(
+                    &self,
+                    receipts: Vec<ReceiptExport>,
+                    format: &str,
+                ) -> Result<Vec<ReceiptExport>, ComplianceError> {
+                    match format {
+                        "json" => Ok(receipts),
+                        "csv" => {
+                            // Convert to CSV format
+                            // Implementation would serialize to CSV
+                            Ok(receipts)
+                        }
+                        "pdf" => {
+                            // Generate PDF report
+                            // Implementation would use PDF library
+                            Ok(receipts)
+                        }
+                        _ => Err(ComplianceError::UnsupportedFormat),
+                    }
+                }
+
+                fn calculate_export_hash(&self, data: &[ReceiptExport]) -> String {
+                    let json = serde_json::to_string(data).unwrap_or_default();
+                    let mut hasher = Sha256::new();
+                    hasher.update(json.as_bytes());
+                    format!("{:x}", hasher.finalize())
+                }
+
+                fn generate_retention_metadata(
+                    &self,
+                    user_id: &str,
+                    privacy_band: &str,
+                ) -> Result<HashMap<String, RetentionInfo>, ComplianceError> {
+                    let mut metadata = HashMap::new();
+
+                    // Calculate retention periods based on privacy band
+                    let (retention_days, grace_days) = match privacy_band {
+                        "GREEN" => (365, 7),
+                        "AMBER" => (180, 7),
+                        "RED" => (90, 7),
+                        _ => return Err(ComplianceError::InvalidPrivacyBand),
+                    };
+
+                    // Query current receipt counts and ages
+                    // Implementation would query database for retention status
+
+                    metadata.insert(
+                        "turn_receipts".to_string(),
+                        RetentionInfo {
+                            days_retained: retention_days,
+                            eligible_for_deletion: false, // Would be calculated
+                            deletion_date: None,
+                        }
+                    );
+
+                    Ok(metadata)
+                }
+
+                fn create_audit_trail(
+                    &self,
+                    user_id: &str,
+                    trace_id: &str,
+                ) -> Result<Vec<AuditEntry>, ComplianceError> {
+                    Ok(vec![
+                        AuditEntry {
+                            timestamp: Utc::now(),
+                            action: "GDPR_EXPORT_INITIATED".to_string(),
+                            details: format!("User {} requested data export", user_id),
+                            trace_id: trace_id.to_string(),
+                        }
+                    ])
+                }
+
+                fn log_compliance_export(
+                    &self,
+                    export: &ExportResult,
+                    trace_id: &str,
+                ) -> Result<(), ComplianceError> {
+                    // Log to compliance audit table
+                    // Implementation would insert audit record
+                    Ok(())
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import List, Dict, Optional, Any
+            from datetime import datetime, timezone
+            import hashlib
+            import json
+            import asyncio
+
+            @dataclass
+            class ExportResult:
+                user_id: str
+                export_timestamp: datetime
+                privacy_band: str
+                total_receipts: int
+                export_hash: str
+                receipts: List['ReceiptExport']
+                metadata: 'ExportMetadata'
+                audit_trail: List['AuditEntry']
+
+            @dataclass
+            class ReceiptExport:
+                receipt_id: str
+                receipt_type: str
+                timestamp: datetime
+                session_id: str
+                data: Dict[str, Any]
+                hash_chain: 'HashChainInfo'
+                privacy_applied: List[str]
+
+            @dataclass
+            class HashChainInfo:
+                current_hash: str
+                previous_hash: Optional[str]
+                chain_verified: bool
+
+            @dataclass
+            class ExportMetadata:
+                export_duration_ms: float
+                data_size_bytes: int
+                compression_ratio: float
+                retention_status: Dict[str, 'RetentionInfo']
+
+            @dataclass
+            class RetentionInfo:
+                days_retained: int
+                eligible_for_deletion: bool
+                deletion_date: Optional[datetime]
+
+            @dataclass
+            class AuditEntry:
+                timestamp: datetime
+                action: str
+                details: str
+                trace_id: str
+
+            class ComplianceReporting:
+                """GDPR Article 15 compliance export functionality"""
+
+                def __init__(self, db_connection, observability):
+                    self.db = db_connection
+                    self.obs = observability
+
+                async def export_user_receipts(
+                    self,
+                    user_id: str,
+                    privacy_band: str,
+                    export_format: str = "json",
+                    include_deleted: bool = False,
+                    trace_id: str = "",
+                ) -> ExportResult:
+                    """Export all receipts for a user in GDPR Article 15 format"""
+                    start_time = asyncio.get_event_loop().time()
+
+                    # Query all receipts for user
+                    receipts = await self._query_user_receipts(user_id, include_deleted)
+
+                    # Apply privacy band redaction
+                    redacted_receipts = self._apply_privacy_redaction(receipts, privacy_band)
+
+                    # Verify hash chains
+                    verified_receipts = self._verify_hash_chains(redacted_receipts)
+
+                    # Generate export data
+                    export_data = self._format_export_data(verified_receipts, export_format)
+
+                    # Calculate export hash for integrity
+                    export_hash = self._calculate_export_hash(export_data)
+
+                    # Generate retention metadata
+                    retention_metadata = await self._generate_retention_metadata(user_id, privacy_band)
+
+                    # Create audit trail
+                    audit_trail = self._create_audit_trail(user_id, trace_id)
+
+                    duration_ms = (asyncio.get_event_loop().time() - start_time) * 1000
+
+                    export_result = ExportResult(
+                        user_id=user_id,
+                        export_timestamp=datetime.now(timezone.utc),
+                        privacy_band=privacy_band,
+                        total_receipts=len(export_data),
+                        export_hash=export_hash,
+                        receipts=export_data,
+                        metadata=ExportMetadata(
+                            export_duration_ms=duration_ms,
+                            data_size_bytes=len(json.dumps([r.__dict__ for r in export_data])),
+                            compression_ratio=1.0,
+                            retention_status=retention_metadata,
+                        ),
+                        audit_trail=audit_trail,
+                    )
+
+                    # Log compliance export
+                    await self._log_compliance_export(export_result, trace_id)
+
+                    # Record observability metrics
+                    self.obs.record_compliance_check("gdpr_export", "SUCCESS", trace_id)
+
+                    return export_result
+
+                async def _query_user_receipts(self, user_id: str, include_deleted: bool) -> List[Dict]:
+                    """Query receipts for user from database"""
+                    query = """
+                        SELECT * FROM k0_receipts
+                        WHERE user_id = $1
+                    """
+                    if not include_deleted:
+                        query += " AND deleted_at IS NULL"
+
+                    # Execute query
+                    # self.db.execute(query, [user_id])
+                    return []  # Placeholder
+
+                def _apply_privacy_redaction(self, receipts: List[Dict], privacy_band: str) -> List[Dict]:
+                    """Apply privacy band specific redaction rules"""
+                    redacted = []
+
+                    for receipt in receipts:
+                        redaction_rules = []
+
+                        # Apply band-specific redaction
+                        if privacy_band == "GREEN":
+                            redaction_rules.extend(["email_masked", "phone_masked"])
+                        elif privacy_band == "AMBER":
+                            redaction_rules.extend(["email_removed", "phone_removed", "location_anonymized"])
+                        elif privacy_band == "RED":
+                            redaction_rules.extend(["all_pii_removed", "content_sanitized"])
+
+                        # Apply redaction to receipt data
+                        redacted_receipt = self._redact_receipt_data(receipt, redaction_rules)
+                        redacted.append(redacted_receipt)
+
+                    return redacted
+
+                def _verify_hash_chains(self, receipts: List[Dict]) -> List[ReceiptExport]:
+                    """Verify hash chains for all receipts"""
+                    verified = []
+
+                    for receipt in receipts:
+                        chain_verified = self._verify_receipt_hash_chain(receipt)
+
+                        verified.append(ReceiptExport(
+                            receipt_id=receipt['id'],
+                            receipt_type=receipt['receipt_type'],
+                            timestamp=receipt['timestamp'],
+                            session_id=receipt['session_id'],
+                            data=receipt['data'],
+                            hash_chain=HashChainInfo(
+                                current_hash=receipt['current_hash'],
+                                previous_hash=receipt.get('previous_hash'),
+                                chain_verified=chain_verified,
+                            ),
+                            privacy_applied=receipt.get('privacy_applied', []),
+                        ))
+
+                    return verified
+
+                def _format_export_data(self, receipts: List[ReceiptExport], format: str) -> List[ReceiptExport]:
+                    """Format export data based on requested format"""
+                    if format == "json":
+                        return receipts
+                    elif format == "csv":
+                        # Convert to CSV format
+                        return receipts
+                    elif format == "pdf":
+                        # Generate PDF report
+                        return receipts
+                    else:
+                        raise ValueError(f"Unsupported export format: {format}")
+
+                def _calculate_export_hash(self, data: List[ReceiptExport]) -> str:
+                    """Calculate SHA-256 hash of export data for integrity"""
+                    json_str = json.dumps([r.__dict__ for r in data], default=str, sort_keys=True)
+                    return hashlib.sha256(json_str.encode()).hexdigest()
+
+                async def _generate_retention_metadata(
+                    self,
+                    user_id: str,
+                    privacy_band: str,
+                ) -> Dict[str, RetentionInfo]:
+                    """Generate retention metadata for user's receipts"""
+                    metadata = {}
+
+                    # Calculate retention periods
+                    if privacy_band == "GREEN":
+                        retention_days, grace_days = 365, 7
+                    elif privacy_band == "AMBER":
+                        retention_days, grace_days = 180, 7
+                    elif privacy_band == "RED":
+                        retention_days, grace_days = 90, 7
+                    else:
+                        raise ValueError(f"Invalid privacy band: {privacy_band}")
+
+                    # Query retention status
+                    metadata["turn_receipts"] = RetentionInfo(
+                        days_retained=retention_days,
+                        eligible_for_deletion=False,
+                        deletion_date=None,
+                    )
+
+                    return metadata
+
+                def _create_audit_trail(self, user_id: str, trace_id: str) -> List[AuditEntry]:
+                    """Create audit trail for export operation"""
+                    return [
+                        AuditEntry(
+                            timestamp=datetime.now(timezone.utc),
+                            action="GDPR_EXPORT_INITIATED",
+                            details=f"User {user_id} requested data export",
+                            trace_id=trace_id,
+                        )
+                    ]
+
+                async def _log_compliance_export(self, export: ExportResult, trace_id: str):
+                    """Log compliance export to audit table"""
+                    # Insert into compliance_audit table
+                    pass
+
+                def _redact_receipt_data(self, receipt: Dict, rules: List[str]) -> Dict:
+                    """Apply redaction rules to receipt data"""
+                    # Implementation would apply specific redaction rules
+                    return receipt
+
+                def _verify_receipt_hash_chain(self, receipt: Dict) -> bool:
+                    """Verify hash chain integrity for receipt"""
+                    # Implementation would verify SHA-256 hash chain
+                    return True
+
+    dependencies:
+      - name: serde
+        description: Serialization for export data structures
+      - name: chrono
+        description: Date/time handling for export timestamps
+      - name: sha2
+        description: SHA-256 hashing for data integrity
+      - name: tokio
+        description: Async runtime for database queries
+
+testing_requirements:
+  - unit_tests:
+      - export_completeness: All user receipts included in export
+      - hash_integrity: Export hash matches calculated hash
+      - privacy_redaction: PII properly redacted based on privacy band
+  - integration_tests:
+      - database_queries: Correct receipt retrieval from database
+      - format_validation: Exported data in correct format (JSON/CSV/PDF)
+      - audit_logging: Export operations properly logged
+  - security_tests:
+      - access_control: Only authorized users can request exports
+      - data_leakage: No unauthorized data in exports
+      - rate_limiting: Export requests properly rate limited
+
+error_handling:
+  - ComplianceError::InvalidPrivacyBand: Invalid privacy band specified
+  - ComplianceError::UnsupportedFormat: Unsupported export format requested
+  - ComplianceError::DatabaseError: Database query failed during export
+  - ComplianceError::HashVerificationFailed: Hash chain verification failed
+
+compliance:
+  - gdpr: Article 15 (right of access by data subject)
+  - gdpr: Article 30 (records of processing activities)
+  - hipaa: § 164.524 (access of individuals to protected health information)
+  - soc2: CC7.1 (access to systems and data)

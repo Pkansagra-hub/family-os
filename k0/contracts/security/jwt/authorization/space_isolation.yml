@@ -1,0 +1,931 @@
+---
+# ADR-0037: Space Isolation Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Space Isolation Contract
+# Defines space-based data isolation and access control
+
+contract:
+  name: space_isolation
+  version: "1.0.0"
+  description: "Space-based data isolation and access control"
+  parent_adr: "ADR-0037"
+  priority: "HIGH"
+  effort: "1.5 days"
+
+# Space Isolation Concept
+space_isolation_concept:
+  description: "Space-based multi-tenancy and data isolation"
+  objectives:
+    - "Isolate data between spaces"
+    - "Enforce space membership"
+    - "Support space hierarchies"
+    - "Enable cross-space collaboration"
+
+  space_model:
+    space_definition: "Logical container for users and data"
+    isolation_principle: "Data isolation between spaces"
+    membership_model: "Users belong to specific spaces"
+    hierarchy_support: "Nested space structures"
+
+# Space Membership
+space_membership:
+  membership_types:
+    owner:
+      description: "Full space control"
+      permissions: ["manage_members", "manage_space", "access_all_data"]
+      count_limit: 1
+
+    admin:
+      description: "Space administration"
+      permissions: ["manage_members", "manage_content", "view_analytics"]
+      count_limit: "unlimited"
+
+    member:
+      description: "Regular space member"
+      permissions: ["read_content", "create_content", "comment"]
+      count_limit: "unlimited"
+
+    guest:
+      description: "Limited access member"
+      permissions: ["read_public_content"]
+      count_limit: "unlimited"
+
+  membership_lifecycle:
+    invitation: "Invite users to space"
+    acceptance: "User accepts invitation"
+    activation: "Membership becomes active"
+    modification: "Role changes within space"
+    deactivation: "Temporary suspension"
+    removal: "Permanent membership removal"
+
+# Space Data Isolation
+data_isolation:
+  isolation_mechanisms:
+    database_isolation:
+      description: "Separate databases per space"
+      implementation: "Multi-tenant database architecture"
+      benefits: "Complete data isolation"
+      challenges: "Resource overhead"
+
+    schema_isolation:
+      description: "Shared database with schema separation"
+      implementation: "Space-specific tables/schemas"
+      benefits: "Resource efficiency"
+      challenges: "Complex queries"
+
+    row_level_security:
+      description: "Row-level access control"
+      implementation: "Automatic space_id filtering"
+      benefits: "Flexible sharing"
+      challenges: "Query performance"
+
+  isolation_enforcement:
+    automatic_filtering: "All queries filtered by space_id"
+    access_validation: "Space membership validation"
+    cross_space_access: "Explicit permission required"
+    audit_logging: "Cross-space access events"
+
+# Space Hierarchy
+space_hierarchy:
+  hierarchy_model:
+    parent_child_relationships: "Spaces can contain sub-spaces"
+    permission_inheritance: "Children inherit parent permissions"
+    access_bubbling: "Access bubbles up hierarchy"
+    isolation_boundaries: "Hierarchy respects isolation"
+
+  hierarchy_operations:
+    create_subspace:
+      validation: "Parent space permission required"
+      inheritance: "Inherit parent space settings"
+      isolation: "Sub-space data isolation"
+
+    move_spaces:
+      validation: "Source and destination permissions"
+      data_migration: "Move data between spaces"
+      permission_updates: "Update access permissions"
+
+    hierarchy_queries:
+      ancestor_queries: "Find parent spaces"
+      descendant_queries: "Find child spaces"
+      permission_resolution: "Resolve inherited permissions"
+
+# Cross-Space Collaboration
+cross_space_collaboration:
+  collaboration_models:
+    shared_workspaces:
+      description: "Shared spaces between multiple spaces"
+      access_control: "Member spaces grant access"
+      data_isolation: "Shared data isolation"
+      governance: "Collaboration governance"
+
+    data_sharing:
+      description: "Controlled data sharing between spaces"
+      sharing_permissions: "Explicit sharing grants"
+      access_levels: ["read", "write", "admin"]
+      revocation: "Sharing permission revocation"
+
+    federated_access:
+      description: "Federated access across space boundaries"
+      trust_relationships: "Established space trust"
+      access_policies: "Federation access policies"
+      audit_trail: "Federated access logging"
+
+  collaboration_governance:
+    approval_workflows: "Collaboration request approvals"
+    access_monitoring: "Cross-space access monitoring"
+    compliance_checks: "Collaboration compliance validation"
+    incident_response: "Cross-space security incidents"
+
+# Space Access Control
+space_access_control:
+  access_enforcement:
+    membership_validation:
+      description: "Validate user space membership"
+      enforcement_points: ["api_access", "data_queries", "ui_rendering"]
+      failure_handling: "Access denied responses"
+
+    permission_checking:
+      description: "Check space-specific permissions"
+      permission_model: "Role + space context"
+      dynamic_evaluation: "Real-time permission evaluation"
+      caching_strategy: "Permission decision caching"
+
+    context_awareness:
+      description: "Context-aware access control"
+      space_context: "Current space context"
+      operation_context: "Operation-specific context"
+      temporal_context: "Time-based access rules"
+
+  access_patterns:
+    space_scoped_operations:
+      description: "Operations within space boundaries"
+      automatic_scoping: "Implicit space filtering"
+      scope_validation: "Space boundary validation"
+
+    cross_space_operations:
+      description: "Operations across space boundaries"
+      explicit_permissions: "Cross-space permissions required"
+      approval_requirements: "Cross-space approval workflows"
+      audit_requirements: "Enhanced audit logging"
+
+# Security Considerations
+security_considerations:
+  isolation_breaches:
+    description: "Prevent space isolation breaches"
+    measures:
+      - "Strict space_id validation"
+      - "Parameterized queries only"
+      - "Access control enforcement"
+      - "Regular security audits"
+
+  privilege_escalation:
+    description: "Prevent cross-space privilege escalation"
+    measures:
+      - "Space membership validation"
+      - "Permission boundary enforcement"
+      - "Cross-space access controls"
+      - "Audit trail monitoring"
+
+  data_leakage_prevention:
+    description: "Prevent data leakage between spaces"
+    measures:
+      - "Automatic data filtering"
+      - "Encryption at rest"
+      - "Secure data transport"
+      - "Access logging and monitoring"
+
+  compliance_monitoring:
+    description: "Space isolation compliance"
+    measures:
+      - "Automated compliance checks"
+      - "Isolation boundary validation"
+      - "Access pattern analysis"
+      - "Regular security assessments"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "sqlx = { version = \"0.7\", features = [\"postgres\"] }"
+
+    code_example: |
+      use serde::{Deserialize, Serialize};
+      use std::collections::HashMap;
+      use sqlx::PgPool;
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct Space {
+          pub space_id: String,
+          pub name: String,
+          pub parent_space_id: Option<String>,
+          pub owner_id: String,
+          pub created_at: i64,
+          pub settings: SpaceSettings,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct SpaceSettings {
+          pub isolation_level: IsolationLevel,
+          pub allow_subspaces: bool,
+          pub max_members: Option<i32>,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub enum IsolationLevel {
+          Database,    // Separate database
+          Schema,      // Separate schema
+          RowLevel,    // Row-level security
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub enum SpaceRole {
+          Owner,
+          Admin,
+          Member,
+          Guest,
+      }
+
+      impl SpaceRole {
+          pub fn permissions(&self) -> Vec<&'static str> {
+              match self {
+                  SpaceRole::Owner => vec!["manage_members", "manage_space", "access_all_data", "create_subspaces"],
+                  SpaceRole::Admin => vec!["manage_members", "manage_content", "view_analytics"],
+                  SpaceRole::Member => vec!["read_content", "create_content", "comment"],
+                  SpaceRole::Guest => vec!["read_public_content"],
+              }
+          }
+      }
+
+      #[derive(Debug)]
+      pub struct SpaceAccessRequest {
+          pub user_id: String,
+          pub space_id: String,
+          pub operation: String,
+          pub resource_id: Option<String>,
+      }
+
+      #[derive(Debug)]
+      pub struct SpaceAccessDecision {
+          pub granted: bool,
+          pub reason: String,
+          pub required_role: Option<SpaceRole>,
+          pub user_role: Option<SpaceRole>,
+      }
+
+      pub struct SpaceIsolationManager {
+          pool: PgPool,
+          space_cache: HashMap<String, Space>,
+          membership_cache: HashMap<(String, String), SpaceRole>,
+      }
+
+      impl SpaceIsolationManager {
+          pub fn new(pool: PgPool) -> Self {
+              Self {
+                  pool,
+                  space_cache: HashMap::new(),
+                  membership_cache: HashMap::new(),
+              }
+          }
+
+          pub async fn check_space_access(
+              &self,
+              request: &SpaceAccessRequest,
+          ) -> Result<SpaceAccessDecision, SpaceError> {
+              // Check if user is member of space
+              let user_role = self.get_user_space_role(&request.user_id, &request.space_id).await?;
+
+              let user_role = match user_role {
+                  Some(role) => role,
+                  None => return Ok(SpaceAccessDecision {
+                      granted: false,
+                      reason: "User is not a member of this space".to_string(),
+                      required_role: None,
+                      user_role: None,
+                  }),
+              };
+
+              // Check if operation is allowed for user's role
+              let allowed = self.check_operation_permission(&request.operation, &user_role);
+
+              Ok(SpaceAccessDecision {
+                  granted: allowed,
+                  reason: if allowed {
+                      "Access granted".to_string()
+                  } else {
+                      "Insufficient permissions".to_string()
+                  },
+                  required_role: Some(self.get_required_role_for_operation(&request.operation)),
+                  user_role: Some(user_role),
+              })
+          }
+
+          pub async fn get_user_space_role(
+              &self,
+              user_id: &str,
+              space_id: &str,
+          ) -> Result<Option<SpaceRole>, SpaceError> {
+              // Check cache first
+              let cache_key = (user_id.to_string(), space_id.to_string());
+              if let Some(role) = self.membership_cache.get(&cache_key) {
+                  return Ok(Some(role.clone()));
+              }
+
+              // Query database
+              let role: Option<String> = sqlx::query_scalar(
+                  "SELECT role FROM space_memberships WHERE user_id = $1 AND space_id = $2"
+              )
+              .bind(user_id)
+              .bind(space_id)
+              .fetch_optional(&self.pool)
+              .await?;
+
+              let space_role = role.and_then(|r| self.parse_space_role(&r));
+
+              // Cache result
+              if let Some(ref role) = space_role {
+                  self.membership_cache.insert(cache_key, role.clone());
+              }
+
+              Ok(space_role)
+          }
+
+          pub async fn add_space_member(
+              &self,
+              space_id: &str,
+              user_id: &str,
+              role: SpaceRole,
+              added_by: &str,
+          ) -> Result<(), SpaceError> {
+              // Validate adder has permission
+              let adder_role = self.get_user_space_role(added_by, space_id).await?
+                  .ok_or(SpaceError::NotSpaceMember)?;
+
+              if !adder_role.permissions().contains(&"manage_members") {
+                  return Err(SpaceError::InsufficientPermissions);
+              }
+
+              // Check member limits
+              self.validate_member_limits(space_id, &role).await?;
+
+              // Add member
+              sqlx::query(
+                  "INSERT INTO space_memberships (space_id, user_id, role, added_by, added_at)
+                   VALUES ($1, $2, $3, $4, $5)"
+              )
+              .bind(space_id)
+              .bind(user_id)
+              .bind(self.role_to_string(&role))
+              .bind(added_by)
+              .bind(chrono::Utc::now().timestamp())
+              .execute(&self.pool)
+              .await?;
+
+              // Invalidate cache
+              self.membership_cache.remove(&(user_id.to_string(), space_id.to_string()));
+
+              Ok(())
+          }
+
+          pub async fn create_subspace(
+              &self,
+              parent_space_id: &str,
+              name: &str,
+              owner_id: &str,
+          ) -> Result<String, SpaceError> {
+              // Validate parent space allows subspaces
+              let parent_space = self.get_space(parent_space_id).await?
+                  .ok_or(SpaceError::SpaceNotFound)?;
+
+              if !parent_space.settings.allow_subspaces {
+                  return Err(SpaceError::SubspacesNotAllowed);
+              }
+
+              // Check owner permission in parent
+              let owner_role = self.get_user_space_role(owner_id, parent_space_id).await?
+                  .ok_or(SpaceError::NotSpaceMember)?;
+
+              if !owner_role.permissions().contains(&"create_subspaces") {
+                  return Err(SpaceError::InsufficientPermissions);
+              }
+
+              // Create subspace
+              let subspace_id = uuid::Uuid::new_v4().to_string();
+              let subspace = Space {
+                  space_id: subspace_id.clone(),
+                  name: name.to_string(),
+                  parent_space_id: Some(parent_space_id.to_string()),
+                  owner_id: owner_id.to_string(),
+                  created_at: chrono::Utc::now().timestamp(),
+                  settings: SpaceSettings {
+                      isolation_level: parent_space.settings.isolation_level.clone(),
+                      allow_subspaces: true,
+                      max_members: None,
+                  },
+              };
+
+              // Store subspace
+              self.store_space(&subspace).await?;
+
+              // Add owner as member
+              self.add_space_member(&subspace_id, owner_id, SpaceRole::Owner, owner_id).await?;
+
+              Ok(subspace_id)
+          }
+
+          pub async fn get_space_hierarchy(&self, space_id: &str) -> Result<Vec<String>, SpaceError> {
+              let mut hierarchy = Vec::new();
+              let mut current_id = Some(space_id.to_string());
+
+              while let Some(id) = current_id {
+                  hierarchy.push(id.clone());
+                  let space = self.get_space(&id).await?;
+                  current_id = space.and_then(|s| s.parent_space_id);
+              }
+
+              Ok(hierarchy)
+          }
+
+          fn check_operation_permission(&self, operation: &str, role: &SpaceRole) -> bool {
+              let permissions = role.permissions();
+              match operation {
+                  "read_content" => permissions.contains(&"read_content") || permissions.contains(&"read_public_content"),
+                  "create_content" => permissions.contains(&"create_content"),
+                  "manage_members" => permissions.contains(&"manage_members"),
+                  "manage_space" => permissions.contains(&"manage_space"),
+                  "access_all_data" => permissions.contains(&"access_all_data"),
+                  _ => false,
+              }
+          }
+
+          fn get_required_role_for_operation(&self, operation: &str) -> SpaceRole {
+              match operation {
+                  "manage_space" => SpaceRole::Owner,
+                  "manage_members" => SpaceRole::Admin,
+                  "create_content" => SpaceRole::Member,
+                  "read_content" => SpaceRole::Guest,
+                  _ => SpaceRole::Member,
+              }
+          }
+
+          async fn validate_member_limits(&self, space_id: &str, role: &SpaceRole) -> Result<(), SpaceError> {
+              if let Some(space) = self.get_space(space_id).await? {
+                  if let Some(max_members) = space.settings.max_members {
+                      let current_count: i64 = sqlx::query_scalar(
+                          "SELECT COUNT(*) FROM space_memberships WHERE space_id = $1"
+                      )
+                      .bind(space_id)
+                      .fetch_one(&self.pool)
+                      .await?;
+
+                      if current_count >= max_members as i64 {
+                          return Err(SpaceError::MemberLimitExceeded);
+                      }
+                  }
+
+                  // Check role-specific limits
+                  match role {
+                      SpaceRole::Owner => {
+                          let owner_count: i64 = sqlx::query_scalar(
+                              "SELECT COUNT(*) FROM space_memberships WHERE space_id = $1 AND role = 'owner'"
+                          )
+                          .bind(space_id)
+                          .fetch_one(&self.pool)
+                          .await?;
+
+                          if owner_count > 0 {
+                              return Err(SpaceError::OwnerLimitExceeded);
+                          }
+                      }
+                      _ => {} // No limits for other roles
+                  }
+              }
+
+              Ok(())
+          }
+
+          async fn get_space(&self, space_id: &str) -> Result<Option<Space>, SpaceError> {
+              // Check cache first
+              if let Some(space) = self.space_cache.get(space_id) {
+                  return Ok(Some(space.clone()));
+              }
+
+              // Query database
+              let space: Option<Space> = sqlx::query_as(
+                  "SELECT * FROM spaces WHERE space_id = $1"
+              )
+              .bind(space_id)
+              .fetch_optional(&self.pool)
+              .await?;
+
+              // Cache result
+              if let Some(ref space) = space {
+                  self.space_cache.insert(space_id.to_string(), space.clone());
+              }
+
+              Ok(space)
+          }
+
+          async fn store_space(&self, space: &Space) -> Result<(), SpaceError> {
+              sqlx::query(
+                  "INSERT INTO spaces (space_id, name, parent_space_id, owner_id, created_at, settings)
+                   VALUES ($1, $2, $3, $4, $5, $6)"
+              )
+              .bind(&space.space_id)
+              .bind(&space.name)
+              .bind(&space.parent_space_id)
+              .bind(&space.owner_id)
+              .bind(space.created_at)
+              .bind(serde_json::to_value(&space.settings)?)
+              .execute(&self.pool)
+              .await?;
+
+              Ok(())
+          }
+
+          fn parse_space_role(&self, role_str: &str) -> Option<SpaceRole> {
+              match role_str {
+                  "owner" => Some(SpaceRole::Owner),
+                  "admin" => Some(SpaceRole::Admin),
+                  "member" => Some(SpaceRole::Member),
+                  "guest" => Some(SpaceRole::Guest),
+                  _ => None,
+              }
+          }
+
+          fn role_to_string(&self, role: &SpaceRole) -> &'static str {
+              match role {
+                  SpaceRole::Owner => "owner",
+                  SpaceRole::Admin => "admin",
+                  SpaceRole::Member => "member",
+                  SpaceRole::Guest => "guest",
+              }
+          }
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+      - "sqlalchemy==2.0.0"
+      - "asyncpg==0.29.0"
+
+    code_example: |
+      from pydantic import BaseModel
+      from typing import Dict, List, Optional
+      from enum import Enum
+      import asyncpg
+      import json
+
+      class IsolationLevel(str, Enum):
+          DATABASE = "database"
+          SCHEMA = "schema"
+          ROW_LEVEL = "row_level"
+
+      class SpaceSettings(BaseModel):
+          isolation_level: IsolationLevel
+          allow_subspaces: bool = True
+          max_members: Optional[int] = None
+
+      class Space(BaseModel):
+          space_id: str
+          name: str
+          parent_space_id: Optional[str] = None
+          owner_id: str
+          created_at: int
+          settings: SpaceSettings
+
+      class SpaceRole(str, Enum):
+          OWNER = "owner"
+          ADMIN = "admin"
+          MEMBER = "member"
+          GUEST = "guest"
+
+          def permissions(self) -> List[str]:
+              if self == SpaceRole.OWNER:
+                  return ["manage_members", "manage_space", "access_all_data", "create_subspaces"]
+              elif self == SpaceRole.ADMIN:
+                  return ["manage_members", "manage_content", "view_analytics"]
+              elif self == SpaceRole.MEMBER:
+                  return ["read_content", "create_content", "comment"]
+              else:  # GUEST
+                  return ["read_public_content"]
+
+      class SpaceAccessRequest(BaseModel):
+          user_id: str
+          space_id: str
+          operation: str
+          resource_id: Optional[str] = None
+
+      class SpaceAccessDecision(BaseModel):
+          granted: bool
+          reason: str
+          required_role: Optional[SpaceRole] = None
+          user_role: Optional[SpaceRole] = None
+
+      class SpaceIsolationManager:
+          def __init__(self, connection_string: str):
+              self.connection_string = connection_string
+              self.space_cache: Dict[str, Space] = {}
+              self.membership_cache: Dict[tuple, SpaceRole] = {}
+
+          async def check_space_access(self, request: SpaceAccessRequest) -> SpaceAccessDecision:
+              """Check if user has access to perform operation in space"""
+              # Check membership
+              user_role = await self.get_user_space_role(request.user_id, request.space_id)
+
+              if not user_role:
+                  return SpaceAccessDecision(
+                      granted=False,
+                      reason="User is not a member of this space",
+                      required_role=None,
+                      user_role=None
+                  )
+
+              # Check permissions
+              allowed = self.check_operation_permission(request.operation, user_role)
+
+              return SpaceAccessDecision(
+                  granted=allowed,
+                  reason="Access granted" if allowed else "Insufficient permissions",
+                  required_role=self.get_required_role_for_operation(request.operation),
+                  user_role=user_role
+              )
+
+          async def get_user_space_role(self, user_id: str, space_id: str) -> Optional[SpaceRole]:
+              """Get user's role in space"""
+              cache_key = (user_id, space_id)
+
+              # Check cache
+              if cache_key in self.membership_cache:
+                  return self.membership_cache[cache_key]
+
+              # Query database
+              conn = await asyncpg.connect(self.connection_string)
+              try:
+                  role_str = await conn.fetchval(
+                      "SELECT role FROM space_memberships WHERE user_id = $1 AND space_id = $2",
+                      user_id, space_id
+                  )
+
+                  role = SpaceRole(role_str) if role_str else None
+
+                  # Cache result
+                  if role:
+                      self.membership_cache[cache_key] = role
+
+                  return role
+              finally:
+                  await conn.close()
+
+          async def add_space_member(
+              self,
+              space_id: str,
+              user_id: str,
+              role: SpaceRole,
+              added_by: str
+          ) -> None:
+              """Add user to space with specific role"""
+              # Validate adder permissions
+              adder_role = await self.get_user_space_role(added_by, space_id)
+              if not adder_role or "manage_members" not in adder_role.permissions():
+                  raise SpaceError("Insufficient permissions to add members")
+
+              # Validate limits
+              await self.validate_member_limits(space_id, role)
+
+              # Add member
+              conn = await asyncpg.connect(self.connection_string)
+              try:
+                  await conn.execute(
+                      """INSERT INTO space_memberships
+                         (space_id, user_id, role, added_by, added_at)
+                         VALUES ($1, $2, $3, $4, $5)""",
+                      space_id, user_id, role.value, added_by, int(time.time())
+                  )
+              finally:
+                  await conn.close()
+
+              # Invalidate cache
+              self.membership_cache.pop((user_id, space_id), None)
+
+          async def create_subspace(
+              self,
+              parent_space_id: str,
+              name: str,
+              owner_id: str
+          ) -> str:
+              """Create a subspace under parent space"""
+              # Validate parent allows subspaces
+              parent = await self.get_space(parent_space_id)
+              if not parent or not parent.settings.allow_subspaces:
+                  raise SpaceError("Subspaces not allowed")
+
+              # Check owner permissions
+              owner_role = await self.get_user_space_role(owner_id, parent_space_id)
+              if not owner_role or "create_subspaces" not in owner_role.permissions():
+                  raise SpaceError("Insufficient permissions to create subspace")
+
+              # Create subspace
+              subspace_id = str(uuid.uuid4())
+              subspace = Space(
+                  space_id=subspace_id,
+                  name=name,
+                  parent_space_id=parent_space_id,
+                  owner_id=owner_id,
+                  created_at=int(time.time()),
+                  settings=SpaceSettings(
+                      isolation_level=parent.settings.isolation_level,
+                      allow_subspaces=True
+                  )
+              )
+
+              # Store subspace
+              await self.store_space(subspace)
+
+              # Add owner
+              await self.add_space_member(subspace_id, owner_id, SpaceRole.OWNER, owner_id)
+
+              return subspace_id
+
+          async def get_space_hierarchy(self, space_id: str) -> List[str]:
+              """Get space hierarchy path"""
+              hierarchy = []
+              current_id = space_id
+
+              while current_id:
+                  hierarchy.append(current_id)
+                  space = await self.get_space(current_id)
+                  current_id = space.parent_space_id if space else None
+
+              return hierarchy
+
+          def check_operation_permission(self, operation: str, role: SpaceRole) -> bool:
+              """Check if role allows operation"""
+              permissions = role.permissions()
+
+              if operation == "read_content":
+                  return "read_content" in permissions or "read_public_content" in permissions
+              elif operation == "create_content":
+                  return "create_content" in permissions
+              elif operation == "manage_members":
+                  return "manage_members" in permissions
+              elif operation == "manage_space":
+                  return "manage_space" in permissions
+              elif operation == "access_all_data":
+                  return "access_all_data" in permissions
+
+              return False
+
+          def get_required_role_for_operation(self, operation: str) -> SpaceRole:
+              """Get minimum role required for operation"""
+              if operation == "manage_space":
+                  return SpaceRole.OWNER
+              elif operation == "manage_members":
+                  return SpaceRole.ADMIN
+              elif operation == "create_content":
+                  return SpaceRole.MEMBER
+              else:
+                  return SpaceRole.GUEST
+
+          async def validate_member_limits(self, space_id: str, role: SpaceRole) -> None:
+              """Validate space member limits"""
+              space = await self.get_space(space_id)
+              if not space:
+                  return
+
+              conn = await asyncpg.connect(self.connection_string)
+              try:
+                  # Check total member limit
+                  if space.settings.max_members:
+                      count = await conn.fetchval(
+                          "SELECT COUNT(*) FROM space_memberships WHERE space_id = $1",
+                          space_id
+                      )
+                      if count >= space.settings.max_members:
+                          raise SpaceError("Member limit exceeded")
+
+                  # Check owner limit (only one owner)
+                  if role == SpaceRole.OWNER:
+                      owner_count = await conn.fetchval(
+                          "SELECT COUNT(*) FROM space_memberships WHERE space_id = $1 AND role = 'owner'",
+                          space_id
+                      )
+                      if owner_count > 0:
+                          raise SpaceError("Owner already exists")
+
+              finally:
+                  await conn.close()
+
+          async def get_space(self, space_id: str) -> Optional[Space]:
+              """Get space by ID"""
+              # Check cache
+              if space_id in self.space_cache:
+                  return self.space_cache[space_id]
+
+              # Query database
+              conn = await asyncpg.connect(self.connection_string)
+              try:
+                  row = await conn.fetchrow(
+                      "SELECT * FROM spaces WHERE space_id = $1",
+                      space_id
+                  )
+
+                  if row:
+                      settings_data = json.loads(row['settings'])
+                      space = Space(
+                          space_id=row['space_id'],
+                          name=row['name'],
+                          parent_space_id=row['parent_space_id'],
+                          owner_id=row['owner_id'],
+                          created_at=row['created_at'],
+                          settings=SpaceSettings(**settings_data)
+                      )
+
+                      # Cache result
+                      self.space_cache[space_id] = space
+                      return space
+
+                  return None
+              finally:
+                  await conn.close()
+
+          async def store_space(self, space: Space) -> None:
+              """Store space in database"""
+              conn = await asyncpg.connect(self.connection_string)
+              try:
+                  await conn.execute(
+                      """INSERT INTO spaces
+                         (space_id, name, parent_space_id, owner_id, created_at, settings)
+                         VALUES ($1, $2, $3, $4, $5, $6)""",
+                      space.space_id,
+                      space.name,
+                      space.parent_space_id,
+                      space.owner_id,
+                      space.created_at,
+                      space.settings.json()
+                  )
+              finally:
+                  await conn.close()
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Space membership validation"
+    - "Permission checking logic"
+    - "Hierarchy operations"
+    - "Isolation enforcement"
+
+  integration_tests:
+    - "Full space lifecycle"
+    - "Cross-space operations"
+    - "Hierarchy traversals"
+    - "Member management workflows"
+
+  security_tests:
+    - "Isolation breach prevention"
+    - "Privilege escalation protection"
+    - "Data leakage prevention"
+    - "Access control enforcement"
+
+  performance_tests:
+    - "Access check latency"
+    - "Hierarchy query performance"
+    - "Concurrent space operations"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "privacy_band_enforcement.yml: Provides privacy context"
+    - "role_based_access.yml: Provides role permissions"
+  downstream:
+    - "authorization_cache.yml: Caches space-based decisions"
+    - "authorization_audit.yml: Audits space access"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Space isolation properly enforced"
+    - "Membership management works"
+    - "Hierarchy operations functional"
+    - "Cross-space access controlled"
+
+  performance:
+    - "Space operations <5ms"
+    - "Hierarchy queries <10ms"
+    - "Scalable to 10k spaces"
+
+  security:
+    - "Complete data isolation"
+    - "No cross-space data leakage"
+    - "Proper access controls"
+    - "Audit trail integrity"
+
+  reliability:
+    - "Consistent isolation enforcement"
+    - "Membership state integrity"
+    - "Graceful failure handling"

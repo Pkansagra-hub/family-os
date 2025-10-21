@@ -1,0 +1,451 @@
+# K0 Vault Schema Contract
+# Source ADR: 0035c-encrypted-vault-key-management.md
+# Epic 2.9, Issue 2.9.3
+# Purpose: SQLite schema for pii_vault and vault_audit_log tables in K0 database
+
+contract:
+  name: k0_vault_schema
+  version: "1.0.0"
+  source_adr: "0035c-encrypted-vault-key-management.md"
+  epic: "2.9"
+  issue: "2.9.3"
+
+database:
+  name: "K0 (FamilyOS kernel database)"
+  engine: "SQLite 3.35+"
+  location: "k0/storage/k0.db"
+  encryption_at_rest: "Optional - SQLCipher for additional security"
+
+pii_vault_table:
+  name: "pii_vault"
+  purpose: "Store encrypted PII values with AES-256-GCM"
+
+  schema_sql: |
+    CREATE TABLE pii_vault (
+        vault_key TEXT PRIMARY KEY,              -- Unique vault key (UUID-based)
+        encrypted_value BLOB NOT NULL,           -- AES-256-GCM ciphertext
+        nonce BLOB NOT NULL,                     -- 96-bit nonce (12 bytes)
+        auth_tag BLOB NOT NULL,                  -- 128-bit authentication tag (16 bytes)
+        pii_type TEXT NOT NULL,                  -- "ssn" | "email" | "phone" | "name" | etc.
+        user_id TEXT NOT NULL,                   -- User identifier (for access control)
+        space_id TEXT NOT NULL,                  -- Space identifier
+        trace_id TEXT NOT NULL,                  -- Cognitive trace ID (for debugging)
+        created_at INTEGER NOT NULL,             -- Unix timestamp (ms)
+        accessed_at INTEGER,                     -- Last access timestamp (for audit)
+        deleted_at INTEGER,                      -- Soft delete timestamp (GDPR right to erasure)
+        keystore_key_id TEXT NOT NULL,           -- Keystore key ID (for key rotation tracking)
+        keystore_backend TEXT NOT NULL,          -- "OS_KEYCHAIN" | "ENCRYPTED_FILE" | "LOCAL_HSM" | "CLOUD_KMS"
+        metadata TEXT,                           -- JSON metadata (optional)
+
+        INDEX idx_user_space (user_id, space_id),
+        INDEX idx_pii_type (pii_type),
+        INDEX idx_deleted_at (deleted_at),
+        INDEX idx_created_at (created_at),
+        INDEX idx_keystore_backend (keystore_backend)
+    );
+
+  columns:
+    vault_key:
+      type: "TEXT"
+      constraint: "PRIMARY KEY"
+      description: "Unique identifier for vault entry"
+      format: "{pii_type}_{user_id}_{uuid}_{timestamp}"
+      example: "ssn_user001_abc123def456_1698765432000"
+
+    encrypted_value:
+      type: "BLOB"
+      constraint: "NOT NULL"
+      description: "AES-256-GCM ciphertext (PII plaintext encrypted)"
+      size: "Variable (same size as plaintext)"
+      example: "0xABCD1234... (hex bytes)"
+
+    nonce:
+      type: "BLOB"
+      constraint: "NOT NULL"
+      description: "96-bit nonce (12 bytes, unique per encryption)"
+      size: "12 bytes"
+      uniqueness: "Must be unique for each encryption with same key"
+
+    auth_tag:
+      type: "BLOB"
+      constraint: "NOT NULL"
+      description: "128-bit authentication tag (16 bytes, integrity protection)"
+      size: "16 bytes"
+      purpose: "Verify ciphertext integrity on decryption"
+
+    pii_type:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Type of PII (for categorization and metrics)"
+      values: ["ssn", "email", "phone", "credit_card", "name", "address", "organization"]
+
+    user_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "User identifier (for access control)"
+      authorization: "User can only access own PII"
+
+    space_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Space identifier (multi-tenancy)"
+      authorization: "User can only access PII within own space"
+
+    trace_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Cognitive trace ID (for debugging and correlation)"
+      format: "UUID v4"
+
+    created_at:
+      type: "INTEGER"
+      constraint: "NOT NULL"
+      description: "Unix timestamp in milliseconds (creation time)"
+      example: 1698765432000
+
+    accessed_at:
+      type: "INTEGER"
+      constraint: "NULL allowed"
+      description: "Last access timestamp (for audit trail)"
+      update: "Set on each retrieve operation"
+
+    deleted_at:
+      type: "INTEGER"
+      constraint: "NULL allowed"
+      description: "Soft delete timestamp (GDPR right to erasure)"
+      soft_delete: "Set timestamp on delete, hard delete after 30 days"
+
+    keystore_key_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Keystore key ID (for key rotation tracking)"
+      purpose: "Track which key was used to encrypt this PII"
+
+    keystore_backend:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Keystore backend type"
+      values: ["OS_KEYCHAIN", "ENCRYPTED_FILE", "LOCAL_HSM", "CLOUD_KMS"]
+
+    metadata:
+      type: "TEXT"
+      constraint: "NULL allowed"
+      description: "JSON metadata (optional)"
+      format: "JSON string"
+      example: '{"session_id": "sess_123", "ip_address": "192.168.1.1"}'
+
+  indexes:
+    idx_user_space:
+      columns: ["user_id", "space_id"]
+      purpose: "Fast lookup by user and space (authorization queries)"
+      query_pattern: "SELECT * FROM pii_vault WHERE user_id = ? AND space_id = ?"
+
+    idx_pii_type:
+      columns: ["pii_type"]
+      purpose: "Metrics and analytics by PII type"
+      query_pattern: "SELECT COUNT(*) FROM pii_vault WHERE pii_type = ?"
+
+    idx_deleted_at:
+      columns: ["deleted_at"]
+      purpose: "Cleanup queries (hard delete expired entries)"
+      query_pattern: "DELETE FROM pii_vault WHERE deleted_at < ?"
+
+    idx_created_at:
+      columns: ["created_at"]
+      purpose: "Retention policy (delete entries older than 90 days)"
+      query_pattern: "SELECT * FROM pii_vault WHERE created_at < ?"
+
+    idx_keystore_backend:
+      columns: ["keystore_backend"]
+      purpose: "Metrics by keystore backend"
+      query_pattern: "SELECT COUNT(*) FROM pii_vault WHERE keystore_backend = ?"
+
+vault_audit_log_table:
+  name: "vault_audit_log"
+  purpose: "Audit trail for all vault operations (GDPR/HIPAA compliance)"
+
+  schema_sql: |
+    CREATE TABLE vault_audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation TEXT NOT NULL,                 -- "store" | "retrieve" | "delete"
+        vault_key TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        space_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,              -- Unix timestamp (ms)
+        success BOOLEAN NOT NULL,                -- Operation succeeded?
+        error_message TEXT,                      -- Error message if failed
+
+        INDEX idx_user_id (user_id),
+        INDEX idx_timestamp (timestamp),
+        INDEX idx_operation (operation)
+    );
+
+  columns:
+    id:
+      type: "INTEGER"
+      constraint: "PRIMARY KEY AUTOINCREMENT"
+      description: "Unique audit log entry ID"
+
+    operation:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Vault operation type"
+      values: ["store", "retrieve", "delete"]
+
+    vault_key:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Vault key being operated on"
+
+    user_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "User who performed the operation"
+
+    space_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Space where operation occurred"
+
+    trace_id:
+      type: "TEXT"
+      constraint: "NOT NULL"
+      description: "Cognitive trace ID (correlate with K1 logs)"
+
+    timestamp:
+      type: "INTEGER"
+      constraint: "NOT NULL"
+      description: "Unix timestamp in milliseconds"
+
+    success:
+      type: "BOOLEAN"
+      constraint: "NOT NULL"
+      description: "Operation succeeded (true) or failed (false)"
+
+    error_message:
+      type: "TEXT"
+      constraint: "NULL allowed"
+      description: "Error message if operation failed"
+      example: "User user002 doesn't own PII ssn_user001_abc123_1234567890"
+
+  indexes:
+    idx_user_id:
+      columns: ["user_id"]
+      purpose: "Audit queries by user"
+      query_pattern: "SELECT * FROM vault_audit_log WHERE user_id = ?"
+
+    idx_timestamp:
+      columns: ["timestamp"]
+      purpose: "Time-range queries (last 24 hours, etc.)"
+      query_pattern: "SELECT * FROM vault_audit_log WHERE timestamp > ?"
+
+    idx_operation:
+      columns: ["operation"]
+      purpose: "Metrics by operation type"
+      query_pattern: "SELECT COUNT(*) FROM vault_audit_log WHERE operation = ?"
+
+storage_characteristics:
+  pii_vault_row_size:
+    vault_key: "~50 bytes"
+    encrypted_value: "~20 bytes (avg PII length)"
+    nonce: "12 bytes"
+    auth_tag: "16 bytes"
+    pii_type: "~10 bytes"
+    user_id: "~20 bytes"
+    space_id: "~20 bytes"
+    trace_id: "36 bytes (UUID)"
+    created_at: "8 bytes"
+    accessed_at: "8 bytes"
+    deleted_at: "8 bytes"
+    keystore_key_id: "~30 bytes"
+    keystore_backend: "~15 bytes"
+    metadata: "~50 bytes (optional)"
+    total: "~303 bytes per row"
+
+  vault_audit_log_row_size:
+    id: "8 bytes"
+    operation: "~10 bytes"
+    vault_key: "~50 bytes"
+    user_id: "~20 bytes"
+    space_id: "~20 bytes"
+    trace_id: "36 bytes"
+    timestamp: "8 bytes"
+    success: "1 byte"
+    error_message: "~50 bytes (optional)"
+    total: "~203 bytes per row"
+
+  estimated_storage:
+    pii_vault_12k_entries: "3.6 MB (12,000 × 303 bytes)"
+    audit_log_36k_entries: "7.3 MB (36,000 × 203 bytes, 3 ops per PII)"
+    total: "~11 MB (K0 database overhead included)"
+
+retention_policies:
+  pii_vault:
+    soft_delete_grace_period: "30 days"
+    description: "Soft-deleted PII kept for 30 days before hard delete"
+
+    hard_delete_trigger: "Automated cron job (daily)"
+    hard_delete_query: "DELETE FROM pii_vault WHERE deleted_at IS NOT NULL AND deleted_at < ?"
+
+    retention_period: "90 days (non-deleted PII)"
+    retention_query: "DELETE FROM pii_vault WHERE deleted_at IS NULL AND created_at < ?"
+
+  vault_audit_log:
+    retention_period: "1 year (HIPAA requirement)"
+    cleanup_query: "DELETE FROM vault_audit_log WHERE timestamp < ?"
+
+migration_script:
+  filename: "k0/contracts/sql/003_pii_vault_schema.sql"
+  content: |
+    -- Migration: PII Vault Schema
+    -- Date: 2025-10-21
+    -- ADR: 0035c-encrypted-vault-key-management.md
+
+    -- Create pii_vault table
+    CREATE TABLE IF NOT EXISTS pii_vault (
+        vault_key TEXT PRIMARY KEY,
+        encrypted_value BLOB NOT NULL,
+        nonce BLOB NOT NULL,
+        auth_tag BLOB NOT NULL,
+        pii_type TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        space_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        accessed_at INTEGER,
+        deleted_at INTEGER,
+        keystore_key_id TEXT NOT NULL,
+        keystore_backend TEXT NOT NULL,
+        metadata TEXT
+    );
+
+    -- Create indexes
+    CREATE INDEX IF NOT EXISTS idx_user_space ON pii_vault(user_id, space_id);
+    CREATE INDEX IF NOT EXISTS idx_pii_type ON pii_vault(pii_type);
+    CREATE INDEX IF NOT EXISTS idx_deleted_at ON pii_vault(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_created_at ON pii_vault(created_at);
+    CREATE INDEX IF NOT EXISTS idx_keystore_backend ON pii_vault(keystore_backend);
+
+    -- Create vault_audit_log table
+    CREATE TABLE IF NOT EXISTS vault_audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation TEXT NOT NULL,
+        vault_key TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        space_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        success BOOLEAN NOT NULL,
+        error_message TEXT
+    );
+
+    -- Create audit log indexes
+    CREATE INDEX IF NOT EXISTS idx_audit_user_id ON vault_audit_log(user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON vault_audit_log(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_audit_operation ON vault_audit_log(operation);
+
+query_patterns:
+  store_pii:
+    sql: |
+      INSERT INTO pii_vault (
+          vault_key, encrypted_value, nonce, auth_tag, pii_type,
+          user_id, space_id, trace_id, created_at,
+          keystore_key_id, keystore_backend
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    parameters: [vault_key, encrypted_value, nonce, auth_tag, pii_type, user_id, space_id, trace_id, created_at, keystore_key_id, keystore_backend]
+
+  retrieve_pii:
+    sql: |
+      SELECT encrypted_value, nonce, auth_tag, keystore_key_id, user_id, space_id, deleted_at
+      FROM pii_vault
+      WHERE vault_key = ?;
+    parameters: [vault_key]
+    authorization: "Verify user_id and space_id match requester"
+
+  update_accessed_at:
+    sql: |
+      UPDATE pii_vault
+      SET accessed_at = ?
+      WHERE vault_key = ?;
+    parameters: [accessed_at, vault_key]
+
+  soft_delete_pii:
+    sql: |
+      UPDATE pii_vault
+      SET deleted_at = ?
+      WHERE vault_key = ? AND user_id = ? AND space_id = ?;
+    parameters: [deleted_at, vault_key, user_id, space_id]
+    authorization: "Only owner can delete"
+
+  hard_delete_expired:
+    sql: |
+      DELETE FROM pii_vault
+      WHERE deleted_at IS NOT NULL AND deleted_at < ?;
+    parameters: [cutoff_timestamp]
+    frequency: "Daily cron job"
+
+  log_audit_entry:
+    sql: |
+      INSERT INTO vault_audit_log (
+          operation, vault_key, user_id, space_id, trace_id,
+          timestamp, success, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+    parameters: [operation, vault_key, user_id, space_id, trace_id, timestamp, success, error_message]
+
+compliance:
+  gdpr:
+    right_to_access:
+      query: "SELECT vault_key, pii_type, created_at FROM pii_vault WHERE user_id = ? AND deleted_at IS NULL"
+      description: "User can list all their PII in vault"
+
+    right_to_erasure:
+      operation: "Soft delete (set deleted_at), hard delete after 30 days"
+      compliance: "Article 17 - Right to erasure"
+
+    encryption_at_rest:
+      compliance: "Article 32 - Security of processing"
+      implementation: "AES-256-GCM encryption"
+
+  hipaa:
+    access_logging:
+      requirement: "164.308(a)(1)(ii)(D) - Log access to PHI"
+      implementation: "vault_audit_log table"
+
+    encryption:
+      requirement: "164.312(a)(2)(iv) - AES-256 encryption"
+      implementation: "AES-256-GCM"
+
+    audit_retention:
+      requirement: "6 years (HIPAA standard)"
+      implementation: "1 year (configurable)"
+
+testing:
+  unit_tests:
+    - test_pii_vault_schema_creation
+    - test_vault_audit_log_schema_creation
+    - test_insert_pii_vault_entry
+    - test_retrieve_pii_vault_entry
+    - test_soft_delete_pii
+    - test_hard_delete_expired_pii
+    - test_audit_log_entry
+
+  integration_tests:
+    - test_full_vault_lifecycle_store_retrieve_delete
+    - test_authorization_enforcement
+    - test_audit_trail_completeness
+
+  performance_tests:
+    - test_vault_insert_latency
+    - test_vault_select_latency
+    - test_index_query_performance
+
+documentation:
+  vault_schema_guide:
+    path: "docs/privacy/k0-vault-schema.md"
+    sections:
+      - "pii_vault table structure"
+      - "vault_audit_log table structure"
+      - "Query patterns"
+      - "Retention policies"
+      - "Compliance considerations"

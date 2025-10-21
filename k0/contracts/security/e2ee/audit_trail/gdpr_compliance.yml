@@ -1,0 +1,372 @@
+---
+# ADR-0036: GDPR Compliance Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# GDPR Compliance Contract
+# Defines GDPR compliance requirements for E2EE audit trails
+
+contract:
+  name: gdpr_compliance
+  version: "1.0.0"
+  description: "GDPR compliance requirements and implementation for E2EE audit trails"
+  parent_adr: "ADR-0036"
+  priority: "CRITICAL"
+  effort: "4 weeks"
+
+# GDPR Principles
+gdpr_principles:
+  lawfulness_fairness_transparency:
+    lawful_basis:
+      - "consent: User explicitly consented to E2EE"
+      - "contract: E2EE required for service provision"
+      - "legitimate_interest: Security and privacy protection"
+      - "legal_obligation: Compliance with data protection laws"
+
+    transparency_requirements:
+      - "Clear privacy notice about E2EE processing"
+      - "Information about audit logging purposes"
+      - "User rights regarding their audit data"
+      - "Contact information for data protection inquiries"
+
+  purpose_limitation:
+    allowed_purposes:
+      - "Providing E2EE encryption service"
+      - "Ensuring security and integrity of encrypted data"
+      - "Complying with legal obligations"
+      - "Investigating security incidents"
+
+    purpose_specification:
+      - "Audit trails used only for specified purposes"
+      - "No repurposing of audit data without justification"
+      - "Regular review of audit data usage"
+      - "Deletion when purposes no longer apply"
+
+  data_minimization:
+    minimal_data_collection:
+      - "Only collect audit data necessary for E2EE operation"
+      - "No collection of unnecessary personal data"
+      - "Anonymization where possible"
+      - "Regular review and minimization of collected data"
+
+    retention_minimization:
+      - "Audit data retained only as long as necessary"
+      - "7-year retention for security audit trails"
+      - "Automatic deletion after retention periods"
+      - "Justification required for extended retention"
+
+  accuracy:
+    data_accuracy:
+      - "Audit data must be accurate and up-to-date"
+      - "Correction mechanisms for inaccurate data"
+      - "Regular validation of audit data integrity"
+      - "Processes for handling data correction requests"
+
+  storage_limitation:
+    secure_storage:
+      - "Audit data encrypted at rest"
+      - "Access controls and authentication"
+      - "Regular security assessments"
+      - "Secure deletion procedures"
+
+  integrity_confidentiality:
+    data_protection:
+      - "End-to-end encryption of audit data"
+      - "Access logging for audit data access"
+      - "Regular security monitoring"
+      - "Incident response procedures"
+
+  accountability:
+    responsibility:
+      - "Clear assignment of data protection responsibilities"
+      - "Regular audits of compliance"
+      - "Documentation of processing activities"
+      - "Data protection impact assessments"
+
+# Data Subject Rights
+data_subject_rights:
+  right_to_information:
+    information_provided:
+      - "Clear privacy notice about audit data processing"
+      - "Purpose of processing audit data"
+      - "Legal basis for processing"
+      - "Recipients of audit data"
+      - "Retention periods for audit data"
+
+    information_format:
+      - "Concise, transparent, intelligible information"
+      - "Written or other means (electronic)"
+      - "Free of charge"
+      - "Within one month of request"
+
+  right_of_access:
+    access_request_handling:
+      - "Confirm whether processing audit data"
+      - "Provide copy of audit data in portable format"
+      - "Information about processing purposes, categories, recipients"
+      - "Response within one month"
+      - "Free of charge (generally)"
+
+    access_scope:
+      - "All audit data relating to the data subject"
+      - "Clear and intelligible format"
+      - "Electronic format when requested"
+      - "No excessive requests handling"
+
+  right_to_rectification:
+    rectification_process:
+      - "Correct inaccurate audit data"
+      - "Complete incomplete audit data"
+      - "Process within one month"
+      - "Inform recipients of rectification"
+      - "Document rectification actions"
+
+    rectification_scope:
+      - "Correction of factual inaccuracies"
+      - "Completion of incomplete data"
+      - "Addition of explanatory statements"
+      - "Audit trail of rectification actions"
+
+  right_to_erasure:
+    erasure_conditions:
+      - "Data no longer necessary for purposes"
+      - "Consent withdrawn and no other legal basis"
+      - "Data subject objects to processing"
+      - "Processing unlawful"
+      - "Legal obligation to erase"
+      - "Data collected from child"
+
+    erasure_process:
+      - "Identify all audit data to erase"
+      - "Erase data within one month"
+      - "Inform recipients of erasure"
+      - "Document erasure actions"
+      - "Secure deletion methods"
+
+  right_to_restriction:
+    restriction_conditions:
+      - "Accuracy of data contested"
+      - "Processing unlawful but erasure not requested"
+      - "Data no longer needed but required for legal claims"
+      - "Objected to processing pending verification"
+
+    restriction_implementation:
+      - "Mark data as restricted"
+      - "Limit processing of restricted data"
+      - "Inform recipients of restriction"
+      - "Review restriction periodically"
+
+  right_to_data_portability:
+    portability_requirements:
+      - "Provide audit data in structured, commonly used format"
+      - "Direct transmission to another controller when requested"
+      - "Only for data processed by automated means"
+      - "Only for consent or contract-based processing"
+
+    portability_scope:
+      - "Audit data provided to data subject"
+      - "Data transmitted directly to another controller"
+      - "Structured and machine-readable format"
+      - "No adverse effect on rights of others"
+
+  right_to_object:
+    objection_rights:
+      - "Object to processing based on legitimate interests"
+      - "Object to processing for direct marketing"
+      - "Object at any time for direct marketing"
+      - "Object for research purposes unless necessary for public interest"
+
+    objection_process:
+      - "Cease processing unless compelling legitimate grounds"
+      - "Inform data subject of objection decision"
+      - "Document objection and decision"
+      - "Right to lodge complaint with supervisory authority"
+
+  automated_decision_making:
+    decision_making_rights:
+      - "Not subject to automated decision making including profiling"
+      - "Audit data not used for automated decisions"
+      - "Human involvement in all E2EE-related decisions"
+      - "Right to human intervention and expression of views"
+
+# Audit Data Processing
+audit_data_processing:
+  lawful_basis:
+    primary_basis: "Legal obligation (Article 6(1)(c))"
+    secondary_basis: "Legitimate interest (Article 6(1)(f))"
+    documentation: "Document legal basis for each processing activity"
+
+  processing_inventory:
+    processing_activities:
+      - "Collection of audit events during E2EE operations"
+      - "Storage of audit data for compliance purposes"
+      - "Access to audit data for security investigations"
+      - "Deletion of audit data after retention periods"
+      - "Sharing audit data with supervisory authorities"
+
+  data_protection_officer:
+    dpo_role:
+      - "Monitor compliance with GDPR"
+      - "Advise on data protection impact assessments"
+      - "Cooperate with supervisory authorities"
+      - "Act as contact point for data subjects"
+
+    dpo_responsibilities:
+      - "Review audit data processing activities"
+      - "Ensure data subject rights are respected"
+      - "Monitor data protection training"
+      - "Conduct regular compliance audits"
+
+# Data Protection Impact Assessment
+dpia_requirements:
+  dpia_triggers:
+    - "Systematic and extensive profiling"
+    - "Large scale processing of sensitive data"
+    - "Systematic monitoring of public areas"
+    - "Processing for research purposes"
+    - "High risk processing activities"
+
+  dpia_content:
+    - "Description of processing operations"
+    - "Assessment of necessity and proportionality"
+    - "Assessment of risks to data subjects"
+    - "Measures to address identified risks"
+    - "Safeguards, security measures, mechanisms"
+
+  dpia_process:
+    - "Conduct DPIA before high-risk processing"
+    - "Consult data protection officer"
+    - "Seek advice from supervisory authority when appropriate"
+    - "Review DPIA periodically and when significant changes occur"
+
+# Breach Notification
+breach_notification:
+  breach_detection:
+    - "Monitoring systems for security breaches"
+    - "Regular security assessments and testing"
+    - "Incident response procedures"
+    - "Breach detection within 72 hours"
+
+  breach_notification_requirements:
+    - "Notify supervisory authority within 72 hours"
+    - "Notify data subjects without undue delay"
+    - "Provide information about breach nature"
+    - "Provide contact details for more information"
+    - "Describe likely consequences of breach"
+    - "Describe measures taken to mitigate breach"
+
+  breach_documentation:
+    - "Document all breaches and responses"
+    - "Review breach response procedures"
+    - "Implement improvements based on lessons learned"
+    - "Report to supervisory authorities as required"
+
+# International Data Transfers
+international_transfers:
+  adequacy_decisions:
+    - "Transfers to countries with adequacy decision"
+    - "No further safeguards required"
+    - "Regular review of adequacy decisions"
+
+  appropriate_safeguards:
+    - "Standard contractual clauses"
+    - "Binding corporate rules"
+    - "Approved codes of conduct"
+    - "Certification mechanisms"
+    - "Ad hoc contractual clauses"
+
+  transfer_impact_assessment:
+    - "Assess risks of transfers without adequacy"
+    - "Implement supplementary measures if needed"
+    - "Document transfer mechanisms"
+    - "Regular review of transfer safeguards"
+
+# Implementation Interface
+implementation:
+  rust:
+    struct: "GDPRComplianceManager"
+    functions:
+      - "new(config: GDPRConfig) -> Result<Self, GDPRComplianceError>"
+      - "process_subject_right_request(&self, request: SubjectRightRequest) -> Result<GDPRResponse, GDPRComplianceError>"
+      - "assess_data_processing(&self, processing: DataProcessing) -> GDPRAssessment"
+      - "handle_breach_notification(&self, breach: SecurityBreach) -> Result<(), GDPRComplianceError>"
+      - "audit_compliance_status(&self) -> GDPRComplianceReport"
+
+  python:
+    class: "GDPRComplianceManager"
+    methods:
+      - "__init__(self, config: dict)"
+      - "process_subject_right_request(self, request: dict) -> dict"
+      - "assess_data_processing(self, processing: dict) -> dict"
+      - "handle_breach_notification(self, breach: dict) -> None"
+      - "audit_compliance_status(self) -> dict"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Data subject rights processing logic"
+    - "GDPR compliance assessment functions"
+    - "Breach notification procedures"
+    - "Audit data processing validation"
+    - "Retention and deletion logic"
+
+  integration_tests:
+    - "Full GDPR compliance workflow"
+    - "Data subject rights request handling"
+    - "Breach detection and notification"
+    - "International data transfer compliance"
+    - "DPIA process integration"
+
+  compliance_tests:
+    - "GDPR principle adherence validation"
+    - "Data subject rights implementation"
+    - "Audit trail GDPR compliance"
+    - "Retention period enforcement"
+    - "Data minimization verification"
+
+  audit_tests:
+    - "Compliance audit procedures"
+    - "GDPR violation detection"
+    - "Remediation action tracking"
+    - "Compliance reporting accuracy"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "e2ee_audit_logger.yml: Provides audit data for GDPR compliance"
+    - "audit_schema.yml: Defines GDPR-compliant audit schema"
+  downstream:
+    - "hipaa_compliance.yml: Healthcare-specific compliance"
+    - "compliance_metrics.yml: GDPR compliance metrics"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All data subject rights properly implemented"
+    - "GDPR principles adhered to in audit processing"
+    - "Breach notification within 72 hours"
+    - "Lawful basis documented for all processing"
+    - "Data protection impact assessments conducted"
+
+  compliance:
+    - "Audit data processing inventory complete"
+    - "Data protection officer role fulfilled"
+    - "International transfers properly safeguarded"
+    - "Regular compliance audits conducted"
+    - "Supervisory authority cooperation maintained"
+
+  security:
+    - "Audit data encrypted and access controlled"
+    - "Data subject rights requests securely handled"
+    - "Breach detection and response effective"
+    - "Secure deletion procedures implemented"
+    - "Data integrity maintained throughout retention"
+
+  accountability:
+    - "Complete documentation of processing activities"
+    - "Regular training on GDPR compliance"
+    - "Transparent communication with data subjects"
+    - "Continuous improvement of compliance measures"
+    - "Clear assignment of data protection responsibilities"

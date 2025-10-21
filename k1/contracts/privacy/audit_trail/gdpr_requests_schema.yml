@@ -1,0 +1,351 @@
+# GDPR Requests Schema Contract
+# Source ADR: 0035d-audit-trail-gdpr-compliance.md
+# Epic 2.9, Issue 2.9.4
+# Purpose: Detailed schema for GDPR requests table and request processing workflow
+
+contract:
+  name: gdpr_requests_schema
+  version: "1.0.0"
+  source_adr: "0035d-audit-trail-gdpr-compliance.md"
+  epic: "2.9"
+  issue: "2.9.4"
+
+gdpr_rights_implemented:
+  article_15_access: "Right to access personal data (30-day response time)"
+  article_17_erasure: "Right to erasure ('right to be forgotten') (30-day response time)"
+  article_20_portability: "Right to data portability (machine-readable format)"
+  article_33_breach: "Breach notification (72 hours to regulator)"
+
+gdpr_requests_table:
+  purpose: "Track all GDPR requests with processing status and response data"
+  retention: "7 years (HIPAA audit trail requirement)"
+  compliance: "GDPR Articles 15, 17, 20, 33"
+
+  schema:
+    table_name: "gdpr_requests"
+    columns:
+      - name: "id"
+        type: "INTEGER PRIMARY KEY AUTOINCREMENT"
+        description: "Unique request identifier"
+
+      - name: "request_type"
+        type: "TEXT NOT NULL"
+        description: "Type of GDPR request"
+        values: ["access", "erasure", "portability", "rectification", "restriction", "objection"]
+
+      - name: "user_id"
+        type: "TEXT NOT NULL"
+        description: "User making the request (data subject)"
+
+      - name: "space_id"
+        type: "TEXT NOT NULL"
+        description: "Space identifier (privacy boundary)"
+
+      - name: "trace_id"
+        type: "TEXT NOT NULL"
+        description: "Request trace ID for correlation"
+
+      - name: "requested_at"
+        type: "INTEGER NOT NULL"
+        description: "Request timestamp (Unix milliseconds)"
+
+      - name: "fulfilled_at"
+        type: "INTEGER"
+        description: "Fulfillment timestamp (Unix milliseconds)"
+
+      - name: "status"
+        type: "TEXT NOT NULL"
+        description: "Request processing status"
+        values: ["pending", "processing", "fulfilled", "rejected", "partially_fulfilled"]
+
+      - name: "response_data"
+        type: "TEXT"
+        description: "JSON response data (PII export for access, deletion summary for erasure)"
+
+      - name: "metadata"
+        type: "TEXT"
+        description: "JSON metadata (request details, processing notes, rejection reasons)"
+
+    indexes:
+      - name: "idx_gdpr_user"
+        columns: ["user_id"]
+        purpose: "User request history and duplicate prevention"
+
+      - name: "idx_gdpr_requested_at"
+        columns: ["requested_at"]
+        purpose: "Time-based queries and SLA monitoring"
+
+      - name: "idx_gdpr_status"
+        columns: ["status"]
+        purpose: "Pending request queue and status reporting"
+
+gdpr_request_types:
+  access:
+    article: "15"
+    description: "Right to access personal data"
+    response_time: "30 days"
+    response_format: "JSON export of all PII"
+    cost: "Free"
+
+  erasure:
+    article: "17"
+    description: "Right to erasure ('right to be forgotten')"
+    response_time: "30 days"
+    response_format: "Deletion confirmation"
+    cost: "Free"
+
+  portability:
+    article: "20"
+    description: "Right to data portability"
+    response_time: "30 days"
+    response_format: "Machine-readable JSON/CSV export"
+    cost: "Free"
+
+  rectification:
+    article: "16"
+    description: "Right to rectification"
+    response_time: "30 days"
+    response_format: "Correction confirmation"
+    cost: "Free"
+
+  restriction:
+    article: "18"
+    description: "Right to restriction of processing"
+    response_time: "30 days"
+    response_format: "Processing restriction confirmation"
+    cost: "Free"
+
+  objection:
+    article: "21"
+    description: "Right to object to processing"
+    response_time: "30 days"
+    response_format: "Processing cessation confirmation"
+    cost: "Free"
+
+gdpr_access_response_format:
+  json_schema: |
+    {
+      "type": "object",
+      "properties": {
+        "user_id": {"type": "string"},
+        "space_id": {"type": "string"},
+        "requested_at": {"type": "number"},
+        "fulfilled_at": {"type": "number"},
+        "pii_values": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pii_type": {"type": "string"},
+              "value": {"type": "string"},
+              "vault_key": {"type": "string"},
+              "timestamp": {"type": "number"},
+              "detection_method": {"type": "string"},
+              "confidence": {"type": "number"}
+            }
+          }
+        },
+        "audit_entries": {"type": "number"},
+        "total_operations": {"type": "number"}
+      }
+    }
+
+  example_response: |
+    {
+      "user_id": "user_12345",
+      "space_id": "space_001",
+      "requested_at": 1698765432000,
+      "fulfilled_at": 1698775432000,
+      "pii_values": [
+        {
+          "pii_type": "ssn",
+          "value": "123-45-6789",
+          "vault_key": "ssn_user_12345_abc123_1698765432000",
+          "timestamp": 1698765432000,
+          "detection_method": "regex",
+          "confidence": 1.0
+        },
+        {
+          "pii_type": "email",
+          "value": "john.doe@example.com",
+          "vault_key": "email_user_12345_def456_1698765433000",
+          "timestamp": 1698765433000,
+          "detection_method": "regex",
+          "confidence": 1.0
+        }
+      ],
+      "audit_entries": 47,
+      "total_operations": 23
+    }
+
+gdpr_erasure_response_format:
+  json_schema: |
+    {
+      "type": "object",
+      "properties": {
+        "user_id": {"type": "string"},
+        "space_id": {"type": "string"},
+        "requested_at": {"type": "number"},
+        "fulfilled_at": {"type": "number"},
+        "pii_deleted": {"type": "number"},
+        "audit_deleted": {"type": "number"},
+        "vault_keys_deleted": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "grace_period_days": {"type": "number"}
+      }
+    }
+
+  example_response: |
+    {
+      "user_id": "user_12345",
+      "space_id": "space_001",
+      "requested_at": 1698765432000,
+      "fulfilled_at": 1698775432000,
+      "pii_deleted": 12,
+      "audit_deleted": 47,
+      "vault_keys_deleted": [
+        "ssn_user_12345_abc123_1698765432000",
+        "email_user_12345_def456_1698765433000"
+      ],
+      "grace_period_days": 30
+    }
+
+gdpr_portability_response_format:
+  description: "Machine-readable export in multiple formats"
+  supported_formats: ["json", "csv", "xml"]
+
+  json_format: |
+    {
+      "data_export": {
+        "user_id": "user_12345",
+        "export_timestamp": 1698775432000,
+        "format": "json",
+        "pii_categories": [
+          {
+            "category": "personal_identifiers",
+            "pii_entities": [
+              {
+                "type": "ssn",
+                "value": "123-45-6789",
+                "collected_at": 1698765432000,
+                "purpose": "identity_verification"
+              }
+            ]
+          }
+        ]
+      }
+    }
+
+  csv_format: |
+    pii_type,value,collected_at,purpose,source
+    ssn,123-45-6789,1698765432000,identity_verification,user_input
+    email,john.doe@example.com,1698765433000,communication,user_input
+
+gdpr_request_processing_workflow:
+  step_1_validation:
+    description: "Validate request authenticity and completeness"
+    checks:
+      - "User authentication verified"
+      - "Request type supported"
+      - "No duplicate pending requests"
+      - "Rate limiting (max 1 request per day)"
+    response_time: "<1 second"
+
+  step_2_logging:
+    description: "Log request in gdpr_requests table"
+    status: "pending"
+    notification: "Email confirmation to user"
+    response_time: "<100ms"
+
+  step_3_processing:
+    description: "Process request based on type"
+    access_processing:
+      - "Query audit_log for user's PII operations"
+      - "Retrieve PII values from vault"
+      - "Generate JSON export"
+      - "Update request status to 'fulfilled'"
+    erasure_processing:
+      - "Query audit_log for vault keys"
+      - "Soft delete PII from vault (30-day grace period)"
+      - "Delete audit log entries"
+      - "Update request status to 'fulfilled'"
+    response_time: "<10 seconds (access), <5 seconds (erasure)"
+
+  step_4_notification:
+    description: "Notify user of completion"
+    email_template: |
+      Subject: GDPR Request Fulfilled - {request_type}
+
+      Dear {user_name},
+
+      Your GDPR {request_type} request has been processed.
+
+      Request ID: {request_id}
+      Requested: {requested_at}
+      Fulfilled: {fulfilled_at}
+
+      {response_summary}
+
+      Download your data: {download_link} (expires in 30 days)
+
+      Best regards,
+      Privacy Team
+    response_time: "<1 second"
+
+gdpr_sla_monitoring:
+  response_time_sla:
+    access: "30 days (GDPR Article 15)"
+    erasure: "30 days (GDPR Article 17)"
+    portability: "30 days (GDPR Article 20)"
+
+  compliance_metrics:
+    fulfilled_within_sla: "Percentage of requests fulfilled within SLA"
+    average_response_time: "Average fulfillment time in days"
+    pending_requests: "Number of pending requests > SLA"
+
+  alerting:
+    sla_breach: "Alert when request exceeds SLA by 10%"
+    high_pending: "Alert when >10 requests pending > SLA"
+
+gdpr_request_validation:
+  authentication:
+    description: "Verify user identity"
+    methods: ["JWT token", "email verification", "2FA"]
+
+  authorization:
+    description: "Verify user owns the data"
+    checks: ["user_id matches authenticated user", "space_id access"]
+
+  rate_limiting:
+    description: "Prevent abuse"
+    limits: ["1 access request per day", "1 erasure request per month"]
+
+  duplicate_prevention:
+    description: "Prevent duplicate requests"
+    logic: "Check for pending requests of same type from same user"
+
+gdpr_breach_notification:
+  trigger: "PII vault database breach or unauthorized access detected"
+  timeline: "72 hours to regulator (GDPR Article 33)"
+  content:
+    - "Nature of breach"
+    - "Categories of data affected"
+    - "Number of data subjects"
+    - "Contact details for more information"
+    - "Measures taken to mitigate"
+  safe_harbor: "Encrypted PII not subject to notification (recital 75)"
+
+gdpr_controller_obligations:
+  data_protection_impact_assessment: "Required for high-risk processing"
+  data_protection_officer: "Designated DPO contact"
+  records_of_processing: "Maintain processing records"
+  international_data_transfers: "Adequacy decisions or safeguards"
+
+implementation_notes:
+  async_processing: "GDPR requests processed asynchronously to avoid blocking"
+  idempotency: "Requests are idempotent (same request multiple times = same result)"
+  audit_trail: "All GDPR request operations logged in audit_log"
+  backup_retention: "GDPR data retained in backups for 7 years (legal hold)"
+  cross_border: "Support for EU users with GDPR rights regardless of location"

@@ -1,0 +1,198 @@
+---
+# ADR-0036b: Key Deletion Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Key Deletion Contract
+# Defines secure deletion of encryption keys after retention period
+
+contract:
+  name: key_deletion
+  version: "1.0.0"
+  description: "Secure deletion of AES-256 encryption keys after retention"
+  parent_adr: "ADR-0036b"
+  priority: "HIGH"
+  effort: "1 week"
+
+# Deletion Policy
+deletion_policy:
+  retention_days: 365
+  hard_delete: true
+  audit_logged: true
+  compliance: "GDPR data minimization, HIPAA retention requirements"
+
+# Deletion Triggers
+deletion_triggers:
+  retention_expired:
+    description: "Key older than retention period"
+    condition: "revoked_at + 365 days < now()"
+    automatic: true
+
+  user_account_deleted:
+    description: "User account deletion (GDPR)"
+    condition: "user deleted, all keys deleted"
+    immediate: true
+
+  space_deleted:
+    description: "Space deletion"
+    condition: "space deleted, all keys deleted"
+    immediate: true
+
+# Deletion Process
+deletion_process:
+  1:
+    name: "Check deletion eligibility"
+    description: "Verify retention period expired"
+    condition: "key.retention_expires_at < now()"
+
+  2:
+    name: "Verify no active references"
+    description: "Check no SessionState still uses this key"
+    validation: "Query K0 for key usage"
+    blocking: "Do not delete if still referenced"
+
+  3:
+    name: "Audit deletion"
+    description: "Log deletion operation before execution"
+    compliance: "GDPR/HIPAA audit requirements"
+
+  4:
+    name: "Delete from storage backend"
+    description: "Remove key from OS keychain/encrypted file"
+    method: "Secure deletion (overwrite before delete)"
+    permanent: "Cannot be recovered"
+
+  5:
+    name: "Delete metadata"
+    description: "Remove key metadata from keystore"
+    atomicity: "Metadata deletion with key deletion"
+
+  6:
+    name: "Update audit log"
+    description: "Mark deletion as completed"
+    retention: "Audit logs retained 7 years"
+
+# Secure Deletion
+secure_deletion:
+  method: "Cryptographic erasure"
+  os_keychain: "OS handles secure deletion"
+  encrypted_file: "Overwrite key material with random data"
+  local_hsm: "HSM secure erase command"
+  verification: "Verify key no longer accessible"
+
+# Retention Periods
+retention_periods:
+  regular_keys: 365
+  rotated_keys: 180
+  revoked_keys: 365
+  emergency_keys: 365
+  compliance: "GDPR/HIPAA minimum retention"
+
+# Background Processing
+background_processing:
+  scheduler: "Daily job to check expired keys"
+  batch_size: "10 keys per batch"
+  error_handling: "Retry failed deletions"
+  monitoring: "Track deletion success/failure rates"
+
+# Error Handling
+error_handling:
+  active_references:
+    error_code: "KEY_STILL_REFERENCED"
+    description: "Key still used by SessionState"
+    recovery: "Delay deletion, alert administrator"
+
+  deletion_failure:
+    error_code: "KEY_DELETION_FAILED"
+    description: "Cannot delete key from storage"
+    recovery: "Retry deletion, mark for manual cleanup"
+
+  audit_failure:
+    error_code: "AUDIT_LOG_FAILED"
+    description: "Cannot log deletion operation"
+    recovery: "Block deletion, alert compliance team"
+
+# Monitoring and Alerting
+monitoring_alerting:
+  deletion_events:
+    metric: "key_deletions_total"
+    labels: ["trigger_type", "success"]
+    alerting: "Failed deletions trigger alert"
+
+  retention_violations:
+    metric: "key_retention_violations_total"
+    labels: ["violation_type"]
+    alerting: "Keys deleted too early trigger alert"
+
+  active_key_deletions:
+    metric: "active_key_deletion_attempts_total"
+    labels: ["key_id"]
+    alerting: "Attempts to delete active keys trigger alert"
+
+# Implementation Interface
+implementation:
+  rust:
+    function: "delete_expired_keys() -> Result<DeletionSummary, DeletionError>"
+    async: true
+    background_job: "Scheduled daily execution"
+
+  python:
+    function: "delete_expired_keys() -> dict"
+    async: true
+    scheduler: "Celery beat task"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Keys deleted after retention period"
+    - "Active keys not deleted"
+    - "Secure deletion methods used"
+    - "Deletion operations audited"
+
+  security_tests:
+    - "Deleted keys truly inaccessible"
+    - "Key material securely erased"
+    - "No recovery possible after deletion"
+
+  integration_tests:
+    - "Full deletion lifecycle"
+    - "Background job processes expired keys"
+    - "Audit trail maintained"
+
+  performance_tests:
+    - "Deletion operations within budget"
+    - "Background processing doesn't impact users"
+    - "Batch processing efficient"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "key_revocation.yml: Schedules keys for deletion"
+    - "key_rotation.yml: Keys retained after rotation"
+  downstream:
+    - "None (final key lifecycle stage)"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Keys deleted after retention period"
+    - "Active keys protected from deletion"
+    - "Secure deletion methods used"
+    - "Background processing works"
+
+  security:
+    - "Deleted keys completely inaccessible"
+    - "Key material securely erased"
+    - "No recovery possible"
+
+  compliance:
+    - "GDPR data minimization enforced"
+    - "HIPAA retention requirements met"
+    - "Complete audit trail maintained"
+
+  reliability:
+    - "Deletion failures handled gracefully"
+    - "Background jobs run reliably"
+    - "Monitoring alerts on issues"

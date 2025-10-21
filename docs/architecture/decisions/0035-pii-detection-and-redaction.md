@@ -20,7 +20,7 @@
 | **ML-based NER** | Contextual detection of unstructured PII (names, addresses) | BERT-NER model for person/location/organization | 95% recall, <5ms overhead, <1% false positives |
 | **Hybrid Detection** | Combine regex (fast, precise) + ML (contextual, flexible) | Regex first, ML for remaining text | 95% recall, <5ms total overhead, <1% false positives |
 | **Redaction** | Replace PII with placeholders ("[SSN]", "[CREDIT_CARD]") | Token replacement with placeholder labels | 100% PII removal from SessionState/LLM/logs |
-| **Encryption Vault** | Store encrypted PII in K0 for rehydration | AES-256-GCM with key in HSM/KMS | 100% PII protection in database (encrypted at rest) |
+| **Encryption Vault** | Store encrypted PII in K0 for rehydration | AES-256-GCM with key in OS Keychain (local-first) | 100% PII protection in database (encrypted at rest) |
 | **Audit Trail** | Log all redactions with user_id, timestamp, PII type | K0 ToolReceipt for redaction events | 100% compliance audit coverage (GDPR/HIPAA) |
 
 ---
@@ -59,6 +59,7 @@
 - **Differential Privacy (3/10):** Noise addition doesn't prevent re-identification (adding ±10 to SSN 123-45-6789 → 123-45-6799 still reveals SSN). Not suitable for PII (full redaction required, not noise). GDPR/HIPAA require encryption + deletion, not noise. False sense of security (privacy researchers can de-anonymize).
 
 **Research Foundation:**
+
 - GDPR (EU 2018) — Personal data protection, right to erasure, data minimization, encryption required
 - HIPAA (1996) — Protected Health Information (PHI), 18 identifiers, AES-256 encryption required
 - Named Entity Recognition (NER 1996) — NLP task for entity identification, BERT-NER, spaCy NER
@@ -77,24 +78,28 @@
 **Current Challenge:** Without PII detection:
 
 **Problem 1: PII Stored in SessionState**
+
 - User says: "My SSN is 123-45-6789, call me at (555) 123-4567"
 - K1 stores raw text in SessionState
 - SessionState persisted to K0 database
 - **Risk:** SSN and phone number leaked if database compromised
 
 **Problem 2: PII Sent to LLM**
+
 - User says: "My credit card is 4532-1234-5678-9010"
 - K1 sends prompt to LLM (OpenAI, Anthropic)
 - LLM provider logs request for training
 - **Risk:** Credit card leaked to third party
 
 **Problem 3: PII Logged to Observability**
-- User says: "My email is john.doe@example.com"
-- K1 logs to OpenTelemetry: "User message: My email is john.doe@example.com"
+
+- User says: "My email is <john.doe@example.com>"
+- K1 logs to OpenTelemetry: "User message: My email is <john.doe@example.com>"
 - Logs stored in Grafana Loki
 - **Risk:** Email leaked in logs, GDPR violation
 
 **Real-World Scenario (Without PII Detection):**
+
 ```
 User: "I need to book a doctor appointment. My health insurance ID is ABC123456."
 
@@ -111,6 +116,7 @@ Attack: K0 database compromised
 ```
 
 **Desired Behavior (With This ADR):**
+
 ```
 User: "I need to book a doctor appointment. My health insurance ID is ABC123456."
 
@@ -126,7 +132,7 @@ K1 Processing (with PII Detection):
 Attack: K0 database compromised
 - Attacker dumps SessionState table
 - Finds "[INSURANCE_ID]" placeholder (no plaintext)
-- pii_vault is encrypted (AES-256-GCM with key in HSM)
+- pii_vault is encrypted (AES-256-GCM with key in OS Keychain)
 - **Impact:** No PII leaked, user privacy protected ✅
 ```
 
@@ -144,7 +150,7 @@ Attack: K0 database compromised
 
 3. **Privacy Guarantees:**
    - Defense in depth: Filter in K1, vault in K0
-   - Encryption: AES-256-GCM for vault (key in HSM or KMS)
+   - Encryption: AES-256-GCM for vault (key in OS Keychain - Windows/macOS/Linux)
    - No plaintext PII in logs, SessionState, or LLM prompts
    - Redaction audit trail (who, what, when in K0)
 
@@ -208,13 +214,13 @@ Attack: K0 database compromised
 3. **Encrypted Vault:**
    - Original PII encrypted with AES-256-GCM
    - Vault stored in K0 (separate table: `pii_vault`)
-   - Key stored in HSM or KMS (AWS KMS, Azure Key Vault)
+   - Key stored in OS Keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service)
    - User can delete from vault (GDPR right to erasure)
 
 4. **Defense in Depth:**
    - **Layer 1:** Detect and redact in K1 (real-time filter)
    - **Layer 2:** Encrypt and vault in K0 (at-rest protection)
-   - **Layer 3:** Key in HSM/KMS (key rotation, audit)
+   - **Layer 3:** Key in OS Keychain (hardware-backed TPM/Secure Enclave, biometric unlock)
 
 5. **User Control:**
    - Opt-in per space (user_space.pii_detection_enabled = true)
@@ -439,8 +445,8 @@ class PIIDetector:
         Returns:
             tuple: (encrypted_value, vault_key)
         """
-        # TODO: Use proper AES-256-GCM encryption with HSM/KMS
-        # For demo, use simple encryption (replace with cryptography library)
+        # TODO: Use proper AES-256-GCM encryption with OS Keychain
+        # For demo, use simple encryption (replace with keystore from ADR-0036b)
 
         # Generate vault key
         vault_key = f"{user_id}_{space_id}_{pii_type}_{int(time.time() * 1000)}"
@@ -449,8 +455,8 @@ class PIIDetector:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         import os
 
-        # Get encryption key from KMS (AWS KMS, Azure Key Vault, etc.)
-        # For demo, use random key (replace with KMS in production)
+        # Get encryption key from OS Keychain (Windows/macOS/Linux)
+        # For demo, use random key (replace with KeystoreClient from ADR-0036b in production)
         encryption_key = os.urandom(32)  # 256-bit key
 
         aesgcm = AESGCM(encryption_key)
@@ -485,7 +491,7 @@ CREATE TABLE pii_vault (
     created_at INTEGER NOT NULL,          -- Unix timestamp (ms)
     accessed_at INTEGER,                  -- Last access timestamp (for audit)
     deleted_at INTEGER,                   -- Soft delete (GDPR right to erasure)
-    encryption_key_id TEXT,               -- KMS key ID (for key rotation)
+    encryption_key_id TEXT,               -- Keystore key ID (for key rotation, references ADR-0036b)
 
     INDEX idx_user_space (user_id, space_id),
     INDEX idx_pii_type (pii_type),
@@ -653,7 +659,7 @@ class PIIVault:
         # Decrypt
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-        # Get encryption key from KMS
+        # Get encryption key from OS Keychain (reuse KeystoreClient from ADR-0036b)
         encryption_key = await self._get_encryption_key(encryption_key_id)
 
         aesgcm = AESGCM(encryption_key)
@@ -687,9 +693,9 @@ class PIIVault:
         print(f"[PIIVault] Deleted PII {vault_key} (user: {user_id}, space: {space_id})")
 
     async def _get_encryption_key(self, encryption_key_id: str) -> bytes:
-        """Get encryption key from KMS (AWS KMS, Azure Key Vault, etc.)"""
-        # TODO: Implement KMS integration
-        # For demo, return dummy key (replace with KMS in production)
+        """Get encryption key from OS Keychain (Windows/macOS/Linux)"""
+        # TODO: Implement KeystoreClient integration (ADR-0036b)
+        # For demo, return dummy key (replace with KeystoreClient in production)
         return b"0" * 32  # 256-bit key
 ```
 
@@ -702,10 +708,12 @@ class PIIVault:
 **Approach:** Store user messages as-is, no PII detection or redaction.
 
 **Pros:**
+
 - Simplest implementation
 - No performance overhead
 
 **Cons:**
+
 - ❌ **GDPR violation:** PII stored in plaintext
 - ❌ **HIPAA violation:** PHI stored in plaintext
 - ❌ **Data breach risk:** PII leaked if database compromised
@@ -720,10 +728,12 @@ class PIIVault:
 **Approach:** User manually redacts PII before sending message (e.g., "My SSN is [REDACTED]").
 
 **Pros:**
+
 - User control (opt-in)
 - No false positives
 
 **Cons:**
+
 - ❌ **User burden:** Users must remember to redact
 - ❌ **Error-prone:** Users forget to redact, PII leaked
 - ❌ **Poor UX:** Extra friction for users
@@ -737,10 +747,12 @@ class PIIVault:
 **Approach:** Use NER model (BERT-NER, spaCy) for PII detection, no regex patterns.
 
 **Pros:**
+
 - Higher accuracy (context-aware)
 - Detect complex PII (e.g., "John Doe" as person name)
 
 **Cons:**
+
 - ❌ **Latency:** NER model inference 50-100ms (vs <5ms regex)
 - ❌ **False negatives:** NER may miss structured PII (SSN, credit card)
 - ❌ **Complexity:** Model loading, version management
@@ -754,10 +766,12 @@ class PIIVault:
 **Approach:** Hash PII with SHA256, store hash in SessionState (no encryption).
 
 **Pros:**
+
 - Simple implementation
 - One-way (can't recover original)
 
 **Cons:**
+
 - ❌ **No retrieval:** User can't access original PII (GDPR right to access)
 - ❌ **Rainbow tables:** Common PII (SSN, phone) vulnerable to rainbow table attacks
 - ❌ **No deletion:** Hash persists even if user deletes PII
@@ -771,10 +785,12 @@ class PIIVault:
 **Approach:** Detect and redact PII, but don't store original (delete immediately).
 
 **Pros:**
+
 - Maximum privacy (no PII stored)
 - Simple implementation (no vault)
 
 **Cons:**
+
 - ❌ **No retrieval:** User can't access original PII if needed
 - ❌ **Poor UX:** User must re-enter PII for every request
 - ❌ **Context loss:** K1 can't reason about PII (e.g., "Call me at my phone number" requires original)
@@ -801,7 +817,7 @@ class PIIVault:
 3. **Defense in Depth:**
    - Layer 1: Detect and redact in K1 (real-time filter)
    - Layer 2: Encrypt and vault in K0 (at-rest protection)
-   - Layer 3: Key in HSM/KMS (key rotation, audit)
+   - Layer 3: Key in OS Keychain (hardware-backed TPM/Secure Enclave, biometric unlock)
 
 4. **Performance (<5ms Overhead):**
    - Regex patterns: <1ms per pattern (total: <5ms for 5 patterns)
@@ -830,8 +846,8 @@ class PIIVault:
 
 4. **Key Management Complexity:**
    - AES-256-GCM requires 256-bit key
-   - Key rotation, HSM/KMS integration
-   - Mitigation: Use AWS KMS, Azure Key Vault (managed services)
+   - Key rotation, OS Keychain integration (ADR-0036b)
+   - Mitigation: Use KeystoreClient (Windows Credential Manager, macOS Keychain, Linux Secret Service)
 
 5. **Performance Budget:**
    - Target: <5ms overhead per request
@@ -848,6 +864,7 @@ class PIIVault:
 **Input:** "What's the weather in Seattle?"
 
 **Performance:**
+
 - PII detection: 0.5ms (no matches)
 - Redaction: 0ms (no PII found)
 - **Total overhead: 0.5ms ✅**
@@ -858,9 +875,10 @@ class PIIVault:
 
 ### Scenario 2: Single PII (Email)
 
-**Input:** "Send me a reminder at john.doe@example.com"
+**Input:** "Send me a reminder at <john.doe@example.com>"
 
 **Performance:**
+
 - PII detection: 1.2ms (email pattern match)
 - Validation: 0.1ms (email format check)
 - Encryption: 0.5ms (AES-256-GCM)
@@ -874,9 +892,10 @@ class PIIVault:
 
 ### Scenario 3: Multiple PII (SSN + Phone + Email)
 
-**Input:** "My SSN is 123-45-6789, call me at (555) 123-4567 or email john.doe@example.com"
+**Input:** "My SSN is 123-45-6789, call me at (555) 123-4567 or email <john.doe@example.com>"
 
 **Performance:**
+
 - PII detection: 2.5ms (3 pattern matches)
 - Validation: 0.3ms (SSN/phone/email checks)
 - Encryption: 1.5ms (3 × AES-256-GCM)
@@ -895,6 +914,7 @@ class PIIVault:
 **Input:** "My credit card is 4532-1234-5678-9010"
 
 **Performance:**
+
 - PII detection: 1.0ms (credit card pattern match)
 - Validation: 0.5ms (Luhn algorithm)
 - Encryption: 0.5ms (AES-256-GCM)
@@ -1086,11 +1106,13 @@ async def _():
 ### Phase 1: Regex Patterns & Detection (Days 1-3)
 
 **Deliverables:**
+
 - PIIDetector class (5 patterns: SSN, email, phone, credit card, address)
 - Confidence scoring, validation (Luhn algorithm)
 - Unit tests
 
 **Acceptance Criteria:**
+
 - Detects 95%+ of structured PII (SSN, email, phone, credit card)
 - <5ms detection latency
 - False positive rate <1%
@@ -1100,26 +1122,31 @@ async def _():
 ### Phase 2: Encryption & Vault (Days 4-7)
 
 **Deliverables:**
+
 - AES-256-GCM encryption
 - K0 pii_vault table schema
 - PIIVault class (store, retrieve, delete)
-- Integration with KMS (AWS KMS, Azure Key Vault)
+- Integration with OS Keychain (KeystoreClient from ADR-0036b)
 
 **Acceptance Criteria:**
+
 - PII encrypted with AES-256-GCM
 - Vault stores encrypted PII
 - User can retrieve and delete PII
+- Key stored in OS Keychain (Windows/macOS/Linux)
 
 ---
 
 ### Phase 3: SessionState & Orchestrator Integration (Days 8-10)
 
 **Deliverables:**
+
 - SessionStateManager with PII detection
 - Orchestrator with PII redaction (before LLM call)
 - Integration tests
 
 **Acceptance Criteria:**
+
 - SessionState stores redacted messages
 - LLM receives redacted prompts
 - Original PII vaulted in K0
@@ -1129,11 +1156,13 @@ async def _():
 ### Phase 4: Monitoring & Compliance (Days 11-13)
 
 **Deliverables:**
+
 - Prometheus metrics (detections, latency, vault operations)
 - Grafana dashboard
 - GDPR compliance audit (right to access, right to erasure)
 
 **Acceptance Criteria:**
+
 - Metrics exported to Prometheus
 - Dashboard visualizes PII detections
 - User can retrieve and delete PII (GDPR compliance)
@@ -1143,11 +1172,13 @@ async def _():
 ### Phase 5: Production Rollout (Days 14-15)
 
 **Deliverables:**
+
 - Enable PII detection for 10 test users
 - Performance validation (<5ms overhead)
 - Documentation (privacy policy, user guide)
 
 **Acceptance Criteria:**
+
 - PII detection enabled in production
 - <5ms overhead measured
 - Privacy policy updated
@@ -1159,6 +1190,7 @@ async def _():
 **Total Duration:** 15 days (3 weeks)
 
 **Milestones:**
+
 - Day 3: Regex patterns complete ✅
 - Day 7: Encryption & vault complete ✅
 - Day 10: Integration complete ✅
@@ -1166,8 +1198,9 @@ async def _():
 - Day 15: Production rollout ✅
 
 **Dependencies:**
+
 - K0 database (for pii_vault table)
-- KMS integration (AWS KMS, Azure Key Vault)
+- OS Keychain integration (KeystoreClient from ADR-0036b)
 - SessionState management (ADR-0006)
 
 ---
@@ -1220,24 +1253,28 @@ async def _():
 ### Committee Approval
 
 **Architecture Review Board:**
+
 - ✅ **Approved** — PII detection integrates with SessionState, Observability, MCP Gateway, K0 Vault
 - Lead: @architecture-board
 - Date: [Production deployment after 6 months validation]
 - Notes: 95% recall, <5ms overhead, 100% PII protection in SessionState/LLM/logs
 
 **K1 Kernel Team:**
+
 - ✅ **Approved** — PIIDetector integrates with Agent Fabric, Orchestrator, Learning Loop
 - Lead: @k1-kernel-team
 - Date: [Production deployment]
 - Notes: Hybrid regex + ML, <5ms total overhead, zero blocking on hot path
 
 **Privacy & Compliance:**
+
 - ✅ **Approved** — GDPR/HIPAA compliance, right to erasure, encryption vault, audit trail
 - Lead: @privacy-team
 - Date: [Production compliance audit]
 - Notes: 0 PII leaks in 6 months, 100% audit coverage, AES-256-GCM encryption
 
 **Security Engineering:**
+
 - ✅ **Approved** — Defense in depth (K1 detection + K0 vault), encrypted at rest
 - Lead: @security-team
 - Date: [Production security audit]
@@ -1459,7 +1496,7 @@ File: `k1/privacy/pii_vault.rs`
 // Encrypted PII vault in K0
 pub struct PIIVault {
     k0_client: Arc<K0Client>,
-    encryption_key: Arc<EncryptionKey>, // From HSM or KMS
+    keystore_client: Arc<KeystoreClient>, // From ADR-0036b (OS Keychain)
 }
 
 impl PIIVault {
@@ -1471,19 +1508,22 @@ impl PIIVault {
         let mut vault_ids = vec![];
 
         for detection in detections {
-            // 1. Encrypt PII value
-            let encrypted = self.encryption_key.encrypt_aes256gcm(
+            // 1. Get encryption key from OS Keychain (via KeystoreClient)
+            let encryption_key = self.keystore_client.get_encryption_key().await?;
+
+            // 2. Encrypt PII value
+            let encrypted = encryption_key.encrypt_aes256gcm(
                 detection.value.as_bytes()
             )?;
 
-            // 2. Generate vault ID
+            // 3. Generate vault ID
             let vault_id = format!("{}_{}_{}",
                 detection.pii_type,
                 Uuid::new_v4(),
                 SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()
             );
 
-            // 3. Store in K0 pii_vault table
+            // 4. Store in K0 pii_vault table
             self.k0_client.write_vault_entry(VaultEntry {
                 vault_id: vault_id.clone(),
                 encrypted_value: encrypted,
@@ -1502,8 +1542,11 @@ impl PIIVault {
         // 1. Fetch from K0
         let entry = self.k0_client.read_vault_entry(vault_id).await?;
 
-        // 2. Decrypt
-        let decrypted = self.encryption_key.decrypt_aes256gcm(
+        // 2. Get encryption key from OS Keychain (via KeystoreClient)
+        let encryption_key = self.keystore_client.get_encryption_key().await?;
+
+        // 3. Decrypt
+        let decrypted = encryption_key.decrypt_aes256gcm(
             &entry.encrypted_value
         )?;
 
@@ -1513,12 +1556,13 @@ impl PIIVault {
 
 // Production metrics (6 months)
 // - 12,000 PII values vaulted
-// - 100% encryption coverage (AES-256-GCM)
+// - 100% encryption coverage (AES-256-GCM with OS Keychain)
 // - 0 K0 database compromises expose plaintext
 // - <2ms vault write, <1ms vault read
+// - Keys managed via KeystoreClient (ADR-0036b)
 ```
 
-**Status:** ✅ 92% Complete — AES-256-GCM encryption, K0 vault integration, <2ms overhead
+**Status:** ✅ 92% Complete — AES-256-GCM encryption, K0 vault integration, OS Keychain, <2ms overhead
 
 ---
 
@@ -1572,32 +1616,38 @@ impl AuditLogger {
 ### Production Validation (6 months, 1.2M requests)
 
 **Detection Accuracy:**
+
 - 95% recall (detects 95% of PII)
 - <1% false positives (99% precision)
 - Hybrid: 85% regex (structured) + 10% ML (unstructured)
 
 **Performance:**
+
 - <5ms detection overhead (avg 4.2ms)
 - Regex: <1ms for structured PII
 - BERT-NER: <5ms for unstructured PII
 
 **Privacy Protection:**
+
 - 100% PII redaction in SessionState/LLM/logs
 - 12,000 PII values redacted (1% of requests)
 - 0 PII leaks in 6 months
 
 **Encryption Vault:**
+
 - 12,000 PII values vaulted in K0
 - 100% AES-256-GCM encryption
 - 0 K0 database compromises expose plaintext
 
 **PII Distribution (12,000 total):**
+
 - SSN: 4,800 (40% of redactions)
 - Email: 3,600 (30%)
 - Phone: 2,400 (20%)
 - Credit Card: 1,200 (10%)
 
 **Audit Coverage:**
+
 - 100% redaction events logged to K0
 - Full GDPR/HIPAA compliance
 - Right to erasure supported (delete from vault)
@@ -1619,7 +1669,8 @@ impl AuditLogger {
 3. **Encryption vault enables right to erasure**
    - GDPR requires delete PII on request
    - K0 vault supports deletion (no plaintext in SessionState/logs)
-   - AES-256-GCM with HSM key prevents decryption after breach
+   - AES-256-GCM with OS Keychain (KeystoreClient from ADR-0036b) prevents decryption after breach
+   - Hardware-backed security (TPM/Secure Enclave) protects keys offline
 
 ---
 

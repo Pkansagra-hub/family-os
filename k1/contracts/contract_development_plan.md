@@ -42,7 +42,7 @@
 - ✅ **Epic 2.7 added:** Tool Execution & Sandbox Contracts - 32 files (Architecture: 5, MCP Protocol: 6, WASM Sandbox: 7, Process Sandbox: 8, Selection Logic: 6)
 - ✅ **Epic 2.8 added:** MCP Protocol Integration Contracts - 30 files (JSON-RPC: 7, Lifecycle: 8, Circuit Breaker: 6, Error Handling: 9)
 - ✅ **Epic 2.9 added:** PII Detection & Redaction Contracts - 30 files (Regex: 6, BERT-NER: 7, Vault: 8, Audit: 9)
-- ✅ **Epic 2.10 added:** E2EE for RED Band Contracts - 32 files (AES-256-GCM: 8, KMS: 10, Selective Encryption: 8, Audit: 6)
+- ✅ **Epic 2.10 added:** E2EE for RED Band Contracts - 32 files (AES-256-GCM: 8, Keystore: 10, Selective Encryption: 8, Audit: 6)
 - ✅ **Epic 2.11 added:** JWT Authentication Contracts - 30 files (Generation: 8, Validation: 8, Refresh: 7, Authorization: 7)
 - ✅ **Epic 2.12 added:** Audit Trail & K0 Receipts Contracts - 30 files (Schema: 8, WAL: 8, Retention: 7, Query: 7)
 - ✅ **Epic 2.13 added:** Backpressure Cascade 3-Tier Contracts - 28 files (Watermarks: 8, Propagation: 7, Recovery: 7, Retention Overrides: 6)
@@ -99,7 +99,7 @@
 - **ADR-0033 (Three-Tier Sandbox Strategy):** Epic 2.7 (tool execution contracts) = 32 contract files (Architecture: 5 + MCP Protocol: 6 + WASM: 7 + Process: 8 + Selection: 6) ✅
 - **ADR-0034 (MCP Protocol for Tool Integration):** Epic 2.8 (MCP protocol contracts) = 30 contract files (JSON-RPC: 7 + Lifecycle: 8 + Circuit Breaker: 6 + Error Handling: 9) ✅
 - **ADR-0035 (PII Detection & Redaction):** Epic 2.9 (PII privacy contracts) = 30 contract files (Regex: 6 + BERT-NER: 7 + Vault: 8 + Audit: 9) ✅
-- **ADR-0036 (E2EE for RED Band):** Epic 2.10 (E2EE contracts) = 32 contract files (AES-256-GCM: 8 + KMS: 10 + Selective Encryption: 8 + Audit: 6) = **COMPLETE**
+- **ADR-0036 (E2EE for RED Band):** Epic 2.10 (E2EE contracts) = 32 contract files (AES-256-GCM: 8 + Keystore: 10 + Selective Encryption: 8 + Audit: 6) = **COMPLETE**
 - **ADR-0037 (JWT Authentication):** Epic 2.11 (JWT auth contracts) = 30 contract files (Generation: 8 + Validation: 8 + Refresh: 7 + Authorization: 7) = **COMPLETE**
 - **ADR-0038 (Audit Trail to K0 Receipts):** Epic 2.12 (receipt contracts) = 30 contract files (Schema: 8 + WAL: 8 + Retention: 7 + Query: 7) = **COMPLETE**
 - **ADR-0039 (Backpressure Cascade 3-Tier):** Epic 2.13 (backpressure contracts) = 28 contract files (Watermarks: 8 + Propagation: 7 + Recovery: 7 + Retention Overrides: 6) = **COMPLETE**
@@ -2424,13 +2424,13 @@ k1_module_manifest:
 
 ```
 ├── aes_256_gcm_encryption.yml              # AES-256-GCM authenticated encryption (confidentiality + integrity), 256-bit key (32 bytes), 96-bit nonce (12 bytes, unique per encryption), 128-bit auth tag (16 bytes)
-├── aws_kms_key_management.yml              # Encryption key stored in AWS KMS (never in database), key rotation every 90 days (automated), multi-region keys (us-east-1, us-west-2, eu-west-1), CloudTrail audit log
-├── k0_vault_schema.yml                     # K0 table: pii_vault (vault_key PRIMARY KEY, encrypted_value BLOB, nonce BLOB, auth_tag BLOB, pii_type TEXT, user_id, space_id, trace_id, created_at, deleted_at)
-├── vault_operations_store_retrieve_delete.yml # Store: Encrypt PII, generate vault_key (UUID), insert into pii_vault, Retrieve: Fetch ciphertext, decrypt with KMS key, return plaintext, Delete: Soft delete (set deleted_at timestamp)
+├── local_keystore_integration.yml          # Encryption key stored in OS Keychain (Windows Credential Manager/macOS Keychain/Linux Secret Service), reuses KeystoreClient from ADR-0036b, <1ms key fetch (35× faster than cloud KMS)
+├── k0_vault_schema.yml                     # K0 table: pii_vault (vault_key PRIMARY KEY, encrypted_value BLOB, nonce BLOB, auth_tag BLOB, pii_type TEXT, user_id, space_id, trace_id, keystore_key_id TEXT, keystore_backend TEXT ["OS_KEYCHAIN"|"ENCRYPTED_FILE"|"LOCAL_HSM"|"CLOUD_KMS"], created_at, deleted_at)
+├── vault_operations_store_retrieve_delete.yml # Store: Get key from OS Keychain (<1ms), encrypt PII, generate vault_key (UUID), insert into pii_vault, Retrieve: Fetch ciphertext, get key from keystore, decrypt, return plaintext, Delete: Soft delete (set deleted_at timestamp)
 ├── gdpr_compliance_right_to_erasure.yml    # Right to erasure: User can delete PII from vault (soft delete → hard delete after 30 days grace period), right to access: user can retrieve original PII from vault
-├── performance_metrics.yml                 # <2ms encryption overhead (avg 1.8ms per PII value), <5ms vault write (K0 INSERT with encrypted value), <5ms vault read (K0 SELECT + decrypt)
-├── breach_protection.yml                   # K0 database breach: SessionState stores redacted placeholders ([SSN], [EMAIL]), vault stores encrypted ciphertext (0xABCD...), decryption key in KMS (not in database)
-└── audit_trail_integration.yml             # All vault operations logged to K0 audit_log table (operation, vault_key, user_id, timestamp, success/error), integration with Prometheus (vault_operations_total metric)
+├── performance_metrics.yml                 # <2ms encryption overhead (avg 1.8ms per PII value), <3ms vault operations (down from 5ms), <1ms key fetch from OS keychain (vs 35-50ms cloud KMS), 100% offline capability
+├── breach_protection.yml                   # K0 database breach: SessionState stores redacted placeholders ([SSN], [EMAIL]), vault stores encrypted ciphertext (0xABCD...), decryption key in OS Keychain (hardware-backed TPM/Secure Enclave), attacker cannot decrypt without user password/biometric unlock
+└── audit_trail_integration.yml             # All vault operations logged to K0 audit_log table (operation, vault_key, user_id, timestamp, success/error), integration with Prometheus (vault_operations_total metric), local audit (no CloudTrail dependency)
 ```
 
 ---
@@ -2457,8 +2457,16 @@ k1_module_manifest:
 
 - Regex pattern library (12 patterns, 85% recall, <1ms, 100% precision)
 - ML-based NER (BERT-base, 95% recall, <5ms, 99% precision)
-- Encrypted vault (AES-256-GCM, AWS KMS, GDPR right to erasure)
+- Encrypted vault (AES-256-GCM, OS Keychain local-first, GDPR right to erasure)
 - Comprehensive audit trail (GDPR/HIPAA compliance, right to access/erasure)
+
+**Architecture Notes:**
+
+- **Local-First:** Encryption keys stored in OS Keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service)
+- **Hardware-Backed:** TPM/Secure Enclave protection, biometric unlock (Touch ID/Face ID/Windows Hello)
+- **Performance:** <1ms key fetch (35-50× faster than cloud KMS), <3ms vault operations (48-53% faster)
+- **Offline Capability:** 100% local operation, zero internet dependency
+- **Cloud Optional:** Cloud KMS available for enterprise deployments only (not required)
 
 **Total Contracts: 30 files** (6 regex + 7 NER + 8 vault + 9 audit)
 
@@ -2491,24 +2499,26 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.10.2: KMS Integration & Key Lifecycle Contracts
+#### Issue 2.10.2: Keystore Integration & Key Lifecycle Contracts
 
-**Expected Output:** `contracts/security/e2ee/kms/` (10 files)
+**Expected Output:** `contracts/security/e2ee/keystore/` (10 files)
 
 ```
-├── kms_client_interface.yml                # KMSClient trait: generate_key(space_id, user_id), get_key(key_id), rotate_key(key_id), revoke_key(key_id), schedule_key_deletion(key_id, pending_days), needs_rotation(key_id)
-├── aws_kms_client.yml                      # AWS KMS implementation: KmsClient init, generate_data_key(AES-256), encrypt/decrypt with KMS master key, CloudTrail integration
-├── azure_keyvault_client.yml               # Azure Key Vault implementation: KeyClient init, key versioning (track rotation history), Azure Monitor integration, Managed HSM option (FIPS 140-2 Level 3)
-├── google_cloudkms_client.yml              # Google Cloud KMS implementation: KeyManagementServiceClient init, automatic key rotation (90 days default), Cloud Audit Logs, External Key Manager (BYOK)
-├── key_metadata.yml                        # KeyMetadata: key_id (ARN/name), space_id, user_id, created_at, rotated_at, expires_at (90 days from created/rotated), is_byok, kms_provider (AWS_KMS/AZURE_KEY_VAULT/etc)
-├── key_generation.yml                      # Generate 256-bit encryption key: Call KMS generate_data_key (AES-256) → Store KeyMetadata in K0 (space_id → key_id mapping) → <200ms latency
-├── key_rotation.yml                        # Automatic 90-day rotation: Check expires_at daily → Generate new key version → Update key_id references → Old key retained 180 days → <500ms latency
-├── key_revocation.yml                      # Immediate revocation: User requests key disable → Disable key in KMS → Blacklist key_id in Redis → Prevent future encryption/decryption
-├── byok_import.yml                         # BYOK workflow: User generates 256-bit key → User imports to KMS (import_key_material) → K1 stores key_id reference → User controls lifecycle (rotate, revoke)
-└── key_caching.yml                         # Key caching strategy: Cache keys in memory (session duration, 1-hour max TTL) → Invalidate on rotation → Reduce KMS calls (cost optimization, <50ms fetch cached)
+├── keystore_client_interface.yml           # KeystoreClient trait (reused from ADR-0036b): generate_key(space_id, user_id), get_key(key_id), rotate_key(key_id), revoke_key(key_id), schedule_key_deletion(key_id, pending_days), needs_rotation(key_id)
+├── os_keychain_client.yml                  # OS Keychain implementation: Windows Credential Manager (DPAPI + TPM), macOS Keychain (Secure Enclave + T2/M1), Linux Secret Service (GNOME Keyring/KWallet), <1ms key fetch, biometric unlock support
+├── encrypted_file_client.yml               # Encrypted File fallback: Password-protected SQLite with Argon2 KDF (100ms derivation), AES-256-GCM encrypted keys, user password/PIN required, <5ms key fetch
+├── local_hsm_client.yml                    # Local HSM support (optional): YubiHSM, Nitrokey via PKCS#11, hardware-backed key generation, <10ms key operations, supports key rotation + deletion
+├── key_metadata.yml                        # KeyMetadata: key_id (UUID), space_id, user_id, created_at, rotated_at, expires_at (90 days from created/rotated), keystore_backend (OS_KEYCHAIN/ENCRYPTED_FILE/LOCAL_HSM/CLOUD_KMS), is_byok
+├── key_generation.yml                      # Generate 256-bit encryption key: Call KeystoreClient.generate_key (AES-256) → Store KeyMetadata in K0 (space_id → key_id mapping) → <1ms latency (OS Keychain), <5ms (Encrypted File)
+├── key_rotation.yml                        # Automatic 90-day rotation: Check expires_at daily → Generate new key version → Update key_id references → Old key retained 180 days → <1ms latency
+├── key_revocation.yml                      # Immediate revocation: User requests key disable → Delete key from keystore → Blacklist key_id in K0 → Prevent future encryption/decryption
+├── byok_import.yml                         # BYOK workflow: User generates 256-bit key → User imports to keystore (store in OS Keychain or Encrypted File) → K1 stores key_id reference → User controls lifecycle (rotate, revoke)
+└── key_caching.yml                         # Key caching strategy: Cache keys in memory (session duration, 1-hour max TTL) → Invalidate on rotation → Already fast (<1ms OS Keychain, <5ms Encrypted File), cache reduces concurrent access contention
 ```
 
-**ADR References:** ADR-0036b lines 1-251 (KMS), 252-500 (lifecycle), 501-750 (BYOK), 751-1000 (multi-provider)
+**ADR References:** ADR-0036b lines 1-251 (Keystore hierarchy), 252-500 (lifecycle), 501-750 (BYOK), 751-1000 (multi-provider)
+
+**Note:** This issue reuses KeystoreClient from ADR-0036b (unified key management). Cloud KMS available as optional enterprise backend via keystore_backend enum.
 
 ---
 
@@ -2517,14 +2527,14 @@ k1_module_manifest:
 **Expected Output:** `contracts/security/e2ee/selective/` (8 files)
 
 ```
-├── e2ee_manager.yml                        # E2EEManager class: check privacy band (RED → encrypt, GREEN/AMBER/BLACK → skip), get key from KMS (cached), create SessionStateEncryptor, encrypt 3 sections in parallel
+├── e2ee_manager.yml                        # E2EEManager class: check privacy band (RED → encrypt, GREEN/AMBER/BLACK → skip), get key from KeystoreClient (cached, <1ms), create SessionStateEncryptor, encrypt 3 sections in parallel
 ├── band_detection.yml                      # Privacy band detection: Extract from SessionState.meta.privacy_band → enabled_bands = [RED] → Skip if not in enabled_bands (0ms overhead for GREEN/AMBER)
 ├── section_selection.yml                   # Section-level selection: encrypted_sections = ["beliefs", "scoreboard", "control"], plaintext_sections = ["persona", "meta"], multimodal handled separately
 ├── parallel_encryption.yml                 # Parallel encryption with tokio tasks: Encrypt 3 sections concurrently → tokio::spawn for each section → Join all futures → <3ms total (1ms per section × 3 parallel)
 ├── sessionstate_encryptor.yml              # SessionStateEncryptor: Serialize section to JSON → Encrypt JSON bytes with AES-256-GCM → Store EncryptedData (ciphertext, nonce, auth_tag, key_id)
 ├── sessionstate_decryptor.yml              # SessionStateDecryptor: Load EncryptedData from K0 → Decrypt ciphertext → Deserialize JSON → Populate SessionState section
 ├── graceful_degradation.yml                # Encryption failure fallback: Log error → Save plaintext SessionState with RED_ENCRYPTION_FAILED flag → Alert metrics → Continue turn (don't block)
-└── performance_monitoring.yml              # Track encryption overhead per band: RED avg 0.8ms, GREEN/AMBER 0ms → Alert if RED >1ms P95 → Cache hit rate for keys >75%
+└── performance_monitoring.yml              # Track encryption overhead per band: RED avg 0.8ms, GREEN/AMBER 0ms → Alert if RED >1ms P95 → Cache hit rate for keys >90% (OS Keychain fast access)
 ```
 
 **ADR References:** ADR-0036c lines 1-251 (selective), 252-500 (integration), 501-750 (async), 751-1000 (performance)
@@ -2546,7 +2556,22 @@ k1_module_manifest:
 
 **ADR References:** ADR-0036d lines 1-251 (audit), 252-500 (GDPR), 501-750 (HIPAA), 751-1000 (BYOK docs)
 
-**Total Contracts: 32 files** (8 AES + 10 KMS + 8 selective + 6 audit)
+**Total Contracts: 32 files** (8 AES + 10 Keystore + 8 selective + 6 audit)
+
+**Key Contracts:**
+
+- **`encryption_key.yml`** — 256-bit AES key with AES-NI hardware acceleration
+- **`os_keychain_client.yml`** — OS Keychain (Windows/macOS/Linux) with TPM/Secure Enclave, <1ms key fetch
+- **`e2ee_manager.yml`** — Selective encryption for RED band SessionState (beliefs/scoreboard/control sections), <1ms overhead
+- **`e2ee_audit_logger.yml`** — GDPR/HIPAA-compliant audit trail with local logging
+
+**Architecture Notes:**
+
+- **Local-First:** Keys stored in OS Keychain (Windows Credential Manager/macOS Keychain/Linux Secret Service), hardware-backed TPM/Secure Enclave, biometric unlock support
+- **Performance:** <1ms key fetch (vs 35-50ms cloud KMS), <3ms selective encryption for RED band, 100% offline capability
+- **Security:** AES-256-GCM with 128-bit authentication tag, constant-time execution with AES-NI, key rotation every 90 days
+- **Privacy:** Zero-knowledge architecture with BYOK support, selective encryption (only RED band), GDPR/HIPAA-compliant audit trail
+- **Cloud Optional:** Cloud KMS available as optional enterprise backend via keystore_backend enum (not required for local-first operation)
 
 ---
 
@@ -2569,11 +2594,11 @@ k1_module_manifest:
 ├── refresh_token_issuance.yml              # Issue 7-day refresh token: Minimal claims (sub, exp = now + 7d, jti, token_type = "refresh") → Sign with RSA private key → Store in Redis (refresh:<jti> → user_id, 7-day TTL)
 ├── token_pair_response.yml                 # TokenPair struct: access_token (JWT string), refresh_token (JWT string), expires_in (3600 seconds), token_type ("Bearer")
 ├── rs256_signing.yml                       # RS256 signing: RSA 2048-bit private key (PEM format) → SHA-256 hash → JWT header (alg=RS256, typ=JWT, kid=key_id) → Base64URL encode
-├── private_key_security.yml                # Private key stored in KMS (AWS KMS, Azure Key Vault): Never exposed to K1 memory → Sign operation uses KMS API → 90-day key rotation
+├── private_key_security.yml                # Private key stored in OS Keychain (Windows Credential Manager/macOS Keychain/Linux Secret Service) or Local HSM (YubiHSM/Nitrokey): Never exposed to K1 memory → Sign operation uses secure keystore → 90-day key rotation
 └── observability.yml                       # Prometheus metrics: token_issuance_total (counter), signing_latency_ms (histogram), token_type label (access/refresh)
 ```
 
-**ADR References:** ADR-0037a lines 1-251 (generation), 252-500 (RS256), 501-750 (claims), 751-1000 (KMS)
+**ADR References:** ADR-0037a lines 1-251 (generation), 252-500 (RS256), 501-750 (claims), 751-1000 (Keystore)
 
 ---
 
@@ -2588,7 +2613,7 @@ k1_module_manifest:
 ├── claims_extraction.yml                   # Parse payload: Base64URL decode payload → Deserialize JSON → Extract Claims struct → Validate required fields (sub, exp, iss, aud)
 ├── blacklist_check.yml                     # Query Redis for revoked tokens: GET blacklist:<jti> → Cache results (1-minute TTL) → <1ms lookup → Alert on revoked token usage attempt
 ├── validation_errors.yml                   # JWTValidationError enum: Expired, InvalidSignature, InvalidIssuer, InvalidAudience, Revoked, InvalidToken, InvalidFormat, InvalidAlgorithm
-├── public_key_distribution.yml             # Distribute RSA public key: Load from KMS on startup → Cache in memory (all API Gateway instances) → No KMS call per request → Public key refresh on rotation
+├── public_key_distribution.yml             # Distribute RSA public key: Load from OS Keychain on startup → Cache in memory (all API Gateway instances) → No keystore call per request → Public key refresh on rotation
 └── observability.yml                       # Prometheus metrics: validations_total (counter), validation_latency_ms (histogram), blacklist_hit_rate (gauge), failure_reasons (counter by reason)
 ```
 

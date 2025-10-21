@@ -21,11 +21,11 @@ contract_metadata:
 overview:
   description: |
     Spawn and manage MCP server process using asyncio.subprocess.
-    
+
     **Problem:** K1 needs to spawn MCP servers as subprocesses, monitor health, enforce timeouts.
     **Solution:** MCPProcessSpawner class with spawn/terminate/kill/monitor methods.
     **Pattern:** Process Manager pattern.
-    
+
     **Design Decisions:**
     - asyncio.create_subprocess_exec (non-blocking subprocess)
     - stdio pipes for JSON-RPC communication
@@ -44,7 +44,7 @@ overview:
 class_definition:
   name: "MCPProcessSpawner"
   description: "Spawn and manage MCP server processes"
-  
+
   responsibilities:
     - "Spawn subprocess (asyncio.create_subprocess_exec)"
     - "Track process state (lifecycle FSM)"
@@ -52,29 +52,29 @@ class_definition:
     - "Enforce initialization timeout"
     - "Graceful shutdown (shutdown → SIGTERM → SIGKILL)"
     - "Immediate kill (SIGKILL)"
-  
+
   attributes:
     server_path:
       type: "str"
       description: "Path to MCP server executable"
       example: "/opt/familyos/mcp_servers/weather_api.py"
-    
+
     timeout_seconds:
       type: "int"
       description: "Default timeout for tools/call requests"
       default: 30
       example: 30
-    
+
     process:
       type: "asyncio.subprocess.Process | None"
       description: "Subprocess instance (None before spawn)"
       example: "<Process pid=12345>"
-    
+
     info:
       type: "ProcessInfo | None"
       description: "Process information (FSM state, PID, timestamps)"
       example: "ProcessInfo(pid=12345, state=RUNNING, ...)"
-    
+
     monitor_task:
       type: "asyncio.Task | None"
       description: "Background task monitoring process exit"
@@ -87,7 +87,7 @@ class_definition:
 spawn_method:
   signature: "async def spawn(self) -> ProcessInfo"
   description: "Spawn MCP server subprocess"
-  
+
   algorithm:
     step_1:
       action: "Call asyncio.create_subprocess_exec"
@@ -99,7 +99,7 @@ spawn_method:
             stderr=asyncio.subprocess.PIPE
         )
       rationale: "Non-blocking subprocess with stdio pipes"
-    
+
     step_2:
       action: "Initialize ProcessInfo (SPAWNING state)"
       code: |
@@ -108,26 +108,26 @@ spawn_method:
             state=ProcessState.SPAWNING,
             started_at=time.time()
         )
-    
+
     step_3:
       action: "Start background monitor task"
       code: |
         self.monitor_task = asyncio.create_task(self._monitor_process())
       rationale: "Detects crashes asynchronously"
-    
+
     step_4:
       action: "Return ProcessInfo"
       code: "return self.info"
-  
+
   returns:
     type: "ProcessInfo"
     description: "Process information (PID, state=SPAWNING)"
-  
+
   raises:
     RuntimeError:
       condition: "Subprocess fails to start (FileNotFoundError, PermissionError)"
       message: "Failed to spawn MCP server: {error}"
-  
+
   performance:
     target: "<50ms P95"
     actual: "~30ms"
@@ -135,11 +135,11 @@ spawn_method:
       process_spawn: "20ms (fork/exec)"
       ProcessInfo_init: "0.1ms"
       monitor_task_start: "10ms (asyncio.create_task)"
-  
+
   example: |
     spawner = MCPProcessSpawner("/opt/familyos/mcp_servers/weather_api.py", timeout_seconds=30)
     info = await spawner.spawn()
-    
+
     print(f"Spawned MCP server: PID {info.pid}, state {info.state}")
     # Output: Spawned MCP server: PID 12345, state SPAWNING
 
@@ -150,14 +150,14 @@ spawn_method:
 wait_for_ready_method:
   signature: "async def wait_for_ready(self, timeout: float = 5.0)"
   description: "Wait for MCP server to initialize (SPAWNING → RUNNING)"
-  
+
   algorithm:
     step_1:
       action: "Create MCPClient (stdio transport)"
       code: |
         from .jsonrpc import MCPClient, TransportType
         client = MCPClient(TransportType.STDIO, process=self.process)
-    
+
     step_2:
       action: "Send initialize JSON-RPC request with timeout"
       code: |
@@ -166,22 +166,22 @@ wait_for_ready_method:
             timeout=timeout
         )
       rationale: "Handshake with MCP server, verify it's ready"
-    
+
     step_3:
       action: "Transition to RUNNING state"
       code: "self.info.state = ProcessState.RUNNING"
-    
+
     step_4:
       action: "Log success"
       code: 'print(f"[MCPProcessSpawner] MCP server ready: {server_info}")'
-  
+
   parameters:
     timeout:
       type: "float"
       default: 5.0
       description: "Max time to wait for initialization (seconds)"
       example: 5.0
-  
+
   raises:
     TimeoutError:
       condition: "Initialization exceeds timeout"
@@ -190,7 +190,7 @@ wait_for_ready_method:
         except asyncio.TimeoutError:
             await self.kill()
             raise TimeoutError(f"MCP server initialization timed out after {timeout}s")
-    
+
     RuntimeError:
       condition: "Initialization fails (JSON-RPC error, crash)"
       action: "Kill process, raise RuntimeError"
@@ -198,7 +198,7 @@ wait_for_ready_method:
         except Exception as e:
             await self.kill()
             raise RuntimeError(f"MCP server initialization failed: {e}")
-  
+
   performance:
     target: "<100ms P95"
     actual: "~50ms"
@@ -206,11 +206,11 @@ wait_for_ready_method:
       json_rpc_initialize: "40ms (request + response)"
       state_transition: "0.1ms"
       logging: "10ms"
-  
+
   example: |
     await spawner.spawn()
     await spawner.wait_for_ready(timeout=5.0)
-    
+
     # Process now in RUNNING state, ready for tools/call
     assert spawner.info.state == ProcessState.RUNNING
 
@@ -221,7 +221,7 @@ wait_for_ready_method:
 terminate_method:
   signature: "async def terminate(self, timeout: float = 5.0)"
   description: "Gracefully terminate MCP server (shutdown → SIGTERM → SIGKILL)"
-  
+
   shutdown_sequence:
     step_1:
       name: "Send shutdown JSON-RPC request"
@@ -234,7 +234,7 @@ terminate_method:
         await asyncio.wait_for(client.shutdown(), timeout=2.0)
       success_transition: "TERMINATED (process exits cleanly)"
       failure_action: "Proceed to step 2 (SIGTERM)"
-    
+
     step_2:
       name: "Wait for graceful exit"
       timeout: "5s (parameter)"
@@ -244,7 +244,7 @@ terminate_method:
         await asyncio.wait_for(self.process.wait(), timeout=timeout)
       success_transition: "TERMINATED (exit code captured)"
       failure_action: "Proceed to step 3 (SIGTERM)"
-    
+
     step_3:
       name: "Send SIGTERM (interrupt signal)"
       timeout: null
@@ -253,7 +253,7 @@ terminate_method:
       code: |
         self.process.send_signal(signal.SIGTERM)
       rationale: "SIGTERM allows process to run cleanup handlers"
-    
+
     step_4:
       name: "Wait for SIGTERM exit"
       timeout: "5s (parameter)"
@@ -263,7 +263,7 @@ terminate_method:
         await asyncio.wait_for(self.process.wait(), timeout=timeout)
       success_transition: "TERMINATED (signal=SIGTERM)"
       failure_action: "Proceed to step 5 (SIGKILL)"
-    
+
     step_5:
       name: "Send SIGKILL (force kill)"
       timeout: null
@@ -274,14 +274,14 @@ terminate_method:
         await self.process.wait()
       success_transition: "TERMINATED (signal=SIGKILL)"
       failure_action: "None (SIGKILL always succeeds)"
-  
+
   parameters:
     timeout:
       type: "float"
       default: 5.0
       description: "Max time to wait at each graceful shutdown step"
       example: 5.0
-  
+
   performance:
     clean_exit:
       description: "Server responds to shutdown and exits cleanly"
@@ -290,7 +290,7 @@ terminate_method:
         shutdown_json_rpc: "5ms"
         server_cleanup: "50ms"
         process_exit: "10ms"
-    
+
     sigterm_exit:
       description: "Server doesn't respond to shutdown, SIGTERM required"
       duration: "~5,015ms"
@@ -299,7 +299,7 @@ terminate_method:
         wait_timeout: "5,000ms"
         sigterm_signal: "5ms"
         process_exit: "10ms"
-    
+
     sigkill_exit:
       description: "Server unresponsive, force kill required"
       duration: "~10,015ms"
@@ -310,11 +310,11 @@ terminate_method:
         wait_timeout_2: "5,000ms"
         sigkill_signal: "5ms"
         process_exit: "5ms"
-  
+
   example: |
     # Graceful shutdown
     await spawner.terminate(timeout=5.0)
-    
+
     # Check final state
     assert spawner.info.state == ProcessState.TERMINATED
     assert spawner.info.exit_code == 0  # Clean exit
@@ -326,18 +326,18 @@ terminate_method:
 kill_method:
   signature: "async def kill(self)"
   description: "Immediately kill MCP server (SIGKILL, no cleanup)"
-  
+
   algorithm:
     step_1:
       action: "Send SIGKILL signal"
       code: "self.process.kill()"
       rationale: "Immediate termination, no cleanup"
-    
+
     step_2:
       action: "Wait for process to exit"
       code: "await self.process.wait()"
       rationale: "Prevent zombie process"
-    
+
     step_3:
       action: "Update ProcessInfo (TERMINATED state)"
       code: |
@@ -345,12 +345,12 @@ kill_method:
         self.info.terminated_at = time.time()
         self.info.exit_code = self.process.returncode
         self.info.signal = signal.SIGKILL
-  
+
   use_cases:
     - "Timeout enforcement (tool exceeds time limit)"
     - "Emergency shutdown (security violation)"
     - "Initialization timeout (process not responding)"
-  
+
   performance:
     target: "<20ms"
     actual: "~15ms"
@@ -358,11 +358,11 @@ kill_method:
       sigkill_signal: "5ms"
       process_exit: "5ms"
       state_update: "5ms"
-  
+
   example: |
     # Tool times out, kill immediately
     await spawner.kill()
-    
+
     assert spawner.info.state == ProcessState.TERMINATED
     assert spawner.info.signal == signal.SIGKILL
 
@@ -373,27 +373,27 @@ kill_method:
 monitor_process_method:
   signature: "async def _monitor_process(self)"
   description: "Background task monitoring process exit (detects crashes)"
-  
+
   algorithm:
     step_1:
       action: "Wait for process to exit"
       code: "exit_code = await self.process.wait()"
       rationale: "Blocking wait, task sleeps until process exits"
-    
+
     step_2:
       action: "Check if already terminated by K1"
       code: |
         if self.info.state == ProcessState.TERMINATING:
             return  # Expected termination, not a crash
       rationale: "Graceful shutdown not considered a crash"
-    
+
     step_3:
       action: "Mark as CRASHED"
       code: |
         self.info.state = ProcessState.CRASHED
         self.info.terminated_at = time.time()
         self.info.exit_code = exit_code
-    
+
     step_4:
       action: "Check if killed by signal"
       code: |
@@ -403,36 +403,36 @@ monitor_process_method:
         else:
             print(f"[MCPProcessSpawner] MCP server crashed (exit code {exit_code}): PID {self.process.pid}")
       rationale: "Negative exit codes indicate signals (SIGSEGV=-11)"
-    
+
     step_5:
       action: "Emit crash event"
       code: "await self._emit_crash_event()"
       rationale: "Notify supervisor, circuit breaker"
-  
+
   crash_detection:
     non_zero_exit_code:
       condition: "exit_code > 0"
       example: "exit_code = 1 (general error)"
       action: "Mark as CRASHED, log error"
-    
+
     signal_termination:
       condition: "exit_code < 0"
       example: "exit_code = -11 (SIGSEGV)"
       action: "Mark as CRASHED, capture signal, log error"
-  
+
   example_crash_scenarios:
     segmentation_fault:
       description: "Process crashes with SIGSEGV (signal 11)"
       exit_code: -11
       signal: 11
       log_message: "MCP server crashed (signal 11): PID 12345"
-    
+
     python_exception:
       description: "Uncaught Python exception, process exits"
       exit_code: 1
       signal: null
       log_message: "MCP server crashed (exit code 1): PID 12345"
-    
+
     out_of_memory:
       description: "Process killed by OOM killer (signal 9)"
       exit_code: -9
@@ -446,7 +446,7 @@ monitor_process_method:
 emit_crash_event_method:
   signature: "async def _emit_crash_event(self)"
   description: "Emit crash event to K1 supervisor"
-  
+
   integration_points:
     supervisor:
       adr: "ADR-0002b"
@@ -458,19 +458,19 @@ emit_crash_event_method:
         - "signal"
         - "uptime_seconds"
         - "total_requests"
-    
+
     circuit_breaker:
       adr: "ADR-0034c"
       action: "Increment failure counter, possibly open circuit"
       data:
         - "tool_name"
         - "failure_type: crash"
-    
+
     telemetry:
       action: "Emit crash metric"
       metric: "mcp_process_crashes_total"
       labels: ["tool_name", "exit_code", "signal"]
-  
+
   example: |
     async def _emit_crash_event(self):
         # Emit to supervisor
@@ -481,13 +481,13 @@ emit_crash_event_method:
             signal=self.info.signal,
             uptime_seconds=self.info.uptime_seconds()
         )
-        
+
         # Emit to circuit breaker
         await circuit_breaker.record_failure(
             tool_name=self.tool_name,
             failure_type="crash"
         )
-        
+
         # Emit metric
         mcp_process_crashes_total.labels(
             tool_name=self.tool_name,
@@ -505,11 +505,11 @@ python_implementation: |
   import time
   from typing import Optional
   from .lifecycle_fsm import ProcessState, ProcessInfo
-  
+
   class MCPProcessSpawner:
       """
       Spawn and manage MCP server processes.
-      
+
       Responsibilities:
       - Spawn subprocess (asyncio.create_subprocess_exec)
       - Track process state (lifecycle FSM)
@@ -517,22 +517,22 @@ python_implementation: |
       - Enforce timeout (asyncio.wait_for)
       - Graceful shutdown (SIGTERM → SIGKILL)
       """
-      
+
       def __init__(self, server_path: str, timeout_seconds: int = 30):
           """
           Initialize process spawner.
-          
+
           Args:
               server_path: Path to MCP server executable
               timeout_seconds: Default timeout for tools/call requests
           """
           self.server_path = server_path
           self.timeout_seconds = timeout_seconds
-          
+
           self.process: Optional[asyncio.subprocess.Process] = None
           self.info: Optional[ProcessInfo] = None
           self.monitor_task: Optional[asyncio.Task] = None
-      
+
       async def spawn(self) -> ProcessInfo:
           """Spawn MCP server subprocess"""
           self.process = await asyncio.create_subprocess_exec(
@@ -541,52 +541,52 @@ python_implementation: |
               stdout=asyncio.subprocess.PIPE,
               stderr=asyncio.subprocess.PIPE
           )
-          
+
           self.info = ProcessInfo(
               pid=self.process.pid,
               state=ProcessState.SPAWNING,
               started_at=time.time()
           )
-          
+
           self.monitor_task = asyncio.create_task(self._monitor_process())
-          
+
           print(f"[MCPProcessSpawner] Spawned MCP server: PID {self.process.pid}")
-          
+
           return self.info
-      
+
       async def wait_for_ready(self, timeout: float = 5.0):
           """Wait for MCP server to initialize (SPAWNING → RUNNING)"""
           from .jsonrpc import MCPClient, TransportType
-          
+
           client = MCPClient(TransportType.STDIO, process=self.process)
-          
+
           try:
               server_info = await asyncio.wait_for(
                   client.initialize(),
                   timeout=timeout
               )
-              
+
               self.info.state = ProcessState.RUNNING
-              
+
               print(f"[MCPProcessSpawner] MCP server ready: {server_info}")
-          
+
           except asyncio.TimeoutError:
               await self.kill()
               raise TimeoutError(f"MCP server initialization timed out after {timeout}s")
-          
+
           except Exception as e:
               await self.kill()
               raise RuntimeError(f"MCP server initialization failed: {e}")
-      
+
       async def terminate(self, timeout: float = 5.0):
           """Gracefully terminate MCP server (shutdown → SIGTERM → SIGKILL)"""
           if not self.process or not self.info.is_alive():
               return
-          
+
           self.info.state = ProcessState.TERMINATING
-          
+
           print(f"[MCPProcessSpawner] Terminating MCP server PID {self.process.pid}")
-          
+
           # Step 1: Send shutdown JSON-RPC
           try:
               from .jsonrpc import MCPClient, TransportType
@@ -594,7 +594,7 @@ python_implementation: |
               await asyncio.wait_for(client.shutdown(), timeout=2.0)
           except:
               pass  # Ignore errors
-          
+
           # Step 2: Wait for graceful exit
           try:
               await asyncio.wait_for(self.process.wait(), timeout=timeout)
@@ -604,11 +604,11 @@ python_implementation: |
               return
           except asyncio.TimeoutError:
               pass
-          
+
           # Step 3: Send SIGTERM
           print(f"[MCPProcessSpawner] Sending SIGTERM to PID {self.process.pid}")
           self.process.send_signal(signal.SIGTERM)
-          
+
           try:
               await asyncio.wait_for(self.process.wait(), timeout=timeout)
               self.info.state = ProcessState.TERMINATED
@@ -618,50 +618,50 @@ python_implementation: |
               return
           except asyncio.TimeoutError:
               pass
-          
+
           # Step 4: Send SIGKILL
           print(f"[MCPProcessSpawner] Sending SIGKILL to PID {self.process.pid}")
           self.process.kill()
           await self.process.wait()
-          
+
           self.info.state = ProcessState.TERMINATED
           self.info.terminated_at = time.time()
           self.info.exit_code = self.process.returncode
           self.info.signal = signal.SIGKILL
-      
+
       async def kill(self):
           """Immediately kill MCP server (SIGKILL)"""
           if not self.process or not self.info.is_alive():
               return
-          
+
           print(f"[MCPProcessSpawner] Killing MCP server PID {self.process.pid}")
           self.process.kill()
           await self.process.wait()
-          
+
           self.info.state = ProcessState.TERMINATED
           self.info.terminated_at = time.time()
           self.info.exit_code = self.process.returncode
           self.info.signal = signal.SIGKILL
-      
+
       async def _monitor_process(self):
           """Background task: monitor process exit"""
           exit_code = await self.process.wait()
-          
+
           if self.info.state == ProcessState.TERMINATING:
               return
-          
+
           self.info.state = ProcessState.CRASHED
           self.info.terminated_at = time.time()
           self.info.exit_code = exit_code
-          
+
           if exit_code < 0:
               self.info.signal = -exit_code
               print(f"[MCPProcessSpawner] MCP server crashed (signal {-exit_code})")
           else:
               print(f"[MCPProcessSpawner] MCP server crashed (exit code {exit_code})")
-          
+
           await self._emit_crash_event()
-      
+
       async def _emit_crash_event(self):
           """Emit crash event to supervisor"""
           print(f"[MCPProcessSpawner] Crash event: PID {self.process.pid}")
@@ -675,17 +675,17 @@ performance_requirements:
     target: "<50ms P95"
     actual: "~30ms"
     measurement: "Time from spawn() call to return"
-  
+
   initialization_latency:
     target: "<100ms P95"
     actual: "~50ms"
     measurement: "Time for wait_for_ready() to complete"
-  
+
   graceful_shutdown_latency:
     target: "<100ms P95 (clean exit)"
     actual: "~65ms"
     measurement: "Time for terminate() with clean exit"
-  
+
   force_kill_latency:
     target: "<10s worst case"
     actual: "~10s"
@@ -700,13 +700,13 @@ metrics:
     type: "counter"
     labels: ["tool_name"]
     description: "Total MCP process spawns"
-  
+
   mcp_process_spawn_duration_ms:
     type: "histogram"
     buckets: [10, 20, 50, 100, 200]
     labels: ["tool_name"]
     description: "Process spawn duration"
-  
+
   mcp_process_crashes_total:
     type: "counter"
     labels: ["tool_name", "exit_code", "signal"]
@@ -717,17 +717,17 @@ logging:
     level: "INFO"
     message: "MCP process spawned"
     fields: ["pid", "tool_name", "server_path"]
-  
+
   process_ready:
     level: "INFO"
     message: "MCP process ready"
     fields: ["pid", "tool_name", "initialization_duration_ms"]
-  
+
   process_terminated:
     level: "INFO"
     message: "MCP process terminated"
     fields: ["pid", "tool_name", "exit_code", "signal", "uptime_seconds"]
-  
+
   process_crashed:
     level: "ERROR"
     message: "MCP process crashed"
@@ -741,22 +741,22 @@ test_coverage:
   unit_tests:
     - test_name: "test_process_spawner_spawn"
       description: "Spawn subprocess, verify PID > 0, state = SPAWNING"
-    
+
     - test_name: "test_process_spawner_wait_for_ready"
       description: "Initialize completes, state transitions to RUNNING"
-    
+
     - test_name: "test_process_spawner_terminate_clean"
       description: "Graceful shutdown, process exits cleanly (exit code 0)"
-    
+
     - test_name: "test_process_spawner_terminate_sigterm"
       description: "Shutdown fails, SIGTERM required, process exits"
-    
+
     - test_name: "test_process_spawner_terminate_sigkill"
       description: "SIGTERM fails, SIGKILL required, process forced to exit"
-    
+
     - test_name: "test_process_spawner_kill_immediate"
       description: "kill() sends SIGKILL, process exits immediately"
-    
+
     - test_name: "test_process_spawner_monitor_crash"
       description: "Background monitor detects crash (non-zero exit)"
 
@@ -769,11 +769,11 @@ references:
     - name: "asyncio.subprocess — Python 3.10"
       url: "https://docs.python.org/3/library/asyncio-subprocess.html"
       description: "Non-blocking process spawning and management"
-    
+
     - name: "Unix Signals — POSIX 1990"
       url: "https://en.wikipedia.org/wiki/Signal_(IPC)"
       description: "SIGTERM (graceful), SIGKILL (force)"
-  
+
   related_contracts:
     - "lifecycle_fsm_5_states.yml"
     - "initialize_request.yml"

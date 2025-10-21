@@ -1,0 +1,203 @@
+---
+# ADR-0036b: Key Generation Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Key Generation Contract
+# Defines secure generation of 256-bit AES encryption keys
+
+contract:
+  name: key_generation
+  version: "1.0.0"
+  description: "Secure generation of 256-bit AES encryption keys for E2EE"
+  parent_adr: "ADR-0036b"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# Key Generation Requirements
+key_generation_requirements:
+  algorithm: "AES-256"
+  key_length_bits: 256
+  key_length_bytes: 32
+  randomness_source: "Cryptographically Secure Pseudo-Random Number Generator (CSPRNG)"
+  entropy_requirement: "256 bits of entropy minimum"
+
+# Generation Triggers
+generation_triggers:
+  space_creation:
+    description: "Generate key when RED band space is created"
+    condition: "privacy_band == RED"
+    automatic: true
+
+  key_rotation:
+    description: "Generate new key during 90-day rotation"
+    condition: "key_age > 90 days"
+    automatic: true
+
+  emergency_rotation:
+    description: "Generate new key on security incident"
+    condition: "security_incident_detected"
+    manual_trigger: true
+
+  byok_import:
+    description: "User provides own key material"
+    condition: "user_provided_key"
+    validation: "Verify 256-bit key format"
+
+# Randomness Sources
+randomness_sources:
+  primary:
+    os_csprng:
+      description: "Operating System CSPRNG"
+      windows: "BCryptGenRandom (CryptGenRandom)"
+      macos: "SecRandomCopyBytes (/dev/random)"
+      linux: "getrandom() system call"
+      compliance: "FIPS 140-2 validated"
+
+  secondary:
+    hardware_rng:
+      description: "Hardware Random Number Generator"
+      sources: ["TPM RNG", "RDRAND instruction", "ARM RNG"]
+      availability: "When hardware RNG present"
+      fallback: "OS CSPRNG"
+
+  validation:
+    statistical_tests: "FIPS 140-2 randomness tests"
+    entropy_estimation: "Shannon entropy calculation"
+    duplicate_detection: "Check for repeated patterns"
+
+# Generation Process
+generation_process:
+  1:
+    name: "Validate trigger condition"
+    description: "Check if key generation is required"
+    error_handling: "Return early if not needed"
+
+  2:
+    name: "Select randomness source"
+    description: "Choose best available CSPRNG"
+    priority: "Hardware RNG > OS CSPRNG"
+
+  3:
+    name: "Generate 256-bit key material"
+    description: "Collect 32 bytes of random data"
+    validation: "Verify entropy requirements"
+
+  4:
+    name: "Create EncryptionKey object"
+    description: "Wrap key material in secure structure"
+    memory_safety: "Zero-copy when possible"
+
+  5:
+    name: "Generate base nonce"
+    description: "96-bit random base for nonce generation"
+    uniqueness: "Unique per key"
+
+  6:
+    name: "Create key metadata"
+    description: "Record creation time, expiration, etc."
+    storage: "In keystore alongside key"
+
+  7:
+    name: "Store key securely"
+    description: "Store in OS keychain or encrypted file"
+    atomicity: "All-or-nothing storage operation"
+
+# Performance Budget
+performance_budget:
+  generation_ms: 10
+  memory_usage_mb: 0.001
+  cpu_usage_percent: 5
+
+# Security Validation
+security_validation:
+  randomness_testing:
+    - "FIPS 140-2 statistical tests"
+    - "No predictable patterns"
+    - "Sufficient entropy"
+
+  key_uniqueness:
+    - "Check against existing keys"
+    - "Collision probability < 2^-128"
+
+  memory_safety:
+    - "Key material not leaked in memory"
+    - "Secure zeroing after use"
+
+# Error Handling
+error_handling:
+  rng_failure:
+    error_code: "RNG_UNAVAILABLE"
+    description: "Cannot access randomness source"
+    recovery: "Retry with different source, alert if persistent"
+
+  entropy_insufficient:
+    error_code: "INSUFFICIENT_ENTROPY"
+    description: "Generated key lacks entropy"
+    recovery: "Regenerate key, check RNG health"
+
+  storage_failure:
+    error_code: "KEY_STORAGE_FAILED"
+    description: "Cannot store generated key"
+    recovery: "Retry storage, alert on failure"
+
+# Implementation Interface
+implementation:
+  rust:
+    function: "generate_encryption_key(space_id: &str, user_id: &str) -> Result<EncryptionKey, KeyGenerationError>"
+    async: false
+    hardware_detection: "Automatic RNG source selection"
+
+  python:
+    function: "generate_encryption_key(space_id: str, user_id: str) -> EncryptionKey"
+    library: "cryptography (os.urandom) or secrets.token_bytes"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Key generation produces 256-bit keys"
+    - "Keys are cryptographically random"
+    - "No duplicate keys generated"
+    - "Key metadata correctly populated"
+
+  security_tests:
+    - "Randomness statistical validation"
+    - "Memory not leaked after generation"
+    - "Key material not logged or exposed"
+
+  performance_tests:
+    - "Generation within 10ms budget"
+    - "Memory usage minimal"
+    - "Concurrent generation thread-safe"
+
+  integration_tests:
+    - "Generated keys work for encryption/decryption"
+    - "Keys stored and retrieved correctly"
+    - "Key rotation triggers new generation"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "ADR-0036a: Encryption key structure"
+  downstream:
+    - "key_storage.yml: Stores generated keys"
+    - "key_metadata.yml: Records key information"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "256-bit AES keys generated securely"
+    - "Keys are cryptographically random"
+    - "Key generation within performance budget"
+
+  security:
+    - "FIPS 140-2 compliant randomness"
+    - "No key material exposure"
+    - "Secure memory handling"
+
+  reliability:
+    - "Generation succeeds on all platforms"
+    - "Error handling prevents failures"
+    - "Hardware RNG utilized when available"

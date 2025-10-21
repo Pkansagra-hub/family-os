@@ -1,0 +1,194 @@
+classes:
+  - name: HashChainComputer
+    description: Computes SHA-256 hash chain for tamper-evident audit trail
+    research: SHA-256 (NIST FIPS 180-4), Merkle trees (Bitcoin blockchain)
+    performance_budget: <0.5ms per hash computation
+    security_properties:
+      - tamper-evident: Changing one receipt breaks entire chain
+      - deterministic: Same input produces same hash
+      - collision-resistant: SHA-256 preimage resistance
+    methods:
+      - name: compute_receipt_hash
+        description: Compute SHA-256 hash of receipt data
+        parameters:
+          - name: receipt_id
+            type: string
+            description: Unique receipt identifier
+          - name: timestamp
+            type: int64
+            description: Unix timestamp in milliseconds
+          - name: data
+            type: string
+            description: Receipt data (JSON or FlatBuffers)
+          - name: previous_hash
+            type: string
+            description: Hash of previous receipt in chain
+        returns:
+          type: string
+          description: SHA-256 hash (64-character hex string)
+        implementation:
+          rust: |
+            use sha2::{Sha256, Digest};
+
+            pub fn compute_receipt_hash(
+                receipt_id: &str,
+                timestamp: i64,
+                data: &str,
+                previous_hash: &str,
+            ) -> String {
+                let mut hasher = Sha256::new();
+                hasher.update(receipt_id.as_bytes());
+                hasher.update(timestamp.to_string().as_bytes());
+                hasher.update(data.as_bytes());
+                hasher.update(previous_hash.as_bytes());
+
+                format!("{:x}", hasher.finalize())
+            }
+          python: |
+            import hashlib
+
+            def compute_receipt_hash(
+                receipt_id: str,
+                timestamp: int,
+                data: str,
+                previous_hash: str,
+            ) -> str:
+                """Compute SHA-256 hash for receipt chain"""
+                hasher = hashlib.sha256()
+                hasher.update(receipt_id.encode())
+                hasher.update(str(timestamp).encode())
+                hasher.update(data.encode())
+                hasher.update(previous_hash.encode())
+
+                return hasher.hexdigest()
+        performance_requirements:
+          - latency: <0.5ms (P95)
+          - throughput: 2000 hashes/second
+        error_handling:
+          - invalid_input: Return empty string with error log
+          - hash_collision: Log security alert (extremely unlikely)
+
+      - name: verify_chain_continuity
+        description: Verify hash chain integrity between receipts
+        parameters:
+          - name: receipts
+            type: List[Receipt]
+            description: Ordered list of receipts to verify
+        returns:
+          type: VerificationResult
+          description: VERIFIED or BROKEN with details
+        implementation:
+          rust: |
+            pub enum VerificationResult {
+                Verified,
+                Broken {
+                    receipt_id: String,
+                    expected_hash: String,
+                    actual_hash: String,
+                },
+            }
+
+            pub fn verify_chain_continuity(receipts: &[Receipt]) -> VerificationResult {
+                for window in receipts.windows(2) {
+                    let prev_receipt = &window[0];
+                    let curr_receipt = &window[1];
+
+                    if curr_receipt.previous_hash != prev_receipt.current_hash {
+                        return VerificationResult::Broken {
+                            receipt_id: curr_receipt.receipt_id.clone(),
+                            expected_hash: prev_receipt.current_hash.clone(),
+                            actual_hash: curr_receipt.previous_hash.clone(),
+                        };
+                    }
+                }
+                VerificationResult::Verified
+            }
+          python: |
+            from typing import List
+            from dataclasses import dataclass
+
+            @dataclass
+            class VerificationResult:
+                verified: bool
+                broken_receipt_id: str = ""
+                expected_hash: str = ""
+                actual_hash: str = ""
+
+            def verify_chain_continuity(receipts: List[Receipt]) -> VerificationResult:
+                """Verify hash chain continuity"""
+                for i in range(1, len(receipts)):
+                    prev_receipt = receipts[i-1]
+                    curr_receipt = receipts[i]
+
+                    if curr_receipt.previous_hash != prev_receipt.current_hash:
+                        return VerificationResult(
+                            verified=False,
+                            broken_receipt_id=curr_receipt.receipt_id,
+                            expected_hash=prev_receipt.current_hash,
+                            actual_hash=curr_receipt.previous_hash,
+                        )
+
+                return VerificationResult(verified=True)
+        performance_requirements:
+          - latency: <10ms for 100 receipts
+          - scalability: Linear time complexity O(n)
+        security_requirements:
+          - tamper_detection: Detects any modification to receipt data
+          - forensic_proof: Provides cryptographic proof of receipt order
+
+    genesis_receipt:
+      description: First receipt in session has previous_hash = "0" × 64
+      implementation: |
+        // Genesis hash (64 zeros)
+        const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        // First receipt in session
+        let first_receipt = Receipt {
+            previous_hash: GENESIS_HASH.to_string(),
+            // ... other fields
+        };
+
+dependencies:
+  - name: sha2
+    version: "0.10"
+    description: SHA-256 cryptographic hash function
+    language: rust
+  - name: hashlib
+    version: "built-in"
+    description: SHA-256 cryptographic hash function
+    language: python
+
+testing_requirements:
+  - unit_tests:
+      - hash_computation_deterministic: Same input produces same hash
+      - hash_chain_verification: Detects broken chains
+      - genesis_receipt_handling: First receipt uses genesis hash
+      - performance_budget: <0.5ms per hash computation
+  - integration_tests:
+      - end_to_end_chain: Create 100 receipts, verify entire chain
+      - tamper_detection: Modify receipt data, verify detection
+      - concurrent_access: Multiple threads computing hashes safely
+  - security_tests:
+      - collision_resistance: Verify SHA-256 preimage resistance
+      - timing_attacks: Constant-time hash computation
+
+observability:
+  metrics:
+    - name: hash_computations_total
+      type: counter
+      description: Total SHA-256 hash computations
+    - name: hash_chain_verifications_total
+      type: counter
+      description: Total hash chain verifications
+    - name: hash_chain_breaks_detected_total
+      type: counter
+      description: Total hash chain breaks detected
+    - name: hash_computation_latency_ms
+      type: histogram
+      buckets: [0.1, 0.5, 1.0, 2.0]
+      description: Hash computation latency in milliseconds
+
+compliance:
+  - gdpr: Article 30 (record of processing with integrity guarantees)
+  - hipaa: § 164.312(b) (audit controls with tamper detection)
+  - soc2: CC7.2 (system monitoring with cryptographic integrity)

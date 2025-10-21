@@ -1,0 +1,435 @@
+---
+# ADR-0037: Validation Observability Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Validation Observability Contract
+# Defines metrics, logging, and monitoring for JWT validation components
+
+contract:
+  name: validation_observability
+  version: "1.0.0"
+  description: "Observability for JWT validation pipeline"
+  parent_adr: "ADR-0037"
+  priority: "MEDIUM"
+  effort: "1 day"
+
+# Metrics Collection
+metrics_collection:
+  validation_metrics:
+    jwt_validation_total:
+      type: "Counter"
+      description: "Total JWT validation attempts"
+      labels: ["result", "error_code", "endpoint"]
+      example: "jwt_validation_total{result=\"success\"} 1000"
+
+    jwt_validation_duration:
+      type: "Histogram"
+      description: "JWT validation duration"
+      buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+      labels: ["stage"]
+      example: "jwt_validation_duration_bucket{stage=\"signature\",le=\"0.01\"} 950"
+
+    jwt_validation_errors_total:
+      type: "Counter"
+      description: "JWT validation errors by type"
+      labels: ["error_code", "category", "severity"]
+      example: "jwt_validation_errors_total{error_code=\"JWT_100\",category=\"signature\"} 5"
+
+  signature_verification_metrics:
+    signature_verification_total:
+      type: "Counter"
+      description: "Signature verification attempts"
+      labels: ["result", "key_id"]
+      example: "signature_verification_total{result=\"success\",key_id=\"key_001\"} 1000"
+
+    signature_verification_duration:
+      type: "Histogram"
+      description: "Signature verification duration"
+      buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01]
+      example: "signature_verification_duration_bucket{le=\"0.001\"} 999"
+
+  expiry_check_metrics:
+    expiry_check_total:
+      type: "Counter"
+      description: "Expiry validation attempts"
+      labels: ["result", "time_remaining"]
+      buckets: ["expired", "<1h", "1-24h", "1-7d", ">7d"]
+      example: "expiry_check_total{result=\"success\",time_remaining=\"1-24h\"} 500"
+
+  claims_extraction_metrics:
+    claims_extraction_total:
+      type: "Counter"
+      description: "Claims extraction attempts"
+      labels: ["result", "claims_count"]
+      example: "claims_extraction_total{result=\"success\",claims_count=\"8\"} 1000"
+
+    claims_extraction_duration:
+      type: "Histogram"
+      description: "Claims extraction duration"
+      buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05]
+
+  blacklist_check_metrics:
+    blacklist_check_total:
+      type: "Counter"
+      description: "Blacklist check attempts"
+      labels: ["result", "cache_hit"]
+      example: "blacklist_check_total{result=\"not_blacklisted\",cache_hit=\"true\"} 950"
+
+    blacklist_check_duration:
+      type: "Histogram"
+      description: "Blacklist check duration"
+      buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]
+
+    blacklist_size:
+      type: "Gauge"
+      description: "Current blacklist size"
+      example: "blacklist_size 150"
+
+  public_key_cache_metrics:
+    public_key_cache_hits_total:
+      type: "Counter"
+      description: "Public key cache hits"
+      labels: ["cache_level"]
+      example: "public_key_cache_hits_total{cache_level=\"memory\"} 990"
+
+    public_key_cache_misses_total:
+      type: "Counter"
+      description: "Public key cache misses"
+      labels: ["cache_level"]
+      example: "public_key_cache_misses_total{cache_level=\"redis\"} 10"
+
+    public_key_cache_size:
+      type: "Gauge"
+      description: "Public key cache size"
+      labels: ["cache_level"]
+      example: "public_key_cache_size{cache_level=\"memory\"} 3"
+
+# Logging Strategy
+logging_strategy:
+  log_levels:
+    success_validations: "DEBUG"
+    failed_validations: "INFO"
+    security_events: "WARNING"
+    system_errors: "ERROR"
+
+  log_formats:
+    validation_attempt:
+      level: "DEBUG"
+      message: "JWT validation attempt"
+      fields: ["token_jti", "endpoint", "user_agent", "ip_address"]
+      example: "JWT validation attempt jti=abc123 endpoint=/api/data ip=192.168.1.1"
+
+    validation_success:
+      level: "DEBUG"
+      message: "JWT validation successful"
+      fields: ["token_jti", "validation_duration_ms", "claims_sub"]
+      example: "JWT validation successful jti=abc123 duration=2.5ms sub=user123"
+
+    validation_failure:
+      level: "INFO"
+      message: "JWT validation failed"
+      fields: ["token_jti", "error_code", "error_message", "endpoint"]
+      example: "JWT validation failed jti=abc123 error_code=JWT_100 endpoint=/api/data"
+
+    security_event:
+      level: "WARNING"
+      message: "JWT security event"
+      fields: ["token_jti", "event_type", "ip_address", "user_agent", "trace_id"]
+      example: "JWT security event jti=abc123 event_type=signature_verification_failed trace_id=xyz789"
+
+    system_error:
+      level: "ERROR"
+      message: "JWT validation system error"
+      fields: ["error_type", "error_message", "component", "trace_id"]
+      example: "JWT validation system error error_type=redis_unavailable component=blacklist_check trace_id=xyz789"
+
+  structured_logging:
+    format: "JSON with consistent field names"
+    required_fields: ["timestamp", "level", "component", "message", "trace_id"]
+    optional_fields: ["token_jti", "error_code", "duration_ms", "ip_address"]
+
+# Alerting Rules
+alerting_rules:
+  validation_error_rate:
+    condition: "rate(jwt_validation_errors_total[5m]) > 0.1"
+    severity: "WARNING"
+    description: "High JWT validation error rate"
+    runbook: "Check authentication service health"
+
+  signature_verification_failures:
+    condition: "rate(jwt_validation_errors_total{error_code=\"JWT_100\"}[5m]) > 0.05"
+    severity: "CRITICAL"
+    description: "High signature verification failure rate"
+    runbook: "Check key rotation, potential attack"
+
+  validation_latency_p95:
+    condition: "histogram_quantile(0.95, rate(jwt_validation_duration_bucket[5m])) > 0.1"
+    severity: "WARNING"
+    description: "JWT validation latency too high"
+    runbook: "Check system resources, optimize caching"
+
+  blacklist_check_failures:
+    condition: "rate(jwt_validation_errors_total{error_code=\"JWT_501\"}[5m]) > 0.01"
+    severity: "ERROR"
+    description: "Blacklist check failures"
+    runbook: "Check Redis connectivity"
+
+  cache_hit_ratio_low:
+    condition: "(public_key_cache_hits_total / (public_key_cache_hits_total + public_key_cache_misses_total)) < 0.99"
+    severity: "WARNING"
+    description: "Public key cache hit ratio too low"
+    runbook: "Check cache configuration, network latency"
+
+  blacklist_size_high:
+    condition: "blacklist_size > 10000"
+    severity: "INFO"
+    description: "Large blacklist size"
+    runbook: "Monitor for potential abuse, consider cleanup"
+
+# Monitoring Dashboard
+monitoring_dashboard:
+  panels:
+    validation_success_rate:
+      title: "JWT Validation Success Rate"
+      query: "rate(jwt_validation_total{result=\"success\"}[5m]) / rate(jwt_validation_total[5m])"
+      type: "gauge"
+      threshold: "95%"
+
+    validation_latency:
+      title: "JWT Validation Latency"
+      query: "histogram_quantile(0.95, rate(jwt_validation_duration_bucket[5m]))"
+      type: "graph"
+      unit: "seconds"
+
+    error_breakdown:
+      title: "Validation Errors by Type"
+      query: "rate(jwt_validation_errors_total[5m])"
+      type: "table"
+      group_by: ["error_code"]
+
+    cache_performance:
+      title: "Public Key Cache Performance"
+      metrics: ["cache_hit_ratio", "cache_size", "cache_latency"]
+      type: "combined"
+
+    security_events:
+      title: "JWT Security Events"
+      query: "rate(jwt_security_events_total[5m])"
+      type: "graph"
+      alerting: "Any non-zero rate"
+
+# Tracing Integration
+tracing_integration:
+  trace_context:
+    service_name: "jwt-validator"
+    operation_name: "validate_jwt"
+    tags: ["token_jti", "endpoint", "result"]
+
+  span_structure:
+    root_span: "validate_jwt"
+    child_spans:
+      - "extract_header"
+      - "verify_signature"
+      - "check_expiry"
+      - "extract_claims"
+      - "check_blacklist"
+
+  trace_sampling:
+    sample_rate: "10% for success, 100% for failures"
+    security_events: "100% sampling"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "prometheus = \"0.13\""
+      - "tracing = \"0.1\""
+      - "opentelemetry = \"0.18\""
+
+    code_example: |
+      use prometheus::{Counter, Histogram, Encoder, TextEncoder};
+      use std::time::Instant;
+      use tracing::{info, warn, error, instrument};
+
+      lazy_static::lazy_static! {
+          static ref JWT_VALIDATION_TOTAL: Counter = register_counter!(
+              "jwt_validation_total",
+              "Total JWT validation attempts"
+          ).unwrap();
+
+          static ref JWT_VALIDATION_DURATION: Histogram = register_histogram!(
+              "jwt_validation_duration",
+              "JWT validation duration",
+              vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+          ).unwrap();
+
+          static ref JWT_VALIDATION_ERRORS_TOTAL: Counter = register_counter!(
+              "jwt_validation_errors_total",
+              "JWT validation errors by type"
+          ).unwrap();
+      }
+
+      #[instrument(skip(token), fields(token_jti = %token_jti))]
+      pub async fn validate_jwt_with_observability(
+          token: &str,
+          token_jti: &str
+      ) -> Result<(), JwtValidationError> {
+          let start = Instant::now();
+          JWT_VALIDATION_TOTAL.inc();
+
+          let result = validate_jwt_internal(token).await;
+
+          let duration = start.elapsed().as_secs_f64();
+          JWT_VALIDATION_DURATION.observe(duration);
+
+          match &result {
+              Ok(_) => {
+                  info!("JWT validation successful");
+              }
+              Err(e) => {
+                  JWT_VALIDATION_ERRORS_TOTAL
+                      .with_label_values(&[&e.error_code()])
+                      .inc();
+
+                  if e.is_security_event() {
+                      warn!(error_code = %e.error_code(), "JWT security event");
+                  } else {
+                      info!(error_code = %e.error_code(), "JWT validation failed");
+                  }
+              }
+          }
+
+          result
+      }
+
+  python:
+    dependencies:
+      - "prometheus_client==0.17.0"
+      - "structlog==23.1.0"
+      - "opentelemetry-distro==0.40b0"
+
+    code_example: |
+      from prometheus_client import Counter, Histogram, generate_latest
+      import structlog
+      import time
+      from opentelemetry import trace
+
+      # Metrics
+      jwt_validation_total = Counter(
+          'jwt_validation_total',
+          'Total JWT validation attempts',
+          ['result', 'error_code']
+      )
+
+      jwt_validation_duration = Histogram(
+          'jwt_validation_duration',
+          'JWT validation duration',
+          buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
+      )
+
+      # Structured logging
+      logger = structlog.get_logger()
+
+      @trace.get_tracer(__name__).start_as_current_span("validate_jwt")
+      async def validate_jwt_with_observability(token: str, token_jti: str):
+          start_time = time.time()
+          jwt_validation_total.labels(result='attempt').inc()
+
+          try:
+              result = await validate_jwt_internal(token)
+
+              duration = time.time() - start_time
+              jwt_validation_duration.observe(duration)
+
+              logger.info(
+                  "jwt_validation_successful",
+                  token_jti=token_jti,
+                  duration_ms=duration * 1000
+              )
+
+              jwt_validation_total.labels(result='success').inc()
+              return result
+
+          except JwtValidationError as e:
+              duration = time.time() - start_time
+              jwt_validation_duration.observe(duration)
+
+              jwt_validation_total.labels(
+                  result='error',
+                  error_code=e.code
+              ).inc()
+
+              if e.is_security_event:
+                  logger.warning(
+                      "jwt_security_event",
+                      token_jti=token_jti,
+                      error_code=e.code,
+                      trace_id=trace.get_current_span().get_span_context().trace_id
+                  )
+              else:
+                  logger.info(
+                      "jwt_validation_failed",
+                      token_jti=token_jti,
+                      error_code=e.code
+                  )
+
+              raise
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Metrics collection"
+    - "Log formatting"
+    - "Alert condition evaluation"
+    - "Tracing span creation"
+
+  integration_tests:
+    - "Metrics export"
+    - "Log aggregation"
+    - "Alert triggering"
+    - "Tracing propagation"
+
+  security_tests:
+    - "Log injection prevention"
+    - "Sensitive data masking"
+    - "Audit log integrity"
+
+  performance_tests:
+    - "Metrics overhead"
+    - "Logging performance"
+    - "Tracing impact"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "jwt_validator.yml: Provides validation events"
+    - "signature_verification.yml: Provides signature events"
+    - "blacklist_check.yml: Provides blacklist events"
+  downstream:
+    - "observability.yml: Aggregates with other metrics"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All validation events captured"
+    - "Metrics properly exposed"
+    - "Logs structured and complete"
+    - "Alerts trigger on conditions"
+
+  performance:
+    - "Observability overhead <5%"
+    - "Metrics collection efficient"
+    - "Logging doesn't impact latency"
+
+  security:
+    - "No sensitive data in logs"
+    - "Security events properly captured"
+    - "Audit trail maintained"
+
+  reliability:
+    - "Metrics always available"
+    - "Logging never fails"
+    - "Tracing doesn't break validation"

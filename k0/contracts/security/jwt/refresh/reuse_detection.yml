@@ -1,0 +1,531 @@
+---
+# ADR-0037: Reuse Detection Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Reuse Detection Contract
+# Defines detection and prevention of refresh token reuse attacks
+
+contract:
+  name: reuse_detection
+  version: "1.0.0"
+  description: "Detect and prevent refresh token reuse attacks"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "1.5 days"
+
+# Refresh Token Reuse Attacks
+reuse_attack_types:
+  simple_reuse:
+    description: "Using the same refresh token multiple times"
+    detection: "Token not found on second use"
+    prevention: "Single-use tokens with rotation"
+    severity: "HIGH"
+
+  concurrent_reuse:
+    description: "Using token simultaneously from multiple clients"
+    detection: "Race condition in token consumption"
+    prevention: "Atomic token state transitions"
+    severity: "CRITICAL"
+
+  replay_attack:
+    description: "Replaying captured refresh token"
+    detection: "Token already consumed"
+    prevention: "Immediate invalidation on use"
+    severity: "CRITICAL"
+
+  family_attack:
+    description: "Using revoked family token"
+    detection: "Family revocation check"
+    prevention: "Family-based revocation"
+    severity: "HIGH"
+
+# Detection Mechanisms
+detection_mechanisms:
+  token_absence_detection:
+    description: "Detect reuse by token absence"
+    mechanism: "Token not found in store"
+    confidence: "HIGH (single-use tokens)"
+    false_positives: "LOW (normal token expiry)"
+
+  consumption_timestamp_tracking:
+    description: "Track when tokens were consumed"
+    mechanism: "Timestamp on token usage"
+    analysis: "Compare usage patterns"
+    alerting: "Suspicious timing patterns"
+
+  client_fingerprinting:
+    description: "Track client characteristics"
+    fingerprints:
+      - "IP address"
+      - "User agent"
+      - "Device fingerprint"
+      - "Geolocation"
+    anomaly_detection: "Deviation from normal patterns"
+
+  rate_based_detection:
+    description: "Detect unusual usage rates"
+    metrics:
+      - "Refresh attempts per minute"
+      - "Failed refresh attempts"
+      - "Concurrent usage attempts"
+    thresholds: "Dynamic based on user history"
+
+# Prevention Strategies
+prevention_strategies:
+  immediate_invalidation:
+    description: "Invalidate token immediately after use"
+    implementation: "Delete from storage"
+    effectiveness: "100% against reuse"
+    performance_impact: "Minimal"
+
+  atomic_operations:
+    description: "Atomic token validation and consumption"
+    implementation: "Database transactions"
+    race_condition_prevention: "Serialize concurrent access"
+    performance_impact: "Low"
+
+  family_revocation:
+    description: "Revoke entire token family on suspicion"
+    triggers:
+      - "Reuse attempt detected"
+      - "Suspicious activity"
+      - "Security incident"
+    scope: "All active tokens in family"
+    recovery: "Require new login"
+
+  progressive_delays:
+    description: "Increasing delays on suspicious activity"
+    implementation: "Exponential backoff"
+    user_impact: "Gradual performance degradation"
+    reset: "On successful legitimate use"
+
+# Alerting and Response
+alerting_response:
+  security_events:
+    reuse_attempt:
+      severity: "CRITICAL"
+      alerting: "Immediate security alert"
+      response: "Family revocation, account lockout consideration"
+      logging: "Full context with trace_id"
+
+    concurrent_usage:
+      severity: "HIGH"
+      alerting: "Immediate alert"
+      response: "Family revocation"
+      logging: "Client information and timing"
+
+    suspicious_pattern:
+      severity: "MEDIUM"
+      alerting: "Threshold-based alerting"
+      response: "Increased monitoring"
+      logging: "Pattern analysis"
+
+  automated_responses:
+    family_revocation:
+      trigger: "Reuse detection"
+      action: "Revoke all family tokens"
+      notification: "User notification (configurable)"
+      cooldown: "Prevent immediate re-login"
+
+    account_lockout:
+      trigger: "Multiple reuse attempts"
+      threshold: "3 attempts in 5 minutes"
+      duration: "15 minutes"
+      notification: "Security alert to user"
+
+    ip_blocking:
+      trigger: "Reuse from suspicious IP"
+      duration: "1 hour"
+      scope: "IP-based blocking"
+      monitoring: "Block effectiveness"
+
+# Monitoring and Metrics
+monitoring_metrics:
+  reuse_detection_metrics:
+    reuse_attempts_total:
+      type: "Counter"
+      description: "Total reuse attempts detected"
+      labels: ["attack_type", "user_id", "severity"]
+      alerting: "Any non-zero value"
+
+    concurrent_usage_events:
+      type: "Counter"
+      description: "Concurrent usage detection events"
+      labels: ["resolution", "user_id"]
+      alerting: "High frequency"
+
+    family_revocations_total:
+      type: "Counter"
+      description: "Family revocations due to reuse"
+      labels: ["trigger", "user_count"]
+      alerting: "Rate monitoring"
+
+    token_consumption_rate:
+      type: "Histogram"
+      description: "Time between token issuance and consumption"
+      buckets: [60, 300, 900, 3600, 86400]  # seconds
+      analysis: "Anomaly detection"
+
+  security_health_metrics:
+    false_positive_rate:
+      type: "Gauge"
+      description: "Rate of false positive detections"
+      target: "<0.01"
+      monitoring: "Trend analysis"
+
+    detection_coverage:
+      type: "Gauge"
+      description: "Percentage of attacks detected"
+      target: ">99%"
+      monitoring: "Regular assessment"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "chrono = \"0.4\""
+      - "prometheus = \"0.13\""
+
+    code_example: |
+      use prometheus::{Counter, Histogram};
+      use std::collections::HashMap;
+      use tokio::sync::RwLock;
+
+      lazy_static::lazy_static! {
+          static ref REUSE_ATTEMPTS_TOTAL: Counter = register_counter!(
+              "reuse_attempts_total",
+              "Total reuse attempts detected"
+          ).unwrap();
+
+          static ref CONCURRENT_USAGE_EVENTS: Counter = register_counter!(
+              "concurrent_usage_events_total",
+              "Concurrent usage detection events"
+          ).unwrap();
+      }
+
+      #[derive(Debug)]
+      pub enum ReuseAttackType {
+          SimpleReuse,
+          ConcurrentUsage,
+          ReplayAttack,
+          FamilyAttack,
+      }
+
+      #[derive(Debug)]
+      pub struct ReuseDetectionResult {
+          pub attack_detected: bool,
+          pub attack_type: Option<ReuseAttackType>,
+          pub confidence: f64,
+          pub should_revoke_family: bool,
+      }
+
+      pub struct ReuseDetector {
+          token_store: Arc<dyn RefreshTokenStore>,
+          family_revocator: Arc<dyn FamilyRevocator>,
+          suspicious_activity: RwLock<HashMap<String, Vec<i64>>>, // user_id -> timestamps
+      }
+
+      impl ReuseDetector {
+          pub async fn detect_reuse(
+              &self,
+              refresh_token: &str,
+              user_id: &str,
+              client_info: &ClientInfo,
+          ) -> ReuseDetectionResult {
+              // Check if token exists (simple reuse detection)
+              let token_exists = self.token_store
+                  .token_exists(refresh_token)
+                  .await;
+
+              if !token_exists {
+                  REUSE_ATTEMPTS_TOTAL
+                      .with_label_values(&["simple_reuse", user_id, "high"])
+                      .inc();
+
+                  return ReuseDetectionResult {
+                      attack_detected: true,
+                      attack_type: Some(ReuseAttackType::SimpleReuse),
+                      confidence: 1.0,
+                      should_revoke_family: true,
+                  };
+              }
+
+              // Check for concurrent usage patterns
+              let concurrent = self.detect_concurrent_usage(user_id, client_info).await;
+              if concurrent {
+                  CONCURRENT_USAGE_EVENTS
+                      .with_label_values(&["revoked", user_id])
+                      .inc();
+
+                  return ReuseDetectionResult {
+                      attack_detected: true,
+                      attack_type: Some(ReuseAttackType::ConcurrentUsage),
+                      confidence: 0.9,
+                      should_revoke_family: true,
+                  };
+              }
+
+              // Check client fingerprint anomalies
+              let fingerprint_anomaly = self.detect_fingerprint_anomaly(user_id, client_info).await;
+              if fingerprint_anomaly {
+                  return ReuseDetectionResult {
+                      attack_detected: true,
+                      attack_type: Some(ReuseAttackType::ReplayAttack),
+                      confidence: 0.7,
+                      should_revoke_family: false, // Monitor first
+                  };
+              }
+
+              ReuseDetectionResult {
+                  attack_detected: false,
+                  attack_type: None,
+                  confidence: 0.0,
+                  should_revoke_family: false,
+              }
+          }
+
+          async fn detect_concurrent_usage(&self, user_id: &str, client_info: &ClientInfo) -> bool {
+              // Simplified concurrent usage detection
+              // In practice, you'd track active refresh operations
+              false
+          }
+
+          async fn detect_fingerprint_anomaly(&self, user_id: &str, client_info: &ClientInfo) -> bool {
+              // Check if client fingerprint deviates from user's normal pattern
+              // This would involve storing and comparing historical fingerprints
+              false
+          }
+
+          pub async fn handle_reuse_detection(
+              &self,
+              result: &ReuseDetectionResult,
+              refresh_token: &str,
+              user_id: &str,
+          ) {
+              if result.attack_detected {
+                  // Log security event
+                  tracing::warn!(
+                      user_id = %user_id,
+                      attack_type = ?result.attack_type,
+                      confidence = %result.confidence,
+                      "Refresh token reuse detected"
+                  );
+
+                  // Revoke family if recommended
+                  if result.should_revoke_family {
+                      if let Ok(metadata) = self.token_store.retrieve_token(refresh_token).await {
+                          if let Some(meta) = metadata {
+                              self.family_revocator
+                                  .revoke_family(&meta.family_id)
+                                  .await;
+                          }
+                      }
+                  }
+              }
+          }
+      }
+
+  python:
+    dependencies:
+      - "prometheus_client==0.17.0"
+      - "pydantic==2.0.0"
+      - "asyncio"
+
+    code_example: |
+      from prometheus_client import Counter
+      from enum import Enum
+      from typing import Optional, Dict, List
+      import time
+      import asyncio
+
+      # Metrics
+      reuse_attempts_total = Counter(
+          'reuse_attempts_total',
+          'Total reuse attempts detected',
+          ['attack_type', 'user_id', 'severity']
+      )
+
+      concurrent_usage_events = Counter(
+          'concurrent_usage_events_total',
+          'Concurrent usage detection events',
+          ['resolution', 'user_id']
+      )
+
+      class ReuseAttackType(str, Enum):
+          SIMPLE_REUSE = "simple_reuse"
+          CONCURRENT_USAGE = "concurrent_usage"
+          REPLAY_ATTACK = "replay_attack"
+          FAMILY_ATTACK = "family_attack"
+
+      class ReuseDetectionResult:
+          def __init__(
+              self,
+              attack_detected: bool,
+              attack_type: Optional[ReuseAttackType],
+              confidence: float,
+              should_revoke_family: bool
+          ):
+              self.attack_detected = attack_detected
+              self.attack_type = attack_type
+              self.confidence = confidence
+              self.should_revoke_family = should_revoke_family
+
+      class ReuseDetector:
+          def __init__(self, token_store, family_revocator):
+              self.token_store = token_store
+              self.family_revocator = family_revocator
+              self.suspicious_activity: Dict[str, List[float]] = {}
+
+          async def detect_reuse(
+              self,
+              refresh_token: str,
+              user_id: str,
+              client_info
+          ) -> ReuseDetectionResult:
+              """Detect potential refresh token reuse attacks"""
+              # Check if token exists
+              token_exists = await self._token_exists(refresh_token)
+
+              if not token_exists:
+                  reuse_attempts_total.labels(
+                      attack_type="simple_reuse",
+                      user_id=user_id,
+                      severity="high"
+                  ).inc()
+
+                  return ReuseDetectionResult(
+                      attack_detected=True,
+                      attack_type=ReuseAttackType.SIMPLE_REUSE,
+                      confidence=1.0,
+                      should_revoke_family=True
+                  )
+
+              # Check for concurrent usage
+              concurrent = await self._detect_concurrent_usage(user_id, client_info)
+              if concurrent:
+                  concurrent_usage_events.labels(
+                      resolution="revoked",
+                      user_id=user_id
+                  ).inc()
+
+                  return ReuseDetectionResult(
+                      attack_detected=True,
+                      attack_type=ReuseAttackType.CONCURRENT_USAGE,
+                      confidence=0.9,
+                      should_revoke_family=True
+                  )
+
+              # Check fingerprint anomalies
+              anomaly = await self._detect_fingerprint_anomaly(user_id, client_info)
+              if anomaly:
+                  return ReuseDetectionResult(
+                      attack_detected=True,
+                      attack_type=ReuseAttackType.REPLAY_ATTACK,
+                      confidence=0.7,
+                      should_revoke_family=False
+                  )
+
+              return ReuseDetectionResult(
+                  attack_detected=False,
+                  attack_type=None,
+                  confidence=0.0,
+                  should_revoke_family=False
+              )
+
+          async def _token_exists(self, refresh_token: str) -> bool:
+              """Check if token exists in store"""
+              metadata = await self.token_store.retrieve_token(refresh_token)
+              return metadata is not None
+
+          async def _detect_concurrent_usage(self, user_id: str, client_info) -> bool:
+              """Detect concurrent usage patterns"""
+              # Simplified implementation
+              return False
+
+          async def _detect_fingerprint_anomaly(self, user_id: str, client_info) -> bool:
+              """Detect client fingerprint anomalies"""
+              # Simplified implementation
+              return False
+
+          async def handle_reuse_detection(
+              self,
+              result: ReuseDetectionResult,
+              refresh_token: str,
+              user_id: str
+          ):
+              """Handle detected reuse attack"""
+              if result.attack_detected:
+                  import logging
+                  logging.warning(
+                      f"Refresh token reuse detected: user={user_id}, "
+                      f"type={result.attack_type}, confidence={result.confidence}"
+                  )
+
+                  if result.should_revoke_family:
+                      # Get token family and revoke
+                      metadata = await self.token_store.retrieve_token(refresh_token)
+                      if metadata:
+                          await self.family_revocator.revoke_family(metadata.family_id)
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Reuse detection logic"
+    - "Attack type classification"
+    - "Confidence scoring"
+    - "Family revocation decisions"
+
+  integration_tests:
+    - "Full reuse detection workflow"
+    - "Token store integration"
+    - "Family revocation integration"
+    - "Metrics collection"
+
+  security_tests:
+    - "False positive rates"
+    - "Detection accuracy"
+    - "Attack simulation"
+    - "Evasion attempts"
+
+  performance_tests:
+    - "Detection latency"
+    - "Concurrent detection"
+    - "Metrics overhead"
+    - "Memory usage"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "refresh_token_store.yml: Provides token existence checks"
+    - "single_use_rotation.yml: Provides consumption tracking"
+    - "token_family_revocation.yml: Provides family revocation"
+  downstream:
+    - "refresh_endpoint.yml: Uses reuse detection"
+    - "observability.yml: Monitors detection metrics"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Reuse attacks detected accurately"
+    - "False positive rate minimized"
+    - "Family revocation triggered appropriately"
+    - "Security events logged completely"
+
+  performance:
+    - "Detection adds minimal latency"
+    - "High throughput maintained"
+    - "Metrics collection efficient"
+
+  security:
+    - "Attack detection comprehensive"
+    - "Response actions effective"
+    - "No bypass opportunities"
+
+  reliability:
+    - "Consistent detection results"
+    - "Graceful error handling"
+    - "Monitoring and alerting"

@@ -1,0 +1,358 @@
+---
+# ADR-0036: Band Detection Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Band Detection Contract
+# Defines privacy band detection and classification logic
+
+contract:
+  name: band_detection
+  version: "1.0.0"
+  description: "Privacy band detection and classification for SessionState sections"
+  parent_adr: "ADR-0036"
+  priority: "HIGH"
+  effort: "2 weeks"
+
+# Privacy Band Model
+privacy_band_model:
+  red_band:
+    description: "Highly sensitive data requiring end-to-end encryption"
+    sensitivity_level: "CRITICAL"
+    encryption_required: true
+    access_control: "Owner only with explicit consent"
+    retention_policy: "Encrypted at rest, decrypted only for authorized access"
+    examples: ["beliefs", "scoreboard", "control state"]
+
+  amber_band:
+    description: "Moderately sensitive data with conditional encryption"
+    sensitivity_level: "HIGH"
+    encryption_required: false
+    access_control: "Space members with appropriate permissions"
+    retention_policy: "May be encrypted based on policy"
+    examples: ["metadata", "session information"]
+
+  green_band:
+    description: "Non-sensitive data, no encryption required"
+    sensitivity_level: "LOW"
+    encryption_required: false
+    access_control: "Broad access allowed"
+    retention_policy: "Standard retention policies"
+    examples: ["telemetry", "analytics", "public data"]
+
+# Detection Rules
+detection_rules:
+  section_based_detection:
+    beliefs:
+      band: "RED"
+      reason: "Contains user's mental models and internal state"
+      confidence: 1.0
+      automatic: true
+
+    scoreboard:
+      band: "RED"
+      reason: "Performance metrics and evaluation data"
+      confidence: 1.0
+      automatic: true
+
+    control:
+      band: "RED"
+      reason: "Decision logic and control state"
+      confidence: 1.0
+      automatic: true
+
+    metadata:
+      band: "AMBER"
+      reason: "Session metadata with some user identification"
+      confidence: 0.9
+      conditional: "Based on space policy"
+
+    telemetry:
+      band: "GREEN"
+      reason: "Usage analytics and performance telemetry"
+      confidence: 1.0
+      automatic: true
+
+  content_based_detection:
+    personal_identifiers:
+      patterns: ["email", "phone", "address", "name"]
+      band: "AMBER"
+      confidence: 0.8
+      context_dependent: true
+
+    sensitive_keywords:
+      patterns: ["password", "secret", "private", "confidential"]
+      band: "RED"
+      confidence: 0.95
+      automatic: true
+
+    health_data:
+      patterns: ["medical", "health", "diagnosis", "treatment"]
+      band: "RED"
+      confidence: 1.0
+      compliance: "HIPAA requirements"
+
+    financial_data:
+      patterns: ["payment", "credit", "bank", "transaction"]
+      band: "RED"
+      confidence: 0.9
+      compliance: "PCI DSS considerations"
+
+# Detection Engine
+detection_engine:
+  analysis_pipeline:
+    1:
+      name: "Section-based classification"
+      description: "Classify based on known section types"
+      method: "Lookup table + pattern matching"
+      confidence_threshold: 0.8
+
+    2:
+      name: "Content analysis"
+      description: "Analyze content for sensitive patterns"
+      method: "Regex patterns + keyword detection"
+      performance: "Streaming analysis to avoid full content scan"
+
+    3:
+      name: "Context evaluation"
+      description: "Consider user preferences and space policies"
+      method: "Policy lookup + user consent check"
+      dynamic: "Can override automatic classifications"
+
+    4:
+      name: "Confidence scoring"
+      description: "Calculate confidence in classification"
+      method: "Weighted combination of detection methods"
+      threshold: "0.7 minimum for automatic encryption"
+
+  detection_modes:
+    automatic:
+      description: "Fully automatic classification"
+      use_case: "High-confidence detections"
+      override_allowed: false
+
+    assisted:
+      description: "Human-in-the-loop for uncertain cases"
+      use_case: "Low-confidence detections"
+      user_prompt: "Confirm classification before encryption"
+
+    manual:
+      description: "User-specified classifications"
+      use_case: "Override automatic detection"
+      persistence: "User preferences stored and respected"
+
+# Classification API
+classification_api:
+  classify_section:
+    function: "classify_section(section_path: str, content_sample: bytes, context: ClassificationContext) -> ClassificationResult"
+    description: "Classify a SessionState section"
+    parameters:
+      section_path: "Path to the section (e.g., 'beliefs.core')"
+      content_sample: "Sample of section content (first 1KB)"
+      context: "Classification context (user, space, operation)"
+    returns:
+      band: "RED/AMBER/GREEN"
+      confidence: "0.0-1.0 confidence score"
+      reasons: "List of classification reasons"
+      recommended_actions: "Suggested encryption actions"
+
+  classify_sessionstate:
+    function: "classify_sessionstate(sessionstate: SessionState, context: ClassificationContext) -> SessionClassification"
+    description: "Classify entire SessionState"
+    parameters:
+      sessionstate: "Complete SessionState object"
+      context: "Classification context"
+    returns:
+      section_classifications: "Map of section -> classification"
+      overall_band: "Highest sensitivity band in SessionState"
+      encryption_required: "Whether any encryption needed"
+      red_sections: "List of sections requiring encryption"
+
+  validate_classification:
+    function: "validate_classification(classification: ClassificationResult) -> ValidationResult"
+    description: "Validate classification result"
+    checks: ["confidence threshold", "reason completeness", "policy compliance"]
+    returns: "Validation status and any issues"
+
+# Performance Requirements
+performance_requirements:
+  classification_latency:
+    single_section: "< 10ms"
+    full_sessionstate: "< 50ms"
+    content_analysis: "< 5ms per KB"
+
+  throughput:
+    sections_per_second: "1000"
+    sessionstates_per_second: "100"
+    concurrent_classifications: "Thread-safe"
+
+  resource_usage:
+    memory_per_classification: "< 1MB"
+    cpu_overhead: "< 5% during analysis"
+    false_positive_rate: "< 1%"
+
+# Accuracy and Calibration
+accuracy_calibration:
+  training_data:
+    source: "Labeled SessionState samples"
+    size: "10,000+ samples across all bands"
+    update_frequency: "Monthly model updates"
+
+  accuracy_metrics:
+    precision_red: "> 0.95"
+    recall_red: "> 0.98"
+    precision_amber: "> 0.85"
+    recall_amber: "> 0.90"
+
+  calibration_process:
+    regular_audits: "Monthly accuracy audits"
+    user_feedback: "Incorporate user corrections"
+    model_updates: "Continuous learning from corrections"
+    drift_detection: "Detect accuracy degradation"
+
+# Policy Integration
+policy_integration:
+  space_policies:
+    encryption_policy: "Space-level E2EE policy"
+    band_overrides: "Space-specific band classifications"
+    compliance_requirements: "GDPR/HIPAA/SOC2 requirements"
+
+  user_preferences:
+    e2ee_opt_out: "User can opt out of E2EE"
+    band_customization: "User-defined band classifications"
+    consent_management: "Granular consent for data processing"
+
+  global_policies:
+    data_residency: "Geographic data handling requirements"
+    retention_policies: "Data retention and deletion policies"
+    access_controls: "Organization-wide access policies"
+
+# Error Handling
+error_handling:
+  classification_failure:
+    error_code: "CLASSIFICATION_FAILED"
+    description: "Cannot classify section content"
+    recovery: "Default to higher security band"
+    fallback: "AMBER band as conservative default"
+
+  content_unavailable:
+    error_code: "CONTENT_UNAVAILABLE"
+    description: "Cannot access section content for analysis"
+    recovery: "Use section metadata only"
+    fallback: "Classify based on section path only"
+
+  policy_conflict:
+    error_code: "POLICY_CONFLICT"
+    description: "Conflicting policy requirements"
+    recovery: "Escalate to policy administrator"
+    resolution: "Manual policy review required"
+
+  performance_degradation:
+    error_code: "PERFORMANCE_DEGRADATION"
+    description: "Classification taking too long"
+    recovery: "Simplify analysis, skip content analysis"
+    fallback: "Section-based classification only"
+
+# Monitoring and Metrics
+monitoring_metrics:
+  classification_metrics:
+    metric: "band_detection_classifications_total"
+    labels: ["band", "method", "confidence_range"]
+    description: "Classification operation counts"
+
+  accuracy_metrics:
+    metric: "band_detection_accuracy"
+    labels: ["band", "metric_type"]
+    description: "Classification accuracy metrics"
+
+  performance_metrics:
+    metric: "band_detection_duration_seconds"
+    labels: ["operation_type"]
+    description: "Classification operation timing"
+
+  error_metrics:
+    metric: "band_detection_errors_total"
+    labels: ["error_type"]
+    description: "Classification error counts"
+
+# Implementation Interface
+implementation:
+  rust:
+    struct: "BandDetector"
+    functions:
+      - "new(config: BandDetectionConfig) -> Result<Self, DetectionError>"
+      - "classify_section(&self, section_path: &str, content_sample: &[u8], context: &ClassificationContext) -> Result<ClassificationResult, DetectionError>"
+      - "classify_sessionstate(&self, sessionstate: &SessionState, context: &ClassificationContext) -> Result<SessionClassification, DetectionError>"
+      - "validate_classification(&self, classification: &ClassificationResult) -> ValidationResult"
+
+  python:
+    class: "BandDetector"
+    methods:
+      - "__init__(self, config: dict)"
+      - "classify_section(self, section_path: str, content_sample: bytes, context: dict) -> dict"
+      - "classify_sessionstate(self, sessionstate: dict, context: dict) -> dict"
+      - "validate_classification(self, classification: dict) -> dict"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Section-based classification accuracy"
+    - "Content pattern detection"
+    - "Confidence scoring correctness"
+    - "Policy integration"
+    - "Error handling"
+
+  integration_tests:
+    - "Full SessionState classification"
+    - "Policy override handling"
+    - "User preference integration"
+    - "Performance under load"
+
+  accuracy_tests:
+    - "Classification accuracy vs labeled data"
+    - "False positive/negative rates"
+    - "Confidence calibration"
+    - "Edge case handling"
+
+  performance_tests:
+    - "Classification latency"
+    - "Throughput under load"
+    - "Memory usage"
+    - "Concurrent classification"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "None (core detection logic)"
+  downstream:
+    - "e2ee_manager.yml: Uses band detection results"
+    - "section_selection.yml: Uses classifications for selection"
+    - "encryption_bypass.yml: Uses classifications for bypass decisions"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Accurate band classification (> 95% precision/recall)"
+    - "Fast classification (< 10ms per section)"
+    - "Policy integration works correctly"
+    - "User preferences respected"
+
+  accuracy:
+    - "RED band detection > 98% recall"
+    - "AMBER band detection > 90% recall"
+    - "GREEN band detection > 95% precision"
+    - "Low false positive rate (< 1%)"
+
+  performance:
+    - "Classification within latency budgets"
+    - "High throughput for SessionState processing"
+    - "Efficient resource usage"
+    - "Scalable for concurrent operations"
+
+  reliability:
+    - "Robust error handling"
+    - "Graceful degradation on failures"
+    - "Monitoring and alerting effective"
+    - "Continuous accuracy calibration"

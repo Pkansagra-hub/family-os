@@ -1,0 +1,324 @@
+---
+# ADR-0037: Claims Structure Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Claims Structure Contract
+# Defines JWT claims structure with standard and custom fields
+
+contract:
+  name: claims_structure
+  version: "1.0.0"
+  description: "JWT claims structure with standard RFC 7519 fields and custom K1 fields"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "3 days"
+
+# Claims Structure
+claims_structure:
+  struct_name: "Claims"
+  description: "JWT claims payload structure"
+
+  standard_claims:
+    - name: "iss"
+      type: "String"
+      description: "Issuer - identifies the principal that issued the JWT"
+      required: true
+      example: "k1.familyos.com"
+      validation: "Must match configured issuer"
+
+    - name: "sub"
+      type: "String"
+      description: "Subject - identifies the principal that is the subject of the JWT"
+      required: true
+      example: "user_12345"
+      validation: "Must be valid user ID, no PII exposure"
+
+    - name: "aud"
+      type: "String"
+      description: "Audience - identifies the recipients that the JWT is intended for"
+      required: true
+      example: "k1-api"
+      validation: "Must match API audience"
+
+    - name: "exp"
+      type: "u64"
+      description: "Expiration Time - identifies the expiration time after which the JWT must not be accepted"
+      required: true
+      example: 1638360000
+      validation: "Must be future timestamp, checked with 5-minute skew tolerance"
+
+    - name: "nbf"
+      type: "u64"
+      description: "Not Before - identifies the time before which the JWT must not be accepted"
+      required: false
+      example: 1638350000
+      validation: "If present, must be past timestamp"
+
+    - name: "iat"
+      type: "u64"
+      description: "Issued At - identifies the time at which the JWT was issued"
+      required: true
+      example: 1638350000
+      validation: "Must be reasonable past timestamp"
+
+    - name: "jti"
+      type: "String"
+      description: "JWT ID - provides a unique identifier for the JWT"
+      required: true
+      example: "jwt_123e4567-e89b-12d3-a456-426614174000"
+      validation: "Must be unique UUID v4, used for token revocation"
+
+  custom_claims:
+    - name: "space_id"
+      type: "String"
+      description: "K1 space/workspace identifier for multi-tenancy"
+      required: true
+      example: "space_abc123"
+      validation: "Must be valid space ID, enforces tenant isolation"
+
+    - name: "roles"
+      type: "Vec<String>"
+      description: "User roles for role-based access control"
+      required: true
+      example: '["user", "operator"]'
+      validation: "Must contain at least one role, valid role names only"
+
+    - name: "privacy_band"
+      type: "String"
+      description: "User's privacy band (RED, AMBER, GREEN)"
+      required: true
+      example: "AMBER"
+      validation: "Must be valid privacy band enum value"
+
+    - name: "capabilities"
+      type: "Vec<String>"
+      description: "Specific capabilities granted to user"
+      required: true
+      example: '["TOOL_CALL", "SESSION_READ", "AGENT_MANAGE"]'
+      validation: "Must contain valid capability names"
+
+    - name: "token_type"
+      type: "String"
+      description: "Type of token (access or refresh)"
+      required: true
+      example: "access"
+      validation: "Must be 'access' or 'refresh'"
+
+  pii_protection:
+    no_pii_in_claims:
+      - "No email addresses in claims"
+      - "No phone numbers in claims"
+      - "No names in claims (use user_id only)"
+      - "No location data in claims"
+      - "No sensitive identifiers"
+
+    user_id_anonymity:
+      - "user_id is internal identifier only"
+      - "No correlation to external user data"
+      - "UUID format prevents enumeration attacks"
+
+  access_token_claims:
+    description: "Claims included in access tokens"
+    includes:
+      - "All standard claims"
+      - "All custom claims"
+    exclusions:
+      - "No sensitive refresh-specific data"
+    expiry: "1 hour from issuance"
+
+  refresh_token_claims:
+    description: "Minimal claims included in refresh tokens"
+    includes:
+      - "iss, sub, aud, exp, iat, jti"
+      - "token_type = 'refresh'"
+    exclusions:
+      - "No roles, capabilities, privacy_band"
+      - "No space_id (inferred from user)"
+    expiry: "7 days from issuance"
+    rationale: "Minimal claims reduce token size and exposure"
+
+# Claims Validation
+claims_validation:
+  required_fields:
+    access_token:
+      - "iss, sub, aud, exp, iat, jti"
+      - "space_id, roles, privacy_band, capabilities"
+      - "token_type"
+    refresh_token:
+      - "iss, sub, aud, exp, iat, jti"
+      - "token_type"
+
+  field_validation_rules:
+    iss:
+      - "Must match configured issuer"
+      - "Case-sensitive string match"
+    sub:
+      - "Must be valid user ID format"
+      - "No empty strings"
+    aud:
+      - "Must match API audience"
+      - "Case-sensitive string match"
+    exp:
+      - "Must be future timestamp"
+      - "5-minute clock skew tolerance"
+    jti:
+      - "Must be valid UUID v4 format"
+      - "Must be unique across all tokens"
+    space_id:
+      - "Must be valid space identifier"
+      - "Enforces tenant boundaries"
+    roles:
+      - "Must contain valid role names"
+      - "At least one role required"
+    privacy_band:
+      - "Must be RED, AMBER, or GREEN"
+      - "Case-sensitive"
+    capabilities:
+      - "Must contain valid capability names"
+      - "Can be empty for minimal access"
+
+# JSON Serialization
+json_serialization:
+  format: "Compact JSON without whitespace"
+  encoding: "UTF-8"
+  base64url_encoding: "Payload encoded with Base64URL (RFC 4648)"
+  field_ordering: "Consistent ordering for signature verification"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "jsonwebtoken = \"8.3\""
+      - "uuid = { version = \"1.0\", features = [\"v4\"] }"
+
+    code_example: |
+      #[derive(Debug, Serialize, Deserialize)]
+      pub struct Claims {
+          // Standard claims
+          pub iss: String,
+          pub sub: String,
+          pub aud: String,
+          pub exp: u64,
+          pub iat: u64,
+          pub jti: String,
+
+          // Custom claims
+          pub space_id: String,
+          pub roles: Vec<String>,
+          pub privacy_band: String,
+          pub capabilities: Vec<String>,
+          pub token_type: String,
+      }
+
+      impl Claims {
+          pub fn new_access_token(user_id: &str, space_id: &str, roles: Vec<String>, privacy_band: &str, capabilities: Vec<String>) -> Self {
+              // Implementation
+          }
+
+          pub fn new_refresh_token(user_id: &str) -> Self {
+              // Implementation
+          }
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+      - "PyJWT==2.8.0"
+
+    code_example: |
+      from pydantic import BaseModel
+      from typing import List
+
+      class Claims(BaseModel):
+          # Standard claims
+          iss: str
+          sub: str
+          aud: str
+          exp: int
+          iat: int
+          jti: str
+
+          # Custom claims
+          space_id: str
+          roles: List[str]
+          privacy_band: str
+          capabilities: List[str]
+          token_type: str
+
+          @classmethod
+          def new_access_token(cls, user_id: str, space_id: str, roles: List[str], privacy_band: str, capabilities: List[str]) -> 'Claims':
+              # Implementation
+              pass
+
+          @classmethod
+          def new_refresh_token(cls, user_id: str) -> 'Claims':
+              # Implementation
+              pass
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Claims creation with valid parameters"
+    - "Claims validation for all fields"
+    - "JSON serialization/deserialization"
+    - "Field validation rules"
+    - "PII protection verification"
+
+  integration_tests:
+    - "Claims in JWT token flow"
+    - "Token validation with claims"
+    - "Multi-tenant space isolation"
+    - "Role-based access control"
+
+  validation_tests:
+    - "Required field presence"
+    - "Field format validation"
+    - "Timestamp validation"
+    - "UUID format validation"
+    - "Enum value validation"
+
+  security_tests:
+    - "No PII leakage in claims"
+    - "Token entropy validation"
+    - "Claim tampering detection"
+    - "Replay attack prevention"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "None - foundational claims structure"
+  downstream:
+    - "access_token_issuance.yml: Uses access token claims"
+    - "refresh_token_issuance.yml: Uses refresh token claims"
+    - "claims_extraction.yml: Parses claims from tokens"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Claims structure correctly defined"
+    - "JSON serialization works properly"
+    - "Field validation works for all cases"
+    - "PII protection maintained"
+    - "Multi-tenant isolation enforced"
+
+  security:
+    - "No sensitive data in claims"
+    - "Proper field validation"
+    - "Unique token identifiers"
+    - "Tamper-evident structure"
+
+  compliance:
+    - "JWT RFC 7519 compliance"
+    - "No PII exposure in tokens"
+    - "Proper audience validation"
+    - "Secure token lifetimes"
+
+  performance:
+    - "Fast JSON serialization/deserialization"
+    - "Minimal token size"
+    - "Efficient validation"
+    - "Low memory overhead"

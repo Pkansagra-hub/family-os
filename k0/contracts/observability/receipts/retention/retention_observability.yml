@@ -1,0 +1,449 @@
+classes:
+  - name: RetentionObservability
+    description: Observability and metrics for retention policy execution and auto-deletion
+    research: ADR-0038c (retention policies), Prometheus monitoring, GDPR compliance monitoring
+    performance_budget: <0.1ms per metric emission (P95)
+    reliability_properties:
+      - metric_accuracy: All retention metrics accurately reflect policy execution
+      - compliance_tracking: GDPR/HIPAA compliance events fully tracked
+      - alerting_coverage: Retention policy violations trigger alerts within 1 second
+    methods:
+      - name: record_retention_execution
+        description: Record retention policy execution metrics and traces
+        parameters:
+          - name: execution_id
+            type: string
+            description: Unique retention execution identifier
+          - name: duration_ms
+            type: float
+            description: Execution duration in milliseconds
+          - name: receipts_deleted
+            type: int
+            description: Number of receipts deleted
+          - name: privacy_band
+            type: string
+            description: Privacy band being processed
+          - name: dry_run
+            type: bool
+            description: Whether this was a dry run execution
+          - name: trace_id
+            type: string
+            description: Cognitive trace ID
+        returns:
+          type: void
+        implementation:
+          rust: |
+            use prometheus::{Counter, Histogram, Gauge, Encoder, TextEncoder};
+            use opentelemetry::trace::{Tracer, Span, Status};
+            use std::collections::HashMap;
+
+            lazy_static! {
+                static ref RETENTION_EXECUTIONS_TOTAL: Counter = register_counter!(
+                    "retention_executions_total",
+                    "Total retention policy executions",
+                    &["privacy_band", "dry_run"]
+                ).unwrap();
+
+                static ref RETENTION_EXECUTION_LATENCY_MS: Histogram = register_histogram!(
+                    "retention_execution_latency_ms",
+                    "Retention execution latency in milliseconds",
+                    &["privacy_band"],
+                    vec![100.0, 500.0, 1000.0, 5000.0, 10000.0]
+                ).unwrap();
+
+                static ref RECEIPTS_DELETED_TOTAL: Counter = register_counter!(
+                    "receipts_deleted_total",
+                    "Total receipts deleted by retention policies",
+                    &["privacy_band", "deletion_reason"]
+                ).unwrap();
+
+                static ref RETENTION_ELIGIBLE_RECEIPTS: Gauge = register_gauge!(
+                    "retention_eligible_receipts",
+                    "Number of receipts eligible for deletion",
+                    &["privacy_band"]
+                ).unwrap();
+
+                static ref RETENTION_POLICY_VIOLATIONS_TOTAL: Counter = register_counter!(
+                    "retention_policy_violations_total",
+                    "Total retention policy violations detected",
+                    &["violation_type"]
+                ).unwrap();
+
+                static ref RETENTION_COMPLIANCE_CHECKS_TOTAL: Counter = register_counter!(
+                    "retention_compliance_checks_total",
+                    "Total retention compliance checks performed",
+                    &["check_type", "result"]
+                ).unwrap();
+            }
+
+            impl RetentionObservability {
+                pub fn record_retention_execution(
+                    &self,
+                    execution_id: &str,
+                    duration_ms: f64,
+                    receipts_deleted: u64,
+                    privacy_band: &str,
+                    dry_run: bool,
+                    trace_id: &str,
+                ) {
+                    // Prometheus metrics
+                    let dry_run_str = if dry_run { "true" } else { "false" };
+                    RETENTION_EXECUTIONS_TOTAL
+                        .with_label_values(&[privacy_band, dry_run_str])
+                        .inc();
+
+                    RETENTION_EXECUTION_LATENCY_MS
+                        .with_label_values(&[privacy_band])
+                        .observe(duration_ms);
+
+                    if !dry_run && receipts_deleted > 0 {
+                        RECEIPTS_DELETED_TOTAL
+                            .with_label_values(&[privacy_band, "RETENTION_POLICY_EXPIRED"])
+                            .inc_by(receipts_deleted);
+                    }
+
+                    // OpenTelemetry tracing
+                    let tracer = opentelemetry::global::tracer("retention_policy");
+                    let mut span = tracer
+                        .span_builder(format!("retention.execute.{}", privacy_band.to_lowercase()))
+                        .with_trace_id(trace_id.parse().unwrap_or_default())
+                        .start(&tracer);
+
+                    span.set_attribute("execution.id", execution_id.to_string());
+                    span.set_attribute("privacy.band", privacy_band.to_string());
+                    span.set_attribute("duration_ms", duration_ms);
+                    span.set_attribute("receipts_deleted", receipts_deleted as i64);
+                    span.set_attribute("dry_run", dry_run);
+
+                    // Performance budget validation
+                    if duration_ms > 5000.0 && !dry_run {  // 5 second budget
+                        span.set_attribute("budget.violation", true);
+                        span.add_event(
+                            "Performance budget exceeded",
+                            vec![
+                                KeyValue::new("budget_ms", 5000.0),
+                                KeyValue::new("actual_ms", duration_ms),
+                            ]
+                        );
+                    }
+
+                    // Compliance validation
+                    if receipts_deleted > 10000 && !dry_run {
+                        span.add_event(
+                            "High volume deletion",
+                            vec![KeyValue::new("receipts_deleted", receipts_deleted as i64)]
+                        );
+                    }
+
+                    span.end();
+                }
+
+                pub fn record_deletion_audit(
+                    &self,
+                    receipt_id: &str,
+                    user_id: &str,
+                    privacy_band: &str,
+                    deletion_reason: &str,
+                    trace_id: &str,
+                ) {
+                    // Record individual deletion for audit trail
+                    RECEIPTS_DELETED_TOTAL
+                        .with_label_values(&[privacy_band, deletion_reason])
+                        .inc();
+
+                    let tracer = opentelemetry::global::tracer("retention_policy");
+                    let mut span = tracer
+                        .span_builder("retention.delete.receipt")
+                        .with_trace_id(trace_id.parse().unwrap_or_default())
+                        .start(&tracer);
+
+                    span.set_attribute("receipt.id", receipt_id.to_string());
+                    span.set_attribute("user.id", user_id.to_string());
+                    span.set_attribute("privacy.band", privacy_band.to_string());
+                    span.set_attribute("deletion.reason", deletion_reason.to_string());
+
+                    span.end();
+                }
+
+                pub fn update_eligible_receipts(&self, privacy_band: &str, count: i64) {
+                    RETENTION_ELIGIBLE_RECEIPTS
+                        .with_label_values(&[privacy_band])
+                        .set(count);
+                }
+
+                pub fn record_policy_violation(
+                    &self,
+                    violation_type: &str,
+                    details: &str,
+                    trace_id: &str,
+                ) {
+                    RETENTION_POLICY_VIOLATIONS_TOTAL
+                        .with_label_values(&[violation_type])
+                        .inc();
+
+                    let tracer = opentelemetry::global::tracer("retention_policy");
+                    let mut span = tracer
+                        .span_builder("retention.violation")
+                        .with_trace_id(trace_id.parse().unwrap_or_default())
+                        .start(&tracer);
+
+                    span.set_attribute("violation.type", violation_type.to_string());
+                    span.set_attribute("violation.details", details.to_string());
+                    span.set_status(Status::Error, "Retention policy violation detected");
+
+                    span.end();
+                }
+
+                pub fn record_compliance_check(
+                    &self,
+                    check_type: &str,
+                    result: &str,
+                    trace_id: &str,
+                ) {
+                    RETENTION_COMPLIANCE_CHECKS_TOTAL
+                        .with_label_values(&[check_type, result])
+                        .inc();
+
+                    let tracer = opentelemetry::global::tracer("retention_policy");
+                    let mut span = tracer
+                        .span_builder(format!("retention.compliance.{}", check_type))
+                        .with_trace_id(trace_id.parse().unwrap_or_default())
+                        .start(&tracer);
+
+                    span.set_attribute("check.type", check_type.to_string());
+                    span.set_attribute("check.result", result.to_string());
+
+                    if result == "FAILED" {
+                        span.set_status(Status::Error, "Compliance check failed");
+                    }
+
+                    span.end();
+                }
+
+                pub fn get_metrics(&self) -> String {
+                    let encoder = TextEncoder::new();
+                    let metric_families = prometheus::gather();
+                    let mut buffer = Vec::new();
+                    encoder.encode(&metric_families, &mut buffer).unwrap();
+                    String::from_utf8(buffer).unwrap()
+                }
+            }
+          python: |
+            from prometheus_client import Counter, Histogram, Gauge, generate_latest
+            from opentelemetry import trace
+            from opentelemetry.trace import Status, StatusCode
+            import time
+
+            class RetentionObservability:
+                """Observability for retention policy execution"""
+
+                def __init__(self):
+                    self.retention_executions_total = Counter(
+                        'retention_executions_total',
+                        'Total retention policy executions',
+                        ['privacy_band', 'dry_run']
+                    )
+
+                    self.retention_execution_latency_ms = Histogram(
+                        'retention_execution_latency_ms',
+                        'Retention execution latency in milliseconds',
+                        ['privacy_band'],
+                        buckets=[100.0, 500.0, 1000.0, 5000.0, 10000.0]
+                    )
+
+                    self.receipts_deleted_total = Counter(
+                        'receipts_deleted_total',
+                        'Total receipts deleted by retention policies',
+                        ['privacy_band', 'deletion_reason']
+                    )
+
+                    self.retention_eligible_receipts = Gauge(
+                        'retention_eligible_receipts',
+                        'Number of receipts eligible for deletion',
+                        ['privacy_band']
+                    )
+
+                    self.retention_policy_violations_total = Counter(
+                        'retention_policy_violations_total',
+                        'Total retention policy violations detected',
+                        ['violation_type']
+                    )
+
+                    self.retention_compliance_checks_total = Counter(
+                        'retention_compliance_checks_total',
+                        'Total retention compliance checks performed',
+                        ['check_type', 'result']
+                    )
+
+                    self.tracer = trace.get_tracer(__name__)
+
+                def record_retention_execution(
+                    self,
+                    execution_id: str,
+                    duration_ms: float,
+                    receipts_deleted: int,
+                    privacy_band: str,
+                    dry_run: bool,
+                    trace_id: str,
+                ):
+                    """Record retention policy execution metrics and traces"""
+                    dry_run_str = "true" if dry_run else "false"
+
+                    self.retention_executions_total \
+                        .labels(privacy_band=privacy_band, dry_run=dry_run_str) \
+                        .inc()
+
+                    self.retention_execution_latency_ms \
+                        .labels(privacy_band=privacy_band) \
+                        .observe(duration_ms)
+
+                    if not dry_run and receipts_deleted > 0:
+                        self.receipts_deleted_total \
+                            .labels(privacy_band=privacy_band, deletion_reason="RETENTION_POLICY_EXPIRED") \
+                            .inc(receipts_deleted)
+
+                    # OpenTelemetry tracing
+                    with self.tracer.start_as_current_span(
+                        f"retention.execute.{privacy_band.lower()}",
+                        trace_id=trace_id,
+                    ) as span:
+                        span.set_attribute("execution.id", execution_id)
+                        span.set_attribute("privacy.band", privacy_band)
+                        span.set_attribute("duration_ms", duration_ms)
+                        span.set_attribute("receipts_deleted", receipts_deleted)
+                        span.set_attribute("dry_run", dry_run)
+
+                        # Performance budget validation
+                        if duration_ms > 5000.0 and not dry_run:
+                            span.set_attribute("budget.violation", True)
+                            span.add_event(
+                                "Performance budget exceeded",
+                                {"budget_ms": 5000.0, "actual_ms": duration_ms}
+                            )
+
+                        # Compliance validation
+                        if receipts_deleted > 10000 and not dry_run:
+                            span.add_event("High volume deletion", {"receipts_deleted": receipts_deleted})
+
+                def record_deletion_audit(
+                    self,
+                    receipt_id: str,
+                    user_id: str,
+                    privacy_band: str,
+                    deletion_reason: str,
+                    trace_id: str,
+                ):
+                    """Record individual deletion for audit trail"""
+                    self.receipts_deleted_total \
+                        .labels(privacy_band=privacy_band, deletion_reason=deletion_reason) \
+                        .inc()
+
+                    with self.tracer.start_as_current_span(
+                        "retention.delete.receipt",
+                        trace_id=trace_id,
+                    ) as span:
+                        span.set_attribute("receipt.id", receipt_id)
+                        span.set_attribute("user.id", user_id)
+                        span.set_attribute("privacy.band", privacy_band)
+                        span.set_attribute("deletion.reason", deletion_reason)
+
+                def update_eligible_receipts(self, privacy_band: str, count: int):
+                    """Update gauge of eligible receipts"""
+                    self.retention_eligible_receipts \
+                        .labels(privacy_band=privacy_band) \
+                        .set(count)
+
+                def record_policy_violation(
+                    self,
+                    violation_type: str,
+                    details: str,
+                    trace_id: str,
+                ):
+                    """Record retention policy violation"""
+                    self.retention_policy_violations_total \
+                        .labels(violation_type=violation_type) \
+                        .inc()
+
+                    with self.tracer.start_as_current_span(
+                        "retention.violation",
+                        trace_id=trace_id,
+                    ) as span:
+                        span.set_attribute("violation.type", violation_type)
+                        span.set_attribute("violation.details", details)
+                        span.set_status(Status(StatusCode.ERROR, "Retention policy violation detected"))
+
+                def record_compliance_check(
+                    self,
+                    check_type: str,
+                    result: str,
+                    trace_id: str,
+                ):
+                    """Record compliance check result"""
+                    self.retention_compliance_checks_total \
+                        .labels(check_type=check_type, result=result) \
+                        .inc()
+
+                    with self.tracer.start_as_current_span(
+                        f"retention.compliance.{check_type}",
+                        trace_id=trace_id,
+                    ) as span:
+                        span.set_attribute("check.type", check_type)
+                        span.set_attribute("check.result", result)
+
+                        if result == "FAILED":
+                            span.set_status(Status(StatusCode.ERROR, "Compliance check failed"))
+
+                def get_metrics(self) -> str:
+                    """Get Prometheus metrics in text format"""
+                    return generate_latest().decode('utf-8')
+
+    dependencies:
+      - name: prometheus
+        description: Metrics collection and exposition
+      - name: opentelemetry
+        description: Distributed tracing and observability
+      - name: structlog
+        description: Structured logging for retention events
+
+testing_requirements:
+  - unit_tests:
+      - metric_accuracy: Retention metrics increment correctly for each execution
+      - tracing_completeness: All retention operations properly traced
+      - performance_budget: <0.1ms per metric emission
+  - integration_tests:
+      - prometheus_scraping: Retention metrics exposed correctly at /metrics endpoint
+      - tracing_collection: Retention traces collected by Jaeger/Zipkin
+      - alerting_integration: Critical retention errors trigger alerts
+  - security_tests:
+      - metric_leakage: No sensitive data in retention metric labels
+      - trace_privacy: PII redacted in retention trace attributes
+
+alerting_rules:
+  - name: RetentionExecutionLatencyHigh
+    condition: histogram_quantile(0.95, rate(retention_execution_latency_ms_bucket[5m])) > 5000
+    severity: warning
+    description: Retention execution latency exceeds 5s P95 budget
+    runbook: Check database performance, consider retention tuning
+
+  - name: RetentionPolicyViolationsHigh
+    condition: rate(retention_policy_violations_total[5m]) > 0
+    severity: error
+    description: Retention policy violations detected
+    runbook: Investigate violation details, check policy configuration
+
+  - name: HighVolumeDeletion
+    condition: rate(receipts_deleted_total[1h]) > 10000
+    severity: warning
+    description: High volume receipt deletion (>10K/hour)
+    runbook: Verify retention policies are correct, monitor storage impact
+
+  - name: RetentionComplianceCheckFailed
+    condition: retention_compliance_checks_total{result="FAILED"} > 0
+    severity: error
+    description: Retention compliance check failed
+    runbook: Review compliance check details, verify GDPR/HIPAA adherence
+
+compliance:
+  - gdpr: Article 30 (processing records retention with audit logging)
+  - hipaa: § 164.530(j) (administrative safeguards with monitoring)
+  - soc2: CC7.2 (system monitoring with retention compliance)

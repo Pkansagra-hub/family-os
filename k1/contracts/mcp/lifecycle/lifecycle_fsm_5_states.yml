@@ -21,11 +21,11 @@ contract_metadata:
 overview:
   description: |
     Finite state machine tracking MCP server process lifecycle.
-    
+
     **Problem:** MCP server processes have complex lifecycle (spawn → run → terminate).
     **Solution:** 5-state FSM with explicit transitions.
     **Pattern:** Finite State Machine (Mealy 1956).
-    
+
     **Design Decisions:**
     - 5 states cover all lifecycle phases
     - Explicit state transitions (no implicit state changes)
@@ -52,7 +52,7 @@ states:
       - "Not ready for tools/call requests"
     duration: "Typically 50-100ms (process spawn + Python interpreter start)"
     next_states: ["RUNNING", "CRASHED"]
-    
+
   RUNNING:
     description: "Process healthy and ready for tools/call requests"
     entry_condition: "initialize JSON-RPC response received successfully"
@@ -63,7 +63,7 @@ states:
       - "Background monitor task running"
     duration: "Variable (seconds to hours, depends on tool usage)"
     next_states: ["TERMINATING", "CRASHED"]
-  
+
   TERMINATING:
     description: "Graceful shutdown in progress (shutdown JSON-RPC sent)"
     entry_condition: "terminate() called or K1 shutdown initiated"
@@ -74,7 +74,7 @@ states:
       - "Resources being cleaned up"
     duration: "Typically 50-100ms (clean exit), up to 10s (force kill)"
     next_states: ["TERMINATED"]
-  
+
   TERMINATED:
     description: "Process exited cleanly (exit code 0 or clean shutdown)"
     entry_condition: "Process exited with code 0 OR gracefully terminated"
@@ -86,7 +86,7 @@ states:
     duration: "Final state (no transitions)"
     next_states: []
     final_state: true
-  
+
   CRASHED:
     description: "Process died unexpectedly (non-zero exit or signal)"
     entry_condition: "Process exited with non-zero code OR killed by signal"
@@ -105,7 +105,7 @@ states:
 
 state_transitions:
   description: "Valid state transitions in MCP process lifecycle FSM"
-  
+
   transitions:
     - from: "SPAWNING"
       to: "RUNNING"
@@ -114,13 +114,13 @@ state_transitions:
       example: |
         # Process spawned
         info.state = ProcessState.SPAWNING
-        
+
         # Send initialize, receive response
         server_info = await client.initialize()
-        
+
         # Transition to RUNNING
         info.state = ProcessState.RUNNING
-    
+
     - from: "SPAWNING"
       to: "CRASHED"
       trigger: "Process crashes during initialization (exit/signal)"
@@ -128,14 +128,14 @@ state_transitions:
       example: |
         # Process spawned
         info.state = ProcessState.SPAWNING
-        
+
         # Process crashes before initialize completes
         exit_code = await process.wait()  # Non-zero
-        
+
         # Transition to CRASHED
         info.state = ProcessState.CRASHED
         info.exit_code = exit_code
-    
+
     - from: "RUNNING"
       to: "TERMINATING"
       trigger: "terminate() called or K1 shutdown"
@@ -143,14 +143,14 @@ state_transitions:
       example: |
         # Process running
         info.state = ProcessState.RUNNING
-        
+
         # User calls terminate()
         await spawner.terminate()
-        
+
         # Transition to TERMINATING
         info.state = ProcessState.TERMINATING
         await client.shutdown()
-    
+
     - from: "RUNNING"
       to: "CRASHED"
       trigger: "Process crashes during operation (exit/signal)"
@@ -158,14 +158,14 @@ state_transitions:
       example: |
         # Process running
         info.state = ProcessState.RUNNING
-        
+
         # Process crashes (e.g., segfault)
         exit_code = await process.wait()  # Negative (signal)
-        
+
         # Transition to CRASHED
         info.state = ProcessState.CRASHED
         info.signal = -exit_code  # SIGSEGV = 11
-    
+
     - from: "TERMINATING"
       to: "TERMINATED"
       trigger: "Process exits gracefully OR force killed (SIGKILL)"
@@ -173,10 +173,10 @@ state_transitions:
       example: |
         # Graceful shutdown initiated
         info.state = ProcessState.TERMINATING
-        
+
         # Process exits cleanly
         exit_code = await process.wait()
-        
+
         # Transition to TERMINATED
         info.state = ProcessState.TERMINATED
         info.exit_code = exit_code
@@ -188,62 +188,62 @@ state_transitions:
 
 process_info_schema:
   description: "Data structure holding MCP server process information"
-  
+
   fields:
     pid:
       type: "int"
       required: true
       description: "Process ID (from subprocess.Popen)"
       example: 12345
-    
+
     state:
       type: "ProcessState (Enum)"
       required: true
       description: "Current lifecycle state"
       enum: ["SPAWNING", "RUNNING", "TERMINATING", "TERMINATED", "CRASHED"]
       example: "RUNNING"
-    
+
     started_at:
       type: "float"
       required: true
       description: "Unix timestamp when process spawned"
       example: 1729536000.123
-    
+
     terminated_at:
       type: "float"
       required: false
       default: 0
       description: "Unix timestamp when process terminated (0 if still running)"
       example: 1729536300.456
-    
+
     exit_code:
       type: "int | None"
       required: false
       default: null
       description: "Process exit code (0=success, non-zero=error, None=still running)"
       example: 0
-    
+
     signal:
       type: "int | None"
       required: false
       default: null
       description: "Signal that killed process (SIGTERM=15, SIGKILL=9, SIGSEGV=11)"
       example: 15
-    
+
     total_requests:
       type: "int"
       required: false
       default: 0
       description: "Total tools/call requests handled by this process"
       example: 42
-    
+
     total_timeouts:
       type: "int"
       required: false
       default: 0
       description: "Total requests that timed out (process killed)"
       example: 2
-  
+
   methods:
     uptime_seconds:
       description: "Calculate process uptime in seconds"
@@ -256,7 +256,7 @@ process_info_schema:
       example: |
         info = ProcessInfo(pid=12345, state=RUNNING, started_at=time.time() - 10)
         uptime = info.uptime_seconds()  # ~10.0
-    
+
     is_alive:
       description: "Check if process is alive (not in final state)"
       returns: "bool"
@@ -264,7 +264,7 @@ process_info_schema:
       example: |
         info = ProcessInfo(pid=12345, state=RUNNING, started_at=time.time())
         assert info.is_alive() == True
-        
+
         info.state = ProcessState.TERMINATED
         assert info.is_alive() == False
 
@@ -276,7 +276,7 @@ python_implementation: |
   from enum import Enum
   from dataclasses import dataclass
   import time
-  
+
   class ProcessState(Enum):
       """MCP server process lifecycle states"""
       SPAWNING = "SPAWNING"        # Starting process
@@ -284,15 +284,15 @@ python_implementation: |
       TERMINATING = "TERMINATING"  # Graceful shutdown in progress
       TERMINATED = "TERMINATED"    # Process exited cleanly
       CRASHED = "CRASHED"          # Process crashed (non-zero exit/signal)
-  
+
   @dataclass
   class ProcessInfo:
       """
       MCP server process information.
-      
+
       Tracks process lifecycle state, PID, timestamps, exit codes, counters.
       """
-      
+
       pid: int                      # Process ID
       state: ProcessState           # Current lifecycle state
       started_at: float             # Timestamp when process spawned
@@ -301,22 +301,22 @@ python_implementation: |
       signal: int = None            # Signal that killed process
       total_requests: int = 0       # Total tools/call requests handled
       total_timeouts: int = 0       # Total requests that timed out
-      
+
       def uptime_seconds(self) -> float:
           """
           Calculate process uptime in seconds.
-          
+
           Returns:
               float: Uptime (terminated_at - started_at if terminated, else now - started_at)
           """
           if self.state in (ProcessState.TERMINATED, ProcessState.CRASHED):
               return self.terminated_at - self.started_at
           return time.time() - self.started_at
-      
+
       def is_alive(self) -> bool:
           """
           Check if process is alive (not in final state).
-          
+
           Returns:
               bool: True if state in (SPAWNING, RUNNING, TERMINATING)
           """
@@ -340,14 +340,14 @@ state_transition_examples:
         code: |
           process = await asyncio.create_subprocess_exec(...)
           info = ProcessInfo(pid=process.pid, state=ProcessState.SPAWNING, started_at=time.time())
-      
+
       - step: 2
         state: "RUNNING"
         action: "Initialize completes, process ready"
         code: |
           server_info = await client.initialize()
           info.state = ProcessState.RUNNING
-      
+
       - step: 3
         state: "RUNNING"
         action: "Handle multiple tools/call requests"
@@ -355,14 +355,14 @@ state_transition_examples:
           for _ in range(10):
               result = await client.call_tool("get_weather", {"city": "Seattle"})
               info.total_requests += 1
-      
+
       - step: 4
         state: "TERMINATING"
         action: "User calls terminate(), shutdown initiated"
         code: |
           info.state = ProcessState.TERMINATING
           await client.shutdown()
-      
+
       - step: 5
         state: "TERMINATED"
         action: "Process exits cleanly (code 0)"
@@ -371,7 +371,7 @@ state_transition_examples:
           info.state = ProcessState.TERMINATED
           info.exit_code = exit_code
           info.terminated_at = time.time()
-  
+
   initialization_crash:
     description: "Crash during initialization: SPAWNING → CRASHED"
     sequence:
@@ -381,7 +381,7 @@ state_transition_examples:
         code: |
           process = await asyncio.create_subprocess_exec(...)
           info = ProcessInfo(pid=process.pid, state=ProcessState.SPAWNING, started_at=time.time())
-      
+
       - step: 2
         state: "CRASHED"
         action: "Process crashes before initialize completes (import error, segfault, etc.)"
@@ -391,7 +391,7 @@ state_transition_examples:
           info.state = ProcessState.CRASHED
           info.exit_code = exit_code
           info.terminated_at = time.time()
-  
+
   runtime_crash:
     description: "Crash during operation: RUNNING → CRASHED"
     sequence:
@@ -401,7 +401,7 @@ state_transition_examples:
         code: |
           info.state = ProcessState.RUNNING
           result = await client.call_tool("process_data", {"data": "..."})
-      
+
       - step: 2
         state: "CRASHED"
         action: "Process crashes (segfault, OOM, etc.)"
@@ -423,27 +423,27 @@ state_invariants:
     - "terminated_at == 0 (not yet terminated)"
     - "exit_code == None (process still running)"
     - "signal == None (no signal yet)"
-  
+
   RUNNING_invariants:
     - "PID > 0 (process exists)"
     - "started_at > 0 (timestamp set)"
     - "terminated_at == 0 (not yet terminated)"
     - "exit_code == None (process still running)"
     - "total_requests >= 0 (counter valid)"
-  
+
   TERMINATING_invariants:
     - "PID > 0 (process exists)"
     - "started_at > 0 (timestamp set)"
     - "terminated_at == 0 (not yet terminated)"
     - "exit_code == None (process not yet exited)"
-  
+
   TERMINATED_invariants:
     - "PID > 0 (process exists)"
     - "started_at > 0 (timestamp set)"
     - "terminated_at > started_at (valid termination timestamp)"
     - "exit_code >= 0 (valid exit code, typically 0)"
     - "signal may be set (SIGTERM, SIGKILL)"
-  
+
   CRASHED_invariants:
     - "PID > 0 (process exists)"
     - "started_at > 0 (timestamp set)"
@@ -460,13 +460,13 @@ performance_requirements:
     actual: "~0.001ms"
     measurement: "Time to update ProcessInfo.state field (enum assignment)"
     rationale: "In-memory enum assignment, negligible cost"
-  
+
   uptime_calculation_latency:
     target: "<0.01ms P95"
     actual: "~0.001ms"
     measurement: "Time to compute uptime_seconds() (simple arithmetic)"
     rationale: "Single subtraction operation"
-  
+
   is_alive_check_latency:
     target: "<0.01ms P95"
     actual: "~0.001ms"
@@ -483,13 +483,13 @@ metrics:
     labels: ["tool_name", "pid", "state"]
     description: "MCP process current state (0=SPAWNING, 1=RUNNING, 2=TERMINATING, 3=TERMINATED, 4=CRASHED)"
     example_value: 1.0  # RUNNING
-  
+
   mcp_process_state_transitions_total:
     type: "counter"
     labels: ["tool_name", "from_state", "to_state"]
     description: "Total state transitions"
     example_value: 127.0
-  
+
   mcp_process_uptime_seconds:
     type: "histogram"
     buckets: [1, 10, 60, 300, 600, 1800, 3600]
@@ -507,9 +507,9 @@ logging:
       - "to_state"
       - "uptime_seconds"
     example: |
-      [INFO] MCP process state transition: pid=12345, tool_name=weather_api, 
+      [INFO] MCP process state transition: pid=12345, tool_name=weather_api,
              from_state=RUNNING, to_state=TERMINATING, uptime_seconds=120.5
-  
+
   process_crashed:
     level: "ERROR"
     message: "MCP process crashed"
@@ -521,7 +521,7 @@ logging:
       - "uptime_seconds"
       - "total_requests"
     example: |
-      [ERROR] MCP process crashed: pid=12345, tool_name=video_transcoder, 
+      [ERROR] MCP process crashed: pid=12345, tool_name=video_transcoder,
               exit_code=-11, signal=SIGSEGV, uptime_seconds=45.2, total_requests=8
 
 # =============================================================================
@@ -533,27 +533,27 @@ test_coverage:
     - test_name: "test_process_state_enum_values"
       description: "Verify all 5 states defined correctly"
       assertion: "len(ProcessState) == 5"
-    
+
     - test_name: "test_process_info_uptime_running"
       description: "Uptime calculation for running process"
       assertion: "uptime ~= (now - started_at)"
-    
+
     - test_name: "test_process_info_uptime_terminated"
       description: "Uptime calculation for terminated process"
       assertion: "uptime == (terminated_at - started_at)"
-    
+
     - test_name: "test_process_info_is_alive_true"
       description: "is_alive() returns True for SPAWNING, RUNNING, TERMINATING"
       assertion: "info.is_alive() == True"
-    
+
     - test_name: "test_process_info_is_alive_false"
       description: "is_alive() returns False for TERMINATED, CRASHED"
       assertion: "info.is_alive() == False"
-    
+
     - test_name: "test_state_transition_spawning_to_running"
       description: "Valid transition SPAWNING → RUNNING"
       assertion: "state changes from SPAWNING to RUNNING"
-    
+
     - test_name: "test_state_transition_running_to_crashed"
       description: "Valid transition RUNNING → CRASHED"
       assertion: "state changes from RUNNING to CRASHED, exit_code captured"
@@ -568,21 +568,21 @@ references:
       description: "Mathematical model of computation with states and transitions"
       reference: "Mealy (1955), Moore (1956)"
       url: "https://en.wikipedia.org/wiki/Finite-state_machine"
-    
+
     - name: "Unix Process States"
       description: "Process lifecycle states in Unix systems"
       reference: "Stevens & Rago (2013) - Advanced Programming in the UNIX Environment"
       url: "https://en.wikipedia.org/wiki/Process_state"
-  
+
   design_patterns:
     - name: "State Pattern"
       description: "Object behavior changes based on internal state"
       reference: "Gang of Four (1994)"
-    
+
     - name: "Lifecycle Management"
       description: "Managing object/process lifecycle with explicit states"
       reference: "Fowler (2002) - Patterns of Enterprise Application Architecture"
-  
+
   related_contracts:
     - "process_spawner.yml"
     - "initialize_request.yml"

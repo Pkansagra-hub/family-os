@@ -1,0 +1,33 @@
+// k0/contracts/observability/receipts/schema/state_receipt.fbs
+// StateReceipt FlatBuffers schema for SessionState change audit logging
+// SOC2 CC7.2: System monitoring
+// ADR-0038a: Receipt Generation & Schema
+
+namespace K1.Receipts;
+
+table StateReceipt {
+  // Receipt metadata
+  receipt_id: string;
+  receipt_type: string = "STATE";
+
+  // Session context
+  session_id: string;
+  space_id: string;
+  user_id: string;
+
+  // State delta
+  section: string;                // beliefs | scoreboard | control
+  delta: string;                  // JSON string of changes
+  previous_state_hash: string;    // SHA-256 of previous SessionState
+  new_state_hash: string;         // SHA-256 of new SessionState
+
+  // Tracing
+  trace_id: string;
+  timestamp: long;                // Unix timestamp (ms)
+
+  // Hash chain for tamper-evident audit trail
+  previous_receipt_hash: string;
+  current_hash: string;
+}
+
+root_type StateReceipt;

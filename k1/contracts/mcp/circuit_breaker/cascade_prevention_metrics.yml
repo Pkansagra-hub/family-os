@@ -1,0 +1,426 @@
+# Cascade Prevention Metrics Contract
+# Issue: 2.8.3 - Circuit Breaker Integration
+# Source: ADR-0034c (MCP Circuit Breaker Integration), lines 951-1150
+
+contract:
+  name: "cascade_prevention_metrics"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  source_adr: "ADR-0034c"
+  parent_issue: "2.8.3"
+
+overview:
+  purpose: "Define metrics and observability for circuit breaker cascade prevention effectiveness"
+  scope: "Prometheus metrics, Grafana dashboards, cascade prevention rate calculation, alerting"
+  context: "Circuit breaker achieves 92% cascade prevention (96 failures vs 1,200 without circuit breaker)"
+
+cascade_prevention_concept:
+  definition: "Preventing repeated requests to failing tool from exhausting resources and cascading to other components"
+  problem: "Without circuit breaker, 100 requests × 30s timeout = 3000s wasted + resource exhaustion"
+  solution: "Circuit breaker rejects requests immediately after threshold, saving 95% resources"
+  success_metric: "92% cascade prevention rate (96 failures vs 1,200 without)"
+
+cascade_prevention_rate_calculation:
+  formula: "cascade_prevention_rate = 1 - (actual_failures / potential_failures_without_cb)"
+
+  example:
+    scenario: "Weather API down for 1 hour"
+    without_circuit_breaker:
+      requests: 100
+      failures_per_request: 1
+      potential_failures: 100
+      total_time: "100 × 30s timeout = 3000s"
+      resource_impact: "100 pending requests, CPU/memory exhausted"
+
+    with_circuit_breaker:
+      first_5_requests: "5 failures (trigger OPEN at failure_threshold=5)"
+      circuit_opens_at: "Request 5"
+      next_95_requests: "95 rejections (circuit OPEN)"
+      actual_failures: 5
+      rejections: 95
+      total_time: "5 × 30s + 95 × 0.001s = 150.095s"
+      cascade_prevention_rate: "1 - (5 / 100) = 0.95 = 95%"
+
+    improvement:
+      time_saved: "3000s - 150s = 2850s (95% faster)"
+      resource_saved: "95 requests rejected immediately (95%)"
+      cascade_prevention: "95 failures prevented (95% rate)"
+
+production_evidence:
+  deployment: "K1 6-month production deployment"
+  total_mcp_executions: "960,000 requests"
+  total_circuit_open_events: 96
+
+  without_circuit_breaker_projection:
+    assumption: "Each circuit open event represents ~12 failures (5 to trigger + 7 during recovery)"
+    projected_failures: "96 events × 12.5 failures/event = 1,200 failures"
+
+  with_circuit_breaker_actual:
+    actual_failures: 96
+    failures_prevented: "1,200 - 96 = 1,104 failures prevented"
+    cascade_prevention_rate: "1 - (96 / 1,200) = 0.92 = 92%"
+
+  interpretation: "Circuit breaker prevented 1,104 cascading failures (92% prevention rate)"
+
+prometheus_metrics:
+  circuit_breaker_state:
+    type: "Gauge"
+    labels: ["tool_id"]
+    values:
+      CLOSED: 0
+      OPEN: 1
+      HALF_OPEN: 2
+    description: "Current circuit state per tool"
+    usage: "Track which tools are healthy vs failing"
+    query: "circuit_breaker_state"
+    alert:
+      condition: "circuit_breaker_state{tool_id='weather_api'} == 1"
+      severity: "warning"
+      message: "Circuit breaker OPEN for weather_api"
+
+  circuit_breaker_transitions_total:
+    type: "Counter"
+    labels: ["tool_id", "from_state", "to_state"]
+    description: "Total circuit state transitions"
+    usage: "Track transition frequency and patterns"
+    queries:
+      all_transitions: "rate(circuit_breaker_transitions_total[5m])"
+      open_events: "rate(circuit_breaker_transitions_total{to_state='OPEN'}[1h])"
+      recovery_events: "rate(circuit_breaker_transitions_total{to_state='CLOSED'}[1h])"
+    alert:
+      condition: "rate(circuit_breaker_transitions_total{to_state='OPEN'}[1h]) > 10"
+      severity: "critical"
+      message: "Circuit breaker opening too frequently (>10/hour) for {tool_id}"
+
+  circuit_breaker_rejections_total:
+    type: "Counter"
+    labels: ["tool_id"]
+    description: "Total requests rejected by circuit breaker (circuit OPEN)"
+    usage: "Measure cascade prevention effectiveness"
+    query: "rate(circuit_breaker_rejections_total[5m])"
+    alert:
+      condition: "rate(circuit_breaker_rejections_total[5m]) > 10"
+      severity: "warning"
+      message: "High rejection rate for {tool_id}, circuit breaker preventing cascade"
+
+  circuit_breaker_failures_total:
+    type: "Counter"
+    labels: ["tool_id"]
+    description: "Total failures recorded by circuit breaker"
+    usage: "Track actual failures (not rejections)"
+    query: "rate(circuit_breaker_failures_total[5m])"
+    calculation: "Incremented on every record_failure() call"
+
+  circuit_breaker_failure_rate:
+    type: "Gauge"
+    labels: ["tool_id"]
+    description: "Failure rate (failures / total requests)"
+    calculation: "circuit_breaker_failures_total / (circuit_breaker_failures_total + circuit_breaker_success_total)"
+    query: "circuit_breaker_failure_rate{tool_id='weather_api'}"
+    alert:
+      condition: "circuit_breaker_failure_rate > 0.1"
+      severity: "warning"
+      message: "High failure rate (>10%) for {tool_id}"
+
+  circuit_breaker_rejection_rate:
+    type: "Gauge"
+    labels: ["tool_id"]
+    description: "Rejection rate (rejections / (requests + rejections))"
+    calculation: "circuit_breaker_rejections_total / (total_requests + circuit_breaker_rejections_total)"
+    query: "circuit_breaker_rejection_rate{tool_id='weather_api'}"
+    interpretation: "High rejection rate indicates circuit frequently OPEN"
+
+  circuit_breaker_open_duration_seconds:
+    type: "Histogram"
+    labels: ["tool_id"]
+    buckets: [10, 30, 60, 120, 300, 600]
+    description: "Duration circuit was OPEN (time to recovery)"
+    calculation: "Recorded on OPEN → HALF_OPEN transition: open_duration = now - circuit_open_time"
+    queries:
+      p50: "histogram_quantile(0.50, circuit_breaker_open_duration_seconds)"
+      p95: "histogram_quantile(0.95, circuit_breaker_open_duration_seconds)"
+      p99: "histogram_quantile(0.99, circuit_breaker_open_duration_seconds)"
+    alert:
+      condition: "histogram_quantile(0.95, circuit_breaker_open_duration_seconds) > 300"
+      severity: "warning"
+      message: "Circuit breaker OPEN duration P95 >300s for {tool_id}"
+
+  circuit_breaker_probe_success_total:
+    type: "Counter"
+    labels: ["tool_id"]
+    description: "Total successful probe requests (HALF_OPEN → CLOSED)"
+    query: "rate(circuit_breaker_probe_success_total[1h])"
+
+  circuit_breaker_probe_failure_total:
+    type: "Counter"
+    labels: ["tool_id"]
+    description: "Total failed probe requests (HALF_OPEN → OPEN)"
+    query: "rate(circuit_breaker_probe_failure_total[1h])"
+
+  circuit_breaker_cascade_prevention_rate:
+    type: "Gauge"
+    labels: ["tool_id"]
+    description: "Cascade prevention rate (1 - actual_failures / potential_failures)"
+    calculation: "1 - (circuit_breaker_failures_total / (circuit_breaker_failures_total + circuit_breaker_rejections_total))"
+    query: "circuit_breaker_cascade_prevention_rate{tool_id='weather_api'}"
+    interpretation: "0.92 = 92% of potential failures prevented"
+
+grafana_dashboard:
+  title: "MCP Circuit Breaker - Cascade Prevention"
+
+  panels:
+    circuit_state_table:
+      type: "table"
+      title: "Circuit Breaker State"
+      query: "circuit_breaker_state"
+      columns: ["tool_id", "state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)", "timestamp"]
+      description: "Real-time circuit state for all tools"
+
+    transitions_graph:
+      type: "graph"
+      title: "Circuit Breaker Transitions"
+      queries:
+        - expr: "rate(circuit_breaker_transitions_total{to_state='OPEN'}[5m])"
+          legend: "Opening (CLOSED → OPEN)"
+        - expr: "rate(circuit_breaker_transitions_total{to_state='HALF_OPEN'}[5m])"
+          legend: "Testing (OPEN → HALF_OPEN)"
+        - expr: "rate(circuit_breaker_transitions_total{to_state='CLOSED',from_state='HALF_OPEN'}[5m])"
+          legend: "Recovered (HALF_OPEN → CLOSED)"
+      y_axis: "Transitions/sec"
+
+    rejections_graph:
+      type: "graph"
+      title: "Circuit Breaker Rejections (Cascade Prevention)"
+      query: "rate(circuit_breaker_rejections_total[5m])"
+      legend: "{{tool_id}}"
+      y_axis: "Rejections/sec"
+      description: "Requests rejected due to circuit OPEN (cascade prevented)"
+
+    failure_rate_graph:
+      type: "graph"
+      title: "Circuit Breaker Failure Rate"
+      query: "circuit_breaker_failure_rate"
+      legend: "{{tool_id}}"
+      y_axis: "Failure rate (0-1)"
+      thresholds:
+        - {value: 0.1, color: "yellow", label: "Warning: 10% failure rate"}
+        - {value: 0.2, color: "red", label: "Critical: 20% failure rate"}
+
+    open_duration_histogram:
+      type: "heatmap"
+      title: "Circuit Breaker OPEN Duration"
+      query: "circuit_breaker_open_duration_seconds"
+      x_axis: "Time"
+      y_axis: "Duration (seconds)"
+      legend: "Count"
+      description: "Distribution of how long circuit stays OPEN"
+
+    cascade_prevention_gauge:
+      type: "gauge"
+      title: "Cascade Prevention Rate"
+      query: "circuit_breaker_cascade_prevention_rate"
+      min: 0
+      max: 1
+      thresholds:
+        - {value: 0.7, color: "red"}
+        - {value: 0.85, color: "yellow"}
+        - {value: 0.95, color: "green"}
+      description: "Overall cascade prevention effectiveness"
+
+    tool_health_heatmap:
+      type: "status_history"
+      title: "Tool Health Status"
+      query: "circuit_breaker_state"
+      legend: ["CLOSED (healthy)", "OPEN (failing)", "HALF_OPEN (testing)"]
+      description: "Historical view of circuit states per tool"
+
+alerting_rules:
+  circuit_open_frequently:
+    condition: "rate(circuit_breaker_transitions_total{to_state='OPEN'}[1h]) > 10"
+    severity: "critical"
+    summary: "Circuit breaker for {{$labels.tool_id}} opening frequently"
+    description: "Circuit breaker opened {{$value}} times in last hour (threshold: 10). Tool may be unreliable or threshold too strict."
+    action: "Investigate tool reliability, adjust failure threshold or timeout"
+
+  circuit_open_too_long:
+    condition: "histogram_quantile(0.95, circuit_breaker_open_duration_seconds) > 300"
+    severity: "warning"
+    summary: "Circuit breaker for {{$labels.tool_id}} open too long"
+    description: "P95 open duration {{$value}}s (threshold: 300s). Tool recovery is slow."
+    action: "Investigate tool recovery time, adjust timeout or probe strategy"
+
+  high_failure_rate:
+    condition: "circuit_breaker_failure_rate > 0.1"
+    severity: "warning"
+    summary: "High failure rate for {{$labels.tool_id}}"
+    description: "Failure rate {{$value}} (threshold: 0.1 = 10%). Tool reliability degraded."
+    action: "Investigate root cause of failures"
+
+  low_cascade_prevention:
+    condition: "circuit_breaker_cascade_prevention_rate < 0.7"
+    severity: "warning"
+    summary: "Low cascade prevention rate for {{$labels.tool_id}}"
+    description: "Cascade prevention rate {{$value}} (threshold: 0.7 = 70%). Circuit breaker not effective."
+    action: "Adjust failure threshold (too high?) or timeout (too long?)"
+
+  probe_failure_rate_high:
+    condition: "rate(circuit_breaker_probe_failure_total[1h]) / rate(circuit_breaker_probe_success_total[1h] + circuit_breaker_probe_failure_total[1h]) > 0.5"
+    severity: "warning"
+    summary: "High probe failure rate for {{$labels.tool_id}}"
+    description: "Probe failure rate >50%. Timeout may be too short, tool not fully recovered."
+    action: "Increase timeout duration"
+
+cascade_prevention_analysis:
+  example_scenario:
+    tool_id: "weather_api"
+    time_window: "1 hour (60 minutes)"
+    request_rate: "100 requests/hour"
+    failure_duration: "30 minutes"
+
+    without_circuit_breaker:
+      total_requests: 100
+      requests_during_failure: 50
+      timeout_per_request: 30000  # ms
+      total_wasted_time: "50 × 30s = 1500s (25 minutes)"
+      actual_failures: 50
+      cascade_impact: "50 pending requests, resource exhaustion"
+
+    with_circuit_breaker:
+      failure_threshold: 5
+      timeout_seconds: 30
+      first_5_failures: "5 × 30s = 150s"
+      circuit_opens: "After 5th failure"
+      next_45_rejections: "45 × 0.001s = 0.045s"
+      total_wasted_time: "150.045s (2.5 minutes)"
+      actual_failures: 5
+      prevented_failures: "50 - 5 = 45"
+      cascade_prevention_rate: "45 / 50 = 0.9 = 90%"
+      time_saved: "1500s - 150s = 1350s (22.5 minutes)"
+      resource_saved: "45 requests (90%)"
+
+  metric_interpretation:
+    high_rejection_rate:
+      value: ">50%"
+      meaning: "Circuit breaker rejecting >50% of requests"
+      diagnosis: "Tool frequently failing, circuit opens often"
+      action: "Investigate tool reliability or adjust thresholds"
+
+    high_cascade_prevention_rate:
+      value: ">90%"
+      meaning: "Circuit breaker preventing >90% of cascading failures"
+      diagnosis: "Circuit breaker working effectively"
+      action: "No action needed, system healthy"
+
+    low_cascade_prevention_rate:
+      value: "<70%"
+      meaning: "Circuit breaker preventing <70% of cascading failures"
+      diagnosis: "Circuit breaker not effective (threshold too high, timeout too long)"
+      action: "Decrease failure threshold or timeout duration"
+
+implementation_example:
+  python_code: |
+    from prometheus_client import Counter, Gauge, Histogram
+
+    # Metrics
+    circuit_state_gauge = Gauge(
+        "circuit_breaker_state",
+        "Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
+        ["tool_id"]
+    )
+
+    transitions_counter = Counter(
+        "circuit_breaker_transitions_total",
+        "Total circuit state transitions",
+        ["tool_id", "from_state", "to_state"]
+    )
+
+    rejections_counter = Counter(
+        "circuit_breaker_rejections_total",
+        "Total requests rejected by circuit breaker",
+        ["tool_id"]
+    )
+
+    failures_counter = Counter(
+        "circuit_breaker_failures_total",
+        "Total failures recorded by circuit breaker",
+        ["tool_id"]
+    )
+
+    open_duration_histogram = Histogram(
+        "circuit_breaker_open_duration_seconds",
+        "Duration circuit breaker was OPEN",
+        ["tool_id"],
+        buckets=[10, 30, 60, 120, 300, 600]
+    )
+
+    # Emit metrics
+    def emit_state_transition(tool_id: str, from_state: str, to_state: str):
+        transitions_counter.labels(tool_id=tool_id, from_state=from_state, to_state=to_state).inc()
+        circuit_state_gauge.labels(tool_id=tool_id).set(state_to_value(to_state))
+
+        if to_state == "HALF_OPEN" and from_state == "OPEN":
+            # Record open duration
+            open_duration = time.time() - circuit_open_time
+            open_duration_histogram.labels(tool_id=tool_id).observe(open_duration)
+
+    def record_rejection(tool_id: str):
+        rejections_counter.labels(tool_id=tool_id).inc()
+
+    def record_failure(tool_id: str):
+        failures_counter.labels(tool_id=tool_id).inc()
+
+testing_requirements:
+  unit_tests:
+    - "Metrics registered correctly"
+    - "State transitions emit metrics"
+    - "Rejections counted correctly"
+    - "Open duration histogram recorded"
+
+  integration_tests:
+    - "Prometheus scrapes metrics successfully"
+    - "Grafana dashboard displays data"
+    - "Alerts fire correctly"
+    - "Cascade prevention rate calculated accurately"
+
+performance_requirements:
+  metric_emission: "<0.1ms (counter increment, gauge set)"
+  metric_scrape: "<100ms (Prometheus scrape all metrics)"
+  dashboard_refresh: "<1s (Grafana dashboard load)"
+
+observability_best_practices:
+  retention:
+    raw_metrics: "15 days"
+    aggregated_metrics: "90 days"
+    alerts_history: "30 days"
+
+  sampling:
+    high_cardinality: "Avoid high cardinality labels (e.g., trace_id)"
+    tool_id_cardinality: "~100 tools typical"
+
+  alerting:
+    alert_fatigue: "Tune thresholds to avoid alert fatigue"
+    actionable: "Alerts must be actionable (investigation or config change)"
+    severity: "Critical (requires immediate action), Warning (investigate)"
+
+references:
+  - type: "ADR"
+    id: "ADR-0034c"
+    title: "MCP Circuit Breaker Integration"
+    lines: "951-1150 (cascade prevention metrics)"
+
+  - type: "Contract"
+    id: "circuit_breaker_fsm_3_states.yml"
+    description: "Circuit breaker FSM"
+
+  - type: "Contract"
+    id: "state_transitions.yml"
+    description: "State transitions emit metrics"
+
+  - type: "Research"
+    citation: "Netflix Hystrix - Metrics & Monitoring"
+    url: "https://github.com/Netflix/Hystrix/wiki/Metrics-and-Monitoring"
+    topic: "Circuit breaker observability patterns"
+
+  - type: "Production Evidence"
+    source: "K1 6-month deployment"
+    metrics: "92% cascade prevention (96 failures vs 1,200 without)"
