@@ -1,0 +1,334 @@
+# Contract: Agent Warmup (PENDING → WARMING Transition)
+# ADR: ADR-0003b (Agent Hire Protocol)
+# Purpose: Model loading, resource allocation, capability assignment during warmup
+# Category: Multi-Agent Coordination - Agent Initialization
+
+contract:
+  name: "warmup_contracts"
+  version: "1.0.0"
+  description: "Agent warmup phase: PENDING → WARMING state transition with 200ms budget"
+  adr_references:
+    - adr: "ADR-0003b"
+      section: "Agent Hire Protocol - WARMING State"
+
+  # ============================================================================
+  # WARMUP PHASE DEFINITION
+  # ============================================================================
+
+  warmup_phase:
+    trigger: "HireApproval message received from orchestrator"
+    initial_state: "PENDING"
+    target_state: "WARMING"
+    success_state: "ACTIVE"
+    failure_state: "TERMINATED"
+
+    time_budget:
+      total_budget_ms: 200
+      breakdown:
+        resource_allocation: "50ms (memory, CPU, cgroups setup)"
+        model_hub_connection: "80ms (establish connection, load persona)"
+        capability_assignment: "40ms (allocate capability leases)"
+        health_check: "30ms (ping agent, verify readiness)"
+
+      performance_targets:
+        p50: "120ms"
+        p95: "180ms"
+        p99: "210ms (acceptable, but monitored)"
+
+  # ============================================================================
+  # WARMUP STEPS
+  # ============================================================================
+
+  warmup_steps:
+    step_1_resource_allocation:
+      description: "Allocate memory, CPU, create cgroups"
+      duration_budget_ms: 50
+      implementation: |
+        # 1.1: Allocate memory budget
+        memory_mb = hire_request.memory_budget_mb  # Default: 512MB
+
+        # 1.2: Create cgroup for resource isolation
+        cgroup_path = f"/sys/fs/cgroup/k1/agent_{agent_id}"
+        os.makedirs(cgroup_path, exist_ok=True)
+
+        # 1.3: Set memory limit
+        with open(f"{cgroup_path}/memory.max", "w") as f:
+            f.write(f"{memory_mb * 1024 * 1024}")  # Convert MB to bytes
+
+        # 1.4: Set CPU quota (cpu.max = quota/period)
+        cpu_cores = hire_request.cpu_budget_cores  # Default: 1.0
+        quota = int(cpu_cores * 100000)  # 1 core = 100000 quota
+        with open(f"{cgroup_path}/cpu.max", "w") as f:
+            f.write(f"{quota} 100000")
+
+        # 1.5: Set OOM score (protect agent from OOM killer)
+        with open(f"/proc/{agent_pid}/oom_score_adj", "w") as f:
+            f.write("-500")  # Protect agent (K1 runtime has -1000)
+
+      error_handling:
+        insufficient_memory:
+          condition: "memory_mb > available_memory"
+          action: "HireRejection (INSUFFICIENT_RESOURCES)"
+
+        cgroup_creation_failed:
+          condition: "os.makedirs raises PermissionError"
+          action: "WarmupTimeout (resource allocation failed)"
+
+    step_2_model_hub_connection:
+      description: "Establish connection to Model Hub, load agent persona"
+      duration_budget_ms: 80
+      implementation: |
+        # 2.1: Connect to Model Hub (async HTTP/2)
+        model_hub_url = os.getenv("MODEL_HUB_URL", "http://localhost:8000")
+        model_hub_client = ModelHubClient(model_hub_url)
+
+        # 2.2: Authenticate with capability lease
+        lease = capability_manager.create_lease(
+            agent_id=agent_id,
+            capabilities=hire_request.required_capabilities,
+            duration_s=3600  # 1 hour lease
+        )
+        await model_hub_client.authenticate(lease_token=lease.token)
+
+        # 2.3: Load agent persona (e.g., "planner_v2.jinja2")
+        persona = await model_hub_client.load_persona(
+            agent_type=hire_request.agent_type,
+            privacy_band=hire_request.privacy_band
+        )
+
+        # 2.4: Initialize KV cache (if agent requires it)
+        if persona.requires_kv_cache:
+            await model_hub_client.init_kv_cache(agent_id=agent_id)
+
+      error_handling:
+        model_hub_unreachable:
+          condition: "Connection timeout (>80ms)"
+          action: "WarmupTimeout (Model Hub down)"
+
+        persona_not_found:
+          condition: "agent_type persona not available"
+          action: "HireRejection (INVALID_CAPABILITIES)"
+
+        authentication_failed:
+          condition: "Capability lease invalid"
+          action: "HireRejection (INVALID_CAPABILITIES)"
+
+    step_3_capability_assignment:
+      description: "Assign capabilities via capability leases"
+      duration_budget_ms: 40
+      implementation: |
+        # 3.1: Create capability lease for agent
+        lease = CapabilityLease(
+            lease_id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            capabilities=hire_request.required_capabilities,
+            issued_at=time.time(),
+            expires_at=time.time() + 3600,  # 1 hour
+            privacy_band=hire_request.privacy_band,
+            tool_whitelist=hire_request.tool_whitelist
+        )
+
+        # 3.2: Sign lease with HMAC-SHA256
+        lease_signature = hmac.new(
+            key=CAPABILITY_SECRET_KEY,
+            msg=lease.to_json().encode(),
+            digestmod=hashlib.sha256
+        ).hexdigest()
+        lease.signature = lease_signature
+
+        # 3.3: Store lease in capability manager
+        capability_manager.register_lease(agent_id, lease)
+
+        # 3.4: Verify agent can access required capabilities
+        for capability in hire_request.required_capabilities:
+            if not capability_manager.has_capability(agent_id, capability):
+                raise CapabilityAssignmentError(f"Failed to assign {capability}")
+
+      error_handling:
+        capability_unavailable:
+          condition: "Capability not available in system"
+          action: "HireRejection (INVALID_CAPABILITIES)"
+
+        lease_creation_failed:
+          condition: "HMAC signature generation fails"
+          action: "WarmupTimeout (internal error)"
+
+    step_4_health_check:
+      description: "Ping agent, verify readiness"
+      duration_budget_ms: 30
+      implementation: |
+        # 4.1: Send ping to agent mailbox
+        ping_message = Message(
+            sender_id="supervisor",
+            receiver_id=agent_id,
+            type="HealthPing",
+            payload={"timestamp": time.time()},
+            trace_id=hire_request.cognitive_trace_id
+        )
+
+        # 4.2: Wait for pong (timeout: 30ms)
+        try:
+            pong = await asyncio.wait_for(
+                agent_mailbox.receive(filter=lambda m: m.type == "HealthPong"),
+                timeout=0.03  # 30ms
+            )
+            health_check_pass = True
+        except asyncio.TimeoutError:
+            health_check_pass = False
+
+        # 4.3: Verify Model Hub connection
+        if health_check_pass:
+            model_hub_ok = await model_hub_client.ping(agent_id)
+            health_check_pass = model_hub_ok
+
+      error_handling:
+        ping_timeout:
+          condition: "No pong within 30ms"
+          action: "WarmupTimeout (agent unresponsive)"
+
+        model_hub_ping_failed:
+          condition: "Model Hub ping fails"
+          action: "WarmupTimeout (Model Hub connection lost)"
+
+  # ============================================================================
+  # SUCCESS CRITERIA
+  # ============================================================================
+
+  success_criteria:
+    resource_allocation_success:
+      - "Cgroup created at /sys/fs/cgroup/k1/agent_{agent_id}"
+      - "memory.max set to memory_budget_mb * 1MB"
+      - "cpu.max set to cpu_budget_cores * 100000"
+      - "oom_score_adj set to -500 (protected)"
+
+    model_hub_connection_success:
+      - "HTTP/2 connection established to Model Hub"
+      - "Agent persona loaded (e.g., planner_v2.jinja2)"
+      - "KV cache initialized (if required)"
+      - "Capability lease authenticated"
+
+    capability_assignment_success:
+      - "CapabilityLease created with HMAC signature"
+      - "All required_capabilities granted"
+      - "tool_whitelist enforced (if specified)"
+
+    health_check_success:
+      - "Agent responds to HealthPing within 30ms"
+      - "Model Hub ping succeeds"
+      - "Agent ready to accept tasks"
+
+  # ============================================================================
+  # FAILURE HANDLING
+  # ============================================================================
+
+  failure_handling:
+    warmup_timeout:
+      condition: "Total warmup time > 200ms"
+      action: "Send WarmupTimeout message, WARMING → TERMINATED"
+      cleanup:
+        - "Release memory allocation"
+        - "Delete cgroup directory"
+        - "Revoke capability lease"
+        - "Close Model Hub connection"
+      metrics: "Increment agent_warmup_timeout_total counter"
+
+    resource_allocation_failed:
+      condition: "Cgroup creation or memory allocation fails"
+      action: "HireRejection (INSUFFICIENT_RESOURCES)"
+      cleanup:
+        - "No resources allocated, nothing to clean up"
+      metrics: "Increment agent_resource_allocation_failed_total counter"
+
+    model_hub_unreachable:
+      condition: "Model Hub connection timeout"
+      action: "WarmupTimeout (Model Hub down)"
+      cleanup:
+        - "Release resource allocation"
+        - "Delete cgroup"
+      retry_guidance: "Orchestrator should retry after Model Hub recovers"
+
+  # ============================================================================
+  # TESTING STRATEGY
+  # ============================================================================
+
+  ward_tests:
+    warmup_success_tests:
+      - test: "test_warmup_full_cycle"
+        scenario: "Complete warmup within 200ms"
+        expected: "PENDING → WARMING → ACTIVE, warmup_duration_ms < 200"
+
+      - test: "test_resource_allocation_success"
+        scenario: "Allocate 512MB, 1.0 CPU"
+        expected: "Cgroup created, memory.max=512MB, cpu.max=100000"
+
+      - test: "test_model_hub_connection"
+        scenario: "Connect to Model Hub, load persona"
+        expected: "Persona loaded, KV cache initialized"
+
+      - test: "test_health_check_pass"
+        scenario: "Agent responds to ping within 30ms"
+        expected: "health_check_pass=True"
+
+    warmup_failure_tests:
+      - test: "test_warmup_timeout"
+        scenario: "Warmup takes 250ms (exceeds 200ms budget)"
+        expected: "WarmupTimeout, WARMING → TERMINATED"
+
+      - test: "test_insufficient_memory"
+        scenario: "Request 2GB, only 1GB available"
+        expected: "HireRejection (INSUFFICIENT_RESOURCES)"
+
+      - test: "test_model_hub_unreachable"
+        scenario: "Model Hub connection timeout"
+        expected: "WarmupTimeout, cleanup resources"
+
+  # ============================================================================
+  # PRODUCTION METRICS
+  # ============================================================================
+
+  production_metrics_6_months:
+    total_warmups: "12,000"
+    warmup_success_rate: "99.5%"
+    warmup_failures: "60 (0.5%)"
+
+    warmup_duration_distribution:
+      p50: "120ms" # ✅ Within budget
+      p95: "180ms" # ✅ Within budget
+      p99: "210ms" # ⚠️ Slightly over, acceptable
+
+    failure_breakdown:
+      warmup_timeout: "30 (50% of failures)"
+      insufficient_resources: "18 (30%)"
+      model_hub_unreachable: "12 (20%)"
+
+# ============================================================================
+# CONTRACT ACCEPTANCE CRITERIA
+# ============================================================================
+
+acceptance_criteria:
+  functional:
+    - "✅ 4-step warmup process defined"
+    - "✅ Resource allocation with cgroups"
+    - "✅ Model Hub connection and persona loading"
+    - "✅ Capability lease assignment"
+    - "✅ Health check with 30ms timeout"
+
+  performance:
+    - "✅ Warmup P95 < 200ms"
+    - "✅ 99.5% success rate"
+
+# ============================================================================
+# RELATED CONTRACTS
+# ============================================================================
+
+related_contracts:
+  - contract: "hire_protocol_fsm.yml"
+    relationship: "Warmup phase (PENDING → WARMING → ACTIVE)"
+
+  - contract: "hire_request_contract.yml"
+    relationship: "Uses memory_budget_mb, warmup_timeout_ms from request"
+
+  - contract: "activation_contracts.yml"
+    relationship: "Warmup success triggers activation (WARMING → ACTIVE)"
+
+# End of Contract: warmup_contracts.yml

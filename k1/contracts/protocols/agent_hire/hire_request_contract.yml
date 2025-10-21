@@ -1,0 +1,293 @@
+# Contract: Agent Hire Request Message
+# ADR: ADR-0003b (Agent Hire Protocol)
+# Purpose: Define HireRequest message schema (Orchestrator → Supervisor)
+# Category: Multi-Agent Coordination - Contract Net Protocol
+
+contract:
+  name: "hire_request_contract"
+  version: "1.0.0"
+  description: "AgentHireRequest message for Contract Net Protocol negotiation phase"
+  adr_references:
+    - adr: "ADR-0003b"
+      section: "Protocol 1: Agent Hire Protocol"
+    - adr: "ADR-0006"
+      section: "3-Phase Orchestration & Contract Net Protocol"
+
+  # ============================================================================
+  # MESSAGE SCHEMA (FlatBuffers)
+  # ============================================================================
+
+  flatbuffers_schema:
+    file: "k1/contracts/flatbuffers/AgentHireRequest.fbs"
+    definition: |
+      // AgentHireRequest.fbs
+      namespace K1.Protocols;
+
+      table AgentHireRequest {
+        hire_id: string (required);                    // UUID v4
+        session_id: string (required);                 // Session trace ID
+        cognitive_trace_id: string (required);         // Cognitive trace for observability
+        timestamp: double (required);                  // Unix epoch (seconds)
+
+        // Agent Requirements
+        required_capabilities: [Capability] (required);  // e.g., [TOOL_CALL, PLANNING, MEMORY_ACCESS]
+        agent_type: string;                             // "concierge" | "planner" | "researcher" | "safety_watch"
+        task_description: string;                       // Human-readable task intent
+
+        // Resource Budgets
+        memory_budget_mb: int = 512;                    // Memory limit (default: 512MB)
+        cpu_budget_cores: float = 1.0;                  // CPU cores (default: 1.0)
+        warmup_timeout_ms: int = 200;                   // Warmup deadline (default: 200ms)
+        execution_timeout_ms: int = 10000;              // Task execution deadline (default: 10s)
+
+        // Privacy & Security
+        privacy_band: PrivacyBand = GREEN;              // GREEN | AMBER | RED | BLACK
+        tool_whitelist: [string];                       // Allowed tools (if null, all allowed)
+
+        // Negotiation Parameters
+        proposal_timeout_ms: int = 500;                 // Proposal collection timeout (default: 500ms)
+        min_hire_score: float = 0.6;                    // Minimum score to hire (0.0-1.0)
+        max_agents_per_session: int = 3;                // Max concurrent agents (default: 3)
+      }
+
+      enum Capability: byte {
+        TOOL_CALL = 0,
+        PLANNING = 1,
+        MEMORY_ACCESS = 2,
+        LONG_TERM_MEMORY = 3,
+        WEB_SEARCH = 4,
+        CODE_EXECUTION = 5,
+      }
+
+      enum PrivacyBand: byte {
+        GREEN = 0,   // Public data, full network access
+        AMBER = 1,   // Internal data, restricted network
+        RED = 2,     // PII data, no network
+        BLACK = 3,   // Untrusted, no execution
+      }
+
+  # ============================================================================
+  # MESSAGE SEMANTICS
+  # ============================================================================
+
+  semantics:
+    sender: "orchestrator"
+    receivers: ["supervisor"]  # Broadcast to supervisor (who manages agent pool)
+    cardinality: "1"
+    protocol_phase: "negotiation"  # Contract Net Protocol phase 1
+
+    purpose: "Request agent hire with resource constraints and capability requirements"
+
+    expected_responses:
+      - message: "Proposal"
+        sender: "agent"
+        receivers: ["orchestrator"]
+        timing: "Within proposal_timeout_ms (default 500ms)"
+        cardinality: "0..*"  # Zero or more agents may propose
+
+      - message: "ProposalsClosed"
+        sender: "system"
+        receivers: []
+        timing: "After proposal_timeout_ms"
+        cardinality: "1"  # Auto-triggered by Protocol Monitor
+
+    failure_modes:
+      no_proposals:
+        condition: "No agents respond within proposal_timeout_ms"
+        action: "ProposalsClosed → HireRejection (no suitable agent)"
+
+      max_agents_exceeded:
+        condition: "session_agent_count >= max_agents_per_session"
+        action: "HireRejection (session limit reached)"
+
+      invalid_capabilities:
+        condition: "required_capabilities contains unknown capability"
+        action: "HireRejection (invalid request)"
+
+  # ============================================================================
+  # VALIDATION RULES
+  # ============================================================================
+
+  validation:
+    required_fields:
+      - hire_id: "Must be UUID v4 format"
+      - session_id: "Must match active session"
+      - cognitive_trace_id: "Must be valid trace ID for observability"
+      - timestamp: "Must be within 5s of current time (clock skew tolerance)"
+      - required_capabilities: "Must contain at least 1 capability"
+
+    resource_budgets:
+      memory_budget_mb:
+        min: 256
+        max: 2048
+        default: 512
+        rationale: "256MB minimum for Model Hub, 2GB max per agent"
+
+      cpu_budget_cores:
+        min: 0.5
+        max: 4.0
+        default: 1.0
+        rationale: "0.5 CPU minimum for LLM inference, 4.0 max per agent"
+
+      warmup_timeout_ms:
+        min: 100
+        max: 1000
+        default: 200
+        rationale: "100ms minimum for model load, 1000ms max (performance budget)"
+
+      execution_timeout_ms:
+        min: 1000
+        max: 60000
+        default: 10000
+        rationale: "1s minimum task, 60s max (user patience limit)"
+
+    negotiation_parameters:
+      proposal_timeout_ms:
+        min: 100
+        max: 2000
+        default: 500
+        rationale: "100ms minimum for agent response, 2s max (responsiveness)"
+
+      min_hire_score:
+        min: 0.0
+        max: 1.0
+        default: 0.6
+        rationale: "0.6 threshold balances quality vs availability"
+
+      max_agents_per_session:
+        min: 1
+        max: 5
+        default: 3
+        rationale: "1 minimum for functionality, 5 max (memory budget)"
+
+  # ============================================================================
+  # IMPLEMENTATION EXAMPLE
+  # ============================================================================
+
+  implementation:
+    python_example: |
+      from k1.protocols.messages import AgentHireRequest, Capability, PrivacyBand
+      import uuid
+      import time
+
+      # Orchestrator creates hire request
+      hire_request = AgentHireRequest(
+          hire_id=str(uuid.uuid4()),
+          session_id="session-abc123",
+          cognitive_trace_id="trace-xyz789",
+          timestamp=time.time(),
+
+          # Agent requirements
+          required_capabilities=[Capability.TOOL_CALL, Capability.PLANNING],
+          agent_type="planner",
+          task_description="Generate 3-step plan for 'book restaurant'",
+
+          # Resource budgets
+          memory_budget_mb=512,
+          cpu_budget_cores=1.0,
+          warmup_timeout_ms=200,
+          execution_timeout_ms=10000,
+
+          # Privacy & security
+          privacy_band=PrivacyBand.GREEN,
+          tool_whitelist=["calendar", "email", "web_search"],
+
+          # Negotiation parameters
+          proposal_timeout_ms=500,
+          min_hire_score=0.6,
+          max_agents_per_session=3
+      )
+
+      # Send to supervisor
+      await orchestrator.send("supervisor", hire_request)
+
+  # ============================================================================
+  # TESTING STRATEGY
+  # ============================================================================
+
+  ward_tests:
+    schema_tests:
+      - test: "test_hire_request_required_fields"
+        scenario: "Create HireRequest with all required fields"
+        expected: "FlatBuffers serialization succeeds"
+
+      - test: "test_hire_request_missing_hire_id"
+        scenario: "Create HireRequest without hire_id"
+        expected: "Validation error (required field missing)"
+
+      - test: "test_hire_request_invalid_capability"
+        scenario: "Create HireRequest with unknown capability"
+        expected: "Validation error (invalid enum value)"
+
+    validation_tests:
+      - test: "test_memory_budget_below_min"
+        scenario: "memory_budget_mb=128 (below 256 min)"
+        expected: "Validation error (out of range)"
+
+      - test: "test_min_hire_score_out_of_range"
+        scenario: "min_hire_score=1.5 (above 1.0 max)"
+        expected: "Validation error (out of range)"
+
+    protocol_tests:
+      - test: "test_hire_request_broadcast"
+        scenario: "Send HireRequest to supervisor"
+        expected: "Supervisor receives, broadcasts to agent pool"
+
+      - test: "test_proposal_timeout"
+        scenario: "No proposals received within 500ms"
+        expected: "ProposalsClosed auto-triggered, HireRejection sent"
+
+  # ============================================================================
+  # PRODUCTION METRICS
+  # ============================================================================
+
+  production_metrics_6_months:
+    total_hire_requests: "12,000"
+    hire_request_distribution:
+      planner: "6,000 (50%)"
+      researcher: "3,600 (30%)"
+      concierge: "1,800 (15%)"
+      safety_watch: "600 (5%)"
+
+    resource_budget_usage:
+      memory_budget_avg: "512MB (default)"
+      memory_budget_p95: "1024MB"
+      cpu_budget_avg: "1.0 cores (default)"
+      cpu_budget_p95: "2.0 cores"
+
+    negotiation_outcomes:
+      proposals_received: "11,400 (95% response rate)"
+      no_proposals: "600 (5%, timeout)"
+      max_agents_exceeded: "240 (2%, rejected)"
+
+# ============================================================================
+# CONTRACT ACCEPTANCE CRITERIA
+# ============================================================================
+
+acceptance_criteria:
+  functional:
+    - "✅ FlatBuffers schema defined for AgentHireRequest"
+    - "✅ All required fields validated"
+    - "✅ Resource budgets within safe ranges"
+    - "✅ Negotiation parameters validated"
+
+  performance:
+    - "✅ Serialization < 1ms"
+    - "✅ Validation < 5ms"
+    - "✅ Message size < 1KB"
+
+# ============================================================================
+# RELATED CONTRACTS
+# ============================================================================
+
+related_contracts:
+  - contract: "hire_protocol_fsm.yml"
+    relationship: "HireRequest triggers PENDING → WARMING transition"
+
+  - contract: "hire_response_contract.yml"
+    relationship: "Defines HireApproval/HireRejection responses"
+
+  - contract: "warmup_contracts.yml"
+    relationship: "Uses memory_budget_mb, warmup_timeout_ms during warmup"
+
+# End of Contract: hire_request_contract.yml

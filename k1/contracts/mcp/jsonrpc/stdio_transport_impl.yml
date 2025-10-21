@@ -1,0 +1,666 @@
+# stdio Transport Implementation Contract
+# ADR: 0034a-mcp-jsonrpc-protocol.md (lines 751-1250)
+# Purpose: JSON-RPC 2.0 over stdin/stdout pipes for MCP server communication (70% of tools)
+# Research: JSON-RPC 2.0 Specification (2010), Unix pipes IPC
+
+contract_metadata:
+  name: "stdio_transport_impl"
+  version: "1.0.0"
+  parent_adr: "ADR-0034a"
+  related_adrs:
+    - "ADR-0034: MCP Protocol Adoption"
+    - "ADR-0034b: MCP Process Lifecycle"
+    - "ADR-0033c: Process Sandbox Implementation"
+  status: "approved"
+  created: "2025-10-21"
+  priority: "CRITICAL"
+
+# =============================================================================
+# STDIO TRANSPORT OVERVIEW
+# =============================================================================
+
+stdio_transport_overview:
+  description: |
+    JSON-RPC 2.0 over stdio pipes (stdin/stdout).
+
+    **Communication Model:**
+    - K1 (client) writes JSON-RPC requests to MCP server's stdin
+    - MCP server writes JSON-RPC responses to stdout (K1 reads)
+    - Each line is one JSON-RPC message (newline-delimited JSON)
+    - stderr used for server logging (not JSON-RPC)
+
+    **Why stdio?**
+    - Natural process isolation (K1 ↔ tool in separate processes)
+    - Low latency (<1ms IPC overhead)
+    - No network ports required (simpler security)
+    - Cross-platform (Windows/Linux/macOS)
+
+    **Use Cases:**
+    - 70% of tools (Process sandbox from ADR-0033c)
+    - MCP servers as native processes (Python, Node.js, Rust)
+    - Tools with fast execution (<5s typical)
+
+  transport_type: "stdio"
+  percentage_adoption: "70%"  # 608 out of 758 tools
+  ipc_mechanism: "stdin/stdout pipes"
+  message_format: "newline-delimited JSON"
+  process_model: "asyncio.subprocess or tokio::process"
+
+# =============================================================================
+# STDIO TRANSPORT ARCHITECTURE
+# =============================================================================
+
+architecture:
+  description: "K1 MCPClient communicates with MCP server via pipes"
+
+  components:
+    k1_mcp_client:
+      role: "JSON-RPC 2.0 client"
+      responsibilities:
+        - "Spawn MCP server subprocess with stdin/stdout pipes"
+        - "Write JSON-RPC requests to subprocess stdin (newline-delimited)"
+        - "Read JSON-RPC responses from subprocess stdout (async loop)"
+        - "Match responses to pending requests by id"
+        - "Handle subprocess lifecycle (spawn, monitor, terminate)"
+
+    mcp_server_subprocess:
+      role: "JSON-RPC 2.0 server (tool implementation)"
+      responsibilities:
+        - "Read JSON-RPC requests from stdin (line by line)"
+        - "Execute tool logic"
+        - "Write JSON-RPC responses to stdout (newline-delimited)"
+        - "Log debug info to stderr (not JSON-RPC)"
+        - "Handle graceful shutdown (SIGTERM)"
+
+    pipes:
+      stdin:
+        direction: "K1 → MCP server"
+        content: "JSON-RPC requests (one per line)"
+        encoding: "UTF-8"
+        max_line_size: "10MB"
+
+      stdout:
+        direction: "MCP server → K1"
+        content: "JSON-RPC responses (one per line)"
+        encoding: "UTF-8"
+        max_line_size: "10MB"
+
+      stderr:
+        direction: "MCP server → K1"
+        content: "Server logs (NOT JSON-RPC)"
+        encoding: "UTF-8"
+        usage: "Debug logging, error tracing"
+
+# =============================================================================
+# STDIO TRANSPORT IMPLEMENTATION
+# =============================================================================
+
+python_implementation:
+  description: "Reference implementation from ADR-0034a"
+
+  StdioTransport_class: |
+    import asyncio
+    from typing import Optional, Dict
+    import json
+    import uuid
+
+    class StdioTransport:
+        """
+        JSON-RPC 2.0 over stdio pipes.
+
+        Communication: newline-delimited JSON
+        - Each line is one JSON-RPC message (request or response)
+        - stdin: K1 writes requests, MCP server reads
+        - stdout: MCP server writes responses, K1 reads
+
+        Used for 70% of tools (Process sandbox).
+        """
+
+        def __init__(self, process: asyncio.subprocess.Process):
+            """
+            Initialize stdio transport.
+
+            Args:
+                process: MCP server subprocess (stdin/stdout pipes)
+            """
+            self.process = process
+            self.stdin = process.stdin
+            self.stdout = process.stdout
+            self.stderr = process.stderr
+            self.pending_requests: Dict[str, asyncio.Future] = {}
+            self.receive_task: Optional[asyncio.Task] = None
+
+        async def send_request(self, method: str, params: dict, timeout_ms: float = 30000) -> JsonRpcResponse:
+            """
+            Send JSON-RPC request and wait for response.
+
+            Args:
+                method: JSON-RPC method name
+                params: Method parameters
+                timeout_ms: Request timeout in milliseconds
+
+            Returns:
+                JsonRpcResponse: Server response
+
+            Raises:
+                JsonRpcError: If server returns error
+                TimeoutError: If response not received within timeout
+            """
+            # Generate request ID
+            request_id = str(uuid.uuid4())
+
+            # Build request
+            request = JsonRpcRequest(
+                method=method,
+                params=params,
+                id=request_id
+            )
+
+            # Validate request
+            request.validate()
+
+            # Create future for response
+            response_future = asyncio.Future()
+            self.pending_requests[request_id] = response_future
+
+            # Write request to stdin (newline-delimited JSON)
+            request_json = request.to_json()
+            self.stdin.write(f"{request_json}\n".encode("utf-8"))
+            await self.stdin.drain()
+
+            # Wait for response (with timeout)
+            try:
+                response = await asyncio.wait_for(
+                    response_future,
+                    timeout=timeout_ms / 1000.0
+                )
+            except asyncio.TimeoutError:
+                # Remove from pending
+                del self.pending_requests[request_id]
+                raise TimeoutError(f"Request {request_id} timed out after {timeout_ms}ms")
+
+            # Remove from pending
+            del self.pending_requests[request_id]
+
+            return response
+
+        async def receive_loop(self):
+            """
+            Background task: read responses from stdout.
+
+            Runs continuously, reading newline-delimited JSON from stdout.
+            Matches response ID to pending request, resolves Future.
+            """
+            while True:
+                try:
+                    # Read one line (one JSON-RPC response)
+                    line_bytes = await self.stdout.readline()
+                    if not line_bytes:
+                        # EOF (server closed stdout)
+                        break
+
+                    line = line_bytes.decode("utf-8").strip()
+                    if not line:
+                        # Empty line, skip
+                        continue
+
+                    # Parse JSON response
+                    data = json.loads(line)
+
+                    # Check if error response
+                    if "error" in data:
+                        error_resp = JsonRpcErrorResponse(
+                            error=JsonRpcErrorDetail(
+                                code=data["error"]["code"],
+                                message=data["error"]["message"],
+                                data=data["error"].get("data")
+                            ),
+                            id=data.get("id")
+                        )
+
+                        # Resolve pending request with error
+                        request_id = error_resp.id
+                        if request_id in self.pending_requests:
+                            future = self.pending_requests[request_id]
+                            future.set_exception(JsonRpcError(
+                                error_resp.error.code,
+                                error_resp.error.message,
+                                error_resp.error.data
+                            ))
+                    else:
+                        # Success response
+                        response = JsonRpcResponse.from_json(line)
+
+                        # Resolve pending request
+                        request_id = response.id
+                        if request_id in self.pending_requests:
+                            future = self.pending_requests[request_id]
+                            future.set_result(response)
+
+                except json.JSONDecodeError as e:
+                    # Invalid JSON from server (log warning, continue)
+                    print(f"[StdioTransport] Invalid JSON from server: {e}")
+                except Exception as e:
+                    # Unexpected error (log, continue)
+                    print(f"[StdioTransport] Error processing response: {e}")
+
+        def start_receive_loop(self):
+            """Start background receive loop"""
+            self.receive_task = asyncio.create_task(self.receive_loop())
+
+        async def close(self):
+            """Close transport and cleanup"""
+            if self.stdin:
+                self.stdin.close()
+                await self.stdin.wait_closed()
+
+            if self.receive_task:
+                self.receive_task.cancel()
+                try:
+                    await self.receive_task
+                except asyncio.CancelledError:
+                    pass
+
+  usage_example: |
+    # Spawn MCP server subprocess
+    process = await asyncio.create_subprocess_exec(
+        "python3", "weather_api_mcp_server.py",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    # Create stdio transport
+    transport = StdioTransport(process)
+    transport.start_receive_loop()
+
+    # Send initialize request
+    response = await transport.send_request("initialize", {}, timeout_ms=5000)
+    print(f"Server capabilities: {response.result['capabilities']}")
+
+    # Send tools/call request
+    response = await transport.send_request(
+        "tools/call",
+        {"name": "get_weather", "arguments": {"city": "Seattle"}},
+        timeout_ms=10000
+    )
+    print(f"Weather: {response.result}")
+
+    # Cleanup
+    await transport.close()
+    process.kill()
+    await process.wait()
+
+# =============================================================================
+# REQUEST/RESPONSE FLOW
+# =============================================================================
+
+request_response_flow:
+  description: "Sequence of operations for single request/response"
+
+  send_request_sequence:
+    step_1:
+      action: "Generate UUID v4 request id"
+      code: 'request_id = str(uuid.uuid4())'
+
+    step_2:
+      action: "Build JsonRpcRequest object"
+      code: 'request = JsonRpcRequest(method="tools/call", params={...}, id=request_id)'
+
+    step_3:
+      action: "Validate request format"
+      code: 'request.validate()'
+
+    step_4:
+      action: "Create Future for response"
+      code: 'response_future = asyncio.Future(); pending_requests[request_id] = response_future'
+
+    step_5:
+      action: "Serialize request to JSON"
+      code: 'request_json = request.to_json()'
+
+    step_6:
+      action: "Write to stdin (newline-delimited)"
+      code: 'stdin.write(f"{request_json}\\n".encode("utf-8")); await stdin.drain()'
+
+    step_7:
+      action: "Wait for response (with timeout)"
+      code: 'response = await asyncio.wait_for(response_future, timeout=30.0)'
+
+    step_8:
+      action: "Return response"
+      code: 'return response'
+
+  receive_loop_sequence:
+    step_1:
+      action: "Read one line from stdout"
+      code: 'line_bytes = await stdout.readline()'
+
+    step_2:
+      action: "Check for EOF"
+      code: 'if not line_bytes: break'
+
+    step_3:
+      action: "Decode UTF-8"
+      code: 'line = line_bytes.decode("utf-8").strip()'
+
+    step_4:
+      action: "Parse JSON"
+      code: 'data = json.loads(line)'
+
+    step_5:
+      action: "Check if error or success response"
+      code: 'if "error" in data: ... else: ...'
+
+    step_6:
+      action: "Extract response id"
+      code: 'response_id = data["id"]'
+
+    step_7:
+      action: "Lookup pending request"
+      code: 'future = pending_requests.get(response_id)'
+
+    step_8:
+      action: "Resolve Future (success or error)"
+      code: 'future.set_result(response) or future.set_exception(error)'
+
+    step_9:
+      action: "Repeat (infinite loop)"
+      code: 'while True: ...'
+
+# =============================================================================
+# NEWLINE-DELIMITED JSON FORMAT
+# =============================================================================
+
+newline_delimited_json:
+  description: |
+    Each JSON-RPC message is one line (newline-delimited JSON).
+
+    **Format:**
+    - One JSON object per line
+    - Lines separated by newline (\\n)
+    - No blank lines between messages
+    - UTF-8 encoding
+
+    **Advantages:**
+    - Simple parsing (read line, parse JSON)
+    - No message length prefix required
+    - Human-readable (can debug with cat/tail)
+
+    **Disadvantages:**
+    - Cannot handle newlines in JSON strings (must escape)
+    - 10MB line size limit (prevents infinite reads)
+
+  format_specification:
+    encoding: "UTF-8"
+    line_terminator: "\\n (LF, 0x0A)"
+    max_line_size: "10MB"
+    empty_lines: "ignored"
+    json_format: "compact (no pretty-printing, no newlines)"
+
+  example_stream:
+    description: "Example stdio stream (3 requests, 3 responses)"
+    stream: |
+      {"jsonrpc":"2.0","method":"initialize","params":{},"id":"req-1"}
+      {"jsonrpc":"2.0","result":{"protocolVersion":"2024-11-05","capabilities":{}},"id":"req-1"}
+      {"jsonrpc":"2.0","method":"tools/list","params":{},"id":"req-2"}
+      {"jsonrpc":"2.0","result":{"tools":[{"name":"get_weather","description":"..."}]},"id":"req-2"}
+      {"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_weather","arguments":{"city":"Seattle"}},"id":"req-3"}
+      {"jsonrpc":"2.0","result":{"temperature":65,"units":"F"},"id":"req-3"}
+
+    notes:
+      - "Each line is one complete JSON object"
+      - "No newlines within JSON (compact format)"
+      - "Responses interleaved with requests (full duplex)"
+
+# =============================================================================
+# ASYNC REQUEST/RESPONSE MATCHING
+# =============================================================================
+
+async_request_response_matching:
+  description: "How K1 matches responses to pending requests (async, out-of-order)"
+
+  pending_requests_dict:
+    type: "Dict[str, asyncio.Future]"
+    key: "request_id (UUID v4)"
+    value: "asyncio.Future (resolved when response arrives)"
+    purpose: "Match response id to correct pending request"
+
+  matching_algorithm:
+    step_1:
+      description: "K1 sends request with id='req-123'"
+      action: "pending_requests['req-123'] = asyncio.Future()"
+
+    step_2:
+      description: "K1 awaits future"
+      action: "response = await pending_requests['req-123']"
+
+    step_3:
+      description: "MCP server processes request, sends response with id='req-123'"
+      action: "Write JSON-RPC response to stdout"
+
+    step_4:
+      description: "K1 receive_loop reads response"
+      action: "data = json.loads(line); response_id = data['id']"
+
+    step_5:
+      description: "K1 looks up pending request"
+      action: "future = pending_requests.get(response_id)"
+
+    step_6:
+      description: "K1 resolves future"
+      action: "future.set_result(response)"
+
+    step_7:
+      description: "Original await completes"
+      action: "response = await pending_requests['req-123'] returns"
+
+  out_of_order_handling:
+    description: "Responses may arrive in different order than requests"
+    example:
+      scenario: "K1 sends req-A, req-B. MCP server responds B, then A."
+      requests:
+        - {"id": "req-A", "method": "slow_tool", "sent_at": "t=0"}
+        - {"id": "req-B", "method": "fast_tool", "sent_at": "t=1"}
+      responses:
+        - {"id": "req-B", "result": "fast result", "received_at": "t=2"}
+        - {"id": "req-A", "result": "slow result", "received_at": "t=10"}
+      outcome: "Both requests matched correctly via id"
+
+# =============================================================================
+# SUBPROCESS LIFECYCLE MANAGEMENT
+# =============================================================================
+
+subprocess_lifecycle:
+  description: "How K1 manages MCP server subprocess lifecycle"
+
+  spawn_subprocess:
+    function: "asyncio.create_subprocess_exec"
+    args:
+      - "executable: str (e.g., 'python3')"
+      - "args: List[str] (e.g., ['weather_api_mcp_server.py'])"
+      - "stdin: asyncio.subprocess.PIPE"
+      - "stdout: asyncio.subprocess.PIPE"
+      - "stderr: asyncio.subprocess.PIPE"
+    returns: "asyncio.subprocess.Process"
+    latency: "<100ms P95 (from ADR-0033c)"
+
+  monitor_subprocess:
+    description: "Detect subprocess crashes"
+    method: "asyncio.create_task(process.wait())"
+    crash_detection:
+      exit_code_zero: "Clean exit (normal shutdown)"
+      exit_code_nonzero: "Crash (log error, increment circuit breaker)"
+      signal_kill: "Killed by signal (SIGSEGV, SIGABRT, SIGKILL)"
+    action_on_crash:
+      - "Log crash with trace_id"
+      - "Reject all pending requests with Internal Error (-32603)"
+      - "Increment circuit breaker failure count"
+      - "Remove from pending_requests dict"
+
+  terminate_subprocess:
+    graceful_shutdown:
+      step_1: "Send 'shutdown' JSON-RPC request"
+      step_2: "Wait 5 seconds for clean exit"
+      step_3: "If not exited, send SIGTERM"
+      step_4: "Wait 5 seconds"
+      step_5: "If still running, send SIGKILL"
+    force_kill:
+      step_1: "Send SIGKERM"
+      step_2: "Wait 5 seconds"
+      step_3: "Send SIGKILL"
+      step_4: "Wait for exit (process.wait())"
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+
+error_handling:
+  invalid_json_from_server:
+    trigger: "stdout contains malformed JSON"
+    action: "Log warning, discard line, continue receive_loop"
+    example: '{"jsonrpc":"2.0","result":{temperature:65},"id":"req-1"}  # Missing quotes around "temperature"'
+
+  unknown_response_id:
+    trigger: "Response id not in pending_requests"
+    action: "Log warning, discard response (late/duplicate)"
+    example: "Response id='req-999' but no pending request with that id"
+
+  subprocess_crash:
+    trigger: "process.wait() returns non-zero exit code"
+    action: "Reject all pending requests, log crash, increment circuit breaker"
+    example: "MCP server crashed with SIGSEGV"
+
+  stdin_write_failure:
+    trigger: "stdin.write() raises BrokenPipeError"
+    action: "Log error, close transport, kill subprocess"
+    example: "MCP server closed stdin (unexpected)"
+
+  stdout_eof:
+    trigger: "stdout.readline() returns empty bytes"
+    action: "Break receive_loop, close transport"
+    example: "MCP server closed stdout (graceful shutdown)"
+
+# =============================================================================
+# PERFORMANCE REQUIREMENTS
+# =============================================================================
+
+performance_requirements:
+  subprocess_spawn_latency:
+    target: "<100ms P95"
+    measurement: "Time from asyncio.create_subprocess_exec to process ready"
+    source: "ADR-0033c (Process Sandbox Implementation)"
+
+  stdio_write_latency:
+    target: "<1ms P95"
+    measurement: "Time to write JSON-RPC request to stdin + drain"
+    rationale: "Pipe I/O is fast (in-memory buffer)"
+
+  stdio_read_latency:
+    target: "<1ms P95"
+    measurement: "Time to read one line from stdout"
+    rationale: "Pipe I/O is fast"
+
+  total_ipc_overhead:
+    target: "<3.5ms P95"
+    measurement: "JSON serialization (0.5ms) + write (1ms) + read (1ms) + deserialization (0.5ms) + matching (0.01ms)"
+    percentage: "1.7% of 200ms tool execution (negligible)"
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+metrics:
+  stdio_requests_sent_total:
+    type: "counter"
+    labels: ["method"]
+    description: "Total JSON-RPC requests sent via stdio"
+
+  stdio_responses_received_total:
+    type: "counter"
+    labels: ["method", "status"]  # status: success | error
+    description: "Total JSON-RPC responses received via stdio"
+
+  stdio_subprocess_spawned_total:
+    type: "counter"
+    labels: ["tool_name"]
+    description: "Total MCP server subprocesses spawned"
+
+  stdio_subprocess_crashes_total:
+    type: "counter"
+    labels: ["tool_name", "exit_code"]
+    description: "Total MCP server subprocess crashes"
+
+  stdio_write_latency_ms:
+    type: "histogram"
+    buckets: [0.1, 0.5, 1, 5, 10]
+    labels: ["method"]
+    description: "Stdio write latency in milliseconds"
+
+logging:
+  request_sent:
+    level: "DEBUG"
+    message: "JSON-RPC request sent via stdio"
+    fields:
+      - "request_id"
+      - "method"
+      - "tool_name"
+
+  response_received:
+    level: "DEBUG"
+    message: "JSON-RPC response received via stdio"
+    fields:
+      - "request_id"
+      - "method"
+      - "status"
+
+  subprocess_crashed:
+    level: "ERROR"
+    message: "MCP server subprocess crashed"
+    fields:
+      - "tool_name"
+      - "exit_code"
+      - "signal"
+      - "pending_requests_count"
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+references:
+  standards:
+    - name: "JSON-RPC 2.0 Specification"
+      url: "https://www.jsonrpc.org/specification"
+      year: 2010
+
+    - name: "Newline Delimited JSON (NDJSON)"
+      url: "http://ndjson.org/"
+      year: 2013
+      description: "Streaming JSON format (one JSON object per line)"
+
+  related_adrs:
+    - "ADR-0034b: MCP Process Lifecycle"
+    - "ADR-0033c: Process Sandbox Implementation"
+    - "ADR-0032: Band-Based Egress Rules"
+
+  related_contracts:
+    - "jsonrpc_request_format.yml"
+    - "jsonrpc_response_format.yml"
+    - "request_id_tracking.yml"
+    - "http_transport_impl.yml"
+
+# =============================================================================
+# CONTRACT VERSION & APPROVAL
+# =============================================================================
+
+contract_status:
+  version: "1.0.0"
+  status: "approved"
+  approved_by: "K1 Architecture Team"
+  approved_date: "2025-10-21"
+  next_review: "2026-04-21"
+  change_history:
+    - version: "1.0.0"
+      date: "2025-10-21"
+      author: "K1 Architecture Team"
+      changes: "Initial contract based on ADR-0034a"

@@ -12,6 +12,7 @@
 ## 📊 Executive Summary
 
 **Total Scope:**
+
 - **206 ADRs analyzed** (0001-0050 including sub-ADRs, ADRs 0001-0041 fully detailed)
 - **22 contract categories** identified
 - **~741 contract files** to create (expanded from 649 after ADR 0039-0041 review, +92 files)
@@ -20,6 +21,7 @@
 - **~129 implementation issues** (detailed below, comprehensive coverage)
 
 **Major Expansions After ADR 0001-0035 Review:**
+
 - ✅ **Epic 3.3 added:** K0 Pipeline Contracts (P01-P20) - 60 files (20 pipelines × 3 files each)
 - ✅ **Epic 2.6 added:** MPST Protocol Detailed Contracts (6 protocols) - 54 files (9 per protocol)
 - ✅ **Epic 3.2.3 expanded:** SSE Event Schemas (17 events) - 25 files (17 FlatBuffers + envelope + serializer + 5 filters + browser SDK)
@@ -50,6 +52,7 @@
 - ✅ **Serialization contracts:** Complete FlatBuffers, REST API dual format, WebSocket binary, SSE JSON, schema versioning
 
 **Success Criteria:**
+
 - ✅ All contracts map to source ADRs with line references
 - ✅ FlatBuffers schemas compile and validate (76 schemas across 5 layers + 17 SSE events + 6 SessionState sections)
 - ✅ Protocol definitions pass MPST validation (6 protocols: Agent Hire, Task Execution, Clarification, Barge-In, Tool Call, Saga Rollback)
@@ -62,6 +65,7 @@
 - ✅ Documentation complete with examples (YAML templates, FlatBuffers schemas, OpenAPI 3.1 specs)
 
 **Coverage Summary by ADR:**
+
 - **ADR-0001 (K0/K1 Split):** Epic 1.1 (20 K0 ports) + Epic 3.3 (20 K0 pipelines) = 80 contract files ✅
 - **ADR-0002 (Actor Model):** Epic 1.2 (mailbox, supervisor, router) = 7 contract files ✅
 - **ADR-0003 (MPST Protocols):** Epic 1.3 (6 PDL definitions) + Epic 2.6 (6 protocol FSMs) = 60 contract files ✅
@@ -105,6 +109,7 @@
 **Total Contract Files:** ~741 files across 33 epics, 4 milestones, 12 weeks
 
 **Recent Expansion History:**
+
 1. **Initial Plan (User "structure good" feedback):** 150 files, 18 epics, Milestones 1-4
 2. **After ADR 0001-0015 Gap Analysis:** 220 files (+70 files), 24 epics (added Epic 2.6, 3.3)
 3. **After ADR 0016-0017 Detailed Review:** 266 files (+46 files), 24 epics (expanded Epic 3.2.3, 4.1.1)
@@ -126,18 +131,22 @@
 Based on ADRs 0001-0004 and sub-ADRs reviewed, the contract development follows this timeline:
 
 ### **Phase 1: Foundation Contracts (Weeks 1-3)**
+
 **ADRs:** 0001-0004 + sub-ADRs
 **Focus:** Core kernel architecture, Actor Model, protocols, module structure
 
 ### **Phase 2: Agent & Orchestration Contracts (Weeks 4-6)**
+
 **ADRs:** 0005-0009 + sub-ADRs
 **Focus:** Agent lifecycle, orchestration, planning, error recovery
 
 ### **Phase 3: Serialization & API Contracts (Weeks 7-9)**
+
 **ADRs:** 0011-0016 + sub-ADRs
 **Focus:** FlatBuffers schemas, API specifications, WebSocket, SSE
 
 ### **Phase 4: State & Performance Contracts (Weeks 10-12)**
+
 **ADRs:** 0017-0031 + sub-ADRs
 **Focus:** SessionState, storage, performance budgets, observability
 
@@ -148,6 +157,7 @@ Based on ADRs 0001-0004 and sub-ADRs reviewed, the contract development follows 
 **Goal:** Establish core architectural contracts from foundational ADRs
 
 ### **Milestone Deliverables:**
+
 - [ ] K0/K1 integration contracts complete
 - [ ] Actor Model mailbox contracts defined
 - [ ] MPST protocol contracts validated
@@ -157,6 +167,7 @@ Based on ADRs 0001-0004 and sub-ADRs reviewed, the contract development follows 
 ---
 
 ## Epic 1.1: K0/K1 Kernel Split Contracts
+
 **ADR Source:** ADR-0001, ADR-0001a, ADR-0001f
 **Timeline:** Week 1 (5 days)
 **Dependencies:** None (foundational)
@@ -164,17 +175,21 @@ Based on ADRs 0001-0004 and sub-ADRs reviewed, the contract development follows 
 ### **Issues for Epic 1.1:**
 
 #### **Issue 1.1.1: K0 Bridge Port Definitions (P01-P20)**
+
 **Effort:** 2 days
 **Assignee:** Backend Contract Lead
 
 **Context (File Reference):**
+
 - **Source ADR:** `docs/architecture/decisions/0001a-k0-bridge-communication-protocol.md`
 - **Lines:** 350-650 (Port Specifications)
 - **K0 Docs:** Memory kernel documentation (JSON envelope specs)
 
 **Expected Output:**
+
 - **Location:** `contracts/k0_bridge/ports/`
 - **Files to Create:**
+
   ```
   contracts/k0_bridge/ports/
   ├── P01_recall_query.yml         # Memory retrieval contract
@@ -200,6 +215,7 @@ Based on ADRs 0001-0004 and sub-ADRs reviewed, the contract development follows 
   ```
 
 **Contract Schema Template (YAML):**
+
 ```yaml
 # contracts/k0_bridge/ports/P01_recall_query.yml
 port:
@@ -386,6 +402,7 @@ port:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] 20 port YAML files created in `contracts/k0_bridge/ports/`
 - [ ] Each port has complete request/response schemas
 - [ ] Usage examples with code snippets
@@ -396,16 +413,20 @@ port:
 ---
 
 #### **Issue 1.1.2: K0 Bridge Dual Protocol Support (JSON + FlatBuffers)**
+
 **Effort:** 1 day
 **Assignee:** Serialization Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0001a-k0-bridge-communication-protocol.md`
 - **Lines:** 100-250 (Dual Protocol Support section)
 
 **Expected Output:**
+
 - **Location:** `contracts/k0_bridge/protocols/`
 - **Files:**
+
   ```
   contracts/k0_bridge/protocols/
   ├── json_envelope_spec.yml       # JSON envelope contract (PRIMARY)
@@ -415,6 +436,7 @@ port:
   ```
 
 **Contract Example (json_envelope_spec.yml):**
+
 ```yaml
 json_envelope:
   name: "K0 Bridge JSON Envelope"
@@ -501,6 +523,7 @@ json_envelope:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] JSON envelope spec complete with all required fields
 - [ ] FlatBuffers envelope spec mapped to JSON structure
 - [ ] Content negotiation rules documented
@@ -510,16 +533,20 @@ json_envelope:
 ---
 
 #### **Issue 1.1.3: State Boundary Management Contracts**
+
 **Effort:** 1 day
 **Assignee:** State Management Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0001f-state-boundary-management-k1-k0.md`
 - **Lines:** 150-450 (State Allocation section)
 
 **Expected Output:**
+
 - **Location:** `contracts/sessionstate/boundaries/`
 - **Files:**
+
   ```
   contracts/sessionstate/boundaries/
   ├── k1_state_allocation.yml      # What lives in K1 SessionState
@@ -530,6 +557,7 @@ json_envelope:
   ```
 
 **Contract Example (k1_state_allocation.yml):**
+
 ```yaml
 k1_sessionstate_allocation:
   name: "K1 SessionState Working Memory"
@@ -625,6 +653,7 @@ k1_sessionstate_allocation:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] K1 state allocation contract complete with 6 sections
 - [ ] K0 state allocation contract (7 memory types)
 - [ ] State flow patterns documented (write, read, recovery)
@@ -634,6 +663,7 @@ k1_sessionstate_allocation:
 ---
 
 ## Epic 1.2: Actor Model Contracts
+
 **ADR Source:** ADR-0002, ADR-0002a-d
 **Timeline:** Week 1-2 (3 days)
 **Dependencies:** None (foundational)
@@ -641,17 +671,21 @@ k1_sessionstate_allocation:
 ### **Issues for Epic 1.2:**
 
 #### **Issue 1.2.1: Mailbox Message Envelope Schema**
+
 **Effort:** 1 day
 **Assignee:** Messaging Infrastructure Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0002-actor-model-agent-isolation.md`
 - **Lines:** 500-800 (Mailbox architecture section)
 - **Related:** ADR-0002a Mailbox MPSC Queue Implementation
 
 **Expected Output:**
+
 - **Location:** `contracts/actor_model/mailbox/`
 - **Files:**
+
   ```
   contracts/actor_model/mailbox/
   ├── message_envelope.yml          # Mailbox message envelope spec
@@ -662,6 +696,7 @@ k1_sessionstate_allocation:
   ```
 
 **Contract Example (message_envelope.yml):**
+
 ```yaml
 mailbox_message_envelope:
   name: "Actor Mailbox Message Envelope"
@@ -773,6 +808,7 @@ mailbox_message_envelope:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Message envelope YAML complete with all fields
 - [ ] AI agent vs pure actor usage clarified
 - [ ] MPSC queue contract with lock-free guarantees
@@ -783,16 +819,20 @@ mailbox_message_envelope:
 ---
 
 #### **Issue 1.2.2: Supervisor Health Check Protocol**
+
 **Effort:** 1 day
 **Assignee:** Reliability Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0002b-supervisor-monitoring-crash-recovery.md`
 - **Related:** Supervisor monitoring for ALL 52 K1 components
 
 **Expected Output:**
+
 - **Location:** `contracts/actor_model/supervisor/`
 - **Files:**
+
   ```
   contracts/actor_model/supervisor/
   ├── health_check_protocol.yml     # Ping-pong health checks (1Hz)
@@ -803,6 +843,7 @@ mailbox_message_envelope:
   ```
 
 **Acceptance Criteria:**
+
 - [ ] Health check protocol (1Hz ping-pong) documented
 - [ ] Crash detection criteria (3 missed pings = crash)
 - [ ] Blacklist policy (3 crashes in 10min → blacklist 1hr)
@@ -812,16 +853,20 @@ mailbox_message_envelope:
 ---
 
 #### **Issue 1.2.3: Actor Router & Admission Control**
+
 **Effort:** 1 day
 **Assignee:** Infrastructure Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0002c-actor-router-admission-control.md`
 - **Lines:** Focus on message routing and load management
 
 **Expected Output:**
+
 - **Location:** `contracts/actor_model/router/`
 - **Files:**
+
   ```
   contracts/actor_model/router/
   ├── routing_table_schema.yml      # component_id → mailbox mapping
@@ -831,6 +876,7 @@ mailbox_message_envelope:
   ```
 
 **Acceptance Criteria:**
+
 - [ ] Routing table schema (component_id → mailbox)
 - [ ] Admission control policies (drop LOW priority at 90% load)
 - [ ] Priority routing rules (URGENT → front of queue)
@@ -839,6 +885,7 @@ mailbox_message_envelope:
 ---
 
 ## Epic 1.3: MPST Protocol Contracts
+
 **ADR Source:** ADR-0003, ADR-0003a-d
 **Timeline:** Week 2 (5 days)
 **Dependencies:** Epic 1.2 (Actor Model contracts)
@@ -846,16 +893,20 @@ mailbox_message_envelope:
 ### **Issues for Epic 1.3:**
 
 #### **Issue 1.3.1: Protocol Definition Language (PDL) Specification**
+
 **Effort:** 2 days
 **Assignee:** Protocol Architect
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0003a-protocol-definition-language-pdl-specification.md`
 - **Lines:** Custom YAML-based PDL for conversation protocols
 
 **Expected Output:**
+
 - **Location:** `contracts/protocols/pdl/`
 - **Files:**
+
   ```
   contracts/protocols/pdl/
   ├── pdl_specification.yml         # PDL language spec
@@ -865,6 +916,7 @@ mailbox_message_envelope:
   ```
 
 **Contract Example (pdl_specification.yml):**
+
 ```yaml
 protocol_definition_language:
   name: "K1 Protocol Definition Language (PDL)"
@@ -1006,6 +1058,7 @@ protocol_definition_language:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Complete PDL specification YAML
 - [ ] JSON Schema for PDL validation
 - [ ] PDL compiler contract (YAML → FSM)
@@ -1015,16 +1068,20 @@ protocol_definition_language:
 ---
 
 #### **Issue 1.3.2: Six Core Protocol Definitions**
+
 **Effort:** 2 days
 **Assignee:** Protocol Architect + AI Agent Specialist
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0003b-6-core-protocol-implementations.md`
 - **Lines:** Complete specifications for 6 protocols
 
 **Expected Output:**
+
 - **Location:** `contracts/protocols/definitions/`
 - **Files:**
+
   ```
   contracts/protocols/definitions/
   ├── agent_hire.pdl.yml            # Agent hiring (6 states, 8 transitions)
@@ -1036,6 +1093,7 @@ protocol_definition_language:
   ```
 
 **Contract Example (agent_hire.pdl.yml):**
+
 ```yaml
 # contracts/protocols/definitions/agent_hire.pdl.yml
 protocol:
@@ -1185,6 +1243,7 @@ protocol:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] 6 protocol PDL files created
 - [ ] Each protocol has complete FSM (states, transitions, timeouts)
 - [ ] AI agent vs pure actor behavior clarified
@@ -1195,16 +1254,20 @@ protocol:
 ---
 
 #### **Issue 1.3.3: Protocol Monitor Runtime Implementation Contract**
+
 **Effort:** 1 day
 **Assignee:** Runtime Engineer
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0003c-protocol-monitor-runtime-implementation.md`
 - **Lines:** Protocol Monitor as pure actor, FSM executor
 
 **Expected Output:**
+
 - **Location:** `contracts/protocols/runtime/`
 - **Files:**
+
   ```
   contracts/protocols/runtime/
   ├── protocol_monitor_api.yml      # Protocol Monitor public API
@@ -1214,6 +1277,7 @@ protocol:
   ```
 
 **Acceptance Criteria:**
+
 - [ ] Protocol Monitor API contract (load, start, validate, complete)
 - [ ] FSM execution contract (state tracking, transition rules)
 - [ ] Violation handlers (block, DLQ, timeout injection)
@@ -1222,6 +1286,7 @@ protocol:
 ---
 
 ## Epic 1.4: 52-Module Architecture Documentation
+
 **ADR Source:** ADR-0004, ADR-0004a-d
 **Timeline:** Week 3 (5 days)
 **Dependencies:** Epic 1.1, 1.2, 1.3 (foundational architecture)
@@ -1229,17 +1294,21 @@ protocol:
 ### **Issues for Epic 1.4:**
 
 #### **Issue 1.4.1: 5-Layer Architecture Module Manifest**
+
 **Effort:** 2 days
 **Assignee:** Architecture Documentation Lead
 
 **Context:**
+
 - **Source ADR:** `docs/architecture/decisions/0004-52-module-5-layer-architecture.md`
 - **Lines:** 100-600 (Complete module classification)
 - **Related:** `docs/k1_module_analysis.md`
 
 **Expected Output:**
+
 - **Location:** `contracts/architecture/`
 - **Files:**
+
   ```
   contracts/architecture/
   ├── module_manifest.yml           # Complete 52-module registry
@@ -1250,6 +1319,7 @@ protocol:
   ```
 
 **Contract Example (module_manifest.yml):**
+
 ```yaml
 k1_module_manifest:
   name: "K1 Intelligence Module - Complete Architecture"
@@ -1509,6 +1579,7 @@ k1_module_manifest:
 ```
 
 **Acceptance Criteria:**
+
 - [ ] Complete 52-module manifest with all details
 - [ ] AI agent classification (4 modules clearly marked)
 - [ ] Pure actor classification (48 modules)
@@ -1522,6 +1593,7 @@ k1_module_manifest:
 **Goal:** Define agent lifecycle, orchestration, planning, error recovery, and capability security contracts
 
 ### **Milestone Deliverables:**
+
 - [ ] Agent lifecycle FSM contracts (6 states)
 - [ ] Orchestration 3-phase contracts (Contract Net Protocol)
 - [ ] Planning pipeline contracts (4 stages)
@@ -1532,6 +1604,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.1: Agent Lifecycle Contracts
+
 **ADR Source:** ADR-0005, ADR-0005a-e
 **Timeline:** Week 4 (5 days)
 **Dependencies:** Milestone 1 (Actor Model, Protocols)
@@ -1539,9 +1612,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.1:**
 
 #### **Issue 2.1.1: Agent Lifecycle FSM Contract**
+
 **Effort:** 1 day | **Source ADR:** `0005-agent-lifecycle-fsm.md`
 
 **Expected Output:** `contracts/agent_lifecycle/`
+
 ```
 ├── lifecycle_fsm.yml                # 6-state FSM: PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED
 ├── state_transitions.yml            # Transition rules and triggers
@@ -1552,6 +1627,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - FSM state definitions with entry/exit actions
 - Transition guards and timing constraints
 - Performance budgets per state
@@ -1559,9 +1635,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.1.2: Supervisor Monitoring & Blacklist Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0005d-supervisor-blacklist.md`
 
 **Expected Output:** `contracts/agent_lifecycle/supervisor/`
+
 ```
 ├── health_monitoring.yml            # 1Hz ping, 3 missed = crash
 ├── crash_detection.yml              # Crash criteria and logging
@@ -1573,9 +1651,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.1.3: Agent Personality & Capabilities Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0005e-agent-personality-capabilities.md`
 
 **Expected Output:** `contracts/agent_lifecycle/personality/`
+
 ```
 ├── capability_tokens.yml            # Unforgeable capability tokens
 ├── persona_prompts.yml              # Jinja2 prompt templates (AI agents only)
@@ -1587,6 +1667,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.2: Orchestration Contracts (Contract Net Protocol)
+
 **ADR Source:** ADR-0006, ADR-0006a-e
 **Timeline:** Week 4-5 (3 days)
 **Dependencies:** Epic 2.1 (Agent Lifecycle)
@@ -1594,9 +1675,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.2:**
 
 #### **Issue 2.2.1: 3-Phase Orchestration Contract**
+
 **Effort:** 1 day | **Source ADR:** `0006-3phase-orchestration-contract-net.md`
 
 **Expected Output:** `contracts/orchestration/3phase/`
+
 ```
 ├── negotiation_phase.yml            # Task announcement → proposals
 ├── selection_phase.yml              # Multi-criteria scoring
@@ -1608,9 +1691,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.2.2: Multi-Criteria Scoring Contract**
+
 **Effort:** 1 day | **Source ADR:** `0006b-multi-criteria-scoring.md`
 
 **Expected Output:** `contracts/orchestration/scoring/`
+
 ```
 ├── scoring_algorithm.yml            # Capability (0.4) + Latency (0.3) + Cost (0.2) + Specialization (0.1)
 ├── capability_matching.yml          # Required vs provided capabilities
@@ -1622,9 +1707,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.2.3: Parallel DAG Execution & Saga Integration**
+
 **Effort:** 1 day | **Source ADR:** `0006c-parallel-dag-execution.md`, `0006d-saga-pattern-integration.md`
 
 **Expected Output:** `contracts/orchestration/execution/`
+
 ```
 ├── dag_execution.yml                # Parallel task execution with dependencies
 ├── task_dependencies.yml            # DAG topology representation
@@ -1635,6 +1722,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.3: Planning Pipeline Contracts
+
 **ADR Source:** ADR-0007, ADR-0007a-d
 **Timeline:** Week 5 (3 days)
 **Dependencies:** Epic 2.2 (Orchestration)
@@ -1642,9 +1730,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.3:**
 
 #### **Issue 2.3.1: 4-Stage Planning Pipeline Contract**
+
 **Effort:** 1 day | **Source ADR:** `0007-4stage-planning-pipeline.md`
 
 **Expected Output:** `contracts/planning/pipeline/`
+
 ```
 ├── sketch_stage.yml                 # LLM-powered plan sketching (ADR-0007a)
 ├── expand_stage.yml                 # Tool/prompt registry integration (ADR-0007b)
@@ -1654,6 +1744,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Sketch stage: LLM prompt templates for Planner AI agent
 - Expand stage: Tool registry lookup, prompt template selection
 - Validation stage: Rule engine + arbiter fallback
@@ -1662,9 +1753,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.3.2: Tool & Prompt Registry Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0007b-expand-stage-tool-prompt-registry-integration.md`
 
 **Expected Output:** `contracts/planning/registries/`
+
 ```
 ├── tool_registry_schema.yml         # Tool catalog (JSON specs)
 ├── prompt_registry_schema.yml       # Prompt templates (Jinja2)
@@ -1675,9 +1768,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.3.3: Plan Validation Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0007c-validation-stage-2-tier-implementation.md`
 
 **Expected Output:** `contracts/planning/validation/`
+
 ```
 ├── rule_engine_schema.yml           # Validation rules (cycles, budgets, capabilities)
 ├── arbiter_contract.yml             # Human-in-loop arbiter for RED band
@@ -1688,6 +1783,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.4: Error Recovery Contracts (Saga & Circuit Breaker)
+
 **ADR Source:** ADR-0008, ADR-0008a-d, ADR-0009, ADR-0009a-c
 **Timeline:** Week 6 (5 days)
 **Dependencies:** Epic 2.2, 2.3 (Orchestration, Planning)
@@ -1695,9 +1791,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.4:**
 
 #### **Issue 2.4.1: Saga Pattern Contracts**
+
 **Effort:** 2 days | **Source ADR:** `0008-saga-pattern-error-recovery.md`
 
 **Expected Output:** `contracts/error_recovery/saga/`
+
 ```
 ├── saga_definition.yml              # Saga state machine
 ├── compensating_transactions.yml    # Rollback handlers (ADR-0008a)
@@ -1707,6 +1805,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Compensating transaction design (idempotent, logged)
 - Forward recovery (retry, continue) vs backward recovery (rollback, abort)
 - Distributed state tracking (saga log)
@@ -1715,9 +1814,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.4.2: Circuit Breaker Contracts**
+
 **Effort:** 2 days | **Source ADR:** `0009-circuit-breaker-pattern.md`
 
 **Expected Output:** `contracts/error_recovery/circuit_breaker/`
+
 ```
 ├── circuit_breaker_fsm.yml          # 3-state FSM: CLOSED → OPEN → HALF_OPEN (ADR-0009a)
 ├── per_service_config.yml           # Service-specific thresholds (ADR-0009b)
@@ -1728,9 +1829,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.4.3: Timeout & Deadlock Handling Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0008d-timeout-deadlock-handling.md`
 
 **Expected Output:** `contracts/error_recovery/timeouts/`
+
 ```
 ├── timeout_policies.yml             # Per-operation timeout budgets
 ├── deadlock_detection.yml           # Circular wait detection
@@ -1741,6 +1844,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.5: Capability-Based Security Contracts
+
 **ADR Source:** ADR-0010, ADR-0010a-d
 **Timeline:** Week 6 (5 days)
 **Dependencies:** Epic 2.1, 2.2, 2.3 (Agent Lifecycle, Orchestration, Planning)
@@ -1748,9 +1852,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.5:**
 
 #### **Issue 2.5.1: Capability Token Design Contracts**
+
 **Effort:** 2 days | **Source ADR:** `0010-capability-based-security.md`, `0010a-capability-token-design-lifecycle.md`
 
 **Expected Output:** `contracts/security/capabilities/`
+
 ```
 ├── capability_token_schema.yml      # Unforgeable token structure (capability_id, subject, resource, rights, constraints)
 ├── hmac_sha256_signing.yml          # Cryptographic signature with secret key
@@ -1762,6 +1868,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Capability token structure with HMAC-SHA256 signature
 - Rights enum (READ, WRITE, EXECUTE, DELETE, DELEGATE, ATTENUATE)
 - Constraints schema (max_cost_usd, max_invocations, privacy_band)
@@ -1770,9 +1877,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.5.2: Capability Manager Contracts**
+
 **Effort:** 2 days | **Source ADR:** `0010-capability-based-security.md`
 
 **Expected Output:** `contracts/security/capability_manager/`
+
 ```
 ├── capability_issuance.yml          # Issue capability with signing
 ├── capability_verification.yml      # Verify signature + validate constraints
@@ -1784,6 +1893,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Capability Manager API (issue, verify, revoke)
 - Role-based capability templates (planner → read_tools only)
 - Secret key management (rotation, storage in Vault)
@@ -1792,9 +1902,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.5.3: Agent Capability Assignment Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0010b-agent-capability-assignment-policy.md`
 
 **Expected Output:** `contracts/security/agent_capabilities/`
+
 ```
 ├── planner_agent_capabilities.yml   # Planner: read_tools, execute_read_tools (no write, no delete)
 ├── booking_agent_capabilities.yml   # Booking: execute_booking, max_cost_usd: 100.0, requires_approval: true
@@ -1805,6 +1917,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Per-agent capability templates (4 AI agents + key pure actors)
 - Least privilege enforcement (Planner can't book reservations)
 - Delegation rules (Orchestrator can delegate attenuated capabilities)
@@ -1812,9 +1925,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.5.4: Capability Enforcement & Audit Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0010c-capability-enforcement-runtime.md`, `0010d-capability-revocation-audit-trail.md`
 
 **Expected Output:** `contracts/security/enforcement/`
+
 ```
 ├── tool_runner_enforcement.yml      # Tool Runner checks capability before execution
 ├── model_hub_enforcement.yml        # Model Hub checks capability before LLM call
@@ -1826,6 +1941,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Hot path enforcement (<1ms validation before every tool/model call)
 - Audit trail to K0 WAL (100% capability usage logged)
 - Revocation propagation (Redis pub/sub for multi-instance K1)
@@ -1834,11 +1950,13 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.5.5: Band-Based Egress Rules Contracts**
+
 **Effort:** 4 days | **Source ADR:** `0032-band-based-egress-rules.md` + sub-ADRs `0032a-d`
 
 **Expected Output:** `contracts/security/egress/` (17 files)
 
 **Network Egress Control - ADR-0032a (4 files):**
+
 ```
 ├── iptables_egress_controller.yml              # Iptables --pid-owner process isolation: Per-tool firewall rules, <5ms rule setup via iptables-restore, default-deny policy (DROP all OUTPUT), cleanup on tool exit, supports IPv4/IPv6
 ├── privacy_band_network_policies.yml           # Privacy band policies: GREEN (whitelisted domains: *.openai.com *.anthropic.com, 443/tcp only), AMBER (+ PII masking proxy), RED (127.0.0.1 only), BLACK (all network blocked)
@@ -1847,6 +1965,7 @@ k1_module_manifest:
 ```
 
 **Filesystem Egress Control - ADR-0032b (5 files):**
+
 ```
 ├── chroot_jail_manager.yml                     # Chroot jail creation: Ephemeral jails from templates (minimal-jail, python-jail, node-jail), <3ms jail setup, per-tool isolation (tool_id → /tmp/jail_<tool_id>), cleanup on exit
 ├── readonly_mounts_system.yml                  # Read-only mounts: /usr/lib (system libraries), /usr/bin (binaries), /etc/resolv.conf (DNS), /tmp/input (tool input data), mounted with MS_RDONLY + MS_NOSUID + MS_NODEV
@@ -1856,6 +1975,7 @@ k1_module_manifest:
 ```
 
 **Resource Egress Control - ADR-0032c (4 files):**
+
 ```
 ├── cgroups_v2_controller.yml                   # Cgroups v2 controller: Per-tool cgroup creation /sys/fs/cgroup/k1_tool_<tool_id>, <2ms cgroup setup, zero runtime overhead, automatic cleanup on process exit via notify_on_release
 ├── cpu_memory_limits_by_band.yml               # CPU/Memory limits by privacy band: GREEN (cpu.max 400000 100000 = 4 CPUs, memory.max 2GB), AMBER (200000 100000 = 2 CPUs, 1GB), RED (100000 100000 = 1 CPU, 512MB), BLACK (0 resources)
@@ -1864,6 +1984,7 @@ k1_module_manifest:
 ```
 
 **Egress Violation Logging - ADR-0032d (4 files):**
+
 ```
 ├── violation_detector.yml                      # Violation detector: Capture events from iptables LOG target, seccomp audit, cgroups notifications, filesystem inotify, <1ms event capture, batch 100 events/sec
 ├── k0_tool_receipt_integration.yml             # K0 ToolReceipt integration: Write violation events to ToolReceipt FlatBuffers, batch forward to K0 (100 events → 1 batch), <10ms forward latency, async (non-blocking tool execution)
@@ -1872,6 +1993,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - Network isolation (iptables --pid-owner per-tool, <5ms setup)
 - Filesystem isolation (chroot + seccomp, <3ms jail setup)
 - Resource limits (cgroups v2, <2ms setup, zero runtime overhead)
@@ -1880,6 +2002,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.6: MPST Protocol Detailed Contracts (6 Protocols)
+
 **ADR Source:** ADR-0003 (MPST Protocol Validation), Scribble/MPST specifications
 **Timeline:** Week 6 (3 days, parallel with Epic 2.5)
 **Dependencies:** Epic 1.3 (MPST Protocol PDL definitions), Epic 2.1-2.3 (Agent, Orchestration, Planning)
@@ -1887,9 +2010,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.6:**
 
 #### **Issue 2.6.1: Agent Hire Protocol FSM Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0003-mpst-protocol-validation.md`, architecture_diagrams/k1_agent_lifecycle_fsm.mmd
 
 **Expected Output:** `contracts/protocols/agent_hire/`
+
 ```
 ├── hire_protocol_fsm.yml            # 6-state FSM (PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED)
 ├── hire_request_contract.yml        # Orchestrator → Supervisor: AgentHireRequest (required_capabilities, memory_budget_mb, warmup_timeout_ms)
@@ -1904,6 +2029,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 6-state agent lifecycle FSM with deterministic transitions
 - Hire request/response message schemas (FlatBuffers)
 - Timeout enforcement contracts (warmup <200ms, drain <5s)
@@ -1912,9 +2038,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.6.2: Task Execution Protocol Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0003-mpst-protocol-validation.md`, ADR-0006 (3-Phase Orchestration)
 
 **Expected Output:** `contracts/protocols/task_execution/`
+
 ```
 ├── task_protocol_fsm.yml            # 4-phase FSM (ANNOUNCE → PROPOSE → SELECT → EXECUTE → COMPLETE)
 ├── task_announcement_contract.yml   # Orchestrator → All Agents: TaskAnnouncement (task_id, intent, user_input, required_capabilities)
@@ -1929,6 +2057,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 4-phase task execution protocol (Contract Net Protocol)
 - Hiring score algorithm (0.4 confidence + 0.3 latency + 0.3 cost)
 - Progress monitoring with progress updates
@@ -1937,9 +2066,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.6.3: Clarification Protocol Contracts**
+
 **Effort:** 0.5 day | **Source ADR:** `0003-mpst-protocol-validation.md`
 
 **Expected Output:** `contracts/protocols/clarification/`
+
 ```
 ├── clarification_protocol_fsm.yml   # 3-state FSM (REQUEST → WAITING_RESPONSE → RESOLVED)
 ├── clarification_request_contract.yml # Planner → User: ClarificationRequest (question, options, context, priority)
@@ -1950,6 +2081,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 3-state clarification FSM (REQUEST → WAITING → RESOLVED)
 - Clarification request/response schemas
 - Timeout handling (60s → use default or escalate)
@@ -1958,9 +2090,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.6.4: Barge-In Protocol Contracts**
+
 **Effort:** 0.5 day | **Source ADR:** `0003-mpst-protocol-validation.md`
 
 **Expected Output:** `contracts/protocols/barge_in/`
+
 ```
 ├── barge_in_protocol_fsm.yml        # 4-state FSM (STREAMING → INTERRUPTED → DRAINING → RESUMED)
 ├── barge_in_signal_contract.yml     # Client → Server: BargeInSignal (reason: STOP/NEW_INPUT, timestamp)
@@ -1972,6 +2106,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 4-state barge-in FSM (STREAMING → INTERRUPTED → DRAINING → RESUMED)
 - Interrupt propagation (WebSocket → API Gateway → Agent)
 - Drain contracts (finish in-flight operations)
@@ -1980,9 +2115,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.6.5: Tool Call Protocol Contracts**
+
 **Effort:** 0.5 day | **Source ADR:** `0003-mpst-protocol-validation.md`
 
 **Expected Output:** `contracts/protocols/tool_call/`
+
 ```
 ├── tool_call_protocol_fsm.yml       # 5-state FSM (REQUESTED → APPROVAL_PENDING → EXECUTING → COMPLETED/FAILED)
 ├── tool_call_request_contract.yml   # Agent → Tool Runner: ToolCall (tool_name, args, privacy_band, budget)
@@ -1996,6 +2133,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 5-state tool call FSM (REQUEST → APPROVAL → EXECUTE → COMPLETE/FAIL)
 - Approval workflow for RED band tools (user must approve)
 - Capability token enforcement (Tool Runner validates before execution)
@@ -2004,9 +2142,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.6.6: Saga Rollback Protocol Contracts**
+
 **Effort:** 0.5 day | **Source ADR:** `0003-mpst-protocol-validation.md`, ADR-0009 (Saga Pattern)
 
 **Expected Output:** `contracts/protocols/saga_rollback/`
+
 ```
 ├── saga_protocol_fsm.yml            # 5-state FSM (EXECUTING → COMPENSATING → ROLLED_BACK/FAILED)
 ├── saga_definition_contract.yml     # Saga structure (steps, compensations, dependencies)
@@ -2019,6 +2159,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts:**
+
 - 5-state saga FSM (EXECUTE → COMPENSATE → ROLLBACK/FAIL)
 - Compensation request/response schemas
 - Rollback strategies (UNDO, COMPENSATE, BEST_EFFORT)
@@ -2030,9 +2171,8 @@ k1_module_manifest:
 
 ---
 
-
-
 ## Epic 2.7: Tool Execution & Sandbox Contracts (ADR-0033)
+
 **ADR Source:** ADR-0033 (Three-Tier Sandbox Strategy), Sub-ADRs 0033a-d
 **Timeline:** Week 6 (4 days, parallel with Epic 2.6)
 **Dependencies:** Epic 2.5 (Egress Rules), Epic 1.1 (K0 Ports)
@@ -2042,9 +2182,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.7:**
 
 #### **Issue 2.7.1: 2D Tool Execution Architecture Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0033-three-tier-sandbox-strategy.md`
 
 **Expected Output:** `contracts/tools/architecture/` (5 files)
+
 ```
 ├── 2d_architecture_protocol_sandbox.yml    # Protocol Layer (MCP 80%, Direct 20%) × Sandbox Layer (WASM 15%, Process 80%, Container 5%), 6 valid combinations
 ├── protocol_layer_mcp_vs_direct.yml        # MCP Protocol (JSON-RPC 2.0 over stdio/HTTP) vs Direct API (REST/CLI), 80% MCP adoption (608 tools)
@@ -2056,9 +2198,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.7.2: MCP Protocol Integration Contracts (Layer 1)**
+
 **Effort:** 1 day | **Source ADR:** `0033a-mcp-protocol-integration.md`
 
 **Expected Output:** `contracts/tools/mcp_protocol/` (6 files)
+
 ```
 ├── json_rpc_2_0_protocol.yml               # JSON-RPC 2.0 format: {"jsonrpc":"2.0", "method":"tools/call", "params":{...}, "id":"..."}, stdio/HTTP transports
 ├── mcp_client_implementation.yml           # MCPClient wraps JSON-RPC, supports stdio (70%) and HTTP (10%) transports, timeout enforcement per tool
@@ -2071,9 +2215,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.7.3: WASM Sandbox Implementation Contracts (Layer 2)**
+
 **Effort:** 1 day | **Source ADR:** `0033b-wasm-sandbox-implementation.md`
 
 **Expected Output:** `contracts/tools/wasm_sandbox/` (7 files)
+
 ```
 ├── wasmtime_runtime.yml                    # Wasmtime runtime initialization, WASM module loading from .wasm file, <10ms instantiation
 ├── wasi_capabilities_filesystem.yml        # WASI preopened directories (e.g., /tmp/tool_workspace), capability-based filesystem access (can't access random files)
@@ -2087,9 +2233,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.7.4: Process Sandbox Implementation Contracts (Layer 2)**
+
 **Effort:** 1 day | **Source ADR:** `0033c-process-sandbox-implementation.md`
 
 **Expected Output:** `contracts/tools/process_sandbox/` (8 files)
+
 ```
 ├── os_process_isolation.yml                # Separate PID per tool, no shared memory, subprocess.Popen spawning, <100ms overhead
 ├── adr_0032_egress_integration.yml         # Full ADR-0032 4-layer egress control: iptables (network), chroot (filesystem), cgroups (resource), audit logging
@@ -2104,9 +2252,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.7.5: 2D Selection Logic & Fallback Cascade**
+
 **Effort:** 1 day | **Source ADR:** `0033d-2d-selection-logic.md`
 
 **Expected Output:** `contracts/tools/selection/` (6 files)
+
 ```
 ├── tool_execution_selector.yml             # ToolExecutionSelector algorithm: Evaluates 6 valid combinations (MCP×WASM, MCP×Process, MCP×Container, Direct×WASM, Direct×Process, Direct×Container)
 ├── protocol_selection_axis1.yml            # Axis 1: MCP (if tool has MCP server, 80%) vs Direct (legacy tools, 20%), prefer MCP for standardization
@@ -2117,6 +2267,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts for Epic 2.7:**
+
 - 2D architecture: Protocol (MCP/Direct) × Sandbox (WASM/Process/Container)
 - MCP protocol integration (JSON-RPC 2.0, stdio/HTTP)
 - WASM sandbox (Wasmtime, WASI, zero syscalls, 15% tools)
@@ -2128,6 +2279,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.8: MCP Protocol Integration Contracts (ADR-0034)
+
 **ADR Source:** ADR-0034 (MCP Protocol for Tool Integration), Sub-ADRs 0034a-d
 **Timeline:** Week 7 (5 days, parallel with Epic 3.1)
 **Dependencies:** Epic 2.7 (Tool Execution Architecture), Epic 2.4 (Error Recovery)
@@ -2137,9 +2289,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.8:**
 
 #### **Issue 2.8.1: JSON-RPC 2.0 Protocol Implementation**
+
 **Effort:** 1 day | **Source ADR:** `0034a-mcp-jsonrpc-protocol.md`
 
 **Expected Output:** `contracts/mcp/jsonrpc/` (7 files)
+
 ```
 ├── jsonrpc_request_format.yml              # JSON-RPC 2.0 request: {"jsonrpc":"2.0", "method":"tools/call", "params":{...}, "id":"UUID"}, validation rules
 ├── jsonrpc_response_format.yml             # Success response: {"jsonrpc":"2.0", "result":{...}, "id":"UUID"} OR Error response: {"jsonrpc":"2.0", "error":{code,message,data}, "id":"UUID"}
@@ -2153,9 +2307,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.8.2: MCP Process Lifecycle & Timeout Enforcement**
+
 **Effort:** 1 day | **Source ADR:** `0034b-mcp-process-lifecycle.md`
 
 **Expected Output:** `contracts/mcp/lifecycle/` (8 files)
+
 ```
 ├── lifecycle_fsm_5_states.yml              # 5-state FSM: SPAWNING (starting) → RUNNING (healthy) → TERMINATING (graceful shutdown) → TERMINATED (exited cleanly) → CRASHED (non-zero exit/signal)
 ├── process_spawner.yml                     # MCPProcessSpawner: asyncio.create_subprocess_exec(stdin=PIPE, stdout=PIPE, stderr=PIPE), track process state (lifecycle FSM)
@@ -2170,9 +2326,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.8.3: Circuit Breaker Integration**
+
 **Effort:** 1 day | **Source ADR:** `0034c-mcp-circuit-breaker.md`
 
 **Expected Output:** `contracts/mcp/circuit_breaker/` (6 files)
+
 ```
 ├── circuit_breaker_fsm_3_states.yml        # 3-state FSM: CLOSED (normal, requests allowed) → OPEN (failing, reject immediately) → HALF_OPEN (testing recovery, allow 1 probe) → CLOSED
 ├── per_tool_circuit_breaker.yml            # Each tool has separate circuit breaker instance, state tracked in-memory (tool_id → CircuitBreakerState), Redis-backed for multi-instance K1 (future)
@@ -2185,9 +2343,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.8.4: Error Handling & Recovery Strategies**
+
 **Effort:** 2 days | **Source ADR:** `0034d-mcp-error-handling.md`
 
 **Expected Output:** `contracts/mcp/error_handling/` (9 files)
+
 ```
 ├── error_classification_3_categories.yml   # TRANSIENT (network timeout, 503, rate limit 429) → retry 3x, PERMANENT (400 invalid params, 404 not found, 401 unauthorized) → no retry, CRITICAL (tool crash, circuit breaker OPEN, security violation) → escalate
 ├── retry_strategy_exponential_backoff.yml  # Exponential backoff: delay = base_delay × 2^(retry_count-1) with jitter (random 0-500ms), max retries: 3 (total 4 executions including original)
@@ -2201,6 +2361,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts for Epic 2.8:**
+
 - JSON-RPC 2.0 protocol implementation (stdio/HTTP transports)
 - Process lifecycle FSM (5 states: SPAWNING/RUNNING/TERMINATING/TERMINATED/CRASHED)
 - Circuit breaker resilience (3 states: CLOSED/OPEN/HALF_OPEN, 92% cascade prevention)
@@ -2211,6 +2372,7 @@ k1_module_manifest:
 ---
 
 ## Epic 2.9: PII Detection & Redaction Contracts (ADR-0035)
+
 **ADR Source:** ADR-0035 (PII Detection & Redaction), Sub-ADRs 0035a-d
 **Timeline:** Week 7-8 (6 days, parallel with Epic 3.1)
 **Dependencies:** Epic 4.1 (SessionState), Epic 4.2 (K0 Storage)
@@ -2220,9 +2382,11 @@ k1_module_manifest:
 ### **Issues for Epic 2.9:**
 
 #### **Issue 2.9.1: Regex Pattern Library for Structured PII**
+
 **Effort:** 1 day | **Source ADR:** `0035a-regex-pattern-library.md`
 
 **Expected Output:** `contracts/privacy/regex_patterns/` (6 files)
+
 ```
 ├── regex_pattern_registry.yml              # 12 precompiled patterns: SSN (\d{3}-\d{2}-\d{4}), email, phone, credit card, address, IP address, driver license, passport, IBAN, MAC address, health insurance, tax ID
 ├── pattern_validation_logic.yml            # Luhn algorithm for credit cards, SSN format validation (no 000-xx-xxxx), email RFC 5322 validation, phone E.164 international format
@@ -2235,9 +2399,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.9.2: ML-based NER for Unstructured PII**
+
 **Effort:** 2 days | **Source ADR:** `0035b-ml-based-ner.md`
 
 **Expected Output:** `contracts/privacy/bert_ner/` (7 files)
+
 ```
 ├── bert_base_model.yml                     # BERT-base (110M parameters) fine-tuned on CoNLL-2003 NER dataset, BIO tagging scheme (B-PERSON, I-PERSON, B-LOCATION, etc.)
 ├── onnx_runtime_inference.yml              # Export BERT to ONNX format, ONNX Runtime for inference (CPU initially, GPU optional), INT8 quantization for 4× speedup (5ms → 1.25ms)
@@ -2251,9 +2417,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.9.3: Encrypted PII Vault & Key Management**
+
 **Effort:** 2 days | **Source ADR:** `0035c-encrypted-vault-key-management.md`
 
 **Expected Output:** `contracts/privacy/vault/` (8 files)
+
 ```
 ├── aes_256_gcm_encryption.yml              # AES-256-GCM authenticated encryption (confidentiality + integrity), 256-bit key (32 bytes), 96-bit nonce (12 bytes, unique per encryption), 128-bit auth tag (16 bytes)
 ├── aws_kms_key_management.yml              # Encryption key stored in AWS KMS (never in database), key rotation every 90 days (automated), multi-region keys (us-east-1, us-west-2, eu-west-1), CloudTrail audit log
@@ -2268,9 +2436,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 2.9.4: Audit Trail & GDPR/HIPAA Compliance**
+
 **Effort:** 1 day | **Source ADR:** `0035d-audit-trail-gdpr-compliance.md`
 
 **Expected Output:** `contracts/privacy/audit/` (9 files)
+
 ```
 ├── audit_log_schema.yml                    # K0 table: audit_log (id AUTOINCREMENT, operation TEXT, pii_type TEXT, user_id, space_id, trace_id, timestamp, vault_key, original_value_hash SHA-256, redacted_placeholder, detection_method, confidence)
 ├── gdpr_requests_schema.yml                # K0 table: gdpr_requests (id AUTOINCREMENT, request_type TEXT ["access"|"erasure"|"portability"], user_id, space_id, requested_at, fulfilled_at, status ["pending"|"fulfilled"|"rejected"], response_data JSON)
@@ -2284,6 +2454,7 @@ k1_module_manifest:
 ```
 
 **Key Contracts for Epic 2.9:**
+
 - Regex pattern library (12 patterns, 85% recall, <1ms, 100% precision)
 - ML-based NER (BERT-base, 95% recall, <5ms, 99% precision)
 - Encrypted vault (AES-256-GCM, AWS KMS, GDPR right to erasure)
@@ -2304,6 +2475,7 @@ k1_module_manifest:
 #### Issue 2.10.1: AES-256-GCM Encryption Contracts
 
 **Expected Output:** `contracts/security/e2ee/aes256gcm/` (8 files)
+
 ```
 ├── encryption_key.yml                      # EncryptionKey class (256-bit key, AES-NI cipher, AtomicU64 nonce counter, created_at, rotated_at)
 ├── encrypt_operation.yml                   # Encrypt method: Generate unique nonce (atomic counter increment) → AES-256-GCM encrypt → Split ciphertext + 16-byte auth tag → <1ms validation
@@ -2322,6 +2494,7 @@ k1_module_manifest:
 #### Issue 2.10.2: KMS Integration & Key Lifecycle Contracts
 
 **Expected Output:** `contracts/security/e2ee/kms/` (10 files)
+
 ```
 ├── kms_client_interface.yml                # KMSClient trait: generate_key(space_id, user_id), get_key(key_id), rotate_key(key_id), revoke_key(key_id), schedule_key_deletion(key_id, pending_days), needs_rotation(key_id)
 ├── aws_kms_client.yml                      # AWS KMS implementation: KmsClient init, generate_data_key(AES-256), encrypt/decrypt with KMS master key, CloudTrail integration
@@ -2342,6 +2515,7 @@ k1_module_manifest:
 #### Issue 2.10.3: Selective Encryption & SessionState Integration Contracts
 
 **Expected Output:** `contracts/security/e2ee/selective/` (8 files)
+
 ```
 ├── e2ee_manager.yml                        # E2EEManager class: check privacy band (RED → encrypt, GREEN/AMBER/BLACK → skip), get key from KMS (cached), create SessionStateEncryptor, encrypt 3 sections in parallel
 ├── band_detection.yml                      # Privacy band detection: Extract from SessionState.meta.privacy_band → enabled_bands = [RED] → Skip if not in enabled_bands (0ms overhead for GREEN/AMBER)
@@ -2360,6 +2534,7 @@ k1_module_manifest:
 #### Issue 2.10.4: Audit Trail & Compliance Contracts
 
 **Expected Output:** `contracts/security/e2ee/audit/` (6 files)
+
 ```
 ├── e2ee_audit_logger.yml                   # E2EEAuditLogger class: log_operation(operation, timestamp, space_id, user_id, key_id, band, trace_id, success, error_message) → INSERT to K0 e2ee_audit_log table, <5ms async
 ├── audit_log_schema.yml                    # E2EEAuditLog schema: operation (Encrypt/Decrypt/KeyGenerate/KeyRotate/KeyRevoke/KeyDelete/KeyImport/KeyExport), timestamp, space_id, user_id, key_id, band, trace_id, success (bool), error_message (optional)
@@ -2386,6 +2561,7 @@ k1_module_manifest:
 #### Issue 2.11.1: Token Generation & Signing Contracts
 
 **Expected Output:** `contracts/security/jwt/generation/` (8 files)
+
 ```
 ├── auth_service.yml                        # AuthService class: issue_tokens(user_id, space_id, roles, privacy_band, capabilities) → Issue access + refresh tokens, RS256 sign with private key (2048-bit RSA), <50ms
 ├── claims_structure.yml                    # Claims struct: Standard (sub, iat, exp, iss, aud, jti), Custom (space_id, roles: Vec<String>, privacy_band: String, capabilities: Vec<String>), no PII in claims
@@ -2404,6 +2580,7 @@ k1_module_manifest:
 #### Issue 2.11.2: Token Validation & Verification Contracts
 
 **Expected Output:** `contracts/security/jwt/validation/` (8 files)
+
 ```
 ├── jwt_validator.yml                       # JWTValidator class: validate_token(token, trace_id) → Decode header → Verify RS256 signature → Check expiry → Extract claims → Check blacklist → <2ms total
 ├── signature_verification.yml              # RS256 signature verification: Verify with RSA public key (2048-bit, PEM format) → Fail fast if invalid signature → <1ms latency
@@ -2422,6 +2599,7 @@ k1_module_manifest:
 #### Issue 2.11.3: Refresh Token Flow & Rotation Contracts
 
 **Expected Output:** `contracts/security/jwt/refresh/` (7 files)
+
 ```
 ├── refresh_token_store.yml                 # RefreshTokenStore class: store(jti, user_id, ttl_seconds) → Redis SET refresh:<jti> → user_id (7-day TTL), consume(jti) → Redis GET_DEL (atomic, single-use)
 ├── refresh_endpoint.yml                    # POST /auth/refresh: Parse refresh_token from body → Validate refresh token (signature + expiry + exists in Redis) → Issue new token pair → Delete old refresh token → <100ms
@@ -2439,6 +2617,7 @@ k1_module_manifest:
 #### Issue 2.11.4: Session Binding & Authorization Contracts
 
 **Expected Output:** `contracts/security/jwt/authorization/` (7 files)
+
 ```
 ├── session_jwt_binder.yml                  # SessionStateJWTBinder: bind_claims_to_session(session, claims, trace_id) → session.meta.user_id = claims.sub, session.meta.space_id = claims.space_id, session.meta.roles/privacy_band/capabilities
 ├── space_isolation.yml                     # Space isolation middleware: Extract space_id from request path/query → Compare with session.meta.space_id → 403 Forbidden if mismatch (cross-space access denied)
@@ -2466,6 +2645,7 @@ k1_module_manifest:
 #### Issue 2.12.1: Receipt Generation & Schema Contracts
 
 **Expected Output:** `contracts/observability/receipts/schema/` (8 files)
+
 ```
 ├── turn_receipt.fbs                        # TurnReceipt FlatBuffers: receipt_id, session_id, space_id, user_id, turn_number, user_message (redacted), agent_response (redacted), privacy_band, latency_ms, intent, trace_id, timestamp, previous_receipt_hash, current_hash
 ├── tool_receipt.fbs                        # ToolReceipt FlatBuffers: receipt_id, session_id, space_id, user_id, turn_number, tool_name, tool_arguments (redacted), tool_result (redacted), success, error, violation_type (from ADR-0032), privacy_band, latency_ms, trace_id, timestamp, hash chain
@@ -2484,6 +2664,7 @@ k1_module_manifest:
 #### Issue 2.12.2: K0 WAL Integration & Async Writes Contracts
 
 **Expected Output:** `contracts/observability/receipts/wal/` (8 files)
+
 ```
 ├── k0_receipts_table.sql                   # receipts table: receipt_id TEXT PK, session_id TEXT, space_id TEXT, user_id TEXT, receipt_type TEXT (TURN/TOOL/STATE/AGENT), privacy_band TEXT, payload BLOB (FlatBuffers), timestamp INTEGER, previous_hash TEXT, current_hash TEXT, indexes on session_id/timestamp/privacy_band
 ├── receipt_writer.yml                      # ReceiptWriter class: Async queue (mpsc::channel, 10,000 capacity) → Batch writer task (100 receipts or 100ms) → WAL write (append-only, single fsync per batch) → <5ms async
@@ -2502,6 +2683,7 @@ k1_module_manifest:
 #### Issue 2.12.3: Retention Policies & Auto-Deletion Contracts
 
 **Expected Output:** `contracts/observability/receipts/retention/` (7 files)
+
 ```
 ├── retention_config.yml                    # Band-specific retention: GREEN 365 days, AMBER 180 days, RED 90 days, grace period 7 days (buffer before deletion), pruning schedule: hourly (cron "0 * * * *")
 ├── retention_manager.yml                   # RetentionManager class: Load retention policies → Schedule hourly pruning job → DELETE receipts WHERE timestamp < cutoff (band-specific) → <5s pruning latency
@@ -2519,6 +2701,7 @@ k1_module_manifest:
 #### Issue 2.12.4: Query Interface & Compliance Export Contracts
 
 **Expected Output:** `contracts/observability/receipts/query/` (7 files)
+
 ```
 ├── receipt_query_api.yml                   # Query API endpoints: GET /api/receipts/session/{session_id} (returns all receipts for session, <50ms), GET /api/receipts/user/{user_id} (all sessions, <500ms), filter by receipt_type/start_date/end_date
 ├── query_params.yml                        # ReceiptQueryParams struct: receipt_type (optional, TURN/TOOL/STATE/AGENT), start_date (optional, Unix timestamp), end_date (optional, Unix timestamp)
@@ -2546,6 +2729,7 @@ k1_module_manifest:
 #### Issue 2.13.1: Watermark Thresholds & Tier Triggers Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/watermarks/` (8 files)
+
 ```
 ├── watermark_config.yml                    # Tier thresholds: Tier 1 (queue 50, latency 2500ms, active 80), Tier 2 (queue 100, memory 450MB, CPU 85%), Tier 3 (queue 200, memory 480MB, thermal CRITICAL), 10% hysteresis
 ├── backpressure_tier_enum.yml              # BackpressureTier enum: NORMAL (0), TIER_1_REJECT_NEW (1), TIER_2_CANCEL_BG (2), TIER_3_EMERGENCY (3), severity property
@@ -2564,6 +2748,7 @@ k1_module_manifest:
 #### Issue 2.13.2: Signal Propagation & Component Response Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/propagation/` (7 files)
+
 ```
 ├── backpressure_signal.yml                 # BackpressureSignal struct: tier, timestamp, reason, trace_id, priority property, __lt__ method for priority queue
 ├── backpressure_coordinator.yml            # BackpressureCoordinator class: Event bus for signal broadcast, register_callback method, broadcast method (<50ms propagation), track current_signal
@@ -2581,6 +2766,7 @@ k1_module_manifest:
 #### Issue 2.13.3: Recovery & Gradual Resume Contracts
 
 **Expected Output:** `contracts/infrastructure/backpressure/recovery/` (7 files)
+
 ```
 ├── recovery_state_machine.yml              # Recovery FSM: Tier 3 → Tier 2 (30s sustained) → Tier 1 (10s sustained) → Normal (10s sustained), automatic rollback on health check failure
 ├── recovery_manager.yml                    # RecoveryManager class: start_recovery method, _recovery_loop background task, admission_rate_percent (10% → 100%), rate_increase_interval (5s)
@@ -2598,6 +2784,7 @@ k1_module_manifest:
 #### Issue 2.13.4: Privacy Band Retention Override Contracts
 
 **Expected Output:** `contracts/privacy/retention_overrides/` (6 files)
+
 ```
 ├── retention_policy_config.yml             # Band-specific retention: GREEN (30d warm/365d cold = 395d total), AMBER (same), RED (7d warm/90d cold = 97d total), BLACK (7d/90d = 97d total), 75% faster deletion for RED
 ├── lifecycle_manager.yml                   # LifecycleManager class: Daily cron job checks retention policies, moves warm → cold after threshold, hard deletes cold after threshold, 100% automation
@@ -2624,6 +2811,7 @@ k1_module_manifest:
 #### Issue 2.14.1: Connection Management & Authentication Contracts
 
 **Expected Output:** `contracts/api/websocket/connection/` (8 files)
+
 ```
 ├── websocket_upgrade_handshake.yml         # HTTP → WebSocket upgrade: Client sends GET with Upgrade: websocket header, server validates Sec-WebSocket-Key, responds with 101 Switching Protocols, <500ms establishment
 ├── jwt_authentication.yml                  # JWT in query param: ?token=<jwt>, validate signature (RS256 from ADR-0037), extract claims (user_id, session_id, space_id), reject if invalid (403 Forbidden), <50ms validation
@@ -2642,6 +2830,7 @@ k1_module_manifest:
 #### Issue 2.14.2: Message Framing & FlatBuffers Protocol Contracts
 
 **Expected Output:** `contracts/api/websocket/protocol/` (8 files)
+
 ```
 ├── websocket_message_envelope.fbs          # WebSocketMessage FlatBuffers: version, message_id, conversation_id, timestamp_ms, trace_id, payload (union of 17 types)
 ├── message_payload_union.fbs               # MessagePayload union: ConnectionEstablished, Heartbeat, HeartbeatAck, UserMessage, AgentMessageStart, AgentMessageChunk, AgentMessageEnd, ToolCallStarted, Error (17 total)
@@ -2660,6 +2849,7 @@ k1_module_manifest:
 #### Issue 2.14.3: Backpressure & Flow Control Contracts
 
 **Expected Output:** `contracts/api/websocket/flow_control/` (7 files)
+
 ```
 ├── message_queue.yml                       # MessageQueue: mpsc::channel (100 capacity), bounded queue (prevents infinite growth), non-blocking send (<1ms), recv method, queue depth tracking
 ├── flow_control_manager.yml                # FlowControlManager: Monitor queue depth per session, warning at 90% full (90 messages), drop oldest messages (FIFO) when queue full, backpressure handling
@@ -2677,6 +2867,7 @@ k1_module_manifest:
 #### Issue 2.14.4: Heartbeat & Reconnection Contracts
 
 **Expected Output:** `contracts/api/websocket/reconnection/` (7 files)
+
 ```
 ├── heartbeat_manager.yml                   # HeartbeatManager: 30-second interval ping/pong (RFC 6455 §5.5.2), server sends Heartbeat message, client responds with HeartbeatAck, update last_heartbeat timestamp
 ├── timeout_detection.yml                   # Timeout threshold: 90 seconds (3× heartbeat interval), close stale connections if no HeartbeatAck, free server resources, emit timeout_detected metric
@@ -2704,6 +2895,7 @@ k1_module_manifest:
 #### Issue 2.15.1: Session CRUD & Resource Design Contracts
 
 **Expected Output:** `contracts/api/rest/sessions/` (9 files)
+
 ```
 ├── post_create_session.yml                 # POST /v1/sessions: Create session with persona, privacy_band, capabilities, initial_agents, metadata, ttl_seconds, return 201 Created with Location header, <500ms P95
 ├── get_session.yml                         # GET /v1/sessions/{id}: Retrieve session details (status, agents, metadata), ETag header (MD5 hash of state), Last-Modified header (ISO 8601), <100ms P95 (uncached), <10ms P95 (cached 304 Not Modified)
@@ -2723,6 +2915,7 @@ k1_module_manifest:
 #### Issue 2.15.2: Idempotency & State Synchronization Contracts
 
 **Expected Output:** `contracts/api/rest/idempotency/` (8 files)
+
 ```
 ├── idempotency_key_header.yml              # Idempotency-Key header (Stripe pattern): Optional header for POST requests, client-generated unique key (UUID), server stores key → response mapping for 24h, duplicate requests return 200 OK with cached response
 ├── redis_key_storage.yml                   # Redis storage: SET idempotency:{key} <response> EX 86400 (24h TTL), GET idempotency:{key} on duplicate, atomic check-and-set (prevents race conditions), <10ms P95 storage latency
@@ -2741,6 +2934,7 @@ k1_module_manifest:
 #### Issue 2.15.3: Cursor-Based Pagination Contracts
 
 **Expected Output:** `contracts/api/rest/pagination/` (9 files)
+
 ```
 ├── opaque_cursor.yml                       # Cursor encoding: Base64-encoded last item ID ({"id": "session-020"}), client can't manipulate cursor (prevents "jump to page 500" abuse), server decodes and validates
 ├── pagination_manager.yml                  # PaginationManager class (1,120 lines): encode_cursor/decode_cursor methods, paginate method (fetch limit+1, check has_more), O(log n) index lookup vs O(n) offset scan
@@ -2760,6 +2954,7 @@ k1_module_manifest:
 #### Issue 2.15.4: OpenAPI Spec & RFC 7807 Error Handling Contracts
 
 **Expected Output:** `contracts/api/rest/documentation/` (8 files)
+
 ```
 ├── openapi_3_1_spec.yml                    # OpenAPI 3.1 specification (2,400 lines): All 21 endpoints documented, request/response schemas with examples, authentication schemes (JWT Bearer), auto-generate SDKs (TypeScript, Python, Go)
 ├── rfc7807_error_format.yml                # RFC 7807 Problem Details: type (URL to error docs), title (human-readable), status (HTTP code), detail (specific message with context), instance (request path), trace_id (optional)
@@ -2777,12 +2972,12 @@ k1_module_manifest:
 
 ---
 
-
 ## 📦 Milestone 3: Serialization & API Contracts (Weeks 7-9)
 
 **Goal:** Define FlatBuffers schemas, API specifications, WebSocket, and SSE contracts
 
 ### **Milestone Deliverables:**
+
 - [ ] 76 FlatBuffers schemas across 5 layers
 - [ ] OpenAPI 3.1 REST specifications
 - [ ] WebSocket binary protocol contracts
@@ -2792,6 +2987,7 @@ k1_module_manifest:
 ---
 
 ## Epic 3.1: FlatBuffers Schema Contracts
+
 **ADR Source:** ADR-0011, ADR-0012, ADR-0012a-e
 **Timeline:** Week 7-8 (10 days)
 **Dependencies:** Milestone 1-2 (all prior contracts)
@@ -2799,9 +2995,11 @@ k1_module_manifest:
 ### **Issues for Epic 3.1:**
 
 #### **Issue 3.1.1: FlatBuffers Design Principles Contract**
+
 **Effort:** 1 day | **Source ADR:** `0011-flatbuffers-serialization.md`
 
 **Expected Output:** `contracts/flatbuffers/principles/`
+
 ```
 ├── schema_design_principles.yml     # Naming, field ordering, optional fields (ADR-0011a)
 ├── code_generation_integration.yml  # Build-time codegen (ADR-0011b)
@@ -2813,9 +3011,11 @@ k1_module_manifest:
 ---
 
 #### **Issue 3.1.2: Layer 1 Core Kernel Schemas (15 schemas)**
+
 **Effort:** 2 days | **Source ADR:** `0012a-layer1-core-kernel-schemas.md`
 
 **Expected Output:** `contracts/flatbuffers/layer1_kernel/`
+
 ```
 ├── agent_lease.fbs                  # Agent capability/lease
 ├── task_announcement.fbs            # Task broadcast
@@ -2829,6 +3029,7 @@ k1_module_manifest:
 ```
 
 **Template Structure for Each Schema:**
+
 ```fbs
 // agent_lease.fbs
 namespace k1.kernel;
@@ -2866,9 +3067,11 @@ table Budget {
 ---
 
 #### **Issue 3.1.3: Layer 2 State & Persistence Schemas (18 schemas)**
+
 **Effort:** 2 days | **Source ADR:** `0012b-layer2-state-persistence-schemas.md`
 
 **Expected Output:** `contracts/flatbuffers/layer2_state/`
+
 ```
 ├── session_state.fbs                # 6-section SessionState
 ├── state_delta.fbs                  # SessionState delta serialization
@@ -2882,9 +3085,11 @@ table Budget {
 ---
 
 #### **Issue 3.1.4: Layer 3 Execution & Tools Schemas (16 schemas)**
+
 **Effort:** 2 days | **Source ADR:** `0012c-layer3-execution-tools-schemas.md`
 
 **Expected Output:** `contracts/flatbuffers/layer3_execution/`
+
 ```
 ├── tool_call.fbs                    # Tool invocation
 ├── tool_result.fbs                  # Tool response
@@ -2898,9 +3103,11 @@ table Budget {
 ---
 
 #### **Issue 3.1.5: Layer 4 Ingress & Voice Schemas (14 schemas)**
+
 **Effort:** 2 days | **Source ADR:** `0012d-layer4-ingress-voice-schemas.md`
 
 **Expected Output:** `contracts/flatbuffers/layer4_ingress/`
+
 ```
 ├── websocket_message.fbs            # WebSocket binary protocol
 ├── sse_event.fbs                    # Server-sent events
@@ -2914,9 +3121,11 @@ table Budget {
 ---
 
 #### **Issue 3.1.6: Layer 5 Infrastructure Schemas (13 schemas)**
+
 **Effort:** 1 day | **Source ADR:** `0012e-layer5-infrastructure-schemas.md`
 
 **Expected Output:** `contracts/flatbuffers/layer5_infrastructure/`
+
 ```
 ├── config_update.fbs                # Hot config reload
 ├── prometheus_metric.fbs            # Metrics export
@@ -2930,6 +3139,7 @@ table Budget {
 ---
 
 ## Epic 3.2: API Specification Contracts
+
 **ADR Source:** ADR-0014, ADR-0015, ADR-0016, ADR-0040, ADR-0041, ADR-0047
 **Timeline:** Week 8-9 (5 days)
 **Dependencies:** Epic 3.1 (FlatBuffers schemas)
@@ -2937,9 +3147,11 @@ table Budget {
 ### **Issues for Epic 3.2:**
 
 #### **Issue 3.2.1: REST API Contracts (Dual Format)**
+
 **Effort:** 2 days | **Source ADR:** `0014-json-rest-api-dual-format.md`, `0041-rest-api-session-management.md`
 
 **Expected Output:** `contracts/api/rest/`
+
 ```
 ├── content_negotiation.yml          # JSON vs FlatBuffers selection (ADR-0014a)
 ├── openapi_spec_generation.yml      # Auto-gen from FlatBuffers (ADR-0014b)
@@ -2953,9 +3165,11 @@ table Budget {
 ---
 
 #### **Issue 3.2.2: WebSocket Binary Protocol Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0015-websocket-binary-protocol.md`, `0040-websocket-realtime-chat.md`
 
 **Expected Output:** `contracts/api/websocket/`
+
 ```
 ├── message_envelope.yml             # WebSocket message routing (ADR-0015a)
 ├── flow_control.yml                 # Backpressure (ADR-0015b)
@@ -2969,17 +3183,20 @@ table Budget {
 ---
 
 #### **Issue 3.2.3: SSE Event Schema Contracts**
+
 **Effort:** 4 days | **Source ADR:** `0016-sse-event-schemas.md` + sub-ADRs `0016a-d`
 
 **Expected Output:** `contracts/api/sse/` (25 files)
 
 **Event Envelope & Common (2 files):**
+
 ```
 ├── event_envelope.fbs               # EventEnvelope root table (metadata + payload union)
 └── event_metadata.fbs               # EventMetadata, SchemaVersion struct
 ```
 
 **Agent Lifecycle Events (4 FlatBuffers schemas):**
+
 ```
 ├── agent_hired.fbs                  # AgentHired event
 ├── agent_fired.fbs                  # AgentFired event (TerminationReason enum)
@@ -2988,6 +3205,7 @@ table Budget {
 ```
 
 **Turn Execution Events (4 FlatBuffers schemas):**
+
 ```
 ├── turn_started.fbs                 # TurnStarted event (intent, privacy_band)
 ├── turn_completed.fbs               # TurnCompleted event (metrics: ttft_ms, tokens)
@@ -2996,6 +3214,7 @@ table Budget {
 ```
 
 **Tool Execution Events (4 FlatBuffers schemas):**
+
 ```
 ├── tool_call_started.fbs            # ToolCallStarted event
 ├── tool_call_completed.fbs          # ToolCallCompleted event
@@ -3004,6 +3223,7 @@ table Budget {
 ```
 
 **Session Lifecycle Events (3 FlatBuffers schemas):**
+
 ```
 ├── session_created.fbs              # SessionCreated event
 ├── session_terminated.fbs           # SessionTerminated event
@@ -3011,12 +3231,14 @@ table Budget {
 ```
 
 **System Events (2 FlatBuffers schemas):**
+
 ```
 ├── heartbeat.fbs                    # Heartbeat event (keepalive)
 └── error.fbs                        # Error event (severity, error_trace)
 ```
 
 **Serialization & Filtering (5 YAML contracts):**
+
 ```
 ├── flatbuffers_to_json_serializer.yml  # PascalCase→snake_case, <2ms P95 (ADR-0016b)
 ├── topic_filter.yml                    # 5 topics, O(1) membership check (ADR-0016c)
@@ -3026,6 +3248,7 @@ table Budget {
 ```
 
 **Event Type Enumeration (1 file):**
+
 ```
 └── event_types.yml                     # EventType enum, category mapping (ADR-0016a)
 ```
@@ -3033,9 +3256,11 @@ table Budget {
 ---
 
 #### **Issue 3.2.4: OpenAPI 3.1 Specifications**
+
 **Effort:** 1 day | **Source ADR:** `0047-openapi-3-1-rest-specs.md`
 
 **Expected Output:** `contracts/api_specs/openapi_3_1_specs/`
+
 ```
 ├── k1_rest_api_v1.yml               # Complete OpenAPI 3.1 spec
 ├── session_endpoints.yml            # /sessions/* endpoints
@@ -3048,6 +3273,7 @@ table Budget {
 ---
 
 ## Epic 3.3: K0 Pipeline Contracts (P01-P20)
+
 **ADR Source:** ADR-0001 (K0/K1 Kernel Split), ADR-0012 (76 Schemas - Pipelines category)
 **Timeline:** Week 9 (5 days)
 **Dependencies:** Epic 3.1 (FlatBuffers schemas), Epic 1.1 (K0 Bridge ports)
@@ -3055,9 +3281,11 @@ table Budget {
 ### **Issues for Epic 3.3:**
 
 #### **Issue 3.3.1: Memory Pipeline Contracts (P01-P05)**
+
 **Effort:** 1 day | **Source ADR:** `0001-k0-k1-kernel-split.md` section "20 K0 Pipelines"
 
 **Expected Output:** `contracts/k0_bridge/pipelines/memory/`
+
 ```
 ├── p01_recall.yml                   # Memory retrieval (query → results)
 │   ├── RecallRequest.fbs           # query, context, space_ids, modalities, max_results
@@ -3082,6 +3310,7 @@ table Budget {
 ```
 
 **Key Contracts:**
+
 - **P01 Recall:** Multi-modal memory retrieval (text + audio + vision), semantic search, BM25 ranking, vector embeddings
 - **P02 Memory Formation:** Turn summarization, entity extraction, sentiment analysis, write to K0 WAL
 - **P03 Entity Extraction:** NER (Named Entity Recognition), entity types (PERSON, ORG, LOC, DATE, MONEY, etc.)
@@ -3091,9 +3320,11 @@ table Budget {
 ---
 
 #### **Issue 3.3.2: Learning Pipeline Contracts (P06-P08)**
+
 **Effort:** 1 day | **Source ADR:** `0001-k0-k1-kernel-split.md`, ADR-0027 (Learning Loop)
 
 **Expected Output:** `contracts/k0_bridge/pipelines/learning/`
+
 ```
 ├── p06_learning_tick.yml            # Adaptive learning feedback
 │   ├── LearningTickRequest.fbs     # feedback_signals (explicit/implicit/behavioral)
@@ -3110,6 +3341,7 @@ table Budget {
 ```
 
 **Key Contracts:**
+
 - **P06 Learning:** Feedback signals (explicit: user rating, implicit: click-through, behavioral: dwell time), drift detection, config hot-reload
 - **P07 Sync:** SessionState delta batching (every 5min or 10 deltas), K0 WAL commit, checkpoint coordination
 - **P08 Preference Learning:** Infer user preferences from interaction history (communication style, privacy bands, tool preferences)
@@ -3117,9 +3349,11 @@ table Budget {
 ---
 
 #### **Issue 3.3.3: Content Analysis Pipeline Contracts (P09-P12)**
+
 **Effort:** 1 day | **Source ADR:** `0001-k0-k1-kernel-split.md`
 
 **Expected Output:** `contracts/k0_bridge/pipelines/content_analysis/`
+
 ```
 ├── p09_sentiment_analysis.yml       # Analyze emotional tone
 │   ├── SentimentRequest.fbs        # text, context, language
@@ -3140,6 +3374,7 @@ table Budget {
 ```
 
 **Key Contracts:**
+
 - **P09 Sentiment:** Emotional tone analysis (POSITIVE/NEGATIVE/NEUTRAL), fine-grained emotions (joy, anger, sadness, etc.)
 - **P10 PII Detection:** Identify PII entities (EMAIL, PHONE, SSN, etc.), suggest privacy band (GREEN/AMBER/RED)
 - **P11 Moderation:** Content safety filter (HATE_SPEECH, VIOLENCE, SEXUAL, HARASSMENT), confidence-based blocking
@@ -3148,9 +3383,11 @@ table Budget {
 ---
 
 #### **Issue 3.3.4: Transformation Pipeline Contracts (P13-P16)**
+
 **Effort:** 1 day | **Source ADR:** `0001-k0-k1-kernel-split.md`
 
 **Expected Output:** `contracts/k0_bridge/pipelines/transformation/`
+
 ```
 ├── p13_summarization.yml            # Generate summaries
 │   ├── SummarizationRequest.fbs    # text, summary_length (SHORT/MEDIUM/LONG), style
@@ -3171,6 +3408,7 @@ table Budget {
 ```
 
 **Key Contracts:**
+
 - **P13 Summarization:** Extractive vs abstractive summaries, length control (SHORT/MEDIUM/LONG), key point extraction
 - **P14 Translation:** Multi-language support (ISO 639-1), entity preservation, language detection
 - **P15 Embedding Generation:** Text → vector embeddings (ada-002, instructor-xl), dimensionality (768, 1536)
@@ -3179,9 +3417,11 @@ table Budget {
 ---
 
 #### **Issue 3.3.5: Operational Pipeline Contracts (P17-P20)**
+
 **Effort:** 1 day | **Source ADR:** `0001-k0-k1-kernel-split.md`
 
 **Expected Output:** `contracts/k0_bridge/pipelines/operational/`
+
 ```
 ├── p17_resource_allocation.yml      # Request K0 resources
 │   ├── ResourceAllocationRequest.fbs # resource_type (MEMORY/CPU/GPU), amount, duration
@@ -3202,6 +3442,7 @@ table Budget {
 ```
 
 **Key Contracts:**
+
 - **P17 Resource Allocation:** Request K0 resources (memory, CPU, GPU), allocation policies (fair share, priority queues)
 - **P18 Cost Tracking:** Per-operation cost tracking (tokens, model inference, storage), budget enforcement (per-session, per-family)
 - **P19 Audit Logging:** Security audit trail (who did what, when), retention policies (90 days for compliance)
@@ -3218,6 +3459,7 @@ table Budget {
 **Goal:** Define SessionState, storage, performance budgets, and observability contracts
 
 ### **Milestone Deliverables:**
+
 - [ ] SessionState 6-section contracts
 - [ ] Multi-tier storage contracts (Hot/Warm/Cold)
 - [ ] Performance budget contracts (P95 targets)
@@ -3227,6 +3469,7 @@ table Budget {
 ---
 
 ## Epic 4.1: SessionState Contracts
+
 **ADR Source:** ADR-0017, ADR-0017a-f, ADR-0019, ADR-0050
 **Timeline:** Week 10 (5 days)
 **Dependencies:** Epic 3.1 (FlatBuffers schemas)
@@ -3234,11 +3477,13 @@ table Budget {
 ### **Issues for Epic 4.1:**
 
 #### **Issue 4.1.1: 6-Section SessionState Structure**
+
 **Effort:** 4 days | **Source ADR:** `0017-sessionstate-6-section-design.md` + sub-ADRs `0017a-f`
 
 **Expected Output:** `contracts/sessionstate/structure/` (21 files)
 
 **Section 1: Beliefs Section (ADR-0017a) - 4 files:**
+
 ```
 ├── beliefs_section_schema.fbs       # Fact table (key, value, confidence, source, timestamps)
 ├── beliefs_manager.yml              # add_fact, get_fact, has_fact, remove_fact operations
@@ -3247,6 +3492,7 @@ table Budget {
 ```
 
 **Section 2: Scoreboard Section (ADR-0017b) - 4 files:**
+
 ```
 ├── scoreboard_section_schema.fbs    # Entity, Referent, QUD tables
 ├── scoreboard_manager.yml           # add_entity, resolve_referent, push_qud operations
@@ -3255,6 +3501,7 @@ table Budget {
 ```
 
 **Section 3: Control Section (ADR-0017c) - 4 files:**
+
 ```
 ├── control_section_schema.fbs       # AgentLease, FlowState tables
 ├── control_manager.yml              # acquire_lease, release_lease, set_flow_state operations
@@ -3263,6 +3510,7 @@ table Budget {
 ```
 
 **Section 4: Persona Section (ADR-0017d) - 3 files:**
+
 ```
 ├── persona_section_schema.fbs       # PersonaTrait table (trait_name, trait_value, confidence)
 ├── persona_manager.yml              # set_trait, get_trait, get_all_traits operations
@@ -3270,6 +3518,7 @@ table Budget {
 ```
 
 **Section 5: Multimodal Section (ADR-0017e) - 3 files:**
+
 ```
 ├── multimodal_section_schema.fbs    # AudioBuffer, VisionEmbedding tables (K0 blob pointers)
 ├── multimodal_manager.yml           # add_audio_buffer, add_vision_embedding operations
@@ -3277,6 +3526,7 @@ table Budget {
 ```
 
 **Section 6: Meta Section (ADR-0017f) - 3 files:**
+
 ```
 ├── meta_section_schema.fbs          # PerformanceMetrics table (avg_ttft_ms, avg_e2e_latency_ms, counters)
 ├── meta_manager.yml                 # increment_turn_counter, record_ttft, record_e2e_latency operations
@@ -3286,11 +3536,13 @@ table Budget {
 ---
 
 #### **Issue 4.1.2: 3-Tier Eviction Strategy**
+
 **Effort:** 3 days | **Source ADR:** `0018-3-tier-eviction-strategy.md` + sub-ADRs `0018a-c`
 
 **Expected Output:** `contracts/sessionstate/eviction/` (15 files)
 
 **Tier 1: Soft Eviction (64KB → 80KB) - ADR-0018a (6 files):**
+
 ```
 ├── tier1_threshold_check.yml        # Trigger at 80KB (25% buffer), <100μs decision
 ├── tier1_eviction_priority.yml      # 4-stage priority (meta → turns → entities → grounding)
@@ -3301,6 +3553,7 @@ table Budget {
 ```
 
 **Tier 2: Hard Eviction (128KB → 192KB) - ADR-0018b (5 files):**
+
 ```
 ├── tier2_threshold_check.yml        # Trigger at 192KB (aggressive eviction)
 ├── tier2_beliefs_lru.yml            # Evict least-used facts (LRU), keep top 50
@@ -3310,12 +3563,14 @@ table Budget {
 ```
 
 **Tier 3: OOM Prevention (256KB Kill) - ADR-0018c (2 files):**
+
 ```
 ├── tier3_session_termination.yml    # Kill session at 256KB (last resort)
 └── tier3_oom_metrics.yml            # Track OOM events (target: 0% in production)
 ```
 
 **Eviction Infrastructure (2 files):**
+
 ```
 ├── eviction_metrics.yml             # Prometheus: tier1_total, tier2_total, tier3_total
 └── never_evict_rules.yml            # Control section (agent leases, flow), persona
@@ -3324,11 +3579,13 @@ table Budget {
 ---
 
 #### **Issue 4.1.3: SessionState Serialization & Coherence**
+
 **Effort:** 5 days | **Source ADR:** `0019-flatbuffers-sessionstate-serialization.md` + sub-ADRs `0019a-d`, `0050-sessionstate-coherence-guarantees.md`
 
 **Expected Output:** `contracts/sessionstate/serialization/` (27 files)
 
 **FlatBuffers Schema Root - ADR-0019a (7 files):**
+
 ```
 ├── sessionstate_root.fbs            # Root table: 6 sections + metadata
 ├── beliefs_section.fbs              # Facts, entities, relations (scoreboard section)
@@ -3340,6 +3597,7 @@ table Budget {
 ```
 
 **FlatBuffers Type Schemas - ADR-0019a (7 files):**
+
 ```
 ├── fact_type.fbs                    # Fact: content, speaker_id, priority, verified
 ├── entity_type.fbs                  # Entity: name, type, attributes, last_mentioned
@@ -3351,6 +3609,7 @@ table Budget {
 ```
 
 **Serialization Pipeline - ADR-0019b/0019c/0019d (6 files):**
+
 ```
 ├── full_serialization.yml           # Serialize all 6 sections (<1ms, 64KB target)
 ├── delta_serialization.yml          # Serialize changed sections only (<0.5ms)
@@ -3361,6 +3620,7 @@ table Budget {
 ```
 
 **Coherence Guarantees - ADR-0050 (7 files):**
+
 ```
 ├── coherence_guarantees.yml         # Read-Your-Writes, Monotonic Reads/Writes
 ├── bounded_staleness.yml            # <250ms lag K1 vs K0
@@ -3374,6 +3634,7 @@ table Budget {
 ---
 
 ## Epic 4.2: Storage Contracts
+
 **ADR Source:** ADR-0020, ADR-0021, ADR-0022, ADR-0023
 **Timeline:** Week 10-11 (3 days)
 **Dependencies:** Epic 4.1 (SessionState)
@@ -3381,11 +3642,13 @@ table Budget {
 ### **Issues for Epic 4.2:**
 
 #### **Issue 4.2.1: Multi-Tier Storage Contracts**
+
 **Effort:** 3 days | **Source ADR:** `0020-multi-tier-storage.md` + sub-ADRs `0020a-c`
 
 **Expected Output:** `contracts/storage/tiers/` (17 files)
 
 **Hot Tier L1 (RAM) - ADR-0020a (5 files):**
+
 ```
 ├── hot_tier_class.yml               # HotTier: 56MB capacity, 1000 sessions
 ├── hot_lru_eviction.yml             # LRU eviction when capacity > 56MB
@@ -3395,6 +3658,7 @@ table Budget {
 ```
 
 **Warm Tier L2 (SSD) - ADR-0020b (6 files):**
+
 ```
 ├── warm_tier_class.yml              # WarmTier: 100MB capacity, 30 days
 ├── k0_wal_schema.yml                # SQLite schema: session_checkpoints, turn_history, receipts
@@ -3405,6 +3669,7 @@ table Budget {
 ```
 
 **Cold Tier L3 (S3) - ADR-0020c (6 files):**
+
 ```
 ├── cold_tier_class.yml              # ColdTier: Unlimited capacity, S3 backend
 ├── s3_bucket_structure.yml          # /sessions/{session_id}/YYYY-MM/sessionstate.fb.zst
@@ -3417,11 +3682,13 @@ table Budget {
 ---
 
 #### **Issue 4.2.2: Turn History Retention & K0 Batching**
+
 **Effort:** 5 days | **Source ADR:** `0021-turn-history-retention-policies.md` + sub-ADRs `0021a-c`, `0022-k0-bridge-bounded-batching.md` + sub-ADRs `0022a-d`
 
 **Expected Output:** `contracts/storage/retention/` + `contracts/k0_bridge/batching/` (22 files)
 
 **ADR-0021: Turn History Retention Policies (10 files):**
+
 ```
 retention_policies/
 ├── retention_policy_engine.yml      # Background task (24-hour interval), 3-tier enforcement
@@ -3437,6 +3704,7 @@ retention_policies/
 ```
 
 **ADR-0022: K0 Bridge Bounded Batching (12 files):**
+
 ```
 k0_bridge_batching/
 ├── batching_engine.yml              # Batch 10-50 messages, 100ms timeout
@@ -3456,11 +3724,13 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.2.3: Cursor-Based Pagination**
+
 **Effort:** 3 days | **Source ADR:** `0023-cursor-based-turn-pagination.md` + sub-ADRs `0023a-c`
 
 **Expected Output:** `contracts/api/pagination/` (10 files)
 
 **Cursor Encoding & Security - ADR-0023a (3 files):**
+
 ```
 ├── turn_cursor_dataclass.yml        # TurnCursor(turn_id, timestamp_ms, session_id, version)
 ├── cursor_encoder.yml               # Encode/decode with HMAC SHA-256 signature
@@ -3468,6 +3738,7 @@ k0_bridge_batching/
 ```
 
 **Pagination REST API - ADR-0023b (4 files):**
+
 ```
 ├── turns_pagination_endpoint.yml    # GET /api/v1/sessions/{id}/turns?cursor=...&limit=50
 ├── pagination_response_format.yml   # {turns, next_cursor, has_more}
@@ -3476,6 +3747,7 @@ k0_bridge_batching/
 ```
 
 **K0 WAL Query Optimization - ADR-0023c (3 files):**
+
 ```
 ├── k0_pagination_query.yml          # K0PaginationQuery class (cursor-based SQL)
 ├── composite_index_schema.sql       # CREATE INDEX idx_turns_session_timestamp
@@ -3485,11 +3757,13 @@ k0_bridge_batching/
 ---
 
 ## Epic 4.3: Performance & Resource Contracts
+
 **ADR Source:** ADR-0024-0031
 **Timeline:** Week 11-12 (10 days)
 **Dependencies:** Milestone 1-3 (all prior contracts)
 
 **Epic Summary:**
+
 - **Total Contracts:** ~44 files across performance budgets, KV cache, and thermal management
 - **Effort Estimate:** 9 days (3 days per issue for Issues 4.3.1-4.3.3, 1 day each for 4.3.4-4.3.5)
 - **Key Deliverables:** 15 performance budgets + 16 KV cache contracts + 13 thermal contracts
@@ -3497,11 +3771,13 @@ k0_bridge_batching/
 ### **Issues for Epic 4.3:**
 
 #### **Issue 4.3.1: Performance Budget Contracts**
+
 **Effort:** 3 days | **Source ADR:** `0024-performance-budgets-p95-targets.md` + sub-ADRs `0024a-d`
 
 **Expected Output:** `contracts/performance/budgets/` (15 files)
 
 **Turn-Level Performance Budgets - ADR-0024a (3 files):**
+
 ```
 ├── ttft_budget_tracker.yml          # TTFT <150ms P95 (ASR 80ms + Intent 50ms + Orchestrator 20ms)
 ├── e2e_turn_budget_tracker.yml      # E2E <2000ms P95 (composable budget breakdown)
@@ -3509,6 +3785,7 @@ k0_bridge_batching/
 ```
 
 **Component-Level Performance Budgets - ADR-0024b (5 files):**
+
 ```
 ├── intent_classification_budget.yml # <50ms P95, 100ms timeout
 ├── orchestrator_3phase_budget.yml   # <250ms P95 (negotiation 100ms + selection 50ms + exec 100ms)
@@ -3518,6 +3795,7 @@ k0_bridge_batching/
 ```
 
 **Memory Budgets & Resource Limits - ADR-0024c (3 files):**
+
 ```
 ├── sessionstate_size_limits.yml     # 64KB soft / 128KB hard / 256KB OOM (3-tier eviction)
 ├── kv_cache_global_budget.yml       # 512MB device-wide, 32MB min per session
@@ -3525,6 +3803,7 @@ k0_bridge_batching/
 ```
 
 **Graceful Degradation & Budget Pressure - ADR-0024d (4 files):**
+
 ```
 ├── degradation_manager.yml          # GREEN/AMBER/RED/CRITICAL levels (adaptive policies)
 ├── amber_degradation_actions.yml    # Skip persona (saves 20ms), skip grounding (saves 12ms)
@@ -3533,6 +3812,7 @@ k0_bridge_batching/
 ```
 
 **Budget Enforcement & Monitoring (2 files):**
+
 ```
 ├── budget_enforcer.yml              # Deadline tracking, 80% utilization warnings
 └── prometheus_budget_metrics.yml    # Histograms (P50/P95/P99), alerts (>105% of budget)
@@ -3541,16 +3821,19 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.3.2: KV Cache Management Contracts**
+
 **Effort:** 3 days | **Source ADR:** `0025-kv-cache-management-512mb.md` + sub-ADRs `0025a-e`
 
 **Expected Output:** `contracts/performance/kv_cache/` (16 files)
 
 **Global KV Cache Allocator - ADR-0025a (1 file):**
+
 ```
 └── global_allocator_512mb.yml       # GlobalKVCacheAllocator: 512MB global budget, per-session min 32MB/max 256MB
 ```
 
 **LRU/LFU Hybrid Eviction - ADR-0025b (3 files):**
+
 ```
 ├── hybrid_eviction_policy.yml       # 60% recency (LRU) + 40% frequency (LFU) scoring
 ├── eviction_scoring_algorithm.yml   # eviction_score = 0.6*recency + 0.4*frequency
@@ -3558,18 +3841,21 @@ k0_bridge_batching/
 ```
 
 **Per-Session Allocation Policies - ADR-0025a continued (2 files):**
+
 ```
 ├── per_session_allocation.yml       # 32MB guaranteed, 128MB default, 256MB max
 └── allocation_fragmentation.yml     # Contiguous memory blocks, <3% fragmentation target
 ```
 
 **Cache Warming & Prefetch - ADR-0025c (2 files):**
+
 ```
 ├── cache_warmer_prefetch.yml        # Prefetch last 3 turns on session resume (<50ms)
 └── resume_detection.yml             # Trigger warming if inactive >5 minutes
 ```
 
 **zstd Compression for Inactive Caches - ADR-0025d (3 files):**
+
 ```
 ├── zstd_compressor_level3.yml       # zstd level 3 (70% reduction: 128MB → 38MB)
 ├── compression_trigger.yml          # Compress if inactive >10 minutes (<15ms latency)
@@ -3577,18 +3863,21 @@ k0_bridge_batching/
 ```
 
 **Protected Sessions & Hit Rate - ADR-0025e (2 files):**
+
 ```
 ├── protection_manager.yml           # Never evict: active conversation + safety monitoring
 └── hit_rate_monitor.yml             # Track cache hit rate (target >75%), miss penalty tracking
 ```
 
 **KV Cache Observability (2 files):**
+
 ```
 ├── kv_cache_metrics.yml             # Prometheus: allocated_mb, available_mb, fragmentation_%
 └── eviction_rate_metrics.yml        # Track evictions_total, hit_rate_percent, miss_penalty_ms
 ```
 
 **Memory Fragmentation Prevention (1 file):**
+
 ```
 └── contiguous_allocation.yml        # Maintain contiguous blocks, defragmentation at <3% threshold
 ```
@@ -3596,17 +3885,20 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.3.3: Thermal & Placement Contracts**
+
 **Effort:** 5 days | **Source ADR:** `0026-thermal-hysteresis-matrix.md` + `0027-model-placement-cascade.md` + sub-ADRs
 
 **Expected Output:** `contracts/performance/thermal_placement/` (28 files)
 
 **Thermal Sensor Monitoring - ADR-0026a (2 files):**
+
 ```
 ├── thermal_sensors_cross_platform.yml  # Linux thermal zones, Windows WMI, macOS IOKit
 └── thermal_state_detection.yml         # 5 states: COOL <60°C, WARM 60-75°C, HOT 75-85°C, CRITICAL 85-95°C, EMERGENCY >95°C
 ```
 
 **Hysteresis State Machine - ADR-0026b (3 files):**
+
 ```
 ├── hysteresis_fsm_5c_buffer.yml     # 5°C buffer (upgrade +5°C, downgrade -5°C = 10°C dead band)
 ├── state_transition_thresholds.yml  # WARM→HOT at 80°C, HOT→WARM at 70°C (asymmetric thresholds)
@@ -3614,12 +3906,14 @@ k0_bridge_batching/
 ```
 
 **Cooldown Periods - ADR-0026b continued (2 files):**
+
 ```
 ├── upgrade_cooldown_10s.yml         # 10s cooldown before upgrade (fast degradation)
 └── downgrade_cooldown_30_60s.yml    # 30-60s cooldown before downgrade (slow recovery)
 ```
 
 **Model Placement Integration - ADR-0026c (4 files):**
+
 ```
 ├── thermal_placement_manager.yml    # Thermal-aware accelerator selection
 ├── npu_placement_policy.yml         # NPU (30ms, 10W): COOL/WARM only
@@ -3628,16 +3922,19 @@ k0_bridge_batching/
 ```
 
 **Emergency Jump & Flapping Prevention - ADR-0026c continued (1 file):**
+
 ```
 └── emergency_jump_handler.yml       # Critical ≥85°C → immediate Remote (skip intermediate tiers)
 ```
 
 **User Notifications - ADR-0026d (1 file):**
+
 ```
 └── thermal_user_notifications.yml   # EMERGENCY: "Device cooling down..." | Recovery: "Device ready"
 ```
 
 **Model Placement Algorithm - ADR-0027 + ADR-0027a (4 files):**
+
 ```
 ├── placement_cascade_npu_gpu_cpu_remote.yml  # 4-tier cascade: NPU (140ms, 5-8W) → GPU (180ms, 15-25W) → CPU (350ms, 3-10W) → Remote (600ms, 0W, $0.002/token)
 ├── thermal_cascade_integration.yml           # COOL/WARM→NPU/GPU, HOT→GPU/CPU/Remote, CRITICAL→CPU/Remote, EMERGENCY→Remote only
@@ -3646,6 +3943,7 @@ k0_bridge_batching/
 ```
 
 **Automatic Failover - ADR-0027b (4 files):**
+
 ```
 ├── failover_manager_100ms_budget.yml         # <100ms total: detection 15ms + KV transfer 25ms + model load 45ms + resume 8ms
 ├── kv_cache_transfer_pinned_memory.yml       # Pinned memory for fast transfers: 2GB/s NPU→GPU, 8GB/s GPU→CPU
@@ -3654,6 +3952,7 @@ k0_bridge_batching/
 ```
 
 **Cost-Aware Fallback - ADR-0027c (4 files):**
+
 ```
 ├── cost_tracker_per_token.yml                # Track cost per token: $0.000002/token target for remote API ($2 per 1M tokens)
 ├── budget_state_machine_4_tiers.yml          # UNDER_BUDGET <$0.05, APPROACHING $0.05-$0.10, SOFT_LIMIT $0.10-$0.20, HARD_LIMIT ≥$0.20
@@ -3662,6 +3961,7 @@ k0_bridge_batching/
 ```
 
 **Remote Resilience - ADR-0027d (3 files):**
+
 ```
 ├── remote_resilient_client_retry.yml         # 3 retries with exponential backoff: 1s, 2s, 4s delays, 10s timeout per request
 ├── circuit_breaker_state_machine.yml         # Open after 5 consecutive failures, half-open after 60s, test with single request
@@ -3671,11 +3971,13 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.3.4: WFQ Scheduler Contracts**
+
 **Effort:** 2 days | **Source ADR:** `0028-weighted-fair-queuing-scheduler.md` + sub-ADRs `0028a-c`
 
 **Expected Output:** `contracts/performance/scheduler/` (10 files)
 
 **WFQ Algorithm & Virtual Time - ADR-0028 + ADR-0028a (3 files):**
+
 ```
 ├── wfq_scheduler_virtual_time.yml             # Virtual time formula: vtime_finish = vtime_start + (turn_cost_ms / weight)
 ├── virtual_time_tracker_per_session.yml       # Track virtual time per session, proportional CPU allocation (URGENT:REALTIME:INTERACTIVE:BACKGROUND = 10:5:3:1)
@@ -3683,6 +3985,7 @@ k0_bridge_batching/
 ```
 
 **Priority Classes & Preemption - ADR-0028 + ADR-0028b (3 files):**
+
 ```
 ├── priority_manager_4_classes.yml             # URGENT (weight 10, ≤50ms), REALTIME (weight 5, ≤150ms), INTERACTIVE (weight 3, ≤300ms), BACKGROUND (weight 1, ≤5000ms)
 ├── preemption_checkpoint_kv_cache.yml         # Preemption flow: save KV cache (1-10ms), interrupt inference, run high priority, resume preempted
@@ -3690,12 +3993,14 @@ k0_bridge_batching/
 ```
 
 **Starvation Prevention - ADR-0028c (2 files):**
+
 ```
 ├── age_boost_calculator_10pct_per_sec.yml     # Age boost formula: effective_weight = base_weight × (1 + 0.1 × wait_seconds)
 └── forced_scheduling_500ms_threshold.yml      # Force-schedule BACKGROUND if starved >500ms (URGENT >50ms, REALTIME >150ms, INTERACTIVE >300ms)
 ```
 
 **Scheduler Observability - ADR-0028 + ADR-0029c (2 files):**
+
 ```
 ├── queue_depth_metrics_active_tasks.yml       # Gauge: orchestrator_active_tasks (currently executing tasks per priority class)
 └── wait_time_histogram_p50_p95_p99.yml        # Histogram: session_wait_time_ms (latency from task announcement to execution start)
@@ -3704,11 +4009,13 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.3.5: Cost Tracking Contracts**
+
 **Effort:** 3 days | **Source ADR:** `0031-cost-tracking-per-session.md` + sub-ADRs `0031a-d`
 
 **Expected Output:** `contracts/performance/cost/` (16 files)
 
 **Hierarchical Budget Enforcement - ADR-0031a (6 files):**
+
 ```
 ├── session_budget_enforcement_10_cents.yml     # Session budget: $0.10 default per conversation, alert at 50%/80%/95%, block at 100%
 ├── user_daily_budget_enforcement_5_usd.yml     # User daily budget: $5.00 per user per day, auto-reset at midnight UTC, aggregate session costs
@@ -3719,6 +4026,7 @@ k0_bridge_batching/
 ```
 
 **Cost Model & Pricing - ADR-0031b (4 files):**
+
 ```
 ├── token_cost_calculator_per_model.yml         # Token costs: GPT-4o ($0.005/$0.015 input/output per 1K), Claude ($0.003/$0.015), Gemini ($0.00125/$0.005), local models ($0.0001/$0.0002)
 ├── tool_cost_calculator_per_call.yml           # Tool costs: web_search ($0.002/call), image_generation ($0.04/image), web_scraping ($0.001/page), local tools ($0)
@@ -3727,6 +4035,7 @@ k0_bridge_batching/
 ```
 
 **Automatic Cost Fallback - ADR-0031c (3 files):**
+
 ```
 ├── fallback_tier_state_machine.yml             # 4 fallback tiers: NORMAL (0-50%, continue), WARNING (50-80%, notify), COST_OPTIMIZED (80-95%, cheaper models), LOCAL_ONLY (95-100%, on-device only)
 ├── cheaper_model_alternatives.yml              # Model downgrades: GPT-4o → GPT-4o-mini (97% cheaper), Claude-3.5-Sonnet → Claude-3-Haiku (90% cheaper), Gemini-1.5-Pro → Gemini-1.5-Flash (80% cheaper)
@@ -3734,6 +4043,7 @@ k0_bridge_batching/
 ```
 
 **Cost Observability - ADR-0031d (3 files):**
+
 ```
 ├── cost_prometheus_metrics.yml                 # Prometheus metrics: cost_total_usd (counter), cost_per_turn_usd (histogram buckets [0.001,0.005,0.01,0.02,0.05,0.1,0.2,0.5,1.0]), budget_utilization_ratio (gauge 0.0-1.0), budget_remaining_usd (gauge), fallback_events_total (counter), budget_violations_total (counter)
 ├── cost_grafana_dashboards.yml                 # Grafana dashboards: IT Admin (real-time budget monitoring, anomaly detection), Finance (MTD spending by department, forecast Q4), Compliance (audit trails, SOC2/ISO27001 reports), Manager (team usage, cost optimization tips)
@@ -3743,6 +4053,7 @@ k0_bridge_batching/
 ---
 
 ## Epic 4.4: Observability Contracts
+
 **ADR Source:** ADR-0029, ADR-0030
 **Timeline:** Week 12 (5 days)
 **Dependencies:** All prior epics (observability spans all)
@@ -3750,11 +4061,13 @@ k0_bridge_batching/
 ### **Issues for Epic 4.4:**
 
 #### **Issue 4.4.1: Prometheus Metrics Contracts (RED Method)**
+
 **Effort:** 4 days | **Source ADR:** `0029-prometheus-metrics-red-method.md` + sub-ADRs `0029a-e`
 
 **Expected Output:** `contracts/observability/metrics/` (25 files)
 
 **RED Method Schema - ADR-0029a (4 files):**
+
 ```
 ├── metric_schema_validator_naming.yml         # Metric naming convention: k1_<component>_<metric>_<unit> (e.g., k1_turn_ttft_ms)
 ├── naming_convention_enforcer.yml             # Enforce metric types: Counter (rate/errors), Histogram (duration), Gauge (current state)
@@ -3763,6 +4076,7 @@ k0_bridge_batching/
 ```
 
 **Turn-Level Metrics - ADR-0029b (5 files):**
+
 ```
 ├── ttft_tracker_150ms_p95_budget.yml          # TTFT histogram: 150ms P95 budget = ASR 50ms + Intent 50ms + Orchestration 50ms
 ├── e2e_latency_tracker_2000ms_p95.yml         # E2E histogram: 2000ms P95 budget = TTFT 150ms + LLM Generation 1650ms + TTS 200ms
@@ -3772,6 +4086,7 @@ k0_bridge_batching/
 ```
 
 **Component Metrics - ADR-0029c (5 files):**
+
 ```
 ├── agent_metrics_6_core.yml                   # 6 agent metrics: transitions_total, crashes_total, hiring_latency_ms, active_agents, blacklisted_agents, supervisor_checks_total
 ├── orchestrator_metrics_7_core.yml            # 7 orchestrator metrics: tasks_total, 3phase_latency_ms, negotiation_rounds, selection_latency_ms, execution_latency_ms, timeouts_total, active_tasks
@@ -3781,6 +4096,7 @@ k0_bridge_batching/
 ```
 
 **Infrastructure Metrics - ADR-0029d (5 files):**
+
 ```
 ├── kv_cache_metrics_5_core.yml                # 5 KV cache metrics: hit_rate (0.0-1.0, target >0.75), size_mb (budget 128MB), evictions_total (LRU), entries, access_latency_ms (hit <1ms, miss <10ms)
 ├── thermal_metrics_4_core.yml                 # 4 thermal metrics: state (0=COOL, 1=WARM, 2=HOT, 3=CRITICAL, 4=EMERGENCY), temperature_celsius (NPU/GPU/CPU), throttling_events_total, placement_decisions_total
@@ -3790,6 +4106,7 @@ k0_bridge_batching/
 ```
 
 **Alerting & Dashboards - ADR-0029e (6 files):**
+
 ```
 ├── slo_alert_rules_10_groups.yml              # 10 alert rule groups: Turn (TTFT, E2E, error rate, availability), Agent (hiring latency, crash rate, blacklist), Orchestrator (3-phase latency, timeout rate), Planner (validation failures, arbiter approvals), Tool (execution latency, timeout rate), KV Cache (hit rate, size, eviction rate), Thermal (throttling events, emergency state), Memory (SessionState size, K1 total memory), Cost (per-turn budget, monthly burn rate), Synthetic Monitoring (synthetic turn success rate, synthetic TTFT)
 ├── grafana_turn_overview_dashboard_12_panels.yml   # Grafana Turn Overview: 12 panels (TTFT histogram, E2E histogram, error rate graph, success rate gauge, barge-in latency, active turns, phase breakdown, error types breakdown, timeout stages, asr/intent/llm/tts latency, turn throughput)
@@ -3802,11 +4119,13 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.4.2: Intelligent Trace Sampling Contracts**
+
 **Effort:** 3 days | **Source ADR:** `0030-intelligent-trace-sampling.md` + sub-ADRs `0030a-d`
 
 **Expected Output:** `contracts/observability/tracing/` (13 files)
 
 **Head-Based Sampling Strategy - ADR-0030a (4 files):**
+
 ```
 ├── head_based_sampler_decision_logic.yml       # Sampling rules (priority order): 1. Errors (100%), 2. High latency (TTFT >150ms OR E2E >2000ms = 100%), 3. RED band (100%), 4. Backpressure Tier 1+ (100%), 5. Baseline (1% hash-based)
 ├── w3c_trace_context_propagation.yml           # W3C Trace Context format: {version}-{trace-id}-{parent-id}-{trace-flags}, traceparent header injection <0.5ms, cognitive_trace_id as trace-id (128-bit UUID)
@@ -3815,6 +4134,7 @@ k0_bridge_batching/
 ```
 
 **Tail-Based Sampling & Span Buffering - ADR-0030b (3 files):**
+
 ```
 ├── tail_sampling_coordinator.yml               # Tail-based decision after turn completion: Evaluate final context (status, latency, privacy band), decide KEEP (export to Jaeger) or DISCARD (drop from buffer), <100ms decision latency
 ├── span_buffer_management_60s.yml              # Span buffer: 60s retention, <50MB memory budget (10,000 turns × 50 spans × 100 bytes avg = 2.1MB peak × 10x headroom), BatchSpanProcessor integration
@@ -3822,6 +4142,7 @@ k0_bridge_batching/
 ```
 
 **Adaptive Sampling Rate Adjustment - ADR-0030c (3 files):**
+
 ```
 ├── adaptive_sampling_fsm_3_states.yml          # Adaptive FSM: NORMAL (1% baseline) → DEGRADATION (10% baseline, TTFT >157ms 5s OR error >1%) → CRITICAL (50% baseline, TTFT >210ms 10s OR error >5% OR backpressure Tier 2+)
 ├── health_indicator_monitoring.yml             # Health checks every 5s: Query Prometheus for TTFT P95, error rate, backpressure tier, upgrade if sustained degradation, downgrade after 60s recovery
@@ -3829,6 +4150,7 @@ k0_bridge_batching/
 ```
 
 **Trace Storage & Jaeger Integration - ADR-0030d (3 files):**
+
 ```
 ├── jaeger_otlp_exporter_grpc.yml               # OTLP exporter: gRPC endpoint localhost:4317, batch 512 spans, 5s timeout, resource attributes (service.name, service.version, deployment.environment, k1.kernel)
 ├── jaeger_badger_storage_retention.yml         # Badger storage backend: Hot storage 7 days (all sampled traces), warm storage 30 days (errors/critical only), embedded key-value store (no external DB), TTL-based eviction, maintenance every 1h
@@ -3838,9 +4160,11 @@ k0_bridge_batching/
 ---
 
 #### **Issue 4.4.3: Receipt & Audit Trail Contracts**
+
 **Effort:** 1 day | **Source ADR:** `0038-audit-trail-to-k0-receipts.md`
 
 **Expected Output:** `contracts/observability/receipts/`
+
 ```
 ├── receipt_generation.yml           # Schema (ADR-0038a)
 ├── k0_wal_integration_async.yml     # Async writes (ADR-0038b)
@@ -3858,9 +4182,11 @@ k0_bridge_batching/
 **Location:** `contracts/testing/`
 
 #### **Issue T.1: Contract Testing Framework**
+
 **Effort:** 3 days | **Source ADR:** `0013d-contract-testing-compatibility-validation.md`
 
 **Expected Output:** `contracts/testing/`
+
 ```
 ├── consumer_contracts/              # Consumer-driven contract tests (Pact-style)
 ├── provider_contracts/              # Provider contract validation
@@ -3871,6 +4197,7 @@ k0_bridge_batching/
 ```
 
 **Key Testing Components:**
+
 1. **Schema Validation:** FlatBuffers compiler validation, JSON Schema validation
 2. **Protocol Validation:** PDL → FSM compilation, state transition validation
 3. **Contract Tests:** Consumer-driven tests between K1 components and K0
@@ -3882,12 +4209,14 @@ k0_bridge_batching/
 ## 📊 Final Deliverables Checklist
 
 ### **Milestone 1: Foundation (Weeks 1-3)**
+
 - [ ] 20 K0 Bridge port contracts (P01-P20)
 - [ ] Actor Model mailbox/supervisor/router contracts
 - [ ] 6 MPST protocol definitions (PDL)
 - [ ] 52-module architecture manifest
 
 ### **Milestone 2: Agent & Orchestration (Weeks 4-6)**
+
 - [ ] Agent lifecycle FSM (6 states)
 - [ ] Orchestration 3-phase contracts
 - [ ] Planning pipeline (4 stages)
@@ -3895,18 +4224,21 @@ k0_bridge_batching/
 - [ ] Capability-based security contracts (unforgeable tokens, HMAC-SHA256)
 
 ### **Milestone 3: Serialization & API (Weeks 7-9)**
+
 - [ ] 76 FlatBuffers schemas (5 layers)
 - [ ] REST API OpenAPI 3.1 specs
 - [ ] WebSocket binary protocol
 - [ ] SSE event schemas (17 types)
 
 ### **Milestone 4: State & Performance (Weeks 10-12)**
+
 - [ ] SessionState 6-section structure
 - [ ] Multi-tier storage contracts
 - [ ] Performance budgets (P95 targets)
 - [ ] Observability contracts (Prometheus, OpenTelemetry)
 
 ### **Testing & Validation (All Milestones)**
+
 - [ ] Contract testing framework
 - [ ] Compatibility matrix (228-380 tests)
 - [ ] CI/CD integration
@@ -3948,6 +4280,7 @@ k0_bridge_batching/
 **Timeline:** 12 weeks (3 months)
 
 **Priority Order:**
+
 1. K0 Bridge ports (P01-P20) - critical for K1↔K0 communication
 2. Actor Model mailbox - critical for all component messaging
 3. MPST protocols - critical for agent coordination
@@ -3962,6 +4295,7 @@ k0_bridge_batching/
 ### **2025-10-13: Comprehensive ADR 0001-0015 Review & Plan Expansion**
 
 **Changes Made:**
+
 1. **Executive Summary Updated:**
    - Contract files: 150 → **220 files** (+70 files, +47% increase)
    - Epics: 18 → **24 epics** (+6 epics)
@@ -4003,6 +4337,7 @@ k0_bridge_batching/
    - **ADR-0015a (Message Envelope):** 32-byte envelope overhead, hash table routing <1ms, sequence tracking (partial, 401 lines)
 
 **Files Modified:**
+
 - `contracts/CONTRACT_DEVELOPMENT_PLAN.md` (2314 lines → 2655 lines → 2825 lines, total +511 lines from initial, +22% expansion)
 
 **Latest Update (ADRs 0016-0017 Batch):**
@@ -4028,11 +4363,13 @@ k0_bridge_batching/
    - **Why Expanded:** Each sub-ADR (0017a-f) provides detailed implementation for each section. Previous plan had only 1 generic YAML per section (7 files total). Each section needs: FlatBuffers schema + manager implementation + eviction/logic contract + serialization contract (3-4 files per section × 6 sections = 21 files).
 
 **Next Steps:**
+
 - Continue reading ADRs 0018-0031 in next batches (4-5 ADRs per batch)
 - Add Milestone 5 if needed after reviewing remaining ADRs (observability, tooling, testing)
 - Update plan with any additional missing contracts from ADRs 0018-0031
 
 **Coverage Validation:**
+
 - ✅ ADR-0001 (K0/K1 Split): Epic 1.1 (20 ports) + Epic 3.3 (20 pipelines) = **COMPLETE**
 - ✅ ADR-0002 (Actor Model): Epic 1.2 (mailbox, supervisor, router) = **COMPLETE**
 - ✅ ADR-0003 (MPST Protocols): Epic 1.3 (6 PDL) + Epic 2.6 (6 FSMs) = **COMPLETE**

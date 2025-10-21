@@ -1,0 +1,538 @@
+# Saga Compensation Request & Response Contracts
+# Purpose: Message contracts for orchestrator → agent compensation requests and responses
+# Research: Saga Pattern (Garcia-Molina 1987), idempotent compensating transactions
+# Source ADRs: ADR-0003b (6 Core Protocol Implementations), ADR-0009 (Circuit Breaker)
+# Version: 1.0.0
+# Last Updated: 2025-10-21
+
+compensation_request_contract:
+  name: "Compensation Request Message Contract"
+  description: "Orchestrator → Agent/Tool: Request to execute compensation action"
+  adr_reference:
+    - "ADR-0003b: 6 Core Protocol Implementations"
+    - "ADR-0009: Circuit Breaker Pattern"
+  version: "1.0.0"
+  flatbuffers_schema: "contracts/flatbuffers/CompensationRequest.fbs"
+
+  # ============================================================================
+  # Message Structure
+  # ============================================================================
+  message_type: "CompensationRequest"
+  protocol_phase: "compensating"
+  sender: "orchestrator"
+  receiver: "agent | tool_runner | service"
+
+  fields:
+    # ===== IDENTIFIERS =====
+    compensation_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Unique compensation request ID"
+      example: "comp-550e8400-e29b-41d4-a716-446655440300"
+      validation:
+        - "UUID v4 format"
+        - "Must be globally unique"
+
+    saga_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "References parent saga"
+      example: "saga-123e4567-e89b-12d3-a456-426614174000"
+
+    cognitive_trace_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Distributed trace ID for observability"
+
+    step_id:
+      type: "string"
+      required: true
+      description: "ID of step to compensate"
+      example: "step_book_hotel"
+
+    idempotency_key:
+      type: "string (UUID v4)"
+      required: true
+      description: "Unique key for idempotent compensation (safe to retry)"
+      rationale: "Prevents duplicate compensation execution"
+      validation:
+        - "UUID v4 format"
+        - "Same key + step_id = idempotent operation"
+
+    # ===== ORIGINAL ACTION CONTEXT =====
+    original_action:
+      type: "object (JSON)"
+      required: true
+      description: "Original action taken by this step"
+      max_size_bytes: 1048576  # 1MB
+      sub_fields:
+        action_type:
+          type: "enum"
+          values: ["CREATE", "UPDATE", "DELETE", "BOOK", "RESERVE", "CHARGE", "NOTIFY"]
+          description: "Semantic action type"
+          example: "BOOK"
+
+        action_id:
+          type: "string (UUID v4)"
+          description: "Unique action identifier"
+          example: "action-12345"
+
+        resource_id:
+          type: "string"
+          description: "Resource affected by action"
+          example: "hotel_reservation_67890"
+
+        resource_type:
+          type: "string"
+          description: "Type of resource"
+          example: "booking"
+          values: ["booking", "reservation", "payment", "notification", "account"]
+
+        action_result:
+          type: "object (JSON)"
+          description: "Result data from original action"
+          example: '{"booking_id": "hotel_res_67890", "confirmation_code": "ABC123", "total_cost": 199.99}'
+
+        action_timestamp_ms:
+          type: "timestamp"
+          description: "When original action executed"
+
+      validation:
+        - "Must be valid JSON"
+        - "action_id required"
+        - "resource_id required for compensable actions"
+
+    # ===== COMPENSATION DETAILS =====
+    compensation_type:
+      type: "enum"
+      required: true
+      description: "Type of compensation strategy"
+      values:
+        - "UNDO"          # Completely undo action (DELETE booking)
+        - "COMPENSATE"    # Counteracting action (CANCEL + REFUND)
+        - "BEST_EFFORT"   # Partial rollback (log failure, manual intervention)
+      default: "COMPENSATE"
+      impact:
+        UNDO: "Hard delete or reverse operation"
+        COMPENSATE: "Execute counteracting action (may have side effects)"
+        BEST_EFFORT: "Partial rollback, log failure, alert operations"
+
+    compensation_action:
+      type: "object (JSON)"
+      required: true
+      description: "How to execute compensation"
+      sub_fields:
+        service_url:
+          type: "string (URL)"
+          description: "Compensation endpoint"
+          example: "https://hotel-service/api/bookings/hotel_res_67890/cancel"
+
+        http_method:
+          type: "enum"
+          values: ["DELETE", "POST", "PUT", "PATCH"]
+          default: "POST"
+
+        parameters:
+          type: "object (JSON)"
+          description: "Compensation parameters"
+          example: '{"booking_id": "hotel_res_67890", "reason": "saga_rollback", "refund_amount": 199.99}'
+
+        headers:
+          type: "object (JSON)"
+          required: false
+          description: "Custom HTTP headers"
+          example: '{"Authorization": "Bearer ${token}"}'
+
+        expected_response:
+          type: "object (JSON)"
+          required: false
+          description: "Expected response schema"
+
+    cancellation_reason:
+      type: "enum"
+      required: true
+      description: "Why compensation is needed"
+      values:
+        - "downstream_step_failed"     # Subsequent step failed
+        - "timeout_exceeded"           # Step timed out
+        - "user_requested_cancellation" # User cancelled
+        - "insufficient_funds"         # Payment failed
+        - "resource_unavailable"       # Resource no longer available
+        - "validation_failed"          # Validation error
+      example: "downstream_step_failed"
+
+    cancellation_details:
+      type: "string"
+      required: true
+      description: "Human-readable cancellation reason"
+      example: "Payment step failed: credit card declined"
+      max_length: 500
+
+    # ===== TIMEOUT & PRIORITY =====
+    timeout_ms:
+      type: "integer"
+      required: true
+      description: "Compensation timeout"
+      example: 3000
+      validation:
+        - "Range: 500-30000"
+        - "Should be >= original step timeout"
+
+    deadline_ms:
+      type: "timestamp"
+      required: false
+      description: "Absolute deadline for compensation completion"
+      example: 1729108903000
+
+    priority:
+      type: "enum"
+      required: true
+      description: "Compensation priority (higher than original step)"
+      values: ["CRITICAL", "HIGH", "NORMAL"]
+      default: "HIGH"
+      rationale: "Compensation is high priority to restore system consistency"
+
+    # ===== RETRY POLICY =====
+    retry_policy:
+      type: "object"
+      required: true
+      description: "Retry configuration for compensation"
+      sub_fields:
+        max_retries:
+          type: "integer"
+          description: "Max retry attempts"
+          default: 3
+          validation:
+            - "Range: 0-10"
+
+        backoff_strategy:
+          type: "enum"
+          values: ["exponential", "linear", "fixed"]
+          default: "exponential"
+
+        backoff_base_ms:
+          type: "integer"
+          default: 100
+          description: "Base delay for backoff"
+
+        retryable_errors:
+          type: "array of string"
+          description: "Error codes to retry"
+          example: ["TIMEOUT", "SERVICE_ERROR", "RATE_LIMIT"]
+
+    # ===== COMPENSATION ORDER =====
+    compensation_order:
+      type: "integer"
+      required: true
+      description: "Order of compensation in rollback sequence"
+      example: 3
+      rationale: "Compensations execute in reverse order (LIFO)"
+      validation:
+        - "Must be > 0"
+
+    total_compensation_steps:
+      type: "integer"
+      required: true
+      description: "Total steps requiring compensation"
+      example: 3
+
+    failed_step_id:
+      type: "string"
+      required: true
+      description: "Which step caused saga failure"
+      example: "step_charge_payment"
+
+    # ===== AUDIT CONTEXT =====
+    audit_context:
+      type: "object"
+      required: true
+      description: "Audit trail information"
+      sub_fields:
+        user_id:
+          type: "string"
+          description: "User who initiated saga"
+
+        session_id:
+          type: "string (UUID v4)"
+          description: "Session context"
+
+        privacy_band:
+          type: "enum"
+          values: ["GREEN", "AMBER", "RED", "BLACK"]
+          description: "Data sensitivity level"
+
+        request_origin:
+          type: "string"
+          description: "Where request originated"
+          example: "orchestrator"
+
+    requested_at_ms:
+      type: "timestamp"
+      required: true
+      description: "When compensation requested"
+
+  # ============================================================================
+  # Validation Rules
+  # ============================================================================
+  validation_rules:
+    rule_1_compensation_id_valid:
+      condition: "is_uuid_v4(compensation_id)"
+      on_violation: "reject_request"
+
+    rule_2_idempotency_key_valid:
+      condition: "is_uuid_v4(idempotency_key)"
+      on_violation: "reject_request"
+
+    rule_3_original_action_valid:
+      condition: "original_action.action_id != null AND original_action.resource_id != null"
+      on_violation: "reject_request"
+
+    rule_4_timeout_reasonable:
+      condition: "500 <= timeout_ms <= 30000"
+      on_violation: "use_default_timeout"
+
+    rule_5_compensation_not_expired:
+      condition: "current_time_ms <= deadline_ms OR deadline_ms == null"
+      on_violation: "reject_request"
+
+---
+
+compensation_response_contract:
+  name: "Compensation Response Message Contract"
+  description: "Agent/Tool → Orchestrator: Result of compensation execution"
+  version: "1.0.0"
+  flatbuffers_schema: "contracts/flatbuffers/CompensationResponse.fbs"
+
+  # ============================================================================
+  # Message Structure
+  # ============================================================================
+  message_type: "CompensationResponse"
+  protocol_phase: "compensating"
+  sender: "agent | tool_runner | service"
+  receiver: "orchestrator"
+
+  fields:
+    # ===== IDENTIFIERS =====
+    compensation_response_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Unique response ID"
+
+    compensation_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "References compensation request"
+
+    saga_id:
+      type: "string (UUID v4)"
+      required: true
+
+    step_id:
+      type: "string"
+      required: true
+
+    idempotency_key:
+      type: "string (UUID v4)"
+      required: true
+      description: "Echo idempotency key from request"
+
+    # ===== RESULT =====
+    success:
+      type: "boolean"
+      required: true
+      description: "Whether compensation succeeded"
+      impact:
+        true: "Compensation complete, system state restored"
+        false: "Compensation failed, manual intervention may be required"
+
+    compensation_status:
+      type: "enum"
+      required: true
+      description: "Detailed compensation status"
+      values:
+        - "COMPLETED"           # Full compensation success
+        - "PARTIALLY_COMPLETED" # Partial success (some actions failed)
+        - "FAILED"              # Complete failure
+        - "SKIPPED"             # Already in desired state (idempotent duplicate)
+        - "NOT_FOUND"           # Resource not found (considered success)
+
+    result_data:
+      type: "object (JSON)"
+      required: false
+      description: "Compensation result details"
+      max_size_bytes: 1048576  # 1MB
+      example: '{"booking_id": "hotel_res_67890", "status": "cancelled", "refund_amount": 199.99, "refund_id": "refund_123"}'
+
+    # ===== ERROR HANDLING =====
+    error_code:
+      type: "enum"
+      required: false
+      description: "Error code if compensation failed"
+      values:
+        - "NOT_FOUND"           # Resource already gone (OK)
+        - "UNAUTHORIZED"        # Not authorized to compensate
+        - "TIMEOUT"             # Compensation timed out
+        - "SERVICE_ERROR"       # Service returned error
+        - "INVALID_STATE"       # Resource in invalid state
+        - "NETWORK_ERROR"       # Network failure
+        - "RATE_LIMIT"          # Rate limited
+        - "IDEMPOTENCY_CONFLICT" # Duplicate with different result
+
+    error_message:
+      type: "string"
+      required: false
+      description: "Human-readable error message"
+      max_length: 1000
+      example: "Booking already checked in, cannot be cancelled"
+
+    partial_compensation_details:
+      type: "object (JSON)"
+      required: false
+      description: "If PARTIALLY_COMPLETED, what was done vs failed"
+      example: '{"refunded": true, "booking_deleted": false, "reason": "delete_api_failed"}'
+
+    # ===== RESOURCE STATE =====
+    resource_state_after_compensation:
+      type: "object (JSON)"
+      required: false
+      description: "State of resource after compensation"
+      example: '{"booking_status": "cancelled", "refund_status": "processed", "checked_in": false}'
+
+    # ===== PERFORMANCE =====
+    compensation_latency_ms:
+      type: "integer"
+      required: true
+      description: "Time to execute compensation"
+      example: 2100
+
+    retry_count:
+      type: "integer"
+      required: true
+      description: "Number of retries attempted"
+      default: 0
+
+    # ===== IDEMPOTENCY =====
+    is_idempotent:
+      type: "boolean"
+      required: true
+      description: "True if compensation can be safely retried"
+      default: true
+      rationale: "All compensations should be idempotent"
+
+    is_duplicate:
+      type: "boolean"
+      required: true
+      description: "True if handled via idempotency (duplicate request)"
+      default: false
+
+    responded_at_ms:
+      type: "timestamp"
+      required: true
+
+  # ============================================================================
+  # Special Cases
+  # ============================================================================
+  special_cases:
+    already_compensated:
+      description: "Resource already in compensated state"
+      response_values:
+        success: true
+        compensation_status: "SKIPPED"
+        is_duplicate: true
+      rationale: "Idempotency ensures safe duplicate handling"
+
+    resource_not_found:
+      description: "Resource to compensate doesn't exist"
+      response_values:
+        success: true
+        compensation_status: "NOT_FOUND"
+        error_code: "NOT_FOUND"
+      rationale: "Goal achieved (resource doesn't exist)"
+
+    cannot_compensate:
+      description: "Resource in state where compensation impossible"
+      response_values:
+        success: false
+        compensation_status: "FAILED"
+        error_code: "INVALID_STATE"
+      action: "Escalate to manual intervention"
+
+    partial_compensation:
+      description: "Some compensation actions succeeded, others failed"
+      response_values:
+        success: false
+        compensation_status: "PARTIALLY_COMPLETED"
+      action: "Log failure, retry, or escalate"
+
+  # ============================================================================
+  # Examples
+  # ============================================================================
+  examples:
+    example_1_success:
+      compensation_response_id: "resp-550e8400-e29b-41d4-a716-446655440302"
+      compensation_id: "comp-550e8400-e29b-41d4-a716-446655440300"
+      saga_id: "saga-123e4567-e89b-12d3-a456-426614174000"
+      step_id: "step_book_hotel"
+      idempotency_key: "idem-550e8400-e29b-41d4-a716-446655440301"
+      success: true
+      compensation_status: "COMPLETED"
+      result_data: '{"booking_id": "hotel_res_67890", "status": "cancelled", "refund_amount": 199.99}'
+      compensation_latency_ms: 2100
+      retry_count: 0
+      is_idempotent: true
+      is_duplicate: false
+      responded_at_ms: 1729108902100
+
+    example_2_failure:
+      compensation_response_id: "resp-550e8400-e29b-41d4-a716-446655440303"
+      compensation_id: "comp-550e8400-e29b-41d4-a716-446655440300"
+      saga_id: "saga-123e4567-e89b-12d3-a456-426614174000"
+      step_id: "step_book_hotel"
+      idempotency_key: "idem-550e8400-e29b-41d4-a716-446655440301"
+      success: false
+      compensation_status: "FAILED"
+      error_code: "INVALID_STATE"
+      error_message: "Booking already checked in, cannot be cancelled"
+      compensation_latency_ms: 500
+      retry_count: 3
+      is_idempotent: true
+      is_duplicate: false
+      responded_at_ms: 1729108900500
+
+    example_3_already_compensated:
+      compensation_response_id: "resp-550e8400-e29b-41d4-a716-446655440304"
+      compensation_id: "comp-550e8400-e29b-41d4-a716-446655440300"
+      saga_id: "saga-123e4567-e89b-12d3-a456-426614174000"
+      step_id: "step_book_hotel"
+      idempotency_key: "idem-550e8400-e29b-41d4-a716-446655440301"
+      success: true
+      compensation_status: "SKIPPED"
+      error_message: "Booking already cancelled (idempotent duplicate request)"
+      compensation_latency_ms: 10
+      retry_count: 0
+      is_idempotent: true
+      is_duplicate: true
+      responded_at_ms: 1729108800010
+
+  # ============================================================================
+  # Metrics
+  # ============================================================================
+  metrics:
+    - name: "compensation_response_total"
+      type: "counter"
+      labels: ["saga_id", "step_id", "success", "compensation_status"]
+
+    - name: "compensation_latency_ms"
+      type: "histogram"
+      labels: ["step_id", "success"]
+      buckets: [100, 500, 1000, 2000, 5000, 10000]
+
+    - name: "compensation_retry_count"
+      type: "histogram"
+      labels: ["step_id", "success"]
+      buckets: [0, 1, 2, 3, 5, 10]
+
+    - name: "compensation_idempotent_hit_total"
+      type: "counter"
+      labels: ["step_id"]
+      description: "Duplicate compensation requests handled via idempotency"
