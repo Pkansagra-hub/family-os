@@ -1,0 +1,440 @@
+# Process Sandbox: Filesystem Egress via chroot + seccomp-bpf
+# Purpose: Confine tool filesystem access to isolated directory tree
+# Research: chroot jails, seccomp-bpf filtering, path resolution
+# Part of ADR-0033c (Process Sandbox Implementation) & ADR-0032 (Egress Layer 2)
+
+---
+contract_id: "TOOL_EXEC_PROCESS_FILESYSTEM_EGRESS_CHROOT"
+contract_type: "filesystem_security"
+applies_to: ["k1.orchestrator.tool_runner", "k1.process_sandbox"]
+
+# ============================================================================
+# FILESYSTEM EGRESS PRINCIPLE: chroot Sandbox + seccomp Filtering
+# ============================================================================
+
+principle: |
+  Tool filesystem access confined via two-layer approach:
+
+  Layer 2A: chroot(2) syscall
+  - Change process root directory to /tmp/tool_<tool_id>_sandbox
+  - Process sees /etc, /usr, /lib as contents of sandbox
+  - Cannot access parent directories (no ../../etc escape)
+  - Cannot access /root/.ssh, /etc/shadow (outside sandbox)
+
+  Layer 2B: seccomp-bpf filtering
+  - Block dangerous syscalls (mount, ptrace, execve)
+  - Allow safe syscalls but validate arguments
+  - Force path resolution within sandbox
+  - Block attempts to escape chroot (/../etc redirected to /etc)
+
+  Result: Complete filesystem confinement
+
+# ============================================================================
+# CHROOT DIRECTORY STRUCTURE
+# ============================================================================
+
+chroot_layout:
+  sandbox_root: |
+    /tmp/tool_<tool_id>_sandbox/ (becomes "/" for tool)
+
+    Structure (for tool_id=200):
+    /tmp/tool_200_sandbox/
+      ├─ bin/ (busybox or minimal shell)
+      ├─ lib/ (symlink to /lib for dynamic linking)
+      ├─ lib64/ (symlink to /lib64 for 64-bit)
+      ├─ usr/
+      │   ├─ bin/ (symlink to host /usr/bin)
+      │   ├─ lib/ (needed libraries)
+      │   └─ lib64/ (needed libraries)
+      ├─ etc/ (read-only config files)
+      │   ├─ ld.so.cache (dynamic linker cache)
+      │   ├─ ld.so.conf (linker config)
+      │   └─ [tool-specific config files]
+      ├─ var/ (variable data)
+      │   ├─ tmp/ (temporary files)
+      │   └─ lib/ (cached data)
+      ├─ workspace/ (read-write output directory)
+      │   └─ [output files written here]
+      └─ tmp/ (more temporary storage)
+
+  symlink_strategy: |
+    Dynamic libraries symlinked to reduce duplication:
+
+    /tmp/tool_200_sandbox/lib -> /lib (host's /lib)
+    /tmp/tool_200_sandbox/usr/lib -> /usr/lib (host's /usr/lib)
+
+    Benefit: Shared library binaries (memory efficient)
+    Security: Symlinks are read-only from tool perspective
+    (tool cannot write to /lib because it's outside sandbox)
+
+  read_only_system: |
+    System directories are read-only:
+
+    Mounted as read-only bind-mount:
+    mount -o bind,ro /lib /tmp/tool_200_sandbox/lib
+    mount -o bind,ro /usr/lib /tmp/tool_200_sandbox/usr/lib
+
+    Tool attempts write to /lib:
+    $ echo "hack" > /lib/libc.so.6
+
+    Result: Permission denied (EROFS - read-only filesystem)
+
+  read_write_workspace: |
+    Only workspace/ is writable:
+
+    /tmp/tool_200_sandbox/workspace/ (read-write)
+
+    Tool can write:
+    $ touch /workspace/output.json
+    $ echo "result" > /workspace/output.json
+
+    Result: File created in /tmp/tool_200_sandbox/workspace/output.json
+    K1 retrieves output after tool terminates
+
+# ============================================================================
+# CHROOT SYSCALL EXECUTION
+# ============================================================================
+
+chroot_execution:
+  chroot_setup_in_preexec_fn: |
+    Python implementation (in subprocess preexec_fn):
+
+    import os
+
+    def setup_chroot(tool_id):
+        sandbox_root = f"/tmp/tool_{tool_id}_sandbox"
+
+        # Create sandbox directory structure
+        os.makedirs(f"{sandbox_root}/workspace", exist_ok=True)
+        os.makedirs(f"{sandbox_root}/tmp", exist_ok=True)
+        os.makedirs(f"{sandbox_root}/etc", exist_ok=True)
+
+        # Create symlinks to system libraries
+        os.symlink("/lib", f"{sandbox_root}/lib")
+        os.symlink("/lib64", f"{sandbox_root}/lib64")
+        os.symlink("/usr/lib", f"{sandbox_root}/usr/lib")
+
+        # Mount read-only system directories
+        os.system(f"mount -o bind,ro /usr {sandbox_root}/usr")
+        os.system(f"mount -o bind,ro /etc {sandbox_root}/etc")
+
+        # Change root directory
+        os.chroot(sandbox_root)
+
+        # Change working directory (now relative to new root)
+        os.chdir("/workspace")
+
+        # Drop capabilities (covered in separate contract)
+        drop_capabilities()
+
+    # Called in child process before exec()
+    setup_chroot(200)
+    os.execvp("python3", ["python3", "/tool.py"])
+
+  chroot_isolation_guaranteed: |
+    After chroot() syscall, process cannot escape:
+
+    Escape attempt 1: Read /etc/shadow
+    $ cat /etc/shadow
+    Result: /etc/shadow is symlink to host /etc → /etc/shadow
+           (relative to new root, becomes /etc/etc/shadow)
+           Tool cannot access original /etc/shadow
+
+    Escape attempt 2: Try parent directory
+    $ cd /..
+    $ ls /
+    Result: Still shows sandbox root (not host root)
+           /../etc is same as /etc (relative to sandbox root)
+
+    Escape attempt 3: open("/etc/shadow")
+    Result: Opens /etc/shadow (sandbox /etc/shadow, which is /etc/shadow copy)
+           Original host /etc/shadow unreachable
+
+    Guarantee: chroot is kernel-enforced, cannot escape
+
+# ============================================================================
+# SECCOMP-BPF FILTERING: Syscall Enforcement
+# ============================================================================
+
+seccomp_filtering:
+  seccomp_purpose: |
+    chroot alone is sufficient for path-based isolation.
+    seccomp adds extra layer for syscall filtering:
+
+    Benefits:
+    1. Block dangerous syscalls (mount, execve, ptrace, etc.)
+    2. Prevent fork/thread creation (fork, clone, etc.)
+    3. Enforce resource limits (brk, mmap cannot exceed quota)
+    4. Detect/block unusual patterns (unusual syscall sequences)
+
+  dangerous_syscalls_blocked: |
+    mount/umount:
+    - What: Mount filesystems, unmount
+    - Why: Would escape chroot if used to bind mount parent
+    - Action: SECCOMP_RET_KILL_PROCESS (terminate tool)
+
+    ptrace:
+    - What: Debug other processes
+    - Why: Could inspect sibling processes, K1 memory
+    - Action: SECCOMP_RET_ERRNO (return EPERM)
+
+    execve/execveat:
+    - What: Execute new binary (spawn new process)
+    - Why: Tool should not spawn subprocesses
+    - Action: SECCOMP_RET_ERRNO (return EACCES)
+
+    clone/fork:
+    - What: Create new process or thread
+    - Why: MAX_TOOLS enforced, tool should not spawn
+    - Action: SECCOMP_RET_ERRNO (return EAGAIN)
+
+    socket:
+    - What: Create raw socket (bypassing iptables)
+    - Why: Network already controlled by iptables
+    - Action: Allowed via WASI socket wrapper instead
+
+  bpf_program_example: |
+    Simplified seccomp-bpf program (actual uses libseccomp):
+
+    // Using libseccomp C API (Python wrapper available)
+    scmp_filter_ctx ctx;
+
+    // Create filter, default action SECCOMP_RET_ALLOW
+    ctx = seccomp_init(SECCOMP_ACT_ALLOW);
+
+    // Block dangerous syscalls
+    seccomp_rule_add(ctx, SECCOMP_ACT_KILL_PROCESS, SCMP_SYS(mount), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_KILL_PROCESS, SCMP_SYS(umount2), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_KILL_PROCESS, SCMP_SYS(ptrace), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_ERRNO(EACCES), SCMP_SYS(execve), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_ERRNO(EAGAIN), SCMP_SYS(fork), 0);
+
+    // Allow common syscalls
+    seccomp_rule_add(ctx, SECCOMP_ACT_ALLOW, SCMP_SYS(open), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_ALLOW, SCMP_SYS(read), 0);
+    seccomp_rule_add(ctx, SECCOMP_ACT_ALLOW, SCMP_SYS(write), 0);
+
+    // Load and apply filter
+    seccomp_load(ctx);
+
+  python_implementation: |
+    Using python-seccomp library:
+
+    import ctypes
+    from seccomp import *
+
+    def setup_seccomp_filter():
+        f = SyscallFilter(ALLOW)
+
+        # Block dangerous syscalls
+        f.add_rule(KILL, "mount")
+        f.add_rule(KILL, "umount2")
+        f.add_rule(KILL, "ptrace")
+        f.add_rule(ERRNO(22), "execve")  # EINVAL
+        f.add_rule(ERRNO(11), "fork")    # EAGAIN
+
+        # Whitelist safe syscalls
+        f.add_rule(ALLOW, "open")
+        f.add_rule(ALLOW, "read")
+        f.add_rule(ALLOW, "write")
+
+        # Load filter (cannot be unloaded)
+        f.load()
+
+# ============================================================================
+# CONFIGURATION: Per-Tool Filesystem Policy
+# ============================================================================
+
+configuration:
+  tool_filesystem_policy: |
+    YAML per-tool configuration:
+
+    weather_tool:
+      filesystem_policy:
+        writable_paths:
+          - /workspace
+          - /tmp
+        readonly_paths:
+          - /usr/lib
+          - /lib
+        blocked_files:
+          - /etc/shadow
+          - /root/.ssh
+        blocked_syscalls:
+          - mount
+          - ptrace
+          - execve
+        allowed_syscalls: [open, read, write, close, etc.]
+
+  privacy_band_filesystem_restrictions: |
+    Filesystem restrictions per privacy band:
+
+    GREEN band tools:
+      writable_paths: [/workspace, /tmp, /var/tmp]
+      readonly_paths: [/usr/lib, /lib, /etc]
+      file_size_limit: 100MB per file
+      total_size_limit: 500MB
+
+    AMBER band tools:
+      writable_paths: [/workspace, /tmp]
+      readonly_paths: [/usr/lib, /lib]
+      file_size_limit: 50MB per file
+      total_size_limit: 250MB
+
+    RED band tools:
+      writable_paths: [/workspace]
+      readonly_paths: [/lib only]
+      file_size_limit: 10MB per file
+      total_size_limit: 50MB
+
+# ============================================================================
+# OUTPUT HANDLING: Retrieving Tool Results
+# ============================================================================
+
+output_handling:
+  workspace_as_output_directory: |
+    Tool writes results to /workspace:
+
+    Tool code:
+    with open("/workspace/result.json", "w") as f:
+        json.dump({"status": "success", "data": [...]}, f)
+
+    Filesystem (sandbox):
+    /tmp/tool_200_sandbox/workspace/result.json (file exists)
+
+    K1 retrieval:
+    1. After tool terminates
+    2. K1 reads: /tmp/tool_200_sandbox/workspace/result.json
+    3. K1 parses JSON
+    4. K1 includes in response to user
+
+  output_retrieval_example: |
+    Python K1 code:
+
+    import subprocess
+    import json
+
+    # Execute tool
+    process = subprocess.Popen(...)
+    stdout, stderr = process.communicate()
+
+    # Retrieve output files
+    workspace_path = f"/tmp/tool_{tool_id}_sandbox/workspace"
+    for filename in os.listdir(workspace_path):
+        filepath = os.path.join(workspace_path, filename)
+        with open(filepath, "r") as f:
+            output_content = f.read()
+        # Process output_content
+
+# ============================================================================
+# SECURITY PROPERTIES: What's Prevented
+# ============================================================================
+
+security_properties:
+  prevents_path_traversal: |
+    Attack: Tool tries to read /etc/password
+
+    $ cat ../../etc/passwd
+
+    Result: Path resolution within sandbox
+             ../../etc is same as /etc (sandbox's /etc)
+             File not accessible (outside original /etc/passwd)
+
+  prevents_symlink_escape: |
+    Attack: Tool follows symlink out of sandbox
+
+    $ ln -s /etc/shadow /workspace/shadow_link
+    $ cat /workspace/shadow_link
+
+    Result: Symlink created in workspace
+             When followed, resolves relative to sandbox root
+             Symlink target /etc/shadow is /etc/shadow (sandbox)
+             Original host /etc/shadow not accessible
+
+  prevents_hard_link_to_sensitive_file: |
+    Attack: Hard link to /etc/shadow
+
+    $ ln /etc/shadow /workspace/shadow_copy
+    $ cat /workspace/shadow_copy
+
+    Result: Hard link created (not possible across filesystems)
+             If created: Points to sandboxed /etc/shadow
+             Original /etc/shadow inode different
+
+  prevents_fork_bomb: |
+    Attack: Tool spawns unlimited processes
+
+    def fork_bomb():
+        while True:
+            os.fork()
+
+    Result: First fork() call blocked by seccomp
+             Tool process killed (SECCOMP_RET_KILL_PROCESS)
+             No fork bomb possible
+
+  prevents_privilege_escalation: |
+    Attack: Tool tries to become root
+
+    $ sudo su
+    $ su root
+
+    Result: Running as unprivileged UID (e.g., 1000)
+             sudo, su commands fail (EACCES or EPERM)
+             setuid/setgid capabilities dropped
+             Cannot escalate privilege
+
+# ============================================================================
+# PERFORMANCE OVERHEAD: Setup Cost
+# ============================================================================
+
+performance_overhead:
+  chroot_setup_time: |
+    chroot + seccomp setup takes <5ms per tool:
+
+    Breakdown:
+    - Create sandbox directories: ~1ms
+    - Mount read-only filesystems: ~2ms
+    - chroot() syscall: ~0.1ms
+    - seccomp filter compilation + load: ~1-2ms
+    - Total: ~4-5ms
+
+    Applied in preexec_fn (subprocess creation)
+
+  runtime_overhead_minimal: |
+    After setup, runtime overhead is minimal:
+
+    - chroot is transparent (no overhead per syscall)
+    - seccomp adds ~50-100ns per syscall (negligible)
+    - Path resolution slightly slower (relative lookups)
+
+    Total runtime overhead: <5% (negligible)
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: Each tool MUST have isolated sandbox root directory
+    ENFORCEMENT: K1 creates /tmp/tool_<tool_id>_sandbox per tool
+    RATIONALE: Separate namespace prevents cross-tool access
+
+  rule_2: |
+    RULE: System directories MUST be mounted read-only
+    ENFORCEMENT: mount -o bind,ro applied to /lib, /usr/lib, /etc
+    RATIONALE: Tool cannot modify system binaries/libraries
+
+  rule_3: |
+    RULE: Only /workspace directory MUST be writable
+    ENFORCEMENT: All other directories read-only or non-existent
+    RATIONALE: Contain output to single directory for retrieval
+
+  rule_4: |
+    RULE: Dangerous syscalls MUST be blocked (mount, ptrace, execve, fork)
+    ENFORCEMENT: seccomp-bpf filter blocks with KILL or ERRNO
+    RATIONALE: Prevent escape, process spawning, privilege escalation
+
+  rule_5: |
+    RULE: chroot escape attempts MUST be impossible
+    ENFORCEMENT: Kernel enforces chroot isolation in path resolution
+    RATIONALE: No relative path (../..) can escape sandbox

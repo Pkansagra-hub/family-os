@@ -1,0 +1,899 @@
+# ADR-0074: Pluggable Module System (Registry, Loader, Extensions)
+
+**Status:** ✅ Accepted
+**Date:** 2025-10-17
+**Authors:** K1 Architecture Team
+**Milestone:** M2 - Pluggable Module System & Extensibility
+**Category:** Layer 5 - Infrastructure (Module Management & Plugins)
+
+**Related ADRs:**
+- [ADR-0004 (52-Module 5-Layer Architecture)](0004-52-module-5-layer-architecture.md)
+- [ADR-0004b (Module Dependency Management)](0004b-module-dependency-management.md)
+- [ADR-0004c (Module README Template)](0004c-module-readme-template.md)
+- [ADR-0008 (Saga Pattern Error Recovery)](0008-saga-pattern-error-recovery.md)
+- [ADR-0008b (Forward Recovery vs Backward Recovery)](0008b-forward-recovery-vs-backward-recovery.md)
+- [ADR-0010 (Capability-Based Security)](0010-capability-based-security.md)
+- [ADR-0013a (Schema Version Registry & Compatibility Matrix)](0013a-schema-version-registry-compatibility-matrix.md)
+- [ADR-0072 (Dynamic Agent Creation - Uses pluggable modules)](0072-dynamic-agent-creation-subsystem.md)
+- [ADR-0073 (Agent Lifecycle FSM - Uses pluggable modules)](0073-agent-lifecycle-fsm-enhancements.md)
+
+---
+
+## Context: Why Pluggable Modules?
+
+**Problem Statement:**
+
+K1 deployed as monolithic kernel with 52 fixed modules across 5 layers. But real-world deployments need:
+
+1. **Runtime Extensibility** - Add custom tools, metrics exporters, thermal policies without recompiling
+2. **Version Independence** - Old K1 deployments must run custom modules built for new K1 versions
+3. **Isolation** - Failed plugin must not crash kernel (currently would crash)
+4. **Discovery** - Know what modules are available, what versions, dependencies
+5. **Configuration** - Enable/disable modules, customize behavior per deployment
+
+**Current Limitations (Pre-ADR-0074):**
+
+- ❌ Modules only discoverable via `k1_module_analysis.md` (manual document)
+- ❌ No runtime module loading (all modules hardcoded at startup)
+- ❌ No version conflict detection (incompatible versions silently fail)
+- ❌ No extension points (can't plug custom tools, metrics, policies)
+- ❌ No isolation (module crash = kernel crash)
+- ❌ No capability binding for plugins (all-or-nothing access)
+
+**Example Deployment Scenarios ADR-0074 Enables:**
+
+```
+Scenario 1: Custom Metrics Exporter
+- Deploy K1 with default Prometheus exporter
+- Later: Add custom DatadogMetricsExporter plugin (no recompile)
+- Both run simultaneously without conflicts
+
+Scenario 2: Custom Thermal Policy
+- Deploy K1 on mobile device (ARM CPU, GPU, NPU)
+- Need custom placement strategy for thermal management
+- Plug in MobileDeviceThermalPolicy without K1 recompile
+
+Scenario 3: Custom Tool
+- K1 has built-in tools (weather, calendar, email)
+- Add custom CRMTool plugin for customer service
+- Tools run with isolated capabilities (can't access other agent data)
+```
+
+---
+
+## Decision: Three-Part Pluggable Module Architecture
+
+We implement **three coordinated systems** for runtime module support:
+
+### Part 1: Module Registry (Issue 2.1.1)
+
+**Purpose:** Discover, index, and manage module metadata
+
+```python
+from dataclasses import dataclass
+from typing import Dict, List, Optional
+from enum import Enum
+import yaml
+from packaging import version as pkg_version
+from pathlib import Path
+
+class ModuleStatus(Enum):
+    DISCOVERED = "DISCOVERED"
+    LOADING = "LOADING"
+    LOADED = "LOADED"
+    FAILED = "FAILED"
+    UNLOADED = "UNLOADED"
+
+@dataclass
+class DependencySpec:
+    """Dependency on another module"""
+    module_id: str
+    version_constraint: str  # e.g., ">=1.0.0,<2.0.0"
+    optional: bool = False
+
+@dataclass
+class ModuleMetadata:
+    """Module metadata from discovery"""
+    module_id: str
+    version: str
+    name: str
+    description: str
+    entry_point: str  # e.g., "example_module:ExamplePlugin"
+    author: str
+    capabilities: List[str]  # e.g., ["CUSTOM_TOOL", "METRIC_EXPORT"]
+    dependencies: List[DependencySpec]
+    config_schema: Dict  # YAML schema for configuration
+    supported_k1_versions: str  # e.g., ">=1.0.0"
+    security_permissions: List[str]  # e.g., ["SYSTEM_ADMIN"]
+    tags: List[str]  # e.g., ["plugins", "experimental"]
+
+class ModuleRegistry:
+    """Registry for discovered modules"""
+
+    def __init__(self, plugins_dir: str):
+        self.plugins_dir = plugins_dir
+        self.modules: Dict[str, Dict[str, ModuleMetadata]] = {}  # module_id -> version -> metadata
+        self.status: Dict[str, ModuleStatus] = {}  # "module_id:version" -> status
+        self.dependency_graph: Dict[str, List[str]] = {}  # module_id -> dependencies
+
+    async def discover_all(self) -> None:
+        """Discover all modules in plugins directory"""
+        logger.info(f"Discovering modules in {self.plugins_dir}")
+
+        for module_dir in Path(self.plugins_dir).glob("*/"):
+            if not module_dir.is_dir():
+                continue
+
+            metadata_file = module_dir / "metadata.yml"
+            if not metadata_file.exists():
+                logger.debug(f"Skipping {module_dir} (no metadata.yml)")
+                continue
+
+            try:
+                await self.discover_module(module_dir)
+            except Exception as e:
+                logger.error(f"Failed to discover module {module_dir}: {e}")
+
+    async def discover_module(self, module_dir: Path) -> ModuleMetadata:
+        """Discover single module and parse metadata"""
+        metadata_file = module_dir / "metadata.yml"
+
+        try:
+            with open(metadata_file) as f:
+                data = yaml.safe_load(f)
+        except Exception as e:
+            raise ValueError(f"Failed to parse metadata.yml: {e}")
+
+        module_data = data.get('module', {})
+
+        metadata = ModuleMetadata(
+            module_id=module_data.get('id'),
+            version=module_data.get('version'),
+            name=module_data.get('name'),
+            description=module_data.get('description', ''),
+            entry_point=module_data.get('entry_point'),
+            author=module_data.get('author', 'Unknown'),
+            capabilities=module_data.get('capabilities', []),
+            dependencies=[
+                DependencySpec(
+                    module_id=dep.get('id'),
+                    version_constraint=dep.get('version', '*'),
+                    optional=dep.get('optional', False)
+                )
+                for dep in module_data.get('dependencies', [])
+            ],
+            config_schema=module_data.get('config_schema', {}),
+            supported_k1_versions=module_data.get('supported_k1_versions', '>=0.0.0'),
+            security_permissions=module_data.get('security', {}).get('required_permissions', []),
+            tags=module_data.get('tags', [])
+        )
+
+        # Register metadata
+        if metadata.module_id not in self.modules:
+            self.modules[metadata.module_id] = {}
+
+        self.modules[metadata.module_id][metadata.version] = metadata
+        self.status[f"{metadata.module_id}:{metadata.version}"] = ModuleStatus.DISCOVERED
+
+        logger.info(f"Discovered module {metadata.module_id}:{metadata.version}")
+        return metadata
+
+    def get_module(self, module_id: str, version_constraint: str = "*") -> Optional[ModuleMetadata]:
+        """Get module matching version constraint (highest version)"""
+        if module_id not in self.modules:
+            return None
+
+        available_versions = list(self.modules[module_id].keys())
+        matching = self._find_matching_version(available_versions, version_constraint)
+
+        if matching:
+            return self.modules[module_id][matching]
+
+        return None
+
+    def _find_matching_version(self, available: List[str], constraint: str) -> Optional[str]:
+        """Find highest matching version given constraint"""
+        if constraint == "*":
+            return max(available, key=pkg_version.parse)
+
+        matching = []
+        for v in available:
+            try:
+                if self._version_matches(v, constraint):
+                    matching.append(v)
+            except Exception:
+                continue
+
+        if matching:
+            return max(matching, key=pkg_version.parse)
+
+        return None
+
+    def _version_matches(self, version: str, constraint: str) -> bool:
+        """Check if version matches constraint (e.g., ">=1.0.0,<2.0.0")"""
+        v = pkg_version.parse(version)
+
+        # Parse constraints
+        for spec in constraint.split(","):
+            spec = spec.strip()
+            if spec.startswith(">="):
+                if v < pkg_version.parse(spec[2:]):
+                    return False
+            elif spec.startswith(">"):
+                if v <= pkg_version.parse(spec[1:]):
+                    return False
+            elif spec.startswith("<="):
+                if v > pkg_version.parse(spec[2:]):
+                    return False
+            elif spec.startswith("<"):
+                if v >= pkg_version.parse(spec[1:]):
+                    return False
+            elif spec.startswith("=="):
+                if v != pkg_version.parse(spec[2:]):
+                    return False
+
+        return True
+
+    def validate_dependency_graph(self) -> List[str]:
+        """Validate no circular dependencies or conflicts"""
+        errors = []
+
+        # Check circular dependencies
+        visited = set()
+        rec_stack = set()
+
+        def has_cycle(module_id: str) -> bool:
+            """DFS to detect cycles"""
+            visited.add(module_id)
+            rec_stack.add(module_id)
+
+            if module_id in self.modules:
+                # Get first version (all versions have same deps)
+                first_version = list(self.modules[module_id].keys())[0]
+                metadata = self.modules[module_id][first_version]
+
+                for dep in metadata.dependencies:
+                    if dep.module_id not in visited:
+                        if has_cycle(dep.module_id):
+                            return True
+                    elif dep.module_id in rec_stack:
+                        return True
+
+            rec_stack.remove(module_id)
+            return False
+
+        for module_id in self.modules:
+            if module_id not in visited:
+                if has_cycle(module_id):
+                    errors.append(f"Circular dependency detected: {module_id}")
+
+        # Check version conflicts
+        for module_id, versions in self.modules.items():
+            for version, metadata in versions.items():
+                for dep in metadata.dependencies:
+                    resolved = self.get_module(dep.module_id, dep.version_constraint)
+                    if not resolved and not dep.optional:
+                        errors.append(
+                            f"Unsatisfiable dependency: {module_id}:{version} "
+                            f"requires {dep.module_id}:{dep.version_constraint}"
+                        )
+
+        return errors
+
+```
+
+**Performance Budget (P95):**
+- Module discovery (50 modules): <500ms
+- Metadata lookup: <5ms
+- Dependency resolution: <100ms
+- Conflict detection: <200ms
+
+**Metrics:**
+- `module_discovery_count` (gauge): Number of discovered modules
+- `module_version_conflicts_total` (counter): Version conflicts detected
+
+---
+
+### Part 2: Dynamic Module Loader (Issue 2.1.2)
+
+**Purpose:** Load modules at runtime with isolation and capability binding
+
+```python
+from typing import Callable, Dict, Any
+import importlib.util
+import sys
+import inspect
+
+class ModuleLoadError(Exception):
+    """Base error for module loading"""
+    pass
+
+class ModuleInterfaceError(ModuleLoadError):
+    """Plugin doesn't implement required interface"""
+    pass
+
+class CapabilityError(ModuleLoadError):
+    """Capability binding failed"""
+    pass
+
+class PluginInterface:
+    """Required interface for all plugins"""
+
+    async def initialize(self, config: Dict[str, Any]) -> None:
+        """Initialize plugin with config"""
+        raise NotImplementedError
+
+    async def shutdown(self) -> None:
+        """Shutdown plugin"""
+        raise NotImplementedError
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of capabilities provided"""
+        raise NotImplementedError
+
+    async def health_check(self) -> bool:
+        """Optional: Health check (default True)"""
+        return True
+
+class ModuleLoader:
+    """Dynamically load modules with isolation"""
+
+    def __init__(self, registry: ModuleRegistry, capability_manager, logger_instance):
+        self.registry = registry
+        self.capability_manager = capability_manager
+        self.logger = logger_instance
+        self.loaded_modules: Dict[str, PluginInterface] = {}  # "module_id:version" -> plugin instance
+        self.module_contexts: Dict[str, Dict] = {}  # Isolated namespaces
+        self.load_order: List[str] = []  # Track load order for shutdown
+
+    async def load(
+        self,
+        module_id: str,
+        version_constraint: str = "*",
+        config: Dict[str, Any] = None
+    ) -> PluginInterface:
+        """Load module dynamically with dependencies"""
+
+        if config is None:
+            config = {}
+
+        # Step 1: Get metadata
+        metadata = self.registry.get_module(module_id, version_constraint)
+        if not metadata:
+            raise ModuleLoadError(f"Module not found: {module_id}:{version_constraint}")
+
+        module_key = f"{metadata.module_id}:{metadata.version}"
+
+        # Check if already loaded
+        if module_key in self.loaded_modules:
+            self.logger.debug(f"Module already loaded: {module_key}")
+            return self.loaded_modules[module_key]
+
+        self.logger.info(f"Loading module {module_key}")
+
+        try:
+            # Step 2: Load dependencies recursively
+            dependencies = {}
+            for dep in metadata.dependencies:
+                try:
+                    dep_module = await self.load(dep.module_id, dep.version_constraint)
+                    dependencies[dep.module_id] = dep_module
+                except Exception as e:
+                    if not dep.optional:
+                        raise ModuleLoadError(f"Failed to load dependency {dep.module_id}: {e}")
+                    self.logger.warn(f"Optional dependency {dep.module_id} not loaded: {e}")
+
+            # Step 3: Create isolated context
+            module_context = {
+                "dependencies": dependencies,
+                "config": config,
+                "__name__": f"k1_plugin_{metadata.module_id}",
+            }
+            self.module_contexts[module_key] = module_context
+
+            # Step 4: Load Python module dynamically
+            module_path = Path(self.registry.plugins_dir) / metadata.module_id
+            spec = importlib.util.spec_from_file_location(
+                f"k1_plugin_{metadata.module_id}",
+                module_path / "__init__.py"
+            )
+            if not spec or not spec.loader:
+                raise ModuleLoadError(f"Cannot load module {metadata.module_id}: no spec")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[f"k1_plugin_{metadata.module_id}"] = module
+            spec.loader.exec_module(module)
+
+            # Step 5: Validate plugin interface
+            if not hasattr(module, 'Plugin'):
+                raise ModuleInterfaceError(f"Module missing Plugin class")
+
+            plugin_class = module.Plugin
+            required_methods = ['initialize', 'shutdown', 'get_capabilities']
+            for method in required_methods:
+                if not hasattr(plugin_class, method):
+                    raise ModuleInterfaceError(f"Plugin missing required method: {method}")
+
+            # Validate method signatures
+            init_sig = inspect.signature(plugin_class.initialize)
+            if len(init_sig.parameters) != 2:  # self, config
+                raise ModuleInterfaceError(f"initialize() has wrong signature")
+
+            # Step 6: Instantiate plugin
+            plugin_instance = plugin_class()
+
+            # Step 7: Inject capabilities
+            plugin_capabilities = set()
+            try:
+                for capability_name in metadata.capabilities:
+                    cap_token = await self.capability_manager.issue_capability(
+                        subject=f"module:{metadata.module_id}",
+                        resource=capability_name,
+                        rights=["execute"],
+                        ttl_seconds=3600,
+                        constraints={"module_id": metadata.module_id}
+                    )
+                    setattr(plugin_instance, f"_cap_{capability_name}", cap_token)
+                    plugin_capabilities.add(capability_name)
+                    self.logger.debug(f"Bound capability {capability_name} to {module_key}")
+            except Exception as e:
+                raise CapabilityError(f"Failed to inject capabilities: {e}")
+
+            # Step 8: Initialize plugin
+            self.registry.status[module_key] = ModuleStatus.LOADING
+            try:
+                await plugin_instance.initialize(config)
+            except Exception as e:
+                # Rollback on initialization failure
+                await self._unload_no_deps(module_key, plugin_instance)
+                raise ModuleLoadError(f"Plugin initialization failed: {e}")
+
+            # Mark as loaded
+            self.registry.status[module_key] = ModuleStatus.LOADED
+            self.loaded_modules[module_key] = plugin_instance
+            self.load_order.append(module_key)
+
+            self.logger.info(f"Module loaded successfully: {module_key}")
+
+            # Export metrics
+            self.logger.metric("module_loaded_total", 1, tags={"module": metadata.module_id})
+
+            return plugin_instance
+
+        except Exception as e:
+            self.registry.status[module_key] = ModuleStatus.FAILED
+            self.logger.error(f"Module load failed: {module_key}: {e}")
+            raise
+
+    async def _unload_no_deps(self, module_key: str, plugin_instance: PluginInterface) -> None:
+        """Unload single module without handling dependents"""
+        try:
+            await plugin_instance.shutdown()
+        except Exception as e:
+            self.logger.error(f"Error during plugin shutdown for {module_key}: {e}")
+
+        # Revoke capabilities
+        module_id = module_key.split(":")[0]
+        await self.capability_manager.revoke_module_capabilities(module_id)
+
+        # Clean up
+        if module_key in self.loaded_modules:
+            del self.loaded_modules[module_key]
+        if module_key in self.module_contexts:
+            del self.module_contexts[module_key]
+        if f"k1_plugin_{module_id}" in sys.modules:
+            del sys.modules[f"k1_plugin_{module_id}"]
+
+    async def unload(self, module_id: str, version: str) -> None:
+        """Unload module and any dependent modules"""
+        module_key = f"{module_id}:{version}"
+
+        if module_key not in self.loaded_modules:
+            return
+
+        # Find dependents and unload them first
+        dependents = [
+            mk for mk in self.loaded_modules.keys()
+            if self._module_depends_on(mk, module_id)
+        ]
+
+        for dep_key in dependents:
+            await self.unload(*dep_key.split(":"))
+
+        # Now unload this module
+        plugin_instance = self.loaded_modules[module_key]
+        await self._unload_no_deps(module_key, plugin_instance)
+        self.registry.status[module_key] = ModuleStatus.UNLOADED
+
+        self.logger.info(f"Module unloaded: {module_key}")
+
+    def _module_depends_on(self, module_key: str, dependency_id: str) -> bool:
+        """Check if a module depends on another"""
+        module_id, version = module_key.split(":")
+        metadata = self.registry.get_module(module_id, version)
+        if not metadata:
+            return False
+
+        return any(dep.module_id == dependency_id for dep in metadata.dependencies)
+
+```
+
+**Performance Budget (P95):**
+- Load latency per module: <500ms
+- Dependency resolution: <200ms
+- Unload latency: <100ms
+
+**Metrics:**
+- `module_loaded_total` (counter): Modules loaded successfully
+- `module_load_failed_total` (counter): Module load failures
+- `module_unloaded_total` (counter): Modules unloaded
+
+---
+
+### Part 3: Layer 5 Extension Points (Issues 2.2.1, 2.2.2)
+
+**Purpose:** Define pluggable extension points and bind capabilities
+
+```python
+from abc import ABC, abstractmethod
+from typing import List, Callable
+import asyncio
+
+# Extension Point Base Classes
+
+class ExtensionPoint(ABC):
+    """Base for all extension points"""
+
+    @abstractmethod
+    async def initialize(self, config: Dict[str, Any]) -> None:
+        """Initialize extension"""
+        pass
+
+    @abstractmethod
+    async def shutdown(self) -> None:
+        """Shutdown extension"""
+        pass
+
+    @abstractmethod
+    def get_name(self) -> str:
+        """Return extension name"""
+        pass
+
+    async def health_check(self) -> bool:
+        """Optional: Health check"""
+        return True
+
+# 10 Layer 5 Extension Points
+
+class ConfigProvider(ExtensionPoint):
+    """Custom configuration source (e.g., Consul, etcd)"""
+
+    @abstractmethod
+    async def get_config(self, key: str) -> Dict[str, Any]:
+        """Get configuration value"""
+        pass
+
+class MetricsExporter(ExtensionPoint):
+    """Custom metrics sink (e.g., Datadog, InfluxDB)"""
+
+    @abstractmethod
+    async def export_metrics(self, metrics: Dict[str, Any]) -> None:
+        """Export metrics"""
+        pass
+
+class TraceExporter(ExtensionPoint):
+    """Custom trace sink (e.g., Jaeger, Lightstep)"""
+
+    @abstractmethod
+    async def export_traces(self, traces: List[Dict[str, Any]]) -> None:
+        """Export traces"""
+        pass
+
+class LogHandler(ExtensionPoint):
+    """Custom log sink (e.g., CloudLogging, Loki)"""
+
+    @abstractmethod
+    async def handle_log(self, level: str, message: str, context: Dict) -> None:
+        """Handle log message"""
+        pass
+
+class ThermalPolicy(ExtensionPoint):
+    """Custom device thermal management"""
+
+    @abstractmethod
+    async def compute_placement_score(
+        self,
+        agent_spec: Any,  # AgentSpec
+        devices: List[Any]
+    ) -> Dict[str, float]:
+        """Compute placement score per device"""
+        pass
+
+class PlacementStrategy(ExtensionPoint):
+    """Custom agent placement algorithm"""
+
+    @abstractmethod
+    async def place_agent(
+        self,
+        agent_spec: Any,
+        available_devices: List[Any]
+    ) -> Any:  # Device
+        """Select device for agent placement"""
+        pass
+
+class CachePolicy(ExtensionPoint):
+    """Custom KV cache eviction policy"""
+
+    @abstractmethod
+    async def on_cache_full(self, cache_stats: Dict) -> None:
+        """Called when cache is full"""
+        pass
+
+class BackpressureHandler(ExtensionPoint):
+    """Custom backpressure response"""
+
+    @abstractmethod
+    async def on_backpressure(self, queue_depth: int, threshold: int) -> str:
+        """Return action: DROP, QUEUE, REJECT"""
+        pass
+
+class ErrorInterceptor(ExtensionPoint):
+    """Custom error handling/recovery"""
+
+    @abstractmethod
+    async def on_error(self, error: Exception, context: Dict) -> Optional[str]:
+        """Return recovery action or None"""
+        pass
+
+class HealthCheckProvider(ExtensionPoint):
+    """Custom health check logic"""
+
+    @abstractmethod
+    async def perform_health_check(self) -> bool:
+        """Perform health check"""
+        pass
+
+# Extension Registry
+
+class ExtensionRegistry:
+    """Manages all extensions"""
+
+    def __init__(self):
+        self.extension_points: Dict[str, List[ExtensionPoint]] = {}
+        self.hooks: Dict[str, List[Callable]] = {}
+        self.hook_order: Dict[str, List[str]] = {}  # Preserve order
+
+    def register_extension(
+        self,
+        point_name: str,
+        extension: ExtensionPoint
+    ) -> None:
+        """Register an extension"""
+        if point_name not in self.extension_points:
+            self.extension_points[point_name] = []
+
+        self.extension_points[point_name].append(extension)
+        logger.info(f"Registered extension: {point_name}={extension.get_name()}")
+
+    def register_hook(
+        self,
+        event_name: str,
+        callback: Callable,
+        order: int = 100
+    ) -> None:
+        """Register before/after hook"""
+        if event_name not in self.hooks:
+            self.hooks[event_name] = []
+            self.hook_order[event_name] = []
+
+        self.hooks[event_name].append(callback)
+        self.hook_order[event_name].append(order)
+
+        # Sort by order
+        sorted_hooks = [h for _, h in sorted(
+            zip(self.hook_order[event_name], self.hooks[event_name])
+        )]
+        self.hooks[event_name] = sorted_hooks
+
+    async def emit_hook(self, event_name: str, **kwargs) -> None:
+        """Emit hook event to all registered callbacks"""
+        if event_name not in self.hooks:
+            return
+
+        for callback in self.hooks[event_name]:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(**kwargs)
+                else:
+                    callback(**kwargs)
+            except Exception as e:
+                logger.error(f"Hook error for {event_name}: {e}")
+                # Extension errors don't crash K1
+
+    def get_extensions(self, point_name: str) -> List[ExtensionPoint]:
+        """Get all extensions for a point"""
+        return self.extension_points.get(point_name, [])
+
+    async def shutdown_all(self) -> None:
+        """Shutdown all extensions"""
+        for extensions in self.extension_points.values():
+            for ext in extensions:
+                try:
+                    await ext.shutdown()
+                except Exception as e:
+                    logger.error(f"Error shutting down extension {ext.get_name()}: {e}")
+
+# Decorator for registering extensions
+
+_extension_registry = ExtensionRegistry()
+
+def register_extension_point(point_name: str):
+    """Decorator to register extension"""
+    def decorator(cls):
+        instance = cls()
+        _extension_registry.register_extension(point_name, instance)
+        return cls
+    return decorator
+
+```
+
+**Extension Point Mapping:**
+
+| Extension Point | Purpose | Usage |
+|-----------------|---------|-------|
+| ConfigProvider | Custom config source | K1 Config Manager calls `get_config()` |
+| MetricsExporter | Custom metrics sink | Prometheus exporter calls `export_metrics()` |
+| TraceExporter | Custom trace sink | OpenTelemetry calls `export_traces()` |
+| LogHandler | Custom log sink | Logger calls `handle_log()` |
+| ThermalPolicy | Device thermal mgmt | Thermal Manager calls `compute_placement_score()` |
+| PlacementStrategy | Agent placement | Orchestrator calls `place_agent()` |
+| CachePolicy | KV cache eviction | Cache Manager calls `on_cache_full()` |
+| BackpressureHandler | Backpressure response | Backpressure system calls `on_backpressure()` |
+| ErrorInterceptor | Error recovery | Error handler calls `on_error()` |
+| HealthCheckProvider | Custom health checks | Health Monitor calls `perform_health_check()` |
+
+**Performance Budget (P95):**
+- Extension registration: <50ms per extension
+- Hook emission: <10ms per hook (error isolated)
+- Extension init: <100ms per extension
+- Extension shutdown: <50ms per extension
+
+**Metrics:**
+- `extension_point_registrations_total` (counter): Extensions registered
+- `extension_hook_errors_total` (counter): Hook execution errors
+- `extension_init_failures_total` (counter): Extension init failures
+
+---
+
+## Integration with M2 Modules
+
+### Issue 2.1.1: Module Registry Service
+- **Responsible for:** Module discovery, versioning, dependency graph validation
+- **Produced by:** ModuleRegistry class with full discovery pipeline
+- **Tested by:** WARD tests covering 50+ module scenarios
+
+### Issue 2.1.2: Dynamic Module Loader
+- **Responsible for:** Runtime loading, isolation, capability injection
+- **Produced by:** ModuleLoader class with dependency resolution
+- **Tested by:** WARD tests covering load/unload/failure scenarios
+
+### Issue 2.2.1: Layer 5 Extension Points
+- **Responsible for:** 10 extension points defined, interfaces documented
+- **Produced by:** 10 ExtensionPoint subclasses with async methods
+- **Tested by:** WARD tests covering all 10 extension points
+
+### Issue 2.2.2: Extension Capability Binding
+- **Responsible for:** Capability injection during module loading
+- **Produced by:** ModuleLoader.load() binding capabilities per manifest
+- **Tested by:** WARD tests validating capability isolation
+
+---
+
+## Consequences
+
+### Positive
+
+✅ **Runtime Extensibility:** Add tools, exporters, policies without recompile
+
+✅ **Version Independence:** Old K1 deployments support new modules (via version constraints)
+
+✅ **Isolation:** Failed plugin doesn't crash kernel (async error boundaries)
+
+✅ **Discovery:** All modules discoverable via metadata + version resolved
+
+✅ **Configuration:** Per-deployment customization via YAML config
+
+✅ **Capability Control:** Plugins get only bound capabilities (principle of least privilege)
+
+### Negative
+
+❌ **Complexity:** Module system adds discovery + loading + isolation overhead
+
+❌ **Performance:** Module loading (<500ms) adds latency to startup
+
+❌ **Debugging:** Plugin isolation makes debugging harder (separate namespaces)
+
+### Mitigations
+
+- Module metadata caching reduces discovery overhead (<5ms lookup)
+- Module pre-loading (cache warm-up) reduces startup latency
+- Comprehensive logging in loader helps debugging
+- WARD tests validate all edge cases before deployment
+
+---
+
+## References
+
+**Related Research:**
+- Plugin Architectures (Gamma et al.)
+- Dynamic Module Loading (OSGi, Apache Felix)
+- Version Dependency Resolution (Semantic Versioning - semver.org)
+- Capability-Based Security (Dennis & Van Horn 1966)
+- Saga Pattern for distributed recovery (Garcia-Molina 1987)
+
+**K1 Architecture Diagrams:**
+- `k1_architecture_diagram.mmd` - Module layering (Layer 1-5)
+- `k1_module_complete_adr_architecture.mmd` - Module relationships
+
+**K1 Contracts:**
+- `contracts/architecture/module_manifest.yml` - Module structure
+- `contracts/architecture/layer_dependencies.yml` - Layer dependencies
+- `contracts/flatbuffers/layer5_infrastructure/` - FlatBuffers for module metadata
+
+**Performance Targets (M2 Milestones):**
+- Module discovery: <500ms (50 modules)
+- Registry lookup: <5ms P95
+- Module load: <500ms P95
+- Hook emission: <10ms P95
+- Extension init: <100ms P95
+
+---
+
+## Implementation Roadmap (M2 Issues 2.1.1-2.2.2)
+
+### Issue 2.1.1: Module Registry Service (1 week)
+
+**Deliverables:**
+- `k1/plugins/registry.py` - Full ModuleRegistry implementation
+- `tests/plugins/test_registry.py` - WARD tests (discovery, versioning, conflicts)
+
+**Success Criteria:**
+- Registry discovers modules with metadata parsing ✓
+- Dependency graph validation detects cycles ✓
+- Version conflict detection works ✓
+- Semantic versioning supported ✓
+
+### Issue 2.1.2: Dynamic Module Loader (1-2 weeks)
+
+**Deliverables:**
+- `k1/plugins/loader.py` - Full ModuleLoader implementation
+- `tests/plugins/test_loader.py` - WARD tests (load, unload, isolation)
+
+**Success Criteria:**
+- Modules load with dependency resolution ✓
+- Isolation prevents cross-module pollution ✓
+- Capabilities bound correctly ✓
+- Rollback on failure ✓
+
+### Issue 2.2.1: Layer 5 Extension Points (1 week)
+
+**Deliverables:**
+- `k1/infrastructure/extensions.py` - All 10 extension points
+- `tests/infrastructure/test_extensions.py` - WARD tests
+
+**Success Criteria:**
+- All 10 extension points defined ✓
+- Hook system works ✓
+- Error isolation verified ✓
+
+### Issue 2.2.2: Extension Capability Binding (1 week)
+
+**Deliverables:**
+- Capability binding in ModuleLoader
+- Extension capability tests
+- Sample extensions (3) demonstrating capability usage
+
+**Success Criteria:**
+- Capabilities injected during load ✓
+- Plugins can use only bound capabilities ✓
+- Capability revocation on unload ✓

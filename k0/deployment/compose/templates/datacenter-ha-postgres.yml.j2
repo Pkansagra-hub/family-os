@@ -1,0 +1,23 @@
+# Postgres HA overlay for datacenter stack.
+# TODO(familyos): Replace with managed Postgres service once cross-region offering is available.
+version: "3.9"
+
+services:
+  postgres-ha:
+    image: postgres:15
+    deploy:
+      mode: replicated
+      replicas: {{ replicas }}
+      placement:
+        constraints:
+          - node.labels.familyos.role == "peer"
+    environment:
+      POSTGRES_SHARED_BUFFERS: "4GB"
+    volumes:
+      - postgres-ha-data:/var/lib/postgresql/data
+    x-familyos-todo: "Integrate Patroni/pg_auto_failover for production failover orchestration."
+
+volumes:
+  postgres-ha-data:
+    driver: local
+    x-familyos-todo: "Provision durable storage ({{ storage_gib }}GiB) with synchronous replication."

@@ -1,0 +1,66 @@
+{
+  "bundle": {
+    "selectors": [
+      {
+        "selector": {
+          "index": 0,
+          "driver": "wal",
+          "topic": "memory.timeline",
+          "limit": 2
+        },
+        "items": [
+          {
+            "wal_pos": 42,
+            "tenant_id": "tenant-alpha",
+            "space_id": "space-main",
+            "topic": "memory.timeline",
+            "commit_ts": "2025-09-28T12:00:01Z",
+            "schema_uri": "schema://memory.delta",
+            "schema_version": "1.0",
+            "device_id": "device-1",
+            "payload_sha256": "f4d61...",
+            "envelope": {
+              "tenant_id": "tenant-alpha",
+              "space_id": "space-main",
+              "topic": "memory.timeline"
+            },
+            "body": {
+              "value": 1
+            }
+          }
+        ],
+        "next_cursor": 42,
+        "latency_ms": 4.2,
+        "metadata": {
+          "driver": "wal",
+          "source": "st_wal",
+          "rows": 1
+        }
+      }
+    ]
+  },
+  "trace": {
+    "mode": "batch",
+    "nodes": [
+      {
+        "stage": "query.driver.wal",
+        "selector_index": 0,
+        "latency_ms": 4.2,
+        "items": 1,
+        "status": "ok"
+      },
+      {
+        "stage": "query.aggregate",
+        "latency_ms": 4.2
+      }
+    ],
+    "selectors_executed": 1,
+    "scheduler_cost": 3,
+    "exhausted_time_budget": false
+  },
+  "budgets": {
+    "fanout": 2,
+    "time_slice": 180,
+    "policy": "qos:v1/time"
+  }
+}

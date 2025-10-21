@@ -1,0 +1,702 @@
+metadata:
+  title: "Capability Delegation Rules Contract"
+  description: "Delegation and attenuation policies for capability propagation across agent hierarchies"
+  adr_references:
+    - "ADR-0010b: Agent Capability Assignment Policy"
+    - "ADR-0002: Actor Model & Agent Isolation"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+
+########################################
+# SECTION 1: DELEGATION OVERVIEW
+########################################
+delegation_overview:
+  definition: |
+    Capability delegation allows parent agents to grant attenuated (reduced-privilege)
+    capabilities to child agents. Parent retains original capability, child receives
+    restricted version with reduced constraints.
+
+  use_cases:
+    - "Orchestrator delegates booking capability to booking agent"
+    - "Planning agent spawns sub-planning agent for complex subtask"
+    - "Supervisor grants temporary elevated capability to agent"
+
+  key_principles:
+    - "Attenuation: Child capabilities always more restrictive than parent"
+    - "Time-bound: Child capabilities expire sooner than parent"
+    - "Revocation cascade: Parent revocation automatically revokes children"
+    - "Depth limit: Maximum delegation depth = 3 (prevent deep chains)"
+
+########################################
+# SECTION 2: DELEGATION WORKFLOW
+########################################
+delegation_workflow:
+  step_1_parent_requests_delegation:
+    action: "Parent agent calls capability_manager.delegate_capability()"
+    latency_ms: 2                       # Capability creation + signing
+
+    request_structure:
+      parent_cap_id: "01JCPARENT123"
+      child_agent_id: "agent_booking_001"
+      attenuation_override: {}          # Optional: Override default attenuation rules
+
+    example: |
+      child_cap = await capability_manager.delegate_capability(
+          parent_cap_id="01JCPARENT123",
+          child_agent_id="agent_booking_001"
+      )
+
+  step_2_validate_parent_capability:
+    action: "Verify parent capability exists and not revoked"
+    latency_ms: 0.15                    # Redis lookup
+
+    validation_checks:
+      - "Parent capability exists in registry"
+      - "Parent capability not revoked"
+      - "Parent capability not expired"
+      - "Parent has 'delegate' permission (or is orchestrator/supervisor)"
+
+    if_validation_fails:
+      result: "DENIED"
+      reason: "Parent capability invalid or lacks delegation permission"
+      logging: "delegation_denied (WARNING level)"
+
+  step_3_check_delegation_depth:
+    action: "Verify delegation depth <= 3"
+    latency_ms: 0.05
+
+    validation: |
+      if parent_cap.delegation_depth >= 3:
+          return DENIED("Max delegation depth exceeded (3)")
+
+    if_exceeds_depth:
+      result: "DENIED"
+      reason: "Max delegation depth (3) exceeded"
+      logging: "delegation_denied (WARNING level)"
+
+  step_4_apply_attenuation_rules:
+    action: "Reduce constraints for child capability"
+    latency_ms: 0.5                     # Attenuation calculation
+
+    default_attenuation:
+      budget_multiplier: 0.5            # Child gets 50% of parent budget
+      invocations_multiplier: 0.5       # Child gets 50% of parent invocations
+      max_child_expiration_minutes: 10  # Child expires after 10 min max
+      permissions_reduction: true       # Child permissions ⊆ parent permissions
+
+    attenuation_logic: |
+      child_constraints = {
+          "budget_usd": parent_cap.constraints["budget_usd"] * 0.5,
+          "max_invocations": int(parent_cap.constraints["max_invocations"] * 0.5),
+          "expires_at": min(
+              parent_cap.constraints["expires_at"],
+              datetime.utcnow() + timedelta(minutes=10)
+          )
+      }
+
+  step_5_create_child_capability:
+    action: "Create new capability token for child agent"
+    latency_ms: 1.5                     # JWT creation + HMAC-SHA256 signing
+
+    child_capability_structure:
+      cap_id: "01JCCHILD456"            # New ULID
+      agent_id: "agent_booking_001"
+      resource_type: "TOOL"
+      resource_id: "book_hotel"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 5              # 50% of parent (10)
+        budget_usd: 500.0               # 50% of parent (1000)
+        expires_at: "2025-10-15T14:50:00Z"
+      issued_by: "parent_agent"
+      parent_cap_id: "01JCPARENT123"
+      delegation_depth: 1               # Parent depth + 1
+      issued_at: "2025-10-15T14:40:00Z"
+      signature: "hmac-sha256:abc123..."
+
+  step_6_track_delegation_chain:
+    action: "Record parent→child relationship in delegation registry"
+    latency_ms: 0.2                     # Redis write
+
+    registry_update:
+      redis_key: "delegation_children:{parent_cap_id}"
+      redis_operation: "SADD delegation_children:01JCPARENT123 01JCCHILD456"
+
+      delegation_record:
+        parent_cap_id: "01JCPARENT123"
+        child_cap_id: "01JCCHILD456"
+        parent_agent_id: "agent_orchestrator_001"
+        child_agent_id: "agent_booking_001"
+        delegation_depth: 1
+        delegated_at: "2025-10-15T14:40:00Z"
+        attenuation_applied:
+          budget_multiplier: 0.5
+          invocations_multiplier: 0.5
+          expiration_reduced: true
+
+  step_7_send_to_child_agent:
+    action: "Send capability token to child agent via message"
+    latency_ms: 5                       # Message routing
+
+    message_to_child:
+      type: "CAPABILITY_GRANTED"
+      cap_id: "01JCCHILD456"
+      token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      resource_type: "TOOL"
+      resource_id: "book_hotel"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 5
+        budget_usd: 500.0
+        expires_at: "2025-10-15T14:50:00Z"
+
+########################################
+# SECTION 3: ATTENUATION RULES
+########################################
+attenuation_rules:
+  rule_1_budget_reduction:
+    description: "Child budget = parent budget × 0.5"
+    rationale: "Prevent budget exhaustion via recursive agent spawning"
+
+    formula: "child_budget_usd = parent_budget_usd * budget_multiplier"
+    default_multiplier: 0.5
+
+    examples:
+      example_1:
+        parent_budget: 1000.0
+        child_budget: 500.0
+        calculation: "1000.0 * 0.5 = 500.0"
+
+      example_2:
+        parent_budget: 100.0
+        child_budget: 50.0
+        calculation: "100.0 * 0.5 = 50.0"
+
+      example_3_rounding:
+        parent_budget: 75.0
+        child_budget: 37.5
+        calculation: "75.0 * 0.5 = 37.5 (preserve decimals)"
+
+    edge_cases:
+      parent_budget_zero:
+        parent_budget: 0.0
+        child_budget: 0.0
+        behavior: "Cannot delegate if parent has no budget"
+
+      parent_budget_very_small:
+        parent_budget: 0.10
+        child_budget: 0.05
+        behavior: "Allow delegation even for small budgets"
+
+  rule_2_invocations_reduction:
+    description: "Child invocations = floor(parent invocations × 0.5)"
+    rationale: "Prevent runaway loops via recursive agent spawning"
+
+    formula: "child_max_invocations = floor(parent_max_invocations * invocations_multiplier)"
+    default_multiplier: 0.5
+
+    examples:
+      example_1:
+        parent_invocations: 10
+        child_invocations: 5
+        calculation: "floor(10 * 0.5) = 5"
+
+      example_2_odd_number:
+        parent_invocations: 7
+        child_invocations: 3
+        calculation: "floor(7 * 0.5) = 3"
+
+      example_3_small_number:
+        parent_invocations: 3
+        child_invocations: 1
+        calculation: "floor(3 * 0.5) = 1"
+
+    edge_cases:
+      parent_invocations_one:
+        parent_invocations: 1
+        child_invocations: 0
+        behavior: "floor(1 * 0.5) = 0, cannot delegate (need at least 1 invocation)"
+
+      parent_invocations_two:
+        parent_invocations: 2
+        child_invocations: 1
+        behavior: "floor(2 * 0.5) = 1, allow delegation"
+
+  rule_3_expiration_reduction:
+    description: "Child expires_at = min(parent expires_at, current_time + 10 minutes)"
+    rationale: "Child cannot outlive parent, and must expire soon for short-lived tasks"
+
+    formula: "child_expires_at = min(parent_expires_at, datetime.utcnow() + timedelta(minutes=max_child_expiration_minutes))"
+    default_max_child_expiration_minutes: 10
+
+    examples:
+      example_1_parent_expires_late:
+        parent_expires_at: "2025-10-15T18:00:00Z"
+        current_time: "2025-10-15T14:40:00Z"
+        child_expires_at: "2025-10-15T14:50:00Z"
+        calculation: "min(parent, current + 10min) = current + 10min"
+
+      example_2_parent_expires_soon:
+        parent_expires_at: "2025-10-15T14:45:00Z"
+        current_time: "2025-10-15T14:40:00Z"
+        child_expires_at: "2025-10-15T14:45:00Z"
+        calculation: "min(parent, current + 10min) = parent (sooner)"
+
+      example_3_parent_expires_very_soon:
+        parent_expires_at: "2025-10-15T14:42:00Z"
+        current_time: "2025-10-15T14:40:00Z"
+        child_expires_at: "2025-10-15T14:42:00Z"
+        calculation: "Parent expires in 2 min, child inherits"
+
+    edge_cases:
+      parent_expires_in_one_minute:
+        parent_expires_at: "2025-10-15T14:41:00Z"
+        current_time: "2025-10-15T14:40:00Z"
+        child_expires_at: "2025-10-15T14:41:00Z"
+        behavior: "Allow delegation even if parent expires very soon"
+
+  rule_4_permissions_restriction:
+    description: "Child permissions ⊆ parent permissions (subset only)"
+    rationale: "Child cannot have more permissions than parent"
+
+    formula: "child_permissions = parent_permissions ∩ requested_permissions"
+
+    examples:
+      example_1_equal_permissions:
+        parent_permissions: ["execute"]
+        requested_permissions: ["execute"]
+        child_permissions: ["execute"]
+        behavior: "Allow (equal permissions)"
+
+      example_2_subset_permissions:
+        parent_permissions: ["execute", "read"]
+        requested_permissions: ["execute"]
+        child_permissions: ["execute"]
+        behavior: "Allow (child is subset of parent)"
+
+      example_3_superset_permissions:
+        parent_permissions: ["execute"]
+        requested_permissions: ["execute", "write"]
+        child_permissions: "DENIED"
+        behavior: "Deny (child would have more permissions than parent)"
+
+    edge_cases:
+      parent_no_permissions:
+        parent_permissions: []
+        requested_permissions: ["execute"]
+        child_permissions: "DENIED"
+        behavior: "Cannot delegate if parent has no permissions"
+
+  rule_5_delegation_depth_limit:
+    description: "Delegation depth ≤ 3 (max 3 levels)"
+    rationale: "Prevent deep delegation chains (complexity, audit difficulty)"
+
+    formula: "child_delegation_depth = parent_delegation_depth + 1"
+    max_delegation_depth: 3
+
+    examples:
+      example_1_depth_0_to_1:
+        parent_depth: 0                 # Orchestrator (original issuer)
+        child_depth: 1                  # Booking agent
+        behavior: "Allow"
+
+      example_2_depth_1_to_2:
+        parent_depth: 1                 # Booking agent
+        child_depth: 2                  # Payment agent
+        behavior: "Allow"
+
+      example_3_depth_2_to_3:
+        parent_depth: 2                 # Payment agent
+        child_depth: 3                  # Tool agent
+        behavior: "Allow (max depth)"
+
+      example_4_depth_3_to_4:
+        parent_depth: 3                 # Tool agent
+        child_depth: 4                  # Another agent
+        behavior: "DENIED (exceeds max depth)"
+
+    validation: |
+      if parent_cap.delegation_depth >= max_delegation_depth:
+          return DENIED("Max delegation depth exceeded (3)")
+
+########################################
+# SECTION 4: DELEGATION PERMISSIONS
+########################################
+delegation_permissions:
+  who_can_delegate:
+    - role: "orchestrator_agent"
+      reason: "Orchestrator coordinates agents, delegates task-specific capabilities"
+      default_capability: "CAPABILITY_MANAGER:delegate_capability"
+
+    - role: "supervisor_agent"
+      reason: "Supervisor has admin privileges, can delegate any capability"
+      default_capability: "CAPABILITY_MANAGER:delegate_capability"
+
+    - role: "planning_agent"
+      reason: "Planning agent can spawn sub-planning agents for complex subtasks"
+      default_capability: "CAPABILITY_MANAGER:delegate_capability (escalation)"
+
+  who_cannot_delegate:
+    - role: "tool_agent"
+      reason: "Tool agent is leaf executor (no sub-agents)"
+      behavior: "Delegation request denied at supervisor evaluation"
+
+    - role: "booking_agent"
+      reason: "Booking agent is leaf executor (no sub-agents)"
+      behavior: "Delegation request denied"
+
+    - role: "memory_agent"
+      reason: "Memory agent manages state (no sub-agents)"
+      behavior: "Delegation request denied"
+
+  delegation_permission_verification:
+    description: "Verify agent has 'delegate' permission before allowing delegation"
+
+    verification_logic: |
+      async def verify_delegation_permission(agent: Agent, parent_cap: CapabilityToken):
+          # Check if agent has explicit delegate permission
+          if "delegate" in parent_cap.permissions:
+              return True
+
+          # Check if agent is orchestrator or supervisor (implicit delegation)
+          if agent.role in ["orchestrator_agent", "supervisor_agent"]:
+              return True
+
+          # Check if agent has CAPABILITY_MANAGER:delegate_capability
+          delegate_cap = await capability_manager.find_capability(
+              agent_id=agent.id,
+              resource_type="CAPABILITY_MANAGER",
+              resource_id="delegate_capability"
+          )
+
+          if delegate_cap:
+              return True
+
+          return False
+
+    if_no_permission:
+      result: "DENIED"
+      reason: "Agent lacks delegation permission"
+      logging: "delegation_denied (WARNING level)"
+
+########################################
+# SECTION 5: DELEGATION CHAIN TRACKING
+########################################
+delegation_chain_tracking:
+  description: "Track parent→child relationships for audit and revocation cascade"
+
+  storage_tier_1_redis:
+    data_structure: "Redis set"
+    redis_key: "delegation_children:{parent_cap_id}"
+    redis_operations:
+      add_child: "SADD delegation_children:{parent_cap_id} {child_cap_id}"
+      remove_child: "SREM delegation_children:{parent_cap_id} {child_cap_id}"
+      get_children: "SMEMBERS delegation_children:{parent_cap_id}"
+
+    ttl: "24 hours (expires with parent capability)"
+
+  storage_tier_2_k0_wal:
+    data_structure: "FlatBuffers binary"
+    schema: "CapabilityDelegationEvent"
+    retention: "30 days"
+
+    event_structure:
+      event_type: "CAPABILITY_DELEGATED"
+      parent_cap_id: "01JCPARENT123"
+      child_cap_id: "01JCCHILD456"
+      parent_agent_id: "agent_orchestrator_001"
+      child_agent_id: "agent_booking_001"
+      delegation_depth: 1
+      delegated_at: "2025-10-15T14:40:00Z"
+      attenuation_applied:
+        budget_multiplier: 0.5
+        invocations_multiplier: 0.5
+        expiration_reduced: true
+
+  storage_tier_3_elasticsearch:
+    index: "k1_capability_delegations"
+    retention: "90 days"
+
+    query_patterns:
+      query_1_find_children:
+        description: "Find all child capabilities delegated from parent"
+        query: |
+          GET /k1_capability_delegations/_search
+          {
+            "query": {
+              "term": {"parent_cap_id": "01JCPARENT123"}
+            }
+          }
+
+      query_2_find_delegation_chain:
+        description: "Find full delegation chain (root → ... → leaf)"
+        query: |
+          # Recursive query (pseudocode)
+          chain = [parent_cap_id]
+          children = find_children(parent_cap_id)
+          for child in children:
+              chain.extend(find_delegation_chain(child))
+          return chain
+
+      query_3_find_agents_in_chain:
+        description: "Find all agents in delegation chain"
+        query: |
+          GET /k1_capability_delegations/_search
+          {
+            "query": {
+              "term": {"parent_cap_id": "01JCPARENT123"}
+            },
+            "_source": ["child_agent_id"]
+          }
+
+########################################
+# SECTION 6: REVOCATION CASCADE
+########################################
+revocation_cascade:
+  description: "When parent capability revoked, automatically revoke all children (cascade)"
+
+  trigger_conditions:
+    - "Parent capability explicitly revoked (supervisor action)"
+    - "Parent agent crashes (agent_crash trigger)"
+    - "Parent capability expires (automatic expiration)"
+    - "Parent constraint exhausted (budget/invocations)"
+
+  cascade_algorithm:
+    step_1_revoke_parent:
+      action: "Mark parent capability as revoked in Redis + K0 WAL"
+      latency_ms: 0.15                  # Redis write
+
+    step_2_find_children:
+      action: "Retrieve all child capabilities from delegation registry"
+      latency_ms: 0.10                  # Redis SMEMBERS
+
+      redis_operation: "SMEMBERS delegation_children:{parent_cap_id}"
+      result_example: ["01JCCHILD456", "01JCCHILD789", "01JCCHILD999"]
+
+    step_3_revoke_children_recursively:
+      action: "Revoke each child capability (recursive cascade)"
+      latency_ms: "0.1ms per child"
+
+      recursive_logic: |
+        async def revoke_with_cascade(cap_id: str, reason: str):
+            # Step 1: Revoke current capability
+            await capability_supervisor.revoke_capability(cap_id, reason)
+
+            # Step 2: Find children
+            children = await redis.smembers(f"delegation_children:{cap_id}")
+
+            # Step 3: Revoke children recursively
+            for child_id in children:
+                await revoke_with_cascade(child_id, f"Parent revoked: {reason}")
+
+            # Step 4: Cleanup delegation chain
+            await redis.delete(f"delegation_children:{cap_id}")
+
+    step_4_cleanup_delegation_registry:
+      action: "Delete delegation_children Redis key"
+      latency_ms: 0.05                  # Redis DELETE
+
+  performance_analysis:
+    latency_formula: "0.5ms base + 0.1ms × num_children (recursive)"
+
+    examples:
+      example_1_one_child:
+        parent_cap_id: "01JCPARENT123"
+        children: 1
+        total_latency_ms: 0.6           # 0.5 + 0.1*1
+
+      example_2_three_children:
+        parent_cap_id: "01JCPARENT123"
+        children: 3
+        total_latency_ms: 0.8           # 0.5 + 0.1*3
+
+      example_3_deep_chain:
+        parent_cap_id: "01JCPARENT123"
+        delegation_chain: "parent → child1 → grandchild1 → grandchild2"
+        total_children: 3
+        total_latency_ms: 0.8           # 0.5 + 0.1*3 (recursive)
+
+  audit_logging:
+    log_entry_structure:
+      event_type: "CAPABILITY_REVOKED_CASCADE"
+      parent_cap_id: "01JCPARENT123"
+      revoked_children: ["01JCCHILD456", "01JCCHILD789"]
+      reason: "Parent agent crashed"
+      cascade_depth: 2
+      total_latency_ms: 0.7
+      timestamp: "2025-10-15T14:55:00Z"
+
+########################################
+# SECTION 7: DELEGATION SCENARIOS
+########################################
+delegation_scenarios:
+  scenario_1_orchestrator_to_booking_agent:
+    description: "Orchestrator delegates booking capability to booking agent during task execution"
+
+    parent_agent:
+      agent_id: "agent_orchestrator_001"
+      role: "orchestrator_agent"
+      trust_level: 3
+
+    parent_capability:
+      cap_id: "01JCPARENT123"
+      resource_type: "TOOL"
+      resource_id: "book_hotel"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 10
+        budget_usd: 1000.0
+        expires_at: "2025-10-15T18:00:00Z"
+        requires_user_approval: true
+
+    child_agent:
+      agent_id: "agent_booking_001"
+      role: "booking_agent"
+      trust_level: 1
+
+    child_capability:
+      cap_id: "01JCCHILD456"
+      resource_type: "TOOL"
+      resource_id: "book_hotel"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 5              # 50% of parent (10)
+        budget_usd: 500.0               # 50% of parent (1000)
+        expires_at: "2025-10-15T14:50:00Z"  # min(parent, current+10min)
+        requires_user_approval: true
+      issued_by: "agent_orchestrator_001"
+      parent_cap_id: "01JCPARENT123"
+      delegation_depth: 1
+
+    delegation_latency_ms: 2.5          # Total delegation workflow latency
+
+  scenario_2_planning_agent_to_sub_planner:
+    description: "Planning agent spawns sub-planning agent for complex subtask, delegates LLM capability"
+
+    parent_agent:
+      agent_id: "agent_planning_001"
+      role: "planning_agent"
+      trust_level: 2
+
+    parent_capability:
+      cap_id: "01JCPARENT789"
+      resource_type: "LLM"
+      resource_id: "gpt-4o-mini"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 10
+        budget_usd: 1.0
+        expires_at: "2025-10-15T18:00:00Z"
+
+    child_agent:
+      agent_id: "agent_planning_002"
+      role: "planning_agent"
+      trust_level: 1                    # Inherit lower trust level
+
+    child_capability:
+      cap_id: "01JCCHILD999"
+      resource_type: "LLM"
+      resource_id: "gpt-4o-mini"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 5              # 50% of parent
+        budget_usd: 0.5                 # 50% of parent
+        expires_at: "2025-10-15T14:50:00Z"
+      issued_by: "agent_planning_001"
+      parent_cap_id: "01JCPARENT789"
+      delegation_depth: 1
+
+    delegation_latency_ms: 2.5
+
+########################################
+# SECTION 8: TESTING SCENARIOS
+########################################
+testing_scenarios:
+  scenario_1_delegation_with_attenuation:
+    description: "Orchestrator delegates capability to booking agent, attenuation applied"
+
+    setup: |
+      orchestrator = await agent_fabric.hire_agent(role="orchestrator_agent")
+      orchestrator_cap = await capability_manager.issue_capability(
+          agent_id=orchestrator.id,
+          resource_type="TOOL",
+          resource_id="book_hotel",
+          permissions=["execute"],
+          constraints={"max_invocations": 10, "budget_usd": 1000.0}
+      )
+
+      booking_agent = await agent_fabric.hire_agent(role="booking_agent")
+
+    execution: |
+      child_cap = await capability_manager.delegate_capability(
+          parent_cap_id=orchestrator_cap.cap_id,
+          child_agent_id=booking_agent.id
+      )
+
+    expected_child_capability:
+      resource_type: "TOOL"
+      resource_id: "book_hotel"
+      permissions: ["execute"]
+      constraints:
+        max_invocations: 5              # 50% of parent
+        budget_usd: 500.0               # 50% of parent
+        expires_at: "current + 10min"
+      delegation_depth: 1
+
+    validation: |
+      assert child_cap.constraints["max_invocations"] == 5
+      assert child_cap.constraints["budget_usd"] == 500.0
+      assert child_cap.delegation_depth == 1
+
+  scenario_2_delegation_depth_limit_enforced:
+    description: "Attempt 4-level delegation, denied (max depth=3)"
+
+    setup: |
+      # Level 0 → 1
+      cap_level_0 = await capability_manager.issue_capability(...)
+      cap_level_1 = await capability_manager.delegate_capability(parent_cap_id=cap_level_0.cap_id)
+
+      # Level 1 → 2
+      cap_level_2 = await capability_manager.delegate_capability(parent_cap_id=cap_level_1.cap_id)
+
+      # Level 2 → 3
+      cap_level_3 = await capability_manager.delegate_capability(parent_cap_id=cap_level_2.cap_id)
+
+    execution: |
+      # Level 3 → 4 (should be DENIED)
+      try:
+          cap_level_4 = await capability_manager.delegate_capability(parent_cap_id=cap_level_3.cap_id)
+      except DelegationError as e:
+          assert str(e) == "Max delegation depth exceeded (3)"
+
+    expected_result: "DENIED"
+    expected_reason: "Max delegation depth exceeded (3)"
+
+  scenario_3_revocation_cascade:
+    description: "Parent capability revoked, all children automatically revoked (cascade)"
+
+    setup: |
+      parent_cap = await capability_manager.issue_capability(...)
+
+      # Delegate to 3 children
+      child_caps = []
+      for i in range(3):
+          child_cap = await capability_manager.delegate_capability(parent_cap_id=parent_cap.cap_id)
+          child_caps.append(child_cap)
+
+    execution: |
+      # Revoke parent
+      await capability_supervisor.revoke_with_cascade(
+          cap_id=parent_cap.cap_id,
+          reason="Parent agent crashed"
+      )
+
+    expected_result:
+      revoked_capabilities: 4           # 1 parent + 3 children
+      total_latency_ms: 0.8             # 0.5 base + 0.1*3
+
+    validation: |
+      # Verify all children revoked
+      for child_cap in child_caps:
+          cap = await capability_manager.get_capability(child_cap.cap_id)
+          assert cap.status == "REVOKED"

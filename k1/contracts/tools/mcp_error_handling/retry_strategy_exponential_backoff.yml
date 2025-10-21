@@ -1,0 +1,125 @@
+# Retry Strategy: Exponential Backoff
+# Purpose: Define retry strategy with exponential backoff and jitter
+# Source ADR: 0034d-mcp-error-handling.md (lines 401-800)
+# Version: 1.0
+
+component_name: "RetryStrategy"
+version: "1.0"
+description: "Exponential backoff retry strategy for TRANSIENT errors"
+
+references:
+  adr: ["0034d"]
+  contracts: ["error_classification_3_categories"]
+
+retry_policy:
+  applicable_to: "TRANSIENT errors only"
+  max_total_attempts: 4
+  max_retries: 3
+
+backoff_algorithm:
+  base_delay_seconds: 1
+  multiplier: 2
+  max_delay_seconds: 8
+  jitter_range_ms: [0, 500]
+
+  sequence:
+    attempt_1: "Immediate (no delay)"
+    retry_1: "1 second + jitter (0-500ms)"
+    retry_2: "2 seconds + jitter (0-500ms)"
+    retry_3: "4 seconds + jitter (0-500ms)"
+    retry_4: "8 seconds + jitter (0-500ms) [fallback if retry 3]"
+
+  formula: "delay = base * (multiplier ^ retry_count) + jitter"
+
+jitter_implementation:
+  purpose: "Prevent thundering herd on simultaneous retries"
+  method: "random.uniform(0, 0.5)"
+  range_seconds: [0, 0.5]
+  applied: "To every backoff delay except attempt_1"
+
+should_retry_logic:
+  check_error_category: "Must be TRANSIENT"
+  check_retry_count: "retry_count < 3"
+  check_circuit_breaker: "If OPEN, skip retry"
+  decision:
+    if_transient_and_under_limit: "Schedule retry"
+    if_permanent: "No retry, go to Tier 2"
+    if_critical: "No retry, go to Tier 3/4"
+    if_circuit_open: "No retry, go to Tier 2"
+
+production_statistics:
+  total_retries: 12000
+  successful_retries: 10200
+  success_rate: "85%"
+  rationale: "Most TRANSIENT errors succeed within 3 retries"
+
+performance_slas:
+  max_retry_delay_seconds: 8
+  total_retry_window_seconds: 15
+  description: "All 3 retries should complete within 15 seconds"
+
+implementation:
+  class: "RetryStrategy"
+  method: "should_retry(error, retry_count, circuit_breaker_state)"
+  returns: "bool"
+
+  pseudocode: |
+    def should_retry(error, retry_count, cb_state):
+      if error.category != TRANSIENT:
+        return False
+      if retry_count >= 3:
+        return False
+      if cb_state == OPEN:
+        return False
+      return True
+
+    async def execute_with_retry(coro, tool_id):
+      for attempt in range(4):
+        try:
+          return await asyncio.wait_for(coro, timeout)
+        except asyncio.TimeoutError as e:
+          error = classify_error(e, tool_id)
+          if not should_retry(error, attempt-1, cb_state):
+            raise
+          delay = calculate_backoff(attempt) + random.uniform(0, 0.5)
+          await asyncio.sleep(delay)
+      raise
+
+exponential_backoff_table:
+  retry_1:
+    base_delay: 1
+    jitter_max: 0.5
+    total_delay_range: [1.0, 1.5]
+
+  retry_2:
+    base_delay: 2
+    jitter_max: 0.5
+    total_delay_range: [2.0, 2.5]
+
+  retry_3:
+    base_delay: 4
+    jitter_max: 0.5
+    total_delay_range: [4.0, 4.5]
+
+metrics:
+  prometheus_counters:
+    - name: "retries_total"
+      labels: ["tool_id"]
+    - name: "retry_success_total"
+      labels: ["tool_id"]
+    - name: "retry_exhausted_total"
+      labels: ["tool_id"]
+
+testing_requirements:
+  - test_backoff_calculation: "Verify 1s, 2s, 4s, 8s sequence"
+  - test_jitter_application: "Verify jitter added (0-500ms)"
+  - test_should_retry_logic: "TRANSIENT retries, PERMANENT doesn't"
+  - test_retry_count_limit: "Max 3 retries (4 total attempts)"
+  - test_circuit_breaker_integration: "OPEN skips retry"
+  - test_production_stats: "85% success rate on retries"
+
+compliance:
+  adr_0034d_sections: ["Retry strategy", "Exponential backoff", "Jitter"]
+
+changelog:
+  "1.0": "Initial contract - Exponential backoff retry strategy"

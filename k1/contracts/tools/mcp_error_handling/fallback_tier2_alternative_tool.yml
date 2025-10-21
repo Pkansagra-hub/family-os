@@ -1,0 +1,161 @@
+# Fallback Tier 2: Alternative Tool
+# Purpose: Define Tier 2 fallback strategy - use alternative tool with same capability
+# Source ADR: 0034d-mcp-error-handling.md (lines 1001-1200)
+# Version: 1.0
+
+component_name: "FallbackTier2Alternative"
+version: "1.0"
+description: "Use alternative tool with same capability (70% success rate)"
+
+references:
+  adr: ["0034d"]
+  contracts: ["error_classification_3_categories"]
+
+tier2_overview:
+  name: "Alternative Tool"
+  purpose: "Use different tool that provides same functionality"
+  applicable_errors: "TRANSIENT or PERMANENT (after Tier 1 exhausted)"
+  success_rate_production: "70%"
+
+  entry_conditions:
+    - tier1_exhausted: "true"
+    - alternative_available: "true"
+
+  next_tier_on_failure: "Tier 3 (Cached Result)"
+
+tool_grouping_by_capability:
+  weather:
+    primary: "weather_api"
+    alternatives: ["weather_backup", "weather_archive"]
+
+  calendar:
+    primary: "calendar_api"
+    alternatives: ["calendar_backup"]
+
+  email:
+    primary: "email_smtp"
+    alternatives: ["email_http", "email_backup"]
+
+  translation:
+    primary: "google_translate"
+    alternatives: ["deepl_translate", "aws_translate"]
+
+alternative_lookup:
+  algorithm: "Find tools with same capability"
+  method: |
+    capability = tool_registry[failed_tool].capability
+    alternatives = [t for t in tool_registry if t.capability == capability and t.id != failed_tool]
+    return alternatives[0]  # Use first alternative
+
+tier2_algorithm:
+  step1_lookup_alternative: "Find tool with same capability"
+  step2_alternative_exists: "If none found, skip to Tier 3"
+  step3_execute_alternative: "Execute alternative tool with same parameters"
+  step4_on_success: "Return result, skip Tier 3/4"
+  step5_on_failure: "Log alternative failure, try Tier 3"
+
+pseudocode:
+  code: |
+    async def try_alternative_tool(failed_tool_id, tool_call):
+      # Lookup alternative
+      capability = tool_registry[failed_tool_id].capability
+      alternatives = get_alternatives_for_capability(capability)
+
+      if not alternatives:
+        return None  # No alternative available
+
+      # Try first alternative
+      alternative_tool = alternatives[0]
+
+      try:
+        result = await execute_tool(alternative_tool, tool_call, timeout)
+        return result  # Success with alternative
+      except Exception as e:
+        # Log alternative failure
+        return None  # Will try Tier 3
+
+production_statistics:
+  total_attempts: 2400
+  successful_alternatives: 1680
+  success_rate: "70%"
+  avg_response_time_seconds: 2.5
+
+  by_tool_category:
+    weather: "72% success"
+    calendar: "68% success"
+    email: "75% success"
+    translation: "65% success"
+
+alternative_availability:
+  requirement: "Every primary tool should have at least 1 alternative"
+  exceptions: "Some tools may have no alternative (special case)"
+
+  coverage:
+    with_alternative: "85% of tools"
+    without_alternative: "15% of tools (rare)"
+
+parameter_adaptation:
+  weather_api_to_backup:
+    field_mapping:
+      - api_key: "weather_api_key → weather_backup_key"
+      - format: "json → json (same)"
+      - location: "location → location (same)"
+
+  transformation: "Minimal parameter transformation needed"
+
+error_handling_in_tier2:
+  on_failure_with_alternative:
+    condition: "Alternative also fails"
+    action: "Log alternative failure, go to Tier 3"
+
+  on_no_alternative:
+    condition: "No alternative available"
+    action: "Skip directly to Tier 3"
+
+  on_timeout:
+    condition: "Alternative times out"
+    action: "Treat as error, go to Tier 3"
+
+integration_with_fallback_strategy:
+  entry_condition: "Tier 1 exhausted (PERMANENT error or retries exhausted)"
+  success_exit: "Return result from alternative"
+  failure_exit: "After alternative fails, go to Tier 3"
+
+timing:
+  tier2_max_duration: "30+ seconds (full timeout for alternative)"
+  typical_duration: "1-5 seconds (alternative faster or slower than primary)"
+
+metrics:
+  prometheus_counters:
+    - name: "tier2_attempts_total"
+      labels: ["failed_tool_id", "alternative_tool_id"]
+    - name: "tier2_success_total"
+      labels: ["failed_tool_id", "alternative_tool_id"]
+    - name: "tier2_availability"
+      labels: ["capability"]
+
+logging:
+  log_tier2_attempt:
+    - tier: "2"
+    - failed_tool_id
+    - alternative_tool_id
+    - capability
+    - trace_id
+
+  log_tier2_result:
+    - success: true/false
+    - duration_seconds
+    - alternative_response_time_ms
+
+testing_requirements:
+  - test_tier2_alternative_found: "Lookup alternative for primary tool"
+  - test_tier2_alternative_success: "Alternative succeeds"
+  - test_tier2_no_alternative: "No alternative, skip to Tier 3"
+  - test_tier2_alternative_failure: "Alternative fails, go to Tier 3"
+  - test_tier2_parameter_adaptation: "Parameters adapted for alternative"
+
+compliance:
+  adr_0034d_sections: ["Fallback Tier 2 (Alternative Tool)", "Production statistics (70% success)"]
+
+changelog:
+  "1.0": "Initial contract - Fallback Tier 2 (Alternative tool)"

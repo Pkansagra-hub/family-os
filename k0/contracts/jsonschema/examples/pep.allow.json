@@ -1,0 +1,17 @@
+{
+  "band": "GREEN",
+  "abac": {
+    "tenant_id": "tenant-123",
+    "space_id": "space-alpha",
+    "actor_role": "HOUSEHOLD_DEVICE"
+  },
+  "caps": {
+    "fanout_remaining": 4,
+    "latency_budget_ms": 200
+  },
+  "decision": "ALLOW",
+  "obligations": [
+    "record_audit",
+    "propagate_trace"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "LIMIT_EXCEEDED",
+    "reason": "LIMIT_EXCEEDED",
+    "trace_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "hint": "Reduce fanout or request a higher QoS budget",
+    "budgets": {
+      "limit": 1000,
+      "used": 1005,
+      "policy": "qos:v1/fanout"
+    }
+  }
+}

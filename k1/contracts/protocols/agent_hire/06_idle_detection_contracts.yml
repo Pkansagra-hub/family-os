@@ -1,0 +1,187 @@
+# Agent Hire Protocol - Idle Detection Contracts
+# File: contracts/protocols/agent_hire/06_idle_detection_contracts.yml
+# Purpose: ACTIVE → IDLE state transition based on task inactivity
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-AGENT-HIRE-IDLE-006"
+  name: "Agent Idle Detection Contracts"
+  version: "1.0"
+
+# Idle detection overview
+idle_detection:
+
+  purpose: "Transition agent to IDLE state when no tasks for idle_timeout_ms"
+  default_idle_timeout_ms: 60000  # 60 seconds
+  configurable_timeout_ms: "per-agent-role config"
+
+  state_transition: "ACTIVE → IDLE (after 60s inactivity)"
+  monitoring_mechanism: "Supervisor monitors activity, triggers transition"
+
+  activity_tracking:
+
+    activities_that_prevent_idle:
+      - "Message received in mailbox"
+      - "Task in execution"
+      - "Tool call in progress"
+      - "LLM inference in progress"
+      - "Any non-blocking operation"
+
+    activities_that_trigger_idle:
+      - "No mailbox messages for 60s"
+      - "All in-flight tasks completed"
+      - "Agent confirmed ready (health check pass)"
+
+    tracking_logic: |
+      last_activity_timestamp = current_time()
+
+      while agent.state == ACTIVE:
+        if current_time() - last_activity_timestamp > idle_timeout_ms:
+          # Timeout reached, agent should move to IDLE
+          trigger_idle_transition()
+
+        if message received:
+          last_activity_timestamp = current_time()  # Reset timer
+
+        sleep(100ms)  # Check every 100ms
+
+# Idle transition flow
+idle_transition:
+
+  trigger: "No activity for idle_timeout_ms (60s default)"
+  action: "Supervisor initiates ACTIVE → IDLE transition"
+
+  steps:
+    step_1: "Supervisor detects inactivity timeout"
+    step_2: "Send IDLE_REQUEST to agent (optional notification)"
+    step_3: "Update agent state to IDLE"
+    step_4: "Keep mailbox active (can receive new tasks)"
+    step_5: "Stop active monitoring (save CPU)"
+    step_6: "Log transition: ACTIVE → IDLE"
+
+  observability:
+    metrics:
+      - "agents_idle_total (counter)"
+      - "idle_transition_latency_ms (histogram)"
+    events:
+      - "agent_idle_transitioned"
+
+# Idle pool management
+idle_pool:
+
+  purpose: "Keep idle agents ready for fast reactivation"
+  pool_size_max: 10               # Keep max 10 agents in idle pool
+  pool_maintenance: "LRU eviction if pool > 10"
+
+  idle_pool_benefits:
+    - "Fast agent reactivation: IDLE → ACTIVE in <100ms"
+    - "No model reload needed (model stays in KV cache)"
+    - "CPU resources freed up (mailbox still active)"
+    - "Memory usage remains (model cache, agent state)"
+
+  reactivation_from_idle:
+    trigger: "New task arrives, agent in IDLE state"
+    transition: "IDLE → ACTIVE"
+    latency_budget_ms: 100
+
+    steps:
+      step_1: "Supervisor detects task for idle agent"
+      step_2: "Send ACTIVATE_REQUEST to agent"
+      step_3: "Agent resumes active monitoring"
+      step_4: "Send health check (verify still healthy)"
+      step_5: "On success: transition to ACTIVE, deliver task"
+      step_6: "On failure: retry or fallback to fresh agent hire"
+
+    performance:
+      reactivation_latency_ms: 50
+      health_check_latency_ms: 10
+      total_reactivation_budget_ms: 100
+
+# Idle timeout configuration per role
+idle_timeout_config:
+
+  orchestrator: 30000             # 30 seconds (frequently used)
+  agent:
+    ai_agent_planner: 90000       # 90 seconds (large models take time to reload)
+    ai_agent_researcher: 90000
+    ai_agent_concierge: 60000     # 60 seconds
+    ai_agent_safety_watch: 30000  # 30 seconds (always monitoring)
+
+  tool_runner: 60000              # 60 seconds
+  supervisor: 300000              # 5 minutes (long-lived)
+  router: 600000                  # 10 minutes (long-lived)
+
+# Idle detection observability
+observability:
+
+  metrics:
+    - name: "agent_idle_detected_total"
+      type: "counter"
+      labels: ["agent_role"]
+      description: "Agents transitioned to IDLE"
+
+    - name: "agent_idle_duration_seconds"
+      type: "histogram"
+      buckets: [5, 10, 30, 60, 300]
+      description: "Duration agent spent in IDLE state"
+
+    - name: "agent_idle_pool_size"
+      type: "gauge"
+      description: "Current size of idle pool"
+
+    - name: "idle_pool_evictions_total"
+      type: "counter"
+      description: "Evictions due to pool overflow"
+
+    - name: "reactivation_latency_ms"
+      type: "histogram"
+      buckets: [10, 50, 100, 200]
+      description: "IDLE → ACTIVE transition latency"
+
+  events:
+    - name: "agent_idle_transitioned"
+      fields: ["agent_id", "idle_timeout_ms", "trace_id"]
+
+    - name: "agent_reactivated"
+      fields: ["agent_id", "idle_duration_ms", "reactivation_latency_ms", "trace_id"]
+
+    - name: "reactivation_failed"
+      fields: ["agent_id", "reason", "trace_id"]
+
+# Idle health check during idle state
+idle_health_monitoring:
+
+  health_check_interval_seconds: 300  # Check every 5 minutes
+  health_check_timeout_ms: 10
+
+  purpose: "Verify idle agent still healthy (hasn't crashed)"
+
+  failure_handling:
+    scenario: "Health check fails while agent in IDLE"
+    action: "Mark agent as CRASHED, remove from idle pool"
+    recovery: "On next task, hire fresh agent"
+
+# Lifecycle integration
+lifecycle_context:
+
+  agent_lifecycle_states: |
+    PENDING → WARMING → ACTIVE ↔ IDLE → DRAINING → TERMINATED
+                         ↑_______↓
+                      Reactivation loop
+
+  this_contract_covers:
+    - "ACTIVE → IDLE transition"
+    - "IDLE → ACTIVE reactivation"
+    - "Idle pool management"
+    - "Idle state health checks"
+
+  related_contracts:
+    - "01_hire_protocol_fsm.yml - Hiring process"
+    - "04_warmup_contracts.yml - Warmup → ACTIVE"
+    - "05_activation_contracts.yml - Health check"
+    - "07_drain_initiation_contracts.yml - Draining"
+
+# ==============================================================================
+# END OF FILE: 06_idle_detection_contracts.yml
+# ==============================================================================

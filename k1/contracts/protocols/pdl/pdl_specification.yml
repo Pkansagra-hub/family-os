@@ -1,0 +1,449 @@
+# K1 Protocol Definition Language (PDL) Specification Contract
+# Source: ADR-0003a (Protocol Definition Language Specification)
+# Purpose: Define the formal specification for K1's YAML-based PDL
+# Version: 1.0
+# Date: 2025-10-14
+
+contract:
+  name: "PDL Language Specification"
+  version: "1.0"
+  type: "language_specification"
+  source_adr: "docs/architecture/decisions/0003a-protocol-definition-language-pdl-specification.md"
+  compliance_level: "MANDATORY"
+
+specification:
+  language_name: "K1 Protocol Definition Language (PDL)"
+  format: "YAML"
+  purpose: "Custom DSL for defining multi-agent conversation protocols with MPST validation"
+
+  # Top-Level Structure
+  top_level_structure:
+    root_element: "protocol"
+    required_fields:
+      - field: "name"
+        type: "string"
+        format: "snake_case"
+        description: "Protocol identifier (unique)"
+        example: "agent_hire"
+        validation: "^[a-z][a-z0-9_]*$"
+
+      - field: "version"
+        type: "string"
+        format: "semver"
+        description: "Semantic version (major.minor.patch)"
+        example: "1.0.0"
+        validation: "^\\d+\\.\\d+(\\.\\d+)?$"
+
+      - field: "description"
+        type: "string"
+        description: "Human-readable protocol description"
+        example: "Hire agent with negotiation and selection"
+
+      - field: "initial_state"
+        type: "string"
+        description: "Entry state name (must exist in states list)"
+        example: "start"
+        validation: "Must reference valid state in states[]"
+
+      - field: "terminal_states"
+        type: "array[string]"
+        description: "List of exit state names"
+        example: ["hired", "rejected", "timeout"]
+        validation: "All must exist in states[]"
+
+      - field: "states"
+        type: "array[State]"
+        description: "FSM state definitions"
+        min_count: 2
+        validation: "Must include initial_state and at least one terminal state"
+
+      - field: "transitions"
+        type: "array[Transition]"
+        description: "FSM transition definitions"
+        min_count: 1
+        validation: "All from/to states must exist in states[]"
+
+    optional_fields:
+      - field: "timeouts"
+        type: "array[TimeoutPolicy]"
+        description: "Timeout policies for non-terminal states"
+        default: []
+
+      - field: "violations"
+        type: "array[ViolationHandler]"
+        description: "Violation handling strategies"
+        default: []
+
+      - field: "roles"
+        type: "array[Role]"
+        description: "Role definitions for RBAC"
+        default: []
+
+      - field: "messages"
+        type: "array[MessageDef]"
+        description: "Message schema definitions"
+        default: []
+
+  # State Definition Schema
+  state_definition:
+    required_fields:
+      - field: "name"
+        type: "string"
+        format: "snake_case"
+        description: "State identifier (unique within protocol)"
+        example: "negotiation"
+        validation: "^[a-z][a-z0-9_]*$"
+
+      - field: "type"
+        type: "enum"
+        values: ["entry", "interaction", "decision", "exit"]
+        description: "State type classification"
+        validation:
+          entry: "Must be referenced by initial_state"
+          exit: "Must be in terminal_states[]"
+          interaction: "Multi-agent message exchange state"
+          decision: "Orchestrator decision point state"
+
+      - field: "description"
+        type: "string"
+        description: "Human-readable state purpose"
+        example: "Collect proposals from agents"
+
+    optional_fields:
+      - field: "timeout_ms"
+        type: "integer"
+        description: "State timeout in milliseconds (null = no timeout)"
+        default: null
+        range: [0, 300000]  # 0-5 minutes
+        recommendation: "All non-terminal states should have timeout"
+
+      - field: "llm_aware"
+        type: "boolean"
+        description: "Allows AI agent LLM calls within state"
+        default: false
+        note: "Protocol validates Actor messages, NOT LLM calls. This is documentation for timeout tuning."
+
+  # Transition Definition Schema
+  transition_definition:
+    required_fields:
+      - field: "from"
+        type: "string"
+        description: "Source state name"
+        validation: "Must exist in states[]"
+
+      - field: "to"
+        type: "string"
+        description: "Destination state name"
+        validation: "Must exist in states[]"
+
+      - field: "message"
+        type: "string"
+        description: "Message type triggering transition"
+        example: "HireRequest"
+
+      - field: "sender"
+        type: "string"
+        description: "Sender role (orchestrator, agent, system, etc.)"
+        example: "orchestrator"
+
+      - field: "receivers"
+        type: "array[string]"
+        description: "Receiver roles (['*'] for broadcast, [] for internal)"
+        example: ["*"]
+
+    optional_fields:
+      - field: "cardinality"
+        type: "string"
+        description: "Message cardinality constraint"
+        default: "1"
+        values: ["0..1", "1", "0..*", "1..*"]
+        semantics:
+          "0..1": "Zero or one message"
+          "1": "Exactly one message (default)"
+          "0..*": "Zero or more messages"
+          "1..*": "One or more messages"
+
+      - field: "condition"
+        type: "string"
+        description: "Boolean guard condition for transition"
+        default: null
+        example: "score > threshold"
+        syntax: "Simple comparison operators (>, <, ==, !=, >=, <=)"
+
+      - field: "trigger"
+        type: "enum"
+        values: [null, "timeout", "system"]
+        description: "Auto-trigger type"
+        default: null
+        semantics:
+          null: "Normal message-triggered transition"
+          "timeout": "Auto-triggered when state timeout expires"
+          "system": "System-triggered (supervisor, monitor)"
+
+  # Timeout Policy Schema
+  timeout_policy:
+    required_fields:
+      - field: "state"
+        type: "string"
+        description: "State name to apply timeout"
+        validation: "Must exist in states[]"
+
+      - field: "action"
+        type: "string"
+        description: "Message to auto-send on timeout OR fallback_state"
+        example: "ProposalsClosed"
+
+    optional_fields:
+      - field: "fallback_state"
+        type: "string"
+        description: "Direct state transition without message"
+        default: null
+
+      - field: "log"
+        type: "boolean"
+        description: "Log timeout event"
+        default: true
+
+  # Violation Handler Schema
+  violation_handler:
+    required_fields:
+      - field: "type"
+        type: "enum"
+        values: ["unexpected_message", "invalid_sender", "invalid_cardinality", "timeout", "deadlock", "role_mismatch", "schema_invalid"]
+        description: "Violation type to handle"
+
+      - field: "action"
+        type: "enum"
+        values: ["block", "warn", "dlq", "repair", "fallback", "abort"]
+        description: "Violation handling action"
+        semantics:
+          block: "Drop message, log to DLQ, do NOT transition"
+          warn: "Log violation, deliver anyway (degraded mode)"
+          dlq: "Log to Protocol DLQ for manual review"
+          repair: "Auto-inject timeout transition or callback"
+          fallback: "Trigger timeout fallback transition"
+          abort: "Abort protocol, cleanup FSM, log error"
+
+    optional_fields:
+      - field: "log"
+        type: "boolean"
+        description: "Log violation"
+        default: true
+
+      - field: "metrics"
+        type: "boolean"
+        description: "Emit Prometheus metrics"
+        default: true
+
+  # Role Definition Schema (Optional, see ADR-0003d)
+  role_definition:
+    required_fields:
+      - field: "name"
+        type: "string"
+        description: "Role identifier"
+        example: "orchestrator"
+
+    optional_fields:
+      - field: "capabilities"
+        type: "array[string]"
+        description: "Allowed operations for role"
+        example: ["hire", "fire", "score"]
+
+      - field: "allowed_message_types"
+        type: "array[string]"
+        description: "Message types this role can send"
+        example: ["HireRequest", "HireApproval"]
+
+  # Message Definition Schema (Optional, see ADR-0003d)
+  message_definition:
+    required_fields:
+      - field: "name"
+        type: "string"
+        description: "Message type identifier"
+        example: "HireRequest"
+
+    optional_fields:
+      - field: "sender_role"
+        type: "string"
+        description: "Required sender role"
+        example: "orchestrator"
+
+      - field: "receiver_roles"
+        type: "array[string]"
+        description: "Allowed receiver roles"
+        example: ["*"]
+
+      - field: "schema"
+        type: "string"
+        description: "FlatBuffers schema file name"
+        example: "HireRequest.fbs"
+
+      - field: "priority"
+        type: "integer"
+        description: "Message priority (0=background, 3=urgent)"
+        range: [0, 3]
+        default: 2
+
+  # AI Agent Integration
+  ai_agent_integration:
+    description: "Protocols validate Actor messages, AI agents use LLM reasoning internally"
+    protocol_timeouts:
+      description: "Time to receive Actor message in mailbox"
+      example: "500ms for HireRequest → Proposal"
+    llm_timeouts:
+      description: "Time for AI agent Model Hub call (separate concern)"
+      example: "5000ms for Planner LLM reasoning"
+    key_distinction: |
+      Protocol: Validates mailbox message flow (Orchestrator → Planner)
+      AI Agent: Manages LLM calls internally (Planner → Model Hub → LLM)
+      Protocol does NOT see LLM calls, only Actor messages.
+
+  # Validation Rules
+  validation_rules:
+    compile_time:
+      - rule: "All terminal_states must exist in states[]"
+        error_code: "invalid_terminal_state"
+        severity: "CRITICAL"
+
+      - rule: "initial_state must exist in states[]"
+        error_code: "invalid_initial_state"
+        severity: "CRITICAL"
+
+      - rule: "All transitions.from/to must reference valid state names"
+        error_code: "invalid_transition_target"
+        severity: "CRITICAL"
+
+      - rule: "All terminal states must be reachable from initial state"
+        error_code: "unreachable_terminal_state"
+        severity: "CRITICAL"
+
+      - rule: "All non-terminal states should have outgoing transitions"
+        error_code: "orphaned_state"
+        severity: "WARNING"
+
+      - rule: "All non-terminal states should have timeout policies"
+        error_code: "missing_timeout_policy"
+        severity: "WARNING"
+        note: "Progress guarantee requires timeout"
+
+      - rule: "No cycles in transitions (unless intentional loops)"
+        error_code: "potential_deadlock"
+        severity: "WARNING"
+        note: "Deadlock detection with Tarjan's algorithm"
+
+    runtime:
+      - rule: "Message sender_role must match lease.role"
+        error_code: "role_mismatch"
+        severity: "CRITICAL"
+
+      - rule: "Message signature must validate (HMAC-SHA256)"
+        error_code: "invalid_signature"
+        severity: "CRITICAL"
+
+      - rule: "Lease must not be expired"
+        error_code: "expired_lease"
+        severity: "CRITICAL"
+
+performance_requirements:
+  compilation:
+    budget: "100ms per protocol"
+    target: "50ms typical"
+    optimization: "Pre-compile PDL → FlatBuffers at startup"
+
+  runtime_validation:
+    budget: "2ms P95 per message"
+    target: "1ms typical"
+    optimization: "Pre-compiled FSM lookup (O(1) hash table)"
+
+  fsm_state_lookup:
+    budget: "1ms P95"
+    target: "0.5ms typical"
+    optimization: "In-memory hash table"
+
+observability:
+  metrics:
+    - name: "protocol_compilation_time_ms"
+      type: "histogram"
+      buckets: [10, 50, 100, 250, 500]
+      description: "PDL compilation latency"
+
+    - name: "protocol_validation_errors_total"
+      type: "counter"
+      labels: ["error_code", "protocol_name"]
+      description: "Compilation validation errors"
+
+  logs:
+    - event: "protocol_compiled"
+      level: "INFO"
+      fields: ["protocol_name", "version", "state_count", "transition_count", "compile_time_ms"]
+
+    - event: "protocol_validation_error"
+      level: "ERROR"
+      fields: ["protocol_name", "error_code", "error_message", "line_number"]
+
+examples:
+  simple_protocol:
+    file: "contracts/protocols/pdl/pdl_examples.yml"
+    description: "Example: Agent Hire Protocol (6 states, 8 transitions)"
+
+  nested_protocol:
+    file: "contracts/protocols/pdl/pdl_examples.yml"
+    description: "Example: Task Execution with Clarification (nested)"
+
+  complex_protocol:
+    file: "contracts/protocols/pdl/pdl_examples.yml"
+    description: "Example: Saga Rollback (5 states, 9 transitions, compensating actions)"
+
+compliance:
+  adr_requirements:
+    - adr: "ADR-0003"
+      requirement: "MPST protocol validation for all multi-agent communication"
+      status: "SATISFIED"
+
+    - adr: "ADR-0003a"
+      requirement: "Custom PDL YAML-based DSL for protocol definition"
+      status: "SATISFIED"
+
+    - adr: "ADR-0002"
+      requirement: "Actor Model message-passing validation"
+      status: "SATISFIED"
+
+  testing_requirements:
+    - test: "PDL parser unit tests"
+      coverage: "95%+"
+      description: "Valid/invalid YAML, missing fields, type errors"
+
+    - test: "PDL compiler integration tests"
+      coverage: "100%"
+      description: "Compile all 6 core protocols, verify FSM correctness"
+
+    - test: "Golden tests"
+      description: "Compile hire.pdl.yml → hire.fsm.fbs, compare byte-for-byte"
+
+cross_references:
+  adrs:
+    - "ADR-0003: MPST Protocol Validation"
+    - "ADR-0003a: Protocol Definition Language Specification"
+    - "ADR-0002: Actor Model for Agent Isolation"
+    - "ADR-0011: FlatBuffers Serialization"
+
+  contracts:
+    - "contracts/protocols/pdl/pdl_schema_validation.yml"
+    - "contracts/protocols/pdl/pdl_compiler_contract.yml"
+    - "contracts/protocols/definitions/*.pdl.yml"
+
+  diagrams:
+    - "architecture_diagrams/k1_protocol_monitor_fsms.mmd"
+
+versioning:
+  current_version: "1.0"
+  compatibility_policy: "Semantic versioning (major.minor.patch)"
+  deprecation_policy: "90-day notice for breaking changes"
+  migration_path: "PDL 1.x → 2.x: automated migration tool provided"
+
+notes:
+  - "PDL is designed for developers, not academics (no MPST theory PhD required)"
+  - "YAML syntax chosen for readability and tooling maturity"
+  - "Pre-compilation to FlatBuffers for <2ms runtime validation"
+  - "Protocols validate Actor messages, NOT AI agent LLM calls"
+  - "All 6 core protocols (hire, task, clarification, barge-in, tool, saga) use this specification"

@@ -1,0 +1,689 @@
+# K1 Layer Dependencies Contract
+# Epic 1.4 - Issue 1.4.1 - Architecture Component 2 of 5
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Architecture Team
+# ADR References: ADR-0004 (52-Module Architecture), ADR-0004b (Import Linting)
+
+metadata:
+  contract_id: "layer_dependencies"
+  contract_name: "Layer Dependencies Contract"
+  version: "1.0.0"
+  description: |
+    Layer dependency rules and import-linter contracts for K1's 5-layer architecture.
+    Enforces strict layering via automated import validation (pre-commit + CI).
+    Implements contract from ADR-0004 Section "Layer Dependencies" and ADR-0004b.
+  component_type: "architecture_governance"
+  layer: "all_layers"
+  enforcement: "import-linter"
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+overview:
+  purpose: |
+    Layer Dependencies Contract defines and enforces strict layering rules.
+
+    Key Features:
+    1. 5-layer dependency rules (L1→L5 only, L2→all, L3→L4/L5, L4→L5, L5→none)
+    2. import-linter contracts (automated validation)
+    3. Pre-commit hooks (block commits with violations)
+    4. CI enforcement (block PR merges with violations)
+    5. Escape hatches (TYPE_CHECKING for type-only imports)
+
+    Purpose:
+    - Prevent circular dependencies (Layer N ↔ Layer M)
+    - Prevent layering violations (Layer 1 → Layer 2 direct import)
+    - Maintain clean architecture (hot path clear, foundation isolated)
+    - Enable fast failure isolation (per-layer integration tests)
+
+  enforcement_mechanisms:
+    - "import-linter (Python package)"
+    - "Pre-commit hook (blocks commits)"
+    - "CI/CD (GitHub Actions, blocks PR merges)"
+    - "Developer education (clear error messages + fixes)"
+
+  research_foundation:
+    - "Layered Architecture (Parnas 1972)"
+    - "Dependency Inversion Principle (Martin 2000)"
+
+layering_rules:
+  overview: |
+    K1's 5-layer architecture enforces strict dependency direction:
+
+    Layer 1 (Input) → Can only import Layer 5 (Infrastructure)
+    Layer 2 (Orchestration) → Can import Layers 1, 3, 4, 5 (all layers)
+    Layer 3 (Execution) → Can import Layers 4, 5 (Runtime + Infrastructure)
+    Layer 4 (Runtime Core) → Can import Layer 5 (Infrastructure only)
+    Layer 5 (Infrastructure) → Cannot import ANY other layers (foundation)
+
+    Rationale:
+    - L5 is foundation (all layers depend on it, so it cannot depend on them)
+    - L1 is input processing (communicates with L2 via L5 event bus)
+    - L2 is orchestrator (needs visibility into all layers to coordinate)
+    - L3 is execution (depends on L4 runtime state and L5 infrastructure)
+    - L4 is runtime core (foundation for L3, must not depend on it)
+
+  layer1_input_processing:
+    layer_id: 1
+    layer_name: "Input Processing"
+    can_import:
+      - layer: "Layer 5"
+        modules:
+          - "k1.infrastructure.*"
+        rationale: "L1 needs event bus (L5) to publish events to L2"
+
+    forbidden_imports:
+      - layer: "Layer 2"
+        modules:
+          - "k1.orchestration.*"
+        rationale: "L1 cannot directly import L2 (use event bus instead)"
+      - layer: "Layer 3"
+        modules:
+          - "k1.execution.*"
+          - "k1.agents.*"
+          - "k1.model_hub.*"
+          - "k1.tools.*"
+          - "k1.dialogue.*"
+        rationale: "L1 is input processing, doesn't execute tasks"
+      - layer: "Layer 4"
+        modules:
+          - "k1.runtime.*"
+          - "k1.learning.*"
+        rationale: "L1 doesn't manage state or learning"
+
+    example_violation:
+      code: |
+        # File: k1/input/intent_router.py (Layer 1)
+        from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+
+      error_message: |
+        Layering Violation: Layer 1 cannot import Layer 2
+        Found: k1.input.intent_router imports k1.orchestration.planner
+
+        Suggested Fix:
+        Use event bus (Layer 5) to communicate with Layer 2:
+
+        from k1.infrastructure.event_bus import event_bus, Event, EventTopic
+        await event_bus.publish(Event(...))
+
+      fix: |
+        # File: k1/input/intent_router.py (Layer 1)
+        from k1.infrastructure.event_bus import event_bus, Event, EventTopic  # ✅ ALLOWED
+
+  layer2_orchestration:
+    layer_id: 2
+    layer_name: "Orchestration"
+    can_import:
+      - layer: "Layer 1"
+        modules:
+          - "k1.input.*"
+        rationale: "L2 subscribes to L1 events (via L5 event bus)"
+      - layer: "Layer 3"
+        modules:
+          - "k1.execution.*"
+          - "k1.agents.*"
+          - "k1.model_hub.*"
+          - "k1.tools.*"
+          - "k1.dialogue.*"
+        rationale: "L2 orchestrates L3 execution (agent hire, tool calls)"
+      - layer: "Layer 4"
+        modules:
+          - "k1.runtime.*"
+          - "k1.learning.*"
+        rationale: "L2 reads/writes session state (L4)"
+      - layer: "Layer 5"
+        modules:
+          - "k1.infrastructure.*"
+          - "k1.safety.*"
+          - "k1.observability.*"
+          - "k1.config.*"
+        rationale: "L2 uses infrastructure services (event bus, metrics, config)"
+
+    forbidden_imports: []
+
+    rationale: "L2 is orchestrator, needs visibility into all layers to coordinate workflows"
+
+  layer3_execution:
+    layer_id: 3
+    layer_name: "Execution"
+    can_import:
+      - layer: "Layer 4"
+        modules:
+          - "k1.runtime.*"
+          - "k1.learning.*"
+        rationale: "L3 reads/writes session state (L4 runtime core)"
+      - layer: "Layer 5"
+        modules:
+          - "k1.infrastructure.*"
+          - "k1.safety.*"
+          - "k1.observability.*"
+          - "k1.config.*"
+        rationale: "L3 uses infrastructure services (metrics, config, event bus)"
+
+    forbidden_imports:
+      - layer: "Layer 1"
+        modules:
+          - "k1.input.*"
+        rationale: "L3 is execution, doesn't process input (L1 → L2 → L3 flow)"
+      - layer: "Layer 2"
+        modules:
+          - "k1.orchestration.*"
+        rationale: "L3 is called BY L2, not vice versa (orchestrator calls executor)"
+
+    example_violation:
+      code: |
+        # File: k1/execution/tool_runner.py (Layer 3)
+        from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+
+      error_message: |
+        Layering Violation: Layer 3 cannot import Layer 2
+        Found: k1.execution.tool_runner imports k1.orchestration.planner
+
+        Suggested Fix:
+        Layer 2 (Planner) calls Layer 3 (ToolRunner), not vice versa.
+        ToolRunner should be passive (called by orchestration).
+
+      fix: |
+        # Layer 2 calls Layer 3 (correct pattern):
+
+        # File: k1/orchestration/planner.py (Layer 2)
+        from k1.execution.tool_runner import ToolRunner  # ✅ ALLOWED
+
+        # File: k1/execution/tool_runner.py (Layer 3)
+        # No import of planner needed (ToolRunner is passive)
+
+  layer4_runtime_core:
+    layer_id: 4
+    layer_name: "Runtime Core"
+    can_import:
+      - layer: "Layer 5"
+        modules:
+          - "k1.infrastructure.*"
+          - "k1.safety.*"
+          - "k1.observability.*"
+          - "k1.config.*"
+        rationale: "L4 uses infrastructure services (metrics, config)"
+
+    forbidden_imports:
+      - layer: "Layer 1"
+        modules:
+          - "k1.input.*"
+        rationale: "L4 is runtime core, doesn't process input"
+      - layer: "Layer 2"
+        modules:
+          - "k1.orchestration.*"
+        rationale: "L4 is called BY L2, not vice versa (orchestrator uses runtime)"
+      - layer: "Layer 3"
+        modules:
+          - "k1.execution.*"
+          - "k1.agents.*"
+          - "k1.model_hub.*"
+          - "k1.tools.*"
+          - "k1.dialogue.*"
+        rationale: "L4 is foundation for L3, must not depend on it (circular dependency)"
+
+    example_violation:
+      code: |
+        # File: k1/runtime/session_state.py (Layer 4)
+        from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+
+      error_message: |
+        Layering Violation: Layer 4 cannot import Layer 3
+        Found: k1.runtime.session_state imports k1.execution.agent_registry
+
+        Suggested Fix:
+        SessionState should store agent_ids (strings), not AgentRegistry objects.
+        AgentRegistry (Layer 3) can read SessionState, not vice versa.
+
+      fix: |
+        # File: k1/runtime/session_state.py (Layer 4)
+        class SessionState:
+            def __init__(self):
+                self.agents: list[str] = []  # ✅ Store agent_ids (strings), not AgentRegistry
+
+        # File: k1/execution/agent_registry.py (Layer 3)
+        from k1.runtime.session_state import SessionState  # ✅ ALLOWED
+
+  layer5_infrastructure:
+    layer_id: 5
+    layer_name: "Infrastructure"
+    can_import: []
+
+    forbidden_imports:
+      - layer: "Layer 1"
+        modules:
+          - "k1.input.*"
+      - layer: "Layer 2"
+        modules:
+          - "k1.orchestration.*"
+      - layer: "Layer 3"
+        modules:
+          - "k1.execution.*"
+          - "k1.agents.*"
+          - "k1.model_hub.*"
+          - "k1.tools.*"
+          - "k1.dialogue.*"
+      - layer: "Layer 4"
+        modules:
+          - "k1.runtime.*"
+          - "k1.learning.*"
+
+    allowed_imports:
+      - "Python standard library (asyncio, time, dataclasses, etc.)"
+      - "Third-party packages (prometheus_client, structlog, opentelemetry, etc.)"
+
+    rationale: |
+      Layer 5 is foundation (all layers depend on it).
+      If L5 imported from other layers → circular dependency.
+      L5 must be completely standalone.
+
+    example_violation:
+      code: |
+        # File: k1/infrastructure/scheduler.py (Layer 5)
+        from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+
+      error_message: |
+        Layering Violation: Layer 5 cannot import ANY other layer
+        Found: k1.infrastructure.scheduler imports k1.execution.agent_registry
+
+        Suggested Fix:
+        Scheduler should use agent_ids (strings), not AgentRegistry objects.
+        Scheduler is generic (schedules tasks by ID), not agent-specific.
+
+      fix: |
+        # File: k1/infrastructure/scheduler.py (Layer 5)
+        class Scheduler:
+            def schedule(self, task_id: str, agent_id: str):  # ✅ Use agent_id (string), not AgentRegistry
+
+import_linter_configuration:
+  overview: |
+    import-linter configuration file (.importlinter) enforces layering rules.
+
+    Validation Steps:
+    1. Developer runs: git commit
+    2. Pre-commit hook triggers: lint-imports
+    3. import-linter checks all imports against layering contracts
+    4. If violations → commit blocked, error shown
+    5. Developer fixes violations, commits again
+
+    CI/CD Enforcement:
+    - GitHub Actions runs import-linter on every PR
+    - PR checks fail if violations detected
+    - Merge blocked until violations fixed
+
+  config_file: ".importlinter"
+
+  contracts:
+    contract1_layer1:
+      name: "Layer 1 (Input) can only import Layer 5"
+      type: "layers"
+      config: |
+        [importlinter:contract:layer1-imports-layer5-only]
+        name = Layer 1 (Input) can only import Layer 5 (Infrastructure)
+        type = layers
+        layers =
+            k1.infrastructure
+            k1.input
+        containers =
+            k1
+
+    contract2_layer2:
+      name: "Layer 2 (Orchestration) can import Layers 1, 3, 4, 5"
+      type: "independence"
+      config: |
+        [importlinter:contract:layer2-imports-1-3-4-5]
+        name = Layer 2 (Orchestration) can import Layers 1, 3, 4, 5
+        type = independence
+        modules =
+            k1.orchestration
+        ignore_imports =
+            k1.orchestration -> k1.input
+            k1.orchestration -> k1.execution
+            k1.orchestration -> k1.runtime
+            k1.orchestration -> k1.infrastructure
+
+    contract3_layer3:
+      name: "Layer 3 (Execution) can only import Layers 4, 5"
+      type: "layers"
+      config: |
+        [importlinter:contract:layer3-imports-4-5-only]
+        name = Layer 3 (Execution) can only import Layers 4, 5
+        type = layers
+        layers =
+            k1.infrastructure
+            k1.runtime
+            k1.execution
+        containers =
+            k1
+
+    contract4_layer4:
+      name: "Layer 4 (Runtime Core) can only import Layer 5"
+      type: "layers"
+      config: |
+        [importlinter:contract:layer4-imports-5-only]
+        name = Layer 4 (Runtime Core) can only import Layer 5
+        type = layers
+        layers =
+            k1.infrastructure
+            k1.runtime
+        containers =
+            k1
+
+    contract5_layer5:
+      name: "Layer 5 (Infrastructure) cannot import other layers"
+      type: "forbidden"
+      config: |
+        [importlinter:contract:layer5-no-imports]
+        name = Layer 5 (Infrastructure) cannot import other layers
+        type = forbidden
+        source_modules =
+            k1.infrastructure
+        forbidden_modules =
+            k1.input
+            k1.orchestration
+            k1.execution
+            k1.runtime
+
+    contract6_no_circular:
+      name: "No circular dependencies anywhere in k1"
+      type: "independence"
+      config: |
+        [importlinter:contract:no-circular-dependencies]
+        name = No circular dependencies anywhere in k1
+        type = independence
+        modules =
+            k1
+
+escape_hatches:
+  overview: |
+    Sometimes type hints need imports that would violate layering.
+    Use TYPE_CHECKING for type-only imports (not runtime dependencies).
+
+  type_checking_pattern:
+    description: "Import types for hints without runtime import"
+    example: |
+      # File: k1/runtime/session_state.py (Layer 4)
+      from typing import TYPE_CHECKING
+
+      if TYPE_CHECKING:
+          # Type-only import (not runtime dependency)
+          from k1.execution.agent_registry import AgentRegistry  # ✅ ALLOWED (type-only)
+
+      class SessionState:
+          def __init__(self):
+              self.agents: list[str] = []  # Store agent_ids (strings)
+
+          def get_agent_registry(self) -> "AgentRegistry":  # Type hint only
+              """Return AgentRegistry (injected by Layer 3)"""
+              # NOTE: This method is called BY Layer 3, not vice versa
+              # SessionState doesn't instantiate AgentRegistry (no runtime import)
+              pass
+
+    import_linter_config: |
+      [importlinter:contract:layer4-imports-5-only]
+      name = Layer 4 (Runtime Core) can only import Layer 5
+      type = layers
+      layers =
+          k1.infrastructure
+          k1.runtime
+      containers =
+          k1
+      unmatched_ignore_imports_alerting = warn
+      ignore_imports =
+          # Allow TYPE_CHECKING imports for type hints
+          k1.runtime.* -> k1.execution.* (via TYPE_CHECKING)
+
+pre_commit_hook:
+  overview: |
+    Pre-commit hook runs import-linter before every commit.
+    Blocks commit if layering violations detected.
+
+  config_file: ".pre-commit-config.yaml"
+
+  hook_configuration: |
+    # K1 Intelligence Module - Pre-Commit Hooks
+    repos:
+      - repo: local
+        hooks:
+          # Import Linter: Enforce layering rules
+          - id: import-linter
+            name: import-linter (layering validation)
+            entry: lint-imports
+            language: python
+            pass_filenames: false
+            always_run: true
+            additional_dependencies: ['import-linter==2.0']
+            stages: [commit]
+
+  usage:
+    install: |
+      # Install pre-commit hooks
+      pip install pre-commit
+      pre-commit install
+
+    run: |
+      # Runs automatically on git commit
+      git commit -m "Add feature"
+
+      # If violations → commit blocked:
+      Layering Violations Detected
+      ============================================================
+      Contract: "Layer 1 (Input) can only import Layer 5"
+      Found 1 violation(s):
+      k1/input/intent_router.py:
+        Line 12: from k1.orchestration.planner import Planner
+      ============================================================
+
+      # Fix violation, commit again:
+      # (edit file, remove forbidden import)
+      git commit -m "Add feature (fixed layering violation)"
+      ✅ All checks passed
+
+ci_cd_enforcement:
+  overview: |
+    GitHub Actions runs import-linter on every PR.
+    Blocks merge if layering violations detected.
+
+  workflow_file: ".github/workflows/lint.yml"
+
+  workflow_configuration: |
+    name: Lint & Type Checking
+
+    on:
+      pull_request:
+        branches: [main, develop]
+      push:
+        branches: [main, develop]
+
+    jobs:
+      lint:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+
+          - name: Set up Python
+            uses: actions/setup-python@v5
+            with:
+              python-version: '3.11'
+
+          - name: Install dependencies
+            run: |
+              pip install -e .
+              pip install import-linter ruff black mypy
+
+          - name: Run import-linter (layering validation)
+            run: lint-imports
+            # CRITICAL: This step MUST pass for PR to merge
+
+  pr_workflow:
+    steps:
+      - "1. Developer opens PR"
+      - "2. CI runs import-linter"
+      - "3. If violations → PR checks fail, merge blocked"
+      - "4. Developer fixes violations, pushes again"
+      - "5. PR checks pass → merge allowed"
+
+developer_workflow:
+  overview: |
+    Developer workflow for fixing layering violations.
+
+  step1_identify_violation:
+    description: "Run lint-imports to identify violations"
+    command: "lint-imports"
+    output: |
+      Layering Violations Detected
+      ============================================================
+      Contract: "Layer 1 (Input) can only import Layer 5"
+      Type: layers
+      ------------------------------------------------------------
+
+      k1.input cannot import k1.orchestration (layer 2)
+
+      Found 1 violation(s):
+
+      k1/input/intent_router.py:
+        Line 12: from k1.orchestration.planner import Planner
+
+      Suggested Fix:
+        Layer 1 cannot directly import Layer 2.
+        Use event bus (Layer 5) to communicate:
+
+        # Instead of:
+        from k1.orchestration.planner import Planner
+
+        # Use:
+        from k1.infrastructure.event_bus import event_bus, Event, EventTopic
+        await event_bus.publish(Event(...))
+      ============================================================
+
+  step2_fix_violation:
+    description: "Fix violation (remove forbidden import)"
+    example: |
+      # Before (violation):
+      # File: k1/input/intent_router.py (Layer 1)
+      from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+
+      # After (fixed):
+      # File: k1/input/intent_router.py (Layer 1)
+      from k1.infrastructure.event_bus import event_bus, Event, EventTopic  # ✅ ALLOWED
+
+      async def classify_intent(self, user_input: str, session_id: str, trace_id: str):
+          intent = self._classify(user_input)
+
+          # Publish event to Layer 5 (instead of calling Layer 2 directly)
+          event = Event(
+              topic=EventTopic.INTENT_DETECTED,
+              session_id=session_id,
+              payload={"intent": intent},
+              cognitive_trace_id=trace_id,
+          )
+          await event_bus.publish(event)
+
+  step3_verify_fix:
+    description: "Run lint-imports again to verify fix"
+    command: "lint-imports"
+    output: |
+      ✅ All layering contracts passed
+      No violations found
+
+  step4_commit:
+    description: "Commit changes (pre-commit hook runs automatically)"
+    command: "git commit -m 'Fix layering violation: use event bus instead of direct import'"
+
+performance_impact:
+  validation_time:
+    description: "Time to validate all 52 modules"
+    benchmark:
+      - component: "Initial scan (parse all imports)"
+        time_ms: 3000
+      - component: "Contract validation (check layering rules)"
+        time_ms: 1000
+      - component: "Report generation (format output)"
+        time_ms: 500
+      - total_ms: 4500
+      - budget_ms: 5000
+      - status: "✅ PASS (within 5s budget)"
+
+  ci_impact:
+    description: "CI/CD pipeline duration increase"
+    without_import_linter_s: 45
+    with_import_linter_s: 50
+    overhead_s: 5
+    overhead_pct: 11
+    status: "✅ Acceptable (+11% overhead)"
+
+common_violations_and_fixes:
+  violation1_layer1_to_layer2:
+    description: "Layer 1 directly imports Layer 2"
+    example_violation: |
+      # File: k1/input/intent_router.py (Layer 1)
+      from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+
+    fix: |
+      # Use event bus (Layer 5) to communicate:
+      from k1.infrastructure.event_bus import event_bus, Event, EventTopic
+      await event_bus.publish(Event(...))
+
+  violation2_circular_dependency:
+    description: "Layer 3 ↔ Layer 4 circular dependency"
+    example_violation: |
+      # File: k1/execution/tool_runner.py (Layer 3)
+      from k1.runtime.session_state import SessionState  # ✅ ALLOWED
+
+      # File: k1/runtime/session_state.py (Layer 4)
+      from k1.execution.tool_runner import ToolRunner  # ❌ FORBIDDEN (circular)
+
+    fix: |
+      # Break circular dependency with dependency injection:
+
+      # File: k1/runtime/session_state.py (Layer 4)
+      # Remove: from k1.execution.tool_runner import ToolRunner
+      # Instead: Pass ToolRunner as parameter (injected by Layer 3)
+
+  violation3_layer5_imports_layer3:
+    description: "Layer 5 (foundation) imports Layer 3 (execution)"
+    example_violation: |
+      # File: k1/infrastructure/scheduler.py (Layer 5)
+      from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+
+    fix: |
+      # Use agent_ids (strings) instead of AgentRegistry objects:
+      class Scheduler:
+          def schedule(self, task_id: str, agent_id: str):  # ✅ Use agent_id (string)
+
+compliance:
+  adr_references:
+    - "ADR-0004: 52-Module 5-Layer Architecture (Section: Layer Dependencies)"
+    - "ADR-0004b: Module Dependency Management & Import Linting"
+
+  research_validation:
+    - citation: "Layered Architecture (Parnas 1972)"
+      compliance: "Information hiding, module boundaries based on design decisions"
+    - citation: "Dependency Inversion Principle (Martin 2000)"
+      compliance: "High-level modules (L1-L2) do not depend on low-level details (L3-L5)"
+
+  performance_requirements:
+    - "Validation time <5s (pre-commit hook budget)"
+    - "CI overhead <10% total build time (+5s acceptable)"
+
+  quality_requirements:
+    - "Zero layering violations in codebase"
+    - "Zero circular dependencies"
+    - "100% CI enforcement (every PR checked)"
+
+cross_references:
+  related_contracts:
+    - contract: "module_manifest.yml"
+      relationship: "defines_52_modules"
+    - contract: "ai_agent_classification.yml"
+      relationship: "classifies_4_ai_agents"
+    - contract: "pure_actor_classification.yml"
+      relationship: "classifies_48_pure_actors"
+
+notes:
+  - "Strict layering enforced by import-linter (automated validation)"
+  - "Pre-commit hook blocks commits with violations (fast feedback)"
+  - "CI/CD blocks PR merges with violations (100% enforcement)"
+  - "Clear error messages with suggested fixes (developer-friendly)"
+  - "Escape hatch: TYPE_CHECKING for type-only imports"
+  - "Validation time <5s (within budget, acceptable overhead)"

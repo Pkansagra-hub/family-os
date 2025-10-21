@@ -1,0 +1,591 @@
+---
+# Rule Engine Schema - Tier 1 Validation Rules for Plan Correctness
+# Purpose: Define deterministic constraint checking for expanded plans
+# Source ADR: ADR-0007c (Validation Stage 2-Tier Implementation)
+# Layer: Planning Layer (Layer 3 - Execution & Tools)
+
+contract:
+  name: "Rule Engine Schema"
+  version: "1.0.0"
+  purpose: "Deterministic Tier 1 validation rules for structural, dependency, capability, and security constraints"
+  owner: "Planning Layer"
+  layer: "Layer 3 - Execution & Tools"
+  adr_references:
+    - "ADR-0007c: Validation Stage 2-Tier Implementation"
+    - "ADR-0010: Capability Security (future)"
+
+  research_citations:
+    - "Constraint satisfaction (Mackworth, 1977)"
+    - "Static program analysis (Cousot & Cousot, 1977)"
+
+---
+
+# SECTION 1: OVERVIEW
+
+---
+
+# SECTION 2: STRUCTURAL VALIDATION
+
+structural_validation:
+  description: "Ensure plan has correct format and required fields"
+  complexity: "O(1) format check + O(n) field validation"
+
+  rules:
+    rule_structural_plan_format:
+      name: "Plan Format Check"
+      description: "Plan must be valid expanded plan structure"
+      check: |
+        plan is not null
+        plan.flow_id exists (UUID)
+        plan.steps is array
+        plan.steps.length > 0
+        plan.steps.length <= max_steps (10)
+        plan.created_at is timestamp
+      on_failure: "Plan missing required fields or invalid format"
+
+    rule_structural_step_fields:
+      name: "Step Field Presence"
+      description: "Each step must have required fields"
+      check: |
+        for each step in plan.steps:
+          step.step_id exists (numeric 1-indexed)
+          step.description exists (non-empty string)
+          step.tool_id exists (string matching tool registry)
+          step.parameters exists (dict, may be empty)
+          step.error_handlers exists (array)
+          step.depends_on exists (array of step_ids or empty)
+      on_failure: "Step missing required fields (step_id, tool_id, description, etc)"
+
+    rule_structural_step_order:
+      name: "Step Numbering Consistency"
+      description: "Step IDs must be sequential 1-indexed"
+      check: |
+        step_ids = [step.step_id for step in plan.steps]
+        step_ids == list(range(1, len(plan.steps) + 1))
+      on_failure: "Steps not sequentially numbered (e.g., 1,3,5 instead of 1,2,3)"
+
+---
+
+# SECTION 3: DEPENDENCY VALIDATION
+
+dependency_validation:
+  description: "Ensure plan has valid DAG structure without cycles"
+  complexity: "O(V+E) where V = steps, E = dependencies (Kahn algorithm)"
+
+  rules:
+    rule_dependency_dag_structure:
+      name: "Directed Acyclic Graph Check"
+      description: "Plan dependencies must form DAG (no cycles)"
+      algorithm: |
+        1. Build adjacency list from step.depends_on
+        2. Run Kahn topological sort
+        3. If sort produces len(steps) nodes: valid DAG
+        4. If sort produces < len(steps) nodes: cycle detected
+      on_failure: "Circular dependency detected (steps A→B→A)"
+
+    rule_dependency_exists:
+      name: "Dependency Existence Check"
+      description: "All referenced dependencies must exist"
+      check: |
+        all_step_ids = {step.step_id for step in plan.steps}
+        for each step in plan.steps:
+          for dep_id in step.depends_on:
+            assert dep_id in all_step_ids, f"Step {step.step_id} depends on non-existent step {dep_id}"
+      on_failure: "Step depends on non-existent step ID"
+
+    rule_dependency_no_forward:
+      name: "No Forward Dependencies"
+      description: "Step cannot depend on steps that come after it"
+      check: |
+        for each step in plan.steps:
+          for dep_id in step.depends_on:
+            assert dep_id < step.step_id, f"Step {step.step_id} has forward dep on {dep_id}"
+      on_failure: "Step depends on a later step (step 5 depends on step 7)"
+
+    rule_dependency_resolution:
+      name: "Dependency Resolution Possible"
+      description: "All parameter references resolvable from prior steps"
+      check: |
+        for each step in plan.steps:
+          for param_value in step.parameters.values():
+            if "{{step_N.result" in param_value:
+              step_N = extract_step_number(param_value)
+              assert step_N in step.depends_on, f"Parameter references step {step_N} not in depends_on"
+              assert step_N < step.step_id, "Forward reference"
+      on_failure: "Parameter references step that is not in depends_on or is later step"
+
+---
+
+# SECTION 4: CAPABILITY VALIDATION
+
+capability_validation:
+  description: "Ensure agent pool has capabilities required by all tools"
+  complexity: "O(n*m) where n = steps, m = capabilities per step"
+
+  rules:
+    rule_capability_tool_exists:
+      name: "Tool Exists in Registry"
+      description: "Step tool_id must exist in tool registry"
+      check: |
+        for each step in plan.steps:
+          assert step.tool_id in tool_registry, f"Tool {step.tool_id} not in registry"
+      on_failure: "Tool not found in registry (unknown tool)"
+
+    rule_capability_agent_has_tool:
+      name: "Agent Capabilities Match Tool Requirements"
+      description: "Agent pool must have capabilities for tool execution"
+      check: |
+        tool_registry = load_tool_registry()
+        available_capabilities = collect_from_agent_pool()
+
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          required_caps = tool_spec.capabilities_required
+          assert required_caps ⊆ available_capabilities,
+                 f"Agent pool lacks capabilities {required_caps - available_capabilities}"
+      on_failure: "Agent pool does not have required capability for tool (e.g., internet_access)"
+
+    rule_capability_band_match:
+      name: "Tool Band Matches Session Band"
+      description: "Tool band must match or be lower than session band"
+      check: |
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          band_order = {GREEN: 1, AMBER: 2, RED: 3}
+          assert band_order[session.band] >= band_order[tool_spec.band_required],
+                 f"Tool requires {tool_spec.band_required} but session is {session.band}"
+      on_failure: "Tool requires RED band privacy but session is GREEN"
+
+---
+
+# SECTION 5: BUDGET VALIDATION
+
+budget_validation:
+  description: "Ensure plan fits within time and cost budgets"
+  complexity: "O(n) linear sum"
+
+  rules:
+    rule_budget_latency_total:
+      name: "Total Latency Budget"
+      description: "Critical path must complete within deadline"
+      check: |
+        critical_path_latency = compute_critical_path(plan)
+        assert critical_path_latency <= session.deadline_ms,
+               f"Plan latency {critical_path_latency}ms exceeds deadline {session.deadline_ms}ms"
+      on_failure: "Plan would exceed time deadline (critical path 3000ms > deadline 2500ms)"
+
+    rule_budget_latency_per_step:
+      name: "Per-Step Latency Budget"
+      description: "No single step can exceed per-step budget"
+      check: |
+        max_step_latency_ms = 5000
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert tool_spec.latency_hint_ms.p95 <= max_step_latency_ms,
+                 f"Step {step.step_id} ({step.tool_id}) exceeds per-step max"
+      on_failure: "Step tool latency too high (tool: 10000ms, max: 5000ms)"
+
+    rule_budget_cost_total:
+      name: "Total Cost Budget"
+      description: "Total plan cost must fit within session budget"
+      check: |
+        total_cost = sum(tool_registry[step.tool_id].cost_hint.price_cents for step in plan.steps)
+        assert total_cost <= session.cost_budget_cents,
+               f"Total cost {total_cost} cents exceeds budget {session.cost_budget_cents} cents"
+      on_failure: "Plan cost $50 exceeds session budget $25"
+
+    rule_budget_cost_per_step:
+      name: "Per-Step Cost Budget"
+      description: "No single step can exceed per-step cost limit"
+      check: |
+        max_per_step_cost = 1000  # 10 dollars
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert tool_spec.cost_hint.price_cents <= max_per_step_cost
+      on_failure: "Single step cost $15 exceeds per-step max $10"
+
+---
+
+# SECTION 5b: SAFETY-CRITICAL VALIDATION (New per team recommendations)
+
+safety_critical_validation:
+  description: "Validate side_effects, idempotency, receipts, and capabilities"
+  complexity: "O(n) linear through steps"
+
+  rules:
+    rule_write_tools_have_idempotency:
+      name: "Write Tools Require Idempotency"
+      description: "Tools with side_effects=write_external must have idempotency.required=true"
+      check: |
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          if tool_spec.side_effects == "write_external":
+            assert tool_spec.idempotency.required == true,
+                   f"Write tool {step.tool_id} missing idempotency"
+            assert tool_spec.idempotency.semantics == "exactly_once",
+                   f"Write tool {step.tool_id} should use exactly_once semantics"
+      on_failure: "Write tool (charge_payment) has idempotency.required=false"
+      severity: "CRITICAL"
+
+    rule_write_tools_have_receipts:
+      name: "Write Tools Require Effect Receipts"
+      description: "Tools with side_effects=write_external must emit effect receipts"
+      check: |
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          if tool_spec.side_effects == "write_external":
+            assert tool_spec.receipt_policy.effect_receipt_required == true,
+                   f"Write tool {step.tool_id} missing effect_receipt_required"
+            assert tool_spec.receipt_policy.plan_receipt_required == true,
+                   f"Write tool {step.tool_id} missing plan_receipt_required"
+      on_failure: "Write tool (refund_payment) has effect_receipt_required=false"
+      severity: "CRITICAL"
+
+    rule_financial_tools_require_confirm:
+      name: "Financial Tools Require User Confirmation"
+      description: "Payment tools must require user confirmation"
+      check: |
+        financial_categories = ["payment"]
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          if tool_spec.category in financial_categories:
+            assert tool_spec.confirm_policy.require_user_confirm == true,
+                   f"Financial tool {step.tool_id} missing require_user_confirm"
+      on_failure: "Payment tool (charge_payment) has require_user_confirm=false"
+      severity: "HIGH"
+
+    rule_capability_tokens_present:
+      name: "Capability Tokens Required"
+      description: "All tools must declare capability_tokens_required (enforces signed leases)"
+      check: |
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert len(tool_spec.capability_tokens_required) > 0,
+                 f"Tool {step.tool_id} missing capability_tokens_required"
+          assert "TOOL_CALL" in tool_spec.capability_tokens_required,
+                 f"Tool {step.tool_id} missing TOOL_CALL capability token"
+      on_failure: "Tool (search_web) has empty capability_tokens_required"
+      severity: "HIGH"
+
+    rule_side_effects_declared:
+      name: "Side Effects Must Be Declared"
+      description: "All tools must explicitly declare side_effects"
+      check: |
+        valid_side_effects = ["none", "read", "write_external"]
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert tool_spec.side_effects in valid_side_effects,
+                 f"Tool {step.tool_id} side_effects not declared or invalid"
+      on_failure: "Tool (api_call) missing side_effects declaration"
+      severity: "HIGH"
+
+    rule_determinism_declared:
+      name: "Determinism Must Be Declared"
+      description: "All tools must explicitly declare determinism flag"
+      check: |
+        valid_determinism = ["deterministic", "nondeterministic"]
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert tool_spec.determinism in valid_determinism,
+                 f"Tool {step.tool_id} determinism not declared"
+      on_failure: "Tool (search_web) missing determinism declaration"
+      severity: "HIGH"
+
+    rule_red_band_tools_require_arbiter:
+      name: "RED Band Tools Flag for Arbiter Review"
+      description: "Plans using RED band tools must be reviewed by arbiter (Tier 2)"
+      check: |
+        # This rule passes in Tier 1 but flags for Tier 2
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          if tool_spec.band_required == "RED":
+            # Automatically route to Tier 2 arbiter
+            plan.tier2_required = true
+      on_failure: "Plan flagged for arbiter review (automatic, not a failure)"
+      severity: "INFO"
+
+    rule_multiple_amber_requires_arbiter:
+      name: "Multiple AMBER Tools Flag for Review"
+      description: "Plans with 3+ AMBER tools may need arbiter review"
+      check: |
+        amber_tools = [step for step in plan.steps
+                      if tool_registry[step.tool_id].band_required == "AMBER"]
+        if len(amber_tools) >= 3:
+          plan.tier2_recommended = true
+      on_failure: "Plan has 3+ AMBER tools (may trigger Tier 2)"
+      severity: "WARNING"
+
+---
+
+# SECTION 6: BAND & SECURITY VALIDATION
+
+band_validation:
+  description: "Ensure privacy band requirements met"
+  complexity: "O(n)"
+
+  rules:
+    rule_band_tool_match:
+      name: "Tool Band Compatibility"
+      description: "All tools must be compatible with session band"
+      check: |
+        band_order = {GREEN: 1, AMBER: 2, RED: 3}
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          assert band_order[session.band] >= band_order[tool_spec.band_required]
+      on_failure: "RED band tool in GREEN band session"
+
+    rule_band_step_escalation:
+      name: "Step Band Escalation"
+      description: "Step band cannot exceed session band"
+      check: |
+        for each step in plan.steps:
+          step_band = step.get_band()
+          assert band_order[session.band] >= band_order[step_band]
+      on_failure: "Step tagged RED but session only GREEN"
+
+    rule_pii_handling:
+      name: "PII Data Handling"
+      description: "Steps handling PII require appropriate band"
+      heuristic: |
+        If step description or parameters mention:
+        - email, phone, SSN, name, address → RED band tool required
+        - company, domain, city → AMBER band ok
+      check: |
+        for each step in plan.steps:
+          if contains_pii_keyword(step.description):
+            assert session.band >= AMBER
+      on_failure: "Plan handles PII but session band is GREEN"
+
+---
+
+# SECTION 7: SCHEMA VALIDATION
+
+schema_validation:
+  description: "Ensure step parameters match tool schemas"
+  complexity: "O(n*m) where m = parameters per step"
+
+  rules:
+    rule_schema_input_match:
+      name: "Input Schema Validation"
+      description: "Step parameters must match tool input schema"
+      check: |
+        for each step in plan.steps:
+          tool_spec = tool_registry[step.tool_id]
+          input_schema = tool_spec.schema_in
+          try:
+            validate(step.parameters, input_schema)
+          except ValidationError as e:
+            raise ValidationError(f"Step {step.step_id} parameters invalid: {e}")
+      on_failure: "Step parameters don't match tool schema (missing required field 'query')"
+
+    rule_schema_output_type:
+      name: "Output Type Compatibility"
+      description: "Tool output schema must match downstream parameter expectations"
+      check: |
+        for each step in plan.steps:
+          for downstream_step in get_dependent_steps(step):
+            for param_ref in extract_references(downstream_step.parameters):
+              if param_ref.references(step):
+                upstream_output_schema = tool_registry[step.tool_id].schema_out
+                downstream_input_schema = tool_registry[downstream_step.tool_id].schema_in
+                check_type_compatibility(upstream_output_schema, downstream_input_schema)
+      on_failure: "Step 2 expects 'results' array but Step 1 returns 'result' object"
+
+    rule_schema_parameter_types:
+      name: "Parameter Type Checking"
+      description: "Parameter values must match expected types"
+      check: |
+        for each step in plan.steps:
+          for param_name, param_value in step.parameters.items():
+            expected_type = tool_schema[param_name].type
+            actual_type = typeof(param_value)
+            if expected_type != actual_type:
+              try_coerce(param_value, expected_type)
+      on_failure: "Parameter 'max_results' is string '10' but integer expected"
+
+---
+
+# SECTION 8: ERROR HANDLER VALIDATION
+
+error_handler_validation:
+  description: "Ensure error handlers are well-formed"
+  complexity: "O(n*m) where m = error handlers per step"
+
+  rules:
+    rule_error_handler_targets:
+      name: "Error Handler Target Validation"
+      description: "Error handler targets must exist"
+      check: |
+        for each step in plan.steps:
+          for handler in step.error_handlers:
+            if handler.type == "retry":
+              assert handler.max_retries > 0
+            elif handler.type == "fallback":
+              assert handler.fallback_step_id in plan.steps
+            elif handler.type == "escalate":
+              assert handler.target in ["arbiter", "user", "supervisor"]
+      on_failure: "Error handler references non-existent fallback step"
+
+    rule_error_handler_bands:
+      name: "Error Handler Band Consistency"
+      description: "Error handler targets must match band requirements"
+      check: |
+        for each step in plan.steps:
+          for handler in step.error_handlers:
+            if handler.type == "fallback":
+              fallback_step = plan.steps[handler.fallback_step_id]
+              fallback_tool = tool_registry[fallback_step.tool_id]
+              assert band_order[session.band] >= band_order[fallback_tool.band_required]
+      on_failure: "Fallback error handler references RED band tool in GREEN session"
+
+---
+
+# SECTION 9: FINAL VALIDATION ALGORITHM
+
+final_validation:
+  description: "Complete Tier 1 validation workflow"
+
+  algorithm: |
+    Function validate_tier1(plan: ExpandedPlan) -> ValidationResult:
+      errors = []
+      warnings = []
+
+      # Phase 1: Structural (stop if fails)
+      errors += validate_structural(plan)
+      if errors:
+        return ValidationResult(status="REJECTED", errors, "Structural validation failed")
+
+      # Phase 2: Dependency (stop if fails)
+      errors += validate_dependency(plan)
+      if errors:
+        return ValidationResult(status="REJECTED", errors, "Dependency validation failed")
+
+      # Phase 3: Capability (stop if fails)
+      errors += validate_capability(plan)
+      if errors:
+        return ValidationResult(status="REJECTED", errors, "Capability validation failed")
+
+      # Phase 4: Budget (warning or reject)
+      budget_errors = validate_budget(plan)
+      if len(budget_errors) > 0:
+        return ValidationResult(status="REJECTED", budget_errors, "Budget exceeded")
+
+      # Phase 5: Band & Security
+      band_errors = validate_band(plan)
+      if len(band_errors) > 0:
+        return ValidationResult(status="REJECTED", band_errors, "Band requirement violated")
+
+      # Phase 6: Schema
+      schema_errors = validate_schema(plan)
+      if len(schema_errors) > 0:
+        return ValidationResult(status="REJECTED", schema_errors, "Schema validation failed")
+
+      # Phase 7: Error Handlers
+      handler_errors = validate_error_handlers(plan)
+      if len(handler_errors) > 0:
+        return ValidationResult(status="REJECTED", handler_errors, "Error handler validation failed")
+
+      # All checks passed
+      return ValidationResult(status="PASSED", errors=[], warnings, latency_ms)
+
+  validation_result_type: |
+    class ValidationResult:
+      status: "PASSED" | "PASSED_WITH_WARNINGS" | "REJECTED"
+      errors: [ValidationError]
+      warnings: [ValidationWarning]
+      latency_ms: float
+      rule_checks_passed: int
+      rule_checks_failed: int
+      rule_checks_warnings: int
+
+---
+
+# SECTION 10: ERROR REPORTING
+
+error_reporting:
+  description: "Structured error messages for debugging"
+
+  error_structure: |
+    class ValidationError:
+      rule_name: string              # e.g., "rule_dependency_dag_structure"
+      severity: "ERROR" | "WARNING"
+      step_id: int | None            # Affected step (if applicable)
+      message: string                # Human-readable error
+      suggestion: string             # How to fix
+      technical_details: string      # For debugging
+
+  example_errors:
+    circular_dependency: |
+      rule_name: "rule_dependency_dag_structure"
+      severity: "ERROR"
+      step_id: 5
+      message: "Circular dependency detected"
+      suggestion: "Remove or modify one of the dependencies: Step 3→5, Step 5→3"
+      technical_details: "Topological sort failed with cycle: 3→5→3"
+
+    missing_capability: |
+      rule_name: "rule_capability_agent_has_tool"
+      severity: "ERROR"
+      step_id: 2
+      message: "Agent pool lacks required capability: internet_access"
+      suggestion: "Add agent with internet_access capability or use different tool"
+      technical_details: "Tool 'search_web' requires [internet_access, search_indexing]"
+
+    budget_exceeded: |
+      rule_name: "rule_budget_latency_total"
+      severity: "ERROR"
+      step_id: None
+      message: "Plan latency exceeds deadline"
+      suggestion: "Reduce step count, remove non-critical steps, or increase deadline"
+      technical_details: "Critical path: 3500ms (Step 1→2→4), deadline: 2500ms"
+
+---
+
+# SECTION 11: PERFORMANCE & METRICS
+
+performance:
+  target_latency_ms: 1.0
+  measured_latencies:
+    structural_check: "< 0.1ms (simple format check)"
+    dependency_check: "< 0.3ms (Kahn algorithm on 3-10 steps)"
+    capability_check: "< 0.2ms (set intersection)"
+    budget_check: "< 0.1ms (arithmetic sum)"
+    band_check: "< 0.1ms (enum comparison)"
+    schema_check: "< 0.2ms (JSON Schema validation)"
+    total_p95: "~1.0ms"
+
+metrics:
+  - "validation_tier1_latency_ms (histogram, target less than 1ms)"
+  - "validation_tier1_passed_total (counter by plan type)"
+  - "validation_tier1_rejected_total (counter by rule type)"
+  - "validation_tier1_errors_total (counter by error type)"
+  - "validation_pass_rate (gauge, target greater than 70%)"
+
+---
+
+# SECTION 12: DEPENDENCIES
+
+dependencies:
+  uses:
+    - "tool_registry_schema.yml (tool capabilities, band, latency, cost)"
+    - "Session state (deadline, budget, band)"
+
+  used_by:
+    - "validation_stage.yml (tier 1 checks before tier 2)"
+    - "arbiter_contract.yml (arbiter sees validation results)"
+
+---
+
+# SECTION 13: FUTURE ENHANCEMENTS
+
+future:
+  v2:
+    - "Machine learning for predicting validation failures"
+    - "Suggestion engine for fixing invalid plans"
+    - "Performance profiling for individual rules"
+    - "Rule prioritization (fail fast)"
+
+  v3:
+    - "Pluggable custom rules"
+    - "Rule composition and dependencies"
+    - "Probabilistic constraint satisfaction"

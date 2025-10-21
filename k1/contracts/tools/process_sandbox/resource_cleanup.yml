@@ -1,0 +1,208 @@
+# Resource Cleanup Contract
+# Purpose: Define resource cleanup sequence for process termination
+# Source ADR: 0034b-mcp-process-lifecycle.md (lines 1701-1750)
+# Version: 1.0
+# Status: ACTIVE
+
+component_name: "ResourceCleanup"
+component_type: "Process Lifecycle"
+version: "1.0"
+description: "Manages resource cleanup (pipes, file descriptors, zombie prevention) when process reaches TERMINATED state"
+
+references:
+  adr: ["0034b"]
+  contracts: ["lifecycle_fsm_5_states", "graceful_shutdown", "crash_detection"]
+
+cleanup_trigger:
+  condition: "Process transitions to TERMINATED or CRASHED state"
+  timing: "Must occur within 1 second of state transition"
+  responsibility: "ProcessMonitor or ToolExecutor"
+
+pipe_management:
+  stdin_pipe:
+    created_at: "spawn()"
+    state_during_running: "Open, used for JSON-RPC requests"
+    cleanup_action: "Close stdin pipe (process cannot read)"
+    timing: "After SIGTERM/SIGKILL"
+    error_handling: "Ignore OSError if already closed"
+
+  stdout_pipe:
+    created_at: "spawn()"
+    state_during_running: "Open, used for JSON-RPC responses"
+    cleanup_action: "Close stdout pipe (EOF received)"
+    timing: "After process exits"
+    drain_buffer: "Read remaining bytes before close (optional)"
+    error_handling: "Ignore OSError if already closed"
+
+  stderr_pipe:
+    created_at: "spawn()"
+    state_during_running: "Open, captured for logging"
+    cleanup_action: "Close stderr pipe (capture complete)"
+    timing: "After process exits"
+    final_log: "Log any remaining stderr output"
+    error_handling: "Ignore OSError if already closed"
+
+cleanup_sequence:
+  step1_close_stdin:
+    action: "process.stdin.close()"
+    verify: "process.stdin == None or closed"
+    error: "Ignore OSError (already closed)"
+
+  step2_close_stdout:
+    action: "process.stdout.close()"
+    verify: "process.stdout == None or closed"
+    error: "Ignore OSError (already closed)"
+
+  step3_close_stderr:
+    action: "process.stderr.close()"
+    verify: "process.stderr == None or closed"
+    error: "Ignore OSError (already closed)"
+
+  step4_wait_for_exit:
+    action: "await process.wait()" # if not already done
+    purpose: "Reap process resources, prevent zombies"
+    verify: "process.returncode is not None"
+    error: "Log if wait() fails"
+
+  step5_clear_process_info:
+    action: "Clear ProcessInfo buffers, release memory"
+    verify: "ProcessInfo memory released"
+
+zombie_prevention:
+  what_is_zombie: "Process in TERMINATED state with parent not calling wait()"
+  problem: "Zombies consume PID slots and process table entries"
+
+  prevention_technique_1:
+    name: "Call process.wait()"
+    when: "After process exits"
+    code: "await process.wait()"
+    result: "Reaps child, releases PID"
+
+  prevention_technique_2:
+    name: "Signal handlers"
+    when: "On SIGCHLD"
+    platform: "Unix/Linux"
+    code: "signal.signal(signal.SIGCHLD, signal.SIG_DFL)"
+
+  verification:
+    tool: "ps aux | grep <pid>"
+    zombie_indicator: "<defunct>"
+    action: "If zombie found, report as bug"
+
+file_descriptor_cleanup:
+  fds_created_by_subprocess:
+    - name: "stdin FD"
+      fileno: "3"
+      cleanup: "close(3)"
+
+    - name: "stdout FD"
+      fileno: "4"
+      cleanup: "close(4)"
+
+    - name: "stderr FD"
+      fileno: "5"
+      cleanup: "close(5)"
+
+  fd_leak_prevention:
+    - "Use context managers when available"
+    - "Always call close() in finally blocks"
+    - "Verify FDs are actually closed after cleanup"
+
+buffer_cleanup:
+  stdout_buffer:
+    type: "BytesIO or similar"
+    cleanup: "Clear buffer to free memory"
+
+  stderr_buffer:
+    type: "BytesIO or similar"
+    cleanup: "Log final contents, then clear buffer"
+
+  pending_requests:
+    type: "Dict[request_id, Future]"
+    cleanup: "Cancel any pending futures, clear dict"
+
+memory_release:
+  processinfo_object:
+    cleanup: "Delete reference (ProcessInfo = None)"
+    result: "Python GC will free memory"
+
+  asyncio_tasks:
+    cleanup: "Cancel any background monitor tasks"
+    verification: "task.done() == True"
+
+  metrics_buffers:
+    cleanup: "Keep for analytics (can be expensive to track)"
+    alternative: "Optional: send to time-series DB, then clear"
+
+performance_slas:
+  cleanup_latency_p95_ms: 100
+  description: "Complete cleanup within 100ms of state transition"
+
+error_handling:
+  pipe_close_fails:
+    condition: "OSError on close()"
+    action: "Log error, continue to next pipe"
+    result: "Partial cleanup is acceptable"
+
+  wait_fails:
+    condition: "OSError on process.wait()"
+    action: "Log error, assume process exited"
+    severity: "MEDIUM (zombie possible)"
+
+  file_descriptor_leak:
+    condition: "FD still open after cleanup"
+    action: "Log warning, may be resource leak"
+    severity: "LOW (OS will eventually close)"
+
+state_specific_cleanup:
+  TERMINATED_state:
+    context: "Process exited cleanly"
+    cleanup_scope: "Full cleanup of all resources"
+    urgency: "Normal"
+
+  CRASHED_state:
+    context: "Process crashed or was killed"
+    cleanup_scope: "Full cleanup, may have dangling resources"
+    urgency: "High (may have broken pipes)"
+
+  DRAINING_state:
+    context: "Process shutting down (pre-TERMINATED)"
+    cleanup_scope: "None yet (process still running)"
+    urgency: "N/A"
+
+idempotency:
+  requirement: "Cleanup can be called multiple times safely"
+  implementation: "Check if already closed before closing"
+  example: |
+    if process.stdin and not process.stdin.closed:
+      process.stdin.close()
+
+logging:
+  log_on_cleanup_with:
+    - tool_id
+    - process_id
+    - exit_code
+    - resources_released
+    - cleanup_duration_ms
+    - trace_id
+
+implementation_notes:
+  - "Use try/finally to ensure cleanup happens"
+  - "Ignore OSError on close() (already closed is acceptable)"
+  - "Always call process.wait() to reap child process"
+  - "Log any cleanup errors for debugging"
+  - "Cleanup should be fast (<100ms)"
+  - "Implement as separate cleanup() method in ProcessManager"
+
+testing_requirements:
+  - test_pipe_closure: "Verify all pipes closed after cleanup"
+  - test_zombie_prevention: "Verify no zombies after process exits"
+  - test_fd_cleanup: "Verify file descriptors released"
+  - test_idempotent_cleanup: "Call cleanup 2x, no errors"
+  - test_cleanup_latency: "Verify cleanup completes <100ms"
+
+compliance:
+  adr_0034b_sections: ["Resource cleanup", "Zombie prevention", "File descriptor management"]
+
+changelog:
+  "1.0": "Initial contract - Resource cleanup (pipe closure, FD management, zombie prevention)"

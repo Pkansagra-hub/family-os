@@ -1,0 +1,182 @@
+# Agent Hire Protocol - Response Contracts
+# File: contracts/protocols/agent_hire/03_hire_response_contract.yml
+# Purpose: HireApproval, HireRejection, and HireResponse message contracts
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-AGENT-HIRE-RESPONSE-003"
+  name: "HireResponse Message Contract"
+  version: "1.0"
+
+# Response decision logic
+decision_logic:
+
+  hiring_score_formula: |
+    Score = 0.4 × confidence + 0.3 × latency_factor + 0.3 × cost_factor
+
+    Where:
+    - confidence: Agent's self-assessed capability (0.0-1.0)
+    - latency_factor: Inverse of estimated latency (0.0-1.0)
+      latency_factor = max(0, (3000 - latency_ms) / 3000)
+    - cost_factor: Inverse of cost estimate (0.0-1.0)
+      cost_factor = max(0, (budget_usd - cost_estimate) / budget_usd)
+
+    Threshold: score >= 0.65 (configurable)
+
+# HireApproval message (success response)
+hire_approval:
+  name: "HireApproval"
+  version: "1.0"
+  direction: "orchestrator → agent"
+
+  sender_role: "orchestrator"
+  receiver_roles: ["agent"]
+
+  flatbuffers:
+    schema_definition: |
+      namespace K1.Protocols.Hire;
+
+      table HireApproval {
+        task_id: string;           # Task reference
+        agent_id: string;          # Winning agent
+        score: float;              # Final hiring score
+        lease_id: string;          # Capability lease ID
+        lease_secret: [ubyte];     # HMAC-SHA256 secret (32 bytes)
+        lease_expires_at: uint64;  # Lease expiry timestamp (Unix seconds)
+        trace_id: string;          # OpenTelemetry trace ID
+        timestamp_ns: uint64;      # Nanosecond timestamp
+      }
+
+      root_type HireApproval;
+
+    fields:
+      task_id: "string (UUID), required"
+      agent_id: "string, required, must match winning agent"
+      score: "float 0.0-1.0, required"
+      lease_id: "string (UUID), required"
+      lease_secret: "bytes (32), required, HMAC-SHA256 secret"
+      lease_expires_at: "uint64, required, Unix seconds + 3600"
+      trace_id: "string (UUID), required"
+      timestamp_ns: "uint64, required"
+
+  validation:
+    - "score >= 0.65 (hiring threshold)"
+    - "agent_id must match winning proposal"
+    - "lease_id must be UUID"
+    - "lease_secret exactly 32 bytes"
+    - "lease_expires_at >= current_time + 3600"
+
+  observability:
+    metrics:
+      - name: "hire_approval_sent_total"
+        type: "counter"
+        labels: ["agent_type", "score_range"]
+
+  performance:
+    latency_budget_ms: 50
+
+# HireRejection message (failure response)
+hire_rejection:
+  name: "HireRejection"
+  version: "1.0"
+  direction: "orchestrator → agent"
+
+  sender_role: "orchestrator"
+  receiver_roles: ["agent"]
+
+  flatbuffers:
+    schema_definition: |
+      namespace K1.Protocols.Hire;
+
+      table HireRejection {
+        task_id: string;           # Task reference
+        agent_id: string;          # Rejected agent
+        reason: string;            # Rejection reason
+        score: float;              # Agent's final score
+        threshold: float;          # Hiring threshold
+        trace_id: string;          # OpenTelemetry trace ID
+        timestamp_ns: uint64;      # Nanosecond timestamp
+      }
+
+      root_type HireRejection;
+
+    fields:
+      task_id: "string (UUID), required"
+      agent_id: "string, required"
+      reason: "string enum [SCORE_TOO_LOW, TIMEOUT, NO_PROPOSAL, SELECTION_TIMEOUT]"
+      score: "float, optional (null if timeout)"
+      threshold: "float 0.0-1.0, required"
+      trace_id: "string (UUID), required"
+      timestamp_ns: "uint64, required"
+
+  validation:
+    - "reason must be in valid_values"
+    - "task_id required"
+    - "agent_id required"
+
+  observability:
+    metrics:
+      - name: "hire_rejection_total"
+        type: "counter"
+        labels: ["reason"]
+
+# Hire completion summary
+hire_summary:
+
+  success_case:
+    state_transition: "selection → hired"
+    message: "HireApproval"
+    action: "Provision agent lease, move to WARMING state"
+    user_experience: "Continue with task assignment"
+
+  failure_cases:
+    - reason: "SCORE_TOO_LOW"
+      state_transition: "selection → rejected"
+      message: "HireRejection"
+      action: "Notify user, suggest retry or alternative"
+      user_experience: "Error message with recovery options"
+
+    - reason: "TIMEOUT"
+      state_transition: "negotiation/selection → timeout"
+      message: "Timeout"
+      action: "Escalate or retry hire"
+      user_experience: "Error message, auto-retry suggested"
+
+    - reason: "NO_PROPOSAL"
+      state_transition: "negotiation → timeout"
+      message: "Timeout"
+      action: "No agents responded (system issue)"
+      user_experience: "System error, contact support"
+
+# Error handling
+error_handling:
+
+  errors:
+    - code: "INVALID_SCORE"
+      description: "Score outside 0.0-1.0 range"
+      recovery: "BLOCK message, log as protocol violation"
+
+    - code: "INVALID_LEASE_SECRET"
+      description: "Lease secret not exactly 32 bytes"
+      recovery: "BLOCK message, log security violation"
+
+    - code: "LEASE_ALREADY_ISSUED"
+      description: "Lease ID already exists"
+      recovery: "Reuse existing lease, skip provisioning"
+
+    - code: "AGENT_NOT_FOUND"
+      description: "Agent ID doesn't exist"
+      recovery: "BLOCK message, log as consistency error"
+
+# Performance targets
+performance:
+
+  scoring_latency_ms: 50       # Deterministic scoring <50ms P95
+  selection_decision_ms: 20    # Decision logic <20ms P95
+  lease_provisioning_ms: 30    # Lease generation <30ms P95
+  total_response_ms: 100       # Total response generation <100ms P95
+
+# ==============================================================================
+# END OF FILE: 03_hire_response_contract.yml
+# ==============================================================================

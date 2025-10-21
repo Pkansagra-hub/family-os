@@ -1,0 +1,2 @@
+---
+# Telemetry role currently relies on the kernel role for service management.

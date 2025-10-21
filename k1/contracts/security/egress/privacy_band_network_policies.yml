@@ -1,0 +1,349 @@
+# Privacy Band Network Policies Contract - Issue 2.5.5, Part 2
+# Purpose: Define network access policies per privacy band (GREEN/AMBER/RED/BLACK)
+# Source ADR: ADR-0032, ADR-0032a
+# Last Updated: 2025-10-15
+
+name: "Privacy Band Network Policies"
+purpose: "Network access policies enforced at OS level via iptables per privacy band"
+scope: ["Privacy Bands", "Network Egress", "Access Control"]
+version: "1.0"
+
+# ============================================================================
+# PRIVACY BAND NETWORK POLICIES
+# ============================================================================
+
+privacy_bands:
+
+  GREEN:
+    name: "GREEN Band - Public Internet Access"
+    description: "Compute on public internet data (no private/PII data)"
+    security_level: "HIGH"
+    network_access: true
+
+    allowed_traffic:
+      protocol: ["tcp", "udp"]
+      ports: [80, 443]  # HTTP/HTTPS only
+      destinations: "Internet (0.0.0.0/0 except private ranges)"
+
+    domain_policies:
+      whitelist_strategy: "Explicit domain whitelist per tool"
+      wildcard_support: "*.domain.com allowed"
+      examples:
+        - "*.googleapis.com (Google APIs: Maps, Calendar, etc.)"
+        - "api.openai.com (OpenAI API)"
+        - "api.anthropic.com (Anthropic API)"
+        - "*.weather.com (Weather APIs)"
+
+    blocked_ranges:
+      ipv4:
+        - "192.168.0.0/16 (private)"
+        - "10.0.0.0/8 (private)"
+        - "172.16.0.0/12 (private)"
+        - "127.0.0.0/8 (loopback)"
+        - "169.254.0.0/16 (link-local)"
+      ipv6:
+        - "::1/128 (loopback)"
+        - "fe80::/10 (link-local)"
+        - "fc00::/7 (private)"
+
+    blocked_ports:
+      - 22  # SSH (prevent lateral movement)
+      - 23  # Telnet
+      - 3389  # RDP
+      - 5900  # VNC
+      - 5432  # PostgreSQL (database)
+      - 3306  # MySQL (database)
+      - 6379  # Redis
+      - 27017  # MongoDB
+
+    performance_targets:
+      setup_latency: "<5ms"
+      rule_count: "~50-100 per tool"
+      dns_cache_ttl: "300s"
+
+    audit_logging:
+      violations: "All attempted blocks logged (dst_ip, port, timestamp)"
+      storage: "K0 ToolReceipt (FlatBuffers)"
+      retention: "7 years (compliance)"
+
+  AMBER:
+    name: "AMBER Band - Limited Network + PII Masking"
+    description: "Access to specific external APIs with PII masking enforcement"
+    security_level: "MEDIUM"
+    network_access: true
+
+    allowed_traffic:
+      protocol: ["tcp", "udp"]
+      ports: [80, 443]
+      destinations: "Whitelisted domains only (stricter than GREEN)"
+
+    domain_policies:
+      whitelist_strategy: "Very limited domain list (3-10 domains per tool)"
+      wildcard_support: "Limited wildcards (only for same organization)"
+      example_tools:
+        weather_service:
+          domains: ["api.weather.com", "api.openweathermap.org"]
+          description: "Weather API only, no other internet access"
+
+        email_service:
+          domains: ["smtp.gmail.com", "imap.gmail.com"]
+          description: "Email server, PII masking applied to email body"
+
+        translation_service:
+          domains: ["translation.googleapis.com"]
+          description: "Translation API with PII masking on input text"
+
+    pii_masking:
+      enabled: true
+      before_egress:
+        - "Redact SSN (9 digits → ****-**-####)"
+        - "Redact credit cards (16 digits → ****-****-****-1234)"
+        - "Redact email addresses (mask local part)"
+        - "Redact phone numbers (mask last 4 digits)"
+      enforcement: "PII Redaction Service (ADR-0035) before network send"
+      verification: "Scan outbound packets for PII patterns"
+
+    blocked_ranges:
+      ipv4:
+        - "192.168.0.0/16 (private)"
+        - "10.0.0.0/8 (private)"
+        - "172.16.0.0/12 (private)"
+        - "127.0.0.0/8 (loopback)"
+        - "169.254.0.0/16 (link-local)"
+      ipv6:
+        - "::1/128"
+        - "fe80::/10"
+        - "fc00::/7"
+
+    blocked_ports:
+      - 22, 23, 3389  # Management protocols
+      - 5432, 3306, 6379, 27017  # Databases
+      - 25, 587, 465  # SMTP (additional spam prevention vs GREEN)
+      - 3128, 8080  # Proxy ports
+
+    rules_per_tool: "10-20 iptables rules"
+    pii_masking_overhead: "2-5ms per request"
+
+    audit_logging:
+      pii_violations: "Log if PII detected in outbound traffic"
+      masking_verification: "Confirm PII redaction applied"
+      storage: "K0 ToolReceipt"
+
+  RED:
+    name: "RED Band - Local-Only (No Remote Network)"
+    description: "Highly sensitive operations, no remote network access allowed"
+    security_level: "HIGHEST"
+    network_access: false  # No remote network
+
+    allowed_traffic:
+      protocol: ["tcp", "udp"]
+      ports: [8080, 9000]  # K1 local service ports only
+      destinations: "127.0.0.1 only (localhost)"
+
+    local_services:
+      k1_kernel:
+        address: "127.0.0.1:8080"
+        purpose: "K1 internal event bus"
+        operations: "Query SessionState, emit events"
+
+      k0_bridge:
+        address: "127.0.0.1:9000"
+        purpose: "K0 memory access (P01-P20)"
+        operations: "Read/write memory, audit queries"
+
+    blocked_everything:
+      - "0.0.0.0/0 (all internet blocked)"
+      - "::/0 (all IPv6 blocked)"
+      - "All external domains blocked"
+      - "All remote IPs blocked"
+
+    enforcement:
+      strategy: "Exception-based (ACCEPT 127.0.0.1:8080, then DROP all)"
+      iptables_rules: |
+        -A K1_TOOL_RED_RULES -d 127.0.0.1 -p tcp --dport 8080 -j ACCEPT
+        -A K1_TOOL_RED_RULES -d 127.0.0.1 -p tcp --dport 9000 -j ACCEPT
+        -A K1_TOOL_RED_RULES -j DROP
+
+    verification: "Zero remote network connections possible"
+    monitoring: "Alert on ANY non-127.0.0.1 connection attempt"
+
+    audit_logging:
+      all_attempts: "Log every network connection attempt"
+      even_allowed: "Log localhost connection for traceability"
+      storage: "K0 ToolReceipt"
+      retention: "7 years"
+
+  BLACK:
+    name: "BLACK Band - No Network Access"
+    description: "Experimental/untrusted code, complete isolation"
+    security_level: "MAXIMUM"
+    network_access: false
+
+    allowed_traffic: []  # Nothing allowed
+
+    enforcement:
+      strategy: "Block all network (no exceptions)"
+      iptables_rules: |
+        -A K1_TOOL_BLACK_RULES -j DROP
+
+    use_cases:
+      - "Untrusted third-party plugins"
+      - "Experimental algorithms"
+      - "Security testing/fuzzing"
+
+    verification: "Zero network connectivity possible"
+
+# ============================================================================
+# BAND ASSIGNMENT POLICY
+# ============================================================================
+
+band_assignment:
+
+  criteria_for_assignment:
+
+    green_band:
+      - "Public API (no authentication needed, public data)"
+      - "Examples: weather API, currency conversion, public Wikipedia search"
+      - "No PII risk (only public information accessed)"
+      - "Trusted third-party (production service, long-term support)"
+
+    amber_band:
+      - "Authenticated API (requires API key/auth token)"
+      - "Example: Slack API, email API, Google Calendar"
+      - "May handle user data (PII masking applied)"
+      - "Established service (Google, Microsoft, AWS)"
+
+    red_band:
+      - "Highly sensitive operations (biometric analysis, financial analysis)"
+      - "Examples: Tax return parsing, medical record analysis"
+      - "No remote network needed (all data local)"
+      - "High PII risk (SSNs, medical info, account numbers)"
+
+    black_band:
+      - "Untrusted code (third-party, unverified)"
+      - "Experimental features (research, alpha)"
+      - "Elevated risk (potential malware, no security review)"
+
+  assignment_authority:
+    - "Tool developer (initial suggestion)"
+    - "Security team review (verification)"
+    - "K1 config YAML (final authority)"
+
+  reassignment:
+    - "Downgrade allowed (RED → AMBER if proved safe)"
+    - "Upgrade required (AMBER → RED if vulnerability discovered)"
+    - "Audit log for all reassignments"
+
+# ============================================================================
+# IMPLEMENTATION: BAND DETECTION
+# ============================================================================
+
+band_detection:
+
+  method_1_yaml_config:
+    description: "Tool developer specifies band in config"
+    format: |
+      tools:
+        weather_service:
+          name: "weather_service"
+          band: "GREEN"  # or AMBER, RED, BLACK
+          domains: ["api.weather.com"]
+    authority: "Primary (if specified, use this)"
+
+  method_2_default_band:
+    description: "If band not specified, default to safest band"
+    logic: |
+      if network_access_required and authenticated:
+        default_band = "AMBER"
+      elif network_access_required and public:
+        default_band = "GREEN"
+      elif no_network_required:
+        default_band = "RED"
+      else:
+        default_band = "BLACK"
+
+  method_3_capability_inference:
+    description: "Infer from declared capabilities"
+    examples:
+      - "Capability: EXECUTE_EXTERNAL_API → band >= AMBER"
+      - "Capability: PII_PROCESSING → band >= AMBER (PII masking)"
+      - "Capability: NETWORK_ACCESS → band >= GREEN"
+
+# ============================================================================
+# METRICS & MONITORING
+# ============================================================================
+
+monitoring:
+
+  metrics_per_band:
+
+    network_traffic_volume:
+      type: "Gauge"
+      labels: ["band", "tool_id"]
+      unit: "bytes/sec"
+      targets:
+        GREEN: "track for abuse (expect <1MB/s)"
+        AMBER: "track for PII leaks"
+        RED: "expect 0 (alert on any traffic)"
+        BLACK: "expect 0 (alert on any traffic)"
+
+    blocked_connection_attempts:
+      type: "Counter"
+      labels: ["band", "violation_type"]
+      values:
+        violation_type: ["private_ip_attempt", "unauthorized_domain", "blocked_port"]
+      purpose: "Detect attack attempts"
+
+    band_violations:
+      type: "Counter"
+      labels: ["band"]
+      description: "Total policy violations"
+      alerts:
+        RED_band_violation: "CRITICAL - Alert immediately"
+        GREEN_band_violation: "WARNING - Investigate"
+
+# ============================================================================
+# COMPLIANCE & AUDIT
+# ============================================================================
+
+compliance:
+
+  gdpr:
+    requirement: "Control PII exposure"
+    enforcement: "RED band (local-only) for PII processing, AMBER band (PII masking)"
+    audit: "K0 ToolReceipt logs all network access"
+
+  soc2:
+    requirement: "Access controls and monitoring"
+    enforcement: "Band-based policies enforced at OS level"
+    audit: "Violations logged for security incidents"
+
+  audit_trail:
+    retention: "7 years (SOC2/ISO27001)"
+    immutability: "Append-only logs"
+    traceability: "Session ID → band → network access"
+
+---
+
+summary:
+  capabilities:
+    - "GREEN: Internet access with domain whitelist"
+    - "AMBER: Limited domains with PII masking enforcement"
+    - "RED: Local-only (127.0.0.1), no remote network"
+    - "BLACK: No network access"
+    - "Default-deny policy"
+    - "Audit logging to K0 ToolReceipt"
+    - "7-year compliance retention"
+
+related_contracts:
+  iptables_controller:
+    file: "iptables_egress_controller.yml"
+    purpose: "Enforcement mechanism"
+
+  domain_whitelist:
+    file: "domain_whitelist_manager.yml"
+    purpose: "Per-tool domain lists"
+
+  private_ip_blocker:
+    file: "private_ip_blocker.yml"
+    purpose: "IP range blocking"

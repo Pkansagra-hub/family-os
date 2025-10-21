@@ -1,0 +1,587 @@
+---
+# Orchestration Execution Metrics & Observability
+# ADR Source: ADR-0006-3phase-orchestration-contract-net.md
+# Metrics Specification: Performance tracking, quality assurance, and debugging
+#
+# Purpose: Define comprehensive metrics for monitoring execution phase quality,
+# performance, and failure modes. Enables SLO tracking, alerting, and insights
+# into orchestration health.
+
+execution_metrics:
+  scope: "Covers entire orchestration lifecycle (negotiation → selection → execution)"
+  environment: "Prometheus time-series with 15-second scrape interval"
+  retention: "30 days (long-term archive in K0)"
+  dashboards: |
+    - Orchestration Health (real-time execution status)
+    - Agent Performance (per-agent metrics breakdown)
+    - Failure Analysis (error rates by type)
+    - SLO Tracking (compliance with performance budgets)
+
+---
+
+## Phase 1: Negotiation Metrics
+
+negotiation_metrics:
+  description: "Tracks task announcement and proposal generation"
+
+  time_series:
+    negotiation_duration_ms:
+      type: "Histogram"
+      unit: "milliseconds"
+      buckets: [10, 25, 50, 100, 200, 500]
+      labels: [task_type, agent_pool_size]
+      p95_target: 100  # 100ms for announcing and waiting for proposals
+      example: "Announcing payment task to 3 agents takes ~25ms"
+
+    proposal_count_per_task:
+      type: "Histogram"
+      unit: "proposals"
+      buckets: [1, 2, 3, 5, 10, 20]
+      labels: [task_type, capability_required]
+      description: "How many agents responded with proposals (expected = agent_pool_size)"
+      example: "Expect 100% proposal rate; <100% indicates agent unavailability"
+
+    proposal_quality_score:
+      type: "Histogram"
+      unit: "score (0-100)"
+      buckets: [20, 40, 60, 80, 100]
+      labels: [agent_id, task_type]
+      description: "Average proposal quality from each agent"
+      example: "Agent-01 consistently scores 85; Agent-03 scores 45 (poor matches)"
+
+    proposal_rejections_total:
+      type: "Counter"
+      unit: "rejections"
+      labels: [reason: capability_gap | insufficient_resources | capacity_exceeded]
+      description: "How often agents decline to propose"
+      rate_target: "< 5%"  # Should rarely reject during proposal phase
+
+    negotiation_timeout_total:
+      type: "Counter"
+      unit: "timeouts"
+      labels: [task_type, timeout_threshold_ms]
+      description: "Proposals not received within timeout"
+      rate_target: "< 0.1%"  # Rare - indicates network issues
+
+---
+
+## Phase 2: Selection Metrics
+
+selection_metrics:
+  description: "Tracks scoring, ranking, and agent selection"
+
+  time_series:
+    selection_duration_ms:
+      type: "Histogram"
+      unit: "milliseconds"
+      buckets: [5, 10, 25, 50, 100, 250]
+      labels: [proposal_count]
+      p95_target: 50  # 50ms to score and rank N proposals
+      example: |
+        3 proposals: P95 ~8ms
+        10 proposals: P95 ~18ms
+        20 proposals: P95 ~45ms (approaching target)
+
+    scoring_component_distribution:
+      type: "Gauge (sampling)"
+      labels: [component: capability | latency | cost | specialization]
+      description: "How often each scoring factor is decisive"
+      example: |
+        Capability: 45% (most often determines selection)
+        Latency: 35%
+        Cost: 15%
+        Specialization: 5%
+
+    scoring_variance:
+      type: "Histogram"
+      unit: "std_dev"
+      buckets: [0, 5, 10, 15, 25, 50]
+      labels: [task_type]
+      description: "Spread of scores among candidates (0=all tied, 50+=wide variance)"
+      healthy_range: "5-15"  # Shows differentiation without outliers
+      example: |
+        Variance 2: All agents equally good (poor discrimination)
+        Variance 8: Good differentiation (healthy)
+        Variance 40: One outlier dominates (indicates problem)
+
+    capability_score_by_agent:
+      type: "Histogram (per agent)"
+      unit: "score (0-1)"
+      buckets: [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+      labels: [agent_id, task_type]
+      description: "Capability match scores for each agent"
+      insights: |
+        - Agent-01: 0.95+ consistently → reliable specialist
+        - Agent-03: 0.3-0.5 range → generalist, lower match quality
+        - Agent-05: Bimodal (0.9 or 0.1) → very specialized
+
+    latency_score_distribution:
+      type: "Histogram"
+      unit: "score (0-1)"
+      buckets: [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+      labels: [agent_pool]
+      description: "How agents' estimated latencies compare to budget"
+      example: |
+        Median 0.85: Most agents can meet budget (healthy)
+        Median 0.4: Agents slow relative to budget (capacity concern)
+
+    cost_score_distribution:
+      type: "Histogram"
+      unit: "score (0-1)"
+      buckets: [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+      labels: [task_type]
+      description: "Cost efficiency of proposals (resource utilization)"
+      healthy_range: "0.6-0.9"  # Agents using budgets efficiently
+      alert_if: "Median < 0.3"  # Most proposals exceed budget
+
+    specialization_bonus_applied:
+      type: "Counter"
+      unit: "times"
+      labels: [domain]
+      description: "When specialization bonus boosted an agent's score"
+      healthy_rate: "5-15% of selections"
+      example: "Payment domain agents with bonus applied in 12% of payment tasks"
+
+    outlier_detection:
+      type: "Gauge"
+      unit: "count"
+      description: "Proposals with extreme scores (>3σ from mean)"
+      alert_if: "> 0"  # Never expect outliers with good proposal quality
+      example: |
+        Task has 5 proposals (scores: 0.75, 0.78, 0.76, 0.02, 0.77)
+        Outlier detected: proposal with 0.02 (doesn't belong)
+        Alert: "Outlier proposal from Agent-X detected - investigate"
+
+    winning_agent_characteristics:
+      type: "Gauge (sampling)"
+      unit: "count"
+      labels: [characteristic: first_time | long_idle | recent_success | slow_recovery]
+      description: "Why the selected agent won"
+      insights: |
+        - first_time: 15% (diverse selection)
+        - long_idle: 25% (prefer agents getting work)
+        - recent_success: 55% (prefer proven performers)
+        - slow_recovery: 5% (prefer recovering agents)
+
+---
+
+## Phase 3: Execution Metrics
+
+execution_metrics:
+  description: "Tracks task execution by selected agent"
+
+  time_series:
+    execution_duration_ms:
+      type: "Histogram"
+      unit: "milliseconds"
+      buckets: [100, 500, 1000, 2000, 5000, 10000]
+      labels: [task_type, agent_id]
+      p95_target: 2000  # 2000ms for task execution (from budget)
+      example: |
+        Payment task: P95 ~600ms
+        Computation task: P95 ~1800ms
+        Retrieval task: P95 ~400ms
+
+    execution_result_status:
+      type: "Counter"
+      unit: "executions"
+      labels: [status: success | error | timeout | rejected]
+      success_rate_target: "> 95%"
+      example: |
+        success: 9500 (95%)
+        error: 300 (3%)
+        timeout: 150 (1.5%)
+        rejected: 50 (0.5%)
+
+    execution_error_types:
+      type: "Counter"
+      unit: "errors"
+      labels: [error_type: timeout | network | agent_crash | insufficient_resources | invalid_params | business_logic]
+      description: "Breakdown of error categories"
+      insights: |
+        - timeout (60%): Timeout threshold too aggressive?
+        - network (20%): Network issues with agent
+        - agent_crash (10%): Agent reliability problem
+        - insufficient_resources (8%): Agent running out of capacity
+        - invalid_params (2%): Orchestrator sending bad params
+
+    task_timeout_vs_estimate:
+      type: "Histogram"
+      unit: "ratio"
+      buckets: [0.1, 0.5, 1.0, 1.5, 2.0, 5.0]
+      labels: [task_type, agent_id]
+      description: "Actual duration vs agent's latency estimate (1.0 = perfect estimate)"
+      healthy_mean: "0.8-1.1"  # Estimates usually close to actual
+      alert_if: "Percentile95 > 3.0"  # Agents regularly underestimate
+      example: |
+        Agent-01: Ratio 1.05 (accurate estimates)
+        Agent-03: Ratio 1.8 (underestimates by 80%, bad predictions)
+        Agent-05: Ratio 0.95 (slightly overestimates, conservative)
+
+    task_cost_vs_estimate:
+      type: "Histogram"
+      unit: "ratio"
+      buckets: [0.5, 0.8, 1.0, 1.2, 1.5, 3.0]
+      labels: [task_type, agent_id]
+      description: "Actual cost vs agent's estimate (1.0 = perfect estimate)"
+      healthy_mean: "0.9-1.1"
+      alert_if: "Percentile95 > 2.0"  # Cost overruns
+      example: |
+        Agent-01: 0.98 (accurate)
+        Agent-03: 1.6 (costs 60% more than predicted, budget concerns)
+
+    agent_parallelism:
+      type: "Gauge"
+      unit: "tasks"
+      labels: [agent_id]
+      description: "Concurrent tasks running on agent (capacity utilization)"
+      example: |
+        Agent-01: 3/5 capacity (60% utilization, room for more)
+        Agent-02: 5/5 capacity (100%, at limit)
+        Agent-03: 1/5 capacity (20%, underutilized)
+
+    resource_consumption:
+      type: "Histogram"
+      unit: "MB"
+      buckets: [1, 10, 50, 100, 500, 1000]
+      labels: [resource_type: memory | disk | network, agent_id]
+      description: "Per-task resource usage during execution"
+      example: |
+        Memory: P95 ~200MB per task (budget is 256MB)
+        Network: P95 ~50MB (within limits)
+        Disk: P95 ~5MB
+
+    agent_event_latency:
+      type: "Histogram"
+      unit: "milliseconds"
+      buckets: [1, 5, 10, 50, 100, 500]
+      labels: [event_type: message_sent | message_received | timeout_check]
+      description: "Time between orchestrator and agent for each event"
+      p95_target: "< 50ms"
+      example: |
+        Message send: P95 ~15ms
+        Receive response: P95 ~25ms
+        Timeout enforcement: P95 ~5ms
+
+---
+
+## Cross-Cutting Metrics
+
+cross_cutting_metrics:
+
+  end_to_end_orchestration:
+    type: "Histogram"
+    unit: "milliseconds"
+    buckets: [100, 250, 500, 1000, 2000, 5000]
+    labels: [task_type, orchestration_mode: sync | async]
+    description: "Total time from task arrival to result delivery (entire 3-phase)"
+    p95_target: 250  # 250ms total (from performance budget)
+    decomposition: |
+      e2e_latency = negotiation (100ms) + selection (50ms) + execution (actual)
+      With execution P95=2000ms:
+        - Fast tasks (100ms execution): P95 ~260ms (near budget)
+        - Slow tasks (2000ms execution): P95 ~2150ms (execution dominates)
+
+  orchestration_overhead:
+    type: "Gauge"
+    unit: "percentage"
+    description: "Orchestration latency as % of total (negotiation+selection vs execution)"
+    formula: "(negotiation_ms + selection_ms) / total_e2e_ms * 100"
+    healthy_range: "5-10%"  # Orchestration shouldn't dominate
+    alert_if: "> 20%"  # Overhead too high
+    example: |
+      Task execution: 1000ms
+      Orchestration: 120ms (negotiation 100ms + selection 20ms)
+      Overhead: 120/1120 = 10.7% (acceptable)
+
+  throughput_tasks_per_second:
+    type: "Gauge"
+    unit: "tasks/sec"
+    labels: [task_type]
+    description: "System throughput (completed tasks/second)"
+    example: |
+      Payment tasks: 1000 tasks/sec
+      Computation tasks: 100 tasks/sec
+      Retrieval tasks: 5000 tasks/sec
+    formula: "count(execution_result_status{status='success'}) / time_window"
+
+  parallelism_efficiency:
+    type: "Gauge"
+    unit: "percentage"
+    description: "Fraction of agents actively executing (vs idle/waiting)"
+    formula: "sum(agent_parallelism) / (count(active_agents) * capacity) * 100"
+    healthy_range: "60-80%"  # Good utilization
+    alert_if_low: "< 30%"  # Too many idle agents (wasted capacity)
+    alert_if_high: "> 95%"  # Agents saturated (no headroom)
+
+---
+
+## Quality & SLO Metrics
+
+slo_metrics:
+
+  success_rate:
+    type: "Counter / Rate"
+    unit: "percentage"
+    definition: "% of orchestrations that complete successfully (without failure/compensation)"
+    slo: "> 95%"
+    alert_if: "< 93%"  # 2% margin
+    labels: [task_type, agent_pool]
+
+  compensation_rate:
+    type: "Counter / Rate"
+    unit: "percentage"
+    definition: "% of orchestrations that trigger saga compensation"
+    slo: "< 5%"  # Expect rare failures
+    alert_if: "> 7%"
+    labels: [failure_reason]
+
+  p95_latency:
+    type: "Gauge"
+    unit: "milliseconds"
+    definition: "95th percentile end-to-end orchestration latency"
+    slo: "< 250ms"
+    alert_if: "> 300ms"
+
+  p99_latency:
+    type: "Gauge"
+    unit: "milliseconds"
+    definition: "99th percentile end-to-end orchestration latency"
+    slo: "< 1000ms"
+    alert_if: "> 1200ms"
+
+  agent_availability:
+    type: "Gauge"
+    unit: "percentage"
+    definition: "% of agents responding to proposals without timeout"
+    slo: "> 98%"
+    alert_if: "< 95%"
+    labels: [agent_id]
+    insights: |
+      - Agent-01: 99.8% (excellent)
+      - Agent-03: 92% (network issues? crash prone?)
+      - Agent-05: 97% (acceptable)
+
+---
+
+## Debugging Metrics
+
+debugging_metrics:
+
+  proposal_score_distribution:
+    type: "Histogram"
+    unit: "score (0-1)"
+    buckets: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    labels: [agent_id, task_type]
+    description: "Full distribution of proposals for debugging score anomalies"
+    use_case: |
+      if agent_X usually scores 0.8+ but suddenly averaging 0.3:
+        → Indicates capability drift or service degradation
+      if tight cluster (e.g., all 0.75-0.77):
+        → Indicates homogeneous agents (less differentiation)
+
+  agent_state_transitions:
+    type: "Counter"
+    unit: "transitions"
+    labels: [from_state, to_state, agent_id]
+    description: "Track when agents change state (e.g., ACTIVE → DRAINING)"
+    use_case: "Detect unexpected agent state changes during execution"
+
+  message_send_failures:
+    type: "Counter"
+    unit: "failures"
+    labels: [agent_id, failure_type: network | timeout | rejected]
+    description: "Track when orchestrator can't send message to agent"
+    use_case: "Investigate agent connectivity issues"
+
+  score_disagreement:
+    type: "Counter"
+    unit: "disagreements"
+    description: "When different scoring runs produce different winners (non-determinism)"
+    alert_if: "> 0"  # Should never happen with same input
+    use_case: "Detect bugs in scoring algorithm or non-deterministic randomness"
+
+  proposal_vs_actual_mismatch:
+    type: "Counter"
+    unit: "mismatches"
+    labels: [agent_id, mismatch_type: latency_estimate_wrong | cost_estimate_wrong | capability_mismatch]
+    description: "When actual execution doesn't match agent's proposal"
+    use_case: |
+      Proposal said 100ms, took 2000ms → latency_estimate_wrong
+      Proposal promised capability, agent lacked it → capability_mismatch
+
+---
+
+## Alert Definitions
+
+alerts:
+  high_p95_latency:
+    condition: "p95_latency_ms > 300"
+    severity: "warning"
+    action: "Review slow proposals or agent performance"
+
+  high_compensation_rate:
+    condition: "compensation_rate > 0.07"
+    severity: "warning"
+    action: "Investigate failure causes (timeouts? capacity issues?)"
+
+  low_success_rate:
+    condition: "success_rate < 0.93"
+    severity: "critical"
+    action: "Page on-call; investigate orchestration failures"
+
+  agent_unavailable:
+    condition: "agent_availability[agent_id] < 0.95 for 5 minutes"
+    severity: "warning"
+    action: "Check agent health; may need to restart"
+
+  high_overhead:
+    condition: "orchestration_overhead > 0.20"
+    severity: "info"
+    action: "Slow selection phase; profile algorithm"
+
+  outlier_detection:
+    condition: "count(outlier_proposals) > 0"
+    severity: "warning"
+    action: "Investigate unusual proposal (data corruption? bad state?)"
+
+  non_deterministic_selection:
+    condition: "score_disagreement > 0"
+    severity: "critical"
+    action: "Bug in scoring algorithm; data randomness issue"
+
+---
+
+## Dashboard Layouts
+
+dashboards:
+
+  orchestration_health:
+    title: "Orchestration Health"
+    panels:
+      - panel: "Success Rate (SLO)"
+        metrics: [p95_latency, success_rate, compensation_rate]
+      - panel: "P95 Latency Trend"
+        metric: p95_latency_ms
+        group_by: task_type
+      - panel: "Agent Availability"
+        metric: agent_availability
+        display: status
+      - panel: "Throughput"
+        metric: throughput_tasks_per_second
+        group_by: task_type
+      - panel: "Top Failures"
+        metric: execution_error_types
+        display: breakdown
+
+  agent_performance:
+    title: "Agent Performance Breakdown"
+    panels:
+      - panel: "By Agent"
+        metrics: [execution_duration_ms, success_rate]
+        group_by: agent
+      - panel: "Scoring Patterns"
+        metrics: [capability_score, latency_score, cost_score]
+        group_by: agent
+      - panel: "Capacity Utilization"
+        metric: agent_parallelism
+      - panel: "Resource Usage"
+        metrics: [memory, network, disk]
+        group_by: agent
+      - panel: "Estimation Accuracy"
+        metrics: [task_timeout_vs_estimate, task_cost_vs_estimate]
+
+  failure_analysis:
+    title: "Failure & Debugging"
+    panels:
+      - panel: "Error Breakdown"
+        metric: execution_error_types
+        display: pie_chart
+      - panel: "Agent Reliability"
+        metric: agent_availability
+        group_by: agent
+      - panel: "Outlier Proposals"
+        metric: proposal_score_distribution
+      - panel: "Proposal vs Actual"
+        metric: proposal_vs_actual_mismatch
+      - panel: "Message Failures"
+        metric: message_send_failures
+        group_by: agent
+
+  scoring_insights:
+    title: "Scoring & Selection"
+    panels:
+      - panel: "Score Component Distribution"
+        metric: scoring_component_distribution
+      - panel: "Proposal Quality"
+        metric: proposal_quality_score
+      - panel: "Winning Agent Characteristics"
+        metric: winning_agent_characteristics
+      - panel: "Score Variance"
+        metric: scoring_variance
+      - panel: "Estimation Accuracy"
+        metrics: [task_timeout_vs_estimate, task_cost_vs_estimate]
+
+---
+
+## Prometheus Query Examples
+
+prometheus_queries:
+  p95_latency_query: |
+    histogram_quantile(
+      0.95,
+      rate(execution_duration_ms_bucket[5m])
+    )
+
+  success_rate_query: |
+    (
+      rate(execution_result_status{status="success"}[5m])
+    ) /
+    (
+      rate(execution_result_status[5m])
+    ) * 100
+
+  agent_utilization_query: |
+    (
+      sum(agent_parallelism) /
+      (count(active_agents) * max(agent_capacity))
+    ) * 100
+
+  overhead_percentage_query: |
+    (
+      rate(negotiation_duration_ms_sum[5m]) +
+      rate(selection_duration_ms_sum[5m])
+    ) /
+    rate(end_to_end_orchestration_ms_sum[5m]) * 100
+
+---
+
+## Implementation Notes
+
+implementation:
+  collection_method: "Instrumentation within Orchestrator core"
+  export_format: "Prometheus text format (OpenMetrics)"
+  collection_interval: "15 seconds (standard Prometheus)"
+  retention_policy: |
+    - Prometheus local: 30 days (15-second resolution)
+    - K0 downsampled: 1 year (5-minute resolution)
+    - K0 archive: Indefinite (1-hour resolution)
+
+  performance_impact: |
+    - Metrics collection: < 1% latency overhead
+    - Storage: ~5MB per day per metric
+    - Query performance: < 100ms for dashboard queries
+
+  priority: |
+    Phase 1 (MVP):
+      - p95_latency, success_rate, compensation_rate
+      - execution_duration_ms, execution_result_status
+      - agent_availability
+
+    Phase 2 (Observability):
+      - All orchestration_metrics
+      - All cross_cutting_metrics
+
+    Phase 3 (Debugging):
+      - All debugging_metrics
+      - Full score breakdown metrics

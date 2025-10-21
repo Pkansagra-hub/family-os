@@ -1,0 +1,426 @@
+# Clarification Response Contract
+# FlatBuffers Schema: ClarificationResponse.fbs
+# Purpose: Define clarification response message from user to AI agent
+# ADR Reference: ADR-0003b, ADR-0016 (FlatBuffers Schemas)
+# Latency Target: <50ms from user input to agent processing
+
+---
+clarification_response:
+  name: "ClarificationResponse"
+  version: "1.0"
+  description: "User response to clarification request"
+
+  # ===== Core Fields =====
+  fields:
+    # Message Correlation
+    - name: "response_id"
+      type: "string"
+      description: "Unique UUID v4 for this response"
+      required: true
+      example: "resp_660e8400-e29b-41d4-a716-446655440001"
+      observability: "indexed_in_k0"
+
+    - name: "clarification_id"
+      type: "string"
+      description: "References the ClarificationRequest this answers"
+      required: true
+      example: "clf_550e8400-e29b-41d4-a716-446655440000"
+      observability: "indexed_in_k0"
+
+    - name: "cognitive_trace_id"
+      type: "string"
+      description: "Distributed trace ID (same as original request)"
+      required: true
+      example: "trace_7f3e8c1a-9b2d-4e5c-b1f6-2a3d4e5f6a7b"
+      observability: "trace_correlation"
+
+    # Answer Content
+    - name: "answer"
+      type: "string"
+      description: "User's answer to the clarification question"
+      required: true
+      max_length: 2000
+      example: "Alice's Cafe"
+      observability: "logged_with_pii_redaction"
+
+    - name: "answer_type"
+      type: "string"
+      description: "Type of answer provided"
+      required: true
+      enum: ["single_choice", "multi_choice", "free_text", "yes", "no", "numeric", "datetime", "location"]
+      example: "single_choice"
+
+    - name: "answer_raw_input"
+      type: "string"
+      description: "Raw user input before normalization (for debugging)"
+      required: false
+      max_length: 2000
+      example: "I'll go with the French one"  # User said this, system normalized to "Alice's Cafe"
+      observability: "logged_for_debugging"
+
+    - name: "answer_normalized"
+      type: "string"
+      description: "Normalized version of answer (for system processing)"
+      required: true
+      max_length: 500
+      example: "Alice's Cafe"
+
+    # User Confidence
+    - name: "user_confidence"
+      type: "float"
+      description: "How confident user is in their answer (0.0-1.0, optional explicit rating)"
+      required: false
+      min_value: 0.0
+      max_value: 1.0
+      example: 0.95
+
+    - name: "confidence_source"
+      type: "string"
+      description: "How confidence was determined"
+      required: false
+      enum: ["explicit_rating", "response_time", "hedging_language", "none"]
+      example: "response_time"  # Fast response = high confidence
+
+    - name: "implicit_confidence"
+      type: "float"
+      description: "Inferred confidence from response characteristics"
+      required: false
+      min_value: 0.0
+      max_value: 1.0
+      example: 0.92
+      observability: "metric_histogram"
+      calculation: "based on response_time_ms, hesitation_indicators, correction_count"
+
+    # Response Characteristics
+    - name: "response_time_ms"
+      type: "int32"
+      description: "How long user took to respond (ms)"
+      required: true
+      min_value: 100
+      max_value: 300000  # 5 minutes
+      example: 2500
+      observability: "metric_histogram_by_priority"
+
+    - name: "user_interaction_pattern"
+      type: "string"
+      description: "How user interacted with the interface"
+      required: false
+      enum: ["clicked_option", "typed_text", "voice_input", "auto_selected_default", "other"]
+      example: "clicked_option"
+      observability: "metric_tag"
+
+    - name: "hesitation_indicators"
+      type: "array[string]"
+      description: "Signs of user uncertainty"
+      required: false
+      examples: ["multiple_corrections", "long_pause", "backspace_heavy", "reworded_multiple_times"]
+      observability: "flags_for_analysis"
+
+    - name: "corrections_count"
+      type: "int32"
+      description: "How many times user changed their answer"
+      required: false
+      min_value: 0
+      default: 0
+      observability: "metric_tracked"
+
+    # Session and Context
+    - name: "session_id"
+      type: "string"
+      description: "Session this response belongs to"
+      required: true
+      example: "session_12345678"
+      observability: "indexed_in_k0"
+
+    - name: "user_id"
+      type: "string"
+      description: "Which user provided the response"
+      required: true
+      example: "user_abc123"
+      observability: "indexed_in_k0"
+
+    - name: "device_type"
+      type: "string"
+      description: "What device user responded from"
+      required: false
+      enum: ["web", "mobile", "voice_assistant", "api"]
+      example: "web"
+      observability: "metric_tag"
+
+    - name: "client_id"
+      type: "string"
+      description: "Client application ID"
+      required: false
+      example: "web_app_v2.1"
+
+    # Response Quality
+    - name: "response_valid"
+      type: "bool"
+      description: "Whether response matches expected format/schema"
+      required: true
+      default: true
+      observability: "metric_flag"
+
+    - name: "validation_errors"
+      type: "array[string]"
+      description: "List of validation errors if response_valid == false"
+      required: false
+      examples: ["answer_not_in_options", "numeric_out_of_range", "datetime_format_invalid"]
+      observability: "structured_log"
+
+    - name: "answer_ambiguous"
+      type: "bool"
+      description: "Whether answer could be interpreted multiple ways"
+      required: false
+      default: false
+      observability: "metric_flag"
+
+    - name: "answer_matches_suggested"
+      type: "bool"
+      description: "Whether answer matches agent's suggested answer (for bias analysis)"
+      required: false
+      default: null
+
+    # Metadata
+    - name: "agent_id"
+      type: "string"
+      description: "Which AI agent requested clarification"
+      required: true
+      enum: ["concierge", "planner", "researcher", "safety_watch"]
+      example: "planner"
+      observability: "metric_tag"
+
+    - name: "parent_task_id"
+      type: "string"
+      description: "Which task this clarification was for"
+      required: true
+      example: "task_book_restaurant"
+
+    - name: "space_id"
+      type: "string"
+      description: "Privacy space"
+      required: true
+      enum: ["GREEN", "AMBER", "RED", "BLACK"]
+      example: "GREEN"
+
+    # PII and Security
+    - name: "pii_detected"
+      type: "bool"
+      description: "Whether response contains PII"
+      required: false
+      default: false
+      observability: "security_flag"
+
+    - name: "pii_redaction_applied"
+      type: "bool"
+      description: "Whether PII was redacted from stored answer"
+      required: false
+      default: false
+      observability: "security_flag"
+
+    - name: "security_flags"
+      type: "array[string]"
+      description: "Security concerns detected"
+      required: false
+      examples: ["pii_present", "injection_attempt_detected", "privacy_band_violation"]
+      observability: "security_alerts"
+
+    # Timestamps
+    - name: "received_at_ms"
+      type: "int64"
+      description: "When response was received (Unix timestamp ms)"
+      required: true
+      example: 1697379952500
+      observability: "timestamp_indexed"
+
+    - name: "processed_at_ms"
+      type: "int64"
+      description: "When response was processed/validated"
+      required: false
+      example: 1697379952550
+      observability: "timestamp_for_latency_tracking"
+
+    - name: "created_at_ms"
+      type: "int64"
+      description: "When response was captured/recorded"
+      required: true
+      example: 1697379952500
+
+  # ===== Validation Rules =====
+  validation:
+    rules:
+      - "answer must not be empty"
+      - "answer_type must be valid enum value"
+      - "if response_valid == false, validation_errors must not be empty"
+      - "response_time_ms must be > 100 and < 300000"
+      - "user_confidence, if provided, must be 0.0-1.0"
+      - "implicit_confidence must be 0.0-1.0"
+      - "corrections_count must be >= 0"
+      - "received_at_ms must be <= now_ms"
+      - "received_at_ms must be > clarification_request.created_at_ms"
+
+  # ===== Derived Fields (Computed Server-Side) =====
+  derived_fields:
+    - name: "answer_latency_ms"
+      calculation: "received_at_ms - clarification_request.created_at_ms"
+      description: "Total time from request to response"
+      observability: "histogram_metric"
+
+    - name: "processing_latency_ms"
+      calculation: "processed_at_ms - received_at_ms"
+      description: "Time to validate/process response"
+      observability: "histogram_metric"
+
+    - name: "confidence_final"
+      calculation: "COALESCE(user_confidence, implicit_confidence)"
+      description: "Final confidence score for answer"
+      observability: "histogram_by_priority"
+
+    - name: "quality_score"
+      calculation: "0.5 * confidence_final + 0.3 * (1 - hesitation_factor) + 0.2 * (1 - corrections_factor)"
+      description: "Overall quality of user response"
+      observability: "histogram_metric"
+
+  # ===== FlatBuffers Schema (Code Generation) =====
+  flatbuffers_schema: |
+    namespace K1.Protocols;
+
+    table ClarificationResponse {
+      response_id: string;
+      clarification_id: string;
+      cognitive_trace_id: string;
+      answer: string;
+      answer_type: string;
+      answer_raw_input: string;
+      answer_normalized: string;
+      user_confidence: float;
+      confidence_source: string;
+      implicit_confidence: float;
+      response_time_ms: int32;
+      user_interaction_pattern: string;
+      hesitation_indicators: [string];
+      corrections_count: int32;
+      session_id: string;
+      user_id: string;
+      device_type: string;
+      client_id: string;
+      response_valid: bool;
+      validation_errors: [string];
+      answer_ambiguous: bool;
+      answer_matches_suggested: bool;
+      agent_id: string;
+      parent_task_id: string;
+      space_id: string;
+      pii_detected: bool;
+      pii_redaction_applied: bool;
+      security_flags: [string];
+      received_at_ms: int64;
+      processed_at_ms: int64;
+      created_at_ms: int64;
+    }
+
+    root_type ClarificationResponse;
+
+  # ===== Usage Examples =====
+  examples:
+    - name: "Fast Confident Response"
+      description: "User answered quickly with high confidence"
+      data:
+        response_id: "resp_660e8400-e29b-41d4-a716-446655440001"
+        clarification_id: "clf_550e8400-e29b-41d4-a716-446655440000"
+        cognitive_trace_id: "trace_abc123"
+        answer: "Alice's Cafe"
+        answer_type: "single_choice"
+        answer_raw_input: "Alice's Cafe"
+        answer_normalized: "Alice's Cafe"
+        user_confidence: 0.98
+        confidence_source: "explicit_rating"
+        implicit_confidence: 0.95
+        response_time_ms: 1500
+        user_interaction_pattern: "clicked_option"
+        hesitation_indicators: []
+        corrections_count: 0
+        response_valid: true
+        session_id: "session_xyz"
+        user_id: "user_abc123"
+        agent_id: "planner"
+        received_at_ms: 1697379952500
+
+    - name: "Uncertain Response with Hesitation"
+      description: "User took time to decide, multiple corrections"
+      data:
+        response_id: "resp_660e8400-e29b-41d4-a716-446655440002"
+        clarification_id: "clf_550e8400-e29b-41d4-a716-446655440000"
+        cognitive_trace_id: "trace_def456"
+        answer: "Alice's Bistro"
+        answer_type: "single_choice"
+        answer_raw_input: "Actually, hmm, let me think... maybe the Italian one?"
+        answer_normalized: "Alice's Bistro"
+        implicit_confidence: 0.65
+        response_time_ms: 15000  # User took 15 seconds
+        user_interaction_pattern: "typed_text"
+        hesitation_indicators: ["multiple_corrections", "long_pause", "reworded_multiple_times"]
+        corrections_count: 3
+        response_valid: true
+        answer_ambiguous: true
+        session_id: "session_xyz"
+        user_id: "user_abc123"
+        agent_id: "planner"
+        received_at_ms: 1697379965000
+
+  # ===== Observability =====
+  observability:
+    metrics:
+      - "clarification_response_received_total"          # Counter
+      - "clarification_response_time_ms"                 # Histogram
+      - "clarification_response_time_by_priority"        # Histogram by priority
+      - "clarification_response_valid_total"             # Counter
+      - "clarification_response_validation_error_total"  # Counter by error type
+      - "clarification_confidence_by_source_histogram"   # Histogram by confidence_source
+      - "clarification_implicit_confidence_histogram"    # Histogram
+      - "clarification_hesitation_indicator_total"       # Counter per indicator type
+      - "clarification_quality_score_histogram"          # Histogram of derived quality_score
+
+    structured_logging:
+      enabled: true
+      format: "json"
+      fields:
+        - "response_id"
+        - "clarification_id"
+        - "cognitive_trace_id"
+        - "answer"
+        - "response_time_ms"
+        - "user_confidence"
+        - "implicit_confidence"
+        - "hesitation_indicators"
+        - "corrections_count"
+        - "response_valid"
+        - "validation_errors"
+        - "received_at_ms"
+
+    distributed_tracing:
+      enabled: true
+      trace_id_field: "cognitive_trace_id"
+      parent_span_name: "clarification_response_received"
+      child_spans:
+        - "validate_answer_format"
+        - "compute_confidence"
+        - "detect_pii"
+        - "store_in_k0"
+
+  # ===== Security Considerations =====
+  security:
+    pii_detection:
+      enabled: true
+      targets: ["answer", "answer_raw_input"]
+      on_detection: "redact_and_flag"
+
+    audit_trail:
+      enabled: true
+      storage: "k0_audit_log"
+      fields: ["response_id", "clarification_id", "user_id", "agent_id", "answer_normalized", "response_time_ms", "confidence_final", "received_at_ms"]
+
+    privacy_bands:
+      GREEN: "Standard clarification"
+      AMBER: "May contain identifiable info"
+      RED: "Highly sensitive, audit required"

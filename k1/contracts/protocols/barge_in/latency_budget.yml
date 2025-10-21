@@ -1,0 +1,304 @@
+# Barge-In Protocol - Latency Budget & Performance SLOs
+# Purpose: Define latency targets, SLO tracking, performance budgets
+# ADR Reference: ADR-0003b (Protocols), ADR-0046 (Barge-In Fast-Path), ADR-0024 (Performance)
+# Target: <120ms P95 from user click to agent interrupt
+
+---
+latency_budget:
+  name: "barge_in_protocol_latency_budget"
+  version: "1.0"
+  description: "Barge-In protocol latency targets and error budgets"
+
+  # ===== CRITICAL PATH LATENCY =====
+  critical_path:
+    name: "User Click to Agent Interrupt"
+    description: "Time from user clicking 'stop/interrupt' to agent paused"
+    target_p95_ms: 120
+    target_p99_ms: 200
+    budget_remaining_ms: 120
+    reason: "UX-critical: users expect immediate response to their interrupt"
+
+    components:
+      - name: "User Input Processing"
+        description: "Browser captures click, generates barge-in signal"
+        target_p95_ms: 5
+        allocation: "5ms"
+        responsibility: "client (web browser)"
+        controllable: false  # Network-dependent
+        notes: "Typically <5ms for JavaScript event handling"
+
+      - name: "WebSocket Transmission"
+        description: "Send BargeInSignal from client to server"
+        target_p95_ms: 10
+        allocation: "10ms"
+        responsibility: "network + api_gateway"
+        controllable: false  # Network-dependent
+        criticality: "high"
+
+      - name: "Signal Reception & Validation"
+        description: "Receive, parse, validate signal (auth, session check)"
+        target_p95_ms: 5
+        allocation: "5ms"
+        responsibility: "api_gateway"
+        controllable: true
+        optimization: "Cache session validation, avoid DB lookups"
+
+      - name: "Orchestrator Dispatch"
+        description: "Look up interrupted agent, acquire mailbox reference"
+        target_p95_ms: 10
+        allocation: "10ms"
+        responsibility: "orchestrator"
+        controllable: true
+        optimization: "Use in-memory agent registry, hash lookups"
+
+      - name: "Agent Mailbox Delivery"
+        description: "Queue interrupt signal in agent's mailbox"
+        target_p95_ms: 5
+        allocation: "5ms"
+        responsibility: "actor_mailbox (MPSC queue)"
+        controllable: true
+        notes: "Lock-free, should be very fast"
+
+      - name: "Agent Receive & Process"
+        description: "Agent dequeues signal, processes interrupt"
+        target_p95_ms: 20
+        allocation: "20ms"
+        responsibility: "ai_agent"
+        controllable: false  # Agent behavior
+        notes: "Agent may be in LLM call, yield to scheduler"
+
+    total_critical_path_p95_ms: 120  # 5 + 10 + 5 + 10 + 5 + 20 = 55ms typical, 120ms P95
+    total_critical_path_p99_ms: 200
+
+  # ===== DRAIN LATENCY =====
+  drain_phase:
+    name: "Drain Operation (Completing In-Flight Work)"
+    description: "Time to pause and drain in-flight operations"
+    target_p95_ms: 400
+    target_p99_ms: 500
+    max_absolute_ms: 500  # Hard timeout
+
+    components:
+      - name: "Interrupt Reception"
+        description: "Agent receives interrupt signal"
+        target_p95_ms: 20
+        allocation: "20ms"
+
+      - name: "Current Operation Pause"
+        description: "Pause LLM call, streaming, tool execution"
+        target_p95_ms: 50
+        allocation: "50ms"
+        notes: "May wait for LLM to finish token"
+
+      - name: "Cancel Optional Tasks"
+        description: "Cancel non-critical background tasks"
+        target_p95_ms: 100
+        allocation: "100ms"
+
+      - name: "Wait Required Tasks"
+        description: "Wait for critical tasks to complete"
+        target_p95_ms: 200
+        allocation: "200ms"
+
+      - name: "Capture State Snapshot"
+        description: "Serialize agent state for potential resumption"
+        target_p95_ms: 30
+        allocation: "30ms"
+
+      - name: "Report Drain Complete"
+        description: "Send DrainStatus COMPLETED message"
+        target_p95_ms: 10
+        allocation: "10ms"
+
+    total_drain_p95_ms: 400  # Should complete within 400ms
+    total_drain_p99_ms: 500
+
+  # ===== RESUMPTION LATENCY =====
+  resumption_phase:
+    name: "Resumption After Drain"
+    description: "Time to resume with new task or resume old task"
+    target_p95_ms: 100
+
+    components:
+      - name: "Resumption Decision"
+        description: "Orchestrator decides resume vs terminate"
+        target_p95_ms: 10
+        allocation: "10ms"
+
+      - name: "Restore State (if resuming same task)"
+        description: "Restore agent state from snapshot"
+        target_p95_ms: 30
+        allocation: "30ms"
+
+      - name: "Queue New Task"
+        description: "Queue new task in agent mailbox"
+        target_p95_ms: 10
+        allocation: "10ms"
+
+      - name: "Agent Resume Execution"
+        description: "Agent wakes up and starts new task"
+        target_p95_ms: 50
+        allocation: "50ms"
+
+    total_resumption_p95_ms: 100
+
+  # ===== END-TO-END LATENCY =====
+  end_to_end:
+    name: "Complete Barge-In (Click to Resumed)"
+    description: "Total latency from user click to agent resumed"
+    target_p95_ms: 500  # 120 (interrupt) + 400 (drain) + 100 (resumption) = 620ms typical
+    target_p99_ms: 800
+    budget_remaining_ms: 300
+    note: "User perceives response within 500ms P95 (typically <300ms)"
+
+  # ===== SLO DEFINITIONS =====
+  slos:
+    - name: "Interrupt Latency"
+      description: "P95 latency for interrupt delivery to agent"
+      metric: "barge_in_latency_ms_p95"
+      target_ms: 120
+      calculation_window: "rolling_1h"
+      consequence_if_failed: "error_budget_consumed, UX_degradation_alert"
+      error_budget: 20  # Can tolerate 20ms excess
+
+    - name: "Drain Reliability"
+      description: "Percentage of drains completing within 500ms"
+      metric: "barge_in_drain_time_ms_p95"
+      target_ms: 400
+      calculation_window: "rolling_1h"
+      consequence_if_failed: "error_budget_consumed, timeout_increase_alert"
+      error_budget: 100  # Can tolerate 100ms excess
+
+    - name: "Success Rate"
+      description: "Percentage of interrupt signals successfully processed"
+      metric: "barge_in_success_rate"
+      target_percentage: 99.0
+      calculation_window: "rolling_24h"
+      consequence_if_failed: "error_budget_consumed, availability_alert"
+      error_budget: 1.0
+
+  # ===== LATENCY MONITORING =====
+  monitoring:
+    percentiles:
+      - "p50"  # Median
+      - "p95"  # 95th percentile (SLO target)
+      - "p99"  # 99th percentile
+      - "p999" # 99.9th percentile (extreme tail)
+
+    sampling_strategy: "all_traffic"  # 100% sample
+    collection_frequency: "per_signal"
+
+    dashboard_metrics:
+      - "barge_in_latency_ms_histogram"
+      - "barge_in_latency_ms_p95"
+      - "barge_in_latency_breakdown_ms"
+      - "barge_in_drain_time_ms_histogram"
+      - "barge_in_drain_time_ms_p95"
+
+    alerting:
+      - name: "High Interrupt Latency"
+        condition: "barge_in_latency_ms_p95 > 150"
+        severity: "critical"
+        for_duration: "1m"
+        page_on_call: true
+
+      - name: "High Drain Time"
+        condition: "barge_in_drain_time_ms_p95 > 500"
+        severity: "critical"
+        for_duration: "2m"
+        page_on_call: true
+
+      - name: "Low Success Rate"
+        condition: "barge_in_success_rate < 98%"
+        severity: "high"
+        for_duration: "5m"
+
+  # ===== LATENCY ATTRIBUTION =====
+  attribution:
+    user_input:
+      who: "client (browser)"
+      latency_ms: 5
+      controllable: false
+
+    websocket_delivery:
+      who: "network + api_gateway"
+      latency_ms: 10
+      controllable: false
+
+    signal_validation:
+      who: "api_gateway"
+      latency_ms: 5
+      controllable: true
+      optimization: "Cache session validation"
+
+    orchestrator_dispatch:
+      who: "orchestrator"
+      latency_ms: 10
+      controllable: true
+      optimization: "In-memory agent registry"
+
+    mailbox_delivery:
+      who: "actor_mailbox"
+      latency_ms: 5
+      controllable: true
+      optimization: "Lock-free MPSC queue"
+
+    agent_processing:
+      who: "ai_agent"
+      latency_ms: 20
+      controllable: false
+      notes: "Agent behavior, may be in LLM call"
+
+  # ===== PERFORMANCE CHARACTERISTICS =====
+  performance:
+    throughput:
+      max_per_session: "unlimited (user clicks manually)"
+      max_per_k1_instance: "1000 interrupts/second"
+
+    resource_usage:
+      memory_per_interrupt_bytes: 512
+      storage_per_interrupt_bytes: 256
+      cpu_per_interrupt_ms: 2
+
+    scalability:
+      linear_up_to: "1000 concurrent sessions"
+      degradation_after: "graceful degradation, latency increases 2× at 10k sessions"
+
+    composition_overhead:
+      with_task_protocol: 5   # <5ms overhead
+      with_tool_protocol: 10  # <10ms overhead
+      with_clarification_protocol: 5  # <5ms overhead
+      notes: "Barge-in is highest priority, minimal protocol overhead"
+
+  # ===== ERROR BUDGET TRACKING =====
+  error_budget:
+    month: "October 2025"
+    definitions:
+      - name: "Interrupt Latency Error Budget"
+        available_budget: "20ms"
+        consumed_so_far: "2ms"
+        remaining_budget: "18ms"
+
+      - name: "Drain Time Error Budget"
+        available_budget: "100ms"
+        consumed_so_far: "10ms"
+        remaining_budget: "90ms"
+
+      - name: "Success Rate Error Budget"
+        available_budget: "1.0%"
+        consumed_so_far: "0.1%"
+        remaining_budget: "0.9%"
+
+    monthly_reset: true
+    breach_consequence: "on_call_page"
+
+  # ===== NOTES =====
+  notes:
+    - "<120ms P95 interrupt latency is UX-critical"
+    - "Drain timeout (500ms max) prevents indefinite hangs"
+    - "Most interrupts complete in <300ms end-to-end"
+    - "Network latency (<10ms) is the main bottleneck"
+    - "Client-side latency depends on browser performance"
+    - "Agent processing latency depends on LLM call state"
+    - "Error budget consumed monthly, resets at month end"
+    - "Breaking SLO results in on-call page"

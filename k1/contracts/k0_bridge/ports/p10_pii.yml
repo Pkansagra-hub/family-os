@@ -1,0 +1,470 @@
+# P10 PII - Privacy Protection & Minimization Pipeline
+# Port: P10 (K0 internal policy enforcement)
+# Policy enforcement semantics: PII detection, redaction, GDPR/CCPA compliance
+# Performance budget: 25ms P95, 100ms timeout
+
+version: "1.0"
+port_id: "P10"
+port_name: "PII"
+direction: "K0_INTERNAL"
+semantics: "policy_enforcement"
+transport: "Internal Service Call"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0070"  # PII Detection Strategy
+  - "ADR-0071"  # Privacy Bands
+  - "ADR-0072"  # GDPR Compliance
+  - "ADR-0150"  # Privacy Bands (referenced in P01)
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P10"
+      description: "Port identifier for PII scanning"
+
+    command_type:
+      type: string
+      value: "pii_scan"
+      description: "PII detection and redaction request"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: |
+        Privacy band for redaction policy:
+        - GREEN: Log PII but don't redact (detection only)
+        - AMBER: Redact PII in responses, log redactions
+        - RED: Remove PII entirely, no storage
+
+    capability:
+      type: string
+      value: "SCAN_PII"
+      required: true
+      description: "Required K0 capability for PII scanning"
+
+  payload:
+    content:
+      type: string
+      max_length: 50000
+      required: true
+      description: "Text content to scan for PII"
+      example: "Contact me at john.doe@example.com or call 555-123-4567"
+
+    entity_types:
+      type: array
+      items:
+        type: string
+        enum: ["EMAIL", "SSN", "PHONE", "ADDRESS", "IP", "CREDIT_CARD", "NAME", "DATE_OF_BIRTH", "all"]
+      default: ["all"]
+      description: |
+        PII entity types to detect:
+        - EMAIL: Email addresses (RFC 5322)
+        - SSN: Social Security Numbers (US format)
+        - PHONE: Phone numbers (international formats)
+        - ADDRESS: Physical addresses
+        - IP: IP addresses (IPv4/IPv6)
+        - CREDIT_CARD: Credit card numbers (Luhn algorithm)
+        - NAME: Person names (NER model)
+        - DATE_OF_BIRTH: Birth dates
+        - all: Detect all supported types
+
+    redaction_mode:
+      type: string
+      enum: ["mask", "remove", "encrypt"]
+      default: "mask"
+      description: |
+        Redaction mode:
+        - mask: Replace with placeholder (e.g., [EMAIL])
+        - remove: Delete entirely
+        - encrypt: Encrypt value (reversible if authorized)
+
+    store_redaction_log:
+      type: boolean
+      default: true
+      description: "Store redaction log for audit trail"
+
+    confidence_threshold:
+      type: number
+      min: 0.0
+      max: 1.0
+      default: 0.7
+      description: "Minimum confidence for PII detection (ML model)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "PII scan completed"
+      payload:
+        pii_detected:
+          type: boolean
+          description: "Whether any PII was detected"
+          example: true
+
+        entities_found:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: "PII entity type"
+                example: "EMAIL"
+
+              value_redacted:
+                type: string
+                description: "Redacted value"
+                example: "[EMAIL]"
+
+              position:
+                type: object
+                properties:
+                  start:
+                    type: integer
+                    description: "Start index in original content"
+                  end:
+                    type: integer
+                    description: "End index in original content"
+
+              confidence:
+                type: number
+                min: 0.0
+                max: 1.0
+                description: "Detection confidence score"
+                example: 0.95
+          description: "List of PII entities detected"
+
+        redacted_content:
+          type: string
+          description: "Content with PII redacted"
+          example: "Contact me at [EMAIL] or call [PHONE]"
+
+        redaction_id:
+          type: string
+          format: uuid
+          required: false
+          description: "Redaction log identifier (if store_redaction_log=true)"
+          example: "redaction_123"
+
+        scan_latency_ms:
+          type: integer
+          description: "PII scan latency"
+          example: 18
+
+    "400":
+      description: "Invalid scan request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_entity_types", "content_too_large", "invalid_redaction_mode"]
+
+        details:
+          type: string
+
+    "500":
+      description: "PII scan error"
+      payload:
+        error:
+          type: string
+          enum: ["detection_model_unavailable", "redaction_failed"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Email PII detection (AMBER band)"
+    request:
+      envelope:
+        port_id: "P10"
+        command_type: "pii_scan"
+        cognitive_trace_id: "0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f"
+        privacy_band: "AMBER"
+        capability: "SCAN_PII"
+      payload:
+        content: "Contact me at john.doe@example.com or call 555-123-4567"
+        entity_types: ["EMAIL", "PHONE"]
+        redaction_mode: "mask"
+        store_redaction_log: true
+
+    response:
+      status: 200
+      payload:
+        pii_detected: true
+        entities_found:
+          - type: "EMAIL"
+            value_redacted: "[EMAIL]"
+            position:
+              start: 14
+              end: 36
+            confidence: 0.98
+          - type: "PHONE"
+            value_redacted: "[PHONE]"
+            position:
+              start: 45
+              end: 57
+            confidence: 0.92
+        redacted_content: "Contact me at [EMAIL] or call [PHONE]"
+        redaction_id: "redaction_123"
+        scan_latency_ms: 18
+
+  - name: "Remove SSN (RED band)"
+    request:
+      envelope:
+        port_id: "P10"
+        command_type: "pii_scan"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        privacy_band: "RED"
+        capability: "SCAN_PII"
+      payload:
+        content: "My SSN is 123-45-6789 for verification"
+        entity_types: ["SSN"]
+        redaction_mode: "remove"
+        store_redaction_log: false
+
+    response:
+      status: 200
+      payload:
+        pii_detected: true
+        entities_found:
+          - type: "SSN"
+            value_redacted: ""
+            position:
+              start: 10
+              end: 21
+            confidence: 0.99
+        redacted_content: "My SSN is  for verification"
+        scan_latency_ms: 12
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "schema_lookup"
+      description: |
+        Query st_pii_schema_registry for entity type definitions
+        Load regex patterns, validation rules
+
+    - step: "regex_detection"
+      description: |
+        Fast regex-based detection:
+        - EMAIL: RFC 5322 regex + domain validation
+        - SSN: US format (XXX-XX-XXXX)
+        - PHONE: E.164 international format
+        - IP: IPv4/IPv6 patterns
+        - CREDIT_CARD: Luhn algorithm validation
+
+    - step: "ml_detection"
+      description: |
+        ML-based detection (presidio-analyzer):
+        - NAME: NER model (SpaCy)
+        - ADDRESS: Geocoding validation
+        - DATE_OF_BIRTH: Context-aware extraction
+        Filter by confidence_threshold
+
+    - step: "redaction"
+      description: |
+        Apply redaction_mode:
+        - mask: Replace with [ENTITY_TYPE]
+        - remove: Delete characters
+        - encrypt: AES-256 encryption (key in st_encryption_keys)
+
+    - step: "privacy_budget"
+      description: |
+        Track PII exposure per session (st_privacy_budgets)
+        Increment counters, enforce per-session limits
+        Alert if budget exceeded
+
+    - step: "logging"
+      description: |
+        If store_redaction_log=true:
+        Write to st_redaction_log:
+        - cognitive_trace_id, entity_types found, redaction_mode
+        - Original positions (for reversibility if authorized)
+
+  storage_targets:
+    - "st_pii_schema_registry" # Entity type definitions
+    - "st_redaction_log" # Audit trail
+    - "st_privacy_budgets" # Per-session PII exposure tracking
+    - "st_encryption_keys" # Encryption keys (HSM-backed)
+
+  events_emitted:
+    - "privacy.pii_detected"
+    - "privacy.content_redacted"
+    - "privacy.privacy_budget_updated"
+    - "privacy.privacy_budget_exceeded"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "entity_types must be valid PII types or 'all'"
+  - rule: "redaction_mode must be [mask|remove|encrypt]"
+  - rule: "content max length: 50,000 characters"
+  - rule: "confidence_threshold: 0.0-1.0"
+  - rule: "capability SCAN_PII required"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_pii_scans_total"
+      type: "counter"
+      labels: ["privacy_band", "pii_detected"]
+      description: "Total PII scans"
+
+    - name: "k0_pii_detected_total"
+      type: "counter"
+      labels: ["entity_type", "privacy_band"]
+      description: "Total PII instances detected"
+
+    - name: "k0_pii_redaction_latency_ms"
+      type: "histogram"
+      buckets: [5, 10, 25, 50, 100]
+      description: "PII redaction latency"
+
+    - name: "k0_privacy_budget_exceeded_total"
+      type: "counter"
+      labels: ["session_id"]
+      description: "Total privacy budget violations"
+
+  traces:
+    span_name: "k0_pii.scan"
+    attributes:
+      - "privacy_band"
+      - "entity_types"
+      - "pii_detected"
+      - "redaction_mode"
+
+  logs:
+    - event: "privacy.pii_detected"
+      level: "WARN"
+      fields: ["cognitive_trace_id", "entity_types", "count"]
+
+    - event: "privacy.privacy_budget_exceeded"
+      level: "ERROR"
+      fields: ["session_id", "budget_limit", "current_exposure"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "10ms"
+    p95: "25ms"
+    p99: "50ms"
+    timeout: "100ms"
+
+  throughput:
+    target_qps: 500
+    burst_capacity: 2000
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Internal K0 only (no external access)"
+    required: false
+
+  authorization:
+    capability_required: "SCAN_PII (internal service)"
+
+  privacy_bands:
+    GREEN: "Detection only, no redaction"
+    AMBER: "Mask PII in responses, log redactions"
+    RED: "Remove PII entirely, no storage"
+
+  encryption:
+    encrypt_mode: "AES-256-GCM"
+    key_storage: "HSM-backed (st_encryption_keys)"
+    key_rotation: "Every 30 days"
+
+  audit_trail:
+    redaction_log: "All redactions logged (if store_redaction_log=true)"
+    retention: "90 days"
+
+# ============================================================================
+# PII ENTITY TYPES
+# ============================================================================
+
+entity_types:
+  EMAIL:
+    description: "Email addresses (RFC 5322)"
+    detection: "Regex + domain validation"
+    example: "john.doe@example.com"
+
+  SSN:
+    description: "Social Security Numbers (US format)"
+    detection: "Regex (XXX-XX-XXXX)"
+    example: "123-45-6789"
+
+  PHONE:
+    description: "Phone numbers (E.164 international format)"
+    detection: "Regex + libphonenumber validation"
+    example: "+1-555-123-4567"
+
+  ADDRESS:
+    description: "Physical addresses"
+    detection: "NER model + geocoding validation"
+    example: "123 Main St, Springfield, IL 62701"
+
+  IP:
+    description: "IP addresses (IPv4/IPv6)"
+    detection: "Regex"
+    example: "192.168.1.1"
+
+  CREDIT_CARD:
+    description: "Credit card numbers (Luhn algorithm)"
+    detection: "Regex + Luhn checksum"
+    example: "4111-1111-1111-1111"
+
+  NAME:
+    description: "Person names"
+    detection: "NER model (SpaCy)"
+    example: "John Doe"
+
+  DATE_OF_BIRTH:
+    description: "Birth dates"
+    detection: "Context-aware date extraction"
+    example: "DOB: 01/15/1985"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research:
+  pii_detection:
+    description: "Named entity recognition for PII"
+    citations:
+      - "Lample et al. (2016) - Neural Architectures for Named Entity Recognition"
+      - "Microsoft Presidio - Data Protection and De-identification SDK"
+
+  privacy_by_design:
+    description: "GDPR principles for data minimization"
+    citations:
+      - "GDPR Article 5 - Principles relating to processing of personal data"
+      - "Cavoukian (2009) - Privacy by Design: The 7 Foundational Principles"

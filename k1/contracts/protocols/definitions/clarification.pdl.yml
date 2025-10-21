@@ -1,0 +1,581 @@
+# Clarification Protocol Contract
+# Epic 1.3 - Issue 1.3.2 - Protocol Definition 3 of 6
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Protocol Team
+# ADR References: ADR-0003b (Six Core Protocols)
+
+metadata:
+  protocol_id: "clarification"
+  protocol_name: "Clarification Protocol"
+  version: "1.0.0"
+  description: |
+    Nested clarification protocol for handling ambiguous user inputs.
+    Can be triggered within task execution or other protocols when disambiguation is required.
+    Implements contract from ADR-0003b Section 2.3 (Clarification).
+  research_foundation:
+    - "Actor Model (Hewitt 1973) - Message-passing coordination"
+    - "MPST (Honda et al. 2008) - Nested protocol support"
+  complexity: "MEDIUM"
+  ai_involvement: "MODERATE"
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+protocol_specification:
+  overview: |
+    Clarification Protocol handles ambiguous or underspecified user inputs during task execution.
+    It pauses the parent protocol, requests clarification from the user, and resumes upon receiving
+    a clear response. This protocol can be nested within task execution or other protocols.
+
+  protocol_type: "core"
+  state_count: 4
+  transition_count: 6
+  max_duration_ms: 60000
+  timeout_count: 1
+  message_count: 3
+  role_count: 3
+
+  coordination_pattern: "request_response_with_timeout"
+  ai_agent_roles:
+    - "clarification_agent"
+  pure_agent_roles:
+    - "orchestrator"
+    - "user_interface"
+
+  nesting_support:
+    can_be_nested: true
+    parent_protocols: ["task_execution", "tool_call"]
+    nesting_depth_limit: 2
+
+fsm_states:
+  start:
+    state_id: "start"
+    state_type: "initial"
+    description: "Clarification protocol initiated"
+    valid_roles: ["orchestrator"]
+    entry_actions:
+      - "pause_parent_protocol"
+      - "capture_ambiguity_context"
+      - "generate_clarification_prompt"
+    exit_conditions:
+      - "prompt_ready"
+    timeout_policy: "none"
+    observability:
+      metrics:
+        - "clarification_triggered_total"
+      logs:
+        - level: "INFO"
+          message: "Clarification protocol started"
+          fields: ["task_id", "parent_protocol", "trace_id"]
+    estimated_duration_ms: 50
+
+  awaiting_response:
+    state_id: "awaiting_response"
+    state_type: "intermediate"
+    description: "Waiting for user clarification"
+    valid_roles: ["user_interface"]
+    entry_actions:
+      - "send_clarification_prompt"
+      - "start_response_timer"
+    exit_conditions:
+      - "user_response_received"
+      - "timeout_exceeded"
+    timeout_policy: "response_timeout"
+    observability:
+      metrics:
+        - "clarification_awaiting_count"
+      logs:
+        - level: "INFO"
+          message: "Awaiting user clarification"
+          fields: ["task_id", "prompt", "trace_id"]
+    estimated_duration_ms: 30000
+
+  processing:
+    state_id: "processing"
+    state_type: "intermediate"
+    description: "Processing user clarification"
+    valid_roles: ["clarification_agent"]
+    entry_actions:
+      - "validate_response"
+      - "extract_clarified_intent"
+      - "update_task_context"
+    exit_conditions:
+      - "clarification_processed"
+      - "further_clarification_needed"
+    timeout_policy: "none"
+    ai_reasoning: true
+    observability:
+      metrics:
+        - "clarification_processing_latency_ms"
+      logs:
+        - level: "INFO"
+          message: "Processing clarification"
+          fields: ["task_id", "response", "trace_id"]
+    estimated_duration_ms: 500
+
+  completed:
+    state_id: "completed"
+    state_type: "final"
+    description: "Clarification completed, resume parent protocol"
+    valid_roles: ["orchestrator"]
+    entry_actions:
+      - "resume_parent_protocol"
+      - "inject_clarified_context"
+      - "emit_completion_event"
+    exit_conditions: []
+    timeout_policy: "none"
+    observability:
+      metrics:
+        - "clarification_completed_total"
+        - "clarification_duration_ms"
+      logs:
+        - level: "INFO"
+          message: "Clarification completed"
+          fields: ["task_id", "clarified_intent", "total_duration_ms"]
+    estimated_duration_ms: 50
+
+fsm_transitions:
+  start_to_awaiting:
+    transition_id: "start_to_awaiting"
+    from_state: "start"
+    to_state: "awaiting_response"
+    trigger: "prompt_ready"
+    guard_conditions:
+      - "user_interface_available"
+      - "prompt_is_valid"
+    message_exchange:
+      message_type: "ClarificationRequest"
+      sender_role: "orchestrator"
+      receiver_role: "user_interface"
+      delivery_guarantee: "at_least_once"
+    actions:
+      - "send_prompt_to_user"
+      - "start_timeout_timer"
+    max_duration_ms: 50
+    observability:
+      metrics:
+        - "transition_start_to_awaiting_total"
+
+  awaiting_to_processing:
+    transition_id: "awaiting_to_processing"
+    from_state: "awaiting_response"
+    to_state: "processing"
+    trigger: "user_response_received"
+    guard_conditions:
+      - "response_is_not_empty"
+      - "clarification_agent_available"
+    message_exchange:
+      message_type: "UserClarification"
+      sender_role: "user_interface"
+      receiver_role: "clarification_agent"
+      delivery_guarantee: "exactly_once"
+    actions:
+      - "stop_timeout_timer"
+      - "assign_clarification_agent"
+    max_duration_ms: 50
+    observability:
+      metrics:
+        - "transition_awaiting_to_processing_total"
+
+  processing_to_completed:
+    transition_id: "processing_to_completed"
+    from_state: "processing"
+    to_state: "completed"
+    trigger: "clarification_processed"
+    guard_conditions:
+      - "intent_clarified"
+      - "no_further_clarification_needed"
+    message_exchange:
+      message_type: "ClarificationResult"
+      sender_role: "clarification_agent"
+      receiver_role: "orchestrator"
+      delivery_guarantee: "exactly_once"
+    actions:
+      - "update_task_context"
+      - "emit_success_metrics"
+    max_duration_ms: 50
+    observability:
+      metrics:
+        - "transition_processing_to_completed_total"
+
+  processing_to_awaiting:
+    transition_id: "processing_to_awaiting"
+    from_state: "processing"
+    to_state: "awaiting_response"
+    trigger: "further_clarification_needed"
+    guard_conditions:
+      - "clarification_count_below_max"
+      - "user_interface_available"
+    message_exchange:
+      message_type: "ClarificationRequest"
+      sender_role: "clarification_agent"
+      receiver_role: "user_interface"
+      delivery_guarantee: "at_least_once"
+    actions:
+      - "generate_followup_prompt"
+      - "increment_clarification_counter"
+    max_duration_ms: 50
+    observability:
+      metrics:
+        - "transition_processing_to_awaiting_total"
+        - "multi_round_clarification_total"
+
+  awaiting_to_completed:
+    transition_id: "awaiting_to_completed"
+    from_state: "awaiting_response"
+    to_state: "completed"
+    trigger: "timeout_exceeded"
+    guard_conditions:
+      - "response_timer_expired"
+    message_exchange:
+      message_type: "ClarificationTimeout"
+      sender_role: "system"
+      receiver_role: "orchestrator"
+      delivery_guarantee: "best_effort"
+    actions:
+      - "log_timeout"
+      - "abort_parent_protocol"
+      - "emit_timeout_metrics"
+    max_duration_ms: 50
+    observability:
+      metrics:
+        - "transition_awaiting_to_completed_timeout_total"
+      logs:
+        - level: "WARN"
+          message: "Clarification timeout, aborting parent protocol"
+
+  start_to_completed:
+    transition_id: "start_to_completed"
+    from_state: "start"
+    to_state: "completed"
+    trigger: "clarification_not_needed"
+    guard_conditions:
+      - "ambiguity_resolved_automatically"
+    message_exchange:
+      message_type: "ClarificationSkipped"
+      sender_role: "orchestrator"
+      receiver_role: "system"
+      delivery_guarantee: "best_effort"
+    actions:
+      - "log_auto_resolution"
+      - "resume_parent_immediately"
+    max_duration_ms: 20
+    observability:
+      metrics:
+        - "transition_start_to_completed_skipped_total"
+
+timeout_policies:
+  response_timeout:
+    timeout_id: "response_timeout"
+    duration_ms: 60000
+    scope: "state"
+    target_state: "awaiting_response"
+    action_on_timeout: "abort"
+    fallback_transition: "awaiting_to_completed"
+    retry_allowed: false
+    observability:
+      metrics:
+        - "clarification_timeout_total"
+      logs:
+        - level: "WARN"
+          message: "User clarification timeout"
+
+violation_handlers:
+  out_of_order_message:
+    violation_type: "out_of_order_message"
+    action: "block"
+    severity: "MEDIUM"
+    recovery_strategy: "drop_message"
+
+  invalid_role:
+    violation_type: "invalid_role"
+    action: "block"
+    severity: "HIGH"
+    recovery_strategy: "abort_protocol"
+
+  timeout_exceeded:
+    violation_type: "timeout_exceeded"
+    action: "abort"
+    severity: "MEDIUM"
+    recovery_strategy: "abort_parent_protocol"
+
+message_schemas:
+  ClarificationRequest:
+    message_type: "ClarificationRequest"
+    sender_role: "orchestrator|clarification_agent"
+    receiver_role: "user_interface"
+    delivery_guarantee: "at_least_once"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer1_kernel/orchestrator.fbs::ClarificationRequest"
+    fields:
+      task_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      parent_protocol:
+        type: "string"
+        required: true
+        description: "Protocol that triggered clarification"
+      prompt:
+        type: "string"
+        required: true
+        max_length: 1024
+        description: "Clarification question for user"
+      options:
+        type: "array"
+        required: false
+        items: "string"
+        description: "Multiple choice options (optional)"
+      clarification_round:
+        type: "integer"
+        required: true
+        min: 1
+        max: 3
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "prompt cannot be empty"
+      - "clarification_round must be <= 3"
+    performance:
+      max_serialization_time_ms: 2
+      max_size_bytes: 4096
+
+  UserClarification:
+    message_type: "UserClarification"
+    sender_role: "user_interface"
+    receiver_role: "clarification_agent"
+    delivery_guarantee: "exactly_once"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer4_ingress/user_input.fbs::UserClarification"
+    fields:
+      task_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      response:
+        type: "string"
+        required: true
+        max_length: 2048
+        description: "User's clarification response"
+      selected_option:
+        type: "integer"
+        required: false
+        description: "Index of selected option (if multiple choice)"
+      timestamp:
+        type: "integer"
+        required: true
+        description: "Unix timestamp of response"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "response cannot be empty"
+      - "selected_option must be valid index if provided"
+    performance:
+      max_serialization_time_ms: 2
+      max_size_bytes: 4096
+
+  ClarificationResult:
+    message_type: "ClarificationResult"
+    sender_role: "clarification_agent"
+    receiver_role: "orchestrator"
+    delivery_guarantee: "exactly_once"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer1_kernel/orchestrator.fbs::ClarificationResult"
+    fields:
+      task_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      clarified_intent:
+        type: "string"
+        required: true
+        description: "Clarified user intent"
+      updated_context:
+        type: "object"
+        required: true
+        description: "Updated task context with clarification"
+      confidence_score:
+        type: "float"
+        required: true
+        min: 0.0
+        max: 1.0
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "clarified_intent cannot be empty"
+      - "confidence_score must be in [0.0, 1.0]"
+    performance:
+      max_serialization_time_ms: 5
+      max_size_bytes: 8192
+
+role_definitions:
+  orchestrator:
+    role_id: "orchestrator"
+    role_type: "pure_agent"
+    description: "Orchestrator that manages clarification lifecycle"
+    capabilities:
+      - "protocol_nesting"
+      - "context_management"
+    allowed_states:
+      - "start"
+      - "completed"
+    allowed_transitions:
+      - "start_to_awaiting"
+      - "start_to_completed"
+    message_permissions:
+      can_send:
+        - "ClarificationRequest"
+        - "ClarificationSkipped"
+      can_receive:
+        - "ClarificationResult"
+        - "ClarificationTimeout"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+
+  user_interface:
+    role_id: "user_interface"
+    role_type: "pure_agent"
+    description: "User interface agent for prompt delivery and response capture"
+    capabilities:
+      - "user_communication"
+      - "input_validation"
+    allowed_states:
+      - "awaiting_response"
+    allowed_transitions:
+      - "awaiting_to_processing"
+    message_permissions:
+      can_send:
+        - "UserClarification"
+      can_receive:
+        - "ClarificationRequest"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+
+  clarification_agent:
+    role_id: "clarification_agent"
+    role_type: "ai_agent"
+    description: "AI agent for clarification processing and intent extraction"
+    capabilities:
+      - "intent_extraction"
+      - "ambiguity_resolution"
+      - "followup_generation"
+    allowed_states:
+      - "processing"
+    allowed_transitions:
+      - "processing_to_completed"
+      - "processing_to_awaiting"
+    message_permissions:
+      can_send:
+        - "ClarificationResult"
+        - "ClarificationRequest"
+      can_receive:
+        - "UserClarification"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+    llm_model: "gpt-4"
+    llm_temperature: 0.5
+
+performance_requirements:
+  latency_targets:
+    p50_ms: 30000
+    p95_ms: 55000
+    p99_ms: 60000
+    description: "End-to-end clarification latency (dominated by user response time)"
+
+  processing_latency:
+    p95_ms: 500
+    description: "AI agent processing latency (excluding user wait time)"
+
+  throughput_targets:
+    clarifications_per_minute: 20
+    description: "System-wide clarification capacity"
+
+  resource_limits:
+    memory_per_clarification_mb: 10
+    max_clarification_rounds: 3
+    description: "Resource constraints per clarification"
+
+observability:
+  metrics:
+    counters:
+      - name: "clarification_triggered_total"
+        description: "Total clarifications triggered"
+        labels: ["parent_protocol"]
+      - name: "clarification_completed_total"
+        description: "Total clarifications completed"
+        labels: ["status"]
+      - name: "multi_round_clarification_total"
+        description: "Total multi-round clarifications"
+      - name: "clarification_timeout_total"
+        description: "Total clarification timeouts"
+
+    histograms:
+      - name: "clarification_duration_ms"
+        description: "Total clarification duration"
+        buckets: [5000, 15000, 30000, 45000, 60000]
+      - name: "clarification_processing_latency_ms"
+        description: "AI agent processing latency"
+        buckets: [100, 250, 500, 1000]
+
+    gauges:
+      - name: "active_clarifications"
+        description: "Number of active clarifications"
+
+  logging:
+    structured: true
+    format: "json"
+    required_fields:
+      - "task_id"
+      - "trace_id"
+      - "parent_protocol"
+
+  tracing:
+    enabled: true
+    provider: "opentelemetry"
+    sampling_rate: 1.0
+    spans:
+      - name: "clarification_protocol"
+        attributes: ["task_id", "parent_protocol", "rounds"]
+
+testing_requirements:
+  unit_tests:
+    - test_fsm_state_transitions
+    - test_timeout_enforcement
+    - test_multi_round_clarification
+
+  integration_tests:
+    - test_nested_clarification_in_task_execution
+    - test_user_response_processing
+    - test_timeout_abort_parent
+
+  protocol_validation_tests:
+    - test_mpst_compliance
+    - test_nesting_depth_limit
+
+compliance:
+  adr_references:
+    - "ADR-0003b: Six Core Protocol Implementations (Section 2.3)"
+
+  security_requirements:
+    - "All roles must be attested with HMAC-SHA256"
+
+  privacy_requirements:
+    - "User responses must respect privacy bands"
+
+cross_references:
+  related_protocols:
+    - protocol: "task_execution"
+      relationship: "can_nest_within"
+      description: "Clarification can be nested in task execution"
+
+notes:
+  - "Clarification protocol is nestable with depth limit of 2"
+  - "Maximum 3 clarification rounds before aborting"
+  - "Timeout of 60s for user response"
+  - "Processing latency target is 500ms P95 (AI agent)"

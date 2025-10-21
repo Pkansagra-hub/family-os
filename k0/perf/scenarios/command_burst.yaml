@@ -1,0 +1,78 @@
+# Command Burst Scenario
+#
+# Tests kernel resilience under sudden command submission spikes.
+# Validates:
+# - WAL write throughput
+# - Idempotency ledger performance
+# - Receipt generation latency
+# - Outbox queueing behavior
+
+name: "Command Burst Load Test"
+description: |
+  Simulates a sudden burst of command submissions to test kernel write path
+  performance, idempotency handling, and outbox queueing under load.
+
+type: burst
+duration: 300  # 5 minutes
+
+tags:
+  - command
+  - write-path
+  - burst
+  - production-validation
+
+environment:
+  kernel_endpoint: "http://localhost:8000"
+  telemetry_endpoint: "http://localhost:4317"
+  prometheus_pushgateway: "http://localhost:9091"
+  pulumi_stack: "dev"
+
+phases:
+  - name: "Warmup"
+    duration: 30
+    workload:
+      type: command
+      rate: 10  # req/sec
+      concurrency: 2
+      payload_size: 1024  # 1KB
+
+  - name: "Burst Phase"
+    duration: 180
+    workload:
+      type: command
+      rate: 500  # req/sec
+      concurrency: 50
+      payload_size: 2048  # 2KB
+    assertions:
+      max_p99_latency_ms: 500
+      min_success_rate: 0.99
+
+  - name: "Recovery"
+    duration: 60
+    workload:
+      type: command
+      rate: 10  # req/sec
+      concurrency: 2
+      payload_size: 1024
+    assertions:
+      max_p99_latency_ms: 100
+      min_success_rate: 0.999
+
+  - name: "Cooldown"
+    duration: 30
+    workload:
+      type: command
+      rate: 1  # req/sec
+      concurrency: 1
+      payload_size: 512
+
+global_assertions:
+  max_p99_latency_ms: 500
+  min_success_rate: 0.98
+  max_memory_mb: 512
+  max_cpu_percent: 80.0
+
+artifacts:
+  timeline: true
+  telemetry_traces: true
+  prometheus_snapshots: true

@@ -1,0 +1,14 @@
+{
+  "session_id": "b5bbdc9d686f4c9e9a3cb652c0f80a98",
+  "alias": "st_vector",
+  "driver_module": "faiss",
+  "transport": "http",
+  "endpoint": "https://indexer.family.local/apply",
+  "lease_seconds": 300,
+  "issued_at": "2025-09-30T12:00:00Z",
+  "expires_at": "2025-09-30T12:05:00Z",
+  "capabilities": ["apply"],
+  "metadata": {
+    "version": "1.0.0"
+  }
+}

@@ -1,0 +1,716 @@
+# Protocol Selection Contract - Axis 1 (MCP vs Direct)
+# ADR-0033d: 2D Selection Logic & Fallback Cascade
+# ADR-0033a: MCP Protocol Integration
+# Created: 2025-10-16
+# Status: DRAFT
+
+contract_name: "Protocol Selection (Axis 1)"
+contract_id: "protocol_selection_axis1_v1"
+adr_references:
+  - "ADR-0033d: 2D Selection Logic"
+  - "ADR-0033a: MCP Protocol Integration"
+  - "ADR-0033: Tool Execution Architecture"
+
+description: |
+  Protocol selection logic for Axis 1 of 2D Tool Execution Selector.
+
+  Determines HOW tools are discovered and invoked (Layer 1 - Protocol):
+  - MCP Protocol (80%): Standardized JSON-RPC 2.0 interface
+  - Direct API (20%): Legacy tools, REST APIs, CLI binaries
+
+# ====================
+# Protocol Types
+# ====================
+protocol_types:
+  mcp:
+    name: "MCP Protocol"
+    percentage: "80%"
+    description: |
+      Model Context Protocol (Anthropic 2024).
+      Standardized JSON-RPC 2.0 interface for tool discovery and invocation.
+
+    characteristics:
+      standardized: true
+      discovery: "tools/list method"
+      capability_negotiation: true
+      error_handling: "JSON-RPC error codes"
+      cross_platform: true
+      industry_adoption: "Claude, ChatGPT, Copilot (608 tools)"
+
+    use_cases:
+      - "Standard tools with MCP implementation"
+      - "Weather API, Calendar sync, Web search"
+      - "Tools that need capability discovery"
+      - "Tools that should work with other AI systems"
+
+    examples:
+      - tool_name: "weather_api"
+        description: "Weather service with MCP server implementation"
+        mcp_server_path: "/opt/familyos/mcp_servers/weather_api.py"
+        transport: "stdio"
+
+      - tool_name: "calendar_sync"
+        description: "Calendar service with MCP server"
+        mcp_server_path: "/opt/familyos/mcp_servers/calendar.py"
+        transport: "http"
+
+      - tool_name: "web_search"
+        description: "Search service with MCP server"
+        mcp_server_path: "/opt/familyos/mcp_servers/web_search.py"
+        transport: "stdio"
+
+  direct:
+    name: "Direct API"
+    percentage: "20%"
+    description: |
+      Direct invocation without standardized protocol.
+      For legacy tools, native binaries, REST APIs without MCP wrapper.
+
+    characteristics:
+      standardized: false
+      discovery: "manual tool registry"
+      capability_negotiation: false
+      error_handling: "tool-specific"
+      cross_platform: false
+      vendor_lock_in: true
+
+    use_cases:
+      - "Legacy tools without MCP support"
+      - "Native binaries (ffmpeg, imagemagick, etc.)"
+      - "Existing REST API services"
+      - "Simple CLI tools"
+
+    examples:
+      - tool_name: "ffmpeg"
+        description: "Video encoding via native CLI"
+        binary_path: "/usr/bin/ffmpeg"
+        invocation_type: "cli"
+
+      - tool_name: "imagemagick"
+        description: "Image manipulation via CLI"
+        binary_path: "/usr/bin/convert"
+        invocation_type: "cli"
+
+      - tool_name: "external_api"
+        description: "Third-party REST API"
+        api_endpoint: "https://api.example.com"
+        invocation_type: "rest"
+
+# ====================
+# Protocol Selection Logic (Axis 1)
+# ====================
+selection_logic:
+  name: "Protocol Selection Algorithm"
+  description: |
+    Single-criterion decision: Does tool have MCP implementation?
+
+  decision_rule:
+    condition: "tool.has_mcp_server == true"
+    then: "protocol = MCP"
+    else: "protocol = DIRECT"
+
+  rationale: |
+    Industry Standard (Preference):
+    - MCP adopted by Claude, ChatGPT, Copilot
+    - 608 tools MCP-compatible (Anthropic tool marketplace)
+    - Enables tool portability (tools work with multiple AI systems)
+    - Standardized error handling, capability negotiation
+
+    Legacy Support (Fallback):
+    - Direct API needed for tools without MCP implementation
+    - Prevents complete system breakage from MCP adoption
+    - Allows gradual migration (tools can add MCP over time)
+
+  implementation_pseudocode: |
+    def select_protocol(tool_characteristics):
+      if tool_characteristics.has_mcp_server:
+        return ProtocolType.MCP
+      else:
+        return ProtocolType.DIRECT
+
+# ====================
+# MCP Protocol Details
+# ====================
+mcp_protocol:
+  specification: "Model Context Protocol - Anthropic 2024"
+  specification_url: "https://modelcontextprotocol.io/specification/2025-06-18"
+
+  communication_format:
+    standard: "JSON-RPC 2.0"
+    standard_url: "https://www.jsonrpc.org/specification"
+    encoding: "UTF-8 JSON"
+
+  transport_mechanisms:
+    stdio:
+      name: "Stdio Pipes"
+      description: "stdin/stdout for local process-based MCP servers"
+      use_case: "70% of tools (MCP+Process sandbox)"
+      message_format: "Newline-delimited JSON"
+      performance: "<50ms overhead"
+
+    http:
+      name: "HTTP POST"
+      description: "HTTP for WASM/remote MCP servers"
+      use_case: "10% of tools (MCP+WASM sandbox)"
+      message_format: "JSON POST body"
+      performance: "<50ms overhead"
+
+  rpc_methods:
+    initialize:
+      description: "Server initialization and capability negotiation"
+      request: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_123",
+          "method": "initialize",
+          "params": {
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {
+              "name": "k1_orchestrator",
+              "version": "1.0.0"
+            }
+          }
+        }
+      response: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_123",
+          "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {
+              "name": "weather_api",
+              "version": "1.0.0"
+            }
+          }
+        }
+      timeout: "5 seconds"
+
+    tools_list:
+      description: "List available tools"
+      request: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_124",
+          "method": "tools/list",
+          "params": {}
+        }
+      response: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_124",
+          "result": {
+            "tools": [
+              {
+                "name": "get_weather",
+                "description": "Get weather data for a city",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "city": {"type": "string"},
+                    "units": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                  },
+                  "required": ["city"]
+                }
+              }
+            ]
+          }
+        }
+      timeout: "5 seconds"
+
+    tools_call:
+      description: "Call a tool"
+      request: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_125",
+          "method": "tools/call",
+          "params": {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Seattle",
+              "units": "celsius"
+            }
+          }
+        }
+      response: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_125",
+          "result": {
+            "city": "Seattle",
+            "temperature": 18.5,
+            "condition": "Partly cloudy",
+            "units": "celsius"
+          }
+        }
+      timeout: "30 seconds (per-tool configurable)"
+
+    shutdown:
+      description: "Graceful server shutdown"
+      request: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_126",
+          "method": "shutdown",
+          "params": {}
+        }
+      response: |
+        {
+          "jsonrpc": "2.0",
+          "id": "req_126",
+          "result": {}
+        }
+      timeout: "5 seconds"
+
+  error_codes:
+    parse_error:
+      code: -32700
+      message: "Parse error"
+      description: "Invalid JSON received"
+
+    invalid_request:
+      code: -32600
+      message: "Invalid Request"
+      description: "Request object is not a valid JSON-RPC 2.0 request"
+
+    method_not_found:
+      code: -32601
+      message: "Method not found"
+      description: "Tool/method does not exist"
+
+    invalid_params:
+      code: -32602
+      message: "Invalid params"
+      description: "Tool parameters do not match schema"
+
+    internal_error:
+      code: -32603
+      message: "Internal error"
+      description: "Tool execution failed"
+
+# ====================
+# Direct API Details
+# ====================
+direct_api:
+  invocation_types:
+    cli:
+      name: "CLI Invocation"
+      description: "Execute native CLI binaries (ffmpeg, imagemagick, etc.)"
+      use_case: "15% of tools (Direct+Process sandbox)"
+      examples:
+        - tool_name: "ffmpeg"
+          command: "ffmpeg -i input.mp4 -c:v libx264 output.mp4"
+        - tool_name: "imagemagick"
+          command: "convert input.jpg -resize 800x600 output.jpg"
+
+    rest:
+      name: "REST API"
+      description: "Call existing REST API services"
+      use_case: "3% of tools"
+      examples:
+        - tool_name: "external_weather_api"
+          endpoint: "https://api.openweathermap.org/data/2.5/weather"
+          method: "GET"
+        - tool_name: "database_service"
+          endpoint: "https://db.example.com/query"
+          method: "POST"
+
+    wasm_direct:
+      name: "WASM Direct"
+      description: "Execute standalone WASM module (no MCP wrapper)"
+      use_case: "5% of tools (Direct+WASM sandbox)"
+      examples:
+        - tool_name: "computation_module"
+          module_path: "/opt/wasm_modules/computation.wasm"
+          entrypoint: "_start"
+
+  characteristics:
+    discovery: "Manual tool registry (YAML configuration)"
+    tool_registry_format: |
+      - name: "ffmpeg"
+        protocol: "direct"
+        direct_config:
+          binary_path: "/usr/bin/ffmpeg"
+          invocation_type: "cli"
+          args_template: ["-i", "{input}", "-c:v", "libx264", "{output}"]
+
+    error_handling: |
+      Tool-specific error codes and messages.
+      K1 must parse tool-specific error formats.
+      Example (ffmpeg):
+        - Exit code 0: Success
+        - Exit code 1: Unspecified error
+        - Exit code >1: Specific error
+
+    capability_discovery: "None (manual specification)"
+
+    portability: |
+      Low - tools written for K1 Direct API don't work with Claude/ChatGPT.
+      Recommend migrating to MCP for cross-system portability.
+
+# ====================
+# Protocol Selection Scenarios
+# ====================
+scenarios:
+  scenario_1:
+    title: "MCP-compatible tool"
+    tool_name: "weather_api"
+    has_mcp_server: true
+    selection: "MCP Protocol"
+    rationale: |
+      Tool implements MCP server (discovered in tool registry).
+      Select MCP for standardized integration + portability.
+    advantages:
+      - "Standardized JSON-RPC interface"
+      - "Portable to other AI systems (Claude, ChatGPT)"
+      - "Automatic tool discovery via tools/list"
+      - "Consistent error handling"
+    result:
+      protocol: "mcp"
+      mcp_config:
+        server_path: "/opt/familyos/mcp_servers/weather_api.py"
+        transport: "stdio"
+        timeout_seconds: 30
+
+  scenario_2:
+    title: "Legacy CLI tool without MCP"
+    tool_name: "ffmpeg"
+    has_mcp_server: false
+    selection: "Direct Protocol"
+    rationale: |
+      Tool doesn't have MCP implementation (legacy CLI).
+      Select Direct for direct CLI invocation.
+    advantages:
+      - "No MCP server needed"
+      - "Familiar CLI interface"
+      - "No adaptation layer required"
+    limitations:
+      - "Not portable to other AI systems"
+      - "No capability discovery"
+    result:
+      protocol: "direct"
+      direct_config:
+        binary_path: "/usr/bin/ffmpeg"
+        invocation_type: "cli"
+        args_template: ["-i", "{input}", "-c:v", "libx264", "{output}"]
+
+  scenario_3:
+    title: "Tool migration: Direct → MCP"
+    tool_name: "my_tool"
+    migration_steps: |
+      1. Initial state: Direct API (legacy)
+         - Tool uses CLI invocation
+         - Not portable to other systems
+
+      2. Add MCP implementation:
+         - Implement MCP server (JSON-RPC over stdio)
+         - Test with MCPClient
+
+      3. Update tool registry:
+         - Add has_mcp_server: true
+         - Add mcp_config section
+
+      4. ToolExecutionSelector automatically selects MCP:
+         - No code changes needed
+         - Tool now portable to Claude, ChatGPT, Copilot
+
+    benefits:
+      - "Zero downtime migration"
+      - "ToolExecutionSelector automatically switches to MCP"
+      - "Direct API fallback still works if needed"
+
+# ====================
+# Selection Decision Matrix
+# ====================
+decision_matrix:
+  name: "Protocol Selection Decision Matrix"
+  criterion: "has_mcp_server"
+
+  combinations:
+    combination_1:
+      condition: "has_mcp_server = true"
+      decision: "Select MCP Protocol"
+      tools: "80% (weather_api, calendar_sync, web_search, etc.)"
+      characteristics:
+        - "Standardized JSON-RPC 2.0"
+        - "Industry standard (Claude, ChatGPT, Copilot)"
+        - "Automatic capability discovery"
+        - "Portable across AI systems"
+      performance: "<50ms protocol overhead"
+
+    combination_2:
+      condition: "has_mcp_server = false"
+      decision: "Select Direct Protocol"
+      tools: "20% (ffmpeg, imagemagick, legacy services)"
+      characteristics:
+        - "Custom integration per tool"
+        - "No standardization"
+        - "Manual capability specification"
+        - "Vendor lock-in (K1 only)"
+      performance: "<10ms protocol overhead"
+
+# ====================
+# Protocol Fallback Strategy
+# ====================
+protocol_fallback:
+  primary: "MCP"
+  fallback: "Direct"
+  fallback_strategy: |
+    if MCP server unavailable/crashed:
+      try Direct API invocation (if available)
+
+    Rationale:
+    - MCP is standardized but requires server implementation
+    - Direct is fallback for cases where MCP fails
+    - Example: MCP server crash → Try Direct CLI invocation
+
+  fallback_examples:
+    example_1:
+      title: "MCP server crashes"
+      scenario: |
+        1. K1 sends tools/list to MCP server
+        2. MCP server crashes (unhandled exception)
+        3. MCPClient receives no response (timeout)
+        4. Circuit breaker opens (3+ failures)
+        5. ToolExecutionSelector selects Direct protocol as fallback
+        6. K1 invokes tool via CLI/REST instead
+      result: "Tool execution succeeds via fallback"
+
+    example_2:
+      title: "MCP timeout"
+      scenario: |
+        1. K1 sends tools/call to MCP server
+        2. MCP server doesn't respond within timeout
+        3. MCPClient raises TimeoutError
+        4. ToolExecutionSelector retries with fallback protocol
+        5. Tool executes via Direct API
+      result: "Tool execution succeeds after retry"
+
+# ====================
+# Tool Registry Format
+# ====================
+tool_registry_format:
+  description: "How protocol selection is configured in tool registry"
+
+  yaml_structure: |
+    tool_registry:
+      tools:
+        - name: "weather_api"
+          protocol: "mcp"  # MCP selected for this tool
+          mcp_config:
+            server_path: "/opt/familyos/mcp_servers/weather_api.py"
+            transport: "stdio"
+            timeout_seconds: 30
+
+        - name: "ffmpeg"
+          protocol: "direct"  # Direct selected for this tool
+          direct_config:
+            binary_path: "/usr/bin/ffmpeg"
+            invocation_type: "cli"
+
+  schema:
+    protocol_field:
+      type: "enum"
+      values: ["mcp", "direct"]
+      description: "Protocol type (determined by has_mcp_server characteristic)"
+
+    mcp_config:
+      type: "object"
+      required_if: "protocol == 'mcp'"
+      fields:
+        server_path: "Path to MCP server executable"
+        transport: "Communication mechanism (stdio or http)"
+        timeout_seconds: "Per-tool timeout for MCP requests"
+        port: "HTTP port (required if transport=http)"
+
+    direct_config:
+      type: "object"
+      required_if: "protocol == 'direct'"
+      fields:
+        binary_path: "Path to executable (for CLI)"
+        api_endpoint: "URL (for REST API)"
+        invocation_type: "Type of invocation (cli, rest, wasm_direct)"
+        args_template: "Command-line argument template"
+
+# ====================
+# Implementation Contract
+# ====================
+implementation:
+  class_name: "ProtocolSelector"
+  module: "k1.tools.selection.protocol"
+
+  methods:
+    select_protocol:
+      signature: |
+        def select_protocol(
+          self,
+          tool_characteristics: ToolCharacteristics
+        ) -> ProtocolType
+
+      description: "Select protocol based on has_mcp_server characteristic"
+
+      logic: |
+        if tool_characteristics.has_mcp_server:
+          return ProtocolType.MCP
+        else:
+          return ProtocolType.DIRECT
+
+      parameters:
+        tool_characteristics:
+          type: "ToolCharacteristics"
+          fields:
+            - tool_name
+            - has_mcp_server (required for this method)
+
+      returns: "ProtocolType (MCP or DIRECT)"
+
+      time_complexity: "O(1)"
+      space_complexity: "O(1)"
+
+    get_protocol_config:
+      signature: |
+        def get_protocol_config(
+          self,
+          protocol: ProtocolType,
+          tool_definition: ToolDefinition
+        ) -> Dict
+
+      description: "Get protocol-specific configuration from tool registry"
+
+      logic: |
+        if protocol == ProtocolType.MCP:
+          return tool_definition.mcp_config
+        else:
+          return tool_definition.direct_config
+
+    validate_protocol_config:
+      signature: |
+        def validate_protocol_config(
+          self,
+          protocol: ProtocolType,
+          config: Dict
+        ) -> bool
+
+      description: "Validate protocol configuration schema"
+
+      validation_rules:
+        mcp_config:
+          - server_path: "Must be non-empty string"
+          - transport: "Must be 'stdio' or 'http'"
+          - timeout_seconds: "Must be positive integer"
+          - port: "Required if transport='http'"
+
+        direct_config:
+          - invocation_type: "Must be 'cli', 'rest', or 'wasm_direct'"
+          - binary_path: "Required if invocation_type='cli'"
+          - api_endpoint: "Required if invocation_type='rest'"
+
+# ====================
+# Performance Analysis
+# ====================
+performance:
+  selection_latency_ms:
+    p50: 0.5
+    p95: 1.0
+    p99: 2.0
+    description: "Time to select protocol (single boolean check)"
+
+  protocol_overhead_mcp:
+    description: "MCP protocol overhead (JSON-RPC 2.0)"
+    components:
+      json_serialization: "1-2ms"
+      stdio_transport: "5-10ms (local process)"
+      http_transport: "15-25ms (network)"
+    total: "<50ms for typical workload"
+
+  protocol_overhead_direct:
+    description: "Direct protocol overhead (binary invocation)"
+    components:
+      argument_substitution: "<1ms"
+      process_spawn: "10-50ms"
+    total: "<10ms overhead (not counting actual execution)"
+
+# ====================
+# Testing Contract
+# ====================
+testing:
+  framework: "WARD"
+  test_cases:
+    test_1:
+      name: "Tool with MCP selects MCP protocol"
+      inputs:
+        has_mcp_server: true
+      expected: "ProtocolType.MCP"
+      assertion: "result == ProtocolType.MCP"
+
+    test_2:
+      name: "Tool without MCP selects Direct protocol"
+      inputs:
+        has_mcp_server: false
+      expected: "ProtocolType.DIRECT"
+      assertion: "result == ProtocolType.DIRECT"
+
+    test_3:
+      name: "MCP config validated correctly"
+      inputs:
+        protocol: "mcp"
+        config:
+          server_path: "/opt/familyos/mcp_servers/weather_api.py"
+          transport: "stdio"
+          timeout_seconds: 30
+      expected: "Valid"
+      assertion: "validate_protocol_config(protocol, config) == True"
+
+    test_4:
+      name: "Direct config validated correctly"
+      inputs:
+        protocol: "direct"
+        config:
+          binary_path: "/usr/bin/ffmpeg"
+          invocation_type: "cli"
+      expected: "Valid"
+      assertion: "validate_protocol_config(protocol, config) == True"
+
+# ====================
+# Observability
+# ====================
+observability:
+  logging:
+    fields:
+      - tool_name
+      - selected_protocol
+      - has_mcp_server
+      - trace_id
+    example_log: |
+      {
+        "level": "INFO",
+        "event": "protocol_selected",
+        "tool_name": "weather_api",
+        "selected_protocol": "mcp",
+        "has_mcp_server": true,
+        "trace_id": "trace_abc123"
+      }
+
+  metrics:
+    k1_protocol_selection_total:
+      type: "Counter"
+      labels: ["protocol"]
+      description: "Total protocol selections (mcp or direct)"
+
+# ====================
+# Related ADRs
+# ====================
+related_adrs:
+  - "ADR-0033: Tool Execution Architecture"
+  - "ADR-0033a: MCP Protocol Integration"
+  - "ADR-0033d: 2D Selection Logic & Fallback Cascade"
+  - "ADR-0034: MCP Protocol for Tool Integration"
+
+# ====================
+# Version & Status
+# ====================
+version: "1.0.0"
+status: "DRAFT"
+last_updated: "2025-10-16"
+authors: ["K1 Architecture Team"]

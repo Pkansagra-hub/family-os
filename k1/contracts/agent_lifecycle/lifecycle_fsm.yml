@@ -1,0 +1,286 @@
+# Agent Lifecycle FSM Contract
+# Source ADR: ADR-0005 (Agent Lifecycle FSM with 6 States)
+# Status: Accepted, Implementation 70% Complete - Production Ready
+
+metadata:
+  contract_id: "lifecycle-fsm-v1.0"
+  source_adr: "0005-agent-lifecycle-fsm.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+  related_adrs:
+    - "0002-actor-model-agent-isolation.md"
+    - "0003-mpst-protocol-validation.md"
+    - "0004-52-module-5-layer-architecture.md"
+    - "0006-3phase-orchestration-contract-net.md"
+    - "0008-saga-pattern-error-recovery.md"
+    - "0010-capability-based-security.md"
+    - "0030-model-hub-architecture.md"
+
+# FSM Overview
+fsm_overview:
+  name: "Agent Lifecycle FSM"
+  states: 6
+  initial_state: "PENDING"
+  final_state: "TERMINATED"
+  authority_model: "Supervisor-owned transitions with monotonic clocks"
+  hybrid_support: "AI agents (4) + Pure actors (54)"
+
+# State Definitions
+states:
+
+  # State 1: PENDING
+  PENDING:
+    description: "Agent registered in roster but not yet initialized"
+    entry_conditions:
+      - "Orchestrator sends HIRE message to supervisor"
+      - "Agent ID allocated, lease created, capabilities assigned"
+      - "Agent instance created but constructor not yet invoked"
+    entry_actions:
+      - "Allocate agent_id (UUID)"
+      - "Create AgentLease (caps, bands, budgets, TTL)"
+      - "Add to roster with state=PENDING"
+      - "Emit metric: agent_state_transitions_total{from=null,to=PENDING}"
+    exit_conditions:
+      - "Supervisor invokes agent initialization → WARMING"
+      - "Timeout (5s): PENDING → TERMINATED (initialization deadlock)"
+    typical_duration_ms: 10
+    timeout_ms: 5000
+    failure_action: "TERMINATED"
+    research_backing:
+      - "Kubernetes Pending state (pod scheduled but not started)"
+      - "Ray PENDING_CREATION (actor queued for creation)"
+
+  # State 2: WARMING
+  WARMING:
+    description: "Agent loading AI models, initializing KV cache, registering tools, and loading persona prompts"
+    entry_conditions:
+      - "Transition from PENDING"
+      - "Agent constructor invoked, warm-up sequence starts"
+    ai_agent_actions:
+      - "Load LLM/SLM Model Weights (150-200ms)"
+      - "Load Agent Persona Prompts (5-10ms)"
+      - "Initialize KV Cache (20-30ms)"
+      - "Register Tools (10-20ms)"
+      - "Warm LLM Inference (30-50ms)"
+      - "Supervisor Registration (5ms)"
+    pure_actor_actions:
+      - "Load Configuration (10-20ms)"
+      - "Initialize Mailbox (5ms)"
+      - "Register with Supervisor (5ms)"
+      - "No Model Hub Interaction (0ms)"
+    exit_conditions:
+      - "Warmup complete, all resources initialized → ACTIVE"
+      - "Timeout (5s): WARMING → TERMINATED (warmup failed, retry later)"
+      - "Crash during warmup → TERMINATED (supervisor logs failure)"
+    typical_duration_ms:
+      ai_agents: 240  # 150-250ms laptop, 300-500ms phone
+      pure_actors: 25  # 20-50ms
+    timeout_ms: 5000
+    failure_action: "TERMINATED"
+    performance_budget_ms:
+      ai_agents: 250  # <250ms on laptop, <500ms on phone
+      pure_actors: 50
+    research_backing:
+      - "Kubernetes Init Containers (separate warmup phase)"
+      - "JVM Warmup (JIT compilation and class loading)"
+      - "TensorFlow Graph Compilation (ahead-of-time compilation)"
+
+  # State 3: ACTIVE
+  ACTIVE:
+    description: "Agent ready to accept and execute tasks"
+    entry_conditions:
+      - "Transition from WARMING (initialization complete)"
+      - "Transition from IDLE (new task assigned)"
+    ai_agent_processing:
+      description: "LLM reasoning via Model Hub"
+      loop:
+        - "Receive from mailbox (Actor Model)"
+        - "Load agent prompt from Model Hub"
+        - "Render prompt with task context"
+        - "Call LLM via Model Hub"
+        - "Parse LLM output into structured action"
+        - "Execute action (may involve more LLM calls)"
+        - "Send response via mailbox"
+        - "Check for quiescence (idle detection)"
+    pure_actor_processing:
+      description: "Deterministic message processing"
+      loop:
+        - "Receive from mailbox (Actor Model)"
+        - "Deterministic message handling (NO Model Hub)"
+        - "Send response via mailbox"
+        - "Check for quiescence (idle detection)"
+    exit_conditions:
+      - "No tasks for idle_timeout (60s) + quiescence → IDLE"
+      - "FIRE message from orchestrator → DRAINING"
+      - "Supervisor detects crash → TERMINATED"
+      - "Kill signal (SIGTERM) → DRAINING"
+    quiescence_detection:
+      window_ms: 200
+      condition: "mailbox empty + no arrivals for window_ms"
+    typical_duration: "Variable (seconds to minutes)"
+    performance_targets:
+      mailbox_poll_latency_p95_ms: 0.5
+      task_bid_response_p95_ms: 50
+      task_execution_ai_agents_ms: "50-500 (LLM inference)"
+      task_execution_pure_actors_ms: "<5 (deterministic)"
+      tool_call_e2e_p95_ms: 3000
+      model_inference_ttft_p95_ms: 150
+    research_backing:
+      - "Actor Model receive loop (Hewitt 1973)"
+      - "Event-Driven Architecture SEDA stages (Welsh et al. 2001)"
+      - "LLM Inference Pipelines (vLLM, TensorRT)"
+
+  # State 4: IDLE
+  IDLE:
+    description: "Agent has no assigned tasks but remains loaded in memory for fast reactivation"
+    entry_conditions:
+      - "Transition from ACTIVE after idle_timeout (60s)"
+      - "Agent completed all tasks, mailbox empty"
+    actions:
+      - "Reduce resource footprint (release non-essential memory)"
+      - "Keep model loaded (avoid reload cost)"
+      - "Listen for reactivation (monitor mailbox)"
+      - "Periodic health checks (every 1s)"
+      - "TTL countdown (auto-draining)"
+    exit_conditions:
+      - "New task assigned → ACTIVE (fast reactivation <50ms)"
+      - "TTL expired (configurable, default 5 min) → DRAINING"
+      - "Memory pressure (K1 heap > 80%) → DRAINING (largest RSS first)"
+      - "Thermal overshoot (thermal ≥ T_hot) → DRAINING (thermal contribution)"
+      - "FIRE message from orchestrator → DRAINING"
+    memory_pressure_policy:
+      threshold: 0.8  # >80% heap
+      eviction_order: "largest RSS first"
+      drain_deadline_ms: 2000
+    thermal_pressure_policy:
+      threshold: "T_hot"
+      eviction_order: "thermal contribution (NPU > GPU > CPU)"
+      drain_deadline_ms: 2000
+    typical_duration: "1-5 minutes"
+    performance_targets:
+      reactivation_latency_ms: "<50"
+      memory_footprint_percent: "60-80% of ACTIVE"
+    research_backing:
+      - "Connection Pooling (database connection pools)"
+      - "Orleans Deactivation Timer (actors remain active for grace period)"
+      - "JVM Thread Pools (idle threads remain in pool)"
+
+  # State 5: DRAINING
+  DRAINING:
+    description: "Agent finishing last task before termination, rejecting new tasks"
+    entry_conditions:
+      - "Transition from ACTIVE (FIRE message or idle TTL expired)"
+      - "Transition from IDLE (TTL expired or memory pressure)"
+      - "SIGTERM signal (graceful K1 shutdown)"
+    actions:
+      - "Reject new tasks (MPST-enforced)"
+      - "Finish current task (tool calls, model inference)"
+      - "Flush state to K0 (idempotent deltas)"
+      - "Flush receipts to K0 bridge"
+      - "Revoke capabilities (lease manager)"
+      - "Notify supervisor (DRAINING → TERMINATED)"
+    idempotent_flush:
+      key_scope: "(agent_id, seqno)"
+      semantics: "de-dup on key, retries safe"
+    mpst_drain_enforcement:
+      rule: "orchestrator must not send Assign after DrainBegin"
+      router_action: "admit-deny at receive-side, DLQ with reason='agent_draining'"
+    exit_conditions:
+      - "Current task complete + state flushed → TERMINATED"
+      - "Timeout (10s) → Force termination (warning logged)"
+      - "Crash during draining → TERMINATED"
+    performance_budget_ms: 10000  # Max draining duration
+    typical_duration: "1-5s"
+    research_backing:
+      - "Kubernetes PreStop Hook (30s default grace period)"
+      - "Erlang terminate callback (cleanup logic)"
+      - "Akka postStop lifecycle method (resource cleanup)"
+
+  # State 6: TERMINATED
+  TERMINATED:
+    description: "Agent removed from roster, all resources released"
+    entry_conditions:
+      - "Transition from DRAINING (graceful shutdown complete)"
+      - "Transition from any state (crash, timeout, kill signal)"
+    actions:
+      - "Release model (unload from NPU/GPU memory)"
+      - "Release KV cache (free buffers)"
+      - "Close mailbox (drain MPSC queue)"
+      - "Remove from roster"
+      - "Revoke lease (capabilities including revocation-on-crash)"
+      - "Log termination event to K0"
+      - "Blacklist check (3 crashes in 10 min → 1 hour blacklist)"
+    lease_revocation:
+      policy: "capabilities revoked on DRAINING/TERMINATED"
+      revocation_on_crash: "tool/model tokens/handles marked non-reusable"
+    blacklist_policy:
+      trigger: "3 crashes within 10 minutes"
+      duration_ms: 3600000  # 1 hour
+      per_version: true  # versioned blacklisting
+    exit_condition: "None (final state)"
+    typical_duration: "<50ms"
+    research_backing:
+      - "Actor Model termination (Hewitt 1973)"
+      - "Erlang process exit (linked process notification)"
+      - "Kubernetes Terminated state (final pod state)"
+
+# Authority & Clock Model
+authority_model:
+  principle: "Supervisor owns all lifecycle transitions (single-writer pattern)"
+  monotonic_clocks: "Deadlines stored as absolute monotonic timestamps"
+  intent_based: "Agents publish intents, supervisor makes final decisions"
+  rationale: "Prevents race conditions and double-fire timer bugs"
+
+# K0 Receipts (Every Lifecycle Hop)
+receipts:
+  required_receipts:
+    - AGENT_STATE_CHANGED:
+        fields: [agent_id, from_state, to_state, reason, ts, version_hash]
+        trigger: "Every state transition"
+    - AGENT_CRASH:
+        fields: [agent_id, crash_type, trace, rss_mb, cpu_pct, ts, version_hash]
+        trigger: "Crash detection (<100ms)"
+    - CAPABILITIES_ISSUED:
+        fields: [agent_id, lease_id, capabilities, ttl_ms, ts, version_hash]
+        trigger: "Agent initialization (PENDING → WARMING)"
+    - CAPABILITIES_REVOKED:
+        fields: [agent_id, lease_id, reason, ts, version_hash]
+        trigger: "Agent termination (DRAINING → TERMINATED)"
+    - AGENT_BLACKLISTED:
+        fields: [agent_type, version_hash, ttl_ms, ts, trigger_reason]
+        trigger: "Blacklist threshold exceeded"
+  k0_integration:
+    storage: "Hash-chained in K0 WAL (immutable append-only)"
+    linking: "Each receipt links to prev_receipt_id"
+    retention: "7 days hot, 90 days cold, 7 years audit"
+    observability: "Receipts drive lifecycle analytics and rollback"
+
+# AI Agent vs Pure Actor Matrix
+agent_type_matrix:
+  ai_agents:
+    count: 4
+    types: ["Concierge", "Planner", "Researcher", "Safety Watch"]
+    warming_budget_ms: 250
+    resource_footprint_mb: 150
+    processing_model: "LLM reasoning via Model Hub"
+    crash_recovery: "Complex (model state, KV cache, tool leases)"
+  pure_actors:
+    count: 54
+    examples: ["Orchestrator", "Router", "Protocol Monitor", "Supervisor"]
+    warming_budget_ms: 50
+    resource_footprint_mb: 10
+    processing_model: "Deterministic logic (NO Model Hub)"
+    crash_recovery: "Simple (config reload)"
+
+# Implementation Status
+implementation_status:
+  core_fsm: "COMPLETED"
+  supervisor: "COMPLETED"
+  warming_ai_agents: "COMPLETED"
+  warming_pure_actors: "COMPLETED"
+  active_processing: "COMPLETED"
+  idle_pooling: "IN PROGRESS (optimization pending)"
+  draining_shutdown: "IN PROGRESS (timeout tuning)"
+  memory_pressure: "IN PROGRESS (eviction policy)"
+  overall_completion: "70% (Production Ready)"

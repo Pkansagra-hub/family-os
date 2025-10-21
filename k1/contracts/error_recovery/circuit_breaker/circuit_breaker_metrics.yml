@@ -1,0 +1,769 @@
+# Circuit Breaker Metrics & Observability - Prometheus Metrics, Logging, Alerting
+# Purpose: Define comprehensive observability stack for circuit breaker monitoring
+# Source ADR: ADR-0009c (Circuit Breaker Metrics & Observability)
+# Layer: Layer 2 - Orchestration (Error Recovery)
+#
+# Research Citations:
+#   - Netflix Hystrix Metrics (2011) - Real-time circuit breaker metrics dashboard (1B+ requests/day)
+#   - Prometheus Alerting Best Practices (2016) - SLO-based alerting rules
+#   - Google SRE Book (2016) - Four golden signals: Latency, Traffic, Errors, Saturation
+
+---
+
+# SECTION 1: PROMETHEUS METRICS
+
+prometheus_metrics:
+  description: "6 key metrics for circuit breaker observability"
+
+  metric_1_state_gauge:
+    name: "circuit_breaker_state"
+    type: "Gauge"
+    purpose: "Track current state of each circuit (CLOSED=0, OPEN=1, HALF_OPEN=2)"
+    labels:
+      - "service (e.g., tool_runner, model_hub_local)"
+    values:
+      - "0 = CLOSED (normal operation)"
+      - "1 = OPEN (fail-fast mode)"
+      - "2 = HALF_OPEN (testing recovery)"
+
+    prometheus_client: |
+      from prometheus_client import Gauge
+
+      circuit_breaker_state = Gauge(
+          'circuit_breaker_state',
+          'Circuit breaker current state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)',
+          ['service']
+      )
+
+      # Usage in CircuitBreaker class
+      def _transition_to_open(self):
+          self.state = CircuitState.OPEN
+          circuit_breaker_state.labels(service=self.service_name).set(1)
+
+    promql_queries:
+      - query: "circuit_breaker_state"
+        description: "Show all circuits and their current state"
+
+      - query: "circuit_breaker_state{state='1'}"
+        description: "Show all circuits currently OPEN"
+
+      - query: "circuit_breaker_state == 1 for 5m"
+        description: "Alert if circuit stuck OPEN for >5 minutes"
+
+    grafana_visualization:
+      panel_type: "Time series (line chart)"
+      y_axis: "State (0, 1, 2)"
+      x_axis: "Time"
+      legend: "Service name"
+      use_case: "Track circuit state over time, identify OPEN periods"
+
+  metric_2_transitions_counter:
+    name: "circuit_breaker_transitions_total"
+    type: "Counter"
+    purpose: "Count state transitions (CLOSED→OPEN, OPEN→HALF_OPEN, HALF_OPEN→CLOSED)"
+    labels:
+      - "service"
+      - "from_state (CLOSED, OPEN, HALF_OPEN)"
+      - "to_state (CLOSED, OPEN, HALF_OPEN)"
+
+    prometheus_client: |
+      from prometheus_client import Counter
+
+      circuit_breaker_transitions_total = Counter(
+          'circuit_breaker_transitions_total',
+          'Total circuit breaker state transitions',
+          ['service', 'from_state', 'to_state']
+      )
+
+      def _transition_to_open(self):
+          old_state = self.state
+          self.state = CircuitState.OPEN
+
+          circuit_breaker_transitions_total.labels(
+              service=self.service_name,
+              from_state=old_state.value,
+              to_state=self.state.value
+          ).inc()
+
+    promql_queries:
+      - query: "rate(circuit_breaker_transitions_total{to_state='OPEN'}[1m])"
+        description: "Rate of transitions to OPEN (failures/minute)"
+
+      - query: "sum(increase(circuit_breaker_transitions_total[1h])) by (service)"
+        description: "Total transitions in last hour"
+
+      - query: "rate(circuit_breaker_transitions_total[5m]) > 10"
+        description: "Alert if flapping (>10 transitions in 5 minutes)"
+
+    grafana_visualization:
+      panel_type: "Stat (single value)"
+      value: "Total transitions in last hour"
+      threshold: "Warn if >50, Alert if >100"
+      use_case: "Detect flapping circuits"
+
+  metric_3_calls_counter:
+    name: "circuit_breaker_calls_total"
+    type: "Counter"
+    purpose: "Count all calls through circuit by result (success, failure, rejected)"
+    labels:
+      - "service"
+      - "result (success, failure, rejected)"
+
+    prometheus_client: |
+      from prometheus_client import Counter
+
+      circuit_breaker_calls_total = Counter(
+          'circuit_breaker_calls_total',
+          'Total calls through circuit breaker',
+          ['service', 'result']
+      )
+
+      async def call(self, func, *args, **kwargs):
+          if not await self._should_allow_request():
+              # Circuit OPEN, reject
+              circuit_breaker_calls_total.labels(
+                  service=self.service_name,
+                  result="rejected"
+              ).inc()
+              return await self._invoke_fallback()
+
+          try:
+              result = await func(*args, **kwargs)
+              circuit_breaker_calls_total.labels(
+                  service=self.service_name,
+                  result="success"
+              ).inc()
+              return result
+          except Exception:
+              circuit_breaker_calls_total.labels(
+                  service=self.service_name,
+                  result="failure"
+              ).inc()
+              raise
+
+    promql_queries:
+      - query: |
+          sum(rate(circuit_breaker_calls_total{result='success'}[5m])) by (service)
+          / sum(rate(circuit_breaker_calls_total[5m])) by (service) * 100
+        description: "Success rate (%) for each service"
+
+      - query: |
+          sum(rate(circuit_breaker_calls_total{result='failure'}[5m])) by (service)
+          / sum(rate(circuit_breaker_calls_total[5m])) by (service) * 100
+        description: "Failure rate (%) for each service"
+
+    grafana_visualization:
+      panel_type: "Stacked bar chart"
+      y_axis: "Call count (rate)"
+      x_axis: "Service name"
+      stacks:
+        - "success (green)"
+        - "failure (red)"
+        - "rejected (orange)"
+      use_case: "Compare success/failure/rejection rates across services"
+
+  metric_4_failures_counter:
+    name: "circuit_breaker_failures_total"
+    type: "Counter"
+    purpose: "Count failures by type (timeout, exception, slow_call)"
+    labels:
+      - "service"
+      - "failure_type (timeout, exception, slow_call)"
+
+    prometheus_client: |
+      from prometheus_client import Counter
+
+      circuit_breaker_failures_total = Counter(
+          'circuit_breaker_failures_total',
+          'Total failures detected by circuit breaker',
+          ['service', 'failure_type']
+      )
+
+      async def _record_failure(self, exception: Exception, latency_ms: float):
+          # Classify failure type
+          if isinstance(exception, asyncio.TimeoutError):
+              failure_type = "timeout"
+          elif latency_ms > self.config.slow_call_threshold_ms:
+              failure_type = "slow_call"
+          else:
+              failure_type = "exception"
+
+          circuit_breaker_failures_total.labels(
+              service=self.service_name,
+              failure_type=failure_type
+          ).inc()
+
+    promql_queries:
+      - query: "rate(circuit_breaker_failures_total[5m])"
+        description: "Failure rate by type"
+
+      - query: "topk(3, sum(rate(circuit_breaker_failures_total[1h])) by (failure_type))"
+        description: "Which failure type is most common?"
+
+      - query: "rate(circuit_breaker_failures_total{failure_type='timeout'}[1m]) > 10"
+        description: "Alert if timeout rate >10/minute"
+
+    grafana_visualization:
+      panel_type: "Pie chart"
+      slices:
+        - "timeout (blue)"
+        - "slow_call (yellow)"
+        - "exception (red)"
+      value: "Count in last hour"
+      use_case: "Identify most common failure mode for each service"
+
+  metric_5_fallbacks_counter:
+    name: "circuit_breaker_fallbacks_total"
+    type: "Counter"
+    purpose: "Count fallback invocations by strategy"
+    labels:
+      - "service"
+      - "fallback_strategy (default_value, cached_result, alternate_model, raise_error)"
+
+    prometheus_client: |
+      from prometheus_client import Counter
+
+      circuit_breaker_fallbacks_total = Counter(
+          'circuit_breaker_fallbacks_total',
+          'Total fallback invocations',
+          ['service', 'fallback_strategy']
+      )
+
+      async def _invoke_fallback(self):
+          circuit_breaker_fallbacks_total.labels(
+              service=self.service_name,
+              fallback_strategy=self.fallback.__name__
+          ).inc()
+
+          return await self.fallback()
+
+    promql_queries:
+      - query: "rate(circuit_breaker_fallbacks_total[5m])"
+        description: "Fallback rate by strategy"
+
+      - query: "topk(3, sum(rate(circuit_breaker_fallbacks_total[1h])) by (service))"
+        description: "Which service uses fallbacks most?"
+
+    grafana_visualization:
+      panel_type: "Table"
+      columns:
+        - "service"
+        - "fallback_strategy"
+        - "count"
+        - "rate"
+      sorting: "By count descending"
+      use_case: "Monitor fallback usage, identify degraded services"
+
+  metric_6_latency_histogram:
+    name: "circuit_breaker_latency_ms"
+    type: "Histogram"
+    purpose: "Track latency distribution by circuit state"
+    labels:
+      - "service"
+      - "state (CLOSED, OPEN, HALF_OPEN)"
+
+    buckets:
+      - "0.1ms (reject latency, OPEN state)"
+      - "1ms"
+      - "10ms"
+      - "50ms"
+      - "100ms"
+      - "500ms"
+      - "1000ms (1s)"
+      - "5000ms (5s)"
+      - "10000ms (10s)"
+
+    prometheus_client: |
+      from prometheus_client import Histogram
+
+      circuit_breaker_latency_ms = Histogram(
+          'circuit_breaker_latency_ms',
+          'Circuit breaker call latency in milliseconds',
+          ['service', 'state'],
+          buckets=[0.1, 1, 10, 50, 100, 500, 1000, 5000, 10000]
+      )
+
+      async def call(self, func, *args, **kwargs):
+          start_time = time.time()
+          try:
+              result = await func(*args, **kwargs)
+              latency_ms = (time.time() - start_time) * 1000
+
+              circuit_breaker_latency_ms.labels(
+                  service=self.service_name,
+                  state=self.state.value
+              ).observe(latency_ms)
+
+              return result
+          except Exception:
+              latency_ms = (time.time() - start_time) * 1000
+
+              circuit_breaker_latency_ms.labels(
+                  service=self.service_name,
+                  state=self.state.value
+              ).observe(latency_ms)
+
+              raise
+
+    promql_queries:
+      - query: |
+          histogram_quantile(0.95, sum(rate(circuit_breaker_latency_ms_bucket[5m]))
+          by (service, le))
+        description: "P95 latency by service"
+
+      - query: |
+          histogram_quantile(0.99, sum(rate(circuit_breaker_latency_ms_bucket[5m]))
+          by (state, le))
+        description: "P99 latency by state (CLOSED vs OPEN)"
+
+    grafana_visualization:
+      panel_type: "Heatmap"
+      y_axis: "Latency (ms, log scale)"
+      x_axis: "Time"
+      color: "Request density (blue=low, red=high)"
+      use_case: "Identify latency spikes, compare CLOSED vs OPEN latency"
+      insight: "OPEN state should have <1ms latency (fail-fast)"
+
+---
+
+# SECTION 2: STRUCTURED LOGGING
+
+structured_logging:
+  description: "5 key log events for circuit breaker audit trail"
+
+  log_event_1_opened:
+    event: "circuit_breaker_opened"
+    level: "WARNING"
+    trigger: "failure_count >= failure_threshold"
+
+    fields:
+      - "timestamp (ISO 8601)"
+      - "service (e.g., tool_runner)"
+      - "failure_count (current count)"
+      - "failure_threshold (threshold value)"
+      - "time_window_ms (rolling window)"
+      - "trace_id (for correlation)"
+
+    example_json: |
+      {
+        "timestamp": "2025-10-12T14:23:45.123Z",
+        "level": "WARNING",
+        "message": "circuit_breaker_opened",
+        "service": "tool_runner",
+        "failure_count": 5,
+        "failure_threshold": 5,
+        "time_window_ms": 60000,
+        "trace_id": "abc123"
+      }
+
+    use_case: "Alert operators when circuit opens"
+
+  log_event_2_closed:
+    event: "circuit_breaker_closed"
+    level: "INFO"
+    trigger: "success_count >= success_threshold (in HALF_OPEN)"
+
+    fields:
+      - "timestamp"
+      - "service"
+      - "success_count (consecutive successes)"
+      - "success_threshold (threshold value)"
+      - "trace_id"
+
+    example_json: |
+      {
+        "timestamp": "2025-10-12T14:24:15.456Z",
+        "level": "INFO",
+        "message": "circuit_breaker_closed",
+        "service": "tool_runner",
+        "success_count": 2,
+        "success_threshold": 2,
+        "trace_id": "abc123"
+      }
+
+    use_case: "Track recovery, confirm circuit is healthy"
+
+  log_event_3_transition:
+    event: "circuit_breaker_transition"
+    level: "INFO"
+    trigger: "Any state change"
+
+    fields:
+      - "timestamp"
+      - "service"
+      - "from_state (CLOSED, OPEN, HALF_OPEN)"
+      - "to_state"
+      - "failure_count or success_count"
+      - "trace_id"
+
+    example_json: |
+      {
+        "timestamp": "2025-10-12T14:23:45.123Z",
+        "level": "INFO",
+        "message": "circuit_breaker_transition",
+        "service": "tool_runner",
+        "from_state": "CLOSED",
+        "to_state": "OPEN",
+        "failure_count": 5,
+        "trace_id": "abc123"
+      }
+
+    use_case: "Audit trail for state transitions"
+
+  log_event_4_fallback:
+    event: "circuit_breaker_fallback"
+    level: "WARNING"
+    trigger: "Circuit OPEN, fallback invoked"
+
+    fields:
+      - "timestamp"
+      - "service"
+      - "fallback_strategy (default_value, cached_result, etc.)"
+      - "circuit_state (OPEN)"
+      - "trace_id"
+
+    example_json: |
+      {
+        "timestamp": "2025-10-12T14:23:46.789Z",
+        "level": "WARNING",
+        "message": "circuit_breaker_fallback",
+        "service": "tool_runner",
+        "fallback_strategy": "default_value_fallback",
+        "circuit_state": "OPEN",
+        "trace_id": "abc123"
+      }
+
+    use_case: "Track degraded service, monitor fallback usage"
+
+  log_event_5_failure:
+    event: "circuit_breaker_failure"
+    level: "DEBUG"
+    trigger: "Service call fails"
+
+    fields:
+      - "timestamp"
+      - "service"
+      - "failure_type (timeout, exception, slow_call)"
+      - "latency_ms (actual latency)"
+      - "failure_count (current count)"
+      - "trace_id"
+
+    example_json: |
+      {
+        "timestamp": "2025-10-12T14:23:40.123Z",
+        "level": "DEBUG",
+        "message": "circuit_breaker_failure",
+        "service": "tool_runner",
+        "failure_type": "timeout",
+        "latency_ms": 5000,
+        "failure_count": 1,
+        "trace_id": "abc123"
+      }
+
+    use_case: "Debug failures, identify root cause"
+
+---
+
+# SECTION 3: PROMETHEUS ALERTING RULES
+
+alerting_rules:
+  description: "5 production alerts for circuit breaker incidents"
+
+  alert_1_stuck_open:
+    name: "CircuitBreakerStuckOpen"
+    severity: "CRITICAL"
+    expr: "circuit_breaker_state == 1 for 5m"
+    duration: "5 minutes"
+
+    condition: "Circuit has been OPEN for >5 minutes"
+    threshold: "5m (should recover within timeout_duration_ms)"
+
+    action: "Page on-call engineer (PagerDuty)"
+
+    annotations:
+      summary: "Circuit breaker {{ $labels.service }} stuck OPEN for >5 minutes"
+      description: |
+        Service {{ $labels.service }} circuit breaker has been OPEN for over 5 minutes.
+        Check service health and logs. May need manual intervention or service restart.
+      runbook: "https://k1-docs/runbooks/circuit-breaker-stuck-open"
+
+    rationale: |
+      Circuit should recover within 30-60s (timeout_duration_ms).
+      If OPEN for >5 minutes, indicates service is down or config issue.
+      Requires immediate operator intervention.
+
+  alert_2_high_failure_rate:
+    name: "CircuitBreakerHighFailureRate"
+    severity: "WARNING"
+    expr: |
+      sum(rate(circuit_breaker_calls_total{result="failure"}[1m])) by (service)
+      / sum(rate(circuit_breaker_calls_total[1m])) by (service) > 0.5
+    duration: "1 minute"
+
+    condition: "Failure rate >50% for 1 minute"
+    threshold: "50% (indicates service degradation)"
+
+    action: "Notify Slack channel (#k1-alerts)"
+
+    annotations:
+      summary: "Circuit breaker {{ $labels.service }} failure rate >50%"
+      description: |
+        Service {{ $labels.service }} has failure rate of {{ $value | humanizePercentage }}.
+        Circuit may open soon if failures continue.
+      runbook: "https://k1-docs/runbooks/high-failure-rate"
+
+    rationale: |
+      >50% failure rate indicates service degradation.
+      Circuit may open soon (if failure_threshold is reached).
+      Warns operators before circuit opens.
+
+  alert_3_flapping:
+    name: "CircuitBreakerFlapping"
+    severity: "WARNING"
+    expr: "rate(circuit_breaker_transitions_total[5m]) > 10"
+    duration: "5 minutes"
+
+    condition: ">10 state transitions in 5 minutes"
+    threshold: "10 transitions/5min (abnormal oscillation)"
+
+    action: "Notify Slack channel (#k1-alerts)"
+
+    annotations:
+      summary: "Circuit breaker {{ $labels.service }} flapping (>10 transitions in 5m)"
+      description: |
+        Service {{ $labels.service }} circuit breaker is oscillating between OPEN and CLOSED.
+        Indicates intermittent failures. May need to adjust thresholds.
+      runbook: "https://k1-docs/runbooks/circuit-breaker-flapping"
+
+    rationale: |
+      Flapping indicates intermittent failures (service degraded but not fully down).
+      May need to adjust failure_threshold or timeout_duration_ms.
+      Can cause user experience degradation.
+
+  alert_4_high_fallback_rate:
+    name: "CircuitBreakerHighFallbackRate"
+    severity: "WARNING"
+    expr: |
+      sum(rate(circuit_breaker_fallbacks_total[5m])) by (service)
+      / sum(rate(circuit_breaker_calls_total[5m])) by (service) > 0.3
+    duration: "5 minutes"
+
+    condition: "Fallback rate >30% for 5 minutes"
+    threshold: "30% (indicates frequent circuit opens)"
+
+    action: "Notify Slack channel (#k1-alerts)"
+
+    annotations:
+      summary: "Circuit breaker {{ $labels.service }} fallback rate >30%"
+      description: |
+        Service {{ $labels.service }} is using fallbacks {{ $value | humanizePercentage }}.
+        Circuit is frequently OPEN. Check service health.
+      runbook: "https://k1-docs/runbooks/high-fallback-rate"
+
+    rationale: |
+      >30% fallback rate indicates circuit is frequently OPEN.
+      Users seeing degraded experience (cached results, default values).
+      Service may need scaling or repair.
+
+  alert_5_high_latency:
+    name: "CircuitBreakerHighLatency"
+    severity: "WARNING"
+    expr: |
+      histogram_quantile(0.95, sum(rate(circuit_breaker_latency_ms_bucket[5m]))
+      by (service, le)) > 5000
+    duration: "5 minutes"
+
+    condition: "P95 latency >5s for 5 minutes"
+    threshold: "5000ms (indicates slow service)"
+
+    action: "Notify Slack channel (#k1-alerts)"
+
+    annotations:
+      summary: "Circuit breaker {{ $labels.service }} P95 latency >5s"
+      description: |
+        Service {{ $labels.service }} P95 latency is {{ $value }}ms.
+        Check for slow calls or timeouts. May need performance optimization.
+      runbook: "https://k1-docs/runbooks/high-latency"
+
+    rationale: |
+      P95 latency >5s indicates service is slow.
+      May trigger slow_call_threshold and count as failures.
+      Circuit may open if slow calls are counted as failures.
+
+---
+
+# SECTION 4: GRAFANA DASHBOARDS
+
+grafana_dashboards:
+
+  dashboard_1_overview:
+    name: "Circuit Breaker Overview"
+    description: "High-level view of all circuit breakers"
+    panels:
+      - panel_1_state_timeline:
+          title: "Circuit State Timeline"
+          type: "Time series (line chart)"
+          query: "circuit_breaker_state"
+          y_axis: "State (0=CLOSED, 1=OPEN, 2=HALF_OPEN)"
+          legend: "Service name"
+          use_case: "Which circuits are OPEN at any time?"
+
+      - panel_2_success_rate:
+          title: "Success Rate by Service"
+          type: "Stat (gauge)"
+          query: |
+            sum(rate(circuit_breaker_calls_total{result="success"}[5m])) by (service)
+            / sum(rate(circuit_breaker_calls_total[5m])) by (service) * 100
+          value: "Percentage"
+          threshold: "Green >95%, Yellow 80-95%, Red <80%"
+          use_case: "Quick health check across all services"
+
+      - panel_3_failure_rate:
+          title: "Failure Rate Heatmap"
+          type: "Heatmap"
+          query: "sum(rate(circuit_breaker_calls_total{result=\"failure\"}[5m])) by (service)"
+          y_axis: "Service name"
+          x_axis: "Time"
+          color: "Failure rate (blue=low, red=high)"
+          use_case: "Identify services with high failure rates"
+
+      - panel_4_transitions:
+          title: "Transition Count (Last Hour)"
+          type: "Bar chart"
+          query: "sum(increase(circuit_breaker_transitions_total[1h])) by (service)"
+          y_axis: "Transition count"
+          x_axis: "Service name"
+          use_case: "Identify flapping circuits"
+
+  dashboard_2_detail:
+    name: "Circuit Breaker Detail (Per Service)"
+    description: "Deep dive into a specific circuit breaker"
+    variables:
+      - variable_service: "Service name dropdown (values from circuit_breaker_state)"
+
+    panels:
+      - panel_1_current_state:
+          title: "Current State"
+          type: "Stat (single value)"
+          query: "circuit_breaker_state{service='$service'}"
+          value: "CLOSED/OPEN/HALF_OPEN"
+          color: "Green=CLOSED, Red=OPEN, Yellow=HALF_OPEN"
+
+      - panel_2_call_distribution:
+          title: "Call Result Distribution"
+          type: "Pie chart"
+          query: "sum(rate(circuit_breaker_calls_total{service='$service'}[5m])) by (result)"
+          slices:
+            - "success (green)"
+            - "failure (red)"
+            - "rejected (orange)"
+          use_case: "Proportion of successful vs failed vs rejected calls"
+
+      - panel_3_failure_distribution:
+          title: "Failure Type Distribution"
+          type: "Pie chart"
+          query: "sum(rate(circuit_breaker_failures_total{service='$service'}[5m])) by (failure_type)"
+          slices:
+            - "timeout (blue)"
+            - "slow_call (yellow)"
+            - "exception (red)"
+          use_case: "Most common failure mode"
+
+      - panel_4_latency_percentiles:
+          title: "Latency Percentiles"
+          type: "Time series"
+          queries:
+            - "P50: histogram_quantile(0.50, sum(rate(circuit_breaker_latency_ms_bucket{service='$service'}[5m])) by (le))"
+            - "P95: histogram_quantile(0.95, sum(rate(circuit_breaker_latency_ms_bucket{service='$service'}[5m])) by (le))"
+            - "P99: histogram_quantile(0.99, sum(rate(circuit_breaker_latency_ms_bucket{service='$service'}[5m])) by (le))"
+          y_axis: "Latency (ms, log scale)"
+          legend: "P50 (blue), P95 (orange), P99 (red)"
+          use_case: "Track latency distribution over time"
+
+      - panel_5_fallbacks:
+          title: "Fallback Invocations (Last Hour)"
+          type: "Table"
+          query: "sum(increase(circuit_breaker_fallbacks_total{service='$service'}[1h])) by (fallback_strategy)"
+          columns:
+            - "fallback_strategy"
+            - "count"
+          sorting: "By count descending"
+          use_case: "Monitor fallback usage"
+
+      - panel_6_transitions:
+          title: "State Transition History"
+          type: "Time series"
+          query: "sum(rate(circuit_breaker_transitions_total{service='$service'}[5m])) by (from_state, to_state)"
+          y_axis: "Transition rate (per minute)"
+          legend: "from_state → to_state"
+          use_case: "Track transition patterns"
+
+  dashboard_3_slo:
+    name: "Circuit Breaker SLO Dashboard"
+    description: "Track SLO compliance for circuit breakers"
+
+    slos:
+      - slo_1_availability:
+          title: "Availability SLO (>99.9%)"
+          query: |
+            sum(rate(circuit_breaker_calls_total{result=~"success|fallback"}[30d]))
+            / sum(rate(circuit_breaker_calls_total[30d])) * 100
+          target: ">99.9%"
+          threshold: "Green >99.9%, Yellow 99-99.9%, Red <99%"
+
+      - slo_2_latency:
+          title: "Latency SLO (P95 <3s)"
+          query: |
+            histogram_quantile(0.95, sum(rate(circuit_breaker_latency_ms_bucket[30d])) by (le)) / 1000
+          target: "<3s"
+          threshold: "Green <3s, Yellow 3-5s, Red >5s"
+
+      - slo_3_recovery:
+          title: "Recovery Time SLO (<60s)"
+          query: "Custom: Time from OPEN to CLOSED"
+          target: "<60s"
+          threshold: "Green <10s, Yellow 10-60s, Red >60s"
+
+---
+
+# SECTION 5: PERFORMANCE BUDGETS
+
+performance_budgets:
+
+  metric_emission:
+    gauge_set: "<0.1ms budget, 0.05ms actual"
+    counter_increment: "<0.1ms budget, 0.05ms actual"
+    histogram_observe: "<0.2ms budget, 0.1ms actual"
+    log_write: "<1ms budget, 0.5ms actual"
+    total_overhead_per_call: "<1ms budget, 0.7ms actual"
+    verdict: "✅ All within budget"
+
+  log_volume:
+    calls_per_second: "1000 calls/s (K1 orchestrator throughput)"
+
+    log_events_per_second:
+      - "Log event: circuit_breaker_failure (DEBUG) - 10 events/s"
+      - "Log event: circuit_breaker_opened (WARNING) - 0.01 events/s (infrequent)"
+      - "Log event: circuit_breaker_closed (INFO) - 0.01 events/s (infrequent)"
+
+    estimated_log_volume: "~100KB/hour of DEBUG logs (acceptable)"
+    verdict: "✅ Manageable log volume"
+
+  metric_cardinality:
+    calculation: "6 services × 3 states × 4 result types = 72 metric series"
+    risk: "Low (manageable cardinality)"
+    verdict: "✅ No Prometheus cardinality issues"
+
+---
+
+# SECTION 6: ADR CROSS-REFERENCES
+
+adr_references:
+  - "ADR-0009c: Circuit Breaker Metrics & Observability (primary)"
+  - "ADR-0009: Circuit Breaker Pattern (main pattern)"
+  - "ADR-0009a: Circuit Breaker FSM (state transitions)"
+  - "ADR-0009b: Per-Service Configuration (threshold tuning)"
+
+---
+
+# END OF circuit_breaker_metrics.yml

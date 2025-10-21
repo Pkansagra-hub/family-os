@@ -1,0 +1,37 @@
+name: k0-deployment
+description: FamilyOS K0 Memory Kernel - Infrastructure as Code deployment
+runtime: python
+main: .
+
+config:
+  # Storage configuration
+  k0-deployment:storage_driver:
+    default: sqlite
+    description: Storage backend driver (sqlite, postgres)
+
+  k0-deployment:storage_path:
+    default: /var/lib/k0/kernel.sqlite3
+    description: Path to SQLite database file
+
+  # Telemetry configuration
+  k0-deployment:telemetry_enabled:
+    default: true
+    description: Enable Prometheus and Grafana telemetry stack
+
+  k0-deployment:telemetry_retention_days:
+    default: 30
+    description: Prometheus data retention period in days
+
+  # Secrets configuration
+  k0-deployment:device_key_path:
+    default: /secrets/device.key
+    description: Path to device key file
+
+  # Kernel image
+  k0-deployment:kernel_image:
+    default: familyos/k0-kernel:latest
+    description: Docker image for k0-kernel
+
+  k0-deployment:kernel_port:
+    default: 8000
+    description: External port for k0-kernel HTTP API

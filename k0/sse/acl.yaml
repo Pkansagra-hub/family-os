@@ -1,0 +1,16 @@
+# Placeholder ACL configuration for SSE topics.
+roles:
+  household_device:
+    allow:
+      - "memory.*"
+      - "events.*"
+  security_operator:
+    allow:
+      - "policy.*"
+      - "infra.sanitized.*"
+  coordinator:
+    allow:
+      - "test.*"
+      - "memory.*"
+      - "events.*"
+      - "policy.*"

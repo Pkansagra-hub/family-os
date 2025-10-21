@@ -1,0 +1,413 @@
+#
+# Capability Lifecycle Management
+# EPIC 2.5.1: Capability Token Design Contracts
+# ADR-0010a: Capability Token Design & Lifecycle
+# ADR-0010d: Capability Revocation & Audit Trail
+#
+# Purpose: Complete end-to-end lifecycle operations (issuance through revocation)
+# Foundation: Capabilities (Dennis & Van Horn 1966)
+# Scope: K1 Agent Fabric integration
+#
+
+metadata:
+  title: "Capability Lifecycle Management"
+  version: "1.0"
+  status: "accepted"
+  updated: "2025-10-12"
+  adr_references:
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+    - "ADR-0010d: Capability Revocation & Audit Trail"
+
+lifecycle_phases:
+  issuance:
+    trigger: "Agent hired or capability grant request"
+    responsible_actor: "CapabilityManager or Supervisor"
+
+  verification:
+    trigger: "Before every operation using capability"
+    responsible_actor: "Enforcement point (Tool Runner, Memory Manager, etc.)"
+
+  revocation:
+    trigger: "Agent crash, policy violation, expiration, constraint exhaustion"
+    responsible_actor: "CapabilityManager or Supervisor"
+
+  delegation:
+    trigger: "Agent delegates capability to sub-agent"
+    responsible_actor: "Delegating agent"
+
+  expiration:
+    trigger: "Time-based (expires_at) or constraint-based (budget exhausted)"
+    responsible_actor: "Automatic via validation or cron job"
+
+phase_1_issuance:
+  description: "Create and grant capability token to agent"
+  flow:
+    step_1_role_assignment:
+      action: "Determine agent role (planning, tool, memory, supervisor)"
+      determines: "Default capabilities set"
+      examples:
+        - "planning_agent → [LLM:gemma-2b:EXECUTE, MEMORY:beliefs:READ]"
+        - "tool_agent → [TOOL:*:EXECUTE, MEMORY:scoreboard:WRITE]"
+
+    step_2_default_capabilities:
+      action: "Retrieve default capability set for role"
+      source: "capability_policies.yml"
+      includes: "Pre-authorized tool/memory/LLM set"
+
+    step_3_constraints_application:
+      action: "Apply initial constraints based on trust level"
+      trust_levels:
+        - "0 (Untrusted): max_invocations=10, budget_usd=0.0"
+        - "1 (Low): max_invocations=100, budget_usd=1.0"
+        - "2 (Medium): max_invocations=1000, budget_usd=10.0"
+        - "3 (High): max_invocations=10000, budget_usd=100.0"
+        - "4 (Admin): unlimited"
+
+    step_4_token_generation:
+      action: "Generate JWT token with HMAC-SHA256 signature"
+      creates: "CapabilityToken with claims"
+      includes:
+        - "cap_id (ULID)"
+        - "agent_id (non-transferable owner)"
+        - "permissions (execute, read, write, delete, delegate, attenuate)"
+        - "constraints (max_invocations, budget_usd, etc.)"
+        - "expires_at (issued_at + 24h default)"
+
+    step_5_token_storage:
+      action: "Store capability in Redis + K0 WAL"
+      redis_keys:
+        - "capability:cap_id → token (24h TTL)"
+        - "capability:agent_id:caps → [cap_id, ...] (24h TTL)"
+      k0_wal_event:
+        type: "CAPABILITY_ISSUED"
+        payload: "{cap_id, agent_id, permissions, constraints, issued_at}"
+
+    step_6_audit_log:
+      action: "Log issuance in audit trail"
+      event: "GRANTED"
+      recorded_in:
+        - "K0 WAL (real-time)"
+        - "Elasticsearch (searchable)"
+      includes: "{capability_id, agent_id, permissions, trust_level, issued_by, timestamp}"
+
+  performance:
+    total_latency_ms: 2.0
+    breakdown:
+      - "step_1-3: 0.5ms"
+      - "step_4 (HMAC): 0.3ms"
+      - "step_5 (Redis): 0.2ms"
+      - "step_6 (audit): 1.0ms"
+
+phase_2_verification:
+  description: "Validate capability before each operation"
+  implemented_by: "10-step validation flow (see capability_validation.yml)"
+  latency:
+    cached: "0.05ms (80% hit rate)"
+    uncached: "0.5ms (20% miss rate)"
+    p95: "0.3ms"
+
+phase_3_revocation:
+  description: "Revoke capability (terminate access)"
+  revocation_triggers:
+    agent_crash:
+      condition: "Agent enters TERMINATED state"
+      mechanism: "Supervisor detects termination"
+      action: "Revoke all capabilities for agent"
+      latency_ms: 0.1
+
+    policy_violation:
+      condition: "Agent violates security policy"
+      examples:
+        - "Unauthorized access attempt"
+        - "Budget constraint violation"
+        - "Signature forgery attempt"
+      mechanism: "Reference monitor detects violation"
+      action: "Immediate revocation + alert"
+
+    constraint_exhaustion:
+      condition: "max_invocations or budget_usd exhausted"
+      mechanism: "Validation flow (step_9)"
+      action: "Auto-revoke (status=EXHAUSTED)"
+      latency_ms: 0.05
+
+    user_request:
+      condition: "User or supervisor requests revocation"
+      mechanism: "API endpoint or manual trigger"
+      action: "Immediate revocation"
+
+    session_end:
+      condition: "Session terminates"
+      mechanism: "Session manager"
+      action: "Revoke all session-scoped capabilities"
+
+    timeout:
+      condition: "Capability unused for 30 days"
+      mechanism: "Cron job (hourly check)"
+      action: "Auto-revoke inactive capabilities"
+
+  revocation_mechanism_immediate:
+    implementation: |
+      REDIS.set(f"capability:revoked:{cap_id}", True, ex=86400)
+      REDIS.delete(f"capability:{cap_id}")
+      WAL.write_event({type: "CAPABILITY_REVOKED", cap_id, timestamp})
+    latency_ms: 0.15
+    effect: "Immediate - next operation fails at step_3"
+
+  revocation_mechanism_automatic:
+    implementation: |
+      # Constraint-based (via validation flow)
+      if constraint_exhausted:
+          mark_capability_status(cap_id, "EXHAUSTED")
+          # Revocation happens implicitly on next validation
+    latency_ms: 0.0
+    effect: "Happens at next operation (lazy revocation)"
+
+  revocation_mechanism_emergency:
+    implementation: |
+      # Emergency: revoke all capabilities for agent/session
+      for cap_id in get_capabilities_for_agent(agent_id):
+          revoke_immediately(cap_id)
+      # Triggers circuit breaker if large-scale revocation
+    latency_ms: 0.5
+    effect: "Immediate for all agent capabilities"
+
+  audit_logging_revocation:
+    event_type: "REVOKED"
+    fields:
+      - "revocation_timestamp"
+      - "capability_id"
+      - "agent_id"
+      - "revocation_reason"
+      - "revoked_by"
+      - "usage_count"
+      - "cost_spent"
+    storage:
+      - "K0 WAL (real-time, 30-day retention)"
+      - "Elasticsearch (90-day searchable)"
+      - "S3 GLACIER (7-year compliance archive)"
+
+phase_4_delegation:
+  description: "Delegate capability to sub-agent (attenuate)"
+  delegation_flow:
+    step_1_attenuation:
+      action: "Create weaker version of capability"
+      example: "Parent: max_invocations=1000 → Child: max_invocations=500"
+      rules:
+        - "Can only reduce rights (intersection)"
+        - "Can only add constraints (merge more restrictively)"
+
+    step_2_depth_check:
+      action: "Verify delegation_max_depth not exceeded"
+      check: "current_depth < 3"
+      failure: "DELEGATION_DEPTH_EXCEEDED"
+
+    step_3_token_generation:
+      action: "Generate new JWT for child capability"
+      includes:
+        - "delegated_from: parent_cap_id"
+        - "delegation_depth: parent_depth + 1"
+        - "parent_budget: parent_budget × 0.5"
+
+    step_4_child_storage:
+      action: "Store child capability with K0 WAL"
+      relationship: "Parent ← → Child (trackable)"
+
+    step_5_audit_delegation:
+      action: "Log delegation in audit trail"
+      event: "DELEGATION"
+      includes: "{from_agent, to_agent, cap_id, delegated_cap_id, attenuation_rules}"
+
+  performance:
+    latency_ms: 1.5
+    breakdown:
+      - "Attenuation: 0.5ms"
+      - "Depth check: 0.1ms"
+      - "Token generation: 0.3ms"
+      - "Storage: 0.2ms"
+      - "Audit: 0.4ms"
+
+phase_5_expiration:
+  description: "Capability becomes invalid (time-based or constraint-based)"
+  expiration_trigger_time_based:
+    condition: "current_time > expires_at"
+    mechanism: "Validation flow (step_4)"
+    effect: "Immediate denial on next operation"
+    action: "Status = EXPIRED"
+
+  expiration_trigger_constraint_based:
+    invocations_exhausted:
+      condition: "invocation_counter >= max_invocations"
+      mechanism: "Post-execution counter check"
+      action: "Status = EXHAUSTED"
+
+    budget_exhausted:
+      condition: "cost_spent >= budget_usd"
+      mechanism: "Constraint validation (step_9)"
+      action: "Status = EXHAUSTED"
+
+  cleanup_job:
+    frequency: "Hourly cron"
+    action: "Scan Redis for expired capabilities, delete entries"
+    performance:
+      typical_count: "1000 expirations/hour"
+      deletion_time: "<100ms for batch"
+
+state_machine:
+  states:
+    - "ISSUED: Freshly created, not yet used"
+    - "ACTIVE: In use, valid"
+    - "EXHAUSTED: Invocations/budget limit reached"
+    - "EXPIRED: Time window closed"
+    - "REVOKED: Administratively revoked"
+    - "DELEGATED: Created as child capability"
+
+  transitions:
+    issued_to_active:
+      from: "ISSUED"
+      to: "ACTIVE"
+      trigger: "First validation succeeds"
+      latency_ms: 0.5
+
+    active_to_exhausted:
+      from: "ACTIVE"
+      to: "EXHAUSTED"
+      trigger: "Constraint exhaustion (step_9)"
+      latency_ms: 0.1
+
+    active_to_expired:
+      from: "ACTIVE"
+      to: "EXPIRED"
+      trigger: "expires_at reached (step_4)"
+      latency_ms: 0.05
+
+    any_to_revoked:
+      from: "ANY"
+      to: "REVOKED"
+      trigger: "Revocation call"
+      latency_ms: 0.15
+
+    any_to_delegated:
+      from: "ANY"
+      to: "DELEGATED"
+      trigger: "Delegation creates child"
+      latency_ms: 1.5
+
+k0_wal_integration:
+  events_written:
+    CAPABILITY_ISSUED:
+      payload: "{cap_id, agent_id, permissions, constraints, issued_at}"
+      retention: "30 days (real-time K0 WAL)"
+
+    CAPABILITY_VALIDATED:
+      payload: "{cap_id, agent_id, operation, validation_latency_ms}"
+      logging_level: "DEBUG (sample 10% of successful validations)"
+
+    CAPABILITY_VIOLATED:
+      payload: "{cap_id, agent_id, violation_reason, denied_operation}"
+      logging_level: "WARNING (all violations)"
+
+    CAPABILITY_REVOKED:
+      payload: "{cap_id, agent_id, revocation_reason, revoked_by}"
+      logging_level: "INFO"
+
+    CAPABILITY_DELEGATED:
+      payload: "{from_cap_id, to_cap_id, attenuation_rules}"
+      logging_level: "INFO"
+
+  replay_capability:
+    use_case: "Recover capability state after crash"
+    method: "Replay CAPABILITY_ISSUED + CAPABILITY_DELEGATED events"
+    result: "Reconstruct full capability tree"
+
+elasticsearch_audit_trail:
+  index_pattern: "capability-audit-*"
+  document_structure:
+    timestamp: "ISO 8601"
+    capability_id: "ULID"
+    agent_id: "string"
+    event_type: "GRANTED|VALIDATED|DENIED|REVOKED|EXPIRED|DELEGATION|..."
+    operation: "execute_tool|read_memory|..."
+    result: "ALLOWED|DENIED"
+    latency_ms: "float"
+
+  retention_policy: "90 days"
+  searchable_fields:
+    - "capability_id"
+    - "agent_id"
+    - "event_type"
+    - "timestamp"
+    - "result"
+
+  query_examples:
+    - "Find all validations for capability_id=cap_123"
+    - "Find all denials for agent_id=agent_45"
+    - "Find all revocations in last 24h"
+
+s3_compliance_archive:
+  storage_location: "s3://k1-compliance/capabilities/"
+  retention_policy: "7-year GLACIER (compliance)"
+  archival_trigger: "Nightly batch job (90-day aged documents)"
+  format: "Elasticsearch bulk export + gzip"
+  encryption: "AES-256 (in-transit and at-rest)"
+  audit_trail_complete:
+    coverage: "100% of capability lifecycle events"
+    compliance: "SOC2 Type II, HIPAA-ready"
+
+integration_with_orchestration:
+  agent_fabric:
+    on_agent_termination: "Revoke all capabilities"
+    integration_point: "SupervisorAgent.on_state_change(TERMINATED)"
+    latency_budget: "10ms"
+
+  orchestrator_3phase:
+    on_agent_selection: "Grant task-specific capability"
+    integration_point: "Orchestrator.phase_2_selection()"
+    latency_budget: "1ms (already in selection latency)"
+
+  planner_agent:
+    on_plan_execution: "Validate capabilities for planned actions"
+    integration_point: "PlannerAgent.execute_plan()"
+    latency_budget: "<0.5ms (validation cache hit)"
+
+monitoring_and_alerts:
+  metrics:
+    capability_issuance_rate:
+      unit: "caps/second"
+      alert_threshold: ">100"
+
+    capability_revocation_rate:
+      unit: "revocations/second"
+      alert_threshold: ">50 (possible attack)"
+
+    validation_latency_p95:
+      unit: "milliseconds"
+      alert_threshold: ">1.0 (SLO violation)"
+
+    cache_hit_rate:
+      unit: "percentage"
+      alert_threshold: "<70 (cache thrashing)"
+
+  dashboards:
+    capability_lifecycle:
+      panels:
+        - "Issuance rate (7-day trend)"
+        - "Revocation rate (7-day trend)"
+        - "State distribution (pie chart)"
+
+    validation_performance:
+      panels:
+        - "Validation latency (p50, p95, p99)"
+        - "Cache hit rate"
+        - "Denied requests (reason breakdown)"
+
+    audit_trail:
+      panels:
+        - "Top agents by capability count"
+        - "Top denied operations"
+        - "Revocation reasons breakdown"
+
+references:
+  adr_0010a: "Capability Token Design & Lifecycle"
+  adr_0010d: "Capability Revocation & Audit Trail"
+  dennis_van_horn_1966: "Programming Semantics for Multiprogrammed Computations"
+  rfc_7519: "JSON Web Token (JWT)"

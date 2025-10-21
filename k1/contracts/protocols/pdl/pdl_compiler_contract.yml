@@ -1,0 +1,426 @@
+# K1 PDL Compiler Contract
+# Source: ADR-0003a (Protocol Definition Language Specification)
+# Purpose: PDL → FSM compilation rules and FlatBuffers code generation
+# Version: 1.0
+# Date: 2025-10-14
+
+contract:
+  name: "PDL Compiler Contract"
+  version: "1.0"
+  type: "compiler_specification"
+  source_adr: "docs/architecture/decisions/0003a-protocol-definition-language-pdl-specification.md"
+  compliance_level: "MANDATORY"
+
+compiler:
+  name: "K1 PDL Compiler"
+  input_format: "PDL YAML (.pdl.yml)"
+  output_format: "FlatBuffers binary (.pdl.fb)"
+  language: "Python"
+  location: "k1/protocol_monitor/pdl_compiler/"
+
+compilation_pipeline:
+  stages:
+    - stage: 1
+      name: "YAML Parse"
+      input: "PDL YAML file"
+      output: "Python dictionary"
+      tool: "PyYAML (yaml.safe_load)"
+      error_handling: "Raise SyntaxError on invalid YAML"
+      performance: "< 5ms per protocol"
+
+    - stage: 2
+      name: "Syntax Validation"
+      input: "Python dictionary"
+      output: "Validated protocol structure"
+      validator: "JSON Schema + custom validators"
+      checks:
+        - "Required fields present (name, version, states, transitions, etc.)"
+        - "Field types correct (string, integer, array, etc.)"
+        - "Enum values valid (state.type, transition.trigger, etc.)"
+        - "Pattern matching (snake_case, PascalCase, semver)"
+      error_handling: "Raise ValidationError with field path and expected type"
+      performance: "< 10ms per protocol"
+
+    - stage: 3
+      name: "Semantic Validation"
+      input: "Validated protocol structure"
+      output: "Semantically valid protocol"
+      checks:
+        - "initial_state exists in states[]"
+        - "All terminal_states exist in states[]"
+        - "All transition from/to states exist"
+        - "All timeout policy states exist"
+        - "Reachability: all terminal states reachable from initial_state (BFS)"
+        - "Orphan detection: all non-terminal states have outgoing transitions"
+        - "Timeout coverage: all non-terminal states have timeout policies (warning)"
+      error_handling: "Raise SemanticError with state names and validation failure reason"
+      performance: "< 20ms per protocol (BFS + graph analysis)"
+
+    - stage: 4
+      name: "Deadlock Detection"
+      input: "Semantically valid protocol"
+      output: "Deadlock-free protocol (or warnings)"
+      algorithm: "Tarjan's strongly connected components"
+      checks:
+        - "Detect circular waits in state graph"
+        - "Verify timeout escape for detected cycles"
+      error_handling: "Raise DeadlockError for unbreakable cycles, warn for cycles with timeout escape"
+      performance: "< 30ms per protocol (Tarjan's O(V+E))"
+
+    - stage: 5
+      name: "FSM Code Generation"
+      input: "Validated protocol"
+      output: "FSM data structure (Python)"
+      transformation:
+        states: "Dict[state_name, StateInfo]"
+        transitions: "Dict[(from_state, message_type), Transition]"
+        timeouts: "Dict[state_name, TimeoutPolicy]"
+      optimization: "Build O(1) lookup tables for runtime"
+      performance: "< 5ms per protocol"
+
+    - stage: 6
+      name: "FlatBuffers Serialization"
+      input: "FSM data structure"
+      output: "FlatBuffers binary (.pdl.fb)"
+      schema: "k1/protocol_monitor/schemas/fsm.fbs"
+      tool: "flatbuffers Python library"
+      performance: "< 20ms per protocol"
+
+    - stage: 7
+      name: "Runtime Load (NOT compile-time)"
+      input: "FlatBuffers binary"
+      output: "In-memory FSM lookup tables"
+      loading: "Protocol Monitor startup (k1/protocol_monitor/fsm_registry.py)"
+      performance: "< 100ms per protocol (6 protocols = 600ms total)"
+
+  total_compilation_budget:
+    per_protocol: "< 100ms (all stages 1-6)"
+    typical: "50-70ms"
+    all_6_protocols: "< 600ms"
+
+fsm_data_structures:
+  FSM:
+    fields:
+      - name: "protocol_name"
+        type: "string"
+        description: "Protocol identifier"
+
+      - name: "version"
+        type: "string"
+        description: "Semantic version"
+
+      - name: "initial_state"
+        type: "string"
+        description: "Entry state name"
+
+      - name: "terminal_states"
+        type: "Set[string]"
+        description: "Exit state names"
+
+      - name: "states"
+        type: "Dict[string, StateInfo]"
+        description: "State metadata lookup (O(1))"
+
+      - name: "transitions"
+        type: "Dict[(string, string), Transition]"
+        description: "Transition lookup by (from_state, message_type) (O(1))"
+
+      - name: "timeouts"
+        type: "Dict[string, TimeoutPolicy]"
+        description: "Timeout policy lookup by state (O(1))"
+
+  StateInfo:
+    fields:
+      - name: "name"
+        type: "string"
+
+      - name: "type"
+        type: "enum(entry, interaction, decision, exit)"
+
+      - name: "timeout_ms"
+        type: "Optional[int]"
+
+      - name: "llm_aware"
+        type: "bool"
+
+      - name: "description"
+        type: "string"
+
+  Transition:
+    fields:
+      - name: "from_state"
+        type: "string"
+
+      - name: "to_state"
+        type: "string"
+
+      - name: "message_type"
+        type: "string"
+
+      - name: "sender_role"
+        type: "string"
+
+      - name: "receiver_roles"
+        type: "List[string]"
+
+      - name: "cardinality"
+        type: "string"
+
+      - name: "condition"
+        type: "Optional[string]"
+
+      - name: "trigger"
+        type: "Optional[string]"
+
+  TimeoutPolicy:
+    fields:
+      - name: "state"
+        type: "string"
+
+      - name: "action"
+        type: "string"
+
+      - name: "fallback_state"
+        type: "Optional[string]"
+
+flatbuffers_schema:
+  file: "k1/protocol_monitor/schemas/fsm.fbs"
+  version: "1.0"
+  schema: |
+    namespace K1.ProtocolMonitor;
+
+    table FSM {
+      protocol_name: string;
+      version: string;
+      initial_state: string;
+      terminal_states: [string];
+      states: [StateInfo];
+      transitions: [Transition];
+      timeouts: [TimeoutPolicy];
+    }
+
+    table StateInfo {
+      name: string;
+      type: string;  // entry | interaction | decision | exit
+      description: string;
+      timeout_ms: int = null;
+      llm_aware: bool = false;
+    }
+
+    table Transition {
+      from_state: string;
+      to_state: string;
+      message_type: string;
+      sender_role: string;
+      receiver_roles: [string];
+      cardinality: string = "1";
+      condition: string = null;
+      trigger: string = null;  // timeout | system | null
+    }
+
+    table TimeoutPolicy {
+      state: string;
+      action: string;
+      fallback_state: string = null;
+    }
+
+    root_type FSM;
+
+compilation_output:
+  file_structure:
+    input: "k1/protocols/source/agent_hire.pdl.yml"
+    output: "k1/protocols/compiled/agent_hire.pdl.fb"
+    size: "2-5 KB per protocol (FlatBuffers binary)"
+
+  directory_layout:
+    source: "k1/protocols/source/"
+    compiled: "k1/protocols/compiled/"
+    schemas: "k1/protocol_monitor/schemas/"
+
+error_handling:
+  compilation_errors:
+    - error_type: "SyntaxError"
+      cause: "Invalid YAML syntax"
+      example: "Unmatched bracket, invalid indentation"
+      recovery: "None (fix YAML)"
+
+    - error_type: "ValidationError"
+      cause: "Schema validation failure"
+      example: "Missing required field 'initial_state'"
+      recovery: "Add missing field with valid value"
+
+    - error_type: "SemanticError"
+      cause: "Semantic validation failure"
+      example: "initial_state 'start' not found in states[]"
+      recovery: "Add 'start' state or correct initial_state"
+
+    - error_type: "DeadlockError"
+      cause: "Unbreakable circular wait"
+      example: "States A → B → A with no timeout"
+      recovery: "Add timeout policy to break cycle"
+
+  error_reporting:
+    format: "Structured error with file path, line number, error code, message, hint"
+    example: |
+      CompilationError:
+        file: "agent_hire.pdl.yml"
+        line: 42
+        column: 8
+        error_code: "invalid_initial_state"
+        message: "initial_state 'starting' not found in states[]"
+        hint: "Did you mean 'start'? Available states: ['start', 'negotiation', 'selection', ...]"
+
+performance_optimization:
+  compilation:
+    - optimization: "Parse YAML once, cache in memory"
+      benefit: "Avoid re-parsing for multiple validations"
+
+    - optimization: "Pre-compile regex patterns for validation"
+      benefit: "~5ms savings per protocol"
+
+    - optimization: "Build transition lookup table during FSM generation"
+      benefit: "O(1) runtime validation (hash table)"
+
+    - optimization: "Serialize FlatBuffers with zero-copy"
+      benefit: "~10ms faster serialization"
+
+  runtime:
+    - optimization: "Load FlatBuffers at startup (not per-message)"
+      benefit: "Amortize parse cost over all messages"
+
+    - optimization: "Use hash tables for state/transition lookup"
+      benefit: "O(1) access vs O(n) linear search"
+
+usage:
+  command_line:
+    compile_single: |
+      python -m k1.protocol_monitor.pdl_compiler.compile \
+        --input k1/protocols/source/agent_hire.pdl.yml \
+        --output k1/protocols/compiled/agent_hire.pdl.fb \
+        --validate
+
+    compile_all: |
+      python -m k1.protocol_monitor.pdl_compiler.compile_all \
+        --source-dir k1/protocols/source/ \
+        --output-dir k1/protocols/compiled/ \
+        --validate
+
+    validate_only: |
+      python -m k1.protocol_monitor.pdl_compiler.validate \
+        --input k1/protocols/source/agent_hire.pdl.yml
+
+  programmatic:
+    python_api: |
+      from k1.protocol_monitor.pdl_compiler import PDLCompiler
+
+      # Compile single protocol
+      compiler = PDLCompiler()
+      fsm_binary = compiler.compile_file(
+          input_path="k1/protocols/source/agent_hire.pdl.yml",
+          output_path="k1/protocols/compiled/agent_hire.pdl.fb",
+          validate=True
+      )
+
+      # Compile all protocols
+      compiler.compile_directory(
+          source_dir="k1/protocols/source/",
+          output_dir="k1/protocols/compiled/"
+      )
+
+testing:
+  unit_tests:
+    - test: "YAML parse (valid/invalid syntax)"
+      location: "tests/protocol_monitor/test_pdl_parser.py"
+      coverage: "95%+"
+
+    - test: "Syntax validation (missing fields, invalid types)"
+      location: "tests/protocol_monitor/test_syntax_validation.py"
+      coverage: "95%+"
+
+    - test: "Semantic validation (reachability, orphan states)"
+      location: "tests/protocol_monitor/test_semantic_validation.py"
+      coverage: "95%+"
+
+    - test: "Deadlock detection (circular waits, timeout escape)"
+      location: "tests/protocol_monitor/test_deadlock_detection.py"
+      coverage: "95%+"
+
+    - test: "FSM code generation (transition table, lookup)"
+      location: "tests/protocol_monitor/test_fsm_generation.py"
+      coverage: "95%+"
+
+    - test: "FlatBuffers serialization (binary output)"
+      location: "tests/protocol_monitor/test_flatbuffers_serialization.py"
+      coverage: "95%+"
+
+  integration_tests:
+    - test: "Compile all 6 core protocols"
+      protocols: ["agent_hire", "task_execution", "clarification", "barge_in", "tool_call", "saga_rollback"]
+      validation: "All protocols compile without errors"
+      performance: "Total < 600ms"
+
+  golden_tests:
+    - test: "Compile agent_hire.pdl.yml → agent_hire.pdl.fb"
+      validation: "Output matches expected binary (byte-for-byte)"
+      update_command: "Update golden file if PDL changes"
+
+observability:
+  metrics:
+    - name: "pdl_compilation_time_ms"
+      type: "histogram"
+      buckets: [10, 50, 100, 250, 500]
+      labels: ["protocol_name", "stage"]
+      description: "Compilation latency per stage"
+
+    - name: "pdl_compilation_errors_total"
+      type: "counter"
+      labels: ["protocol_name", "error_code"]
+      description: "Compilation errors"
+
+  logs:
+    - event: "pdl_compilation_started"
+      level: "INFO"
+      fields: ["protocol_name", "input_path"]
+
+    - event: "pdl_compilation_completed"
+      level: "INFO"
+      fields: ["protocol_name", "output_path", "compile_time_ms"]
+
+    - event: "pdl_compilation_failed"
+      level: "ERROR"
+      fields: ["protocol_name", "error_code", "error_message", "line_number"]
+
+compliance:
+  adr_requirements:
+    - adr: "ADR-0003a"
+      requirement: "PDL → FSM compilation with <100ms budget"
+      status: "SATISFIED"
+
+    - adr: "ADR-0003a"
+      requirement: "Deadlock detection using Tarjan's algorithm"
+      status: "SATISFIED"
+
+    - adr: "ADR-0011"
+      requirement: "FlatBuffers serialization for all protocols"
+      status: "SATISFIED"
+
+cross_references:
+  contracts:
+    - "contracts/protocols/pdl/pdl_specification.yml"
+    - "contracts/protocols/pdl/pdl_schema_validation.yml"
+    - "contracts/protocols/definitions/*.pdl.yml"
+
+  adrs:
+    - "ADR-0003a: Protocol Definition Language Specification"
+    - "ADR-0011: FlatBuffers Serialization"
+
+  code:
+    - "k1/protocol_monitor/pdl_compiler/"
+    - "k1/protocol_monitor/schemas/fsm.fbs"
+
+notes:
+  - "Compilation happens at K1 startup (not per-message)"
+  - "All 6 core protocols must compile successfully for K1 to start"
+  - "FlatBuffers binary format enables <1ms runtime loading"
+  - "Deadlock detection is best-effort (heuristic, not formal proof)"
+  - "Golden tests prevent regressions in compiled output"

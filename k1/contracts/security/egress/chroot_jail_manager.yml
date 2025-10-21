@@ -1,0 +1,480 @@
+# Chroot Jail Manager Contract - Issue 2.5.5, Filesystem Layer 1
+# Purpose: Ephemeral chroot jails for per-tool filesystem isolation
+# Source ADR: ADR-0032b (Filesystem Egress Control)
+# Last Updated: 2025-10-15
+
+name: "Chroot Jail Manager"
+purpose: "Create/manage ephemeral chroot jails per tool (<3ms setup, <100ms cleanup)"
+scope: ["Filesystem Isolation", "Jail Management", "Path Isolation"]
+version: "1.0"
+
+# ============================================================================
+# JAIL TEMPLATE ARCHITECTURE
+# ============================================================================
+
+jail_templates:
+
+  green_template:
+    path: "/var/k1/jails/green_template/"
+    band: "GREEN"
+    purpose: "Read-only system libraries + writable output directory"
+
+    directory_structure:
+      essential_dirs:
+        - "/tmp/input (mount point, bind to session input)"
+        - "/tmp/output (mount point, bind to session output)"
+        - "/usr/lib (copied from host)"
+        - "/usr/bin (symbolic links to host binaries)"
+        - "/lib (essential system libs)"
+        - "/lib64 (64-bit libs)"
+        - "/etc/ld.so.cache (dynamic linker cache)"
+
+    content_size: "~150MB (reduced from full /usr/lib)"
+    creation_time: "<100ms"
+    reuse_strategy: "Template reused for all GREEN tools (copy-on-write if possible)"
+
+  amber_template:
+    path: "/var/k1/jails/amber_template/"
+    band: "AMBER"
+    purpose: "Same as GREEN, used as base for PII masking enforcement"
+
+    directory_structure:
+      essential_dirs:
+        - "/tmp/input (PII-masked inputs)"
+        - "/tmp/output (masked outputs)"
+        - "/usr/lib"
+        - "/usr/bin"
+        - "/lib"
+        - "/lib64"
+
+    note: "PII masking applied at input/output boundaries, not in jail"
+    content_size: "~150MB (same as GREEN)"
+
+  red_template:
+    path: "/var/k1/jails/red_template/"
+    band: "RED"
+    purpose: "Minimal ephemeral filesystem (input + output only)"
+
+    directory_structure:
+      essential_dirs:
+        - "/tmp/input (read-only, ephemeral input)"
+        - "/tmp/output (writable, ephemeral output)"
+
+      excluded:
+        - "No system binaries (use host's via restricted exec)"
+        - "No system libraries (minimize footprint)"
+        - "No /etc, /home, /root, /dev (complete isolation)"
+
+    content_size: "~1MB (minimal)"
+    isolation_level: "Maximum"
+    use_case: "Highly sensitive operations (financial, medical data)"
+
+  black_template:
+    path: null
+    band: "BLACK"
+    purpose: "No filesystem at all"
+    note: "Process runs with empty filesystem (seccomp kills I/O syscalls)"
+
+# ============================================================================
+# JAIL CREATION WORKFLOW
+# ============================================================================
+
+jail_creation:
+
+  step_1_select_template:
+    action: "Choose template based on tool band"
+    logic: |
+      if band == "BLACK":
+        jail_type = None  # No filesystem
+      elif band == "RED":
+        jail_type = "red_template"  # Minimal
+      elif band == "AMBER":
+        jail_type = "amber_template"  # Standard + PII masking
+      else:  # GREEN
+        jail_type = "green_template"  # Standard
+    latency: "<1ms"
+
+  step_2_create_jail_id:
+    action: "Generate unique jail identifier"
+    format: "jail_{session_id}_{tool_id}_{timestamp}"
+    example: "jail_sess_abc123_weather_1697376000"
+    purpose: "Unique identification for cleanup"
+
+  step_3_copy_template:
+    action: "Copy template directory to ephemeral location"
+    source: "Template directory (green/amber/red_template)"
+    destination: "/var/k1/jails/ephemeral/{jail_id}/"
+    mechanism: "cp -r (copy-on-write if kernel supports)"
+    latency: "<2ms (green/amber), <0.5ms (red)"
+    note: "Copy is shallow; directories are linked"
+
+  step_4_mount_input_directory:
+    action: "Bind mount session input to /tmp/input"
+    command: "mount --bind {session_input_dir} {jail_root}/tmp/input"
+    permissions: "Read-only (MS_RDONLY flag)"
+    flags: "MS_NOSUID, MS_NODEV (prevent privilege escalation)"
+    latency: "<0.5ms"
+
+  step_5_prepare_output_directory:
+    action: "Create/mount output directory"
+    strategy: |
+      GREEN/AMBER: Mount existing session output dir
+      RED: Create ephemeral tmpfs mount (max 10MB)
+    commands:
+      green_amber: "mount --bind {session_output_dir} {jail_root}/tmp/output"
+      red: "mount -t tmpfs -o size=10M tmpfs {jail_root}/tmp/output"
+    permissions: "Read-write"
+    flags: "MS_NOSUID, MS_NODEV"
+    latency: "<0.5ms"
+
+  step_6_verify_jail:
+    action: "Verify jail is properly set up"
+    checks:
+      - "All required directories exist"
+      - "Mounts are active (findmnt)"
+      - "Mount points are read-only where expected"
+      - "No world-writable directories"
+    latency: "<0.5ms"
+
+  total_jail_creation_time: "<3ms P95"
+  breakdown: "1ms selection, 1ms copy, 0.5ms input, 0.5ms output, 0.5ms verify"
+
+# ============================================================================
+# JAIL ACTIVATION (PER-TOOL LAUNCH)
+# ============================================================================
+
+jail_activation:
+
+  step_1_clone_process:
+    action: "Fork tool process into new namespace"
+    syscall: "clone(CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUTS)"
+    purpose: "Isolate from host mount/PID namespaces"
+    latency: "<1ms"
+
+  step_2_enter_chroot:
+    action: "Change root directory to jail"
+    syscall: "chroot({jail_root}); chdir('/')"
+    effect: "All absolute paths now relative to jail"
+    example: |
+      Before chroot: /home/attacker/secrets → visible
+      After chroot:  /home → resolves to /var/k1/jails/xxx/home (doesn't exist)
+    latency: "<0.1ms"
+
+  step_3_drop_capabilities:
+    action: "Remove dangerous Linux capabilities"
+    capabilities_retained:
+      - "CAP_NET_BIND_SERVICE (if network tool)"
+      - "Basic file I/O capabilities"
+    capabilities_dropped:
+      - "CAP_SYS_CHROOT (can't escape jail)"
+      - "CAP_SYS_ADMIN (can't use privileged syscalls)"
+      - "CAP_NET_ADMIN (can't manipulate network)"
+      - "CAP_SYS_MODULE (can't load kernel modules)"
+    latency: "<0.1ms"
+
+  step_4_apply_seccomp_filter:
+    action: "Load seccomp-bpf filter (reference: seccomp_bpf_filter.yml)"
+    purpose: "Block dangerous syscalls (ptrace, mount, reboot)"
+    latency: "<1ms"
+
+  step_5_verify_isolation:
+    action: "Quick sanity checks"
+    checks:
+      - "pwd returns '/'"
+      - "ls / shows only jail directories"
+      - "stat /home returns ENOENT (outside jail)"
+    latency: "<1ms"
+
+  total_activation_time: "<3ms"
+
+# ============================================================================
+# FILESYSTEM PATHS BY BAND
+# ============================================================================
+
+filesystem_policies:
+
+  green_band:
+    description: "Standard jail with system libraries and writable output"
+
+    allowed_read_paths:
+      - "/tmp/input/* (session input files)"
+      - "/usr/lib/* (system libraries)"
+      - "/usr/bin/* (executables)"
+      - "/lib/* (libc, math libs, etc.)"
+      - "/lib64/* (64-bit libraries)"
+      - "/etc/ld.so.cache (dynamic linker)"
+
+    allowed_write_paths:
+      - "/tmp/output/* (tool output files only)"
+      - "/tmp (temporary files)"
+
+    blocked_paths:
+      - "/home (user home directories)"
+      - "/root (root home)"
+      - "/etc/shadow (passwords)"
+      - "/etc/sudoers (sudo config)"
+      - "/proc/sysrq-trigger (system control)"
+      - "/dev/sda (disk devices)"
+      - "/sys (kernel parameters)"
+
+    enforcement: "chroot boundary + seccomp syscall filtering"
+    examples:
+      - "Tool: weather_api, read /tmp/input/config.json ✅"
+      - "Tool: weather_api, read /etc/passwd ❌ (ENOENT, outside jail)"
+      - "Tool: weather_api, write /tmp/output/result.json ✅"
+      - "Tool: weather_api, write /home/user/data ❌ (EACCES, blocked)"
+
+  amber_band:
+    description: "Same filesystem as GREEN (PII masking at I/O boundary)"
+
+    allowed_read_paths:
+      - "/tmp/input/* (PII-masked inputs)"
+      - "/usr/lib/*"
+      - "/usr/bin/*"
+      - "/lib/*"
+      - "/lib64/*"
+
+    allowed_write_paths:
+      - "/tmp/output/* (outputs are masked before storage)"
+
+    note: "PII masking is done by PII Redaction Service (ADR-0035), not jail"
+
+  red_band:
+    description: "Minimal ephemeral filesystem (input + output only)"
+
+    allowed_read_paths:
+      - "/tmp/input/* (ephemeral, destroyed after tool exit)"
+
+    allowed_write_paths:
+      - "/tmp/output/* (ephemeral tmpfs, max 10MB, destroyed after tool exit)"
+
+    blocked_paths:
+      - "Everything else (no /usr/lib, /usr/bin, /etc)"
+
+    execution_mode: "Tool must be statically linked or bundled"
+    use_case: "Highly sensitive operations (financial, medical)"
+    examples:
+      - "Tool: tax_analyzer, read /tmp/input/1040_form.txt ✅"
+      - "Tool: tax_analyzer, write /tmp/output/analysis.json ✅"
+      - "Tool: tax_analyzer, read /etc/passwd ❌ (/etc doesn't exist)"
+
+# ============================================================================
+# JAIL CLEANUP & DESTRUCTION
+# ============================================================================
+
+jail_cleanup:
+
+  trigger: "Tool process exits or times out (5min default)"
+
+  step_1_terminate_process:
+    action: "Send SIGKILL to tool process (if not already dead)"
+    purpose: "Ensure no running processes in jail"
+    latency: "<1ms"
+
+  step_2_unmount_binds:
+    action: "Unmount all bind mounts in reverse order"
+    commands: |
+      # Get all mounts in jail
+      findmnt -R -n -o TARGET {jail_root} | sort -r | xargs umount
+    example: |
+      Unmount /tmp/output (bind mount)
+      Unmount /tmp/input (bind mount)
+    latency: "<2ms (typical: 3-5 mounts)"
+
+  step_3_unmount_tmpfs:
+    action: "Unmount tmpfs mounts (RED band ephemeral storage)"
+    command: "umount {jail_root}/tmp/output (if tmpfs)"
+    latency: "<0.5ms"
+
+  step_4_delete_jail_directory:
+    action: "Recursively delete jail directory"
+    command: "rm -rf {jail_root}"
+    note: "Fast because jail has minimal files (templates reused)"
+    latency: "<2ms (typical: <100ms total)"
+
+  step_5_clean_mount_table:
+    action: "Verify jail is unmounted (no orphaned mounts)"
+    command: "findmnt {jail_root} (should return nothing)"
+    latency: "<1ms"
+
+  step_6_log_cleanup:
+    action: "Log cleanup event for audit trail"
+    event: "jail_destroyed: jail_id, session_id, tool_id, duration_ms"
+    storage: "K0 ToolReceipt"
+    latency: "<1ms"
+
+  total_cleanup_time: "<100ms P95"
+  breakdown: "1ms kill, 2ms umount, 2ms delete, 1ms verify, 1ms audit"
+
+# ============================================================================
+# ATTACK SCENARIOS & PREVENTION
+# ============================================================================
+
+attack_prevention:
+
+  scenario_1_path_traversal:
+    attack: "Tool tries to access /etc/passwd via ../../etc/passwd"
+    example: "Tool: open('../../etc/passwd')"
+    prevention: |
+      1. chroot makes '/' = jail root
+      2. '../' from /tmp/input stays within jail
+      3. Result: ENOENT (no /etc in jail)
+    strength: "100% effective (chroot boundary)"
+
+  scenario_2_symlink_escape:
+    attack: "Tool creates symlink to /etc/passwd, then reads it"
+    example: |
+      ln -s /etc/passwd /tmp/output/secret
+      cat /tmp/output/secret
+    prevention: |
+      1. chroot boundary blocks symlink traversal
+      2. Symlink target /etc/passwd doesn't exist in jail
+      3. Result: ENOENT (symlink target invalid)
+    strength: "100% effective (chroot enforced by kernel)"
+
+  scenario_3_mount_escape:
+    attack: "Tool tries to mount outside jail"
+    example: "mount /dev/sda /tmp/output"
+    prevention: |
+      1. seccomp filter blocks mount() syscall
+      2. Result: EPERM (operation not permitted)
+    strength: "100% effective (seccomp blocks syscall)"
+
+  scenario_4_ptrace_privilege_escalation:
+    attack: "Tool ptrace()'s init process to escape"
+    example: "ptrace(PTRACE_ATTACH, 1)  // PID 1 (init)"
+    prevention: |
+      1. seccomp filter blocks ptrace() syscall
+      2. CLONE_NEWPID isolates PID namespace (PID 1 in jail, not host)
+      3. Result: EPERM (operation not permitted)
+    strength: "100% effective (dual prevention)"
+
+  scenario_5_disk_tampering:
+    attack: "Tool opens /dev/sda to write raw sectors"
+    example: "open('/dev/sda', O_WRONLY)"
+    prevention: |
+      1. /dev doesn't exist in jail (chroot)
+      2. Even if present, device access would fail (no permissions)
+      3. Result: ENOENT or EACCES
+    strength: "100% effective"
+
+# ============================================================================
+# PERFORMANCE OPTIMIZATION
+# ============================================================================
+
+optimizations:
+
+  copy_on_write_templates:
+    description: "Reuse templates via CoW for fast jail creation"
+    benefit: "Multiple jails share same template, copy on write"
+    result: "Jail creation 2-3x faster"
+
+  template_persistence:
+    description: "Keep templates in memory (tmpfs) for speed"
+    benefit: "<100ms access time, no disk I/O"
+
+  minimal_red_template:
+    description: "RED template is tiny (~1MB vs 150MB for GREEN)"
+    benefit: "RED band tool startup much faster"
+
+  background_mount_validation:
+    description: "Defer non-critical checks (run asynchronously)"
+    benefit: "Reduce tool launch latency"
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+
+monitoring:
+
+  metrics:
+
+    jail_creation_latency:
+      type: "Histogram"
+      unit: "milliseconds"
+      labels: ["band", "tool_type"]
+      target: "P95 <3ms"
+      alert: "P95 > 5ms (performance degradation)"
+
+    active_jails:
+      type: "Gauge"
+      unit: "count"
+      target: "Track active jails per band"
+      alert: ">100 active jails (resource exhaustion)"
+
+    jail_cleanup_latency:
+      type: "Histogram"
+      unit: "milliseconds"
+      target: "P95 <100ms"
+      alert: "P95 > 200ms (cleanup stuck)"
+
+    failed_jail_creation:
+      type: "Counter"
+      labels: ["reason"]
+      reasons: ["out_of_disk", "permissions", "template_missing"]
+      alert: ">5 failures/min (critical issue)"
+
+# ============================================================================
+# ERROR HANDLING
+# ============================================================================
+
+error_scenarios:
+
+  scenario_1_template_missing:
+    trigger: "Template directory doesn't exist"
+    handling: |
+      1. Check if template needs to be created
+      2. Create template from scratch (<100ms)
+      3. Alert: WARNING
+    outcome: "Jail created with fresh template"
+
+  scenario_2_mount_fails:
+    trigger: "mount() syscall fails (e.g., EBUSY)"
+    handling: |
+      1. Retry up to 3 times with 100ms backoff
+      2. If still fails, fail tool launch
+      3. Alert: CRITICAL
+    outcome: "Tool fails to start, error reported"
+
+  scenario_3_chroot_fails:
+    trigger: "chroot() returns EPERM (permission denied)"
+    handling: |
+      1. Verify process running as root (required)
+      2. Log: "Insufficient privileges for chroot"
+      3. Alert: CRITICAL
+    outcome: "Tool launch fails"
+
+  scenario_4_cleanup_stuck:
+    trigger: "Unmount hangs for >5s"
+    handling: |
+      1. Force unmount with -l (lazy unmount)
+      2. Schedule aggressive cleanup (fuser -9)
+      3. Log: "Forced cleanup"
+      4. Alert: WARNING
+    outcome: "Jail eventually cleaned up"
+
+---
+
+summary:
+  capabilities:
+    - "Ephemeral chroot jails (<3ms creation, <100ms cleanup)"
+    - "Band-specific templates (GREEN/AMBER/RED, no BLACK fs)"
+    - "Bind mount input/output directories"
+    - "Read-only system libraries enforcement (MS_RDONLY)"
+    - "Minimal RED template (1MB, input+output only)"
+    - "Dual namespaces (mount + PID isolation)"
+    - "Jail cleanup on process exit (automatic)"
+    - "Attack prevention (path traversal, symlink, mount, ptrace)"
+
+related_contracts:
+  readonly_mounts:
+    file: "readonly_mounts_system.yml"
+    purpose: "Read-only mount configuration"
+
+  seccomp_filter:
+    file: "seccomp_bpf_filter.yml"
+    purpose: "Syscall filtering"
+
+  output_isolation:
+    file: "writable_output_isolation.yml"
+    purpose: "Output directory quotas"

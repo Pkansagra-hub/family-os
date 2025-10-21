@@ -1,0 +1,450 @@
+# P14 Dedup - Near-Duplicate Detection Pipeline
+# Port: P14 (K0_INTERNAL)
+# Background job semantics: Deduplication, canonicalization, storage optimization
+# Performance budget: 100ms P95, 500ms timeout
+
+version: "1.0"
+port_id: "P14"
+port_name: "Dedup"
+direction: "K0_INTERNAL"
+semantics: "background_job"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0110"  # Deduplication Strategy
+  - "ADR-0111"  # LSH Similarity Matching
+  - "ADR-0112"  # Canonicalization Rules
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P14"
+      description: "Port identifier for deduplication operations"
+
+    command_type:
+      type: string
+      enum: ["dedup_check", "dedup_scan", "canonical_lookup"]
+      required: true
+      description: |
+        Dedup operation type:
+        - dedup_check: Check single memory for duplicates
+        - dedup_scan: Scan all memories for duplicates (batch job)
+        - canonical_lookup: Resolve canonical memory for duplicate
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    capability:
+      type: string
+      value: "CHECK_DUPLICATES"
+      required: true
+      description: "Required K0 capability for deduplication"
+
+  payload:
+    memory_id:
+      type: string
+      format: uuid
+      required: false
+      description: "Memory ID (for dedup_check)"
+      example: "mem_abc123"
+
+    content_hash:
+      type: string
+      format: hex
+      required: true
+      description: "BLAKE3 hash (32 bytes, 64 hex chars)"
+      example: "a1b2c3d4e5f6..."
+
+    similarity_threshold:
+      type: number
+      default: 0.9
+      description: "Near-duplicate threshold (0.0-1.0, higher is stricter)"
+
+    dedup_mode:
+      type: string
+      enum: ["exact", "near", "both"]
+      default: "both"
+      description: |
+        Deduplication mode:
+        - exact: BLAKE3 hash matching (identical content)
+        - near: LSH similarity (≥ threshold)
+        - both: Exact first, then near-duplicate check
+
+    batch_size:
+      type: integer
+      default: 1000
+      required: false
+      description: "Batch size (for dedup_scan)"
+
+    canonicalization_strategy:
+      type: string
+      enum: ["oldest", "highest_quality", "manual"]
+      default: "oldest"
+      description: |
+        Canonicalization strategy:
+        - oldest: First memory in cluster becomes canonical
+        - highest_quality: Best formatted, most complete
+        - manual: Admin/user selects canonical
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Dedup check completed"
+      payload:
+        is_duplicate:
+          type: boolean
+          description: "True if duplicate found"
+
+        canonical_memory_id:
+          type: string
+          format: uuid
+          required: false
+          description: "Canonical memory ID (if duplicate)"
+          example: "mem_canonical_123"
+
+        similarity_score:
+          type: number
+          required: false
+          description: "Similarity score (0.0-1.0, if near-duplicate)"
+
+        cluster_id:
+          type: string
+          format: uuid
+          required: false
+          description: "Dedup cluster ID (if duplicate)"
+
+        dedup_mode:
+          type: string
+          description: "Mode used for detection"
+
+        storage_saved_mb:
+          type: number
+          required: false
+          description: "Storage saved by deduplication"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "202":
+      description: "Dedup scan job accepted (async processing)"
+      payload:
+        job_id:
+          type: string
+          format: uuid
+          description: "Dedup scan job identifier"
+
+        total_memories:
+          type: integer
+          description: "Total memories to scan"
+
+        estimated_duration_ms:
+          type: integer
+          description: "Estimated completion time"
+
+    "400":
+      description: "Invalid dedup request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_content_hash", "invalid_similarity_threshold", "invalid_dedup_mode"]
+
+        details:
+          type: string
+
+    "404":
+      description: "Memory not found (for canonical_lookup)"
+
+    "500":
+      description: "Deduplication error"
+      payload:
+        error:
+          type: string
+          enum: ["lsh_index_error", "canonicalization_failed", "cluster_creation_failed"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Check single memory for exact duplicates"
+    request:
+      envelope:
+        port_id: "P14"
+        command_type: "dedup_check"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        capability: "CHECK_DUPLICATES"
+      payload:
+        memory_id: "mem_abc123"
+        content_hash: "a1b2c3d4e5f6789012345678901234567890123456789012345678901234"
+        dedup_mode: "exact"
+
+    response:
+      status: 200
+      payload:
+        is_duplicate: true
+        canonical_memory_id: "mem_canonical_123"
+        similarity_score: 1.0
+        cluster_id: "cluster_xyz"
+        dedup_mode: "exact"
+        storage_saved_mb: 0.5
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Check for near-duplicates with LSH"
+    request:
+      envelope:
+        port_id: "P14"
+        command_type: "dedup_check"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        capability: "CHECK_DUPLICATES"
+      payload:
+        memory_id: "mem_def456"
+        content_hash: "b2c3d4e5f6789012345678901234567890123456789012345678901234"
+        similarity_threshold: 0.95
+        dedup_mode: "near"
+        canonicalization_strategy: "highest_quality"
+
+    response:
+      status: 200
+      payload:
+        is_duplicate: true
+        canonical_memory_id: "mem_canonical_124"
+        similarity_score: 0.97
+        cluster_id: "cluster_abc"
+        dedup_mode: "near"
+        storage_saved_mb: 0.3
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Trigger full dedup scan (batch job)"
+    request:
+      envelope:
+        port_id: "P14"
+        command_type: "dedup_scan"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        capability: "CHECK_DUPLICATES"
+      payload:
+        similarity_threshold: 0.9
+        dedup_mode: "both"
+        batch_size: 5000
+        canonicalization_strategy: "oldest"
+
+    response:
+      status: 202
+      payload:
+        job_id: "dedup_scan_job_123"
+        total_memories: 1000000
+        estimated_duration_ms: 1800000
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "hash_lookup"
+      description: |
+        If dedup_mode=exact or both:
+        - Query st_canonical_map with BLAKE3 content_hash
+        - If match: return canonical_memory_id (exact duplicate)
+
+    - step: "lsh_similarity_search"
+      description: |
+        If dedup_mode=near or both:
+        - Query LSH index with memory content
+        - Find candidate near-duplicates (≥ similarity_threshold)
+        - Compute cosine similarity for candidates
+
+    - step: "cluster_assignment"
+      description: |
+        If duplicate found:
+        - Check if canonical already exists in st_dedup_clusters
+        - If not: create new cluster, assign canonical
+        - Add memory to cluster
+
+    - step: "canonicalization"
+      description: |
+        Select canonical memory based on strategy:
+        - oldest: First memory in cluster (by timestamp)
+        - highest_quality: Best formatting, completeness score
+        - manual: Admin-selected canonical
+
+    - step: "tombstone_creation"
+      description: |
+        If duplicate (not canonical):
+        - Create tombstone in st_tombstones
+        - Soft delete: mark for eventual deletion
+        - Redirect queries to canonical_memory_id
+
+    - step: "storage_update"
+      description: |
+        Update st_canonical_map:
+        - content_hash → canonical_memory_id
+        - Enable fast exact lookups
+
+    - step: "metrics_update"
+      description: "Track storage savings (MB reclaimed by deduplication)"
+
+  storage_targets:
+    - "st_canonical_map" # Hash → canonical_memory_id
+    - "st_dedup_clusters" # Cluster management
+    - "st_tombstones" # Soft delete markers
+    - "st_episodic" # Source memories
+    - "st_lsh_index" # LSH similarity index
+
+  events_emitted:
+    - "infra.dedup_check_started"
+    - "infra.dedup_cluster_created"
+    - "infra.dedup_canonical_assigned"
+    - "infra.dedup_tombstone_created"
+    - "infra.dedup_completed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "content_hash must be valid BLAKE3 hash (64 hex chars)"
+  - rule: "similarity_threshold must be between 0.0 and 1.0"
+  - rule: "dedup_mode must be [exact|near|both]"
+  - rule: "canonicalization_strategy must be [oldest|highest_quality|manual]"
+  - rule: "batch_size must be between 100 and 10000 (for dedup_scan)"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_dedup_checks_total"
+      type: "counter"
+      labels: ["dedup_mode", "result"]
+      description: "Total dedup checks (result: duplicate|unique)"
+
+    - name: "k0_exact_duplicates_found_total"
+      type: "counter"
+      description: "Total exact duplicates found (BLAKE3 match)"
+
+    - name: "k0_near_duplicates_found_total"
+      type: "counter"
+      description: "Total near-duplicates found (LSH match)"
+
+    - name: "k0_storage_saved_mb"
+      type: "gauge"
+      description: "Total storage saved by deduplication (MB)"
+
+    - name: "k0_dedup_latency_ms"
+      type: "histogram"
+      labels: ["dedup_mode"]
+      buckets: [10, 25, 50, 100, 250, 500]
+      description: "Dedup check latency in milliseconds"
+
+    - name: "k0_dedup_clusters_total"
+      type: "gauge"
+      description: "Total dedup clusters"
+
+  traces:
+    span_name: "k0_dedup.check"
+    attributes:
+      - "memory_id"
+      - "dedup_mode"
+      - "similarity_threshold"
+      - "is_duplicate"
+
+  logs:
+    - event: "infra.dedup_cluster_created"
+      level: "INFO"
+      fields: ["cluster_id", "canonical_memory_id"]
+
+    - event: "infra.dedup_completed"
+      level: "INFO"
+      fields: ["memory_id", "is_duplicate", "storage_saved_mb"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    exact_match: "10ms P95" # BLAKE3 hash lookup
+    near_match: "100ms P95" # LSH similarity search
+
+  throughput:
+    target_qps: 100
+    max_concurrent_requests: 200
+
+  storage_savings:
+    exact_duplicates: "5-10% typical"
+    near_duplicates: "15-25% additional (with 0.9 threshold)"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "CHECK_DUPLICATES"
+
+  audit_trail:
+    receipt_id: "Issued for all dedup operations"
+    retention: "365 days"
+
+# ============================================================================
+# DEDUPLICATION ALGORITHMS
+# ============================================================================
+
+algorithms:
+  exact_dedup:
+    algorithm: "BLAKE3 hashing"
+    complexity: "O(1) lookup"
+    precision: "100% (identical content)"
+
+  near_dedup:
+    algorithm: "Locality-Sensitive Hashing (LSH)"
+    hash_family: "MinHash (Jaccard similarity)"
+    complexity: "O(log n) approximate search"
+    precision: "Configurable (similarity_threshold)"
+
+  canonicalization:
+    oldest:
+      strategy: "Select first memory by timestamp"
+      tie_breaker: "Lexicographic memory_id"
+
+    highest_quality:
+      strategy: "Quality score: completeness + formatting + metadata richness"
+      tie_breaker: "Oldest"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Broder, A. Z. (1997). On the resemblance and containment of documents. Proceedings of Compression and Complexity of Sequences."
+    url: "https://doi.org/10.1109/SEQUEN.1997.666900"
+    relevance: "MinHash for near-duplicate detection"
+
+  - citation: "Aumasson, J.-P., et al. (2020). BLAKE3: one function, fast everywhere."
+    url: "https://github.com/BLAKE3-team/BLAKE3-specs"
+    relevance: "BLAKE3 hashing for exact dedup"
+
+  - citation: "Leskovec, J., et al. (2014). Mining of Massive Datasets. Chapter 3: Finding Similar Items."
+    url: "http://www.mmds.org/"
+    relevance: "LSH theory and implementation"

@@ -1,0 +1,229 @@
+# Clarification Protocol - Latency Budget & Performance SLOs
+# Purpose: Define latency targets, SLO tracking, performance budgets
+# ADR Reference: ADR-0003b (Protocols), ADR-0024 (Performance Budgets)
+# Target: <500ms P95 system latency (excluding user think time)
+
+---
+latency_budget:
+  name: "clarification_protocol_latency_budget"
+  version: "1.0"
+  description: "Clarification protocol latency targets and error budgets"
+
+  # ===== END-TO-END LATENCY =====
+  end_to_end:
+    name: "Clarification Roundtrip (Request to Response)"
+    description: "Total time from clarification need detected to response processed"
+    target_p95_ms: 500
+    target_p99_ms: 1000
+    budget_remaining_ms: 500  # Error budget
+
+    components:
+      - name: "Request Generation"
+        description: "Agent detects need and generates clarification"
+        target_p95_ms: 30
+        allocation: "30ms"
+        responsibility: "ai_agent (planner, etc.)"
+        notes: "Includes AI agent LLM reasoning to decide if clarification needed"
+
+      - name: "WebSocket Delivery"
+        description: "Send ClarificationRequest to user via WebSocket"
+        target_p95_ms: 40
+        allocation: "40ms"
+        responsibility: "api_gateway"
+        critical_path: true
+
+      - name: "User Response Time"
+        description: "How long user takes to respond"
+        target_p95_ms: "variable (user think time, not system SLO)"
+        allocation: "not_counted"
+        responsibility: "external (user)"
+        notes: "System target: respond within 60s timeout"
+
+      - name: "Response Capture & Validation"
+        description: "Capture, validate, and process response"
+        target_p95_ms: 50
+        allocation: "50ms"
+        responsibility: "api_gateway + orchestrator"
+        critical_path: true
+
+      - name: "Parent Protocol Resume"
+        description: "Resume parent protocol with clarified answer"
+        target_p95_ms: 10
+        allocation: "10ms"
+        responsibility: "orchestrator"
+
+    total_system_latency_p95_ms: 500  # 30 + 40 + 50 + 10, excludes user think time
+
+  # ===== SLO DEFINITIONS =====
+  slos:
+    - name: "Clarification Response Rate"
+      description: "Percentage of clarifications that receive user response"
+      metric: "clarification_response_received_total / clarification_request_generated_total"
+      target_percentage: 95.0
+      calculation_window: "rolling_24h"
+      consequence_if_failed: "error_budget_consumed, alert_sent"
+      error_budget: 5.0  # Can tolerate 5% failure
+
+    - name: "Protocol Latency P95"
+      description: "P95 latency for clarification protocol overhead"
+      metric: "clarification_latency_ms_p95"
+      target_ms: 500
+      calculation_window: "rolling_1h"
+      consequence_if_failed: "error_budget_consumed, performance_alert"
+      error_budget: 50  # Can tolerate 50ms excess
+
+    - name: "Timeout Rate"
+      description: "Percentage of clarifications timing out"
+      metric: "clarification_timeout_total / clarification_request_generated_total"
+      target_percentage: 5.0
+      calculation_window: "rolling_24h"
+      consequence_if_failed: "error_budget_consumed, availability_alert"
+      error_budget: 5.0
+
+    - name: "Security Compliance"
+      description: "Zero security violations"
+      metric: "clarification_security_violation_total"
+      target_count: 0
+      calculation_window: "real_time"
+      consequence_if_failed: "immediate_escalation"
+      error_budget: 0  # Zero tolerance
+
+  # ===== LATENCY BREAKDOWN BY PRIORITY =====
+  latency_by_priority:
+    BLOCKING:
+      description: "Critical clarifications that block task"
+      target_p95_ms: 500  # Strict latency required
+      response_timeout_ms: 60000  # 60 seconds to respond
+      allows_fallback: false
+
+    OPTIONAL:
+      description: "Helpful but not required"
+      target_p95_ms: 600  # Slightly relaxed
+      response_timeout_ms: 30000  # 30 seconds to respond
+      allows_fallback: true
+
+    LOW:
+      description: "Informational, best-effort"
+      target_p95_ms: 800  # More relaxed
+      response_timeout_ms: 10000  # 10 seconds to respond
+      allows_fallback: true
+
+  # ===== COMPOSITION OVERHEAD =====
+  composition:
+    with_task_execution:
+      overhead_ms: 0
+      description: "Clarification is subprocess of task, no overhead"
+
+    with_planning:
+      overhead_ms: 0
+      description: "Can interrupt planning for clarification"
+
+    with_barge_in:
+      overhead_ms: 10
+      description: "Barge-in can interrupt clarification, minimal overhead"
+
+    stacked_clarification:
+      overhead_ms: 20
+      description: "Clarification about clarification (rare)"
+      impact: "doubles latency (~40ms additional)"
+
+  # ===== LATENCY MONITORING =====
+  monitoring:
+    percentiles:
+      - "p50"  # Median
+      - "p95"  # 95th percentile (SLO target)
+      - "p99"  # 99th percentile
+
+    sampling_strategy: "all_traffic"  # Sample 100% for latency tracking
+    collection_frequency: "per_request"
+
+    dashboard_metrics:
+      - "clarification_latency_ms_histogram"
+      - "clarification_latency_ms_p95"
+      - "clarification_latency_ms_p99"
+      - "clarification_latency_by_agent"
+      - "clarification_latency_by_priority"
+
+    alerting:
+      - name: "High Latency"
+        condition: "clarification_latency_ms_p95 > 600"
+        severity: "warning"
+        for_duration: "5m"
+
+      - name: "Severe Latency"
+        condition: "clarification_latency_ms_p95 > 1000"
+        severity: "critical"
+        for_duration: "2m"
+
+  # ===== ERROR BUDGET TRACKING =====
+  error_budget:
+    month: "October 2025"
+    definitions:
+      - name: "Response Rate Error Budget"
+        available_budget: 5.0  # 5% failure allowed
+        consumed_so_far: 0.8   # 0.8% consumed
+        remaining_budget: 4.2  # 4.2% remaining
+
+      - name: "Latency Error Budget"
+        available_budget: "50ms"  # Can tolerate 50ms excess
+        consumed_so_far: "3ms"    # 3ms consumed
+        remaining_budget: "47ms"  # 47ms remaining
+
+      - name: "Timeout Error Budget"
+        available_budget: 5.0  # 5% timeout allowed
+        consumed_so_far: 1.2
+        remaining_budget: 3.8
+
+    monthly_reset: true
+    breach_consequence: "on_call_page"  # Page engineer if budget exhausted
+
+  # ===== LATENCY ATTRIBUTION =====
+  attribution:
+    request_generation:
+      who: "ai_agent (planner, researcher, etc.)"
+      latency_ms: 30
+      controllable: true
+      optimization: "Batch clarifications, precompute options"
+
+    websocket_delivery:
+      who: "api_gateway"
+      latency_ms: 40
+      controllable: false  # Network-dependent
+      optimization: "Use WebSocket push, not polling"
+
+    response_capture:
+      who: "api_gateway + orchestrator"
+      latency_ms: 50
+      controllable: true
+      optimization: "Parallelize validation with storage"
+
+    protocol_resume:
+      who: "orchestrator"
+      latency_ms: 10
+      controllable: true
+      optimization: "Use async resume pattern"
+
+  # ===== PERFORMANCE CHARACTERISTICS =====
+  performance:
+    throughput:
+      max_per_session: "1 active clarification"
+      max_per_agent: "100 concurrent clarifications"
+      max_total_k1: "1000 concurrent clarifications"
+
+    resource_usage:
+      memory_per_clarification_bytes: 4096
+      storage_per_clarification_bytes: 2048
+      cpu_per_request_ms: 5
+
+    scalability:
+      linear_up_to: "1000 concurrent sessions"
+      degradation_after: "degrades gracefully, latency increases by 2× at 10k sessions"
+
+  # ===== NOTES =====
+  notes:
+    - "User think time (response time) is NOT part of system SLO"
+    - "System latency target: <500ms P95 (excluding user think time)"
+    - "Response timeout default: 60s (can be overridden per priority)"
+    - "Error budget consumed when SLOs breached"
+    - "Monthly reset allows teams to recover from breaches"
+    - "Latency breakdown assumes happy path (no network issues, no validation errors)"

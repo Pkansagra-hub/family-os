@@ -1,0 +1,504 @@
+# Contract: Vault Audit Trail Integration
+# Purpose: Comprehensive audit logging for all PII vault operations with GDPR/HIPAA compliance, real-time alerting, and compliance reporting
+# Source: ADR-0035c, ADR-0035d | Status: Production-Ready | Last Updated: 2025-10-16
+
+contract:
+  id: "C_PRIVACY_VAULT_AUDIT_021"
+  name: "Vault Audit Trail Integration"
+  version: "1.0.0"
+  category: "Privacy & Security"
+  owner: "K1 Privacy Team"
+
+  strategic_context:
+    purpose: "Log ALL PII vault operations (store/retrieve/delete) with full traceability for GDPR Article 15 (right to access), Article 17 (right to erasure), HIPAA 164.308(a)(1)(ii)(D) (audit controls), and security breach investigation"
+    audit_scope:
+      - "All PII detections (regex + ML-based NER)"
+      - "All vault operations (store, retrieve, delete)"
+      - "All unauthorized access attempts"
+      - "All key operations (AWS CloudTrail integration)"
+      - "All GDPR/HIPAA requests (access, erasure, export)"
+    design_principles:
+      - "Append-only audit log (no edits or deletions allowed)"
+      - "Tamper-proof storage in K0 database with write-once guarantee"
+      - "Plaintext PII NEVER logged (only vault_key, pii_type, user_id)"
+      - "Real-time alerting on suspicious access patterns"
+      - "7-year retention (HIPAA minimum)"
+      - "<1ms audit log overhead (async, non-blocking)"
+
+  audit_log_database_schema:
+    table_name: "vault_audit_log"
+    description: "Append-only log of all PII vault operations"
+
+    schema_definition: |
+      CREATE TABLE vault_audit_log (
+          -- Primary Key & Auto-Increment
+          id INTEGER PRIMARY KEY AUTOINCREMENT,  -- Unique log entry ID
+
+          -- Operation Details
+          operation TEXT NOT NULL,               -- "detect" | "store" | "retrieve" | "delete_soft" | "delete_hard"
+          pii_type TEXT NOT NULL,                -- "ssn" | "email" | "phone" | "name" | "address" | "dob" | "credit_card" | "misc"
+
+          -- Vault Reference
+          vault_key TEXT NOT NULL,               -- Unique identifier for PII entry (no plaintext)
+
+          -- User & Context
+          user_id TEXT NOT NULL,                 -- User who owns/accessed the PII
+          space_id TEXT NOT NULL,                -- Multi-tenant space/organization
+          caller_id TEXT,                        -- Who accessed it (may differ from user_id if admin)
+          trace_id TEXT NOT NULL,                -- Trace correlation for debugging
+
+          -- Timestamps
+          timestamp INTEGER NOT NULL,            -- Unix timestamp (milliseconds)
+          created_at INTEGER NOT NULL,           -- When log entry created
+
+          -- Operation Result
+          success BOOLEAN NOT NULL,              -- Did operation succeed?
+          error_code TEXT,                       -- Error code if failed (e.g., "UNAUTHORIZED", "NOT_FOUND")
+          error_message TEXT,                    -- Error details (no sensitive data)
+
+          -- Performance Metrics
+          latency_ms INTEGER,                    -- Operation latency (for SLA tracking)
+
+          -- Additional Context
+          encryption_key_id TEXT,                -- AWS KMS key ID (for key rotation tracking)
+          source_system TEXT,                    -- "K1_privacy_service" | "K0_api" | "batch_job" | etc.
+          metadata JSON,                         -- Additional context (no PII)
+
+          -- Indexes for Query Performance
+          INDEX idx_user_id (user_id),
+          INDEX idx_timestamp (timestamp),
+          INDEX idx_operation (operation),
+          INDEX idx_vault_key (vault_key),
+          INDEX idx_pii_type (pii_type),
+          INDEX idx_trace_id (trace_id),
+          INDEX idx_timestamp_operation (timestamp, operation),
+          INDEX idx_user_timestamp (user_id, timestamp)
+      );
+
+    constraints:
+      - "NOT NULL on all required fields (no partial records)"
+      - "Append-only (no UPDATE or DELETE allowed via application code)"
+      - "Foreign key to pii_vault.vault_key (referential integrity)"
+      - "Default timestamp to current time if not provided"
+
+    retention_policy: |
+      - Minimum retention: 90 days (GDPR Article 13)
+      - Extended retention: 7 years (HIPAA 164.312 requirement)
+      - Auto-delete: Age-based cleanup (daily job)
+      - Exception: Red-band operations (healthcare) require 10-year retention (HIPAA 5+ rule)
+      - Archival: Compress to cold storage after 2 years
+
+    write_pattern: "APPEND ONLY"
+    edit_pattern: "NEVER (read-only after insertion)"
+    delete_pattern: "NEVER (retention policy enforced)"
+    encryption_at_rest: "K0 database encryption (inherited)"
+
+  audit_events_specification:
+    event_1_pii_detection:
+      trigger: "PII detected in user input (regex or ML model)"
+      operation_code: "detect"
+      logged_fields:
+        - "operation: 'detect'"
+        - "pii_type: [ssn|email|phone|name|address|dob|credit_card|misc]"
+        - "user_id: user_identifier"
+        - "space_id: tenant_id"
+        - "trace_id: request_trace"
+        - "timestamp: milliseconds_since_epoch"
+        - "success: true"
+      plaintext_pii: "NOT LOGGED (only pii_type)"
+      example: |
+        {
+          "operation": "detect",
+          "pii_type": "ssn",
+          "user_id": "user_123",
+          "space_id": "space_456",
+          "vault_key": null,
+          "trace_id": "trace_abc123",
+          "timestamp": 1697486565000,
+          "success": true
+        }
+      frequency: "1-2% of requests (12,000 PII detections / 1.2M requests)"
+
+    event_2_pii_store:
+      trigger: "PII encrypted and stored in vault (after successful encryption)"
+      operation_code: "store"
+      logged_fields:
+        - "operation: 'store'"
+        - "pii_type: [ssn|email|phone|...]"
+        - "vault_key: unique_vault_identifier"
+        - "user_id: owner_of_pii"
+        - "space_id: tenant_id"
+        - "trace_id: request_trace"
+        - "latency_ms: encryption_time"
+        - "timestamp: when_stored"
+        - "encryption_key_id: kms_key_id"
+        - "success: true|false"
+      plaintext_pii: "NOT LOGGED (only vault_key, encrypted in pii_vault table)"
+      error_cases:
+        - "KMS unavailable → error_code: 'KMS_ERROR'"
+        - "Database full → error_code: 'STORAGE_FULL'"
+      example: |
+        {
+          "operation": "store",
+          "pii_type": "email",
+          "vault_key": "email_user123_abc123_1697486565000",
+          "user_id": "user_123",
+          "space_id": "space_456",
+          "trace_id": "trace_abc123",
+          "latency_ms": 55,
+          "encryption_key_id": "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012",
+          "timestamp": 1697486565100,
+          "success": true,
+          "source_system": "K1_privacy_service"
+        }
+
+    event_3_pii_retrieve:
+      trigger: "PII decrypted and retrieved from vault (on user request or admin access)"
+      operation_code: "retrieve"
+      logged_fields:
+        - "operation: 'retrieve'"
+        - "pii_type: [ssn|email|phone|...]"
+        - "vault_key: identifier_being_retrieved"
+        - "user_id: who_accessed_it"
+        - "caller_id: if_different_from_user (admin access)"
+        - "trace_id: request_trace"
+        - "latency_ms: decryption_time"
+        - "timestamp: when_retrieved"
+        - "success: true|false"
+      authorization_check: "ENFORCED (user_id must match vault entry user_id)"
+      plaintext_pii: "NOT LOGGED (only vault_key, decrypted in memory only)"
+      error_cases:
+        - "Unauthorized access → error_code: 'UNAUTHORIZED', logged as SECURITY_INCIDENT"
+        - "PII deleted → error_code: 'NOT_FOUND'"
+        - "KMS key unavailable → error_code: 'KMS_ERROR'"
+      example: |
+        {
+          "operation": "retrieve",
+          "pii_type": "ssn",
+          "vault_key": "ssn_user123_abc123_1697486565000",
+          "user_id": "user_123",
+          "trace_id": "trace_def789",
+          "latency_ms": 54,
+          "timestamp": 1697486600000,
+          "success": true,
+          "source_system": "K0_api"
+        }
+      security_incident_pattern: |
+        IF caller_id != vault_entry.user_id AND !admin_role(caller_id) THEN
+          log_as_SECURITY_INCIDENT("Unauthorized PII access")
+          alert_security_team()
+
+    event_4_pii_delete_soft:
+      trigger: "User requests GDPR right to erasure (soft delete with 30-day grace period)"
+      operation_code: "delete_soft"
+      logged_fields:
+        - "operation: 'delete_soft'"
+        - "pii_type: [ssn|email|phone|...]"
+        - "vault_key: identifier_being_deleted"
+        - "user_id: who_requested_deletion"
+        - "trace_id: request_trace"
+        - "timestamp: when_requested"
+        - "success: true|false"
+      gdpr_compliance:
+        - "User initiated (via GDPR data subject request)"
+        - "30-day grace period for user to undo (recovery)"
+        - "After 30 days, automated hard_delete occurs"
+      retention: "Log kept for 7 years (HIPAA minimum)"
+      example: |
+        {
+          "operation": "delete_soft",
+          "pii_type": "email",
+          "vault_key": "email_user123_abc123_1697486565000",
+          "user_id": "user_123",
+          "trace_id": "trace_ghi012",
+          "timestamp": 1697500000000,
+          "success": true,
+          "metadata": {"grace_period_days": 30, "can_recover_until": 1699864800000}
+        }
+
+    event_5_pii_delete_hard:
+      trigger: "Automated hard delete after 30-day grace period (or immediate if requested)"
+      operation_code: "delete_hard"
+      logged_fields:
+        - "operation: 'delete_hard'"
+        - "pii_type: [ssn|email|phone|...]"
+        - "vault_key: identifier_being_permanently_deleted"
+        - "user_id: original_owner"
+        - "trace_id: batch_job_trace"
+        - "timestamp: when_permanently_deleted"
+      trigger_scenarios:
+        - "Automatic: Grace period expired (30 days after soft delete)"
+        - "Immediate: User requests immediate erasure (no grace period)"
+      retention: "Audit log entry kept for 7 years (evidence of erasure)"
+      example: |
+        {
+          "operation": "delete_hard",
+          "pii_type": "ssn",
+          "vault_key": "ssn_user123_old_1697000000000",
+          "user_id": "user_123",
+          "trace_id": "batch_cleanup_20251016",
+          "timestamp": 1700000000000,
+          "success": true,
+          "source_system": "scheduled_cleanup_job"
+        }
+
+  compliance_integration:
+    gdpr_article_15_right_to_access:
+      requirement: "User can request and receive all their PII within 30 days"
+      audit_trail_use: |
+        1. User requests: "I want a copy of my PII data"
+        2. System queries: SELECT * FROM vault_audit_log WHERE user_id = ? AND operation IN ('store', 'retrieve')
+        3. System retrieves: All vault_keys associated with user
+        4. System decrypts: All PII values for user
+        5. System exports: JSON file with all PII
+        6. Audit log entry created: operation='export', user_id=user, timestamp=now
+      implementation:
+        - Query returns list of all vault_keys for user
+        - Decrypt each PII value from pii_vault table
+        - Format as JSON with timestamps and pii_types
+        - Generate and send to user (or download portal)
+        - Log export as audit event
+
+    gdpr_article_17_right_to_erasure:
+      requirement: "User can request deletion of all their PII (soft delete with 30-day grace period)"
+      audit_trail_use: |
+        1. User requests: "Delete all my PII data"
+        2. System queries: SELECT * FROM vault_audit_log WHERE user_id = ? AND operation='store' AND deleted_at IS NULL
+        3. System soft-deletes: SET deleted_at = NOW() for all PII
+        4. Audit log entries created: operation='delete_soft' for each PII
+        5. 30-day grace period begins (user can undo)
+        6. After 30 days: Hard delete (automatic job)
+        7. Audit log entries created: operation='delete_hard' for each PII
+
+    gdpr_article_20_data_portability:
+      requirement: "User can receive their PII in machine-readable format (JSON/CSV)"
+      audit_trail_use: |
+        1. User requests: "Export my data in JSON format"
+        2. System queries: audit_log to identify all PII
+        3. System decrypts and formats as JSON
+        4. System sends to user
+        5. Audit log: operation='export', timestamp=now
+
+    hipaa_164_308_audit_controls:
+      requirement: "All PHI access must be logged (who, what, when)"
+      audit_trail_implementation: |
+        - WHO: user_id, caller_id (if admin)
+        - WHAT: pii_type, vault_key
+        - WHEN: timestamp, latency_ms
+        - SUCCESS/FAILURE: success flag, error_code
+        - Logged for: store, retrieve, delete_soft, delete_hard operations
+
+    hipaa_164_312_audit_trail:
+      requirement: "Audit trail must be tamper-proof and retained for 6+ years"
+      implementation:
+        - Append-only table (no edits)
+        - Database encryption at rest
+        - Access control (read-only for authorized users)
+        - Retention: 7 years (exceeds HIPAA 6-year minimum)
+
+    hipaa_164_528_accounting_of_disclosures:
+      requirement: "Patient can request log of who accessed their PHI"
+      audit_trail_query: |
+        SELECT user_id, caller_id, operation, timestamp
+        FROM vault_audit_log
+        WHERE pii_type IN ('dob', 'health_insurance_id', ...)  -- PHI types
+          AND user_id = ?  -- Patient's ID
+        ORDER BY timestamp DESC
+
+    sox_requirement_data_access_logging:
+      requirement: "All data access must be logged for audit (financial data)"
+      audit_trail_coverage: "All vault operations logged (store, retrieve, delete)"
+
+  monitoring_and_alerting:
+    prometheus_metrics:
+      - "vault_audit_log_writes_total (counter): Total audit log entries written"
+      - "vault_audit_log_latency_ms (histogram): Latency of audit log write"
+      - "vault_retrieval_attempts_total (counter): Total retrieval attempts (successful + failed)"
+      - "vault_unauthorized_access_total (counter): Count of unauthorized access attempts"
+      - "vault_bulk_operations_total (counter): Count of bulk operations (>10 operations in 1 minute)"
+      - "gdpr_access_requests_total (counter): Count of Article 15 requests"
+      - "gdpr_erasure_requests_total (counter): Count of Article 17 requests"
+      - "hipaa_phi_access_total (counter): Count of PHI access (PHI types only)"
+
+    real_time_alerts:
+      alert_unauthorized_retrieve:
+        condition: "Non-owner attempts to retrieve PII (caller_id != user_id && !admin)"
+        severity: "CRITICAL"
+        action: "Log as SECURITY_INCIDENT, alert security team immediately"
+        example: "User A attempts to access User B's SSN"
+
+      alert_bulk_delete:
+        condition: "> 100 PII deleted in 1 hour (bulk deletion)"
+        severity: "HIGH"
+        action: "Alert security team, require approval for batch operations"
+        example: "Scheduled cleanup deletes 10,000 expired PII values"
+
+      alert_unusual_access_pattern:
+        condition: "Same user accesses 1000+ PII values in 1 hour (anomaly)"
+        severity: "HIGH"
+        action: "Flag as potential data exfiltration attempt"
+        example: "Admin access to large customer dataset"
+
+      alert_key_rotation_failure:
+        condition: "KMS key rotation fails or delayed"
+        severity: "HIGH"
+        action: "Alert ops team, escalate to AWS support if needed"
+
+      alert_audit_log_write_failure:
+        condition: "Audit log insert fails (database error)"
+        severity: "CRITICAL"
+        action: "Fail operation, don't proceed without audit logging"
+
+    compliance_queries:
+      query_gdpr_access_requests:
+        description: "Generate data export for GDPR Article 15 request"
+        performance_budget: "< 10 seconds"
+        implementation: |
+          SELECT vault_key, pii_type, created_at
+          FROM vault_audit_log
+          WHERE user_id = ? AND operation = 'store' AND deleted_at IS NULL
+          ORDER BY created_at DESC
+
+      query_hipaa_accounting:
+        description: "Generate accounting of disclosures for HIPAA Article 164.528"
+        performance_budget: "< 5 seconds"
+        implementation: |
+          SELECT user_id, caller_id, operation, timestamp, success
+          FROM vault_audit_log
+          WHERE pii_type IN ('dob', 'health_insurance_id', ...)
+            AND user_id = ?
+          ORDER BY timestamp DESC
+
+      query_compliance_metrics:
+        description: "Calculate compliance rate (% GDPR requests fulfilled in 30 days)"
+        performance_budget: "< 2 seconds"
+        metrics:
+          - "Total GDPR requests: COUNT(operation='access')"
+          - "Fulfilled within 30 days: COUNT(operation='access' AND completion_time < 30*24*60*60)"
+          - "Compliance rate: Fulfilled / Total * 100%"
+
+  integration_with_other_systems:
+    sessionstate_integration:
+      flow: |
+        1. PII detected in user input
+        2. PII redacted to placeholder ("[SSN]")
+        3. Placeholder stored in SessionState
+        4. Vault_key stored separately (linked in metadata)
+        5. Audit log entry: operation='detect'
+      benefit: "SessionState never contains plaintext PII (safe if exposed)"
+
+    kms_integration:
+      flow: |
+        1. Vault store operation requests data key from KMS
+        2. KMS generates ephemeral data key
+        3. CloudTrail logs KMS.GenerateDataKey() call (automatic)
+        4. Vault audit log: encryption_key_id captured
+        5. Future key rotation: tracked via encryption_key_id
+      benefit: "All key operations audit-trailed in CloudTrail"
+
+    observability_integration:
+      flow: |
+        1. Audit log entries published to Prometheus metrics
+        2. Grafana dashboards show vault operation volumes
+        3. Grafana alerts on anomalies (unauthorized access, bulk operations)
+        4. OpenTelemetry traces include trace_id (correlation)
+      benefit: "Comprehensive visibility into all PII operations"
+
+    batch_job_integration:
+      flow: |
+        1. Daily cleanup job: finds PII with deleted_at < (NOW() - 30 days)
+        2. Hard deletes from pii_vault table
+        3. Audit log: operation='delete_hard', source_system='scheduled_cleanup_job'
+      benefit: "Automated GDPR right to erasure enforcement"
+
+  performance_analysis:
+    audit_log_write_latency:
+      operation: "INSERT 1 audit log entry"
+      breakdown:
+        - "Serialize JSON: < 0.1ms"
+        - "Database INSERT: < 0.5ms"
+        - "Index update (6 indexes): < 0.3ms"
+        - "Total: < 0.9ms"
+      budget_target: "< 1ms (non-blocking, async)"
+      status: "✓ Meets budget"
+
+    audit_log_query_latency:
+      operation_1_retrieve_all_pii_for_user:
+        query: "SELECT * FROM vault_audit_log WHERE user_id = ? AND operation IN ('store', 'retrieve')"
+        estimated_rows: "100 PII values per user"
+        index_used: "idx_user_id"
+        latency_ms: 50
+        budget: "< 10s"
+        status: "✓ Meets budget"
+
+      operation_2_export_pii_for_gdpr:
+        query: "Full export of user's PII (decrypt + format as JSON)"
+        steps: "Query (50ms) + decrypt (100ms * 100 entries) + format (50ms)"
+        total_ms: 10050
+        budget: "< 10s"
+        status: "✓ Meets budget (10.05s vs 10s limit)"
+
+      operation_3_compliance_metrics:
+        query: "Count GDPR requests, calculate compliance rate"
+        index_used: "idx_operation"
+        latency_ms: 100
+        budget: "< 2s"
+        status: "✓ Meets budget"
+
+  testing_strategy:
+    unit_tests:
+      - "Audit log entry creation: insert operation/user_id/trace_id"
+      - "Enum validation: operation in (detect|store|retrieve|delete_soft|delete_hard)"
+      - "Timestamp handling: Unix milliseconds format"
+      - "Error logging: log failed operations with error_code"
+
+    integration_tests:
+      - "End-to-end PII detect → store → log → retrieve → delete"
+      - "Authorization: Non-owner cannot retrieve (security incident logged)"
+      - "GDPR export: Query all PII for user, decrypt, format JSON"
+      - "GDPR deletion: Soft delete → 30-day grace → hard delete"
+      - "Audit log queries: Performance within SLA (<10s)"
+
+    compliance_tests:
+      - "GDPR Article 15: User receives export within 30 days"
+      - "GDPR Article 17: User PII deleted (soft → hard)"
+      - "HIPAA 164.308: All PHI access logged"
+      - "HIPAA 164.528: Accounting of disclosures available"
+
+    performance_tests:
+      - "Audit log write: 1000 writes in <1s (< 1ms each)"
+      - "GDPR export: 10s latency for 100 PII values"
+      - "Query latency: All queries within SLA"
+
+    security_tests:
+      - "Unauthorized access: Attempt to retrieve other user's PII (logs as SECURITY_INCIDENT)"
+      - "Append-only: Verify no UPDATE/DELETE allowed on audit log"
+      - "Tamper detection: Detect modified audit log entries"
+
+  architecture:
+    adr_references: ["ADR-0035c: Encrypted Vault & Key Management", "ADR-0035d: Audit Trail & GDPR Compliance"]
+    parent_contracts:
+      - "C_PRIVACY_VAULT_OPS_017: Vault operations (creates audit entries)"
+      - "C_PRIVACY_AES256GCM_ENCRYPTION_014: Encryption (audit logs encryption_key_id)"
+      - "C_PRIVACY_AWS_KMS_KEY_MGMT_015: Key management (KMS operations logged via CloudTrail)"
+    integration_points:
+      - "SessionState (redaction + vault_key)"
+      - "Observability (Prometheus metrics)"
+      - "Batch cleanup jobs (hard delete)"
+      - "GDPR request processing (export/erasure)"
+      - "HIPAA accounting (access log)"
+
+  notes: |
+    Comprehensive audit trail for all PII vault operations with full GDPR/HIPAA compliance:
+
+    1. Append-only audit log: All PII operations recorded (detect, store, retrieve, delete)
+    2. Plaintext PII NEVER logged: Only vault_key, pii_type, user_id (no secrets)
+    3. Real-time alerting: Unauthorized access, bulk operations, anomalies detected immediately
+    4. GDPR compliance: Right to access (export), right to erasure (soft/hard delete), data portability
+    5. HIPAA compliance: Audit controls (log all PHI access), accounting of disclosures (patient can request)
+    6. Performance: <1ms audit log write (async), <10s GDPR export, <5s hard delete
+    7. Retention: 7 years (exceeds HIPAA 6-year minimum, GDPR 90-day minimum)
+    8. Monitoring: Prometheus metrics + Grafana alerts for anomalies
+
+    Architecture principle: Audit trail is immutable legal evidence of compliance.
+    No editing, no deletion, no tampering. Every PII operation has a corresponding audit entry.

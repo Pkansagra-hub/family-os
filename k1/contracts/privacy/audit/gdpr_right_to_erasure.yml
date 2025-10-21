@@ -1,0 +1,47 @@
+# Contract: GDPR Right to Erasure Implementation
+# Source: ADR-0035d | Status: Production-Ready | Last Updated: 2025-10-14
+
+contract:
+  id: "C_PRIVACY_GDPR_ERASURE_FULL_025"
+  name: "GDPR Right to Erasure Implementation"
+  version: "1.0.0"
+
+  gdpr_article_17: "Right to erasure (user can delete their PII)"
+
+  erasure_request_process:
+    user_request:
+      trigger: "User requests PII deletion"
+      action: "INSERT into gdpr_requests (type: erasure)"
+      status: "pending"
+
+    fulfillment:
+      step_1_soft_delete: "SET deleted_at = NOW() in pii_vault"
+      step_2_audit_log: "DELETE from audit_log for user_id"
+      step_3_sessionstate: "Remove PII refs from SessionState"
+      step_4_llm_cache: "Clear LLM context (if applicable)"
+      status: "fulfilled"
+
+    hard_delete:
+      grace_period_days: 30
+      trigger: "After 30 days, automated cleanup"
+      action: "DELETE from pii_vault WHERE deleted_at < NOW() - 30"
+
+    response:
+      notification: "User notified of deletion within 24 hours"
+      confirmation: "Deletion confirmation document provided"
+      retention_notice: "Inform of audit trail 7-year retention (HIPAA)"
+
+  compliance:
+    30_day_response_requirement: true
+    immediate_soft_delete: true
+    data_processor_notification: "Inform K0 storage provider"
+    exceptions:
+      - "Legal holds (litigation, compliance)"
+      - "Audit trail retention (HIPAA 7 years)"
+
+  performance:
+    soft_delete_latency_sec: 1
+    hard_delete_latency_sec: 5
+
+  architecture:
+    adr_references: ["ADR-0035d: GDPR Compliance", "ADR-0035c: Encrypted Vault"]

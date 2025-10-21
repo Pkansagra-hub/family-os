@@ -1,0 +1,445 @@
+# P03 Consolidation - Memory Optimization Pipeline
+# Port: P03 (K0 internal background job)
+# Background job semantics: Sleep-driven memory consolidation
+# Performance budget: Async (no synchronous latency requirement)
+
+version: "1.0"
+port_id: "P03"
+port_name: "Consolidation"
+direction: "K0_INTERNAL"
+semantics: "background_job"
+transport: "Internal Job Queue"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0015"  # Consolidation Strategy (hippocampal replay, neocortical integration)
+  - "ADR-0016"  # Forgetting Policy (decay curves, importance weighting)
+  - "ADR-0120"  # Background Job Scheduling
+  - "ADR-0121"  # Synaptic Homeostasis
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P03"
+      description: "Port identifier for consolidation job"
+
+    command_type:
+      type: string
+      value: "consolidation_request"
+      description: "Background job trigger for memory consolidation"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c"
+
+    trigger_type:
+      type: string
+      enum: ["sleep", "manual", "scheduled"]
+      required: true
+      description: |
+        Consolidation trigger:
+        - sleep: NREM slow-wave sleep cycle detected
+        - manual: User/admin triggered consolidation
+        - scheduled: Periodic background job (e.g., nightly)
+
+  payload:
+    consolidation_mode:
+      type: string
+      enum: ["hippocampal_replay", "neocortical_integration", "synaptic_homeostasis", "full"]
+      required: true
+      description: |
+        Consolidation mode:
+        - hippocampal_replay: CA3 reactivation, memory strengthening
+        - neocortical_integration: Episodic → semantic extraction
+        - synaptic_homeostasis: Connection pruning, forgetting
+        - full: All phases (replay → integration → homeostasis)
+
+    target_memory_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+      required: false
+      description: "Specific memory IDs to consolidate (if empty, auto-select)"
+
+    time_window:
+      type: object
+      required: false
+      description: "Time range for memory selection (if not using target_memory_ids)"
+      properties:
+        start:
+          type: string
+          format: iso8601
+          description: "Start timestamp (ISO 8601)"
+          example: "2025-10-17T00:00:00Z"
+
+        end:
+          type: string
+          format: iso8601
+          description: "End timestamp (ISO 8601)"
+          example: "2025-10-18T23:59:59Z"
+
+    budget_ms:
+      type: integer
+      min: 1000
+      max: 3600000
+      default: 60000
+      description: "Maximum processing time in milliseconds (default: 60s)"
+
+    importance_threshold:
+      type: number
+      min: 0.0
+      max: 1.0
+      default: 0.3
+      description: "Minimum importance score for consolidation (0.0-1.0)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "202":
+      description: "Consolidation job accepted and queued"
+      payload:
+        job_id:
+          type: string
+          format: uuid
+          description: "Unique job identifier for tracking"
+          example: "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+        estimated_duration_ms:
+          type: integer
+          description: "Estimated job duration in milliseconds"
+          example: 45000
+
+        memories_queued_count:
+          type: integer
+          description: "Number of memories queued for consolidation"
+          example: 127
+
+        consolidation_mode:
+          type: string
+          description: "Echo of requested consolidation mode"
+          example: "full"
+
+        scheduled_start_time:
+          type: string
+          format: iso8601
+          description: "Expected job start time"
+          example: "2025-10-18T02:00:00Z"
+
+    "400":
+      description: "Invalid consolidation request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_mode", "invalid_time_window", "budget_exceeded"]
+
+        details:
+          type: string
+          description: "Human-readable error explanation"
+
+    "500":
+      description: "K0 internal error during job scheduling"
+      payload:
+        error:
+          type: string
+          enum: ["job_queue_full", "scheduler_unavailable"]
+
+# ============================================================================
+# JOB STATUS QUERY (Optional companion endpoint)
+# ============================================================================
+
+job_status_query:
+  description: "Query consolidation job status (separate endpoint)"
+  request:
+    envelope:
+      port_id: "P03"
+      command_type: "consolidation_status"
+      cognitive_trace_id: "uuid"
+    payload:
+      job_id:
+        type: string
+        format: uuid
+        required: true
+
+  response:
+    status_codes:
+      "200":
+        description: "Job status retrieved"
+        payload:
+          job_id: "uuid"
+          status:
+            type: string
+            enum: ["queued", "running", "completed", "failed"]
+          progress_percent:
+            type: integer
+            min: 0
+            max: 100
+          memories_processed:
+            type: integer
+          memories_consolidated:
+            type: integer
+          memories_forgotten:
+            type: integer
+          semantic_extractions:
+            type: integer
+          elapsed_ms:
+            type: integer
+          error:
+            type: string
+            required: false
+            description: "Error message if status=failed"
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Sleep-triggered full consolidation"
+    request:
+      envelope:
+        port_id: "P03"
+        command_type: "consolidation_request"
+        cognitive_trace_id: "8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c"
+        trigger_type: "sleep"
+      payload:
+        consolidation_mode: "full"
+        time_window:
+          start: "2025-10-17T00:00:00Z"
+          end: "2025-10-18T23:59:59Z"
+        budget_ms: 60000
+        importance_threshold: 0.3
+
+    response:
+      status: 202
+      payload:
+        job_id: "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+        estimated_duration_ms: 45000
+        memories_queued_count: 127
+        consolidation_mode: "full"
+        scheduled_start_time: "2025-10-18T02:00:00Z"
+
+  - name: "Manual hippocampal replay for specific memories"
+    request:
+      envelope:
+        port_id: "P03"
+        command_type: "consolidation_request"
+        cognitive_trace_id: "9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d"
+        trigger_type: "manual"
+      payload:
+        consolidation_mode: "hippocampal_replay"
+        target_memory_ids:
+          - "7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d"
+          - "4b5c6d7e-8f9a-0b1c-2d3e-4f5a6b7c8d9e"
+        budget_ms: 30000
+
+    response:
+      status: 202
+      payload:
+        job_id: "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e"
+        estimated_duration_ms: 28000
+        memories_queued_count: 2
+        consolidation_mode: "hippocampal_replay"
+        scheduled_start_time: "2025-10-18T14:32:05Z"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  phases:
+    - phase: "selection"
+      description: "Identify memories for consolidation"
+      steps:
+        - "Query st_episodic for memories in time_window"
+        - "Calculate importance scores (recency, frequency, emotional salience)"
+        - "Filter by importance_threshold"
+        - "Sort by consolidation priority"
+
+    - phase: "hippocampal_replay"
+      description: "Reactivate memory sequences with noise injection"
+      steps:
+        - "CA3 recurrent reactivation (pattern completion)"
+        - "CA1 cortical integration (bind to existing representations)"
+        - "Strengthen synaptic connections (LTP)"
+        - "Update st_hipp_store with replay metadata"
+
+    - phase: "neocortical_integration"
+      description: "Extract semantic patterns from episodic memories"
+      steps:
+        - "Cluster similar episodic memories"
+        - "Extract common patterns/themes"
+        - "Generate semantic summaries (LLM-assisted)"
+        - "Update st_semantic, st_knowledge_graph"
+
+    - phase: "synaptic_homeostasis"
+      description: "Connection pruning, forgetting"
+      steps:
+        - "Apply decay functions (Ebbinghaus forgetting curve)"
+        - "Remove redundant/low-value memories (LRU eviction)"
+        - "Archive to cold storage (st_archived_memories)"
+        - "Update importance scores"
+
+  storage_targets:
+    - "st_episodic" # Source for consolidation
+    - "st_semantic" # Target for extracted patterns
+    - "st_hipp_store" # Hippocampal metadata
+    - "st_knowledge_graph" # Semantic relationships
+    - "st_rollup_summaries" # Compressed summaries
+    - "st_archived_memories" # Cold storage
+
+  events_emitted:
+    - "infra.consolidation.job_started"
+    - "infra.consolidation.hippocampal_replay"
+    - "infra.consolidation.neocortical_integration"
+    - "infra.consolidation.synaptic_homeostasis"
+    - "infra.consolidation.job_completed"
+    - "infra.consolidation.job_failed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "consolidation_mode must be [hippocampal_replay|neocortical_integration|synaptic_homeostasis|full]"
+  - rule: "trigger_type must be [sleep|manual|scheduled]"
+  - rule: "budget_ms: 1000-3600000 (1 second to 1 hour)"
+  - rule: "importance_threshold: 0.0-1.0"
+  - rule: "time_window: start must be before end"
+  - rule: "target_memory_ids OR time_window must be provided (not both required)"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_consolidation_jobs_total"
+      type: "counter"
+      labels: ["trigger_type", "consolidation_mode", "status"]
+      description: "Total consolidation jobs"
+
+    - name: "k0_consolidation_duration_ms"
+      type: "histogram"
+      labels: ["consolidation_mode"]
+      buckets: [1000, 5000, 10000, 30000, 60000, 120000]
+      description: "Consolidation job duration"
+
+    - name: "k0_memories_consolidated_total"
+      type: "counter"
+      labels: ["consolidation_mode"]
+      description: "Total memories consolidated"
+
+    - name: "k0_memories_forgotten_total"
+      type: "counter"
+      labels: ["reason"]
+      description: "Total memories forgotten (reason: decay|lru|importance)"
+
+    - name: "k0_semantic_extractions_total"
+      type: "counter"
+      description: "Total semantic patterns extracted"
+
+  traces:
+    span_name: "k0_consolidation.job"
+    attributes:
+      - "job_id"
+      - "consolidation_mode"
+      - "trigger_type"
+      - "memories_queued_count"
+      - "budget_ms"
+
+  logs:
+    - event: "infra.consolidation.job_started"
+      level: "INFO"
+      fields: ["job_id", "consolidation_mode", "memories_queued_count"]
+
+    - event: "infra.consolidation.hippocampal_replay"
+      level: "DEBUG"
+      fields: ["memory_id", "replay_iteration", "synaptic_strength"]
+
+    - event: "infra.consolidation.job_completed"
+      level: "INFO"
+      fields: ["job_id", "duration_ms", "memories_consolidated", "memories_forgotten"]
+
+    - event: "infra.consolidation.job_failed"
+      level: "ERROR"
+      fields: ["job_id", "error", "memories_processed"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    synchronous_response: "50ms" # Job acceptance
+    job_execution: "varies by budget_ms (default 60s)"
+
+  throughput:
+    concurrent_jobs: 5
+    max_queue_depth: 100
+
+  resource_limits:
+    max_memories_per_job: 10000
+    max_budget_ms: 3600000 # 1 hour
+
+  scheduling:
+    priority: "low" # Background job, does not block user interactions
+    throttling: "Rate limited to prevent resource contention"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research:
+  hippocampal_replay:
+    description: "CA3 recurrent reactivation during NREM sleep"
+    citations:
+      - "Wilson & McNaughton (1994) - Reactivation of hippocampal ensemble memories during sleep"
+      - "Foster & Wilson (2006) - Reverse replay of behavioral sequences in hippocampal place cells"
+
+  neocortical_integration:
+    description: "Episodic → semantic transformation via cortical abstraction"
+    citations:
+      - "McClelland et al. (1995) - Why there are complementary learning systems in hippocampus and neocortex"
+      - "Kumaran et al. (2016) - What learning systems do intelligent agents need?"
+
+  synaptic_homeostasis:
+    description: "Connection pruning to maintain network stability"
+    citations:
+      - "Tononi & Cirelli (2014) - Sleep and the price of plasticity"
+      - "Ebbinghaus (1885) - Memory: A contribution to experimental psychology"
+
+  forgetting_mechanisms:
+    description: "Active forgetting via decay curves, LRU eviction"
+    citations:
+      - "Anderson & Schooler (1991) - Reflections of the environment in memory"
+      - "Murre & Dros (2015) - Replication and analysis of Ebbinghaus' forgetting curve"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Internal K0 only (no external access)"
+    required: false
+
+  authorization:
+    capability_required: "None (internal background job)"
+
+  data_protection:
+    privacy_bands:
+      - "Respects privacy_band classification during consolidation"
+      - "RED band memories: local consolidation only, no semantic extraction"
+
+  audit_trail:
+    retention: "Consolidation job logs retained for 30 days"

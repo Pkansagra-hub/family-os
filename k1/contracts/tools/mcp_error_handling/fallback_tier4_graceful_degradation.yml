@@ -1,0 +1,216 @@
+# Fallback Tier 4: Graceful Degradation
+# Purpose: Define Tier 4 fallback strategy - user-friendly error message
+# Source ADR: 0034d-mcp-error-handling.md (lines 1401-1600)
+# Version: 1.0
+
+component_name: "FallbackTier4Graceful"
+version: "1.0"
+description: "Graceful degradation with user-friendly error message (100% success rate)"
+
+references:
+  adr: ["0034d"]
+  contracts: ["error_classification_3_categories"]
+
+tier4_overview:
+  name: "Graceful Degradation"
+  purpose: "Return user-friendly error message and suggest alternatives"
+  applicable_errors: "ALL errors (final fallback)"
+  success_rate: "100%"
+  fallback_source: "Human-friendly template messages"
+
+  entry_conditions:
+    - tier3_exhausted: "true"
+
+  guaranteed_result: "Always returns something (never blank/null)"
+
+tier4_algorithm:
+  step1_classify_error: "Categorize error for message selection"
+  step2_select_template: "Choose friendly message template"
+  step3_personalize_message: "Include tool name, error context"
+  step4_suggest_alternatives: "Offer next steps to user"
+  step5_return_response: "Always return structured response"
+
+tier4_message_templates:
+  network_timeout:
+    message: "I couldn't reach the service right now. Let me try again in a moment."
+    alternatives: "Would you like me to try with a backup service?"
+
+  tool_unavailable:
+    message: "The weather service is temporarily unavailable."
+    alternatives: "I can check cached data from a few minutes ago."
+
+  invalid_request:
+    message: "I didn't understand that request correctly."
+    alternatives: "Could you rephrase that?"
+
+  tool_crashed:
+    message: "I ran into an issue with that tool and had to restart it."
+    alternatives: "Please try again in a moment."
+
+  out_of_memory:
+    message: "The service is under heavy load right now."
+    alternatives: "Try again later or use a simpler query."
+
+  generic_error:
+    message: "Sorry, I encountered an error processing that."
+    alternatives: "Please try rephrasing your request."
+
+message_selection_logic:
+  based_on: "error_code or error_category"
+
+  if_network_timeout: "network_timeout template"
+  if_service_unavailable: "tool_unavailable template"
+  if_invalid_params: "invalid_request template"
+  if_tool_crashed: "tool_crashed template"
+  if_out_of_memory: "out_of_memory template"
+  if_unknown: "generic_error template"
+
+personalization:
+  replace_placeholders:
+    - "{tool_name}": Actual tool name (weather, calendar, email)
+    - "{error_code}": Numeric error code
+    - "{service}": Service name
+
+  examples:
+    template: "I couldn't reach {service} right now."
+    personalized: "I couldn't reach the weather service right now."
+
+tier4_response_structure:
+  type: "Structured response (not just string)"
+  fields:
+    - message: "User-friendly error message"
+    - error_code: "Numeric error code for logging"
+    - tool_id: "Which tool failed"
+    - alternatives: "List of next steps"
+    - trace_id: "For debugging"
+    - suggestions: "Optional suggestions"
+
+suggestions_by_error_type:
+  network_error:
+    - "Check your internet connection"
+    - "Try again in a moment"
+    - "Use a different tool if available"
+
+  tool_error:
+    - "The tool is being restarted"
+    - "Try a simpler version of your request"
+    - "Use cached data if available"
+
+  parameter_error:
+    - "Rephrase your request"
+    - "Provide missing information"
+    - "Check for typos"
+
+confidence_levels:
+  high_confidence:
+    message: "Strong suggestion (network probably temporary)"
+
+  low_confidence:
+    message: "Weak suggestion (unknown error cause)"
+
+pseudocode:
+  code: |
+    async def graceful_fallback(error, tool_id):
+      # Select message template
+      template = select_message_template(error.error_code)
+
+      # Personalize
+      message = template.format(
+        tool_name=get_tool_name(tool_id),
+        service=get_service_name(tool_id)
+      )
+
+      # Build response
+      response = {
+        "message": message,
+        "error_code": error.error_code,
+        "tool_id": tool_id,
+        "alternatives": get_alternatives(error),
+        "trace_id": error.trace_id,
+        "suggestions": get_suggestions(error)
+      }
+
+      return response
+
+response_examples:
+  example_1:
+    error: "Network timeout"
+    response: |
+      {
+        "message": "I couldn't reach the weather service right now. Let me try again in a moment.",
+        "error_code": 1001,
+        "tool_id": "weather_api",
+        "alternatives": ["Use cached data", "Try different time"],
+        "trace_id": "abc-123-def"
+      }
+
+  example_2:
+    error: "Tool crashed"
+    response: |
+      {
+        "message": "I ran into an issue with the calendar and had to restart it.",
+        "error_code": 2001,
+        "tool_id": "calendar_api",
+        "alternatives": ["Try again", "Use simple list view"],
+        "trace_id": "xyz-789-abc"
+      }
+
+metrics:
+  prometheus_counters:
+    - name: "tier4_fallbacks_total"
+      labels: ["tool_id", "error_code"]
+    - name: "tier4_fallback_messages"
+      labels: ["message_type"]
+
+logging:
+  log_tier4_fallback:
+    - tier: "4"
+    - tool_id
+    - error_code
+    - message_template
+    - personalized_message
+    - alternatives
+    - trace_id
+
+guarantees:
+  never_blank_response: true
+  always_user_friendly: true
+  always_includes_trace_id: true
+  always_include_next_steps: true
+
+timing:
+  tier4_latency: "<10ms (template selection + personalization)"
+
+user_experience:
+  transparency: "User always knows an error occurred"
+  helpfulness: "Suggestions help user resolve"
+  friendliness: "Non-technical language"
+  actionability: "User can take next steps"
+
+error_handling_in_tier4:
+  on_template_not_found:
+    condition: "No template matches error"
+    action: "Use generic_error template"
+
+  on_personalization_fail:
+    condition: "Placeholder replacement fails"
+    action: "Use template without personalization"
+
+integration_with_fallback_strategy:
+  entry_condition: "Tier 3 exhausted (always entered eventually)"
+  guaranteed_exit: "Always returns response"
+  no_next_tier: "Final tier, no fallback after this"
+
+testing_requirements:
+  - test_all_templates_exist: "Every error code has a template"
+  - test_personalization: "Placeholders replaced correctly"
+  - test_suggestions_generated: "Alternatives provided"
+  - test_response_structure: "All required fields present"
+  - test_latency: "Tier 4 <10ms"
+  - test_never_blank: "Response always non-empty"
+
+compliance:
+  adr_0034d_sections: ["Fallback Tier 4 (Graceful Degradation)", "Production statistics (100% success)"]
+
+changelog:
+  "1.0": "Initial contract - Fallback Tier 4 (Graceful degradation)"

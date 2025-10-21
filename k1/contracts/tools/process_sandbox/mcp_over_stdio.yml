@@ -1,0 +1,502 @@
+# Process Sandbox: MCP Protocol over stdio Pipes
+# Purpose: Show how MCP protocol works with native process sandbox execution
+# Research: MCP spec, JSON-RPC, pipe-based communication
+# Part of ADR-0033c (Process Sandbox Implementation)
+
+---
+contract_id: "TOOL_EXEC_PROCESS_MCP_OVER_STDIO"
+contract_type: "protocol_integration"
+applies_to: ["k1.orchestrator.tool_runner", "k1.process_sandbox", "k1.mcp_gateway"]
+
+# ============================================================================
+# MCP OVER STDIO: Architecture Overview
+# ============================================================================
+
+principle: |
+  MCP protocol runs over stdin/stdout pipes (native process communication).
+
+  Traditional MCP: JSON-RPC protocol negotiated in-process
+  K1 Process MCP: JSON-RPC over pipe boundaries
+
+  Architecture:
+  K1 Host Process              Tool Process (separate PID)
+  ├─ stdin pipe ────────→ stdin (tool reads MCP requests)
+  ├─ stdout pipe ←──────── stdout (tool writes MCP responses)
+  └─ stderr pipe ←──────── stderr (tool logs errors)
+
+  Communication model:
+  1. K1 writes MCP request JSON to tool stdin (newline-delimited)
+  2. K1 blocks waiting for response (reads from tool stdout)
+  3. Tool reads from stdin, processes request
+  4. Tool writes MCP response JSON to stdout (newline-delimited)
+  5. K1 reads response, continues
+
+  Benefit: Simple, standard Unix pipe communication (no sockets needed)
+
+# ============================================================================
+# PIPE SETUP: stdin/stdout/stderr Configuration
+# ============================================================================
+
+pipe_setup:
+  subprocess_configuration: |
+    Python subprocess with pipes:
+
+    import subprocess
+    import json
+
+    process = subprocess.Popen(
+        args=["python3", "/k1/tools/my_mcp_tool.py"],
+        stdin=subprocess.PIPE,      # K1 → tool
+        stdout=subprocess.PIPE,     # tool → K1 (MCP responses)
+        stderr=subprocess.PIPE,     # tool → K1 (errors/logs)
+        preexec_fn=setup_sandbox,   # Apply security controls
+        text=True,                  # Text mode (str, not bytes)
+        bufsize=1                   # Line-buffered (newline-separated)
+    )
+
+  fd_inheritance: |
+    Tool process inherits three file descriptors:
+
+    fd 0 (stdin):
+    - Connected to pipe from K1
+    - Tool reads MCP requests from stdin
+    - Tool sees: Standard input stream
+
+    fd 1 (stdout):
+    - Connected to pipe to K1
+    - Tool writes MCP responses to stdout
+    - K1 sees: Line-delimited JSON responses
+
+    fd 2 (stderr):
+    - Connected to pipe to K1
+    - Tool logs errors/debug to stderr
+    - K1 sees: Structured logs (not in protocol)
+
+    All other file descriptors (3+): Closed
+    - Prevents tool access to other resources
+    - Tool cannot open new files (only stdin/stdout/stderr)
+
+  buffering_mode: |
+    Line buffering is critical:
+
+    text=True + bufsize=1:
+    - Lines delimited by \n character
+    - Each JSON object on separate line
+    - K1 blocks reading line by line
+    - Tool outputs line by line
+
+    Without line buffering:
+    - Full buffering could deadlock (tool waits for buffer flush)
+    - Partial reads would corrupt JSON
+    - Protocol communication would fail
+
+# ============================================================================
+# MCP PROTOCOL: JSON-RPC over Pipes
+# ============================================================================
+
+mcp_protocol:
+  json_rpc_format: |
+    MCP uses JSON-RPC 2.0 (standard format):
+
+    Request (K1 → Tool via stdin):
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "resources/list",
+      "params": {
+        "cursor": null,
+        "limit": 10
+      }
+    }
+
+    Response (Tool → K1 via stdout):
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "resources": [
+          {
+            "uri": "memory://config.json",
+            "name": "Configuration",
+            "mimeType": "application/json",
+            "description": "Tool configuration file"
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+
+    Error (Tool → K1 if error):
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32700,
+        "message": "Parse error",
+        "data": "Invalid JSON in request"
+      }
+    }
+
+  mcp_methods_available: |
+    Standard MCP methods supported by tool process:
+
+    1. resources/list
+       - Request: List available resources
+       - Response: Array of resources with URIs
+
+    2. resources/read
+       - Request: Read specific resource
+       - Response: Resource content
+
+    3. tools/list
+       - Request: List available tools
+       - Response: Array of tools with signatures
+
+    4. tools/call
+       - Request: Execute tool with arguments
+       - Response: Tool result
+
+    5. prompts/list
+       - Request: List available prompts
+       - Response: Array of prompts
+
+    6. prompts/get
+       - Request: Get prompt template
+       - Response: Prompt with variables
+
+# ============================================================================
+# EXAMPLE: Weather MCP Server Process
+# ============================================================================
+
+example_tool:
+  rust_source_code: |
+    // weather_mcp.rs - MCP server running in process sandbox
+    use serde_json::{json, Value};
+    use std::io::{self, BufRead, Write};
+
+    fn main() {
+        let stdin = io::stdin();
+        let mut reader = stdin.lock().lines();
+
+        // Read requests line by line
+        while let Some(Ok(line)) = reader.next() {
+            if line.is_empty() {
+                continue;
+            }
+
+            // Parse JSON-RPC request
+            let request: Value = match serde_json::from_str(&line) {
+                Ok(r) => r,
+                Err(_) => {
+                    let error = json!({
+                        "jsonrpc": "2.0",
+                        "error": {
+                            "code": -32700,
+                            "message": "Parse error"
+                        }
+                    });
+                    println!("{}", error);
+                    continue;
+                }
+            };
+
+            let id = request["id"].clone();
+            let method = request["method"].as_str().unwrap_or("");
+
+            // Route to handler
+            let result = match method {
+                "resources/list" => handle_resources_list(),
+                "tools/call" => handle_tool_call(&request),
+                _ => {
+                    json!({
+                        "error": {
+                            "code": -32601,
+                            "message": "Method not found"
+                        }
+                    })
+                }
+            };
+
+            // Write response
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            });
+            println!("{}", response);
+            io::stdout().flush().unwrap();  // Ensure line buffered
+        }
+    }
+
+    fn handle_resources_list() -> Value {
+        json!({
+            "resources": [
+                {
+                    "uri": "weather://NYC",
+                    "name": "NYC Weather",
+                    "mimeType": "application/json"
+                },
+                {
+                    "uri": "weather://LA",
+                    "name": "LA Weather",
+                    "mimeType": "application/json"
+                }
+            ]
+        })
+    }
+
+    fn handle_tool_call(request: &Value) -> Value {
+        let tool_name = request["params"]["name"].as_str().unwrap_or("");
+        let args = &request["params"]["arguments"];
+
+        match tool_name {
+            "get_weather" => {
+                let city = args["city"].as_str().unwrap_or("NYC");
+                json!({
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": format!("Weather for {}: 72°F, clear skies", city)
+                        }
+                    ]
+                })
+            }
+            _ => json!({ "error": "Unknown tool" })
+        }
+    }
+
+  k1_interaction: |
+    K1 Host interacts via pipes:
+
+    import subprocess
+    import json
+
+    # Spawn tool process
+    process = subprocess.Popen(
+        ["weather_mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1
+    )
+
+    # Request 1: List resources
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/list",
+        "params": {"limit": 10}
+    }
+    process.stdin.write(json.dumps(request) + "\n")
+    process.stdin.flush()
+
+    # Read response
+    response_line = process.stdout.readline()
+    response = json.loads(response_line)
+    print(f"Resources: {response['result']['resources']}")
+
+    # Request 2: Call tool
+    request = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "get_weather",
+            "arguments": {"city": "NYC"}
+        }
+    }
+    process.stdin.write(json.dumps(request) + "\n")
+    process.stdin.flush()
+
+    # Read response
+    response_line = process.stdout.readline()
+    response = json.loads(response_line)
+    print(f"Weather: {response['result']['content'][0]['text']}")
+
+    # Terminate
+    process.terminate()
+    process.wait()
+
+# ============================================================================
+# PROTOCOL SEMANTICS: Error Handling and Edge Cases
+# ============================================================================
+
+error_handling:
+  timeout_handling: |
+    If tool doesn't respond within timeout:
+
+    1. K1 sets read timeout: 30 seconds
+    2. K1 writes request to stdin
+    3. K1 waits for response (blocking read)
+    4. After 30 seconds: Timeout occurs
+    5. K1 sends SIGTERM to tool (graceful shutdown)
+    6. After 5 seconds: Send SIGKILL (force kill)
+    7. K1 logs: Tool timeout exceeded
+
+    Result: Hung tool cannot block entire session
+
+  malformed_response: |
+    If tool writes invalid JSON:
+
+    1. Tool stdout: {"invalid json}
+    2. K1 reads line: {"invalid json}
+    3. K1 tries json.loads(): Raises JSONDecodeError
+    4. K1 logs: "Tool produced invalid JSON response"
+    5. K1 continues (or terminates tool if critical)
+
+    Result: Bad tool output doesn't crash K1
+
+  tool_crash: |
+    If tool process crashes:
+
+    1. Tool segfaults (SIGSEGV)
+    2. Kernel delivers signal to tool process
+    3. Tool process exits with status 139 (128 + 11)
+    4. K1 detects: process.poll() returns 139
+    5. K1 logs: "Tool crashed with signal 11"
+    6. K1 returns error to user
+
+    Result: Crashed tool is handled gracefully
+
+  tool_outputs_nothing: |
+    If tool exits without responding:
+
+    1. K1 writes request to stdin
+    2. K1 waits for response (blocking readline())
+    3. Tool process exits
+    4. readline() gets EOF
+    5. K1 detects: Empty line means EOF
+    6. K1 logs: "Tool exited without responding"
+
+    Result: Tool exit is handled gracefully
+
+# ============================================================================
+# LATENCY ANALYSIS: Pipe Communication Speed
+# ============================================================================
+
+latency:
+  pipe_communication_latency: |
+    JSON-RPC round-trip latency over pipes:
+
+    Scenario: "Get weather for NYC"
+
+    1. K1 constructs request JSON: <1ms
+    2. K1 writes to stdin pipe: 0.01-0.1ms (pipe write)
+    3. Kernel delivers data to tool: 0.01-0.1ms (pipe copy)
+    4. Tool reads from stdin: 0.01-0.1ms (pipe read)
+    5. Tool processes: 10ms (compute)
+    6. Tool constructs response: <1ms
+    7. Tool writes to stdout: 0.01-0.1ms
+    8. Kernel delivers to K1: 0.01-0.1ms
+    9. K1 reads response: 0.01-0.1ms
+    10. K1 parses JSON: <1ms
+
+    Total latency: ~12-15ms (most is tool logic, pipes negligible)
+
+  comparison_to_http: |
+    Pipe communication vs HTTP:
+
+    Pipes (process sandbox MCP):
+    - Round-trip: 10-20ms (mostly tool logic)
+    - Overhead: <1ms (pipes negligible)
+    - Throughput: Limited by tool, not network
+
+    HTTP (WASM MCP):
+    - Round-trip: 10-20ms (same tool logic)
+    - Overhead: 2-5ms (HTTP overhead)
+    - Throughput: Limited by HTTP protocol, not tool
+
+    Pipes are faster and simpler (lower latency)
+
+# ============================================================================
+# COMPARISON: Process MCP vs WASM MCP
+# ============================================================================
+
+comparison:
+  process_mcp_advantages: |
+    ✅ Native code execution (no 10x slowdown)
+    ✅ Simple stdio communication (pipes)
+    ✅ Standard process model (Unix pipes)
+    ✅ Rich ecosystem (any language)
+    ✅ Near-zero protocol overhead
+    ✅ Excellent performance (50ms overhead + native speed)
+
+  process_mcp_disadvantages: |
+    ❌ Requires OS-level sandboxing (iptables, chroot, seccomp, cgroups)
+    ❌ Linux-specific (not portable to macOS, Windows easily)
+    ❌ Complex setup (4 egress layers)
+    ❌ Less isolation than WASM (process escapes possible, though rare)
+
+  wasm_mcp_advantages: |
+    ✅ Complete isolation (zero-syscall guarantee)
+    ✅ Cross-platform (Linux, macOS, Windows, Web)
+    ✅ Simple setup (just run wasmtime)
+    ✅ No root privilege needed
+    ✅ Portable (single WASM binary)
+
+  wasm_mcp_disadvantages: |
+    ❌ 10x performance penalty (1000ms instead of 100ms)
+    ❌ Must recompile to WASM (not any language)
+    ❌ HTTP protocol overhead (vs pipes)
+    ❌ Smaller tool ecosystem
+    ❌ Limited tool flexibility
+
+# ============================================================================
+# DEPLOYMENT MODEL: When to Use Process vs WASM MCP
+# ============================================================================
+
+deployment:
+  trusted_mcp_tools: |
+    GREEN/AMBER band MCP tools:
+    - Use: Process sandbox with native execution
+    - Reason: Trust justifies complexity
+    - Performance: Native speed (<100ms overhead)
+    - Isolation: OS-level controls
+    - Deployment: 85% of tools
+
+  untrusted_io_bound_mcp: |
+    RED band MCP tools (I/O-bound):
+    - Use: WASM sandbox (HTTP wrapper)
+    - Reason: WASM overhead minimal on I/O
+    - Performance: ~10% overhead (I/O dominates)
+    - Isolation: Complete (100% zero-syscall)
+    - Deployment: 10% of untrusted tools
+
+  untrusted_compute_bound_mcp: |
+    RED band MCP tools (compute-bound):
+    - Use: Process sandbox (if time allows)
+    - OR: WASM if isolation is critical
+    - Performance: 10x penalty with WASM (significant)
+    - Isolation: Complete (WASM) vs strong (process + seccomp)
+    - Deployment: 5% of untrusted tools
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: MCP protocol MUST use JSON-RPC 2.0 format
+    ENFORCEMENT: K1 validates all requests/responses against JSON-RPC spec
+    RATIONALE: Ensure protocol compatibility and error handling
+
+  rule_2: |
+    RULE: All MCP requests MUST have unique ID for correlation
+    ENFORCEMENT: K1 assigns request IDs, validates response IDs match
+    RATIONALE: Track request/response pairs in concurrent execution
+
+  rule_3: |
+    RULE: Tool timeout MUST be enforced (30 seconds default)
+    ENFORCEMENT: K1 sets read timeout, sends SIGTERM on timeout
+    RATIONALE: Prevent hung tools from blocking session
+
+  rule_4: |
+    RULE: Malformed tool responses MUST not crash K1
+    ENFORCEMENT: K1 catches JSON parsing errors, logs as violation
+    RATIONALE: Ensure K1 resilience to tool bugs
+
+  rule_5: |
+    RULE: Tool process MUST be reaped after termination
+    ENFORCEMENT: K1 calls process.wait() and collects exit status
+    RATIONALE: Prevent zombie processes from accumulating

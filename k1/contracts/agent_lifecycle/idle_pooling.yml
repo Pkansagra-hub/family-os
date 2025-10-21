@@ -1,0 +1,234 @@
+# Idle Pooling Contract
+# Source ADR: ADR-0005 (Agent Lifecycle FSM with 6 States)
+# Defines IDLE state resource management and fast reactivation
+
+metadata:
+  contract_id: "idle-pooling-v1.0"
+  source_adr: "0005-agent-lifecycle-fsm.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# IDLE State Overview
+idle_overview:
+  description: "Agent has no assigned tasks but remains loaded in memory for fast reactivation"
+  purpose: "Resource pooling to avoid cold start penalty (200ms+ saved per reactivation)"
+  entry_trigger: "ACTIVE → IDLE after 60s quiescence"
+  exit_trigger: "New task assigned or TTL expired"
+  resource_policy: "Keep model loaded, minimize memory footprint"
+
+# Resource Management Policy
+resource_management:
+
+  # Memory Footprint Reduction
+  memory_optimization:
+    target_footprint: "60-80% of ACTIVE state"
+    actions:
+      - "Release non-essential memory buffers"
+      - "Clear prompt cache (reload on reactivation)"
+      - "Minimize KV cache (keep resident for fast restore)"
+      - "Release intermediate computation buffers"
+    retention:
+      - "Model weights (avoid reload cost)"
+      - "Core agent configuration"
+      - "Mailbox and routing tables"
+      - "Capability leases"
+
+  # Model Retention
+  model_retention:
+    policy: "Keep model loaded in memory"
+    rationale: "Avoid 150-250ms reload cost on reactivation"
+    placement: "Maintain current NPU/GPU/CPU placement"
+    thermal_considerations: "May trigger thermal pressure if NPU overheats"
+
+  # KV Cache Policy
+  kv_cache_policy:
+    current_state: "IN PROGRESS (optimization pending)"
+    target: "Keep resident for <50ms reactivation"
+    current_issue: "Cache restore from K0 slow (50ms)"
+    optimization_needed: "Resident cache with eviction on pressure"
+
+# Reactivation Performance
+reactivation_performance:
+
+  # Performance Target
+  latency_budget_ms: 50
+  breakdown:
+    prompt_cache_restore: 30-40  # Current bottleneck
+    kv_cache_restore: 10-15      # Target: 0ms with resident cache
+    state_transition: 5          # Supervisor transition overhead
+    mailbox_routing: 1           # Message delivery
+
+  # Reactivation Sequence
+  sequence:
+    1_clear_ttl_deadline:
+      action: "Remove idle TTL timer"
+      duration_ms: 1
+
+    2_restore_memory_footprint:
+      action: "Rehydrate caches from K0 or resident memory"
+      duration_ms: 30-40
+      optimization: "Keep resident to reduce to 0ms"
+
+    3_reset_idle_timer:
+      action: "Set new idle timer (60s from now)"
+      duration_ms: 1
+
+    4_emit_metrics:
+      action: "Log reactivation event"
+      duration_ms: 1
+
+    5_process_task:
+      action: "Begin task execution"
+      duration_ms: "varies"
+
+# TTL Management
+ttl_management:
+
+  # Default TTL
+  default_ttl_ms: 300000  # 5 minutes
+  purpose: "Prevent resource waste on abandoned agents"
+  configurable: true
+  user_segmentation:
+    power_users: 900000   # 15 minutes
+    casual_users: 180000  # 3 minutes
+
+  # TTL Expiration
+  expiration_action: "IDLE → DRAINING"
+  drain_deadline_ms: 10000
+  reason: "idle_ttl_expired"
+
+# Memory Pressure Handling
+memory_pressure:
+
+  # Trigger Conditions
+  heap_threshold: 0.8  # >80% K1 heap utilization
+  check_interval_ms: 1000  # Supervisor health check interval
+
+  # Eviction Policy
+  eviction_strategy: "largest RSS first"
+  prioritization:
+    - "Sort IDLE agents by resident set size (RSS) descending"
+    - "Transition largest → DRAINING with 2s deadline"
+    - "Continue until pressure relieved or all IDLE drained"
+
+  # Drain Deadline
+  drain_deadline_ms: 2000
+  escalation: "If deadline exceeded and pressure critical → force TERMINATED"
+
+# Thermal Pressure Handling
+thermal_pressure:
+
+  # Trigger Conditions
+  temperature_threshold: "T_hot"  # Device-specific thermal limit
+  check_interval_ms: 1000
+
+  # Eviction Policy
+  eviction_strategy: "thermal contribution (NPU > GPU > CPU)"
+  prioritization:
+    - "Sort IDLE agents by thermal impact descending"
+    - "NPU agents first (highest thermal contribution)"
+    - "GPU agents second"
+    - "CPU agents last"
+    - "Remote agents never (no local thermal impact)"
+
+  # Drain Deadline
+  drain_deadline_ms: 2000
+  escalation: "If deadline exceeded and thermal critical → force TERMINATED"
+
+# Quiescence Detection
+quiescence_detection:
+  window_ms: 300-500  # configurable: IDLE_QUIESCENCE_MS
+  condition: "mailbox.empty AND no_arrivals_for(window_ms)"
+  rationale: "Prevents false IDLE transitions from late messages (flap guard)"
+  implementation: |
+    def is_quiescent(self, window_ms=300):
+        if not self.mailbox.is_empty():
+            return False
+        time_since_last = now() - self.last_message_at
+        return time_since_last_ms >= window_ms
+
+# Health Checks
+health_checks:
+  interval_ms: 1000
+  actions:
+    - "Verify agent responsiveness"
+    - "Check memory pressure"
+    - "Check thermal status"
+    - "Monitor TTL expiration"
+  failure_action: "Crash detection → TERMINATED"
+
+# Observability
+observability:
+
+  # Metrics
+  metrics:
+    idle_agents_total:
+      type: "gauge"
+      description: "Number of agents in IDLE state"
+
+    agent_idle_duration_ms:
+      type: "histogram"
+      labels: ["agent_id"]
+      description: "Time spent in IDLE state"
+
+    agent_reactivations_total:
+      type: "counter"
+      labels: ["agent_id"]
+      description: "Total IDLE → ACTIVE transitions"
+
+    agent_idle_ttl_expirations_total:
+      type: "counter"
+      labels: ["reason"]  # ttl_expired, memory_pressure, thermal_pressure
+      description: "Total IDLE → DRAINING transitions"
+
+  # Events
+  events:
+    agent_idle_start:
+      fields: ["agent_id", "from_state", "idle_ttl_ms"]
+    agent_idle_ttl_warning:
+      fields: ["agent_id", "time_remaining_ms"]
+    agent_idle_pressure_draining:
+      fields: ["agent_id", "reason", "drain_deadline_ms"]
+    agent_reactivation:
+      fields: ["agent_id", "idle_duration_ms", "reactivation_latency_ms"]
+
+# Implementation Status
+implementation_status:
+  basic_pooling: "COMPLETED"
+  reactivation_optimization: "IN PROGRESS (K0 cache restore slow)"
+  memory_pressure: "IN PROGRESS (eviction policy incomplete)"
+  thermal_pressure: "IN PROGRESS (thermal tracking unreliable)"
+  overall_completion: "60%"
+
+# Performance Validation
+performance_validation:
+
+  # Benchmarks
+  benchmarks:
+    reactivation_latency:
+      target_ms: 50
+      current_ms: 70  # Needs optimization
+      bottleneck: "K0 prompt cache re-hydration"
+
+    memory_footprint:
+      target_percent: "60-80"
+      current_percent: "75-85"  # Within range
+
+    idle_retention:
+      target_minutes: 5
+      current_minutes: 5
+
+  # Test Scenarios
+  test_scenarios:
+    - "ACTIVE → IDLE after 60s quiescence"
+    - "IDLE → ACTIVE on task assignment (<50ms)"
+    - "IDLE → DRAINING on TTL expiry"
+    - "IDLE → DRAINING under memory pressure"
+    - "IDLE → DRAINING under thermal pressure"
+
+# Research Backing
+research_backing:
+  - "Connection Pooling (database connection pools keep connections open)"
+  - "Orleans Virtual Actors (deactivation timer for resource management)"
+  - "JVM Thread Pools (idle threads remain in pool for fast task assignment)"

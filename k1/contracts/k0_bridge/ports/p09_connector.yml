@@ -1,0 +1,492 @@
+# P09 Connector - External Data Ingestion Pipeline
+# Port: P09 (External → K0 ingestion)
+# Command semantics: Ingest data from external sources (calendar, email, documents, IoT, webhooks)
+# Performance budget: 1000ms P95, 10000ms timeout
+
+version: "1.0"
+port_id: "P09"
+port_name: "Connector"
+direction: "K0_INGRESS"
+semantics: "command"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0060"  # Connector Architecture
+  - "ADR-0061"  # OAuth Token Management
+  - "ADR-0062"  # Webhook Security
+  - "ADR-0044"  # HTTP/2 Transport
+  - "ADR-0010"  # Deduplication Strategy
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P09"
+      description: "Port identifier for connector ingestion"
+
+    command_type:
+      type: string
+      value: "connector_ingest"
+      description: "External data ingestion command"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e"
+
+    connector_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Registered connector identifier"
+      example: "connector_calendar_google_001"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: |
+        Privacy classification:
+        - GREEN: Standard ingestion, cloud sync
+        - AMBER: PII detection/redaction before storage
+        - RED: Local-only ingestion, no cloud sync
+
+    capability:
+      type: string
+      value: "INGEST_EXTERNAL_DATA"
+      required: true
+      description: "Required K0 capability for external data ingestion"
+
+  payload:
+    connector_type:
+      type: string
+      enum: ["calendar", "email", "document", "iot", "webhook"]
+      required: true
+      description: |
+        Connector data source type:
+        - calendar: iCal/Google Calendar events
+        - email: IMAP/Gmail messages
+        - document: Google Docs, OneDrive files
+        - iot: Home Assistant, fitness trackers
+        - webhook: Generic HTTP ingestion
+
+    external_data:
+      type: object
+      required: true
+      description: "Raw payload from external source"
+      additionalProperties: true
+
+    normalization_rules:
+      type: object
+      required: false
+      description: "Custom field mapping rules"
+      properties:
+        field_mappings:
+          type: object
+          additionalProperties: true
+          description: "External field → Memory field mappings"
+
+        transformation_script:
+          type: string
+          description: "Optional Lua script for complex transformations"
+
+    dedup_check:
+      type: boolean
+      default: true
+      description: "Enable deduplication via BLAKE3 fingerprinting"
+
+    pii_scan:
+      type: boolean
+      default: true
+      description: "Enable PII detection before storage"
+
+    metadata:
+      type: object
+      required: false
+      description: "Additional ingestion metadata"
+      properties:
+        source_url:
+          type: string
+          description: "Original data source URL"
+
+        ingestion_timestamp:
+          type: string
+          format: iso8601
+          description: "Timestamp of ingestion"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "201":
+      description: "Data ingested successfully"
+      payload:
+        ingestion_id:
+          type: string
+          format: uuid
+          description: "Unique ingestion transaction ID"
+          example: "ingest_123"
+
+        memories_created_count:
+          type: integer
+          description: "Number of new memories created"
+          example: 7
+
+        duplicates_skipped_count:
+          type: integer
+          description: "Number of duplicates skipped"
+          example: 2
+
+        pii_redacted_count:
+          type: integer
+          description: "Number of PII instances redacted"
+          example: 3
+
+        ingestion_latency_ms:
+          type: integer
+          description: "Total ingestion latency"
+          example: 847
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "202":
+      description: "Ingestion accepted (async processing)"
+      payload:
+        ingestion_id:
+          type: string
+          format: uuid
+          description: "Ingestion job identifier"
+
+        estimated_completion_ms:
+          type: integer
+          description: "Estimated completion time"
+
+    "400":
+      description: "Invalid external data"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_connector_type", "invalid_data_format", "normalization_failed"]
+
+        details:
+          type: string
+
+    "401":
+      description: "Unauthorized connector"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_oauth_token", "token_expired"]
+
+    "403":
+      description: "Forbidden - connector lacks permission"
+      payload:
+        required_capability:
+          type: string
+          example: "INGEST_EXTERNAL_DATA"
+
+    "409":
+      description: "Duplicate data detected"
+      payload:
+        existing_memory_ids:
+          type: array
+          items:
+            type: string
+          description: "Memory IDs of existing duplicates"
+
+    "429":
+      description: "Rate limited - connector quota exceeded"
+      payload:
+        retry_after_ms:
+          type: integer
+
+    "500":
+      description: "Ingestion error"
+      payload:
+        error:
+          type: string
+          enum: ["parsing_failed", "storage_failed", "pii_scan_failed"]
+
+    "504":
+      description: "Gateway timeout - ingestion exceeded 10000ms budget"
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Calendar event ingestion"
+    request:
+      envelope:
+        port_id: "P09"
+        command_type: "connector_ingest"
+        cognitive_trace_id: "9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e"
+        connector_id: "connector_calendar_google_001"
+        privacy_band: "AMBER"
+        capability: "INGEST_EXTERNAL_DATA"
+      payload:
+        connector_type: "calendar"
+        external_data:
+          summary: "Team standup"
+          start: "2025-10-20T10:00:00Z"
+          end: "2025-10-20T10:30:00Z"
+          attendees: ["alice@example.com", "bob@example.com"]
+        dedup_check: true
+        pii_scan: true
+
+    response:
+      status: 201
+      payload:
+        ingestion_id: "ingest_123"
+        memories_created_count: 1
+        duplicates_skipped_count: 0
+        pii_redacted_count: 2
+        ingestion_latency_ms: 347
+        receipt_id: "0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f"
+
+  - name: "Email message ingestion"
+    request:
+      envelope:
+        port_id: "P09"
+        command_type: "connector_ingest"
+        cognitive_trace_id: "0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f"
+        connector_id: "connector_email_gmail_001"
+        privacy_band: "AMBER"
+        capability: "INGEST_EXTERNAL_DATA"
+      payload:
+        connector_type: "email"
+        external_data:
+          from: "sarah@example.com"
+          subject: "Q4 Roadmap Discussion"
+          body: "Thanks for the productive meeting. Let's prioritize API v2 migration."
+          date: "2025-10-18T15:30:00Z"
+        dedup_check: true
+        pii_scan: true
+        metadata:
+          source_url: "gmail://message/abc123"
+
+    response:
+      status: 201
+      payload:
+        ingestion_id: "ingest_124"
+        memories_created_count: 1
+        duplicates_skipped_count: 0
+        pii_redacted_count: 1
+        ingestion_latency_ms: 523
+        receipt_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "connector_validation"
+      description: |
+        Verify connector_id in connector registry (st_connectors)
+        Check OAuth token validity, refresh if expired (st_oauth_vault)
+        Validate connector permissions
+
+    - step: "data_parsing"
+      description: |
+        Connector-specific adapters:
+        - calendar: iCal/RFC 5545 parser
+        - email: MIME/RFC 2822 parser
+        - document: Format detection (PDF, DOCX, Google Docs)
+        - iot: JSON schema validation
+        - webhook: Custom payload parsing
+
+    - step: "normalization"
+      description: |
+        External schema → Memory schema transformation:
+        - Extract content, metadata, tags
+        - Apply field_mappings
+        - Execute transformation_script (if provided)
+
+    - step: "pii_scanning"
+      description: |
+        If pii_scan=true:
+        - Delegate to P10 (PII detection pipeline)
+        - Apply redaction based on privacy_band
+        - Log redactions
+
+    - step: "deduplication"
+      description: |
+        If dedup_check=true:
+        - Calculate BLAKE3 fingerprint
+        - Check canonical_map (st_canonical_map)
+        - Skip if duplicate exists
+
+    - step: "memory_write"
+      description: |
+        Delegate to P02 (MemoryWrite pipeline)
+        Create episodic/semantic memories
+        Tag with connector_id for provenance
+
+    - step: "rate_limiting"
+      description: |
+        Per-connector quotas (st_connector_quotas)
+        Backpressure handling
+
+    - step: "receipt_issue"
+      description: "Issue receipt for audit trail"
+
+  storage_targets:
+    - "st_connectors" # Connector registry
+    - "st_oauth_vault" # OAuth tokens (encrypted)
+    - "st_canonical_map" # Deduplication
+    - "st_episodic" # Ingested memories
+    - "st_semantic" # Ingested knowledge
+    - "st_connector_quotas" # Rate limit tracking
+
+  events_emitted:
+    - "infra.connector.ingestion_started"
+    - "infra.connector.data_parsed"
+    - "infra.connector.normalized"
+    - "infra.connector.pii_detected"
+    - "infra.connector.duplicate_skipped"
+    - "infra.connector.ingestion_completed"
+    - "infra.connector.ingestion_failed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "connector_type must be [calendar|email|document|iot|webhook]"
+  - rule: "connector_id must be registered in st_connectors"
+  - rule: "external_data must be valid JSON/structured object"
+  - rule: "capability INGEST_EXTERNAL_DATA required"
+  - rule: "if pii_scan=true then privacy_band must be AMBER or RED"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_connector_ingestion_total"
+      type: "counter"
+      labels: ["connector_type", "status"]
+      description: "Total connector ingestion operations"
+
+    - name: "k0_connector_latency_ms"
+      type: "histogram"
+      labels: ["connector_type"]
+      buckets: [100, 500, 1000, 5000, 10000]
+      description: "Connector ingestion latency"
+
+    - name: "k0_connector_errors_total"
+      type: "counter"
+      labels: ["connector_type", "error"]
+      description: "Total connector errors"
+
+    - name: "k0_connector_duplicates_skipped_total"
+      type: "counter"
+      labels: ["connector_type"]
+      description: "Total duplicates skipped"
+
+    - name: "k0_connector_pii_redacted_total"
+      type: "counter"
+      labels: ["connector_type", "pii_type"]
+      description: "Total PII instances redacted"
+
+  traces:
+    span_name: "k0_connector.ingest"
+    attributes:
+      - "connector_type"
+      - "connector_id"
+      - "memories_created"
+      - "pii_redacted"
+
+  logs:
+    - event: "infra.connector.ingestion_completed"
+      level: "INFO"
+      fields: ["ingestion_id", "connector_type", "memories_created", "latency_ms"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "300ms"
+    p95: "1000ms"
+    p99: "5000ms"
+    timeout: "10000ms"
+
+  throughput:
+    target_qps: 20
+    burst_capacity: 100
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "OAuth 2.0 (per connector) + K0 JWT"
+    required: true
+
+  authorization:
+    capability_required: "INGEST_EXTERNAL_DATA"
+    connector_scope_validation: true
+
+  oauth_management:
+    token_storage: "Encrypted in st_oauth_vault"
+    token_rotation: "Automatic refresh before expiry"
+    scope_minimization: "Request minimal required permissions"
+
+  webhook_security:
+    signature_validation: "HMAC-SHA256"
+    ip_allowlisting: "Per connector configuration"
+
+  privacy_bands:
+    GREEN: "Standard storage, cloud sync"
+    AMBER: "PII detection/redaction mandatory"
+    RED: "Local-only storage, no external sync"
+
+  audit_trail:
+    receipt_id: "Issued for all ingestions"
+    retention: "90 days"
+
+# ============================================================================
+# CONNECTOR TYPES
+# ============================================================================
+
+connector_types:
+  calendar:
+    protocols: ["iCal (RFC 5545)", "Google Calendar API", "Outlook API"]
+    memory_type: "episodic"
+    oauth_scopes: ["calendar.readonly"]
+
+  email:
+    protocols: ["IMAP (RFC 3501)", "Gmail API", "Outlook API"]
+    memory_type: "semantic + episodic"
+    oauth_scopes: ["gmail.readonly"]
+
+  document:
+    protocols: ["Google Docs API", "OneDrive API", "Dropbox API"]
+    memory_type: "semantic"
+    oauth_scopes: ["drive.readonly"]
+
+  iot:
+    protocols: ["Home Assistant", "Fitbit API", "Apple Health"]
+    memory_type: "episodic"
+    oauth_scopes: ["activity.read", "location.read"]
+
+  webhook:
+    protocols: ["HTTP POST", "Zapier", "IFTTT"]
+    memory_type: "custom"
+    authentication: "HMAC signature or API key"

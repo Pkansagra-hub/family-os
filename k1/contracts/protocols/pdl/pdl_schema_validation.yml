@@ -1,0 +1,422 @@
+# K1 PDL Schema Validation Contract
+# Source: ADR-0003a (Protocol Definition Language Specification)
+# Purpose: JSON Schema for validating PDL YAML files
+# Version: 1.0
+# Date: 2025-10-14
+
+contract:
+  name: "PDL JSON Schema Validation"
+  version: "1.0"
+  type: "validation_schema"
+  source_adr: "docs/architecture/decisions/0003a-protocol-definition-language-pdl-specification.md"
+  compliance_level: "MANDATORY"
+
+json_schema:
+  "$schema": "http://json-schema.org/draft-07/schema#"
+  title: "K1 Protocol Definition Language (PDL) Schema"
+  description: "JSON Schema for validating PDL YAML protocol definitions"
+  type: "object"
+
+  required: ["protocol"]
+
+  properties:
+    protocol:
+      type: "object"
+      required: ["name", "version", "description", "initial_state", "terminal_states", "states", "transitions"]
+
+      properties:
+        name:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Protocol identifier (snake_case)"
+          examples: ["agent_hire", "task_execution", "clarification"]
+
+        version:
+          type: "string"
+          pattern: "^\\d+\\.\\d+(\\.\\d+)?$"
+          description: "Semantic version (major.minor or major.minor.patch)"
+          examples: ["1.0", "1.0.0", "2.1.5"]
+
+        description:
+          type: "string"
+          minLength: 10
+          maxLength: 500
+          description: "Human-readable protocol description"
+
+        initial_state:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Entry state name (must exist in states[])"
+
+        terminal_states:
+          type: "array"
+          minItems: 1
+          items:
+            type: "string"
+            pattern: "^[a-z][a-z0-9_]*$"
+          description: "Exit state names (must exist in states[])"
+          examples: [["hired", "rejected", "timeout"]]
+
+        states:
+          type: "array"
+          minItems: 2
+          items:
+            "$ref": "#/definitions/state"
+          description: "FSM state definitions"
+
+        transitions:
+          type: "array"
+          minItems: 1
+          items:
+            "$ref": "#/definitions/transition"
+          description: "FSM transition definitions"
+
+        timeouts:
+          type: "array"
+          items:
+            "$ref": "#/definitions/timeout_policy"
+          description: "Timeout policies for non-terminal states"
+          default: []
+
+        violations:
+          type: "array"
+          items:
+            "$ref": "#/definitions/violation_handler"
+          description: "Violation handling strategies"
+          default: []
+
+        roles:
+          type: "array"
+          items:
+            "$ref": "#/definitions/role"
+          description: "Role definitions for RBAC (optional)"
+          default: []
+
+        messages:
+          type: "array"
+          items:
+            "$ref": "#/definitions/message_def"
+          description: "Message schema definitions (optional)"
+          default: []
+
+  definitions:
+    state:
+      type: "object"
+      required: ["name", "type", "description"]
+      properties:
+        name:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "State identifier (snake_case, unique)"
+
+        type:
+          type: "string"
+          enum: ["entry", "interaction", "decision", "exit"]
+          description: "State type classification"
+
+        description:
+          type: "string"
+          minLength: 5
+          maxLength: 200
+          description: "Human-readable state purpose"
+
+        timeout_ms:
+          type: ["integer", "null"]
+          minimum: 0
+          maximum: 300000
+          description: "State timeout in milliseconds (null = no timeout)"
+          default: null
+
+        llm_aware:
+          type: "boolean"
+          description: "Allows AI agent LLM calls within state"
+          default: false
+
+    transition:
+      type: "object"
+      required: ["from", "to", "message", "sender", "receivers"]
+      properties:
+        from:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Source state name (must exist in states[])"
+
+        to:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Destination state name (must exist in states[])"
+
+        message:
+          type: "string"
+          pattern: "^[A-Z][a-zA-Z0-9]*$"
+          description: "Message type (PascalCase)"
+          examples: ["HireRequest", "Proposal", "TaskComplete"]
+
+        sender:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Sender role"
+          examples: ["orchestrator", "agent", "tool_runner", "system"]
+
+        receivers:
+          type: "array"
+          items:
+            type: "string"
+          description: "Receiver roles (['*'] for broadcast, [] for internal)"
+          examples: [["*"], ["orchestrator"], []]
+
+        cardinality:
+          type: "string"
+          enum: ["0..1", "1", "0..*", "1..*"]
+          description: "Message cardinality constraint"
+          default: "1"
+
+        condition:
+          type: ["string", "null"]
+          description: "Boolean guard condition"
+          examples: ["score > threshold", "retry_count < 3", null]
+          default: null
+
+        trigger:
+          type: ["string", "null"]
+          enum: [null, "timeout", "system"]
+          description: "Auto-trigger type"
+          default: null
+
+    timeout_policy:
+      type: "object"
+      required: ["state", "action"]
+      properties:
+        state:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "State name (must exist in states[])"
+
+        action:
+          type: "string"
+          pattern: "^[A-Z][a-zA-Z0-9]*$"
+          description: "Message to auto-send on timeout"
+          examples: ["ProposalsClosed", "Timeout"]
+
+        fallback_state:
+          type: ["string", "null"]
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Direct state transition without message"
+          default: null
+
+        log:
+          type: "boolean"
+          description: "Log timeout event"
+          default: true
+
+    violation_handler:
+      type: "object"
+      required: ["type", "action"]
+      properties:
+        type:
+          type: "string"
+          enum: ["unexpected_message", "invalid_sender", "invalid_cardinality", "timeout", "deadlock", "role_mismatch", "schema_invalid"]
+          description: "Violation type to handle"
+
+        action:
+          type: "string"
+          enum: ["block", "warn", "dlq", "repair", "fallback", "abort"]
+          description: "Violation handling action"
+
+        log:
+          type: "boolean"
+          description: "Log violation"
+          default: true
+
+        metrics:
+          type: "boolean"
+          description: "Emit Prometheus metrics"
+          default: true
+
+    role:
+      type: "object"
+      required: ["name"]
+      properties:
+        name:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Role identifier"
+          examples: ["orchestrator", "agent", "tool_runner", "system"]
+
+        capabilities:
+          type: "array"
+          items:
+            type: "string"
+          description: "Allowed operations for role"
+          examples: [["hire", "fire", "score"]]
+
+        allowed_message_types:
+          type: "array"
+          items:
+            type: "string"
+            pattern: "^[A-Z][a-zA-Z0-9]*$"
+          description: "Message types this role can send"
+          examples: [["HireRequest", "HireApproval"]]
+
+    message_def:
+      type: "object"
+      required: ["name"]
+      properties:
+        name:
+          type: "string"
+          pattern: "^[A-Z][a-zA-Z0-9]*$"
+          description: "Message type identifier (PascalCase)"
+
+        sender_role:
+          type: "string"
+          pattern: "^[a-z][a-z0-9_]*$"
+          description: "Required sender role"
+
+        receiver_roles:
+          type: "array"
+          items:
+            type: "string"
+          description: "Allowed receiver roles"
+
+        schema:
+          type: ["string", "null"]
+          description: "FlatBuffers schema file name"
+          examples: ["HireRequest.fbs", null]
+
+        priority:
+          type: "integer"
+          minimum: 0
+          maximum: 3
+          description: "Message priority (0=background, 3=urgent)"
+          default: 2
+
+validation_rules:
+  custom_validators:
+    - name: "validate_initial_state_exists"
+      description: "Verify initial_state references a valid state in states[]"
+      implementation: "protocol.initial_state in [s.name for s in protocol.states]"
+      error_code: "invalid_initial_state"
+
+    - name: "validate_terminal_states_exist"
+      description: "Verify all terminal_states reference valid states"
+      implementation: "all(ts in [s.name for s in protocol.states] for ts in protocol.terminal_states)"
+      error_code: "invalid_terminal_state"
+
+    - name: "validate_transition_states_exist"
+      description: "Verify all transition from/to states exist"
+      implementation: "all(t.from in state_names and t.to in state_names for t in protocol.transitions)"
+      error_code: "invalid_transition_target"
+
+    - name: "validate_reachability"
+      description: "Verify all terminal states reachable from initial state (BFS)"
+      implementation: "BFS algorithm from initial_state"
+      error_code: "unreachable_terminal_state"
+
+    - name: "validate_timeout_policies"
+      description: "Warn if non-terminal states lack timeout policies"
+      implementation: "Check non-terminal states have timeout in timeouts[]"
+      error_code: "missing_timeout_policy"
+      severity: "WARNING"
+
+    - name: "detect_deadlocks"
+      description: "Detect circular waits using Tarjan's algorithm"
+      implementation: "Tarjan's strongly connected components"
+      error_code: "potential_deadlock"
+      severity: "WARNING"
+
+usage:
+  python_validation:
+    library: "jsonschema"
+    example: |
+      import yaml
+      import jsonschema
+
+      # Load PDL YAML
+      with open("agent_hire.pdl.yml") as f:
+          pdl_doc = yaml.safe_load(f)
+
+      # Load JSON Schema
+      with open("pdl_schema_validation.yml") as f:
+          schema_contract = yaml.safe_load(f)
+          schema = schema_contract["json_schema"]
+
+      # Validate
+      try:
+          jsonschema.validate(instance=pdl_doc, schema=schema)
+          print("✅ PDL valid")
+      except jsonschema.ValidationError as e:
+          print(f"❌ Validation error: {e.message}")
+
+  command_line_validation:
+    tool: "jsonschema CLI"
+    example: |
+      # Install: pip install jsonschema[cli]
+      jsonschema -i agent_hire.pdl.yml pdl_schema_validation.json
+
+error_codes:
+  critical:
+    - code: "invalid_initial_state"
+      message: "initial_state '{state}' not found in states[]"
+      resolution: "Add state '{state}' to states[] or correct initial_state"
+
+    - code: "invalid_terminal_state"
+      message: "terminal_state '{state}' not found in states[]"
+      resolution: "Add state '{state}' to states[] or remove from terminal_states[]"
+
+    - code: "invalid_transition_target"
+      message: "Transition from='{from}' to='{to}': state '{state}' not found"
+      resolution: "Add state '{state}' to states[] or correct transition"
+
+    - code: "unreachable_terminal_state"
+      message: "Terminal state '{state}' not reachable from initial_state"
+      resolution: "Add transitions to make state reachable or remove from terminal_states[]"
+
+  warnings:
+    - code: "missing_timeout_policy"
+      message: "Non-terminal state '{state}' lacks timeout policy"
+      resolution: "Add timeout policy to timeouts[] for progress guarantee"
+
+    - code: "potential_deadlock"
+      message: "Circular wait detected: {cycle}"
+      resolution: "Add timeout policy to break cycle or review state graph"
+
+performance:
+  validation_time:
+    target: "< 50ms per protocol"
+    typical: "10-20ms"
+    complexity: "O(n + m) where n=states, m=transitions"
+
+  schema_size:
+    json_schema: "~3KB"
+    compiled: "~1KB (minified)"
+
+compliance:
+  adr_requirements:
+    - adr: "ADR-0003a"
+      requirement: "JSON Schema validation for PDL YAML files"
+      status: "SATISFIED"
+
+  testing:
+    - test: "Valid PDL files pass validation"
+      coverage: "All 6 core protocols"
+
+    - test: "Invalid PDL files fail validation"
+      coverage: "Missing fields, invalid types, invalid state references"
+
+    - test: "Custom validators catch semantic errors"
+      coverage: "Reachability, deadlock, timeout policies"
+
+cross_references:
+  contracts:
+    - "contracts/protocols/pdl/pdl_specification.yml"
+    - "contracts/protocols/pdl/pdl_compiler_contract.yml"
+    - "contracts/protocols/definitions/*.pdl.yml"
+
+  adrs:
+    - "ADR-0003a: Protocol Definition Language Specification"
+
+notes:
+  - "JSON Schema validates syntax and basic structure"
+  - "Custom validators handle semantic checks (reachability, deadlock)"
+  - "Validation runs at compile-time (not runtime)"
+  - "All 6 core protocols must pass validation before deployment"

@@ -1,0 +1,418 @@
+# Clarification Protocol - Observability Contract
+# Purpose: Define metrics, tracing, logging for comprehensive clarification monitoring
+# ADR Reference: ADR-0003b, ADR-0024 (Observability), ADR-0035 (PII & Audit)
+# SLO Targets: <500ms P95 clarification response time, 99% response rate
+
+---
+observability:
+  name: "clarification_protocol_observability"
+  version: "1.0"
+  description: "Comprehensive observability contract for clarification protocol"
+
+  # ===== PROMETHEUS METRICS =====
+  metrics:
+
+    # === Counter Metrics (Cumulative) ===
+    counters:
+      - name: "clarification_request_generated_total"
+        help: "Total clarification requests generated"
+        type: "counter"
+        labels: ["agent_id", "priority", "question_type", "space_id"]
+        bucket: "clarification_requests"
+        slo_impact: "N/A"  # Not latency-sensitive
+
+      - name: "clarification_response_received_total"
+        help: "Total clarification responses received from users"
+        type: "counter"
+        labels: ["agent_id", "response_time_bucket", "user_interaction_pattern"]
+        slo_impact: "high"  # Track response rate
+
+      - name: "clarification_timeout_total"
+        help: "Total clarification timeouts (no user response)"
+        type: "counter"
+        labels: ["agent_id", "priority", "reason"]
+        reason_values: ["deadline_exceeded", "user_inactive", "session_ended", "other"]
+        slo_impact: "critical"  # Timeouts are SLO violations
+
+      - name: "clarification_fallback_applied_total"
+        help: "Total times fallback answer was used (OPTIONAL priority)"
+        type: "counter"
+        labels: ["agent_id", "fallback_strategy", "parent_protocol"]
+        slo_impact: "medium"  # Fallback indicates timeout
+
+      - name: "clarification_cancellation_total"
+        help: "Total clarification requests cancelled (e.g., by barge-in)"
+        type: "counter"
+        labels: ["agent_id", "cancellation_reason", "protocol_interrupted_by"]
+        cancellation_reasons: ["barge_in", "task_abort", "session_end", "user_explicit"]
+        slo_impact: "medium"
+
+      - name: "clarification_validation_error_total"
+        help: "Total response validation errors"
+        type: "counter"
+        labels: ["agent_id", "error_type", "question_type"]
+        error_types: ["format_invalid", "not_in_options", "out_of_range", "type_mismatch"]
+        slo_impact: "low"  # Validation errors, not protocol errors
+
+      - name: "clarification_pii_detected_total"
+        help: "Total clarifications with PII detected in request or response"
+        type: "counter"
+        labels: ["agent_id", "pii_type", "space_id"]
+        pii_types: ["email", "ssn", "phone", "name", "address", "health_data"]
+        slo_impact: "security_flag"
+
+      - name: "clarification_ambiguous_response_total"
+        help: "Total responses flagged as ambiguous or unclear"
+        type: "counter"
+        labels: ["agent_id", "ambiguity_reason"]
+        slo_impact: "low"
+
+      - name: "clarification_security_violation_total"
+        help: "Total security violations detected"
+        type: "counter"
+        labels: ["agent_id", "violation_type"]
+        violation_types: ["pii_in_question", "privacy_band_mismatch", "injection_attempt", "auth_failure"]
+        slo_impact: "critical"
+
+    # === Histogram Metrics (Latency, Duration) ===
+    histograms:
+      - name: "clarification_response_time_ms"
+        help: "How long user took to respond to clarification request"
+        type: "histogram"
+        labels: ["agent_id", "priority", "question_type"]
+        buckets: [100, 500, 1000, 2000, 5000, 10000, 30000, 60000]  # ms
+        unit: "milliseconds"
+        slo_target: "p95 < 5000ms"  # User think time
+        slo_impact: "high"
+        # Percentiles: p50, p95, p99
+        derived_metrics:
+          - "clarification_response_time_ms_p50"
+          - "clarification_response_time_ms_p95"
+          - "clarification_response_time_ms_p99"
+
+      - name: "clarification_latency_ms"
+        help: "Total clarification protocol latency (request generation to response processing)"
+        type: "histogram"
+        labels: ["agent_id", "priority"]
+        buckets: [10, 50, 100, 200, 500, 1000, 2000, 5000]  # ms
+        unit: "milliseconds"
+        slo_target: "p95 < 500ms"  # Protocol overhead
+        slo_impact: "critical"
+        components:
+          - "request_generation_ms"
+          - "websocket_delivery_ms"
+          - "user_response_time_ms"
+          - "response_processing_ms"
+
+      - name: "clarification_timeout_remaining_ms"
+        help: "Time remaining before clarification timeout (for monitoring)"
+        type: "histogram"
+        labels: ["agent_id", "priority"]
+        buckets: [5000, 10000, 20000, 30000, 45000, 60000]  # ms
+        unit: "milliseconds"
+        observability_only: true  # For debugging timeout issues
+
+      - name: "clarification_confidence_histogram"
+        help: "Distribution of user confidence scores"
+        type: "histogram"
+        labels: ["agent_id", "confidence_source"]
+        buckets: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        unit: "confidence_0_to_1"
+
+    # === Gauge Metrics (Current State) ===
+    gauges:
+      - name: "clarification_active_total"
+        help: "Number of active (waiting) clarifications"
+        type: "gauge"
+        labels: ["agent_id", "priority"]
+        slo_impact: "medium"  # Indicates load
+
+      - name: "clarification_queue_depth"
+        help: "Number of pending clarification responses in queue"
+        type: "gauge"
+        labels: ["agent_id"]
+        threshold_alert: "> 100"
+
+      - name: "clarification_timeout_percentage"
+        help: "Percentage of clarifications that timeout (calculated from counters)"
+        type: "gauge"
+        labels: ["agent_id", "priority"]
+        calculation: "clarification_timeout_total / clarification_request_generated_total"
+        slo_target: "< 5%"
+        slo_impact: "high"
+
+      - name: "clarification_response_rate"
+        help: "Percentage of clarifications that receive response"
+        type: "gauge"
+        labels: ["agent_id", "priority"]
+        calculation: "clarification_response_received_total / clarification_request_generated_total"
+        slo_target: "> 95%"
+        slo_impact: "critical"
+
+  # ===== DISTRIBUTED TRACING =====
+  tracing:
+    framework: "OpenTelemetry"
+
+    spans:
+      - span_name: "clarification_request_generated"
+        parent_span: "parent_protocol"  # Parent task or planning
+        attributes:
+          - "clarification_id"
+          - "cognitive_trace_id"
+          - "agent_id"
+          - "priority"
+          - "question_type"
+          - "parent_protocol"
+        start_event: "AI agent decides clarification needed (LLM reasoning)"
+        end_event: "ClarificationRequest message sent"
+        latency_budget_ms: 30
+        child_spans:
+          - "generate_question"
+          - "prepare_options"
+          - "determine_priority"
+          - "websocket_send"
+
+      - span_name: "clarification_request_delivered"
+        parent_span: "clarification_request_generated"
+        attributes:
+          - "clarification_id"
+          - "delivery_method"  # websocket, sse, push_notification
+          - "delivery_latency_ms"
+        start_event: "ClarificationRequest enters WebSocket queue"
+        end_event: "User receives request (ack from browser)"
+        latency_budget_ms: 40
+        alert_if_exceeds_ms: 100
+
+      - span_name: "clarification_waiting"
+        parent_span: "clarification_request_delivered"
+        attributes:
+          - "clarification_id"
+          - "timeout_remaining_ms"
+          - "user_interaction_detected"  # true/false during wait
+        start_event: "Waiting for user response"
+        end_event: "User submits response OR timeout"
+        latency_budget_ms: 60000  # User think time, not system latency
+        monitoring:
+          - event: "user_typing_started"
+            latency_from_request_ms: null  # Track to detect user activity
+
+      - span_name: "clarification_response_received"
+        parent_span: "clarification_waiting"
+        attributes:
+          - "clarification_id"
+          - "response_id"
+          - "response_time_ms"
+          - "user_confidence"
+          - "hesitation_count"
+        start_event: "User submits response"
+        end_event: "Response validation complete"
+        latency_budget_ms: 50
+        child_spans:
+          - "validate_format"
+          - "normalize_answer"
+          - "detect_pii"
+          - "compute_confidence"
+
+      - span_name: "clarification_complete"
+        parent_span: "clarification_response_received"
+        attributes:
+          - "clarification_id"
+          - "total_latency_ms"
+          - "user_satisfaction"  # If available
+        start_event: "Response processed and stored"
+        end_event: "Parent protocol resumed with answer"
+        latency_budget_ms: 10
+        post_actions:
+          - "emit_metrics"
+          - "store_audit_trail"
+          - "trigger_parent_protocol_resume"
+
+    trace_sampling:
+      strategy: "dynamic_sampling"
+      base_sample_rate: 0.1  # 10% baseline
+      boost_sample_rate: 1.0  # 100% for:
+      boost_conditions:
+        - "priority == BLOCKING"
+        - "timeout occurred"
+        - "security_violation detected"
+        - "response_time > p95"
+
+  # ===== STRUCTURED LOGGING =====
+  logging:
+    format: "json"
+    level: "INFO"
+    fields:
+      # Always present
+      base_fields:
+        - "timestamp"
+        - "log_level"
+        - "component"
+        - "clarification_id"
+        - "cognitive_trace_id"
+        - "agent_id"
+        - "user_id"
+        - "session_id"
+
+      # Protocol phase specific
+      request_generated:
+        - "question_type"
+        - "priority"
+        - "timeout_ms"
+        - "fallback_answer_present"
+        - "parent_protocol"
+        - "pii_detected"
+
+      response_received:
+        - "response_time_ms"
+        - "user_interaction_pattern"
+        - "response_valid"
+        - "user_confidence"
+        - "implicit_confidence"
+        - "hesitation_count"
+        - "answer_matches_suggested"
+
+      timeout:
+        - "timeout_ms"
+        - "priority"
+        - "fallback_strategy_applied"
+        - "time_to_timeout_ms"
+
+      error:
+        - "error_type"
+        - "error_message"
+        - "validation_errors"
+        - "severity"  # INFO, WARN, ERROR, CRITICAL
+
+    examples:
+      - level: "INFO"
+        event: "clarification_request_generated"
+        message: "Planner requesting clarification on restaurant choice"
+        log:
+          clarification_id: "clf_550e8400-e29b-41d4-a716-446655440000"
+          cognitive_trace_id: "trace_abc123"
+          agent_id: "planner"
+          question_type: "multiple_choice"
+          priority: "BLOCKING"
+          timeout_ms: 60000
+          parent_protocol: "task_execution"
+          pii_detected: false
+
+      - level: "INFO"
+        event: "clarification_response_received"
+        message: "User clarified restaurant preference in 2.5 seconds"
+        log:
+          clarification_id: "clf_550e8400-e29b-41d4-a716-446655440000"
+          response_time_ms: 2500
+          user_confidence: 0.95
+          implicit_confidence: 0.92
+          hesitation_count: 0
+          response_valid: true
+
+      - level: "WARN"
+        event: "clarification_timeout"
+        message: "Clarification timeout after 60s, applying fallback"
+        log:
+          clarification_id: "clf_550e8400-e29b-41d4-a716-446655440000"
+          priority: "OPTIONAL"
+          timeout_ms: 60000
+          fallback_strategy_applied: "use_default_answer"
+          fallback_answer: "Alice's Cafe"
+
+  # ===== DASHBOARDS & ALERTS =====
+  dashboards:
+    grafana_dashboards:
+      - name: "Clarification Protocol - Overview"
+        panels:
+          - title: "Clarification Requests/Min"
+            metric: "clarification_request_generated_total"
+            group_by: ["agent_id"]
+          - title: "Response Rate (%)"
+            metric: "clarification_response_rate"
+            target: "> 95%"
+          - title: "Timeout Rate (%)"
+            metric: "clarification_timeout_percentage"
+            target: "< 5%"
+          - title: "Response Time P95 (ms)"
+            metric: "clarification_response_time_ms_p95"
+            target: "< 5000"
+
+      - name: "Clarification Protocol - Latency"
+        panels:
+          - title: "Response Time Distribution"
+            metric: "clarification_response_time_ms"
+            percentiles: [p50, p95, p99]
+          - title: "Protocol Latency P95"
+            metric: "clarification_latency_ms"
+            target: "< 500ms"
+          - title: "Latency by Priority"
+            metric: "clarification_latency_ms"
+            group_by: ["priority"]
+
+      - name: "Clarification Protocol - Quality"
+        panels:
+          - title: "Confidence Distribution"
+            metric: "clarification_confidence_histogram"
+          - title: "Ambiguous Responses"
+            metric: "clarification_ambiguous_response_total"
+          - title: "Validation Errors"
+            metric: "clarification_validation_error_total"
+            group_by: ["error_type"]
+
+  alerts:
+    - alert_name: "HighClarificationTimeoutRate"
+      condition: "clarification_timeout_percentage > 10"
+      severity: "warning"
+      for_duration: "5m"
+      action: "alert_devops_team"
+      message: "Clarification timeout rate exceeds 10%"
+
+    - alert_name: "LowClarificationResponseRate"
+      condition: "clarification_response_rate < 90"
+      severity: "critical"
+      for_duration: "2m"
+      action: "page_on_call_engineer"
+      message: "Clarification response rate below 90%"
+
+    - alert_name: "ClarificationSecurityViolation"
+      condition: "clarification_security_violation_total > 0"
+      severity: "critical"
+      for_duration: "1m"
+      action: "immediate_investigation"
+      message: "Security violation detected in clarification protocol"
+
+    - alert_name: "HighPIIDetectionRate"
+      condition: "clarification_pii_detected_total / clarification_request_generated_total > 0.5"
+      severity: "warning"
+      for_duration: "10m"
+      action: "alert_security_team"
+      message: "Over 50% of clarifications contain PII"
+
+  # ===== SLOS AND ERROR BUDGETS =====
+  slos:
+    - name: "Clarification Response Rate"
+      description: "Percentage of clarifications that receive user response"
+      metric: "clarification_response_rate"
+      target: ">= 95%"
+      window: "30d"
+      error_budget: "5%"  # Can tolerate 5% failure rate
+
+    - name: "Clarification Latency"
+      description: "Protocol overhead for clarification roundtrip"
+      metric: "clarification_latency_ms_p95"
+      target: "< 500ms"
+      window: "30d"
+      error_budget: "50ms"  # Can tolerate 50ms excess
+
+    - name: "Security Compliance"
+      description: "Zero security violations"
+      metric: "clarification_security_violation_total"
+      target: "== 0"
+      window: "30d"
+      error_budget: "0"  # Zero tolerance
+
+    - name: "Timeout Rate"
+      description: "Percentage of clarifications timing out"
+      metric: "clarification_timeout_percentage"
+      target: "< 5%"
+      window: "30d"
+      error_budget: "5%"

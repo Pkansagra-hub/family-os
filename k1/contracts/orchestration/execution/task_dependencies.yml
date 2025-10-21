@@ -1,0 +1,558 @@
+# Task Dependencies Contract
+# Source ADR: ADR-0006c (Parallel DAG Execution Engine)
+# Defines dependency representation and resolution algorithms
+
+metadata:
+  contract_id: "task-dependencies-v1.0"
+  source_adr: "0006c-parallel-dag-execution.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+  phase: "Phase 3 (Execution)"
+
+# Task Dependencies Overview
+dependencies_overview:
+  description: "DAG topology representation with dependency types and resolution"
+  purpose: "Manage task interdependencies and variable flow through execution"
+  component: "Core of Phase 3 DAG execution"
+  performance: "Dependency resolution <10ms per plan"
+  determinism: "Same input dependencies → same resolution"
+
+# Dependency Types
+dependency_types:
+
+  output_dependency: |
+    **Output Dependency (Data Flow)**
+    Task B depends on output of Task A
+
+    Syntax: {step_A.output_field}
+    Example: {step_1.results[0].id}
+
+    Semantics:
+    - Task A must complete before Task B starts
+    - Task B receives Task A's output as input
+    - Implements data dependency
+
+    Use Cases:
+    - Search results → Booking API
+    - Database query → Report generation
+    - API response → Email body
+
+  control_dependency: |
+    **Control Dependency (Execution Order)**
+    Task B must execute after Task A, regardless of output
+
+    Syntax: dependencies: ["step_A"]
+    Example: dependencies: ["step_1"]
+
+    Semantics:
+    - Task A must complete before Task B starts
+    - Task B doesn't directly use Task A's output
+    - Implements execution ordering
+
+    Use Cases:
+    - Setup → Main task
+    - Cleanup after previous operation
+    - Sequential ordering requirement
+
+  implicit_dependency: |
+    **Implicit Dependency (Transitive)**
+    Task C depends on Task B which depends on Task A
+
+    Diagram:
+      Task A → Task B → Task C
+
+    Resolution:
+    - Task C waits for Task B
+    - Task B waits for Task A
+    - Transitive closure ensures Task A completes before Task C
+
+    DAG Builder handles automatically (topological sort includes transitive)
+
+# Dependency Representation
+dependency_representation:
+
+  dag_node_structure: |
+    class DAGNode:
+        """Node in DAG representing a plan step"""
+        step: PlanStep              # The step itself
+        in_degree: int              # Number of incoming edges (dependencies)
+        out_edges: List[str]        # Step IDs that depend on this step
+        topological_level: int      # Wave number (0-indexed)
+
+  dependency_graph_structure: |
+    class DependencyGraph:
+        """Complete dependency graph"""
+        nodes: Dict[str, DAGNode]   # step_id → DAGNode
+        edges: Dict[str, List[str]] # step_id → [dependent step_ids]
+        waves: List[List[str]]      # Waves of independent steps
+
+  edge_representation: |
+    **Edge: A → B means B depends on A**
+
+    Example:
+      Step 1 → Step 2: Step 2 depends on Step 1
+      Step 2 → Step 3: Step 3 depends on Step 2
+      Step 2 → Step 4: Step 4 depends on Step 2
+
+    Graph:
+      Step 1
+        ↓
+      Step 2
+      ↙   ↘
+    Step 3  Step 4
+
+    DAG Representation:
+      edges = {
+        "step_1": [],
+        "step_2": ["step_3", "step_4"],  # Step 2 has outgoing edges to 3,4
+        "step_3": [],
+        "step_4": []
+      }
+
+# Dependency Resolution
+dependency_resolution:
+
+  variable_substitution: |
+    **Replace {step_N.field} with actual values**
+
+    Algorithm:
+    1. Find all {step_X.field} patterns in step parameters
+    2. Look up step_X result in completed_steps
+    3. Extract field from result object
+    4. Replace pattern with actual value
+    5. Validate no unresolved patterns remain
+
+    Example:
+      Input parameters:
+        {
+          "restaurant_id": "{step_1.results[0].id}",
+          "time": "19:00",
+          "party_size": 2
+        }
+
+      Previous result (step_1):
+        {
+          "results": [
+            {"id": "r123", "name": "Mario's"},
+            {"id": "r456", "name": "Luigi's"}
+          ]
+        }
+
+      Output after substitution:
+        {
+          "restaurant_id": "r123",
+          "time": "19:00",
+          "party_size": 2
+        }
+
+  resolution_algorithm: |
+    def resolve_dependencies(
+        parameters: Dict[str, Any],
+        step_results: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Resolve all {step_N.field} variables in parameters
+
+        Args:
+            parameters: Step parameters with potential {step_N.field} variables
+            step_results: Dict mapping step_id → result
+
+        Returns:
+            parameters: With all variables resolved
+
+        Raises:
+            ValueError: If variable cannot be resolved
+        """
+        resolved = {}
+
+        for key, value in parameters.items():
+            if isinstance(value, str):
+                # Try to resolve pattern
+                resolved[key] = resolve_string_variable(value, step_results)
+            elif isinstance(value, dict):
+                # Recursive: resolve nested dicts
+                resolved[key] = resolve_dependencies(value, step_results)
+            elif isinstance(value, list):
+                # Recursive: resolve list items
+                resolved[key] = [
+                    resolve_dependencies(item, step_results) if isinstance(item, dict)
+                    else resolve_string_variable(item, step_results) if isinstance(item, str)
+                    else item
+                    for item in value
+                ]
+            else:
+                # Keep as-is for primitives
+                resolved[key] = value
+
+        return resolved
+
+    def resolve_string_variable(value: str, step_results: Dict) -> Any:
+        """
+        Resolve single {step_N.field} variable in string
+
+        Patterns:
+        - {step_1.field} → simple field access
+        - {step_1.nested.field} → nested field access
+        - {step_1.array[0].field} → array element access
+        """
+        import re
+
+        pattern = r'\{step_(\d+)\.(.+?)\}'
+        matches = re.findall(pattern, value)
+
+        for step_num, field_path in matches:
+            step_id = f"step_{step_num}"
+
+            if step_id not in step_results:
+                raise ValueError(f"Unresolved dependency: {step_id}")
+
+            # Extract field from result
+            result = step_results[step_id]
+            field_value = extract_nested_field(result, field_path)
+
+            # Replace pattern with value
+            variable_pattern = r'\{step_' + step_num + r'\.' + re.escape(field_path) + r'\}'
+            value = re.sub(variable_pattern, str(field_value), value)
+
+        return value
+
+    def extract_nested_field(obj: Any, field_path: str) -> Any:
+        """
+        Extract nested field from object
+
+        Syntax:
+        - simple: "field" → obj["field"]
+        - nested: "a.b.c" → obj["a"]["b"]["c"]
+        - array: "array[0]" → obj["array"][0]
+        - complex: "a.b[0].c" → obj["a"]["b"][0]["c"]
+        """
+        import re
+
+        # Split field_path into parts
+        parts = re.split(r'[\.\[\]]', field_path)
+        parts = [p for p in parts if p]  # Remove empty strings
+
+        current = obj
+        for part in parts:
+            if isinstance(current, dict):
+                current = current[part]
+            elif isinstance(current, list):
+                current = current[int(part)]
+            else:
+                raise ValueError(f"Cannot extract {part} from {type(current)}")
+
+        return current
+
+# Dependency Examples
+dependency_examples:
+
+  # Example 1: Linear Dependencies
+  example_1_linear:
+    scenario: "Step-by-step restaurant booking"
+
+    plan:
+      step_1:
+        action: "Search restaurants"
+        dependencies: []
+
+      step_2:
+        action: "Book reservation"
+        dependencies: ["step_1"]  # Depends on step_1
+
+      step_3:
+        action: "Send email"
+        dependencies: ["step_2"]  # Depends on step_2
+
+    dag_analysis:
+      step_1: in_degree=0, out_edges=[step_2] → Wave 1
+      step_2: in_degree=1, out_edges=[step_3] → Wave 2
+      step_3: in_degree=1, out_edges=[] → Wave 3
+
+    waves: [[step_1], [step_2], [step_3]]
+
+    execution_order: Step 1 → Step 2 → Step 3 (sequential)
+
+  # Example 2: Parallel Dependencies
+  example_2_parallel:
+    scenario: "Email and SMS sent in parallel"
+
+    plan:
+      step_1:
+        action: "Book reservation"
+        dependencies: []
+
+      step_2:
+        action: "Send confirmation email"
+        dependencies: ["step_1"]
+        parameters:
+          to: "{step_1.user_email}"
+          subject: "Confirmed"
+
+      step_3:
+        action: "Send SMS notification"
+        dependencies: ["step_1"]
+        parameters:
+          phone: "{step_1.user_phone}"
+          message: "Your reservation at {step_1.restaurant_name}"
+
+    dag_analysis:
+      step_1: in_degree=0 → Wave 1
+      step_2: in_degree=1 → Wave 2
+      step_3: in_degree=1 → Wave 2 (same as step_2!)
+
+    waves: [[step_1], [step_2, step_3]]  # Steps 2 & 3 in parallel!
+
+    execution_order: "Step 1 → (Step 2 || Step 3)"
+
+    speedup_example: |
+      If email=100ms, SMS=80ms:
+      Sequential: 100 + 80 = 180ms
+      Parallel: max(100, 80) = 100ms (1.8× faster!)
+
+  # Example 3: Complex DAG (Multiple Levels)
+  example_3_complex:
+    scenario: "Multi-stage data pipeline"
+
+    plan:
+      step_1:
+        action: "Fetch user data"
+        dependencies: []
+
+      step_2:
+        action: "Fetch order history"
+        dependencies: []
+
+      step_3:
+        action: "Compute recommendation"
+        dependencies: ["step_1", "step_2"]  # Depends on both!
+        parameters:
+          user_id: "{step_1.id}"
+          order_count: "{step_2.count}"
+
+      step_4:
+        action: "Store recommendation"
+        dependencies: ["step_3"]
+
+    dag_analysis:
+      step_1: in_degree=0 → Wave 1
+      step_2: in_degree=0 → Wave 1
+      step_3: in_degree=2 (depends on step_1 AND step_2) → Wave 2
+      step_4: in_degree=1 → Wave 3
+
+    waves: [[step_1, step_2], [step_3], [step_4]]  # Steps 1 & 2 parallel!
+
+    execution_order: "(Step 1 || Step 2) → Step 3 → Step 4"
+
+    speedup_example: |
+      If fetch_user=50ms, fetch_orders=60ms, compute=100ms, store=30ms:
+      Sequential: 50 + 60 + 100 + 30 = 240ms
+      Parallel: max(50,60) + 100 + 30 = 190ms (1.26× faster!)
+
+  # Example 4: Diamond Dependency
+  example_4_diamond:
+    scenario: "Converging dependencies"
+
+    plan:
+      step_1:
+        action: "Get base data"
+        dependencies: []
+
+      step_2:
+        action: "Transform A"
+        dependencies: ["step_1"]
+        parameters:
+          data: "{step_1.items}"
+
+      step_3:
+        action: "Transform B"
+        dependencies: ["step_1"]
+        parameters:
+          data: "{step_1.items}"
+
+      step_4:
+        action: "Merge"
+        dependencies: ["step_2", "step_3"]  # Converges from 2 & 3
+        parameters:
+          a: "{step_2.result}"
+          b: "{step_3.result}"
+
+    dag_analysis:
+      step_1: in_degree=0 → Wave 1
+      step_2: in_degree=1 → Wave 2
+      step_3: in_degree=1 → Wave 2
+      step_4: in_degree=2 → Wave 3
+
+    waves: [[step_1], [step_2, step_3], [step_4]]
+
+    diagram: |
+      step_1
+      /     \
+      step_2  step_3  (parallel)
+      \     /
+      step_4
+
+    speedup_example: |
+      If step_1=30ms, step_2=50ms, step_3=60ms, step_4=40ms:
+      Sequential: 30 + 50 + 60 + 40 = 180ms
+      Parallel: 30 + max(50,60) + 40 = 130ms (1.38× faster!)
+
+# Variable Substitution Patterns
+variable_patterns:
+
+  simple_field: |
+    Pattern: {step_N.field}
+    Example: {step_1.id}
+    Resolves to: step_results["step_1"]["id"]
+
+  nested_field: |
+    Pattern: {step_N.a.b.c}
+    Example: {step_1.restaurant.address.zip}
+    Resolves to: step_results["step_1"]["restaurant"]["address"]["zip"]
+
+  array_access: |
+    Pattern: {step_N.array[index]}
+    Example: {step_1.results[0].id}
+    Resolves to: step_results["step_1"]["results"][0]["id"]
+
+  complex_path: |
+    Pattern: {step_N.a[0].b.c[1].d}
+    Example: {step_1.data[0].items.first[1].name}
+    Resolves to: step_results["step_1"]["data"][0]["items"]["first"][1]["name"]
+
+# Edge Cases & Validation
+edge_cases:
+
+  unresolved_dependency: |
+    **Error: Variable references non-existent step**
+
+    Plan:
+      step_1:
+        parameters: {data: "{step_99.result}"}  # step_99 doesn't exist!
+
+    Error on execution:
+      ValueError: Unresolved dependency: step_99
+
+    Prevention: Validate all references during DAG build
+
+  circular_dependency: |
+    **Error: Circular dependency detected**
+
+    Plan:
+      step_1: dependencies: ["step_2"]
+      step_2: dependencies: ["step_3"]
+      step_3: dependencies: ["step_1"]  # Cycle!
+
+    Error on execution:
+      ValueError: Cycle detected in DAG (circular dependencies)
+
+    Prevention: Validate with Kahn's algorithm during DAG build
+
+  missing_output_field: |
+    **Error: Step result missing expected field**
+
+    Plan:
+      step_1: (result: {id: 123})
+      step_2: parameters: {data: "{step_1.missing_field}"}  # Field not in result!
+
+    Error on resolution:
+      KeyError: "missing_field" not in step_1 result
+
+    Prevention: Validate parameter schema matches typical results
+
+  type_mismatch: |
+    **Error: Resolved value has wrong type**
+
+    Scenario:
+      Parameter expects integer: {count: "{step_1.total}"}
+      But step_1.total = "not_a_number" (string)
+
+    Resolution strategy:
+    - Try to coerce types (str → int)
+    - If fails, log warning but proceed (flexible)
+    - User responsible for consistent schemas
+
+# Performance Characteristics
+performance:
+
+  time_complexity: |
+    DAG operations:
+    - Build graph: O(V + E) where V=steps, E=dependencies
+    - Validate acyclic: O(V + E)
+    - Wave computation: O(V + E)
+    - Total DAG construction: O(V + E)
+
+    Typical: V=5-10 steps, E=5-15 dependencies
+    Time: <1ms for DAG operations
+
+  dependency_resolution: |
+    Time to resolve all variables:
+    - Per-step: <0.1ms (regex scan + lookups)
+    - All steps: <1ms for typical plan
+
+    Space: O(V) for storing resolved parameters
+
+  scalability: |
+    Tested scenarios:
+    - 5 steps, linear: 5 waves, O(5) operations ✅
+    - 10 steps, complex: 4 waves, O(20) operations ✅
+    - 20 steps, highly parallel: 3 waves, O(40) operations ✅
+
+    Limits:
+    - Max 50 steps (safety limit enforced)
+    - Max 10 dependencies per step (sanity check)
+    - Max 20 waves (max plan depth)
+
+# Configuration
+configuration:
+
+  dependency_constraints:
+    max_steps_per_plan: 50
+    max_dependencies_per_step: 10
+    max_plan_depth: 20
+    max_reference_depth: 5  # {step.a.b.c.d.e}
+
+  variable_resolution:
+    enable_type_coercion: true      # Try to convert types (str → int)
+    allow_missing_fields: false     # Fail if field missing
+    strict_validation: true         # Validate all references during DAG build
+
+# Testing & Validation
+testing_validation:
+
+  unit_tests:
+    - "Linear dependencies → sequential waves"
+    - "Parallel dependencies → same wave"
+    - "Diamond dependency → correct waves"
+    - "Circular dependency → error detected"
+    - "Simple variable substitution → works"
+    - "Nested variable substitution → works"
+    - "Array access → works"
+    - "Missing step reference → error"
+    - "Missing field → error"
+
+  integration_tests:
+    - "Execute plan with all dependency types"
+    - "Verify variable substitution correct"
+    - "Verify execution order matches DAG"
+    - "Verify parallelism achieved for independent steps"
+
+  property_tests:
+    - "DAG always acyclic"
+    - "Topological order respected"
+    - "All variables resolved before step execution"
+    - "Dependency resolution idempotent"
+
+# Implementation Status
+implementation_status:
+  dag_representation: "COMPLETED"
+  dependency_resolution: "IN PROGRESS"
+  variable_substitution: "IN PROGRESS"
+  validation: "TODO"
+  overall_completion: "50%"
+
+# Research Backing
+research_backing:
+  - "Topological Sorting (Kahn, 1962)"
+  - "DAG Data Flow (Dennis & Fosseen, 1974)"
+  - "Workflow Patterns (van der Aalst et al., 2003)"

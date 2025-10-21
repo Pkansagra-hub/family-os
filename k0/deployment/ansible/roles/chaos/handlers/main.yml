@@ -1,0 +1,8 @@
+---
+# Ansible handlers for chaos configuration (Issue 9.1.4 Phase 4)
+
+- name: reload k0 kernel
+  ansible.builtin.systemd:
+    name: k0-kernel
+    state: reloaded
+  listen: reload k0 kernel

@@ -1,0 +1,569 @@
+# Capability Verification Contract
+# Epic 1.3 - Issue 1.3.4 (Bonus) - Security Component 2 of 2
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Security Team
+# ADR References: ADR-0003d (Role Attestation & Capability Verification)
+
+metadata:
+  contract_id: "capability_verification"
+  contract_name: "Capability Verification Contract"
+  version: "1.0.0"
+  description: |
+    Capability verification contract for PDL protocol role specifications.
+    Enforces role-message binding and least privilege authorization.
+    Implements contract from ADR-0003d Section "Capability Verification".
+  component_type: "pure_agent"
+  layer: "layer1_kernel"
+  security_critical: true
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+overview:
+  purpose: |
+    Capability Verification ensures that:
+    1. Each role has explicit allowed_message_types (PDL specification)
+    2. Agents can only send messages their role authorizes
+    3. Least privilege principle enforced at message level
+    4. No privilege escalation via unauthorized message types
+
+    This is Step 6 of Role Verification (Phase 1 validation).
+
+  security_model:
+    principle: "Least Privilege (Saltzer & Schroeder 1975)"
+    enforcement: "PDL role specification with allowed_message_types"
+    validation: "O(log n) message_type lookup in role specification"
+
+  research_foundation:
+    - "Capability-Based Security (Dennis & Van Horn 1966)"
+    - "Principle of Least Privilege (Saltzer & Schroeder 1975)"
+    - "Role-Based Access Control (Ferraiolo & Kuhn 1992)"
+
+pdl_role_specification:
+  overview: |
+    PDL protocols define roles with allowed_message_types.
+    Capability verification checks if sender_role can send message_type.
+
+  RoleSpecification:
+    description: "PDL role definition with capabilities"
+    format: "YAML (embedded in PDL protocol file)"
+    fields:
+      role_name:
+        type: "string"
+        required: true
+        description: "Role name (orchestrator, agent, tool_runner, system)"
+      allowed_message_types:
+        type: "set<string>"
+        required: true
+        description: "Set of message types this role can send"
+      description:
+        type: "string"
+        required: false
+        description: "Human-readable role description"
+
+    example: |
+      # From agent_hire.pdl.yml
+      roles:
+        orchestrator:
+          allowed_message_types:
+            - "HireRequest"
+            - "Accept"
+            - "Reject"
+            - "CancelRequest"
+          description: "Orchestrator role (initiates agent hire)"
+
+        agent:
+          allowed_message_types:
+            - "Proposal"
+            - "AcceptAck"
+            - "RejectAck"
+          description: "Agent role (responds to hire requests)"
+
+  protocol_compilation:
+    description: "Extract role specifications from PDL files"
+    input: "PDL YAML file (e.g., agent_hire.pdl.yml)"
+    output: "RoleCapabilityMap (role → set<message_type>)"
+
+    algorithm: |
+      1. Parse PDL YAML file
+      2. Extract 'roles' section
+      3. For each role:
+         - role_name = role key
+         - allowed_types = role.allowed_message_types
+         - Store in map: role_capability_map[role_name] = set(allowed_types)
+      4. Return RoleCapabilityMap
+
+    caching: "Compile once at protocol ingestion, cache for runtime checks"
+    invalidation: "Recompile on PDL hot-reload (config manager)"
+
+capability_checking_specification:
+  CapabilityChecker:
+    description: "Check if role can send message_type (Step 6 of RoleVerifier)"
+    purpose: "Enforce least privilege at message level"
+    performance_budget_us: 50
+
+    check_capability_operation:
+      description: "Verify role authorized for message_type"
+      input:
+        protocol: "ProtocolFSM"
+        sender_role: "string"
+        message_type: "string"
+      output:
+        authorized: "bool"
+
+      algorithm: |
+        1. Get role_capability_map from protocol
+        2. Lookup allowed_types = role_capability_map.get(sender_role)
+        3. IF allowed_types is None → RETURN False (unknown role)
+        4. IF message_type in allowed_types → RETURN True
+        5. ELSE → RETURN False (unauthorized message type)
+
+      complexity: "O(log n) for set membership test (n = allowed_message_types count)"
+      latency_target_us: 50
+
+      pseudocode: |
+        FUNCTION check_capability(protocol, sender_role, message_type):
+            # Step 1: Get role capability map
+            role_capability_map = protocol.role_capability_map
+
+            # Step 2: Lookup allowed types for role
+            allowed_types = role_capability_map.get(sender_role)
+            IF allowed_types is None:
+                log_error("unknown_role", role=sender_role)
+                RETURN False
+
+            # Step 3: Check if message_type allowed
+            IF message_type in allowed_types:
+                emit_metric("capability_check_passed", role=sender_role, type=message_type)
+                RETURN True
+            ELSE:
+                log_warning("capability_check_failed", role=sender_role, type=message_type)
+                emit_metric("capability_check_failed", role=sender_role, type=message_type)
+                RETURN False
+
+role_capability_map_specification:
+  RoleCapabilityMap:
+    description: "Mapping from role to allowed message types"
+    purpose: "Fast O(log n) capability lookup"
+    data_structure: "dict<string, set<string>>"
+
+    structure:
+      key: "role_name (string)"
+      value: "set<message_type> (set of strings)"
+
+    operations:
+      get_allowed_types:
+        description: "Get allowed message types for role"
+        input:
+          role: "string"
+        output:
+          allowed_types: "set<string> | None"
+        algorithm: "return map.get(role)"
+        complexity: "O(1) for dict lookup"
+        latency_us: 10
+
+      is_authorized:
+        description: "Check if role can send message_type"
+        input:
+          role: "string"
+          message_type: "string"
+        output:
+          authorized: "bool"
+        algorithm: |
+          allowed_types = get_allowed_types(role)
+          IF allowed_types is None → RETURN False
+          RETURN message_type in allowed_types
+        complexity: "O(1) dict lookup + O(log n) set membership"
+        latency_us: 50
+
+    example: |
+      # Agent Hire Protocol
+      role_capability_map = {
+          "orchestrator": {
+              "HireRequest",
+              "Accept",
+              "Reject",
+              "CancelRequest"
+          },
+          "agent": {
+              "Proposal",
+              "AcceptAck",
+              "RejectAck"
+          }
+      }
+
+      # Check capability
+      assert role_capability_map.is_authorized("orchestrator", "HireRequest") == True
+      assert role_capability_map.is_authorized("agent", "HireRequest") == False
+
+integration_with_role_verifier:
+  overview: |
+    Capability verification is Step 6 of RoleVerifier.verify() operation.
+    It runs AFTER signature verification (Step 5).
+
+  verification_flow:
+    step5_signature:
+      description: "Verify HMAC-SHA256 signature"
+      latency_target_ms: 0.5
+      on_fail: "BLOCK (invalid signature)"
+
+    step6_capability:
+      description: "Verify capability for message_type"
+      component: "CapabilityChecker"
+      algorithm: |
+        protocol = fsm_registry.get_protocol(protocol_name)
+        authorized = capability_checker.check_capability(
+            protocol=protocol,
+            sender_role=message.sender_role,
+            message_type=message.message_type
+        )
+        IF not authorized → BLOCK
+      latency_target_us: 50
+      on_fail: "BLOCK (capability check failed)"
+
+  pseudocode: |
+    # In RoleVerifier.verify()
+
+    # Step 5: Verify signature
+    message_digest = f"{message.message_type}:{message.session_id}:{len(message.payload)}"
+    expected_sig = HMAC-SHA256(message_digest + message.payload, lease.signature_secret)
+    IF not constant_time_compare(expected_sig, message.signature):
+        RETURN VerificationResult(valid=False, reason="Invalid signature", action="BLOCK")
+
+    # Step 6: Verify capability (THIS CONTRACT)
+    protocol = fsm_registry.get_protocol(protocol_name)
+    authorized = capability_checker.check_capability(protocol, message.sender_role, message.message_type)
+    IF not authorized:
+        RETURN VerificationResult(valid=False, reason="Capability check failed", action="BLOCK")
+
+    # All checks passed
+    RETURN VerificationResult(valid=True, reason=None, action="PASS")
+
+pdl_example_specifications:
+  example1_agent_hire:
+    protocol_name: "agent_hire"
+    roles:
+      orchestrator:
+        allowed_message_types:
+          - "HireRequest"
+          - "Accept"
+          - "Reject"
+          - "CancelRequest"
+        description: "Initiates agent hiring with HireRequest"
+
+      agent:
+        allowed_message_types:
+          - "Proposal"
+          - "AcceptAck"
+          - "RejectAck"
+        description: "Responds to hire requests with Proposal"
+
+    attack_scenario:
+      scenario: "Malicious agent sends Accept (orchestrator-only message)"
+      verification_steps:
+        - step: "RoleVerifier checks sender_role = 'agent', message_type = 'Accept'"
+        - step: "CapabilityChecker looks up agent.allowed_message_types = {Proposal, AcceptAck, RejectAck}"
+        - step: "'Accept' not in allowed_message_types → BLOCK"
+      result: "✅ Privilege escalation blocked"
+
+  example2_task_execution:
+    protocol_name: "task_execution"
+    roles:
+      orchestrator:
+        allowed_message_types:
+          - "TaskAnnouncement"
+          - "TaskRequest"
+          - "TaskCancel"
+        description: "Coordinates task execution"
+
+      agent:
+        allowed_message_types:
+          - "Proposal"
+          - "PlanReady"
+          - "ExecutionUpdate"
+          - "TaskResult"
+        description: "Executes assigned tasks"
+
+      arbiter:
+        allowed_message_types:
+          - "ArbiterApproval"
+          - "ArbiterRejection"
+        description: "Approves RED band tasks"
+
+    attack_scenario:
+      scenario: "Agent tries to approve its own RED band task (sends ArbiterApproval)"
+      verification_steps:
+        - step: "RoleVerifier checks sender_role = 'agent', message_type = 'ArbiterApproval'"
+        - step: "CapabilityChecker looks up agent.allowed_message_types = {Proposal, PlanReady, ...}"
+        - step: "'ArbiterApproval' not in allowed_message_types → BLOCK"
+      result: "✅ Arbiter impersonation blocked"
+
+  example3_tool_call:
+    protocol_name: "tool_call"
+    roles:
+      agent:
+        allowed_message_types:
+          - "ToolRequest"
+        description: "Initiates tool calls"
+
+      tool_runner:
+        allowed_message_types:
+          - "ToolResult"
+          - "ToolError"
+        description: "Executes sandboxed tools"
+
+      system:
+        allowed_message_types:
+          - "ToolTimeout"
+          - "ToolKill"
+        description: "System watchdog (timeout enforcement)"
+
+    attack_scenario:
+      scenario: "Concierge agent (no TOOL_CALL capability) tries to send ToolRequest"
+      verification_steps:
+        - step: "RoleVerifier checks lease.capabilities = {} (Concierge has no capabilities)"
+        - step: "Lease lacks TOOL_CALL capability → Concierge never gets 'agent' role in tool_call protocol"
+        - step: "Concierge cannot obtain lease with role='agent' for tool_call → blocked at lease issuance"
+      result: "✅ Unauthorized tool access blocked at lease level"
+      note: "Capability verification happens twice: (1) at lease issuance, (2) at message send"
+
+security_analysis:
+  threat_model:
+    threat1_privilege_escalation_via_message:
+      attack: "Agent sends message type outside role specification (e.g., agent sends Accept)"
+      mitigation: "CapabilityChecker blocks unauthorized message_type"
+      result: "✅ Attack blocked"
+
+    threat2_arbiter_impersonation:
+      attack: "Agent sends ArbiterApproval to bypass RED band restrictions"
+      mitigation: "Only arbiter role can send ArbiterApproval (PDL role specification)"
+      result: "✅ Attack blocked"
+
+    threat3_role_confusion:
+      attack: "Agent claims sender_role='orchestrator' to send orchestrator messages"
+      mitigation: "Signature verification (Step 5) ensures sender_role matches lease.role"
+      result: "✅ Blocked by role attestation (Step 4 + Step 5)"
+      note: "Capability verification (Step 6) is defense-in-depth"
+
+    threat4_protocol_bypass:
+      attack: "Agent skips protocol states by sending out-of-order messages"
+      mitigation: "Phase 2 (protocol validation) checks FSM state transitions"
+      result: "✅ Blocked by MPST validation"
+      note: "Capability verification only checks message_type, not FSM state"
+
+  security_properties:
+    property1_least_privilege:
+      guarantee: "Each role has minimal set of allowed_message_types"
+      enforcement: "PDL role specification reviewed during protocol design"
+      example: "Concierge has zero allowed_message_types (cannot send any protocol messages)"
+
+    property2_explicit_allow_list:
+      guarantee: "No default-allow; only explicitly listed message_types allowed"
+      enforcement: "CapabilityChecker returns False if message_type not in allowed_types"
+      example: "New message type requires PDL update + protocol recompilation"
+
+    property3_role_separation:
+      guarantee: "Roles have disjoint message_type sets (no overlap)"
+      enforcement: "PDL design principle (orchestrator vs agent vs system roles)"
+      example: "orchestrator sends HireRequest, agent sends Proposal (no overlap)"
+
+    property4_defense_in_depth:
+      guarantee: "Capability verification is 2nd layer (after signature verification)"
+      layers:
+        - "Layer 1: Signature verification (prevents role spoofing)"
+        - "Layer 2: Capability verification (prevents privilege escalation)"
+        - "Layer 3: Protocol validation (prevents FSM violations)"
+      benefit: "Multiple independent security checks"
+
+least_privilege_enforcement:
+  overview: |
+    PDL protocols must follow least privilege principle:
+    - Each role has minimal allowed_message_types
+    - No unnecessary capabilities granted
+    - Review process ensures minimal privilege sets
+
+  design_guidelines:
+    guideline1_minimal_message_types:
+      rule: "Role should only send message_types required for its function"
+      example: "Agent role: {Proposal, AcceptAck, RejectAck} (3 types, minimal for agent hire)"
+      antipattern: "Agent role: {Proposal, Accept, Reject, ...} (includes orchestrator messages)"
+
+    guideline2_role_separation:
+      rule: "Separate initiator vs responder roles (disjoint message types)"
+      example: "orchestrator (HireRequest, Accept, Reject) vs agent (Proposal, AcceptAck)"
+      benefit: "Clear role boundaries, prevents confused deputy attacks"
+
+    guideline3_system_role_isolation:
+      rule: "System messages (timeout, kill) separate from user-level roles"
+      example: "system role: {ToolTimeout, ToolKill} (infrastructure-only)"
+      benefit: "User agents cannot impersonate system watchdog"
+
+    guideline4_no_wildcard_permissions:
+      rule: "No role has allowed_message_types = '*' (all messages)"
+      enforcement: "PDL schema validation rejects wildcard specifications"
+      exception: "None (strict whitelist enforcement)"
+
+performance_requirements:
+  latency_targets:
+    capability_check_us: 50
+    role_capability_map_lookup_us: 10
+    set_membership_test_us: 30
+    description: "Per-operation latency targets (P95)"
+
+  throughput_targets:
+    capability_checks_per_second: 1000000
+    description: "System-wide capability check capacity"
+
+  memory_requirements:
+    role_capability_map_bytes: 1024
+    per_protocol_overhead_bytes: 2048
+    max_protocols: 20
+    total_memory_kb: 40
+    description: "Memory footprint (all protocols cached)"
+
+observability:
+  metrics:
+    counters:
+      - name: "capability_check_total"
+        labels: ["protocol_name", "role", "result"]
+      - name: "capability_check_failed_total"
+        labels: ["protocol_name", "role", "message_type"]
+      - name: "unknown_role_total"
+        labels: ["protocol_name", "role"]
+
+    histograms:
+      - name: "capability_check_latency_us"
+        buckets: [10, 25, 50, 100, 200]
+        labels: ["protocol_name"]
+
+    gauges:
+      - name: "loaded_protocols"
+        description: "Number of protocols with cached role_capability_maps"
+
+  logging:
+    structured: true
+    format: "json"
+    required_fields:
+      - "protocol_name"
+      - "sender_role"
+      - "message_type"
+      - "authorized"
+      - "trace_id"
+
+    log_levels:
+      capability_check_failed: "WARN"
+      unknown_role: "ERROR"
+      capability_check_passed: "DEBUG"
+
+  tracing:
+    enabled: true
+    provider: "opentelemetry"
+    sampling_rate: 0.1
+    spans:
+      - name: "capability_check"
+        attributes: ["protocol_name", "sender_role", "message_type", "authorized"]
+
+testing_requirements:
+  unit_tests:
+    - test_role_capability_map_construction
+    - test_capability_check_authorized
+    - test_capability_check_unauthorized
+    - test_unknown_role_handling
+    - test_set_membership_performance
+
+  integration_tests:
+    - test_capability_verification_in_role_verifier
+    - test_privilege_escalation_blocked
+    - test_arbiter_impersonation_blocked
+    - test_pdl_role_compilation
+
+  security_tests:
+    - test_agent_cannot_send_orchestrator_messages
+    - test_concierge_cannot_send_tool_requests
+    - test_agent_cannot_approve_red_band_tasks
+    - test_no_wildcard_permissions
+
+  performance_tests:
+    - test_capability_check_under_50us
+    - test_throughput_1m_checks_per_second
+    - test_memory_footprint_under_40kb
+
+pdl_schema_validation:
+  overview: |
+    PDL compiler validates role specifications during protocol ingestion.
+    Ensures all protocols follow security best practices.
+
+  validation_rules:
+    rule1_roles_required:
+      check: "'roles' section must exist in PDL file"
+      error: "Missing 'roles' section in protocol {protocol_name}"
+
+    rule2_allowed_message_types_required:
+      check: "Each role must have 'allowed_message_types' field"
+      error: "Role {role_name} missing 'allowed_message_types'"
+
+    rule3_no_empty_message_types:
+      check: "allowed_message_types must be non-empty set (or explicitly empty for read-only roles)"
+      error: "Role {role_name} has empty 'allowed_message_types' (use explicit [])"
+
+    rule4_message_types_in_protocol:
+      check: "All allowed_message_types must be defined in protocol 'messages' section"
+      error: "Role {role_name} allows unknown message_type {message_type}"
+
+    rule5_no_wildcard:
+      check: "allowed_message_types cannot contain '*' wildcard"
+      error: "Role {role_name} uses wildcard '*' (forbidden)"
+
+  compiler_integration:
+    stage: "PDL Validation (Stage 2 of pdl_compiler_contract.yml)"
+    on_validation_failure: "Reject protocol, log error, return validation_errors"
+    on_validation_success: "Compile role_capability_map, cache for runtime"
+
+compliance:
+  adr_references:
+    - "ADR-0003d: Role Attestation & Capability Verification"
+    - "ADR-0010: Capability-Based Security"
+    - "ADR-0003: MPST Protocol Contracts (PDL specification)"
+
+  research_validation:
+    - citation: "Capability-Based Security (Dennis & Van Horn 1966)"
+      compliance: "Implements fine-grained message-level capabilities"
+    - citation: "Principle of Least Privilege (Saltzer & Schroeder 1975)"
+      compliance: "Enforces minimal allowed_message_types per role"
+    - citation: "Role-Based Access Control (Ferraiolo & Kuhn 1992)"
+      compliance: "Uses roles to organize message permissions"
+
+  performance_requirements:
+    - "Capability check must be <50μs P95"
+    - "Role capability map lookup must be <10μs P95"
+    - "Set membership test must be <30μs P95"
+
+  security_requirements:
+    - "No wildcard permissions allowed"
+    - "Explicit whitelist for all message types"
+    - "Role separation enforced (disjoint message_type sets)"
+    - "All capability check failures must be logged"
+
+cross_references:
+  related_contracts:
+    - contract: "role_attestation.yml"
+      relationship: "works_with"
+      integration_point: "Step 6 of RoleVerifier.verify()"
+    - contract: "pdl_specification.yml"
+      relationship: "defined_by"
+      integration_point: "Role specifications in PDL YAML"
+    - contract: "pdl_compiler_contract.yml"
+      relationship: "compiled_by"
+      integration_point: "Stage 2 validation, role_capability_map generation"
+    - contract: "protocol_monitor_api.yml"
+      relationship: "used_by"
+      integration_point: "FSM Registry provides ProtocolFSM with role_capability_map"
+
+notes:
+  - "Capability verification is Step 6 of RoleVerifier (Phase 1 validation)"
+  - "Runs AFTER signature verification (defense-in-depth)"
+  - "Enforces least privilege at message level"
+  - "O(log n) complexity for set membership test (n = allowed_message_types count)"
+  - "PDL schema validation ensures no wildcard permissions"
+  - "Role capability maps cached at protocol compilation (hot-reload supported)"
+  - "Integration with Phase 2 (protocol validation) for complete security"

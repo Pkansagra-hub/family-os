@@ -1,0 +1,50 @@
+# FamilyOS Proprietary License
+
+Copyright (c) 2025 FamilyOS. All rights reserved.
+
+This source code, documentation, and all associated assets (collectively, the
+"Software") are the confidential and proprietary property of FamilyOS and its
+affiliates. The Software is provided solely for evaluation, internal review,
+and contribution purposes under the terms of this license. Any other use,
+including but not limited to commercial deployment, redistribution, public
+hosting, or production operation, requires prior written authorization from
+FamilyOS.
+
+## Permitted Use
+
+- Clone, view, and evaluate the Software for the sole purpose of developing or
+	proposing contributions back to the FamilyOS project.
+- Submit pull requests or suggestions subject to the contribution guidelines
+	published in this repository.
+
+All other rights are expressly reserved. You may not copy, modify, merge,
+publish, distribute, sublicense, sell, lease, or otherwise exploit the Software
+without a separate written agreement signed by an authorized representative of
+FamilyOS.
+
+## Patents and Confidentiality
+
+FamilyOS capabilities embodied in the Software are patent pending. No patent or
+patent application is licensed or otherwise conveyed under this license.
+Reverse engineering, decompilation, or disassembly of compiled components is
+strictly prohibited except to the limited extent required by applicable law.
+
+## Contributions
+
+By submitting any contribution to the Software, you agree that (a) you have the
+right to grant, and hereby irrevocably grant, FamilyOS all rights, title, and
+interest in and to your contribution; and (b) your contribution becomes part of
+the Software and is subject to this Proprietary License.
+
+## Warranty Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, OR NON-INFRINGEMENT. IN NO EVENT SHALL
+FAMILYOS OR ITS AFFILIATES BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY
+ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+## Contact
+
+For licensing inquiries please contact [licensing@familyos.dev](mailto:licensing@familyos.dev).

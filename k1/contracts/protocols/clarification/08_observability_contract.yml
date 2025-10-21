@@ -1,0 +1,462 @@
+# Clarification Protocol - Observability Contract
+# File: contracts/protocols/clarification/08_observability_contract.yml
+# Purpose: Comprehensive observability for clarification protocol
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-CLARIFICATION-OBSERVABILITY-008"
+  name: "Clarification Protocol Observability Contract"
+  version: "1.0"
+
+# Observability Overview
+observability:
+  purpose: "Track clarification protocol performance, usage, and issues"
+  components:
+    - "Prometheus metrics (counters, gauges, histograms)"
+    - "Structured events (JSON logs with trace_id)"
+    - "OpenTelemetry tracing (distributed request tracking)"
+
+# Prometheus Metrics
+prometheus_metrics:
+
+  # Clarification Request Metrics
+  clarification_requested_total:
+    type: "counter"
+    labels: ["question_type", "priority"]
+    description: "Total clarifications requested by Planner"
+    usage: |
+      clarification_requested_total{question_type="MULTIPLE_CHOICE", priority="BLOCKING"} +1
+    analysis: "Track clarification frequency, identify patterns (which question types most common)"
+
+  clarification_request_latency_ms:
+    type: "histogram"
+    buckets: [5, 10, 25, 50, 100]
+    description: "Latency from Planner to WebSocket delivery"
+    usage: |
+      clarification_request_latency_ms.observe(latency_ms)
+    analysis: "Ensure request delivery within 60ms budget"
+
+  # Clarification Response Metrics
+  clarification_resolved_total:
+    type: "counter"
+    labels: ["priority", "resolution"]
+    description: "Clarifications resolved (user_response, timeout, aborted)"
+    usage: |
+      clarification_resolved_total{priority="BLOCKING", resolution="user_response"} +1
+      clarification_resolved_total{priority="OPTIONAL", resolution="timeout"} +1
+    analysis: "Track resolution rates, identify timeout patterns"
+
+  clarification_user_response_time_ms:
+    type: "histogram"
+    labels: ["priority"]
+    buckets: [1000, 3000, 5000, 10000, 15000, 30000]
+    description: "Time from request to user response (wall-clock)"
+    usage: |
+      clarification_user_response_time_ms{priority="BLOCKING"}.observe(response_time_ms)
+    analysis: "Monitor user response time distribution, tune timeout thresholds"
+
+  clarification_response_latency_ms:
+    type: "histogram"
+    buckets: [10, 25, 50, 100, 200]
+    description: "Latency from user submit to Planner receipt"
+    usage: |
+      clarification_response_latency_ms.observe(latency_ms)
+    analysis: "Ensure response routing within 70ms budget"
+
+  # Timeout Metrics
+  clarification_timeout_total:
+    type: "counter"
+    labels: ["priority", "strategy"]
+    description: "Clarification timeouts (BLOCKING vs OPTIONAL)"
+    usage: |
+      clarification_timeout_total{priority="BLOCKING", strategy="ABORT_TASK"} +1
+      clarification_timeout_total{priority="OPTIONAL", strategy="USE_DEFAULT"} +1
+    analysis: "Track timeout frequency, identify problematic questions"
+
+  clarification_timeout_rate:
+    type: "gauge"
+    labels: ["priority"]
+    description: "Percentage of clarifications that timeout"
+    calculation: |
+      timeout_rate = clarification_timeout_total / clarification_requested_total
+    analysis: "Monitor timeout rates (target: <10% BLOCKING, <20% OPTIONAL)"
+
+  clarification_default_used_total:
+    type: "counter"
+    description: "Times default answer was used (OPTIONAL timeout)"
+    usage: |
+      clarification_default_used_total +1
+    analysis: "Track default usage frequency"
+
+  clarification_task_aborted_total:
+    type: "counter"
+    description: "Tasks aborted due to clarification timeout (BLOCKING)"
+    usage: |
+      clarification_task_aborted_total +1
+    analysis: "Track task failure rate due to clarification timeout"
+
+  # Cancellation Metrics
+  clarification_cancelled_total:
+    type: "counter"
+    description: "Clarifications cancelled by user"
+    usage: |
+      clarification_cancelled_total +1
+    analysis: "Track user cancellation frequency (may indicate poor question quality)"
+
+  # Multi-Turn Metrics
+  clarification_count_per_task:
+    type: "histogram"
+    buckets: [0, 1, 2, 3, 4, 5]
+    description: "Distribution of clarification count per task"
+    usage: |
+      clarification_count_per_task.observe(count)
+    analysis: "Track how many clarifications per task (target: <2 average)"
+
+  multi_turn_clarification_total:
+    type: "counter"
+    labels: ["clarification_count"]
+    description: "Tasks with 2+ clarifications"
+    usage: |
+      multi_turn_clarification_total{clarification_count="2"} +1
+    analysis: "Track multi-turn frequency"
+
+  clarification_max_exceeded_total:
+    type: "counter"
+    description: "Tasks aborted due to >3 clarifications"
+    usage: |
+      clarification_max_exceeded_total +1
+    analysis: "Track tasks hitting max clarification limit"
+
+  # Queue Metrics
+  clarification_queue_depth:
+    type: "gauge"
+    labels: ["user_id"]
+    description: "Pending clarifications in user's queue"
+    usage: |
+      clarification_queue_depth{user_id="user-123"}.set(queue_length)
+    analysis: "Monitor queue buildup, detect backlog"
+
+  clarification_queue_wait_time_ms:
+    type: "histogram"
+    buckets: [0, 1000, 5000, 10000, 30000]
+    description: "Time clarification waits in queue before presentation"
+    usage: |
+      clarification_queue_wait_time_ms.observe(wait_time_ms)
+    analysis: "Track queuing delay (target: <1s)"
+
+  # WebSocket Metrics
+  websocket_clarification_request_sent_total:
+    type: "counter"
+    description: "Clarification requests sent to clients"
+    usage: |
+      websocket_clarification_request_sent_total +1
+    analysis: "Track WebSocket delivery success"
+
+  websocket_clarification_response_received_total:
+    type: "counter"
+    description: "Clarification responses received from clients"
+    usage: |
+      websocket_clarification_response_received_total +1
+    analysis: "Track response receipt success"
+
+  websocket_clarification_delivery_latency_ms:
+    type: "histogram"
+    buckets: [10, 25, 50, 100, 200]
+    description: "WebSocket delivery latency"
+    usage: |
+      websocket_clarification_delivery_latency_ms.observe(latency_ms)
+    analysis: "Ensure WebSocket delivery within 50ms"
+
+  websocket_clarification_session_disconnected_total:
+    type: "counter"
+    description: "Clarifications aborted due to WebSocket disconnect"
+    usage: |
+      websocket_clarification_session_disconnected_total +1
+    analysis: "Track network reliability issues"
+
+# Structured Events (JSON Logs)
+structured_events:
+
+  clarification_requested:
+    event_name: "clarification_requested"
+    fields:
+      - task_id: "UUID"
+      - agent_id: "UUID"
+      - clarification_id: "UUID"
+      - question: "string"
+      - question_type: "enum"
+      - priority: "enum"
+      - timeout_ms: "uint"
+      - trace_id: "string"
+      - timestamp_ns: "ulong"
+    example: |
+      {
+        "event": "clarification_requested",
+        "task_id": "task-xxx",
+        "agent_id": "agent-ai-planner-001",
+        "clarification_id": "clarif-aaa",
+        "question": "Which restaurant?",
+        "question_type": "MULTIPLE_CHOICE",
+        "priority": "BLOCKING",
+        "timeout_ms": 30000,
+        "trace_id": "...",
+        "timestamp_ns": 1695000001000000000
+      }
+
+  clarification_resolved:
+    event_name: "clarification_resolved"
+    fields:
+      - task_id: "UUID"
+      - agent_id: "UUID"
+      - clarification_id: "UUID"
+      - answer: "string"
+      - resolution: "enum (user_response, timeout, aborted)"
+      - user_response_time_ms: "uint"
+      - trace_id: "string"
+      - timestamp_ns: "ulong"
+    example: |
+      {
+        "event": "clarification_resolved",
+        "task_id": "task-xxx",
+        "clarification_id": "clarif-aaa",
+        "answer": "Acme Pizza",
+        "resolution": "user_response",
+        "user_response_time_ms": 4500,
+        "trace_id": "...",
+        "timestamp_ns": 1695000005500000000
+      }
+
+  clarification_timeout:
+    event_name: "clarification_timeout"
+    fields:
+      - task_id: "UUID"
+      - clarification_id: "UUID"
+      - priority: "enum"
+      - timeout_ms: "uint"
+      - fallback_strategy: "string"
+      - default_answer: "string (if OPTIONAL)"
+      - trace_id: "string"
+      - timestamp_ns: "ulong"
+    example: |
+      {
+        "event": "clarification_timeout",
+        "task_id": "task-yyy",
+        "clarification_id": "clarif-bbb",
+        "priority": "OPTIONAL",
+        "timeout_ms": 15000,
+        "fallback_strategy": "USE_DEFAULT",
+        "default_answer": "12:00 PM",
+        "trace_id": "...",
+        "timestamp_ns": 1695000017000000000
+      }
+
+  clarification_cancelled:
+    event_name: "clarification_cancelled"
+    fields:
+      - task_id: "UUID"
+      - clarification_id: "UUID"
+      - reason: "string (USER_CANCELLED, WEBSOCKET_DISCONNECT, TASK_CANCELLED)"
+      - trace_id: "string"
+      - timestamp_ns: "ulong"
+    example: |
+      {
+        "event": "clarification_cancelled",
+        "task_id": "task-zzz",
+        "clarification_id": "clarif-ccc",
+        "reason": "USER_CANCELLED",
+        "trace_id": "...",
+        "timestamp_ns": 1695000003500000000
+      }
+
+  clarification_max_exceeded:
+    event_name: "clarification_max_exceeded"
+    fields:
+      - task_id: "UUID"
+      - clarification_count: "uint"
+      - trace_id: "string"
+      - timestamp_ns: "ulong"
+    example: |
+      {
+        "event": "clarification_max_exceeded",
+        "task_id": "task-www",
+        "clarification_count": 4,
+        "trace_id": "...",
+        "timestamp_ns": 1695000030000000000
+      }
+
+# OpenTelemetry Tracing
+opentelemetry_tracing:
+
+  trace_structure:
+    parent_span: "task_execution (from Task Execution Protocol)"
+    child_spans:
+      - "clarification_protocol (overall clarification lifecycle)"
+      - "clarification_request (Planner → Orchestrator → WebSocket)"
+      - "clarification_wait_response (waiting for user)"
+      - "clarification_response (User → WebSocket → Orchestrator → Planner)"
+
+  span_attributes:
+    clarification_protocol_span:
+      - "task_id": "UUID"
+      - "clarification_id": "UUID"
+      - "question_type": "enum"
+      - "priority": "enum"
+      - "timeout_ms": "uint"
+      - "resolution": "enum (user_response, timeout, aborted)"
+      - "user_response_time_ms": "uint"
+
+    clarification_request_span:
+      - "request_latency_ms": "uint (Planner → WebSocket)"
+      - "websocket_session_id": "UUID"
+
+    clarification_response_span:
+      - "response_latency_ms": "uint (User → Planner)"
+      - "answer": "string"
+
+  tracing_example: |
+    task_execution [trace_id=xxx]
+      ├─ planning [span_id=aaa]
+      │   ├─ clarification_protocol [span_id=bbb]
+      │   │   ├─ clarification_request [span_id=ccc, latency=50ms]
+      │   │   ├─ clarification_wait_response [span_id=ddd, duration=4500ms]
+      │   │   └─ clarification_response [span_id=eee, latency=70ms]
+      │   └─ planning_resume [span_id=fff]
+      └─ task_result [span_id=ggg]
+
+# Performance Targets
+performance_targets:
+
+  request_delivery_latency:
+    target: "<60ms (Planner → WebSocket → Client)"
+    p95_target: "<100ms"
+    monitoring: "clarification_request_latency_ms histogram"
+
+  response_delivery_latency:
+    target: "<70ms (Client → WebSocket → Orchestrator → Planner)"
+    p95_target: "<150ms"
+    monitoring: "clarification_response_latency_ms histogram"
+
+  user_response_time:
+    p50_target: "3000ms (3 seconds)"
+    p95_target: "10000ms (10 seconds)"
+    p99_target: "20000ms (20 seconds)"
+    monitoring: "clarification_user_response_time_ms histogram"
+
+  timeout_rate:
+    BLOCKING_target: "<10% (most users respond within 30s)"
+    OPTIONAL_target: "<20% (acceptable for defaults)"
+    monitoring: "clarification_timeout_rate gauge"
+
+  queue_depth:
+    target: "<3 clarifications per user"
+    alert_threshold: ">5 clarifications (backlog building)"
+    monitoring: "clarification_queue_depth gauge"
+
+  multi_turn_rate:
+    target: "<30% tasks have 2+ clarifications"
+    ideal: "<20%"
+    monitoring: "multi_turn_clarification_total / task_total"
+
+# Alerting Rules
+alerting_rules:
+
+  high_timeout_rate:
+    condition: "clarification_timeout_rate{priority='BLOCKING'} > 0.15"
+    severity: "WARNING"
+    description: "BLOCKING clarification timeout rate >15% (target: <10%)"
+    action: |
+      - Review timeout duration (may need to increase from 30s)
+      - Analyze question complexity (may be too complex)
+      - Check WebSocket delivery issues
+
+  high_cancellation_rate:
+    condition: "clarification_cancelled_total / clarification_requested_total > 0.10"
+    severity: "WARNING"
+    description: "User cancellation rate >10%"
+    action: |
+      - Review question quality (may be poorly phrased)
+      - Check if users understand question
+      - Analyze cancelled question patterns
+
+  high_queue_depth:
+    condition: "clarification_queue_depth > 5"
+    severity: "WARNING"
+    description: "Clarification queue depth >5 (backlog building)"
+    action: |
+      - Check for slow user responses
+      - Verify queue processing (FIFO working?)
+      - Consider timeout adjustments
+
+  high_websocket_disconnect_rate:
+    condition: "websocket_clarification_session_disconnected_total / websocket_clarification_request_sent_total > 0.05"
+    severity: "CRITICAL"
+    description: "WebSocket disconnect rate >5%"
+    action: |
+      - Investigate network reliability
+      - Check WebSocket Gateway health
+      - Review reconnection logic
+
+  high_multi_turn_rate:
+    condition: "multi_turn_clarification_total{clarification_count='3'} / task_total > 0.10"
+    severity: "INFO"
+    description: "10% of tasks require 3 clarifications"
+    action: |
+      - Review task complexity patterns
+      - Provide guidance for more specific initial requests
+      - Consider AI improvements (reduce ambiguity)
+
+# Dashboard Layout
+dashboard_layout:
+
+  overview_panel:
+    title: "Clarification Protocol Overview"
+    metrics:
+      - "clarification_requested_total (rate per minute)"
+      - "clarification_resolved_total (by resolution type)"
+      - "clarification_timeout_rate (BLOCKING vs OPTIONAL)"
+      - "multi_turn_clarification_total (2+ clarifications)"
+
+  latency_panel:
+    title: "Latency & Performance"
+    metrics:
+      - "clarification_request_latency_ms (P50, P95, P99)"
+      - "clarification_user_response_time_ms (P50, P95, P99)"
+      - "clarification_response_latency_ms (P50, P95, P99)"
+
+  timeout_panel:
+    title: "Timeout Analysis"
+    metrics:
+      - "clarification_timeout_total (by priority)"
+      - "clarification_timeout_rate (trend over time)"
+      - "clarification_default_used_total"
+      - "clarification_task_aborted_total"
+
+  queue_panel:
+    title: "Queue & Concurrency"
+    metrics:
+      - "clarification_queue_depth (per user, max/avg)"
+      - "clarification_queue_wait_time_ms (P50, P95)"
+
+  websocket_panel:
+    title: "WebSocket Delivery"
+    metrics:
+      - "websocket_clarification_request_sent_total"
+      - "websocket_clarification_response_received_total"
+      - "websocket_clarification_delivery_latency_ms"
+      - "websocket_clarification_session_disconnected_total"
+
+# Lifecycle Integration
+lifecycle_context:
+
+  observability_scope: "All clarification protocol phases (request → wait → resolve → timeout)"
+
+  related_contracts:
+    - "01_clarification_protocol_fsm.yml - FSM state transitions tracked"
+    - "02_clarification_request_contract.yml - Request metrics"
+    - "03_clarification_response_contract.yml - Response metrics"
+    - "04_timeout_handling_contract.yml - Timeout metrics"
+
+# ==============================================================================
+# END OF FILE: 08_observability_contract.yml
+# ==============================================================================

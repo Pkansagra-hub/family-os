@@ -1,0 +1,134 @@
+-- Baseline migration for K0 kernel storage schema.
+-- KEEP IN SYNC with ../storage.sql and k0/README.md §6.1.
+
+BEGIN;
+
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=OFF;
+
+CREATE TABLE IF NOT EXISTS st_wal (
+  pos INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  body BLOB,
+  payload_sha256 TEXT,
+  schema_uri TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  idem_key TEXT,
+  device_id TEXT NOT NULL,
+  commit_ts TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS idem_ledger (
+  idem_key TEXT PRIMARY KEY,
+  receipt_id TEXT NOT NULL,
+  first_seen_ts TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('COMMITTED','REJECTED')),
+  expiry_ts TEXT
+);
+
+CREATE TABLE IF NOT EXISTS st_receipts (
+  receipt_id TEXT PRIMARY KEY,
+  idem_key TEXT NOT NULL,
+  wal_pos INTEGER NOT NULL,
+  commit_ts TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  mls_group_id TEXT NOT NULL,
+  key_version TEXT NOT NULL,
+  device_sig TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS st_offsets (
+  subscriber_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  offset INTEGER NOT NULL,
+  updated_ts TEXT NOT NULL,
+  PRIMARY KEY(subscriber_id, topic, space_id, tenant_id)
+);
+
+CREATE TABLE IF NOT EXISTS st_devices (
+  device_id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  mls_group_id TEXT NOT NULL,
+  provisioned_ts TEXT NOT NULL
+);
+
+-- Device keys with rotation support (ADR 001)
+CREATE TABLE IF NOT EXISTS st_device_keys (
+  device_id TEXT NOT NULL,
+  key_version TEXT NOT NULL,
+  verify_key TEXT NOT NULL,
+  key_state TEXT NOT NULL DEFAULT 'ACTIVE'
+    CHECK(key_state IN ('PENDING','ACTIVE','ROTATING','REVOKED')),
+  registered_ts TEXT NOT NULL,
+  activated_ts TEXT,
+  rotated_ts TEXT,
+  revoked_ts TEXT,
+  grace_expires_ts TEXT,
+  revocation_reason TEXT,
+  PRIMARY KEY(device_id, key_version),
+  FOREIGN KEY(device_id) REFERENCES st_devices(device_id)
+);
+
+CREATE TABLE IF NOT EXISTS st_outbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wal_pos INTEGER NOT NULL,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  driver TEXT NOT NULL,
+  op_kind TEXT NOT NULL,
+  payload BLOB NOT NULL,
+  fingerprint TEXT NOT NULL,
+  requeue_seq INTEGER NOT NULL DEFAULT 0,
+  retries INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS st_dlq (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wal_pos INTEGER,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  driver TEXT NOT NULL,
+  op_kind TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  payload BLOB NOT NULL,
+  reason TEXT NOT NULL,
+  retries INTEGER NOT NULL DEFAULT 0,
+  requeue_seq INTEGER NOT NULL DEFAULT 0,
+  first_failure_ts TEXT NOT NULL,
+  last_failure_ts TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'PENDING'
+    CHECK(state IN ('PENDING','REQUEUED','QUARANTINED'))
+);
+
+CREATE TABLE IF NOT EXISTS schema_registry (
+  schema_uri TEXT NOT NULL,
+  version TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('REGISTERED','ACTIVE','DEPRECATED','BLOCKED')),
+  operator_id TEXT,
+  blocked_ts TEXT,
+  blocked_reason TEXT,
+  unblocked_ts TEXT,
+  PRIMARY KEY(schema_uri, version)
+);
+
+DROP INDEX IF EXISTS idx_outbox_fingerprint_space;
+CREATE INDEX IF NOT EXISTS idx_wal_space_pos ON st_wal(space_id, pos);
+CREATE INDEX IF NOT EXISTS idx_wal_tenant_topic ON st_wal(tenant_id, topic, pos);
+CREATE INDEX IF NOT EXISTS idx_receipts_space ON st_receipts(space_id, wal_pos);
+CREATE INDEX IF NOT EXISTS idx_receipts_walpos ON st_receipts(wal_pos);
+CREATE INDEX IF NOT EXISTS idx_outbox_space ON st_outbox(space_id, requeue_seq, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_outbox_idem ON st_outbox(tenant_id, space_id, driver, fingerprint, requeue_seq);
+CREATE INDEX IF NOT EXISTS idx_dlq_space ON st_dlq(space_id, first_failure_ts);
+CREATE INDEX IF NOT EXISTS idx_device_keys_state ON st_device_keys(device_id, key_state);
+
+COMMIT;

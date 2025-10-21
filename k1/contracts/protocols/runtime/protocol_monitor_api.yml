@@ -1,0 +1,687 @@
+# Protocol Monitor API Contract
+# Epic 1.3 - Issue 1.3.3 - Runtime Component 1 of 4
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Protocol Team
+# ADR References: ADR-0003c (Protocol Monitor Runtime)
+
+metadata:
+  contract_id: "protocol_monitor_api"
+  contract_name: "Protocol Monitor API Contract"
+  version: "1.0.0"
+  description: |
+    Protocol Monitor API specification for FSM registry, session tracking, and validation.
+    Defines APIs for registering protocols, tracking active sessions, and runtime validation.
+    Implements contract from ADR-0003c Section 3 (Protocol Monitor Runtime).
+  component_type: "pure_agent"
+  layer: "layer1_kernel"
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+api_specification:
+  overview: |
+    Protocol Monitor provides three core API surfaces:
+    1. FSM Registry: Register and retrieve compiled FSM definitions
+    2. Session Tracker: Track active protocol sessions and their states
+    3. Validator: Runtime validation of protocol compliance
+
+    All APIs are exposed through mailbox hooks with <2ms latency budget.
+
+  design_principles:
+    - "Zero-copy validation where possible"
+    - "Stateless validation functions"
+    - "Immutable FSM definitions"
+    - "Lock-free session tracking"
+    - "Fail-fast validation errors"
+
+  performance_requirements:
+    validation_latency_p95_ms: 2
+    registry_lookup_p95_ms: 0.5
+    session_tracking_p95_ms: 0.3
+    memory_per_session_kb: 8
+
+fsm_registry_api:
+  register_protocol:
+    method: "register_protocol"
+    description: "Register a compiled FSM definition"
+    input:
+      protocol_id:
+        type: "string"
+        required: true
+        format: "snake_case"
+        example: "agent_hire"
+      version:
+        type: "string"
+        required: true
+        format: "semver"
+        example: "1.0.0"
+      fsm_definition:
+        type: "bytes"
+        required: true
+        description: "FlatBuffers-serialized FSM"
+        max_size_bytes: 65536
+      validation_enabled:
+        type: "bool"
+        required: false
+        default: true
+    output:
+      registration_id:
+        type: "string"
+        format: "uuid"
+      status:
+        type: "enum"
+        values: ["success", "duplicate", "invalid_fsm"]
+      error_message:
+        type: "string"
+        required: false
+    errors:
+      - code: "DUPLICATE_PROTOCOL"
+        message: "Protocol already registered"
+        resolution: "Use update_protocol or increment version"
+      - code: "INVALID_FSM"
+        message: "FSM failed validation"
+        resolution: "Check FSM structure and recompile"
+      - code: "SIZE_EXCEEDED"
+        message: "FSM definition exceeds 64KB limit"
+        resolution: "Simplify protocol or split into multiple"
+    performance:
+      latency_target_ms: 5
+      idempotent: true
+    observability:
+      metrics:
+        - "fsm_registrations_total"
+        - "fsm_registration_latency_ms"
+      logs:
+        - level: "INFO"
+          message: "FSM registered"
+          fields: ["protocol_id", "version", "fsm_size_bytes"]
+
+  get_protocol:
+    method: "get_protocol"
+    description: "Retrieve a registered FSM definition"
+    input:
+      protocol_id:
+        type: "string"
+        required: true
+      version:
+        type: "string"
+        required: false
+        description: "If omitted, returns latest version"
+    output:
+      protocol_id:
+        type: "string"
+      version:
+        type: "string"
+      fsm_definition:
+        type: "bytes"
+        description: "FlatBuffers-serialized FSM"
+      registration_timestamp:
+        type: "integer"
+        description: "Unix timestamp of registration"
+    errors:
+      - code: "PROTOCOL_NOT_FOUND"
+        message: "Protocol not registered"
+        resolution: "Register protocol first"
+    performance:
+      latency_target_ms: 0.5
+      cacheable: true
+    observability:
+      metrics:
+        - "fsm_lookups_total"
+        - "fsm_lookup_latency_ms"
+
+  list_protocols:
+    method: "list_protocols"
+    description: "List all registered protocols"
+    input:
+      filter:
+        type: "string"
+        required: false
+        description: "Filter by protocol ID prefix"
+    output:
+      protocols:
+        type: "array"
+        items:
+          protocol_id: "string"
+          version: "string"
+          state_count: "integer"
+          transition_count: "integer"
+    errors: []
+    performance:
+      latency_target_ms: 1
+    observability:
+      metrics:
+        - "fsm_list_requests_total"
+
+  update_protocol:
+    method: "update_protocol"
+    description: "Update an existing protocol FSM"
+    input:
+      protocol_id:
+        type: "string"
+        required: true
+      version:
+        type: "string"
+        required: true
+      fsm_definition:
+        type: "bytes"
+        required: true
+    output:
+      status:
+        type: "enum"
+        values: ["success", "version_conflict"]
+    errors:
+      - code: "VERSION_CONFLICT"
+        message: "Version already exists"
+        resolution: "Increment version number"
+    performance:
+      latency_target_ms: 5
+    observability:
+      metrics:
+        - "fsm_updates_total"
+
+session_tracker_api:
+  start_session:
+    method: "start_session"
+    description: "Start a new protocol session"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      protocol_id:
+        type: "string"
+        required: true
+      initial_state:
+        type: "string"
+        required: true
+        description: "Must be a valid initial state from FSM"
+      context:
+        type: "object"
+        required: false
+        description: "Session context metadata"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["started", "duplicate_session", "invalid_state"]
+      error_message:
+        type: "string"
+        required: false
+    errors:
+      - code: "DUPLICATE_SESSION"
+        message: "Session ID already exists"
+        resolution: "Use unique session ID"
+      - code: "INVALID_STATE"
+        message: "Initial state not found in FSM"
+        resolution: "Use valid initial state"
+      - code: "PROTOCOL_NOT_FOUND"
+        message: "Protocol not registered"
+        resolution: "Register protocol first"
+    performance:
+      latency_target_ms: 0.3
+      idempotent: false
+    observability:
+      metrics:
+        - "sessions_started_total"
+        - "session_start_latency_ms"
+      logs:
+        - level: "INFO"
+          message: "Session started"
+          fields: ["session_id", "protocol_id", "initial_state", "trace_id"]
+
+  get_session_state:
+    method: "get_session_state"
+    description: "Get current state of a protocol session"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      session_id:
+        type: "string"
+      protocol_id:
+        type: "string"
+      current_state:
+        type: "string"
+      state_entry_timestamp:
+        type: "integer"
+      transition_count:
+        type: "integer"
+      violation_count:
+        type: "integer"
+    errors:
+      - code: "SESSION_NOT_FOUND"
+        message: "Session does not exist"
+        resolution: "Start session first"
+    performance:
+      latency_target_ms: 0.2
+      cacheable: false
+    observability:
+      metrics:
+        - "session_state_queries_total"
+
+  end_session:
+    method: "end_session"
+    description: "End a protocol session"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      final_state:
+        type: "string"
+        required: true
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["ended", "invalid_final_state"]
+      session_duration_ms:
+        type: "integer"
+      total_transitions:
+        type: "integer"
+      total_violations:
+        type: "integer"
+    errors:
+      - code: "SESSION_NOT_FOUND"
+        message: "Session does not exist"
+      - code: "INVALID_FINAL_STATE"
+        message: "Current state is not a valid final state"
+        resolution: "Transition to final state first"
+    performance:
+      latency_target_ms: 0.5
+    observability:
+      metrics:
+        - "sessions_ended_total"
+        - "session_duration_ms"
+      logs:
+        - level: "INFO"
+          message: "Session ended"
+          fields: ["session_id", "duration_ms", "transitions", "violations"]
+
+  list_active_sessions:
+    method: "list_active_sessions"
+    description: "List all active protocol sessions"
+    input:
+      protocol_id:
+        type: "string"
+        required: false
+        description: "Filter by protocol ID"
+    output:
+      sessions:
+        type: "array"
+        items:
+          session_id: "string"
+          protocol_id: "string"
+          current_state: "string"
+          duration_ms: "integer"
+    errors: []
+    performance:
+      latency_target_ms: 2
+    observability:
+      metrics:
+        - "session_list_requests_total"
+
+validator_api:
+  validate_transition:
+    method: "validate_transition"
+    description: "Validate a state transition (receive-side hook)"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      from_state:
+        type: "string"
+        required: true
+      to_state:
+        type: "string"
+        required: true
+      trigger:
+        type: "string"
+        required: true
+      sender_role:
+        type: "string"
+        required: true
+      message_type:
+        type: "string"
+        required: true
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      validation_result:
+        type: "enum"
+        values: ["valid", "invalid_transition", "invalid_role", "out_of_order", "timeout"]
+      violation_type:
+        type: "string"
+        required: false
+      violation_action:
+        type: "enum"
+        values: ["block", "warn", "dlq", "repair", "fallback", "abort"]
+        required: false
+      error_message:
+        type: "string"
+        required: false
+    errors: []
+    performance:
+      latency_target_ms: 2
+      critical: true
+      mailbox_budget_ms: 5
+    observability:
+      metrics:
+        - "transitions_validated_total"
+        - "validation_latency_ms"
+        - "violations_detected_total"
+      logs:
+        - level: "WARN"
+          message: "Protocol violation detected"
+          fields: ["session_id", "violation_type", "trace_id"]
+
+  validate_message:
+    method: "validate_message"
+    description: "Validate message schema and role permissions"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      message_type:
+        type: "string"
+        required: true
+      sender_role:
+        type: "string"
+        required: true
+      receiver_role:
+        type: "string"
+        required: true
+      message_payload:
+        type: "bytes"
+        required: true
+        description: "FlatBuffers-serialized message"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      validation_result:
+        type: "enum"
+        values: ["valid", "schema_invalid", "role_unauthorized", "size_exceeded"]
+      error_message:
+        type: "string"
+        required: false
+    errors: []
+    performance:
+      latency_target_ms: 1
+      critical: true
+    observability:
+      metrics:
+        - "messages_validated_total"
+        - "message_validation_latency_ms"
+
+  check_timeout:
+    method: "check_timeout"
+    description: "Check if current state has exceeded timeout"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      timeout_exceeded:
+        type: "bool"
+      timeout_policy_id:
+        type: "string"
+        required: false
+      state_duration_ms:
+        type: "integer"
+      timeout_threshold_ms:
+        type: "integer"
+        required: false
+    errors:
+      - code: "SESSION_NOT_FOUND"
+        message: "Session does not exist"
+    performance:
+      latency_target_ms: 0.5
+    observability:
+      metrics:
+        - "timeout_checks_total"
+        - "timeouts_detected_total"
+
+runtime_configuration:
+  validation_modes:
+    strict:
+      description: "Block all violations immediately"
+      default: true
+      violation_actions: ["block", "abort"]
+    permissive:
+      description: "Warn on violations but continue"
+      default: false
+      violation_actions: ["warn", "repair"]
+    monitoring:
+      description: "Log violations without blocking"
+      default: false
+      violation_actions: ["warn"]
+
+  performance_settings:
+    enable_caching:
+      type: "bool"
+      default: true
+      description: "Cache FSM lookups for <0.5ms latency"
+    cache_ttl_ms:
+      type: "integer"
+      default: 60000
+      description: "FSM cache TTL (60 seconds)"
+    max_active_sessions:
+      type: "integer"
+      default: 10000
+      description: "Maximum concurrent protocol sessions"
+    session_timeout_ms:
+      type: "integer"
+      default: 300000
+      description: "Auto-cleanup abandoned sessions (5 minutes)"
+
+  observability_settings:
+    metrics_enabled:
+      type: "bool"
+      default: true
+    trace_sampling_rate:
+      type: "float"
+      default: 0.1
+      description: "Sample 10% of validation calls for tracing"
+    log_violations:
+      type: "bool"
+      default: true
+
+data_structures:
+  ProtocolRegistration:
+    description: "FSM registry entry"
+    fields:
+      protocol_id: "string"
+      version: "string"
+      fsm_definition: "bytes"
+      state_count: "integer"
+      transition_count: "integer"
+      registration_timestamp: "integer"
+    storage: "in_memory_hashmap"
+    key: "protocol_id:version"
+
+  SessionState:
+    description: "Active session tracking"
+    fields:
+      session_id: "string"
+      protocol_id: "string"
+      current_state: "string"
+      state_entry_timestamp: "integer"
+      transition_count: "integer"
+      violation_count: "integer"
+      context: "object"
+    storage: "lock_free_concurrent_hashmap"
+    key: "session_id"
+    memory_per_entry_kb: 8
+
+  ValidationResult:
+    description: "Validation outcome"
+    fields:
+      validation_result: "enum"
+      violation_type: "string"
+      violation_action: "enum"
+      error_message: "string"
+    storage: "transient"
+
+error_taxonomy:
+  FSM_REGISTRY_ERRORS:
+    - code: "DUPLICATE_PROTOCOL"
+      severity: "MEDIUM"
+      resolution: "Update version or use update_protocol"
+    - code: "INVALID_FSM"
+      severity: "HIGH"
+      resolution: "Fix FSM structure and recompile"
+    - code: "PROTOCOL_NOT_FOUND"
+      severity: "HIGH"
+      resolution: "Register protocol first"
+
+  SESSION_TRACKING_ERRORS:
+    - code: "DUPLICATE_SESSION"
+      severity: "MEDIUM"
+      resolution: "Use unique session ID"
+    - code: "SESSION_NOT_FOUND"
+      severity: "HIGH"
+      resolution: "Start session first"
+    - code: "INVALID_STATE"
+      severity: "HIGH"
+      resolution: "Use valid state from FSM"
+
+  VALIDATION_ERRORS:
+    - code: "INVALID_TRANSITION"
+      severity: "HIGH"
+      resolution: "Follow protocol FSM"
+    - code: "INVALID_ROLE"
+      severity: "CRITICAL"
+      resolution: "Check role permissions"
+    - code: "OUT_OF_ORDER"
+      severity: "HIGH"
+      resolution: "Ensure message ordering"
+    - code: "TIMEOUT_EXCEEDED"
+      severity: "MEDIUM"
+      resolution: "Complete state within timeout"
+
+performance_requirements:
+  latency_targets:
+    validation_p95_ms: 2
+    registry_lookup_p95_ms: 0.5
+    session_tracking_p95_ms: 0.3
+    description: "API latency targets (critical for mailbox budget)"
+
+  throughput_targets:
+    validations_per_second: 100000
+    registrations_per_second: 100
+    session_operations_per_second: 50000
+    description: "System-wide API throughput"
+
+  resource_limits:
+    memory_per_session_kb: 8
+    max_active_sessions: 10000
+    max_registered_protocols: 100
+    description: "Resource constraints"
+
+observability:
+  metrics:
+    counters:
+      - name: "fsm_registrations_total"
+        labels: ["protocol_id"]
+      - name: "sessions_started_total"
+        labels: ["protocol_id"]
+      - name: "sessions_ended_total"
+        labels: ["protocol_id", "status"]
+      - name: "transitions_validated_total"
+        labels: ["protocol_id", "result"]
+      - name: "violations_detected_total"
+        labels: ["protocol_id", "violation_type"]
+
+    histograms:
+      - name: "validation_latency_ms"
+        buckets: [0.5, 1, 2, 5, 10]
+      - name: "fsm_lookup_latency_ms"
+        buckets: [0.1, 0.25, 0.5, 1, 2]
+      - name: "session_start_latency_ms"
+        buckets: [0.1, 0.2, 0.3, 0.5, 1]
+      - name: "session_duration_ms"
+        buckets: [100, 500, 1000, 5000, 10000, 30000]
+
+    gauges:
+      - name: "active_sessions"
+        description: "Number of active protocol sessions"
+      - name: "registered_protocols"
+        description: "Number of registered FSM definitions"
+
+  logging:
+    structured: true
+    format: "json"
+    required_fields:
+      - "session_id"
+      - "protocol_id"
+      - "trace_id"
+
+  tracing:
+    enabled: true
+    provider: "opentelemetry"
+    sampling_rate: 0.1
+
+testing_requirements:
+  unit_tests:
+    - test_fsm_registration
+    - test_session_lifecycle
+    - test_validation_logic
+    - test_timeout_detection
+
+  integration_tests:
+    - test_complete_protocol_flow
+    - test_concurrent_sessions
+    - test_validation_performance
+
+  performance_tests:
+    - test_validation_latency_under_2ms
+    - test_throughput_100k_validations_per_second
+    - test_10k_concurrent_sessions
+
+compliance:
+  adr_references:
+    - "ADR-0003c: Protocol Monitor Runtime"
+    - "ADR-0002: Actor Model with Mailbox Hooks"
+
+  performance_requirements:
+    - "Validation latency must be <2ms P95"
+    - "Registry lookup must be <0.5ms P95"
+    - "Session tracking must be <0.3ms P95"
+    - "Must fit within 5ms mailbox budget"
+
+  security_requirements:
+    - "Role-based access control for all APIs"
+    - "Immutable FSM definitions"
+    - "Session isolation"
+
+cross_references:
+  related_contracts:
+    - contract: "fsm_execution_contract.yml"
+      relationship: "implements"
+    - contract: "violation_handlers.yml"
+      relationship: "uses"
+    - contract: "protocol_lifecycle.yml"
+      relationship: "manages"
+
+notes:
+  - "Protocol Monitor is a pure agent (no AI)"
+  - "All APIs have strict latency budgets (<2ms validation)"
+  - "FSM definitions are immutable after registration"
+  - "Session tracking uses lock-free concurrent hashmap"
+  - "Validation is stateless for performance"

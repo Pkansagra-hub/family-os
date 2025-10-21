@@ -1,0 +1,28 @@
+{
+  "$id": "query.recall.request.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["selectors", "space_id"],
+  "properties": {
+    "selectors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "space_id": {
+      "type": "string"
+    },
+    "fanout_hints": {
+      "type": "object"
+    },
+    "qos_hints": {
+      "type": "object"
+    },
+    "max_latency_ms": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": true
+}

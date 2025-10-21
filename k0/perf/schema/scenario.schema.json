@@ -1,0 +1,180 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://contracts.family-ai.dev/schemas/perf/scenario.schema.json",
+  "title": "Performance Scenario Schema",
+  "description": "Defines a performance or load testing scenario for the k0 kernel",
+  "type": "object",
+  "required": ["name", "type", "duration", "phases"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable scenario name",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "description": {
+      "type": "string",
+      "description": "Detailed scenario description"
+    },
+    "type": {
+      "type": "string",
+      "description": "Scenario type classification",
+      "enum": ["burst", "sustained", "ramp", "spike", "stress", "soak"]
+    },
+    "duration": {
+      "type": "integer",
+      "description": "Total scenario duration in seconds",
+      "minimum": 1,
+      "maximum": 86400
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for filtering and organization",
+      "items": {
+        "type": "string"
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "Environment configuration and requirements",
+      "properties": {
+        "pulumi_stack": {
+          "type": "string",
+          "description": "Pulumi stack name for infrastructure metadata"
+        },
+        "kernel_endpoint": {
+          "type": "string",
+          "description": "Kernel HTTP endpoint URL",
+          "format": "uri"
+        },
+        "telemetry_endpoint": {
+          "type": "string",
+          "description": "OTLP telemetry endpoint URL",
+          "format": "uri"
+        },
+        "prometheus_pushgateway": {
+          "type": "string",
+          "description": "Pushgateway endpoint for metrics",
+          "format": "uri"
+        }
+      },
+      "required": ["kernel_endpoint"]
+    },
+    "phases": {
+      "type": "array",
+      "description": "Ordered list of workload phases",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "duration", "workload"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Phase name",
+            "minLength": 1
+          },
+          "duration": {
+            "type": "integer",
+            "description": "Phase duration in seconds",
+            "minimum": 1
+          },
+          "workload": {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Workload type",
+                "enum": ["command", "query", "sse", "mixed"]
+              },
+              "rate": {
+                "type": "integer",
+                "description": "Requests per second",
+                "minimum": 1
+              },
+              "concurrency": {
+                "type": "integer",
+                "description": "Concurrent connections",
+                "minimum": 1
+              },
+              "payload_size": {
+                "type": "integer",
+                "description": "Payload size in bytes",
+                "minimum": 1
+              }
+            }
+          },
+          "assertions": {
+            "type": "object",
+            "description": "Phase-level success criteria",
+            "properties": {
+              "max_p99_latency_ms": {
+                "type": "integer",
+                "description": "Maximum acceptable P99 latency in milliseconds"
+              },
+              "min_success_rate": {
+                "type": "number",
+                "description": "Minimum success rate (0.0-1.0)",
+                "minimum": 0.0,
+                "maximum": 1.0
+              },
+              "max_error_rate": {
+                "type": "number",
+                "description": "Maximum error rate (0.0-1.0)",
+                "minimum": 0.0,
+                "maximum": 1.0
+              }
+            }
+          }
+        }
+      }
+    },
+    "global_assertions": {
+      "type": "object",
+      "description": "Scenario-wide success criteria",
+      "properties": {
+        "max_p99_latency_ms": {
+          "type": "integer",
+          "description": "Maximum acceptable P99 latency across all phases"
+        },
+        "min_success_rate": {
+          "type": "number",
+          "description": "Minimum overall success rate",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "max_memory_mb": {
+          "type": "integer",
+          "description": "Maximum memory usage in MB"
+        },
+        "max_cpu_percent": {
+          "type": "number",
+          "description": "Maximum CPU utilization percentage",
+          "minimum": 0.0,
+          "maximum": 100.0
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "Artifact collection configuration",
+      "properties": {
+        "timeline": {
+          "type": "boolean",
+          "description": "Capture timeline JSON",
+          "default": true
+        },
+        "telemetry_traces": {
+          "type": "boolean",
+          "description": "Collect OTLP traces",
+          "default": true
+        },
+        "prometheus_snapshots": {
+          "type": "boolean",
+          "description": "Capture Prometheus metrics",
+          "default": true
+        }
+      }
+    }
+  }
+}

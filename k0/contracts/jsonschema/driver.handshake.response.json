@@ -1,0 +1,66 @@
+{
+  "$id": "driver.handshake.response.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DriverHandshakeResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "session_id",
+    "alias",
+    "driver_module",
+    "transport",
+    "endpoint",
+    "lease_seconds",
+    "issued_at",
+    "expires_at"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "alias": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_.-]+$"
+    },
+    "driver_module": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["http", "grpc"]
+    },
+    "endpoint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lease_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true,
+      "default": []
+    },
+    "metadata": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": true
+    }
+  }
+}

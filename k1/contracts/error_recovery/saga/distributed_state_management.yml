@@ -1,0 +1,398 @@
+# Distributed State Management - Crash Recovery & Heartbeat Mechanism
+# Purpose: Persist saga state to K0 WAL for crash recovery and durable compensation replay
+# Source ADR: ADR-0008c (Distributed State Management)
+# Layer: Layer 2 - Orchestration (Error Recovery)
+#
+# Research Citations:
+#   - Write-Ahead Logging (WAL) (Gray & Reuter 1993)
+#   - ARIES algorithm (Mohan et al. 1992) - Database recovery
+#   - At-least-once delivery (Apache Kafka docs)
+
+---
+
+# SECTION 1: SAGA STATE PERSISTENCE
+
+state_persistence:
+  description: "Persist saga execution state to K0 WAL for durability"
+
+  saga_log_schema:
+    topic: "SAGA_LOG"
+    format: "FlatBuffers (saga_log.fbs)"
+    retention_days: 7
+
+    fields:
+      saga_id:
+        type: "string"
+        description: "Unique saga identifier (UUID)"
+
+      workflow_id:
+        type: "string"
+        description: "Workflow definition identifier"
+
+      flow_id:
+        type: "string"
+        description: "Flow execution ID (from orchestrator)"
+
+      session_id:
+        type: "string"
+        description: "Session ID (for user context)"
+
+      state:
+        type: "enum"
+        values: ["EXECUTING", "COMPENSATING", "COMPLETED", "ABORTED", "CRASHED"]
+        description: "Current saga state"
+
+      steps_completed:
+        type: "array of StepResult"
+        description: "Steps that completed successfully"
+        schema:
+          step_id: "string"
+          tool_id: "string"
+          status: "SUCCESS"
+          result_data: "JSON string"
+          latency_ms: "integer"
+
+      current_step_id:
+        type: "integer"
+        description: "Index of currently executing step"
+
+      compensation_stack:
+        type: "array of CompensationAction"
+        description: "Stack of compensations to run (LIFO)"
+        schema:
+          step_id: "integer"
+          tool_id: "string"
+          compensation_type: "TOOL | API | CUSTOM | NOOP"
+          params: "JSON string"
+
+      created_at:
+        type: "long"
+        description: "Unix timestamp (ms) when saga started"
+
+      updated_at:
+        type: "long"
+        description: "Unix timestamp (ms) of last state change"
+
+      last_heartbeat_at:
+        type: "long"
+        description: "Unix timestamp (ms) of last heartbeat (for crash detection)"
+
+      trace_id:
+        type: "string"
+        description: "Trace ID for observability"
+
+  write_events:
+    event_types:
+      - "SAGA_CREATED"                  # Initial saga log
+      - "STEP_STARTED"                  # Step execution started
+      - "STEP_COMPLETED"                # Step succeeded
+      - "STEP_FAILED"                   # Step failed
+      - "COMPENSATION_STARTED"          # Compensation execution started
+      - "COMPENSATION_COMPLETED"        # Compensation succeeded
+      - "STATE_TRANSITION"              # Saga state changed
+      - "HEARTBEAT"                     # Periodic heartbeat (every 10s)
+      - "SAGA_COMPLETED"                # Saga fully succeeded
+      - "SAGA_ABORTED"                  # Saga rolled back
+
+    write_frequency:
+      after_step_completion: "Immediate (real-time)"
+      after_step_failure: "Immediate (real-time)"
+      after_compensation: "Immediate (real-time)"
+      heartbeat: "Every 10 seconds (periodic)"
+      state_transition: "Immediate (real-time)"
+
+    performance:
+      wal_write_latency_ms: "<5"
+      write_throughput: "10,000 writes/sec per K1 instance"
+
+---
+
+# SECTION 2: CRASH RECOVERY COORDINATOR
+
+crash_recovery:
+  description: "Detect and recover from K1 process crashes"
+
+  crash_detection_mechanism:
+    heartbeat_interval_ms: 10000  # 10 seconds
+    crash_detection_threshold_ms: 60000  # 60 seconds no heartbeat = crashed
+    recovery_scan_interval_ms: 30000  # Scan every 30s
+
+    detection_algorithm: |
+      1. Saga Coordinator sends heartbeat every 10s
+      2. K0 records heartbeat timestamp
+      3. Recovery Coordinator scans every 30s
+      4. If (now - last_heartbeat) > 60s:
+         - Mark saga state = CRASHED
+         - Saga is a candidate for recovery
+
+    crash_indicators:
+      - "No heartbeat for 60s"
+      - "Saga state = EXECUTING or COMPENSATING (not terminal)"
+      - "Created < 24 hours ago (not orphaned)"
+
+  recovery_workflow:
+    step_1_detect_crash:
+      action: "Query K0 for crashed sagas"
+      criteria:
+        - "state in [EXECUTING, COMPENSATING]"
+        - "last_heartbeat_at < (now - 60s)"
+        - "created_at > (now - 24h)"
+      result: "List of crashed sagas"
+
+    step_2_load_saga_log:
+      action: "Load full saga log from K0"
+      use: "Understand where saga crashed (which step was executing)"
+
+    step_3_mark_crashed:
+      action: "Update saga state = CRASHED"
+      write: "Write to K0 SAGA_LOG (state transition)"
+
+    step_4_resume_compensation:
+      action: "If saga was executing step N, mark as failed"
+      then: "Transition to COMPENSATING state"
+      use_stack: "Load compensation_stack from K0 log"
+
+    step_5_replay_compensations:
+      action: "Execute compensations in reverse order (LIFO)"
+      guarantee: "At-least-once delivery (idempotency deduplicates)"
+      timeout: "3s per compensation (same as normal execution)"
+
+    step_6_complete_recovery:
+      action: "All compensations completed"
+      result_if_success: "Mark saga state = ABORTED"
+      result_if_partial: "Mark saga state = ABORTED (with failed compensations logged)"
+      write: "Write final state to K0"
+
+  performance:
+    crash_detection_latency_ms: 60000  # 60s max (heartbeat timeout)
+    recovery_scan_interval_ms: 30000   # Scan every 30s
+    compensation_replay_latency_ms: "3000 per step"
+
+  at_least_once_delivery:
+    guarantee: "Compensations replay after crash (may run multiple times)"
+    deduplication: "Redis cache (5-minute TTL) prevents double-compensation"
+    example: |
+      Scenario: K1 crashes while executing cancel_booking compensation
+
+      1. K1 sends: cancel_booking (idempotency_key=saga:step2:cancel_booking)
+      2. Redis: Caches result (TTL 5 min)
+      3. 💥 K1 CRASHES mid-execution
+      4. Recovery Coordinator detects crash (60s later)
+      5. Recovery Coordinator replays: cancel_booking
+      6. Redis: Key still in cache → Returns cached result
+      7. Result: Compensation runs 1 time total (deduped by Redis)
+
+---
+
+# SECTION 3: HEARTBEAT MECHANISM
+
+heartbeat:
+  description: "Liveness detection for saga coordinators"
+
+  heartbeat_sender:
+    description: "Saga Coordinator sends heartbeat periodically"
+    interval_ms: 10000  # 10 seconds
+
+    implementation:
+      operation: "Update saga_log.last_heartbeat_at = now"
+      write: "Write HEARTBEAT event to K0 SAGA_LOG"
+      async: "Background task (doesn't block saga execution)"
+      lifetime: "Starts when saga begins, stops when terminal state reached"
+
+    pseudo_code: |
+      async def heartbeat_loop(saga_log, k0_client):
+        while saga_log.state not in [COMPLETED, ABORTED]:
+          saga_log.last_heartbeat_at = time.now()
+          await k0_client.write_wal(
+            topic="SAGA_LOG",
+            event_type="HEARTBEAT",
+            payload=saga_log
+          )
+          await asyncio.sleep(10)  # 10s interval
+
+  heartbeat_receiver:
+    description: "K0 records heartbeat for crash detection"
+    write_frequency: "Every 10s"
+    persistence: "K0 WAL (SAGA_LOG topic)"
+
+  liveness_check:
+    description: "Check if saga coordinator is alive"
+
+    algorithm: |
+      def is_saga_alive(saga_log, now_ms):
+        if saga_log.state in [COMPLETED, ABORTED]:
+          return True  # Terminal state, alive by definition
+
+        time_since_heartbeat_ms = now_ms - saga_log.last_heartbeat_at
+        crash_threshold_ms = 60000  # 60s
+
+        if time_since_heartbeat_ms > crash_threshold_ms:
+          return False  # Crashed (no heartbeat for 60s)
+        else:
+          return True  # Alive (heartbeat recent)
+
+---
+
+# SECTION 4: ORPHAN CLEANUP
+
+orphan_cleanup:
+  description: "Clean up abandoned sagas to prevent resource leaks"
+
+  orphan_criteria:
+    - "State = EXECUTING or COMPENSATING (not terminal)"
+    - "Created > 24 hours ago (no progress)"
+    - "Assumed: Workflow got stuck (e.g., infinite loop, never recovered from crash)"
+
+  cleanup_process:
+    step_1_scan:
+      action: "Query K0 for orphaned sagas"
+      frequency: "Every 1 hour"
+      criteria:
+        - "state in [EXECUTING, COMPENSATING]"
+        - "created_at < (now - 24h)"
+        - "no recent activity"
+
+    step_2_mark_abandoned:
+      action: "Mark saga state = ABORTED"
+      reason: "Saga ran too long, assuming abandoned"
+      write: "Write to K0 SAGA_LOG"
+
+    step_3_alert:
+      action: "Log warning for support investigation"
+      example: "Orphaned saga 12345 created 25 hours ago, marking as ABORTED"
+
+  canonical_values:
+    orphan_timeout_hours: 24
+    cleanup_interval_hours: 1
+
+---
+
+# SECTION 5: SAGA STATE MACHINE WITH PERSISTENCE
+
+state_transitions:
+  description: "Saga state machine with K0 persistence"
+
+  EXECUTING:
+    description: "Normal execution phase"
+    persistence:
+      frequency: "After every step completion"
+      what: "steps_completed list, current_step_id"
+    transitions_to:
+      - COMPLETED: "All steps succeeded (write SAGA_COMPLETED)"
+      - COMPENSATING: "Step failed (write STATE_TRANSITION)"
+      - CRASHED: "K1 crashed (marked by recovery coordinator)"
+
+  COMPENSATING:
+    description: "Error recovery phase"
+    persistence:
+      frequency: "After every compensation"
+      what: "compensation_stack, completed compensations"
+    transitions_to:
+      - ABORTED: "All compensations complete (write SAGA_ABORTED)"
+      - CRASHED: "K1 crashed mid-compensation (marked by recovery)"
+
+  COMPLETED:
+    description: "Terminal state - all steps succeeded"
+    persistence:
+      write_once: "At transition time"
+      event: "SAGA_COMPLETED"
+    transitions_to: []
+
+  ABORTED:
+    description: "Terminal state - saga rolled back"
+    persistence:
+      write_once: "At transition time"
+      event: "SAGA_ABORTED"
+      includes: "Compensation summary (success rate, failures)"
+    transitions_to: []
+
+  CRASHED:
+    description: "Recovery phase - pending recovery coordinator"
+    persistence:
+      marked_by: "Recovery Coordinator"
+      event: "STATE_TRANSITION (CRASHED)"
+    transitions_to:
+      - COMPENSATING: "Recovery starts compensation from stack"
+      - ABORTED: "Recovery completes successfully"
+
+---
+
+# SECTION 6: RECOVERY EXAMPLE SCENARIO
+
+recovery_example:
+  title: "K1 Crash During Saga Compensation"
+
+  timeline:
+    t0_saga_starts:
+      saga_id: "saga_12345"
+      steps:
+        - "search_restaurants (read-only)"
+        - "book_restaurant (write)"
+        - "create_calendar_event (write)"
+        - "send_email (write)"
+      action: "Step 1-2 succeed, Step 3 fails, enter COMPENSATING"
+
+    t1_compensation_starts:
+      action: "Execute compensations in reverse:"
+      steps:
+        - "Compensate step 2: cancel_restaurant_booking"
+        - "No compensation for step 1 (read-only)"
+      status: "Executing compensation for step 2"
+
+    t2_k1_crashes:
+      event: "💥 K1 process CRASHES"
+      saga_state: "COMPENSATING (mid-execution)"
+      what_lost: "In-memory saga state (but K0 has log)"
+      what_saved: "K0 SAGA_LOG has all previous steps + compensation_stack"
+
+    t3_recovery_detects:
+      wait: "Recovery Coordinator scans every 30s"
+      detection:
+        - "Query K0 for sagas with state=COMPENSATING"
+        - "Find saga_12345 with last_heartbeat > 60s ago"
+        - "Mark saga state = CRASHED"
+
+    t4_recovery_resumes:
+      action: "Load saga_log from K0"
+      compensation_stack: "[step_2_cancel_booking]"
+      action_taken: "Execute cancel_booking (idempotency deduplicates)"
+      result: "Cancellation succeeds"
+
+    t5_recovery_completes:
+      action: "All compensations done"
+      final_state: "ABORTED"
+      write: "Write final state to K0"
+      result: "Restaurant booking is cancelled, state is consistent"
+
+---
+
+# SECTION 7: CANONICAL VALUES
+
+canonical_values:
+  # K0 persistence
+  wal_topic: "SAGA_LOG"
+  retention_days: 7
+  write_timeout_ms: 5000
+
+  # Heartbeat (ADR-0008c)
+  heartbeat_interval_ms: 10000      # 10s
+  crash_detection_threshold_ms: 60000  # 60s no heartbeat = crashed
+
+  # Recovery
+  recovery_scan_interval_ms: 30000  # 30s
+  orphan_timeout_hours: 24
+  cleanup_interval_hours: 1
+
+---
+
+# SECTION 8: ADR CROSS-REFERENCES
+
+adr_references:
+  - "ADR-0008c: Distributed State Management (primary)"
+  - "ADR-0008: Saga Pattern (parent)"
+  - "ADR-0008a: Compensating Transaction Design (idempotency)"
+  - "ADR-0001a: K0 Bridge (SAGA_LOG topic)"
+
+---
+
+# END OF distributed_state_management.yml

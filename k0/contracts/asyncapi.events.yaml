@@ -1,0 +1,98 @@
+asyncapi: '2.6.0'
+info:
+  title: K0 Event Topics
+  version: 1.0.0
+  description: >-
+    AsyncAPI contract for K0 kernel topics covering memory, policy, infra, and advisory streams.
+defaultContentType: application/json
+channels:
+  memory.*:
+    description: Primary episodic/semantic writes persisted in WAL and snapshots.
+    publish:
+      message:
+        oneOf:
+          - $ref: '#/components/messages/GenericMemoryEvent'
+  events.*:
+    description: Infrastructure auditing and observability events sourced from kernel internals.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericEvent'
+  ui.*:
+    description: UI oriented fan-out topics with short retention and fanout limits.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericUiEvent'
+  policy.*:
+    description: Security/operator topics including obligations and redaction outcomes.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericPolicyEvent'
+  infra.sanitized.*:
+    description: Sanitized infrastructure metrics suitable for operations consumption.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericInfraEvent'
+  infra.snapshot.*:
+    description: Announces snapshot lifecycle markers for retention stewards.
+    publish:
+      message:
+        $ref: '#/components/messages/InfraSnapshotEvent'
+  privacy.*:
+    description: Privacy/compliance topics carrying consent updates and redaction receipts.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericPrivacyEvent'
+  intelligence.advisory.*:
+    description: Advisory signals consumed by downstream intelligence services.
+    publish:
+      message:
+        $ref: '#/components/messages/GenericAdvisoryEvent'
+components:
+  messages:
+    GenericMemoryEvent:
+      name: GenericMemoryEvent
+      title: Generic memory event
+      payload:
+        type: object
+        additionalProperties: true
+    GenericEvent:
+      name: GenericEvent
+      title: Generic infrastructure event
+      payload:
+        type: object
+        additionalProperties: true
+    GenericUiEvent:
+      name: GenericUiEvent
+      title: Generic UI event payload
+      payload:
+        type: object
+        additionalProperties: true
+    GenericPolicyEvent:
+      name: GenericPolicyEvent
+      title: Generic policy event payload
+      payload:
+        type: object
+        additionalProperties: true
+    GenericInfraEvent:
+      name: GenericInfraEvent
+      title: Generic sanitized infra metric
+      payload:
+        type: object
+        additionalProperties: true
+    InfraSnapshotEvent:
+      name: InfraSnapshotEvent
+      title: Snapshot lifecycle marker
+      payload:
+        $ref: ./jsonschema/infra.snapshot.event.json
+    GenericPrivacyEvent:
+      name: GenericPrivacyEvent
+      title: Generic privacy/compliance event
+      payload:
+        type: object
+        additionalProperties: true
+    GenericAdvisoryEvent:
+      name: GenericAdvisoryEvent
+      title: Advisory read-only signal
+      payload:
+        type: object
+        additionalProperties: true

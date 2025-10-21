@@ -1,0 +1,288 @@
+#
+# Capability Validation Runtime Flow
+# EPIC 2.5.1: Capability Token Design Contracts
+# ADR-0010c: Capability Enforcement at Runtime
+#
+# Purpose: Define complete 10-step validation process for capability usage
+# Foundation: Reference Monitor Pattern (Anderson 1972)
+# Performance: <0.1ms cached, <0.5ms uncached (P95)
+#
+
+metadata:
+  title: "Capability Validation Runtime Flow"
+  version: "1.0"
+  status: "accepted"
+  updated: "2025-10-12"
+  adr_references:
+    - "ADR-0010c: Capability Enforcement at Runtime"
+
+validation_flow_overview:
+  description: "10-step reference monitor validation at all enforcement points"
+  trigger: "Before every capability-protected operation"
+  target_latency_ms: 0.3
+  p95_latency_ms: 0.5
+  cache_hit_rate_target: 0.8
+
+step_1_cache_check:
+  description: "Check local L1 cache for cached validation result"
+  implementation: |
+    cache_key = f"cap_valid:{cap_id}:{agent_id}:{operation}"
+    cached = L1_CACHE.get(cache_key)
+    if cached and not_expired(cached):
+        return cached.result  # ALLOWED or DENIED
+  latency_ms: 0.05
+  cache_strategy:
+    ttl_seconds: 10
+    max_size: 10000
+    eviction: "LRU"
+    hit_rate_target: 0.8
+  result: "Early-exit if hit (ALLOWED or DENIED)"
+
+step_2_signature_verify:
+  description: "Verify JWT signature with HMAC-SHA256"
+  implementation: |
+    signature = cap_token.split('.')[-1]
+    expected_sig = HMAC_SHA256(secret_key, cap_token[:-(len(signature)+1)])
+    if not constant_time_compare(signature, expected_sig):
+        raise SignatureError("Invalid capability signature")
+  latency_ms: 0.3
+  crypto: "HMAC-SHA256 (RFC 2104, FIPS 180-4)"
+  failure_mode: "SignatureError → DENIED"
+  audit_log: "SIGNATURE_INVALID"
+
+step_3_revocation_check:
+  description: "Check Redis revocation list (blacklist)"
+  implementation: |
+    is_revoked = REDIS.get(f"capability:revoked:{cap_id}")
+    if is_revoked:
+        raise RevocationError("Capability has been revoked")
+  latency_ms: 0.1
+  storage: "Redis key: capability:revoked:cap_id (set if revoked)"
+  failure_mode: "RevocationError → DENIED"
+  audit_log: "REVOKED"
+
+step_4_expiration_check:
+  description: "Check if capability has expired (issued_at + ttl)"
+  implementation: |
+    current_time = now_utc()
+    expires_at = cap_token.claims.expires_at
+    if current_time > expires_at:
+        raise ExpirationError("Capability has expired")
+  latency_ms: 0.05
+  uses_claims: ["expires_at"]
+  failure_mode: "ExpirationError → DENIED"
+  audit_log: "EXPIRED"
+
+step_5_agent_ownership:
+  description: "Verify capability belongs to requesting agent"
+  implementation: |
+    token_agent_id = cap_token.claims.agent_id
+    if token_agent_id != requesting_agent_id:
+        raise OwnershipError("Capability does not belong to agent")
+  latency_ms: 0.05
+  uses_claims: ["agent_id"]
+  failure_mode: "OwnershipError → DENIED (non-transferable)"
+  audit_log: "OWNERSHIP_MISMATCH"
+
+step_6_resource_type_match:
+  description: "Check resource type matches operation type"
+  implementation: |
+    cap_resource_type = cap_token.claims.resource_type
+    op_resource_type = operation.resource_type
+    if cap_resource_type != op_resource_type and cap_resource_type != "*":
+        raise ResourceMismatchError("Resource type mismatch")
+  latency_ms: 0.05
+  uses_claims: ["resource_type"]
+  failure_mode: "ResourceMismatchError → DENIED"
+  audit_log: "RESOURCE_TYPE_MISMATCH"
+
+step_7_resource_id_match:
+  description: "Check resource ID matches (or wildcard allowed)"
+  implementation: |
+    cap_resource_id = cap_token.claims.resource_id
+    op_resource_id = operation.resource_id
+    if cap_resource_id != op_resource_id and cap_resource_id != "*":
+        raise ResourceIdError("Resource ID not in capability")
+  latency_ms: 0.05
+  uses_claims: ["resource_id"]
+  failure_mode: "ResourceIdError → DENIED"
+  audit_log: "RESOURCE_ID_NOT_ALLOWED"
+
+step_8_permission_check:
+  description: "Check if operation permission is in capability"
+  implementation: |
+    cap_perms = cap_token.claims.permissions  # [execute, read, write, ...]
+    required_perm = operation.required_permission
+    if required_perm not in cap_perms:
+        raise PermissionError("Operation not permitted")
+  latency_ms: 0.05
+  uses_claims: ["permissions"]
+  failure_mode: "PermissionError → DENIED"
+  audit_log: "PERMISSION_DENIED"
+
+step_9_constraints_check:
+  description: "Validate all constraint rules (invocations, budget, rate, etc)"
+  implementation: |
+    max_inv = cap_token.claims.constraints.max_invocations
+    spent_inv = REDIS.incr(f"cap:{cap_id}:invocations") - 1
+    if spent_inv >= max_inv:
+        raise ConstraintError("Invocation limit exceeded")
+
+    budget_usd = cap_token.claims.constraints.budget_usd
+    spent_budget = REDIS.get(f"cap:{cap_id}:spent_budget")
+    if spent_budget + operation.estimated_cost >= budget_usd:
+        raise ConstraintError("Budget limit exceeded")
+  latency_ms: 0.2
+  checks:
+    - "max_invocations counter"
+    - "budget_usd spending"
+    - "rate_limit (invocations/minute)"
+    - "time_window (if set)"
+    - "privacy_band (if set)"
+    - "allowed_parameters (if set)"
+    - "forbidden_parameters (if set)"
+  failure_mode: "ConstraintError → DENIED (specific constraint)"
+  audit_log: "CONSTRAINT_VIOLATION"
+
+step_10_cache_result:
+  description: "Cache validation result for 10-second window"
+  implementation: |
+    cache_key = f"cap_valid:{cap_id}:{agent_id}:{operation}"
+    L1_CACHE.set(cache_key, result=ALLOWED, ttl=10)
+  latency_ms: 0.05
+  side_effect: "All prior 9 steps only if cache miss"
+  caching_strategy:
+    ttl_seconds: 10
+    invalidate_on: ["revocation", "expiration", "constraint_change"]
+
+validation_latency_breakdown:
+  cached_hit_path:
+    step_1_cache_check: 0.05
+    total: 0.05
+    frequency: "80% (target hit rate)"
+
+  cache_miss_path:
+    step_1_cache_check: 0.05
+    step_2_signature_verify: 0.3
+    step_3_revocation_check: 0.1
+    step_4_expiration_check: 0.05
+    step_5_agent_ownership: 0.05
+    step_6_resource_type_match: 0.05
+    step_7_resource_id_match: 0.05
+    step_8_permission_check: 0.05
+    step_9_constraints_check: 0.2
+    step_10_cache_result: 0.05
+    total: 0.5
+    frequency: "20% (cache miss)"
+
+  p95_estimate:
+    calculation: "(0.8 × 0.05) + (0.2 × 0.5) = 0.04 + 0.1 = 0.14ms"
+    actual_target: 0.3
+    buffer: "2.1x"
+
+enforcement_points_validation_integration:
+  tool_runner:
+    validates_before: "execute_tool()"
+    steps_used: [2, 3, 4, 5, 6, 7, 8, 9]
+    skips: "step_1 (L1 cache per-tool-runner instance)"
+    performance_budget_ms: 0.5
+
+  memory_manager:
+    validates_before: "read_section(), write_section()"
+    steps_used: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    all_steps: true
+    performance_budget_ms: 0.5
+
+  model_hub:
+    validates_before: "generate()"
+    steps_used: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    all_steps: true
+    performance_budget_ms: 0.5
+
+  k0_bridge:
+    validates_before: "write_event()"
+    steps_used: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    all_steps: true
+    performance_budget_ms: 0.5
+
+caching_strategy:
+  l1_cache:
+    location: "Per-enforcement-point in-memory cache"
+    data_structure: "LRU cache (collections.OrderedDict)"
+    ttl: "10 seconds"
+    max_entries: 10000
+    eviction: "LRU when full"
+    hit_rate_target: 0.8
+    miss_rate_tolerance: 0.2
+
+  cache_invalidation_triggers:
+    revocation: "Delete all entries for cap_id"
+    expiration: "Delete entry on step_4 failure"
+    constraint_exhaustion: "Delete entry when constraint violated"
+    config_reload: "Clear entire L1 cache"
+
+  cache_warming_strategy:
+    approach: "Lazy loading (on-demand)"
+    benefit: "Avoids unnecessary computation"
+
+audit_logging:
+  on_allowed:
+    log_level: "DEBUG"
+    fields:
+      - "timestamp"
+      - "capability_id"
+      - "agent_id"
+      - "resource_type"
+      - "resource_id"
+      - "operation"
+      - "validation_latency_ms"
+      - "cache_hit"
+
+  on_denied:
+    log_level: "WARNING"
+    fields:
+      - "timestamp"
+      - "capability_id"
+      - "agent_id"
+      - "resource_type"
+      - "resource_id"
+      - "operation"
+      - "denial_reason"
+      - "failed_step"
+      - "validation_latency_ms"
+
+  storage:
+    immediate: "K0 WAL (real-time)"
+    searchable: "Elasticsearch (90-day)"
+    archive: "S3 GLACIER (7-year compliance)"
+
+conformance_testing:
+  test_cached_hit:
+    setup: "Warm cache with valid capability"
+    expected_latency: "<0.1ms"
+    expected_result: "ALLOWED"
+
+  test_cache_miss:
+    setup: "Fresh validation, no cache"
+    expected_latency: "<0.5ms"
+    expected_result: "ALLOWED (if valid)"
+
+  test_invalid_signature:
+    setup: "Tampered capability token"
+    expected_step: "step_2"
+    expected_result: "DENIED (SignatureError)"
+
+  test_expired_capability:
+    setup: "Capability past expires_at"
+    expected_step: "step_4"
+    expected_result: "DENIED (ExpirationError)"
+
+  test_budget_exhausted:
+    setup: "Constraint: budget_usd=1.0, spent=1.0"
+    expected_step: "step_9"
+    expected_result: "DENIED (ConstraintError)"
+
+references:
+  adr_0010c: "Capability Enforcement at Runtime"
+  anderson_1972: "Reference Monitor Pattern"
+  rfc_2104: "HMAC: Keyed-Hashing for Message Authentication"

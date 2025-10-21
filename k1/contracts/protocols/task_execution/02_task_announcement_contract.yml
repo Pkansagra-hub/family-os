@@ -1,0 +1,269 @@
+# Task Execution Protocol - Task Announcement Contract
+# File: contracts/protocols/task_execution/02_task_announcement_contract.yml
+# Purpose: TaskAnnouncement message contract (orchestrator broadcasts to agents)
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-TASK-EXECUTION-ANNOUNCE-002"
+  name: "Task Announcement Message Contract"
+  version: "1.0"
+
+# Task Announcement Overview
+task_announcement:
+
+  purpose: "Orchestrator broadcasts task to eligible agents"
+  direction: "Orchestrator (1) → All Eligible Agents (0..*)"
+  protocol_phase: "ANNOUNCE phase (timeout: 50ms)"
+
+  recipients: "All agents with matching required_capabilities"
+  broadcast_mechanism: "Actor mailbox broadcast (to all or filtered by capability)"
+
+# TaskAnnouncement Message Schema
+flatbuffers_schema: |
+  table TaskAnnouncement {
+    task_id: string (required)                 # UUID task identifier
+    intent: string (required)                  # enum: WEATHER_QUERY, CALENDAR_BOOKING, EMAIL_SEND, etc.
+    user_input: string (required)              # User's request text (max 4096 chars)
+    required_capabilities: [string]            # List of required capabilities
+    privacy_band: ubyte (required)             # 0=GREEN, 1=AMBER, 2=RED, 3=BLACK
+    budget_usd: float (required)               # Max cost budget for task (e.g., 5.0 = $5.00)
+    deadline_ms: uint (required)               # Absolute deadline (timestamp + relative offset)
+    trace_id: string (required)                # OpenTelemetry trace ID
+    timestamp_ns: ulong (required)             # Nanoseconds since epoch
+    context: table (optional)                  # Context data (e.g., calendar state, user preferences)
+    examples: table (optional)                 # Example results for few-shot prompting
+  }
+
+# Message Field Definitions
+fields:
+
+  task_id:
+    type: "UUID (string, 36 chars: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+    required: true
+    example: "task-550e8400-e29b-41d4-a716-446655440000"
+    description: "Unique task identifier, used for result matching"
+
+  intent:
+    type: "enum string"
+    required: true
+    enum_values:
+      - "WEATHER_QUERY"
+      - "CALENDAR_BOOKING"
+      - "EMAIL_SEND"
+      - "WEB_SEARCH"
+      - "RESEARCH"
+      - "ANALYSIS"
+      - "CODE_GENERATION"
+      - "IMAGE_GENERATION"
+      - "VIDEO_TRANSCRIPTION"
+    example: "WEATHER_QUERY"
+    description: "User intent/task type"
+
+  user_input:
+    type: "string (max 4096 chars)"
+    required: true
+    example: "What's the weather in San Francisco today?"
+    description: "Raw user request text, sent to agents for evaluation"
+
+  required_capabilities:
+    type: "[string] array of capability names"
+    required: true
+    examples:
+      - ["read_weather_api"]
+      - ["execute_calendar_api", "send_email"]
+      - ["web_search", "code_execution"]
+    description: "Agents must have ALL required capabilities to propose"
+
+  privacy_band:
+    type: "ubyte: 0=GREEN, 1=AMBER, 2=RED, 3=BLACK"
+    required: true
+    example: 0  # GREEN band (public data)
+    values:
+      GREEN: 0    # Public data, minimal security
+      AMBER: 1    # Internal data, some PII masking
+      RED: 2      # Sensitive (passwords, medical), arbiter approval required
+      BLACK: 3    # Blocked (dangerous, no execution)
+    description: "Privacy classification of task data"
+
+  budget_usd:
+    type: "float (dollars)"
+    required: true
+    examples: [1.0, 5.0, 10.0]
+    description: "Max cost for task execution (for pricing/metering)"
+
+  deadline_ms:
+    type: "uint (milliseconds absolute timestamp)"
+    required: true
+    example: 1695000000000  # Unix timestamp ms
+    description: "Absolute deadline (Unix timestamp milliseconds)"
+
+  trace_id:
+    type: "string (OpenTelemetry trace ID)"
+    required: true
+    example: "4bf92f3577b34da6a3ce929d0e0e4736"
+    description: "Distributed tracing trace ID for correlation"
+
+  timestamp_ns:
+    type: "ulong (nanoseconds)"
+    required: true
+    example: 1695000000000000000
+    description: "Message creation timestamp (nanoseconds since epoch)"
+
+  context:
+    type: "table (optional nested table)"
+    required: false
+    fields:
+      calendar_state: "Current calendar events (if CALENDAR_BOOKING intent)"
+      email_templates: "Available email templates (if EMAIL_SEND intent)"
+      search_filters: "Search filters/constraints (if WEB_SEARCH intent)"
+    description: "Optional context data for task evaluation"
+
+  examples:
+    type: "table (optional)"
+    required: false
+    description: "Few-shot examples for better agent reasoning"
+
+# Example Payload
+example_payload: |
+  {
+    "task_id": "task-550e8400-e29b-41d4-a716-446655440000",
+    "intent": "WEATHER_QUERY",
+    "user_input": "What's the weather forecast in San Francisco for the next 3 days?",
+    "required_capabilities": ["read_weather_api"],
+    "privacy_band": 0,  # GREEN
+    "budget_usd": 1.0,
+    "deadline_ms": 1695000000000,
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "timestamp_ns": 1695000000000000000,
+    "context": null,
+    "examples": null
+  }
+
+# Validation Rules
+validation:
+
+  semantic_validation:
+
+    rule_1_task_id_format:
+      condition: "task_id must be valid UUID v4"
+      action: "Validate format, reject if invalid"
+
+    rule_2_intent_valid:
+      condition: "intent must be in enum_values"
+      action: "Reject if unknown intent"
+
+    rule_3_user_input_max_length:
+      condition: "user_input ≤ 4096 characters"
+      action: "Truncate or reject if exceeds"
+
+    rule_4_capabilities_exist:
+      condition: "All required_capabilities must be defined in capability registry"
+      action: "Reject if capability unknown"
+
+    rule_5_privacy_band_valid:
+      condition: "privacy_band in [0=GREEN, 1=AMBER, 2=RED, 3=BLACK]"
+      action: "Reject if invalid"
+
+    rule_6_budget_positive:
+      condition: "budget_usd > 0.0"
+      action: "Reject if zero or negative"
+
+    rule_7_deadline_future:
+      condition: "deadline_ms > current_time_ms"
+      action: "Reject if deadline in past"
+
+    rule_8_timestamp_skew:
+      condition: "|timestamp_ns - current_time_ns| < 100ms"
+      rationale: "Prevent clock skew attacks"
+      action: "Warn if >100ms skew, log for investigation"
+
+# Broadcast Mechanism
+broadcast:
+
+  mechanism: "Actor mailbox broadcast (filtered by capability)"
+
+  process:
+    step_1: "Orchestrator receives task"
+    step_2: "Query capability registry: which agents have required_capabilities?"
+    step_3: "For each eligible agent: send TaskAnnouncement to their mailbox"
+    step_4: "Log: TaskAnnouncement sent to N agents"
+
+  performance:
+    broadcast_latency_ms: 50  # <50ms for all agents to receive
+    recipient_count: "0..58"  # 0 = no agents, 58 = all agents (4 AI + 54 pure)
+
+# Message Size & Serialization
+serialization:
+
+  format: "FlatBuffers binary"
+
+  typical_size_bytes: |
+    Fixed overhead: 100 bytes (task_id, trace_id, timestamps)
+    Variable (user_input): 50-4096 bytes
+    Required_capabilities: 20-100 bytes
+    Total: 170-4296 bytes (typical: 300-500 bytes)
+
+  performance:
+    serialization_time_us: <100    # <100 microseconds
+    deserialization_time_us: <100
+    network_latency_ms: <10        # Local network latency
+    total_broadcast_ms: <50        # 50ms budget for ANNOUNCE phase
+
+# Observability
+observability:
+
+  metrics:
+    - name: "task_announcement_sent_total"
+      type: "counter"
+      labels: ["intent"]
+      description: "TaskAnnouncements sent by intent type"
+
+    - name: "task_announcement_recipients_count"
+      type: "histogram"
+      buckets: [1, 2, 5, 10, 20, 58]
+      description: "Number of eligible agents per announcement"
+
+    - name: "task_announcement_size_bytes"
+      type: "histogram"
+      buckets: [100, 300, 500, 1000, 4096]
+      description: "TaskAnnouncement message size"
+
+    - name: "task_announcement_broadcast_latency_ms"
+      type: "histogram"
+      buckets: [5, 10, 20, 50]
+      description: "Time to broadcast to all eligible agents"
+
+  events:
+    - name: "task_announced"
+      fields: ["task_id", "intent", "recipients_count", "trace_id"]
+
+    - name: "task_announcement_validation_failed"
+      fields: ["task_id", "error_reason", "trace_id"]
+
+# Orchestrator Constraints
+orchestrator_constraints:
+
+  announcement_rate_limit: "1000 announcements/second"
+  max_concurrent_tasks: "100 concurrent tasks per session"
+  recipient_limit: "Max 58 agents per announcement (all K1 agents)"
+
+  backpressure:
+    mechanism: "If task_queue > 50, slow down task acceptance"
+    action: "Inform user: 'System busy, please try again'"
+
+# Lifecycle Integration
+lifecycle_context:
+
+  protocol_phase: "ANNOUNCE phase (first phase of 4-phase execution)"
+  timeout: "50ms from unannounced to all eligible agents notified"
+  next_phase: "PROPOSE phase (agents evaluate and respond)"
+
+  related_contracts:
+    - "01_task_protocol_fsm.yml - FSM state machine"
+    - "03_proposal_response_contract.yml - Agent proposes after receiving"
+    - "04_selection_contract.yml - Orchestrator selects from proposals"
+
+# ==============================================================================
+# END OF FILE: 02_task_announcement_contract.yml
+# ==============================================================================

@@ -1,0 +1,663 @@
+---
+config:
+  flowchart:
+    curve: linear
+  layout: elk
+---
+flowchart TB
+ subgraph L1["🏗️ LAYER 1: CORE KERNEL - FOUNDATION"]
+    direction TB
+        L1_AF["🤖 Agent Fabric<br/>(6-State Lifecycle FSM)<br/>ADR-0005"]
+        L1_AF_LIFE["📊 Lifecycle States<br/>PENDING→WARMING→ACTIVE<br/>→IDLE→DRAINING→TERMINATED<br/>ADR-0005a-e"]
+
+        L1_MB["📮 Mailbox<br/>(MPSC Priority Queue)<br/>ADR-0002a"]
+        L1_MB_TIER["⭐ 4-Tier Priority<br/>URGENT|REALTIME|INTERACTIVE|BG<br/>WFQ + Anti-Starvation"]
+
+        L1_RT["📡 Actor Router<br/>(Message Routing)<br/>ADR-0002c"]
+        L1_SV["👁️ Supervisor<br/>(Health Monitoring)<br/>ADR-0002b"]
+        L1_SV_HEALTH["💓 Coarse Ping: 1Hz<br/>Event-Loop Heartbeat: 200ms<br/>Crash Detection: <2s<br/>Blacklist: 3 crashes/10min"]
+
+        L1_PM["🛡️ Protocol Monitor<br/>(MPST Validation)<br/>ADR-0003"]
+        L1_PM_PROTO["🔐 6 Core Protocols<br/>1. Agent Hire<br/>2. Task Execution<br/>3. Clarification<br/>4. Barge-In<br/>5. Tool Call<br/>6. Saga Rollback<br/>ADR-0003b-d"]
+
+        L1_OR["🎯 Orchestrator<br/>(3-Phase Contract Net)<br/>ADR-0006"]
+        L1_OR_3PH["⚡ Phase 1: Negotiation<br/>Phase 2: Selection (WFQ)<br/>Phase 3: Execution+Saga<br/>Total: <80ms overhead"]
+
+        L1_PL["📋 Planner<br/>(4-Stage Pipeline)<br/>ADR-0007"]
+        L1_PL_STAGE["📈 Stage 1: Sketch (LLM)<br/>Stage 2: Expand (Registry)<br/>Stage 3: Validate (2-Tier)<br/>Stage 4: Commit (K0 WAL)<br/>P95: <2.5s"]
+
+        L1_AR["⚖️ Arbiter<br/>(Plan Validation)<br/>ADR-0007c"]
+        L1_CE["🔐 Capability Enforcer<br/>(Permission Checks)<br/>ADR-0010"]
+        L1_CE_CAPS["🎫 Token-Based Access<br/>HMAC-SHA256 Signature<br/>Least Privilege Enforcement<br/>Lease Expiration Tracking"]
+
+        L1_SC["📝 Saga Coordinator<br/>(Error Recovery)<br/>ADR-0008"]
+        L1_SC_SAGA["🔄 Compensating Transactions<br/>LIFO Unwinding<br/>Forward/Backward Recovery<br/>Best-Effort Compensation<br/>ADR-0008a-d"]
+
+        L1_CB["⚡ Circuit Breaker<br/>(Failure Prevention)<br/>ADR-0009"]
+        L1_CB_CB["🚪 3-State FSM<br/>CLOSED→OPEN→HALF-OPEN<br/>Per-Service Isolation<br/>Probe Strategy<br/>ADR-0009a-c"]
+
+        L1_RA["🎭 Role Attestation<br/>(Security)<br/>ADR-0003d"]
+
+        L1_IR["🧠 Intent Router<br/>(3-Tier Intent Classification)<br/>ADR-0021"]
+        L1_IR_TIER["🎯 Tier 1: Regex (10ms)<br/>Tier 2: SLM (50ms)<br/>Tier 3: LLM (150-500ms)<br/>Multi-store: FTS+Vector+KG"]
+
+        L1_MP["🎬 Meta Policy<br/>(Proactivity+Clarification)<br/>ADR-0052"]
+        L1_MP_HITL["❓ Step-by-Step Approval<br/>RED Band Two-Person Rule<br/>Nested Clarification (Max 3)<br/>Proactive Risk Confirmation<br/>ADR-0052a-d"]
+
+        L1_LL["📊 Learning Loop<br/>(Advisory Only)<br/>ADR-0059"]
+        L1_LL_LEARN["📈 Signal Taxonomy<br/>Explicit (1.0)|Implicit (0.5)|Behavioral (0.2)<br/>Drift Detection (Z>3.0)<br/>Audit & Rollback<br/>ADR-0059a-e"]
+
+        L1_AF --> L1_AF_LIFE
+        L1_MB --> L1_MB_TIER
+        L1_SV --> L1_SV_HEALTH
+        L1_PM --> L1_PM_PROTO
+        L1_OR --> L1_OR_3PH
+        L1_PL --> L1_PL_STAGE
+        L1_CE --> L1_CE_CAPS
+        L1_SC --> L1_SC_SAGA
+        L1_CB --> L1_CB_CB
+        L1_IR --> L1_IR_TIER
+        L1_MP --> L1_MP_HITL
+        L1_LL --> L1_LL_LEARN
+  end
+ subgraph L2["💾 LAYER 2: STATE & PERSISTENCE"]
+    direction TB
+        L2_SS["🧠 SessionState Manager<br/>(6-Section Design)<br/>ADR-0017"]
+        L2_SS_6SEC["📑 Beliefs|Scoreboard|Control<br/>Persona|Multimodal|Meta<br/>FlatBuffers Zero-Copy<br/>64KB Soft Limit"]
+
+        L2_EV["🗑️ Eviction Manager<br/>(3-Tier Strategy)<br/>ADR-0018"]
+        L2_EV_TIERS["⏱️ Tier 1: Hot (RAM <1ms)<br/>Tier 2: Warm (K0 WAL <10ms)<br/>Tier 3: Cold (S3 <100ms)"]
+
+        L2_T1["🔥 Hot Tier L1<br/>(RAM In-Memory)<br/>64MB total pool"]
+        L2_T1_HOT["⭐ Active beliefs, QUD<br/>Current tool invocation<br/>Recent messages<br/>LRU + Size Pressure"]
+
+        L2_T2["☀️ Warm Tier L2<br/>(SSD Local Cache)<br/>K0 WAL Integration"]
+        L2_T2_WARM["🕐 Recent history (50 turns)<br/>Grounding acts, Tool results<br/>30min lifetime<br/>Cursor-based pagination ADR-0023"]
+
+        L2_T3["❄️ Cold Tier L3<br/>(S3 Archive)<br/>ADR-0020"]
+        L2_T3_COLD["📦 Historical archive<br/>Compliance records<br/>Embeddings<br/>30-90 day retention ADR-0021"]
+
+        L2_RT["🔄 Retention Engine<br/>(Lifecycle Management)<br/>ADR-0021"]
+        L2_RT_RET["⏳ GREEN: 365d (1-yr)<br/>AMBER: 365d (1-yr)<br/>RED: 90d (3-mo)<br/>Automatic purge scheduler"]
+
+        L2_RC["📜 Receipt Manager<br/>(Audit Trail)<br/>ADR-0038"]
+        L2_RC_REC["📋 Turn|Tool|State|Agent<br/>SHA-256 Hash Chain<br/>Append-Only WAL<br/>7-year compliance"]
+
+        L2_K0["🌉 K0 Bridge Manager<br/>(Dual Protocol)<br/>ADR-0001a, 0022"]
+        L2_K0_BRIDGE["🚀 HTTP/2 + FlatBuffers<br/>50-item batching<br/>250ms or 64KB flush<br/>zstd compression<br/>Circuit Breaker"]
+
+        L2_CR["🔀 CRDT Manager<br/>(Multi-Device Sync)<br/>ADR-0050"]
+        L2_CR_SYNC["🔄 LAN-first via mDNS<br/>Last-Write-Wins<br/>P2P E2EE internet<br/>Phase 1: LAN | Phase 2: P2P"]
+
+        L2_FB["📚 FlatBuffers Schema<br/>(76 Total Schemas)<br/>ADR-0011, 0012"]
+        L2_FB_SCHEMA["🔧 5 Base Types<br/>20 K0 Pipelines (P01-P20)<br/>8 Agent Contracts<br/>6 State | 7 Model | 5 Tool<br/>6 Protocol | 5 Observability<br/>7 WebSocket | 7 Infrastructure"]
+
+        L2_SS --> L2_SS_6SEC
+        L2_EV --> L2_EV_TIERS
+        L2_T1 --> L2_T1_HOT
+        L2_T2 --> L2_T2_WARM
+        L2_T3 --> L2_T3_COLD
+        L2_RT --> L2_RT_RET
+        L2_RC --> L2_RC_REC
+        L2_K0 --> L2_K0_BRIDGE
+        L2_CR --> L2_CR_SYNC
+        L2_FB -.->|serializes all| L2_SS
+  end
+ subgraph L3["⚙️ LAYER 3: EXECUTION & TOOLS"]
+    direction TB
+        L3_TR["🛠️ Tool Runner<br/>(3-Tier Sandbox)<br/>ADR-0033"]
+        L3_TR_3TIER["🏗️ MCP (70%)<br/>WASM (15%) | Process (80%)<br/>Container (5%)<br/>Egress Rules ADR-0032"]
+
+        L3_MCP["🔌 MCP Gateway<br/>(JSON-RPC 2.0)<br/>ADR-0034"]
+        L3_MCP_MCP["📡 608 tools MCP-compatible<br/>Process Isolation (98%)<br/>Timeout: 5-300s<br/>5 failures → OPEN 30s"]
+
+        L3_WS["🕸️ WASM Sandbox<br/>(Trusted Code)<br/>10x slower, max isolation"]
+        L3_PS["📦 Process Sandbox<br/>(OS Isolation)<br/>chroot+seccomp+cgroups<br/>1 CPU, 256MB RAM, 10s timeout"]
+
+        L3_MH["🧬 Model Hub<br/>(Multi-LLM)<br/>ADR-0001b"]
+        L3_MH_PROV["🤖 OpenAI (GPT-4o)<br/>Anthropic (Claude 3)<br/>vLLM (Local GPU)<br/>Ollama (Local CPU)<br/>Prompt Library v1.0"]
+        L3_MH_SAFETY["🛡️ Safety Filter 3-Tier<br/>Regex (<1ms)<br/>ONNX Model (<3ms)<br/>Safety Watch LLM (<50ms)"]
+        L3_MH_COST["💰 Token Tracking<br/>OpenAI: $0.03/1K<br/>Anthropic: $0.015/1K<br/>Auto-fallback @90% budget"]
+        L3_MH_KVC["🧠 KV Cache Broker<br/>512MB budget (75% hit target)<br/>Per-session dynamic allocation<br/>zstd compression (70% reduction)"]
+
+        L3_SE["🌊 Streaming Engine<br/>(Token Stream)<br/>ADR-0015d"]
+        L3_SE_STREAM["⚡ TTFT <150ms P95<br/>E2E <2000ms P95<br/>50-100 tokens/sec<br/>WebSocket binary frames"]
+        L3_SE_HA["🎧 Voice Integration<br/>Tool interleaving (3 parallel)<br/>Prosody controls (±20st)<br/>VITS+HiFiGAN vocoder"]
+
+        L3_TR_REG["📚 Tool Registry<br/>(Catalog)<br/>Schema versioning"]
+
+        L3_RP["🔍 Result Processor<br/>(Validation)"]
+        L3_EH["🚨 Error Handler<br/>(Tool Recovery)<br/>Circuit Breaker"]
+
+        L3_CE["💰 Cost Estimator<br/>(Budget)<br/>ADR-0031"]
+        L3_CE_COST["💵 Session Budget: $0.10<br/>Daily Budget: $5.00<br/>Monthly Budget: $50.00<br/>Hierarchical enforcement"]
+
+        L3_BATCH["📦 K0 Bridge Batching<br/>ADR-0022"]
+        L3_BATCH_BATCH["🔄 Bounded Memory: 1000 receipts<br/>Flush Trigger: 250ms or 65KB or 100 items<br/>50ms cooldown/session<br/>4-Priority Queuing"]
+
+        L3_TR --> L3_TR_3TIER
+        L3_MCP --> L3_MCP_MCP
+        L3_MH --> L3_MH_PROV
+        L3_MH --> L3_MH_SAFETY
+        L3_MH --> L3_MH_COST
+        L3_MH --> L3_MH_KVC
+        L3_SE --> L3_SE_STREAM
+        L3_SE --> L3_SE_HA
+        L3_CE --> L3_CE_COST
+        L3_BATCH -.->|optimizes| L3_TR & L3_MCP
+  end
+ subgraph L4["🌐 LAYER 4: INGRESS & VOICE"]
+    direction TB
+        L4_REST["🔌 REST API<br/>(Session CRUD)<br/>ADR-0041"]
+        L4_REST_DETAIL["📋 21 endpoints: Sessions|Turns<br/>Agents|Conversations<br/>Webhooks|Batch Ops<br/>Stateless, ETag caching"]
+
+        L4_AG["🚪 API Gateway<br/>(REST/WS/SSE)<br/>ADR-0040, 0047"]
+        L4_WM["🔗 WebSocket Manager<br/>(Connection Mgmt)"]
+        L4_WM_WS["💬 Full-Duplex Bidirectional<br/>FlatBuffers Binary Protocol<br/>JWT in handshake<br/>Auto-Reconnect Exponential"]
+
+        L4_SM["📡 SSE Manager<br/>(Server Events)<br/>ADR-0042"]
+        L4_SM_SSE["🌊 K0 SSE Integration<br/>40+ Topics in 8 Categories<br/>Cursor-based Replay<br/>Multi-Consumer Fanout"]
+        L4_TOPIC["🏷️ SSE Topic Taxonomy<br/>ADR-0043<br/>k0.config.*, k0.receipt.*<br/>k0.learning.*, k0.crdt.*<br/>k0.policy.*, k0.audit.*"]
+
+        L4_TR["🧭 Topic Router<br/>(Event Routing)"]
+
+        L4_VP["🎤 Voice Pipeline<br/>(ASR→Intent→TTS)<br/>ADR-0056"]
+        L4_VP_5STAGE["📊 5-Stage Pipeline<br/>Audio In → ASR → Intent<br/>→ Tools → TTS → Audio Out<br/>K0 owns P11 (ASR), P12 (TTS)"]
+
+        L4_ASR["🎙️ ASR Engine<br/>(Speech-to-Text)<br/>ADR-0056a"]
+        L4_ASR_ASR["🎙️ 16kHz PCM, 16-bit<br/>Streaming recognition<br/>VAD (Voice Activity Detection)<br/>20ms frame size<br/><100ms latency"]
+
+        L4_IC["🧠 Intent Classifier<br/>(Voice Path)<br/>ADR-0058, 0058a-b"]
+        L4_IC_VOICE["🎯 3-Stage Pipeline<br/>Disfluency removal<br/>Base classification<br/>Voice-adjusted confidence<br/>Phonetic fuzzy matching"]
+        L4_IC_CONF["🎚️ Confidence Signals<br/>Base (40%) + ASR (25%)<br/>Phonetic (20%) + Context (15%)<br/>Thresholds: Proceed 0.80<br/>Clarify 0.60 | Reject 0.40"]
+
+        L4_TTS["🔊 TTS Engine<br/>(Text-to-Speech)<br/>ADR-0056d"]
+        L4_TTS_TTS["🗣️ VITS+HiFiGAN Vocoder<br/>Prosody controls (±20st)<br/>Style vector modulation<br/>Streaming mel spectrogram<br/>TTFA <200ms, MOS ≥4.2"]
+
+        L4_BI["🎯 Barge-In Handler<br/>(Interruption)<br/>ADR-0057c"]
+        L4_BI_BARGE["⚡ Barge-in Latency: <120ms P95<br/>TTS Preemption: <20ms<br/>ASR starts <30ms<br/>Client signal <50ms<br/>Context preservation"]
+
+        L4_CL["❓ Clarification Handler<br/>(HITL)<br/>ADR-0052a-d"]
+        L4_CL_HITL["🤝 Step-by-Step Approval<br/>RED Band Two-Person Rule<br/>Nested Chains (Max 3)<br/>Proactive Risk Confirmation<br/>5min timeout per step"]
+
+        L4_AI["🎧 Audio Input<br/>(Microphone)<br/>16kHz PCM stream"]
+        L4_AO["🔉 Audio Output<br/>(Speaker)<br/>Codec negotiation<br/>Opus/AAC/PCM"]
+
+        L4_MQ["📬 Message Queue<br/>(Coalescing)<br/>ADR-0053"]
+        L4_MQ_COAL["🔀 Coalesce Window: 2s<br/>Count Limit: 5 messages<br/>Token Bucket: 5 msg/sec<br/>3-msg burst allowance<br/>RED band bypass"]
+
+        L4_TB["🔄 Turn Boundary<br/>(Implicit/Explicit)<br/>ADR-0054"]
+        L4_TB_TURN["🔔 Implicit: ≥2s Silence<br/>Explicit: Enter|Send|Voice Cmd<br/>MPST State Machine<br/>Timeout enforcement<br/>ADR-0054a-c"]
+
+        L4_CS["🎨 Context Switch Detection<br/>ADR-0055, 0055a-c"]
+        L4_CS_SWITCH["🔄 Intent Drift Analysis<br/>Discourse Marker Detection<br/>Confidence Drop (<0.6)<br/>Switch Prompt 3-variants<br/>Keep/Clear/Go-Back semantics"]
+
+        L4_REST --> L4_REST_DETAIL
+        L4_WM --> L4_WM_WS
+        L4_SM --> L4_SM_SSE
+        L4_SM --> L4_TOPIC
+        L4_VP --> L4_VP_5STAGE
+        L4_ASR --> L4_ASR_ASR
+        L4_IC --> L4_IC_VOICE
+        L4_IC --> L4_IC_CONF
+        L4_TTS --> L4_TTS_TTS
+        L4_BI --> L4_BI_BARGE
+        L4_CL --> L4_CL_HITL
+        L4_MQ --> L4_MQ_COAL
+        L4_TB --> L4_TB_TURN
+        L4_CS -.->|triggers| L4_CL
+  end
+ subgraph L5["🔧 LAYER 5: INFRASTRUCTURE"]
+    direction TB
+        L5_AUTH["🔑 Authenticator<br/>(JWT Auth)<br/>ADR-0037"]
+        L5_AUTH_JWT["🎫 RS256 Signature<br/>Claims: sub, space_id, roles<br/>Access Token: 1hr | Refresh: 7d<br/>Stateless Validation <2ms"]
+
+        L5_BAND["🎀 Privacy Band Manager<br/>(Policy Enforcement)<br/>ADR-0032, 0039"]
+        L5_BAND_BANDS["🏷️ GREEN: Internet OK<br/>AMBER: Local preferred<br/>RED: Local only (+PII masking)<br/>BLACK: Ephemeral+encrypted"]
+        L5_BAND_RETAIN["⏳ Retention Override<br/>RED: 7d warm + 90d cold<br/>GDPR Article 5 minimization"]
+
+        L5_EGRESS["🚫 Band-Based Egress Rules<br/>ADR-0032"]
+        L5_EGRESS_RULES["🔒 iptables --pid-owner (100%)<br/>chroot jails (98%)<br/>seccomp-bpf syscall (100%)<br/>cgroups CPU/memory/FD (95%)"]
+
+        L5_EM["🔒 Encryption Manager<br/>(E2EE)<br/>ADR-0036"]
+        L5_EM_E2EE["🔐 AES-256-GCM User Key<br/>RED band only (selective)<br/>Per-space keys in HSM/KMS<br/>90d auto-rotation<br/>Zero-knowledge architecture"]
+
+        L5_PR["🚫 PII Redactor<br/>(Data Protection)<br/>ADR-0035"]
+        L5_PR_PII["🔍 Hybrid Detection<br/>Regex (12 patterns, 85% recall)<br/>BERT NER (<5ms, 95% recall)<br/>Redaction: [SSN], [CC]<br/>Encrypted vault in K0"]
+
+        L5_AUDIT["📜 Audit Trail<br/>(K0 Receipts)<br/>ADR-0038"]
+        L5_AUDIT_TRAIL["📋 Immutable WAL<br/>SHA-256 Hash Chain<br/>4 Receipt Types<br/>7-year compliance"]
+
+        L5_TM["🌡️ Thermal Manager<br/>(Temperature)<br/>ADR-0026, 0027"]
+        L5_TM_THERMAL["🌡️ Hysteresis: ±5°C<br/>Thresholds: COOL<70 | WARM 70-75<br/>HOT 75-84 | CRITICAL ≥85<br/>Cooldown: upgrade 10s, downgrade 30-60s"]
+
+        L5_MP["🎲 Model Placement Cascade<br/>(Thermal-Aware)<br/>ADR-0027"]
+        L5_MP_CASCADE["⚡ Cool: NPU>GPU>CPU>Remote<br/>Warm: GPU>CPU>Remote<br/>Hot: CPU>Remote<br/>Critical: Remote only<br/>Privacy: RED blocks Remote"]
+        L5_MP_COST["💵 Cost-Aware Fallback<br/>@90% session budget<br/>Auto-route to cheaper tier"]
+
+        L5_KC["⚡ KV Cache Manager<br/>(512MB Global)<br/>ADR-0025, 0060"]
+        L5_KC_CACHE["💾 LRU/LFU Hybrid (60/40)<br/>Per-session: 1-32MB<br/>Hit rate: >75% target<br/>Compression @85% (zstd L3)<br/>ADR-0060a-b"]
+
+        L5_ADAPT_KV["🔄 Adaptive KV-Cache<br/>ADR-0060"]
+        L5_ADAPT_KV_DYN["📊 Dynamic Placement Signal<br/>Thermal State | Workload<br/>Backpressure | Fair Allocation<br/>Rebalancing <10ms P95<br/>Eviction <20ms P95"]
+
+        L5_BP["⬆️ 3-Tier Backpressure<br/>(Load Control)<br/>ADR-0061"]
+        L5_BP_TIER["⚠️ 80% WARN → 90% DEGRADE<br/>→ 95% REJECT<br/>Per-stream watermarks<br/>WFQ 4-Priority (50/30/15/5%)<br/>ADR-0061a-d"]
+        L5_BP_VOICE["🎤 Voice Backpressure<br/>ASR: Frame drop/downsample<br/>TTS: 5-level degradation ladder<br/>Barge-in: <120ms preemption"]
+
+        L5_WFQ["🎯 WFQ Scheduler<br/>(Fairness)<br/>ADR-0028"]
+        L5_WFQ_SCHED["⏳ Virtual Time: v_time = size/weight<br/>Heap-based O(log n)<br/>Aging anti-starvation<br/>BACKGROUND promoted @5s"]
+
+        L5_PM["📊 Performance Monitor<br/>(Metrics)<br/>ADR-0029"]
+        L5_PM_RED["� RED Method: Rate|Errors|Duration<br/>45+ Metrics<br/>RED Overrides:<br/>CRITICAL (50%) never blocked"]
+        L5_METRICS["📊 Key Budgets (P95)<br/>TTFT <150ms | E2E <2000ms<br/>Tool Call <3000ms<br/>Barge-In <120ms | Intent <50ms<br/>SessionState <64KB | KV <512MB"]
+
+        L5_TRACE["🔍 Trace Sampling<br/>(Intelligent)<br/>ADR-0030"]
+        L5_TRACE_SAMPLE["📡 100% Errors + Slow (>P95)<br/>1% Baseline Random<br/>Head-Based Sampling<br/>Effective Rate: ~1.6%"]
+
+        L5_SC["🎨 Context Switch Detection<br/>(Topic Shift)<br/>ADR-0055"]
+        L5_SC_DRIFT["🔄 Intent Category Drift<br/>Discourse Marker Detection<br/>Confidence Drop (<0.6)"]
+
+        L5_AB["🎛️ Affect Modulation<br/>(K0 P08)<br/>ADR-0069"]
+        L5_AB_AFFECT["😊 Emotion Detection<br/>Valence Computation<br/>Empathetic Response Gen<br/>AMBER band, opt-out available"]
+
+        L5_TEST["👨‍💻 Developer Testing<br/>(Harness)<br/>ADR-0066"]
+        L5_TEST_PERSONAS["👤 5 Personas: Tech Pro|Senior<br/>Parent|Student|Adversary<br/>1000+ Synthetic Scenarios<br/>TIER-1: 5min | TIER-2: 30-60min"]
+
+        L5_MULTI["🌍 Multilingual & Code-Switch<br/>(9 Languages)<br/>ADR-0071"]
+        L5_MULTI_LANG["🗣️ LangID 99%+ accuracy<br/>Per-message detection<br/>Code-switching enabled<br/>Family language preferences<br/><50ms detection latency"]
+
+        L5_AUTH --> L5_AUTH_JWT
+        L5_BAND --> L5_BAND_BANDS
+        L5_BAND --> L5_BAND_RETAIN
+        L5_BAND --> L5_EGRESS
+        L5_EM --> L5_EM_E2EE
+        L5_PR --> L5_PR_PII
+        L5_AUDIT -.->|logs| L5_BAND & L5_AUTH
+        L5_TM --> L5_TM_THERMAL
+        L5_MP --> L5_MP_CASCADE
+        L5_MP --> L5_MP_COST
+        L5_KC --> L5_KC_CACHE
+        L5_ADAPT_KV --> L5_KC
+        L5_BP --> L5_BP_TIER
+        L5_BP --> L5_BP_VOICE
+        L5_WFQ -.->|enforces| L5_BP
+        L5_PM --> L5_METRICS
+        L5_PM --> L5_TRACE
+        L5_SC -.->|applies to| L4_IC
+        L5_AB -.->|modulates| L3_SE
+        L5_TEST -.->|generates| L5_TEST_PERSONAS
+        L5_MULTI -.->|supports| L4_AG & L4_VP
+  end
+ subgraph EXT["🔗 EXTERNAL SYSTEMS & K0 MICROKERNEL"]
+    direction TB
+        K0["🏢 K0 Memory Microkernel<br/>(Durable Persistence)<br/>ADR-0001"]
+        K0_BOUNDARY["🚨 HARD BOUNDARY: NO pipelines in K1<br/>ALL P01-P20 IN K0 ONLY<br/>ADR-0001f"]
+
+        K0_PORTS["🔌 4 External Ports (K1 Interface)<br/>ADR-0001a, 0044"]
+        K0_P01["📖 P01 Query Port<br/>(Read Operations)<br/>Multi-store search: FTS+Vector<br/>Knowledge Graph traversal<br/>Episodic recall (time-based)"]
+        K0_P02["✍️ P02 Command Port<br/>(Write Operations)<br/>Memory writes (episodic)<br/>Semantic memories (facts)<br/>Procedural memories (policies)"]
+        K0_P03["🌊 P03 SSE Port<br/>(Event Subscription)<br/>Post-write events<br/>Cognitive updates<br/>Attention gate consolidation"]
+        K0_PIPES["🧠 20 Cognitive Pipelines<br/>P01-P20 Only<br/>P11: ASR (Speech-to-Text)<br/>P12: TTS (Text-to-Speech)<br/>P06: Learning (Feedback)<br/>P08: Affect (Emotion)<br/>P09: Streaming (Real-time)"]
+
+        K0_ROUTING["🎯 K0 Internal Routing<br/>K0 Minimal Gate (validation)<br/>K0 Scheduler (QoS)<br/>20 Pipelines (P01-P20)<br/>Priority lanes: GREEN vs AMBER vs RED"]
+
+        K0_FORMAT["📦 Data Formats<br/>PRIMARY: JSON (backward compat)<br/>OPTIMIZATION: FlatBuffers<br/>Transport: HTTP/2 + TLS 1.3<br/>Batching: 250ms or 64KB trigger<br/>Compression: zstd level 3"]
+
+        K0_SYNC["🔄 Multi-Device Sync<br/>(K0 Backend)<br/>ADR-0050"]
+        K0_SYNC_PHASE["📱 Phase 1 (M2-M3):<br/>LAN-first mDNS discovery<br/>Device-to-device TCP<br/>CRDT Last-Write-Wins<br/>Phase 2 (M4-M5): P2P E2EE"]
+
+        K0_CRDT["🔀 CRDT Reconciliation<br/>(SessionState Coherence)<br/>ADR-0050a-d"]
+
+        COST["💰 Cost Tracker<br/>(Budget Enforcement)<br/>ADR-0031"]
+        COST_HIER["💵 Hierarchical Budget<br/>Corporate: $X/month<br/>User: $Y/day<br/>Session: $Z/session<br/>Auto-fallback @90%"]
+        COST_MODEL["🧮 Cost Model<br/>OpenAI: $0.03/1K (tokens)<br/>Anthropic: $0.015/1K<br/>Tools: $0.001-0.04 per call<br/>Placement: Remote>CPU>GPU>NPU"]
+
+        DEV["👨‍💻 Developer API<br/>(Testing & Observability)<br/>ADR-0066, 0070"]
+        DEV_TEST["🧪 Testing Harness<br/>1000+ Synthetic Scenarios<br/>5 Personas<br/>TIER-1 (<5min)<br/>TIER-2 (30-60min)"]
+        DEV_EVAL["📊 Evaluation Framework<br/>A/B Testing (50/50, 1+ week)<br/>Labeled Transcripts (1%, PII redacted)<br/>Stats: Chi-square, t-test<br/>p <0.05 (95% confidence)"]
+
+        K0 --> K0_BOUNDARY
+        K0 --> K0_PORTS
+        K0_PORTS --> K0_P01
+        K0_PORTS --> K0_P02
+        K0_PORTS --> K0_P03
+        K0 --> K0_PIPES
+        K0 --> K0_ROUTING
+        K0 --> K0_FORMAT
+        K0 --> K0_SYNC
+        K0_SYNC --> K0_SYNC_PHASE
+        K0 --> K0_CRDT
+        COST --> COST_HIER
+        COST --> COST_MODEL
+        DEV --> DEV_TEST
+        DEV --> DEV_EVAL
+  end
+    L1_AF -- mailbox send --> L1_MB
+    L1_OR -- mailbox send --> L1_MB
+    L1_PL -- mailbox send --> L1_MB
+    L1_PM -- validates --> L1_MB
+    L1_AF -- state transitions --> L1_SV
+    L1_SV -- crash detection --> L1_AF
+    L1_SV -- health monitoring --> L1_AF
+    L1_RT -- routes to --> L1_MB
+    L1_CE -- permission check --> L1_RT
+    L1_RA -- role verify --> L1_RT
+    L1_PM -- validates all --> L1_OR & L1_PL & L1_AF & L1_SC & L1_CB
+
+    L1_OR -- Phase 1 TaskAnnouncement --> L1_AF
+    L1_AF -- Phase 1 Proposal --> L1_OR
+    L1_OR -- Phase 2 Selection --> L1_OR
+    L1_OR -- Phase 3 Execute --> L1_AF
+    L1_AF -- Phase 3 Result --> L1_OR
+
+    L1_PL -- Stage 1 LLM Sketch --> L3_MH
+    L3_MH -- LLM response --> L1_PL
+    L1_PL -- Stage 2 Tool Lookup --> L3_TR_REG
+    L3_TR_REG -- Tool schemas --> L1_PL
+    L1_PL -- Stage 3 Validate Tier1 --> L1_PL
+    L1_PL -- Stage 3 Validate Tier2 --> L1_AR
+    L1_AR -- Arbiter verdict --> L1_PL
+    L1_PL -- Stage 4 Commit K0 --> L2_K0
+    L1_PL -- submits plans --> L1_OR
+
+    L1_OR -- Tool invoke --> L3_TR
+    L1_SC -- error recovery --> L1_OR
+    L1_SC -- compensates --> L1_AF
+    L1_CB -- protects --> L1_OR & L3_TR
+    L1_CE -- enforce capabilities --> L1_AF & L1_OR & L1_PL & L1_AR
+    L1_IR -- classify intent --> L1_MP
+    L1_MP -- triggers proactivity --> L1_OR
+    L1_MP -- clarification --> L4_CL
+    L1_LL -- advisory suggestions --> L1_PL
+
+    L1_AF -- context writes --> L2_SS
+    L1_OR -- task results --> L2_SS
+    L1_PL -- belief updates --> L2_SS
+    L1_AF -- audit log --> L2_RC
+    L1_OR -- audit log --> L2_RC
+    L1_PL -- audit log --> L2_RC
+    L1_SC -- error receipt --> L2_RC
+    L1_IR -- classification results --> L2_RC
+
+    L2_SS -- evict pressure --> L2_EV
+    L2_EV -- move warm --> L2_T2
+    L2_EV -- move cold --> L2_T3
+    L2_T1 -- capacity pressure --> L2_T2
+    L2_T2 -- time-based --> L2_T3
+    L2_T3 -- lifecycle --> L2_RT
+    L2_T3 -- retention policy --> L2_RT
+    L2_SS -- delta serialize FlatBuffers --> L2_K0
+    L2_T2 -- batched writes --> L2_K0
+    L2_RC -- async writes --> L2_K0
+    L2_CR -- CRDT merge --> L2_K0
+    L2_K0 -- reads via P01 --> K0
+    L2_K0 -- writes via P02 --> K0
+    L2_K0 -- subscribes P03 --> K0
+
+    L1_AF -- tool invoke --> L3_TR
+    L1_PL -- tool select --> L3_TR_REG
+    L1_PL -- LLM query --> L3_MH
+    L1_AR -- validation rules --> L3_RP
+    L1_CB -- circuit break --> L3_TR
+    L3_TR -- routes to MCP --> L3_MCP
+    L3_TR -- routes to WASM --> L3_WS
+    L3_TR -- routes to Process --> L3_PS
+    L3_MCP -- execute tool --> L3_TR_REG
+    L3_WS -- execute wasm --> L3_TR_REG
+    L3_PS -- execute process --> L3_TR_REG
+    L3_TR -- parse result --> L3_RP
+    L3_RP -- handle error --> L3_EH
+    L3_EH -- trigger circuit break --> L3_TR
+    L3_MH -- stream tokens --> L3_SE
+    L3_SE -- token stream --> L4_VP
+    L3_SE -- token stream --> L4_AG
+    L3_TR -- estimate cost --> L3_CE
+    L3_CE -- cost calculation --> COST
+    L3_BATCH -- batches requests --> L2_K0
+
+    L4_REST -- REST endpoints --> L4_AG
+    L4_AG -- ws connection --> L4_WM
+    L4_WM -- stream tokens --> L4_AG
+    L4_AG -- sse connection --> L4_SM
+    L4_SM -- subscribe topics --> L4_TR
+    L4_TR -- route events --> L4_SM
+    L4_VP -- asr input --> L4_ASR
+    L4_ASR -- text output --> L4_IC
+    L4_IC -- intent --> L4_VP
+    L4_VP -- response --> L4_TTS
+    L4_TTS -- audio output --> L4_VP
+    L4_VP -- barge-in trigger --> L4_BI
+    L4_BI -- preempt --> L4_TTS
+    L4_VP -- clarify needed --> L4_CL
+    L4_CL -- pause execution --> L4_VP & L1_OR
+    L4_AI -- audio frame --> L4_ASR
+    L4_TTS -- stream to --> L4_AO
+    L4_AG -- user message --> L1_PL
+    L4_VP -- intent trigger --> L1_PL
+    L4_IC -- confidence level --> L4_CL
+    L4_BI -- barge-in signal --> L1_OR
+    L4_IC -- LLM call for voice --> L3_MH
+    L4_MQ -- message coalesce --> L4_TB
+    L4_TB -- turn boundary --> L4_AG
+    L4_CS -- detect context switch --> L4_CL
+
+    L5_AUTH -- validate JWT --> L4_AG
+    L5_BAND -- classify band --> L5_EM & L5_PR & L5_EGRESS
+    L5_EGRESS -- enforce rules --> L3_PS & L3_MCP
+    L5_EM -- encrypt SessionState --> L2_T1
+    L5_EM -- encrypt warm tier --> L2_T2
+    L5_PR -- redact output --> L1_OR & L4_AG & L2_RC
+    L5_TM -- thermal state --> L5_MP
+    L5_TM -- thermal signal --> L5_KC
+    L5_TM -- backpressure trigger --> L5_BP
+    L5_MP -- model placement --> L3_MH
+    L5_KC -- allocate KV cache --> L3_MH
+    L5_BP -- throttle messages --> L5_WFQ
+    L5_WFQ -- enforce fairness --> L5_BP
+    L5_PM -- collect metrics --> L5_TRACE
+    L5_PM -- observe --> L5_TM & L5_MP & L5_KC & L5_BP
+    L5_PM -- thermal insights --> L2_EV
+    L5_AUTH -- jwt verify --> L4_AG
+    L5_BAND -- band rules enforce --> L1_CE & L1_AR & L3_PS
+    L5_AUDIT -- logs --> L1_AF & L1_OR & L1_PL & L1_SC
+    L5_SC -- context detect --> L4_CL & L1_IR
+    L5_AB -- emotion modulation --> L3_SE & L4_TTS
+    L5_TEST -- generate scenarios --> L1_AF & L1_PL & L1_OR
+    L5_MULTI -- language detection --> L4_VP & L4_IC & L4_TTS
+
+    K0 -- memory results --> L2_SS & L1_AF & L1_PL
+    K0 -- pipeline outputs --> L1_AF & L3_MH & L4_ASR & L4_TTS
+    K0_P01 -- query results --> L2_SS
+    K0_P02 -- command receipt --> L2_RC
+    K0_P03 -- sse events --> L4_SM
+    K0_PIPES -- ASR output --> L4_ASR
+    K0_PIPES -- TTS output --> L4_TTS
+    K0_PIPES -- Learning P06 --> L1_LL
+    K0_PIPES -- Affect P08 --> L5_AB
+    K0_PIPES -- Streaming P09 --> L3_SE
+
+    L3_MH -- model cost --> COST
+    L3_TR -- tool cost --> COST
+    L5_MP -- placement cost --> COST
+    COST -- cost signal --> L5_MP & L3_MH
+    COST -- budget enforce --> L5_BP
+    L3_TR -- tool result --> L2_SS
+    L3_SE -- stream log --> L2_RC
+    L5_PM -- testing data --> DEV
+    DEV -- test scenarios --> L1_AF & L1_PL & L1_OR & L4_VP
+     L1_AF:::Layer1
+     L1_AF_LIFE:::Layer1_Sub
+     L1_MB:::Layer1
+     L1_MB_TIER:::Layer1_Sub
+     L1_RT:::Layer1
+     L1_SV:::Layer1
+     L1_SV_HEALTH:::Layer1_Sub
+     L1_PM:::Layer1
+     L1_PM_PROTO:::Layer1_Sub
+     L1_OR:::Layer1
+     L1_OR_3PH:::Layer1_Sub
+     L1_PL:::Layer1
+     L1_PL_STAGE:::Layer1_Sub
+     L1_AR:::Layer1
+     L1_CE:::Layer1
+     L1_CE_CAPS:::Layer1_Sub
+     L1_SC:::Layer1
+     L1_SC_SAGA:::Layer1_Sub
+     L1_CB:::Layer1
+     L1_CB_CB:::Layer1_Sub
+     L1_RA:::Layer1
+     L1_IR:::Layer1
+     L1_IR_TIER:::Layer1_Sub
+     L1_MP:::Layer1
+     L1_MP_HITL:::Layer1_Sub
+     L1_LL:::Layer1
+     L1_LL_LEARN:::Layer1_Sub
+
+     L2_SS:::Layer2
+     L2_SS_6SEC:::Layer2_Sub
+     L2_EV:::Layer2
+     L2_EV_TIERS:::Layer2_Sub
+     L2_T1:::Layer2
+     L2_T1_HOT:::Layer2_Sub
+     L2_T2:::Layer2
+     L2_T2_WARM:::Layer2_Sub
+     L2_T3:::Layer2
+     L2_T3_COLD:::Layer2_Sub
+     L2_RT:::Layer2
+     L2_RT_RET:::Layer2_Sub
+     L2_RC:::Layer2
+     L2_RC_REC:::Layer2_Sub
+     L2_K0:::Layer2
+     L2_K0_BRIDGE:::Layer2_Sub
+     L2_CR:::Layer2
+     L2_CR_SYNC:::Layer2_Sub
+     L2_FB:::Layer2
+     L2_FB_SCHEMA:::Layer2_Sub
+
+     L3_TR:::Layer3
+     L3_TR_3TIER:::Layer3_Sub
+     L3_MCP:::Layer3
+     L3_MCP_MCP:::Layer3_Sub
+     L3_WS:::Layer3
+     L3_PS:::Layer3
+     L3_MH:::Layer3
+     L3_MH_PROV:::Layer3_Sub
+     L3_MH_SAFETY:::Layer3_Sub
+     L3_MH_COST:::Layer3_Sub
+     L3_MH_KVC:::Layer3_Sub
+     L3_SE:::Layer3
+     L3_SE_STREAM:::Layer3_Sub
+     L3_SE_HA:::Layer3_Sub
+     L3_TR_REG:::Layer3
+     L3_RP:::Layer3
+     L3_EH:::Layer3
+     L3_CE:::Layer3
+     L3_CE_COST:::Layer3_Sub
+     L3_BATCH:::Layer3
+     L3_BATCH_BATCH:::Layer3_Sub
+
+     L4_REST:::Layer4
+     L4_REST_DETAIL:::Layer4_Sub
+     L4_AG:::Layer4
+     L4_WM:::Layer4
+     L4_WM_WS:::Layer4_Sub
+     L4_SM:::Layer4
+     L4_SM_SSE:::Layer4_Sub
+     L4_TOPIC:::Layer4_Sub
+     L4_TR:::Layer4
+     L4_VP:::Layer4
+     L4_VP_5STAGE:::Layer4_Sub
+     L4_ASR:::Layer4
+     L4_ASR_ASR:::Layer4_Sub
+     L4_IC:::Layer4
+     L4_IC_VOICE:::Layer4_Sub
+     L4_IC_CONF:::Layer4_Sub
+     L4_TTS:::Layer4
+     L4_TTS_TTS:::Layer4_Sub
+     L4_BI:::Layer4
+     L4_BI_BARGE:::Layer4_Sub
+     L4_CL:::Layer4
+     L4_CL_HITL:::Layer4_Sub
+     L4_AI:::Layer4
+     L4_AO:::Layer4
+     L4_MQ:::Layer4
+     L4_MQ_COAL:::Layer4_Sub
+     L4_TB:::Layer4
+     L4_TB_TURN:::Layer4_Sub
+     L4_CS:::Layer4
+     L4_CS_SWITCH:::Layer4_Sub
+
+     L5_AUTH:::Layer5
+     L5_AUTH_JWT:::Layer5_Sub
+     L5_BAND:::Layer5
+     L5_BAND_BANDS:::Layer5_Sub
+     L5_BAND_RETAIN:::Layer5_Sub
+     L5_EGRESS:::Layer5
+     L5_EGRESS_RULES:::Layer5_Sub
+     L5_EM:::Layer5
+     L5_EM_E2EE:::Layer5_Sub
+     L5_PR:::Layer5
+     L5_PR_PII:::Layer5_Sub
+     L5_AUDIT:::Layer5
+     L5_AUDIT_TRAIL:::Layer5_Sub
+     L5_TM:::Layer5
+     L5_TM_THERMAL:::Layer5_Sub
+     L5_MP:::Layer5
+     L5_MP_CASCADE:::Layer5_Sub
+     L5_MP_COST:::Layer5_Sub
+     L5_KC:::Layer5
+     L5_KC_CACHE:::Layer5_Sub
+     L5_ADAPT_KV:::Layer5
+     L5_ADAPT_KV_DYN:::Layer5_Sub
+     L5_BP:::Layer5
+     L5_BP_TIER:::Layer5_Sub
+     L5_BP_VOICE:::Layer5_Sub
+     L5_WFQ:::Layer5
+     L5_WFQ_SCHED:::Layer5_Sub
+     L5_PM:::Layer5
+     L5_PM_RED:::Layer5_Sub
+     L5_METRICS:::Layer5_Sub
+     L5_TRACE:::Layer5
+     L5_TRACE_SAMPLE:::Layer5_Sub
+     L5_SC:::Layer5
+     L5_SC_DRIFT:::Layer5_Sub
+     L5_AB:::Layer5
+     L5_AB_AFFECT:::Layer5_Sub
+     L5_TEST:::Layer5
+     L5_TEST_PERSONAS:::Layer5_Sub
+     L5_MULTI:::Layer5
+     L5_MULTI_LANG:::Layer5_Sub
+
+     K0:::External
+     K0_BOUNDARY:::External_Critical
+     K0_PORTS:::External_Sub
+     K0_P01:::External_Sub
+     K0_P02:::External_Sub
+     K0_P03:::External_Sub
+     K0_PIPES:::External_Sub
+     K0_ROUTING:::External_Sub
+     K0_FORMAT:::External_Sub
+     K0_SYNC:::External_Sub
+     K0_SYNC_PHASE:::External_Sub
+     K0_CRDT:::External_Sub
+     COST:::External
+     COST_HIER:::External_Sub
+     COST_MODEL:::External_Sub
+     DEV:::External
+     DEV_TEST:::External_Sub
+     DEV_EVAL:::External_Sub
+
+    classDef Layer1 fill:#ff6b6b,stroke:#c92a2a,stroke-width:2px,color:#fff,font-weight:bold
+    classDef Layer1_Sub fill:#ff8888,stroke:#c92a2a,stroke-width:1px,color:#000
+    classDef Layer2 fill:#4ecdc4,stroke:#0a7a6b,stroke-width:2px,color:#fff,font-weight:bold
+    classDef Layer2_Sub fill:#7de8de,stroke:#0a7a6b,stroke-width:1px,color:#000
+    classDef Layer3 fill:#95e77d,stroke:#5c940d,stroke-width:2px,color:#fff,font-weight:bold
+    classDef Layer3_Sub fill:#b3f29f,stroke:#5c940d,stroke-width:1px,color:#000
+    classDef Layer4 fill:#ffd43b,stroke:#f59f00,stroke-width:2px,color:#000,font-weight:bold
+    classDef Layer4_Sub fill:#ffe066,stroke:#f59f00,stroke-width:1px,color:#000
+    classDef Layer5 fill:#ff922b,stroke:#d9480f,stroke-width:2px,color:#fff,font-weight:bold
+    classDef Layer5_Sub fill:#ffaa54,stroke:#d9480f,stroke-width:1px,color:#000
+    classDef External fill:#b197fc,stroke:#7950f2,stroke-width:2px,color:#fff,font-weight:bold
+    classDef External_Critical fill:#ff1744,stroke:#d00000,stroke-width:3px,color:#fff,font-weight:bold
+    classDef External_Sub fill:#d4a5ff,stroke:#7950f2,stroke-width:1px,color:#000

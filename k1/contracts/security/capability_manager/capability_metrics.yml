@@ -1,0 +1,567 @@
+metadata:
+  title: "Capability Manager Metrics Contract"
+  description: "Prometheus metrics, alert thresholds, and observability for capability system"
+  adr_references:
+    - "ADR-0010: Capability-Based Security Model"
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+    - "ADR-0010b: Capability Verification & Enforcement"
+  version: "1.0.0"
+  last_updated: "2025-01-15"
+
+########################################
+# SECTION 1: CAPABILITY ISSUANCE METRICS
+########################################
+issuance_metrics:
+  capability_issuance_total:
+    type: "Counter"
+    description: "Total capabilities issued since service start"
+    unit: "count"
+    labels:
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+      - "trust_level: 0|1|2|3|4"
+      - "resource_type: LLM|TOOL|MEMORY|K0_WAL|RBAC"
+    example_prometheus: |
+      capability_issuance_total{agent_role="tool_agent", trust_level="1", resource_type="TOOL"} 1847
+
+    alert_conditions:
+      - "None (tracking metric)"
+
+  capability_issuance_latency_ms:
+    type: "Histogram"
+    description: "Time to issue and sign capability token (P95 target: 2.0ms)"
+    unit: "milliseconds"
+    buckets: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0, 10.0]
+    labels:
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+      - "trust_level: 0|1|2|3|4"
+    percentiles:
+      p50: 1.2
+      p95: 2.0
+      p99: 2.8
+
+    dashboard:
+      panel_type: "Graph"
+      time_range: "Last 1 hour"
+      query: "histogram_quantile(0.95, rate(capability_issuance_latency_ms[5m]))"
+      alert_threshold_p95: 3.0
+
+  capability_issuance_errors_total:
+    type: "Counter"
+    description: "Failed capability issuance attempts by error type"
+    unit: "count"
+    labels:
+      - "error_type: invalid_agent|resource_type|permission|quota_exceeded|crypto_failure|storage_failure|validation_failed"
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+
+    error_breakdown:
+      invalid_agent: "Agent ID not found"
+      resource_type: "Unknown resource type"
+      permission: "Invalid permission for resource"
+      quota_exceeded: "Agent exceeded issuance quota"
+      crypto_failure: "HMAC-SHA256 signing failed"
+      storage_failure: "Redis/K0 write failed"
+      validation_failed: "Constraint validation failed"
+
+    alert_conditions:
+      - "error_rate > 1% of issuances (5min rolling window)"
+      - "Any single error type increases by >50% in 10min window"
+
+########################################
+# SECTION 2: CAPABILITY VERIFICATION METRICS
+########################################
+verification_metrics:
+  capability_verification_total:
+    type: "Counter"
+    description: "Total capability verification requests"
+    unit: "count"
+    labels:
+      - "enforcement_point: tool_runner|memory_manager|model_hub|k0_bridge"
+      - "result: allowed|denied|error"
+      - "reason: valid|expired|revoked|tampered|unauthorized"
+
+    example_prometheus: |
+      capability_verification_total{enforcement_point="tool_runner", result="allowed"} 52847
+      capability_verification_total{enforcement_point="tool_runner", result="denied", reason="revoked"} 23
+
+  capability_verification_latency_ms:
+    type: "Histogram"
+    description: "Time to verify capability token (P95 target: 0.14ms, 80% cached)"
+    unit: "milliseconds"
+    buckets: [0.01, 0.03, 0.05, 0.1, 0.15, 0.2, 0.5, 1.0, 2.0]
+    labels:
+      - "enforcement_point: tool_runner|memory_manager|model_hub|k0_bridge"
+      - "cache_hit: true|false"
+
+    percentiles:
+      p50_cached: 0.05
+      p95_cached: 0.08
+      p99_cached: 0.12
+      p50_uncached: 0.35
+      p95_uncached: 0.50
+      p99_uncached: 0.65
+      p95_overall: 0.14
+
+    dashboard:
+      panel_type: "Graph with dual-axis"
+      left_axis: "Cached latency (p95)"
+      right_axis: "Uncached latency (p95)"
+      query_cached: "histogram_quantile(0.95, rate(capability_verification_latency_ms{cache_hit='true'}[5m]))"
+      query_uncached: "histogram_quantile(0.95, rate(capability_verification_latency_ms{cache_hit='false'}[5m]))"
+
+  capability_verification_cache_hits_total:
+    type: "Counter"
+    description: "Cache hits/misses for capability verification (target: 80% hit rate)"
+    unit: "count"
+    labels:
+      - "cache_tier: L0|L1"
+      - "result: hit|miss"
+
+    target_hit_rate:
+      l0_local: 0.80
+      l1_redis: 0.95
+      overall: 0.80
+
+    slo_definition: |
+      Cache hit rate >= 80% for P95 latency < 0.15ms
+      If hit rate drops below 75%, page on-call engineer
+
+  capability_verification_errors_total:
+    type: "Counter"
+    description: "Verification failures by error type"
+    unit: "count"
+    labels:
+      - "error_type: signature_invalid|expired|revoked|not_found|constraint_violated"
+      - "enforcement_point: tool_runner|memory_manager|model_hub|k0_bridge"
+
+    alert_conditions:
+      - "signature_invalid > 10/min (potential tampering)"
+      - "expired > 5% of verifications (token TTL too short)"
+      - "revoked + expired > 20% (degraded user experience)"
+
+########################################
+# SECTION 3: CAPABILITY REVOCATION METRICS
+########################################
+revocation_metrics:
+  capability_revocation_total:
+    type: "Counter"
+    description: "Total capability revocations by type"
+    unit: "count"
+    labels:
+      - "revocation_type: IMMEDIATE|AUTOMATIC|EMERGENCY"
+      - "trigger: agent_crash|policy_violation|budget_exhaustion|user_request|session_end|timeout"
+
+    example_prometheus: |
+      capability_revocation_total{revocation_type="IMMEDIATE", trigger="user_request"} 147
+      capability_revocation_total{revocation_type="EMERGENCY", trigger="agent_crash"} 3
+
+  capability_revocation_latency_ms:
+    type: "Histogram"
+    description: "Time to revoke capability (P95 targets: IMMEDIATE=0.15ms, AUTOMATIC=0.05ms, EMERGENCY=0.5ms+)"
+    unit: "milliseconds"
+    buckets: [0.05, 0.1, 0.15, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+    labels:
+      - "revocation_type: IMMEDIATE|AUTOMATIC|EMERGENCY"
+
+    targets:
+      immediate_p95: 0.15
+      automatic_p95: 0.05
+      emergency_p95: 0.50
+
+    dashboard:
+      panel_type: "Heatmap"
+      time_range: "Last 4 hours"
+      query: "histogram_quantile(0.95, rate(capability_revocation_latency_ms[5m]))"
+
+  capabilities_revoked_per_session:
+    type: "Gauge"
+    description: "Average revocations per session (tracks cascade size)"
+    unit: "count"
+    labels:
+      - "trigger_type: agent_crash|user_batch|emergency"
+
+    performance_targets:
+      normal_user_batch: "1-5 per session"
+      agent_crash: "3-10 per session"
+      emergency_scenario: "100-1000+ per session"
+
+  revocation_cascade_size:
+    type: "Gauge"
+    description: "Largest cascade revocation in last hour (tracks emergency mass-revoke events)"
+    unit: "capabilities"
+
+    alert_conditions:
+      - "cascade_size > 500 in single event"
+      - "cascade_size > 100 + more than 3 per day"
+
+########################################
+# SECTION 4: CAPABILITY REGISTRY METRICS
+########################################
+registry_metrics:
+  capabilities_stored_total:
+    type: "Gauge"
+    description: "Total capabilities currently in system (across all tiers)"
+    unit: "count"
+    labels:
+      - "storage_tier: L0|L1|L2|L3|L4"
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+
+    capacity_targets:
+      l0_local_cache: 10000
+      l1_redis: 100000
+      l2_k0_wal: "unlimited (disk-backed)"
+      l3_elasticsearch: "unlimited (searchable retention: 90 days)"
+      l4_s3: "unlimited (archive: 7 years)"
+
+    alert_conditions:
+      - "L0 > 9000 (running out of local cache, eviction pressure)"
+      - "L1 > 90000 (Redis memory pressure)"
+
+  capability_storage_size_bytes:
+    type: "Gauge"
+    description: "Total size of capabilities in storage (uncompressed)"
+    unit: "bytes"
+    labels:
+      - "storage_tier: L0|L1|L2"
+
+    size_estimates:
+      l0_per_capability: 512
+      l1_per_capability: 512
+      l0_target_size_mb: 10
+      l1_target_size_mb: 100
+      l2_target_size_gb: 50
+
+    alert_conditions:
+      - "L0 > 12 MB (exceeds 10 MB target)"
+      - "L1 > 150 MB (exceeds 100 MB target)"
+
+  capability_registry_operations_total:
+    type: "Counter"
+    description: "Registry operation count by type"
+    unit: "count"
+    labels:
+      - "operation: store|retrieve|update_counter|mark_revoked|list_agent|cleanup"
+
+    expected_ratios:
+      retrieve_to_store: "50:1 (reads dominate)"
+      update_counter_to_store: "20:1 (tracking usage)"
+
+  capability_registry_latency_ms:
+    type: "Histogram"
+    description: "Registry operation latency by tier"
+    unit: "milliseconds"
+    buckets: [0.01, 0.03, 0.05, 0.1, 0.15, 0.2, 0.5, 1.0, 2.0]
+    labels:
+      - "operation: store|retrieve|update_counter|list_agent"
+      - "tier: L0|L1|L2"
+
+    targets:
+      l0_retrieve_p95: 0.05
+      l1_retrieve_p95: 0.15
+      l2_retrieve_p95: 0.50
+      store_p95: 0.30
+
+########################################
+# SECTION 5: ROLE-BASED TEMPLATE METRICS
+########################################
+rbac_metrics:
+  capabilities_issued_by_role:
+    type: "Counter"
+    description: "Capabilities issued at agent hire, broken down by role"
+    unit: "count"
+    labels:
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+
+    expected_distribution:
+      planning_agent: "40%"
+      tool_agent: "35%"
+      memory_agent: "20%"
+      supervisor: "5%"
+
+  agent_trust_level_distribution:
+    type: "Gauge"
+    description: "Current distribution of agents by trust level"
+    unit: "count"
+    labels:
+      - "trust_level: 0|1|2|3|4"
+      - "agent_role: planning_agent|tool_agent|memory_agent|supervisor"
+
+    expected_distribution:
+      level_0: "5%"
+      level_1: "20%"
+      level_2: "40%"
+      level_3: "30%"
+      level_4: "5%"
+
+  trust_escalation_total:
+    type: "Counter"
+    description: "Automatic trust escalations by source"
+    unit: "count"
+    labels:
+      - "escalation_type: automatic|manual_approval|supervisor_override"
+
+    alert_conditions:
+      - "Automatic > 100/day (possible configuration issue)"
+      - "Manual > 50/day (possible under-provisioning)"
+
+########################################
+# SECTION 6: SECRET KEY MANAGEMENT METRICS
+########################################
+key_management_metrics:
+  secret_key_rotations_total:
+    type: "Counter"
+    description: "Total key rotations (target: every 90 days)"
+    unit: "count"
+
+    schedule:
+      frequency: "Every 90 days"
+      window: "2:00-3:00 UTC"
+      duration: "5 minutes"
+
+  secret_key_rotation_latency_ms:
+    type: "Histogram"
+    description: "Time to complete key rotation end-to-end"
+    unit: "milliseconds"
+    buckets: [5000, 10000, 15000, 30000, 60000, 120000]
+
+    target_p95: 45000
+    target_p99: 60000
+
+    impact: "CapabilityManager briefly unavailable (auto-failover to old key)"
+
+  secret_key_age_days:
+    type: "Gauge"
+    description: "Age of current secret key (target: 0-90 days)"
+    unit: "days"
+
+    alert_conditions:
+      - "> 95 days (should have rotated 5 days ago)"
+      - "> 100 days (emergency situation, immediate rotation required)"
+
+  secret_key_verification_failures_total:
+    type: "Counter"
+    description: "Failed key verification attempts (potential compromise indicator)"
+    unit: "count"
+    labels:
+      - "failure_reason: signature_mismatch|invalid_format"
+
+    alert_conditions:
+      - "> 10 in any 5-minute window (investigate immediately)"
+
+  dual_key_support_active:
+    type: "Gauge"
+    description: "Binary indicator if dual-key support is active (0=off, 1=on)"
+    unit: "boolean"
+
+    expected_state: "1 (on) for 5 minutes after key rotation"
+
+  key_compromise_detection_latency_ms:
+    type: "Gauge"
+    description: "Time to detect and respond to potential key compromise"
+    unit: "milliseconds"
+
+    target: "< 60000 (1 minute)"
+    sla: "Detect and revoke all affected capabilities within 1 minute of incident"
+
+########################################
+# SECTION 7: CROSS-CUTTING METRICS
+########################################
+cross_cutting_metrics:
+  capability_manager_uptime:
+    type: "Gauge"
+    description: "CapabilityManager service availability (% of time accepting requests)"
+    unit: "percentage"
+
+    slo_target: 0.999
+    alert_threshold: 0.995
+
+    calculation: |
+      uptime = (seconds_accepting_requests / total_seconds) * 100
+      measured: 1 minute rolling average
+
+  capability_manager_requests_total:
+    type: "Counter"
+    description: "Total requests to CapabilityManager API"
+    unit: "count"
+    labels:
+      - "method: issue|verify|revoke|list"
+      - "status: success|error"
+
+    expected_distribution:
+      verify: "90%"
+      issue: "5%"
+      revoke: "3%"
+      list: "2%"
+
+  capability_system_errors_total:
+    type: "Counter"
+    description: "All errors in capability system (comprehensive error tracking)"
+    unit: "count"
+    labels:
+      - "component: issuance|verification|revocation|registry|key_management"
+      - "error_class: transient|permanent|configuration"
+
+    alert_conditions:
+      - "error_rate > 1% (5min rolling)"
+      - "permanent_errors > transient_errors (indicates systemic issue)"
+
+  capability_audit_log_lag_ms:
+    type: "Gauge"
+    description: "Delay between capability operation and audit log write"
+    unit: "milliseconds"
+
+    target_p95: 100
+
+    alert_threshold: 500
+
+########################################
+# SECTION 8: ALERTING RULES
+########################################
+alerting_rules:
+  critical_alerts:
+    signature_tampering_detected:
+      condition: "capability_verification_errors_total{error_type='signature_invalid'} > 10 in 1m"
+      severity: "CRITICAL"
+      action: "Page on-call, investigate key compromise"
+      slo: "Response time: < 5 minutes"
+
+    capability_manager_down:
+      condition: "capability_manager_uptime < 0.99"
+      severity: "CRITICAL"
+      action: "Page on-call, failover to backup service"
+      slo: "Detection time: < 30 seconds"
+
+    mass_revocation_event:
+      condition: "revocation_cascade_size > 500 in single event"
+      severity: "CRITICAL"
+      action: "Alert security team, investigate root cause"
+
+  high_alerts:
+    verification_latency_degradation:
+      condition: "histogram_quantile(0.95, capability_verification_latency_ms) > 0.5ms"
+      severity: "HIGH"
+      action: "Check Redis cluster health, investigate eviction"
+
+    cache_hit_rate_drop:
+      condition: "capability_verification_cache_hits_total{result='hit'} / total < 0.75"
+      severity: "HIGH"
+      action: "Increase L0 cache size or L1 Redis allocation"
+
+    key_rotation_delayed:
+      condition: "secret_key_age_days > 95"
+      severity: "HIGH"
+      action: "Schedule immediate key rotation"
+
+  medium_alerts:
+    issuance_error_rate_elevated:
+      condition: "capability_issuance_errors_total / capability_issuance_total > 0.01"
+      severity: "MEDIUM"
+      action: "Investigate error trends, possible quota issues"
+
+    storage_capacity_warning:
+      condition: "capabilities_stored_total{tier='L0'} > 9000"
+      severity: "MEDIUM"
+      action: "Monitor eviction, consider increasing cache size"
+
+########################################
+# SECTION 9: DASHBOARD DEFINITIONS
+########################################
+dashboards:
+  capability_system_overview:
+    title: "Capability Manager - System Overview"
+    time_range: "Last 1 hour"
+    refresh_interval: "30 seconds"
+
+    panels:
+      - panel_1_issuance_rate:
+          title: "Capability Issuance Rate"
+          metric: "rate(capability_issuance_total[5m])"
+          unit: "capabilities/sec"
+          type: "Graph"
+
+      - panel_2_verification_performance:
+          title: "Verification Latency (P95)"
+          metric: "histogram_quantile(0.95, rate(capability_verification_latency_ms[5m]))"
+          unit: "ms"
+          type: "Graph"
+          alert_line: 0.14
+
+      - panel_3_cache_hit_rate:
+          title: "L0 Cache Hit Rate"
+          metric: "rate(capability_verification_cache_hits_total{result='hit'}[5m]) / rate(capability_verification_cache_hits_total[5m])"
+          unit: "%"
+          type: "Gauge"
+          target: 0.80
+
+      - panel_4_error_tracking:
+          title: "Errors by Type (24h)"
+          metric: "capability_issuance_errors_total + capability_verification_errors_total + capability_revocation_latency_ms"
+          type: "Table"
+          columns: ["error_type", "count", "% of total"]
+
+      - panel_5_key_age:
+          title: "Secret Key Age"
+          metric: "secret_key_age_days"
+          unit: "days"
+          type: "Stat"
+          alert_threshold: 95
+
+      - panel_6_storage_utilization:
+          title: "Storage Tier Utilization"
+          metrics:
+            - "capabilities_stored_total{tier='L0'} / 10000"
+            - "capabilities_stored_total{tier='L1'} / 100000"
+          unit: "%"
+          type: "Gauge"
+
+  capability_performance_deep_dive:
+    title: "Capability Manager - Performance Deep Dive"
+    time_range: "Last 4 hours"
+    refresh_interval: "1 minute"
+
+    panels:
+      - panel_1_verification_latency_heatmap:
+          title: "Verification Latency Distribution (Cached vs Uncached)"
+          metric: "capability_verification_latency_ms"
+          labels: ["cache_hit", "enforcement_point"]
+          type: "Heatmap"
+
+      - panel_2_issuance_breakdown:
+          title: "Issuance Latency by Trust Level"
+          metric: "capability_issuance_latency_ms"
+          group_by: "trust_level"
+          type: "StackedGraph"
+
+      - panel_3_revocation_performance:
+          title: "Revocation Latency by Type"
+          metric: "capability_revocation_latency_ms"
+          group_by: "revocation_type"
+          type: "StackedGraph"
+
+########################################
+# SECTION 10: SLO DEFINITIONS
+########################################
+slos:
+  capability_verification_availability:
+    definition: "99.9% of verification requests succeed within P95 latency budget"
+    target: 0.999
+    window: "30 days (calendar month)"
+    error_budget: "43.2 seconds/month"
+
+    measurement: |
+      (requests_succeeded_within_latency_budget / total_requests) >= 0.999
+
+  capability_manager_uptime:
+    definition: "CapabilityManager service available to accept requests"
+    target: 0.999
+    window: "30 days (calendar month)"
+    error_budget: "43.2 seconds/month"
+
+  cache_hit_rate_consistency:
+    definition: "L0 cache hit rate >= 80% for 95% of 5-minute windows"
+    target: 0.95
+    window: "1 week rolling"
+
+  key_rotation_timeliness:
+    definition: "Secret key rotates every 90 days ± 2 days"
+    target: "100%"
+    window: "per rotation cycle"

@@ -1,0 +1,395 @@
+---
+# Arbiter Contract - Human-in-Loop Safety Gate for RED Band Tasks
+# Purpose: Define arbiter workflow for reviewing plans with PII, financial, or legal implications
+# Source ADR: ADR-0007c (Validation Stage 2-Tier Implementation)
+# Layer: Planning Layer (Layer 3 - Execution & Tools)
+
+contract:
+  name: "Arbiter Contract"
+  version: "1.0.0"
+  purpose: "Human-in-loop approval workflow for RED band and complex plans"
+  owner: "Planning Layer"
+  layer: "Layer 3 - Execution & Tools"
+  adr_references:
+    - "ADR-0007c: Validation Stage 2-Tier Implementation"
+    - "ADR-0010: Capability Security"
+
+  research_citations:
+    - "Human-in-the-loop AI (Amershi et al., 2019)"
+    - "Safety evaluation for LLM agents (Wallace et al., 2024)"
+
+---
+
+# SECTION 1: ARBITER OVERVIEW
+
+arbiter:
+  description: "Human expert who reviews and approves high-risk plans"
+  role: "Safety reviewer for plans touching PII, financial, legal domains"
+  trigger_conditions:
+    - "Plan band is RED"
+    - "Plan affects child user (age < 18)"
+    - "Multiple AMBER tools in sequence"
+    - "Validation tier 1 found warnings"
+    - "Unknown/untested tool combinations"
+
+  approval_authority:
+    can_approve: "Plans marked for approval"
+    can_reject: "Plans with safety concerns"
+    can_modify: "Step parameters, error handlers (within scope)"
+    cannot_execute: "Cannot skip validation or modify core logic"
+
+  decision_types:
+    - APPROVE: "Plan is safe to execute"
+    - APPROVE_WITH_MODIFICATIONS: "Plan OK if changes made"
+    - REQUEST_INFO: "Need more details before deciding"
+    - REJECT: "Plan unsafe or violates policy"
+    - ESCALATE: "Requires higher-level review"
+
+---
+
+# SECTION 2: ARBITER REQUEST STRUCTURE
+
+arbiter_request:
+  schema: |
+    class ArbiterRequest:
+      request_id: string                    # UUID for tracking
+      plan: ExpandedPlan                    # Plan to review
+      trigger_reason: string                # Why sent to arbiter
+      risk_level: "HIGH" | "MEDIUM" | "LOW"
+      user_context: Dict                    # User info for decision context
+      time_limit_minutes: int               # Max time for decision
+      escalation_path: [string]             # Who to escalate to if needed
+      created_at: timestamp
+      session_id: string
+      trace_id: string                      # cognitive_trace_id
+
+  trigger_reasons:
+    - "RED band task (PII, financial, legal)"
+    - "Child user (age < 18)"
+    - "Multiple AMBER tools"
+    - "Validation warnings found"
+    - "Custom policy triggered"
+    - "User requested review"
+
+  risk_assessment:
+    HIGH:
+      - Financial transactions >$100
+      - Health/medical data access
+      - Child safety decisions
+      - Irrevocable operations
+      - Multiple PII fields
+    MEDIUM:
+      - Financial transactions $10-100
+      - Email/calendar operations
+      - Single PII field
+      - Data modification
+      - API calls to third parties
+    LOW:
+      - Web searches
+      - Read-only operations
+      - Non-sensitive data
+      - Local operations
+      - System queries
+
+---
+
+# SECTION 3: ARBITER DECISION CRITERIA
+
+decision_criteria:
+  description: "Framework for arbiter decision-making"
+
+  safety_checks:
+    pii_handling: |
+      - Are PII fields being handled appropriately?
+      - Is data encryption in place?
+      - Is there user consent?
+      - Does plan minimize PII exposure?
+
+    idempotency_validation: |
+      - Are write tools using exactly_once semantics?
+      - Are idempotency keys properly templated?
+      - Can retry/recovery operate safely?
+      - Will duplicate execution cause issues?
+
+    receipt_chain: |
+      - Are receipts required for write operations?
+      - Are receipts properly chained through saga?
+      - Can effects be audited if needed?
+      - Are compensation receipts tracked?
+
+    capability_tokens: |
+      - Are all capability tokens present?
+      - Are tokens signed (Ed25519)?
+      - Do tokens cover all required capabilities?
+      - Are tokens within expiration window?
+
+    determinism_assessment: |
+      - Are non-deterministic tools only in low-risk contexts?
+      - Are deterministic tools used on critical paths?
+      - Will output variation cause problems?
+      - Are error handlers sufficient?
+
+    financial_integrity: |
+      - Is amount reasonable for this user/transaction?
+      - Are proper verification steps in place?
+      - Is receipt/confirmation needed?
+      - Are fraud detection rules applied?
+
+    legal_compliance: |
+      - Does plan comply with data protection regulations?
+      - Are audit trails maintained?
+      - Is user consent documented?
+      - Are retention policies followed?
+
+    user_intent_match: |
+      - Does plan match user's stated intent?
+      - Are all steps necessary and sufficient?
+      - Is there a simpler/safer alternative?
+      - Has user been informed of implications?
+
+  approval_checklist:
+    - "Safety checks passed (PII, financial, legal)"
+    - "User intent matches plan"
+    - "All dependencies valid"
+    - "Error handlers sufficient"
+    - "Time and cost budgets reasonable"
+    - "No concerning side effects"
+    - "Audit trail complete"
+    - "Escalation path clear if needed"
+    # NEW: Safety-critical field checks
+    - "Idempotency semantics appropriate for operation type"
+    - "Receipt policies enabled for write operations"
+    - "Capability tokens present and valid (signed leases)"
+    - "Determinism acceptable for critical paths"
+    - "Confirm policies adequate for RED band"
+    - "Rate limits will not be exceeded"
+    - "Health status of external tools verified"
+
+---
+
+# SECTION 4: ARBITER DECISION RESPONSE
+
+arbiter_response:
+  schema: |
+    class ArbiterDecision:
+      request_id: string
+      decision: "APPROVE" | "APPROVE_WITH_MODIFICATIONS" | "REQUEST_INFO" | "REJECT" | "ESCALATE"
+      rationale: string                    # Why this decision
+      confidence: float (0.0-1.0)          # Confidence in decision
+      modifications: [Modification]        # If APPROVE_WITH_MODIFICATIONS
+      concerns: [string]                   # Any safety concerns noted
+      recommendations: [string]            # Best practices applied
+      arbiter_id: string                   # Who made decision
+      decided_at: timestamp
+      valid_until: timestamp (optional)    # Decision expiration
+      escalation_reason: string (optional) # If ESCALATE
+
+  modification_type: |
+    class Modification:
+      step_id: int
+      field: string ("parameters" | "error_handlers" | "description")
+      old_value: any
+      new_value: any
+      reason: string
+
+  decision_examples:
+    approve: |
+      decision: "APPROVE"
+      rationale: "Plan follows best practices, PII handling secure, error handlers comprehensive"
+      concerns: []
+      confidence: 0.95
+
+    reject: |
+      decision: "REJECT"
+      rationale: "Financial transaction amount ($5000) unusually high, requires explicit user confirmation"
+      concerns: ["unusually_large_amount", "missing_user_confirmation"]
+      recommendations: ["Add explicit payment confirmation step", "Cap transaction at $1000"]
+      confidence: 0.92
+
+    with_mods: |
+      decision: "APPROVE_WITH_MODIFICATIONS"
+      modifications:
+        - step_id: 2
+          field: "parameters"
+          old_value: { amount: "$1000" }
+          new_value: { amount: "$500" }
+          reason: "Cap initial transaction, user can request higher later"
+      confidence: 0.88
+
+---
+
+# SECTION 5: ARBITER WORKFLOW
+
+workflow:
+  description: "End-to-end arbiter approval process"
+
+  steps: |
+    1. TRIGGER (Validation Stage)
+       - Tier 1 validation identifies RED band task
+       - Create ArbiterRequest
+       - Route to arbiter queue
+       - Set timeout (1500ms to 30 minutes depending on risk level)
+
+    2. QUEUE (Arbiter UI)
+       - Request appears in arbiter's review queue
+       - Prioritized by risk_level
+       - Arbiter can filter by category
+
+    3. REVIEW (Arbiter Decision Point)
+       - Arbiter reads plan details
+       - Checks safety criteria
+       - Asks questions if needed (REQUEST_INFO)
+       - Makes decision (APPROVE, REJECT, ESCALATE, MODIFY)
+
+    4. DECISION (Store & Notify)
+       - Store decision in K0 audit log
+       - Create ArbiterDecision record
+       - Notify orchestrator of result
+       - Log metrics
+
+    5. EXECUTION (Resume Pipeline)
+       - If APPROVE: Continue to Commit stage
+       - If REJECT: Return error to user with arbiter feedback
+       - If MODIFY: Apply changes and continue
+       - If ESCALATE: Route to higher authority
+       - If REQUEST_INFO: Return to user for clarification
+
+  timing:
+    immediate_rejection: "<50ms (automated checks fail → reject without arbiter)"
+    arbiter_decision_timeout: "1500ms (P99, for interactive approval)"
+    bulk_review_timeout: "30min (LOW risk, batch processing)"
+    expedited_timeout: "5min (HIGH risk, urgent decision needed)"
+
+---
+
+# SECTION 6: ARBITER QUEUE MANAGEMENT
+
+queue_management:
+  description: "How requests are prioritized and routed"
+
+  prioritization: |
+    1. HIGH risk, time-sensitive (expedited: 5 min timeout)
+    2. MEDIUM risk (standard: 1 min timeout)
+    3. LOW risk, can batch (30 min timeout)
+
+    Priority ordering:
+    - Requests closest to timeout first
+    - HIGH risk before MEDIUM/LOW
+    - Child safety before financial before data
+
+  routing_rules: |
+    RED band + financial → Financial specialist arbiter
+    RED band + healthcare → Medical/legal specialist arbiter
+    RED band + child user → Child safety specialist arbiter
+    MEDIUM band + multiple steps → Senior reviewer
+    Default → General arbiter pool
+
+  capacity_management:
+    target_arbiter_pool_size: "3-5 expert reviewers"
+    sla_for_decision: "50% within 100ms, 95% within 1s"
+    queue_length_alert: "If > 10 pending requests"
+    escalation_on_timeout: "If no arbiter available, escalate to supervisor"
+
+---
+
+# SECTION 7: AUDIT & LOGGING
+
+audit_trail:
+  description: "Complete record of all arbiter decisions for compliance"
+
+  logged_events:
+    - Request created (plan, trigger reason, risk level)
+    - Request queued (timestamp, arbiter assignment)
+    - Arbiter review started (arbiter_id, timestamp)
+    - Decision made (decision, rationale, confidence)
+    - User notification (if applicable)
+    - Plan execution (if approved)
+    - Plan rejected/escalated (if not approved)
+
+  retention_policy:
+    high_risk_decisions: "7 years (regulatory requirement)"
+    medium_risk_decisions: "3 years"
+    low_risk_decisions: "1 year"
+    all_decisions: "searchable audit log in K0"
+
+  compliance_fields:
+    - request_id (unique identifier)
+    - user_id (who requested)
+    - arbiter_id (who decided)
+    - decision (APPROVE, REJECT, etc)
+    - rationale (why)
+    - timestamp (when)
+    - plan_hash (immutable plan record)
+    - consent_captured (if user consent needed)
+
+---
+
+# SECTION 8: METRICS & OBSERVABILITY
+
+metrics:
+  - "arbiter_requests_total (counter by risk_level)"
+  - "arbiter_decision_latency_ms (histogram P50/P95/P99)"
+  - "arbiter_approval_rate (gauge, target greater than 90%)"
+  - "arbiter_rejection_rate (gauge, track for pattern analysis)"
+  - "arbiter_queue_length (gauge, current backlog)"
+  - "arbiter_timeout_escalations_total (alert if greater than 5)"
+  - "arbiter_decision_distribution (APPROVE vs REJECT vs MODIFY)"
+
+alerts:
+  - "ArbiterQueueBacklog >10 requests"
+  - "ArbiterResponseTime P95 >5s"
+  - "ArbiterTimeoutRate >10%"
+  - "LowApprovalRate <50%"
+
+---
+
+# SECTION 9: INTEGRATION WITH VALIDATION STAGE
+
+integration:
+  description: "How Tier 2 arbiter fits into validation pipeline"
+
+  workflow: |
+    expand_stage()
+      ↓
+    validation_stage():
+      1. Tier 1 rules
+      2. If plan band=RED or other trigger:
+         a. Create ArbiterRequest
+         b. Call arbiter_service.request_approval(request)
+         c. Wait with timeout (1500ms default)
+      3. If arbiter approves: continue
+      4. If arbiter rejects: return error to user
+      5. If timeout: escalate or reject conservatively
+
+  error_handling:
+    arbiter_timeout: "After 1500ms, escalate to supervisor or reject"
+    arbiter_unavailable: "Route to backup arbiter or queue"
+    arbiter_crash: "Fallback: assume unsafe, reject plan"
+
+---
+
+# SECTION 10: POLICIES & CONSTRAINTS
+
+constraints:
+  - "Arbiter cannot bypass Tier 1 validation errors"
+  - "Arbiter can only modify parameters within tool schema"
+  - "Arbiter modifications logged for audit"
+  - "Arbiter decisions not cached (unique per plan)"
+  - "HIGH risk requests cannot be auto-approved (require human)"
+  - "Child users always require arbiter approval for RED band"
+
+---
+
+# SECTION 11: FUTURE ENHANCEMENTS
+
+future:
+  v2:
+    - "Machine learning to predict arbiter decisions"
+    - "Template-based responses for common plan types"
+    - "Arbiter explanations generation"
+    - "Multi-arbiter consensus voting for highest risk"
+
+  v3:
+    - "Federated arbiter network across K1 instances"
+    - "Arbiter specialization learning"
+    - "Automated arbiter training on feedback"

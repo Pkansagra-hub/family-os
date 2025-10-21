@@ -1,0 +1,512 @@
+# P11 DSAR - Data Subject Access Rights Pipeline
+# Port: P11 (K1 → K0 data rights requests)
+# Command semantics: GDPR Article 15-22 compliance (access, rectification, erasure, portability)
+# Performance budget: 5000ms P95, 30000ms timeout
+
+version: "1.0"
+port_id: "P11"
+port_name: "DSAR"
+direction: "K1_TO_K0"
+semantics: "command"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0080"  # GDPR Compliance Framework
+  - "ADR-0081"  # Data Export Formats
+  - "ADR-0082"  # Right to be Forgotten (Tombstones)
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P11"
+      description: "Port identifier for DSAR requests"
+
+    command_type:
+      type: string
+      value: "dsar_request"
+      description: "Data Subject Access Request (GDPR compliance)"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    requester_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Data subject identifier (must own data)"
+      example: "user_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for request classification"
+
+    capability:
+      type: string
+      value: "SUBMIT_DSAR"
+      required: true
+      description: "Required K0 capability for DSAR submission"
+
+  payload:
+    request_type:
+      type: string
+      enum: ["access", "rectification", "erasure", "portability", "restriction"]
+      required: true
+      description: |
+        GDPR request type:
+        - access (Art. 15): Export all personal data
+        - rectification (Art. 16): Correct inaccurate data
+        - erasure (Art. 17): Right to be forgotten
+        - portability (Art. 20): Export in structured format
+        - restriction (Art. 18): Restrict processing
+
+    scope:
+      type: object
+      required: true
+      description: "Request scope specification"
+      properties:
+        scope_type:
+          type: string
+          enum: ["all_data", "specific_memories", "time_range", "data_categories"]
+          description: "Scope of request"
+
+        memory_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: "Specific memory IDs (if scope_type=specific_memories)"
+
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: iso8601
+            end:
+              type: string
+              format: iso8601
+          description: "Time range (if scope_type=time_range)"
+
+        data_categories:
+          type: array
+          items:
+            type: string
+            enum: ["episodic", "semantic", "procedural", "profile", "usage"]
+          description: "Data categories (if scope_type=data_categories)"
+
+    verification_token:
+      type: string
+      required: true
+      description: "Identity verification token (email OTP, SMS code, etc.)"
+      example: "verify_123456"
+
+    export_format:
+      type: string
+      enum: ["json", "csv", "pdf"]
+      default: "json"
+      description: |
+        Export format (for access/portability):
+        - json: Complete structured export (machine-readable)
+        - csv: Tabular format (episodic memories only)
+        - pdf: Human-readable report
+
+    rectification_data:
+      type: object
+      required: false
+      description: "Corrected data (for request_type=rectification)"
+      additionalProperties: true
+
+    erasure_reason:
+      type: string
+      required: false
+      description: "Reason for erasure (GDPR requirement)"
+      example: "Data no longer necessary for original purpose"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "202":
+      description: "DSAR request accepted for processing"
+      payload:
+        dsar_id:
+          type: string
+          format: uuid
+          description: "Unique DSAR request identifier"
+          example: "dsar_123"
+
+        request_type:
+          type: string
+          description: "Echo of request type"
+          example: "access"
+
+        estimated_completion_time:
+          type: string
+          format: iso8601
+          description: "Expected completion timestamp (GDPR: 30 days)"
+          example: "2025-11-17T14:32:00Z"
+
+        export_url:
+          type: string
+          required: false
+          description: "Secure download URL (for access/portability, available after processing)"
+          example: "https://k0.example.com/exports/dsar_123?token=..."
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "400":
+      description: "Invalid DSAR request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_request_type", "invalid_scope", "invalid_export_format"]
+
+        details:
+          type: string
+
+    "401":
+      description: "Unauthorized - requester_id verification failed"
+
+    "403":
+      description: "Forbidden - verification token invalid"
+      payload:
+        required_verification:
+          type: string
+          example: "Email OTP required"
+
+    "429":
+      description: "Rate limited - DSAR quota exceeded (max 1 per 30 days)"
+      payload:
+        retry_after_ms:
+          type: integer
+
+    "500":
+      description: "DSAR processing error"
+      payload:
+        error:
+          type: string
+          enum: ["export_generation_failed", "erasure_failed", "rectification_failed"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Access request (export all data)"
+    request:
+      envelope:
+        port_id: "P11"
+        command_type: "dsar_request"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        requester_id: "user_abc123"
+        privacy_band: "GREEN"
+        capability: "SUBMIT_DSAR"
+      payload:
+        request_type: "access"
+        scope:
+          scope_type: "all_data"
+        verification_token: "verify_123456"
+        export_format: "json"
+
+    response:
+      status: 202
+      payload:
+        dsar_id: "dsar_123"
+        request_type: "access"
+        estimated_completion_time: "2025-11-17T14:32:00Z"
+        export_url: "https://k0.example.com/exports/dsar_123?token=secure_token_xyz"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Erasure request (right to be forgotten)"
+    request:
+      envelope:
+        port_id: "P11"
+        command_type: "dsar_request"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        requester_id: "user_abc123"
+        privacy_band: "RED"
+        capability: "SUBMIT_DSAR"
+      payload:
+        request_type: "erasure"
+        scope:
+          scope_type: "all_data"
+        verification_token: "verify_789012"
+        erasure_reason: "Data no longer necessary for original purpose"
+
+    response:
+      status: 202
+      payload:
+        dsar_id: "dsar_124"
+        request_type: "erasure"
+        estimated_completion_time: "2025-11-17T14:32:00Z"
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Portability request (structured export)"
+    request:
+      envelope:
+        port_id: "P11"
+        command_type: "dsar_request"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        requester_id: "user_abc123"
+        privacy_band: "GREEN"
+        capability: "SUBMIT_DSAR"
+      payload:
+        request_type: "portability"
+        scope:
+          scope_type: "data_categories"
+          data_categories: ["episodic", "semantic", "profile"]
+        verification_token: "verify_345678"
+        export_format: "json"
+
+    response:
+      status: 202
+      payload:
+        dsar_id: "dsar_125"
+        request_type: "portability"
+        estimated_completion_time: "2025-11-17T14:32:00Z"
+        export_url: "https://k0.example.com/exports/dsar_125?token=portable_data_token"
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "identity_verification"
+      description: |
+        Validate requester_id owns data
+        Verify verification_token (OTP, SMS code, email link)
+        Check DSAR quota (max 1 per 30 days per GDPR)
+
+    - step: "scope_resolution"
+      description: |
+        Query all memory stores based on scope:
+        - all_data: st_episodic, st_semantic, st_procedures, st_kg, etc.
+        - specific_memories: direct lookup by memory_ids
+        - time_range: filter by timestamp
+        - data_categories: filter by memory_type
+
+    - step: "data_aggregation"
+      description: |
+        Collect all matching data:
+        - Memories (content, metadata, tags)
+        - Usage logs (access patterns, query history)
+        - Device information
+        - Sync history
+
+    - step: "access_processing"
+      description: |
+        If request_type=access or portability:
+        - Format conversion (json/csv/pdf)
+        - Encryption (AES-256-GCM)
+        - Upload to secure export storage
+        - Generate time-limited download URL
+
+    - step: "erasure_processing"
+      description: |
+        If request_type=erasure:
+        - Soft delete: create tombstones (st_tombstones)
+        - Mark for hard delete after 90 days
+        - Cascade delete: relationships, embeddings, indices
+        - Emit erasure events for downstream systems
+
+    - step: "rectification_processing"
+      description: |
+        If request_type=rectification:
+        - Update specified fields
+        - Create audit log entry
+        - Trigger re-embedding (P08) if content changed
+
+    - step: "compliance_logging"
+      description: |
+        Log DSAR request to st_dsar_requests:
+        - requester_id, request_type, scope, timestamp
+        - Completion status, export URL (if applicable)
+        - Compliance with 30-day GDPR timeline
+
+    - step: "receipt_issue"
+      description: "Issue receipt for audit trail"
+
+  storage_targets:
+    - "st_dsar_requests" # DSAR request log
+    - "st_dsar_exports" # Generated exports
+    - "st_tombstones" # Soft delete markers
+    - "st_episodic" # Data subject memories
+    - "st_semantic" # Data subject knowledge
+    - "st_procedures" # Data subject habits
+    - "st_usage_logs" # Access patterns
+
+  events_emitted:
+    - "privacy.dsar_request_received"
+    - "privacy.dsar_scope_resolved"
+    - "privacy.dsar_export_generated"
+    - "privacy.dsar_erasure_initiated"
+    - "privacy.dsar_erasure_completed"
+    - "privacy.dsar_rectification_completed"
+    - "privacy.dsar_completed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "request_type must be [access|rectification|erasure|portability|restriction]"
+  - rule: "verification_token must be valid and not expired"
+  - rule: "requester_id must own requested data"
+  - rule: "DSAR quota: max 1 request per 30 days (GDPR)"
+  - rule: "if request_type=rectification then rectification_data required"
+  - rule: "if request_type=erasure then erasure_reason required"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_dsar_requests_total"
+      type: "counter"
+      labels: ["request_type", "status"]
+      description: "Total DSAR requests"
+
+    - name: "k0_dsar_completion_time_ms"
+      type: "histogram"
+      labels: ["request_type"]
+      buckets: [60000, 300000, 3600000, 86400000, 2592000000]
+      description: "DSAR completion time (up to 30 days)"
+
+    - name: "k0_dsar_exports_size_mb"
+      type: "histogram"
+      buckets: [1, 10, 50, 100, 500]
+      description: "DSAR export size in megabytes"
+
+    - name: "k0_tombstones_created_total"
+      type: "counter"
+      description: "Total tombstones created (erasure requests)"
+
+  traces:
+    span_name: "k0_dsar.request"
+    attributes:
+      - "dsar_id"
+      - "request_type"
+      - "scope_type"
+      - "export_format"
+
+  logs:
+    - event: "privacy.dsar_request_received"
+      level: "INFO"
+      fields: ["dsar_id", "requester_id", "request_type"]
+
+    - event: "privacy.dsar_completed"
+      level: "INFO"
+      fields: ["dsar_id", "completion_time_ms", "export_size_mb"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    synchronous_response: "100ms" # Request acceptance
+    export_generation: "varies (1 min - 30 days per GDPR)"
+
+  throughput:
+    target_qps: 1
+    max_concurrent_requests: 10
+
+  gdpr_timeline:
+    response_deadline: "30 days"
+    early_completion_target: "7 days"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT) + verification_token"
+    required: true
+
+  authorization:
+    capability_required: "SUBMIT_DSAR"
+    identity_verification: "Mandatory (OTP, SMS, email link)"
+
+  export_security:
+    encryption: "AES-256-GCM"
+    url_expiry: "7 days"
+    access_logging: "All downloads logged"
+
+  audit_trail:
+    receipt_id: "Issued for all DSAR requests"
+    retention: "7 years (GDPR requirement)"
+
+  privacy_bands:
+    all_bands: "DSAR requests supported for all privacy bands"
+
+# ============================================================================
+# GDPR ARTICLES
+# ============================================================================
+
+gdpr_articles:
+  Article_15:
+    name: "Right of access by the data subject"
+    request_type: "access"
+    timeline: "30 days"
+
+  Article_16:
+    name: "Right to rectification"
+    request_type: "rectification"
+    timeline: "30 days"
+
+  Article_17:
+    name: "Right to erasure ('right to be forgotten')"
+    request_type: "erasure"
+    timeline: "30 days (soft delete), 90 days (hard delete)"
+
+  Article_18:
+    name: "Right to restriction of processing"
+    request_type: "restriction"
+    timeline: "30 days"
+
+  Article_20:
+    name: "Right to data portability"
+    request_type: "portability"
+    timeline: "30 days"
+    format: "Structured, commonly used, machine-readable"
+
+# ============================================================================
+# EXPORT FORMATS
+# ============================================================================
+
+export_formats:
+  json:
+    description: "Complete structured export (machine-readable)"
+    mime_type: "application/json"
+    includes: ["memories", "metadata", "relationships", "usage_logs"]
+
+  csv:
+    description: "Tabular format (episodic memories only)"
+    mime_type: "text/csv"
+    includes: ["episodic_memories", "timestamps", "tags"]
+
+  pdf:
+    description: "Human-readable report"
+    mime_type: "application/pdf"
+    includes: ["summary_statistics", "memory_samples", "usage_overview"]

@@ -1,0 +1,419 @@
+# P08 Embedding - Vector Embedding Lifecycle Pipeline
+# Port: P08 (K0 internal background job)
+# Background job semantics: Generate/refresh vector embeddings for semantic search
+# Performance budget: Async (no synchronous latency requirement)
+
+version: "1.0"
+port_id: "P08"
+port_name: "Embedding"
+direction: "K0_INTERNAL"
+semantics: "background_job"
+transport: "Internal Job Queue"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0050"  # Embedding Strategy
+  - "ADR-0051"  # Vector Indexing (FAISS)
+  - "ADR-0052"  # Model Versioning
+  - "ADR-0120"  # Background Job Scheduling
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P08"
+      description: "Port identifier for embedding jobs"
+
+    command_type:
+      type: string
+      value: "embedding_job"
+      description: "Background job for embedding generation/refresh"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d"
+
+    job_type:
+      type: string
+      enum: ["generate", "refresh", "rebuild"]
+      required: true
+      description: |
+        Embedding job type:
+        - generate: Create embeddings for new memories
+        - refresh: Update embeddings for modified memories
+        - rebuild: Rebuild entire index (model upgrade, corruption recovery)
+
+  payload:
+    target_memory_ids:
+      type: array
+      items:
+        type: string
+        format: uuid
+      required: false
+      description: "Specific memory IDs to process (empty = process all pending)"
+
+    embedding_model:
+      type: string
+      enum: ["text-embedding-ada-002", "local-minilm", "multilingual-e5"]
+      default: "local-minilm"
+      description: |
+        Embedding model:
+        - text-embedding-ada-002: OpenAI remote (high quality, higher latency)
+        - local-minilm: Local model (lower latency, privacy-friendly)
+        - multilingual-e5: Multilingual support
+
+    batch_size:
+      type: integer
+      min: 10
+      max: 1000
+      default: 100
+      description: "Number of memories to process per batch"
+
+    priority:
+      type: string
+      enum: ["urgent", "normal", "background"]
+      default: "normal"
+      description: |
+        Job priority:
+        - urgent: High-priority index rebuild
+        - normal: Standard embedding generation
+        - background: Low-priority bulk processing
+
+    force_regenerate:
+      type: boolean
+      default: false
+      description: "Force regeneration even if embeddings exist"
+
+    index_optimization:
+      type: object
+      required: false
+      description: "Vector index optimization settings"
+      properties:
+        index_type:
+          type: string
+          enum: ["IVF", "HNSW", "Flat"]
+          default: "IVF"
+          description: "FAISS index type"
+
+        quantization:
+          type: boolean
+          default: false
+          description: "Enable scalar quantization (reduce memory)"
+
+        nprobe:
+          type: integer
+          default: 32
+          description: "Number of clusters to probe (IVF only)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "202":
+      description: "Embedding job accepted and queued"
+      payload:
+        job_id:
+          type: string
+          format: uuid
+          description: "Unique job identifier"
+          example: "job_embedding_123"
+
+        memories_queued_count:
+          type: integer
+          description: "Number of memories queued for embedding"
+          example: 542
+
+        estimated_duration_ms:
+          type: integer
+          description: "Estimated job duration"
+          example: 120000
+
+        embedding_model:
+          type: string
+          description: "Embedding model being used"
+          example: "local-minilm"
+
+        scheduled_start_time:
+          type: string
+          format: iso8601
+          description: "Expected job start time"
+
+    "400":
+      description: "Invalid embedding job request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_job_type", "invalid_model", "invalid_batch_size"]
+
+        details:
+          type: string
+
+    "500":
+      description: "K0 internal error during job scheduling"
+      payload:
+        error:
+          type: string
+          enum: ["job_queue_full", "model_unavailable"]
+
+# ============================================================================
+# JOB STATUS QUERY
+# ============================================================================
+
+job_status_query:
+  description: "Query embedding job status"
+  request:
+    envelope:
+      port_id: "P08"
+      command_type: "embedding_status"
+      cognitive_trace_id: "uuid"
+    payload:
+      job_id:
+        type: string
+        format: uuid
+        required: true
+
+  response:
+    status_codes:
+      "200":
+        description: "Job status retrieved"
+        payload:
+          job_id: "uuid"
+          status:
+            type: string
+            enum: ["queued", "running", "completed", "failed"]
+          progress_percent:
+            type: integer
+            min: 0
+            max: 100
+          memories_processed:
+            type: integer
+          embeddings_generated:
+            type: integer
+          index_size_mb:
+            type: number
+          elapsed_ms:
+            type: integer
+          error:
+            type: string
+            required: false
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Generate embeddings for new memories"
+    request:
+      envelope:
+        port_id: "P08"
+        command_type: "embedding_job"
+        cognitive_trace_id: "8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d"
+        job_type: "generate"
+      payload:
+        embedding_model: "local-minilm"
+        batch_size: 100
+        priority: "normal"
+
+    response:
+      status: 202
+      payload:
+        job_id: "job_embedding_123"
+        memories_queued_count: 542
+        estimated_duration_ms: 120000
+        embedding_model: "local-minilm"
+        scheduled_start_time: "2025-10-18T03:00:00Z"
+
+  - name: "Rebuild index with new model"
+    request:
+      envelope:
+        port_id: "P08"
+        command_type: "embedding_job"
+        cognitive_trace_id: "9b0c1d2e-3f4a-5b6c-7d8e-9f0a1b2c3d4e"
+        job_type: "rebuild"
+      payload:
+        embedding_model: "text-embedding-ada-002"
+        batch_size: 50
+        priority: "urgent"
+        force_regenerate: true
+        index_optimization:
+          index_type: "HNSW"
+          quantization: true
+
+    response:
+      status: 202
+      payload:
+        job_id: "job_embedding_124"
+        memories_queued_count: 15420
+        estimated_duration_ms: 3600000
+        embedding_model: "text-embedding-ada-002"
+        scheduled_start_time: "2025-10-18T14:32:10Z"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "job_scheduling"
+      description: |
+        Queue job based on priority
+        Check model availability
+        Allocate compute resources
+
+    - step: "memory_selection"
+      description: |
+        If target_memory_ids provided: fetch those
+        Else: query pending memories (no embeddings or stale)
+        Batch memories by content length
+
+    - step: "embedding_generation"
+      description: |
+        For each batch:
+        - Extract content text
+        - Call embedding model API or local inference
+        - Generate vector embeddings (dimensionality depends on model)
+        - Handle rate limits, retries
+
+    - step: "vector_indexing"
+      description: |
+        FAISS index construction:
+        - IVF: Inverted file index (k-means clustering)
+        - HNSW: Hierarchical navigable small world (graph-based)
+        - Flat: Exhaustive search (small datasets)
+
+    - step: "index_optimization"
+      description: |
+        If quantization enabled: scalar quantization (8-bit)
+        Index pruning: remove low-quality vectors
+        Rebalancing: optimize cluster distribution
+
+    - step: "metadata_update"
+      description: |
+        Update st_index_metadata:
+        - Model version
+        - Index freshness timestamp
+        - Index statistics (size, quality metrics)
+
+    - step: "storage"
+      description: |
+        Write to st_embeddings (memory_id → vector)
+        Write to st_vector (FAISS index serialization)
+
+  storage_targets:
+    - "st_embeddings" # Vector embeddings
+    - "st_vector" # FAISS indices
+    - "st_index_metadata" # Index metadata
+
+  events_emitted:
+    - "infra.ml.embedding_job_started"
+    - "infra.ml.batch_processed"
+    - "infra.ml.model_called"
+    - "infra.ml.index_rebuilt"
+    - "infra.ml.job_completed"
+    - "infra.ml.job_failed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "job_type must be [generate|refresh|rebuild]"
+  - rule: "embedding_model must be [text-embedding-ada-002|local-minilm|multilingual-e5]"
+  - rule: "batch_size: 10-1000"
+  - rule: "priority must be [urgent|normal|background]"
+  - rule: "if force_regenerate=true then job_type can be generate or rebuild"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_embedding_jobs_total"
+      type: "counter"
+      labels: ["job_type", "embedding_model", "status"]
+      description: "Total embedding jobs"
+
+    - name: "k0_embedding_duration_ms"
+      type: "histogram"
+      labels: ["job_type", "embedding_model"]
+      buckets: [10000, 60000, 300000, 1800000, 3600000]
+      description: "Embedding job duration"
+
+    - name: "k0_embedding_batch_size"
+      type: "histogram"
+      buckets: [10, 50, 100, 500, 1000]
+      description: "Batch size distribution"
+
+    - name: "k0_vector_index_size_mb"
+      type: "gauge"
+      labels: ["index_type"]
+      description: "Vector index size in megabytes"
+
+    - name: "k0_embedding_model_calls_total"
+      type: "counter"
+      labels: ["model"]
+      description: "Total model API/inference calls"
+
+  traces:
+    span_name: "k0_embedding.job"
+    attributes:
+      - "job_id"
+      - "job_type"
+      - "embedding_model"
+      - "memories_count"
+
+  logs:
+    - event: "infra.ml.embedding_job_started"
+      level: "INFO"
+      fields: ["job_id", "job_type", "memories_queued"]
+
+    - event: "infra.ml.batch_processed"
+      level: "DEBUG"
+      fields: ["batch_number", "batch_size", "latency_ms"]
+
+    - event: "infra.ml.job_completed"
+      level: "INFO"
+      fields: ["job_id", "duration_ms", "embeddings_generated"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    synchronous_response: "50ms" # Job acceptance
+    job_execution: "varies by batch size (60s - 1 hour)"
+
+  throughput:
+    concurrent_jobs: 3
+    embeddings_per_second: "50-200 (depends on model)"
+
+  resource_limits:
+    max_batch_size: 1000
+    max_concurrent_model_calls: 10
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research:
+  embedding_models:
+    description: "Dense vector representations for semantic search"
+    citations:
+      - "Reimers & Gurevych (2019) - Sentence-BERT"
+      - "Neelakantan et al. (2022) - Text and Code Embeddings by Contrastive Pre-Training"
+
+  vector_indexing:
+    description: "Approximate nearest neighbor search"
+    citations:
+      - "Johnson et al. (2019) - Billion-scale similarity search with GPUs (FAISS)"
+      - "Malkov & Yashunin (2020) - Efficient and robust approximate nearest neighbor search using HNSW"

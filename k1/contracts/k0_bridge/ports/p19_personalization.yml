@@ -1,0 +1,570 @@
+# P19 Personalization - User Modeling & Recommendations Pipeline
+# Port: P19 (K1 → K0 personalization queries)
+# Query semantics: User preferences, behavioral profiles, recommendations
+# Performance budget: 30ms P95, 100ms timeout
+
+version: "1.0"
+port_id: "P19"
+port_name: "Personalization"
+direction: "K1_TO_K0"
+semantics: "query"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0160"  # Personalization Framework
+  - "ADR-0161"  # Recommendation Models
+  - "ADR-0162"  # Contextual Adaptation
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P19"
+      description: "Port identifier for personalization queries"
+
+    command_type:
+      type: string
+      value: "personalization_query"
+      description: "Personalization/recommendation request"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for personalization"
+
+    capability:
+      type: string
+      value: "QUERY_PERSONALIZATION"
+      required: true
+      description: "Required K0 capability for personalization queries"
+
+  payload:
+    query_type:
+      type: string
+      enum: ["preferences", "recommendations", "profile"]
+      required: true
+      description: |
+        Personalization query type:
+        - preferences: User-configured settings (e.g., preferred_workout_time)
+        - recommendations: ML-generated suggestions (e.g., recommended_tasks)
+        - profile: Aggregated user model (traits, roles, health, behavioral patterns)
+
+    context:
+      type: object
+      required: true
+      description: "Contextual factors for adaptation"
+      properties:
+        time_of_day:
+          type: string
+          enum: ["morning", "afternoon", "evening", "night"]
+          description: "Time of day for contextual recommendations"
+
+        location:
+          type: string
+          enum: ["home", "work", "commute", "gym", "other"]
+          description: "User location context"
+
+        device_type:
+          type: string
+          enum: ["mobile", "desktop", "tablet", "watch", "voice"]
+          description: "Device type for UI adaptation"
+
+        social_context:
+          type: string
+          enum: ["alone", "family", "friends", "professional"]
+          description: "Social context"
+
+    recommendation_count:
+      type: integer
+      default: 10
+      description: "Number of recommendations to return (if query_type=recommendations)"
+
+    filter_categories:
+      type: array
+      items:
+        type: string
+      required: false
+      description: "Filter recommendations by categories (e.g., ['tasks', 'contacts', 'content'])"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Personalization query successful"
+      payload:
+        query_type:
+          type: string
+          description: "Echo of query type"
+
+        preferences:
+          type: object
+          required: false
+          description: "User preferences (if query_type=preferences)"
+          additionalProperties: true
+          example:
+            preferred_workout_time: "morning"
+            favorite_cuisines: ["italian", "japanese"]
+            notification_frequency: "moderate"
+
+        recommendations:
+          type: array
+          required: false
+          description: "Recommendations (if query_type=recommendations)"
+          items:
+            type: object
+            properties:
+              item_id:
+                type: string
+                description: "Recommended item identifier"
+
+              item_type:
+                type: string
+                enum: ["task", "contact", "content", "routine", "skill"]
+
+              title:
+                type: string
+                description: "Recommendation title"
+
+              score:
+                type: number
+                description: "Recommendation score (0.0-1.0)"
+
+              reason:
+                type: string
+                description: "Explanation for recommendation"
+                example: "Based on your recent activities"
+
+              metadata:
+                type: object
+                description: "Additional item metadata"
+
+        profile:
+          type: object
+          required: false
+          description: "User profile (if query_type=profile)"
+          properties:
+            traits:
+              type: object
+              description: "Personality traits, preferences"
+
+            roles:
+              type: array
+              items:
+                type: string
+              description: "User roles (e.g., ['parent', 'engineer', 'athlete'])"
+
+            health:
+              type: object
+              description: "Health metrics, fitness level"
+
+            behavioral_patterns:
+              type: object
+              description: "Usage patterns, engagement metrics"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "400":
+      description: "Invalid personalization request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_query_type", "invalid_context", "invalid_recommendation_count"]
+
+        details:
+          type: string
+
+    "500":
+      description: "Personalization error"
+      payload:
+        error:
+          type: string
+          enum: ["recommendation_model_error", "profile_query_error"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Query user preferences"
+    request:
+      envelope:
+        port_id: "P19"
+        command_type: "personalization_query"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PERSONALIZATION"
+      payload:
+        query_type: "preferences"
+        context:
+          time_of_day: "morning"
+          location: "home"
+          device_type: "mobile"
+
+    response:
+      status: 200
+      payload:
+        query_type: "preferences"
+        preferences:
+          preferred_workout_time: "morning"
+          favorite_cuisines: ["italian", "japanese"]
+          notification_frequency: "moderate"
+          theme: "dark"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Get contextual recommendations (morning routine)"
+    request:
+      envelope:
+        port_id: "P19"
+        command_type: "personalization_query"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PERSONALIZATION"
+      payload:
+        query_type: "recommendations"
+        context:
+          time_of_day: "morning"
+          location: "home"
+          device_type: "mobile"
+          social_context: "alone"
+        recommendation_count: 5
+        filter_categories: ["tasks", "routines"]
+
+    response:
+      status: 200
+      payload:
+        query_type: "recommendations"
+        recommendations:
+          - item_id: "task_123"
+            item_type: "task"
+            title: "Morning workout (30 min)"
+            score: 0.92
+            reason: "You usually exercise at this time"
+            metadata:
+              duration_minutes: 30
+              category: "fitness"
+          - item_id: "routine_456"
+            item_type: "routine"
+            title: "Coffee & email check"
+            score: 0.87
+            reason: "Part of your morning routine"
+            metadata:
+              steps: ["brew_coffee", "check_email", "review_calendar"]
+          - item_id: "task_789"
+            item_type: "task"
+            title: "Plan today's priorities"
+            score: 0.81
+            reason: "High productivity in mornings"
+            metadata:
+              duration_minutes: 15
+              category: "planning"
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Query user profile"
+    request:
+      envelope:
+        port_id: "P19"
+        command_type: "personalization_query"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PERSONALIZATION"
+      payload:
+        query_type: "profile"
+        context:
+          device_type: "desktop"
+
+    response:
+      status: 200
+      payload:
+        query_type: "profile"
+        profile:
+          traits:
+            personality: "conscientious"
+            productivity_style: "morning_person"
+            risk_tolerance: "moderate"
+          roles: ["parent", "engineer", "athlete"]
+          health:
+            fitness_level: "intermediate"
+            activity_minutes_per_week: 180
+            sleep_hours_average: 7.5
+          behavioral_patterns:
+            most_active_time: "morning"
+            preferred_devices: ["mobile", "desktop"]
+            engagement_level: "high"
+            session_frequency_per_week: 28
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "profile_query"
+      description: |
+        If query_type=preferences or profile:
+        - Fetch from st_self_preferences (user settings)
+        - Fetch from st_self_traits (personality, preferences)
+        - Fetch from st_self_health (fitness, wellness metrics)
+        - Fetch from st_self_roles (user roles)
+
+    - step: "behavioral_analysis"
+      description: |
+        Aggregate engagement metrics, usage patterns:
+        - Query st_activity (usage logs, interaction history)
+        - Compute derived metrics (engagement_level, session_frequency)
+        - Identify patterns (most_active_time, preferred_devices)
+
+    - step: "recommendation_generation"
+      description: |
+        If query_type=recommendations:
+        - Collaborative filtering: user-user similarity (st_user_embeddings)
+        - Content-based: item-item similarity (st_item_embeddings)
+        - Hybrid: weighted combination (70% collaborative, 30% content-based)
+        - Contextual bandit: exploration-exploitation trade-off
+
+    - step: "contextual_adaptation"
+      description: |
+        Adjust recommendations based on context:
+        - time_of_day: Morning routines, evening activities
+        - location: Home tasks, work tasks, commute content
+        - device_type: Mobile-friendly vs desktop-focused
+        - social_context: Solo activities vs family/friends
+
+    - step: "filtering_ranking"
+      description: |
+        Apply filters (filter_categories)
+        Rank by score (collaborative + content-based + contextual)
+        Return top N (recommendation_count)
+
+    - step: "caching"
+      description: |
+        Cache profiles in K1:
+        - TTL: 5 minutes (configurable)
+        - Invalidate on preference update
+
+  storage_targets:
+    - "st_self_preferences" # User settings
+    - "st_self_traits" # Personality, preferences
+    - "st_self_health" # Fitness, wellness
+    - "st_self_roles" # User roles
+    - "st_activity" # Usage logs
+    - "st_user_embeddings" # User similarity vectors
+    - "st_item_embeddings" # Item similarity vectors
+    - "st_ml_artifacts" # Trained recommendation models
+
+  events_emitted:
+    - "infra.personalization.profile_queried"
+    - "infra.personalization.recommendations_generated"
+    - "infra.personalization.preference_updated"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "query_type must be [preferences|recommendations|profile]"
+  - rule: "context.time_of_day must be [morning|afternoon|evening|night]"
+  - rule: "context.location must be [home|work|commute|gym|other]"
+  - rule: "recommendation_count must be between 1 and 50"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_personalization_queries_total"
+      type: "counter"
+      labels: ["query_type"]
+      description: "Total personalization queries"
+
+    - name: "k0_recommendations_generated_total"
+      type: "counter"
+      labels: ["context_time_of_day", "context_location"]
+      description: "Total recommendations generated"
+
+    - name: "k0_personalization_latency_ms"
+      type: "histogram"
+      buckets: [5, 10, 20, 30, 50, 100]
+      description: "Personalization query latency"
+
+    - name: "k0_recommendation_acceptance_rate"
+      type: "gauge"
+      description: "% of recommendations accepted by users"
+
+  traces:
+    span_name: "k0_personalization.query"
+    attributes:
+      - "query_type"
+      - "session_id"
+      - "context_time_of_day"
+      - "context_location"
+
+  logs:
+    - event: "infra.personalization.profile_queried"
+      level: "INFO"
+      fields: ["session_id", "query_type"]
+
+    - event: "infra.personalization.recommendations_generated"
+      level: "INFO"
+      fields: ["session_id", "recommendation_count", "context"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "15ms"
+    p95: "30ms"
+    p99: "60ms"
+    timeout: "100ms"
+
+  throughput:
+    target_qps: 200
+    max_concurrent_requests: 500
+
+  caching:
+    k1_cache_ttl: "5 minutes (profiles, preferences)"
+    cache_hit_rate_target: "80%"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "QUERY_PERSONALIZATION"
+
+  privacy:
+    profile_isolation: "Profiles isolated per session, no cross-session leakage"
+    anonymization: "Collaborative filtering uses anonymized user IDs"
+
+  audit_trail:
+    receipt_id: "Issued for all personalization queries"
+    retention: "365 days"
+
+# ============================================================================
+# RECOMMENDATION MODELS
+# ============================================================================
+
+recommendation_models:
+  collaborative_filtering:
+    description: "User-user similarity (users like you also enjoyed...)"
+    algorithm: "Matrix factorization (ALS), KNN"
+    features: ["user_embeddings", "interaction_history"]
+    weight: 0.7
+
+  content_based:
+    description: "Item-item similarity (similar to what you've done before...)"
+    algorithm: "Cosine similarity on item embeddings"
+    features: ["item_embeddings", "tags", "categories"]
+    weight: 0.3
+
+  hybrid:
+    description: "Weighted combination of collaborative + content-based"
+    formula: "score = 0.7 * collaborative + 0.3 * content_based"
+
+  contextual_bandit:
+    description: "Exploration-exploitation trade-off (multi-armed bandit)"
+    algorithm: "Thompson Sampling, UCB1"
+    use_case: "A/B testing new recommendations"
+
+# ============================================================================
+# CONTEXTUAL FACTORS
+# ============================================================================
+
+contextual_factors:
+  time_of_day:
+    morning:
+      - "Exercise routines, planning tasks"
+      - "High energy, high productivity"
+    afternoon:
+      - "Meetings, collaboration, deep work"
+      - "Mid-energy, sustained focus"
+    evening:
+      - "Family time, relaxation, hobbies"
+      - "Lower energy, unwinding"
+    night:
+      - "Sleep prep, light content consumption"
+      - "Low energy, recovery"
+
+  location:
+    home:
+      - "Personal tasks, family activities, relaxation"
+    work:
+      - "Professional tasks, meetings, collaboration"
+    commute:
+      - "Audio content, short tasks, planning"
+    gym:
+      - "Fitness routines, health tracking"
+
+  device_type:
+    mobile:
+      - "Quick tasks, notifications, on-the-go"
+    desktop:
+      - "Deep work, complex tasks, detailed content"
+    watch:
+      - "Fitness tracking, quick notifications"
+    voice:
+      - "Hands-free, audio-first interactions"
+
+  social_context:
+    alone:
+      - "Solo tasks, personal goals, deep focus"
+    family:
+      - "Shared activities, family goals"
+    friends:
+      - "Social activities, group events"
+    professional:
+      - "Work tasks, professional networking"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Koren, Y., et al. (2009). Matrix Factorization Techniques for Recommender Systems. IEEE Computer."
+    url: "https://datajobs.com/data-science-repo/Recommender-Systems-[Netflix].pdf"
+    relevance: "Collaborative filtering with matrix factorization"
+
+  - citation: "Agrawal, S., & Goyal, N. (2012). Analysis of Thompson Sampling for the Multi-armed Bandit Problem. COLT 2012."
+    url: "http://proceedings.mlr.press/v23/agrawal12/agrawal12.pdf"
+    relevance: "Contextual bandit for exploration-exploitation"
+
+  - citation: "Chen, J., et al. (2019). Deep Learning for Recommender Systems: A Survey. Knowledge and Information Systems."
+    url: "https://arxiv.org/abs/1707.07435"
+    relevance: "Modern recommendation techniques with neural networks"

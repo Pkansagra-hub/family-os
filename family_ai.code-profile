@@ -1,0 +1,148 @@
+﻿{
+  "name": "Family_AI",
+  "icon": "server",
+  "settings": {
+    "editor.unicodeHighlight.nonBasicASCII": false,
+    "javascript.updateImportsOnFileMove.enabled": "always",
+    "editor.fontVariations": false,
+    "workbench.preferredDarkColorTheme": "Dark+ Pure Black (OLED)",
+    "workbench.preferredHighContrastColorTheme": "Dark+ Pure Black (OLED)",
+    "workbench.colorTheme": "Dark+ Pure Black (OLED)",
+    "workbench.iconTheme": "material-icon-theme",
+    "workbench.tree.indent": 20,
+    "editor.minimap.renderCharacters": false,
+    "editor.minimap.size": "fill",
+    "files.autoSave": "afterDelay",
+    "editor.cursorStyle": "block-outline",
+    "editor.cursorBlinking": "smooth",
+    "editor.rulers": [
+      88,
+      120
+    ],
+    "explorer.confirmPasteNative": false,
+    "explorer.confirmDelete": false,
+    "[python]": {
+      "python.linting.lintOnSave": true,
+      "python.linting.enabled": true,
+      "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit",
+        "source.fixAll": "explicit"
+      },
+      "editor.defaultFormatter": "ms-python.black-formatter",
+      "editor.formatOnSave": true
+    },
+    "python.analysis.typeCheckingMode": "standard",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.include": [
+      "**/*.py"
+    ],
+    "python.analysis.exclude": [
+      "**/node_modules",
+      "**/.venv",
+      "**/venv",
+      "**/__pycache__"
+    ],
+    "python.defaultInterpreterPath": "./venv/Scripts/python.exe",
+    "github.copilot.enable": {
+      "*": true,
+      "plaintext": false,
+      "markdown": true,
+      "scminput": false
+    },
+    "github.copilot.nextEditSuggestions.enabled": true,
+    "github.copilot.chat.codesearch.enabled": true,
+    "chat.agent.maxRequests": 300,
+    "chat.mcp.autostart": "newAndOutdated",
+    "chatgpt.openOnStartup": true,
+    "git.autofetch": true,
+    "git.enableSmartCommit": true,
+    "git.confirmSync": false,
+    "gitlens.ai.model": "vscode",
+    "gitlens.ai.vscode.model": "copilot:gpt-5",
+    "gitlens.ai.largePromptWarningThreshold": 200000,
+    "gitlens.graph.minimap.dataType": "lines",
+    "gitlens.graph.minimap.additionalTypes": [
+      "localBranches",
+      "stashes",
+      "remoteBranches",
+      "pullRequests",
+      "tags"
+    ],
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+      "*.ts": "${capture}.js",
+      "*.js": "${capture}.js.map, ${capture}.min.js, ${capture}.d.ts",
+      "*.jsx": "${capture}.js",
+      "*.tsx": "${capture}.ts",
+      "tsconfig.json": "tsconfig.*.json",
+      "package.json": "package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lockb, bun.lock",
+      "pyproject.toml": "poetry.lock",
+      "requirements.txt": "requirements-*.txt",
+      "*.py": "${capture}.pyc",
+      "*.sqlite": "${capture}.${extname}-*",
+      "*.db": "${capture}.${extname}-*",
+      "*.sqlite3": "${capture}.${extname}-*",
+      "*.db3": "${capture}.${extname}-*",
+      "*.sdb": "${capture}.${extname}-*",
+      "*.s3db": "${capture}.${extname}-*",
+      "README.md": "*.md",
+      "Dockerfile": "docker-compose.yml, .dockerignore"
+    },
+    "makefile.configureOnOpen": true,
+    "svelte.enable-ts-plugin": true,
+    "redhat.telemetry.enabled": true,
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.profiles.windows": {
+      "PowerShell": {
+        "source": "PowerShell",
+        "icon": "terminal-powershell"
+      }
+    },
+    "debug.console.fontSize": 14,
+    "debug.console.lineHeight": 18,
+    "jupyter.askForKernelRestart": false,
+    "jupyter.interactiveWindow.creationMode": "perFile",
+    "markdown.preview.fontSize": 14,
+    "markdown.preview.lineHeight": 1.6,
+    "yaml.schemas": {
+      "https://json.schemastore.org/github-workflow.json": ".github/workflows/*.yml",
+      "https://json.schemastore.org/docker-compose.json": "docker-compose*.yml"
+    }
+  },
+  "extensions": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.black-formatter",
+    "ms-python.isort",
+    "ms-python.pylint",
+    "github.copilot",
+    "github.copilot-chat",
+    "eamodio.gitlens",
+    "pkief.material-icon-theme",
+    "chadbaileyvh.oled-pure-black---vscode",
+    "ms-toolsai.jupyter",
+    "ms-toolsai.jupyter-keymap",
+    "ms-toolsai.jupyter-renderers",
+    "ms-toolsai.jupyter-slideshow",
+    "ms-toolsai.vscode-jupyter-cell-tags",
+    "alexcvzz.vscode-sqlite",
+    "qwtel.sqlite-viewer",
+    "redhat.vscode-yaml",
+    "yzhang.markdown-all-in-one",
+    "shd101wyy.markdown-preview-enhanced",
+    "bierner.markdown-mermaid",
+    "vstirbu.vscode-mermaid-preview",
+    "mermaidchart.vscode-mermaid-chart",
+    "aaron-bond.better-comments",
+    "oderwat.indent-rainbow",
+    "mechatroner.rainbow-csv",
+    "ms-vscode.live-server",
+    "esbenp.prettier-vscode",
+    "ms-azuretools.vscode-docker",
+    "github.vscode-github-actions",
+    "github.vscode-pull-request-github",
+    "chrmarti.regex",
+    "jock.svg",
+    "tintinweb.graphviz-interactive-preview"
+  ]
+}

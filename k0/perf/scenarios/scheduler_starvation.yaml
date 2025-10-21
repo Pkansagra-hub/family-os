@@ -1,0 +1,62 @@
+# Scheduler Starvation Scenario
+#
+# Tests QoS scheduler behavior under extreme resource contention.
+# Validates:
+# - W-DRR fairness across ports
+# - Token starvation recovery
+# - Budget exhaustion handling
+# - Priority band enforcement
+
+name: "QoS Scheduler Starvation Test"
+description: |
+  Saturates all kernel ports simultaneously to test QoS scheduler fairness,
+  token starvation recovery, and priority band enforcement.
+
+type: stress
+duration: 180  # 3 minutes
+
+tags:
+  - qos
+  - scheduler
+  - starvation
+  - stress
+
+environment:
+  kernel_endpoint: "http://localhost:8000"
+  telemetry_endpoint: "http://localhost:4317"
+  prometheus_pushgateway: "http://localhost:9091"
+  pulumi_stack: "dev"
+
+phases:
+  - name: "Port Saturation"
+    duration: 120
+    workload:
+      type: mixed
+      rate: 1000  # Combined req/sec across all ports
+      concurrency: 100
+      payload_size: 1024
+    assertions:
+      max_p99_latency_ms: 2000
+      min_success_rate: 0.85  # Expect resource exhaustion
+
+  - name: "Recovery Validation"
+    duration: 60
+    workload:
+      type: mixed
+      rate: 50  # req/sec
+      concurrency: 10
+      payload_size: 512
+    assertions:
+      max_p99_latency_ms: 200
+      min_success_rate: 0.99
+
+global_assertions:
+  max_p99_latency_ms: 2000
+  min_success_rate: 0.80
+  max_memory_mb: 1024
+  max_cpu_percent: 95.0
+
+artifacts:
+  timeline: true
+  telemetry_traces: true
+  prometheus_snapshots: true

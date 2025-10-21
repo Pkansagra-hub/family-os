@@ -1,0 +1,384 @@
+#
+# Capability Issuance Contract
+# EPIC 2.5.2: Capability Manager Implementation
+# ADR-0010: Capability-Based Security
+#
+# Purpose: Define API for issuing (creating and signing) capability tokens
+# Foundation: Cryptographic token generation with HMAC-SHA256
+# Integration: CapabilityManager.issue_capability()
+#
+
+metadata:
+  title: "Capability Issuance Contract"
+  version: "1.0"
+  status: "accepted"
+  updated: "2025-10-15"
+  adr_references:
+    - "ADR-0010: Capability-Based Security"
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+
+capability_issuance_api:
+  description: "CapabilityManager.issue_capability() interface"
+
+  method_signature: |
+    async def issue_capability(
+        self,
+        agent_id: str,
+        resource_type: str,              # TOOL | MEMORY | LLM | K0_WAL | MCP
+        resource_id: str,                # Specific resource or '*'
+        permissions: List[str],          # [execute, read, write, delete, delegate, attenuate]
+        constraints: CapabilityConstraints = None,
+        issued_by: str = "SYSTEM",
+        trust_level: int = 1,
+        trace_id: str = None
+    ) -> CapabilityToken
+
+  input_parameters:
+    agent_id:
+      type: "string"
+      description: "Non-transferable agent owner (ULID format)"
+      validation: "Must match hiring_agent_id from Agent Fabric"
+      example: "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+    resource_type:
+      type: "enum"
+      values: ["TOOL", "MEMORY", "LLM", "K0_WAL", "MCP"]
+      description: "Type of resource being granted access to"
+      example: "TOOL"
+
+    resource_id:
+      type: "string"
+      description: "Specific resource identifier or wildcard"
+      validation: "Must match registered resource ID or be '*'"
+      example: "book_hotel OR * (all resources of type)"
+
+    permissions:
+      type: "array[string]"
+      values: ["execute", "read", "write", "delete", "delegate", "attenuate", "admin"]
+      description: "Rights being granted"
+      example: ["execute", "read"]
+      validation:
+        - "Cannot grant 'admin' except to supervisor_agent"
+        - "Delegatable permissions: execute, read, write, delegate, attenuate"
+        - "Non-delegatable: delete, admin"
+
+    constraints:
+      type: "CapabilityConstraints"
+      description: "Optional constraints on capability usage"
+      fields:
+        max_invocations: "int (1-1000000)"
+        max_invocations_per_minute: "int (1-1000)"
+        budget_usd: "float (0.01-10000.00)"
+        requires_approval: "bool"
+        privacy_band: "enum (GREEN|AMBER|RED)"
+        time_window_start: "datetime"
+        time_window_end: "datetime"
+      defaults:
+        - "max_invocations: unlimited"
+        - "budget_usd: unlimited"
+        - "privacy_band: GREEN"
+        - "time_window: 24 hours from issuance"
+
+    issued_by:
+      type: "string"
+      description: "Authority issuing the capability"
+      values: ["SYSTEM", "supervisor_agent_id", "orchestrator_agent_id"]
+      default: "SYSTEM"
+
+    trust_level:
+      type: "integer"
+      description: "Agent's current trust level (0-4)"
+      range: "0 (Untrusted) to 4 (Admin)"
+      default: 1
+      usage: "Determines constraint defaults"
+
+    trace_id:
+      type: "string"
+      description: "Distributed trace ID for observability"
+      optional: true
+      format: "UUID v4"
+
+  output_return:
+    type: "CapabilityToken"
+    fields:
+      cap_id: "ULID (Unique Lexicographically Sortable Identifier)"
+      agent_id: "Same as input (non-transferable)"
+      resource_type: "Same as input"
+      resource_id: "Same as input"
+      permissions: "Same as input"
+      constraints: "Merged with trust-level defaults"
+      issued_at: "Current timestamp (ISO 8601)"
+      issued_by: "Same as input"
+      expires_at: "issued_at + 24h (or custom time_window_end)"
+      status: "ISSUED"
+      token: "JWT (header.payload.signature)"
+      signature: "HMAC-SHA256 base64-url encoded"
+
+  error_cases:
+    invalid_agent_id:
+      trigger: "agent_id not found in Agent Fabric"
+      error_type: "AgentNotFoundError"
+      http_code: 404
+      message: "Agent {agent_id} not found"
+
+    invalid_resource_type:
+      trigger: "resource_type not in [TOOL, MEMORY, LLM, K0_WAL, MCP]"
+      error_type: "InvalidResourceTypeError"
+      http_code: 400
+      message: "Unknown resource_type: {resource_type}"
+
+    resource_not_found:
+      trigger: "resource_id not registered and != '*'"
+      error_type: "ResourceNotFoundError"
+      http_code: 404
+      message: "Resource {resource_type}:{resource_id} not found"
+
+    invalid_permission:
+      trigger: "permission not in allowed set for resource_type"
+      error_type: "InvalidPermissionError"
+      http_code: 400
+      message: "Permission {perm} not allowed for {resource_type}"
+
+    admin_permission_unauthorized:
+      trigger: "issued_by attempting to grant admin to non-supervisor"
+      error_type: "UnauthorizedError"
+      http_code: 403
+      message: "Cannot grant admin permission to non-supervisor agent"
+
+    constraint_validation_failure:
+      trigger: "Constraints violate rules (e.g., max_invocations < 1)"
+      error_type: "ConstraintValidationError"
+      http_code: 400
+      message: "Constraint violation: {reason}"
+
+    key_not_available:
+      trigger: "Secret key not loaded (not found in Vault)"
+      error_type: "KeyManagementError"
+      http_code: 500
+      message: "Unable to load secret key for signing"
+
+    quota_exceeded:
+      trigger: "Agent has reached max capabilities (default: 100 per session)"
+      error_type: "QuotaExceededError"
+      http_code: 429
+      message: "Agent capability quota exceeded"
+
+issuance_flow:
+  step_1_validate_inputs:
+    action: "Validate all input parameters"
+    latency_ms: 0.2
+    checks:
+      - "agent_id exists in Agent Fabric"
+      - "resource_type in allowed enum"
+      - "resource_id exists or is '*'"
+      - "permissions valid for resource_type"
+      - "constraints satisfy validation rules"
+
+  step_2_apply_trust_defaults:
+    action: "Merge constraints with trust-level defaults"
+    latency_ms: 0.1
+    logic: |
+      if trust_level == 0:  # Untrusted
+          max_inv = min(constraints.max_invocations, 10)
+          budget = min(constraints.budget_usd, 0.0)
+      elif trust_level == 1:  # Low
+          max_inv = min(constraints.max_invocations, 100)
+          budget = min(constraints.budget_usd, 1.0)
+      elif trust_level == 2:  # Medium
+          max_inv = min(constraints.max_invocations, 1000)
+          budget = min(constraints.budget_usd, 10.0)
+      elif trust_level == 3:  # High
+          max_inv = min(constraints.max_invocations, 10000)
+          budget = min(constraints.budget_usd, 100.0)
+      else:  # Admin
+          max_inv = constraints.max_invocations
+          budget = constraints.budget_usd
+
+  step_3_generate_cap_id:
+    action: "Generate unique ULID for capability"
+    latency_ms: 0.1
+    implementation: "ulid.ULID() (Universally Unique Lexicographically Sortable Identifier)"
+    property: "Sortable by timestamp, unique across distributed system"
+
+  step_4_create_jwt_payload:
+    action: "Construct JWT payload with all claims"
+    latency_ms: 0.2
+    payload_structure: |
+      {
+        "header": {
+          "alg": "HS256",
+          "typ": "JWT"
+        },
+        "payload": {
+          "cap_id": cap_id,
+          "agent_id": agent_id,
+          "resource_type": resource_type,
+          "resource_id": resource_id,
+          "permissions": permissions,
+          "constraints": {
+            "max_invocations": max_invocations,
+            "budget_usd": budget_usd,
+            ...
+          },
+          "issued_at": now_utc(),
+          "issued_by": issued_by,
+          "expires_at": now_utc() + 24h,
+          "status": "ISSUED"
+        }
+      }
+
+  step_5_sign_token:
+    action: "Generate HMAC-SHA256 signature"
+    latency_ms: 0.3
+    algorithm: "HMAC-SHA256 (RFC 2104)"
+    signature: |
+      signature = HMAC_SHA256(
+          secret_key=self.secret_key,
+          message=header_b64 + '.' + payload_b64
+      )
+      signature_b64 = base64_url_encode(signature)
+
+  step_6_assemble_jwt:
+    action: "Combine header.payload.signature"
+    latency_ms: 0.1
+    format: "JWT compact format (RFC 7519)"
+    token: "header_b64.payload_b64.signature_b64"
+    size: "256-512 bytes"
+
+  step_7_store_capability:
+    action: "Store in Redis + K0 WAL"
+    latency_ms: 0.3
+    redis_operations:
+      - "SET capability:{cap_id} → token (24h TTL)"
+      - "LPUSH agent:{agent_id}:caps → cap_id"
+      - "LPUSH capabilities:all → cap_id (audit)"
+
+    k0_wal_event:
+      type: "CAPABILITY_ISSUED"
+      payload:
+        cap_id: cap_id
+        agent_id: agent_id
+        resource_type: resource_type
+        resource_id: resource_id
+        permissions: permissions
+        trust_level: trust_level
+        issued_by: issued_by
+        issued_at: timestamp
+
+  step_8_emit_metrics:
+    action: "Record issuance metrics"
+    latency_ms: 0.1
+    metrics:
+      - "capability_issued_total{agent_id, resource_type} += 1"
+      - "capability_issuance_latency_ms histogram"
+
+  step_9_audit_log:
+    action: "Log issuance in audit trail"
+    latency_ms: 0.2
+    log_level: "INFO"
+    fields:
+      - "timestamp: ISO 8601"
+      - "cap_id: ULID"
+      - "agent_id: string"
+      - "resource_type: enum"
+      - "permissions: array"
+      - "issued_by: string"
+      - "trace_id: UUID"
+
+total_issuance_latency:
+  target_ms: 2.0
+  breakdown:
+    step_1_validation: 0.2
+    step_2_trust_defaults: 0.1
+    step_3_cap_id: 0.1
+    step_4_jwt_payload: 0.2
+    step_5_sign: 0.3
+    step_6_assemble: 0.1
+    step_7_storage: 0.3
+    step_8_metrics: 0.1
+    step_9_audit: 0.2
+    overhead: 0.4
+  p95_ms: 2.5
+  performance_budget_met: true
+
+capability_limits:
+  max_capabilities_per_agent:
+    default: 100
+    per_session: true
+    includes: ["ISSUED", "ACTIVE", "DELEGATED"]
+    excludes: ["EXHAUSTED", "EXPIRED", "REVOKED"]
+
+  issuance_rate_limit:
+    per_agent: "10 issuances/minute"
+    per_system: "1000 issuances/minute"
+    enforcement: "Token bucket algorithm"
+
+role_based_templates:
+  planning_agent:
+    auto_capabilities:
+      - resource_type: "LLM"
+        resource_id: "gemma-2b"
+        permissions: ["execute", "read"]
+        constraints:
+          max_invocations: 1000
+          budget_usd: 5.0
+
+      - resource_type: "TOOL"
+        resource_id: "*"
+        permissions: ["execute", "read"]
+        constraints:
+          max_invocations_per_minute: 5
+
+  tool_agent:
+    auto_capabilities:
+      - resource_type: "TOOL"
+        resource_id: (assigned_tool_id)
+        permissions: ["execute", "read"]
+
+      - resource_type: "MEMORY"
+        resource_id: "scoreboard"
+        permissions: ["write", "read"]
+
+  memory_agent:
+    auto_capabilities:
+      - resource_type: "MEMORY"
+        resource_id: "*"
+        permissions: ["read", "write"]
+
+      - resource_type: "K0_WAL"
+        resource_id: "*"
+        permissions: ["read"]
+
+  supervisor_agent:
+    auto_capabilities:
+      - resource_type: "*"
+        resource_id: "*"
+        permissions: ["execute", "read", "write", "delete", "delegate", "attenuate", "admin"]
+
+testing_scenarios:
+  test_valid_issuance:
+    input: "agent_id=valid, resource=TOOL:book_hotel, perms=[execute]"
+    expected: "CapabilityToken with valid JWT signature"
+    latency_target: "<2.5ms"
+
+  test_untrusted_agent:
+    input: "agent_id=untrusted, trust_level=0, budget_usd=10.0"
+    expected: "Constraints capped to trust defaults (budget=0.0)"
+
+  test_duplicate_issuance:
+    input: "Same agent, same resource, same permissions"
+    expected: "New cap_id, new expiry, separate storage"
+
+  test_invalid_permission:
+    input: "permissions=[delete] for resource_type=LLM"
+    expected: "InvalidPermissionError (delete not allowed for LLM)"
+
+  test_admin_unauthorized:
+    input: "Orchestrator attempting to grant admin to planner_agent"
+    expected: "UnauthorizedError (only supervisor can grant admin)"
+
+references:
+  adr_0010: "Capability-Based Security"
+  adr_0010a: "Capability Token Design & Lifecycle"
+  rfc_7519: "JSON Web Token (JWT)"
+  rfc_2104: "HMAC"

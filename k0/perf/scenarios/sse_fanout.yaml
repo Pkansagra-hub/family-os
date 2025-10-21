@@ -1,0 +1,78 @@
+# SSE Fan-out Scenario
+#
+# Tests SSE delivery performance with multiple concurrent subscribers.
+# Validates:
+# - WAL read throughput
+# - Offset tracking accuracy
+# - Backpressure handling (lag warnings, throttling, shedding)
+# - QoS scheduler token management
+
+name: "SSE Fan-out Stress Test"
+description: |
+  Simulates multiple concurrent SSE subscribers consuming events at different
+  rates to test fan-out delivery, backpressure mechanisms, and offset tracking.
+
+type: sustained
+duration: 600  # 10 minutes
+
+tags:
+  - sse
+  - read-path
+  - fan-out
+  - backpressure
+
+environment:
+  kernel_endpoint: "http://localhost:8000"
+  telemetry_endpoint: "http://localhost:4317"
+  prometheus_pushgateway: "http://localhost:9091"
+  pulumi_stack: "dev"
+
+phases:
+  - name: "Subscriber Ramp-up"
+    duration: 120
+    workload:
+      type: sse
+      rate: 100  # events/sec published
+      concurrency: 10  # subscribers
+      payload_size: 512
+
+  - name: "Sustained Fan-out"
+    duration: 300
+    workload:
+      type: sse
+      rate: 500  # events/sec
+      concurrency: 50  # subscribers
+      payload_size: 1024
+    assertions:
+      max_p99_latency_ms: 200
+      min_success_rate: 0.95  # Allow some backpressure shedding
+
+  - name: "Slow Consumer Stress"
+    duration: 120
+    workload:
+      type: sse
+      rate: 500  # events/sec
+      concurrency: 50  # subscribers with artificial lag
+      payload_size: 2048
+    assertions:
+      max_p99_latency_ms: 500
+      min_success_rate: 0.90  # Expect more backpressure
+
+  - name: "Cooldown"
+    duration: 60
+    workload:
+      type: sse
+      rate: 10  # events/sec
+      concurrency: 5
+      payload_size: 256
+
+global_assertions:
+  max_p99_latency_ms: 500
+  min_success_rate: 0.92
+  max_memory_mb: 768
+  max_cpu_percent: 70.0
+
+artifacts:
+  timeline: true
+  telemetry_traces: true
+  prometheus_snapshots: true

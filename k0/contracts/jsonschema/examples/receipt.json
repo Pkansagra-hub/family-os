@@ -1,0 +1,13 @@
+{
+  "receipt_id": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+  "idem_key": "tenant-123:space-alpha:memory.snapshot.commit:42",
+  "wal_pos": 982341,
+  "commit_ts": "2025-09-28T12:00:01Z",
+  "payload_sha256": "4f2a6b7c0d9e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+  "mls_group_id": "mls-group-7",
+  "key_version": "v3",
+  "device_sig": "MEUCIQC0Hk6sYfF5Xb9G1iBlpFhsm6kXpsbhmCqg0sJDVfV+DwIgW3dQqYxY8kA7P8jS1zT8Jq+PpphKDc9Xj6VqkU+QaKk=",
+  "obligations": [
+    "notify_observer"
+  ]
+}

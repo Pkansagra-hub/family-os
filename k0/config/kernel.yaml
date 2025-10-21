@@ -1,0 +1,21 @@
+# Baseline kernel configuration scaffold.
+version: 0.0.0-dev
+environment: development
+server:
+  host: "0.0.0.0"
+  port: 8080
+  log_level: info
+  timeout_graceful_shutdown: 30
+retention:
+  default:
+    wal_days: 7
+    wal_max_events: 10000000
+qos:
+  scheduler_profile: balanced
+security:
+  key_rotation_grace_window_hours: 24
+  key_rotation_max_grace_hours: 168
+telemetry:
+  # Enable OTLP export by setting this to a reachable collector endpoint.
+  otlp_endpoint: null
+  prometheus_enabled: true

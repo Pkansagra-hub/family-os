@@ -1,0 +1,371 @@
+# Agent Hire Protocol - Termination Contracts
+# File: contracts/protocols/agent_hire/08_termination_contracts.yml
+# Purpose: DRAINING → TERMINATED cleanup and resource deallocation
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-AGENT-HIRE-TERMINATION-008"
+  name: "Agent Termination Contracts"
+  version: "1.0"
+
+# Termination overview
+termination:
+
+  purpose: "Final cleanup, resource deallocation, and agent removal"
+  state_transition: "DRAINING → TERMINATED"
+  trigger: "Drain timeout reached or graceful drain completed"
+
+  termination_actions:
+    - "Revoke agent leases (end HMAC-SHA256 signature validity)"
+    - "Release computational resources (GPU, memory)"
+    - "Evict KV cache entries"
+    - "Close mailbox and message queue"
+    - "Remove agent from supervisor registry"
+    - "Log termination event"
+
+# Termination protocol
+termination_protocol:
+
+  trigger_conditions:
+
+    condition_1_drain_complete:
+      trigger: "All in-flight tasks completed AND drain initiated"
+      action: |
+        1. Agent transitions DRAINING → TERMINATED
+        2. Begin resource cleanup
+        3. Execution latency: <100ms
+
+    condition_2_drain_timeout:
+      trigger: "5000ms elapsed in DRAINING state"
+      action: |
+        1. Force termination (in-flight tasks cancelled)
+        2. Transition DRAINING → TERMINATED
+        3. Send termination signal to agent
+
+    condition_3_crash:
+      trigger: "Agent crash detected (health check failed 3x)"
+      action: |
+        1. Force termination immediately
+        2. Any ACTIVE/IDLE/DRAINING state → TERMINATED
+        3. Add agent to blacklist (1 hour)
+        4. No graceful drain (already crashed)
+
+# Termination phases
+termination_phases:
+
+  phase_1_lease_revocation:
+
+    purpose: "Invalidate HMAC-SHA256 leases, prevent message spoofing"
+    latency_budget_ms: 10
+
+    steps:
+      step_1: "Get agent lease_id from agent metadata"
+      step_2: "Look up lease in Lease Registry"
+      step_3: "Set lease status to REVOKED"
+      step_4: "Timestamp revocation time"
+      step_5: "Propagate to all replicas (if distributed)"
+
+    lease_revocation_schema: |
+      table LeaseRevocation {
+        lease_id: string (required)                # UUID
+        agent_id: string (required)                # Agent owning lease
+        revocation_timestamp_ns: ulong (required)
+        reason: string (required)                  # AGENT_TERMINATED|DRAIN|CRASH|SESSION_END
+        signed_hash: ubyte[32] (required)         # HMAC-SHA256 signature
+      }
+
+    observability:
+      - "lease_revoked_total (counter, labels=[reason])"
+      - "lease_revocation_latency_ms (histogram)"
+
+  phase_2_resource_cleanup:
+
+    purpose: "Release GPU, memory, KV cache"
+    latency_budget_ms: 50
+
+    steps:
+      step_1: "If agent on GPU: Release GPU resources"
+      step_2: "Clear KV cache entries for agent"
+      step_3: "Return CPU cores to thread pool"
+      step_4: "Release model memory (if cached)"
+      step_5: "Release mailbox buffers"
+
+    resource_types:
+      gpu_memory:
+        description: "GPU memory allocated to agent model"
+        example: "2GB for LLM model"
+
+      kv_cache:
+        description: "KV cache for transformer inference acceleration"
+        allocation: "64MB per active agent (default)"
+        cleanup: "Evict all entries for this agent_id"
+
+      cpu_memory:
+        description: "RAM for agent state, buffers"
+        example: "256MB"
+
+      thread_pool:
+        description: "CPU threads allocated"
+        example: "2 threads (LLM inference + tool execution)"
+
+    observability:
+      - "resources_released_total (counter, labels=[resource_type])"
+      - "memory_freed_bytes (histogram)"
+      - "gpu_memory_freed_bytes (histogram)"
+
+  phase_3_mailbox_closure:
+
+    purpose: "Close mailbox, no more messages accepted"
+    latency_budget_ms: 10
+
+    steps:
+      step_1: "Mark mailbox as CLOSED"
+      step_2: "Reject any new incoming messages"
+      step_3: "Drain pending messages (optional)"
+      step_4: "Release mailbox memory"
+      step_5: "Update agent state to TERMINATED"
+
+    behavior_post_closure: |
+      Any message sent to TERMINATED agent:
+        - Supervisor catches: MailboxClosed exception
+        - Routes to DLQ (Dead Letter Queue)
+        - Logs error: "Attempted message to terminated agent"
+
+  phase_4_supervisor_cleanup:
+
+    purpose: "Remove agent from supervisor registry"
+    latency_budget_ms: 10
+
+    steps:
+      step_1: "Remove agent_id from supervisor agents registry"
+      step_2: "Stop health check background task (if running)"
+      step_3: "Update active_agents gauge"
+      step_4: "Log agent termination"
+
+# Termination message contract
+terminate_request_message:
+
+  message_type: "TerminateRequest"
+
+  flatbuffers_schema: |
+    table TerminateRequest {
+      terminate_request_id: string (required)      # UUID
+      agent_id: string (required)                  # Agent to terminate
+      reason: ubyte (required)                     # 0=DRAIN_COMPLETE, 1=DRAIN_TIMEOUT, 2=CRASH
+      force: bool (default=false)                  # Force terminate (skip drain?)
+      trace_id: string (required)                  # OpenTelemetry trace ID
+      timestamp_ns: ulong (required)               # Nanoseconds since epoch
+    }
+
+# Termination response message
+termination_complete_message:
+
+  message_type: "TerminationComplete"
+
+  flatbuffers_schema: |
+    table TerminationComplete {
+      terminate_request_id: string (required)      # Reference request
+      agent_id: string (required)                  # Which agent
+      status: ubyte (required)                     # 0=SUCCESS, 1=ERROR
+      termination_duration_ms: uint (required)     # Total time
+      resources_freed: ResourceCount (required)    # What was released
+      reason_details: string (optional)            # Error details
+      trace_id: string (required)                  # OpenTelemetry trace ID
+      timestamp_ns: ulong (required)               # Completion timestamp
+    }
+
+    table ResourceCount {
+      gpu_memory_freed_bytes: ulong                # GPU memory released
+      cpu_memory_freed_bytes: ulong                # RAM released
+      kv_cache_entries_freed: uint                 # Cache entries evicted
+      mailbox_buffers_freed: uint                  # Mailbox cleanup
+    }
+
+# State machine for termination
+termination_fsm:
+
+  states:
+    DRAINING:
+      type: "current"
+      description: "Agent preparing to terminate"
+
+    TERMINATING:
+      type: "transition"
+      description: "In cleanup phase"
+      timeout_ms: 500   # <500ms for cleanup
+      substates:
+        - "LEASE_REVOCATION"
+        - "RESOURCE_CLEANUP"
+        - "MAILBOX_CLOSURE"
+        - "SUPERVISOR_CLEANUP"
+
+    TERMINATED:
+      type: "exit"
+      description: "Agent fully shut down"
+
+  transitions:
+    DRAINING_to_TERMINATING:
+      trigger: "Drain complete OR drain timeout"
+      action: "Begin termination phases"
+      latency_budget_ms: 10
+
+    TERMINATING_to_TERMINATED:
+      trigger: "All cleanup phases complete"
+      action: "Update state to TERMINATED"
+      latency_budget_ms: 500
+
+    DRAINING_to_TERMINATED_FORCE:
+      trigger: "Force terminate (crash, timeout)"
+      action: "Skip TERMINATING, go directly to TERMINATED"
+      latency_budget_ms: 100
+
+# Error scenarios during termination
+termination_error_scenarios:
+
+  scenario_1_lease_lookup_fail:
+    condition: "Lease not found in registry"
+    action: |
+      - Log warning: "Lease not found for agent"
+      - Continue with resource cleanup (non-fatal)
+      - Mark termination status as PARTIAL_SUCCESS
+
+  scenario_2_gpu_release_fail:
+    condition: "GPU driver fails to release memory"
+    action: |
+      - Log error to alerting system
+      - Mark memory as "orphaned"
+      - Continue with CPU cleanup
+      - Thermal manager will track and alert ops
+
+  scenario_3_mailbox_close_fail:
+    condition: "Mailbox closure throws exception"
+    action: |
+      - Force-close mailbox (ungraceful)"
+      - Log error
+      - Continue with cleanup
+      - Recovery: Next message attempt will detect closure
+
+  scenario_4_termination_timeout:
+    condition: "Cleanup phases exceed 500ms"
+    action: |
+      - Force termination
+      - Some resources may not be cleaned
+      - Log critical error
+      - Thermal manager marks resources as "leaked"
+
+# Cascading termination (session ending)
+cascading_termination:
+
+  scenario: "User session ends, all agents must terminate"
+
+  flow: |
+    1. Session detect: session_end_signal()
+    2. Notify orchestrator: orchestrator.terminate_session(session_id)
+    3. For each agent in session:
+       a. If IDLE: Transition IDLE → DRAINING → TERMINATED (fast path)
+       b. If ACTIVE: Transition to DRAINING (allow task to finish)
+       c. Supervise drain timeout (5s)
+       d. If not done: Force to TERMINATED
+    4. Wait for all agents TERMINATED (with timeout)
+    5. Clean up session metadata
+
+  cascading_timeouts:
+    total_session_termination_budget_ms: 10000  # 10 seconds max
+    per_agent_drain_budget_ms: 5000             # 5 seconds per agent
+
+    calculation: |
+      If 3 agents in session:
+        Agent1: 5s drain
+        Agent2: 5s drain (parallel)
+        Agent3: 5s drain (parallel)
+        Total: 5s (parallel) + 500ms overhead = 5.5s ✓
+
+# Termination observability
+observability:
+
+  metrics:
+    - name: "agent_termination_initiated_total"
+      type: "counter"
+      labels: ["reason"]
+      description: "Termination processes started"
+
+    - name: "agent_termination_duration_ms"
+      type: "histogram"
+      buckets: [10, 50, 100, 300, 500]
+      description: "Time to terminate agent (full lifecycle cleanup)"
+
+    - name: "termination_phase_duration_ms"
+      type: "histogram"
+      labels: ["phase"]  # lease_revocation, resource_cleanup, mailbox_closure, supervisor_cleanup
+      buckets: [1, 5, 10, 50, 100]
+      description: "Duration of each termination phase"
+
+    - name: "resources_freed_total"
+      type: "counter"
+      labels: ["resource_type"]  # gpu_memory, cpu_memory, kv_cache, mailbox
+      description: "Total resources freed"
+
+    - name: "memory_freed_bytes_total"
+      type: "gauge"
+      description: "Total memory freed by terminations"
+
+    - name: "gpu_memory_freed_bytes_total"
+      type: "gauge"
+      description: "Total GPU memory freed"
+
+    - name: "agent_termination_error_total"
+      type: "counter"
+      labels: ["error_type"]  # lease_lookup_fail, gpu_release_fail, etc.
+      description: "Termination errors encountered"
+
+  events:
+    - name: "agent_termination_initiated"
+      fields: ["agent_id", "reason", "trace_id"]
+
+    - name: "agent_terminating"
+      fields: ["agent_id", "termination_phases", "trace_id"]
+
+    - name: "agent_lease_revoked"
+      fields: ["agent_id", "lease_id", "trace_id"]
+
+    - name: "agent_resources_released"
+      fields: ["agent_id", "resources", "trace_id"]
+
+    - name: "agent_terminated"
+      fields: ["agent_id", "termination_duration_ms", "status", "trace_id"]
+
+# Lifecycle integration
+lifecycle_context:
+
+  agent_lifecycle: |
+    PENDING → WARMING → ACTIVE ↔ IDLE → DRAINING → TERMINATED
+                                        ↑________↓
+                                   Termination
+
+  this_contract_covers:
+    - "DRAINING → TERMINATED transition"
+    - "4-phase cleanup process"
+    - "Resource deallocation"
+    - "Lease revocation"
+    - "Session-level cascading termination"
+
+  related_contracts:
+    - "07_drain_initiation_contracts.yml - DRAINING state"
+    - "09_crash_handling_contracts.yml - Crash termination"
+
+# Performance summary
+performance_summary:
+
+  target_termination_latencies:
+    lease_revocation: "< 10ms"
+    resource_cleanup: "< 50ms"
+    mailbox_closure: "< 10ms"
+    supervisor_cleanup: "< 10ms"
+    total_termination: "< 100ms"
+
+  performance_slo: "P95 termination < 500ms (with backpressure)"
+
+# ==============================================================================
+# END OF FILE: 08_termination_contracts.yml
+# ==============================================================================

@@ -1,0 +1,19 @@
+---
+# Post-deployment validation checks.
+- name: Run post-deployment smoke validation
+  hosts: all
+  gather_facts: false
+  vars:
+    telemetry_snapshot_path: "{{ lookup('env', 'K0_TELEMETRY_SNAPSHOT') | default('artifacts/telemetry') }}"
+  tasks:
+    - name: Invoke telemetry verifier
+      ansible.builtin.command:
+        cmd: >-
+          {{ ansible_playbook_python }} -m k0.automation.verify_security_telemetry
+          -d {{ telemetry_snapshot_path }}
+      register: telemetry_result
+      changed_when: false
+
+    - name: Record telemetry verifier output
+      ansible.builtin.debug:
+        var: telemetry_result.stdout_lines

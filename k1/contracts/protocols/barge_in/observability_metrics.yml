@@ -1,0 +1,463 @@
+# Barge-In Protocol - Observability Contract
+# Purpose: Metrics, tracing, logging for comprehensive barge-in monitoring
+# ADR Reference: ADR-0003b, ADR-0024 (Observability), ADR-0046 (Barge-In Fast-Path)
+# SLO Target: <120ms P95 interrupt latency, <500ms drain time
+
+---
+observability:
+  name: "barge_in_protocol_observability"
+  version: "1.0"
+  description: "Comprehensive observability contract for barge-in protocol"
+
+  # ===== PROMETHEUS METRICS =====
+  metrics:
+
+    # === Counter Metrics ===
+    counters:
+      - name: "barge_in_signal_received_total"
+        help: "Total barge-in signals received"
+        type: "counter"
+        labels: ["reason", "source", "force_mode"]
+        reason_values: ["STOP", "NEW_INPUT", "RECONSIDER", "CLARIFICATION"]
+        slo_impact: "high"
+
+      - name: "barge_in_interrupt_success_total"
+        help: "Total successful interrupts (agent paused)"
+        type: "counter"
+        labels: ["agent_id", "reason", "drain_mode"]
+        slo_impact: "critical"
+
+      - name: "barge_in_drain_completed_total"
+        help: "Total drain operations completed"
+        type: "counter"
+        labels: ["agent_id", "drain_status"]
+        drain_status_values: ["COMPLETED", "TIMEOUT", "FAILED"]
+        slo_impact: "critical"
+
+      - name: "barge_in_resumed_total"
+        help: "Total resumed after drain"
+        type: "counter"
+        labels: ["agent_id", "task_type"]
+        slo_impact: "high"
+
+      - name: "barge_in_terminated_total"
+        help: "Total terminated after barge-in"
+        type: "counter"
+        labels: ["agent_id", "reason"]
+        slo_impact: "medium"
+
+      - name: "barge_in_timeout_total"
+        help: "Total barge-in timeouts (drain exceeded 500ms)"
+        type: "counter"
+        labels: ["agent_id"]
+        slo_impact: "critical"
+
+      - name: "barge_in_coalesce_total"
+        help: "Multiple interrupt signals coalesced into one"
+        type: "counter"
+        labels: ["coalesce_count_bucket"]
+        slo_impact: "low"
+
+      - name: "barge_in_security_violation_total"
+        help: "Security violations (wrong user, invalid session)"
+        type: "counter"
+        labels: ["violation_type"]
+        slo_impact: "critical"
+
+      - name: "barge_in_validation_error_total"
+        help: "Signal validation errors"
+        type: "counter"
+        labels: ["error_type"]
+        slo_impact: "low"
+
+      - name: "barge_in_state_corruption_detected_total"
+        help: "Detected state inconsistency during interrupt"
+        type: "counter"
+        labels: ["corruption_type"]
+        slo_impact: "critical"
+
+    # === Histogram Metrics (Latency) ===
+    histograms:
+      - name: "barge_in_latency_ms"
+        help: "Total latency from user signal to agent interrupt"
+        type: "histogram"
+        labels: ["reason", "force_mode"]
+        buckets: [5, 10, 20, 50, 100, 120, 200, 500]  # ms
+        unit: "milliseconds"
+        slo_target: "p95 < 120ms"
+        slo_impact: "critical"
+        percentiles: [p50, p95, p99]
+        notes: "This is the UX-critical metric for interrupt responsiveness"
+        components:
+          - "websocket_receive_ms"
+          - "signal_parse_ms"
+          - "orchestrator_dispatch_ms"
+          - "agent_mailbox_deliver_ms"
+          - "agent_receive_process_ms"
+
+      - name: "barge_in_latency_breakdown_ms"
+        help: "Detailed latency breakdown (component level)"
+        type: "histogram"
+        labels: ["component"]
+        buckets: [1, 5, 10, 20, 50]  # ms
+        unit: "milliseconds"
+        components:
+          - "websocket_receive"       # <5ms
+          - "signal_validation"       # <5ms
+          - "orchestrator_dispatch"   # <10ms
+          - "agent_mailbox"           # <5ms
+          - "agent_processing"        # <20ms
+
+      - name: "barge_in_drain_time_ms"
+        help: "Time to complete drain operation"
+        type: "histogram"
+        labels: ["agent_id", "drain_status"]
+        buckets: [10, 50, 100, 200, 300, 400, 500]  # ms
+        unit: "milliseconds"
+        slo_target: "p95 < 400ms"
+        slo_impact: "high"
+        percentiles: [p50, p95, p99]
+
+      - name: "barge_in_response_time_ms"
+        help: "User response latency (how fast user clicks barge-in)"
+        type: "histogram"
+        labels: ["reason"]
+        buckets: [100, 500, 1000, 2000, 5000, 10000]  # ms
+        unit: "milliseconds"
+        observability_only: true  # Not SLO-tied
+
+      - name: "barge_in_resumption_latency_ms"
+        help: "Time from drain complete to task resumed"
+        type: "histogram"
+        labels: ["task_type"]
+        buckets: [5, 10, 20, 50, 100, 200]  # ms
+        unit: "milliseconds"
+        slo_target: "p95 < 100ms"
+
+    # === Gauge Metrics (Current State) ===
+    gauges:
+      - name: "barge_in_active_total"
+        help: "Number of active barge-in drains"
+        type: "gauge"
+        labels: ["agent_id"]
+        slo_impact: "medium"  # Should be low (one per session max)
+        threshold_alert: "> 100"
+
+      - name: "barge_in_queue_depth"
+        help: "Pending barge-in signals waiting to be processed"
+        type: "gauge"
+        labels: ["agent_id"]
+        threshold_alert: "> 10"
+
+      - name: "barge_in_success_rate"
+        help: "Success rate percentage (successful interrupts)"
+        type: "gauge"
+        labels: ["agent_id", "reason"]
+        calculation: "barge_in_interrupt_success_total / barge_in_signal_received_total"
+        slo_target: "> 99%"
+        slo_impact: "critical"
+
+      - name: "barge_in_drain_failure_rate"
+        help: "Percentage of drains that timeout or fail"
+        type: "gauge"
+        labels: ["agent_id"]
+        calculation: "(barge_in_timeout_total + barge_in_drain_failed_total) / barge_in_drain_completed_total"
+        slo_target: "< 1%"
+        slo_impact: "high"
+
+      - name: "barge_in_avg_tasks_interrupted"
+        help: "Average number of tasks being interrupted"
+        type: "gauge"
+        labels: ["agent_id"]
+        calculation: "average of tasks_remaining from DrainStatus messages"
+        observability_only: true
+
+      - name: "barge_in_avg_drain_time_ms"
+        help: "Average drain time"
+        type: "gauge"
+        labels: ["agent_id"]
+        calculation: "moving average of barge_in_drain_time_ms_p95"
+        observability_only: true
+
+  # ===== DISTRIBUTED TRACING =====
+  tracing:
+    framework: "OpenTelemetry"
+
+    spans:
+      - span_name: "barge_in_signal_received"
+        parent_span: "user_interaction"
+        attributes:
+          - "signal_id"
+          - "cognitive_trace_id"
+          - "reason"
+          - "force_mode"
+          - "source"
+        start_event: "BargeInSignal received from WebSocket"
+        end_event: "Signal validation complete"
+        latency_budget_ms: 5
+        child_spans:
+          - "parse_signal"
+          - "validate_auth"
+          - "validate_session"
+
+      - span_name: "barge_in_interrupt_delivery"
+        parent_span: "barge_in_signal_received"
+        attributes:
+          - "signal_id"
+          - "interrupted_agent_id"
+          - "delivery_latency_ms"
+        start_event: "Signal parsed, ready to dispatch"
+        end_event: "Agent receives InterruptSignal in mailbox"
+        latency_budget_ms: 120
+        alert_if_exceeds_ms: 150
+        critical_path: true
+        components:
+          - "orchestrator_lookup_ms"
+          - "agent_mailbox_send_ms"
+
+      - span_name: "agent_drain"
+        parent_span: "barge_in_interrupt_delivery"
+        attributes:
+          - "signal_id"
+          - "drain_id"
+          - "tasks_remaining"
+          - "eta_ms"
+        start_event: "Agent receives drain signal"
+        end_event: "Drain complete (COMPLETED/TIMEOUT/FAILED)"
+        latency_budget_ms: 500
+        child_spans:
+          - "pause_streaming"
+          - "cancel_optional_tasks"
+          - "wait_required_tasks"
+          - "capture_state_snapshot"
+          - "drain_report"
+
+      - span_name: "barge_in_resumption"
+        parent_span: "agent_drain"
+        attributes:
+          - "signal_id"
+          - "resumption_id"
+          - "new_task_id"
+          - "state_preserved"
+        start_event: "Drain complete, resumption decision made"
+        end_event: "Agent resumed with new task"
+        latency_budget_ms: 100
+        child_spans:
+          - "restore_state"
+          - "queue_new_task"
+          - "agent_resume"
+
+      - span_name: "barge_in_complete"
+        parent_span: "barge_in_signal_received"
+        attributes:
+          - "signal_id"
+          - "total_latency_ms"
+          - "outcome"  # "RESUMED", "TERMINATED", "FAILED"
+        start_event: "Barge-in initiated"
+        end_event: "Agent resumed or terminated"
+        latency_budget_ms: 500
+
+    trace_sampling:
+      strategy: "dynamic_sampling"
+      base_sample_rate: 1.0  # 100% sample all barge-ins (critical)
+      preserve_trace_context: true  # Always propagate trace ID
+
+  # ===== STRUCTURED LOGGING =====
+  logging:
+    format: "json"
+    level: "INFO"
+    fields:
+      # Always present
+      base_fields:
+        - "timestamp"
+        - "log_level"
+        - "component"
+        - "signal_id"
+        - "cognitive_trace_id"
+        - "user_id"
+        - "session_id"
+
+      # Signal received
+      signal_received:
+        - "reason"
+        - "force_mode"
+        - "source"
+        - "priority"
+        - "interrupted_agent_id"
+        - "interrupted_from_state"
+
+      # Drain started
+      drain_started:
+        - "drain_id"
+        - "agent_id"
+        - "tasks_remaining"
+        - "eta_ms"
+        - "can_resume"
+
+      # Drain completed
+      drain_completed:
+        - "drain_id"
+        - "drain_status"  # COMPLETED, TIMEOUT, FAILED
+        - "actual_time_ms"
+        - "tasks_completed"
+
+      # Resumed
+      resumed:
+        - "resumption_id"
+        - "new_task_id"
+        - "task_type"
+        - "state_preserved"
+        - "resumption_latency_ms"
+
+      # Error
+      error:
+        - "error_type"
+        - "error_message"
+        - "severity"
+        - "recovery_attempted"
+
+    examples:
+      - level: "INFO"
+        event: "barge_in_signal_received"
+        message: "User interrupted task with new input"
+        log:
+          signal_id: "bi_550e8400-e29b-41d4-a716-446655440000"
+          cognitive_trace_id: "trace_abc123"
+          reason: "NEW_INPUT"
+          force_mode: "graceful"
+          source: "web_ui"
+          interrupted_agent_id: "planner"
+          interrupted_from_state: "streaming_response"
+
+      - level: "INFO"
+        event: "agent_drain_started"
+        message: "Agent starting drain after barge-in"
+        log:
+          drain_id: "drain_550e8400"
+          agent_id: "planner"
+          tasks_remaining: 2
+          eta_ms: 150
+
+      - level: "WARN"
+        event: "barge_in_drain_timeout"
+        message: "Drain timeout after 500ms, forcing termination"
+        log:
+          drain_id: "drain_550e8400"
+          agent_id: "planner"
+          actual_time_ms: 502
+          tasks_remaining: 1
+
+      - level: "INFO"
+        event: "agent_resumed"
+        message: "Agent resumed with new task"
+        log:
+          resumption_id: "res_550e8400"
+          new_task_id: "task_xyz789"
+          task_type: "NEW_TASK_DIFFERENT_INPUT"
+          resumption_latency_ms: 45
+
+  # ===== DASHBOARDS & ALERTS =====
+  dashboards:
+    grafana_dashboards:
+      - name: "Barge-In Protocol - Overview"
+        panels:
+          - title: "Interrupt Events/Min"
+            metric: "barge_in_signal_received_total"
+            group_by: ["reason"]
+          - title: "Success Rate (%)"
+            metric: "barge_in_success_rate"
+            target: "> 99%"
+          - title: "Interrupt Latency P95 (ms)"
+            metric: "barge_in_latency_ms_p95"
+            target: "< 120ms"
+          - title: "Drain Failures (%)"
+            metric: "barge_in_drain_failure_rate"
+            target: "< 1%"
+
+      - name: "Barge-In Protocol - Latency"
+        panels:
+          - title: "Interrupt Latency Distribution"
+            metric: "barge_in_latency_ms"
+            percentiles: [p50, p95, p99]
+          - title: "Latency Breakdown"
+            metric: "barge_in_latency_breakdown_ms"
+            group_by: ["component"]
+          - title: "Drain Time Distribution"
+            metric: "barge_in_drain_time_ms"
+            percentiles: [p50, p95, p99]
+
+      - name: "Barge-In Protocol - Reliability"
+        panels:
+          - title: "Drain Status Distribution"
+            metric: "barge_in_drain_completed_total"
+            group_by: ["drain_status"]
+          - title: "Resume vs Terminate"
+            metric: "barge_in_resumed_total + barge_in_terminated_total"
+          - title: "Active Drains"
+            metric: "barge_in_active_total"
+
+  alerts:
+    - alert_name: "HighInterruptLatency"
+      condition: "barge_in_latency_ms_p95 > 150"
+      severity: "critical"
+      for_duration: "1m"
+      action: "page_on_call_engineer"
+      message: "Barge-in latency exceeds 150ms (target: <120ms)"
+
+    - alert_name: "HighDrainFailureRate"
+      condition: "barge_in_drain_failure_rate > 5%"
+      severity: "warning"
+      for_duration: "5m"
+      action: "alert_devops"
+      message: "Drain failure rate exceeds 5%"
+
+    - alert_name: "InterruptSuccessRateLow"
+      condition: "barge_in_success_rate < 99%"
+      severity: "critical"
+      for_duration: "2m"
+      action: "page_on_call_engineer"
+      message: "Interrupt success rate below 99%"
+
+    - alert_name: "SecurityViolationDetected"
+      condition: "barge_in_security_violation_total > 0"
+      severity: "critical"
+      for_duration: "1m"
+      action: "immediate_investigation"
+      message: "Security violation in barge-in signal"
+
+    - alert_name: "StateCorruptionDetected"
+      condition: "barge_in_state_corruption_detected_total > 0"
+      severity: "critical"
+      for_duration: "1m"
+      action: "immediate_escalation"
+      message: "State corruption detected during interrupt"
+
+  # ===== SLOs AND ERROR BUDGETS =====
+  slos:
+    - name: "Interrupt Latency"
+      description: "P95 latency from user signal to agent interrupt"
+      metric: "barge_in_latency_ms_p95"
+      target: "< 120ms"
+      window: "30d"
+      error_budget: "20ms"  # Can tolerate 20ms excess
+
+    - name: "Interrupt Success Rate"
+      description: "Percentage of signals that successfully interrupt agent"
+      metric: "barge_in_success_rate"
+      target: "> 99%"
+      window: "30d"
+      error_budget: "1%"
+
+    - name: "Drain Reliability"
+      description: "Percentage of drains completing within 500ms"
+      metric: "barge_in_drain_failure_rate"
+      target: "< 1%"
+      window: "30d"
+      error_budget: "1%"
+
+    - name: "Security Compliance"
+      description: "Zero security violations"
+      metric: "barge_in_security_violation_total"
+      target: "== 0"
+      window: "30d"
+      error_budget: "0"  # Zero tolerance

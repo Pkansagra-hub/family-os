@@ -1,0 +1,668 @@
+# Backpressure Contract
+# Issue: 1.2.1 - Mailbox Message Envelope Schema
+# Source ADR: ADR-0002a (Mailbox MPSC Queue Implementation)
+# Related Diagrams: k1_backpressure_cascade.mmd
+# Research: SEDA (Welsh et al., 2001), Reactive Streams (2015), TCP Congestion Control (Jacobson, 1988)
+
+backpressure_contract:
+  name: "Watermark-Based Backpressure with Cascade Prevention"
+  version: "1.0"
+  description: "Multi-layer backpressure system to prevent OOM, deadlocks, and cascade failures"
+  applies_to:
+    - "ALL queue-based components (mailboxes, K0 bridge, SSE, voice pipeline)"
+    - "4 primary streams + 5 voice pipeline stages"
+    - "Global backpressure coordination"
+
+  backpressure_philosophy:
+    goal: "Graceful degradation under load"
+    strategy: "Per-stream watermarks + global coordination + voice-specific actions"
+    prevention_targets:
+      - "Out-of-Memory (OOM) crashes"
+      - "Deadlocks (circular blocking)"
+      - "Cascade failures (one component blocks others)"
+      - "User-visible errors (prefer degraded service over failure)"
+
+  watermark_model:
+    description: "3-level watermark system for each stream"
+
+    watermark_levels:
+      - level: "LOW"
+        threshold: "25-50% capacity (stream-dependent)"
+        meaning: "Exit backpressure mode, resume normal operation"
+        action: "Clear backpressure flag, resume processing"
+
+      - level: "HIGH"
+        threshold: "50-75% capacity"
+        meaning: "Backpressure active, apply overflow policy"
+        action: "Drop lowest priority, block sender, or merge data"
+
+      - level: "ALERT"
+        threshold: "75-90% capacity"
+        meaning: "Warning threshold, approaching critical"
+        action: "Emit metric, log warning, prepare for overflow"
+
+    state_machine:
+      states:
+        - state: "NORMAL"
+          condition: "queue_depth < HIGH watermark"
+          behavior: "Process messages normally"
+
+        - state: "BACKPRESSURE"
+          condition: "queue_depth >= HIGH watermark"
+          behavior: "Apply overflow policy (drop, block, merge)"
+
+        - state: "CRITICAL"
+          condition: "queue_depth >= 90% capacity"
+          behavior: "Aggressive actions (drop multiple priorities, alert supervisor)"
+
+        - state: "RESUME"
+          condition: "queue_depth < LOW watermark"
+          behavior: "Exit backpressure, clear flag, log recovery"
+
+      transitions:
+        - from: "NORMAL"
+          to: "BACKPRESSURE"
+          trigger: "queue_depth crosses HIGH watermark"
+
+        - from: "BACKPRESSURE"
+          to: "CRITICAL"
+          trigger: "queue_depth reaches 90%"
+
+        - from: "CRITICAL"
+          to: "BACKPRESSURE"
+          trigger: "queue_depth drops below 90%"
+
+        - from: "BACKPRESSURE"
+          to: "RESUME"
+          trigger: "queue_depth drops below LOW watermark"
+
+        - from: "RESUME"
+          to: "NORMAL"
+          trigger: "Recovery logged, backpressure flag cleared"
+
+  per_stream_watermarks:
+    audio_frames:
+      description: "Voice pipeline audio frames (ASR input)"
+      queue_type: "ring_buffer (fixed-size circular)"
+      capacity: 100  # frames
+
+      watermarks:
+        low: 50      # 50% - resume normal
+        high: 100    # 100% - overflow, drop oldest
+        alert: 80    # 80% - emit warning
+
+      overflow_policy:
+        action: "DROP_OLDEST"
+        rationale: "Newest frames most relevant for real-time ASR"
+        user_impact: "None (interim frames less frequent)"
+        dropped_to_dlq: true
+
+      recovery_behavior:
+        trigger: "queue_depth < 50"
+        action: "Resume normal ASR processing"
+        log: "Audio frames backpressure cleared"
+
+      observability:
+        metric_gauge: "audio_frames_queue_depth"
+        metric_counter: "audio_frames_dropped_total"
+        alert_threshold: 80
+
+    agent_mailbox:
+      description: "Agent mailbox (MPSC queue per agent)"
+      queue_type: "MPSC (Multi-Producer Single-Consumer)"
+      capacity: 240  # Total across 4 priority queues
+      per_priority:
+        URGENT: 16
+        REALTIME: 32
+        INTERACTIVE: 64
+        BACKGROUND: 128
+
+      watermarks:
+        low: 25      # 10% - resume, unblock sender
+        high: 50     # 21% - backpressure, block sender
+        alert: 40    # 17% - warning
+        critical: 90 # 37% - drop BACKGROUND messages
+
+      overflow_policy:
+        action: "BLOCK_SENDER"
+        fallback: "DROP_OLDEST (BACKGROUND only)"
+        rationale: "Control messages must not be dropped (coordination critical)"
+        user_impact: "503 Service Temporarily Unavailable"
+        retry_after_ms: 100
+        timeout_ms: 5000  # Max block time before error
+
+      blocking_semantics:
+        mechanism: "Router returns MAILBOX_FULL error to sender"
+        sender_behavior: "Sender waits (exponential backoff)"
+        unblock_condition: "queue_depth < LOW watermark"
+        danger: "Can cause deadlock if circular dependencies exist"
+        mitigation: "Timeout after 5s, reject with error"
+
+      critical_threshold:
+        trigger: "queue_depth >= 90 messages"
+        action: "DROP_OLDEST (BACKGROUND messages) + ALERT_SUPERVISOR"
+        rationale: "Emergency overflow prevention"
+        dlq_reason: "OVERFLOW_CRITICAL"
+
+      observability:
+        metric_gauge: "agent_mailbox_queue_depth{agent_id}"
+        metric_counter: "agent_mailbox_blocked_senders_total{agent_id}"
+        metric_histogram: "agent_mailbox_backpressure_duration_ms{agent_id}"
+        alert_threshold: 40
+
+    k0_outbox:
+      description: "K0 Bridge outbox (SessionState deltas → K0)"
+      queue_type: "priority_queue (priority by band: GREEN/AMBER/RED)"
+      capacity: 1000  # receipts
+
+      watermarks:
+        low: 500     # 50% - resume normal batching
+        high: 1000   # 100% - backpressure, merge deltas
+        alert: 800   # 80% - warning
+
+      overflow_policy:
+        action: "MERGE_DELTAS"
+        rationale: "Multiple StateDelta can be combined (same section)"
+        user_impact: "None (optimization, transparent)"
+        compression: "2-3x reduction typical"
+        example: "3 belief updates → 1 merged belief update"
+
+      merge_algorithm:
+        window_ms: 500  # Merge deltas within 500ms window
+        sections: ["beliefs", "scoreboard", "control", "persona", "multimodal", "meta"]
+        merge_logic:
+          beliefs: "Merge key-value pairs (last write wins)"
+          scoreboard: "Sum metrics"
+          control: "Last write wins"
+          persona: "Deep merge persona fields"
+          multimodal: "Concatenate arrays (with deduplication)"
+          meta: "Merge metadata (last write wins)"
+
+      fallback_policy:
+        trigger: "Merge insufficient, queue still > 1000"
+        action: "Drop BACKGROUND deltas (lowest priority)"
+        dlq_reason: "OVERFLOW_MERGE_FAILED"
+
+      observability:
+        metric_gauge: "k0_outbox_queue_depth"
+        metric_counter_merged: "k0_outbox_deltas_merged_total"
+        metric_counter_dropped: "k0_outbox_deltas_dropped_total"
+        alert_threshold: 800
+
+    sse_subscribers:
+      description: "SSE subscribers (per-client event buffer)"
+      queue_type: "per_client_buffer (separate queue per SSE client)"
+      capacity: 200  # events per client
+
+      watermarks:
+        low: 100     # 50% - resume normal streaming
+        high: 200    # 100% - backpressure, disconnect slow clients
+        alert: 150   # 75% - warning
+
+      overflow_policy:
+        action: "DISCONNECT_SLOW_CLIENTS"
+        rationale: "Prevent one slow client blocking others"
+        user_impact: "Client must reconnect (graceful disconnect)"
+        criteria: ">200 events buffered (client too slow to consume)"
+        disconnect_message: "Too many buffered events, please reconnect"
+
+      slow_client_detection:
+        method: "Monitor per-client queue depth"
+        threshold: "200 events (HIGH watermark)"
+        action: "Close SSE connection, log disconnect reason"
+        client_notification: "Send final event: {type: 'disconnect', reason: 'slow_client'}"
+
+      observability:
+        metric_gauge: "sse_subscriber_queue_depth{client_id}"
+        metric_counter: "sse_slow_clients_disconnected_total"
+        alert_threshold: 150
+
+  voice_pipeline_backpressure:
+    description: "5-stage voice pipeline with latency-sensitive backpressure"
+
+    asr_input_buffer:
+      description: "ASR input audio frames"
+      buffer_size_ms: 200  # Max 200ms of audio
+      sample_rate: 16000  # 16kHz
+
+      watermarks:
+        medium: 160  # 80% - drop partial frames
+        high: 180    # 90% - downsample to 8kHz
+        critical: 190  # 95% - pause ASR + show spinner
+
+      actions:
+        - threshold: 190
+          action: "PAUSE_ASR"
+          user_impact: "Show 'thinking...' spinner"
+          recovery_timeout_ms: 500
+          rationale: "Prevent buffer overflow"
+
+        - threshold: 180
+          action: "DOWNSAMPLE_8KHZ"
+          from_rate: 16000
+          to_rate: 8000
+          user_impact: "Slight quality loss"
+          recovery_timeout_ms: 200
+          rationale: "Reduce data rate by 50%"
+
+        - threshold: 160
+          action: "DROP_PARTIAL_FRAMES"
+          keep: "final_frame_only"
+          user_impact: "None (interim ASR less frequent)"
+          rationale: "Final frame most important"
+
+    intent_queue:
+      description: "Intent classification results queue"
+      max_size: 50  # intents
+      priority_classes: ["CRITICAL", "REALTIME", "INTERACTIVE", "BACKGROUND"]
+
+      watermarks:
+        medium: 35   # 70% - merge duplicate intents
+        high: 42     # 85% - drop BACKGROUND intents
+        critical: 47 # 95% - block new intents
+
+      actions:
+        - threshold: 47
+          action: "BLOCK_NEW_INTENTS"
+          user_impact: "Show 'One moment, processing...'"
+          recovery_timeout_ms: 1000
+          http_response: "503 Service Temporarily Unavailable"
+
+        - threshold: 42
+          action: "DROP_BACKGROUND"
+          priority: "BACKGROUND only"
+          user_impact: "Background tasks delayed"
+          keep: ["CRITICAL", "REALTIME", "INTERACTIVE"]
+          rationale: "Shed load, keep critical work"
+
+        - threshold: 35
+          action: "MERGE_DUPLICATES"
+          time_window_ms: 500
+          user_impact: "None (de-duplication)"
+          rationale: "Reduce redundant processing"
+
+    tool_executor:
+      description: "Tool execution concurrency limit"
+      max_concurrent: 20  # tools
+      tool_types: ["essential", "ephemeral"]
+
+      watermarks:
+        high: 15     # 75% - shed ephemeral tools
+        critical: 18 # 90% - kill long-running tools
+
+      actions:
+        - threshold: 18
+          action: "KILL_LONG_RUNNING"
+          execution_time_threshold_ms: 2000
+          user_impact: "Tool failures returned"
+          recovery_timeout_ms: 100
+          apology: "Tool took too long, cancelled"
+
+        - threshold: 15
+          action: "SHED_EPHEMERAL"
+          tool_types: ["weather", "news", "stocks", "sports"]
+          user_impact: "Non-critical tools skipped"
+          apology: "Skipping non-essential info due to load"
+          rationale: "Prioritize essential tools"
+
+    tts_queue:
+      description: "TTS (Text-to-Speech) generation queue"
+      buffer_size_ms: 500  # Max 500ms of TTS
+      voice_quality: "neural"  # default
+
+      watermarks:
+        medium: 400   # 80% - degrade voice quality
+        high: 450     # 90% - speed up playback
+        critical: 475 # 95% - truncate response
+
+      actions:
+        - threshold: 475
+          action: "TRUNCATE_RESPONSE"
+          keep: "first_3_sentences"
+          suffix: "... (truncated due to load)"
+          user_impact: "Shorter answer"
+          rationale: "Prevent buffer overflow"
+
+        - threshold: 450
+          action: "SPEEDUP_PLAYBACK"
+          speed: 1.15  # 15% faster
+          user_impact: "Slightly faster speech"
+          recovery: "immediate"
+          rationale: "Reduce buffer size"
+
+        - threshold: 400
+          action: "DEGRADE_QUALITY"
+          from_quality: "neural"
+          to_quality: "concatenative"
+          quality_loss_db: -3
+          user_impact: "Lower quality voice"
+          rationale: "Faster generation"
+
+    audio_output_buffer:
+      description: "Audio output playback buffer"
+      buffer_size_ms: 400  # Max 400ms
+      playback: "real-time"
+
+      watermarks:
+        high: 340     # 85% - drop silence frames
+        critical: 380 # 95% - fast-forward to live
+
+      actions:
+        - threshold: 380
+          action: "FAST_FORWARD_TO_LIVE"
+          skip_to: "current_audio_position"
+          fade_ms: 50
+          user_impact: "Audio 'catches up'"
+          recovery_timeout_ms: 200
+
+        - threshold: 340
+          action: "DROP_SILENCE"
+          min_silence_ms: 100
+          user_impact: "None (silence trimmed)"
+          rationale: "Reduce buffer without quality loss"
+
+  global_backpressure:
+    description: "System-wide backpressure coordination"
+
+    total_memory_limit:
+      max_mb: 512  # Total for all queues
+
+      monitoring:
+        sum: "audio_frames + agent_mailbox + k0_outbox + sse_subscribers + voice_pipeline"
+        current_typical: "450MB"
+        headroom: "62MB (12%)"
+
+      overflow_action:
+        trigger: "total_memory > 512MB"
+        action: "SHED_NON_CRITICAL"
+        priority: "Drop BACKGROUND priority across all streams"
+        scope: "ALL queues simultaneously"
+        user_impact: "Degraded service (background work delayed)"
+        alert: "CRITICAL - OOM imminent"
+
+    total_queue_items_limit:
+      max_items: 5000  # Across all queues
+
+      cascade_prevention:
+        trigger: "total_queue_items > 5000"
+        action: "CASCADING_DEGRADATION"
+        stages:
+          - stage: 1
+            action: "Drop BACKGROUND messages"
+            scope: "All queues"
+
+          - stage: 2
+            action: "Drop INTERACTIVE (non-user-facing)"
+            scope: "All queues"
+
+          - stage: 3
+            action: "Throttle REALTIME (rate limit 50%)"
+            scope: "All queues"
+
+          - stage: 4
+            action: "Emergency mode (CRITICAL only)"
+            user_impact: "Severe degradation, only critical work processed"
+
+    sustained_backpressure:
+      threshold_sec: 10  # 10 seconds continuous
+
+      detection:
+        method: "Monitor backpressure_active flags across all streams"
+        condition: "ANY stream in backpressure for >10s"
+        alert: "SUSTAINED_BACKPRESSURE"
+
+      action:
+        notify: "Ops team via PagerDuty"
+        investigate: ["Resource constraints", "Traffic spike", "Slow consumer"]
+        consider: ["Scaling up resources", "Shedding load", "Rate limiting upstream"]
+
+      escalation:
+        - duration: "10s"
+          action: "Warning alert"
+
+        - duration: "30s"
+          action: "Critical alert + notify ops"
+
+        - duration: "60s"
+          action: "Emergency mode (drop all BACKGROUND)"
+
+  backpressure_signals:
+    description: "Upstream backpressure signaling"
+
+    signal_types:
+      - signal: "BACKPRESSURE_ACTIVE"
+        trigger: "Component enters BACKPRESSURE state"
+        target: "Upstream senders"
+        action: "Reduce send rate (exponential backoff)"
+        retry_strategy: "Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (cap)"
+
+      - signal: "BACKPRESSURE_CLEARED"
+        trigger: "Component enters RESUME state"
+        target: "Upstream senders"
+        action: "Resume normal send rate"
+
+      - signal: "CRITICAL_BACKPRESSURE"
+        trigger: "Component reaches 90% capacity"
+        target: "ALL upstream components + supervisor"
+        action: "Emergency load shedding"
+
+    signal_propagation:
+      method: "Message-based (special message type: backpressure_signal)"
+      latency: "<10ms P95"
+      guarantee: "Best-effort (fire-and-forget)"
+
+    receiver_behavior:
+      on_backpressure:
+        action: "Reduce send rate by 50%"
+        retry: "Exponential backoff with jitter"
+        max_retries: 5
+
+      on_cleared:
+        action: "Resume normal rate"
+        ramp_up: "Gradual (additive increase)"
+
+  observability:
+    prometheus_metrics:
+      # Per-stream gauges
+      - name: "k1_queue_depth"
+        type: "gauge"
+        labels: ["queue_name"]
+        description: "Current queue depth"
+
+      - name: "k1_backpressure_active"
+        type: "gauge"
+        labels: ["queue_name"]
+        values: [0, 1]
+        description: "1 if backpressure active, 0 otherwise"
+
+      # Per-stream counters
+      - name: "k1_dropped_items_total"
+        type: "counter"
+        labels: ["queue_name", "reason"]
+        description: "Total items dropped (by reason)"
+
+      - name: "k1_blocked_senders_total"
+        type: "counter"
+        labels: ["queue_name"]
+        description: "Total senders blocked"
+
+      - name: "k1_watermark_breaches_total"
+        type: "counter"
+        labels: ["queue_name", "watermark"]
+        description: "Total watermark breaches (high/alert/critical)"
+
+      # Voice pipeline metrics
+      - name: "voice_asr_buffer_ms"
+        type: "gauge"
+        description: "ASR input buffer level (milliseconds)"
+
+      - name: "voice_intent_queue_size"
+        type: "gauge"
+        description: "Intent queue size"
+
+      - name: "voice_tool_active_count"
+        type: "gauge"
+        description: "Active tool executions"
+
+      - name: "voice_tts_buffer_ms"
+        type: "gauge"
+        description: "TTS queue buffer level"
+
+      - name: "voice_audio_output_buffer_ms"
+        type: "gauge"
+        description: "Audio output buffer level"
+
+      - name: "voice_frames_dropped_total"
+        type: "counter"
+        labels: ["stage"]
+        description: "Voice frames dropped (by pipeline stage)"
+
+      - name: "voice_intents_merged_total"
+        type: "counter"
+        description: "Duplicate intents merged"
+
+      - name: "voice_tools_shed_total"
+        type: "counter"
+        labels: ["tool_type"]
+        description: "Ephemeral tools shed"
+
+      - name: "voice_tts_degraded_total"
+        type: "counter"
+        labels: ["degradation_type"]
+        description: "TTS quality degradations"
+
+      - name: "voice_responses_truncated_total"
+        type: "counter"
+        description: "Responses truncated"
+
+      # Duration histograms
+      - name: "k1_backpressure_duration_ms"
+        type: "histogram"
+        labels: ["queue_name"]
+        buckets: [10, 50, 100, 250, 500, 1000, 5000]
+        description: "Backpressure duration"
+
+      # Global metrics
+      - name: "k1_total_memory_mb"
+        type: "gauge"
+        description: "Total queue memory usage"
+
+      - name: "k1_total_queue_items"
+        type: "gauge"
+        description: "Total items across all queues"
+
+      - name: "k1_sustained_backpressure_sec"
+        type: "gauge"
+        description: "Sustained backpressure duration"
+
+    structured_logging:
+      - event: "backpressure.activated"
+        level: "WARNING"
+        fields: ["queue_name", "queue_depth", "threshold", "timestamp_ms"]
+
+      - event: "backpressure.cleared"
+        level: "INFO"
+        fields: ["queue_name", "queue_depth", "duration_ms", "timestamp_ms"]
+
+      - event: "backpressure.critical"
+        level: "ERROR"
+        fields: ["queue_name", "queue_depth", "action", "timestamp_ms"]
+
+      - event: "backpressure.sustained"
+        level: "CRITICAL"
+        fields: ["duration_sec", "affected_queues", "timestamp_ms"]
+
+      - event: "voice.degradation"
+        level: "WARNING"
+        fields: ["stage", "action", "user_impact", "timestamp_ms"]
+
+  configuration:
+    config_file: "k1/config/backpressure.yml"
+
+    per_stream:
+      audio_frames:
+        high: 100
+        low: 50
+        action: "drop_oldest"
+
+      agent_mailbox:
+        high: 50
+        low: 25
+        action: "block_sender"
+        timeout_ms: 5000
+
+      k0_outbox:
+        high: 1000
+        low: 500
+        action: "merge_deltas"
+
+      sse_subscribers:
+        high: 200
+        low: 100
+        action: "disconnect_slow"
+
+    voice_backpressure:
+      asr_input:
+        buffer_ms: 200
+        watermarks: [160, 180, 190]
+
+      intent_queue:
+        max_size: 50
+        watermarks: [35, 42, 47]
+
+      tool_executor:
+        max_concurrent: 20
+        watermarks: [15, 18]
+
+      tts_queue:
+        buffer_ms: 500
+        watermarks: [400, 450, 475]
+
+      audio_output:
+        buffer_ms: 400
+        watermarks: [340, 380]
+
+    global:
+      max_memory_mb: 512
+      max_total_queue_items: 5000
+      sustained_threshold_sec: 10
+
+  testing_requirements:
+    load_tests:
+      - test: "Burst load: 500 msg/s → verify backpressure activation"
+      - test: "Sustained load: 200 msg/s for 60s → verify no sustained backpressure"
+      - test: "OOM scenario: Fill all queues → verify global shedding"
+
+    recovery_tests:
+      - test: "Backpressure activation → recovery → verify RESUME transition"
+      - test: "Critical threshold → verify emergency actions"
+
+    voice_pipeline_tests:
+      - test: "ASR overload → verify downsample/pause actions"
+      - test: "Intent queue full → verify merge/drop/block actions"
+      - test: "TTS overload → verify degrade/speedup/truncate actions"
+
+  related_contracts:
+    - contract: "mpsc_queue_contract.yml"
+      relation: "MPSC queue implements watermark-based backpressure"
+
+    - contract: "routing_contract.yml"
+      relation: "Router returns MAILBOX_FULL error on backpressure"
+
+    - contract: "dead_letter_queue.yml"
+      relation: "Dropped messages sent to DLQ with reason=OVERFLOW"
+
+  related_adrs:
+    - adr: "ADR-0002a"
+      section: "Backpressure Management"
+      lines: "358-430 (Watermark-based backpressure)"
+
+    - diagram: "k1_backpressure_cascade.mmd"
+      section: "Complete backpressure cascade"
+      lines: "Per-stream + voice pipeline + global coordination"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.2.1"
+      author: "Messaging Infrastructure Lead"

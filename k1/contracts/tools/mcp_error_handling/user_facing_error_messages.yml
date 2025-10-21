@@ -1,0 +1,219 @@
+# User-Facing Error Messages
+# Purpose: Define 12+ user-friendly error message templates
+# Source ADR: 0034d-mcp-error-handling.md (lines 1701-1800)
+# Version: 1.0
+
+component_name: "UserFacingErrorMessages"
+version: "1.0"
+description: "12+ friendly error message templates for user communication"
+
+references:
+  adr: ["0034d"]
+  contracts: ["fallback_tier4_graceful_degradation"]
+
+message_library:
+  count: 12
+  principle: "Non-technical, friendly, actionable"
+  tone: "Helpful assistant, not blame"
+
+templates:
+  1_network_timeout:
+    error_codes: [1001]
+    message: "I couldn't reach that service right now, but let me try again in a moment."
+    alternatives:
+      - "Try using a backup service"
+      - "Check your internet connection"
+      - "Try again in a few seconds"
+
+  2_service_unavailable:
+    error_codes: [1004]
+    message: "The {service} is temporarily unavailable. Let me try a different approach."
+    alternatives:
+      - "Use cached information from earlier"
+      - "Try a simpler request"
+      - "Try again later"
+
+  3_invalid_request:
+    error_codes: [-32602]
+    message: "I didn't understand that quite right. Could you rephrase that?"
+    alternatives:
+      - "Try again with more specific details"
+      - "Break down the request into smaller parts"
+
+  4_method_not_found:
+    error_codes: [-32601]
+    message: "I don't think I can do that with this tool."
+    alternatives:
+      - "Try using a different tool"
+      - "Rephrase your request"
+
+  5_parse_error:
+    error_codes: [-32700]
+    message: "There was a problem processing your request."
+    alternatives:
+      - "Try again"
+      - "Report this if it keeps happening"
+
+  6_tool_crashed:
+    error_codes: [2001]
+    message: "I had to restart {tool_name}. Let me try again."
+    alternatives:
+      - "Try again in a moment"
+      - "Use a different tool"
+
+  7_out_of_memory:
+    error_codes: [2002]
+    message: "{service} is under heavy load right now. Try again in a moment."
+    alternatives:
+      - "Simplify your request"
+      - "Try a smaller dataset"
+      - "Try again later"
+
+  8_tool_hung:
+    error_codes: [2003]
+    message: "{service} isn't responding. Let me try a different approach."
+    alternatives:
+      - "Try again"
+      - "Use cached information"
+      - "Try a simpler version"
+
+  9_circuit_breaker_open:
+    error_codes: [3001]
+    message: "The {tool_name} is having issues. Let me use a backup instead."
+    alternatives:
+      - "Use a different tool"
+      - "Try again later"
+
+  10_dns_failure:
+    error_codes: [1003]
+    message: "I'm having trouble connecting to {service}. Let me retry."
+    alternatives:
+      - "Check your internet connection"
+      - "Try again"
+
+  11_network_unreachable:
+    error_codes: [1002]
+    message: "I'm having trouble reaching that service right now."
+    alternatives:
+      - "Check your internet connection"
+      - "Try a different service"
+      - "Try again"
+
+  12_generic_error:
+    error_codes: [-32603, 0]
+    message: "I encountered an error. Let me try a different approach."
+    alternatives:
+      - "Try again"
+      - "Simplify your request"
+      - "Report this if it persists"
+
+message_structure:
+  required_fields:
+    - primary_message: "Main user-facing message"
+    - alternatives: "List of 1-3 next steps"
+
+  optional_fields:
+    - suggestion: "Optional tip"
+    - retry_countdown: "Show retry in N seconds"
+    - estimated_wait: "Estimated time to resolution"
+
+placeholders:
+  service: "Service name (weather, calendar, email)"
+  tool_name: "Tool name (weather_api, calendar_backup)"
+  error_code: "Numeric error code (optional)"
+  time: "Time placeholder (few seconds, a minute)"
+
+personalization_examples:
+  template: "I couldn't reach {service}. Let me try again."
+  with_weather: "I couldn't reach the weather service. Let me try again."
+  with_calendar: "I couldn't reach the calendar service. Let me try again."
+
+tone_guidelines:
+  - "Say 'I' (assistant perspective, not 'the system')"
+  - "Avoid technical jargon (no 'API', 'timeout', 'JSON-RPC')"
+  - "Be honest about what went wrong (but friendly)"
+  - "Always provide next steps"
+  - "Avoid blame ('you didn't...', 'you forgot...')"
+  - "Use positive framing ('let me try', 'let me use')"
+
+message_selection_algorithm:
+  input: "error_code or ErrorCategory"
+
+  if_error_code_provided:
+    lookup: "Find template with matching error_code"
+    if_found: "Use template"
+    if_not_found: "Use generic_error template"
+
+  if_only_category_provided:
+    if_transient: "Use network_timeout or service_unavailable"
+    if_permanent: "Use invalid_request or method_not_found"
+    if_critical: "Use tool_crashed or circuit_breaker_open"
+
+response_object:
+  type: "Structured JSON"
+  fields:
+    message: string (primary message)
+    alternatives: array[string] (next steps)
+    error_code: int (numeric code for logging)
+    suggestion: string (optional tip)
+    trace_id: string (for debugging)
+
+examples:
+  example_request:
+    input: "User asks for weather in NYC"
+    error: "Network timeout (error code 1001)"
+
+  example_response:
+    output: |
+      {
+        "message": "I couldn't reach the weather service right now, but let me try again in a moment.",
+        "alternatives": [
+          "Use cached weather from earlier",
+          "Try again in a few seconds",
+          "Ask about a different location"
+        ],
+        "error_code": 1001,
+        "suggestion": "Weather data is usually quick to fetch. If this persists, check your internet.",
+        "trace_id": "req-12345-abcde"
+      }
+
+metrics:
+  prometheus_counters:
+    - name: "user_messages_shown"
+      labels: ["message_type", "error_code"]
+    - name: "message_template_usage"
+      labels: ["template_id"]
+
+logging:
+  log_user_message:
+    - message_template_id
+    - error_code
+    - tool_id
+    - personalization_applied
+    - trace_id
+
+testing_requirements:
+  - test_all_templates_accessible: "All 12 templates defined"
+  - test_message_selection: "Correct template for error code"
+  - test_personalization: "Placeholders replaced"
+  - test_alternatives_provided: "Each message has alternatives"
+  - test_tone_compliance: "Messages are friendly, non-technical"
+  - test_response_structure: "JSON structure valid"
+
+accessibility:
+  simple_language: "No jargon, <12 word average"
+  actionable: "Every message suggests next step"
+  empathetic: "Assistant acknowledges difficulty"
+
+a_b_testing:
+  supported: true
+  tracked_metrics:
+    - user_satisfaction
+    - retry_rate
+    - alternative_selection_rate
+
+compliance:
+  adr_0034d_sections: ["User-facing error messages"]
+
+changelog:
+  "1.0": "Initial contract - 12 user-friendly error messages"

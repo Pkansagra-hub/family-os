@@ -1,0 +1,33 @@
+{
+  "$id": "query.recall.response.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["bundle", "trace", "budgets"],
+  "properties": {
+    "bundle": {
+      "type": "object"
+    },
+    "trace": {
+      "type": "object"
+    },
+    "budgets": {
+      "type": "object",
+      "required": ["fanout", "time_slice"],
+      "properties": {
+        "fanout": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "time_slice": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

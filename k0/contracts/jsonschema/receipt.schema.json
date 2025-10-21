@@ -1,0 +1,51 @@
+{
+  "$id": "receipt.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "idem_key",
+    "wal_pos",
+    "commit_ts",
+    "payload_sha256",
+    "mls_group_id",
+    "key_version",
+    "device_sig"
+  ],
+  "properties": {
+    "receipt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idem_key": {
+      "type": "string"
+    },
+    "wal_pos": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "commit_ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "mls_group_id": {
+      "type": "string"
+    },
+    "key_version": {
+      "type": "string"
+    },
+    "device_sig": {
+      "type": "string"
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

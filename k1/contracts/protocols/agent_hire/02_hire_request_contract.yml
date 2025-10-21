@@ -1,0 +1,275 @@
+# Agent Hire Protocol - Message Schemas & Contracts
+# File: contracts/protocols/agent_hire/02_hire_request_contract.yml
+# Purpose: HireRequest message contract definition with FlatBuffers schema
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-AGENT-HIRE-REQUEST-002"
+  name: "HireRequest Message Contract"
+  version: "1.0"
+
+  source_adrs:
+    - "ADR-0003b: 6 Core Protocol Implementations (Agent Hire)"
+    - "ADR-0011: FlatBuffers for All Contracts"
+    - "ADR-0003d: Role Attestation & Capability Verification"
+
+# Message definition
+message:
+  name: "HireRequest"
+  namespace: "k1.protocols.hire"
+  version: "1.0"
+  direction: "orchestrator → broadcast (all agents)"
+
+  # Role and capability constraints
+  sender_role: "orchestrator"              # ONLY orchestrator can send
+  receiver_roles: ["*"]                    # Broadcast to all agents
+  capability_required: "HIRE_REQUEST"      # Sender capability
+
+  # Timing constraints
+  timing:
+    send_timeout_ms: 100                   # Send must complete in 100ms
+    delivery_timeout_ms: 500               # Delivery within negotiation timeout
+    processing_timeout_ms: 400             # Agent processing within 400ms
+
+# FlatBuffers schema
+flatbuffers:
+  schema_file: "schemas/hire_request.fbs"
+
+  schema_definition: |
+    namespace K1.Protocols.Hire;
+
+    table HireRequest {
+      task_id: string;                   # Unique task ID
+      intent: string;                    # User intent (NLU classification)
+      user_input: string;                # Original user query
+      required_capabilities: [string];   # Capabilities needed (TOOL_CALL, etc.)
+      constraints: Constraints;          # Task constraints
+      privacy_band: ubyte;               # GREEN=0, AMBER=1, RED=2, BLACK=3
+      deadline_ms: uint32;               # Deadline for task completion
+      budget_usd: float;                 # Budget limit for task
+      trace_id: string;                  # OpenTelemetry trace ID
+      timestamp_ns: uint64;              # Nanosecond timestamp
+    }
+
+    table Constraints {
+      max_cost_usd: float;
+      require_tool_call: bool;
+      require_speech: bool;
+      require_vision: bool;
+      language: string;                  # ISO 639-1 language code
+    }
+
+    root_type HireRequest;
+
+  # Field descriptions
+  fields:
+    task_id:
+      type: "string (UUID)"
+      required: true
+      description: "Unique task identifier"
+      example: "task_550e8400-e29b-41d4-a716-446655440000"
+      validation: "RFC 4122 UUID v4"
+
+    intent:
+      type: "string (enum)"
+      required: true
+      description: "NLU classification of user intent"
+      valid_values:
+        - "WEATHER_QUERY"
+        - "CALENDAR_BOOKING"
+        - "EMAIL_SEND"
+        - "WEB_SEARCH"
+        - "RESEARCH"
+        - "ANALYSIS"
+      validation: "Must be in valid_values list"
+
+    user_input:
+      type: "string (max 4096 bytes)"
+      required: true
+      description: "Original user query/request"
+      example: "What's the weather in Seattle this weekend?"
+      validation: "Max 4096 bytes, no null bytes"
+
+    required_capabilities:
+      type: "array<string>"
+      required: true
+      description: "Capabilities needed for task"
+      valid_values:
+        - "TOOL_CALL"
+        - "MCP_ACCESS"
+        - "MODEL_HUB_READ"
+        - "RESEARCH"
+        - "ANALYSIS"
+      validation: "All must be in valid_values list"
+
+    privacy_band:
+      type: "enum ubyte"
+      required: true
+      description: "Privacy classification"
+      valid_values:
+        - "GREEN=0: No PII"
+        - "AMBER=1: May contain PII (user approval required)"
+        - "RED=2: Contains sensitive PII (arbiter approval required)"
+        - "BLACK=3: Highest sensitivity (restricted access)"
+      validation: "Must be 0-3"
+
+    deadline_ms:
+      type: "uint32 (milliseconds)"
+      required: false
+      description: "Task deadline (milliseconds from now)"
+      example: 300000  # 5 minutes
+      validation: "0 = no deadline, >0 = milliseconds"
+
+    budget_usd:
+      type: "float"
+      required: false
+      description: "Budget limit for task (tool calls, LLM inference)"
+      example: 10.50
+      validation: ">= 0.00, max 9999.99"
+
+    trace_id:
+      type: "string (UUID)"
+      required: true
+      description: "OpenTelemetry trace ID"
+      example: "trace_550e8400-e29b-41d4-a716-446655440000"
+      validation: "RFC 4122 UUID v4"
+
+    timestamp_ns:
+      type: "uint64 (nanoseconds)"
+      required: true
+      description: "Nanosecond Unix timestamp (system.clock_gettime(CLOCK_REALTIME_COARSE))"
+      validation: "Must be current time within 100ms"
+
+# Validation rules
+validation:
+
+  required_fields:
+    - task_id
+    - intent
+    - user_input
+    - required_capabilities
+    - privacy_band
+    - trace_id
+    - timestamp_ns
+
+  semantic_validation:
+    - "intent must be in valid_values"
+    - "all required_capabilities must be in valid_values"
+    - "privacy_band must be 0-3"
+    - "user_input length > 0 and <= 4096"
+    - "required_capabilities length > 0 and <= 10"
+    - "budget_usd >= 0.00"
+    - "deadline_ms >= 0"
+
+  timestamp_validation:
+    - "timestamp_ns must be current time"
+    - "max skew: 100ms (prevent clock skew attacks)"
+    - "if timestamp_ns > now + 100ms: REJECT"
+    - "if timestamp_ns < now - 100ms: REJECT"
+
+# Observability
+observability:
+
+  metrics:
+    - name: "hire_request_sent_total"
+      type: "counter"
+      labels: ["intent", "privacy_band"]
+      description: "HireRequest messages sent"
+
+    - name: "hire_request_size_bytes"
+      type: "histogram"
+      buckets: [100, 500, 1000, 2000, 4096]
+      description: "HireRequest message size"
+
+    - name: "hire_request_validation_latency_us"
+      type: "histogram"
+      buckets: [10, 50, 100, 500, 1000]
+      description: "HireRequest validation latency (microseconds)"
+
+  events:
+    - name: "hire_request_created"
+      fields: ["task_id", "intent", "privacy_band", "trace_id"]
+
+    - name: "hire_request_broadcast"
+      fields: ["task_id", "agent_count", "trace_id"]
+
+    - name: "hire_request_validation_failed"
+      fields: ["task_id", "reason", "trace_id"]
+
+  tracing:
+    - "Attached to span: hire_request_created"
+    - "Propagate trace_id to all agents"
+    - "Log validation latency in span"
+
+# Performance budgets
+performance:
+  serialization_latency_us: 100     # FlatBuffers serialization <100us
+  validation_latency_us: 50         # Validation <50us
+  broadcast_latency_ms: 50          # Send to all agents <50ms
+  total_latency_budget_ms: 100      # Total <100ms
+
+# Example payload
+example_payload:
+  task_id: "task_550e8400-e29b-41d4-a716-446655440000"
+  intent: "WEATHER_QUERY"
+  user_input: "What's the weather in Seattle this weekend?"
+  required_capabilities: ["WEB_SEARCH", "WEATHER_API_ACCESS"]
+  privacy_band: 0  # GREEN
+  deadline_ms: 300000
+  budget_usd: 5.00
+  trace_id: "trace_550e8400-e29b-41d4-a716-446655440000"
+  timestamp_ns: 1697880000000000000
+
+# Error handling
+error_handling:
+
+  validation_errors:
+    - code: "INVALID_INTENT"
+      http_status: 400
+      message: "Intent not in valid_values"
+      recovery: "Reject HireRequest, send error to user"
+
+    - code: "INVALID_CAPABILITY"
+      http_status: 400
+      message: "Capability not in valid_values"
+      recovery: "Reject HireRequest, log error"
+
+    - code: "INVALID_BAND"
+      http_status: 400
+      message: "Privacy band must be 0-3"
+      recovery: "Reject HireRequest"
+
+    - code: "SCHEMA_MISMATCH"
+      http_status: 400
+      message: "Message doesn't match FlatBuffers schema"
+      recovery: "BLOCK message (protocol violation)"
+
+    - code: "TIMESTAMP_SKEW"
+      http_status: 400
+      message: "Timestamp outside acceptable skew"
+      recovery: "BLOCK message (security risk)"
+
+# Compliance and security
+security:
+
+  role_attestation:
+    - "Message must include sender_role='orchestrator'"
+    - "HMAC-SHA256 signature must be verified"
+    - "Lease must be valid (not expired)"
+
+  privacy_considerations:
+    - "user_input may contain PII (log at privacy_band level)"
+    - "Redact user_input in logs if privacy_band > AMBER"
+    - "Encrypt user_input in transit for privacy_band > AMBER"
+
+  audit_trail:
+    - "Log: HireRequest creation"
+    - "Log: HireRequest broadcast"
+    - "Log: Agent responses"
+    - "Log: Hire success/failure"
+    - "Retention: 7 years (SOC2/ISO 27001 compliance)"
+
+# ==============================================================================
+# END OF FILE: 02_hire_request_contract.yml
+# ==============================================================================

@@ -1,0 +1,1103 @@
+################################################################################
+# CONTRACT: Tool Execution Selection - Observability & Metrics
+# CONTRACT_ID: TOOLS-SELECTION-OBSERVABILITY
+# PURPOSE: Defines observability requirements for 2D selection and fallback logic
+# ADR_REFERENCE: ADR-0033d (2D Selection Logic - Section 6: Observability)
+# STATUS: ACTIVE
+# LAST_UPDATED: 2025-01-15
+################################################################################
+
+contract_name: "Tool Execution Selection - Observability & Metrics"
+contract_id: "TOOLS-SELECTION-OBSERVABILITY"
+version: "1.0"
+status: "ACTIVE"
+
+description: |
+  Comprehensive observability specification for the 2D tool execution selection
+  system. Covers Prometheus metrics, OpenTelemetry distributed tracing, and
+  structured logging for complete visibility into selection decisions and
+  fallback cascade behavior.
+
+  This contract ensures:
+  1. Complete observability of selection decisions (why tool runs where)
+  2. Quantification of fallback cascade effectiveness (success rates)
+  3. Performance monitoring (latency, success rates, sandbox usage)
+  4. Operational alerts and SLA compliance
+  5. Debugging and root cause analysis capabilities
+
+################################################################################
+# SECTION 1: PROMETHEUS METRICS
+################################################################################
+prometheus_metrics:
+  metadata:
+    namespace: "k1"
+    subsystem: "tools"
+    component: "selection"
+    unit_consistency: "Counters: _total, Gauges: value, Histograms: _ms or _seconds"
+
+  ################################################################################
+  # METRIC 1: Tool Selection Decisions (Counters)
+  ################################################################################
+
+  metric_1_selection_total:
+    metric_name: "k1_tool_selection_total"
+    metric_type: "Counter"
+    description: |
+      Total number of tool selections made. Primary metric for volume.
+
+    semantics: "Incremented every time 2D selector runs (successful or fallback)"
+
+    labels:
+      - label: "tool_name"
+        description: "Name of the tool selected"
+        cardinality: "~10,000 (high)"
+
+      - label: "band"
+        description: "Privacy band of the tool"
+        cardinality: "3 (GREEN, AMBER, RED)"
+        values: ["GREEN", "AMBER", "RED"]
+
+      - label: "selected_protocol"
+        description: "Protocol selected by 2D selector"
+        cardinality: "2 (MCP, Direct)"
+        values: ["MCP", "Direct"]
+
+      - label: "selected_sandbox"
+        description: "Sandbox selected by 2D selector"
+        cardinality: "3 (WASM, Process, Container)"
+        values: ["WASM", "Process", "Container"]
+
+    examples: |
+      k1_tool_selection_total{
+        tool_name="weather_api",
+        band="GREEN",
+        selected_protocol="MCP",
+        selected_sandbox="Process"
+      } = 45230  (45,230 times weather_api selected for MCP+Process)
+
+      k1_tool_selection_total{
+        tool_name="user_plugin",
+        band="GREEN",
+        selected_protocol="Direct",
+        selected_sandbox="WASM"
+      } = 1203  (1,203 times user_plugin selected for Direct+WASM)
+
+    expected_distribution: |
+      By Protocol:
+      - MCP: 80% of total
+      - Direct: 20% of total
+
+      By Sandbox:
+      - Process: 80% of total
+      - WASM: 15% of total
+      - Container: 5% of total
+
+      By Band:
+      - GREEN: 85% of total
+      - AMBER: 12% of total
+      - RED: 3% of total
+
+    alerting: |
+      WARNING: If MCP percentage drops below 75% (indicates MCP issues)
+      WARNING: If Process percentage drops below 75% (sandboxing overuse)
+      ERROR: If any dimension has >50% cardinality explosion (new tools)
+
+  ################################################################################
+  # METRIC 2: Protocol Selection Breakdown (Counters)
+  ################################################################################
+
+  metric_2_protocol_selections:
+    metric_name: "k1_tool_protocol_selections_total"
+    metric_type: "Counter"
+    description: |
+      Breakdown of protocol selection decisions (MCP vs Direct).
+
+    labels:
+      - label: "protocol"
+        description: "Protocol selected"
+        cardinality: "2"
+        values: ["MCP", "Direct"]
+
+      - label: "reason"
+        description: "Reason for selection"
+        cardinality: "2"
+        values:
+          - "has_mcp_server_true (tool has MCP)"
+          - "has_mcp_server_false (tool has no MCP)"
+
+    examples: |
+      k1_tool_protocol_selections_total{
+        protocol="MCP",
+        reason="has_mcp_server_true"
+      } = 720000  (720k selections chose MCP)
+
+      k1_tool_protocol_selections_total{
+        protocol="Direct",
+        reason="has_mcp_server_false"
+      } = 180000  (180k selections chose Direct)
+
+    interpretation: |
+      Ratio of MCP:Direct should be ~4:1 (80:20)
+      - If ratio deviates, indicates tool registry changes
+      - If skewed toward Direct, may indicate MCP server failures
+
+  ################################################################################
+  # METRIC 3: Sandbox Selection Breakdown (Counters)
+  ################################################################################
+
+  metric_3_sandbox_selections:
+    metric_name: "k1_tool_sandbox_selections_total"
+    metric_type: "Counter"
+    description: |
+      Breakdown of sandbox selection decisions (WASM, Process, Container).
+
+    labels:
+      - label: "sandbox"
+        description: "Sandbox selected"
+        cardinality: "3"
+        values: ["WASM", "Process", "Container"]
+
+      - label: "reason"
+        description: "Reason for selection"
+        cardinality: "6"
+        values:
+          - "untrusted_isolation (trust_level=UNTRUSTED)"
+          - "red_band_compliance (band=RED + high_risk)"
+          - "performance_critical_native (performance_critical=true)"
+          - "default_trusted (default for trusted tools)"
+          - "fallback_from_stage_2 (fallback cascade)"
+          - "fallback_from_stage_3 (fallback cascade)"
+
+    examples: |
+      k1_tool_sandbox_selections_total{
+        sandbox="Process",
+        reason="default_trusted"
+      } = 600000  (600k tools defaulted to Process)
+
+      k1_tool_sandbox_selections_total{
+        sandbox="WASM",
+        reason="untrusted_isolation"
+      } = 135000  (135k tools selected for isolation)
+
+      k1_tool_sandbox_selections_total{
+        sandbox="Container",
+        reason="red_band_compliance"
+      } = 5000  (5k RED band tools required Container)
+
+    interpretation: |
+      Expected distribution:
+      - Process: ~600k (60%, default)
+      - WASM: ~135k (13.5%, untrusted tools)
+      - Container: ~265k (26.5%, all other reasons)
+
+      Deviations indicate:
+      - Process dropping: More untrusted tools or performance critical
+      - WASM increasing: More untrusted plugins or stricter policies
+      - Container increasing: More RED band or high-risk tools
+
+  ################################################################################
+  # METRIC 4: Fallback Cascade Attempts (Counters)
+  ################################################################################
+
+  metric_4_fallback_attempts_total:
+    metric_name: "k1_tool_fallback_attempts_total"
+    metric_type: "Counter"
+    description: |
+      Total number of fallback attempts by stage.
+
+    semantics: |
+      Incremented each time fallback stage is attempted.
+      Does NOT include Stage 1 (initial selection).
+
+    labels:
+      - label: "fallback_stage"
+        description: "Which fallback stage"
+        cardinality: "3"
+        values: ["stage_2", "stage_3", "stage_4"]
+
+      - label: "result"
+        description: "Outcome of fallback attempt"
+        cardinality: "2"
+        values: ["success", "failure"]
+
+      - label: "tool_name"
+        description: "Tool that triggered fallback"
+        cardinality: "~10,000 (high)"
+
+    examples: |
+      k1_tool_fallback_attempts_total{
+        fallback_stage="stage_2",
+        result="success"
+      } = 200000  (200k Stage 2 attempts succeeded)
+
+      k1_tool_fallback_attempts_total{
+        fallback_stage="stage_2",
+        result="failure"
+      } = 50000  (50k Stage 2 attempts failed)
+
+      k1_tool_fallback_attempts_total{
+        fallback_stage="stage_3",
+        result="success"
+      } = 50000  (50k Stage 3 attempts succeeded)
+
+      k1_tool_fallback_attempts_total{
+        fallback_stage="stage_4",
+        result="success"
+      } = 30000  (30k Stage 4 attempts succeeded)
+
+    success_rates: |
+      From total of 1,000,000 selections:
+      - Stage 1 (implicit): 700,000 success (70%)
+      - Stage 2: 200,000 attempts → 160,000 success (80% recovery rate)
+      - Stage 3: 50,000 attempts → 40,000 success (80% recovery rate)
+      - Stage 4: 30,000 attempts → 24,600 success (82% recovery rate)
+      - Exhaustion: 20,000 failures (2%)
+
+      Cumulative success: 98%
+
+  ################################################################################
+  # METRIC 5: Fallback Exhaustion (Counters)
+  ################################################################################
+
+  metric_5_fallback_exhausted_total:
+    metric_name: "k1_tool_fallback_exhausted_total"
+    metric_type: "Counter"
+    description: |
+      Total number of tools that exhausted all 6 possible combinations.
+
+    semantics: |
+      Incremented when all (protocol, sandbox) combinations have been
+      attempted and all failed.
+
+    labels:
+      - label: "tool_name"
+        description: "Tool that exhausted all options"
+        cardinality: "~100 (low, anomaly metric)"
+
+      - label: "band"
+        description: "Privacy band of exhausted tool"
+        cardinality: "3"
+
+      - label: "final_failure_reason"
+        description: "Why last combination failed"
+        cardinality: "~20"
+        values:
+          - "service_unavailable"
+          - "network_unreachable"
+          - "authentication_failed"
+          - "timeout"
+          - "resource_exhausted"
+          - "protocol_error"
+          - "sandbox_error"
+          - "configuration_error"
+
+    examples: |
+      k1_tool_fallback_exhausted_total{
+        tool_name="broken_service",
+        band="GREEN",
+        final_failure_reason="service_unavailable"
+      } = 1247  (1,247 exhaustion events for broken_service)
+
+      k1_tool_fallback_exhausted_total{
+        tool_name="high_risk_tool",
+        band="RED",
+        final_failure_reason="configuration_error"
+      } = 42  (42 exhaustion events for high_risk_tool)
+
+    alerting: |
+      CRITICAL: If any tool exhausts >100 times in 24h (persistent failure)
+      WARNING: If exhaustion count increases >5x week-over-week
+
+  ################################################################################
+  # METRIC 6: Fallback Stage Distribution (Histogram + Summary)
+  ################################################################################
+
+  metric_6_fallback_stage_distribution:
+    metric_name: "k1_tool_final_completion_stage"
+    metric_type: "Gauge"
+    description: |
+      Distribution of which stage tools ultimately succeeded on.
+
+    labels:
+      - label: "completion_stage"
+        description: "Stage where tool succeeded"
+        values: ["stage_1", "stage_2", "stage_3", "stage_4", "exhausted"]
+
+    examples: |
+      k1_tool_final_completion_stage{
+        completion_stage="stage_1"
+      } = 700000  (70% of tools succeed Stage 1)
+
+      k1_tool_final_completion_stage{
+        completion_stage="stage_2"
+      } = 200000  (20% succeed after Stage 2)
+
+      k1_tool_final_completion_stage{
+        completion_stage="stage_3"
+      } = 50000  (5% succeed after Stage 3)
+
+      k1_tool_final_completion_stage{
+        completion_stage="stage_4"
+      } = 30000  (3% succeed after Stage 4)
+
+      k1_tool_final_completion_stage{
+        completion_stage="exhausted"
+      } = 20000  (2% exhaust all options)
+
+    health_interpretation: |
+      HEALTHY: 70% Stage 1 success
+      HEALTHY: 98% cumulative success (exhaustion <2%)
+      WARNING: Stage 1 success <60% (selector miscalibration)
+      WARNING: Exhaustion >5% (systemic failures)
+
+################################################################################
+# SECTION 2: LATENCY HISTOGRAMS (PROMETHEUS)
+################################################################################
+
+latency_metrics:
+
+  ################################################################################
+  # METRIC 7: Selection Algorithm Latency (Histogram)
+  ################################################################################
+
+  metric_7_selection_latency:
+    metric_name: "k1_tool_selection_latency_ms"
+    metric_type: "Histogram"
+    description: |
+      Latency of 2D selection algorithm execution (Stage 1 only).
+
+    semantics: |
+      Measures time from input (ToolCharacteristics) to output (SelectionResult).
+      Does NOT include fallback cascade time.
+
+    unit: "milliseconds"
+
+    buckets_ms: [1, 2, 5, 10, 25, 50, 100, 200, 500, 1000]
+
+    percentiles:
+      p50: "3ms (median)"
+      p95: "8ms (95th percentile)"
+      p99: "15ms (99th percentile)"
+      max: "200ms (rare)"
+
+    expected_distribution: |
+      p50: ~3ms (simple decision tree)
+      p95: ~8ms (with registry lookup)
+      p99: ~15ms (worst case)
+
+    sla: "P95 < 10ms (selection latency budget)"
+
+    examples: |
+      k1_tool_selection_latency_ms_bucket{le="5"} = 450000  (450k < 5ms)
+      k1_tool_selection_latency_ms_bucket{le="10"} = 949500  (949.5k < 10ms)
+      k1_tool_selection_latency_ms_bucket{le="25"} = 999000  (999k < 25ms)
+      k1_tool_selection_latency_ms_count = 1000000
+      k1_tool_selection_latency_ms_sum = 5000000  (avg = 5ms)
+
+  ################################################################################
+  # METRIC 8: Fallback Stage Latency (Histogram)
+  ################################################################################
+
+  metric_8_fallback_latency:
+    metric_name: "k1_tool_fallback_latency_ms"
+    metric_type: "Histogram"
+    description: |
+      Latency of fallback execution for each stage.
+
+    semantics: |
+      Measures time from fallback trigger to completion (success or timeout).
+      Includes sandbox boot time, protocol negotiation time.
+
+    labels:
+      - label: "fallback_stage"
+        values: ["stage_2", "stage_3", "stage_4"]
+
+    unit: "milliseconds"
+
+    buckets_ms: [5, 10, 25, 50, 100, 150, 200, 300, 500, 1000, 2000]
+
+    expected_latencies:
+      stage_2:
+        p50: "30ms"
+        p95: "50ms"
+        description: "Sandbox fallback (boot variance)"
+
+      stage_3:
+        p50: "60ms"
+        p95: "100ms"
+        description: "Protocol fallback (negotiation)"
+
+      stage_4:
+        p50: "100ms"
+        p95: "150ms"
+        description: "Full fallback (both dimensions)"
+
+    sla:
+      stage_2: "P95 < 100ms"
+      stage_3: "P95 < 200ms"
+      stage_4: "P95 < 300ms"
+
+    examples: |
+      k1_tool_fallback_latency_ms_bucket{
+        fallback_stage="stage_2",
+        le="50"
+      } = 160000  (160k Stage 2 attempts < 50ms)
+
+      k1_tool_fallback_latency_ms_bucket{
+        fallback_stage="stage_2",
+        le="100"
+      } = 198000  (198k Stage 2 attempts < 100ms)
+
+  ################################################################################
+  # METRIC 9: Total Execution Latency (Histogram)
+  ################################################################################
+
+  metric_9_total_execution_latency:
+    metric_name: "k1_tool_total_execution_latency_ms"
+    metric_type: "Histogram"
+    description: |
+      Total time from selection decision through fallback cascade completion.
+
+    semantics: |
+      Measures Stage 1 selection + all fallback stages (if any) until success
+      or exhaustion.
+
+    unit: "milliseconds"
+
+    buckets_ms: [5, 10, 25, 50, 100, 200, 300, 500, 1000, 2000, 5000]
+
+    expected_distribution: |
+      Stage 1 only (70%): ~5ms
+      Stage 1 + Stage 2 (20%): ~35ms
+      Stage 1 + Stage 2 + Stage 3 (5%): ~80ms
+      Stage 1 + Stage 2 + Stage 3 + Stage 4 (3%): ~150ms
+      Exhaustion (2%): ~500ms (timeout)
+
+    percentiles:
+      p50: "8ms (most hit Stage 1)"
+      p95: "70ms (some fallback)"
+      p99: "250ms (heavy fallback or timeout)"
+
+    sla: "P95 < 100ms (selection + fallback budget)"
+
+    examples: |
+      k1_tool_total_execution_latency_ms_bucket{le="10"} = 700000
+      k1_tool_total_execution_latency_ms_bucket{le="100"} = 950000
+      k1_tool_total_execution_latency_ms_bucket{le="300"} = 990000
+
+################################################################################
+# SECTION 3: OPENTELEMETRY DISTRIBUTED TRACING
+################################################################################
+
+distributed_tracing:
+  tracer_provider: "OpenTelemetry (Python SDK)"
+  exporters:
+    - "Jaeger (development)"
+    - "Cloud Trace (production)"
+    - "stdout (debugging)"
+
+  ################################################################################
+  # TRACE 1: Tool Selection Decision
+  ################################################################################
+
+  trace_1_selection_decision:
+    span_name: "tool.selection.2d_selector"
+    description: |
+      Traces the 2D selection decision from input characteristics to
+      selected (protocol, sandbox) combination.
+
+    attributes:
+      trace_id: "globally_unique_identifier"
+      span_id: "span_specific_identifier"
+      parent_span_id: "parent_execution_span"
+
+      # Input
+      tool_name: "string: tool identifier"
+      band: "string: GREEN|AMBER|RED"
+      trust_level: "string: TRUSTED|UNTRUSTED"
+      has_mcp_server: "bool"
+      performance_critical: "bool"
+
+      # Decision Path
+      protocol_criterion_met: "bool: has_mcp_server value"
+      protocol_selected: "string: MCP|Direct"
+
+      sandbox_step_1_triggered: "bool: trust_level=UNTRUSTED"
+      sandbox_step_2_triggered: "bool: band=RED + high_risk"
+      sandbox_step_3_triggered: "bool: performance_critical=true"
+      sandbox_step_triggered_count: "int: which decision step fired"
+      sandbox_selected: "string: WASM|Process|Container"
+
+      # Output
+      selection_protocol: "string: final protocol"
+      selection_sandbox: "string: final sandbox"
+
+      # Performance
+      decision_latency_ms: "float: time to decide"
+
+    events:
+      - event: "characteristics_validated"
+      - event: "protocol_criterion_evaluated"
+      - event: "sandbox_criteria_evaluated"
+      - event: "selection_decided"
+
+    status_codes:
+      OK: "Selection completed successfully"
+      ERROR: "Selection failed (invalid input)"
+
+    example_trace_json: |
+      {
+        "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+        "span_id": "1234567890abcdef",
+        "span_name": "tool.selection.2d_selector",
+        "start_time": "2025-01-15T10:30:45.000000Z",
+        "end_time": "2025-01-15T10:30:45.008000Z",
+        "duration_ms": 8,
+        "attributes": {
+          "tool_name": "user_plugin",
+          "band": "GREEN",
+          "trust_level": "UNTRUSTED",
+          "has_mcp_server": false,
+          "performance_critical": false,
+          "protocol_selected": "Direct",
+          "sandbox_selected": "WASM",
+          "selection_protocol": "Direct",
+          "selection_sandbox": "WASM"
+        },
+        "events": [
+          {"name": "characteristics_validated", "time": 0},
+          {"name": "protocol_criterion_evaluated", "time": 2},
+          {"name": "sandbox_criteria_evaluated", "time": 5},
+          {"name": "selection_decided", "time": 8}
+        ],
+        "status": "OK"
+      }
+
+  ################################################################################
+  # TRACE 2: Fallback Cascade Execution
+  ################################################################################
+
+  trace_2_fallback_cascade:
+    span_name: "tool.execution.fallback_cascade"
+    description: |
+      Traces the entire fallback cascade from initial selection through
+      Stage 1-4 attempts to final success or exhaustion.
+
+    parent_span: "tool.selection.2d_selector"
+    child_spans:
+      - "tool.fallback.stage_2"
+      - "tool.fallback.stage_3"
+      - "tool.fallback.stage_4"
+
+    attributes:
+      trace_id: "inherited from selection"
+      span_id: "cascade_execution_id"
+
+      # Cascade tracking
+      tool_name: "string"
+      band: "string"
+      cascade_started_ms: "timestamp"
+      cascade_completed_ms: "timestamp"
+      cascade_duration_ms: "float"
+
+      # Stage 1 (implicit, no fallback yet)
+      stage_1_protocol: "string"
+      stage_1_sandbox: "string"
+      stage_1_result: "string: SUCCESS|FAILED"
+      stage_1_failure_reason: "string or null"
+      stage_1_latency_ms: "float"
+
+      # Stage 2 (if triggered)
+      stage_2_attempted: "bool"
+      stage_2_protocol: "string or null"
+      stage_2_sandbox: "string or null"
+      stage_2_result: "string: SUCCESS|FAILED or null"
+      stage_2_failure_reason: "string or null"
+      stage_2_latency_ms: "float or null"
+
+      # Stage 3 (if triggered)
+      stage_3_attempted: "bool"
+      stage_3_protocol: "string or null"
+      stage_3_sandbox: "string or null"
+      stage_3_result: "string: SUCCESS|FAILED or null"
+      stage_3_failure_reason: "string or null"
+      stage_3_latency_ms: "float or null"
+
+      # Stage 4 (if triggered)
+      stage_4_attempted: "bool"
+      stage_4_protocol: "string or null"
+      stage_4_sandbox: "string or null"
+      stage_4_result: "string: SUCCESS|FAILED or null"
+      stage_4_failure_reason: "string or null"
+      stage_4_latency_ms: "float or null"
+
+      # Final outcome
+      final_protocol: "string"
+      final_sandbox: "string"
+      final_result: "string: SUCCESS|EXHAUSTED"
+      completion_stage: "int: 1-4 or -1 if exhausted"
+      total_stages_attempted: "int"
+
+    events:
+      - event: "cascade_started"
+      - event: "stage_N_started"
+      - event: "stage_N_completed"
+      - event: "fallback_decision_made"
+      - event: "cascade_completed"
+
+    example_trace_json: |
+      {
+        "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+        "span_id": "cascade-567",
+        "span_name": "tool.execution.fallback_cascade",
+        "duration_ms": 63,
+        "attributes": {
+          "tool_name": "user_plugin",
+          "stage_1_protocol": "Direct",
+          "stage_1_sandbox": "WASM",
+          "stage_1_result": "FAILED",
+          "stage_1_failure_reason": "timeout",
+          "stage_1_latency_ms": 18,
+          "stage_2_attempted": true,
+          "stage_2_protocol": "Direct",
+          "stage_2_sandbox": "Process",
+          "stage_2_result": "SUCCESS",
+          "stage_2_latency_ms": 45,
+          "final_protocol": "Direct",
+          "final_sandbox": "Process",
+          "final_result": "SUCCESS",
+          "completion_stage": 2,
+          "total_stages_attempted": 2
+        }
+      }
+
+################################################################################
+# SECTION 4: STRUCTURED LOGGING
+################################################################################
+
+structured_logging:
+  log_level: "INFO"
+  format: "JSON"
+  fields:
+    timestamp: "ISO 8601 UTC"
+    trace_id: "OpenTelemetry trace ID"
+    span_id: "OpenTelemetry span ID"
+    level: "DEBUG|INFO|WARNING|ERROR|CRITICAL"
+    component: "k1.tools.selection"
+    message: "human-readable message"
+
+  ################################################################################
+  # LOG 1: Selection Decision Log
+  ################################################################################
+
+  log_1_selection_decision:
+    log_type: "TOOL_SELECTION_DECISION"
+    level: "INFO"
+    when: "Every tool selection (high volume)"
+
+    structured_entry: |
+      {
+        "timestamp": "2025-01-15T10:30:45.123Z",
+        "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+        "level": "INFO",
+        "component": "k1.tools.selection",
+        "log_type": "TOOL_SELECTION_DECISION",
+
+        "tool_name": "weather_api",
+        "band": "GREEN",
+        "trust_level": "TRUSTED",
+        "has_mcp_server": true,
+        "performance_critical": false,
+
+        "decision": {
+          "protocol": "MCP",
+          "sandbox": "Process",
+          "reasoning": "has_mcp_server=true → MCP; default_trusted → Process"
+        },
+
+        "latency_ms": 5.2
+      }
+
+    sampling: |
+      log_sample_rate: 10% (log 1 in 10 selections to reduce volume)
+      always_log_if: failure or unusual decision
+
+  ################################################################################
+  # LOG 2: Fallback Cascade Log
+  ################################################################################
+
+  log_2_fallback_cascade:
+    log_type: "TOOL_FALLBACK_CASCADE"
+    level: "INFO"
+    when: "When fallback cascade triggered (Stage 2+)"
+
+    structured_entry: |
+      {
+        "timestamp": "2025-01-15T10:30:45.200Z",
+        "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+        "level": "INFO",
+        "component": "k1.tools.selection.cascade",
+        "log_type": "TOOL_FALLBACK_CASCADE",
+
+        "tool_name": "user_plugin",
+        "band": "GREEN",
+        "cascade_initiated_by_stage": 1,
+        "cascade_initiated_reason": "WASM execution timeout",
+
+        "cascade_stages": [
+          {
+            "stage": 1,
+            "protocol": "Direct",
+            "sandbox": "WASM",
+            "result": "FAILED",
+            "reason": "timeout",
+            "latency_ms": 18
+          },
+          {
+            "stage": 2,
+            "protocol": "Direct",
+            "sandbox": "Process",
+            "result": "SUCCESS",
+            "reason": null,
+            "latency_ms": 45
+          }
+        ],
+
+        "final_result": {
+          "status": "SUCCESS",
+          "protocol": "Direct",
+          "sandbox": "Process",
+          "completion_stage": 2,
+          "total_duration_ms": 63
+        }
+      }
+
+  ################################################################################
+  # LOG 3: Fallback Exhaustion Log
+  ################################################################################
+
+  log_3_exhaustion:
+    log_type: "TOOL_FALLBACK_EXHAUSTED"
+    level: "ERROR"
+    when: "When all 6 combinations fail"
+
+    structured_entry: |
+      {
+        "timestamp": "2025-01-15T10:30:45.500Z",
+        "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+        "level": "ERROR",
+        "component": "k1.tools.selection.cascade",
+        "log_type": "TOOL_FALLBACK_EXHAUSTED",
+
+        "tool_name": "broken_service",
+        "band": "RED",
+        "error_code": "TOOL_EXECUTION_EXHAUSTED",
+
+        "cascades_attempted": 6,
+        "all_attempts": [
+          {
+            "stage": 1,
+            "protocol": "MCP",
+            "sandbox": "Container",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          },
+          {
+            "stage": 2,
+            "protocol": "MCP",
+            "sandbox": "Process",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          },
+          {
+            "stage": 2,
+            "protocol": "MCP",
+            "sandbox": "WASM",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          },
+          {
+            "stage": 3,
+            "protocol": "Direct",
+            "sandbox": "Container",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          },
+          {
+            "stage": 4,
+            "protocol": "Direct",
+            "sandbox": "Process",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          },
+          {
+            "stage": 4,
+            "protocol": "Direct",
+            "sandbox": "WASM",
+            "result": "FAILED",
+            "reason": "service_unavailable"
+          }
+        ],
+
+        "final_failure_reason": "service_unavailable",
+        "total_duration_ms": 450,
+        "recommendation": "Check service availability; possible incident"
+      }
+
+    alerts: |
+      Automatic incident creation if:
+      - Same tool exhausts >3 times in 5 minutes
+      - >5 different tools exhaust in 5 minutes (system-wide issue)
+
+################################################################################
+# SECTION 5: OPERATIONAL DASHBOARDS
+################################################################################
+
+dashboards:
+  dashboard_1_selection_overview:
+    name: "Tool Selection Overview"
+    panels:
+      - title: "Selections per Second"
+        metric: "rate(k1_tool_selection_total[5m])"
+        description: "Overall throughput"
+
+      - title: "Protocol Distribution"
+        metric: "k1_tool_protocol_selections_total"
+        labels: ["protocol"]
+        description: "MCP vs Direct breakdown"
+
+      - title: "Sandbox Distribution"
+        metric: "k1_tool_sandbox_selections_total"
+        labels: ["sandbox"]
+        description: "WASM vs Process vs Container"
+
+      - title: "Selection Latency (P95)"
+        metric: "histogram_quantile(0.95, k1_tool_selection_latency_ms_bucket)"
+        description: "95th percentile selection time"
+
+      - title: "Success Rate"
+        query: |
+          (
+            sum(rate(k1_tool_fallback_exhausted_total[5m])) +
+            sum(rate(k1_tool_selection_total[5m]))
+          ) / sum(rate(k1_tool_selection_total[5m]))
+        description: "Percentage of tools that don't exhaust"
+
+  dashboard_2_fallback_cascade:
+    name: "Fallback Cascade Effectiveness"
+    panels:
+      - title: "Fallback Attempts by Stage"
+        metric: "k1_tool_fallback_attempts_total"
+        labels: ["fallback_stage", "result"]
+        description: "Volume and success rate per stage"
+
+      - title: "Cumulative Success Rate"
+        query: |
+          (
+            700000 +  // Stage 1
+            sum(k1_tool_fallback_attempts_total{result="success"})
+          ) /
+          (700000 + sum(k1_tool_fallback_attempts_total))
+        description: "Percentage of tools succeeding anywhere"
+
+      - title: "Exhaustion Events"
+        metric: "k1_tool_fallback_exhausted_total"
+        labels: ["tool_name"]
+        description: "Tools that exhausted all options"
+
+      - title: "Average Cascade Duration"
+        metric: "avg(k1_tool_total_execution_latency_ms)"
+        description: "Time from selection to final result"
+
+  dashboard_3_performance_sla:
+    name: "Performance SLA Compliance"
+    panels:
+      - title: "Selection Latency SLA (P95 < 10ms)"
+        query: |
+          histogram_quantile(0.95, k1_tool_selection_latency_ms_bucket) < 10
+        description: "RED if violated"
+
+      - title: "Stage 2 Latency SLA (P95 < 100ms)"
+        query: |
+          histogram_quantile(0.95,
+            k1_tool_fallback_latency_ms_bucket{fallback_stage="stage_2"}
+          ) < 100
+        description: "RED if violated"
+
+      - title: "Total Latency SLA (P95 < 100ms)"
+        query: |
+          histogram_quantile(0.95, k1_tool_total_execution_latency_ms) < 100
+        description: "RED if violated"
+
+################################################################################
+# SECTION 6: ALERTS & THRESHOLDS
+################################################################################
+
+alerting:
+  alert_1_selection_latency:
+    name: "ToolSelectionLatencyHigh"
+    condition: |
+      histogram_quantile(0.95, k1_tool_selection_latency_ms_bucket) > 10
+    duration: "5 minutes"
+    severity: "WARNING"
+    action: "Investigate selector performance (caching issue?)"
+
+  alert_2_fallback_exhaustion_rate:
+    name: "ToolFallbackExhaustionRateHigh"
+    condition: |
+      rate(k1_tool_fallback_exhausted_total[5m]) > 0.01
+    duration: "5 minutes"
+    severity: "ERROR"
+    action: "Investigate tool failures (service down?)"
+
+  alert_3_protocol_mcp_ratio_skewed:
+    name: "ProtocolRatioSkewed"
+    condition: |
+      sum(rate(k1_tool_protocol_selections_total{protocol="MCP"}[1h])) /
+      sum(rate(k1_tool_protocol_selections_total[1h]))
+      < 0.75
+    duration: "15 minutes"
+    severity: "WARNING"
+    action: "Investigate MCP server availability"
+
+  alert_4_sandbox_process_ratio_low:
+    name: "SandboxProcessRatioLow"
+    condition: |
+      sum(rate(k1_tool_sandbox_selections_total{sandbox="Process"}[1h])) /
+      sum(rate(k1_tool_sandbox_selections_total[1h]))
+      < 0.70
+    duration: "15 minutes"
+    severity: "WARNING"
+    action: "Investigate untrusted tool surge"
+
+################################################################################
+# SECTION 7: TEST CONTRACT
+################################################################################
+
+testing:
+  framework: "WARD (Python async testing)"
+
+  test_case_1_metrics_incremented:
+    test_name: "observability_metrics_incremented_on_selection"
+    description: |
+      Verify that all Prometheus metrics are incremented when
+      2D selector makes a selection decision.
+
+    setup: |
+      tool := ToolCharacteristics(...)
+      metrics := PrometheusMetrics()
+      selector := ToolExecutionSelector()
+
+    execution: |
+      initial_count := metrics.get("k1_tool_selection_total")
+      result := await selector.select(tool)
+      final_count := metrics.get("k1_tool_selection_total")
+
+    expected_output: |
+      final_count == initial_count + 1
+      Metric labels correctly set (tool_name, protocol, sandbox, band)
+
+    assertion: |
+      assert final_count == initial_count + 1
+
+  test_case_2_tracing_attributes:
+    test_name: "observability_tracing_attributes_set_correctly"
+    description: |
+      Verify that OpenTelemetry span attributes are set correctly.
+
+    setup: |
+      tracer := OpenTelemetryTracer()
+      selector := ToolExecutionSelector(tracer=tracer)
+
+    execution: |
+      span := tracer.capture_span()
+      result := await selector.select(tool)
+      attributes := span.attributes
+
+    expected_output: |
+      attributes.tool_name == tool.tool_name
+      attributes.protocol_selected == result.protocol
+      attributes.sandbox_selected == result.sandbox
+      attributes.decision_latency_ms > 0
+
+    assertion: |
+      assert attributes.tool_name == tool.tool_name
+      assert "protocol_selected" in attributes
+
+  test_case_3_fallback_logging:
+    test_name: "observability_fallback_logs_structured_json"
+    description: |
+      Verify that fallback cascade events are logged as structured JSON.
+
+    setup: |
+      logger := StructuredLogger()
+      cascade := CascadeExecutor(logger=logger)
+
+    execution: |
+      logs := logger.capture_logs()
+      result := await cascade.execute_with_fallback(...)
+
+    expected_output: |
+      logs[0].log_type == "TOOL_FALLBACK_CASCADE"
+      logs[0].cascade_stages is list
+      logs[0].final_result.status in ["SUCCESS", "EXHAUSTED"]
+
+    assertion: |
+      assert len(logs) >= 1
+      assert logs[0].log_type == "TOOL_FALLBACK_CASCADE"
+
+################################################################################
+# SECTION 8: IMPLEMENTATION CONTRACT
+################################################################################
+
+implementation:
+  observability_provider_module: "k1.tools.selection.observability"
+
+  classes:
+    - class_name: "SelectionMetrics"
+      responsibility: "Prometheus metric management"
+      methods:
+        - "record_selection(tool_name, band, protocol, sandbox)"
+        - "record_fallback_attempt(stage, result)"
+        - "record_fallback_exhaustion(tool_name, reason)"
+
+    - class_name: "SelectionTracer"
+      responsibility: "OpenTelemetry span management"
+      methods:
+        - "start_selection_span(tool_name)"
+        - "start_cascade_span(tool_name)"
+        - "set_span_attributes(...)"
+        - "add_span_event(event_name)"
+
+    - class_name: "SelectionLogger"
+      responsibility: "Structured JSON logging"
+      methods:
+        - "log_selection_decision(decision, latency)"
+        - "log_fallback_cascade(stages, final_result)"
+        - "log_fallback_exhaustion(tool_name, reason)"
+
+################################################################################
+# SECTION 9: ADR REFERENCES
+################################################################################
+
+adr_references:
+  - adr_number: "0033d"
+    title: "2D Selection Logic"
+    sections:
+      - "Section 6: Observability"
+
+  - adr_number: "0033"
+    title: "Tool Execution Architecture"
+    sections:
+      - "Section 5: Observability Requirements"
+
+related_contracts:
+  - "tool_execution_selector.yml"
+  - "protocol_selection_axis1.yml"
+  - "sandbox_selection_axis2.yml"
+  - "fallback_cascade_4_stages.yml"
+  - "tool_characteristics_criteria.yml"
+
+################################################################################
+# END CONTRACT
+################################################################################

@@ -1,0 +1,518 @@
+# Checksum: 5ffc5730fc1bc913
+groups:
+- interval: 30s
+  name: k0-availability
+  rules:
+  - alert: K0ApiAvailabilityWarning
+    annotations:
+      description: API availability is {{ $value | humanizePercentage }} (< 99.5%),
+        target is 99.9%
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/api-availability.md
+      summary: K0 API availability below warning threshold
+    expr: 100 * (1 - (rate(k0_kernel_http_requests_total{status=~"5.."}[5m]) / rate(k0_kernel_http_requests_total[5m])))
+      < 99.5
+    for: 5m
+    labels:
+      component: kernel
+      contact: sre
+      maintenance: 'false'
+      runbook: alerts/api-availability.md
+      severity: warning
+      slo: availability
+      space: all
+      subsystem: availability
+      tenant: all
+  - alert: K0ApiAvailabilityCritical
+    annotations:
+      description: API availability is {{ $value | humanizePercentage }} (< 99.0%),
+        target is 99.9%
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/api-availability.md
+      summary: K0 API availability CRITICAL
+    expr: 100 * (1 - (rate(k0_kernel_http_requests_total{status=~"5.."}[5m]) / rate(k0_kernel_http_requests_total[5m])))
+      < 99.0
+    for: 2m
+    labels:
+      component: kernel
+      contact: sre
+      maintenance: 'false'
+      runbook: alerts/api-availability.md
+      severity: critical
+      slo: availability
+      space: all
+      subsystem: availability
+      tenant: all
+  - alert: K0DriverHandshakeFailureWarning
+    annotations:
+      description: Driver handshake failures are {{ $value | humanize }} per minute
+        (> 1), investigate driver availability
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/driver-handshake.md
+      summary: K0 driver handshake failures above warning threshold
+    expr: rate(k0_driver_handshakes_total{outcome="failure"}[5m]) * 60 > 1
+    for: 10m
+    labels:
+      component: drivers
+      contact: drivers
+      maintenance: 'false'
+      runbook: alerts/driver-handshake.md
+      severity: warning
+      slo: availability
+      space: all
+      subsystem: drivers
+      tenant: all
+  - alert: K0DriverHandshakeFailureCritical
+    annotations:
+      description: Driver handshake failures are {{ $value | humanize }} per minute
+        (> 3), drivers likely offline
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/driver-handshake.md
+      summary: K0 driver handshake failures CRITICAL
+    expr: rate(k0_driver_handshakes_total{outcome="failure"}[5m]) * 60 > 3
+    for: 5m
+    labels:
+      component: drivers
+      contact: drivers
+      maintenance: 'false'
+      runbook: alerts/driver-handshake.md
+      severity: critical
+      slo: availability
+      space: all
+      subsystem: drivers
+      tenant: all
+- interval: 30s
+  name: k0-topology
+  rules:
+  - alert: K0SchedulerQuorumWarning
+    annotations:
+      description: Scheduler quorum minimum is {{ $value | humanize }} (< 3), target
+        is 3
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/control-plane-failover.md
+      summary: Scheduler quorum below warning threshold
+    expr: min without(zone)(k0_scheduler_quorum_members) < 3
+    for: 5m
+    labels:
+      component: cluster
+      contact: sre
+      maintenance: 'false'
+      runbook: control-plane-failover.md
+      severity: warning
+      slo: topology
+      space: all
+      subsystem: topology
+      tenant: all
+  - alert: K0SchedulerQuorumCritical
+    annotations:
+      description: Scheduler quorum minimum is {{ $value | humanize }} (< 2), target
+        is 3
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/control-plane-failover.md
+      summary: Scheduler quorum CRITICAL
+    expr: min without(zone)(k0_scheduler_quorum_members) < 2
+    for: 2m
+    labels:
+      component: cluster
+      contact: sre
+      maintenance: 'false'
+      runbook: control-plane-failover.md
+      severity: critical
+      slo: topology
+      space: all
+      subsystem: topology
+      tenant: all
+  - alert: K0WalReplicaLagWarning
+    annotations:
+      description: Replica WAL lag is {{ $value | humanizeDuration }} (> 20s), target
+        is < 10s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/data-plane-promotion.md
+      summary: Replica WAL lag above warning threshold
+    expr: max without(instance, pod)(k0_wal_replica_lag_seconds) > 20
+    for: 10m
+    labels:
+      component: storage
+      contact: sre
+      maintenance: 'false'
+      runbook: data-plane-promotion.md
+      severity: warning
+      slo: freshness
+      space: all
+      subsystem: topology
+      tenant: all
+  - alert: K0WalReplicaLagCritical
+    annotations:
+      description: Replica WAL lag is {{ $value | humanizeDuration }} (> 30s), target
+        is < 10s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/data-plane-promotion.md
+      summary: Replica WAL lag CRITICAL
+    expr: max without(instance, pod)(k0_wal_replica_lag_seconds) > 30
+    for: 5m
+    labels:
+      component: storage
+      contact: sre
+      maintenance: 'false'
+      runbook: data-plane-promotion.md
+      severity: critical
+      slo: freshness
+      space: all
+      subsystem: topology
+      tenant: all
+  - alert: K0ZoneHealthWarning
+    annotations:
+      description: Average cluster zone health is {{ $value | humanize }} (< 1), target
+        is 1
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/control-plane-failover.md
+      summary: Cluster zone health below warning threshold
+    expr: sum(k0_cluster_zone_health) / clamp_min(count(k0_cluster_zone_health), 1)
+      < 1
+    for: 10m
+    labels:
+      component: cluster
+      contact: sre
+      maintenance: 'false'
+      runbook: control-plane-failover.md
+      severity: warning
+      slo: availability
+      space: all
+      subsystem: topology
+      tenant: all
+  - alert: K0ZoneHealthCritical
+    annotations:
+      description: Average cluster zone health is {{ $value | humanize }} (<= 0),
+        target is 1
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/control-plane-failover.md
+      summary: Cluster zone health CRITICAL
+    expr: sum(k0_cluster_zone_health) / clamp_min(count(k0_cluster_zone_health), 1)
+      <= 0
+    for: 2m
+    labels:
+      component: cluster
+      contact: sre
+      maintenance: 'false'
+      runbook: control-plane-failover.md
+      severity: critical
+      slo: availability
+      space: all
+      subsystem: topology
+      tenant: all
+- interval: 30s
+  name: k0-slo-latency
+  rules:
+  - alert: K0CommandLatencyWarning
+    annotations:
+      description: Command p95 latency is {{ $value | humanize }}ms (> 150ms), target
+        is < 100ms
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/command-latency.md
+      summary: K0 command latency (p95) above warning threshold
+    expr: histogram_quantile(0.95, sum(rate(k0_kernel_http_request_latency_seconds_bucket{route="/k0/command.submit"}[5m]))
+      by (le)) * 1000 > 150
+    for: 5m
+    labels:
+      component: kernel
+      contact: runtime
+      maintenance: 'false'
+      runbook: alerts/command-latency.md
+      severity: warning
+      slo: latency
+      space: all
+      subsystem: command
+      tenant: all
+  - alert: K0CommandLatencyCritical
+    annotations:
+      description: Command p95 latency is {{ $value | humanize }}ms (> 250ms), target
+        is < 100ms
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/command-latency.md
+      summary: K0 command latency (p95) CRITICAL
+    expr: histogram_quantile(0.95, sum(rate(k0_kernel_http_request_latency_seconds_bucket{route="/k0/command.submit"}[5m]))
+      by (le)) * 1000 > 250
+    for: 2m
+    labels:
+      component: kernel
+      contact: runtime
+      maintenance: 'false'
+      runbook: alerts/command-latency.md
+      severity: critical
+      slo: latency
+      space: all
+      subsystem: command
+      tenant: all
+  - alert: K0QueryLatencyWarning
+    annotations:
+      description: Query p95 latency is {{ $value | humanize }}ms (> 75ms), target
+        is < 50ms
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/query-latency.md
+      summary: K0 query latency (p95) above warning threshold
+    expr: histogram_quantile(0.95, sum(rate(k0_kernel_http_request_latency_seconds_bucket{route="/k0/query.execute"}[5m]))
+      by (le)) * 1000 > 75
+    for: 5m
+    labels:
+      component: kernel
+      contact: runtime
+      maintenance: 'false'
+      runbook: alerts/query-latency.md
+      severity: warning
+      slo: latency
+      space: all
+      subsystem: query
+      tenant: all
+  - alert: K0QueryLatencyCritical
+    annotations:
+      description: Query p95 latency is {{ $value | humanize }}ms (> 150ms), target
+        is < 50ms
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/query-latency.md
+      summary: K0 query latency (p95) CRITICAL
+    expr: histogram_quantile(0.95, sum(rate(k0_kernel_http_request_latency_seconds_bucket{route="/k0/query.execute"}[5m]))
+      by (le)) * 1000 > 150
+    for: 2m
+    labels:
+      component: kernel
+      contact: runtime
+      maintenance: 'false'
+      runbook: alerts/query-latency.md
+      severity: critical
+      slo: latency
+      space: all
+      subsystem: query
+      tenant: all
+- interval: 60s
+  name: k0-durability
+  rules:
+  - alert: K0WalLagWarning
+    annotations:
+      description: WAL lag is {{ $value | humanizeDuration }} (> 120s), target is
+        < 60s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/wal-lag.md
+      summary: K0 WAL lag above warning threshold
+    expr: time() - k0_kernel_snapshot_watermark > 120
+    for: 5m
+    labels:
+      component: storage
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/wal-lag.md
+      severity: warning
+      slo: freshness
+      space: all
+      subsystem: storage
+      tenant: all
+  - alert: K0WalLagCritical
+    annotations:
+      description: WAL lag is {{ $value | humanizeDuration }} (> 300s), target is
+        < 60s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/wal-lag.md
+      summary: K0 WAL lag CRITICAL
+    expr: time() - k0_kernel_snapshot_watermark > 300
+    for: 2m
+    labels:
+      component: storage
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/wal-lag.md
+      severity: critical
+      slo: freshness
+      space: all
+      subsystem: storage
+      tenant: all
+  - alert: K0OutboxBacklogWarning
+    annotations:
+      description: Outbox pending count is {{ $value | humanize }} (> 50000), target
+        is < 10000
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/outbox-backlog.md
+      summary: K0 outbox backlog above warning threshold
+    expr: sum(k0_outbox_pending_total{state="pending"}) > 50000
+    for: 10m
+    labels:
+      component: storage
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/outbox-backlog.md
+      severity: warning
+      slo: saturation
+      space: all
+      subsystem: outbox
+      tenant: all
+  - alert: K0OutboxBacklogCritical
+    annotations:
+      description: Outbox pending count is {{ $value | humanize }} (> 100000), target
+        is < 10000
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/outbox-backlog.md
+      summary: K0 outbox backlog CRITICAL
+    expr: sum(k0_outbox_pending_total{state="pending"}) > 100000
+    for: 5m
+    labels:
+      component: storage
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/outbox-backlog.md
+      severity: critical
+      slo: saturation
+      space: all
+      subsystem: outbox
+      tenant: all
+  - alert: K0ReplayThroughputWarning
+    annotations:
+      description: Replay throughput is {{ $value | humanize }} evt/s (< 500 evt/s),
+        target is > 1000 evt/s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/replay-throughput.md
+      summary: K0 replay throughput below warning threshold
+    expr: rate(k0_kernel_replay_watermark[5m]) < 500
+    for: 10m
+    labels:
+      component: replay
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/replay-throughput.md
+      severity: warning
+      slo: throughput
+      space: all
+      subsystem: replay
+      tenant: all
+  - alert: K0ReplayThroughputCritical
+    annotations:
+      description: Replay throughput is {{ $value | humanize }} evt/s (< 100 evt/s),
+        target is > 1000 evt/s
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/replay-throughput.md
+      summary: K0 replay throughput CRITICAL
+    expr: rate(k0_kernel_replay_watermark[5m]) < 100
+    for: 5m
+    labels:
+      component: replay
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/replay-throughput.md
+      severity: critical
+      slo: throughput
+      space: all
+      subsystem: replay
+      tenant: all
+  - alert: K0ReplayFailureRateWarning
+    annotations:
+      description: Replay failure ratio is {{ $value | humanizePercentage }} (> 2%),
+        investigate downstream storage or payload integrity
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/replay-failure.md
+      summary: K0 replay failure rate above warning threshold
+    expr: (100 * rate(k0_replay_failures_total[5m]) / clamp_min(rate(k0_replay_attempts_total[5m]),
+      1)) > 2
+    for: 15m
+    labels:
+      component: replay
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/replay-failure.md
+      severity: warning
+      slo: reliability
+      space: all
+      subsystem: replay
+      tenant: all
+  - alert: K0ReplayFailureRateCritical
+    annotations:
+      description: Replay failure ratio is {{ $value | humanizePercentage }} (> 5%),
+        replay pipeline compromised
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/replay-failure.md
+      summary: K0 replay failure rate CRITICAL
+    expr: (100 * rate(k0_replay_failures_total[5m]) / clamp_min(rate(k0_replay_attempts_total[5m]),
+      1)) > 5
+    for: 5m
+    labels:
+      component: replay
+      contact: storage
+      maintenance: 'false'
+      runbook: alerts/replay-failure.md
+      severity: critical
+      slo: reliability
+      space: all
+      subsystem: replay
+      tenant: all
+- interval: 30s
+  name: k0-qos
+  rules:
+  - alert: K0SchedulerStarvationWarning
+    annotations:
+      description: Scheduler denials are {{ $value | humanize }} per minute (> 10),
+        check QoS budgets
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/scheduler-starvation.md
+      summary: K0 scheduler denials above warning threshold
+    expr: rate(k0_qos_scheduler_denials_total[5m]) * 60 > 10
+    for: 10m
+    labels:
+      component: qos
+      contact: qos
+      maintenance: 'false'
+      runbook: alerts/scheduler-starvation.md
+      severity: warning
+      slo: capacity
+      space: all
+      subsystem: qos
+      tenant: all
+  - alert: K0SchedulerStarvationCritical
+    annotations:
+      description: Scheduler denials are {{ $value | humanize }} per minute (> 25),
+        workloads starved
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/scheduler-starvation.md
+      summary: K0 scheduler denials CRITICAL
+    expr: rate(k0_qos_scheduler_denials_total[5m]) * 60 > 25
+    for: 5m
+    labels:
+      component: qos
+      contact: qos
+      maintenance: 'false'
+      runbook: alerts/scheduler-starvation.md
+      severity: critical
+      slo: capacity
+      space: all
+      subsystem: qos
+      tenant: all
+  - alert: K0SseDisconnectSpikeWarning
+    annotations:
+      description: SSE active subscriptions are {{ $value | humanizePercentage }}
+        of baseline (< 95%), investigate disconnect causes
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/sse-disconnect.md
+      summary: K0 SSE active subscription ratio below warning threshold
+    expr: 100 * avg_over_time(k0_sse_active_subscriptions[5m]) / clamp_min(avg_over_time(k0_sse_active_subscriptions[30m]),
+      1) < 95
+    for: 10m
+    labels:
+      component: ports
+      contact: ports
+      maintenance: 'false'
+      runbook: alerts/sse-disconnect.md
+      severity: warning
+      slo: availability
+      space: all
+      subsystem: sse
+      tenant: all
+  - alert: K0SseDisconnectSpikeCritical
+    annotations:
+      description: SSE active subscriptions are {{ $value | humanizePercentage }}
+        of baseline (< 90%), widespread disconnect
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/sse-disconnect.md
+      summary: K0 SSE active subscription ratio CRITICAL
+    expr: 100 * avg_over_time(k0_sse_active_subscriptions[5m]) / clamp_min(avg_over_time(k0_sse_active_subscriptions[30m]),
+      1) < 90
+    for: 5m
+    labels:
+      component: ports
+      contact: ports
+      maintenance: 'false'
+      runbook: alerts/sse-disconnect.md
+      severity: critical
+      slo: availability
+      space: all
+      subsystem: sse
+      tenant: all
+- interval: 120s
+  name: k0-meta
+  rules:
+  - alert: K0AlertingDeadman
+    annotations:
+      description: Alertmanager heartbeat should always be firing; silence only for
+        maintenance. If missing, alerting pipeline may be down.
+      runbook_url: https://github.com/Pkansagra-hub/memory_kernel/blob/main/docs/development/runbooks/alerts/alerting-deadman.md
+      summary: K0 alerting dead-man switch
+    expr: vector(1)
+    for: 0m
+    labels:
+      component: observability
+      contact: sre
+      maintenance: 'false'
+      runbook: alerts/alerting-deadman.md
+      severity: info
+      slo: meta
+      space: all
+      subsystem: meta
+      tenant: all

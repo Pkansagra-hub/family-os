@@ -1,0 +1,19 @@
+{
+  "selectors": [
+    {
+      "type": "semantic",
+      "space_id": "space-alpha",
+      "tenant_id": "tenant-123",
+      "limit": 20,
+      "query": "family photo highlights"
+    }
+  ],
+  "space_id": "space-alpha",
+  "fanout_hints": {
+    "max_devices": 5
+  },
+  "qos_hints": {
+    "target_latency_ms": 150
+  },
+  "max_latency_ms": 200
+}

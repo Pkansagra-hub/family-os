@@ -1,0 +1,528 @@
+# JSON Envelope Specification - K0 Bridge Protocol
+# Purpose: Primary envelope format for K0↔K1 communication
+# Status: Production-ready, K0 native format
+# ADR References: ADR-0001a (K0 Bridge Protocol), ADR-0014 (JSON REST API)
+
+version: "1.0"
+specification_type: "json_envelope"
+priority: "PRIMARY"
+related_adrs:
+  - "ADR-0001a" # K0 Bridge Communication Protocol
+  - "ADR-0014"  # JSON for REST API (Dual Format)
+  - "ADR-0001"  # K0/K1 Kernel Split
+
+# ============================================================================
+# ENVELOPE STRUCTURE SPECIFICATION
+# ============================================================================
+
+envelope_structure:
+  description: |
+    JSON envelope is the PRIMARY format for K0 Bridge communication.
+    K0 uses JSON natively, requiring no conversion overhead.
+    All fields are UTF-8 strings or standard JSON types.
+
+  schema_format: "JSON Schema Draft 2020-12"
+  content_type: "application/json"
+  character_encoding: "UTF-8"
+
+  top_level_structure:
+    port:
+      type: string
+      required: true
+      enum: ["command", "query", "sse", "observability"]
+      description: "K0 external port (K1 calls 4 ports, K0 routes to 20 pipelines internally)"
+
+    command_type:
+      type: string
+      required: true
+      description: "Operation type (memory_write, recall_query, action_command, etc.)"
+      examples: ["memory_write", "recall_query", "consolidation_trigger", "learning_feedback"]
+
+    envelope_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Unique envelope identifier (idempotency key)"
+      example: "env_abc123"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "End-to-end trace ID (propagates K1 → K0 → Storage → K1)"
+      example: "trace_xyz789"
+
+    timestamp:
+      type: string
+      format: iso8601
+      required: true
+      description: "Envelope creation timestamp (ISO 8601 with milliseconds)"
+      example: "2025-10-14T12:34:56.789Z"
+
+    device_id:
+      type: string
+      required: true
+      description: "Device identifier (for device-signed receipts)"
+      example: "device_dad_phone"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_456"
+
+    user_id:
+      type: string
+      required: true
+      description: "User identifier (family member)"
+      example: "user_dad"
+
+    schema_version:
+      type: string
+      format: semver
+      required: true
+      description: "Envelope schema version (SemVer 2.0)"
+      example: "1.2.0"
+
+    qos_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: |
+        QoS band controls K0 processing path:
+        - GREEN: Fast Lane (<50ms, simple writes, no Hippocampus)
+        - AMBER: Smart Lane (<200ms, Hippocampus DG→CA3→CA1)
+        - RED: Critical (prioritized, escalated processing)
+
+    obligations:
+      type: array
+      items:
+        type: string
+      required: false
+      description: |
+        Cognitive processing obligations (triggers Smart Lane):
+        - "pattern_separation" (Hippocampus DG)
+        - "pattern_completion" (Hippocampus CA3)
+        - "consolidation" (Hippocampus CA1 → Cortex)
+        - "semantic_integration" (link episodic → semantic)
+      examples: [[], ["pattern_separation", "consolidation"]]
+
+    payload:
+      type: object
+      required: true
+      description: "Port-specific payload (schema varies by command_type)"
+      additionalProperties: true
+
+    signature:
+      type: string
+      format: hex
+      required: true
+      description: "ED25519 device signature (hex-encoded)"
+      example: "a1b2c3d4e5f6..."
+
+# ============================================================================
+# COMMAND PORT ENVELOPES
+# ============================================================================
+
+command_port_examples:
+  - name: "Memory Write - Fast Lane (GREEN, preferences)"
+    envelope:
+      port: "command"
+      command_type: "memory_write"
+      envelope_id: "env_abc123"
+      cognitive_trace_id: "trace_xyz789"
+      timestamp: "2025-10-14T12:34:56.789Z"
+      device_id: "device_dad_phone"
+      session_id: "sess_456"
+      user_id: "user_dad"
+      schema_version: "1.2.0"
+      qos_band: "GREEN"
+      obligations: []
+      payload:
+        memory_type: "preference"
+        content: "User likes espresso"
+        tags: ["coffee", "preference"]
+        metadata:
+          source: "conversation"
+          confidence: 0.95
+      signature: "ed25519_signature_hex"
+
+  - name: "Memory Write - Smart Lane (AMBER, episodic with Hippocampus)"
+    envelope:
+      port: "command"
+      command_type: "memory_write"
+      envelope_id: "env_def456"
+      cognitive_trace_id: "trace_abc123"
+      timestamp: "2025-10-14T14:30:00.000Z"
+      device_id: "device_mom_phone"
+      session_id: "sess_789"
+      user_id: "user_mom"
+      schema_version: "1.2.0"
+      qos_band: "AMBER"
+      obligations: ["pattern_separation", "consolidation", "semantic_integration"]
+      payload:
+        memory_type: "episodic"
+        content: "Emma's soccer practice is Wednesday at 4pm"
+        speaker: "Mom"
+        tags: ["family", "schedule", "sports"]
+        entities: ["Emma", "soccer practice"]
+        temporal: "Wednesday 4pm"
+        metadata:
+          source: "voice_conversation"
+          confidence: 0.92
+          emotion: "neutral"
+          importance: "high"
+      signature: "ed25519_signature_hex"
+
+# ============================================================================
+# QUERY PORT ENVELOPES
+# ============================================================================
+
+query_port_examples:
+  - name: "Recall Query (episodic memory retrieval)"
+    envelope:
+      port: "query"
+      command_type: "recall_query"
+      envelope_id: "env_query_001"
+      cognitive_trace_id: "trace_query_001"
+      timestamp: "2025-10-14T15:00:00.000Z"
+      device_id: "device_dad_phone"
+      session_id: "sess_456"
+      user_id: "user_dad"
+      schema_version: "1.2.0"
+      qos_band: "GREEN"
+      query:
+        text: "What did Emma say about soccer practice?"
+        intent: "episodic_recall"
+        context_window_ms: 604800000
+        max_results: 10
+        include_provenance: true
+        cognitive_enhancements:
+          working_memory_boost: true
+          affect_bias: true
+          temporal_bias: "recency"
+          social_bias: "family_only"
+      signature: "ed25519_signature_hex"
+
+    response:
+      status: "success"
+      envelope_id: "env_query_001"
+      cognitive_trace_id: "trace_query_001"
+      timestamp: "2025-10-14T15:00:00.045Z"
+      results:
+        - memory_id: "mem_98765"
+          content: "Emma's soccer practice is Wednesday at 4pm"
+          memory_type: "episodic"
+          speaker: "Mom"
+          timestamp: "2025-10-05T14:30:00Z"
+          confidence: 0.92
+          salience: 0.85
+          provenance:
+            stores: ["st_epi", "st_fts", "st_vec"]
+            fusion_score: 0.89
+            mmr_score: 0.85
+            fts_score: 0.91
+            vector_score: 0.88
+            kg_score: 0.82
+          cognitive_enhancements:
+            working_memory_boost: 1.2
+            affect_bias: 0.0
+            temporal_bias: 0.95
+            social_bias: 1.5
+          entities: ["Emma", "soccer practice"]
+          tags: ["family", "schedule", "sports"]
+      total_matches: 3
+      retrieval_latency_ms: 45
+      metadata:
+        stores_queried: ["st_fts", "st_vec", "st_kg", "st_epi"]
+        working_memory_hits: 2
+        cache_tier_hits: 0
+        hot_tier_hits: 2
+        cold_tier_hits: 1
+
+# ============================================================================
+# SSE PORT ENVELOPES
+# ============================================================================
+
+sse_port_examples:
+  - name: "SSE Subscribe (event stream connection)"
+    envelope:
+      port: "sse"
+      command_type: "sse_subscribe"
+      envelope_id: "env_sse_001"
+      cognitive_trace_id: "trace_sse_001"
+      timestamp: "2025-10-14T16:00:00.000Z"
+      device_id: "device_dad_phone"
+      session_id: "sess_456"
+      user_id: "user_dad"
+      schema_version: "1.2.0"
+      qos_band: "GREEN"
+      subscription:
+        topics: ["memory_write_confirmed", "consolidation_complete", "prospective_trigger"]
+        session_filter: "sess_456"
+      signature: "ed25519_signature_hex"
+
+  - name: "SSE Event (memory write confirmed)"
+    event:
+      event: "memory_write_confirmed"
+      id: "event_abc123"
+      data:
+        envelope_id: "env_abc123"
+        receipt_id: "rcpt_xyz789"
+        receipt_signature: "ed25519_signature_hex"
+        timestamp: "2025-10-14T12:34:57.000Z"
+        deltas_processed: 1
+        write_latency_ms: 42
+
+# ============================================================================
+# OBSERVABILITY PORT ENVELOPES
+# ============================================================================
+
+observability_port_examples:
+  - name: "Metrics Query (Prometheus format)"
+    envelope:
+      port: "observability"
+      command_type: "metrics_query"
+      envelope_id: "env_metrics_001"
+      cognitive_trace_id: "trace_metrics_001"
+      timestamp: "2025-10-14T17:00:00.000Z"
+      device_id: "device_dad_phone"
+      session_id: "sess_456"
+      user_id: "user_admin"
+      schema_version: "1.2.0"
+      qos_band: "GREEN"
+      query:
+        format: "prometheus"
+        filters: ["k0_bridge_*", "k0_pipeline_*"]
+      signature: "ed25519_signature_hex"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  - rule: "envelope_id must be unique (idempotency)"
+  - rule: "cognitive_trace_id must propagate through all operations"
+  - rule: "timestamp must be ISO 8601 with milliseconds"
+  - rule: "qos_band must be [GREEN|AMBER|RED]"
+  - rule: "obligations array triggers Smart Lane if non-empty"
+  - rule: "signature must be valid ED25519 signature of envelope body"
+  - rule: "schema_version must match K0 supported versions (SemVer)"
+  - rule: "port must be [command|query|sse|observability]"
+
+# ============================================================================
+# JSON SCHEMA DEFINITION
+# ============================================================================
+
+json_schema:
+  $schema: "https://json-schema.org/draft/2020-12/schema"
+  $id: "https://k0.familyos.ai/schemas/envelope/v1.json"
+  title: "K0 Bridge JSON Envelope"
+  description: "Primary envelope format for K0↔K1 communication"
+  type: object
+  required:
+    - port
+    - command_type
+    - envelope_id
+    - cognitive_trace_id
+    - timestamp
+    - device_id
+    - session_id
+    - user_id
+    - schema_version
+    - qos_band
+    - payload
+    - signature
+  properties:
+    port:
+      type: string
+      enum: ["command", "query", "sse", "observability"]
+    command_type:
+      type: string
+    envelope_id:
+      type: string
+      format: uuid
+    cognitive_trace_id:
+      type: string
+      format: uuid
+    timestamp:
+      type: string
+      format: date-time
+    device_id:
+      type: string
+    session_id:
+      type: string
+      format: uuid
+    user_id:
+      type: string
+    schema_version:
+      type: string
+      pattern: "^\\d+\\.\\d+\\.\\d+$"
+    qos_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+    obligations:
+      type: array
+      items:
+        type: string
+      default: []
+    payload:
+      type: object
+    signature:
+      type: string
+      pattern: "^[0-9a-f]+$"
+
+# ============================================================================
+# SERIALIZATION CHARACTERISTICS
+# ============================================================================
+
+serialization:
+  format: "JSON (RFC 8259)"
+  character_encoding: "UTF-8"
+
+  performance:
+    serialization_latency: "1.5-2ms (typical)"
+    deserialization_latency: "2-2.5ms (typical)"
+    payload_size: "1.0x baseline (no compression)"
+    human_readable: true
+
+  optimization:
+    minification: "Remove whitespace in production (20-30% size reduction)"
+    compression: "gzip or zstd for large payloads (>4KB)"
+    streaming: "Supported via JSON Lines for large responses"
+
+  advantages:
+    - "K0 native format (zero conversion overhead on K0 side)"
+    - "Human-readable (debuggable with jq, text editors)"
+    - "Self-describing (schema version in envelope)"
+    - "Universal compatibility (all HTTP clients support JSON)"
+    - "Easy to extend (add new fields without breaking compatibility)"
+
+  disadvantages:
+    - "Slower than FlatBuffers (3-4x serialization overhead)"
+    - "Larger payload size vs FlatBuffers (~40% larger)"
+    - "Parsing overhead (not zero-copy)"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "ED25519 device signature"
+    signature_coverage: "All envelope fields except 'signature' itself"
+    algorithm: "ED25519 (Edwards-curve Digital Signature Algorithm)"
+
+  integrity:
+    envelope_id: "Idempotency key (prevents duplicate processing)"
+    signature_verification: "K0 verifies signature before processing"
+
+  transport:
+    encryption: "TLS 1.3 (HTTP/2 over HTTPS)"
+    certificate_validation: "Device certificates (mutual TLS)"
+
+# ============================================================================
+# ERROR RESPONSES
+# ============================================================================
+
+error_responses:
+  - status: 400
+    error_type: "invalid_envelope"
+    description: "Envelope validation failed (missing fields, invalid format)"
+    example:
+      status: "error"
+      error: "invalid_envelope"
+      details: "Missing required field: cognitive_trace_id"
+      envelope_id: "env_abc123"
+
+  - status: 401
+    error_type: "invalid_signature"
+    description: "ED25519 signature verification failed"
+    example:
+      status: "error"
+      error: "invalid_signature"
+      details: "Signature does not match envelope body"
+      envelope_id: "env_abc123"
+
+  - status: 413
+    error_type: "payload_too_large"
+    description: "Payload exceeds size limit (1MB default)"
+    example:
+      status: "error"
+      error: "payload_too_large"
+      details: "Payload size: 1.5MB, limit: 1MB"
+      envelope_id: "env_abc123"
+
+  - status: 429
+    error_type: "rate_limited"
+    description: "QoS band budget exceeded (P17 QoS enforcement)"
+    example:
+      status: "error"
+      error: "rate_limited"
+      details: "GREEN band budget exceeded (1000 ops/hour)"
+      envelope_id: "env_abc123"
+      retry_after_seconds: 120
+
+# ============================================================================
+# VERSIONING STRATEGY
+# ============================================================================
+
+versioning:
+  policy: "SemVer 2.0 (Major.Minor.Patch)"
+
+  compatibility:
+    backward_compatible:
+      - "Add new optional fields (Minor version bump)"
+      - "Add new enum values (Minor version bump)"
+      - "Deprecate fields (Minor version bump + 90-day notice)"
+
+    breaking_changes:
+      - "Remove required fields (Major version bump)"
+      - "Change field types (Major version bump)"
+      - "Rename fields (Major version bump)"
+
+  migration:
+    strategy: "N/N+1 compatibility (support 2 versions simultaneously)"
+    deprecation_period: "90 days minimum"
+    upgrade_path: "K0 supports multiple schema versions, clients upgrade gradually"
+
+# ============================================================================
+# TESTING STRATEGY
+# ============================================================================
+
+testing:
+  unit_tests:
+    - "JSON schema validation (all required fields present)"
+    - "Timestamp format validation (ISO 8601 with milliseconds)"
+    - "UUID format validation (envelope_id, cognitive_trace_id, session_id)"
+    - "Enum validation (port, qos_band, command_type)"
+    - "Signature verification (ED25519 valid signature)"
+
+  integration_tests:
+    - "Round-trip serialization (K1 → JSON → K0 → JSON → K1)"
+    - "Large payload handling (>1MB payloads with compression)"
+    - "Error response parsing (400, 401, 413, 429 status codes)"
+    - "Schema version compatibility (v1.0.0, v1.1.0, v1.2.0)"
+
+  contract_tests:
+    - "JSON schema compliance (validate against JSON Schema Draft 2020-12)"
+    - "K0 compatibility (ensure K0 can parse all envelopes)"
+    - "Backward compatibility (old clients can parse new envelopes)"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "RFC 8259: The JavaScript Object Notation (JSON) Data Interchange Format (2017)"
+    url: "https://tools.ietf.org/html/rfc8259"
+    relevance: "JSON serialization standard"
+
+  - citation: "JSON Schema: A Media Type for Describing JSON Documents (Draft 2020-12)"
+    url: "https://json-schema.org/draft/2020-12/schema"
+    relevance: "JSON schema validation standard"
+
+  - citation: "RFC 7519: JSON Web Token (JWT)"
+    url: "https://tools.ietf.org/html/rfc7519"
+    relevance: "Inspiration for envelope structure and signature format"

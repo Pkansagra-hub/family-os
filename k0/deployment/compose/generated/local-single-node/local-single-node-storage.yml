@@ -1,0 +1,21 @@
+version: "3.8"
+services:
+  k0-kernel:
+    image: ghcr.io/pkansagra-hub/k0:0.0.0-dev
+    env_file:
+      - ./env/k0.env
+    volumes:
+      - ./data/k0.sqlite3:/var/lib/k0/kernel.sqlite3
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+  scheduler-worker:
+    image: ghcr.io/familyos/k0-scheduler:latest
+    depends_on:
+      - k0-kernel
+    environment:
+      K0_KERNEL_ENDPOINT: http://k0-kernel:8080

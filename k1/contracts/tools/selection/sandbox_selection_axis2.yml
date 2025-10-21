@@ -1,0 +1,576 @@
+# Sandbox Selection Contract - Axis 2 (WASM, Process, Container)
+# ADR-0033d: 2D Selection Logic & Fallback Cascade
+# ADR-0033b: WASM Sandbox
+# ADR-0033c: Process Sandbox
+# Created: 2025-10-16
+# Status: DRAFT
+
+contract_name: "Sandbox Selection (Axis 2)"
+contract_id: "sandbox_selection_axis2_v1"
+related_adrs:
+  - "ADR-0033d: 2D Selection Logic"
+  - "ADR-0033b: WASM Sandbox (Layer 2)"
+  - "ADR-0033c: Process Sandbox (Layer 2)"
+  - "ADR-0033: Tool Execution Architecture"
+  - "ADR-0032: Band-Based Egress Rules"
+
+description: |
+  Sandbox selection logic for Axis 2 of 2D Tool Execution Selector.
+
+  Determines WHERE and HOW tools execute securely (Layer 2 - Sandbox):
+  - WASM Sandbox (15%): Maximum isolation, capability-based I/O, zero syscalls
+  - Process Sandbox (80%): OS process isolation, ADR-0032 egress controls
+  - Container Sandbox (5%): Hardware-level isolation (gVisor/Firecracker)
+
+# ====================
+# Sandbox Types
+# ====================
+sandbox_types:
+  wasm:
+    name: "WASM Sandbox"
+    percentage: "15%"
+    description: |
+      WebAssembly (WASM) runtime with WASI capabilities for maximum isolation.
+
+      Provides zero native syscalls - all I/O through capability-based WASI interface.
+      Perfect for untrusted code (user plugins, third-party submissions, experimental features).
+
+    characteristics:
+      security_level: "MAXIMUM"
+      isolation_model: "Capability-based I/O (WASI)"
+      native_syscalls: false
+      filesystem_access: "Preopened directories only"
+      network_access: "Allowed hosts only (via custom host function)"
+      process_spawning: "IMPOSSIBLE (no API in WASI)"
+      kernel_vulnerability_risk: "ZERO (no syscalls)"
+      boot_time: "10ms"
+      memory_overhead_per_tool: "5MB"
+      performance_vs_native: "10x slower"
+      cross_platform: "Linux, macOS, Windows, Web"
+
+    use_cases:
+      - "User-submitted plugins (untrusted code)"
+      - "Third-party experimental tools"
+      - "RED band high-risk operations"
+      - "Cross-platform tools (same WASM on all OSes)"
+
+    examples:
+      - tool_name: "user_plugin"
+        band: "GREEN"
+        trust_level: "UNTRUSTED"
+        description: "User-submitted text formatter in WASM"
+
+      - tool_name: "experimental_tool"
+        band: "RED"
+        trust_level: "VERIFIED"
+        description: "High-risk experimental feature in WASM"
+
+  process:
+    name: "Process Sandbox"
+    percentage: "80%"
+    description: |
+      OS process isolation with ADR-0032 egress controls.
+
+      Separate process, namespace isolation, with iptables, chroot, seccomp, cgroups.
+      Optimal for standard tools with good performance and adequate security.
+
+    characteristics:
+      security_level: "MEDIUM-HIGH"
+      isolation_model: "OS process + ADR-0032 (iptables, chroot, seccomp, cgroups)"
+      native_syscalls: true
+      syscall_filtering: "seccomp-bpf (whitelist/blacklist)"
+      filesystem_isolation: "chroot jail + readonly mounts"
+      network_isolation: "iptables --pid-owner per-tool"
+      resource_limits: "cgroups v2 (CPU, memory, PIDs, I/O)"
+      kernel_vulnerability_risk: "MEDIUM (syscalls filtered by seccomp)"
+      boot_time: "100ms"
+      memory_overhead_per_tool: "10MB"
+      performance_vs_native: "Native speed (no overhead)"
+      cross_platform: "Linux only"
+
+    egress_controls:
+      adr: "ADR-0032"
+      network: "iptables per-tool, band-based policies"
+      filesystem: "chroot + seccomp + readonly mounts"
+      resource: "cgroups v2 (CPU, memory, PIDs, I/O)"
+      violations: "Logged to K0 ToolReceipt"
+
+    use_cases:
+      - "Standard tools with good security"
+      - "Performance-critical tools (native speed)"
+      - "MCP server implementations"
+      - "Native binaries and CLI tools"
+      - "Most tools (80%)"
+
+    examples:
+      - tool_name: "weather_api"
+        band: "AMBER"
+        trust_level: "VERIFIED"
+        description: "Weather API server in Process sandbox"
+
+      - tool_name: "ffmpeg"
+        band: "GREEN"
+        trust_level: "TRUSTED"
+        description: "Video encoding tool in Process sandbox"
+
+  container:
+    name: "Container Sandbox"
+    percentage: "5%"
+    description: |
+      Hardware-level isolation via gVisor (user-space kernel) or Firecracker (microVM).
+
+      For high-risk RED band operations requiring maximum isolation beyond OS processes.
+      Acceptable overhead (125ms boot for Firecracker) for rare high-risk scenarios.
+
+    characteristics:
+      security_level: "MAXIMUM (hardware-level)"
+      isolation_model: "gVisor (syscall interception) OR Firecracker (KVM microVM)"
+      native_syscalls: true
+      kernel_isolation: "User-space kernel (gVisor) OR hardware isolation (Firecracker)"
+      filesystem_isolation: "Container-level (no host filesystem)"
+      network_isolation: "Container-level (separate network namespace)"
+      kernel_vulnerability_risk: "MINIMAL (gVisor intercepts) or NONE (Firecracker hardware)"
+      boot_time: "125ms (Firecracker) or <100ms (gVisor)"
+      memory_overhead_per_tool: "100MB (microVM) or 50MB (gVisor)"
+      performance_vs_native: "2% overhead (gVisor) or 5-10% (Firecracker)"
+      cross_platform: "Linux only (KVM or syscall interception)"
+
+    implementations:
+      gvisor:
+        name: "gVisor"
+        description: "User-space kernel intercepts syscalls"
+        boot_time: "100ms"
+        memory_overhead: "50MB"
+        performance_overhead: "2%"
+        research: "Google 2018"
+
+      firecracker:
+        name: "Firecracker"
+        description: "Lightweight KVM-based microVM"
+        boot_time: "125ms"
+        memory_overhead: "100MB"
+        performance_overhead: "5-10%"
+        research: "AWS 2018"
+
+    use_cases:
+      - "RED band high-risk operations"
+      - "Untrusted code requiring hardware-level isolation"
+      - "Rare critical security scenarios"
+
+    examples:
+      - tool_name: "high_risk_tool"
+        band: "RED"
+        trust_level: "VERIFIED"
+        description: "High-risk RED band operation in Firecracker microVM"
+
+# ====================
+# Sandbox Selection Logic (Axis 2)
+# ====================
+selection_logic:
+  name: "Sandbox Selection Algorithm"
+  description: |
+    Multi-criteria decision tree: Select sandbox based on trust level, band, and performance needs.
+
+  decision_tree:
+    step_1:
+      criterion: "trust_level"
+      condition: "trust_level == UNTRUSTED"
+      decision: "sandbox = WASM"
+      rationale: |
+        Untrusted code requires maximum isolation.
+        WASM provides zero native syscalls + capability-based I/O.
+        Only acceptable choice for user-submitted code.
+      priority: "HIGHEST (security-first)"
+
+    step_2:
+      criterion: "band + risk_indicator"
+      condition: "band == RED AND (high_risk_indicator OR experimental)"
+      decision: "sandbox = CONTAINER"
+      rationale: |
+        RED band high-risk operations need hardware-level isolation.
+        Container sandbox provides gVisor (syscall interception) or Firecracker (KVM).
+        Acceptable boot overhead (125ms) for rare critical scenarios.
+      priority: "HIGHEST (RED band critical)"
+
+    step_3:
+      criterion: "performance_critical"
+      condition: "performance_critical == true AND (trust_level != UNTRUSTED)"
+      decision: "sandbox = PROCESS"
+      rationale: |
+        Performance-critical tools need native speed (no WASM 10x slowdown).
+        Process sandbox provides good security + native performance.
+        Recommended for video processing, real-time tools, etc.
+      priority: "HIGH (performance requirement)"
+
+    step_4:
+      criterion: "default"
+      condition: "none of above"
+      decision: "sandbox = PROCESS"
+      rationale: |
+        Process sandbox is default for 80% of tools.
+        Good security + good performance balance.
+        Covers most standard tools (weather API, calendar, web search, etc.).
+      priority: "DEFAULT"
+
+  implementation_pseudocode: |
+    def select_sandbox(tool_characteristics):
+      # Step 1: Untrusted code
+      if tool_characteristics.trust_level == TrustLevel.UNTRUSTED:
+        return SandboxType.WASM
+
+      # Step 2: RED band high-risk
+      if tool_characteristics.band == PrivacyBand.RED and high_risk_indicator(tool_characteristics):
+        return SandboxType.CONTAINER
+
+      # Step 3: Performance-critical
+      if tool_characteristics.performance_critical:
+        return SandboxType.PROCESS
+
+      # Step 4: Default
+      return SandboxType.PROCESS
+
+# ====================
+# Security Analysis
+# ====================
+security_analysis:
+  threat_model_1:
+    name: "Untrusted Code Attempts Filesystem Escape"
+    attack: |
+      User uploads malicious.wasm that attempts to read /etc/passwd
+      or write /usr/bin/backdoor
+
+    wasm_sandbox_defense:
+      mechanism: "WASI preopened directories"
+      implementation: |
+        WASM can only access preopened_dirs (e.g., /tmp/tool_workspace).
+        Attempt to access /etc/passwd → WASI trap (capability violation).
+      result: "BLOCKED - Attack impossible"
+
+    process_sandbox_defense:
+      mechanism: "ADR-0032 chroot + seccomp"
+      implementation: |
+        chroot jail restricts filesystem access.
+        seccomp filters dangerous syscalls.
+      result: "BLOCKED (but more complex than WASM)"
+
+    container_sandbox_defense:
+      mechanism: "gVisor syscall interception OR Firecracker hardware isolation"
+      result: "BLOCKED - Highest security"
+
+  threat_model_2:
+    name: "Untrusted Code Attempts Process Spawning"
+    attack: |
+      User uploads spawn.wasm that attempts to execute /bin/sh
+      via process spawn
+
+    wasm_sandbox_defense:
+      mechanism: "WASI has no process spawn API"
+      implementation: "WASM cannot call exec, fork, or spawn syscalls"
+      result: "IMPOSSIBLE - No API available"
+
+    process_sandbox_defense:
+      mechanism: "ADR-0032 seccomp filters exec/fork"
+      implementation: "seccomp-bpf blocks exec, fork, clone syscalls"
+      result: "BLOCKED (via seccomp)"
+
+    container_sandbox_defense:
+      mechanism: "Container namespace isolation"
+      result: "BLOCKED - Separate container"
+
+  threat_model_3:
+    name: "Code Attempts Kernel 0-day Exploit"
+    attack: |
+      Attacker exploits kernel vulnerability to escape sandbox
+      and gain host access
+
+    wasm_sandbox_defense:
+      mechanism: "Zero native syscalls = no kernel surface attack"
+      implementation: "WASM cannot call syscalls directly (no syscall instruction)"
+      result: "IMPOSSIBLE - No kernel attack surface"
+
+    process_sandbox_defense:
+      mechanism: "Filtered syscalls (not all blocked)"
+      implementation: "seccomp whitelist allows some syscalls"
+      risk: "Kernel 0-day in allowed syscalls = potential escape"
+      result: "MITIGATED (not eliminated)"
+
+    container_sandbox_defense:
+      mechanism: "Separate kernel (Firecracker) or intercepted (gVisor)"
+      implementation: "gVisor: Less surface for kernel exploits"
+      result: "HIGHLY MITIGATED - Separate kernel reduces surface"
+
+# ====================
+# Sandbox Fallback Logic
+# ====================
+sandbox_fallback:
+  description: |
+    When preferred sandbox unavailable, try fallback sandboxes in order.
+
+  fallback_chains:
+    if_preferred_wasm:
+      preferred: "WASM"
+      fallback_order: ["PROCESS", "CONTAINER"]
+      rationale: |
+        WASM unavailable (e.g., runtime crashed)?
+        1. Try Process sandbox (relax security, gain speed)
+        2. Try Container sandbox (different isolation model)
+
+    if_preferred_process:
+      preferred: "PROCESS"
+      fallback_order: ["WASM", "CONTAINER"]
+      rationale: |
+        Process unavailable (e.g., cgroups issue)?
+        1. Try WASM (maximum isolation, security-first)
+        2. Try Container (hardware isolation)
+
+    if_preferred_container:
+      preferred: "CONTAINER"
+      fallback_order: ["PROCESS", "WASM"]
+      rationale: |
+        Container unavailable (e.g., Firecracker not installed)?
+        1. Try Process sandbox (more compatible)
+        2. Try WASM (maximum security backup)
+
+# ====================
+# Selection Decision Matrix
+# ====================
+decision_matrix:
+  name: "Sandbox Selection Decision Matrix"
+  columns:
+    - "Criterion"
+    - "WASM (15%)"
+    - "Process (80%)"
+    - "Container (5%)"
+
+  rows:
+    criterion_trust_level:
+      criterion: "trust_level"
+      wasm: "BEST for UNTRUSTED (only choice for user code)"
+      process: "OK for VERIFIED/TRUSTED"
+      container: "OK for RED band"
+
+    criterion_performance:
+      criterion: "performance_critical"
+      wasm: "WORST (10x slower, not acceptable)"
+      process: "BEST (native speed)"
+      container: "OK (2-10% overhead acceptable for rare RED band)"
+
+    criterion_security:
+      criterion: "security_level"
+      wasm: "MAXIMUM (zero syscalls)"
+      process: "MEDIUM-HIGH (filtered syscalls)"
+      container: "MAXIMUM (hardware isolation or syscall interception)"
+
+    criterion_boot_time:
+      criterion: "boot_time_ms"
+      wasm: "10ms (fastest)"
+      process: "100ms"
+      container: "125ms (Firecracker) or 100ms (gVisor)"
+
+    criterion_memory:
+      criterion: "memory_overhead_per_tool_mb"
+      wasm: "5MB (smallest)"
+      process: "10MB"
+      container: "100MB (Firecracker) or 50MB (gVisor)"
+
+    criterion_cross_platform:
+      criterion: "cross_platform_support"
+      wasm: "YES (Linux, macOS, Windows, Web)"
+      process: "NO (Linux only)"
+      container: "NO (Linux + KVM only)"
+
+# ====================
+# Performance Comparison
+# ====================
+performance_comparison:
+  metric_boot_time:
+    wasm: "10ms"
+    process: "100ms"
+    container: "125ms (Firecracker) or 100ms (gVisor)"
+    winner: "WASM (10x faster)"
+
+  metric_memory_overhead:
+    wasm: "5MB per tool"
+    process: "10MB per tool"
+    container: "100MB (Firecracker) or 50MB (gVisor) per tool"
+    winner: "WASM (20x less memory)"
+
+  metric_execution_speed:
+    wasm: "10x slower than native"
+    process: "Native speed (no overhead)"
+    container: "2% overhead (gVisor) or 5-10% (Firecracker)"
+    winner: "PROCESS (native speed)"
+
+  metric_security:
+    wasm: "MAXIMUM (zero syscalls)"
+    process: "MEDIUM-HIGH (filtered syscalls)"
+    container: "MAXIMUM (hardware isolation)"
+    winner: "TIE: WASM and CONTAINER (both maximum)"
+
+# ====================
+# Tool Registry Examples
+# ====================
+tool_registry_examples:
+  example_1_wasm:
+    tool_name: "user_plugin"
+    band: "GREEN"
+    trust_level: "UNTRUSTED"
+    performance_critical: false
+    sandbox_selection:
+      selected: "WASM"
+      reason: "Untrusted code requires maximum isolation"
+      override: "None (non-negotiable for UNTRUSTED)"
+    config:
+      wasm_config:
+        wasi_config:
+          preopened_dirs: ["/tmp/user_plugin_workspace"]
+          allowed_hosts: []
+          allowed_env_vars: []
+          max_memory_mb: 64
+          timeout_seconds: 10
+
+  example_2_process:
+    tool_name: "weather_api"
+    band: "AMBER"
+    trust_level: "VERIFIED"
+    performance_critical: true
+    sandbox_selection:
+      selected: "PROCESS"
+      reason: "Performance-critical tool needs native speed + VERIFIED trust"
+      override: "Could force WASM if paranoid, but not recommended (10x slower)"
+    config:
+      sandbox_config:
+        egress_rules: "ADR-0032"
+        resource_limits:
+          cpu_quota: 50000
+          memory_mb: 256
+          pid_limit: 10
+        timeout_seconds: 30
+
+  example_3_container:
+    tool_name: "high_risk_tool"
+    band: "RED"
+    trust_level: "VERIFIED"
+    performance_critical: false
+    sandbox_selection:
+      selected: "CONTAINER"
+      reason: "RED band high-risk operation requires hardware-level isolation"
+      override: "No fallback (Firecracker mandatory for RED band)"
+    config:
+      container_config:
+        runtime: "firecracker"
+        memory_mb: 128
+        vcpu_count: 1
+        timeout_seconds: 120
+
+# ====================
+# Implementation Contract
+# ====================
+implementation:
+  class_name: "SandboxSelector"
+  module: "k1.tools.selection.sandbox"
+
+  methods:
+    select_sandbox:
+      signature: |
+        def select_sandbox(
+          self,
+          tool_characteristics: ToolCharacteristics
+        ) -> SandboxType
+
+      description: "Select sandbox based on trust level, band, and performance needs"
+
+      decision_tree_implementation: |
+        # Step 1: Untrusted code
+        if tool_characteristics.trust_level == TrustLevel.UNTRUSTED:
+          return SandboxType.WASM
+
+        # Step 2: RED band high-risk
+        if tool_characteristics.band == PrivacyBand.RED and high_risk_indicator(...):
+          return SandboxType.CONTAINER
+
+        # Step 3: Performance-critical
+        if tool_characteristics.performance_critical:
+          return SandboxType.PROCESS
+
+        # Step 4: Default
+        return SandboxType.PROCESS
+
+      time_complexity: "O(1)"
+      space_complexity: "O(1)"
+
+    get_fallback_sandboxes:
+      signature: |
+        def get_fallback_sandboxes(
+          self,
+          preferred_sandbox: SandboxType,
+          tool_characteristics: ToolCharacteristics
+        ) -> List[SandboxType]
+
+      description: "Get fallback sandboxes for graceful degradation"
+
+      logic: |
+        if preferred_sandbox == SandboxType.WASM:
+          return [SandboxType.PROCESS, SandboxType.CONTAINER]
+
+        elif preferred_sandbox == SandboxType.PROCESS:
+          if tool_characteristics.trust_level == TrustLevel.UNTRUSTED:
+            return [SandboxType.WASM, SandboxType.CONTAINER]
+          else:
+            return [SandboxType.CONTAINER, SandboxType.WASM]
+
+        elif preferred_sandbox == SandboxType.CONTAINER:
+          return [SandboxType.PROCESS, SandboxType.WASM]
+
+        return []
+
+# ====================
+# Testing Contract
+# ====================
+testing:
+  framework: "WARD"
+  test_cases:
+    test_1:
+      name: "Untrusted tool selects WASM sandbox"
+      inputs:
+        trust_level: "UNTRUSTED"
+        band: "GREEN"
+        performance_critical: false
+      expected: "SandboxType.WASM"
+      assertion: "result == SandboxType.WASM"
+
+    test_2:
+      name: "Performance-critical tool selects Process sandbox"
+      inputs:
+        trust_level: "VERIFIED"
+        band: "AMBER"
+        performance_critical: true
+      expected: "SandboxType.PROCESS"
+      assertion: "result == SandboxType.PROCESS"
+
+    test_3:
+      name: "RED band high-risk selects Container sandbox"
+      inputs:
+        trust_level: "VERIFIED"
+        band: "RED"
+        high_risk_indicator: true
+        performance_critical: false
+      expected: "SandboxType.CONTAINER"
+      assertion: "result == SandboxType.CONTAINER"
+
+    test_4:
+      name: "Default tool selects Process sandbox"
+      inputs:
+        trust_level: "TRUSTED"
+        band: "GREEN"
+        performance_critical: false
+      expected: "SandboxType.PROCESS"
+      assertion: "result == SandboxType.PROCESS"
+
+# ====================
+# Version & Status
+# ====================
+version: "1.0.0"
+status: "DRAFT"
+last_updated: "2025-10-16"
+authors: ["K1 Architecture Team"]

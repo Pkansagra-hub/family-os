@@ -1,0 +1,682 @@
+# Protocol Lifecycle Contract
+# Epic 1.3 - Issue 1.3.3 - Runtime Component 4 of 4
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Protocol Team
+# ADR References: ADR-0003c (Protocol Monitor Runtime)
+
+metadata:
+  contract_id: "protocol_lifecycle"
+  contract_name: "Protocol Lifecycle Contract"
+  version: "1.0.0"
+  description: |
+    Protocol lifecycle management contract for start, pause, resume, interrupt, and abort operations.
+    Defines lifecycle states and transitions for protocol sessions.
+    Implements contract from ADR-0003c Section 6 (Protocol Lifecycle).
+  component_type: "pure_agent"
+  layer: "layer1_kernel"
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+lifecycle_overview:
+  description: |
+    Protocol sessions have a well-defined lifecycle with 6 states:
+    PENDING → ACTIVE → PAUSED/INTERRUPTED → COMPLETED/ABORTED
+
+    Lifecycle operations allow external control of protocol execution for
+    features like barge-in, clarification, error recovery, and graceful shutdown.
+
+  state_diagram: |
+    PENDING → ACTIVE → COMPLETED
+        ↓        ↓        ↑
+        → PAUSED → INTERRUPTED → ABORTED
+
+lifecycle_states:
+  PENDING:
+    state_id: "PENDING"
+    description: "Protocol session created but not yet started"
+    valid_operations:
+      - "start"
+      - "abort"
+    entry_conditions:
+      - "Session registered"
+      - "FSM definition loaded"
+    exit_conditions:
+      - "Start operation invoked"
+      - "Abort operation invoked"
+    observability:
+      metrics:
+        - "sessions_pending_count"
+    estimated_duration_ms: 100
+
+  ACTIVE:
+    state_id: "ACTIVE"
+    description: "Protocol actively executing state transitions"
+    valid_operations:
+      - "pause"
+      - "interrupt"
+      - "abort"
+    entry_conditions:
+      - "Start operation successful"
+      - "Resume operation successful"
+    exit_conditions:
+      - "Protocol reaches final state"
+      - "Pause operation invoked"
+      - "Interrupt operation invoked"
+      - "Abort operation invoked"
+    observability:
+      metrics:
+        - "sessions_active_count"
+    estimated_duration_ms: 30000
+
+  PAUSED:
+    state_id: "PAUSED"
+    description: "Protocol temporarily paused (e.g., for clarification)"
+    valid_operations:
+      - "resume"
+      - "abort"
+    entry_conditions:
+      - "Pause operation invoked"
+    exit_conditions:
+      - "Resume operation invoked"
+      - "Abort operation invoked"
+      - "Pause timeout exceeded"
+    timeout_ms: 60000
+    observability:
+      metrics:
+        - "sessions_paused_count"
+    estimated_duration_ms: 30000
+
+  INTERRUPTED:
+    state_id: "INTERRUPTED"
+    description: "Protocol interrupted (e.g., by barge-in)"
+    valid_operations:
+      - "resume"
+      - "abort"
+    entry_conditions:
+      - "Interrupt operation invoked"
+    exit_conditions:
+      - "Resume operation invoked (new protocol)"
+      - "Abort operation invoked"
+    observability:
+      metrics:
+        - "sessions_interrupted_count"
+    estimated_duration_ms: 1000
+
+  COMPLETED:
+    state_id: "COMPLETED"
+    description: "Protocol successfully reached final state"
+    valid_operations: []
+    entry_conditions:
+      - "FSM reached final state"
+    exit_conditions: []
+    cleanup_actions:
+      - "Finalize session state"
+      - "Emit completion metrics"
+      - "Remove from active sessions"
+    observability:
+      metrics:
+        - "sessions_completed_total"
+    estimated_duration_ms: 100
+
+  ABORTED:
+    state_id: "ABORTED"
+    description: "Protocol aborted due to error or explicit abort"
+    valid_operations: []
+    entry_conditions:
+      - "Abort operation invoked"
+      - "Critical violation detected"
+    exit_conditions: []
+    cleanup_actions:
+      - "Cleanup resources"
+      - "Emit abort metrics"
+      - "Notify parent protocol"
+      - "Remove from active sessions"
+    observability:
+      metrics:
+        - "sessions_aborted_total"
+    estimated_duration_ms: 200
+
+lifecycle_operations:
+  start:
+    operation_id: "start"
+    description: "Start a protocol session"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      protocol_id:
+        type: "string"
+        required: true
+      initial_state:
+        type: "string"
+        required: true
+      context:
+        type: "object"
+        required: false
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["started", "failed"]
+      error_message:
+        type: "string"
+        required: false
+    state_transition:
+      from: "PENDING"
+      to: "ACTIVE"
+    preconditions:
+      - "Session in PENDING state"
+      - "FSM definition registered"
+      - "Initial state is valid"
+    postconditions:
+      - "Session in ACTIVE state"
+      - "Current state set to initial_state"
+      - "Session start timestamp recorded"
+    side_effects:
+      - "Session added to active sessions"
+      - "Metric: sessions_started_total incremented"
+      - "Log: session_started event"
+    performance:
+      latency_target_ms: 0.5
+    pseudocode: |
+      FUNCTION start_session(session_id, protocol_id, initial_state, context, trace_id):
+          session = get_session(session_id)
+          IF session.lifecycle_state != PENDING:
+              RETURN (failed, "Session not in PENDING state")
+
+          fsm = get_fsm(protocol_id)
+          IF fsm is None:
+              RETURN (failed, "Protocol not registered")
+
+          IF initial_state not in fsm.states:
+              RETURN (failed, "Invalid initial state")
+
+          session.lifecycle_state = ACTIVE
+          session.current_state = initial_state
+          session.start_timestamp = current_time_ms()
+          session.context = context
+          session.trace_id = trace_id
+
+          add_to_active_sessions(session)
+          increment_metric("sessions_started_total", protocol_id)
+          log_event("session_started", session_id, protocol_id, trace_id)
+
+          RETURN (started, None)
+
+  pause:
+    operation_id: "pause"
+    description: "Pause a protocol session (e.g., for clarification)"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      reason:
+        type: "string"
+        required: true
+        max_length: 256
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["paused", "failed"]
+      error_message:
+        type: "string"
+        required: false
+    state_transition:
+      from: "ACTIVE"
+      to: "PAUSED"
+    preconditions:
+      - "Session in ACTIVE state"
+      - "Protocol supports pause (pausable=true)"
+    postconditions:
+      - "Session in PAUSED state"
+      - "Pause timestamp recorded"
+      - "Pause timeout timer started"
+    side_effects:
+      - "Message processing suspended"
+      - "Metric: sessions_paused_total incremented"
+      - "Log: session_paused event"
+    performance:
+      latency_target_ms: 0.3
+    pseudocode: |
+      FUNCTION pause_session(session_id, reason, trace_id):
+          session = get_session(session_id)
+          IF session.lifecycle_state != ACTIVE:
+              RETURN (failed, "Session not in ACTIVE state")
+
+          IF not session.fsm.pausable:
+              RETURN (failed, "Protocol does not support pause")
+
+          session.lifecycle_state = PAUSED
+          session.pause_timestamp = current_time_ms()
+          session.pause_reason = reason
+          start_pause_timeout_timer(session, 60000)
+
+          suspend_message_processing(session)
+          increment_metric("sessions_paused_total", session.protocol_id)
+          log_event("session_paused", session_id, reason, trace_id)
+
+          RETURN (paused, None)
+
+  resume:
+    operation_id: "resume"
+    description: "Resume a paused or interrupted protocol session"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      updated_context:
+        type: "object"
+        required: false
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["resumed", "failed"]
+      error_message:
+        type: "string"
+        required: false
+    state_transition:
+      from: ["PAUSED", "INTERRUPTED"]
+      to: "ACTIVE"
+    preconditions:
+      - "Session in PAUSED or INTERRUPTED state"
+    postconditions:
+      - "Session in ACTIVE state"
+      - "Resume timestamp recorded"
+      - "Pause timeout timer cancelled"
+    side_effects:
+      - "Message processing resumed"
+      - "Context updated if provided"
+      - "Metric: sessions_resumed_total incremented"
+      - "Log: session_resumed event"
+    performance:
+      latency_target_ms: 0.5
+    pseudocode: |
+      FUNCTION resume_session(session_id, updated_context, trace_id):
+          session = get_session(session_id)
+          IF session.lifecycle_state not in [PAUSED, INTERRUPTED]:
+              RETURN (failed, "Session not in PAUSED or INTERRUPTED state")
+
+          session.lifecycle_state = ACTIVE
+          session.resume_timestamp = current_time_ms()
+
+          IF updated_context is not None:
+              merge_context(session.context, updated_context)
+
+          cancel_pause_timeout_timer(session)
+          resume_message_processing(session)
+          increment_metric("sessions_resumed_total", session.protocol_id)
+          log_event("session_resumed", session_id, trace_id)
+
+          RETURN (resumed, None)
+
+  interrupt:
+    operation_id: "interrupt"
+    description: "Interrupt a protocol session (e.g., by barge-in)"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      interrupt_type:
+        type: "string"
+        required: true
+        enum: ["barge_in", "user_abort", "system_override"]
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["interrupted", "failed"]
+      error_message:
+        type: "string"
+        required: false
+    state_transition:
+      from: "ACTIVE"
+      to: "INTERRUPTED"
+    preconditions:
+      - "Session in ACTIVE state"
+      - "Protocol supports interrupt (interruptible=true)"
+    postconditions:
+      - "Session in INTERRUPTED state"
+      - "Interrupt timestamp recorded"
+      - "Output buffers flushed"
+    side_effects:
+      - "Message processing suspended immediately"
+      - "Output generation stopped"
+      - "Metric: sessions_interrupted_total incremented"
+      - "Log: session_interrupted event"
+    performance:
+      latency_target_ms: 0.2
+      critical: true
+    pseudocode: |
+      FUNCTION interrupt_session(session_id, interrupt_type, trace_id):
+          session = get_session(session_id)
+          IF session.lifecycle_state != ACTIVE:
+              RETURN (failed, "Session not in ACTIVE state")
+
+          IF not session.fsm.interruptible:
+              RETURN (failed, "Protocol does not support interrupt")
+
+          session.lifecycle_state = INTERRUPTED
+          session.interrupt_timestamp = current_time_ms()
+          session.interrupt_type = interrupt_type
+
+          stop_output_generation(session)
+          flush_output_buffers(session)
+          suspend_message_processing(session)
+          increment_metric("sessions_interrupted_total",
+                         session.protocol_id, interrupt_type)
+          log_event("session_interrupted", session_id, interrupt_type, trace_id)
+
+          RETURN (interrupted, None)
+
+  abort:
+    operation_id: "abort"
+    description: "Abort a protocol session immediately"
+    input:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      abort_reason:
+        type: "string"
+        required: true
+        max_length: 1024
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    output:
+      status:
+        type: "enum"
+        values: ["aborted", "failed"]
+      error_message:
+        type: "string"
+        required: false
+    state_transition:
+      from: ["PENDING", "ACTIVE", "PAUSED", "INTERRUPTED"]
+      to: "ABORTED"
+    preconditions:
+      - "Session exists"
+    postconditions:
+      - "Session in ABORTED state"
+      - "All resources cleaned up"
+      - "Session removed from active sessions"
+    side_effects:
+      - "Message processing stopped"
+      - "Resources cleaned up"
+      - "Parent protocol notified"
+      - "Metric: sessions_aborted_total incremented"
+      - "Log: session_aborted event"
+    performance:
+      latency_target_ms: 2.0
+    pseudocode: |
+      FUNCTION abort_session(session_id, abort_reason, trace_id):
+          session = get_session(session_id)
+          IF session is None:
+              RETURN (failed, "Session not found")
+
+          session.lifecycle_state = ABORTED
+          session.abort_timestamp = current_time_ms()
+          session.abort_reason = abort_reason
+
+          stop_message_processing(session)
+          cleanup_resources(session)
+          notify_parent_protocol(session)
+          remove_from_active_sessions(session)
+          increment_metric("sessions_aborted_total", session.protocol_id)
+          log_event("session_aborted", session_id, abort_reason, trace_id)
+
+          RETURN (aborted, None)
+
+lifecycle_transitions:
+  PENDING_to_ACTIVE:
+    trigger: "start"
+    validation:
+      - "FSM definition exists"
+      - "Initial state is valid"
+    latency_ms: 0.5
+
+  ACTIVE_to_PAUSED:
+    trigger: "pause"
+    validation:
+      - "Protocol supports pause"
+    latency_ms: 0.3
+
+  PAUSED_to_ACTIVE:
+    trigger: "resume"
+    validation: []
+    latency_ms: 0.5
+
+  ACTIVE_to_INTERRUPTED:
+    trigger: "interrupt"
+    validation:
+      - "Protocol supports interrupt"
+    latency_ms: 0.2
+    critical: true
+
+  INTERRUPTED_to_ACTIVE:
+    trigger: "resume"
+    validation: []
+    latency_ms: 0.5
+
+  ACTIVE_to_COMPLETED:
+    trigger: "final_state_reached"
+    validation:
+      - "Current state is final state"
+    latency_ms: 0.3
+
+  any_to_ABORTED:
+    trigger: "abort"
+    validation: []
+    latency_ms: 2.0
+
+  PAUSED_to_ABORTED:
+    trigger: "pause_timeout"
+    validation: []
+    latency_ms: 1.0
+
+lifecycle_configuration:
+  pausable_protocols:
+    - "task_execution"
+    - "clarification"
+    - "tool_call"
+
+  interruptible_protocols:
+    - "task_execution"
+    - "clarification"
+
+  timeout_settings:
+    pause_timeout_ms: 60000
+    interrupt_timeout_ms: 5000
+    abort_cleanup_timeout_ms: 5000
+
+  cleanup_policies:
+    on_completed:
+      - "Finalize session state"
+      - "Emit metrics"
+      - "Remove from registry"
+    on_aborted:
+      - "Cleanup resources"
+      - "Notify parent"
+      - "Create incident if critical"
+      - "Remove from registry"
+
+session_tracking:
+  SessionLifecycle:
+    description: "Session lifecycle tracking structure"
+    fields:
+      session_id:
+        type: "string"
+        format: "uuid"
+      protocol_id:
+        type: "string"
+      lifecycle_state:
+        type: "enum"
+        values: ["PENDING", "ACTIVE", "PAUSED", "INTERRUPTED", "COMPLETED", "ABORTED"]
+      start_timestamp:
+        type: "integer"
+        description: "Unix timestamp (ms)"
+      pause_timestamp:
+        type: "integer"
+        required: false
+      resume_timestamp:
+        type: "integer"
+        required: false
+      interrupt_timestamp:
+        type: "integer"
+        required: false
+      end_timestamp:
+        type: "integer"
+        required: false
+      pause_reason:
+        type: "string"
+        required: false
+      interrupt_type:
+        type: "string"
+        required: false
+      abort_reason:
+        type: "string"
+        required: false
+      trace_id:
+        type: "string"
+        format: "uuid"
+    storage: "concurrent_hashmap"
+    key: "session_id"
+
+performance_requirements:
+  latency_targets:
+    start_ms: 0.5
+    pause_ms: 0.3
+    resume_ms: 0.5
+    interrupt_ms: 0.2
+    abort_ms: 2.0
+    description: "Per-operation latency targets"
+
+  throughput_targets:
+    lifecycle_operations_per_second: 50000
+    description: "System-wide lifecycle operation capacity"
+
+  resource_limits:
+    max_paused_sessions: 1000
+    max_interrupted_sessions: 500
+    memory_per_session_kb: 4
+    description: "Resource constraints"
+
+observability:
+  metrics:
+    counters:
+      - name: "sessions_started_total"
+        labels: ["protocol_id"]
+      - name: "sessions_paused_total"
+        labels: ["protocol_id", "reason"]
+      - name: "sessions_resumed_total"
+        labels: ["protocol_id"]
+      - name: "sessions_interrupted_total"
+        labels: ["protocol_id", "interrupt_type"]
+      - name: "sessions_completed_total"
+        labels: ["protocol_id"]
+      - name: "sessions_aborted_total"
+        labels: ["protocol_id", "reason"]
+
+    histograms:
+      - name: "lifecycle_operation_latency_ms"
+        buckets: [0.2, 0.5, 1, 2, 5]
+        labels: ["operation"]
+      - name: "session_duration_ms"
+        buckets: [100, 500, 1000, 5000, 10000, 30000]
+        labels: ["protocol_id"]
+      - name: "pause_duration_ms"
+        buckets: [1000, 5000, 10000, 30000, 60000]
+        labels: ["protocol_id"]
+
+    gauges:
+      - name: "sessions_pending_count"
+      - name: "sessions_active_count"
+      - name: "sessions_paused_count"
+      - name: "sessions_interrupted_count"
+
+  logging:
+    structured: true
+    format: "json"
+    required_fields:
+      - "session_id"
+      - "protocol_id"
+      - "lifecycle_state"
+      - "operation"
+      - "trace_id"
+
+  tracing:
+    enabled: true
+    provider: "opentelemetry"
+    sampling_rate: 0.1
+    spans:
+      - name: "lifecycle_operation"
+        attributes: ["operation", "protocol_id", "session_id"]
+
+testing_requirements:
+  unit_tests:
+    - test_start_operation
+    - test_pause_operation
+    - test_resume_operation
+    - test_interrupt_operation
+    - test_abort_operation
+    - test_state_transitions
+
+  integration_tests:
+    - test_complete_lifecycle
+    - test_pause_resume_flow
+    - test_interrupt_resume_flow
+    - test_timeout_handling
+
+  performance_tests:
+    - test_operation_latencies
+    - test_concurrent_lifecycle_operations
+
+compliance:
+  adr_references:
+    - "ADR-0003c: Protocol Monitor Runtime (Section 6 - Protocol Lifecycle)"
+
+  performance_requirements:
+    - "Start must be <0.5ms"
+    - "Pause must be <0.3ms"
+    - "Resume must be <0.5ms"
+    - "Interrupt must be <0.2ms (critical)"
+    - "Abort must be <2.0ms"
+
+  reliability_requirements:
+    - "Abort must cleanup all resources"
+    - "Pause timeout must prevent hanging"
+    - "Interrupt must stop output immediately"
+
+cross_references:
+  related_contracts:
+    - contract: "protocol_monitor_api.yml"
+      relationship: "extends"
+    - contract: "fsm_execution_contract.yml"
+      relationship: "uses"
+
+notes:
+  - "6 lifecycle states: PENDING, ACTIVE, PAUSED, INTERRUPTED, COMPLETED, ABORTED"
+  - "5 operations: start, pause, resume, interrupt, abort"
+  - "Interrupt operation is critical for barge-in (<0.2ms)"
+  - "Pause supports clarification protocol nesting"
+  - "Abort ensures cleanup even in error cases"
+  - "Not all protocols support pause/interrupt"

@@ -1,0 +1,579 @@
+# P18 Safety - Content Safety & Abuse Prevention Pipeline
+# Port: P18 (K1 → K0 safety checks and enforcement)
+# Policy enforcement semantics: Content moderation, safety classification
+# Performance budget: 50ms P95, 200ms timeout
+
+version: "1.0"
+port_id: "P18"
+port_name: "Safety"
+direction: "K1_TO_K0"
+semantics: "policy_enforcement"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0150"  # Safety Policy Framework
+  - "ADR-0151"  # Content Moderation Pipeline
+  - "ADR-0152"  # Appeals Process
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P18"
+      description: "Port identifier for safety checks"
+
+    command_type:
+      type: string
+      value: "safety_check"
+      description: "Content safety evaluation request"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for safety enforcement"
+
+    capability:
+      type: string
+      value: "CHECK_SAFETY"
+      required: true
+      description: "Required K0 capability for safety checks"
+
+  payload:
+    content:
+      type: string
+      required: true
+      description: "Content to check for safety violations"
+      example: "User message text..."
+
+    check_type:
+      type: string
+      enum: ["toxicity", "hate_speech", "violence", "sexual", "self_harm", "all"]
+      default: "all"
+      description: |
+        Safety check type:
+        - toxicity: Rude, disrespectful, unreasonable language
+        - hate_speech: Identity-based attacks (race, religion, gender, etc.)
+        - violence: Violent threats, glorification of violence
+        - sexual: Explicit sexual content
+        - self_harm: Suicide, self-injury content
+        - all: Check all categories
+
+    threshold:
+      type: number
+      default: 0.7
+      description: "Violation threshold (0.0-1.0, higher is stricter)"
+
+    blocking_mode:
+      type: string
+      enum: ["warn", "block"]
+      default: "block"
+      description: |
+        Enforcement action:
+        - warn: Log violation, allow operation (soft enforcement)
+        - block: Deny operation, return 403 (hard enforcement)
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Content is safe (no violations)"
+      payload:
+        is_safe:
+          type: boolean
+          value: true
+          description: "Content passed safety checks"
+
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+                enum: ["toxicity", "hate_speech", "violence", "sexual", "self_harm"]
+
+              score:
+                type: number
+                description: "Violation score (0.0-1.0)"
+
+              threshold:
+                type: number
+                description: "Threshold used"
+          description: "Empty array (no violations)"
+
+        action_taken:
+          type: string
+          value: "none"
+          description: "No action needed"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "202":
+      description: "Content flagged for review (medium confidence)"
+      payload:
+        is_safe:
+          type: boolean
+          value: false
+          description: "Content flagged (pending review)"
+
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+
+              score:
+                type: number
+
+              threshold:
+                type: number
+          description: "Detected violations"
+
+        action_taken:
+          type: string
+          value: "flag"
+          description: "Flagged for async review"
+
+        flag_id:
+          type: string
+          format: uuid
+          description: "Flag ID for tracking"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "403":
+      description: "Content blocked (high confidence violation)"
+      payload:
+        is_safe:
+          type: boolean
+          value: false
+          description: "Content blocked"
+
+        violations:
+          type: array
+          items:
+            type: object
+            properties:
+              category:
+                type: string
+
+              score:
+                type: number
+
+              threshold:
+                type: number
+          description: "Detected violations"
+
+        action_taken:
+          type: string
+          value: "block"
+          description: "Operation blocked"
+
+        block_reason:
+          type: string
+          description: "Human-readable block reason"
+          example: "Content violates community guidelines (hate speech detected)"
+
+        appeal_url:
+          type: string
+          required: false
+          description: "URL to appeal block decision"
+
+    "400":
+      description: "Invalid safety check request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_content", "invalid_check_type", "invalid_threshold"]
+
+        details:
+          type: string
+
+    "500":
+      description: "Safety check error"
+      payload:
+        error:
+          type: string
+          enum: ["classifier_error", "api_timeout"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Check content for all safety violations (pass)"
+    request:
+      envelope:
+        port_id: "P18"
+        command_type: "safety_check"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "CHECK_SAFETY"
+      payload:
+        content: "Let's schedule a meeting to discuss the project."
+        check_type: "all"
+        threshold: 0.7
+        blocking_mode: "block"
+
+    response:
+      status: 200
+      payload:
+        is_safe: true
+        violations: []
+        action_taken: "none"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Check content with toxicity violation (medium confidence, flagged)"
+    request:
+      envelope:
+        port_id: "P18"
+        command_type: "safety_check"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_def456"
+        privacy_band: "GREEN"
+        capability: "CHECK_SAFETY"
+      payload:
+        content: "This is a somewhat rude and disrespectful message."
+        check_type: "toxicity"
+        threshold: 0.7
+        blocking_mode: "block"
+
+    response:
+      status: 202
+      payload:
+        is_safe: false
+        violations:
+          - category: "toxicity"
+            score: 0.75
+            threshold: 0.7
+        action_taken: "flag"
+        flag_id: "flag_123"
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Check content with hate speech (high confidence, blocked)"
+    request:
+      envelope:
+        port_id: "P18"
+        command_type: "safety_check"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_ghi789"
+        privacy_band: "GREEN"
+        capability: "CHECK_SAFETY"
+      payload:
+        content: "[content with clear hate speech]"
+        check_type: "hate_speech"
+        threshold: 0.7
+        blocking_mode: "block"
+
+    response:
+      status: 403
+      payload:
+        is_safe: false
+        violations:
+          - category: "hate_speech"
+            score: 0.95
+            threshold: 0.7
+        action_taken: "block"
+        block_reason: "Content violates community guidelines (hate speech detected)"
+        appeal_url: "https://k1.example.com/safety/appeal?block_id=block_456"
+
+  - name: "Check content with warn-only mode"
+    request:
+      envelope:
+        port_id: "P18"
+        command_type: "safety_check"
+        cognitive_trace_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+        session_id: "sess_jkl012"
+        privacy_band: "GREEN"
+        capability: "CHECK_SAFETY"
+      payload:
+        content: "Mildly inappropriate content..."
+        check_type: "all"
+        threshold: 0.7
+        blocking_mode: "warn"
+
+    response:
+      status: 200
+      payload:
+        is_safe: true
+        violations:
+          - category: "toxicity"
+            score: 0.6
+            threshold: 0.7
+        action_taken: "warn"
+        receipt_id: "5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "content_classification"
+      description: |
+        ML-based safety classification:
+        - Perspective API (Google): toxicity, hate speech
+        - OpenAI Moderation API: violence, sexual, self_harm
+        - Local models: privacy-sensitive classification
+        Return scores per category (0.0-1.0)
+
+    - step: "score_evaluation"
+      description: |
+        Compare scores against thresholds:
+        - score ≥ 0.9: High confidence (immediate block)
+        - score 0.7-0.9: Medium confidence (flag for review)
+        - score < 0.7: Low confidence (allow with warning log)
+
+    - step: "policy_enforcement"
+      description: |
+        Apply enforcement action based on blocking_mode:
+        - warn: Log violation, allow operation (soft enforcement)
+        - block: Return 403, deny operation (hard enforcement)
+
+    - step: "audit_logging"
+      description: |
+        Log to st_flagged_content:
+        - content_hash (BLAKE3)
+        - violations (categories, scores)
+        - action_taken (warn, flag, block)
+        - timestamp, session_id
+
+    - step: "safety_blocks"
+      description: |
+        If action_taken=block:
+        - Create entry in st_safety_blocks
+        - Include block_reason, appeal_url
+        - Enable appeals process
+
+  storage_targets:
+    - "st_flagged_content" # Audit trail
+    - "st_safety_blocks" # Persistent blocks
+    - "st_safety_appeals" # Appeal requests
+
+  events_emitted:
+    - "infra.safety.check_started"
+    - "infra.safety.violation_detected"
+    - "infra.safety.content_blocked"
+    - "infra.safety.appeal_submitted"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "content must be non-empty string"
+  - rule: "check_type must be [toxicity|hate_speech|violence|sexual|self_harm|all]"
+  - rule: "threshold must be between 0.0 and 1.0"
+  - rule: "blocking_mode must be [warn|block]"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_safety_checks_total"
+      type: "counter"
+      labels: ["check_type", "action_taken"]
+      description: "Total safety checks"
+
+    - name: "k0_safety_violations_total"
+      type: "counter"
+      labels: ["category", "confidence_level"]
+      description: "Total safety violations detected"
+
+    - name: "k0_safety_blocks_total"
+      type: "counter"
+      labels: ["category"]
+      description: "Total content blocks"
+
+    - name: "k0_safety_appeals_total"
+      type: "counter"
+      labels: ["appeal_status"]
+      description: "Total appeal submissions"
+
+    - name: "k0_safety_latency_ms"
+      type: "histogram"
+      buckets: [10, 25, 50, 100, 200]
+      description: "Safety check latency in milliseconds"
+
+  traces:
+    span_name: "k0_safety.check"
+    attributes:
+      - "check_type"
+      - "is_safe"
+      - "action_taken"
+
+  logs:
+    - event: "infra.safety.violation_detected"
+      level: "WARN"
+      fields: ["session_id", "category", "score"]
+
+    - event: "infra.safety.content_blocked"
+      level: "WARN"
+      fields: ["session_id", "category", "block_reason"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "25ms"
+    p95: "50ms"
+    p99: "100ms"
+    timeout: "200ms"
+
+  throughput:
+    target_qps: 200
+    max_concurrent_requests: 500
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "CHECK_SAFETY"
+
+  audit_trail:
+    receipt_id: "Issued for all safety checks"
+    retention: "7 years (legal compliance)"
+    pii_redaction: "Content hash stored, not raw content"
+
+# ============================================================================
+# SAFETY CATEGORIES
+# ============================================================================
+
+safety_categories:
+  toxicity:
+    description: "Rude, disrespectful, unreasonable language"
+    examples:
+      - "Insults, name-calling"
+      - "Aggressive, hostile tone"
+      - "Dismissive, condescending language"
+    ml_models: ["Perspective API", "OpenAI Moderation"]
+
+  hate_speech:
+    description: "Identity-based attacks (race, religion, gender, etc.)"
+    examples:
+      - "Racial slurs, ethnic stereotypes"
+      - "Religious intolerance"
+      - "Gender-based discrimination"
+    ml_models: ["Perspective API", "OpenAI Moderation"]
+
+  violence:
+    description: "Violent threats, glorification of violence"
+    examples:
+      - "Physical threats, harm"
+      - "Terrorism, extremism"
+      - "Graphic violence descriptions"
+    ml_models: ["OpenAI Moderation", "Custom Classifier"]
+
+  sexual:
+    description: "Explicit sexual content"
+    examples:
+      - "Pornography, explicit imagery"
+      - "Sexual harassment"
+      - "Minors in sexual contexts"
+    ml_models: ["OpenAI Moderation", "Custom Classifier"]
+
+  self_harm:
+    description: "Suicide, self-injury content"
+    examples:
+      - "Suicide ideation, methods"
+      - "Self-harm encouragement"
+      - "Eating disorder promotion"
+    ml_models: ["OpenAI Moderation", "Crisis Text Line API"]
+
+# ============================================================================
+# CONFIDENCE THRESHOLDS
+# ============================================================================
+
+confidence_thresholds:
+  high_confidence:
+    score_range: "≥ 0.9"
+    action: "Immediate block (403)"
+    rationale: "Very high certainty of violation"
+
+  medium_confidence:
+    score_range: "0.7-0.9"
+    action: "Flag for review (202)"
+    rationale: "Likely violation, requires human review"
+
+  low_confidence:
+    score_range: "< 0.7"
+    action: "Allow with warning log (200)"
+    rationale: "Possible false positive, log for analysis"
+
+# ============================================================================
+# APPEALS PROCESS
+# ============================================================================
+
+appeals_process:
+  submission:
+    - "User clicks appeal_url from 403 response"
+    - "Provide reason for appeal"
+    - "Submit to st_safety_appeals"
+
+  review:
+    - "Human moderator reviews flagged content"
+    - "Decision: uphold block or overturn"
+    - "Update st_safety_blocks with appeal_status"
+
+  notification:
+    - "User notified of appeal decision"
+    - "If overturned: remove block, allow operation"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Perspective API. (2017). A tool to help improve conversations online. Jigsaw/Google."
+    url: "https://www.perspectiveapi.com/"
+    relevance: "Toxicity and hate speech detection"
+
+  - citation: "OpenAI. (2023). Moderation API. OpenAI Content Policy."
+    url: "https://platform.openai.com/docs/guides/moderation"
+    relevance: "Multi-category safety classification"
+
+  - citation: "Davidson, T., et al. (2017). Automated Hate Speech Detection and the Problem of Offensive Language. ICWSM 2017."
+    url: "https://aaai.org/ocs/index.php/ICWSM/ICWSM17/paper/view/15665"
+    relevance: "Challenges in automated hate speech detection"

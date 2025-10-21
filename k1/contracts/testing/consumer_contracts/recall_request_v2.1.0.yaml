@@ -1,0 +1,147 @@
+# RecallRequest v2.1.0 - Consumer Contract
+
+schema_name: RecallRequest
+consumer_name: "K1 Turn Executor"
+consumer_version: "2.1.0"
+provider_version: "2.1.0"
+contract_date: "2025-10-13"
+maintainer: "k1-architecture-team"
+
+expectations:
+  required_fields:
+    - query              # Natural language query (always required)
+    - trace_id           # Cognitive trace ID for observability
+
+  optional_fields:
+    - time_range         # NEW in v2.1.0: Time filter for recall
+    - limit              # Max results (default: 10)
+    - space_ids          # Array of family space IDs to search
+    - modalities         # Array of modalities: text, audio, vision
+    - semantic_threshold # Min similarity score (default: 0.7)
+
+  deprecated_fields_used:
+    - legacy_query_format  # Deprecated in v2.1.0, remove in v3.0.0
+
+  type_expectations:
+    query: string
+    trace_id: string
+    time_range: TimeRange
+    limit: uint32
+    space_ids: [string]
+    modalities: [string]
+    semantic_threshold: float
+    legacy_query_format: string
+
+  nested_types:
+    TimeRange:
+      fields:
+        start_ts: int64
+        end_ts: int64
+
+compatibility:
+  forward_compatible_with:
+    - "2.0.0"  # Can deserialize v2.0.0 data (missing time_range OK)
+
+  backward_compatible_with:
+    - "2.2.0"  # Can deserialize v2.2.0 data (ignore new fields)
+
+  breaking_changes_from:
+    - "1.x.x"  # MAJOR version change, not compatible
+
+test_scenarios:
+  - name: "Minimal request (required fields only)"
+    description: "Consumer provides only required fields"
+    data:
+      query: "user:123 activity:fishing"
+      trace_id: "trace-abc-123"
+    expected: PASS
+
+  - name: "Full request (v2.1.0 with time_range)"
+    description: "Consumer provides all fields including new time_range"
+    data:
+      query: "user:123 activity:fishing"
+      trace_id: "trace-abc-123"
+      time_range:
+        start_ts: 1697234567000
+        end_ts: 1697320967000
+      limit: 50
+      space_ids: ["fam_smith", "fam_jones"]
+      modalities: ["text", "audio"]
+      semantic_threshold: 0.8
+    expected: PASS
+
+  - name: "Old consumer (v2.0.0) + New schema (v2.1.0)"
+    description: "Consumer ignores new 'time_range' field"
+    consumer_version: "2.0.0"
+    provider_version: "2.1.0"
+    data:
+      query: "user:123"
+      trace_id: "trace-abc"
+    expected: PASS  # Forward compatible
+
+  - name: "New consumer (v2.1.0) + Old schema (v2.0.0)"
+    description: "Consumer uses default for missing 'time_range'"
+    consumer_version: "2.1.0"
+    provider_version: "2.0.0"
+    data:
+      query: "user:123"
+      trace_id: "trace-abc"
+      # NOTE: No time_range (v2.0.0 schema doesn't have it)
+    expected: PASS  # Backward compatible
+
+example_data:
+  valid_v2_1_0:
+    query: "user:123 activity:fishing date:2025-10-15"
+    trace_id: "trace-abc-123"
+    time_range:
+      start_ts: 1697234567000
+      end_ts: 1697320967000
+    limit: 50
+    space_ids: ["fam_smith", "fam_jones"]
+    modalities: ["text", "audio"]
+    semantic_threshold: 0.85
+
+  valid_v2_0_0:
+    query: "user:123 activity:fishing"
+    trace_id: "trace-abc-123"
+    limit: 50
+    space_ids: ["fam_smith"]
+    # NOTE: No time_range (v2.0.0 schema doesn't have it)
+
+  minimal:
+    query: "user:123"
+    trace_id: "trace-abc"
+
+validation_rules:
+  - field: query
+    rule: "Must be non-empty string"
+
+  - field: trace_id
+    rule: "Must be non-empty string (cognitive_trace_id format)"
+
+  - field: limit
+    rule: "If present, must be > 0 and <= 1000"
+
+  - field: semantic_threshold
+    rule: "If present, must be between 0.0 and 1.0"
+
+  - field: time_range
+    rule: "If present, start_ts must be < end_ts"
+
+changelog:
+  - version: "2.1.0"
+    date: "2025-09-01"
+    changes:
+      - "Added optional 'time_range' field (MINOR bump, backward compatible)"
+      - "Deprecated 'legacy_query_format' (remove in v3.0.0)"
+
+  - version: "2.0.0"
+    date: "2025-06-01"
+    changes:
+      - "Renamed 'modality' to 'modalities' array (MAJOR bump, breaking change)"
+      - "Added 'semantic_threshold' optional field"
+
+  - version: "1.0.0"
+    date: "2025-01-01"
+    changes:
+      - "Initial release"

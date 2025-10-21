@@ -1,0 +1,317 @@
+# State Consistency Guarantees Contract
+# Issue: 1.1.3 - State Boundary Management Contracts
+# Source ADR: ADR-0001f (State Boundary Management K1 vs K0)
+# Related ADRs: ADR-0050 (SessionState Coherence Guarantees)
+
+state_consistency_guarantees:
+  name: "K1 ↔ K0 State Consistency Guarantees"
+  version: "1.0"
+  purpose: "Define consistency guarantees between K1 working memory and K0 long-term memory"
+
+  # ========================================
+  # K1 CONSISTENCY (Eventually Consistent)
+  # ========================================
+  k1_consistency:
+    model: "Eventually Consistent"
+    guarantee: "K1 SessionState may lag K0 by <250ms (batch flush interval)"
+
+    characteristics:
+      staleness_bound: "250ms maximum (batch flush interval)"
+      update_visibility: "Immediate within K1 session (local reads see local writes)"
+      cross_session_visibility: "Delayed by up to 250ms (until K0 flush)"
+
+    example_scenario:
+      description: "K1 updates beliefs, continues execution before K0 flush"
+
+      timeline:
+        - time: "T0"
+          action: "K1 updates SessionState.beliefs.current_task = 'Schedule Emma soccer'"
+          state: "beliefs dirty flag set"
+          visibility: "Visible immediately within K1 session"
+
+        - time: "T0 + 50ms"
+          action: "K1 continues executing (uses updated beliefs)"
+          state: "beliefs not yet flushed to K0"
+          visibility: "Still only visible within K1"
+
+        - time: "T0 + 100ms"
+          action: "K1 generates response using beliefs"
+          state: "beliefs still not in K0"
+          risk: "If K1 crashes here, 100ms of updates lost"
+
+        - time: "T0 + 250ms"
+          action: "K1 batch flush to K0 (P02 MemoryWrite)"
+          state: "beliefs serialized, sent to K0"
+          visibility: "In-flight to K0"
+
+        - time: "T0 + 260ms"
+          action: "K0 writes to WAL, returns receipt"
+          state: "beliefs now durable in K0"
+          visibility: "Visible to all K1 instances querying K0"
+
+      consistency_window: "0-250ms eventual consistency lag"
+
+    implications:
+      positive:
+        - "Fast K1 updates (<1ms in-memory)"
+        - "No blocking on K0 writes during turn execution"
+        - "High throughput (100s of updates/sec)"
+
+      negative:
+        - "Risk of data loss if K1 crashes <250ms after update"
+        - "Cross-session updates delayed (multi-device sync lag)"
+        - "K1 reads from K0 may see stale data"
+
+    mitigation_strategies:
+      - strategy: "Critical updates use AMBER band (explicit flush)"
+        example: "GroundingCommit for conversation turns (sync flush)"
+        guarantee: "AMBER band commits immediately to K0"
+
+      - strategy: "K1 prefers local SessionState over K0 for recent updates"
+        example: "Read beliefs from K1 memory, not K0 query"
+        guarantee: "Read-your-writes within K1 session"
+
+      - strategy: "K1 buffers deltas during K0 unavailability"
+        example: "Network partition → buffer up to 10MB, flush on reconnect"
+        guarantee: "Zero data loss during temporary K0 unavailability"
+
+  # ========================================
+  # K0 CONSISTENCY (Strongly Consistent)
+  # ========================================
+  k0_consistency:
+    model: "Strongly Consistent (ACID)"
+    guarantee: "K0 provides ACID guarantees via Write-Ahead Log (WAL)"
+
+    acid_properties:
+      atomicity:
+        description: "All deltas in a batch commit together or not at all"
+        mechanism: "SQLite WAL transaction boundary"
+        example: "10 deltas → single WAL transaction → all succeed or all fail"
+        guarantee: "No partial writes"
+
+      consistency:
+        description: "K0 state always valid (constraints enforced)"
+        mechanism: "SQLite schema constraints, foreign keys"
+        example: "memory_id must exist before reference in relationships"
+        guarantee: "Schema constraints never violated"
+
+      isolation:
+        description: "Concurrent writes don't interfere"
+        mechanism: "SQLite locking (WAL mode allows concurrent readers)"
+        example: "Session A and Session B flush simultaneously → serialized by SQLite"
+        guarantee: "Serializability (writes appear sequential)"
+
+      durability:
+        description: "Once receipt issued, data survives crash"
+        mechanism: "WAL sync to disk before receipt"
+        example: "K0 crashes after receipt → data intact on restart"
+        guarantee: "Zero data loss after receipt"
+
+    example_scenario:
+      description: "K1 sends batch flush, K0 provides ACID guarantees"
+
+      timeline:
+        - time: "T0"
+          action: "K1 sends batch flush (10 deltas)"
+          state: "In-flight to K0"
+
+        - time: "T0 + 5ms"
+          action: "K0 receives batch, starts WAL transaction"
+          state: "Transaction open, not yet committed"
+          visibility: "Not visible to other sessions"
+
+        - time: "T0 + 8ms"
+          action: "K0 writes all 10 deltas to WAL"
+          state: "All deltas in WAL buffer"
+          visibility: "Still not visible"
+
+        - time: "T0 + 9ms"
+          action: "K0 syncs WAL to disk (fsync)"
+          state: "WAL durable on disk"
+          guarantee: "Survives K0 crash"
+
+        - time: "T0 + 10ms"
+          action: "K0 issues receipt to K1"
+          state: "Transaction committed"
+          visibility: "Now visible to all sessions"
+          guarantee: "ACID complete"
+
+      consistency_window: "Zero lag (strongly consistent after receipt)"
+
+    failure_scenarios:
+      - scenario: "K0 crashes before WAL sync (T0 + 8ms)"
+        outcome: "Entire batch lost (10 deltas rolled back)"
+        k1_action: "No receipt received, K1 retries flush"
+        data_loss: "Zero (K1 retries, deltas still in buffer)"
+
+      - scenario: "K0 crashes after WAL sync (T0 + 9ms)"
+        outcome: "All 10 deltas durable, no loss"
+        k1_action: "Receipt may be lost in-flight, K1 retries"
+        k0_action: "K0 restart → WAL replay → deltas restored"
+        data_loss: "Zero (WAL guarantees durability)"
+
+      - scenario: "Network partition (K1 ↔ K0 disconnected)"
+        outcome: "K1 cannot flush, buffers deltas"
+        k1_action: "Buffer up to 10MB, flush on reconnect"
+        data_loss: "Zero (K1 buffers, flushes later)"
+
+  # ========================================
+  # K1 READS K0 (Stale Reads Acceptable)
+  # ========================================
+  k1_reads_k0:
+    model: "Stale Reads Acceptable"
+    guarantee: "K1 reads from K0 may be stale by <50ms (K0 cache invalidation lag)"
+
+    example_scenario:
+      description: "K1 writes to K0, immediately reads back stale data"
+
+      timeline:
+        - time: "T0"
+          action: "K1 writes 'Emma soccer → Wednesday 4pm' to K0 (P02 MemoryWrite)"
+          state: "Write in-flight"
+
+        - time: "T0 + 10ms"
+          action: "K0 commits to WAL, returns receipt"
+          state: "Data durable in K0"
+          k0_cache: "Not yet invalidated (still has old 'Tuesday 3pm')"
+
+        - time: "T0 + 15ms"
+          action: "K1 immediately reads 'Emma soccer' from K0 (P01 RecallQuery)"
+          state: "Query in-flight"
+
+        - time: "T0 + 20ms"
+          action: "K0 CACHE tier returns stale result 'Tuesday 3pm'"
+          state: "Cache not yet invalidated"
+          staleness: "20ms stale (old data returned)"
+
+        - time: "T0 + 50ms"
+          action: "K0 cache invalidation completes"
+          state: "Cache now has 'Wednesday 4pm'"
+
+        - time: "T0 + 60ms"
+          action: "K1 reads again, gets fresh result 'Wednesday 4pm'"
+          state: "Cache hit, fresh data"
+
+      consistency_window: "0-50ms staleness possible"
+
+    implications:
+      positive:
+        - "Fast K0 reads (CACHE tier <1ms, 75% hit rate)"
+        - "No need to block on cache invalidation"
+
+      negative:
+        - "Stale reads possible (up to 50ms lag)"
+        - "Read-after-write consistency not guaranteed across K1↔K0 boundary"
+
+    mitigation_strategies:
+      - strategy: "K1 prefers local SessionState over K0 for recent updates"
+        example: "Use K1 beliefs (local) instead of K0 query (remote)"
+        guarantee: "Read-your-writes within K1 session"
+
+      - strategy: "K0 cache invalidation on write"
+        example: "K0 write → invalidate CACHE tier → next read fresh"
+        latency: "<50ms cache invalidation"
+
+      - strategy: "K1 includes timestamp in queries"
+        example: "P01 RecallQuery with min_timestamp = last_write_timestamp"
+        guarantee: "Skip stale cache entries, read from HOT tier"
+
+  # ========================================
+  # CROSS-SESSION CONSISTENCY
+  # ========================================
+  cross_session_consistency:
+    model: "Eventually Consistent (Multi-Device Sync)"
+    guarantee: "Updates visible across sessions within 250ms + 50ms = 300ms"
+
+    example_scenario:
+      description: "User updates persona on Device A, sees update on Device B"
+
+      timeline:
+        - time: "T0"
+          device: "Device A (K1 Instance A)"
+          action: "User updates formality = 0.5 (was 0.3)"
+          state: "K1-A SessionState.persona updated"
+          visibility: "Only visible on Device A"
+
+        - time: "T0 + 250ms"
+          device: "Device A (K1 Instance A)"
+          action: "K1-A batch flush to K0"
+          state: "formality = 0.5 flushed to K0"
+
+        - time: "T0 + 260ms"
+          device: "K0 Memory Module"
+          action: "K0 commits to WAL, updates self_model table"
+          state: "formality = 0.5 durable in K0"
+          visibility: "Now visible to all K1 instances querying K0"
+
+        - time: "T0 + 300ms"
+          device: "Device B (K1 Instance B)"
+          action: "User initiates conversation on Device B"
+          state: "K1-B loads persona from K0 (P18 PersonalizationSync)"
+          result: "formality = 0.5 (fresh data)"
+
+      total_latency: "300ms (250ms flush + 50ms propagation)"
+
+    conflict_resolution:
+      mechanism: "Last-write-wins with vector clocks"
+
+      example_conflict:
+        - time: "T0"
+          device: "Device A"
+          action: "Update formality = 0.5"
+          vector_clock: "{A: 1, B: 0}"
+
+        - time: "T0 + 100ms"
+          device: "Device B"
+          action: "Update formality = 0.7 (concurrent)"
+          vector_clock: "{A: 0, B: 1}"
+
+        - time: "T0 + 250ms"
+          device: "Device A → K0"
+          action: "Flush formality = 0.5"
+          k0_state: "formality = 0.5, clock {A: 1, B: 0}"
+
+        - time: "T0 + 350ms"
+          device: "Device B → K0"
+          action: "Flush formality = 0.7"
+          k0_state: "formality = 0.7, clock {A: 1, B: 1}"
+          resolution: "Last write wins (B's update wins, clock {A: 1, B: 1} > {A: 1, B: 0})"
+
+  observability:
+    prometheus_metrics:
+      - name: "consistency_lag_ms"
+        type: "histogram"
+        labels: ["consistency_type"]
+        buckets: [10, 50, 100, 250, 500, 1000]
+        description: "Consistency lag (K1→K0 flush, K0 cache invalidation, cross-session sync)"
+
+      - name: "stale_read_total"
+        type: "counter"
+        labels: ["session_id", "memory_type"]
+        description: "Total stale reads detected (K1 reads K0 with stale cache)"
+
+      - name: "consistency_violation_total"
+        type: "counter"
+        labels: ["violation_type"]
+        description: "Total consistency violations (unexpected stale reads, cross-session conflicts)"
+
+      - name: "k0_wal_commit_latency_ms"
+        type: "histogram"
+        labels: []
+        buckets: [1, 5, 10, 25, 50, 100]
+        description: "K0 WAL commit latency (ACID durability)"
+
+  related_adrs:
+    - adr: "ADR-0001f"
+      section: "State Consistency Guarantees"
+      lines: "K1 eventual, K0 strong, stale reads"
+
+    - adr: "ADR-0050"
+      section: "SessionState Coherence Guarantees"
+      lines: "Read-your-writes, monotonic reads/writes, bounded staleness"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.1.3"
+      author: "Contract Development Team"

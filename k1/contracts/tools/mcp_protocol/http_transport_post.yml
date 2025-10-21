@@ -1,0 +1,835 @@
+# MCP Transport: HTTP POST Implementation (Layer 1 - Protocol Transport)
+# Purpose: JSON-RPC 2.0 over HTTP POST requests
+# Research: REST principles (Fielding 2000), JSON-RPC 2.0 spec
+# Part of ADR-0033a (MCP Protocol Integration)
+# Applies to: K1 tools using MCP protocol over HTTP (10% adoption)
+
+---
+contract_id: "TOOL_EXEC_MCP_HTTP_TRANSPORT_POST"
+contract_type: "protocol_transport"
+applies_to: ["k1.orchestrator.tool_runner", "k1.planner.tool_executor"]
+research_basis:
+  - title: "Architectural Styles and the Design of Network-based Software Architectures"
+    authors: ["Roy T. Fielding"]
+    year: 2000
+  - title: "JSON-RPC 2.0 Specification"
+    authors: ["JSON-RPC Working Group"]
+    year: 2010
+  - title: "RFC 7230: HTTP/1.1 Message Syntax and Routing"
+    authors: ["IETF HTTP Working Group"]
+    year: 2014
+
+# ============================================================================
+# OVERVIEW: HTTP Transport Design
+# ============================================================================
+
+overview: |
+  HTTP transport provides JSON-RPC 2.0 communication over HTTP POST requests.
+
+  Use cases:
+  1. Remote MCP servers (not same-process subprocess)
+  2. Load-balanced server pools (multiple replicas)
+  3. Cloud-hosted tools (Lambda, Cloud Functions)
+  4. Legacy APIs already exposed as HTTP services
+  5. Cross-organizational tool invocation
+
+  Performance characteristics:
+  - Latency: P95 < 10ms (localhost), P95 < 50ms (10ms network + overhead)
+  - Throughput: > 500 requests/second per connection
+  - Memory: ~2KB per request (headers + payload)
+  - Connection pooling: Reuse HTTP connections (persistent HTTP/1.1)
+
+  Adoption in K1:
+  - 10% of tools use HTTP transport (legacy APIs, cloud services)
+  - Typically combined with Container sandbox (cloud-native)
+  - Example: AWS Lambda + API Gateway
+
+# ============================================================================
+# PROTOCOL: HTTP POST for JSON-RPC 2.0
+# ============================================================================
+
+protocol:
+  http_version: "HTTP/1.1 or HTTP/2"
+  method: "POST"
+  content_type: "application/json"
+  accept_header: "application/json"
+  request_headers:
+    required:
+      - "Content-Type: application/json"
+      - "Content-Length: <bytes>"
+    optional:
+      - "Authorization: Bearer <token>"  # If server requires auth
+      - "X-Request-ID: <uuid>"  # Correlation ID
+      - "X-Trace-ID: <trace_id>"  # K1 cognitive trace ID
+      - "X-Tool-ID: <tool_id>"  # Tool identifier
+      - "X-Band: <GREEN|AMBER|RED|BLACK>"  # Privacy band
+      - "User-Agent: K1/1.0"  # Identification
+
+  response_headers:
+    required:
+      - "Content-Type: application/json"
+      - "Content-Length: <bytes>"
+    optional:
+      - "X-Response-Time-Ms: <ms>"  # Server-side latency
+      - "X-Server-Version: <version>"  # Server info
+
+  body_format:
+    request_body: |
+      Standard JSON-RPC 2.0 request (single object):
+
+      POST /rpc HTTP/1.1
+      Host: example.com:8080
+      Content-Type: application/json
+      Content-Length: 78
+
+      {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":1}
+
+    response_body_success: |
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+      Content-Length: 45
+
+      {"jsonrpc":"2.0","result":{...},"id":1}
+
+    response_body_error: |
+      HTTP/1.1 200 OK
+      Content-Type: application/json
+      Content-Length: 87
+
+      {"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid Request"},"id":1}
+
+    status_codes:
+      200_ok: |
+        Standard success response (even for JSON-RPC errors).
+        Check response body for error field.
+
+      400_bad_request: |
+        Malformed HTTP request (invalid Content-Type, etc.).
+        Response: Plain text or HTML error message.
+
+      401_unauthorized: |
+        Authentication failed.
+        Caller should retry with credentials or report auth error.
+
+      403_forbidden: |
+        Authorization failed (authenticated but not allowed).
+        Caller should report permission error.
+
+      404_not_found: |
+        HTTP endpoint does not exist.
+        Tool unavailable at this URL.
+
+      500_internal_server_error: |
+        Server-side error (not JSON-RPC error, but HTTP error).
+        Caller should retry or fallback.
+
+      503_service_unavailable: |
+        Server temporarily unavailable (maintenance, overload).
+        Caller should retry with exponential backoff.
+
+# ============================================================================
+# HTTP FEATURES: Connection & Request Management
+# ============================================================================
+
+connection_management:
+  connection_pooling:
+    strategy: "HTTP/1.1 persistent connections"
+    max_connections_per_host: 4
+    keepalive_timeout_seconds: 30
+    max_requests_per_connection: 100
+    rationale: |
+      HTTP/1.1 reuses TCP connections for multiple requests.
+      Reduces overhead compared to creating new connections per request.
+      Pool size of 4 balances resource usage and parallelism.
+
+  connection_lifecycle:
+    on_first_request: |
+      1. Create TCP socket to host:port
+      2. Perform TLS handshake (if HTTPS)
+      3. Send HTTP request
+      4. Receive HTTP response
+      5. Keep connection open (Connection: keep-alive)
+
+    on_subsequent_requests: |
+      1. Reuse existing connection from pool
+      2. Send HTTP request
+      3. Receive HTTP response
+      4. Keep connection open
+
+    on_timeout: |
+      1. Close idle connections after 30 seconds
+      2. Remove from pool
+      3. Next request creates new connection
+
+    on_exit: |
+      1. Close all connections in pool
+      2. Send Connection: close header
+      3. Wait for server to close (or timeout)
+      4. Free socket resources
+
+  connection_reuse_benefits:
+    reduced_latency: |
+      - No TCP 3-way handshake (3x RTT saved)
+      - No TLS handshake (2-3x RTT saved if HTTPS)
+      - Typical savings: 20-50ms per request (at 10ms RTT)
+
+    reduced_resource_usage: |
+      - Fewer file descriptors open
+      - Fewer TCP connections in TIME_WAIT
+      - Lower CPU usage (no socket creation/teardown)
+
+    improved_throughput: |
+      - Can pipeline multiple requests (HTTP/2)
+      - Server can reuse buffers
+      - Connection state known to both sides
+
+# ============================================================================
+# REQUEST/RESPONSE HANDLING
+# ============================================================================
+
+request_response_protocol:
+  request_submission:
+    method: "async def send_request(method, params, timeout, url)"
+    steps: |
+      1. Create JSON-RPC 2.0 request object
+      2. Generate request ID (UUID or sequence)
+      3. Serialize to JSON (utf-8)
+      4. Create HTTP POST request
+      5. Set Content-Type, Content-Length headers
+      6. Optionally set X-Request-ID, X-Trace-ID for correlation
+      7. Get or create connection from pool
+      8. Send HTTP request (non-blocking)
+      9. Register timeout timer (3 seconds default)
+      10. Return future (await for response)
+
+  response_matching:
+    strategy: "Request ID correlation (same as stdio)"
+    flow: |
+      1. Client sends: {jsonrpc, method, params, id: 123}
+      2. HTTP request sent to server
+      3. Server receives, processes request
+      4. Server sends HTTP response: {jsonrpc, result/error, id: 123}
+      5. Client receives HTTP response
+      6. Parse response body (JSON)
+      7. Extract response.id = 123
+      8. Match to pending_requests[123]
+      9. Resolve future with result/error
+      10. Await-ing caller receives response
+
+  timeout_behavior:
+    default_timeout_seconds: 3
+    timeout_scope: |
+      From request submit to response complete (entire HTTP round-trip).
+      Includes:
+      - TCP connect time (if new connection)
+      - TLS handshake (if HTTPS)
+      - HTTP request transmission
+      - Server processing time
+      - HTTP response transmission
+      - JSON parsing
+
+    timeout_strategy: |
+      1. If response not received within 3s
+      2. Cancel HTTP request
+      3. Close connection (force close to avoid stale state)
+      4. Reject future with TimeoutError
+      5. Emit metric: http_request_timeout{url, method, tool}
+      6. Log: {event: "http_timeout", url, timeout_ms, trace_id}
+
+  http_status_handling:
+    status_200_ok:
+      interpretation: "Always check response body for JSON-RPC error"
+      action: |
+        1. Parse response body as JSON-RPC
+        2. If result field present: Success
+        3. If error field present: JSON-RPC error (not HTTP error)
+        4. Resolve request with result or error
+
+    status_4xx_client_error:
+      interpretation: "Invalid HTTP request (not server issue)"
+      action: |
+        1. Log as non-retryable error
+        2. Report to caller as HTTP error
+        3. Do NOT retry automatically
+        4. ToolExecutionSelector may try fallback
+
+    status_5xx_server_error:
+      interpretation: "Server-side error (may be transient)"
+      action: |
+        1. Log as retryable error
+        2. Emit error metric with status code
+        3. Do NOT retry automatically (let orchestrator retry)
+        4. ToolExecutionSelector may try fallback or retry
+
+    connection_timeout:
+      interpretation: "Cannot reach server"
+      action: |
+        1. Log connection error
+        2. Emit metric: http_connection_error
+        3. Do NOT retry automatically
+        4. ToolExecutionSelector may try fallback
+
+# ============================================================================
+# ERROR HANDLING & RECOVERY
+# ============================================================================
+
+error_handling:
+  network_errors:
+    connection_refused:
+      cause: "Server not running or port closed"
+      detection: "OSError(errno=ECONNREFUSED)"
+      handling: |
+        1. Close connection
+        2. Remove from pool
+        3. Report ConnectionRefusedError to caller
+        4. Emit metric: http_connection_refused
+        5. ToolExecutionSelector may retry or fallback
+
+    timeout_exceeded:
+      cause: "Network latency or server slowness"
+      detection: "asyncio.TimeoutError or socket timeout"
+      handling: |
+        1. Cancel HTTP request
+        2. Close connection
+        3. Remove from pool
+        4. Report TimeoutError to caller
+        5. Emit metric: http_request_timeout
+        6. ToolExecutionSelector may retry or fallback
+
+    tls_error:
+      cause: "Certificate invalid, mismatched hostname, etc."
+      detection: "ssl.SSLError"
+      handling: |
+        1. Log SSL error details
+        2. Close connection
+        3. Report SSLError to caller
+        4. Do NOT retry (security issue)
+        5. ToolExecutionSelector may use non-HTTPS transport
+
+    incomplete_response:
+      cause: "Connection closed before full response"
+      detection: "OSError during read, Content-Length mismatch"
+      handling: |
+        1. Log incomplete response
+        2. Close connection
+        3. Report IncompleteResponseError to caller
+        4. Emit metric: http_incomplete_response
+        5. ToolExecutionSelector may retry or fallback
+
+  application_errors:
+    malformed_json:
+      cause: "Response body is not valid JSON"
+      detection: "json.JSONDecodeError"
+      handling: |
+        1. Log JSON parse error
+        2. Close connection (likely corrupted state)
+        3. Report MalformedJSONError to caller
+        4. Emit metric: http_malformed_response
+        5. ToolExecutionSelector may retry or fallback
+
+    invalid_jsonrpc:
+      cause: "Response missing required fields (jsonrpc, id)"
+      detection: "Schema validation fails"
+      handling: |
+        1. Log schema error
+        2. Attempt recovery (extract id if possible)
+        3. Report InvalidJSONRPCError to caller
+        4. Emit metric: http_invalid_jsonrpc
+        5. ToolExecutionSelector may retry or fallback
+
+    response_id_mismatch:
+      cause: "Response ID doesn't match request ID"
+      detection: "response.id != request.id"
+      handling: |
+        1. Log mismatch error
+        2. Discard response
+        3. Continue waiting for correct ID
+        4. May timeout if never arrives
+        5. Emit metric: http_id_mismatch
+
+  recovery_strategies:
+    connection_pooling: |
+      Bad connections are removed from pool.
+      Next request creates fresh connection.
+      Automatic recovery without retry logic.
+
+    exponential_backoff: |
+      ToolExecutionSelector (not HTTP transport) implements backoff.
+      HTTP transport only reports errors.
+      Orchestrator decides retry strategy.
+
+    graceful_degradation: |
+      If HTTP server unavailable, fallback to alternative:
+      1. Stdio transport (if available)
+      2. Different HTTP server (if load-balanced)
+      3. Container sandbox (if available)
+
+# ============================================================================
+# PERFORMANCE & OPTIMIZATION
+# ============================================================================
+
+performance:
+  latency_targets:
+    tcp_connect: "< 5ms (localhost, no RTT penalty)"
+    tls_handshake: "< 20ms (if HTTPS, with resumption)"
+    http_request_send: "< 1ms (small JSON payload)"
+    server_processing: "< 100ms (dependent on server)"
+    http_response_recv: "< 1ms (small JSON response)"
+    json_parsing: "< 1ms (response body)"
+    total_round_trip_local: "< 10ms P95 (localhost)"
+    total_round_trip_remote: "< 50ms P95 (10ms RTT + overhead)"
+
+  throughput_targets:
+    requests_per_second: "> 500 (per connection pool)"
+    concurrent_requests: "< 100 (typical <50)"
+    connection_reuse: "> 90% (persistent connections)"
+    burst_capacity: "500 req/sec for 10 seconds"
+
+  optimization_techniques:
+    connection_pooling: |
+      - Reuse TCP connections (reduce handshake overhead)
+      - Max 4 connections per host (balance parallelism vs resources)
+      - 30s keepalive timeout (prevent stale connections)
+
+    request_pipelining: |
+      - HTTP/1.1 allows multiple requests without waiting for response
+      - Not used by default (simplicity, server compatibility)
+      - Can be enabled for high-throughput scenarios
+
+    compression: |
+      - Support gzip/deflate for response bodies (if server supports)
+      - Trade-off: CPU (decompression) vs bandwidth (reduced size)
+      - Not used by default (small JSON payloads, fast network)
+
+    caching: |
+      - Cache HTTP responses if tool is idempotent
+      - Respect Cache-Control headers
+      - Typical cache hit rate: 5-10% (tools not usually idempotent)
+
+    dns_caching: |
+      - Cache DNS lookups (e.g., example.com → 1.2.3.4)
+      - TTL: 30-300 seconds (reasonable balance)
+      - Reduces DNS latency on subsequent requests
+
+  profiling_results:
+    cpu_usage: "< 0.5% per HTTP client (mostly I/O wait)"
+    memory_per_client: "~2KB per request, ~50KB per connection pool"
+    context_switches: "3-4 per request (TCP, HTTP send/recv)"
+
+# ============================================================================
+# SECURITY: Authentication, Encryption, Validation
+# ============================================================================
+
+security:
+  authentication:
+    methods_supported:
+      bearer_token: |
+        Authorization: Bearer <token>
+        Caller provides JWT or API token in header.
+
+      api_key: |
+        X-API-Key: <key>
+        Caller provides API key in custom header.
+
+      basic_auth: |
+        Authorization: Basic <base64(user:pass)>
+        Caller provides username/password (not recommended over HTTP).
+
+      oauth2: |
+        Bearer token with OAuth2 flow.
+        Caller obtains token from auth server, includes in request.
+
+    implementation:
+      tls_encryption: |
+        MUST use HTTPS (TLS 1.2+) for production.
+        HTTP allowed only for localhost development.
+
+      token_storage: |
+        Store tokens securely (K1 SecretsManager).
+        Never log tokens or include in URLs.
+
+      token_refresh: |
+        Implement token refresh before expiry.
+        Automatic retry on 401 Unauthorized.
+
+  encryption:
+    transport_encryption:
+      protocol: "TLS 1.2 or higher"
+      cipher_suites: "Modern, forward-secret (TLS_ECDHE_*)"
+      certificate_validation: |
+        Validate server certificate:
+        1. Check certificate chain
+        2. Verify hostname matches CN or SAN
+        3. Check expiry date
+        4. Reject self-signed (unless development mode)
+
+    payload_encryption: |
+      JSON-RPC payloads encrypted by TLS layer.
+      No application-level encryption needed (TLS sufficient).
+
+  input_validation:
+    request_validation:
+      - Validate JSON syntax (json.loads)
+      - Validate JSON-RPC schema (required fields, types)
+      - Validate params against tool schema
+      - Reject malicious payloads (no code injection)
+
+    response_validation:
+      - Validate JSON syntax
+      - Validate JSON-RPC schema
+      - Validate result/error types
+      - Reject oversized responses (>16MB)
+
+    rate_limiting:
+      - Respect Rate-Limit-Reset headers from server
+      - Implement client-side backoff (exponential, jitter)
+      - Track rate limit errors in metrics
+
+  privacy_enforcement:
+    privacy_band_headers: |
+      Always include X-Band header:
+      - GREEN: Allow list (public APIs)
+      - AMBER: Proxy PII handling
+      - RED: Deny (sensitive operations)
+      - BLACK: Never used for HTTP (too risky)
+
+    pii_handling: |
+      - Log request/response params without PII
+      - Redact sensitive fields before metrics
+      - Implement AMBER band PII proxy (if needed)
+
+# ============================================================================
+# OBSERVABILITY: Metrics, Traces, Logs
+# ============================================================================
+
+observability:
+  metrics:
+    prometheus_metrics:
+      - name: "http_requests_total"
+        type: "Counter"
+        labels: ["url", "method", "status_code", "tool_id"]
+        description: "Total HTTP requests sent"
+
+      - name: "http_request_duration_ms"
+        type: "Histogram"
+        labels: ["url", "method", "status_code", "tool_id"]
+        buckets: [0.5, 1, 2, 5, 10, 20, 50, 100]
+        description: "HTTP request latency (full round-trip)"
+
+      - name: "http_connection_pool_size"
+        type: "Gauge"
+        labels: ["url"]
+        description: "Active connections in pool per host"
+
+      - name: "http_connection_reuse_ratio"
+        type: "Gauge"
+        labels: ["url"]
+        description: "Ratio of reused vs new connections (0-1)"
+
+      - name: "http_errors_total"
+        type: "Counter"
+        labels: ["url", "error_type", "tool_id"]
+        values: ["connection_refused", "timeout", "tls_error", "malformed_json"]
+        description: "HTTP-level errors"
+
+      - name: "http_status_codes_total"
+        type: "Counter"
+        labels: ["url", "status_code"]
+        description: "HTTP response status codes (2xx, 4xx, 5xx)"
+
+      - name: "http_response_size_bytes"
+        type: "Histogram"
+        labels: ["url", "method"]
+        buckets: [100, 500, 1000, 5000, 10000, 50000]
+        description: "HTTP response body size (bytes)"
+
+  tracing:
+    traces_captured:
+      - span_name: "http_transport_request"
+        attributes:
+          - url: "string (e.g., 'https://api.example.com/rpc')"
+          - method: "string (always 'POST')"
+          - request_id: "integer"
+          - request_size_bytes: "integer"
+          - response_size_bytes: "integer"
+          - http_status_code: "integer"
+          - duration_ms: "float"
+        events:
+          - "request_start"
+          - "connection_acquired"
+          - "request_sent"
+          - "response_headers_received"
+          - "response_body_received"
+          - "response_parsed"
+
+      - span_name: "http_transport_error"
+        attributes:
+          - url: "string"
+          - error_type: "string"
+          - error_message: "string"
+          - duration_ms: "float"
+        events:
+          - "error_detected"
+          - "connection_closed"
+
+  logging:
+    log_events:
+      - event: "http_request_sent"
+        level: "DEBUG"
+        context: {url, method, request_id, request_size, trace_id}
+
+      - event: "http_response_received"
+        level: "DEBUG"
+        context: {url, status_code, response_size, duration_ms, trace_id}
+
+      - event: "http_error"
+        level: "WARNING"
+        context: {url, error_type, error_message, trace_id}
+
+      - event: "http_timeout"
+        level: "WARNING"
+        context: {url, method, timeout_ms, trace_id}
+
+      - event: "http_malformed_response"
+        level: "ERROR"
+        context: {url, response_sample_100b, error_message, trace_id}
+
+      - event: "http_connection_error"
+        level: "ERROR"
+        context: {url, error_type, error_message, trace_id}
+
+# ============================================================================
+# INTEGRATION: HTTP + Container Sandbox (Cloud-Native)
+# ============================================================================
+
+cloud_native_integration:
+  overview: |
+    HTTP transport typically used with Container sandbox for cloud
+    deployments (Lambda, Cloud Functions, Kubernetes).
+
+    Pattern: MCP+HTTP+Container
+    - Client: K1 ToolExecutionSelector in Container
+    - Server: Tool deployed as Lambda/Function/Pod
+    - Transport: HTTP POST to server endpoint
+
+  aws_lambda_example:
+    deployment:
+      - Tool deployed as AWS Lambda function
+      - API Gateway endpoint: https://api.example.com/tools/weather
+      - K1 calls: POST /tools/weather with JSON-RPC request
+
+    configuration: |
+      tool_registry.yml:
+      - tool_id: weather_lambda
+        protocol: MCP
+        sandbox: CONTAINER
+        mcp_config:
+          transport: HTTP
+          url: https://api.example.com/tools/weather
+          timeout_seconds: 5
+        container_config:
+          registry: aws_lambda
+          region: us-west-2
+          function_arn: arn:aws:lambda:us-west-2:xxx:function:weather-tool
+
+    benefits:
+      - Serverless (pay per invocation)
+      - Auto-scaling (Lambda handles load)
+      - Low operational overhead (AWS manages infrastructure)
+      - Works with K1 selection logic (fallback to other sandboxes if needed)
+
+  kubernetes_example:
+    deployment:
+      - Tool deployed as Kubernetes Service
+      - Service URL: http://weather-tool.default.svc.cluster.local:8080
+      - K1 calls: POST /rpc with JSON-RPC request
+
+    configuration: |
+      tool_registry.yml:
+      - tool_id: weather_k8s
+        protocol: MCP
+        sandbox: CONTAINER
+        mcp_config:
+          transport: HTTP
+          url: http://weather-tool.default.svc.cluster.local:8080
+          timeout_seconds: 5
+        container_config:
+          registry: kubernetes
+          namespace: default
+          service: weather-tool
+
+# ============================================================================
+# DEPLOYMENT & CONFIGURATION
+# ============================================================================
+
+configuration:
+  yaml_section: "k1/config/tools/mcp_transports.yml"
+  config_example: |
+    mcp_http_transport:
+      enabled: true
+      connection_pool:
+        max_connections_per_host: 4
+        keepalive_timeout_seconds: 30
+        max_requests_per_connection: 100
+      timeouts:
+        request_timeout_seconds: 3
+        connect_timeout_seconds: 5
+        dns_timeout_seconds: 2
+      ssl:
+        verify_certificate: true  # Must for production
+        ca_cert_path: "/etc/ssl/certs/ca-certificates.crt"
+        min_tls_version: "1.2"
+      compression:
+        enabled: false  # Not needed for small JSON
+        algorithms: ["gzip", "deflate"]
+      observability:
+        metrics_enabled: true
+        tracing_enabled: true
+        logging_level: "INFO"
+
+  environment_setup: |
+    # Set before K1 startup
+    K1_HTTP_TRANSPORT_VERIFY_SSL=true
+    K1_HTTP_TRANSPORT_TIMEOUT_SECONDS=3
+    K1_HTTP_TRANSPORT_POOL_SIZE=4
+    K1_HTTP_TRANSPORT_LOG_LEVEL=INFO
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: HTTP transport MUST use POST method for JSON-RPC requests
+    ENFORCEMENT: Enforce in HTTP client implementation
+    RATIONALE: JSON-RPC standard (requests must be POST)
+
+  rule_2: |
+    RULE: All HTTP requests MUST include Content-Type: application/json
+    ENFORCEMENT: Check headers before sending
+    RATIONALE: Server must know how to parse request body
+
+  rule_3: |
+    RULE: All responses MUST be validated as JSON-RPC (check for id matching)
+    ENFORCEMENT: Validate schema before processing
+    RATIONALE: Ensure response corresponds to request
+
+  rule_4: |
+    RULE: HTTP 200 responses MUST check body for JSON-RPC error field
+    ENFORCEMENT: Parse response and check for error key
+    RATIONALE: JSON-RPC errors return 200 HTTP status (not 4xx/5xx)
+
+  rule_5: |
+    RULE: HTTPS (TLS encryption) MUST be used in production
+    ENFORCEMENT: Reject HTTP URLs (except localhost)
+    RATIONALE: Protect credentials and tool outputs from eavesdropping
+
+  rule_6: |
+    RULE: Connection pool MUST close idle connections after 30 seconds
+    ENFORCEMENT: Track connection access time, close on timeout
+    RATIONALE: Prevent resource leaks (file descriptors, memory)
+
+# ============================================================================
+# COMPARISON: HTTP vs Stdio Transport
+# ============================================================================
+
+comparison:
+  http_vs_stdio:
+    http_transport:
+      latency: "< 10ms (localhost), < 50ms (remote)"
+      throughput: "> 500 req/sec"
+      startup: "< 500ms (server startup time)"
+      adoption: "10% of MCP tools"
+      use_case: "Remote services, cloud functions, load-balanced pools"
+      complexity: "Low (standard HTTP client, stateless)"
+      security: "Medium (network exposure, but can use TLS+auth)"
+      connection_pooling: "Built-in (HTTP/1.1 keep-alive)"
+      async_model: "Fully async (asyncio + aiohttp)"
+
+    stdio_transport:
+      latency: "< 5ms (IPC)"
+      throughput: "> 1000 req/sec"
+      startup: "< 100ms (process spawn)"
+      adoption: "70% of MCP tools"
+      use_case: "Native processes, same-host tools"
+      complexity: "Medium (process management, signals)"
+      security: "High (no network exposure)"
+      connection_pooling: "Not applicable (one process)"
+      async_model: "Fully async (asyncio + StreamReader)"
+
+# ============================================================================
+# EXAMPLES: HTTP Transport in Action
+# ============================================================================
+
+examples:
+  example_1_successful_lambda_call:
+    title: "Successful MCP call to AWS Lambda"
+    flow: |
+      1. K1 ToolExecutionSelector chooses MCP+HTTP+Container
+      2. Calls MCPClient.call_tool(tool_id="weather_lambda", ...)
+      3. Transport serializes JSON-RPC request to JSON
+      4. Transport creates HTTP POST request to Lambda endpoint
+      5. Connection pool acquires or creates connection to host
+      6. HTTP request sent over TLS to API Gateway
+      7. API Gateway routes to Lambda function
+      8. Lambda processes request (MCP server)
+      9. Lambda returns JSON-RPC response
+      10. Transport receives HTTP response (200 OK)
+      11. Transport parses JSON response body
+      12. Validates JSON-RPC schema (checks id, jsonrpc, result/error)
+      13. Resolves future with result
+      14. K1 receives tool output
+
+    code_pseudocode: |
+      # K1 tool execution
+      client = MCPClient(transport=HttpTransport(
+          url="https://api.example.com/tools/weather",
+          timeout_seconds=5
+      ))
+
+      result = await client.call_tool(
+          tool_id="weather_lambda",
+          arguments={"city": "SF"}
+      )
+      # Returns: {"temperature": 72, "condition": "sunny"}
+
+  example_2_connection_pooling:
+    title: "Connection reuse over multiple requests"
+    flow: |
+      1. First request: Create TCP connection, TLS handshake, send request
+      2. Response received, but connection stays open (keep-alive)
+      3. Second request: Reuse same connection, send request immediately
+      4. No TCP handshake, no TLS handshake (save 50-100ms)
+      5. Response received
+      6. Connection still open (keep-alive)
+      7. After 30s idle: Connection closed
+      8. Next request creates new connection
+
+    code_pseudocode: |
+      # Connection pooling is transparent
+      for i in range(10):
+          result = await client.call_tool(...)  # Reuses connection
+          # Request 1: 50ms (handshake + request)
+          # Requests 2-10: 10ms each (reused connection)
+          # Total: 50 + 90 = 140ms (vs 500ms if new connection each time)
+
+  example_3_timeout_and_retry:
+    title: "Request timeout, orchestrator retries with fallback"
+    flow: |
+      1. K1 sends HTTP request to Lambda
+      2. Network latency + Lambda cold start > 3s timeout
+      3. Transport cancels request, closes connection
+      4. Transport returns TimeoutError to caller
+      5. ToolExecutionSelector catches TimeoutError
+      6. Fallback Stage 2: Try different sandbox (e.g., Process+Stdio)
+      7. Eventually succeeds or reports final error
+
+    code_pseudocode: |
+      try:
+          result = await asyncio.wait_for(
+              client.call_tool(...),
+              timeout=3.0
+          )
+      except asyncio.TimeoutError:
+          # Timeout! ToolExecutionSelector triggers fallback
+          # Retry with different combination (e.g., Stdio transport)

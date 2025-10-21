@@ -1,0 +1,177 @@
+# MCP Circuit Breaker Configuration (Optional)
+# Purpose: Tool-specific circuit breaker threshold configuration
+# Source ADR: 0034d-mcp-error-handling.md (circuit breaker integration)
+# Version: 1.0
+# Status: OPTIONAL (reference error_recovery/circuit_breaker for base implementation)
+
+component_name: "MCPCircuitBreakerConfig"
+version: "1.0"
+description: "Tool-specific circuit breaker configuration overrides for MCP error handling"
+
+references:
+  adr: ["0034d"]
+  base_implementation: "contracts/error_recovery/circuit_breaker/"
+  contracts: ["circuit_breaker_integration"]
+
+overview:
+  purpose: "Define per-tool circuit breaker thresholds"
+  extends: "Base circuit breaker from error_recovery/"
+  optional: true
+  note: "This file is optional. If not provided, base circuit breaker defaults are used."
+
+circuit_breaker_state_machine:
+  states: ["CLOSED", "OPEN", "HALF_OPEN"]
+  transitions: "See circuit_breaker_integration.yml"
+
+default_thresholds:
+  failure_threshold: 5
+  rolling_window_seconds: 60
+  cooldown_seconds: 60
+  success_threshold_half_open: 1
+
+tool_specific_configuration:
+  weather_api:
+    failure_threshold: 5
+    rolling_window_seconds: 60
+    cooldown_seconds: 60
+    rationale: "Weather service is stable, standard thresholds"
+
+  weather_backup:
+    failure_threshold: 5
+    rolling_window_seconds: 60
+    cooldown_seconds: 60
+    rationale: "Backup service, same reliability expectations"
+
+  calendar_api:
+    failure_threshold: 3
+    rolling_window_seconds: 60
+    cooldown_seconds: 120
+    rationale: "Calendar service is more critical, faster detection (3 vs 5 failures)"
+
+  calendar_backup:
+    failure_threshold: 4
+    rolling_window_seconds: 60
+    cooldown_seconds: 120
+    rationale: "Backup service, slightly higher threshold than primary"
+
+  video_transcoder:
+    failure_threshold: 1
+    rolling_window_seconds: 60
+    cooldown_seconds: 300
+    rationale: "Transcoding is resource-intensive, fail fast (1 failure) and long cooldown"
+
+  email_smtp:
+    failure_threshold: 5
+    rolling_window_seconds: 60
+    cooldown_seconds: 180
+    rationale: "Email is important, moderate cooldown"
+
+  database_query:
+    failure_threshold: 10
+    rolling_window_seconds: 60
+    cooldown_seconds: 30
+    rationale: "Database is reliable, high threshold, short cooldown"
+
+  external_api_generic:
+    failure_threshold: 5
+    rolling_window_seconds: 60
+    cooldown_seconds: 60
+    rationale: "Generic external API, standard thresholds"
+
+threshold_selection_rationale:
+  critical_services:
+    comment: "Fast-fail for critical services (calendar, email)"
+    failure_threshold: 3
+
+  standard_services:
+    comment: "Standard thresholds (weather, generic APIs)"
+    failure_threshold: 5
+
+  resource_intensive:
+    comment: "Very fast-fail for heavy services (video, transcoding)"
+    failure_threshold: 1
+
+  reliable_services:
+    comment: "High threshold for reliable services (database)"
+    failure_threshold: 10
+
+cooldown_rationale:
+  short_cooldown:
+    duration_seconds: 30
+    use_case: "Reliable services (database)"
+    recovery_fast: true
+
+  standard_cooldown:
+    duration_seconds: 60
+    use_case: "Standard services (weather, generic)"
+    recovery_normal: true
+
+  long_cooldown:
+    duration_seconds: 180
+    use_case: "Important services (email)"
+    recovery_slow: true
+
+  very_long_cooldown:
+    duration_seconds: 300
+    use_case: "Resource-intensive services (video)"
+    recovery_very_slow: true
+
+configuration_schema:
+  type: "YAML"
+  structure: |
+    tools:
+      <tool_id>:
+        failure_threshold: int
+        rolling_window_seconds: int
+        cooldown_seconds: int
+        rationale: string (optional)
+
+override_rules:
+  rule1: "Tool-specific config overrides defaults"
+  rule2: "If tool not listed, use default thresholds"
+  rule3: "All thresholds must be positive integers"
+  rule4: "cooldown_seconds >= rolling_window_seconds is recommended"
+
+rollback_procedure:
+  if_config_invalid: "Use default thresholds"
+  if_config_missing: "Use default thresholds"
+  graceful_degradation: true
+
+monitoring:
+  track_per_tool:
+    - circuit_breaker_state
+    - state_transitions
+    - failures_in_rolling_window
+    - cooldown_remaining_seconds
+
+prometheus_metrics:
+  - name: "circuit_breaker_configuration"
+    type: "Gauge"
+    labels: ["tool_id", "parameter"] # parameter = failure_threshold|cooldown
+    value: "Configuration value"
+
+hot_reload:
+  supported: true
+  method: "Configuration manager hot-reload"
+  timing: "Changes applied within 1 second"
+  validation: "Validate before applying"
+
+implementation_notes:
+  - "This is optional configuration"
+  - "Base circuit breaker implementation is in error_recovery/"
+  - "Override only if default thresholds don't match tool characteristics"
+  - "All values must be validated (positive integers)"
+  - "Changes are hot-reloadable (no restart needed)"
+
+testing_requirements:
+  - test_config_load: "Configuration loaded correctly"
+  - test_override_applied: "Override values used for tool"
+  - test_default_fallback: "Default thresholds used if override missing"
+  - test_config_validation: "Invalid config rejected"
+  - test_hot_reload: "Changes applied without restart"
+
+compliance:
+  adr_0034d_sections: ["Circuit breaker integration", "Tool-specific configuration"]
+
+changelog:
+  "1.0": "Initial contract - MCP circuit breaker configuration (optional)"

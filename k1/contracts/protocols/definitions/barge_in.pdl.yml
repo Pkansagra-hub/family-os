@@ -1,0 +1,502 @@
+# Barge-In Protocol Contract
+# Epic 1.3 - Issue 1.3.2 - Protocol Definition 4 of 6
+# Version: 1.0.0
+# Status: DRAFT
+# Owner: Protocol Team
+# ADR References: ADR-0003b (Six Core Protocols), ADR-0011 (Voice Pipeline)
+
+metadata:
+  protocol_id: "barge_in"
+  protocol_name: "Barge-In Protocol"
+  version: "1.0.0"
+  description: |
+    User interruption protocol for voice interactions.
+    Handles user barge-in during agent responses, graceful cancellation, and state recovery.
+    Implements contract from ADR-0003b Section 2.4 (Barge-In).
+  research_foundation:
+    - "Actor Model (Hewitt 1973) - Asynchronous message handling"
+    - "MPST (Honda et al. 2008) - Protocol interruption patterns"
+    - "Voice UI Design (Nielsen 2001) - User interruption handling"
+  complexity: "LOW"
+  ai_involvement: "MINIMAL"
+  created_date: "2025-01-13"
+  last_modified: "2025-01-13"
+
+protocol_specification:
+  overview: |
+    Barge-In Protocol handles user interruptions during agent speech generation or playback.
+    It immediately stops ongoing operations, cleans up resources, and returns control to the user.
+    Critical for natural voice interactions with low latency (<120ms).
+
+  protocol_type: "core"
+  state_count: 3
+  transition_count: 5
+  max_duration_ms: 200
+  timeout_count: 1
+  message_count: 3
+  role_count: 3
+
+  coordination_pattern: "interrupt_and_cleanup"
+  ai_agent_roles: []
+  pure_agent_roles:
+    - "voice_pipeline"
+    - "streaming_engine"
+    - "orchestrator"
+
+  latency_critical: true
+  latency_budget_ms: 120
+
+fsm_states:
+  idle:
+    state_id: "idle"
+    state_type: "initial"
+    description: "No active barge-in, normal operation"
+    valid_roles: ["voice_pipeline"]
+    entry_actions: []
+    exit_conditions:
+      - "barge_in_detected"
+    timeout_policy: "none"
+    observability:
+      metrics:
+        - "barge_in_idle_state_duration_ms"
+    estimated_duration_ms: 0
+
+  interrupting:
+    state_id: "interrupting"
+    state_type: "intermediate"
+    description: "Barge-in triggered, stopping all outputs"
+    valid_roles: ["voice_pipeline", "streaming_engine"]
+    entry_actions:
+      - "stop_tts_generation"
+      - "stop_audio_playback"
+      - "flush_output_buffers"
+      - "cancel_pending_chunks"
+    exit_conditions:
+      - "all_outputs_stopped"
+      - "cleanup_timeout"
+    timeout_policy: "cleanup_timeout"
+    latency_critical: true
+    observability:
+      metrics:
+        - "barge_in_interrupt_latency_ms"
+        - "buffers_flushed_total"
+      logs:
+        - level: "INFO"
+          message: "Barge-in triggered, stopping outputs"
+          fields: ["session_id", "trace_id", "active_outputs"]
+    estimated_duration_ms: 80
+
+  completed:
+    state_id: "completed"
+    state_type: "final"
+    description: "Barge-in completed, ready for new user input"
+    valid_roles: ["orchestrator"]
+    entry_actions:
+      - "notify_orchestrator"
+      - "reset_turn_state"
+      - "enable_user_input"
+    exit_conditions: []
+    timeout_policy: "none"
+    observability:
+      metrics:
+        - "barge_in_completed_total"
+        - "barge_in_end_to_end_latency_ms"
+      logs:
+        - level: "INFO"
+          message: "Barge-in completed, ready for input"
+          fields: ["session_id", "trace_id", "total_duration_ms"]
+    estimated_duration_ms: 20
+
+fsm_transitions:
+  idle_to_interrupting:
+    transition_id: "idle_to_interrupting"
+    from_state: "idle"
+    to_state: "interrupting"
+    trigger: "barge_in_detected"
+    guard_conditions:
+      - "output_is_active"
+      - "user_input_detected"
+    message_exchange:
+      message_type: "BargeInSignal"
+      sender_role: "voice_pipeline"
+      receiver_role: "streaming_engine"
+      delivery_guarantee: "best_effort"
+    actions:
+      - "set_barge_in_flag"
+      - "start_latency_timer"
+    max_duration_ms: 10
+    latency_critical: true
+    observability:
+      metrics:
+        - "transition_idle_to_interrupting_total"
+        - "barge_in_detection_latency_ms"
+      logs:
+        - level: "INFO"
+          message: "Barge-in detected"
+
+  interrupting_to_completed:
+    transition_id: "interrupting_to_completed"
+    from_state: "interrupting"
+    to_state: "completed"
+    trigger: "all_outputs_stopped"
+    guard_conditions:
+      - "tts_stopped"
+      - "audio_stopped"
+      - "buffers_flushed"
+    message_exchange:
+      message_type: "BargeInComplete"
+      sender_role: "streaming_engine"
+      receiver_role: "orchestrator"
+      delivery_guarantee: "at_least_once"
+    actions:
+      - "stop_latency_timer"
+      - "emit_latency_metrics"
+    max_duration_ms: 20
+    observability:
+      metrics:
+        - "transition_interrupting_to_completed_total"
+
+  interrupting_to_completed_timeout:
+    transition_id: "interrupting_to_completed_timeout"
+    from_state: "interrupting"
+    to_state: "completed"
+    trigger: "cleanup_timeout"
+    guard_conditions:
+      - "timeout_exceeded"
+    message_exchange:
+      message_type: "BargeInTimeout"
+      sender_role: "system"
+      receiver_role: "orchestrator"
+      delivery_guarantee: "best_effort"
+    actions:
+      - "force_cleanup"
+      - "log_timeout_warning"
+    max_duration_ms: 20
+    observability:
+      metrics:
+        - "transition_interrupting_to_completed_timeout_total"
+      logs:
+        - level: "WARN"
+          message: "Barge-in cleanup timeout, forcing completion"
+
+  idle_to_completed:
+    transition_id: "idle_to_completed"
+    from_state: "idle"
+    to_state: "completed"
+    trigger: "barge_in_no_output"
+    guard_conditions:
+      - "no_active_outputs"
+    message_exchange:
+      message_type: "BargeInSkipped"
+      sender_role: "voice_pipeline"
+      receiver_role: "orchestrator"
+      delivery_guarantee: "best_effort"
+    actions:
+      - "log_no_op"
+    max_duration_ms: 10
+    observability:
+      metrics:
+        - "transition_idle_to_completed_noop_total"
+
+  completed_to_idle:
+    transition_id: "completed_to_idle"
+    from_state: "completed"
+    to_state: "idle"
+    trigger: "new_turn_started"
+    guard_conditions:
+      - "orchestrator_ready"
+    message_exchange:
+      message_type: "TurnStart"
+      sender_role: "orchestrator"
+      receiver_role: "voice_pipeline"
+      delivery_guarantee: "at_least_once"
+    actions:
+      - "reset_barge_in_state"
+    max_duration_ms: 10
+    observability:
+      metrics:
+        - "transition_completed_to_idle_total"
+
+timeout_policies:
+  cleanup_timeout:
+    timeout_id: "cleanup_timeout"
+    duration_ms: 100
+    scope: "state"
+    target_state: "interrupting"
+    action_on_timeout: "force_cleanup"
+    fallback_transition: "interrupting_to_completed_timeout"
+    retry_allowed: false
+    observability:
+      metrics:
+        - "barge_in_cleanup_timeout_total"
+      logs:
+        - level: "WARN"
+          message: "Barge-in cleanup timeout"
+
+violation_handlers:
+  out_of_order_message:
+    violation_type: "out_of_order_message"
+    action: "warn"
+    severity: "LOW"
+    recovery_strategy: "continue"
+
+  timeout_exceeded:
+    violation_type: "timeout_exceeded"
+    action: "fallback"
+    severity: "MEDIUM"
+    recovery_strategy: "force_cleanup"
+
+message_schemas:
+  BargeInSignal:
+    message_type: "BargeInSignal"
+    sender_role: "voice_pipeline"
+    receiver_role: "streaming_engine"
+    delivery_guarantee: "best_effort"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer4_ingress/voice.fbs::BargeInSignal"
+    fields:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      timestamp_ms:
+        type: "integer"
+        required: true
+        description: "Unix timestamp of barge-in detection"
+      audio_level_db:
+        type: "float"
+        required: true
+        description: "User audio level that triggered barge-in"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "audio_level_db must be > -60dB threshold"
+    performance:
+      max_serialization_time_ms: 1
+      max_size_bytes: 256
+
+  BargeInComplete:
+    message_type: "BargeInComplete"
+    sender_role: "streaming_engine"
+    receiver_role: "orchestrator"
+    delivery_guarantee: "at_least_once"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer3_execution/streaming.fbs::BargeInComplete"
+    fields:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      latency_ms:
+        type: "integer"
+        required: true
+        description: "Barge-in latency from detection to completion"
+      chunks_cancelled:
+        type: "integer"
+        required: true
+        description: "Number of output chunks cancelled"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "latency_ms must be <= 120ms target"
+    performance:
+      max_serialization_time_ms: 1
+      max_size_bytes: 256
+
+  BargeInTimeout:
+    message_type: "BargeInTimeout"
+    sender_role: "system"
+    receiver_role: "orchestrator"
+    delivery_guarantee: "best_effort"
+    schema_version: "1.0.0"
+    flatbuffers_schema: "layer5_infrastructure/system.fbs::BargeInTimeout"
+    fields:
+      session_id:
+        type: "string"
+        required: true
+        format: "uuid"
+      timeout_ms:
+        type: "integer"
+        required: true
+        description: "Cleanup timeout duration"
+      trace_id:
+        type: "string"
+        required: true
+        format: "uuid"
+    validation:
+      - "timeout_ms must be 100ms"
+    performance:
+      max_serialization_time_ms: 1
+      max_size_bytes: 256
+
+role_definitions:
+  voice_pipeline:
+    role_id: "voice_pipeline"
+    role_type: "pure_agent"
+    description: "Voice pipeline that detects barge-in from user audio"
+    capabilities:
+      - "barge_in_detection"
+      - "audio_level_monitoring"
+    allowed_states:
+      - "idle"
+      - "interrupting"
+    allowed_transitions:
+      - "idle_to_interrupting"
+      - "idle_to_completed"
+      - "completed_to_idle"
+    message_permissions:
+      can_send:
+        - "BargeInSignal"
+        - "BargeInSkipped"
+      can_receive:
+        - "TurnStart"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+
+  streaming_engine:
+    role_id: "streaming_engine"
+    role_type: "pure_agent"
+    description: "Streaming engine that stops TTS and audio playback"
+    capabilities:
+      - "tts_control"
+      - "audio_control"
+      - "buffer_management"
+    allowed_states:
+      - "interrupting"
+    allowed_transitions:
+      - "interrupting_to_completed"
+    message_permissions:
+      can_send:
+        - "BargeInComplete"
+      can_receive:
+        - "BargeInSignal"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+
+  orchestrator:
+    role_id: "orchestrator"
+    role_type: "pure_agent"
+    description: "Orchestrator that coordinates turn state after barge-in"
+    capabilities:
+      - "turn_management"
+      - "state_recovery"
+    allowed_states:
+      - "completed"
+    allowed_transitions:
+      - "completed_to_idle"
+    message_permissions:
+      can_send:
+        - "TurnStart"
+      can_receive:
+        - "BargeInComplete"
+        - "BargeInTimeout"
+    attestation_required: true
+    attestation_method: "hmac_sha256"
+
+performance_requirements:
+  latency_targets:
+    p50_ms: 80
+    p95_ms: 115
+    p99_ms: 120
+    description: "Barge-in latency from detection to output stop (CRITICAL)"
+
+  detection_latency:
+    p95_ms: 30
+    description: "Audio processing latency for barge-in detection"
+
+  cleanup_latency:
+    p95_ms: 80
+    description: "Output cleanup latency (TTS + audio stop)"
+
+  resource_limits:
+    memory_per_barge_in_mb: 1
+    description: "Minimal memory footprint"
+
+observability:
+  metrics:
+    counters:
+      - name: "barge_in_triggered_total"
+        description: "Total barge-ins triggered"
+        labels: ["session_type"]
+      - name: "barge_in_completed_total"
+        description: "Total barge-ins completed"
+        labels: ["status"]
+      - name: "barge_in_cleanup_timeout_total"
+        description: "Total cleanup timeouts"
+
+    histograms:
+      - name: "barge_in_end_to_end_latency_ms"
+        description: "End-to-end barge-in latency"
+        buckets: [20, 50, 80, 100, 120, 150]
+      - name: "barge_in_detection_latency_ms"
+        description: "Audio detection latency"
+        buckets: [5, 10, 20, 30, 50]
+      - name: "barge_in_interrupt_latency_ms"
+        description: "Output interrupt latency"
+        buckets: [20, 40, 60, 80, 100]
+
+    gauges:
+      - name: "active_barge_ins"
+        description: "Number of active barge-in operations"
+
+  logging:
+    structured: true
+    format: "json"
+    required_fields:
+      - "session_id"
+      - "trace_id"
+      - "latency_ms"
+
+  tracing:
+    enabled: true
+    provider: "opentelemetry"
+    sampling_rate: 1.0
+    spans:
+      - name: "barge_in_protocol"
+        attributes: ["session_id", "audio_level_db", "chunks_cancelled"]
+
+testing_requirements:
+  unit_tests:
+    - test_fsm_state_transitions
+    - test_timeout_enforcement
+    - test_buffer_cleanup
+
+  integration_tests:
+    - test_barge_in_during_tts
+    - test_barge_in_during_audio_playback
+    - test_latency_under_120ms
+    - test_cleanup_timeout_recovery
+
+  performance_tests:
+    - test_p95_latency_115ms
+    - test_detection_latency_30ms
+    - test_concurrent_barge_ins
+
+compliance:
+  adr_references:
+    - "ADR-0003b: Six Core Protocol Implementations (Section 2.4)"
+    - "ADR-0011: Voice Pipeline with VAD and Barge-In"
+
+  security_requirements:
+    - "All roles must be attested with HMAC-SHA256"
+
+  latency_requirements:
+    - "P95 barge-in latency must be <= 115ms"
+    - "P99 barge-in latency must be <= 120ms"
+    - "Detection latency must be <= 30ms"
+
+cross_references:
+  related_protocols:
+    - protocol: "task_execution"
+      relationship: "can_interrupt"
+      description: "Barge-in can interrupt task execution output"
+
+notes:
+  - "Barge-in is latency-critical with P95 target of 115ms"
+  - "Cleanup timeout is 100ms to prevent hanging"
+  - "Uses best-effort delivery for low latency"
+  - "Audio level threshold is -60dB for detection"

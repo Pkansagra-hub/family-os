@@ -1,0 +1,488 @@
+# Agent Hire Protocol Definition Contract
+# Source: ADR-0003b (6 Core Protocol Implementations)
+# Purpose: Complete specification for Agent Hire Protocol (Contract Net Protocol)
+# Version: 1.0
+# Date: 2025-10-14
+
+contract:
+  name: "Agent Hire Protocol"
+  version: "1.0"
+  type: "protocol_definition"
+  source_adr: "docs/architecture/decisions/0003b-6-core-protocol-implementations.md"
+  compliance_level: "MANDATORY"
+  research_foundation: "Contract Net Protocol (Smith 1980), MPST (Honda 2008)"
+
+protocol_specification:
+  metadata:
+    protocol_name: "agent_hire"
+    protocol_version: "1.0"
+    description: "Hire agent using Contract Net Protocol with negotiation, scoring, and selection"
+    purpose: "Coordinate agent hiring through broadcast negotiation and deterministic selection"
+    states_count: 6
+    transitions_count: 8
+    typical_duration: "< 600ms P95"
+
+  research_context:
+    contract_net_protocol:
+      source: "Smith, R. G. (1980) - The Contract Net Protocol"
+      application: "Orchestrator broadcasts task, agents bid, orchestrator selects best agent"
+      phases:
+        - "Announcement: HireRequest broadcast to all agents"
+        - "Bidding: Agents submit Proposal messages"
+        - "Award: Orchestrator scores proposals, selects winner"
+
+    agent_types:
+      ai_agents:
+        count: 4
+        names: ["Concierge", "Planner", "Researcher", "Safety Watch"]
+        behavior: "Call Model Hub (LLM) to assess task fit, generate proposal with confidence score"
+        llm_timeout: "5000ms internal (separate from protocol timeout)"
+
+      pure_agents:
+        count: 54
+        behavior: "Deterministic logic to assess task fit (no LLM)"
+        response_time: "< 50ms typical"
+
+  fsm_states:
+    start:
+      type: "entry"
+      description: "Protocol entry point"
+      timeout_ms: null
+      llm_aware: false
+      expected_duration: "< 1ms"
+      next_states: ["negotiation"]
+
+    negotiation:
+      type: "interaction"
+      description: "Collect proposals from agents (broadcast HireRequest)"
+      timeout_ms: 500
+      llm_aware: true
+      rationale: |
+        AI agents may call Model Hub (LLM) to generate proposals.
+        Timeout allows LLM inference (100-200ms typical) + network overhead.
+      expected_duration: "500ms max (timeout)"
+      entry_conditions: "HireRequest broadcast received by all agents"
+      exit_conditions: "500ms timeout OR all agents responded"
+      next_states: ["selection", "timeout"]
+
+    selection:
+      type: "decision"
+      description: "Score proposals, select winner (deterministic)"
+      timeout_ms: 100
+      llm_aware: false
+      rationale: "Pure actor logic (no LLM), deterministic scoring algorithm"
+      expected_duration: "< 5ms typical"
+      entry_conditions: "ProposalsClosed received (timeout or manual)"
+      exit_conditions: "Winner selected OR no valid proposals"
+      next_states: ["hired", "rejected", "timeout"]
+
+    hired:
+      type: "exit"
+      description: "Agent successfully hired"
+      timeout_ms: null
+      entry_conditions: "HireApproval sent to winning agent"
+      cleanup_actions: ["Update SessionState", "Log agent lease", "Emit metrics"]
+
+    rejected:
+      type: "exit"
+      description: "No suitable agent found"
+      timeout_ms: null
+      entry_conditions: "All proposals scored below threshold"
+      cleanup_actions: ["Log rejection reason", "Emit metrics"]
+
+    timeout:
+      type: "exit"
+      description: "Negotiation timed out (no proposals received)"
+      timeout_ms: null
+      entry_conditions: "Negotiation timeout expired with 0 proposals"
+      cleanup_actions: ["Log timeout", "Trigger fallback", "Emit metrics"]
+
+  fsm_transitions:
+    t1_start_to_negotiation:
+      from: "start"
+      to: "negotiation"
+      message: "HireRequest"
+      sender: "orchestrator"
+      receivers: ["*"]  # Broadcast to all 58 agents
+      cardinality: "1"
+      message_schema: "HireRequest.fbs"
+      expected_latency: "< 1ms (mailbox delivery)"
+      payload_example:
+        session_id: "session_123"
+        cognitive_trace_id: "trace_456"
+        task_description: "Plan vacation itinerary"
+        required_capabilities: ["TOOL_CALL", "MODEL_HUB_READ"]
+        constraints:
+          budget: "$0.10"
+          max_duration_ms: 15000
+        priority: 2
+
+    t2_negotiation_self_loop:
+      from: "negotiation"
+      to: "negotiation"
+      message: "Proposal"
+      sender: "agent"
+      receivers: ["orchestrator"]
+      cardinality: "0..*"  # Zero or more proposals
+      message_schema: "Proposal.fbs"
+      expected_latency: "50-200ms (AI agents with LLM), < 10ms (pure agents)"
+      payload_example:
+        agent_id: "agent_planner_01"
+        role: "agent"
+        score: 0.85
+        confidence: 0.92
+        rationale: "High expertise in travel planning, low current load"
+        estimated_duration_ms: 12000
+        estimated_cost: "$0.08"
+        capabilities: ["TOOL_CALL", "MODEL_HUB_READ"]
+
+    t3_negotiation_to_selection:
+      from: "negotiation"
+      to: "selection"
+      message: "ProposalsClosed"
+      sender: "system"
+      receivers: []  # Internal transition
+      cardinality: "1"
+      trigger: "timeout"
+      timeout_behavior: "Auto-triggered after 500ms"
+      rationale: "Progress guarantee: negotiation cannot wait indefinitely"
+
+    t4_selection_to_hired:
+      from: "selection"
+      to: "hired"
+      message: "HireApproval"
+      sender: "orchestrator"
+      receivers: ["agent"]  # Winning agent only
+      cardinality: "1"
+      condition: "score > threshold"
+      message_schema: "HireApproval.fbs"
+      expected_latency: "< 5ms"
+      payload_example:
+        agent_id: "agent_planner_01"
+        lease_id: "lease_abc123"
+        lease_duration_seconds: 3600
+        task_assignment: "Plan vacation itinerary"
+
+    t5_selection_to_rejected:
+      from: "selection"
+      to: "rejected"
+      message: "HireRejection"
+      sender: "orchestrator"
+      receivers: ["agent"]  # All rejected agents
+      cardinality: "1"
+      condition: "score <= threshold"
+      message_schema: "HireRejection.fbs"
+      payload_example:
+        agent_id: "agent_researcher_02"
+        reason: "Score below threshold (0.65 < 0.70)"
+        alternative: "Suggest alternative agent: agent_planner_01"
+
+    t6_negotiation_to_timeout:
+      from: "negotiation"
+      to: "timeout"
+      message: "Timeout"
+      sender: "system"
+      receivers: []
+      cardinality: "1"
+      condition: "proposal_count == 0"
+      trigger: "timeout"
+      rationale: "No proposals received within 500ms"
+
+    t7_selection_to_rejected_timeout:
+      from: "selection"
+      to: "rejected"
+      message: "SelectionTimeout"
+      sender: "system"
+      receivers: []
+      cardinality: "1"
+      trigger: "timeout"
+      timeout_behavior: "Auto-reject if selection exceeds 100ms"
+
+    t8_selection_to_timeout_no_valid:
+      from: "selection"
+      to: "timeout"
+      message: "NoValidProposals"
+      sender: "orchestrator"
+      receivers: []
+      cardinality: "1"
+      condition: "all_scores <= threshold"
+      rationale: "All proposals scored below acceptance threshold"
+
+  timeout_policies:
+    negotiation_timeout:
+      state: "negotiation"
+      timeout_ms: 500
+      action: "ProposalsClosed"
+      fallback_state: "selection"
+      log: true
+      rationale: "Progress guarantee: negotiation must complete within 500ms"
+      metrics: ["protocol_agent_hire_negotiation_timeout_total"]
+
+    selection_timeout:
+      state: "selection"
+      timeout_ms: 100
+      action: "SelectionTimeout"
+      fallback_state: "rejected"
+      log: true
+      rationale: "Deterministic scoring should complete quickly"
+      metrics: ["protocol_agent_hire_selection_timeout_total"]
+
+  violation_handlers:
+    unexpected_message:
+      type: "unexpected_message"
+      action: "block"
+      log: true
+      metrics: true
+      example: "Proposal sent before HireRequest"
+      recovery: "Drop message, log violation, continue protocol"
+
+    timeout_violation:
+      type: "timeout"
+      action: "fallback"
+      log: true
+      metrics: true
+      example: "No Proposal received within 500ms"
+      recovery: "Trigger ProposalsClosed, transition to selection"
+
+    deadlock:
+      type: "deadlock"
+      action: "abort"
+      log: true
+      metrics: true
+      example: "Circular wait (should not occur in this protocol)"
+      recovery: "Abort protocol, cleanup FSM, log error"
+
+    role_mismatch:
+      type: "role_mismatch"
+      action: "block"
+      log: true
+      metrics: true
+      example: "Agent sends HireApproval (only orchestrator allowed)"
+      recovery: "Drop message, log security violation"
+
+  message_schemas:
+    HireRequest:
+      flatbuffers_schema: "contracts/flatbuffers/layer1_kernel/HireRequest.fbs"
+      fields:
+        - name: "session_id"
+          type: "string"
+          required: true
+        - name: "cognitive_trace_id"
+          type: "string"
+          required: true
+        - name: "task_description"
+          type: "string"
+          required: true
+        - name: "required_capabilities"
+          type: "array[string]"
+          required: true
+        - name: "constraints"
+          type: "Constraints"
+          required: false
+        - name: "priority"
+          type: "uint8"
+          default: 2
+
+    Proposal:
+      flatbuffers_schema: "contracts/flatbuffers/layer1_kernel/Proposal.fbs"
+      fields:
+        - name: "agent_id"
+          type: "string"
+          required: true
+        - name: "role"
+          type: "string"
+          required: true
+        - name: "score"
+          type: "float"
+          required: true
+          range: [0.0, 1.0]
+        - name: "confidence"
+          type: "float"
+          required: true
+          range: [0.0, 1.0]
+        - name: "rationale"
+          type: "string"
+          required: false
+        - name: "estimated_duration_ms"
+          type: "uint32"
+          required: true
+        - name: "estimated_cost"
+          type: "string"
+          required: true
+
+    HireApproval:
+      flatbuffers_schema: "contracts/flatbuffers/layer1_kernel/HireApproval.fbs"
+      fields:
+        - name: "agent_id"
+          type: "string"
+          required: true
+        - name: "lease_id"
+          type: "string"
+          required: true
+        - name: "lease_duration_seconds"
+          type: "uint32"
+          required: true
+        - name: "task_assignment"
+          type: "string"
+          required: true
+
+    HireRejection:
+      flatbuffers_schema: "contracts/flatbuffers/layer1_kernel/HireRejection.fbs"
+      fields:
+        - name: "agent_id"
+          type: "string"
+          required: true
+        - name: "reason"
+          type: "string"
+          required: true
+        - name: "alternative"
+          type: "string"
+          required: false
+
+  role_definitions:
+    orchestrator:
+      capabilities: ["HIRE_REQUEST", "HIRE_APPROVAL", "HIRE_REJECTION", "PROPOSAL_SCORING"]
+      allowed_messages: ["HireRequest", "HireApproval", "HireRejection", "NoValidProposals"]
+      behavior: "Initiates hire, scores proposals, selects winner"
+      llm_usage: false
+
+    agent:
+      capabilities: ["PROPOSAL_SUBMIT"]
+      allowed_messages: ["Proposal"]
+      behavior: "Receives HireRequest, generates Proposal"
+      llm_usage: "true (for AI agents: Concierge, Planner, Researcher, Safety Watch)"
+
+    system:
+      capabilities: ["TIMEOUT_TRIGGER"]
+      allowed_messages: ["ProposalsClosed", "Timeout", "SelectionTimeout"]
+      behavior: "Triggers timeouts, enforces progress"
+      llm_usage: false
+
+performance_requirements:
+  total_protocol_duration:
+    budget: "< 600ms P95"
+    breakdown:
+      negotiation_phase: "500ms max"
+      selection_phase: "100ms max"
+    typical: "520-580ms (AI agents), 50-100ms (pure agents only)"
+
+  ai_agent_behavior:
+    llm_call_duration: "100-200ms typical (GPT-4, Claude)"
+    proposal_generation: "10-50ms (parsing, formatting)"
+    total_ai_agent_latency: "150-250ms per AI agent"
+
+  orchestrator_scoring:
+    algorithm: "Multi-criteria scoring (load, fit, performance, constraints)"
+    complexity: "O(n) where n = proposal_count"
+    budget: "< 5ms for up to 58 proposals"
+
+observability:
+  metrics:
+    - name: "protocol_agent_hire_duration_ms"
+      type: "histogram"
+      buckets: [100, 250, 500, 1000]
+      labels: ["session_id"]
+      description: "Total protocol duration"
+
+    - name: "protocol_agent_hire_proposals_count"
+      type: "histogram"
+      buckets: [0, 1, 2, 3, 5, 10]
+      labels: ["session_id"]
+      description: "Number of proposals received"
+
+    - name: "protocol_agent_hire_violations_total"
+      type: "counter"
+      labels: ["violation_type"]
+      description: "Protocol violations"
+
+    - name: "protocol_agent_hire_outcome"
+      type: "counter"
+      labels: ["outcome"]  # hired, rejected, timeout
+      description: "Protocol outcomes"
+
+  logs:
+    - event: "protocol_agent_hire_started"
+      level: "INFO"
+      fields: ["session_id", "trace_id", "task_description"]
+
+    - event: "protocol_agent_hire_proposal_received"
+      level: "DEBUG"
+      fields: ["session_id", "agent_id", "score", "confidence"]
+
+    - event: "protocol_agent_hire_completed"
+      level: "INFO"
+      fields: ["session_id", "outcome", "selected_agent_id", "duration_ms"]
+
+  traces:
+    - span: "agent_hire_protocol"
+      parent: "turn_execution"
+      attributes: ["session_id", "trace_id", "outcome", "duration_ms"]
+
+testing_requirements:
+  unit_tests:
+    - test: "Valid hire flow (HireRequest → Proposals → HireApproval)"
+      coverage: "Happy path"
+
+    - test: "Rejection flow (all proposals below threshold)"
+      coverage: "Edge case"
+
+    - test: "Timeout flow (no proposals received)"
+      coverage: "Timeout handling"
+
+    - test: "Violation handling (Proposal before HireRequest)"
+      coverage: "Security"
+
+  integration_tests:
+    - test: "End-to-end hire with 4 AI agents"
+      validation: "All agents respond, orchestrator selects winner"
+
+    - test: "Hire with mixed AI + pure agents"
+      validation: "Protocol completes, metrics correct"
+
+    - test: "Concurrent hire protocols (multiple sessions)"
+      validation: "No interference, isolated FSM state"
+
+  performance_tests:
+    - test: "Agent hire latency P95"
+      target: "< 600ms"
+      load: "100 concurrent hire protocols"
+
+    - test: "Proposal scoring latency"
+      target: "< 5ms for 58 proposals"
+
+compliance:
+  adr_requirements:
+    - adr: "ADR-0003"
+      requirement: "MPST protocol validation for all multi-agent communication"
+      status: "SATISFIED"
+
+    - adr: "ADR-0003b"
+      requirement: "Agent Hire Protocol (6 states, 8 transitions)"
+      status: "SATISFIED"
+
+    - adr: "ADR-0006"
+      requirement: "Contract Net Protocol for agent selection"
+      status: "SATISFIED"
+
+cross_references:
+  adrs:
+    - "ADR-0003: MPST Protocol Validation"
+    - "ADR-0003b: 6 Core Protocol Implementations"
+    - "ADR-0006: 3-Phase Orchestration & Contract Net Protocol"
+    - "ADR-0005: Agent Lifecycle FSM"
+
+  contracts:
+    - "contracts/protocols/pdl/pdl_specification.yml"
+    - "contracts/orchestration/README.md"
+    - "contracts/flatbuffers/layer1_kernel/HireRequest.fbs"
+
+  diagrams:
+    - "architecture_diagrams/k1_orchestrator_3phase.mmd"
+    - "architecture_diagrams/k1_agent_lifecycle_fsm.mmd"
+
+notes:
+  - "Agent Hire is the entry point for all multi-agent collaboration"
+  - "Protocol validates Actor messages only (NOT AI agent LLM calls)"
+  - "AI agents call Model Hub internally (5000ms timeout, separate from protocol)"
+  - "Orchestrator scoring is deterministic (no LLM), <5ms budget"
+  - "Progress guarantee: negotiation completes within 500ms (timeout)"

@@ -1,0 +1,470 @@
+# P16 FeatureFlags - Feature Management & A/B Testing Pipeline
+# Port: P16 (K1 → K0 feature flag queries)
+# Query semantics: Feature flag evaluation, A/B test variant assignment
+# Performance budget: 10ms P95, 50ms timeout
+
+version: "1.0"
+port_id: "P16"
+port_name: "FeatureFlags"
+direction: "K1_TO_K0"
+semantics: "query"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0130"  # Feature Flag Management
+  - "ADR-0131"  # A/B Testing Framework
+  - "ADR-0132"  # Gradual Rollout Strategy
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P16"
+      description: "Port identifier for feature flag queries"
+
+    command_type:
+      type: string
+      value: "feature_flag_query"
+      description: "Feature flag evaluation request"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    capability:
+      type: string
+      value: "QUERY_FEATURE_FLAGS"
+      required: true
+      description: "Required K0 capability for feature flag queries"
+
+  payload:
+    flag_keys:
+      type: array
+      items:
+        type: string
+      required: true
+      description: "Array of feature flag identifiers to evaluate"
+      example: ["enable_new_ui", "recommendation_algorithm", "voice_feedback_v2"]
+
+    context:
+      type: object
+      required: true
+      description: "Evaluation context for targeting rules"
+      properties:
+        user_attributes:
+          type: object
+          description: "User-specific attributes"
+          additionalProperties: true
+
+        device_type:
+          type: string
+          enum: ["mobile", "desktop", "tablet", "watch", "web"]
+
+        privacy_band:
+          type: string
+          enum: ["GREEN", "AMBER", "RED"]
+
+        app_version:
+          type: string
+          example: "K1-v1.0.0"
+
+    cache_ttl_ms:
+      type: integer
+      default: 300000
+      description: "Cache TTL in milliseconds (5 minutes default)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Feature flags evaluated successfully"
+      payload:
+        flags:
+          type: array
+          items:
+            type: object
+            properties:
+              flag_key:
+                type: string
+                description: "Feature flag identifier"
+                example: "enable_new_ui"
+
+              enabled:
+                type: boolean
+                description: "Flag enabled/disabled"
+
+              variant:
+                type: string
+                required: false
+                description: "Variant assignment (for multivariate flags)"
+                example: "variant_A"
+
+              reason:
+                type: string
+                enum: ["targeting_match", "rollout_percentage", "default", "override", "killswitch"]
+                description: "Evaluation reason"
+
+              metadata:
+                type: object
+                required: false
+                description: "Additional flag metadata"
+
+        cache_ttl_ms:
+          type: integer
+          description: "Cache TTL for flags"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "400":
+      description: "Invalid feature flag request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_flag_keys", "invalid_context"]
+
+        details:
+          type: string
+
+    "500":
+      description: "Feature flag evaluation error"
+      payload:
+        error:
+          type: string
+          enum: ["flag_registry_error", "targeting_evaluation_failed"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Query boolean feature flag"
+    request:
+      envelope:
+        port_id: "P16"
+        command_type: "feature_flag_query"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        capability: "QUERY_FEATURE_FLAGS"
+      payload:
+        flag_keys: ["enable_new_ui"]
+        context:
+          device_type: "mobile"
+          privacy_band: "GREEN"
+          app_version: "K1-v1.0.0"
+        cache_ttl_ms: 300000
+
+    response:
+      status: 200
+      payload:
+        flags:
+          - flag_key: "enable_new_ui"
+            enabled: true
+            reason: "rollout_percentage"
+            metadata:
+              rollout_percentage: 50
+        cache_ttl_ms: 300000
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Query multivariate A/B test flag"
+    request:
+      envelope:
+        port_id: "P16"
+        command_type: "feature_flag_query"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_def456"
+        capability: "QUERY_FEATURE_FLAGS"
+      payload:
+        flag_keys: ["recommendation_algorithm"]
+        context:
+          device_type: "desktop"
+          privacy_band: "GREEN"
+          user_attributes:
+            cohort: "power_users"
+        cache_ttl_ms: 600000
+
+    response:
+      status: 200
+      payload:
+        flags:
+          - flag_key: "recommendation_algorithm"
+            enabled: true
+            variant: "variant_B"
+            reason: "targeting_match"
+            metadata:
+              variants: ["variant_A", "variant_B", "variant_C"]
+              assignment_hash: "a1b2c3d4"
+        cache_ttl_ms: 600000
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Query multiple flags with admin override"
+    request:
+      envelope:
+        port_id: "P16"
+        command_type: "feature_flag_query"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_admin123"
+        capability: "QUERY_FEATURE_FLAGS"
+      payload:
+        flag_keys: ["enable_new_ui", "voice_feedback_v2", "experimental_feature_x"]
+        context:
+          device_type: "desktop"
+          privacy_band: "GREEN"
+          user_attributes:
+            role: "admin"
+        cache_ttl_ms: 60000
+
+    response:
+      status: 200
+      payload:
+        flags:
+          - flag_key: "enable_new_ui"
+            enabled: true
+            reason: "override"
+            metadata:
+              override_by: "admin_user_123"
+          - flag_key: "voice_feedback_v2"
+            enabled: false
+            reason: "default"
+          - flag_key: "experimental_feature_x"
+            enabled: true
+            reason: "override"
+        cache_ttl_ms: 60000
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "flag_lookup"
+      description: |
+        Query st_feature_flags for flag definitions:
+        - flag_key, flag_type (boolean, multivariate, rollout)
+        - targeting_rules, rollout_percentage, default_value
+        - Check admin overrides (st_flag_overrides)
+
+    - step: "targeting_evaluation"
+      description: |
+        Match context against targeting rules:
+        - device_type filter (mobile, desktop, etc.)
+        - privacy_band filter (GREEN, AMBER, RED)
+        - user_attributes filter (cohort, role, etc.)
+        - app_version filter (semantic versioning)
+
+    - step: "variant_assignment"
+      description: |
+        For multivariate flags:
+        - Deterministic hash: hash(session_id + flag_key) % num_variants
+        - Stable: same session always gets same variant
+        - Log assignment: st_ab_test_assignments
+
+    - step: "rollout_evaluation"
+      description: |
+        For rollout flags:
+        - Hash session_id to [0, 100)
+        - Enable if hash < rollout_percentage
+        - Example: 10% rollout → enable for hash [0, 10)
+
+    - step: "override_check"
+      description: |
+        Check admin overrides (st_flag_overrides):
+        - session_id-specific overrides take precedence
+        - Admin can force enable/disable for testing
+
+    - step: "response_construction"
+      description: |
+        Build response with enabled/variant/reason for each flag
+        Apply cache_ttl_ms for K1 caching
+
+  storage_targets:
+    - "st_feature_flags" # Flag definitions
+    - "st_flag_overrides" # Admin overrides
+    - "st_ab_test_assignments" # Variant assignment log
+
+  events_emitted:
+    - "infra.feature_flag_queried"
+    - "infra.ab_test_assigned"
+    - "infra.flag_override_applied"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "flag_keys must be non-empty array"
+  - rule: "context.device_type must be [mobile|desktop|tablet|watch|web]"
+  - rule: "context.privacy_band must be [GREEN|AMBER|RED]"
+  - rule: "cache_ttl_ms must be ≥ 0"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_feature_flag_queries_total"
+      type: "counter"
+      labels: ["flag_key", "enabled"]
+      description: "Total feature flag queries"
+
+    - name: "k0_feature_flag_cache_hits_total"
+      type: "counter"
+      labels: ["flag_key"]
+      description: "Total cache hits (flags cached in K1)"
+
+    - name: "k0_ab_test_assignments_total"
+      type: "counter"
+      labels: ["flag_key", "variant"]
+      description: "Total A/B test variant assignments"
+
+    - name: "k0_flag_overrides_total"
+      type: "counter"
+      labels: ["flag_key"]
+      description: "Total admin overrides applied"
+
+    - name: "k0_feature_flag_latency_ms"
+      type: "histogram"
+      buckets: [1, 5, 10, 25, 50]
+      description: "Feature flag evaluation latency"
+
+  traces:
+    span_name: "k0_feature_flags.query"
+    attributes:
+      - "flag_keys"
+      - "session_id"
+      - "device_type"
+
+  logs:
+    - event: "infra.feature_flag_queried"
+      level: "INFO"
+      fields: ["flag_key", "enabled", "reason"]
+
+    - event: "infra.ab_test_assigned"
+      level: "INFO"
+      fields: ["flag_key", "variant", "assignment_hash"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "5ms"
+    p95: "10ms"
+    p99: "25ms"
+    timeout: "50ms"
+
+  throughput:
+    target_qps: 1000
+    max_concurrent_requests: 5000
+
+  caching:
+    k1_cache: "Flags cached in K1 with configurable TTL (default: 5 minutes)"
+    cache_hit_rate_target: "95%"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "QUERY_FEATURE_FLAGS"
+
+  audit_trail:
+    receipt_id: "Issued for all feature flag queries"
+    retention: "365 days"
+
+# ============================================================================
+# FEATURE FLAG TYPES
+# ============================================================================
+
+feature_flag_types:
+  boolean:
+    description: "Simple on/off toggle"
+    example: "enable_new_ui"
+    use_cases: ["feature rollout", "killswitch", "gradual deployment"]
+
+  multivariate:
+    description: "Multiple variants (A/B/C testing)"
+    example: "recommendation_algorithm: [collaborative, content_based, hybrid]"
+    use_cases: ["A/B testing", "algorithm comparison", "UI variations"]
+
+  rollout:
+    description: "Gradual percentage-based rollout"
+    example: "voice_feedback_v2: 0% → 10% → 50% → 100%"
+    use_cases: ["canary deployment", "phased rollout", "risk mitigation"]
+
+  killswitch:
+    description: "Emergency disable mechanism"
+    example: "disable_external_connectors"
+    use_cases: ["incident response", "security mitigation", "performance protection"]
+
+# ============================================================================
+# TARGETING RULES
+# ============================================================================
+
+targeting_rules:
+  user_attributes:
+    description: "Match on user-specific attributes"
+    examples:
+      - "cohort: power_users"
+      - "role: admin"
+      - "beta_tester: true"
+
+  rollout_percentage:
+    description: "Enable for X% of sessions"
+    examples:
+      - "10% rollout"
+      - "50% rollout"
+      - "100% rollout"
+
+  whitelist_blacklist:
+    description: "Specific session/device allow/deny"
+    examples:
+      - "whitelist: [sess_abc123, sess_def456]"
+      - "blacklist: [sess_xyz789]"
+
+  time_based:
+    description: "Activate/deactivate at specific times"
+    examples:
+      - "activate_after: 2025-11-01T00:00:00Z"
+      - "deactivate_after: 2025-12-31T23:59:59Z"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Feitelson, D. G., et al. (2013). Development and Deployment at Facebook. IEEE Internet Computing."
+    url: "https://research.facebook.com/publications/development-and-deployment-at-facebook/"
+    relevance: "Feature flag best practices at scale"
+
+  - citation: "Kohavi, R., et al. (2013). Online Controlled Experiments at Large Scale. KDD 2013."
+    url: "https://www.microsoft.com/en-us/research/publication/online-controlled-experiments-at-large-scale/"
+    relevance: "A/B testing methodology and statistical significance"

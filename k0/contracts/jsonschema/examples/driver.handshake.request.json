@@ -1,0 +1,9 @@
+{
+  "alias": "st_vector",
+  "transport": "http",
+  "endpoint": "https://indexer.family.local/apply",
+  "capabilities": ["apply"],
+  "metadata": {
+    "version": "1.0.0"
+  }
+}

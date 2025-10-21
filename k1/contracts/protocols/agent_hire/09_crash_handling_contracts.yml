@@ -1,0 +1,386 @@
+# Agent Hire Protocol - Crash Handling Contracts
+# File: contracts/protocols/agent_hire/09_crash_handling_contracts.yml
+# Purpose: Crash detection, blacklisting, and failure recovery
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-AGENT-HIRE-CRASH-009"
+  name: "Agent Crash Handling Contracts"
+  version: "1.0"
+
+# Crash handling overview
+crash_handling:
+
+  purpose: "Detect crashes, quarantine agents, prevent cascade failures"
+  state_transition: "ACTIVE/IDLE/WARMING → CRASHED → TERMINATED"
+
+  crash_detection_mechanisms:
+    - "Health check timeout (no response in 10ms)"
+    - "Message deserialization error (corrupted state)"
+    - "Panic/exception in agent actor loop"
+    - "Process termination detection"
+    - "Memory violation (out of bounds, segfault)"
+
+# Crash definition
+crash_definition:
+
+  severity: "CRITICAL - Agent no longer available"
+
+  crash_conditions:
+
+    condition_1_health_check_timeout:
+      signal: "HealthCheckResponse not received in 10ms"
+      detection: "Supervisor waits for ping-pong, timeout fires"
+      severity: "CRITICAL"
+
+    condition_2_deserialization_error:
+      signal: "FlatBuffers message fails to deserialize"
+      detection: "Protocol validation layer catches error"
+      severity: "CRITICAL"
+      example: "Corrupted message schema, invalid field values"
+
+    condition_3_panic:
+      signal: "Agent actor loop panics"
+      detection: "Python exception not caught, actor thread dies"
+      severity: "CRITICAL"
+
+    condition_4_process_death:
+      signal: "OS process terminates unexpectedly"
+      detection: "IPC channel closes, worker process joins with error"
+      severity: "CRITICAL"
+
+    condition_5_resource_exhaustion:
+      signal: "OOM killer or memory fault"
+      detection: "Process memory exceeds limits, kernel terminates"
+      severity: "CRITICAL"
+
+# Crash detection flow
+crash_detection:
+
+  detector: "Supervisor actor"
+  detection_trigger: "Health check timeout or protocol error"
+
+  detection_flow:
+
+    step_1_timeout_detected:
+      action: "Supervisor health check times out"
+      latency_ms: 10  # Health check timeout
+
+    step_2_retry:
+      action: "Supervisor retries 0 additional times (fail-fast)"
+      rationale: "Health checks must be <10ms; retry would exceed budget"
+      decision: "On first timeout, treat as crash"
+
+    step_3_crash_logged:
+      action: |
+        1. Log crash event: CRITICAL
+        2. Record timestamp
+        3. Increment crash counter for agent_id
+
+      logging_format: |
+        {
+          "event": "agent_crash_detected",
+          "agent_id": "agent-ai-planner-001",
+          "crash_type": "HEALTH_CHECK_TIMEOUT",
+          "timestamp_ns": 1695000000000,
+          "trace_id": "trace-12345678"
+        }
+
+    step_4_blacklist_check:
+      action: |
+        1. Check crash history for agent_id
+        2. Query: crashes in last 10 minutes (600s window)
+        3. If crash_count >= 3: Trigger blacklist
+
+      logic: |
+        crash_history = get_crash_history(agent_id)
+        recent_crashes = filter(crash_history, timestamp > now() - 600s)
+
+        if len(recent_crashes) >= 3:
+          blacklist_agent(agent_id, duration=3600s)  # 1 hour
+        else:
+          record_crash(agent_id, timestamp)
+
+# Crash blacklist system
+crash_blacklist:
+
+  purpose: "Prevent re-hiring of crash-prone agents"
+
+  blacklist_rules:
+
+    rule_1_three_crashes:
+      condition: "3 crashes within 10 minutes (600 second window)"
+      action: "Add agent_id to blacklist"
+      blacklist_duration_seconds: 3600  # 1 hour
+      rationale: |
+        - 3 crashes in 10min = systemic problem
+        - Likely: model bug, memory leak, or hardware issue
+        - 1 hour blacklist = time for ops to investigate/restart
+
+    rule_2_sequential_crashes:
+      condition: "2 consecutive crashes (2nd within 5s of 1st)"
+      action: "Extend blacklist to 2 hours"
+      rationale: "Rapid crash suggests immediate failure, extend isolation"
+
+    rule_3_crash_cascade:
+      condition: "4 crashes in 5 minutes"
+      action: "Extend blacklist to 4 hours, alert ops"
+      rationale: "Cascade failure, likely systemic issue"
+
+# Blacklist storage contract
+blacklist_entry_schema:
+
+  flatbuffers_schema: |
+    table BlacklistEntry {
+      agent_id: string (required)                 # UUID of blacklisted agent
+      blacklist_timestamp_ns: ulong (required)    # When added to blacklist
+      blacklist_expires_ns: ulong (required)      # When blacklist expires
+      crash_count_in_window: uint (required)      # Crashes triggering blacklist
+      reason: string (required)                   # CRASH_THRESHOLD|CASCADE
+      recovery_eligible: bool (default=false)     # Can be retried if expires
+    }
+
+  storage: "In-memory HashSet<(agent_id, expires_ns)>"
+  lookup: "O(1) hash table, checked on hire"
+
+# Crash recovery flow
+crash_recovery:
+
+  immediate_recovery:
+    trigger: "Agent crash detected"
+    action: |
+      1. Transition crashed agent to TERMINATED
+      2. Add to blacklist
+      3. Notify orchestrator: "Agent hire failed"
+      4. Orchestrator selects new agent from non-blacklisted pool
+      5. New hire request issued
+
+    recovery_latency_ms: 50  # Select new agent, issue hire
+    user_impact: "No new tasks accept during recovery"
+
+  blacklist_recovery:
+    trigger: "Blacklist expires (1 hour later)"
+    action: |
+      1. Agent removed from blacklist
+      2. Agent eligible for future hiring
+      3. Ops should investigate root cause before rehire
+
+    retention_policy: "Log crash history indefinitely (audit trail)"
+
+# Crash handling with in-flight tasks
+in_flight_task_on_crash:
+
+  scenario: "Agent crashes while executing task"
+
+  flow:
+    step_1_crash_detected: |
+      Agent crashes mid-task
+      - Health check timeout detected
+      - Supervisor marks agent CRASHED
+
+    step_2_task_loss:
+      question: "What happens to the task?"
+      answer: |
+        Task is LOST (no recovery guarantee).
+        Rationale: Actor model fault tolerance = task loss.
+        Application layer must implement task recovery.
+
+    step_3_task_recovery:
+      mechanism: "Application-level idempotency"
+      pattern: |
+        1. Orchestrator timeout (task >30s): assume agent crashed
+        2. Re-hire new agent
+        3. Re-send task to new agent
+        4. Idempotent task_id ensures no double execution
+
+    step_4_user_experience:
+      impact: "Task may take 30s+ to detect and retry"
+      design_choice: "Reliability > latency (prefer correctness)"
+
+# Crash scenarios and responses
+crash_scenarios:
+
+  scenario_1_startup_crash:
+
+    condition: "Agent crashes during WARMING (model loading)"
+    timing: "Within 200ms of hire approval"
+
+    detection: |
+      1. Supervisor waits for WARMING → ACTIVE transition
+      2. Timeout fires (200ms + buffer)
+      3. Detected as crash
+
+    handling: |
+      1. Log: "Agent crashed during warmup"
+      2. Increment crash counter
+      3. Check blacklist rule (3 crashes in 600s)
+      4. If triggered: Add to blacklist, try hiring new agent
+
+    observability: |
+      - "agent_warmup_crash_total" counter
+      - "warmup_crash_rate_pct" metric
+
+  scenario_2_execution_crash:
+
+    condition: "Agent crashes during ACTIVE task execution"
+    timing: "While LLM inference or tool execution in progress"
+
+    detection: |
+      1. Supervisor health check times out
+      2. OR tool result never received
+      3. Crash detected
+
+    handling: |
+      1. Log: "Agent crashed during execution"
+      2. Current task is lost (no recovery in actor model)
+      3. Increment crash counter
+      4. Blacklist if threshold reached
+      5. Orchestrator times out task after 30s, rehires
+
+    observability: |
+      - "agent_execution_crash_total" counter
+      - "task_loss_on_crash_total" counter
+
+  scenario_3_cascade_crash:
+
+    condition: "Multiple agents crash in quick succession"
+    timing: "2+ crashes within 60 seconds"
+
+    detection: |
+      1. Orchestrator tracks crash rate
+      2. If crash_rate > threshold: Declare cascade
+      3. Alert ops
+
+    handling: |
+      1. Pause new agent hiring
+      2. Investigate root cause (model bug, hardware issue)
+      3. Once fixed: Resume hiring
+      4. Affected agents on 4-hour blacklist
+
+    threshold_calculation: |
+      cascade_threshold = (crashes_last_60s) >= 3
+
+      if crash_rate > cascade_threshold:
+        pause_hiring()
+        alert_ops("AGENT_CRASH_CASCADE")
+        disable_model_or_check_hardware()
+
+    observability: |
+      - "agent_crash_cascade_detected_total" counter
+      - "hiring_paused_cascade" event
+
+# Crash metrics and observability
+observability:
+
+  metrics:
+    - name: "agent_crash_detected_total"
+      type: "counter"
+      labels: ["crash_type"]  # HEALTH_CHECK_TIMEOUT, PANIC, DESERIALIZATION_ERROR, etc.
+      description: "Total agent crashes detected"
+
+    - name: "agent_crash_rate_per_minute"
+      type: "gauge"
+      description: "Crashes per minute (for cascade detection)"
+
+    - name: "agent_blacklist_active_count"
+      type: "gauge"
+      description: "Agents currently on blacklist"
+
+    - name: "agent_blacklist_entry_total"
+      type: "counter"
+      labels: ["reason"]  # CRASH_THRESHOLD, CASCADE, etc.
+      description: "Total blacklist entries created"
+
+    - name: "agent_blacklist_expiry_total"
+      type: "counter"
+      description: "Agents removed from blacklist (expiry)"
+
+    - name: "agent_crash_recovery_latency_ms"
+      type: "histogram"
+      buckets: [10, 50, 100, 500, 1000]
+      description: "Time from crash to new agent hired"
+
+    - name: "task_loss_on_crash_total"
+      type: "counter"
+      description: "Tasks lost due to agent crash"
+
+  events:
+    - name: "agent_crash_detected"
+      fields: ["agent_id", "crash_type", "health_check_timeout_ms", "trace_id"]
+
+    - name: "agent_crash_history"
+      fields: ["agent_id", "crash_count_in_600s", "trace_id"]
+
+    - name: "agent_blacklisted"
+      fields: ["agent_id", "reason", "blacklist_duration_s", "trace_id"]
+
+    - name: "agent_crash_cascade_detected"
+      fields: ["crash_count_last_60s", "hiring_paused", "trace_id"]
+
+    - name: "task_lost_on_crash"
+      fields: ["task_id", "agent_id", "trace_id"]
+
+    - name: "agent_blacklist_expired"
+      fields: ["agent_id", "blacklist_duration_s", "trace_id"]
+
+# Crash handling integration
+lifecycle_context:
+
+  state_transitions: |
+    ACTIVE → CRASHED → TERMINATED (any state can crash)
+    IDLE → CRASHED → TERMINATED
+    WARMING → CRASHED → TERMINATED
+
+  this_contract_covers:
+    - "Crash detection (all mechanisms)"
+    - "Crash logging and metrics"
+    - "Blacklist system (3-crash rule)"
+    - "In-flight task loss handling"
+    - "Recovery flow"
+    - "Cascade detection and mitigation"
+
+  related_contracts:
+    - "05_activation_contracts.yml - Health check (crash trigger)"
+    - "08_termination_contracts.yml - Termination post-crash"
+
+# Operational procedures
+operational_procedures:
+
+  procedure_1_investigate_crash:
+
+    trigger: "Agent crash detected"
+    steps: |
+      1. Check agent logs in log aggregation
+      2. Get stack trace: "where did it crash?"
+      3. Check model version: "which model crashed?"
+      4. Check GPU status: "hardware issue?"
+      5. Check memory usage: "OOM?"
+
+    action_items: |
+      a. If model bug: Deploy fix, remove from blacklist
+      b. If hardware: Replace GPU, escalate to ops
+      c. If OOM: Tune KV cache size, reduce batch size
+
+  procedure_2_manual_blacklist_override:
+
+    trigger: "Ops determined root cause, wants to retry"
+    steps: |
+      1. Verify fix applied (model reload, etc.)
+      2. Remove agent_id from blacklist manually
+      3. Re-enable hiring for that agent
+      4. Monitor crash rate again
+
+  procedure_3_cascade_response:
+
+    trigger: "Agent crash cascade detected"
+    steps: |
+      1. Alert ops: "AGENT_CRASH_CASCADE"
+      2. Pause hiring: "pause_agent_hiring()"
+      3. Investigate root cause
+      4. Once fixed: Resume hiring
+      5. Extend blacklist to 4 hours for affected agents
+
+# ==============================================================================
+# END OF FILE: 09_crash_handling_contracts.yml
+# ==============================================================================

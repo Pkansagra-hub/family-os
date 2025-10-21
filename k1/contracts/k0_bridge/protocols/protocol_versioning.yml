@@ -1,0 +1,523 @@
+# Protocol Versioning Specification - K0 Bridge Protocol
+# Purpose: SemVer 2.0 versioning, N/N+1 compatibility, schema evolution
+# Status: Production-ready, 90-day deprecation policy
+# ADR References: ADR-0001a (K0 Bridge), ADR-0013 (Pipeline Versioning)
+
+version: "1.0"
+specification_type: "protocol_versioning"
+related_adrs:
+  - "ADR-0001a" # K0 Bridge Communication Protocol
+  - "ADR-0013"  # Pipeline Versioning Policy
+  - "ADR-0011"  # FlatBuffers Serialization (Schema Evolution)
+  - "SemVer-2.0.0" # Semantic Versioning 2.0
+
+# ============================================================================
+# VERSIONING POLICY OVERVIEW
+# ============================================================================
+
+versioning_policy:
+  standard: "Semantic Versioning 2.0.0 (SemVer)"
+  format: "MAJOR.MINOR.PATCH"
+
+  version_components:
+    major:
+      description: "Breaking changes (incompatible API changes)"
+      increment_triggers:
+        - "Remove required envelope fields"
+        - "Change field types (string → int)"
+        - "Rename fields"
+        - "Change port semantics"
+        - "Remove supported formats (e.g., remove FlatBuffers support)"
+      examples: ["1.0.0 → 2.0.0", "2.5.3 → 3.0.0"]
+
+    minor:
+      description: "Backward-compatible new features"
+      increment_triggers:
+        - "Add new optional envelope fields"
+        - "Add new enum values (qos_band, command_type)"
+        - "Add new ports (P21, P22, etc.)"
+        - "Add new cognitive enhancements"
+        - "Deprecate fields (with 90-day notice)"
+      examples: ["1.0.0 → 1.1.0", "2.3.0 → 2.4.0"]
+
+    patch:
+      description: "Backward-compatible bug fixes"
+      increment_triggers:
+        - "Fix serialization bugs"
+        - "Fix validation logic"
+        - "Performance improvements (no API changes)"
+        - "Documentation updates"
+      examples: ["1.0.0 → 1.0.1", "2.3.4 → 2.3.5"]
+
+  compatibility_guarantee:
+    backward_compatible:
+      description: "New versions read old data"
+      rule: "Minor and Patch versions MUST be backward compatible"
+      example: "v1.2.0 client can read v1.0.0 envelopes"
+
+    forward_compatible:
+      description: "Old versions read new data (ignore unknown fields)"
+      rule: "FlatBuffers provides forward compatibility via vtables"
+      example: "v1.0.0 client can read v1.2.0 envelopes (ignores new fields)"
+
+# ============================================================================
+# SCHEMA VERSION FIELD
+# ============================================================================
+
+schema_version_field:
+  location: "envelope.schema_version"
+  type: "string"
+  format: "MAJOR.MINOR.PATCH (SemVer 2.0)"
+  required: true
+
+  examples:
+    - version: "1.0.0"
+      description: "Initial K0 Bridge protocol version"
+      release_date: "2025-10-01"
+
+    - version: "1.1.0"
+      description: "Added obligations array, cognitive enhancements"
+      release_date: "2025-11-15"
+      changes:
+        - "Added obligations: [string] (optional)"
+        - "Added cognitive_enhancements in query payloads"
+        - "Backward compatible with v1.0.0"
+
+    - version: "1.2.0"
+      description: "Added P13-P20 ports, QoS bands"
+      release_date: "2026-01-10"
+      changes:
+        - "Added QoS bands: GREEN, AMBER, RED"
+        - "Added ports P13-P20"
+        - "Backward compatible with v1.0.0, v1.1.0"
+
+    - version: "2.0.0"
+      description: "Breaking change: timestamp now microseconds"
+      release_date: "2026-06-01"
+      changes:
+        - "BREAKING: timestamp field now int64 microseconds (was ISO 8601 string)"
+        - "BREAKING: Removed deprecated 'priority' field"
+        - "NOT backward compatible with v1.x.x"
+
+  validation:
+    rule: "K0 validates schema_version against supported versions list"
+    supported_versions: ["1.0.0", "1.1.0", "1.2.0"]
+    unsupported_response:
+      status: 400
+      error: "unsupported_schema_version"
+      details: "K0 supports: 1.0.0, 1.1.0, 1.2.0"
+      suggested_upgrade: "Upgrade K1 client to latest version"
+
+# ============================================================================
+# N/N+1 COMPATIBILITY STRATEGY
+# ============================================================================
+
+nn1_compatibility:
+  description: |
+    K0 supports N (current) and N+1 (next) schema versions simultaneously.
+    This enables gradual K1 client upgrades without downtime.
+
+  example_scenario:
+    current_production: "K0 v1.1.0"
+    next_release: "K0 v1.2.0"
+
+    during_transition:
+      k0_supported_versions: ["1.0.0", "1.1.0", "1.2.0"]
+      k1_clients:
+        - version: "1.0.0"
+          status: "Supported (N-1)"
+          action: "Schedule upgrade to 1.1.0 or 1.2.0"
+
+        - version: "1.1.0"
+          status: "Supported (N)"
+          action: "Can upgrade to 1.2.0 anytime"
+
+        - version: "1.2.0"
+          status: "Supported (N+1)"
+          action: "Early adopter, full feature access"
+
+    after_transition:
+      k0_supported_versions: ["1.1.0", "1.2.0", "1.3.0"]
+      deprecated: "1.0.0 (90 days after 1.3.0 release)"
+
+  migration_timeline:
+    day_0: "Release K0 v1.2.0, support [1.0.0, 1.1.0, 1.2.0]"
+    day_30: "Announce deprecation of v1.0.0 (90-day notice)"
+    day_90: "Remove v1.0.0 support, support [1.1.0, 1.2.0, 1.3.0]"
+
+# ============================================================================
+# DEPRECATION POLICY
+# ============================================================================
+
+deprecation_policy:
+  notice_period: "90 days minimum"
+
+  process:
+    - step: 1
+      action: "Mark field as deprecated in schema comments"
+      example: |
+        table Envelope {
+          priority: int32 (deprecated);  // Deprecated in v1.1.0, use qos_band instead
+          qos_band: QoSBand;  // Replacement for priority
+        }
+
+    - step: 2
+      action: "Emit deprecation warnings in K0 logs"
+      log_format:
+        level: "WARNING"
+        event: "deprecated_field_used"
+        fields:
+          - "envelope_id"
+          - "deprecated_field: priority"
+          - "replacement_field: qos_band"
+          - "deprecation_date: 2025-11-15"
+          - "removal_date: 2026-02-15"
+
+    - step: 3
+      action: "Update K1 client to stop using deprecated field"
+      timeline: "Within 90 days of deprecation notice"
+
+    - step: 4
+      action: "Remove deprecated field in next MAJOR version"
+      example: "priority field removed in v2.0.0 (90 days after v1.1.0)"
+
+  communication_channels:
+    - "K0 Bridge changelog (docs/CHANGELOG.md)"
+    - "ADR updates (docs/architecture/decisions/)"
+    - "Prometheus metric: k0_bridge_deprecated_field_usage_total"
+    - "Email to K1 development team"
+
+# ============================================================================
+# SCHEMA EVOLUTION RULES
+# ============================================================================
+
+schema_evolution_rules:
+  backward_compatible_changes:
+    description: "Changes that do NOT break existing clients (Minor version bump)"
+
+    allowed:
+      - change: "Add new optional field"
+        example: |
+          // v1.0.0
+          table Envelope {
+            envelope_id: string;
+            timestamp: int64;
+          }
+
+          // v1.1.0 (backward compatible)
+          table Envelope {
+            envelope_id: string;
+            timestamp: int64;
+            request_timeout_ms: int32 = 10000;  // NEW optional field with default
+          }
+        impact: "Old clients ignore new field, continue working"
+
+      - change: "Add new enum value"
+        example: |
+          // v1.0.0
+          enum QoSBand: byte {
+            GREEN = 1,
+            AMBER = 2
+          }
+
+          // v1.1.0 (backward compatible)
+          enum QoSBand: byte {
+            GREEN = 1,
+            AMBER = 2,
+            RED = 3  // NEW enum value
+          }
+        impact: "Old clients use GREEN/AMBER, ignore RED"
+
+      - change: "Deprecate field (keep for 90 days)"
+        example: |
+          // v1.1.0
+          table Envelope {
+            priority: int32 (deprecated);  // Keep for 90 days
+            qos_band: QoSBand;  // Replacement
+          }
+        impact: "Old clients use priority, new clients use qos_band"
+
+  breaking_changes:
+    description: "Changes that BREAK existing clients (Major version bump)"
+
+    forbidden_in_minor_versions:
+      - change: "Remove required field"
+        example: "Remove envelope_id (breaks idempotency)"
+        impact: "Old clients cannot serialize envelopes"
+        version_bump: "MAJOR (v1.2.0 → v2.0.0)"
+
+      - change: "Change field type"
+        example: "timestamp: string → int64"
+        impact: "Old clients send wrong type, K0 rejects"
+        version_bump: "MAJOR (v1.2.0 → v2.0.0)"
+
+      - change: "Rename field"
+        example: "envelope_id → request_id"
+        impact: "Old clients use wrong field name"
+        version_bump: "MAJOR (v1.2.0 → v2.0.0)"
+
+      - change: "Change enum value semantics"
+        example: "GREEN=1 now means 'critical' instead of 'fast lane'"
+        impact: "Old clients misinterpret qos_band"
+        version_bump: "MAJOR (v1.2.0 → v2.0.0)"
+
+# ============================================================================
+# VERSION COMPATIBILITY MATRIX
+# ============================================================================
+
+compatibility_matrix:
+  description: "Which K1 client versions work with which K0 server versions"
+
+  matrix:
+    - k0_version: "1.0.0"
+      supported_k1_versions: ["1.0.0"]
+      notes: "Initial release"
+
+    - k0_version: "1.1.0"
+      supported_k1_versions: ["1.0.0", "1.1.0"]
+      notes: "Added obligations, cognitive_enhancements (backward compatible)"
+
+    - k0_version: "1.2.0"
+      supported_k1_versions: ["1.0.0", "1.1.0", "1.2.0"]
+      notes: "Added QoS bands, P13-P20 ports (backward compatible)"
+
+    - k0_version: "2.0.0"
+      supported_k1_versions: ["2.0.0"]
+      notes: "Breaking changes: timestamp microseconds, removed priority (NOT backward compatible)"
+
+  testing_strategy:
+    description: "Contract tests validate compatibility matrix"
+    tests:
+      - name: "v1.0.0 client → v1.2.0 K0 (backward compatibility)"
+        client_version: "1.0.0"
+        server_version: "1.2.0"
+        expected_result: "SUCCESS (K0 ignores unknown v1.2.0 fields)"
+
+      - name: "v1.2.0 client → v1.0.0 K0 (forward compatibility with graceful degradation)"
+        client_version: "1.2.0"
+        server_version: "1.0.0"
+        expected_result: "PARTIAL SUCCESS (K0 ignores qos_band, uses default priority)"
+
+      - name: "v2.0.0 client → v1.2.0 K0 (breaking change rejection)"
+        client_version: "2.0.0"
+        server_version: "1.2.0"
+        expected_result: "FAILURE (K0 rejects v2.0.0 timestamp format)"
+
+# ============================================================================
+# MIGRATION PATHS
+# ============================================================================
+
+migration_paths:
+  v1_0_to_v1_1:
+    type: "Minor version upgrade (backward compatible)"
+
+    k1_client_changes:
+      - "Add obligations: [string] field (optional)"
+      - "Add cognitive_enhancements in query payloads (optional)"
+      - "No breaking changes, old code continues working"
+
+    k0_server_changes:
+      - "Support obligations array (default: [])"
+      - "Support cognitive_enhancements (default: null)"
+      - "Continue accepting v1.0.0 envelopes"
+
+    deployment:
+      - "Deploy K0 v1.1.0 first (backward compatible with v1.0.0 clients)"
+      - "Deploy K1 v1.1.0 clients gradually (can coexist with v1.0.0 clients)"
+      - "No downtime required"
+
+  v1_2_to_v2_0:
+    type: "Major version upgrade (breaking changes)"
+
+    breaking_changes:
+      - "timestamp: string → int64 (microseconds)"
+      - "Remove deprecated priority field"
+
+    k1_client_changes:
+      - "Update timestamp serialization (ISO 8601 → Unix microseconds)"
+      - "Remove priority field usage, use qos_band exclusively"
+      - "Update schema_version to '2.0.0'"
+
+    k0_server_changes:
+      - "Parse timestamp as int64 (reject string format)"
+      - "Remove priority field support"
+      - "Reject envelopes with schema_version < 2.0.0"
+
+    deployment:
+      - "Coordinate K0 and K1 deployment (breaking changes)"
+      - "Deploy K0 v2.0.0 + K1 v2.0.0 simultaneously"
+      - "Brief downtime window (5-10 minutes) for coordination"
+
+    rollback_plan:
+      - "If issues, rollback K0 to v1.2.0 + K1 to v1.2.0"
+      - "Maintain v1.2.0 backups for 30 days"
+
+# ============================================================================
+# PROTOCOL VERSION NEGOTIATION
+# ============================================================================
+
+protocol_version_negotiation:
+  mechanism: "K1 sends schema_version in envelope, K0 validates"
+
+  negotiation_flow:
+    - step: 1
+      description: "K1 includes schema_version in envelope"
+      example: '{"schema_version": "1.2.0", ...}'
+
+    - step: 2
+      description: "K0 validates schema_version against supported list"
+      k0_supported: ["1.0.0", "1.1.0", "1.2.0"]
+
+    - step: 3
+      description: "If supported, K0 processes request with version-specific logic"
+      example: "v1.0.0 envelopes use default qos_band=GREEN"
+
+    - step: 4
+      description: "If unsupported, K0 responds with 400 Bad Request"
+      response:
+        status: 400
+        error: "unsupported_schema_version"
+        details: "K0 supports: 1.0.0, 1.1.0, 1.2.0"
+        client_version: "1.3.0"
+        suggested_action: "Upgrade K0 to support 1.3.0 or downgrade K1 to 1.2.0"
+
+  version_specific_logic:
+    description: "K0 adapts behavior based on schema_version"
+
+    example_v1_0_0:
+      description: "v1.0.0 clients don't send qos_band"
+      k0_behavior: "Default qos_band to GREEN, use priority field"
+
+    example_v1_1_0:
+      description: "v1.1.0 clients send qos_band, may include obligations"
+      k0_behavior: "Use qos_band, process obligations if present"
+
+    example_v1_2_0:
+      description: "v1.2.0 clients send qos_band, obligations, use P13-P20"
+      k0_behavior: "Full feature support, all ports available"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_bridge_schema_version_usage_total"
+      type: "counter"
+      labels: ["schema_version"]
+      description: "Total requests by schema version (1.0.0, 1.1.0, 1.2.0)"
+
+    - name: "k0_bridge_deprecated_field_usage_total"
+      type: "counter"
+      labels: ["field_name", "schema_version"]
+      description: "Usage of deprecated fields (priority, etc.)"
+
+    - name: "k0_bridge_unsupported_version_errors_total"
+      type: "counter"
+      labels: ["client_version"]
+      description: "Requests rejected due to unsupported schema version"
+
+  logs:
+    - event: "unsupported_schema_version"
+      level: "WARNING"
+      fields:
+        - "envelope_id"
+        - "client_version: 1.3.0"
+        - "k0_supported_versions: [1.0.0, 1.1.0, 1.2.0]"
+
+    - event: "deprecated_field_used"
+      level: "WARNING"
+      fields:
+        - "envelope_id"
+        - "deprecated_field: priority"
+        - "replacement_field: qos_band"
+        - "deprecation_date: 2025-11-15"
+        - "removal_date: 2026-02-15 (90 days)"
+
+# ============================================================================
+# TESTING STRATEGY
+# ============================================================================
+
+testing:
+  contract_tests:
+    description: "Validate compatibility matrix with real envelopes"
+
+    tests:
+      - name: "v1.0.0 envelope → v1.2.0 K0 (backward compatibility)"
+        envelope_version: "1.0.0"
+        k0_version: "1.2.0"
+        expected: "SUCCESS"
+        assertion: "K0 accepts v1.0.0, defaults qos_band=GREEN"
+
+      - name: "v1.2.0 envelope → v1.0.0 K0 (forward compatibility rejection)"
+        envelope_version: "1.2.0"
+        k0_version: "1.0.0"
+        expected: "FAILURE (400 unsupported_schema_version)"
+        assertion: "K0 rejects v1.2.0 (unknown obligations field)"
+
+      - name: "v2.0.0 envelope → v1.2.0 K0 (major version rejection)"
+        envelope_version: "2.0.0"
+        k0_version: "1.2.0"
+        expected: "FAILURE (400 unsupported_schema_version)"
+        assertion: "K0 rejects v2.0.0 (timestamp format changed)"
+
+  regression_tests:
+    description: "Ensure old tests pass with new versions"
+    strategy: "Maintain test suite for each schema version (v1.0.0, v1.1.0, v1.2.0)"
+
+  upgrade_tests:
+    description: "Test migration paths (v1.0→v1.1, v1.1→v1.2, v1.2→v2.0)"
+
+    test_v1_0_to_v1_1:
+      - "Deploy K0 v1.1.0, keep K1 v1.0.0"
+      - "Verify v1.0.0 clients continue working"
+      - "Deploy K1 v1.1.0, verify new features work"
+      - "Rollback K1 to v1.0.0, verify compatibility"
+
+# ============================================================================
+# CHANGELOG MANAGEMENT
+# ============================================================================
+
+changelog:
+  location: "docs/CHANGELOG.md"
+  format: "Keep a Changelog 1.0.0"
+
+  example_entry:
+    version: "1.2.0"
+    date: "2026-01-10"
+
+    added:
+      - "QoS bands: GREEN, AMBER, RED (qos_band field)"
+      - "Ports P13-P20 (indexing, deduplication, rollups, etc.)"
+      - "Request timeout field (request_timeout_ms, optional, default 10000)"
+
+    deprecated:
+      - "priority field (use qos_band instead, removal in v2.0.0 after 2026-04-10)"
+
+    fixed:
+      - "Timestamp parsing with millisecond precision"
+      - "FlatBuffers serialization for large payloads (>1MB)"
+
+    security:
+      - "Validate schema_version to prevent version confusion attacks"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Semantic Versioning 2.0.0 (Tom Preston-Werner, 2013)"
+    url: "https://semver.org/"
+    relevance: "MAJOR.MINOR.PATCH versioning standard"
+
+  - citation: "FlatBuffers Schema Evolution (Google, 2014)"
+    url: "https://google.github.io/flatbuffers/flatbuffers_guide_writing_schema.html"
+    relevance: "Forward/backward compatibility via vtables"
+
+  - citation: "Protocol Buffers Schema Evolution (Google, 2008)"
+    url: "https://developers.google.com/protocol-buffers/docs/proto3#updating"
+    relevance: "Best practices for evolving binary schemas"
+
+  - citation: "Keep a Changelog (Olivier Lacan, 2014)"
+    url: "https://keepachangelog.com/"
+    relevance: "Structured changelog format for version tracking"

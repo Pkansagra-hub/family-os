@@ -1,0 +1,647 @@
+# WASM Sandbox: Wasmtime Runtime Initialization & Module Loading
+# Purpose: Initialize Wasmtime runtime, load WASM modules, manage module lifecycle
+# Research: WebAssembly specification (W3C), Wasmtime architecture (Bytecode Alliance)
+# Part of ADR-0033b (WASM Sandbox Implementation)
+# Applies to: K1 tools using WASM sandbox (15% adoption, untrusted code)
+
+---
+contract_id: "TOOL_EXEC_WASM_SANDBOX_WASMTIME_RUNTIME"
+contract_type: "sandbox_runtime"
+applies_to: ["k1.orchestrator.tool_runner", "k1.config.wasm_sandbox"]
+research_basis:
+  - title: "WebAssembly Specification"
+    authors: ["World Wide Web Consortium (W3C)"]
+    year: 2019
+  - title: "Wasmtime: A Standalone WebAssembly Runtime"
+    authors: ["Bytecode Alliance"]
+    year: 2019
+  - title: "Secure Execution Environments for Untrusted Code"
+    authors: ["Garfinkel et al."]
+    year: 2003
+
+# ============================================================================
+# OVERVIEW: Wasmtime Runtime
+# ============================================================================
+
+overview: |
+  Wasmtime is a standalone WebAssembly runtime that executes WASM modules
+  with full isolation from the host OS. No native code execution, no syscalls,
+  no direct memory access outside WASM module boundary.
+
+  K1 uses Wasmtime to safely execute untrusted code (15% of tools):
+  - User-provided plugins
+  - Third-party algorithms
+  - Community-contributed tools
+  - Verified but complex libraries (cryptography, compression)
+
+  Characteristics:
+  - Runtime: Open-source (Apache 2.0 / MIT licensed)
+  - Performance: 10x slower than native (acceptable for 15% of tools)
+  - Memory: <5MB per module (compact WASM bytecode)
+  - Startup: <100ms module instantiation + setup
+  - Isolation: 100% (no syscalls, no ambient authority)
+
+# ============================================================================
+# RUNTIME LIFECYCLE: Initialization & Configuration
+# ============================================================================
+
+runtime_initialization:
+  startup_sequence:
+    step_1_create_engine: |
+      Create Wasmtime Engine (once per K1 instance, shared across all tools)
+
+      pseudocode:
+      ```
+      config = wasmtime.Config()
+      config.set_wasm_simd(True)      # Enable SIMD instructions (faster)
+      config.set_wasm_relaxed_simd(True)  # Enable relaxed SIMD
+      config.set_wasm_bulk_memory(True)   # Enable bulk memory operations
+      config.set_wasm_multi_value(True)   # Enable multi-value returns
+
+      engine = wasmtime.Engine(config)
+      ```
+
+      This engine is reused for ALL WASM modules (no per-module overhead).
+      Configuration happens once at K1 startup.
+
+    step_2_load_wasm_module: |
+      Load WASM module file from disk
+
+      pseudocode:
+      ```
+      wasm_bytes = read_file("/path/to/tool.wasm")
+      # Validate WASM bytecode format
+      module = wasmtime.Module(engine, wasm_bytes)
+      ```
+
+      Module validation happens once at load time.
+      Same module can be instantiated multiple times (module reuse).
+
+    step_3_create_linker: |
+      Create Linker (maps imports to host functions)
+
+      pseudocode:
+      ```
+      linker = wasmtime.Linker(engine)
+
+      # Link host functions (WASI)
+      linker.define_wasi()
+
+      # Link custom host functions (if any)
+      linker.define("env", "log", host_log_function)
+      ```
+
+    step_4_instantiate_module: |
+      Instantiate module with WASI store
+
+      pseudocode:
+      ```
+      store = wasmtime.Store(engine)
+      instance = linker.instantiate(store, module)
+      ```
+
+      Each instantiation creates separate memory, tables, global state.
+      Modules are completely isolated from each other.
+
+  configuration_options:
+    memory_limits:
+      initial_pages: "1 (64 KB)"
+      max_pages: "1024 (64 MB, typical for untrusted code)"
+      rationale: |
+        Initial: 64 KB (reasonable minimum for most tools)
+        Max: 64 MB (prevents memory exhaustion attacks)
+        Tool can request more via WASI memory.grow, denied if >max_pages
+
+    cpu_time_limits:
+      mechanism: "asyncio timeout or budget-based execution"
+      approach: |
+        K1 doesn't use Wasmtime's fuel system (experimental).
+        Instead: Wrap WASM function calls with asyncio.wait_for(timeout).
+        Timeout: Per-tool configuration (calculator: 5s, default: 30s)
+        On timeout: Abort WASM execution, clean up instance
+
+    simd_extensions:
+      enabled: true
+      rationale: |
+        SIMD (Single Instruction Multiple Data) speeds up:
+        - Cryptography (AES, SHA)
+        - Image processing
+        - Numerical computation
+        - ML inference
+
+        Typical speedup: 2-4x vs scalar code.
+        Safety: SIMD opcodes are sandboxed like any other instruction.
+
+    feature_flags:
+      bulk_memory: true  # Enable bulk memory operations (memcpy, memmove)
+      multi_value: true  # Functions can return multiple values
+      reference_types: true  # External references (future use)
+      exceptions: true  # Exception handling support
+      tail_calls: true  # Tail call optimization
+
+# ============================================================================
+# MODULE LIFECYCLE: Loading, Instantiation, Execution, Cleanup
+# ============================================================================
+
+module_lifecycle:
+  module_loading:
+    operation: "Load WASM module from file"
+
+    process:
+      step_1_validate_path: |
+        - Check file exists
+        - Check file is readable
+        - Validate path is within /k1/wasm_modules/ (prevent directory traversal)
+
+      step_2_read_file: |
+        - Read .wasm file (typically <1MB)
+        - No size limit enforcement (Wasmtime validates during parse)
+
+      step_3_parse_wasm: |
+        - Wasmtime parses bytecode
+        - Validates WASM format (magic number, version, sections)
+        - Validates instruction sequences (no undefined behavior)
+        - On error: MalformedWasmError (propagate to caller)
+
+      step_4_create_module: |
+        - Create Wasmtime Module object
+        - Module contains compiled code (not executed yet)
+        - Module is immutable (can be shared across instances)
+
+    performance:
+      latency: "<50ms module load + parse (typical 10-30ms)"
+      memory: "<2MB per module (bytecode + metadata)"
+      caching: |
+        K1 caches compiled modules in memory (module_id → Module object).
+        Reuse same Module for multiple instantiations (zero cost).
+        On K1 restart, reload .wasm files from disk.
+
+    error_handling:
+      malformed_wasm: |
+        Error: Invalid WASM bytecode
+        Cause: Corrupted file, invalid opcodes, wrong version
+        Action: Reject module load, emit error event, alert administrator
+        Mitigation: Store .wasm files in read-only mount, checksum validation
+
+      unsupported_features: |
+        Error: Module uses unsupported feature (e.g., tail_calls but disabled)
+        Cause: Module compiled with feature not enabled in engine config
+        Action: Either enable feature or reject module (inform user)
+
+      resource_limit_exceeded: |
+        Error: Module exceeds resource limits (module size, import count)
+        Cause: Intentionally oversized module (potential attack)
+        Action: Reject module, alert administrator
+
+  module_instantiation:
+    operation: "Create instance from loaded module"
+
+    process:
+      step_1_create_store: |
+        - Create new Store (contains memory, tables, globals for this instance)
+        - Store is tied to Engine (shares code)
+        - Each Store has separate runtime state (complete isolation)
+
+      step_2_prepare_imports: |
+        - Resolve module imports (WASI filesystem, network, etc.)
+        - Link to host functions (or WASI presets)
+        - Validate import types match module expectations
+
+      step_3_instantiate: |
+        - Execute module initialization (start function)
+        - Allocate memory (initial_pages from config)
+        - Initialize tables, globals
+        - Call start function (if defined)
+
+      step_4_execute_setup: |
+        - If module has setup/initialize function: call it
+        - Example: user_plugin.wasm exports initialize() → call it
+        - Communicate configuration (tool_id, workspace, capabilities)
+
+    performance:
+      latency: "<100ms instantiation + setup"
+      memory: "<5MB per instance (including memory.initial_pages)"
+      parallelism: "Multiple instances of same module can run in parallel"
+
+    error_handling:
+      import_mismatch: |
+        Error: Module imports function that doesn't exist or has wrong signature
+        Cause: Module expects env.log(str) but host provides env.log(i32)
+        Action: Reject instantiation, emit error (versioning issue)
+
+      memory_allocation_failed: |
+        Error: Cannot allocate initial memory (typically very rare)
+        Cause: Out of system memory (10 GB+ used)
+        Action: Reject instantiation, force garbage collection, retry
+
+      start_function_failed: |
+        Error: Module's start function panicked or exited non-zero
+        Cause: Module initialization logic has bug
+        Action: Reject instantiation, emit error, notify developer
+
+      timeout_during_setup: |
+        Error: Module setup took >10 seconds (infinite loop?)
+        Cause: Module initialization runs forever
+        Action: Kill setup, reject instantiation, emit error
+
+  module_execution:
+    operation: "Call exported function from WASM module"
+
+    process:
+      step_1_prepare_arguments: |
+        - Convert caller arguments to WASM types (i32, i64, f32, f64)
+        - Validate argument types match function signature
+        - Copy string/buffer arguments to WASM memory
+
+      step_2_call_function: |
+        - instance.exports.get(function_name)(args...)
+        - WASM function executes in sandbox (no syscalls)
+        - Function can call imported functions (WASI, host functions)
+        - Function returns result or trap (error)
+
+      step_3_extract_result: |
+        - Convert WASM return type (i32, i64, f32, f64) to host type
+        - Read response from WASM memory (if string/buffer result)
+        - Validate response size (prevent unbounded buffer read)
+
+      step_4_handle_errors: |
+        - If WASM function traps: catch trap, convert to ToolExecutionError
+        - If timeout exceeded: abort execution, clean up instance
+        - If memory/resource limits exceeded: abort, clean up
+
+    performance:
+      execution: "1-100ms per function call (10x slower than native)"
+      overhead: "<0.5ms per call (function dispatch, argument marshalling)"
+
+    error_handling:
+      trap_execution: |
+        Error: WASM instruction trapped (e.g., divide by zero, unreachable)
+        Cause: Module bug (integer overflow, assertion failure, etc.)
+        Action: Catch trap, return error to caller, log for debugging
+
+      import_call_failed: |
+        Error: WASM called host function which raised exception
+        Cause: Host function (e.g., file I/O) failed
+        Action: Propagate error to WASM (host can define error handling)
+
+      memory_access_violation: |
+        Error: WASM tried to access memory outside allocated bounds
+        Cause: Buffer overflow in WASM code (prevented by Wasmtime)
+        Action: Trap execution, report memory bounds error
+        Note: Wasmtime prevents this (bounds checking)
+
+      indirect_call_target_invalid: |
+        Error: WASM tried to call indirect function with invalid table index
+        Cause: WASM code bug (table out of bounds)
+        Action: Trap execution, report type error
+
+  module_cleanup:
+    operation: "Destroy instance and free resources"
+
+    process:
+      step_1_call_cleanup: |
+        - If module exports cleanup(): call it
+        - Module can perform graceful shutdown (flush buffers, close files)
+        - Timeout: 1 second (no hanging cleanup)
+
+      step_2_destroy_store: |
+        - Store holds memory, tables, globals
+        - Destroy Store (all memory freed)
+        - Callback hooks (e.g., resource cleanup) executed
+
+      step_3_verify_cleanup: |
+        - Verify all resources released
+        - Check for resource leaks (file handles, memory)
+        - Emit cleanup metrics
+
+    performance:
+      cleanup: "<10ms (usually instantaneous)"
+
+    error_handling:
+      cleanup_timeout: |
+        Error: Module cleanup exceeded 1 second timeout
+        Cause: Cleanup function has infinite loop
+        Action: Force cleanup (don't call cleanup function again)
+
+      cleanup_exception: |
+        Error: Cleanup function raised exception
+        Cause: Module cleanup code has bug
+        Action: Log error, continue cleanup (don't abort)
+
+# ============================================================================
+# MEMORY MANAGEMENT: Isolation & Bounds Checking
+# ============================================================================
+
+memory_management:
+  linear_memory: |
+    WASM modules have linear memory: flat byte array (0 to 2^32-1 bytes)
+    Memory is private to module instance (completely isolated from other instances).
+    Other WASM modules cannot access this memory.
+    Host can only access memory via explicit interface (exported functions).
+
+  memory_bounds_checking: |
+    Wasmtime performs bounds checking on EVERY memory access:
+    - memory.load(offset) → check (offset < current_size)
+    - memory.store(offset, value) → check (offset + size <= current_size)
+    - Cost: 1 CPU instruction per access (negligible)
+    - Result: No buffer overflow possible (100% safe)
+
+  memory_growth: |
+    WASM can dynamically grow memory:
+    - memory.grow(pages) → request additional memory pages
+    - Each page = 64 KB
+    - K1 limits maximum: 1024 pages (64 MB)
+    - Failure: If >max_pages, memory.grow returns -1 (not an error, handled by module)
+
+  memory_initialization: |
+    Module memory contains:
+    - Data segments (read-only constants from module)
+    - Heap (dynamic allocation by module)
+    - Stack (function call frames, local variables)
+    - No shared memory with other modules or host
+    - All content is zero-initialized (before data segments loaded)
+
+# ============================================================================
+# WASI: Sandboxed I/O Capabilities
+# ============================================================================
+
+wasi_support:
+  overview: |
+    WASI (WebAssembly System Interface) provides safe I/O operations.
+    WASI functions are sandboxed: module cannot access arbitrary files/network.
+    Instead: WASI functions are sandboxed through capability-based access.
+
+  wasi_filesystem: |
+    WASI filesystem provides read/write access to preopened directories only.
+    Example: /tmp/tool_workspace preopened → module can read/write within workspace.
+
+    Capabilities:
+    - fd_open: Can only open files within allowed directories
+    - fd_read: Can read from opened files
+    - fd_write: Can write to opened files
+    - fd_seek: Can seek within files
+    - fd_close: Can close file descriptors
+
+    Security:
+    - Module cannot bypass preopened directories (no chroot escape)
+    - Module cannot access /etc/passwd, /root/.ssh, etc. (no capability)
+    - Each tool gets separate workspace (tool_id → /tmp/tool_workspace)
+
+  wasi_environment: |
+    WASI environment provides:
+    - Environment variables (TOOL_ID, WORKSPACE, etc.)
+    - Command-line arguments (if applicable)
+
+    Security:
+    - Module only sees allowed environment variables
+    - Sensitive env vars (API_KEY) not exposed to untrusted modules
+
+  wasi_clock: |
+    WASI clock provides:
+    - Current time (for timestamping, timeouts)
+    - Monotonic clock (for benchmarking)
+
+    Security:
+    - Module cannot see absolute time (prevent timing attacks)
+    - Monotonic clock only (no other host state leakage)
+
+# ============================================================================
+# CONFIGURATION: YAML Schema
+# ============================================================================
+
+configuration:
+  yaml_section: "k1/config/tools/wasm_sandbox.yml"
+  config_example: |
+    wasm_sandbox:
+      enabled: true
+      engine:
+        wasm_simd: true
+        wasm_relaxed_simd: true
+        wasm_bulk_memory: true
+        wasm_multi_value: true
+      module_defaults:
+        max_memory_pages: 1024      # 64 MB max memory per module
+        initial_memory_pages: 1     # 64 KB initial memory
+        timeout_seconds: 30         # Default timeout
+        enable_wasi: true           # Enable WASI filesystem/environment
+      modules:
+        - module_id: "user_plugin"
+          path: "/k1/wasm_modules/user_plugin.wasm"
+          initial_memory_pages: 2   # 128 KB
+          max_memory_pages: 512     # 32 MB (plugin-specific limit)
+          timeout_seconds: 5        # Plugin-specific timeout
+          wasi_preopened_dirs:
+            - path: "/tmp/plugin_workspace"
+              fd: 3
+        - module_id: "crypto_lib"
+          path: "/k1/wasm_modules/crypto_lib.wasm"
+          timeout_seconds: 10
+
+  environment_variables: |
+    K1_WASM_ENGINE_CONFIG_PATH=/k1/config/tools/wasm_sandbox.yml
+    K1_WASM_MODULES_DIR=/k1/wasm_modules/
+    K1_WASM_MODULE_CACHE_SIZE=100  # Cache compiled modules in memory
+
+# ============================================================================
+# OBSERVABILITY: Metrics, Traces, Logs
+# ============================================================================
+
+observability:
+  metrics:
+    prometheus_metrics:
+      - name: "wasm_module_loads_total"
+        type: "Counter"
+        labels: ["module_id", "status"]
+        values: ["success", "failure"]
+        description: "Total WASM module loads"
+
+      - name: "wasm_module_load_duration_ms"
+        type: "Histogram"
+        labels: ["module_id"]
+        buckets: [10, 30, 50, 100, 200]
+        description: "WASM module load time"
+
+      - name: "wasm_instantiation_total"
+        type: "Counter"
+        labels: ["module_id"]
+        description: "Total WASM module instantiations"
+
+      - name: "wasm_instantiation_duration_ms"
+        type: "Histogram"
+        labels: ["module_id"]
+        buckets: [10, 30, 50, 100, 200]
+        description: "WASM instantiation time"
+
+      - name: "wasm_execution_duration_ms"
+        type: "Histogram"
+        labels: ["module_id", "function_name"]
+        buckets: [1, 5, 10, 50, 100, 500]
+        description: "WASM function execution time"
+
+      - name: "wasm_memory_usage_bytes"
+        type: "Gauge"
+        labels: ["module_id"]
+        description: "WASM module memory usage"
+
+  tracing:
+    traces_captured:
+      - span_name: "wasm_module_load"
+        attributes:
+          - module_id: "string"
+          - module_size_bytes: "integer"
+          - load_duration_ms: "float"
+        events: ["load_start", "parse_complete", "load_complete"]
+
+      - span_name: "wasm_instantiation"
+        attributes:
+          - module_id: "string"
+          - instance_id: "string (UUID)"
+          - instantiation_duration_ms: "float"
+          - memory_allocated_bytes: "integer"
+
+      - span_name: "wasm_function_call"
+        attributes:
+          - module_id: "string"
+          - function_name: "string"
+          - duration_ms: "float"
+          - result: "success|trap|timeout"
+
+  logging:
+    log_events:
+      - event: "wasm_module_load_success"
+        level: "INFO"
+        context: {module_id, module_size_bytes, load_duration_ms, trace_id}
+
+      - event: "wasm_module_load_failure"
+        level: "ERROR"
+        context: {module_id, error_message, error_code, trace_id}
+
+      - event: "wasm_instantiation_success"
+        level: "DEBUG"
+        context: {module_id, instance_id, memory_allocated_bytes, trace_id}
+
+      - event: "wasm_function_call_trap"
+        level: "WARNING"
+        context: {module_id, function_name, trap_code, trace_id}
+
+      - event: "wasm_timeout"
+        level: "WARNING"
+        context: {module_id, function_name, timeout_ms, trace_id}
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: Wasmtime Engine MUST be created once at K1 startup
+    ENFORCEMENT: Singleton pattern (Engine created in __init__ of WasmSandboxManager)
+    RATIONALE: Engine holds compiled code, expensive to recreate
+
+  rule_2: |
+    RULE: WASM modules MUST be loaded from /k1/wasm_modules/ only
+    ENFORCEMENT: Path validation (reject paths with .., absolute paths outside /k1/wasm_modules/)
+    RATIONALE: Prevent directory traversal attacks (load arbitrary files)
+
+  rule_3: |
+    RULE: WASM memory MUST NOT exceed max_pages (default 1024 = 64MB)
+    ENFORCEMENT: Set memory.max to max_pages during instantiation, memory.grow rejects >max_pages
+    RATIONALE: Prevent memory exhaustion attacks
+
+  rule_4: |
+    RULE: WASM function calls MUST timeout (default 30s, configurable per tool)
+    ENFORCEMENT: asyncio.wait_for wraps instance call with timeout
+    RATIONALE: Prevent infinite loops / resource exhaustion
+
+  rule_5: |
+    RULE: Each WASM module instance MUST have separate Store (isolated state)
+    ENFORCEMENT: Create new Store for each instantiate() call
+    RATIONALE: Complete isolation between module instances
+
+# ============================================================================
+# EXAMPLES: Wasmtime Runtime in Action
+# ============================================================================
+
+examples:
+  example_1_load_and_execute_module:
+    title: "Load WASM module and execute function"
+    flow: |
+      1. K1 ToolExecutionSelector chooses MCP+WASM for user_plugin
+      2. WasmSandboxManager.execute(tool_id="user_plugin", function="process")
+      3. Load module from /k1/wasm_modules/user_plugin.wasm
+      4. Create Store with memory limits (initial: 64KB, max: 64MB)
+      5. Instantiate module (call start function if exists)
+      6. Call exported function: instance.exports["process"](input_data)
+      7. Await result (or timeout after 5 seconds)
+      8. Extract result from WASM memory
+      9. Clean up Store (free memory)
+      10. Return result to K1
+
+    code_pseudocode: |
+      # K1 tool execution
+      wasm_mgr = WasmSandboxManager()
+
+      # Load module (cached on disk)
+      result = await wasm_mgr.execute(
+          tool_id="user_plugin",
+          function_name="process",
+          arguments={"input": "hello"},
+          timeout_seconds=5
+      )
+
+      # Returns: {"output": "world"}
+      # Under the hood:
+      # 1. Load /k1/wasm_modules/user_plugin.wasm
+      # 2. Create Store + instantiate
+      # 3. Call instance.exports["process"](input_dict)
+      # 4. Read result from WASM memory
+      # 5. Destroy Store (free memory)
+
+  example_2_memory_limit_protection:
+    title: "WASM module tries to exceed memory limit"
+    flow: |
+      1. Module configured with max_memory_pages=256 (16MB)
+      2. Module calls memory.grow(300) (try to allocate 19.2 MB)
+      3. Wasmtime checks: 256 + 300 > 256 → exceeds max
+      4. memory.grow returns -1 (failure, not an error)
+      5. Module code handles failure (or crashes trying to use non-existent memory)
+      6. If module crashes: trap caught, execution aborted
+      7. K1 receives ToolExecutionError
+      8. ToolExecutionSelector tries fallback (MCP+Process)
+
+    code_pseudocode: |
+      # WASM module code (Rust compiled to WASM)
+      let pages_needed = 300;
+      if memory.grow(pages_needed) == -1 {
+          // Memory allocation failed
+          // Handle gracefully (return error to caller)
+      } else {
+          // Memory allocated, use it
+      }
+
+  example_3_wasi_filesystem_sandbox:
+    title: "WASM module reads file using WASI"
+    flow: |
+      1. Module initialized with preopened directory: /tmp/tool_workspace (fd=3)
+      2. Module calls fd_open(fd=3, "data.txt") → opens /tmp/tool_workspace/data.txt
+      3. Module calls fd_read(file_fd) → reads file contents
+      4. Module tries fd_open(fd=3, "../../etc/passwd")
+      5. WASI checks: path normalization prevents escape
+      6. WASI returns error: cannot access outside preopened directory
+      7. Module receives error, handles gracefully
+      8. Execution continues (no security breach)
+
+    code_pseudocode: |
+      # WASM module code (C compiled to WASM via wasi-sdk)
+      int fd = open("data.txt", O_RDONLY);  // Opens /tmp/tool_workspace/data.txt
+      if (fd < 0) {
+          // Error handling
+      } else {
+          char buf[256];
+          read(fd, buf, sizeof(buf));
+          // Process data
+      }
+
+      // Attempt to escape sandbox:
+      int fd2 = open("../../etc/passwd", O_RDONLY);  // Returns error
+      // WASI prevents this (sandboxed filesystem)

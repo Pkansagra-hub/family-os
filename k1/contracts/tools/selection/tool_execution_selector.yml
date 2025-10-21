@@ -1,0 +1,670 @@
+# ToolExecutionSelector Contract - 2D Selection Algorithm (Protocol × Sandbox)
+# ADR-0033d: 2D Selection Logic & Fallback Cascade
+# Created: 2025-10-16
+# Status: DRAFT
+
+contract_name: "Tool Execution Selector"
+contract_id: "tool_execution_selector_v1"
+adr_reference: "ADR-0033d"
+
+description: |
+  Core 2D selection algorithm for automatic protocol and sandbox combination selection.
+
+  Selection is based on orthogonal axes:
+  - Axis 1 (Protocol): MCP (80%) vs Direct (20%)
+  - Axis 2 (Sandbox): WASM (15%) vs Process (80%) vs Container (5%)
+
+  Valid combinations (6 total):
+  - MCP + WASM (10%): User plugins, untrusted MCP servers
+  - MCP + Process (70%): Standard tools, MCP servers as native processes
+  - MCP + Container (<1%): High-risk MCP servers in hardware-isolated microVM
+  - Direct + WASM (5%): Standalone WASM modules (no MCP)
+  - Direct + Process (15%): Native binaries, CLI tools
+  - Direct + Container (<1%): Containerized services
+
+# ====================
+# Selection Algorithm
+# ====================
+selection_algorithm:
+  name: "2D ToolExecutionSelector"
+  description: |
+    Automatic selection of optimal Protocol × Sandbox combination with 4-stage fallback cascade.
+
+    Algorithm:
+    1. Determine Protocol (Axis 1): Check if tool has MCP server → MCP (80%), else Direct (20%)
+    2. Determine Sandbox (Axis 2): Check trust level and security requirements
+       - Untrusted code → WASM (15%, maximum isolation)
+       - Performance-critical → Process (80%, native speed)
+       - High-risk RED band → Container (5%, hardware-level isolation)
+       - Default → Process
+    3. Build Fallback Chain (4 stages):
+       - Stage 1: Preferred combination (protocol + sandbox)
+       - Stage 2: Fallback sandbox (same protocol)
+       - Stage 3: Fallback protocol (same sandbox)
+       - Stage 4: Double fallback (both protocol and sandbox)
+    4. Return SelectionResult with preferred + fallback chain + rationale
+
+  research_foundation: |
+    - Decision Trees: Quinlan (1986)
+    - Fallback Patterns: Nygard (2007) - "Release It!"
+    - ADR-0033: Tool Execution Architecture (2-layer)
+    - ADR-0033a: MCP Protocol Integration (Layer 1)
+    - ADR-0033b: WASM Sandbox (Layer 2)
+    - ADR-0033c: Process Sandbox (Layer 2)
+
+# ====================
+# Input Specification
+# ====================
+input:
+  name: ToolCharacteristics
+  description: "Tool characteristics for selection decision"
+
+  fields:
+    tool_name:
+      type: string
+      description: "Tool identifier (e.g., 'weather_api', 'user_plugin')"
+      example: "weather_api"
+      required: true
+
+    band:
+      type: enum
+      enum: ["GREEN", "AMBER", "RED", "BLACK"]
+      description: |
+        Privacy/security band classification:
+        - GREEN: No user data, offline-safe
+        - AMBER: Some user data, network access allowed
+        - RED: Sensitive operations, network restricted to allowlist
+        - BLACK: Untrusted code, no network access
+      example: "AMBER"
+      required: true
+
+    trust_level:
+      type: enum
+      enum: ["TRUSTED", "VERIFIED", "UNTRUSTED"]
+      description: |
+        Tool trust classification:
+        - TRUSTED: First-party tools (built by K1 team)
+        - VERIFIED: Third-party verified (audited, signed)
+        - UNTRUSTED: User-submitted, unaudited code
+      example: "VERIFIED"
+      required: true
+
+    has_mcp_server:
+      type: boolean
+      description: "Whether tool has MCP protocol implementation (true) or must use Direct API (false)"
+      example: true
+      required: true
+
+    performance_critical:
+      type: boolean
+      description: |
+        Whether tool is performance-sensitive:
+        - true: Requires native speed (e.g., video processing, real-time)
+        - false: Non-critical performance (e.g., one-off calculations)
+      example: false
+      required: true
+
+# ====================
+# Output Specification
+# ====================
+output:
+  name: SelectionResult
+  description: "Result of 2D selection with preferred + fallback chain"
+
+  fields:
+    protocol:
+      type: enum
+      enum: ["mcp", "direct"]
+      description: "Selected protocol (Axis 1)"
+      example: "mcp"
+
+    sandbox:
+      type: enum
+      enum: ["wasm", "process", "container"]
+      description: "Selected sandbox (Axis 2)"
+      example: "process"
+
+    rationale:
+      type: string
+      description: "Human-readable rationale for selection (comma-separated reasons)"
+      example: |
+        MCP server available (standardized interface) | AMBER band (allow-list network) |
+        Process sandbox (non-critical performance, native speed)
+
+    fallback_chain:
+      type: array
+      description: |
+        4-stage fallback chain: [
+          (preferred_protocol, preferred_sandbox),
+          (preferred_protocol, fallback_sandbox_1),
+          (fallback_protocol, fallback_sandbox_1),
+          (fallback_protocol, fallback_sandbox_2)
+        ]
+      example: [
+        ["mcp", "process"],
+        ["mcp", "wasm"],
+        ["direct", "wasm"]
+      ]
+      items:
+        type: array
+        items:
+          type: string
+          enum: ["mcp", "direct", "wasm", "process", "container"]
+
+# ====================
+# Selection Decision Matrix
+# ====================
+decision_matrix:
+  name: "Protocol × Sandbox 2D Matrix"
+  description: "Valid combinations and distribution"
+
+  protocol_axis:
+    name: "Protocol Selection (Axis 1)"
+    description: |
+      HOW tools are discovered and invoked:
+      - MCP Protocol (80%): Standardized JSON-RPC 2.0 interface
+      - Direct API (20%): Legacy tools, REST APIs, CLI binaries
+
+    decision_rule:
+      description: "Prefer MCP if available, else Direct"
+      if_mcp_server_exists: "protocol = MCP"
+      else: "protocol = DIRECT"
+
+  sandbox_axis:
+    name: "Sandbox Selection (Axis 2)"
+    description: |
+      WHERE and HOW tools execute securely:
+      - WASM Sandbox (15%): Maximum isolation, capability-based I/O
+      - Process Sandbox (80%): OS process isolation, ADR-0032 controls
+      - Container Sandbox (5%): Hardware-level isolation (gVisor/Firecracker)
+
+    decision_tree:
+      step_1:
+        condition: "trust_level == UNTRUSTED"
+        decision: "sandbox = WASM"
+        rationale: "Untrusted code requires maximum isolation (capability-based I/O)"
+
+      step_2:
+        condition: "band == RED AND high_risk_indicator"
+        decision: "sandbox = CONTAINER"
+        rationale: "High-risk RED band operations require hardware-level isolation"
+
+      step_3:
+        condition: "performance_critical == true"
+        decision: "sandbox = PROCESS"
+        rationale: "Performance-critical tools need native speed (no WASM 10x slowdown)"
+
+      step_4:
+        condition: "default"
+        decision: "sandbox = PROCESS"
+        rationale: "80% of tools are standard, non-critical, use lightweight Process sandbox"
+
+# ====================
+# Fallback Cascade (4 Stages)
+# ====================
+fallback_cascade:
+  name: "4-Stage Fallback Chain"
+  description: |
+    Graceful degradation strategy when preferred combination unavailable.
+    Tries all 4 combinations in order until success.
+
+  stage_1:
+    name: "Preferred Combination"
+    description: "Try optimal (protocol, sandbox) pair"
+    condition: "Both preferred_protocol AND preferred_sandbox available"
+    success_rate: "70% (majority of tools work first try)"
+    latency_impact: "None (no fallback overhead)"
+
+  stage_2:
+    name: "Fallback Sandbox"
+    description: "Keep same protocol, try different sandbox"
+    condition: "Preferred sandbox unavailable (e.g., WASM runtime crashed)"
+    fallback_logic: |
+      If preferred_sandbox = WASM:
+        Try: [PROCESS, CONTAINER]  (relax security for speed)
+      If preferred_sandbox = PROCESS:
+        Try: [WASM, CONTAINER]     (increase security or hardware isolation)
+      If preferred_sandbox = CONTAINER:
+        Try: [PROCESS, WASM]       (reduce overhead)
+    success_rate: "20% (fallback works most of the time)"
+    latency_impact: "<100ms per failed attempt"
+    example: |
+      MCP+WASM unavailable (WASM runtime crashed)
+      → Try MCP+Process (graceful degradation)
+      → Success! Tool executes with same protocol, different sandbox
+
+  stage_3:
+    name: "Fallback Protocol"
+    description: "Keep same sandbox, try different protocol"
+    condition: "Preferred protocol unavailable (e.g., MCP server crashed)"
+    fallback_logic: |
+      If preferred_protocol = MCP:
+        Try: DIRECT  (fall back to direct API invocation)
+      If preferred_protocol = DIRECT:
+        No fallback available (Direct is last resort)
+    success_rate: "5% (rare, protocol rarely crashes completely)"
+    latency_impact: "<50ms per failed attempt"
+    example: |
+      MCP+Process unavailable (MCP server crash)
+      → Try Direct+Process (different protocol, same sandbox)
+      → Success! Tool executes via direct CLI invocation in Process sandbox
+
+  stage_4:
+    name: "Double Fallback"
+    description: "Both protocol and sandbox fallback"
+    condition: "Both preferred protocol AND sandbox unavailable"
+    fallback_logic: |
+      Use last-resort combination from chains:
+      - Remaining_protocol × Remaining_sandbox
+    success_rate: "3% (rare, indicates systemic failure)"
+    latency_impact: "<200ms total (3 failed attempts)"
+    example: |
+      MCP+Process unavailable (MCP crash, Process sandbox issue)
+      Direct+Process unavailable
+      → Try Direct+WASM (maximum fallback)
+      → Success! Final fallback works
+
+# ====================
+# Performance Analysis
+# ====================
+performance:
+  selection_latency_ms:
+    p50: 2
+    p95: 8
+    p99: 15
+    description: "Time to run selection algorithm (decision tree traversal)"
+
+  scenario_1_preferred_success:
+    condition: "First attempt succeeds (70% of tools)"
+    total_latency_ms: 210  # Example: 10ms protocol + 200ms tool
+    fallback_overhead_ms: 0
+    description: "MCP+Process tool, no fallback needed"
+
+  scenario_2_fallback_sandbox:
+    condition: "Sandbox fallback succeeds (20% of tools)"
+    total_latency_ms: 310  # Example: 75ms failed attempt + 75ms sandbox switch + 160ms successful attempt
+    fallback_overhead_ms: 100
+    description: "MCP+WASM unavailable, fallback to MCP+Process"
+
+  scenario_3_fallback_protocol:
+    condition: "Protocol fallback succeeds (5% of tools)"
+    total_latency_ms: 360  # Example: 2 failed attempts × 75ms + 210ms successful attempt
+    fallback_overhead_ms: 150
+    description: "MCP+Process unavailable, fallback to Direct+Process"
+
+  scenario_4_double_fallback:
+    condition: "Double fallback succeeds (3% of tools)"
+    total_latency_ms: 500  # Example: 3 failed attempts + successful attempt
+    fallback_overhead_ms: 290
+    description: "Both preferred protocol and sandbox fail, double fallback works"
+
+  scenario_5_all_exhausted:
+    condition: "All fallbacks exhausted (2% of tools, broken)"
+    total_latency_ms: 300
+    fallback_overhead_ms: 300
+    error: "RuntimeError: Tool failed after 4 attempts"
+    description: "Tool completely broken, no combination works"
+
+# ====================
+# Selection Criteria Examples
+# ====================
+examples:
+  example_1:
+    tool_name: "weather_api"
+    band: "AMBER"
+    trust_level: "VERIFIED"
+    has_mcp_server: true
+    performance_critical: true
+
+    selection_steps:
+      step_1_protocol: "has_mcp_server=true → protocol=MCP"
+      step_2_sandbox: "trust_level=VERIFIED (not untrusted) AND performance_critical=true → sandbox=PROCESS"
+      step_3_rationale: |
+        MCP server available (standardized interface) |
+        AMBER band (allow-list network) |
+        Process sandbox (performance-critical, native speed required)
+
+    result:
+      protocol: "mcp"
+      sandbox: "process"
+      fallback_chain: [
+        ["mcp", "process"],
+        ["mcp", "wasm"],
+        ["direct", "wasm"]
+      ]
+
+  example_2:
+    tool_name: "user_plugin"
+    band: "GREEN"
+    trust_level: "UNTRUSTED"
+    has_mcp_server: true
+    performance_critical: false
+
+    selection_steps:
+      step_1_protocol: "has_mcp_server=true → protocol=MCP"
+      step_2_sandbox: "trust_level=UNTRUSTED → sandbox=WASM (maximum isolation)"
+      step_3_rationale: |
+        MCP server available |
+        WASM sandbox (untrusted code requires maximum security)
+
+    result:
+      protocol: "mcp"
+      sandbox: "wasm"
+      fallback_chain: [
+        ["mcp", "wasm"],
+        ["mcp", "process"],
+        ["direct", "process"],
+        ["direct", "wasm"]
+      ]
+
+  example_3:
+    tool_name: "ffmpeg"
+    band: "GREEN"
+    trust_level: "TRUSTED"
+    has_mcp_server: false
+    performance_critical: true
+
+    selection_steps:
+      step_1_protocol: "has_mcp_server=false → protocol=DIRECT (no MCP for CLI tool)"
+      step_2_sandbox: "trust_level=TRUSTED AND performance_critical=true → sandbox=PROCESS"
+      step_3_rationale: |
+        No MCP server (legacy CLI tool) |
+        Process sandbox (performance-critical, native video processing)
+
+    result:
+      protocol: "direct"
+      sandbox: "process"
+      fallback_chain: [
+        ["direct", "process"],
+        ["direct", "container"]
+      ]
+
+  example_4:
+    tool_name: "high_risk_tool"
+    band: "RED"
+    trust_level: "VERIFIED"
+    has_mcp_server: true
+    performance_critical: false
+
+    selection_steps:
+      step_1_protocol: "has_mcp_server=true → protocol=MCP"
+      step_2_sandbox: "band=RED AND high_risk_indicator → sandbox=CONTAINER (hardware-level isolation)"
+      step_3_rationale: |
+        MCP server available |
+        RED band (maximum security required, hardware-level isolation)
+
+    result:
+      protocol: "mcp"
+      sandbox: "container"
+      fallback_chain: [
+        ["mcp", "container"],
+        ["mcp", "process"],
+        ["direct", "process"]
+      ]
+
+# ====================
+# Implementation Contract
+# ====================
+implementation:
+  class_name: "ToolExecutionSelector"
+  module: "k1.tools.selection"
+
+  constructor:
+    parameters:
+      tool_registry: "dict"  # Tool configurations from YAML
+      sandbox_availability: "dict"  # Runtime sandbox status (wasm, process, container)
+    description: "Initialize selector with tool registry and sandbox availability"
+
+  methods:
+    select:
+      signature: |
+        def select(self, characteristics: ToolCharacteristics) -> SelectionResult
+      description: "Select optimal Protocol × Sandbox combination"
+      parameters:
+        characteristics: "ToolCharacteristics"
+      returns: "SelectionResult"
+      raises:
+        - "ValueError: Tool not found in registry"
+        - "ValueError: No suitable combination available"
+
+    _select_protocol:
+      signature: |
+        def _select_protocol(self, characteristics: ToolCharacteristics) -> ProtocolType
+      description: "Select protocol (Axis 1)"
+      logic: |
+        if characteristics.has_mcp_server:
+          return ProtocolType.MCP
+        else:
+          return ProtocolType.DIRECT
+
+    _select_sandbox:
+      signature: |
+        def _select_sandbox(self, characteristics: ToolCharacteristics) -> SandboxType
+      description: "Select sandbox (Axis 2)"
+      logic: |
+        if characteristics.trust_level == TrustLevel.UNTRUSTED:
+          return SandboxType.WASM
+
+        if characteristics.band == PrivacyBand.RED and high_risk_indicator:
+          return SandboxType.CONTAINER
+
+        if characteristics.trust_level in [TRUSTED, VERIFIED] and characteristics.performance_critical:
+          return SandboxType.PROCESS
+
+        return SandboxType.PROCESS  # Default
+
+    _build_fallback_chain:
+      signature: |
+        def _build_fallback_chain(
+          self,
+          preferred_protocol: ProtocolType,
+          fallback_protocol: Optional[ProtocolType],
+          preferred_sandbox: SandboxType,
+          fallback_sandboxes: List[SandboxType]
+        ) -> List[Tuple[ProtocolType, SandboxType]]
+      description: "Build 4-stage fallback chain"
+      logic: |
+        chain = []
+
+        # Stage 1: Preferred
+        chain.append((preferred_protocol, preferred_sandbox))
+
+        # Stage 2: Fallback sandbox
+        if len(fallback_sandboxes) >= 1:
+          chain.append((preferred_protocol, fallback_sandboxes[0]))
+
+        # Stage 3: Fallback protocol
+        if fallback_protocol and len(fallback_sandboxes) >= 1:
+          chain.append((fallback_protocol, fallback_sandboxes[0]))
+
+        # Stage 4: Double fallback
+        if fallback_protocol and len(fallback_sandboxes) >= 2:
+          chain.append((fallback_protocol, fallback_sandboxes[1]))
+
+        return chain
+
+    _generate_rationale:
+      signature: |
+        def _generate_rationale(
+          self,
+          characteristics: ToolCharacteristics,
+          protocol: ProtocolType,
+          sandbox: SandboxType
+        ) -> str
+      description: "Generate human-readable rationale for selection"
+      returns: "Comma-separated list of reasons"
+
+# ====================
+# Testing Contract
+# ====================
+testing:
+  framework: "WARD"
+  test_cases:
+    test_1:
+      name: "Untrusted tool selects WASM sandbox"
+      inputs:
+        tool_name: "user_plugin"
+        band: "GREEN"
+        trust_level: "UNTRUSTED"
+        has_mcp_server: true
+        performance_critical: false
+      expected_output:
+        protocol: "mcp"
+        sandbox: "wasm"
+      assertion: "result.sandbox == SandboxType.WASM"
+
+    test_2:
+      name: "Performance-critical tool selects Process sandbox"
+      inputs:
+        tool_name: "weather_api"
+        band: "AMBER"
+        trust_level: "VERIFIED"
+        has_mcp_server: true
+        performance_critical: true
+      expected_output:
+        protocol: "mcp"
+        sandbox: "process"
+      assertion: "result.sandbox == SandboxType.PROCESS"
+
+    test_3:
+      name: "RED band high-risk tool selects Container sandbox"
+      inputs:
+        tool_name: "high_risk_tool"
+        band: "RED"
+        trust_level: "VERIFIED"
+        has_mcp_server: true
+        performance_critical: false
+      expected_output:
+        protocol: "mcp"
+        sandbox: "container"
+      assertion: "result.sandbox == SandboxType.CONTAINER"
+
+    test_4:
+      name: "Tool without MCP selects Direct protocol"
+      inputs:
+        tool_name: "ffmpeg"
+        band: "GREEN"
+        trust_level: "TRUSTED"
+        has_mcp_server: false
+        performance_critical: true
+      expected_output:
+        protocol: "direct"
+        sandbox: "process"
+      assertion: "result.protocol == ProtocolType.DIRECT"
+
+    test_5:
+      name: "Selector builds 4-stage fallback chain"
+      inputs:
+        tool_name: "user_plugin"
+        band: "GREEN"
+        trust_level: "UNTRUSTED"
+        has_mcp_server: true
+        performance_critical: false
+      expected_output:
+        fallback_chain_length: 4
+      assertion: "len(result.fallback_chain) == 4"
+
+    test_6:
+      name: "Selector generates human-readable rationale"
+      inputs:
+        tool_name: "weather_api"
+        band: "AMBER"
+        trust_level: "VERIFIED"
+        has_mcp_server: true
+        performance_critical: true
+      expected_output:
+        rationale_contains: ["MCP server", "AMBER band", "Process sandbox", "performance"]
+      assertion: "all(phrase in result.rationale.lower() for phrase in expected_phrases)"
+
+# ====================
+# Observability
+# ====================
+observability:
+  logging:
+    level: "INFO"
+    fields:
+      - tool_name
+      - selected_protocol
+      - selected_sandbox
+      - rationale
+      - fallback_chain_length
+      - trace_id
+    example_log: |
+      {
+        "level": "INFO",
+        "event": "tool_execution_selected",
+        "tool_name": "weather_api",
+        "selected_protocol": "mcp",
+        "selected_sandbox": "process",
+        "rationale": "MCP server available | AMBER band | Process sandbox (performance-critical, native speed)",
+        "fallback_chain_length": 3,
+        "trace_id": "trace_abc123"
+      }
+
+  metrics:
+    k1_tool_selection_total:
+      type: "Counter"
+      description: "Total tool selections"
+      labels: ["tool_name", "selected_protocol", "selected_sandbox"]
+
+    k1_tool_fallback_total:
+      type: "Counter"
+      description: "Fallback attempts (when preferred combination unavailable)"
+      labels: ["tool_name", "fallback_reason"]
+
+    k1_tool_selection_latency_ms:
+      type: "Histogram"
+      description: "Selection algorithm latency"
+      buckets: [1, 5, 10, 25, 50, 100]
+
+  tracing:
+    span_name: "tool_execution_selector"
+    attributes:
+      - tool_name
+      - selected_protocol
+      - selected_sandbox
+      - trace_id
+
+# ====================
+# Error Handling
+# ====================
+error_handling:
+  error_1:
+    name: "Tool not found"
+    error_code: "TOOL_NOT_FOUND"
+    http_status: 404
+    message: "Tool '{tool_name}' not found in registry"
+    mitigation: "Check tool name, verify tool registry is loaded"
+
+  error_2:
+    name: "No suitable combination"
+    error_code: "NO_SUITABLE_COMBINATION"
+    http_status: 503
+    message: "No suitable protocol × sandbox combination for tool '{tool_name}' (available sandboxes: {available})"
+    mitigation: "Check sandbox availability, may need to enable WASM/Container runtime"
+
+  error_3:
+    name: "Invalid tool characteristics"
+    error_code: "INVALID_CHARACTERISTICS"
+    http_status: 400
+    message: "Invalid tool characteristics: {details}"
+    mitigation: "Verify tool_characteristics schema"
+
+# ====================
+# ADR References
+# ====================
+adr_references:
+  - "ADR-0033: Tool Execution Architecture (Protocol × Sandbox)"
+  - "ADR-0033a: MCP Protocol Integration (Layer 1)"
+  - "ADR-0033b: WASM Sandbox Implementation (Layer 2)"
+  - "ADR-0033c: Process Sandbox Implementation (Layer 2)"
+  - "ADR-0032: Band-Based Egress Rules"
+  - "ADR-0010: Capability-Based Security"
+
+# ====================
+# Version & Status
+# ====================
+version: "1.0.0"
+status: "DRAFT"
+last_updated: "2025-10-16"
+authors: ["K1 Architecture Team"]

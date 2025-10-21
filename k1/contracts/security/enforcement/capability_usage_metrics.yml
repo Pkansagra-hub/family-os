@@ -1,0 +1,627 @@
+# Capability Usage Metrics Contract - Issue 2.5.4, Part 7
+# Purpose: Prometheus metrics and alerting for capability enforcement
+# Source ADR: ADR-0010c (Capability Enforcement Runtime)
+# Last Updated: 2025-10-15
+
+name: "Capability Usage Metrics & Alerting"
+purpose: "Comprehensive observability for capability enforcement system"
+scope: ["Tool Runner", "Model Hub", "K0 Bridge", "Capability Manager", "Revocation System"]
+version: "1.0"
+
+# ============================================================================
+# PROMETHEUS METRICS - CAPABILITY VALIDATION
+# ============================================================================
+
+metrics:
+
+  # --- VALIDATION METRICS ---
+
+  capability_validations_total:
+    type: "Counter"
+    description: "Total capability validations performed"
+    labels: ["resource_type", "validation_status"]
+    values:
+      resource_type: ["tool", "model", "memory", "api"]
+      validation_status: ["valid", "invalid", "expired", "revoked", "constraint_violated", "error"]
+    example: "capability_validations_total{resource_type='tool', validation_status='valid'}"
+    purpose: "Track validation success rate and identify failure patterns"
+    query: "rate(capability_validations_total[5m]) - detect spikes in validations"
+
+  capability_validation_latency_ms:
+    type: "Histogram"
+    description: "Capability validation latency in milliseconds"
+    labels: ["resource_type", "cached"]
+    buckets: [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+    percentiles: ["p50", "p95", "p99"]
+    example_queries:
+      - "histogram_quantile(0.95, capability_validation_latency_ms{resource_type='tool'})"
+      - "histogram_quantile(0.95, capability_validation_latency_ms{cached='true'}) # Should be <0.1ms"
+    purpose: "Performance monitoring for validation pipeline"
+    targets:
+      tool_runner: "<1ms P95"
+      model_hub: "<10ms P95"
+
+  capability_cache_hits_total:
+    type: "Counter"
+    description: "Capability validation cache hits"
+    labels: ["resource_type"]
+    example: "capability_cache_hits_total{resource_type='tool'}"
+    derived_metric: "cache_hit_rate = rate(capability_cache_hits_total) / rate(capability_validations_total)"
+    purpose: "Track cache effectiveness (target: 85% hit rate)"
+
+  capability_cache_misses_total:
+    type: "Counter"
+    description: "Capability validation cache misses"
+    labels: ["resource_type"]
+    example: "capability_cache_misses_total{resource_type='model'}"
+
+  capability_cache_size_bytes:
+    type: "Gauge"
+    description: "Current size of capability validation cache"
+    labels: ["resource_type"]
+    example: "capability_cache_size_bytes{resource_type='tool'} = 1048576 (1MB)"
+    purpose: "Memory usage monitoring"
+    limits:
+      tool_cache_max: "10MB"
+      model_cache_max: "50MB"
+
+  # --- CONSTRAINT VIOLATION METRICS ---
+
+  capability_constraint_violations_total:
+    type: "Counter"
+    description: "Total constraint violations detected"
+    labels: ["resource_type", "constraint_type", "agent_id"]
+    values:
+      constraint_type: ["max_invocations", "max_cost_usd", "privacy_band", "rate_limit", "permission_denied"]
+    example_queries:
+      - "rate(capability_constraint_violations_total[5m]) # Violations per second"
+      - "capability_constraint_violations_total{constraint_type='max_cost_usd'} # Cost violations"
+    purpose: "Identify policy violations and potential abuse"
+
+  capability_invocation_count:
+    type: "Gauge"
+    description: "Current invocation count for capability"
+    labels: ["agent_id", "resource_id"]
+    example: "capability_invocation_count{agent_id='agent_planner_001', resource_id='web_search'} = 842"
+    purpose: "Track usage against max_invocations constraint"
+
+  capability_cost_usd:
+    type: "Gauge"
+    description: "Current cumulative cost for agent/resource"
+    labels: ["agent_id", "resource_id"]
+    example: "capability_cost_usd{agent_id='agent_planner_001', resource_id='gpt-4o'} = 45.32"
+    purpose: "Track spending against max_cost_usd constraint"
+
+  capability_rate_limit_current:
+    type: "Gauge"
+    description: "Current request count in rate limit window"
+    labels: ["agent_id", "resource_id", "window"]
+    values:
+      window: ["minute", "hour", "day"]
+    example: "capability_rate_limit_current{agent_id='agent_planner_001', window='minute'} = 342"
+    purpose: "Track requests against rate limits"
+
+  # --- SIGNATURE/CRYPTOGRAPHY METRICS ---
+
+  capability_signature_failures_total:
+    type: "Counter"
+    description: "Failed HMAC signature verifications"
+    labels: ["failure_reason"]
+    values:
+      failure_reason: ["invalid_hmac", "malformed_token", "key_rotation_required", "expired_key"]
+    purpose: "Detect cryptographic attacks or key rotation issues"
+    alert_threshold: "spike > 50 failures/min"
+
+  capability_hmac_verification_latency_ms:
+    type: "Histogram"
+    description: "HMAC signature verification latency"
+    buckets: [0.1, 0.2, 0.3, 0.5, 1.0]
+    percentiles: ["p50", "p95"]
+    purpose: "Identify performance bottleneck in hot path"
+    target: "P95 <0.5ms (not to exceed 5% of 1ms budget)"
+
+  capability_key_rotation_events:
+    type: "Counter"
+    description: "Signing key rotation events"
+    labels: ["key_id", "status"]
+    values:
+      status: ["initiated", "completed", "failed"]
+    purpose: "Track key rotation lifecycle"
+
+  # --- REVOCATION METRICS ---
+
+  capability_revocations_total:
+    type: "Counter"
+    description: "Total capabilities revoked"
+    labels: ["capability_type", "revocation_reason"]
+    values:
+      revocation_reason: ["admin_revocation", "agent_misbehavior", "security_incident", "ttl_expired"]
+    purpose: "Track revocation events"
+
+  revocation_propagation_latency_ms:
+    type: "Histogram"
+    description: "Time for revocation to propagate across K1 instances"
+    buckets: [10, 50, 100, 200, 500, 1000]
+    percentiles: ["p50", "p95", "p99"]
+    purpose: "Monitor multi-instance revocation efficiency"
+    target: "P95 <100ms"
+
+  revoked_capabilities_active:
+    type: "Gauge"
+    description: "Number of active revoked capabilities in Redis"
+    example: "revoked_capabilities_active = 42"
+    purpose: "Monitor revocation cache size"
+
+  revocation_cascade_depth:
+    type: "Histogram"
+    description: "Depth of cascading revocation (parent → children)"
+    buckets: [1, 2, 3, 5, 10, 20]
+    purpose: "Understand delegation chains"
+
+  cascaded_capabilities_revoked_total:
+    type: "Counter"
+    description: "Capabilities revoked as cascading consequence"
+    purpose: "Track cascading revocation effectiveness"
+
+  revocation_grace_period_violations:
+    type: "Counter"
+    description: "Tasks terminated before grace period"
+    labels: ["resource_type"]
+    purpose: "Monitor grace period violations (should be 0)"
+
+  # --- RESOURCE EXECUTION METRICS ---
+
+  tool_execution_total:
+    type: "Counter"
+    description: "Total tool executions attempted"
+    labels: ["tool_id", "validation_status"]
+    values:
+      validation_status: ["allowed", "denied"]
+    example: "rate(tool_execution_total{validation_status='allowed'}[5m])"
+    purpose: "Track tool execution volume"
+
+  tool_execution_denied_total:
+    type: "Counter"
+    description: "Tool executions denied by capability enforcement"
+    labels: ["tool_id", "denial_reason"]
+    values:
+      denial_reason: ["invalid_signature", "revoked", "budget_exceeded", "rate_limit"]
+    purpose: "Identify denial patterns"
+
+  model_call_total:
+    type: "Counter"
+    description: "Total model inference calls"
+    labels: ["agent_id", "model_id", "call_status"]
+    values:
+      call_status: ["allowed", "denied", "error", "timeout"]
+    purpose: "Track model call volume per agent/model"
+
+  model_call_cost_usd:
+    type: "Histogram"
+    description: "Cost per model call in USD"
+    labels: ["model_id"]
+    buckets: [0.001, 0.01, 0.05, 0.10, 0.50, 1.00, 5.00]
+    percentiles: ["p50", "p95", "p99"]
+    purpose: "Cost distribution analysis"
+
+  model_call_tokens_input:
+    type: "Histogram"
+    description: "Input tokens per model call"
+    labels: ["model_id"]
+    buckets: [100, 500, 1000, 5000, 10000, 50000]
+    purpose: "Understand token consumption patterns"
+
+  model_call_tokens_output:
+    type: "Histogram"
+    description: "Output tokens per model call"
+    labels: ["model_id"]
+    buckets: [10, 50, 100, 500, 1000, 5000]
+    purpose: "Track output token variance"
+
+  # --- AUDIT & LOGGING METRICS ---
+
+  audit_events_written_total:
+    type: "Counter"
+    description: "Total audit events written to K0 WAL"
+    labels: ["event_type"]
+    purpose: "Track audit logging volume"
+
+  audit_event_write_latency_ms:
+    type: "Histogram"
+    description: "Latency of writing audit events to K0 WAL"
+    buckets: [0.5, 1.0, 2.0, 5.0, 10.0]
+    percentiles: ["p95", "p99"]
+    purpose: "Ensure audit logging doesn't impact performance"
+    target: "P95 <10ms"
+
+  audit_trail_storage_gb:
+    type: "Gauge"
+    description: "Total audit trail storage size"
+    example: "audit_trail_storage_gb = 125.4"
+    purpose: "Storage capacity planning"
+    limits:
+      warning_threshold: "300GB (90-day retention estimate)"
+      alert_threshold: "450GB (critical)"
+
+  # --- PERFORMANCE & RESOURCE METRICS ---
+
+  capability_enforcement_cpu_usage_percent:
+    type: "Gauge"
+    description: "CPU usage for capability enforcement"
+    example: "capability_enforcement_cpu_usage_percent = 2.5"
+    purpose: "Monitor overhead (<5% target)"
+
+  capability_enforcement_memory_mb:
+    type: "Gauge"
+    description: "Memory used by capability enforcement system"
+    example: "capability_enforcement_memory_mb = 128"
+    purpose: "Track memory overhead"
+    limits:
+      tool_runner: "50MB"
+      model_hub: "75MB"
+      revocation_system: "25MB"
+
+  validation_queue_depth:
+    type: "Gauge"
+    description: "Number of pending validations in queue"
+    labels: ["validator"]
+    values:
+      validator: ["tool_runner", "model_hub", "k0_bridge"]
+    purpose: "Detect bottlenecks"
+
+  validation_queue_processing_latency_ms:
+    type: "Histogram"
+    description: "Time validation spends in queue"
+    buckets: [1, 5, 10, 50, 100]
+    purpose: "Monitor queue wait time"
+    target: "P95 <50ms (queue latency)"
+
+# ============================================================================
+# GRAFANA DASHBOARDS
+# ============================================================================
+
+grafana_dashboards:
+
+  dashboard_1_validation_health:
+    title: "Capability Validation Health"
+    time_range: "Last 24 hours"
+    refresh_rate: "30 seconds"
+
+    panels:
+      1_validation_success_rate:
+        type: "stat"
+        query: "1 - (rate(capability_validations_total{validation_status='invalid'}[5m]) + rate(capability_validations_total{validation_status='revoked'}[5m]) + rate(capability_validations_total{validation_status='constraint_violated'}[5m])) / rate(capability_validations_total[5m])"
+        unit: "percent"
+        target_value: ">99.9%"
+        color_scheme: "green/yellow/red"
+
+      2_p95_validation_latency:
+        type: "graph"
+        query: "histogram_quantile(0.95, capability_validation_latency_ms)"
+        unit: "ms"
+        target_line: "1.0"  # Tool Runner target
+        alert_threshold: "2.0"
+
+      3_cache_hit_rate:
+        type: "stat"
+        query: "rate(capability_cache_hits_total[5m]) / (rate(capability_cache_hits_total[5m]) + rate(capability_cache_misses_total[5m]))"
+        unit: "percent"
+        target_value: ">85%"
+
+      4_violations_by_type:
+        type: "pie_chart"
+        query: "sum by (constraint_type) (rate(capability_constraint_violations_total[5m]))"
+        labels: ["max_cost", "rate_limit", "invocation_limit", "privacy_band", "permission_denied"]
+
+      5_validation_latency_heatmap:
+        type: "heatmap"
+        query: "capability_validation_latency_ms"
+        unit: "ms"
+        y_axis: "latency_ms"
+        x_axis: "time"
+
+  dashboard_2_model_cost_tracking:
+    title: "Model Hub Cost Tracking & Budgets"
+    time_range: "Last 30 days"
+    refresh_rate: "5 minutes"
+
+    panels:
+      1_cost_per_agent_daily:
+        type: "bar_chart"
+        query: "sum by (agent_id) (increase(model_call_cost_usd[1d]))"
+        unit: "USD"
+        sort_by: "value"
+        top_k: 10
+
+      2_cost_per_model:
+        type: "pie_chart"
+        query: "sum by (model_id) (model_call_cost_usd)"
+        labels: ["gpt-4o", "gpt-4o-mini", "claude-3-opus", "claude-3-haiku", "local_models"]
+
+      3_budget_adherence_by_agent:
+        type: "gauge_panel"
+        query: "sum(model_call_cost_usd) by (agent_id) / 100.0"  # Assuming $100 budget
+        unit: "percent"
+        thresholds: [50, 80, 100]
+        colors: ["green", "yellow", "red"]
+
+      4_tokens_consumed_daily:
+        type: "area_chart"
+        query: "sum(increase(model_call_tokens_input[1d])) + sum(increase(model_call_tokens_output[1d]))"
+        unit: "tokens"
+
+      5_cost_projection_monthly:
+        type: "stat"
+        query: "(sum(increase(model_call_cost_usd[1d])) * 30)"  # Project to 30 days
+        unit: "USD"
+        format: "$###.##"
+
+  dashboard_3_revocation_efficiency:
+    title: "Capability Revocation & Multi-Instance Coordination"
+    time_range: "Last 24 hours"
+    refresh_rate: "1 minute"
+
+    panels:
+      1_revocations_per_hour:
+        type: "bar_chart"
+        query: "sum(increase(capability_revocations_total[1h]))"
+        unit: "count"
+
+      2_revocation_propagation_latency:
+        type: "graph"
+        query: "histogram_quantile(0.95, revocation_propagation_latency_ms)"
+        unit: "ms"
+        target_line: "100"
+        alert_threshold: "500"
+
+      3_active_revoked_capabilities:
+        type: "stat"
+        query: "revoked_capabilities_active"
+        unit: "count"
+
+      4_cascading_revocation_depth:
+        type: "heatmap"
+        query: "revocation_cascade_depth"
+        y_axis: "depth"
+
+      5_grace_period_violations:
+        type: "stat"
+        query: "sum(revocation_grace_period_violations)"
+        unit: "count"
+        target_value: "0"  # Should never happen
+
+  dashboard_4_security_incidents:
+    title: "Security Incidents & Anomalies"
+    time_range: "Last 7 days"
+    refresh_rate: "1 minute"
+
+    panels:
+      1_failed_validations_24h:
+        type: "stat"
+        query: "sum(increase(capability_validations_total{validation_status=~'invalid|revoked|constraint_violated'}[24h]))"
+        unit: "count"
+        alert_threshold: "1000"
+
+      2_signature_verification_failures:
+        type: "bar_chart"
+        query: "sum by (failure_reason) (rate(capability_signature_failures_total[5m]))"
+        alert_threshold: "10/min"
+
+      3_agent_spoofing_attempts:
+        type: "stat"
+        query: "sum(rate(capability_validations_total{validation_status='invalid', reason='agent_id_mismatch'}[5m]))"
+        unit: "attempts/sec"
+
+      4_tools_denied_by_agent:
+        type: "table"
+        query: "sum by (agent_id, tool_id) (rate(tool_execution_denied_total[1h]))"
+        columns: ["agent_id", "tool_id", "denied_count", "denial_reason"]
+
+      5_constraint_violations_timeline:
+        type: "graph"
+        query: "sum(rate(capability_constraint_violations_total[5m])) by (constraint_type)"
+        unit: "violations/sec"
+
+# ============================================================================
+# ALERTING RULES
+# ============================================================================
+
+alerting_rules:
+
+  # CRITICAL ALERTS
+
+  alert_validation_latency_critical:
+    name: "ValidationLatencyCritical"
+    condition: "histogram_quantile(0.95, capability_validation_latency_ms{resource_type='tool'}) > 2.0"
+    duration: "5m"
+    severity: "critical"
+    message: "Tool validation P95 latency exceeds 2ms (target: <1ms)"
+    runbook: "docs/runbooks/validation-latency-debug.md"
+    action: "Page on-call, investigate validation pipeline bottleneck"
+
+  alert_signature_failure_spike:
+    name: "SignatureFailureSpike"
+    condition: "rate(capability_signature_failures_total[5m]) > 50"
+    duration: "2m"
+    severity: "critical"
+    message: "Signature verification failures >50/min (possible key rotation issue or attack)"
+    runbook: "docs/runbooks/signature-failures-debug.md"
+    action: "Immediate key rotation review, check authentication service"
+
+  alert_constraint_violation_spike:
+    name: "ConstraintViolationSpike"
+    condition: "sum(rate(capability_constraint_violations_total[5m])) > 100"
+    duration: "5m"
+    severity: "critical"
+    message: "Constraint violations >100/min (possible misconfiguration or abuse)"
+    runbook: "docs/runbooks/constraint-violation-spike.md"
+    action: "Investigate violation patterns, check for agent misbehavior"
+
+  alert_revocation_propagation_latency:
+    name: "RevocationPropagationLatency"
+    condition: "histogram_quantile(0.95, revocation_propagation_latency_ms) > 500"
+    duration: "5m"
+    severity: "critical"
+    message: "Revocation propagation latency >500ms (target: <100ms)"
+    runbook: "docs/runbooks/revocation-latency-debug.md"
+    action: "Check Redis performance, K1 instance connectivity"
+
+  alert_audit_write_latency_high:
+    name: "AuditWriteLatencyHigh"
+    condition: "histogram_quantile(0.95, audit_event_write_latency_ms) > 100"
+    duration: "5m"
+    severity: "critical"
+    message: "Audit event write latency >100ms (impacts validation performance)"
+    runbook: "docs/runbooks/audit-latency-debug.md"
+    action: "Check K0 WAL performance, disk I/O, batch sizes"
+
+  # WARNING ALERTS
+
+  alert_cache_hit_rate_low:
+    name: "CacheHitRateLow"
+    condition: "rate(capability_cache_hits_total[5m]) / (rate(capability_cache_hits_total[5m]) + rate(capability_cache_misses_total[5m])) < 0.75"
+    duration: "10m"
+    severity: "warning"
+    message: "Cache hit rate <75% (target: >85%)"
+    action: "Monitor cache eviction rate, consider increasing cache size"
+
+  alert_validation_latency_warning:
+    name: "ValidationLatencyWarning"
+    condition: "histogram_quantile(0.95, capability_validation_latency_ms) > 1.5"
+    duration: "10m"
+    severity: "warning"
+    message: "Validation P95 latency approaching limit (1.5ms, target: <1ms)"
+    action: "Investigate load, enable performance profiling"
+
+  alert_model_hub_latency:
+    name: "ModelHubLatencyWarning"
+    condition: "histogram_quantile(0.95, capability_validation_latency_ms{resource_type='model'}) > 8.0"
+    duration: "10m"
+    severity: "warning"
+    message: "Model Hub validation latency >8ms (target: <10ms)"
+    action: "Check Model Hub load, monitor queue depth"
+
+  alert_storage_capacity_warning:
+    name: "StorageCapacityWarning"
+    condition: "audit_trail_storage_gb > 300"
+    duration: "30m"
+    severity: "warning"
+    message: "Audit trail storage >300GB (capacity planning alert)"
+    action: "Plan archival to S3, monitor retention policy"
+
+  alert_storage_capacity_critical:
+    name: "StorageCapacityCritical"
+    condition: "audit_trail_storage_gb > 450"
+    duration: "10m"
+    severity: "critical"
+    message: "Audit trail storage >450GB (critical capacity)"
+    action: "Immediate archival to S3, enable emergency retention policy"
+
+  alert_revocation_grace_period_violation:
+    name: "RevocationGracePeriodViolation"
+    condition: "sum(rate(revocation_grace_period_violations[5m])) > 0"
+    duration: "1m"
+    severity: "warning"
+    message: "Tasks force-terminated before grace period (should not happen)"
+    runbook: "docs/runbooks/grace-period-violation.md"
+    action: "Investigate revocation timeout settings"
+
+  # INFO ALERTS
+
+  alert_key_rotation_completed:
+    name: "KeyRotationCompleted"
+    condition: "increase(capability_key_rotation_events{status='completed'}[1h]) > 0"
+    duration: "0m"
+    severity: "info"
+    message: "Signing key rotation completed"
+    action: "None (informational)"
+
+# ============================================================================
+# OBSERVABILITY INTEGRATION
+# ============================================================================
+
+observability:
+
+  metrics_backend:
+    type: "Prometheus"
+    endpoint: "http://prometheus:9090"
+    scrape_interval: "15 seconds"
+    retention: "30 days"
+
+  tracing_backend:
+    type: "Jaeger"
+    endpoint: "http://jaeger:6831"
+    trace_sampling_rate: "0.1"  # 10% of requests
+    integration: "OpenTelemetry with cognitive_trace_id"
+
+  logging_backend:
+    type: "ELK Stack"
+    elasticsearch_endpoint: "http://elasticsearch:9200"
+    log_index: "k1-audit-*"
+    retention: "90 days"
+
+  visualization:
+    type: "Grafana"
+    endpoint: "http://grafana:3000"
+    dashboard_count: 4
+    alert_notification: "Slack + PagerDuty"
+
+# ============================================================================
+# DEPLOYMENT & ROLLOUT
+# ============================================================================
+
+deployment:
+  schedule: "Week 2 of enforcement implementation"
+  canary_percentage: "100% (all events, no sampling for security)"
+
+  rollout_phases:
+    phase_1: "Deploy metrics collection (no alerts)"
+    phase_2: "Enable INFO/WARNING alerts (manual review)"
+    phase_3: "Enable CRITICAL alerts with PagerDuty integration"
+    phase_4: "Production validation & runbook hardening"
+
+  rollback_plan: "Disable alert notifications if false positives >1%, disable metrics if overhead >5% CPU"
+
+summary:
+  description: "Comprehensive observability for capability enforcement system"
+  capabilities:
+    - "Real-time Validation Monitoring: Track validation success/failure/latency"
+    - "Cost Tracking: Model call costs per agent/model for billing"
+    - "Revocation Efficiency: Monitor multi-instance revocation propagation"
+    - "Security Incident Detection: Signature failures, spoofing attempts, violations"
+    - "Performance Guardrails: <1ms validation, <10ms model calls, <100ms revocation"
+    - "Audit Compliance: 100% audit logging with immutable trail"
+
+metrics_summary:
+  total_metrics: 40
+  coverage: ["validation", "cost", "revocation", "audit", "performance"]
+
+dashboards_summary:
+  total_dashboards: 4
+  total_panels: 20
+
+alerting_summary:
+  critical_alerts: 6
+  warning_alerts: 5
+  info_alerts: 1
+
+data_retention:
+  prometheus: "30 days"
+  audit_trail: "90 days"
+
+related_contracts:
+  tool_runner_enforcement:
+    file: "tool_runner_enforcement.yml"
+    integration: "Enforcer using these metrics"
+
+  model_hub_enforcement:
+    file: "model_hub_enforcement.yml"
+    integration: "Cost tracking from these metrics"
+
+  hot_path_validation:
+    file: "hot_path_validation.yml"
+    integration: "Performance targets measured by these metrics"
+
+  audit_trail_schema:
+    file: "audit_trail_schema.yml"
+    integration: "Audit events generating these metrics"

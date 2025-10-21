@@ -1,0 +1,902 @@
+---
+config:
+  flowchart:
+    htmlLabels:false
+    curve: linear
+  theme: neo
+  layout: elk
+  look: neo
+---
+
+flowchart TB
+
+%% ====== CORE CLASS STYLES (match Diagram 1) ======
+classDef plane fill:#eef7ff,stroke:#2a6ebb,stroke-width:1px,rx:8,ry:8
+classDef mid fill:#f8fff0,stroke:#6b8e23,stroke-width:1px,rx:8,ry:8
+classDef gate fill:#fff7e6,stroke:#d48806,stroke-width:1px,rx:8,ry:8
+classDef bus fill:#f0f0f0,stroke:#666,stroke-width:2px,rx:8,ry:8
+classDef storage fill:#f3f8ff,stroke:#1f4aa1,stroke-width:1px,rx:8,ry:8
+classDef brain fill:#fffdf0,stroke:#b38b00,stroke-width:1px,rx:10,ry:10
+classDef fast stroke:#00897b,stroke-width:2px
+classDef smart stroke:#d46b08,stroke-width:2px,stroke-dasharray:4 3
+classDef card fill:#fff,stroke:#999,stroke-width:1px,rx:8,ry:8
+classDef kernel_space fill:#fff3e0,stroke:#ff9800,stroke-width:3px,stroke-dasharray:8 4,rx:12,ry:12
+
+%% Category tints (kept)
+classDef infrastructure_core fill:#fff9c4,stroke:#faad14,stroke-width:2px,rx:10,ry:10
+classDef consolidation fill:#f6ffed,stroke:#52c41a,stroke-width:2px,rx:8,ry:8
+classDef prospective_memory fill:#e6f7ff,stroke:#1890ff,stroke-width:2px,rx:8,ry:8
+classDef knowledge_graph fill:#f9f0ff,stroke:#722ed1,stroke-width:2px,rx:8,ry:8
+classDef security_safety fill:#fff1f0,stroke:#ff4d4f,stroke-width:2px,rx:8,ry:8
+classDef observability fill:#fff7e6,stroke:#d48806,stroke-width:2px,rx:8,ry:8
+classDef sync_edge fill:#f0f5ff,stroke:#2f54eb,stroke-width:2px,rx:8,ry:8
+
+%% ====== FAMILY INFRASTRUCTURE LEGEND ======
+subgraph FAMILY_LEGEND["🎨 Family Infrastructure Diagram Guide"]
+  L1["Unified classes/colors as Diagram 1"]:::card
+  L2["family.infra.* & family.privacy.* topics carry cognitive_trace_id"]:::card
+  L3["👨‍👩‍👧‍👦 Family-aware hand-offs: P03/P05/P07/P08/P10/P11–P15/P16/P17–P20"]:::card
+  L4["📱 Cross-device receipts/outbox/WAL/offsets/DLQ coordination"]:::card
+  L5["💰 Subscription enforcement at infrastructure level"]:::card
+  L6["🚨 Family emergency protocols and failsafes"]:::card
+end
+
+%% ====== K0 KERNEL INFRASTRUCTURE (Diagram 4 View) ======
+subgraph K0_KERNEL_D4["🟡 K0 Kernel Core (Infrastructure Interface)"]
+  direction TB
+
+  subgraph K0_INFRASTRUCTURE_PIPELINES_D4["🚀 K0 Infrastructure Pipelines"]
+    P03_D4["P03 Consolidation/Forgetting<br/>← Consolidation triggers<br/>← Memory processing jobs<br/>→ Handlers: Episodic → Semantic transformation"]:::consolidation
+    P05_D4["P05 Prospective/Triggers<br/>← Future-oriented memories<br/>← Planning coordination<br/>→ Handlers: Trigger scheduling & execution"]:::prospective_memory
+    P07_D4["P07 Sync/CRDT<br/>← Multi-device coordination<br/>← Conflict resolution<br/>→ Handlers: CRDT merge operations"]:::sync_edge
+    P08_D4["P08 Embedding Lifecycle<br/>← Semantic processing<br/>← Vector generation<br/>→ Handlers: Embedding generation & indexing"]:::mid
+    P10_D4["P10 PII/Minimization<br/>← Privacy enforcement<br/>← PII detection/redaction<br/>→ Handlers: Privacy policy enforcement"]:::security_safety
+    P11_D4["P11 DSAR/GDPR<br/>← Compliance operations<br/>← Right-to-access/erasure<br/>→ Handlers: GDPR compliance"]:::security_safety
+    P12_D4["P12 Device/E2EE<br/>← Encryption operations<br/>← Key management<br/>→ Handlers: E2EE coordination"]:::security_safety
+    P13_D4["P13 Index Rebuild<br/>← Index maintenance<br/>← Search optimization<br/>→ Handlers: Index rebuilding"]:::mid
+    P14_D4["P14 Near-Duplicate/Canon<br/>← Deduplication<br/>← Canonicalization<br/>→ Handlers: Duplicate detection"]:::mid
+    P15_D4["P15 Rollups/Summaries<br/>← Aggregation<br/>← Summary generation<br/>→ Handlers: Data rollups"]:::consolidation
+    P16_D4["P16 Feature Flags/A-B<br/>← Experimentation<br/>← Feature toggles<br/>→ Handlers: A/B testing"]:::mid
+    P17_D4["P17 QoS/Cost Governance<br/>← Resource management<br/>← Budget enforcement<br/>→ Handlers: QoS scheduling"]:::observability
+    P18_D4["P18 Safety/Abuse<br/>← Content moderation<br/>← Abuse detection<br/>→ Handlers: Safety enforcement"]:::security_safety
+  end
+
+  subgraph K0_PORTS_D4["🔌 K0 Ports (Infrastructure Access)"]
+    K0_WAL_D4["WAL Port (evt_wal)<br/>Event stream<br/>→ Infrastructure processing<br/>→ Pipeline fan-out"]:::bus
+    K0_OFFSETS_D4["Offsets Port (evt_offsets)<br/>Pipeline progress<br/>→ Infrastructure coordination<br/>← Progress tracking"]:::bus
+    K0_CMD_D4["Command Port<br/>submit(envelope)<br/>← Infrastructure writes<br/>→ WAL → Pipelines"]:::bus
+    K0_QRY_D4["Query Port<br/>recall(query)<br/>→ Infrastructure reads<br/>← Storage drivers"]:::fast
+    K0_OBS_D4["Observability Port<br/>metrics/spans/logs<br/>→ Infrastructure monitoring<br/>← All pipelines"]:::fast
+  end
+
+  subgraph K0_INFRASTRUCTURE_DRIVERS_D4["💾 K0 Storage Drivers (Infrastructure)"]
+    K0_SQLITE_D4["st_sqlite<br/>episodic | semantic | prospective | privacy | security<br/>pii_audit | compliance_log | keys | consent"]:::storage
+    K0_KG_D4["st_kg<br/>nodes | edges | temporal | relationships"]:::storage
+    K0_VEC_D4["st_vector<br/>embeddings | similarity_index"]:::storage
+    K0_BLOB_D4["st_blob<br/>models | large_artifacts"]:::storage
+    K0_SYNC_D4["sync_crdt<br/>CRDT coordination | multi-device"]:::storage
+    K0_CRYPTO_D4["crypto_mls<br/>E2EE keys | device encryption"]:::storage
+  end
+
+  %% Minimal wiring
+  K0_WAL_D4 --> P03_D4 & P05_D4 & P07_D4 & P08_D4 & P10_D4 & P11_D4 & P12_D4 & P13_D4 & P14_D4 & P15_D4 & P16_D4 & P17_D4 & P18_D4
+  K0_CMD_D4 --> K0_SQLITE_D4 & K0_KG_D4 & K0_VEC_D4 & K0_BLOB_D4
+  K0_QRY_D4 --> K0_SQLITE_D4 & K0_KG_D4 & K0_VEC_D4 & K0_BLOB_D4
+  P03_D4 -.consolidation.-> K0_SQLITE_D4
+  P05_D4 -.triggers.-> K0_SQLITE_D4
+  P07_D4 -.sync.-> K0_SYNC_D4
+  P08_D4 -.embeddings.-> K0_VEC_D4 & K0_BLOB_D4
+  P10_D4 & P11_D4 -.privacy/compliance.-> K0_SQLITE_D4
+  P12_D4 -.encryption.-> K0_CRYPTO_D4 & K0_SQLITE_D4
+
+  K0_INFRASTRUCTURE_NOTE_D4["📝 NOTE: Full K0 architecture in Diagram 1<br/>This is infrastructure-focused subset showing P03/P05/P07/P08/P10-P18 integration<br/>⚠️ INFRASTRUCTURE SERVES K0: Handlers for K0 pipelines, not owners"]:::card
+end
+class K0_KERNEL_D4 kernel_space
+
+%% ====== K0 INFRASTRUCTURE ROUTING ======
+subgraph K0_INFRASTRUCTURE_ROUTING["🔗 K0 Infrastructure Routing (Cross-Diagram)"]
+  FROM_D1_K0_WAL["← FROM D1 K0 WAL (evt_wal)<br/>🧠 Event stream FOR infrastructure processing<br/>📊 All infrastructure operations sourced FROM K0 WAL<br/>VIA: K0 pipeline fan-out"]:::bus
+
+  FROM_D1_K0_OFFSETS["← FROM D1 K0 Offsets (evt_offsets)<br/>🧠 Pipeline progress tracking<br/>📈 Infrastructure pipeline coordination<br/>VIA: K0 offset management"]:::bus
+
+  TO_D1_K0_DRIVERS["→ TO D1 K0 Storage Drivers<br/>🧠 Persistent storage VIA K0 drivers<br/>💾 All infrastructure writes THROUGH K0 Command Port<br/>VIA: K0::st_sqlite, K0::st_kg, K0::st_vector, K0::st_blob, K0::sync_crdt, K0::crypto_mls"]:::storage
+
+  TO_D2_COGNITIVE["→ TO D2 Cognitive Core<br/>🧠 Consolidated memories VIA K0 P03<br/>🔄 Prospective triggers VIA K0 P05<br/>VIA: K0 P03 → Hippocampus, K0 P05 → Planning"]:::brain
+
+  TO_D3_INTELLIGENCE["→ TO D3 Intelligence Systems<br/>🧠 Infrastructure support VIA K0 P03/P08<br/>� Observability metrics VIA K0 Observability Port<br/>VIA: K0 P03 consolidation, K0 P08 embeddings"]:::brain
+
+  FROM_D2_COGNITIVE["← FROM D2 Cognitive Core<br/>🧠 Consolidation triggers FROM Hippocampus<br/>🧠 Working memory coordination<br/>VIA: K0 P03 consolidation requests"]:::brain
+
+  FROM_D3_INTELLIGENCE["← FROM D3 Intelligence Systems<br/>🧠 Learning feedback FOR consolidation<br/>📈 Intelligence insights<br/>VIA: K0 P03 learning signals"]:::brain
+
+  TO_PRODUCTION_DEPLOYMENT["→ TO Production Systems / Runtime<br/>🚀 K0-Powered Family AI deployment<br/>🧠 Cross-device coordination VIA K0 P07 (Sync/CRDT)<br/>👨‍👩‍👧‍👦 Family infrastructure coordination"]:::infrastructure_core
+end
+class K0_INFRASTRUCTURE_ROUTING card
+
+%% ====== PIPELINE & SSE ANCHORS ======
+subgraph PIPELINE_ANCHORS["🔗 K0 Pipeline & SSE Anchors"]
+  TO_P03["→ D1 K0 P03 (Consolidation/Forgetting)"]:::bus
+  TO_P05["→ D1 K0 P05 (Prospective/Triggers)"]:::bus
+  TO_P07["→ D1 K0 P07 (Sync/CRDT)"]:::bus
+  TO_P08["→ D1 K0 P08 (Embedding Lifecycle)"]:::bus
+  TO_P10["→ D1 K0 P10 (PII/Minimization)"]:::bus
+  TO_P11["→ D1 K0 P11 (DSAR/GDPR)"]:::bus
+  TO_P12["→ D1 K0 P12 (Device/E2EE)"]:::bus
+  TO_P13["→ D1 K0 P13 (Index Rebuild)"]:::bus
+  TO_P14["→ D1 K0 P14 (Near-Duplicate/Canon)"]:::bus
+  TO_P15["→ D1 K0 P15 (Rollups/Summaries)"]:::bus
+  TO_P16["→ D1 K0 P16 (Feature Flags/A-B)"]:::bus
+  TO_P17["→ D1 K0 P17 (QoS/Cost Governance)"]:::bus
+  TO_P18["→ D1 K0 P18 (Safety/Abuse)"]:::bus
+  TO_P19["→ D1 K0 P19 (Personalization/Reco)"]:::bus
+  TO_P20["→ D1 K0 P20 (Procedures/Habits)"]:::bus
+  TO_SSE_INFRA["→ K0 SSE Port: infra.* & privacy.* (sanitized)"]:::plane
+end
+class PIPELINE_ANCHORS card
+
+%% ====== BUS BRIDGE & INTERNALS ======
+subgraph BUS_BRIDGE["📡 Events Bus & Internals (cognitive_trace_id)"]
+  EVT_BUS_ANCHOR["events.bus"]:::bus
+  EVT_SCHEMA_VALID["events/validation.py (schema)"]:::gate
+  EVT_PERSIST["events/persistence.py (WAL/offsets)"]:::mid
+  EVT_DISPATCH["events/dispatcher.py"]:::mid
+  EVT_SUBS["events/subscription.py"]:::mid
+  EVT_MW["events/middleware.py"]:::mid
+  OUTBOX_DRAINER["events/outbox_drainer.py"]:::bus
+  DLQ_REPLAYER["events/dlq_replayer.py"]:::bus
+
+  %% Topics
+  INFRA_TOPICS["infra.*"]:::bus
+  PRIVACY_TOPICS["privacy.*"]:::bus
+  INFRA_CONS_T["infra.consolidation.*"]:::bus
+  INFRA_KG_T["infra.kg.*"]:::bus
+  INFRA_PROS_T["infra.prospective.*"]:::bus
+  INFRA_SYNC_T["infra.sync.*"]:::bus
+  INFRA_SEC_T["infra.security.*"]:::bus
+  INFRA_OBS_T["infra.observability.*"]:::bus
+  INFRA_ML_T["infra.ml.*"]:::bus
+
+  %% Helpers referenced in flows
+  EV_SEMANTIC_FILTERS["events.semantic_filters"]:::bus
+  EV_CAUSAL_INDEXING["events.causal_indexing"]:::bus
+  EV_PATTERN_STORAGE["events.pattern_storage"]:::bus
+end
+class BUS_BRIDGE card
+
+%% ====== K0 STORAGE DRIVERS (Infrastructure Reference) ======
+subgraph K0_INFRASTRUCTURE_STORAGE["💾 K0 Storage Drivers (Infrastructure View)"]
+  direction TB
+
+  K0_CONSOL_REF["K0::st_sqlite[episodic, semantic, procedural]<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P03 Consolidation handlers<br/>• Episodic → Semantic transformation<br/>➡️ REFERENCE: D1 K0 st_sqlite driver"]:::storage
+
+  K0_KG_REF["K0::st_kg[nodes, edges, temporal, relationships]<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• Knowledge Graph infrastructure<br/>• Temporal reasoning & causal analysis<br/>➡️ REFERENCE: D1 K0 st_kg driver"]:::storage
+
+  K0_PROSP_REF["K0::st_sqlite[prospective, plans]<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P05 Prospective handlers<br/>• Future-oriented memory triggers<br/>➡️ REFERENCE: D1 K0 st_sqlite driver"]:::storage
+
+  K0_SYNC_REF["K0 sync_crdt driver<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P07 Sync/CRDT handlers<br/>• Multi-device coordination<br/>➡️ REFERENCE: D1 K0 sync_crdt driver"]:::storage
+
+  K0_EMBED_REF["K0::st_vector[embeddings] + K0::st_blob[models]<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P08 Embedding handlers<br/>• Semantic vector generation<br/>➡️ REFERENCE: D1 K0 st_vector & st_blob drivers"]:::storage
+
+  K0_PRIVACY_REF["K0::st_sqlite[pii_audit, redaction_log, consent]<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P10 Privacy handlers<br/>• PII detection & redaction audit trails<br/>➡️ REFERENCE: D1 K0 st_sqlite driver"]:::storage
+
+  K0_SEC_REF["K0::st_sqlite[keys, compliance_log] + K0 crypto_mls<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 P11/P12/P18 Security handlers<br/>• E2EE keys & GDPR compliance<br/>➡️ REFERENCE: D1 K0 st_sqlite & crypto_mls drivers"]:::storage
+
+  K0_OBS_REF["K0::st_sqlite[logs, metrics] + External observability<br/>← FROM D1 K0_DRIVERS<br/>🧠 USED BY:<br/>• K0 Observability infrastructure<br/>• Metrics & structured logging<br/>➡️ REFERENCE: D1 K0 st_sqlite + external"]:::storage
+
+  K0_INFRA_STORAGE_NOTE["� NOTE: All infrastructure storage VIA K0 drivers ONLY<br/>• NO direct storage access from infrastructure components<br/>• ALL writes VIA K0 Command Port → WAL → Pipelines → Drivers<br/>• ALL reads VIA K0 Query Port → Drivers<br/>⚠️ Kernel boundary enforced by K0 PEP@syscall<br/>🔗 Full driver definitions in Diagram 1 (D1 K0_DRIVERS)"]:::card
+end
+class K0_INFRASTRUCTURE_STORAGE card
+
+%% ====== REGISTRIES ======
+subgraph REGISTRIES["📇 Registries"]
+  REG_TOOLS["registry/tools"]:::mid
+  REG_PROMPTS["registry/prompts"]:::mid
+  REG_AGENTS["registry/agents"]:::mid
+end
+class REGISTRIES card
+
+%% ====== K0 P03 CONSOLIDATION HANDLERS ======
+subgraph K0_P03_CONSOLIDATION_HANDLERS["🌙 K0 P03 Consolidation/Forgetting Handlers"]
+  direction TB
+
+  K0_P03_COORDINATION["🔗 K0 P03 Integration<br/>🧠 SERVES K0 P03 PIPELINE:<br/>• Event source: K0 WAL (evt_wal)<br/>• Progress tracking: K0 Offsets (evt_offsets)<br/>• Storage: K0::st_sqlite[episodic,semantic,procedural]<br/>➡️ INFRASTRUCTURE FOR: K0 P03 consolidation operations"]:::consolidation
+
+  subgraph K0_P03_SLEEP_COORDINATION["🧠 K0 P03 Sleep Coordination"]
+    SLEEP_SCHEDULER["⏰ K0 P03 Scheduler<br/>🧠 SCHEDULE COORDINATION:<br/>• Triggers FROM K0 P03 pipeline<br/>• Sleep-based scheduling<br/>• Job queue management<br/>➡️ SCHEDULES: K0 P03 consolidation jobs"]:::consolidation
+    SLEEP_STATE_MACHINE["🔄 K0 P03 State Machine<br/>🧠 CONSOLIDATION STATE:<br/>• State management FOR K0 P03<br/>• Sleep cycle coordination<br/>➡️ MANAGES: K0 P03 sleep cycles"]:::consolidation
+    SLEEP_TRIGGER["🎯 K0 P03 Triggers<br/>🧠 TRIGGER COORDINATION:<br/>• Consolidation initiation<br/>• D2 Hippocampus coordination VIA K0 P03<br/>➡️ TRIGGERS: K0 P03 consolidation"]:::consolidation
+  end
+
+  subgraph K0_P03_CONSOLIDATION_PROCESSES["🧠 K0 P03 Processing Engines"]
+    CONS_HIPPOCAMPAL["🧠 K0 P03 Hippocampal Replay Handler<br/>🧠 HIPPOCAMPAL REPLAY:<br/>• Memory pattern replay FOR K0 P03<br/>• Sequence consolidation<br/>• Importance weighting<br/>➡️ PROCESSES: K0 P03 memory strengthening"]:::consolidation
+    CONS_NEOCORTICAL["🗂️ K0 P03 Neocortical Integration Handler<br/>🧠 NEOCORTICAL INTEGRATION:<br/>• Integration INTO long-term knowledge<br/>• Storage VIA K0 Command Port → K0::st_sqlite<br/>➡️ PROCESSES: K0 P03 knowledge integration"]:::consolidation
+    CONS_SYNAPTIC["⚡ K0 P03 Synaptic Homeostasis Handler<br/>🧠 SYNAPTIC OPTIMIZATION:<br/>• Connection optimization<br/>• Forgetting policy enforcement<br/>➡️ PROCESSES: K0 P03 connection health"]:::consolidation
+  end
+
+  subgraph K0_P03_CONSOLIDATION_TYPES["🧠 K0 P03 Memory Type Handlers"]
+    CONS_EPISODIC["📅 K0 P03 Episodic Handler<br/>🧠 EPISODIC CONSOLIDATION:<br/>• Episodic → Semantic transformation<br/>• Storage IN K0::st_sqlite[episodic]<br/>➡️ PROCESSES: K0 P03 episodic memories"]:::consolidation
+    CONS_SEMANTIC["📚 K0 P03 Semantic Handler<br/>🧠 SEMANTIC CONSOLIDATION:<br/>• Knowledge consolidation<br/>• Storage IN K0::st_sqlite[semantic]<br/>➡️ PROCESSES: K0 P03 semantic knowledge"]:::consolidation
+    CONS_PROCEDURAL["⚙️ K0 P03 Procedural Handler<br/>🧠 PROCEDURAL CONSOLIDATION:<br/>• Skill consolidation<br/>• Coordination WITH K0 P20 (Procedures/Habits)<br/>➡️ PROCESSES: K0 P03 procedural skills"]:::consolidation
+    CONS_EMOTIONAL["💗 K0 P03 Emotional Handler<br/>🧠 EMOTIONAL CONSOLIDATION:<br/>• Emotional memory strengthening<br/>👨‍👩‍👧‍👦 Family emotional memories<br/>➡️ PROCESSES: K0 P03 emotional intelligence"]:::consolidation
+  end
+
+  subgraph K0_P03_JOB_COORDINATION["⚙️ K0 P03 Job Coordination"]
+    LEG_COMPACTOR["📦 K0 P03 Compaction Worker<br/>🧠 COMPACTION:<br/>• Memory compression VIA K0::st_sqlite<br/>• Coordination WITH K0 P15 (Rollups/Summaries)<br/>➡️ SERVES: K0 P03 optimization"]:::consolidation
+    LEG_ROLLUPS["📊 K0 P03 Rollup Worker<br/>🧠 SUMMARY GENERATION:<br/>• Memory summary generation<br/>• Aggregation FOR K0 P15<br/>➡️ SERVES: K0 P03 summaries"]:::consolidation
+    LEG_REPLAY["🔄 K0 P03 Replay Coordinator<br/>🧠 REPLAY COORDINATION:<br/>• Replay scheduling FROM K0 WAL<br/>• Progress tracking VIA K0 Offsets<br/>➡️ COORDINATES: K0 P03 replay operations"]:::consolidation
+  end
+
+  K0_P03_NOTE["📝 NOTE: All consolidation serves K0 P03 pipeline<br/>Event source: K0 WAL → P03 fan-out → handlers<br/>Storage: K0 Command Port → K0::st_sqlite<br/>Forgetting: Policy enforcement IN P03 handlers"]:::card
+end
+class K0_P03_CONSOLIDATION_HANDLERS card
+
+%% ====== K0::st_kg KNOWLEDGE GRAPH INFRASTRUCTURE ======
+subgraph K0_KG_INFRASTRUCTURE["🕸️ K0::st_kg Knowledge Graph Infrastructure"]
+
+  K0_KG_COORDINATION["� K0::st_kg Integration<br/>🧠 GRAPH STORAGE IN K0::st_kg:<br/>• Queries VIA K0 Query Port<br/>• Updates VIA K0 Command Port<br/>• Storage: K0::st_kg[nodes,edges,temporal]<br/>➡️ INFRASTRUCTURE FOR: K0::st_kg operations"]:::knowledge_graph
+
+  subgraph K0_KG_QUERY_OPS["🔍 K0::st_kg Query Coordinators"]
+    KG_TEMPORAL_ENGINE["� K0::st_kg Temporal Reasoning<br/>🧠 TEMPORAL QUERIES:<br/>• Time-aware graph traversal<br/>• Historical queries VIA K0 Query Port<br/>➡️ QUERIES: K0::st_kg temporal operations"]:::knowledge_graph
+    KG_CAUSAL_GRAPH["🔗 K0::st_kg Causal Graph<br/>🧠 CAUSAL QUERIES:<br/>• Causal relationships IN K0::st_kg<br/>• Causal inference<br/>➡️ QUERIES: K0::st_kg causal data"]:::knowledge_graph
+    KG_RELATION_DISCOVERY["🔍 K0::st_kg Relation Discovery<br/>🧠 RELATIONSHIP QUERIES:<br/>• Discover relationships IN K0::st_kg<br/>• Pattern matching<br/>➡️ QUERIES: K0::st_kg relationships"]:::knowledge_graph
+  end
+
+  subgraph K0_KG_UPDATE_OPS["✏️ K0::st_kg Update Coordinators"]
+    KG_VERSION_CONTROL["🗃️ K0::st_kg Versioning<br/>🧠 VERSION MANAGEMENT:<br/>• Knowledge versioning IN K0::st_kg<br/>• Updates VIA K0 Command Port<br/>➡️ UPDATES: K0::st_kg versions"]:::knowledge_graph
+    KG_CONCEPT_EVOLUTION["🌱 K0::st_kg Concept Evolution<br/>🧠 CONCEPT UPDATES:<br/>• Concept evolution tracking<br/>• Node updates VIA K0 Command Port<br/>➡️ UPDATES: K0::st_kg concepts"]:::knowledge_graph
+    KG_INCONSISTENCY_RESOLUTION["⚖️ K0::st_kg Consistency<br/>🧠 CONSISTENCY ENFORCEMENT:<br/>• Inconsistency detection<br/>• Resolution VIA K0 Command Port<br/>➡️ UPDATES: K0::st_kg consistency"]:::knowledge_graph
+  end
+
+  subgraph K0_KG_GROUNDING["🌐 K0::st_kg Grounding Systems"]
+    KG_SENSORY_GROUNDING["👁️ K0::st_kg Sensory Grounding<br/>🧠 SENSORY GROUNDING:<br/>• Sensory → graph mapping<br/>• Multimodal grounding IN K0::st_kg<br/>➡️ GROUNDS: K0::st_kg sensory data"]:::knowledge_graph
+    KG_LINGUISTIC_MAPPING["🗣️ K0::st_kg Linguistic Mapping<br/>🧠 LINGUISTIC MAPPING:<br/>• Language → graph mapping<br/>• Semantic representation IN K0::st_kg<br/>➡️ MAPS: K0::st_kg linguistic data"]:::knowledge_graph
+    KG_PROCEDURAL_LINKING["⚙️ K0::st_kg Procedural Linking<br/>🧠 PROCEDURAL LINKING:<br/>• Procedural knowledge links<br/>• Coordination WITH K0 P20 (Procedures)<br/>➡️ LINKS: K0::st_kg procedural data"]:::knowledge_graph
+  end
+
+  subgraph K0_KG_LEGACY["⚙️ K0::st_kg Legacy Handlers"]
+    LEG_KG_TEMPORAL["⏰ kg/temporal.py<br/>Legacy temporal handler"]:::knowledge_graph
+    LEG_KG_JOBS["🔄 consolidation/kg_jobs.py<br/>Legacy KG jobs"]:::knowledge_graph
+  end
+
+  K0_KG_NOTE["📝 NOTE: All KG operations via K0::st_kg driver<br/>Queries: K0 Query Port → K0::st_kg<br/>Updates: K0 Command Port → K0::st_kg<br/>Storage: K0::st_kg[nodes, edges, temporal, relationships]"]:::card
+end
+class K0_KG_INFRASTRUCTURE card
+
+%% ====== K0 P05 PROSPECTIVE MEMORY HANDLERS ======
+subgraph K0_P05_PROSPECTIVE_HANDLERS["🔮 K0 P05 Prospective/Triggers Handlers"]
+
+  K0_P05_COORDINATION["🔗 K0 P05 Integration<br/>🧠 SERVES K0 P05 PIPELINE:<br/>• Event source: K0 WAL (evt_wal)<br/>• Trigger storage: K0::st_sqlite[prospective,plans]<br/>• Activation: K0 SSE Port TO D3 Intelligence<br/>➡️ INFRASTRUCTURE FOR: K0 P05 prospective operations"]:::prospective_memory
+
+  subgraph K0_P05_INTENTION["💭 K0 P05 Intention Management"]
+    PROS_INTENTION_FORMATION["💭 K0 P05 Intention Formation<br/>🧠 INTENTION FORMATION:<br/>• Future-oriented memories<br/>• Storage IN K0::st_sqlite[prospective]<br/>➡️ FORMS: K0 P05 intentions"]:::prospective_memory
+    PROS_CUE_MONITORING["👁️ K0 P05 Cue Monitoring<br/>🧠 CUE MONITORING:<br/>• Context-aware cue detection<br/>• Coordination WITH K0::st_kg FOR context<br/>➡️ MONITORS: K0 P05 cues"]:::prospective_memory
+    PROS_RETRIEVAL_ENGINE["🔍 K0 P05 Retrieval Engine<br/>🧠 RETRIEVAL OPERATIONS:<br/>• Retrieve intentions FROM K0::st_sqlite<br/>• Query VIA K0 Query Port<br/>➡️ RETRIEVES: K0 P05 intentions"]:::prospective_memory
+  end
+
+  subgraph K0_P05_EXECUTION["⚡ K0 P05 Trigger Execution"]
+    PROS_EXECUTION_CONTROL["⚡ K0 P05 Execution Controller<br/>🧠 TRIGGER EXECUTION:<br/>• Trigger evaluation<br/>• Activation signals TO D3 VIA K0 SSE Port<br/>➡️ COORDINATES: K0 P05 trigger execution"]:::prospective_memory
+    PROS_PRIORITY_MANAGER["📊 K0 P05 Priority Manager<br/>🧠 PRIORITY MANAGEMENT:<br/>• Priority-based scheduling<br/>• Queue management IN K0::st_sqlite<br/>➡️ MANAGES: K0 P05 priorities"]:::prospective_memory
+    PROS_INTERFERENCE_CONTROL["🛡️ K0 P05 Interference Control<br/>🧠 INTERFERENCE MANAGEMENT:<br/>• Conflict detection<br/>• Resolution strategies<br/>➡️ CONTROLS: K0 P05 interference"]:::prospective_memory
+    PROS_FORGETTING_PREVENTION["🔒 K0 P05 Forgetting Prevention<br/>🧠 RETENTION:<br/>• Critical intention retention<br/>• Coordination WITH K0 P03 FOR consolidation<br/>➡️ PREVENTS: K0 P05 forgetting"]:::prospective_memory
+  end
+
+  subgraph K0_P05_TRIGGER_TYPES["🎯 K0 P05 Trigger Types"]
+    PROS_TIME_BASED["⏰ K0 P05 Time-Based Triggers<br/>🧠 TIME-BASED:<br/>• Scheduled activation<br/>• Storage IN K0::st_sqlite[prospective]<br/>➡️ SCHEDULES: K0 P05 time triggers"]:::prospective_memory
+    PROS_EVENT_BASED["🎯 K0 P05 Event-Based Triggers<br/>🧠 EVENT-BASED:<br/>• Event-driven activation<br/>• Event monitoring FROM K0 WAL<br/>➡️ SCHEDULES: K0 P05 event triggers"]:::prospective_memory
+    PROS_ACTIVITY_BASED["🏃 K0 P05 Activity-Based Triggers<br/>🧠 ACTIVITY-BASED:<br/>• Activity-driven activation<br/>• Context monitoring<br/>➡️ SCHEDULES: K0 P05 activity triggers"]:::prospective_memory
+  end
+
+  subgraph K0_P05_PLANNING["📋 K0 P05 Planning Support"]
+    LEG_PROS_ENGINE["🔄 K0 P05 Planning Engine<br/>prospective/engine.py<br/>Planning context FROM D3 Intelligence"]:::prospective_memory
+    LEG_PROS_SCHEDULER["📅 K0 P05 Scheduler<br/>prospective/scheduler.py<br/>Trigger scheduling coordinator"]:::prospective_memory
+    LEG_PROS_STATE_MACHINE["🎛️ K0 P05 State Machine<br/>prospective/state_machine.py<br/>Prospective memory states"]:::prospective_memory
+  end
+
+  K0_P05_NOTE["📝 NOTE: All prospective memory serves K0 P05 pipeline<br/>Storage: K0::st_sqlite[prospective, plans]<br/>Activation: K0 SSE Port → D3 Intelligence<br/>Planning: Coordination WITH D3 VIA K0 P05"]:::card
+end
+class K0_P05_PROSPECTIVE_HANDLERS card
+
+%% ====== K0 P07 SYNC & CRDT HANDLERS ======
+subgraph K0_P07_SYNC_HANDLERS["🌐 K0 P07 Sync/CRDT Handlers"]
+
+  K0_P07_COORDINATION["🔗 K0 P07 Integration<br/>🧠 SERVES K0 P07 PIPELINE:<br/>• Multi-device coordination VIA K0 sync_crdt driver<br/>• Conflict resolution FOR distributed memories<br/>• Device registry IN K0::st_sqlite[devices]<br/>➡️ INFRASTRUCTURE FOR: K0 P07 sync operations"]:::sync_edge
+
+  subgraph K0_P07_SYNC_COORDINATION["🔄 K0 P07 Sync Coordinators"]
+    SYNC_COGNITIVE_ROUTER["🎯 K0 P07 Sync Router<br/>🧠 SYNC ROUTING:<br/>• Route sync operations<br/>• CRDT merge VIA K0 sync_crdt driver<br/>➡️ ROUTES: K0 P07 sync operations"]:::sync_edge
+    SYNC_CONFLICT_RESOLUTION["⚖️ K0 P07 Conflict Resolution<br/>🧠 CONFLICT RESOLUTION:<br/>• CRDT-based conflict resolution<br/>• Merge strategies VIA K0 sync_crdt<br/>➡️ RESOLVES: K0 P07 conflicts"]:::sync_edge
+    SYNC_ADAPTIVE_STRATEGY["🔄 K0 P07 Adaptive Strategy<br/>🧠 SYNC STRATEGY:<br/>• Adaptive sync policies<br/>• Bandwidth management WITH K0 P17 (QoS)<br/>➡️ ADAPTS: K0 P07 sync strategy"]:::sync_edge
+  end
+
+  subgraph K0_P07_EDGE_MANAGEMENT["📱 K0 P07 Edge Device Management"]
+    EDGE_COGNITIVE_CACHE["💾 K0 P07 Cognitive Cache<br/>🧠 EDGE CACHING:<br/>• Local cache management<br/>• Sync coordination WITH K0 P07<br/>➡️ CACHES: K0 P07 edge data"]:::sync_edge
+    EDGE_FEDERATED_LEARNING["🤝 K0 P07 Federated Learning<br/>🧠 FEDERATED LEARNING:<br/>• Cross-device learning<br/>• Model sync VIA K0 P07<br/>➡️ COORDINATES: K0 P07 federated learning"]:::sync_edge
+    EDGE_OFFLINE_INTELLIGENCE["📱 K0 P07 Offline Intelligence<br/>🧠 OFFLINE SUPPORT:<br/>• Offline operation support<br/>• Sync queue IN K0::st_sqlite[sync_queue]<br/>➡️ SUPPORTS: K0 P07 offline operations"]:::sync_edge
+  end
+
+  subgraph K0_P07_SYNC_POLICY["⚖️ K0 P07 Sync Policy"]
+    K0_P07_PRIVACY_SYNC["🔐 K0 P07 Privacy-Aware Sync<br/>🧠 PRIVACY-AWARE:<br/>• Privacy-aware sync WITH K0 P10<br/>• Selective sync BY privacy bands<br/>➡️ ENFORCES: K0 P07 privacy policies"]:::sync_edge
+    K0_P07_DEVICE_REGISTRY["📱 K0 P07 Device Registry<br/>🧠 DEVICE MANAGEMENT:<br/>• Device registry IN K0::st_sqlite[devices]<br/>• Capability negotiation<br/>➡️ MANAGES: K0 P07 device registry"]:::sync_edge
+  end
+
+  subgraph K0_P07_LEGACY["⚙️ K0 P07 Legacy Handlers"]
+    LEG_SYNC_MANAGER["🔄 sync/sync_manager.py<br/>Legacy sync coordinator"]:::sync_edge
+    LEG_REPLICATOR["📋 sync/replicator.py<br/>Legacy replication handler"]:::sync_edge
+    LEG_CRDT["🌿 sync/crdt.py<br/>CRDT operations"]:::sync_edge
+  end
+
+  K0_P07_NOTE["📝 NOTE: All sync operations serve K0 P07 pipeline<br/>CRDT: K0 sync_crdt driver<br/>Device registry: K0::st_sqlite[devices]<br/>Coordination: K0 P17 (QoS), K0 P10 (Privacy)"]:::card
+end
+class K0_P07_SYNC_HANDLERS card
+
+%% ====== ML & ADAPTATION (K0 P08 SUPPORT) ======
+subgraph ML_ADAPTATION["🤖 Machine Learning & Adaptation (K0 P08 Support)"]
+
+  K0_ML_COORDINATION["🔗 K0 ML Integration<br/>🧠 ML SUPPORT FOR K0 P08:<br/>• Model artifacts IN K0::st_blob<br/>• Performance monitoring WITH K0 Observability<br/>➡️ SUPPORTS: K0 P08 ML operations"]:::sync_edge
+
+  subgraph K0_ML_LEARNING["🔄 K0 ML Learning Systems"]
+    ML_CONTINUAL_LEARNING["🔄 K0 ML Continual Learning<br/>🧠 CONTINUAL LEARNING:<br/>• Continuous model improvement<br/>• Coordination WITH K0 P03<br/>➡️ LEARNS: K0 ML continual updates"]:::sync_edge
+    ML_META_LEARNING["🎭 K0 ML Meta-Learning<br/>🧠 META-LEARNING:<br/>• Learning to learn<br/>• Model optimization<br/>➡️ LEARNS: K0 ML meta strategies"]:::sync_edge
+    ML_SELF_SUPERVISED["🔍 K0 ML Self-Supervised<br/>🧠 SELF-SUPERVISED:<br/>• Unsupervised learning<br/>• Feature extraction FOR K0 P08<br/>➡️ LEARNS: K0 ML self-supervised"]:::sync_edge
+  end
+
+  subgraph K0_ML_ADAPTATION["🎯 K0 ML User Adaptation"]
+    ML_USER_MODELING["👤 K0 ML User Modeling<br/>🧠 USER MODELING:<br/>• User preference learning<br/>• Model storage IN K0::st_blob<br/>➡️ MODELS: K0 ML user profiles"]:::sync_edge
+    ML_CONTEXTUAL_ADAPTATION["🎯 K0 ML Contextual Adaptation<br/>🧠 CONTEXT ADAPTATION:<br/>• Context-aware adaptation<br/>• Real-time tuning<br/>➡️ ADAPTS: K0 ML context"]:::sync_edge
+    ML_FEEDBACK_LEARNING["📊 K0 ML Feedback Learning<br/>🧠 FEEDBACK LEARNING:<br/>• User feedback integration<br/>• Model refinement<br/>➡️ LEARNS: K0 ML feedback"]:::sync_edge
+  end
+
+  subgraph K0_ML_INFRASTRUCTURE["⚙️ K0 ML Infrastructure"]
+    LEG_ML_RUNNER["🏃 ml_capsule/runs/runner.py<br/>ML job executor"]:::sync_edge
+    LEG_STRESS_HARNESS["🧪 ml_capsule/stress/harness.py<br/>ML stress testing"]:::sync_edge
+    LEG_MODEL_REGISTRY["📚 ml_capsule/models/registry.py<br/>Model registry → K0::st_blob"]:::sync_edge
+  end
+
+  K0_ML_NOTE["📝 NOTE: ML artifacts stored IN K0::st_blob<br/>Coordination: K0 P08 (Embeddings), K0 P03 (Learning)"]:::card
+end
+class ML_ADAPTATION card
+
+%% ====== K0 SECURITY INFRASTRUCTURE (P11/P12/P18) ======
+subgraph K0_SECURITY_INFRASTRUCTURE["🛡️ K0 Security Infrastructure"]
+  direction TB
+
+  %% K0 P11 DSAR/GDPR Handlers
+  subgraph K0_P11_HANDLERS["📋 K0 P11 DSAR/GDPR Handlers"]
+    K0_P11_COORDINATION["security/gdpr_coordinator.py<br/>🧠 K0 P11 COORDINATION:<br/>• GDPR operations VIA K0 Query/Command Ports<br/>• Right-to-access requests FROM K0 Query Port<br/>• Right-to-erasure coordination<br/>➡️ COORDINATES: K0 P11 (DSAR/GDPR) compliance"]:::security_safety
+
+    K0_P11_ACCESS["security/dsar_access.py<br/>🧠 ACCESS OPERATIONS:<br/>• Query user data VIA K0 Query Port<br/>• Aggregate memories FROM K0::st_sqlite<br/>• Export formatting & delivery<br/>➡️ HANDLES: K0 P11 right-to-access"]:::security_safety
+
+    K0_P11_ERASURE["security/dsar_erasure.py<br/>🧠 ERASURE OPERATIONS:<br/>• Delete user data VIA K0 Command Port<br/>• Cascade deletions ACROSS K0 drivers<br/>• Verification & audit logging<br/>➡️ HANDLES: K0 P11 right-to-erasure"]:::security_safety
+
+    K0_P11_AUDIT["security/compliance_audit.py<br/>🧠 COMPLIANCE AUDIT:<br/>• Audit trails IN K0::st_sqlite[compliance_log]<br/>• GDPR operation logging<br/>• Retention policy enforcement<br/>➡️ AUDITS: K0 P11 compliance operations"]:::security_safety
+  end
+
+  %% K0 P12 Device/E2EE Handlers
+  subgraph K0_P12_HANDLERS["🔐 K0 P12 Device/E2EE Handlers"]
+    K0_P12_COORDINATION["security/e2ee_coordinator.py<br/>🧠 K0 P12 COORDINATION:<br/>• E2EE operations VIA K0 crypto_mls driver<br/>• Device encryption coordination<br/>• Key lifecycle management<br/>➡️ COORDINATES: K0 P12 (Device/E2EE) operations"]:::security_safety
+
+    K0_P12_KEY_MGMT["security/key_manager.py<br/>🧠 KEY MANAGEMENT:<br/>• Key storage IN K0::st_sqlite[keys]<br/>• Key rotation & ratcheting<br/>• HSM/TEE attestation integration<br/>➡️ MANAGES: K0 P12 encryption keys"]:::security_safety
+
+    K0_P12_MLS_GROUPS["security/mls_group.py<br/>🧠 MLS GROUP COORDINATION:<br/>• Multi-device group management<br/>• Group state IN K0::st_sqlite[mls_groups]<br/>• Member addition/removal coordination<br/>➡️ MANAGES: K0 P12 MLS groups"]:::security_safety
+
+    K0_P12_ENCRYPTION["security/encryptor.py<br/>🧠 ENCRYPTION OPERATIONS:<br/>• Message encryption VIA K0 crypto_mls<br/>• Selective sharing BY privacy bands<br/>• Ratchet service coordination<br/>➡️ ENCRYPTS: K0 P12 E2EE messages"]:::security_safety
+  end
+
+  %% K0 P18 Safety/Abuse Handlers
+  subgraph K0_P18_HANDLERS["🚨 K0 P18 Safety/Abuse Handlers"]
+    K0_P18_COORDINATION["security/safety_coordinator.py<br/>� K0 P18 COORDINATION:<br/>• Safety operations FROM K0 WAL events<br/>• Content moderation policies<br/>• Abuse detection algorithms<br/>➡️ COORDINATES: K0 P18 (Safety/Abuse) enforcement"]:::security_safety
+
+    K0_P18_THREAT_DETECTION["security/threat_detector.py<br/>🧠 THREAT DETECTION:<br/>• Anomaly detection ON K0 WAL stream<br/>• Pattern-based threat identification<br/>• Zero-trust verification<br/>➡️ DETECTS: K0 P18 security threats"]:::security_safety
+
+    K0_P18_CONTENT_MODERATION["security/content_moderator.py<br/>🧠 CONTENT MODERATION:<br/>• Content safety checks<br/>• Classification BY privacy bands<br/>• Moderation actions TO K0 Command Port<br/>➡️ MODERATES: K0 P18 content safety"]:::security_safety
+
+    K0_P18_ABUSE_RESPONSE["security/abuse_responder.py<br/>🧠 ABUSE RESPONSE:<br/>• Incident response coordination<br/>• Safety events TO K0 Observability Port<br/>• Adaptive defense strategies<br/>➡️ RESPONDS: K0 P18 abuse incidents"]:::security_safety
+  end
+
+  K0_SECURITY_NOTE["� NOTE: All security operations SERVE K0 pipelines<br/>• P11 (DSAR/GDPR) via K0 Query/Command Ports<br/>• P12 (Device/E2EE) via K0 crypto_mls driver + K0::st_sqlite[keys]<br/>• P18 (Safety/Abuse) FROM K0 WAL events, TO K0 Observability<br/>⚠️ Security infrastructure provides HANDLERS for K0 security pipelines"]:::card
+end
+class K0_SECURITY_INFRASTRUCTURE card
+
+%% ====== K0 PRIVACY & PII INFRASTRUCTURE (P10) ======
+subgraph K0_P10_PRIVACY_INFRASTRUCTURE["⚖️ K0 P10 Privacy & PII Infrastructure"]
+  direction TB
+
+  %% K0 P10 Coordination
+  K0_P10_COORDINATION["privacy/p10_coordinator.py<br/>🧠 K0 P10 COORDINATION:<br/>• PII operations SERVE K0 P10 (PII/Minimization) pipeline<br/>• Privacy enforcement FROM K0 WAL events<br/>• PII detection and redaction coordination<br/>➡️ COORDINATES: K0 P10 privacy operations"]:::security_safety
+
+  %% PII Detection
+  subgraph K0_P10_DETECTION["🔍 K0 P10 PII Detection"]
+    K0_P10_DETECTOR["privacy/pii_detector.py<br/>� PII DETECTION:<br/>• Detect PII IN K0 WAL events<br/>• Classification BY privacy bands (GREEN/AMBER/RED)<br/>• Detection metadata TO K0::st_sqlite[pii_audit]<br/>➡️ DETECTS: K0 P10 PII violations"]:::security_safety
+
+    K0_P10_CLASSIFIER["privacy/band_classifier.py<br/>🧠 PRIVACY BAND CLASSIFICATION:<br/>• GREEN: No PII, public data<br/>• AMBER: Limited PII, internal use<br/>• RED: Sensitive PII, restricted access<br/>➡️ CLASSIFIES: K0 P10 privacy bands"]:::security_safety
+
+    K0_P10_SCHEMA_REGISTRY["privacy/pii_schema_registry.py<br/>🧠 PII SCHEMA REGISTRY:<br/>• PII pattern definitions<br/>• Entity recognition rules<br/>• Schema versioning IN K0::st_sqlite<br/>➡️ MANAGES: K0 P10 PII schemas"]:::security_safety
+  end
+
+  %% PII Redaction
+  subgraph K0_P10_REDACTION["🔐 K0 P10 Redaction Operations"]
+    K0_P10_REDACTOR["privacy/redaction_engine.py<br/>🧠 REDACTION OPERATIONS:<br/>• Redact PII FROM K0 Query Port results<br/>• Selective redaction BY privacy bands<br/>• Audit trails IN K0::st_sqlite[redaction_log]<br/>➡️ REDACTS: K0 P10 sensitive data"]:::security_safety
+
+    K0_P10_MINIMIZER["privacy/pii_minimizer_service.py<br/>🧠 DATA MINIMIZATION:<br/>• PII minimization policies<br/>• Retention policy enforcement<br/>• Auto-deletion coordination WITH K0 P03<br/>➡️ MINIMIZES: K0 P10 PII retention"]:::security_safety
+  end
+
+  %% Privacy Governance
+  subgraph K0_P10_GOVERNANCE["⚖️ K0 P10 Privacy Governance"]
+    K0_P10_POLICY_ENGINE["privacy/policy_rules_engine.py<br/>🧠 POLICY ENFORCEMENT:<br/>• Privacy policy rules<br/>• Policy decision cache (in-memory)<br/>• Policy violations TO K0 Observability<br/>➡️ ENFORCES: K0 P10 privacy policies"]:::security_safety
+
+    K0_P10_CONSENT_MGMT["privacy/consent_manager.py<br/>🧠 CONSENT MANAGEMENT:<br/>• User consent storage IN K0::st_sqlite[consent]<br/>• Dynamic consent updates<br/>• Consent verification FOR queries<br/>➡️ MANAGES: K0 P10 user consent"]:::security_safety
+
+    K0_P10_PRIVACY_BUDGET["privacy/privacy_budget.py<br/>🧠 PRIVACY BUDGET:<br/>• Differential privacy budget tracking<br/>• Query sensitivity analysis<br/>• Budget exhaustion alerts<br/>➡️ TRACKS: K0 P10 privacy budget"]:::security_safety
+
+    K0_P10_COMPLIANCE["privacy/compliance_tracker.py<br/>🧠 COMPLIANCE COORDINATION:<br/>• Compliance tracking WITH K0 P11 (GDPR)<br/>• Audit trail aggregation<br/>• Compliance reports generation<br/>➡️ COORDINATES: K0 P10 compliance WITH P11"]:::security_safety
+  end
+
+  K0_P10_NOTE["📝 NOTE: All privacy operations SERVE K0 P10 (PII/Minimization) pipeline<br/>• PII detection FROM K0 WAL events<br/>• Redaction IN K0 Query Port results<br/>• Audit trails TO K0::st_sqlite[pii_audit, redaction_log, consent]<br/>• Coordination WITH K0 P11 (DSAR/GDPR) for compliance<br/>⚠️ Privacy bands: GREEN (public) | AMBER (internal) | RED (sensitive)"]:::card
+end
+class K0_P10_PRIVACY_INFRASTRUCTURE card
+
+%% ====== K0 OBSERVABILITY INFRASTRUCTURE ======
+subgraph K0_OBSERVABILITY_INFRASTRUCTURE["🔭 K0 Observability Infrastructure"]
+  direction TB
+
+  %% K0 Observability Coordination
+  K0_OBS_COORDINATION["observability/obs_coordinator.py<br/>🧠 K0 OBSERVABILITY COORDINATION:<br/>• All observability VIA K0 Observability Port<br/>• cognitive_trace_id correlation<br/>• Infrastructure monitoring FOR K0 pipelines<br/>➡️ COORDINATES: K0 observability operations"]:::observability
+
+  %% Metrics Collection
+  subgraph K0_OBS_METRICS["📈 K0 Observability Metrics"]
+    K0_OBS_PROMETHEUS["observability/prometheus_collector.py<br/>🧠 PROMETHEUS METRICS:<br/>• Metrics FROM K0 Observability Port<br/>• Infrastructure metrics (P03/P07/P08/P10-P18)<br/>• Performance dashboards & alerting<br/>➡️ COLLECTS: K0 infrastructure metrics"]:::observability
+
+    K0_OBS_COGNITIVE_METRICS["observability/cognitive_metrics.py<br/>🧠 COGNITIVE METRICS:<br/>• Memory operation performance tracking<br/>• Memory formation & retrieval metrics<br/>• Quality & accuracy measurements<br/>➡️ MONITORS: K0 cognitive health"]:::observability
+
+    K0_OBS_ANALYTICS["observability/memory_analytics.py<br/>🧠 MEMORY ANALYTICS:<br/>• Memory analytics FOR optimization<br/>• Usage pattern analysis<br/>• Performance trend analysis<br/>➡️ MONITORS: K0 memory performance"]:::observability
+  end
+
+  %% Distributed Tracing
+  subgraph K0_OBS_TRACING["� K0 Observability Traces"]
+    K0_OBS_OPENTELEMETRY["observability/otel_tracer.py<br/>🧠 DISTRIBUTED TRACING:<br/>• OpenTelemetry traces FROM K0<br/>• cognitive_trace_id propagation<br/>• Cross-diagram trace correlation<br/>➡️ TRACES: K0 infrastructure operations"]:::observability
+
+    K0_OBS_DISTRIBUTED["observability/distributed_tracing.py<br/>🧠 CROSS-DEVICE TRACING:<br/>• Multi-device operation tracing<br/>• Sync coordination tracking WITH P07<br/>• Edge device trace aggregation<br/>➡️ MONITORS: K0 distribution"]:::observability
+
+    K0_OBS_SAMPLING["observability/adaptive_sampling.py<br/>🧠 ADAPTIVE SAMPLING:<br/>• Intelligent trace sampling<br/>• High-cardinality reduction<br/>• Cost-aware sampling WITH P17<br/>➡️ OPTIMIZES: K0 trace volume"]:::observability
+  end
+
+  %% Logging & Analytics
+  subgraph K0_OBS_LOGGING["📝 K0 Observability Logs"]
+    K0_OBS_STRUCTURED_LOGS["observability/structured_logger.py<br/>🧠 STRUCTURED LOGGING:<br/>• Logs WITH cognitive_trace_id<br/>• Aggregation FROM all K0 pipelines<br/>• Storage IN K0::st_sqlite[logs] OR external<br/>➡️ LOGS: K0 infrastructure events"]:::observability
+
+    K0_OBS_BEHAVIORAL["observability/behavioral_analytics.py<br/>🧠 BEHAVIORAL ANALYTICS:<br/>• User behavior pattern analysis<br/>• Family usage insights<br/>• Predictive analytics<br/>➡️ MONITORS: K0 usage patterns"]:::observability
+
+    K0_OBS_ANOMALY["observability/anomaly_detector.py<br/>🧠 ANOMALY DETECTION:<br/>• Real-time anomaly detection<br/>• Pattern deviation alerts<br/>• Incident correlation<br/>➡️ DETECTS: K0 operational anomalies"]:::observability
+  end
+
+  %% Intelligence & Predictions
+  subgraph K0_OBS_INTELLIGENCE["🔮 K0 Intelligence Monitoring"]
+    K0_OBS_INTELLIGENCE_DASH["observability/intelligence_dashboard.py<br/>🧠 INTELLIGENCE DASHBOARD:<br/>• Intelligence metrics FROM D3<br/>• Learning progress visualization<br/>• Model performance tracking<br/>➡️ MONITORS: K0 intelligence operations"]:::observability
+
+    K0_OBS_CAUSAL["observability/causal_analysis.py<br/>🧠 CAUSAL ANALYSIS:<br/>• Memory relationship causality<br/>• Effect propagation tracking<br/>• Root cause analysis<br/>➡️ ANALYZES: K0 relationships"]:::observability
+
+    K0_OBS_PREDICTIVE["observability/predictive_insights.py<br/>🧠 PREDICTIVE INSIGHTS:<br/>• Memory-driven predictions<br/>• Trend forecasting<br/>• Capacity planning<br/>➡️ PREDICTS: K0 infrastructure needs"]:::observability
+  end
+
+  K0_OBS_NOTE["� NOTE: All observability VIA K0 Observability Port<br/>• Metrics: Prometheus FROM K0 Observability Port<br/>• Traces: OpenTelemetry WITH cognitive_trace_id propagation<br/>• Logs: Structured logging TO K0::st_sqlite[logs] or external<br/>• Coverage: All K0 pipelines (P03/P05/P07/P08/P10-P18)<br/>⚠️ cognitive_trace_id MUST propagate across all operations"]:::card
+end
+class K0_OBSERVABILITY_INFRASTRUCTURE card
+
+%% ====== CONNECTOR INFRA (P09) ======
+subgraph CONNECTORS_INFRA["🔌 Connector Infrastructure (P09)"]
+  CONNECTOR_REGISTRY["st_connectors"]:::storage
+  OAUTH_VAULT["st_oauth_vault"]:::storage
+  WEBHOOK_INGEST["webhook_ingest"]:::mid
+  TOKEN_ROTATOR["token_rotator"]:::mid
+end
+class CONNECTORS_INFRA card
+
+%% ====== K0 P08 EMBEDDING LIFECYCLE HANDLERS ======
+subgraph K0_P08_EMBEDDING_HANDLERS["🧠 K0 P08 Embedding Lifecycle Handlers"]
+
+  K0_P08_COORDINATION["🔗 K0 P08 Integration<br/>🧠 SERVES K0 P08 PIPELINE:<br/>• Event source: K0 WAL (evt_wal)<br/>• Embeddings: K0::st_vector<br/>• Models: K0::st_blob<br/>➡️ INFRASTRUCTURE FOR: K0 P08 embedding operations"]:::mid
+
+  subgraph K0_P08_GENERATION["🔄 K0 P08 Embedding Generation"]
+    EMB_ORCH["K0 P08 Embedding Orchestrator<br/>🧠 ORCHESTRATION:<br/>• Batch processing FROM K0 WAL<br/>• Generation coordination<br/>➡️ ORCHESTRATES: K0 P08 generation"]:::mid
+    EMB_BUILDER["K0 P08 Embedding Builder<br/>🧠 EMBEDDING GENERATION:<br/>• Generate embeddings FOR K0::st_vector<br/>• Storage VIA K0 Command Port<br/>➡️ GENERATES: K0::st_vector embeddings"]:::mid
+    K0_P08_MODEL_MGR["K0 P08 Model Manager<br/>🧠 MODEL LIFECYCLE:<br/>• Model versioning IN K0::st_blob<br/>• Hot-swap support<br/>➡️ MANAGES: K0 P08 model lifecycle"]:::mid
+  end
+
+  subgraph K0_P08_INDEXING["🔍 K0 P08 Vector Indexing"]
+    VEC_INDEX_BUILDER["K0 P08 Vector Index Builder<br/>🧠 VECTOR INDEX:<br/>• Index maintenance FOR K0::st_vector<br/>• Similarity search optimization<br/>➡️ MAINTAINS: K0::st_vector indexes"]:::mid
+    FTS_INDEXER_SVC["K0 P08 FTS Indexer<br/>🧠 FTS INDEX:<br/>• Full-text search indexing<br/>• Index storage IN K0::st_fts<br/>➡️ MAINTAINS: K0::st_fts indexes"]:::mid
+  end
+
+  subgraph K0_P08_P13_COORDINATION["🔄 K0 P13 Index Rebuild Handlers"]
+    REINDEX_SCHED["K0 P13 Reindex Scheduler<br/>🧠 INDEX REBUILD:<br/>• Rebuild scheduling FOR K0 P13<br/>• Coordination WITH K0 P08<br/>➡️ SCHEDULES: K0 P13 rebuild jobs"]:::mid
+    REINDEX_WORKER["K0 P13 Reindex Worker<br/>🧠 REBUILD WORKER:<br/>• Vector index rebuild<br/>• FTS index rebuild<br/>➡️ REBUILDS: K0 P13 indexes"]:::mid
+  end
+
+  K0_P08_NOTE["📝 NOTE: All embeddings serve K0 P08 pipeline<br/>Embeddings: K0::st_vector<br/>Models: K0::st_blob<br/>Coordination: K0 P13 (Index Rebuild)"]:::card
+end
+class K0_P08_EMBEDDING_HANDLERS card
+
+%% ====== WORKFLOWS & BACKUP/RESTORE ======
+subgraph WORKFLOWS_BACKUP["🗓️ Workflows & Backup/Restore"]
+  WF_ENGINE["workflows/engine"]:::mid
+  WF_SCHED["workflows/scheduler"]:::mid
+  BACKUP_SCHED["backup/scheduler"]:::mid
+  SNAPSHOT_MGR["backup/snapshot_manager"]:::mid
+  RESTORE_MGR["backup/restore_manager"]:::mid
+end
+class WORKFLOWS_BACKUP card
+
+%% ====== SAFETY PIPE (P18 complement) ======
+subgraph SAFETY_PIPE["🧯 Safety & Abuse Ops"]
+  SAFETY_QUEUE["safety_queue"]:::bus
+  SAFETY_WORKER["safety_worker"]:::mid
+  FLAGGED_STORE["st_flagged_content"]:::storage
+end
+class SAFETY_PIPE card
+
+%% ====== WIRING: K0 Infrastructure Inputs ======
+FROM_D2_COGNITIVE-->SLEEP_SCHEDULER & KG_TEMPORAL_ENGINE & PROS_INTENTION_FORMATION
+FROM_D3_INTELLIGENCE-->ML_CONTINUAL_LEARNING & OBS_COGNITIVE_METRICS & POL_RULES_ENGINE
+FROM_D1_K0_WAL-->EVT_BUS_ANCHOR
+FROM_D1_K0_OFFSETS-->EVT_PERSIST
+
+%% ====== WIRING: Bus internals ======
+EVT_SCHEMA_VALID-->EVT_PERSIST
+EVT_PERSIST<-->EVT_DISPATCH
+EVT_DISPATCH<-->EVT_SUBS
+EVT_MW<-->EVT_DISPATCH
+OUTBOX_DRAINER-->EVT_BUS_ANCHOR
+DLQ_REPLAYER-->EVT_BUS_ANCHOR
+
+%% ====== WIRING: K0 P03 Consolidation ======
+%% K0 P03 coordination
+K0_WAL_D4 -.consolidation_events.-> K0_P03_COORDINATION
+P03_D4 --> K0_P03_COORDINATION
+K0_P03_COORDINATION --> SLEEP_SCHEDULER
+
+%% Sleep coordination cycle
+SLEEP_SCHEDULER-->SLEEP_STATE_MACHINE-->SLEEP_TRIGGER-->SLEEP_SCHEDULER
+SLEEP_STATE_MACHINE-->CONS_HIPPOCAMPAL & CONS_NEOCORTICAL & CONS_SYNAPTIC
+
+%% Hippocampal processing
+CONS_HIPPOCAMPAL-->CONS_EPISODIC & KG_TEMPORAL_ENGINE
+CONS_NEOCORTICAL-->CONS_SEMANTIC & KG_CONCEPT_EVOLUTION
+CONS_SYNAPTIC-->CONS_PROCEDURAL & CONS_EMOTIONAL
+
+%% Storage via K0 drivers
+CONS_EPISODIC -.store.-> K0_SQLITE_D4
+CONS_EPISODIC --> EV_CAUSAL_INDEXING
+CONS_SEMANTIC -.store.-> K0_SQLITE_D4
+CONS_SEMANTIC --> KG_RELATION_DISCOVERY
+CONS_PROCEDURAL -.store.-> K0_SQLITE_D4
+CONS_PROCEDURAL --> ML_CONTINUAL_LEARNING
+CONS_EMOTIONAL -.store.-> K0_SQLITE_D4
+CONS_EMOTIONAL --> POL_DYNAMIC_CONSENT
+
+%% Job coordination
+LEG_COMPACTOR -.compact.-> K0_SQLITE_D4
+LEG_ROLLUPS -.rollup.-> K0_SQLITE_D4
+LEG_REPLAY --> K0_OFFSETS_D4
+
+%% Progress tracking
+SLEEP_SCHEDULER -.progress.-> K0_OFFSETS_D4
+
+%% ====== WIRING: K0::st_kg Knowledge Graph ======
+%% K0 KG coordination
+K0_KG_COORDINATION -.queries.-> K0_QRY_D4
+K0_KG_COORDINATION -.updates.-> K0_CMD_D4
+K0_CMD_D4 -.store.-> K0_KG_D4
+
+%% KG query operations
+KG_TEMPORAL_ENGINE<-->KG_VERSION_CONTROL<-->KG_CAUSAL_GRAPH
+KG_CONCEPT_EVOLUTION-->KG_RELATION_DISCOVERY-->KG_INCONSISTENCY_RESOLUTION
+KG_SENSORY_GROUNDING<-->KG_LINGUISTIC_MAPPING<-->KG_PROCEDURAL_LINKING
+
+%% KG integration with other systems
+KG_CAUSAL_GRAPH-->PROS_CUE_MONITORING & OBS_CAUSAL_ANALYSIS
+KG_TEMPORAL_ENGINE -.queries.-> K0_KG_D4
+KG_CONCEPT_EVOLUTION -.updates.-> K0_KG_D4
+LEG_KG_TEMPORAL -.legacy.-> K0_KG_D4
+
+%% ====== WIRING: K0 P05 Prospective ======
+%% K0 P05 coordination
+K0_WAL_D4 -.prospective_events.-> K0_P05_COORDINATION
+P05_D4 --> K0_P05_COORDINATION
+K0_P05_COORDINATION --> PROS_INTENTION_FORMATION
+
+%% Prospective flow
+PROS_INTENTION_FORMATION-->PROS_CUE_MONITORING-->PROS_RETRIEVAL_ENGINE-->PROS_EXECUTION_CONTROL
+PROS_TIME_BASED & PROS_EVENT_BASED & PROS_ACTIVITY_BASED-->PROS_PRIORITY_MANAGER
+PROS_PRIORITY_MANAGER-->PROS_INTERFERENCE_CONTROL-->PROS_FORGETTING_PREVENTION
+
+%% Storage via K0
+PROS_INTENTION_FORMATION -.store.-> K0_SQLITE_D4
+PROS_RETRIEVAL_ENGINE -.query.-> K0_QRY_D4
+PROS_EXECUTION_CONTROL -.notify.-> K0_OBS_D4
+PROS_EXECUTION_CONTROL-->EV_PATTERN_STORAGE & OBS_BEHAVIORAL_ANALYTICS
+
+%% ====== WIRING: K0 P07 Sync ======
+%% K0 P07 coordination
+P07_D4 --> K0_P07_COORDINATION
+K0_P07_COORDINATION --> SYNC_COGNITIVE_ROUTER
+
+%% Sync operations
+SYNC_COGNITIVE_ROUTER<-->SYNC_CONFLICT_RESOLUTION<-->SYNC_ADAPTIVE_STRATEGY
+SYNC_CONFLICT_RESOLUTION -.crdt.-> K0_SYNC_D4
+K0_P07_DEVICE_REGISTRY -.devices.-> K0_SQLITE_D4
+
+%% Edge coordination
+EDGE_COGNITIVE_CACHE-->EDGE_FEDERATED_LEARNING-->EDGE_OFFLINE_INTELLIGENCE
+EDGE_OFFLINE_INTELLIGENCE -.sync_queue.-> K0_SQLITE_D4
+
+%% ====== WIRING: K0 P08 Embeddings & ML ======
+%% K0 P08 coordination
+K0_WAL_D4 -.embedding_events.-> K0_P08_COORDINATION
+P08_D4 --> K0_P08_COORDINATION
+K0_P08_COORDINATION --> EMB_ORCH
+
+%% Embedding generation
+EMB_ORCH --> EMB_BUILDER
+EMB_BUILDER -.store.-> K0_VEC_D4
+K0_P08_MODEL_MGR -.models.-> K0_BLOB_D4
+
+%% Indexing
+VEC_INDEX_BUILDER -.index.-> K0_VEC_D4
+FTS_INDEXER_SVC -.index.-> K0_SQLITE_D4
+
+%% K0 P13 rebuild coordination
+P13_D4 --> REINDEX_SCHED
+REINDEX_SCHED --> REINDEX_WORKER
+REINDEX_WORKER -.rebuild.-> K0_VEC_D4
+
+%% ML coordination
+K0_ML_COORDINATION --> ML_CONTINUAL_LEARNING
+LEG_MODEL_REGISTRY -.artifacts.-> K0_BLOB_D4
+LEG_MODEL_REGISTRY-->ST_ML_ART
+ML_USER_MODELING-->ST_ML_ART
+
+%% ====== WIRING: Policy, P10, Security ======
+PII_MINIMIZER-->PII_SCHEMA_REG
+PII_MINIMIZER-->ST_PII_MAP
+REDACTION_COORD-->ST_REDACTION_LOG
+SEC_ADAPTIVE_DEFENSE-->OBS_ANOMALY_DETECTION
+MLS_BAND_CONTROL-->SYNC_CONFLICT_RESOLUTION
+HSM_SERVICE-->E2EE_KEY_MANAGEMENT
+RATCHET_SVC-->E2EE_KEY_MANAGEMENT
+
+%% ====== WIRING: Registries ======
+REG_TOOLS & REG_PROMPTS & REG_AGENTS-->ST_REGS
+
+%% ====== WIRING: Workflows & Backup ======
+WF_SCHED-->WF_ENGINE
+BACKUP_SCHED-->SNAPSHOT_MGR-->ST_SNAPSHOTS
+RESTORE_MGR-->ST_SNAPSHOTS
+
+%% ====== WIRING: Durability path ======
+ST_OUTBOX-->OUTBOX_DRAINER
+EVT_PERSIST-->ST_WAL & ST_OFFSETS
+EVT_BUS_ANCHOR-.nack/errors.->ST_DLQ
+DLQ_REPLAYER-->ST_DLQ
+ST_RECEIPTS-->OBS_INTELLIGENCE_DASHBOARD
+
+%% ====== WIRING: Connector Infra ======
+WEBHOOK_INGEST-->CONNECTOR_REGISTRY
+TOKEN_ROTATOR-->OAUTH_VAULT
+
+%% ====== BUS & SSE BRIDGING ======
+CONS_HIPPOCAMPAL & CONS_NEOCORTICAL & CONS_SYNAPTIC-->INFRA_CONS_T
+KG_TEMPORAL_ENGINE & KG_CAUSAL_GRAPH & KG_RELATION_DISCOVERY-->INFRA_KG_T
+PROS_EXECUTION_CONTROL & PROS_PRIORITY_MANAGER-->INFRA_PROS_T
+SYNC_COGNITIVE_ROUTER & SYNC_CONFLICT_RESOLUTION-->INFRA_SYNC_T
+SEC_ADAPTIVE_DEFENSE & MLS_ENFORCEMENT-->INFRA_SEC_T
+K0_OBS_INTELLIGENCE_DASH & K0_OBS_ANOMALY-->INFRA_OBS_T
+EMB_ORCH & REINDEX_SCHED-->INFRA_ML_T
+PII_MINIMIZER & REDACTION_COORD-->PRIVACY_TOPICS
+
+INFRA_CONS_T & INFRA_KG_T & INFRA_PROS_T & INFRA_SYNC_T & INFRA_SEC_T & INFRA_OBS_T & INFRA_ML_T & PRIVACY_TOPICS-->EVT_BUS_ANCHOR
+INFRA_CONS_T & INFRA_KG_T & INFRA_PROS_T & INFRA_SYNC_T & INFRA_SEC_T & INFRA_OBS_T & INFRA_ML_T & PRIVACY_TOPICS-->TO_SSE_INFRA
+
+%% ====== K0 INFRASTRUCTURE COORDINATION WIRING ======
+
+%% K0 WAL fan-out TO infrastructure processing
+FROM_D1_K0_WAL-->SLEEP_SCHEDULER
+FROM_D1_K0_WAL-->CONS_HIPPOCAMPAL
+FROM_D1_K0_WAL-->EMB_ORCH
+FROM_D1_K0_WAL-->PII_MINIMIZER
+
+%% D2 Cognitive Core coordination VIA K0 P03
+FROM_D2_COGNITIVE-->K0_OBS_COGNITIVE_METRICS
+FROM_D2_COGNITIVE-->SYNC_COGNITIVE_ROUTER
+FROM_D2_COGNITIVE-->CONS_NEOCORTICAL
+FROM_D2_COGNITIVE-->KG_CONCEPT_EVOLUTION
+FROM_D2_COGNITIVE-->ML_META_LEARNING
+
+%% D3 Intelligence Systems coordination VIA K0 P03/P08
+FROM_D3_INTELLIGENCE-->K0_OBS_INTELLIGENCE_DASH
+FROM_D3_INTELLIGENCE-->K0_OBS_PREDICTIVE
+FROM_D3_INTELLIGENCE-->ML_CONTINUAL_LEARNING
+FROM_D3_INTELLIGENCE-->KG_RELATION_DISCOVERY
+FROM_D3_INTELLIGENCE-->PROS_CUE_MONITORING
+
+%% Infrastructure outputs TO D1 K0 Storage Drivers
+CONS_SEMANTIC-->TO_D1_K0_DRIVERS
+CONS_EPISODIC-->TO_D1_K0_DRIVERS
+CONS_PROCEDURAL-->TO_D1_K0_DRIVERS
+CONS_EMOTIONAL-->TO_D1_K0_DRIVERS
+
+%% Infrastructure observability TO D1 K0
+K0_OBS_PREDICTIVE-->TO_D1_K0_DRIVERS
+K0_OBS_BEHAVIORAL-->TO_D1_K0_DRIVERS
+K0_OBS_OPENTELEMETRY-->K0_OBS_D4
+K0_OBS_PROMETHEUS-->K0_OBS_D4
+
+%% Infrastructure intelligence outputs VIA K0
+ML_USER_MODELING-->TO_D1_K0_DRIVERS
+ML_CONTEXTUAL_ADAPTATION-->TO_D1_K0_DRIVERS
+KG_CAUSAL_GRAPH-->TO_D1_K0_DRIVERS
+PROS_EXECUTION_CONTROL-->TO_D2_COGNITIVE
+
+%% K0 Infrastructure cross-component coordination
+SLEEP_SCHEDULER-->CONS_HIPPOCAMPAL
+SLEEP_SCHEDULER-->CONS_NEOCORTICAL
+SLEEP_SCHEDULER-->CONS_SYNAPTIC
+K0_OBS_ANALYTICS-->ML_CONTINUAL_LEARNING
+K0_OBS_COGNITIVE_METRICS-->SYNC_ADAPTIVE_STRATEGY
+SYNC_COGNITIVE_ROUTER-->EDGE_COGNITIVE_CACHE
+ML_USER_MODELING-->K0_P10_CONSENT_MGMT
+KG_TEMPORAL_ENGINE-->PROS_TIME_BASED
+
+%% ====== K0 P10 PRIVACY & PII WIRING ======
+%% K0 WAL events TO P10 handlers
+K0_WAL_D4 -.pii_detection.-> K0_P10_COORDINATION
+P10_D4 --> K0_P10_COORDINATION
+
+%% P10 Detection operations
+K0_P10_COORDINATION --> K0_P10_DETECTOR
+K0_P10_DETECTOR --> K0_P10_CLASSIFIER
+K0_P10_DETECTOR --> K0_P10_SCHEMA_REGISTRY
+K0_P10_CLASSIFIER -.privacy_bands.-> K0_P10_REDACTOR
+
+%% P10 Redaction operations
+K0_QRY_D4 --> K0_P10_REDACTOR
+K0_P10_REDACTOR --> K0_P10_MINIMIZER
+K0_P10_MINIMIZER -.auto_deletion.-> K0_P03_COORDINATION
+
+%% P10 Governance
+K0_P10_COORDINATION --> K0_P10_POLICY_ENGINE
+K0_P10_POLICY_ENGINE --> K0_P10_CONSENT_MGMT
+K0_P10_CONSENT_MGMT --> K0_P10_PRIVACY_BUDGET
+K0_P10_PRIVACY_BUDGET --> K0_P10_COMPLIANCE
+
+%% P10 Storage
+K0_P10_DETECTOR -.audit.-> K0_SQLITE_D4
+K0_P10_REDACTOR -.redaction_log.-> K0_SQLITE_D4
+K0_P10_CONSENT_MGMT -.consent.-> K0_SQLITE_D4
+
+%% P10 Observability
+K0_P10_POLICY_ENGINE -.violations.-> K0_OBS_D4
+K0_P10_PRIVACY_BUDGET -.budget_alerts.-> K0_OBS_D4
+
+%% P10 Coordination WITH P11
+K0_P10_COMPLIANCE -.compliance_coordination.-> K0_P11_COORDINATION
+
+%% ====== K0 P11 DSAR/GDPR WIRING ======
+%% P11 Coordination
+P11_D4 --> K0_P11_COORDINATION
+K0_P11_COORDINATION --> K0_P11_ACCESS
+K0_P11_COORDINATION --> K0_P11_ERASURE
+K0_P11_COORDINATION --> K0_P11_AUDIT
+
+%% P11 Access operations VIA K0 Query Port
+K0_QRY_D4 --> K0_P11_ACCESS
+K0_P11_ACCESS -.aggregate_memories.-> K0_SQLITE_D4
+
+%% P11 Erasure operations VIA K0 Command Port
+K0_CMD_D4 --> K0_P11_ERASURE
+K0_P11_ERASURE -.cascade_deletions.-> K0_SQLITE_D4
+K0_P11_ERASURE -.cascade_deletions.-> K0_KG_D4
+K0_P11_ERASURE -.cascade_deletions.-> K0_VEC_D4
+
+%% P11 Audit trails
+K0_P11_ACCESS -.audit.-> K0_P11_AUDIT
+K0_P11_ERASURE -.audit.-> K0_P11_AUDIT
+K0_P11_AUDIT -.compliance_log.-> K0_SQLITE_D4
+
+%% P11 Coordination WITH P10
+K0_P11_COORDINATION -.compliance_feedback.-> K0_P10_COMPLIANCE
+
+%% ====== K0 P12 DEVICE/E2EE WIRING ======
+%% P12 Coordination
+P12_D4 --> K0_P12_COORDINATION
+K0_P12_COORDINATION --> K0_P12_KEY_MGMT
+K0_P12_COORDINATION --> K0_P12_MLS_GROUPS
+K0_P12_COORDINATION --> K0_P12_ENCRYPTION
+
+%% P12 Key management
+K0_P12_KEY_MGMT -.keys.-> K0_SQLITE_D4
+K0_P12_KEY_MGMT -.encryption.-> K0_CRYPTO_D4
+K0_P12_KEY_MGMT --> K0_P12_ENCRYPTION
+
+%% P12 MLS groups
+K0_P12_MLS_GROUPS -.groups.-> K0_SQLITE_D4
+K0_P12_MLS_GROUPS --> K0_P12_ENCRYPTION
+
+%% P12 Encryption operations
+K0_P12_ENCRYPTION -.encrypt.-> K0_CRYPTO_D4
+K0_P12_ENCRYPTION -.selective_sharing.-> K0_P10_CLASSIFIER
+
+%% ====== K0 P18 SAFETY/ABUSE WIRING ======
+%% K0 WAL events TO P18 handlers
+K0_WAL_D4 -.safety_events.-> K0_P18_COORDINATION
+P18_D4 --> K0_P18_COORDINATION
+
+%% P18 Threat detection
+K0_P18_COORDINATION --> K0_P18_THREAT_DETECTION
+K0_P18_THREAT_DETECTION --> K0_P18_CONTENT_MODERATION
+K0_P18_THREAT_DETECTION --> K0_P18_ABUSE_RESPONSE
+
+%% P18 Content moderation
+K0_P18_CONTENT_MODERATION -.moderation_actions.-> K0_CMD_D4
+K0_P18_CONTENT_MODERATION -.classification.-> K0_P10_CLASSIFIER
+
+%% P18 Abuse response
+K0_P18_ABUSE_RESPONSE -.incident_response.-> K0_OBS_D4
+K0_P18_ABUSE_RESPONSE -.safety_events.-> K0_OBS_D4
+
+%% ====== K0 OBSERVABILITY INFRASTRUCTURE WIRING ======
+%% K0 Observability Port TO all observability components
+K0_OBS_D4 --> K0_OBS_COORDINATION
+
+%% Observability Coordination
+K0_OBS_COORDINATION --> K0_OBS_PROMETHEUS
+K0_OBS_COORDINATION --> K0_OBS_OPENTELEMETRY
+K0_OBS_COORDINATION --> K0_OBS_STRUCTURED_LOGS
+
+%% Metrics Collection
+K0_OBS_PROMETHEUS --> K0_OBS_COGNITIVE_METRICS
+K0_OBS_PROMETHEUS --> K0_OBS_ANALYTICS
+
+%% Distributed Tracing
+K0_OBS_OPENTELEMETRY --> K0_OBS_DISTRIBUTED
+K0_OBS_OPENTELEMETRY --> K0_OBS_SAMPLING
+
+%% Logging & Analytics
+K0_OBS_STRUCTURED_LOGS --> K0_OBS_BEHAVIORAL
+K0_OBS_STRUCTURED_LOGS --> K0_OBS_ANOMALY
+
+%% Intelligence Monitoring
+K0_OBS_COORDINATION --> K0_OBS_INTELLIGENCE_DASH
+K0_OBS_INTELLIGENCE_DASH --> K0_OBS_CAUSAL
+K0_OBS_INTELLIGENCE_DASH --> K0_OBS_PREDICTIVE
+
+%% Observability Storage (optional)
+K0_OBS_STRUCTURED_LOGS -.logs.-> K0_SQLITE_D4
+
+%% Cross-component observability
+K0_P03_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P05_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P07_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P08_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P10_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P11_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P12_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+K0_P18_COORDINATION -.metrics.-> K0_OBS_PROMETHEUS
+
+%% ====== K0 PIPELINE HAND-OFFS ======
+K0_P03_CONSOLIDATION_HANDLERS-->TO_P03 & TO_P15
+K0_P05_PROSPECTIVE_HANDLERS-->TO_P05 & TO_P20
+K0_P07_SYNC_HANDLERS-->TO_P07
+K0_P08_EMBEDDING_HANDLERS-->TO_P08 & TO_P13
+K0_KG_INFRASTRUCTURE-->TO_P03
+K0_P10_PRIVACY_INFRASTRUCTURE-->TO_P10
+K0_SECURITY_INFRASTRUCTURE-->TO_P11 & TO_P12 & TO_P18
+K0_OBSERVABILITY_INFRASTRUCTURE-->TO_P17
+REGISTRIES-->TO_P16
+ML_ADAPTATION-->TO_P19
+WORKFLOWS_BACKUP-->TO_P13
+CONNECTORS_INFRA-->TO_P09
+
+%% ====== K0 INFRASTRUCTURE CROSS-DIAGRAM OUTPUTS ======
+SLEEP_STATE_MACHINE-->TO_PRODUCTION_DEPLOYMENT
+K0_OBS_INTELLIGENCE_DASH-->TO_PRODUCTION_DEPLOYMENT
+CONS_HIPPOCAMPAL-->TO_D2_COGNITIVE
+K0_OBS_ANALYTICS-->TO_D1_K0_DRIVERS

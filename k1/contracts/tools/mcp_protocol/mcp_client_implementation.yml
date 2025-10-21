@@ -1,0 +1,402 @@
+# MCP Client Implementation Contract
+#
+# **Purpose:** Define MCPClient class that wraps JSON-RPC 2.0 protocol,
+# supports stdio (70%) and HTTP (10%) transports, enforces timeouts per tool,
+# and handles request/response correlation.
+#
+# **Source ADR:** ADR-0033a (MCP Protocol Integration)
+# **Transport:** Stdio (Process sandbox) or HTTP (WASM sandbox)
+
+---
+mcp_client_implementation:
+  name: "MCPClient Implementation"
+  version: "1.0"
+  description: "Client library for JSON-RPC 2.0 MCP communication"
+
+  class_definition:
+    name: "MCPClient"
+    inheritance: "Generic[T]"
+    threading: "Async-first (asyncio)"
+
+    initialization:
+      constructor: "__init__(self, transport: Transport, tool_config: ToolConfig)"
+      parameters:
+        transport:
+          type: "Transport (Stdio or HTTP)"
+          description: "Transport layer (auto-selected based on sandbox)"
+
+        tool_config:
+          type: "ToolConfig"
+          fields:
+            tool_name: "string (e.g., 'weather_api')"
+            timeout_seconds: "integer (tool-specific)"
+            trace_id: "UUID (cognitive_trace_id for tracing)"
+
+    attributes:
+      pending_requests:
+        type: "Dict[str, Future]"
+        description: "Pending requests awaiting response (request_id → Future)"
+
+      transport:
+        type: "Transport"
+        description: "Underlying transport (Stdio or HTTP)"
+
+      next_request_id:
+        type: "int"
+        description: "Monotonic counter for request IDs"
+
+      logger:
+        type: "structlog.Logger"
+        description: "Structured logger with trace_id"
+
+  methods:
+
+    method_async_initialize:
+      name: "async initialize()"
+      description: "Initialize MCP server and return capabilities"
+
+      implementation: |
+        async def initialize(self) -> Dict:
+            """Initialize MCP server"""
+            request_id = self._generate_request_id()
+            request = {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "id": request_id
+            }
+
+            self.logger.info(
+                "mcp_initialize_request",
+                tool_name=self.tool_config.tool_name,
+                trace_id=self.tool_config.trace_id
+            )
+
+            # Send request, wait for response with timeout
+            response = await self._send_request(
+                request,
+                timeout_seconds=5  # Initialize timeout
+            )
+
+            self.logger.info(
+                "mcp_initialize_response",
+                capabilities=response.get("capabilities"),
+                trace_id=self.tool_config.trace_id
+            )
+
+            return response
+
+    method_async_list_tools:
+      name: "async list_tools()"
+      description: "List available tools from server"
+
+      implementation: |
+        async def list_tools(self) -> List[Dict]:
+            """List tools from server"""
+            request_id = self._generate_request_id()
+            request = {
+                "jsonrpc": "2.0",
+                "method": "tools/list",
+                "id": request_id
+            }
+
+            response = await self._send_request(
+                request,
+                timeout_seconds=5
+            )
+
+            return response.get("tools", [])
+
+    method_async_call_tool:
+      name: "async call_tool(tool_name: str, arguments: Dict)"
+      description: "Invoke tool with parameters"
+
+      implementation: |
+        async def call_tool(
+            self,
+            tool_name: str,
+            arguments: Dict
+        ) -> Dict:
+            """Invoke tool"""
+            request_id = self._generate_request_id()
+            request = {
+                "jsonrpc": "2.0",
+                "method": "tools/call",
+                "params": {
+                    "tool_name": tool_name,
+                    "arguments": arguments
+                },
+                "id": request_id
+            }
+
+            self.logger.info(
+                "mcp_tool_call_request",
+                tool_name=tool_name,
+                argument_size=len(str(arguments)),
+                trace_id=self.tool_config.trace_id
+            )
+
+            start_time = time.time()
+
+            try:
+                response = await self._send_request(
+                    request,
+                    timeout_seconds=self.tool_config.timeout_seconds
+                )
+
+                latency_ms = (time.time() - start_time) * 1000
+
+                self.logger.info(
+                    "mcp_tool_call_response",
+                    tool_name=tool_name,
+                    latency_ms=latency_ms,
+                    result_size=len(str(response)),
+                    trace_id=self.tool_config.trace_id
+                )
+
+                # Record metrics
+                k1_mcp_tool_call_latency_ms.labels(
+                    tool_name=tool_name,
+                    sandbox=self.transport.sandbox_type
+                ).observe(latency_ms)
+
+                return response
+
+            except asyncio.TimeoutError:
+                self.logger.error(
+                    "mcp_tool_call_timeout",
+                    tool_name=tool_name,
+                    timeout_seconds=self.tool_config.timeout_seconds,
+                    trace_id=self.tool_config.trace_id
+                )
+                raise
+
+    method_async_shutdown:
+      name: "async shutdown()"
+      description: "Gracefully shutdown MCP server"
+
+      implementation: |
+        async def shutdown(self):
+            """Shutdown server"""
+            request_id = self._generate_request_id()
+            request = {
+                "jsonrpc": "2.0",
+                "method": "shutdown",
+                "id": request_id
+            }
+
+            try:
+                await self._send_request(
+                    request,
+                    timeout_seconds=5
+                )
+            except asyncio.TimeoutError:
+                self.logger.warning(
+                    "mcp_shutdown_timeout",
+                    trace_id=self.tool_config.trace_id
+                )
+
+            await self.transport.close()
+
+    method_private_send_request:
+      name: "_send_request(request: Dict, timeout_seconds: int)"
+      description: "Send request and wait for response with timeout"
+
+      implementation: |
+        async def _send_request(
+            self,
+            request: Dict,
+            timeout_seconds: int
+        ) -> Dict:
+            """Send request and wait for response"""
+            request_id = str(request["id"])
+
+            # Create future for response
+            response_future = asyncio.Future()
+            self.pending_requests[request_id] = response_future
+
+            try:
+                # Send request via transport
+                await self.transport.send(request)
+
+                # Wait for response with timeout
+                response = await asyncio.wait_for(
+                    response_future,
+                    timeout=timeout_seconds
+                )
+
+                # Check for JSON-RPC error
+                if "error" in response:
+                    error = response["error"]
+                    raise JSONRPCError(
+                        error["code"],
+                        error["message"],
+                        error.get("data")
+                    )
+
+                return response.get("result")
+
+            finally:
+                # Clean up pending request
+                self.pending_requests.pop(request_id, None)
+
+    method_private_handle_response:
+      name: "_handle_response(response: Dict)"
+      description: "Handle incoming response, match to pending request"
+
+      implementation: |
+        def _handle_response(self, response: Dict):
+            """Handle response from server"""
+            request_id = str(response.get("id", ""))
+
+            if request_id not in self.pending_requests:
+                self.logger.warning(
+                    "mcp_response_no_pending_request",
+                    request_id=request_id,
+                    trace_id=self.tool_config.trace_id
+                )
+                return
+
+            # Resolve pending request
+            future = self.pending_requests[request_id]
+            future.set_result(response)
+
+    method_private_generate_request_id:
+      name: "_generate_request_id()"
+      description: "Generate unique request ID"
+
+      implementation: |
+        def _generate_request_id(self) -> str:
+            """Generate request ID"""
+            request_id = f"req-{self.tool_config.tool_name}-{self.next_request_id}"
+            self.next_request_id += 1
+            return request_id
+
+  ## TRANSPORT INTERFACE
+  transport_interface:
+    name: "Transport (abstract)"
+    methods:
+      async_send:
+        signature: "async send(request: Dict) → None"
+        description: "Send JSON-RPC request"
+
+      async_receive:
+        signature: "async receive() → Dict"
+        description: "Receive JSON-RPC response"
+
+      async_close:
+        signature: "async close() → None"
+        description: "Close transport connection"
+
+  ## STDIO TRANSPORT IMPLEMENTATION
+  stdio_transport:
+    name: "StdioTransport (implements Transport)"
+    description: "JSON-RPC over stdin/stdout pipes (70% of tools)"
+
+    initialization:
+      server_process: "subprocess.Process (spawned MCP server)"
+      encoding: "UTF-8"
+      buffer: "Newline-delimited JSON"
+
+    send_method: |
+      async def send(self, request: Dict) -> None:
+          """Send request to server stdin"""
+          request_json = json.dumps(request)
+          self.server_process.stdin.write(request_json + "\n")
+          self.server_process.stdin.flush()
+
+    receive_method: |
+      async def receive(self) -> Dict:
+          """Receive response from server stdout"""
+          response_line = self.server_process.stdout.readline()
+          response = json.loads(response_line)
+          return response
+
+    close_method: |
+      async def close(self) -> None:
+          """Close pipes and terminate process"""
+          self.server_process.stdin.close()
+          self.server_process.stdout.close()
+          self.server_process.terminate()
+          self.server_process.wait(timeout=5)
+
+  ## HTTP TRANSPORT IMPLEMENTATION
+  http_transport:
+    name: "HttpTransport (implements Transport)"
+    description: "JSON-RPC over HTTP POST (10% of tools)"
+
+    initialization:
+      server_url: "string (e.g., http://localhost:8001/rpc)"
+      session: "aiohttp.ClientSession (async HTTP)"
+      headers: "Content-Type: application/json"
+
+    send_receive_combined: |
+      async def call(self, request: Dict) -> Dict:
+          """Send request and receive response via HTTP"""
+          request_json = json.dumps(request)
+
+          async with self.session.post(
+              self.server_url,
+              data=request_json,
+              headers={"Content-Type": "application/json"}
+          ) as response:
+              response_json = await response.json()
+              return response_json
+
+    latency_note: "<10ms typical (network latency)"
+
+  ## ERROR HANDLING
+  error_handling:
+    error_types:
+      - name: "JSONRPCError"
+        fields:
+          - code: "int (JSON-RPC error code)"
+          - message: "str (error message)"
+          - data: "optional object (error details)"
+
+      - name: "TimeoutError"
+        description: "Request exceeded tool-specific timeout"
+
+      - name: "TransportError"
+        description: "Transport layer failure (connection lost, etc)"
+
+      - name: "ValidationError"
+        description: "Response failed validation"
+
+    recovery_strategies:
+      timeout_error: "Trigger Tool Execution Protocol fallback (ADR-0033d)"
+      transport_error: "Spawn new process or reconnect"
+      validation_error: "Log error, escalate to operator"
+
+  ## PERFORMANCE TARGETS
+  performance:
+    latency:
+      stdio: "<5ms per call (same process)"
+      http: "<10ms per call (network latency)"
+
+    overhead:
+      request_serialization: "<0.5ms (json.dumps)"
+      response_parsing: "<0.5ms (json.loads)"
+      total_client_overhead: "<1ms"
+
+    memory:
+      per_pending_request: "~1KB (Future object)"
+      client_instance: "~10KB"
+
+  ## OBSERVABILITY
+  observability:
+    metrics:
+      - "k1_mcp_requests_total (by method)"
+      - "k1_mcp_request_latency_ms (histogram)"
+      - "k1_mcp_errors_total (by error code)"
+      - "k1_mcp_pending_requests (gauge)"
+
+    tracing:
+      - "mcp_client_initialize"
+      - "mcp_client_list_tools"
+      - "mcp_client_call_tool"
+      - "mcp_client_shutdown"
+
+    logging:
+      - "mcp_request_sent (method, tool, trace_id)"
+      - "mcp_response_received (latency_ms, trace_id)"
+      - "mcp_error (error_code, error_message, trace_id)"

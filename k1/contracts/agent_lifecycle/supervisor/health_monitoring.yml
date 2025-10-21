@@ -1,0 +1,265 @@
+# Health Monitoring Contract
+# Source ADR: ADR-0005d (Supervisor Monitoring & Blacklist Management)
+# Defines heartbeat monitoring protocol and health checks
+
+metadata:
+  contract_id: "health-monitoring-v1.0"
+  source_adr: "0005d-supervisor-blacklist.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# Health Monitoring Overview
+health_monitoring_overview:
+  description: "Heartbeat-based health monitoring with 1Hz checks and 3s timeout"
+  purpose: "Detect unresponsive agents within 3s, trigger replacement within 100ms"
+  protocol: "Agent sends heartbeat every 1s, Supervisor checks every 1s"
+  performance_target: "<1% CPU overhead, <100ms crash detection"
+
+# Heartbeat Protocol
+heartbeat_protocol:
+
+  # Message Format
+  heartbeat_message:
+    direction: "Agent → Supervisor"
+    frequency: "Every 1s (1Hz)"
+    fields:
+      - agent_id: "string (UUID)"
+      - timestamp: "datetime (monotonic clock)"
+      - sequence_number: "int (optional, for duplicate detection)"
+    payload_size: "<100 bytes"
+    transport: "Actor mailbox message"
+
+  # Supervisor Processing
+  supervisor_processing:
+    interval_ms: 1000  # Check every 1s
+    timeout_ms: 3000   # 3s = 2 missed heartbeats
+    action_on_timeout: "Declare agent dead, trigger replacement"
+    performance_budget_ms: "<1ms per check (dict scan)"
+
+# Health Check Types
+health_check_types:
+
+  # Primary: Heartbeat Monitoring
+  heartbeat_monitoring:
+    description: "Passive monitoring via heartbeat messages"
+    interval: "1s (agent sends)"
+    timeout: "3s (supervisor timeout)"
+    failure_action: "Treat as crash, spawn replacement"
+    false_positive_rate: "<0.1% (network jitter tolerance)"
+
+  # Secondary: Active Ping (Optional)
+  active_ping:
+    description: "Active health check for critical agents"
+    interval: "5s (supervisor sends ping)"
+    timeout: "1s (response timeout)"
+    enabled_for: "Critical agents only (Planner, Safety Watch)"
+    performance_impact: "<0.5% CPU additional"
+
+  # Tertiary: Event Loop Heartbeat
+  event_loop_heartbeat:
+    description: "Detect event loop stalls (200ms resolution)"
+    interval: "200ms (agent internal)"
+    timeout: "400ms (2 missed beats)"
+    detection: "Supervisor monitors agent-reported timestamps"
+    purpose: "Catch stuck agents (infinite loop, deadlock)"
+
+# Health States
+health_states:
+
+  # Healthy: Normal operation
+  healthy:
+    criteria:
+      - "Last heartbeat < 1s ago"
+      - "No crash reports"
+      - "State transitions normal"
+    actions: "None (continue monitoring)"
+
+  # Degraded: Warning signs
+  degraded:
+    criteria:
+      - "Last heartbeat 1-3s ago (1 missed)"
+      - "State transition delays"
+      - "High memory usage (>80%)"
+    actions:
+      - "Log warning"
+      - "Increase monitoring frequency"
+      - "Prepare replacement agent"
+
+  # Unhealthy: Action required
+  unhealthy:
+    criteria:
+      - "Last heartbeat > 3s ago (2+ missed)"
+      - "Crash reported"
+      - "Invalid state transitions"
+      - "Resource exhaustion (OOM, thermal)"
+    actions:
+      - "Declare agent dead"
+      - "Log crash event"
+      - "Spawn replacement agent"
+      - "Update crash counters"
+
+  # Blacklisted: Blocked from spawning
+  blacklisted:
+    criteria:
+      - "Agent type has 3+ crashes in 10 min"
+      - "Blacklist duration not expired"
+    actions:
+      - "Block new agent spawns"
+      - "Log blacklist event"
+      - "Alert operations team"
+
+# Monitoring Configuration
+monitoring_config:
+
+  # Intervals
+  intervals:
+    heartbeat_check_ms: 1000      # Supervisor checks heartbeats
+    active_ping_ms: 5000          # Optional active pings
+    event_loop_check_ms: 200      # Event loop heartbeat
+    health_report_ms: 60000       # Health summary reports
+
+  # Thresholds
+  thresholds:
+    heartbeat_timeout_ms: 3000    # 3s = dead
+    degraded_threshold_ms: 1000  # 1s = degraded
+    event_loop_timeout_ms: 400   # 400ms = stuck
+    memory_warning_percent: 80    # >80% = warning
+    cpu_warning_percent: 90       # >90% = warning
+
+  # Timeouts
+  timeouts:
+    crash_detection_ms: 100       # Max time to detect crash
+    replacement_spawn_ms: 240     # Max time to spawn replacement
+    total_failover_ms: 340        # Total: detection + spawn
+
+# Agent Health Reporting
+agent_reporting:
+
+  # Required Agent Capabilities
+  required_capabilities:
+    - "Send heartbeat every 1s"
+    - "Report state transitions"
+    - "Report crashes before termination"
+    - "Handle active ping requests (optional)"
+
+  # Health Metadata
+  health_metadata:
+    agent_id: "UUID"
+    agent_type: "enum (Planner, Orchestrator, etc.)"
+    current_state: "AgentState enum"
+    memory_mb: "current RSS"
+    cpu_percent: "current CPU usage"
+    last_heartbeat: "datetime"
+    crash_count: "int (since spawn)"
+
+# Performance Budgets
+performance_budgets:
+
+  # Supervisor Overhead
+  supervisor_overhead:
+    cpu_percent: "<1%"  # Target for 100 agents
+    memory_mb: "<10"    # Agent tracking + history
+    network_kb_per_sec: "<1"  # Heartbeat messages
+
+  # Agent Overhead
+  agent_overhead:
+    cpu_percent: "<0.1%"  # Heartbeat sending
+    memory_bytes: "<100"  # Heartbeat message
+    latency_ms: "<1"      # Heartbeat send time
+
+  # Detection Latency
+  detection_latency:
+    heartbeat_timeout_ms: 3000   # Max time to detect dead agent
+    crash_notification_ms: 100   # Time to notify supervisor
+    replacement_spawn_ms: 240    # Time to spawn replacement
+    total_failover_ms: 3340      # End-to-end fail-over time
+
+# Failure Scenarios
+failure_scenarios:
+
+  # Network Partition
+  network_partition:
+    detection: "Heartbeat timeout (3s)"
+    impact: "Agent declared dead, replacement spawned"
+    recovery: "When network recovers, old agent terminates gracefully"
+
+  # Agent Crash (OOM)
+  agent_crash_oom:
+    detection: "Crash report + heartbeat timeout"
+    impact: "Immediate replacement spawn"
+    recovery: "New agent avoids same OOM (different placement)"
+
+  # Event Loop Stall
+  event_loop_stall:
+    detection: "Event loop heartbeat timeout (400ms)"
+    impact: "Fast detection of stuck agents"
+    recovery: "Supervisor kills stuck agent, spawns replacement"
+
+  # Supervisor Crash
+  supervisor_crash:
+    detection: "K0 restart (supervisor is pure actor, low crash risk)"
+    impact: "Temporary monitoring gap (<30s restart time)"
+    recovery: "All agents continue running, monitoring resumes"
+
+# Observability
+observability:
+
+  # Metrics
+  metrics:
+    agent_heartbeat_received_total:
+      type: "counter"
+      labels: ["agent_type"]
+      description: "Total heartbeats received"
+
+    agent_heartbeat_timeout_total:
+      type: "counter"
+      labels: ["agent_type"]
+      description: "Total heartbeat timeouts"
+
+    agent_health_check_duration_ms:
+      type: "histogram"
+      labels: ["check_type"]
+      buckets: [1, 5, 10, 50, 100, 500]
+      description: "Health check latency"
+
+    supervisor_cpu_percent:
+      type: "gauge"
+      description: "Supervisor CPU usage"
+
+    supervisor_memory_mb:
+      type: "gauge"
+      description: "Supervisor memory usage"
+
+  # Events
+  events:
+    agent_heartbeat_timeout:
+      fields: ["agent_id", "agent_type", "last_heartbeat_seconds_ago"]
+    agent_health_degraded:
+      fields: ["agent_id", "reason", "severity"]
+    agent_health_restored:
+      fields: ["agent_id", "downtime_seconds"]
+    supervisor_restart:
+      fields: ["reason", "downtime_seconds"]
+
+  # Logs
+  log_levels:
+    heartbeat_received: "DEBUG"
+    heartbeat_timeout: "WARNING"
+    agent_crash: "ERROR"
+    supervisor_error: "ERROR"
+
+# Implementation Status
+implementation_status:
+  heartbeat_protocol: "COMPLETED"
+  timeout_detection: "COMPLETED"
+  health_states: "COMPLETED"
+  observability: "COMPLETED"
+  performance_optimization: "IN PROGRESS"
+  overall_completion: "90%"
+
+# Research Backing
+research_backing:
+  - "Heartbeat protocols in distributed systems (Tanenbaum 2016)"
+  - "Failure detection in actor systems (Erlang OTP)"
+  - "Circuit breaker pattern for fault tolerance (Nygard 2007)"

@@ -1,0 +1,619 @@
+# Tool Runner Capability Enforcement Contract
+# ADR-0010c: Capability Enforcement at Runtime
+# Issue 2.5.4: Capability Enforcement & Audit Contracts
+#
+# Purpose: Define capability validation requirements for Tool Runner before tool execution
+# Scope: Tool Runner (P008 in K1) acts as Reference Monitor for tool authorization
+# Research: Reference Monitor (Anderson 1972), Capability-Based Protection (Levy 1984)
+# Performance Target: <1ms validation latency (HMAC + constraint check)
+
+---
+contract:
+  name: "Tool Runner Capability Enforcement"
+  version: "1.0.0"
+  status: "approved"
+  date: "2025-10-15"
+  parent_adr: "ADR-0010c-capability-enforcement-runtime"
+  owner: "Security Architecture Team"
+
+# ============================================================================
+# SECTION 1: CAPABILITY VALIDATION FLOW
+# ============================================================================
+
+validation:
+  # Pre-execution validation gate (before tool.execute())
+  enforcement_point: "tool_runner.execute_tool"
+
+  enforcement_steps:
+    - step: 1
+      name: "Cache Lookup"
+      description: "Check in-memory cache for recently validated capability"
+      latency_budget_ms: 0.05
+      check:
+        - lookup_cache_key: "token_hash:resource_id:permission"
+        - check_expiry: "cached_entry.expires_at > now()"
+        - ttl_seconds: 10
+      cache_hit_path: "return VALID immediately"
+      cache_miss_consequence: "proceed to Step 2"
+
+    - step: 2
+      name: "Signature Verification (HMAC-SHA256)"
+      description: "Verify token signature using shared secret key"
+      latency_budget_ms: 0.3
+      check:
+        - algorithm: "HMAC-SHA256"
+        - payload: "token_claims (JSON)"
+        - verify: "computed_signature == token.signature"
+        - secret_key_rotation: "90-day rotation with graceful transition"
+      failure_consequence: "INVALID - return INVALID status, log violation"
+      audit_log_event: "capability_signature_invalid"
+
+    - step: 3
+      name: "Expiration Check"
+      description: "Verify token not expired"
+      latency_budget_ms: 0.1
+      check:
+        - field: "token.expires_at"
+        - comparison: "token.expires_at > now()"
+        - ttl_default: "3600 seconds (1 hour)"
+      failure_consequence: "EXPIRED - return EXPIRED status, log violation"
+      audit_log_event: "capability_expired"
+
+    - step: 4
+      name: "Agent Subject Validation"
+      description: "Verify token subject matches caller agent_id"
+      latency_budget_ms: 0.1
+      check:
+        - caller_id: "from mailbox sender_id"
+        - token_subject: "token.claims.subject"
+        - comparison: "caller_id == token_subject"
+        - allow_delegation: "if has_DELEGATE right, allow delegation (see ADR-0010c)"
+      failure_consequence: "INVALID - agent spoofing detected, return INVALID, log CRITICAL"
+      audit_log_event: "capability_agent_mismatch"
+
+    - step: 5
+      name: "Resource Match Validation"
+      description: "Verify token resource matches requested resource"
+      latency_budget_ms: 0.1
+      check:
+        - token_resource: "token.claims.resource (tool_id)"
+        - requested_resource: "from execute_tool() call"
+        - comparison: "token_resource == requested_resource"
+      failure_consequence: "INVALID - return INVALID, log violation"
+      audit_log_event: "capability_resource_mismatch"
+
+    - step: 6
+      name: "Permission Validation"
+      description: "Verify token permission includes requested permission"
+      latency_budget_ms: 0.1
+      check:
+        - token_permissions: "token.claims.rights (array of strings)"
+        - requested_permission: "from execute_tool() call (EXECUTE for tools)"
+        - check: "requested_permission in token_permissions"
+        - example: "token.rights = ['EXECUTE', 'READ_OUTPUT']"
+      failure_consequence: "INVALID - return INVALID, log violation"
+      audit_log_event: "capability_permission_denied"
+
+    - step: 7
+      name: "Constraint Enforcement"
+      description: "Verify constraints (max_invocations, max_cost_usd, privacy_band)"
+      latency_budget_ms: 0.1
+      constraints:
+        - name: "max_invocations"
+          description: "Agent cannot exceed maximum invocations"
+          type: "numeric"
+          tracking: "in-memory counter per (agent_id, capability_id)"
+          check: "current_invocations < max_invocations"
+          failure: "CONSTRAINT_VIOLATED - return DENIED, log violation"
+          audit_log_event: "capability_invocation_limit_exceeded"
+
+        - name: "max_cost_usd"
+          description: "Agent cannot exceed cost budget"
+          type: "currency"
+          tracking: "per-session cost accumulator"
+          check: "accumulated_cost + tool_estimated_cost <= max_cost_usd"
+          failure: "CONSTRAINT_VIOLATED - return DENIED, log violation"
+          audit_log_event: "capability_budget_exceeded"
+
+        - name: "privacy_band"
+          description: "Capability must not exceed session privacy band"
+          type: "enum"
+          bands: ["GREEN", "AMBER", "RED", "BLACK"]
+          check: "token.band <= session.band (GREEN <= AMBER <= RED <= BLACK)"
+          failure: "CONSTRAINT_VIOLATED - return DENIED, log violation"
+          audit_log_event: "capability_band_violation"
+
+        - name: "requires_approval"
+          description: "High-risk tools require explicit human approval"
+          type: "boolean"
+          check: "if token.requires_approval and not session.approval_flag, DENY"
+          examples:
+            - "transfer_money: requires_approval = true"
+            - "delete_files: requires_approval = true"
+            - "send_email: requires_approval = true (RED band only)"
+          failure: "APPROVAL_REQUIRED - return DENIED, log violation"
+          audit_log_event: "capability_approval_required"
+
+  # Total validation latency budget
+  total_latency_budget_ms: 1.0
+  percentile: "P95"
+
+  # Validation result returned to Tool Runner
+  validation_result:
+    - status: "VALID"
+      description: "All 7 checks passed, capability is valid"
+      action: "proceed with tool execution"
+      cache_entry_created: true
+      cache_ttl_seconds: 10
+
+    - status: "INVALID"
+      description: "Signature invalid, agent mismatch, resource mismatch, or permission denied"
+      action: "reject tool execution, return error to agent"
+      error_code: 403
+      error_message: "Capability validation failed: [reason]"
+      audit_log_severity: "WARNING"
+
+    - status: "EXPIRED"
+      description: "Token expired (exceeds expires_at)"
+      action: "reject tool execution, request agent refresh capability"
+      error_code: 401
+      error_message: "Capability expired, please refresh"
+      audit_log_severity: "INFO"
+
+    - status: "REVOKED"
+      description: "Capability revoked by supervisor"
+      action: "reject tool execution, notify agent"
+      error_code: 403
+      error_message: "Capability revoked by supervisor"
+      audit_log_severity: "WARNING"
+
+    - status: "CONSTRAINT_VIOLATED"
+      description: "Constraint check failed (budget, invocations, etc.)"
+      action: "reject tool execution"
+      error_code: 429
+      error_message: "Constraint violated: [constraint_name]"
+      audit_log_severity: "WARNING"
+
+# ============================================================================
+# SECTION 2: REVOCATION INTEGRATION
+# ============================================================================
+
+revocation:
+  # Check if capability has been revoked by supervisor
+  enforcement_step: "Step 2.5 (after signature verification, before resource match)"
+
+  revocation_list:
+    storage: "Redis hash with TTL"
+    key_format: "capability_revocations:{capability_id}"
+    ttl_seconds: 300  # 5 minutes (revocation list retained for grace period)
+    update_mechanism: "Redis pub/sub from Supervisor on revocation"
+
+  revocation_check:
+    operation: "Redis HEXISTS revoked_capabilities {capability_id}"
+    latency_budget_ms: 0.2
+
+    if_revoked: "return REVOKED status"
+    if_not_revoked: "proceed to constraint enforcement"
+
+  cascading_revocation:
+    policy: "If parent capability revoked, all delegated children revoked"
+    implementation: "Revoke all capabilities with parent_capability_id == revoked_parent"
+    propagation_latency: "<100ms across all K1 instances via Redis pub/sub"
+
+  graceful_revocation:
+    policy: "Allow in-flight operations to complete, block new invocations"
+    implementation:
+      - step: 1
+        name: "Mark Revoked"
+        action: "Add capability_id to Redis revocation list"
+        effect: "New invocations blocked immediately"
+
+      - step: 2
+        name: "In-Flight Grace Period"
+        action: "Give executing tool 5s to complete current operation"
+        timeout: "5000ms"
+        effect: "Tool receives revocation event after completion"
+
+      - step: 3
+        name: "Force Terminate"
+        action: "If tool still executing after 5s, force terminate"
+        timeout: "5000ms (hard deadline)"
+        effect: "Tool terminated, cleanup executed"
+
+# ============================================================================
+# SECTION 3: PERFORMANCE TARGETS & GUARANTEES
+# ============================================================================
+
+performance:
+  hot_path_latency:
+    description: "Validation latency for cached capability (fast path)"
+    percentile: "P95"
+    budget_ms: 0.05  # 50 microseconds
+    typical_ms: 0.02  # 20 microseconds (dict lookup)
+    measurement: "time_validation_end - time_validation_start"
+
+  cold_path_latency:
+    description: "Validation latency for uncached capability (slow path)"
+    percentile: "P95"
+    budget_ms: 1.0  # 1 millisecond
+    typical_ms: 0.4  # 400 microseconds (HMAC + Redis checks)
+    measurement: "time_validation_end - time_validation_start"
+
+  revocation_check_latency:
+    description: "Time to check if capability is revoked"
+    percentile: "P95"
+    budget_ms: 0.2  # 200 microseconds
+    typical_ms: 0.1  # 100 microseconds (Redis lookup)
+
+  constraint_check_latency:
+    description: "Time to check all 4 constraints"
+    percentile: "P95"
+    budget_ms: 0.2  # 200 microseconds
+    typical_ms: 0.08  # 80 microseconds (in-memory lookups)
+
+  overall_validation_latency:
+    description: "Total time for Step 1-7 validation"
+    percentile: "P95"
+    budget_ms: 1.0
+    typical_ms: 0.5
+    measurement: "time_execute_tool_returns - time_execute_tool_called"
+
+  # Performance impact: <1% overhead (validation < 1ms, tool execution typically 100ms+)
+  impact_percentage: "<1% of tool execution time"
+
+# ============================================================================
+# SECTION 4: TOOL RUNNER IMPLEMENTATION REQUIREMENTS
+# ============================================================================
+
+implementation:
+  class_name: "CapabilityEnforcer"
+  module: "k1.security.capability_enforcement"
+
+  initialization:
+    parameters:
+      - name: "verifier"
+        type: "CapabilityTokenVerifier"
+        description: "Token signature verification instance"
+
+      - name: "redis_client"
+        type: "Redis"
+        description: "Redis client for revocation list"
+
+      - name: "audit_logger"
+        type: "AuditLogger"
+        description: "Audit logging instance (writes to K0 WAL)"
+
+  public_methods:
+    - method: "validate_capability"
+      params:
+        - "token: str (capability token)"
+        - "agent_id: str"
+        - "resource_type: str (e.g., 'tool')"
+        - "resource_id: str (e.g., tool_id)"
+        - "permission: str (e.g., 'EXECUTE')"
+        - "trace_id: str (for audit trail)"
+      returns: "CapabilityValidation (status, claims, error_message)"
+      raises:
+        - "TokenVerificationError: invalid signature"
+        - "CapabilityExpiredError: token expired"
+        - "CapabilityRevokedError: capability revoked"
+        - "ConstraintViolationError: constraint violated"
+
+  call_site_integration:
+    integration_point: "Tool Runner execute_tool() method"
+    location: "k1/execution/tool_runner.py:120"
+    before_execution:
+      code_example: |
+        async def execute_tool(self, agent_id, tool_id, params, trace_id):
+          # NEW: Validate capability before execution
+          validation = await self.enforcer.validate_capability(
+            token=agent_capability_token,
+            agent_id=agent_id,
+            resource_type="tool",
+            resource_id=tool_id,
+            permission="EXECUTE",
+            trace_id=trace_id
+          )
+
+          if validation.status != "VALID":
+            raise ToolExecutionError(
+              f"Capability validation failed: {validation.error_message}"
+            )
+
+          # EXISTING: Execute tool
+          result = await tool.execute(params)
+          return result
+
+# ============================================================================
+# SECTION 5: AUDIT TRAIL INTEGRATION
+# ============================================================================
+
+audit_logging:
+  event_source: "Tool Runner Enforcement"
+
+  events_logged:
+    - event: "capability_validated"
+      when: "validation.status == VALID"
+      fields:
+        - "agent_id"
+        - "resource_id"
+        - "permission"
+        - "cached (bool)"
+        - "validation_latency_ms"
+      audit_log_topic: "CAPABILITY_ENFORCEMENT"
+
+    - event: "capability_invalid"
+      when: "validation.status == INVALID"
+      severity: "WARNING"
+      fields:
+        - "agent_id"
+        - "resource_id"
+        - "reason (signature_invalid | agent_mismatch | resource_mismatch | permission_denied)"
+        - "validation_latency_ms"
+      audit_log_topic: "CAPABILITY_ENFORCEMENT"
+
+    - event: "capability_expired"
+      when: "validation.status == EXPIRED"
+      severity: "INFO"
+      fields:
+        - "agent_id"
+        - "resource_id"
+        - "expires_at"
+        - "seconds_expired"
+      audit_log_topic: "CAPABILITY_ENFORCEMENT"
+
+    - event: "capability_revoked"
+      when: "validation.status == REVOKED"
+      severity: "WARNING"
+      fields:
+        - "agent_id"
+        - "resource_id"
+        - "revoked_at"
+      audit_log_topic: "CAPABILITY_ENFORCEMENT"
+
+    - event: "constraint_violated"
+      when: "validation.status == CONSTRAINT_VIOLATED"
+      severity: "WARNING"
+      fields:
+        - "agent_id"
+        - "resource_id"
+        - "constraint_name (max_invocations | max_cost_usd | privacy_band | requires_approval)"
+        - "current_value"
+        - "limit_value"
+      audit_log_topic: "CAPABILITY_ENFORCEMENT"
+
+  audit_log_destination: "K0 WAL (Write-Ahead Log)"
+  topic: "CAPABILITY_ENFORCEMENT"
+  retention: "90 days (GDPR compliant)"
+
+# ============================================================================
+# SECTION 6: METRICS & OBSERVABILITY
+# ============================================================================
+
+metrics:
+  prometheus_metrics:
+    - metric_name: "capability_validations_total"
+      type: "Counter"
+      labels:
+        - "resource_type (tool)"
+        - "result (VALID | INVALID | EXPIRED | REVOKED | CONSTRAINT_VIOLATED)"
+      description: "Total capability validations performed"
+      query: "rate(capability_validations_total[5m])"
+
+    - metric_name: "capability_validation_latency_ms"
+      type: "Histogram"
+      labels:
+        - "resource_type"
+        - "cached (true | false)"
+      buckets_ms: [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+      percentiles: ["p50", "p95", "p99"]
+      description: "Latency distribution for capability validation"
+
+    - metric_name: "capability_cache_hits_total"
+      type: "Counter"
+      labels:
+        - "resource_type"
+      description: "Successful in-memory cache lookups"
+
+    - metric_name: "capability_cache_misses_total"
+      type: "Counter"
+      labels:
+        - "resource_type"
+      description: "Failed in-memory cache lookups"
+
+    - metric_name: "capability_constraint_violations_total"
+      type: "Counter"
+      labels:
+        - "resource_type"
+        - "constraint_name (max_invocations | max_cost_usd | privacy_band)"
+      description: "Constraint violations detected"
+
+    - metric_name: "capability_signature_failures_total"
+      type: "Counter"
+      labels:
+        - "resource_type"
+        - "reason (invalid_hmac | expired_key | malformed_token)"
+      description: "Token signature verification failures"
+
+  grafana_dashboard:
+    name: "Capability Enforcement"
+    panels:
+      - title: "Validation Success Rate"
+        query: "rate(capability_validations_total{result='VALID'}[5m]) / rate(capability_validations_total[5m])"
+        yaxis_label: "Success Rate %"
+
+      - title: "Validation Latency (P95)"
+        query: "histogram_quantile(0.95, capability_validation_latency_ms)"
+        yaxis_label: "Latency (ms)"
+        threshold: 1.0  # Alert if >1ms
+
+      - title: "Cache Hit Rate"
+        query: "rate(capability_cache_hits_total[5m]) / (rate(capability_cache_hits_total[5m]) + rate(capability_cache_misses_total[5m]))"
+        yaxis_label: "Hit Rate %"
+
+      - title: "Constraint Violations by Type"
+        query: "rate(capability_constraint_violations_total[5m]) by (constraint_name)"
+        yaxis_label: "Violations/sec"
+
+# ============================================================================
+# SECTION 7: SECURITY GUARANTEES
+# ============================================================================
+
+security_guarantees:
+  - guarantee: "No unsigned capabilities accepted"
+    implementation: "HMAC-SHA256 signature verification on all capabilities"
+    enforcement: "Step 2 - Signature Verification"
+    audit: "capability_signature_invalid events logged"
+
+  - guarantee: "No agent can execute tools outside their capability set"
+    implementation: "Permission validation (Step 6) checks token.rights"
+    enforcement: "Reject execution if permission not in token.rights"
+    audit: "capability_permission_denied events logged"
+
+  - guarantee: "No agent can spoof another agent's identity"
+    implementation: "Agent subject validation (Step 4) verifies caller_id == token.subject"
+    enforcement: "Reject execution if agent_id mismatch"
+    audit: "capability_agent_mismatch events logged (CRITICAL severity)"
+
+  - guarantee: "Constraints cannot be exceeded"
+    implementation: "Constraint enforcement (Step 7) checks max_invocations, max_cost, band, approval"
+    enforcement: "Reject execution if constraint violated"
+    audit: "constraint_violated events logged"
+
+  - guarantee: "Revoked capabilities are immediately ineffective"
+    implementation: "Revocation list checked before resource access"
+    enforcement: "Redis revocation list with pub/sub propagation"
+    audit: "capability_revoked events logged"
+
+  - guarantee: "100% audit trail for all capability usage"
+    implementation: "All validations logged to K0 WAL"
+    enforcement: "Audit logging at every enforcement point"
+    retention: "90 days (GDPR compliant, user-initiated deletion available)"
+
+# ============================================================================
+# SECTION 8: ERROR HANDLING & FALLBACK
+# ============================================================================
+
+error_handling:
+  signature_verification_failure:
+    cause: "HMAC-SHA256 mismatch or malformed token"
+    response: "Return INVALID status, reject execution"
+    logging: "capability_signature_invalid event (severity: WARNING)"
+    user_message: "Your capability is invalid. Please refresh and try again."
+    fallback: "None (execution rejected)"
+
+  token_expired:
+    cause: "token.expires_at < now()"
+    response: "Return EXPIRED status, reject execution"
+    logging: "capability_expired event (severity: INFO)"
+    user_message: "Your capability has expired. Please refresh and try again."
+    fallback: "Agent can request new capability from Capability Manager"
+
+  revocation_check_failure:
+    cause: "Redis connection error during revocation list lookup"
+    response: "Conservative: assume REVOKED (deny execution) to prevent security bypass"
+    logging: "capability_revocation_check_failed event (severity: CRITICAL)"
+    user_message: "System is checking capabilities. Please retry."
+    fallback: "Retry after 5 seconds (Redis should recover)"
+
+  constraint_check_failure:
+    cause: "Cannot fetch current invocation count or cost"
+    response: "Conservative: assume CONSTRAINT_VIOLATED (deny execution)"
+    logging: "capability_constraint_check_failed event (severity: CRITICAL)"
+    user_message: "System is verifying constraints. Please retry."
+    fallback: "Retry after 5 seconds"
+
+  cache_corruption:
+    cause: "Cached entry has invalid structure or encoding"
+    response: "Evict cache entry, proceed to uncached validation"
+    logging: "capability_cache_corruption_detected event (severity: WARNING)"
+    user_message: "None (transparent to user)"
+    fallback: "Fall back to full validation"
+
+# ============================================================================
+# SECTION 9: COMPLIANCE & GOVERNANCE
+# ============================================================================
+
+compliance:
+  frameworks:
+    - name: "GDPR - Right to Know"
+      requirement: "Users can query who accessed their data with which capabilities"
+      implementation: "Audit trail in K0 WAL searchable by (agent_id, resource_id, timestamp)"
+
+    - name: "GDPR - Right to Erasure"
+      requirement: "Users can revoke all capabilities retroactively"
+      implementation: "Supervisor revokes all capabilities for user_id, audit trail preserved"
+
+    - name: "SOC2 - Logical Access"
+      requirement: "Access control enforced at every resource boundary"
+      implementation: "Capability enforcement at Tool Runner, Model Hub, Memory Manager, K0 Bridge"
+
+    - name: "NIST SP 800-207 - Zero Trust"
+      requirement: "Never trust, always verify access"
+      implementation: "Every tool execution validated against capability (never assume valid)"
+
+# ============================================================================
+# SECTION 10: DEPLOYMENT & ROLLOUT
+# ============================================================================
+
+deployment:
+  phase: 1
+  effort_weeks: 1
+  implementation_order:
+    - week: 1
+      tasks:
+        - task: "Implement CapabilityEnforcer class"
+          files: ["k1/security/capability_enforcement.py"]
+
+        - task: "Integrate validation into Tool Runner"
+          files: ["k1/execution/tool_runner.py"]
+
+        - task: "Add audit logging"
+          files: ["k1/audit/audit_logger.py"]
+
+        - task: "Add metrics & Grafana dashboard"
+          files: ["k1/observability/metrics.py"]
+
+  validation:
+    - unit_tests: "test_capability_enforcement.py (50+ tests)"
+      coverage_target: ">95%"
+
+    - integration_tests: "Test end-to-end tool execution with capability validation"
+      scenarios:
+        - valid_capability_allowed
+        - invalid_signature_rejected
+        - expired_capability_rejected
+        - revoked_capability_rejected
+        - constraint_violated_rejected
+        - cache_hit_performance
+
+    - performance_tests: "Validate <1ms P95 validation latency"
+      benchmark: "1M validations, measure latency distribution"
+
+  rollout_strategy: "Gradual rollout with feature flag"
+  phases:
+    phase_1: "Enable for 10% of tool executions (canary)"
+    phase_2: "Enable for 50% of tool executions (ramp up)"
+    phase_3: "Enable for 100% of tool executions (full deployment)"
+
+# ============================================================================
+# SECTION 11: KNOWN ISSUES & FUTURE WORK
+# ============================================================================
+
+known_issues: []
+
+future_work:
+  - title: "Delegated Capability Enforcement"
+    description: "Support agents delegating capabilities to sub-agents"
+    adr_reference: "ADR-0010c, ADR-0010d"
+    effort: "2 weeks"
+
+  - title: "Distributed Capability Revocation"
+    description: "Multi-instance K1 capability revocation coordination"
+    adr_reference: "ADR-0010d"
+    effort: "2 weeks"
+
+  - title: "Machine Learning-Based Anomaly Detection"
+    description: "Detect unusual capability usage patterns"
+    adr_reference: "Future ADR"
+    effort: "4 weeks"

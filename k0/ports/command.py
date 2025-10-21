@@ -1,0 +1,761 @@
+"""HTTP handlers for the command port (`/k0/command.submit`)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Callable, Literal, Mapping, TypeVar, cast
+
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from k0.gate import MinimalGate
+from k0.idem import IdempotencyLedger, LedgerEntry
+from k0.kernel.admission import record_admission_decision
+from k0.kernel.dependencies import qos_context_dependency
+from k0.obs import (
+    MetricsExporter,
+    ObservabilityEmitter,
+    TracerFactory,
+    update_log_context,
+)
+from k0.outbox import compute_fingerprint
+from k0.policy import evaluate_envelope
+from k0.ports.errors import (
+    KERNEL_COMPONENT_GATE,
+    KERNEL_COMPONENT_POLICY,
+    KERNEL_COMPONENT_QOS,
+    ErrorEnvelope,
+)
+from k0.qos import (
+    QoSBudgetError,
+    QoSContext,
+    SchedulerCapacityError,
+    SchedulerToken,
+    apply_qos_obligations,
+    coerce_positive_int,
+)
+from k0.receipts import ReceiptDocument, ReceiptIssuer
+from k0.security import canonical_json, hash_payload
+from k0.storage.outbox import OutboxEntry
+from k0.storage.provisioning import ProvisionedDevice, ProvisioningLedger
+from k0.storage.receipts import Receipt
+from k0.storage.wal import WalEntry
+from k0.uow import UnitOfWork
+from k0.uow.connection_pool import connection_scope
+
+router = APIRouter(prefix="/k0", tags=["command"])
+
+DEFAULT_OUTBOX_DRIVER = "st_epi"
+DEFAULT_OUTBOX_OPERATION = "UPSERT"
+OUTBOX_INLINE_BODY_LIMIT_BYTES = 4096
+
+UnitOfWorkFactory = Callable[[], UnitOfWork]
+T = TypeVar("T")
+
+
+class Envelope(BaseModel):
+    """Minimal representation of the command envelope schema."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cognitive_trace_id: uuid.UUID = Field(
+        ..., description="Trace correlation identifier."
+    )
+    tenant_id: str
+    space_id: str
+    topic: str
+    schema_uri: str
+    schema_version: str
+    actor: str
+    device_id: str
+    band: Literal["GREEN", "AMBER", "RED"]
+    policy_version: str
+    ts: str
+    sig: str
+    idem_key: str | None = None
+    payload_sha256: str | None = None
+    payload_bytes: int | None = None
+    policy: dict[str, Any] | None = None
+    policy_ctx: dict[str, Any] | None = None
+    pep: dict[str, Any] | None = None
+
+
+class CommandResponse(BaseModel):
+    """Response emitted after a successful command commit."""
+
+    receipt_id: uuid.UUID = Field(..., description="Unique receipt identifier.")
+    commit_ts: str = Field(..., description="ISO8601 timestamp of commit.")
+    offsets: dict[str, int] = Field(
+        ..., description="Committed offsets keyed by topic."
+    )
+    idem_key: str = Field(..., description="Canonical idempotency key.")
+    obligations: list[str] = Field(
+        default_factory=list,
+        description="Policy obligations applied during admission.",
+    )
+
+
+@router.post(
+    "/command.submit",
+    response_model=CommandResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "Minimal Gate rejection",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "REJECTED_KERNEL_GATE",
+                            "component": "kernel.gate",
+                            "reason": "PAYLOAD_HASH_MISMATCH",
+                            "trace_id": "0e1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+                        }
+                    }
+                }
+            },
+        },
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Policy enforcement denied the command",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "PEP_DENY",
+                            "component": "kernel.policy",
+                            "reason": "ROLE_FORBIDDEN",
+                            "trace_id": "0e1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+                        }
+                    }
+                }
+            },
+        },
+        status.HTTP_409_CONFLICT: {
+            "description": "Existing commit detected for the idem key",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "receipt_id": "11111111-2222-3333-4444-555555555555",
+                        "commit_ts": "2025-09-28T12:00:00Z",
+                        "idem_key": "4f2a6b7c...",
+                    }
+                }
+            },
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "QoS budgets or scheduler capacity exhausted",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": {
+                            "code": "QOS_BUDGET_EXHAUSTED",
+                            "component": "kernel.qos",
+                            "reason": "FANOUT_BUDGET_EXHAUSTED",
+                            "trace_id": "0e1a2b3c-4d5e-6f70-8192-a3b4c5d6e7f8",
+                            "budgets": {"fanout": 0, "top_k": 8},
+                            "details": {"cap": "fanout"},
+                            "hint": "Reduce fanout request",
+                        }
+                    }
+                }
+            },
+        },
+    },
+)
+async def submit_command(
+    request: Request,
+    qos: QoSContext = Depends(qos_context_dependency),
+) -> CommandResponse | JSONResponse:
+    """Process a command submission through the Minimal Gate and UnitOfWork."""
+
+    scheduler_token: SchedulerToken | None = None
+    initial_fanout_budget = qos.fanout_budget
+    initial_top_k_budget = qos.top_k_budget
+
+    try:
+        payload = await request.json()
+        if not isinstance(payload, Mapping):
+            return _error_response(
+                request,
+                status.HTTP_400_BAD_REQUEST,
+                "REJECTED_KERNEL_GATE",
+                component=KERNEL_COMPONENT_GATE,
+                reason="INVALID_ENVELOPE",
+                hint="Envelope payload must be a JSON object",
+            )
+
+        payload_mapping = cast(Mapping[str, Any], payload)
+        try:
+            envelope_data, body_bytes, body_snapshot = _extract_body(payload_mapping)
+        except (TypeError, ValueError):
+            return _error_response(
+                request,
+                status.HTTP_400_BAD_REQUEST,
+                "REJECTED_KERNEL_GATE",
+                component=KERNEL_COMPONENT_GATE,
+                reason="CANONICALIZATION_ERROR",
+                hint="Envelope body could not be canonicalised",
+            )
+
+        try:
+            envelope_model = Envelope.model_validate(envelope_data)
+        except ValidationError:
+            return _error_response(
+                request,
+                status.HTTP_400_BAD_REQUEST,
+                "REJECTED_KERNEL_GATE",
+                component=KERNEL_COMPONENT_GATE,
+                reason="ENVELOPE_VALIDATION_FAILED",
+            )
+
+        envelope_dict = {
+            key: value
+            for key, value in envelope_model.model_dump().items()
+            if value is not None
+        }
+        if envelope_model.model_extra:
+            for key, value in envelope_model.model_extra.items():
+                if value is None:
+                    continue
+                envelope_dict[key] = value
+        envelope_dict["cognitive_trace_id"] = str(envelope_model.cognitive_trace_id)
+
+        request.state.cognitive_trace_id = str(envelope_model.cognitive_trace_id)
+        update_log_context(
+            cognitive_trace_id=str(envelope_model.cognitive_trace_id),
+            tenant_id=envelope_model.tenant_id,
+            space_id=envelope_model.space_id,
+            device_id=envelope_model.device_id,
+            topic=envelope_model.topic,
+            schema_uri=envelope_model.schema_uri,
+            actor=envelope_model.actor,
+        )
+
+        # Re-add body field for gate processing (gate expects body to be present for validation)
+        if body_snapshot is not None:
+            envelope_dict["body"] = body_snapshot
+
+        minimal_gate = _get_state_component(request, "minimal_gate", MinimalGate)
+        provisioning = _get_state_component(
+            request, "provisioning_ledger", ProvisioningLedger
+        )
+        idem_ledger = _get_state_component(
+            request, "idempotency_ledger", IdempotencyLedger
+        )
+        receipt_issuer = _get_state_component(request, "receipt_issuer", ReceiptIssuer)
+        unit_of_work_factory = _get_unit_of_work_factory(request)
+
+        with connection_scope() as gate_connection:
+            outcome = minimal_gate.validate(
+                dict(envelope_dict),
+                body=body_bytes,
+                connection=gate_connection,
+            )
+            if not outcome.accepted:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    "REJECTED_KERNEL_GATE",
+                    component=KERNEL_COMPONENT_GATE,
+                    reason=outcome.reason or "MINIMAL_GATE_REJECTION",
+                    hint=(
+                        None if outcome.reason else "Envelope rejected by Minimal Gate"
+                    ),
+                )
+
+            idem_key = outcome.idem_key
+            if idem_key is None:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    "REJECTED_KERNEL_GATE",
+                    component=KERNEL_COMPONENT_GATE,
+                    reason="IDEMPOTENCY_KEY_MISSING",
+                    hint="Minimal Gate did not produce an idempotency key",
+                )
+
+            duplicate = idem_ledger.lookup(idem_key, connection=gate_connection)
+            if duplicate is not None:
+                _emit_duplicate_telemetry(request, envelope_dict, duplicate)
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={
+                        "receipt_id": duplicate.receipt_id,
+                        "commit_ts": duplicate.first_seen_ts,
+                        "idem_key": duplicate.idem_key,
+                    },
+                )
+
+            device_record = provisioning.lookup(
+                envelope_dict["tenant_id"],
+                envelope_dict["space_id"],
+                envelope_dict["device_id"],
+                connection=gate_connection,
+            )
+
+        if not isinstance(device_record, ProvisionedDevice):
+            return _error_response(
+                request,
+                status.HTTP_400_BAD_REQUEST,
+                "REJECTED_KERNEL_GATE",
+                component=KERNEL_COMPONENT_GATE,
+                reason="DEVICE_NOT_PROVISIONED",
+            )
+
+        envelope_dict["idem_key"] = idem_key
+        if body_bytes is not None:
+            envelope_dict["payload_bytes"] = len(body_bytes)
+
+        decision = evaluate_envelope(envelope_dict)
+        if not decision.admit:
+            record_admission_decision(
+                request,
+                decision=decision,
+                envelope=_audit_envelope(envelope_dict, body_snapshot),
+                receipt=None,
+                port="command",
+            )
+            return _error_response(
+                request,
+                status.HTTP_403_FORBIDDEN,
+                "PEP_DENY",
+                component=KERNEL_COMPONENT_POLICY,
+                reason=decision.deny_reason or "POLICY_DENIED",
+                hint=(
+                    None
+                    if decision.deny_reason
+                    else "Policy enforcement denied the request"
+                ),
+            )
+
+        apply_qos_obligations(qos, decision.obligations)
+
+        fanout_request = _resolve_cap_request(envelope_dict, "fanout") or 1
+        fanout_request = max(1, fanout_request)
+        top_k_request = _resolve_cap_request(envelope_dict, "top_k")
+        latency_budget_ms = _resolve_cap_request(envelope_dict, "latency_ms")
+
+        initial_fanout_budget = qos.fanout_budget
+        initial_top_k_budget = qos.top_k_budget
+
+        try:
+            qos.consume_fanout(fanout_request)
+        except QoSBudgetError:
+            return _qos_budget_response(
+                request,
+                qos,
+                envelope=envelope_dict,
+                cap="fanout",
+                reason="FANOUT_BUDGET_EXHAUSTED",
+            )
+
+        if top_k_request is not None and top_k_request > 0:
+            try:
+                qos.consume_top_k(top_k_request)
+            except QoSBudgetError:
+                qos.fanout_budget = initial_fanout_budget
+                return _qos_budget_response(
+                    request,
+                    qos,
+                    envelope=envelope_dict,
+                    cap="top_k",
+                    reason="TOP_K_BUDGET_EXHAUSTED",
+                )
+
+        scheduler_cost = _compute_scheduler_cost(
+            fanout=fanout_request,
+            payload_bytes=envelope_dict.get("payload_bytes"),
+            top_k=top_k_request,
+            latency_ms=latency_budget_ms,
+        )
+
+        try:
+            scheduler_token = qos.acquire(
+                band=str(envelope_dict.get("band", "GREEN")),
+                port="command",
+                cost=scheduler_cost,
+            )
+        except SchedulerCapacityError as exc:
+            qos.fanout_budget = initial_fanout_budget
+            qos.top_k_budget = initial_top_k_budget
+            return _qos_budget_response(
+                request,
+                qos,
+                envelope=envelope_dict,
+                cap="scheduler",
+                reason="SCHEDULER_CAPACITY_EXHAUSTED",
+                hint=str(exc),
+            )
+
+        commit_ts = _utc_now()
+        receipt_id = uuid.uuid4()
+
+        payload_digest = envelope_dict.get("payload_sha256")
+        if payload_digest is None and body_bytes is not None:
+            payload_digest = hash_payload(body_bytes)
+        if payload_digest is None:
+            payload_digest = hash_payload(b"") or "0" * 64
+
+        wal_entry = WalEntry(
+            tenant_id=envelope_dict["tenant_id"],
+            space_id=envelope_dict["space_id"],
+            topic=envelope_dict["topic"],
+            envelope_json=canonical_json(_strip_body(envelope_dict)),
+            schema_uri=envelope_dict["schema_uri"],
+            schema_version=envelope_dict["schema_version"],
+            device_id=envelope_dict["device_id"],
+            commit_ts=commit_ts,
+            body=body_bytes,
+            payload_sha256=payload_digest,
+            idem_key=idem_key,
+        )
+
+        wal_pos: int | None = None
+        receipt_doc: ReceiptDocument | None = None
+        body_bytes_length = len(body_bytes) if body_bytes is not None else 0
+        inline_body_allowed = (
+            body_snapshot is not None
+            and body_bytes is not None
+            and body_bytes_length <= OUTBOX_INLINE_BODY_LIMIT_BYTES
+        )
+
+        with unit_of_work_factory() as uow:
+            wal_pos = uow.append_wal(wal_entry)
+
+            outbox_payload: dict[str, Any] = {
+                "wal_pos": wal_pos,
+                "topic": envelope_dict["topic"],
+                "tenant_id": envelope_dict["tenant_id"],
+                "space_id": envelope_dict["space_id"],
+                "schema_uri": envelope_dict["schema_uri"],
+                "schema_version": envelope_dict["schema_version"],
+                "commit_ts": commit_ts,
+                "idem_key": idem_key,
+                "payload_sha256": payload_digest,
+                "payload_bytes": body_bytes_length,
+                "payload_inline_mode": (
+                    "embedded" if inline_body_allowed else "omitted"
+                ),
+            }
+            if inline_body_allowed:
+                outbox_payload["body"] = body_snapshot
+
+            outbox_bytes = canonical_json(outbox_payload).encode("utf-8")
+            outbox_entry = OutboxEntry(
+                id=None,
+                wal_pos=wal_pos,
+                tenant_id=envelope_dict["tenant_id"],
+                space_id=envelope_dict["space_id"],
+                driver=DEFAULT_OUTBOX_DRIVER,
+                op_kind=DEFAULT_OUTBOX_OPERATION,
+                payload=outbox_bytes,
+                fingerprint=compute_fingerprint(
+                    DEFAULT_OUTBOX_DRIVER,
+                    DEFAULT_OUTBOX_OPERATION,
+                    outbox_bytes,
+                ),
+                requeue_seq=0,
+                retries=0,
+                last_error=None,
+            )
+            uow.stage_outbox(outbox_entry)
+
+            if outcome.key_version is None:
+                raise RuntimeError(
+                    "Minimal Gate did not return a key_version for accepted command"
+                )
+
+            receipt_doc = receipt_issuer.issue(
+                receipt_id=str(receipt_id),
+                idem_key=idem_key,
+                wal_pos=wal_pos,
+                commit_ts=commit_ts,
+                tenant_id=envelope_dict["tenant_id"],
+                space_id=envelope_dict["space_id"],
+                device_id=envelope_dict["device_id"],
+                payload_sha256=payload_digest,
+                mls_group_id=device_record.mls_group_id,
+                key_version=outcome.key_version,
+                obligations=decision.obligations,
+                connection=uow.connection,
+            )
+
+            ledger_entry = LedgerEntry(
+                idem_key=idem_key,
+                receipt_id=receipt_doc.receipt_id,
+                first_seen_ts=commit_ts,
+                state="COMMITTED",
+                expiry_ts=None,
+            )
+            idem_ledger.upsert(ledger_entry, connection=uow.connection)
+
+        if wal_pos is None or receipt_doc is None:
+            raise RuntimeError("UnitOfWork failed to commit command artefacts")
+
+        receipt_record = Receipt(
+            receipt_id=receipt_doc.receipt_id,
+            idem_key=idem_key,
+            wal_pos=receipt_doc.wal_pos,
+            commit_ts=receipt_doc.commit_ts,
+            tenant_id=receipt_doc.tenant_id,
+            space_id=receipt_doc.space_id,
+            device_id=receipt_doc.device_id,
+            mls_group_id=receipt_doc.mls_group_id,
+            key_version=receipt_doc.key_version,
+            device_sig=receipt_doc.device_sig,
+        )
+        record_admission_decision(
+            request,
+            decision=decision,
+            envelope=_audit_envelope(envelope_dict, body_snapshot),
+            receipt=receipt_record,
+            port="command",
+        )
+
+        response = CommandResponse(
+            receipt_id=receipt_id,
+            commit_ts=commit_ts,
+            offsets={envelope_dict["topic"]: receipt_doc.wal_pos},
+            idem_key=idem_key,
+            obligations=list(receipt_doc.obligations),
+        )
+        return response
+    finally:
+        if scheduler_token is not None:
+            scheduler_token.release()
+
+
+def _strip_body(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in envelope.items() if key != "body"}
+
+
+def _json_safe_body(value: Any) -> Any:
+    if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+        return cast(Any, value)
+    return None
+
+
+def _extract_body(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], bytes | None, Any]:
+    working = {str(key): value for key, value in payload.items()}
+    body_value = working.pop("body", None)
+    if body_value is None:
+        return working, None, None
+    body_bytes = _normalise_body_bytes(body_value)
+    return working, body_bytes, _json_safe_body(body_value)
+
+
+def _normalise_body_bytes(body: Any) -> bytes:
+    if isinstance(body, memoryview):
+        return body.tobytes()
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8")
+    return canonical_json(body).encode("utf-8")
+
+
+def _get_state_component(request: Request, attribute: str, expected_type: type[T]) -> T:
+    component = getattr(request.app.state, attribute, None)
+    if not isinstance(component, expected_type):
+        raise RuntimeError(f"{attribute} is not configured on the application state")
+    return component
+
+
+def _get_unit_of_work_factory(request: Request) -> UnitOfWorkFactory:
+    factory = getattr(request.app.state, "unit_of_work_factory", None)
+    if not callable(factory):
+        raise RuntimeError("UnitOfWork factory has not been configured")
+    return cast(UnitOfWorkFactory, factory)
+
+
+def _resolve_trace_id(request: Request) -> str:
+    trace_id = getattr(request.state, "cognitive_trace_id", None)
+    if trace_id:
+        return str(trace_id)
+    tracer_factory = getattr(request.app.state, "tracer_factory", None)
+    if isinstance(tracer_factory, TracerFactory):
+        trace_id = tracer_factory.new_trace_id()
+    else:
+        trace_id = str(uuid.uuid4())
+    request.state.cognitive_trace_id = trace_id
+    return trace_id
+
+
+def _error_response(
+    request: Request,
+    status_code: int,
+    code: str,
+    *,
+    component: str,
+    reason: str | None = None,
+    hint: str | None = None,
+    budgets: Mapping[str, int] | None = None,
+    details: Mapping[str, Any] | None = None,
+) -> JSONResponse:
+    trace_id = _resolve_trace_id(request)
+    envelope = ErrorEnvelope(
+        code=code,
+        component=component,
+        trace_id=trace_id,
+        reason=reason,
+        hint=hint,
+        budgets=budgets,
+        details=details,
+    )
+    return JSONResponse(status_code=status_code, content=envelope.as_payload())
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _audit_envelope(envelope: Mapping[str, Any], body: Any) -> dict[str, Any]:
+    payload = dict(envelope)
+    if body is not None:
+        payload["body"] = body
+    return payload
+
+
+def _emit_duplicate_telemetry(
+    request: Request,
+    envelope: Mapping[str, Any],
+    entry: LedgerEntry,
+) -> None:
+    metrics_exporter = getattr(request.app.state, "metrics_exporter", None)
+    if isinstance(metrics_exporter, MetricsExporter):
+        metrics_exporter.emit(
+            "command_idempotency_duplicates_total",
+            port="command",
+            state=str(entry.state),
+        )
+
+    observability_emitter = getattr(request.app.state, "observability_emitter", None)
+    if isinstance(observability_emitter, ObservabilityEmitter):
+        event_payload: dict[str, Any] = {
+            "event": "command_idem_duplicate",
+            "trace_id": _resolve_trace_id(request),
+            "idem_key": entry.idem_key,
+            "receipt_id": entry.receipt_id,
+            "state": entry.state,
+            "tenant_id": envelope.get("tenant_id"),
+            "space_id": envelope.get("space_id"),
+        }
+        if entry.first_seen_ts:
+            event_payload["first_seen_ts"] = entry.first_seen_ts
+        observability_emitter.emit(event_payload)
+
+
+def _resolve_cap_request(envelope: Mapping[str, Any], cap: str) -> int | None:
+    for root_key in ("policy", "pep", "policy_ctx"):
+        root = envelope.get(root_key)
+        if not isinstance(root, Mapping):
+            continue
+        root_mapping = cast(Mapping[str, Any], root)
+        caps_section = cast(Mapping[str, Any] | None, root_mapping.get("caps"))
+        if not isinstance(caps_section, Mapping):
+            continue
+        cap_entry = cast(Any, caps_section.get(cap))
+        value = coerce_positive_int(cap_entry)
+        if value is not None:
+            return value
+    return None
+
+
+def _compute_scheduler_cost(
+    *,
+    fanout: int,
+    payload_bytes: Any,
+    top_k: int | None,
+    latency_ms: int | None,
+) -> int:
+    payload_units = 0
+    if isinstance(payload_bytes, (int, float)) and payload_bytes > 0:
+        payload_units = max(1, int((int(payload_bytes) + 4095) // 4096))
+
+    top_k_units = 0
+    if top_k is not None and top_k > 0:
+        top_k_units = max(1, int(top_k) // 8)
+
+    latency_units = 0
+    if latency_ms is not None and latency_ms > 0 and latency_ms < 150:
+        latency_units = 1
+
+    cost = fanout + payload_units + top_k_units + latency_units
+    return max(1, cost)
+
+
+def _serialize_qos_budgets(qos: QoSContext) -> dict[str, int]:
+    return {
+        "fanout": max(0, int(qos.fanout_budget)),
+        "top_k": max(0, int(qos.top_k_budget)),
+    }
+
+
+def _emit_qos_budget_telemetry(
+    request: Request,
+    *,
+    envelope: Mapping[str, Any],
+    cap: str,
+    reason: str,
+    budgets: Mapping[str, int],
+    hint: str | None,
+) -> None:
+    metrics_exporter = getattr(request.app.state, "metrics_exporter", None)
+    if isinstance(metrics_exporter, MetricsExporter):
+        metrics_exporter.emit(
+            "qos_budget_exhausted_total",
+            port="command",
+            cap=cap,
+            band=str(envelope.get("band", "UNKNOWN")),
+        )
+
+    observability_emitter = getattr(request.app.state, "observability_emitter", None)
+    if isinstance(observability_emitter, ObservabilityEmitter):
+        event: dict[str, Any] = {
+            "event": "command_qos_budget_exhausted",
+            "trace_id": _resolve_trace_id(request),
+            "port": "command",
+            "cap": cap,
+            "reason": reason,
+            "budgets": dict(budgets),
+            "tenant_id": envelope.get("tenant_id"),
+            "space_id": envelope.get("space_id"),
+            "topic": envelope.get("topic"),
+            "band": envelope.get("band"),
+        }
+        if hint:
+            event["hint"] = hint
+        observability_emitter.emit(event)
+
+
+def _qos_budget_response(
+    request: Request,
+    qos: QoSContext,
+    *,
+    envelope: Mapping[str, Any],
+    cap: str,
+    reason: str,
+    hint: str | None = None,
+) -> JSONResponse:
+    budgets = _serialize_qos_budgets(qos)
+    _emit_qos_budget_telemetry(
+        request,
+        envelope=envelope,
+        cap=cap,
+        reason=reason,
+        budgets=budgets,
+        hint=hint,
+    )
+    return _error_response(
+        request,
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        "QOS_BUDGET_EXHAUSTED",
+        component=KERNEL_COMPONENT_QOS,
+        reason=reason,
+        hint=hint,
+        budgets=budgets,
+        details={"cap": cap},
+    )

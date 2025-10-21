@@ -1,0 +1,600 @@
+# K1 PDL Examples
+# Source: ADR-0003a (Protocol Definition Language Specification)
+# Purpose: Example PDL protocol definitions for documentation and testing
+# Version: 1.0
+# Date: 2025-10-14
+
+examples:
+  name: "K1 PDL Protocol Examples"
+  version: "1.0"
+  description: "Example protocol definitions demonstrating PDL features"
+  source_adr: "docs/architecture/decisions/0003a-protocol-definition-language-pdl-specification.md"
+
+# ===========================================================================
+# Example 1: Simple Protocol - Agent Hire (6 states, 8 transitions)
+# ===========================================================================
+
+example_1_simple_protocol:
+  name: "agent_hire_simple"
+  description: "Simplified agent hire protocol for documentation"
+  features: ["Basic FSM", "Timeout policies", "Guard conditions", "Broadcast messages"]
+
+  protocol:
+    name: "agent_hire_simple"
+    version: "1.0"
+    description: "Hire agent with negotiation and selection (simplified)"
+
+    initial_state: "start"
+    terminal_states: ["hired", "rejected", "timeout"]
+
+    states:
+      - name: "start"
+        type: "entry"
+        description: "Protocol entry point"
+        timeout_ms: null
+        llm_aware: false
+
+      - name: "negotiation"
+        type: "interaction"
+        description: "Collect proposals from agents"
+        timeout_ms: 500
+        llm_aware: true  # AI agents may call LLMs to generate proposals
+
+      - name: "selection"
+        type: "decision"
+        description: "Score proposals, select winner"
+        timeout_ms: 100
+        llm_aware: false
+
+      - name: "hired"
+        type: "exit"
+        description: "Agent successfully hired"
+        timeout_ms: null
+
+      - name: "rejected"
+        type: "exit"
+        description: "No suitable agent found"
+        timeout_ms: null
+
+      - name: "timeout"
+        type: "exit"
+        description: "Negotiation timed out"
+        timeout_ms: null
+
+    transitions:
+      - from: "start"
+        to: "negotiation"
+        message: "HireRequest"
+        sender: "orchestrator"
+        receivers: ["*"]  # Broadcast
+        cardinality: "1"
+
+      - from: "negotiation"
+        to: "negotiation"
+        message: "Proposal"
+        sender: "agent"
+        receivers: ["orchestrator"]
+        cardinality: "0..*"  # Multiple proposals
+
+      - from: "negotiation"
+        to: "selection"
+        message: "ProposalsClosed"
+        sender: "system"
+        receivers: []
+        trigger: "timeout"
+
+      - from: "selection"
+        to: "hired"
+        message: "HireApproval"
+        sender: "orchestrator"
+        receivers: ["agent"]
+        condition: "score > threshold"
+
+      - from: "selection"
+        to: "rejected"
+        message: "HireRejection"
+        sender: "orchestrator"
+        receivers: ["agent"]
+        condition: "score <= threshold"
+
+      - from: "negotiation"
+        to: "timeout"
+        message: "Timeout"
+        sender: "system"
+        receivers: []
+        trigger: "timeout"
+
+    timeouts:
+      - state: "negotiation"
+        action: "ProposalsClosed"
+        fallback_state: "selection"
+        log: true
+
+      - state: "selection"
+        action: "HireRejection"
+        fallback_state: "rejected"
+        log: true
+
+    violations:
+      - type: "unexpected_message"
+        action: "block"
+        log: true
+
+      - type: "timeout"
+        action: "fallback"
+        log: true
+
+# ===========================================================================
+# Example 2: Nested Protocol - Task Execution with Clarification
+# ===========================================================================
+
+example_2_nested_protocol:
+  name: "task_with_clarification"
+  description: "Task execution protocol demonstrating nested clarification"
+  features: ["Nested protocols", "AI agent LLM reasoning", "Protocol composition"]
+
+  task_protocol:
+    name: "task_execution"
+    version: "1.0"
+    description: "Execute task with AI agent planning"
+
+    initial_state: "assigned"
+    terminal_states: ["completed", "failed", "timeout"]
+
+    states:
+      - name: "assigned"
+        type: "entry"
+        description: "Task assigned to AI agent"
+        timeout_ms: null
+
+      - name: "planning"
+        type: "interaction"
+        description: "AI agent generating plan (LLM reasoning)"
+        timeout_ms: 5000  # Allow LLM inference time
+        llm_aware: true
+
+      - name: "approved"
+        type: "decision"
+        description: "Plan approved by orchestrator"
+        timeout_ms: 100
+
+      - name: "executing"
+        type: "interaction"
+        description: "AI agent executing approved plan"
+        timeout_ms: 10000
+        llm_aware: true
+
+      - name: "completed"
+        type: "exit"
+        description: "Task execution completed successfully"
+
+      - name: "failed"
+        type: "exit"
+        description: "Task execution failed"
+
+      - name: "timeout"
+        type: "exit"
+        description: "Task execution timed out"
+
+    transitions:
+      - from: "assigned"
+        to: "planning"
+        message: "TaskAssignment"
+        sender: "orchestrator"
+        receivers: ["ai_agent"]
+
+      - from: "planning"
+        to: "approved"
+        message: "PlanProposal"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+      - from: "approved"
+        to: "executing"
+        message: "PlanApproval"
+        sender: "orchestrator"
+        receivers: ["ai_agent"]
+
+      - from: "executing"
+        to: "completed"
+        message: "ExecutionComplete"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+      - from: "executing"
+        to: "failed"
+        message: "ExecutionFailed"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+  clarification_protocol:
+    name: "clarification"
+    version: "1.0"
+    description: "User clarification loop (nested in task)"
+
+    initial_state: "confused"
+    terminal_states: ["resume", "timeout"]
+
+    states:
+      - name: "confused"
+        type: "entry"
+        description: "AI agent confused, needs clarification"
+
+      - name: "clarify_request"
+        type: "interaction"
+        description: "Send clarification request to user"
+        timeout_ms: 30000  # 30s for user response
+        llm_aware: true
+
+      - name: "user_respond"
+        type: "interaction"
+        description: "User provides clarification"
+        timeout_ms: 100
+
+      - name: "resume"
+        type: "exit"
+        description: "Resume parent protocol (task execution)"
+
+      - name: "timeout"
+        type: "exit"
+        description: "User did not respond"
+
+    transitions:
+      - from: "confused"
+        to: "clarify_request"
+        message: "ClarificationNeeded"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+      - from: "clarify_request"
+        to: "user_respond"
+        message: "UserResponse"
+        sender: "orchestrator"
+        receivers: ["ai_agent"]
+
+      - from: "user_respond"
+        to: "resume"
+        message: "ClarificationComplete"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+  nesting_example:
+    description: "How clarification nests in task execution"
+    flow: |
+      1. Start task_execution protocol
+      2. Agent reaches planning state
+      3. Agent confused → PAUSE task_execution
+      4. Start clarification protocol (nested)
+      5. Clarification completes → resume task_execution
+      6. Continue from planning state
+
+# ===========================================================================
+# Example 3: Complex Protocol - Saga Rollback with Compensating Actions
+# ===========================================================================
+
+example_3_complex_protocol:
+  name: "saga_rollback"
+  description: "Distributed transaction error recovery with compensating actions"
+  features: ["Error handling", "Compensating transactions", "Retry logic", "Multiple exit paths"]
+
+  protocol:
+    name: "saga_rollback"
+    version: "1.0"
+    description: "Saga pattern rollback with compensating actions"
+
+    initial_state: "fail"
+    terminal_states: ["restore", "timeout"]
+
+    states:
+      - name: "fail"
+        type: "entry"
+        description: "Task execution failed, initiate rollback"
+        timeout_ms: null
+
+      - name: "compensate"
+        type: "interaction"
+        description: "Execute compensating actions"
+        timeout_ms: 5000
+
+      - name: "rollback"
+        type: "interaction"
+        description: "Roll back state changes"
+        timeout_ms: 2000
+
+      - name: "restore"
+        type: "exit"
+        description: "State restored to pre-task checkpoint"
+
+      - name: "timeout"
+        type: "exit"
+        description: "Rollback timed out (manual intervention required)"
+
+    transitions:
+      - from: "fail"
+        to: "compensate"
+        message: "TaskFailed"
+        sender: "ai_agent"
+        receivers: ["orchestrator"]
+
+      - from: "compensate"
+        to: "compensate"
+        message: "CompensatingAction"
+        sender: "orchestrator"
+        receivers: ["tool_runner"]
+        cardinality: "0..*"  # Multiple compensating actions
+
+      - from: "compensate"
+        to: "rollback"
+        message: "CompensationComplete"
+        sender: "orchestrator"
+        receivers: ["state_manager"]
+
+      - from: "rollback"
+        to: "restore"
+        message: "RollbackComplete"
+        sender: "state_manager"
+        receivers: ["orchestrator"]
+
+      - from: "compensate"
+        to: "timeout"
+        message: "CompensationTimeout"
+        sender: "system"
+        receivers: []
+        trigger: "timeout"
+
+      - from: "rollback"
+        to: "timeout"
+        message: "RollbackTimeout"
+        sender: "system"
+        receivers: []
+        trigger: "timeout"
+
+      # Retry logic
+      - from: "compensate"
+        to: "fail"
+        message: "CompensationFailed"
+        sender: "orchestrator"
+        receivers: []
+        condition: "retry_count < max_retries"
+
+    timeouts:
+      - state: "compensate"
+        action: "CompensationTimeout"
+        fallback_state: "timeout"
+        log: true
+
+      - state: "rollback"
+        action: "RollbackTimeout"
+        fallback_state: "timeout"
+        log: true
+
+    violations:
+      - type: "unexpected_message"
+        action: "block"
+        log: true
+        metrics: true
+
+      - type: "timeout"
+        action: "fallback"
+        log: true
+
+# ===========================================================================
+# Example 4: Protocol with Roles and Messages (Security)
+# ===========================================================================
+
+example_4_role_based_protocol:
+  name: "secure_agent_hire"
+  description: "Agent hire protocol with role attestation and capability verification"
+  features: ["Role-based security", "Message definitions", "Capability enforcement"]
+
+  protocol:
+    name: "secure_agent_hire"
+    version: "1.0"
+    description: "Agent hire with role attestation (ADR-0003d)"
+
+    initial_state: "start"
+    terminal_states: ["hired", "rejected"]
+
+    # Role definitions
+    roles:
+      - name: "orchestrator"
+        capabilities: ["HIRE_REQUEST", "HIRE_APPROVAL", "HIRE_REJECTION"]
+        allowed_message_types: ["HireRequest", "HireApproval", "HireRejection"]
+
+      - name: "agent"
+        capabilities: ["PROPOSAL_SUBMIT"]
+        allowed_message_types: ["Proposal"]
+
+      - name: "system"
+        capabilities: ["TIMEOUT_TRIGGER"]
+        allowed_message_types: ["ProposalsClosed", "Timeout"]
+
+    # Message definitions with security
+    messages:
+      - name: "HireRequest"
+        sender_role: "orchestrator"
+        receiver_roles: ["*"]
+        schema: "HireRequest.fbs"
+        priority: 2
+
+      - name: "Proposal"
+        sender_role: "agent"
+        receiver_roles: ["orchestrator"]
+        schema: "Proposal.fbs"
+        priority: 2
+
+      - name: "HireApproval"
+        sender_role: "orchestrator"
+        receiver_roles: ["agent"]
+        schema: "HireApproval.fbs"
+        priority: 3  # Urgent
+
+    states:
+      - name: "start"
+        type: "entry"
+        description: "Protocol entry"
+
+      - name: "negotiation"
+        type: "interaction"
+        description: "Collect proposals"
+        timeout_ms: 500
+
+      - name: "selection"
+        type: "decision"
+        description: "Score proposals"
+        timeout_ms: 100
+
+      - name: "hired"
+        type: "exit"
+        description: "Agent hired"
+
+      - name: "rejected"
+        type: "exit"
+        description: "No suitable agent"
+
+    transitions:
+      - from: "start"
+        to: "negotiation"
+        message: "HireRequest"
+        sender: "orchestrator"
+        receivers: ["*"]
+
+      - from: "negotiation"
+        to: "negotiation"
+        message: "Proposal"
+        sender: "agent"
+        receivers: ["orchestrator"]
+        cardinality: "0..*"
+
+      - from: "negotiation"
+        to: "selection"
+        message: "ProposalsClosed"
+        sender: "system"
+        receivers: []
+        trigger: "timeout"
+
+      - from: "selection"
+        to: "hired"
+        message: "HireApproval"
+        sender: "orchestrator"
+        receivers: ["agent"]
+
+      - from: "selection"
+        to: "rejected"
+        message: "HireRejection"
+        sender: "orchestrator"
+        receivers: ["agent"]
+
+    violations:
+      - type: "role_mismatch"
+        action: "block"
+        log: true
+        metrics: true
+
+# ===========================================================================
+# Example 5: Minimal Protocol (Testing)
+# ===========================================================================
+
+example_5_minimal_protocol:
+  name: "minimal_protocol"
+  description: "Minimal valid PDL protocol for testing"
+  features: ["Minimal valid structure"]
+
+  protocol:
+    name: "minimal"
+    version: "1.0"
+    description: "Minimal protocol for testing"
+
+    initial_state: "start"
+    terminal_states: ["done"]
+
+    states:
+      - name: "start"
+        type: "entry"
+        description: "Entry"
+        timeout_ms: null
+
+      - name: "done"
+        type: "exit"
+        description: "Exit"
+        timeout_ms: null
+
+    transitions:
+      - from: "start"
+        to: "done"
+        message: "Complete"
+        sender: "system"
+        receivers: []
+
+    timeouts: []
+    violations: []
+
+# ===========================================================================
+# Documentation Notes
+# ===========================================================================
+
+documentation:
+  usage:
+    - "These examples are for documentation and testing"
+    - "Production protocols use full ADR-0003b specifications"
+    - "All 6 core protocols (hire, task, clarification, barge-in, tool, saga) are in contracts/protocols/definitions/"
+
+  testing:
+    - "Use example_5_minimal for compiler testing"
+    - "Use example_1_simple for validation testing"
+    - "Use example_3_complex for deadlock detection testing"
+
+  features_demonstrated:
+    basic:
+      - "States (entry, interaction, decision, exit)"
+      - "Transitions (from, to, message, sender, receivers)"
+      - "Timeout policies"
+      - "Violation handling"
+
+    advanced:
+      - "Guard conditions (score > threshold)"
+      - "Message cardinality (0..1, 1, 0..*, 1..*)"
+      - "Auto-triggers (timeout, system)"
+      - "LLM-aware states (AI agent integration)"
+
+    security:
+      - "Roles (orchestrator, agent, system)"
+      - "Message definitions (sender_role, schema)"
+      - "Capability enforcement"
+      - "Role attestation"
+
+    composition:
+      - "Nested protocols (clarification in task)"
+      - "Protocol pause/resume"
+      - "Complex flows (saga with retry)"
+
+compliance:
+  adr_requirements:
+    - adr: "ADR-0003a"
+      requirement: "PDL examples for documentation"
+      status: "SATISFIED"
+
+  testing:
+    - test: "All examples compile without errors"
+      validation: "PDL compiler"
+
+    - test: "Example protocols used in unit tests"
+      validation: "Test suite coverage"
+
+cross_references:
+  contracts:
+    - "contracts/protocols/pdl/pdl_specification.yml"
+    - "contracts/protocols/pdl/pdl_schema_validation.yml"
+    - "contracts/protocols/pdl/pdl_compiler_contract.yml"
+    - "contracts/protocols/definitions/*.pdl.yml"
+
+  adrs:
+    - "ADR-0003a: Protocol Definition Language Specification"
+    - "ADR-0003b: 6 Core Protocol Implementations"
+    - "ADR-0003d: Role Attestation & Capability Verification"
+
+notes:
+  - "Examples use simplified protocols for clarity"
+  - "Production protocols include more states, transitions, and error handling"
+  - "All examples validated against PDL JSON Schema"
+  - "Examples demonstrate incremental complexity (minimal → simple → complex)"

@@ -1,0 +1,267 @@
+# Clarification Protocol - Timeout Handling Contract
+# File: contracts/protocols/clarification/04_timeout_handling_contract.yml
+# Purpose: Handle user timeout (no response within timeout window)
+# Status: COMPLETE
+# Version: 1.0
+
+contract:
+  id: "CONTRACT-CLARIFICATION-TIMEOUT-004"
+  name: "Clarification Timeout Handling Contract"
+  version: "1.0"
+
+# Timeout Overview
+timeout_handling:
+  purpose: "Handle user timeout when no clarification response received"
+  trigger: "Timeout timer expires (30s BLOCKING, 15s OPTIONAL)"
+  responsibility: "Protocol Monitor enforces timeout, Planner executes fallback strategy"
+
+# Timeout Policies
+timeout_policies:
+
+  BLOCKING_priority_timeout:
+    duration_ms: 30000  # 30 seconds
+    strategy: "ABORT_TASK"
+    rationale: "Task cannot proceed without user answer"
+    behavior: |
+      - Timeout timer expires after 30s
+      - FSM transitions WAITING_RESPONSE → TIMEOUT
+      - Planner aborts task execution
+      - Send TaskFailure to Orchestrator (error_code: CLARIFICATION_TIMEOUT)
+      - Inform user: "I need this information to continue. Task aborted."
+
+    use_cases:
+      - "Disambiguation: Multiple matching restaurants (cannot proceed)"
+      - "Missing required info: Payment method for booking (required)"
+      - "Safety confirmation: RED band action approval (required)"
+
+    observability:
+      - "Log: clarification_timeout (priority=BLOCKING, strategy=ABORT)"
+      - "Metric: clarification_timeout_blocking_total +1"
+      - "Event: task_aborted (reason=clarification_timeout)"
+
+  OPTIONAL_priority_timeout:
+    duration_ms: 15000  # 15 seconds
+    strategy: "USE_DEFAULT"
+    rationale: "Task can proceed with reasonable default"
+    behavior: |
+      - Timeout timer expires after 15s
+      - FSM transitions WAITING_RESPONSE → TIMEOUT
+      - Planner uses default_answer from ClarificationRequest
+      - Log assumption: "Assumed default: {default_answer}"
+      - Continue task execution with default
+      - Inform user: "I didn't hear back, so I assumed [default]. Let me know if you want to change it."
+
+    use_cases:
+      - "Time preference: 'When should I book?' (default: earliest available)"
+      - "Format preference: 'What format?' (default: plain text)"
+      - "Optional detail: 'Any notes?' (default: none)"
+
+    default_selection_logic: |
+      if default_answer provided in request:
+        use default_answer
+      elif question_type == MULTIPLE_CHOICE:
+        use options[0]  # First option
+      elif question_type == YES_NO:
+        use "No"  # Conservative default (don't take risky action)
+      else:
+        use null  # Skip optional field
+
+    observability:
+      - "Log: clarification_timeout (priority=OPTIONAL, strategy=USE_DEFAULT, default={default_answer})"
+      - "Metric: clarification_timeout_optional_total +1"
+      - "Event: clarification_default_used (default={default_answer})"
+
+# Timeout Detection
+timeout_detection:
+
+  timer_start:
+    trigger: "FSM enters WAITING_RESPONSE state"
+    mechanism: "Protocol Monitor starts asyncio timer"
+    precision: "±100ms (adequate for 15-30s timeouts)"
+    code_pattern: |
+      protocol_monitor.start_timer(
+        clarification_id=clarif_id,
+        timeout_ms=timeout_ms,
+        callback=on_clarification_timeout
+      )
+
+  timer_check:
+    mechanism: "Protocol Monitor checks timer expiration"
+    logic: |
+      if current_time >= (request_time + timeout_ms):
+        if no ClarificationResponse received:
+          trigger_timeout()
+        else:
+          cancel_timer()  # User responded before timeout
+
+  timer_cancellation:
+    trigger: "ClarificationResponse received before timeout"
+    action: "Cancel timer, FSM transitions to RESOLVED (not TIMEOUT)"
+
+# Timeout Strategies
+timeout_strategies:
+
+  strategy_1_abort_task:
+    when: "BLOCKING priority timeout"
+    action: "Abort task execution, send TaskFailure"
+    task_failure_message: |
+      {
+        "task_id": "task-xxx",
+        "agent_id": "agent-ai-planner-001",
+        "error_code": "CLARIFICATION_TIMEOUT",
+        "error_message": "User did not provide required clarification within 30 seconds",
+        "retry_after_ms": 0,  # Not retryable (user must re-submit with clarification)
+        "trace_id": "..."
+      }
+
+    user_facing_message: |
+      "I need this information to continue: {question}
+       Please provide an answer and try again."
+
+  strategy_2_use_default:
+    when: "OPTIONAL priority timeout"
+    action: "Use default answer, continue task execution"
+    planner_action: |
+      - Planner receives timeout signal
+      - Extract default_answer from ClarificationRequest
+      - Resume planning with default_answer
+      - Log assumption for auditability
+
+    user_facing_message: |
+      "I didn't hear back about: {question}
+       I'll assume [{default_answer}]. Let me know if you want to change it."
+
+  strategy_3_escalate_to_human:
+    when: "Custom escalation policy (future feature)"
+    action: "Escalate to human operator for manual clarification"
+    use_cases:
+      - "VIP user: Escalate to live agent"
+      - "High-value task: Don't abort, wait for human review"
+      - "Regulatory requirement: Human must approve certain actions"
+
+    implementation: |
+      - Send escalation request to HumanOperatorQueue
+      - Planner waits for human response (extended timeout: 5 minutes)
+      - Human provides clarification via admin UI
+
+  strategy_4_retry_clarification:
+    when: "First timeout, retry with simplified question (future feature)"
+    action: "Re-send clarification with simpler question or fewer options"
+    max_retries: 1  # Only 1 retry to avoid user frustration
+    example: |
+      First try: "Which restaurant? (10 options)"
+      Timeout after 30s
+      Second try: "Which restaurant? (top 2 options only)"
+
+# Timeout Enforcement
+timeout_enforcement:
+
+  enforcement_layer: "Protocol Monitor (Layer 1 kernel)"
+
+  timeout_timer_implementation: |
+    asyncio.wait_for(
+      wait_for_clarification_response(clarification_id),
+      timeout=timeout_ms / 1000.0  # Convert ms to seconds
+    )
+
+    try:
+      response = await wait_for_clarification_response()
+      # Success: FSM → RESOLVED
+    except asyncio.TimeoutError:
+      # Timeout: FSM → TIMEOUT
+      execute_timeout_strategy(priority)
+
+  timeout_guarantee: "100% timeout enforcement (MPST progress guarantee)"
+
+# Timeout Observability
+observability:
+
+  metrics:
+    - name: "clarification_timeout_total"
+      type: "counter"
+      labels: ["priority", "strategy"]
+      description: "Clarification timeouts (BLOCKING vs OPTIONAL)"
+
+    - name: "clarification_timeout_rate"
+      type: "gauge"
+      labels: ["priority"]
+      description: "Percentage of clarifications that timeout"
+      calculation: "timeout_total / request_total"
+
+    - name: "clarification_default_used_total"
+      type: "counter"
+      description: "Times default answer was used (OPTIONAL timeout)"
+
+    - name: "clarification_task_aborted_total"
+      type: "counter"
+      description: "Tasks aborted due to clarification timeout (BLOCKING)"
+
+  events:
+    - name: "clarification_timeout"
+      fields: ["task_id", "clarification_id", "priority", "timeout_ms", "strategy", "trace_id"]
+
+    - name: "clarification_default_used"
+      fields: ["task_id", "clarification_id", "default_answer", "trace_id"]
+
+    - name: "clarification_task_aborted"
+      fields: ["task_id", "clarification_id", "question", "trace_id"]
+
+# Timeout Tuning
+timeout_tuning:
+
+  current_settings:
+    BLOCKING_timeout: 30000  # 30s (covers P99 response time ~20s)
+    OPTIONAL_timeout: 15000  # 15s (covers P95 response time ~10s)
+
+  tuning_considerations:
+    - "User response time P50: 3s, P95: 10s, P99: 20s"
+    - "BLOCKING timeout should cover P99 (30s is safe)"
+    - "OPTIONAL timeout can be shorter (15s covers P95)"
+    - "Mobile users slower than desktop (consider user agent)"
+
+  dynamic_timeout_future_feature:
+    description: "Adjust timeout based on question complexity"
+    examples:
+      - "Simple YES/NO: 10s timeout"
+      - "Multiple choice (2-3 options): 15s timeout"
+      - "Multiple choice (10+ options): 30s timeout"
+      - "Free-form TEXT: 45s timeout"
+
+# Error Recovery
+error_recovery:
+
+  recovery_after_blocking_timeout:
+    user_action: "User must re-submit task with clarification provided upfront"
+    example: |
+      Original request: "Book a table at Pizza Place"
+      Timeout: "Which Pizza Place? (2 options)"
+      User re-submits: "Book a table at Acme Pizza (123 Main St)"
+
+  recovery_after_optional_timeout:
+    planner_action: "Task completed with default, user can request modification"
+    example: |
+      Task: "Book a table"
+      Timeout: "What time?" (default: 12 PM)
+      Completed: Reservation at 12 PM
+      User: "Actually, can you change it to 1 PM?"
+      Planner: "Sure, I'll update the reservation."
+
+# Lifecycle Integration
+lifecycle_context:
+
+  protocol_phase: "WAITING_RESPONSE → TIMEOUT transition"
+
+  parent_task_state: "Task Execution EXECUTE phase (Planner waiting)"
+
+  next_phase: |
+    BLOCKING timeout: Task aborted (FAILED state)
+    OPTIONAL timeout: Planner resumes with default (task continues)
+
+  related_contracts:
+    - "01_clarification_protocol_fsm.yml - FSM TIMEOUT state"
+    - "02_clarification_request_contract.yml - Timeout configuration"
+    - "../task_execution/08_failure_handling_contract.yml - TaskFailure for BLOCKING timeout"
+
+# ==============================================================================
+# END OF FILE: 04_timeout_handling_contract.yml
+# ==============================================================================

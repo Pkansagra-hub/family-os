@@ -1,0 +1,8 @@
+{
+  "subscriber_id": "device-123",
+  "topic": "memory.snapshot",
+  "space_id": "space-alpha",
+  "tenant_id": "tenant-123",
+  "offset": 982341,
+  "ts": "2025-09-28T12:05:00Z"
+}

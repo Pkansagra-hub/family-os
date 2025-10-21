@@ -1,0 +1,575 @@
+# Actor Router & Admission Control Contract
+# Issue: 1.2.1 - Mailbox Message Envelope Schema
+# Source ADR: ADR-0002c (Actor Router & Admission Control)
+# Related ADRs: ADR-0002 (Actor Model), ADR-0010 (Capability-Based Security), ADR-0002a (MPSC Queue)
+
+actor_router_contract:
+  name: "Actor Router with Multi-Layer Admission Control"
+  version: "1.0"
+  description: "Zero-trust message router with capability verification and rate limiting"
+  applies_to:
+    - "ALL actor messaging (58 agents)"
+    - "Inter-agent communication gateway"
+    - "Admission control enforcement point"
+
+  routing_architecture:
+    router_role: "Message gateway between agents (centralized routing)"
+    location_transparency: "Agents send to agent_id, router resolves to mailbox"
+    admission_control: "5-layer security pipeline before message delivery"
+
+    routing_table:
+      description: "Map agent_id → mailbox reference"
+      structure:
+        agent_id: "string (unique agent identifier)"
+        mailbox: "PriorityMailbox reference"
+        location: "enum (local | remote)"
+        remote_address: "string (future: network address)"
+        registration_time_ms: "int64"
+        last_health_check_ms: "int64"
+
+      operations:
+        register:
+          trigger: "Agent transitions WARMING → ACTIVE"
+          action: "Add route entry for agent_id → mailbox"
+          example: "routing_table.register('agent_planner_123', mailbox)"
+
+        unregister:
+          trigger: "Agent transitions DRAINING → TERMINATED"
+          action: "Remove route entry for agent_id"
+          example: "routing_table.unregister('agent_planner_123')"
+
+        lookup:
+          input: "agent_id or '*' (broadcast)"
+          output: "RouteEntry or None"
+          performance: "O(1) hash lookup"
+          example: "route = routing_table.lookup('agent_planner_123')"
+
+      broadcast_handling:
+        receiver_id: "'*'"
+        resolution: "Lookup ALL agents in ACTIVE state"
+        fanout: "Send to each mailbox individually"
+        performance: "O(N) where N = active agent count (typically 3-5)"
+        failure: "Partial success allowed (log failures)"
+
+  admission_control_pipeline:
+    description: "5-layer security checks before message delivery"
+
+    check_order:
+      - check: 1
+        name: "Capability Verification"
+        description: "Verify HMAC-SHA256 signed lease"
+        latency: "<0.02ms P95"
+
+      - check: 2
+        name: "Role Attestation"
+        description: "Verify sender role authorized for message_type"
+        latency: "<0.01ms P95"
+
+      - check: 3
+        name: "Token Bucket Rate Limit"
+        description: "Check sender rate limit (100 msg/s sustained)"
+        latency: "<0.02ms P95"
+
+      - check: 4
+        name: "In-Flight Limits"
+        description: "Check sender in-flight messages/bytes"
+        latency: "<0.02ms P95"
+
+      - check: 5
+        name: "Global Session Limits"
+        description: "Check session-wide rate/memory limits"
+        latency: "<0.03ms P95"
+
+    total_latency: "<0.1ms P95 (all 5 checks)"
+
+    admission_decision:
+      ADMITTED: "All 5 checks PASS → route to mailbox"
+      REJECTED: "Any check FAIL → return error code"
+
+  layer_1_capability_verification:
+    description: "Cryptographic proof of message sending permission"
+
+    lease_structure:
+      lease_id: "string (UUID)"
+      sender_id: "string"
+      receiver_id: "string (or '*' for broadcast)"
+      roles: "array[string] (e.g., ['orchestrator', 'planner'])"
+      capabilities: "array[string] (e.g., ['send_message', 'call_tool'])"
+      issued_at_ms: "int64"
+      expires_at_ms: "int64"
+      signature: "string (HMAC-SHA256 hex)"
+
+    signing_algorithm:
+      algorithm: "HMAC-SHA256"
+      secret_key: "32-byte shared secret (env: ROUTER_SECRET_KEY)"
+      payload: "lease_id:sender_id:receiver_id:roles:capabilities:issued_at:expires_at"
+      signature: "hmac.new(secret_key, payload, hashlib.sha256).hexdigest()"
+
+    verification_steps:
+      - step: 1
+        check: "Lease signature valid"
+        action: "Recompute HMAC-SHA256, compare with lease.signature"
+        error: "AUTHN_FAILED:INVALID_SIGNATURE"
+        retryable: false
+
+      - step: 2
+        check: "Lease not expired"
+        action: "current_time_ms() <= lease.expires_at_ms"
+        error: "AUTHN_FAILED:EXPIRED_LEASE"
+        retryable: false
+
+      - step: 3
+        check: "Sender ID matches"
+        action: "message.sender_id == lease.sender_id"
+        error: "AUTHN_FAILED:SENDER_MISMATCH"
+        retryable: false
+
+      - step: 4
+        check: "Receiver ID matches"
+        action: "message.receiver_id == lease.receiver_id (or '*')"
+        error: "AUTHN_FAILED:RECEIVER_MISMATCH"
+        retryable: false
+
+      - step: 5
+        check: "send_message capability exists"
+        action: "'send_message' in lease.capabilities"
+        error: "AUTHN_FAILED:CAPABILITY_MISMATCH"
+        retryable: false
+
+    lease_renewal:
+      ttl: "3600000ms (1 hour)"
+      renewal_threshold: "300000ms (5 minutes before expiry)"
+      issuer: "Capability Manager component"
+
+    security_properties:
+      unforgeable: "HMAC-SHA256 requires secret_key (only Capability Manager has)"
+      replay_protection: "Lease expires after 1 hour"
+      least_privilege: "Lease scoped to specific sender/receiver/capabilities"
+
+  layer_2_role_attestation:
+    description: "Role-Based Access Control (RBAC) for message types"
+
+    role_permission_matrix:
+      orchestrator:
+        allowed_message_types:
+          - "task_announcement"
+          - "plan_approval"
+          - "plan_rejection"
+          - "agent_selection"
+        use_case: "3-phase coordination (negotiation, selection, execution)"
+
+      planner:
+        allowed_message_types:
+          - "plan_proposal"
+          - "plan_sketch"
+          - "plan_validation_request"
+          - "plan_commit"
+        use_case: "4-stage planning pipeline"
+
+      concierge:
+        allowed_message_types:
+          - "user_message"
+          - "clarification_request"
+          - "turn_complete"
+        use_case: "User interaction management"
+
+      tool_runner:
+        allowed_message_types:
+          - "tool_result"
+          - "tool_error"
+        use_case: "Tool execution results"
+
+      supervisor:
+        allowed_message_types:
+          - "health_check"
+          - "health_response"
+          - "restart_command"
+          - "blacklist_notification"
+        use_case: "Health monitoring and crash recovery"
+
+      protocol_monitor:
+        allowed_message_types:
+          - "protocol_violation"
+          - "protocol_timeout"
+        use_case: "MPST protocol enforcement"
+
+      model_hub:
+        allowed_message_types:
+          - "inference_response"
+          - "streaming_chunk"
+        use_case: "LLM inference results"
+
+    verification_algorithm:
+      - step: 1
+        action: "Extract sender roles from lease"
+        code: "roles = lease.roles  # e.g., ['orchestrator']"
+
+      - step: 2
+        action: "For each role, check if message_type allowed"
+        code: "for role in roles: if message.message_type in ROLE_PERMISSIONS[role]: PASS"
+
+      - step: 3
+        action: "If no role allows message_type, reject"
+        error: "AUTHZ_FAILED:ROLE_POLICY"
+        retryable: false
+
+    multi_role_agents:
+      example: "Planner agent has roles: ['planner', 'observer']"
+      logic: "Allow if ANY role permits message_type (OR logic)"
+
+  layer_3_token_bucket_rate_limit:
+    description: "Per-sender rate limiting with burst tolerance"
+
+    token_bucket_parameters:
+      capacity: 150  # Max tokens (burst capacity)
+      refill_rate: 100  # Tokens per second
+      cost_per_message: 1  # Each message costs 1 token
+
+    algorithm:
+      - step: 1
+        action: "Refill tokens based on elapsed time"
+        code: "new_tokens = min(capacity, current_tokens + (elapsed_ms / 1000) * refill_rate)"
+
+      - step: 2
+        action: "Check if tokens available"
+        code: "if current_tokens >= cost_per_message:"
+
+      - step: 3
+        action: "Deduct tokens and allow"
+        code: "current_tokens -= cost_per_message; return PASS"
+
+      - step: 4
+        action: "If insufficient tokens, reject"
+        error: "SENDER_RATE_LIMIT"
+        retryable: true
+        retry_hint: "retry_after_ms = (cost - current_tokens) / refill_rate * 1000"
+
+    burst_behavior:
+      initial_state: "Bucket starts full (150 tokens)"
+      burst_capacity: "150 messages instantly"
+      sustained_rate: "100 messages/second average"
+      recovery_time: "1.5 seconds to refill from 0 to 150"
+
+    per_sender_isolation:
+      tracking: "Separate bucket per sender_id"
+      independence: "One agent's rate limit doesn't affect others"
+      example: "Planner floods → only Planner rate-limited"
+
+    observability:
+      metric: "router_rate_limit_rejections_total{sender_id}"
+      log: "Rate limit exceeded: sender_id={sender_id}, tokens_remaining={tokens}"
+
+  layer_4_inflight_limits:
+    description: "Limit in-flight messages to prevent resource exhaustion"
+
+    sender_limits:
+      max_messages: 200  # Per sender
+      max_bytes: 1048576  # 1MB per sender
+
+    tracking:
+      increment: "On successful router admission (before enqueue)"
+      decrement: "On receiver dequeue (message processed)"
+      storage: "In-memory dict: sender_id → (message_count, byte_count)"
+
+    verification_steps:
+      - step: 1
+        check: "In-flight message count < 200"
+        action: "inflight_counts[sender_id] < MAX_INFLIGHT_MESSAGES"
+        error: "SESSION_QUOTA:INFLIGHT_COUNT"
+        retryable: true
+
+      - step: 2
+        check: "In-flight bytes < 1MB"
+        action: "inflight_bytes[sender_id] + message_size < MAX_INFLIGHT_BYTES"
+        error: "SESSION_QUOTA:INFLIGHT_BYTES"
+        retryable: true
+
+    message_size_calculation:
+      method: "FlatBuffers serialized size"
+      formula: "len(message.payload) + envelope_overhead (~100 bytes)"
+      typical: "1-4KB per message"
+
+    decrement_trigger:
+      event: "Receiver calls dequeue() and processes message"
+      callback: "router.track_receive(sender_id, message_size)"
+      guarantee: "Eventually consistent (message processed → decrement)"
+
+  layer_5_global_session_limits:
+    description: "Session-wide quotas across all agents"
+
+    session_quotas:
+      max_rate: 500  # Messages per second per session
+      max_memory: 10485760  # 10MB per session
+
+    rate_limit_window: "1 second rolling window"
+
+    tracking:
+      session_id: "Extracted from cognitive_trace_id or session context"
+      aggregation: "Sum across all senders in session"
+      reset: "Every 1 second"
+
+    verification_steps:
+      - step: 1
+        check: "Session rate < 500 msg/s"
+        action: "session_counts[session_id] < MAX_SESSION_RATE"
+        error: "SESSION_QUOTA:RATE_EXCEEDED"
+        retryable: true
+
+      - step: 2
+        check: "Session memory < 10MB"
+        action: "session_memory[session_id] + message_size < MAX_SESSION_MEMORY"
+        error: "SESSION_QUOTA:SIZE_EXCEEDED"
+        retryable: true
+
+    multi_session_isolation:
+      guarantee: "One session's limits don't affect others"
+      example: "Session A floods → only Session A throttled"
+
+  routing_execution:
+    description: "After admission checks PASS, route message to mailbox"
+
+    unicast_routing:
+      receiver_id: "specific agent_id"
+      steps:
+        - step: 1
+          action: "Lookup route entry"
+          code: "route = routing_table.lookup(receiver_id)"
+
+        - step: 2
+          action: "Check route exists"
+          error: "AGENT_NOT_FOUND (if route is None)"
+
+        - step: 3
+          action: "Enqueue to mailbox"
+          code: "success = route.mailbox.enqueue(message)"
+
+        - step: 4
+          action: "Check mailbox not full"
+          error: "MAILBOX_FULL (if success is False)"
+          retryable: true
+
+        - step: 5
+          action: "Track in-flight metrics"
+          code: "inflight_tracker.track_send(sender_id, message_size)"
+
+    broadcast_routing:
+      receiver_id: "'*'"
+      steps:
+        - step: 1
+          action: "Lookup all ACTIVE agents"
+          code: "routes = routing_table.lookup_active_agents()"
+
+        - step: 2
+          action: "For each route, enqueue message"
+          code: "for route in routes: route.mailbox.enqueue(message)"
+
+        - step: 3
+          action: "Partial success allowed"
+          behavior: "If some enqueues fail, log warning but don't fail entire broadcast"
+
+        - step: 4
+          action: "Track metrics per receiver"
+          metric: "router_broadcast_messages_total{success/failure}"
+
+    remote_routing:
+      status: "Not implemented (future)"
+      design: "Network RPC to remote router"
+      use_case: "Distributed K1 (multi-node deployment)"
+
+  admission_error_codes:
+    description: "13 error codes with retry hints"
+
+    error_taxonomy:
+      - code: "AUTHN_FAILED:INVALID_SIGNATURE"
+        description: "Lease signature verification failed"
+        retryable: false
+        mitigation: "Renew lease from Capability Manager"
+
+      - code: "AUTHN_FAILED:EXPIRED_LEASE"
+        description: "Lease expired (TTL exceeded)"
+        retryable: false
+        mitigation: "Renew lease"
+
+      - code: "AUTHN_FAILED:SENDER_MISMATCH"
+        description: "message.sender_id != lease.sender_id"
+        retryable: false
+        mitigation: "Fix sender_id or renew lease"
+
+      - code: "AUTHN_FAILED:RECEIVER_MISMATCH"
+        description: "message.receiver_id != lease.receiver_id"
+        retryable: false
+        mitigation: "Fix receiver_id or renew lease"
+
+      - code: "AUTHN_FAILED:CAPABILITY_MISMATCH"
+        description: "Lease missing 'send_message' capability"
+        retryable: false
+        mitigation: "Request capability from Capability Manager"
+
+      - code: "AUTHZ_FAILED:ROLE_POLICY"
+        description: "Sender role not authorized for message_type"
+        retryable: false
+        mitigation: "Change message_type or request role"
+
+      - code: "SENDER_RATE_LIMIT"
+        description: "Token bucket depleted (>100 msg/s sustained)"
+        retryable: true
+        retry_after_ms: "(cost - tokens) / refill_rate * 1000"
+        mitigation: "Wait and retry, or reduce send rate"
+
+      - code: "SESSION_QUOTA:INFLIGHT_COUNT"
+        description: "Sender has >200 in-flight messages"
+        retryable: true
+        mitigation: "Wait for messages to be processed"
+
+      - code: "SESSION_QUOTA:INFLIGHT_BYTES"
+        description: "Sender has >1MB in-flight bytes"
+        retryable: true
+        mitigation: "Wait for messages to be processed"
+
+      - code: "SESSION_QUOTA:RATE_EXCEEDED"
+        description: "Session exceeded 500 msg/s"
+        retryable: true
+        retry_after_ms: 1000
+        mitigation: "Wait 1 second"
+
+      - code: "SESSION_QUOTA:SIZE_EXCEEDED"
+        description: "Session exceeded 10MB memory"
+        retryable: true
+        mitigation: "Wait for memory to be released"
+
+      - code: "MAILBOX_FULL"
+        description: "Receiver mailbox at HIGH watermark (>50 messages)"
+        retryable: true
+        mitigation: "Backpressure signal sent upstream, retry after receiver processes messages"
+        receiver_overflow_policy: "Receiver applies DROP_OLDEST (background messages to DLQ) or BLOCK_SENDER"
+
+      - code: "AGENT_NOT_FOUND"
+        description: "Receiver agent_id not in routing table"
+        retryable: false
+        mitigation: "Check agent exists and is ACTIVE"
+
+    error_response_format:
+      success: false
+      error_code: "string (one of 13 codes)"
+      error_message: "string (human-readable)"
+      retry_after_ms: "int (optional, for retryable errors)"
+      timestamp_ms: "int64"
+      trace_id: "string (cognitive_trace_id)"
+
+  performance_budgets:
+    admission_latency:
+      p50: "0.05ms"
+      p95: "0.1ms"
+      p99: "0.5ms"
+      max: "5ms"
+
+    routing_latency:
+      unicast_p95: "0.05ms (hash lookup + enqueue)"
+      broadcast_p95: "0.5ms (fanout to 5 agents)"
+
+    throughput:
+      per_router: "10,000 msg/s (0.1ms per message)"
+
+    memory_overhead:
+      routing_table: "58 agents × 100 bytes = 5.8KB"
+      token_buckets: "58 agents × 50 bytes = 2.9KB"
+      inflight_tracker: "58 agents × 100 bytes = 5.8KB"
+      total: "~15KB"
+
+  observability:
+    prometheus_metrics:
+      - name: "router_messages_routed_total"
+        type: "counter"
+        labels: ["sender_id", "receiver_id", "message_type"]
+
+      - name: "router_admissions_rejected_total"
+        type: "counter"
+        labels: ["sender_id", "reason"]
+
+      - name: "router_admission_latency_ms"
+        type: "histogram"
+        labels: ["check_name"]
+        buckets: [0.01, 0.02, 0.05, 0.1, 0.2, 0.5]
+
+      - name: "router_routing_latency_ms"
+        type: "histogram"
+        labels: ["routing_type"]  # unicast | broadcast
+        buckets: [0.01, 0.05, 0.1, 0.5, 1]
+
+      - name: "router_broadcast_messages_total"
+        type: "counter"
+        labels: ["outcome"]  # success | failure
+
+      - name: "router_inflight_messages"
+        type: "gauge"
+        labels: ["sender_id"]
+
+      - name: "router_inflight_bytes"
+        type: "gauge"
+        labels: ["sender_id"]
+
+      - name: "router_token_bucket_tokens"
+        type: "gauge"
+        labels: ["sender_id"]
+
+    structured_logging:
+      - event: "router.admission_rejected"
+        level: "WARNING"
+        fields: ["message_id", "sender_id", "error_code", "trace_id"]
+
+      - event: "router.broadcast"
+        level: "INFO"
+        fields: ["message_id", "sender_id", "receiver_count", "success_count", "failure_count"]
+
+      - event: "router.mailbox_full"
+        level: "WARNING"
+        fields: ["message_id", "receiver_id", "mailbox_depth", "trace_id"]
+
+  testing_requirements:
+    unit_tests:
+      - test: "Capability verification (valid/invalid signature)"
+      - test: "Lease expiration handling"
+      - test: "Role attestation (allowed/denied message types)"
+      - test: "Token bucket rate limiting (burst + sustained)"
+      - test: "In-flight limits (count + bytes)"
+      - test: "Session quotas (rate + memory)"
+      - test: "Unicast routing (happy path)"
+      - test: "Broadcast routing (fanout to N agents)"
+      - test: "Error code generation (all 13 codes)"
+
+    integration_tests:
+      - test: "End-to-end: Orchestrator → Planner (admission + routing)"
+      - test: "Rate limit enforcement: Send 200 msg/s → 100 rejected"
+      - test: "Broadcast: Orchestrator → ALL agents (5 agents)"
+      - test: "Mailbox full backpressure: Slow consumer → MAILBOX_FULL error"
+      - test: "Expired lease: Renewal required"
+
+    security_tests:
+      - test: "Forged lease signature → AUTHN_FAILED"
+      - test: "Unauthorized message_type → AUTHZ_FAILED"
+      - test: "DoS attack: 1000 msg/s flood → rate limited"
+
+  related_contracts:
+    - contract: "message_envelope.yml"
+      relation: "Router admits Message envelopes"
+
+    - contract: "mpsc_queue_contract.yml"
+      relation: "Router enqueues to MPSC queues"
+
+    - contract: "backpressure_contract.yml"
+      relation: "MAILBOX_FULL error triggers backpressure"
+
+  related_adrs:
+    - adr: "ADR-0002c"
+      section: "Actor Router & Admission Control"
+      lines: "Complete ADR (capability verification, rate limiting, routing)"
+
+    - adr: "ADR-0010"
+      section: "Capability-Based Security"
+      lines: "Lease design, HMAC-SHA256 signing"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.2.1"
+      author: "Messaging Infrastructure Lead"

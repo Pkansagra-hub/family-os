@@ -1,0 +1,601 @@
+# Actor Router Observability Contract
+# Issue: 1.2.3 - Actor Router & Admission Control
+# Source ADR: ADR-0002c (Actor Router & Admission Control)
+# Related ADRs: ADR-0010 (Observability)
+# Research: Prometheus, OpenTelemetry, Structured Logging
+
+actor_router_observability:
+  name: "Actor Router Observability"
+  version: "1.0"
+  description: "Comprehensive metrics, tracing, and logging for actor router"
+  applies_to:
+    - "Actor Router admission control pipeline"
+    - "Routing table operations"
+    - "Priority routing and mailbox management"
+
+  observability_philosophy:
+    goal: "Full visibility into message routing, admission rejections, and performance"
+    strategy: "Prometheus metrics + OpenTelemetry tracing + structured logging"
+    zero_overhead: "Observability must not impact routing latency (<0.1ms P95)"
+
+    observability_principles:
+      - principle: "Metrics for quantitative analysis"
+        description: "Prometheus counters, gauges, histograms for performance"
+        use_case: "Dashboards, alerts, SLO tracking"
+
+      - principle: "Tracing for causal analysis"
+        description: "OpenTelemetry spans for end-to-end message flow"
+        use_case: "Debugging latency spikes, admission failures"
+
+      - principle: "Logs for forensics"
+        description: "Structured JSON logs for admission rejections"
+        use_case: "Root cause analysis, security audits"
+
+  prometheus_metrics:
+    description: "Comprehensive Prometheus metrics for actor router"
+
+    routing_metrics:
+      - name: "router_messages_routed_total"
+        type: "counter"
+        labels: ["sender_id", "receiver_id", "message_type", "priority"]
+        description: "Total messages successfully routed"
+        use_case: "Throughput tracking, sender/receiver traffic analysis"
+
+      - name: "router_routing_latency_ms"
+        type: "histogram"
+        labels: ["sender_id", "receiver_id"]
+        buckets: [0.01, 0.05, 0.1, 0.5, 1, 5]
+        description: "End-to-end routing latency (admission + enqueue)"
+        use_case: "Performance monitoring, SLO validation"
+
+      - name: "router_routing_errors_total"
+        type: "counter"
+        labels: ["sender_id", "receiver_id", "error_code"]
+        description: "Total routing failures (AGENT_NOT_FOUND, MAILBOX_FULL, etc.)"
+        use_case: "Error rate tracking, alerting"
+
+    admission_control_metrics:
+      - name: "router_admissions_total"
+        type: "counter"
+        labels: ["sender_id", "receiver_id"]
+        description: "Total admission checks performed"
+        use_case: "Admission throughput tracking"
+
+      - name: "router_admissions_passed_total"
+        type: "counter"
+        labels: ["sender_id", "receiver_id"]
+        description: "Total admission checks passed (all 5 layers)"
+        use_case: "Success rate calculation"
+
+      - name: "router_admissions_rejected_total"
+        type: "counter"
+        labels: ["sender_id", "rejection_reason"]
+        description: "Total admission rejections by reason (13 error codes)"
+        use_case: "Security monitoring, rate limit tracking"
+
+      - name: "router_admission_latency_ms"
+        type: "histogram"
+        labels: ["layer"]
+        buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5]
+        description: "Admission check latency per layer (5 layers)"
+        use_case: "Performance debugging (which layer slow)"
+
+    capability_verification_metrics:
+      - name: "router_capability_verifications_total"
+        type: "counter"
+        labels: ["sender_id", "result"]
+        description: "Total capability verifications (PASS or FAIL)"
+        use_case: "Security audit trail"
+
+      - name: "router_capability_signature_failures_total"
+        type: "counter"
+        labels: ["sender_id"]
+        description: "Total HMAC signature verification failures"
+        use_case: "Security alert (potential attack)"
+
+      - name: "router_capability_expired_leases_total"
+        type: "counter"
+        labels: ["sender_id"]
+        description: "Total expired lease rejections"
+        use_case: "Lease renewal monitoring"
+
+    role_attestation_metrics:
+      - name: "router_role_attestations_total"
+        type: "counter"
+        labels: ["sender_role", "message_type", "result"]
+        description: "Total role attestations (PASS or FAIL)"
+        use_case: "RBAC policy audit"
+
+      - name: "router_role_policy_failures_total"
+        type: "counter"
+        labels: ["sender_role", "message_type"]
+        description: "Total role policy violations"
+        use_case: "Security monitoring (unauthorized message types)"
+
+    rate_limit_metrics:
+      - name: "router_rate_limit_checks_total"
+        type: "counter"
+        labels: ["sender_id", "result"]
+        description: "Total rate limit checks (PASS or FAIL)"
+        use_case: "Rate limit effectiveness tracking"
+
+      - name: "router_rate_limit_rejections_total"
+        type: "counter"
+        labels: ["sender_id"]
+        description: "Total rate limit rejections (token bucket depleted)"
+        use_case: "DoS detection, sender throttling"
+
+      - name: "router_token_bucket_tokens"
+        type: "gauge"
+        labels: ["sender_id"]
+        description: "Current token count per sender (0-150)"
+        use_case: "Real-time rate limit monitoring"
+
+      - name: "router_token_bucket_refills_total"
+        type: "counter"
+        labels: ["sender_id"]
+        description: "Total token refills (100 tokens/sec)"
+        use_case: "Token bucket health monitoring"
+
+    in_flight_limit_metrics:
+      - name: "router_inflight_messages"
+        type: "gauge"
+        labels: ["sender_id"]
+        description: "Current in-flight message count per sender (0-200)"
+        use_case: "Quota monitoring, alerting at 80% (160 messages)"
+
+      - name: "router_inflight_bytes"
+        type: "gauge"
+        labels: ["sender_id"]
+        description: "Current in-flight bytes per sender (0-1MB)"
+        use_case: "Memory pressure monitoring"
+
+      - name: "router_inflight_limit_rejections_total"
+        type: "counter"
+        labels: ["sender_id", "limit_type"]
+        description: "Total in-flight limit rejections (message_count or byte_limit)"
+        use_case: "Sender backlog monitoring"
+
+    session_limit_metrics:
+      - name: "router_session_rate_total"
+        type: "gauge"
+        labels: ["session_id"]
+        description: "Current session rate (messages/sec, 0-500)"
+        use_case: "Session throttling monitoring"
+
+      - name: "router_session_memory_bytes"
+        type: "gauge"
+        labels: ["session_id"]
+        description: "Current session mailbox memory (0-10MB)"
+        use_case: "Session memory pressure"
+
+      - name: "router_session_limit_rejections_total"
+        type: "counter"
+        labels: ["session_id", "limit_type"]
+        description: "Total session limit rejections (rate or memory)"
+        use_case: "Session quota enforcement"
+
+    routing_table_metrics:
+      - name: "router_routing_table_size"
+        type: "gauge"
+        labels: []
+        description: "Number of registered agents in routing table"
+        use_case: "Agent lifecycle tracking"
+
+      - name: "router_agents_registered_total"
+        type: "counter"
+        labels: ["agent_type"]
+        description: "Total agents registered (lifetime)"
+        use_case: "Agent spawn tracking"
+
+      - name: "router_agents_unregistered_total"
+        type: "counter"
+        labels: ["agent_type"]
+        description: "Total agents unregistered (terminated)"
+        use_case: "Agent termination tracking"
+
+      - name: "router_routing_table_lookups_total"
+        type: "counter"
+        labels: ["result"]
+        description: "Total routing table lookups (HIT or MISS)"
+        use_case: "Lookup hit rate (should be ~100%)"
+
+      - name: "router_routing_table_lookup_latency_ms"
+        type: "histogram"
+        labels: []
+        buckets: [0.001, 0.01, 0.05, 0.1, 0.5]
+        description: "Routing table lookup latency"
+        use_case: "Performance monitoring (target <0.05ms P95)"
+
+    mailbox_metrics:
+      - name: "mailbox_messages_enqueued_total"
+        type: "counter"
+        labels: ["component_id", "priority"]
+        description: "Total messages enqueued by priority"
+        use_case: "Priority distribution analysis"
+
+      - name: "mailbox_messages_dequeued_total"
+        type: "counter"
+        labels: ["component_id", "priority"]
+        description: "Total messages dequeued by priority"
+        use_case: "Processing rate tracking"
+
+      - name: "mailbox_messages_dropped_total"
+        type: "counter"
+        labels: ["component_id", "priority", "reason"]
+        description: "Total messages dropped (OVERFLOW or BACKPRESSURE)"
+        use_case: "Backpressure effectiveness"
+
+      - name: "mailbox_queue_depth"
+        type: "gauge"
+        labels: ["component_id", "priority"]
+        description: "Messages in queue per priority level"
+        use_case: "Backpressure monitoring, alerting at HIGH watermark"
+
+      - name: "mailbox_enqueue_latency_ms"
+        type: "histogram"
+        labels: ["priority"]
+        buckets: [0.001, 0.01, 0.05, 0.1, 0.5]
+        description: "Enqueue latency by priority"
+        use_case: "Priority queue performance"
+
+      - name: "mailbox_dequeue_latency_ms"
+        type: "histogram"
+        labels: ["dequeue_mode"]
+        buckets: [0.001, 0.01, 0.05, 0.1, 0.5]
+        description: "Dequeue latency (strict_priority vs wfq)"
+        use_case: "WFQ performance validation"
+
+  opentelemetry_tracing:
+    description: "Distributed tracing for message routing flow"
+
+    trace_structure:
+      root_span:
+        name: "router.route_message"
+        attributes:
+          - "message_id"
+          - "sender_id"
+          - "receiver_id"
+          - "message_type"
+          - "priority"
+          - "session_id"
+
+      child_spans:
+        - span: "router.admission_control"
+          parent: "router.route_message"
+          attributes:
+            - "admission_result (PASS or FAIL)"
+            - "rejection_reason (if FAIL)"
+
+        - span: "router.admission.capability_verification"
+          parent: "router.admission_control"
+          attributes:
+            - "lease_id"
+            - "signature_valid (bool)"
+            - "lease_expired (bool)"
+
+        - span: "router.admission.role_attestation"
+          parent: "router.admission_control"
+          attributes:
+            - "sender_roles"
+            - "message_type"
+            - "role_allowed (bool)"
+
+        - span: "router.admission.rate_limit"
+          parent: "router.admission_control"
+          attributes:
+            - "tokens_available"
+            - "rate_limited (bool)"
+
+        - span: "router.admission.inflight_limit"
+          parent: "router.admission_control"
+          attributes:
+            - "inflight_count"
+            - "inflight_bytes"
+            - "limit_exceeded (bool)"
+
+        - span: "router.admission.session_limit"
+          parent: "router.admission_control"
+          attributes:
+            - "session_rate"
+            - "session_memory"
+            - "limit_exceeded (bool)"
+
+        - span: "router.routing_table_lookup"
+          parent: "router.route_message"
+          attributes:
+            - "receiver_id"
+            - "lookup_result (HIT or MISS)"
+
+        - span: "router.mailbox_enqueue"
+          parent: "router.route_message"
+          attributes:
+            - "component_id"
+            - "priority"
+            - "queue_depth"
+            - "enqueue_result (SUCCESS or FULL)"
+
+    trace_sampling:
+      strategy: "Tail-based sampling"
+      sample_rate:
+        success: "1% (low noise)"
+        rejection: "100% (all failures traced)"
+        slow_path: "100% (latency >1ms traced)"
+      rationale: "Trace failures and anomalies, sample normal traffic"
+
+    trace_export:
+      exporter: "OpenTelemetry Collector"
+      endpoint: "localhost:4317 (gRPC)"
+      backend: "Jaeger (UI), Tempo (storage)"
+      retention: "7 days"
+
+  structured_logging:
+    description: "JSON-structured logs for admission events"
+
+    log_events:
+      - event: "router.message_routed"
+        level: "DEBUG"
+        fields:
+          - "message_id"
+          - "sender_id"
+          - "receiver_id"
+          - "message_type"
+          - "priority"
+          - "routing_latency_ms"
+        frequency: "Every message (rate-limited to 100 logs/sec)"
+
+      - event: "router.admission_rejected"
+        level: "WARNING"
+        fields:
+          - "message_id"
+          - "sender_id"
+          - "receiver_id"
+          - "rejection_reason"
+          - "rejection_layer (1-5)"
+          - "retryable (bool)"
+        frequency: "Every rejection (no rate limit)"
+
+      - event: "router.capability_signature_invalid"
+        level: "ERROR"
+        fields:
+          - "sender_id"
+          - "lease_id"
+          - "expected_signature"
+          - "received_signature"
+          - "timestamp_ms"
+        frequency: "Every signature failure"
+        use_case: "Security audit (potential attack)"
+
+      - event: "router.rate_limit_hit"
+        level: "WARNING"
+        fields:
+          - "sender_id"
+          - "tokens_remaining"
+          - "burst_depleted (bool)"
+          - "timestamp_ms"
+        frequency: "Every rate limit rejection"
+
+      - event: "router.inflight_limit_exceeded"
+        level: "WARNING"
+        fields:
+          - "sender_id"
+          - "inflight_messages"
+          - "inflight_bytes"
+          - "limit_type (message_count or byte_limit)"
+        frequency: "Every in-flight limit rejection"
+
+      - event: "router.session_limit_exceeded"
+        level: "WARNING"
+        fields:
+          - "session_id"
+          - "session_rate"
+          - "session_memory"
+          - "limit_type (rate or memory)"
+        frequency: "Every session limit rejection"
+
+      - event: "router.agent_registered"
+        level: "INFO"
+        fields:
+          - "agent_id"
+          - "agent_type"
+          - "agent_version"
+          - "location (LOCAL or REMOTE)"
+        frequency: "Every agent registration"
+
+      - event: "router.agent_unregistered"
+        level: "INFO"
+        fields:
+          - "agent_id"
+          - "uptime_ms"
+        frequency: "Every agent unregistration"
+
+      - event: "router.mailbox_full"
+        level: "WARNING"
+        fields:
+          - "component_id"
+          - "queue_depth"
+          - "priority"
+          - "dropped_message_id (if DROP_OLDEST)"
+        frequency: "Every mailbox full event"
+
+    log_format:
+      format: "JSON"
+      timestamp: "ISO8601 (2025-10-14T12:00:00.000Z)"
+      level: "DEBUG | INFO | WARNING | ERROR"
+      logger: "router.<component>"
+      trace_id: "OpenTelemetry trace_id (for correlation)"
+      span_id: "OpenTelemetry span_id"
+
+      example:
+        timestamp: "2025-10-14T12:00:00.123Z"
+        level: "WARNING"
+        logger: "router.admission_control"
+        event: "router.admission_rejected"
+        message_id: "msg_12345"
+        sender_id: "agent_planner_123"
+        receiver_id: "agent_orchestrator"
+        rejection_reason: "SENDER_RATE_LIMIT"
+        rejection_layer: 3
+        retryable: true
+        trace_id: "a3f2b1c9d4e5f6a7"
+        span_id: "b8c9d0e1f2a3"
+
+  dashboards:
+    description: "Grafana dashboards for router observability"
+
+    dashboard_1_router_overview:
+      name: "K1 Router Overview"
+      panels:
+        - panel: "Message Throughput"
+          metric: "rate(router_messages_routed_total[5m])"
+          chart_type: "Time series"
+
+        - panel: "Admission Rejection Rate"
+          metric: "rate(router_admissions_rejected_total[5m])"
+          chart_type: "Time series"
+          breakdown: "By rejection_reason"
+
+        - panel: "Routing Latency P50/P95/P99"
+          metric: "histogram_quantile(0.95, router_routing_latency_ms)"
+          chart_type: "Time series"
+
+        - panel: "Routing Table Size"
+          metric: "router_routing_table_size"
+          chart_type: "Gauge"
+
+        - panel: "Top Senders (by message count)"
+          metric: "topk(10, rate(router_messages_routed_total[5m]))"
+          chart_type: "Bar chart"
+
+    dashboard_2_admission_control:
+      name: "K1 Admission Control"
+      panels:
+        - panel: "Admission Rejections by Layer"
+          metric: "router_admissions_rejected_total"
+          chart_type: "Stacked bar"
+          breakdown: "By rejection_layer (1-5)"
+
+        - panel: "Capability Signature Failures"
+          metric: "rate(router_capability_signature_failures_total[5m])"
+          chart_type: "Time series"
+          alert: "Alert if rate >10/min (potential attack)"
+
+        - panel: "Rate Limit Rejections by Sender"
+          metric: "router_rate_limit_rejections_total"
+          chart_type: "Heatmap"
+
+        - panel: "Token Bucket Levels"
+          metric: "router_token_bucket_tokens"
+          chart_type: "Time series (all senders)"
+
+    dashboard_3_mailbox_health:
+      name: "K1 Mailbox Health"
+      panels:
+        - panel: "Mailbox Queue Depth (all priorities)"
+          metric: "mailbox_queue_depth"
+          chart_type: "Time series"
+          breakdown: "By priority"
+
+        - panel: "Messages Dropped (overflow)"
+          metric: "rate(mailbox_messages_dropped_total[5m])"
+          chart_type: "Time series"
+          alert: "Alert if rate >1 drop/sec"
+
+        - panel: "Enqueue Latency P95 by Priority"
+          metric: "histogram_quantile(0.95, mailbox_enqueue_latency_ms)"
+          chart_type: "Time series"
+          target: "<0.02ms P95"
+
+        - panel: "Priority Distribution"
+          metric: "mailbox_messages_enqueued_total"
+          chart_type: "Pie chart"
+          breakdown: "By priority (URGENT, HIGH, NORMAL, LOW)"
+
+  alerts:
+    description: "Prometheus alerting rules"
+
+    alert_rules:
+      - alert: "RouterAdmissionRejectionRateHigh"
+        expr: "rate(router_admissions_rejected_total[5m]) > 10"
+        duration: "5m"
+        severity: "warning"
+        description: "Admission rejection rate >10/sec (DoS attack or misconfiguration)"
+        action: "Check rejection_reason distribution, investigate top senders"
+
+      - alert: "RouterCapabilitySignatureFailures"
+        expr: "rate(router_capability_signature_failures_total[5m]) > 1"
+        duration: "1m"
+        severity: "critical"
+        description: "HMAC signature failures (potential security breach)"
+        action: "Investigate sender, check for compromised keys"
+
+      - alert: "RouterRateLimitRejectionRateHigh"
+        expr: "rate(router_rate_limit_rejections_total[5m]) > 50"
+        duration: "5m"
+        severity: "warning"
+        description: "Rate limit rejections >50/sec (sender flooding)"
+        action: "Identify top senders, consider blacklist"
+
+      - alert: "RouterMailboxFullRate"
+        expr: "rate(mailbox_messages_dropped_total[5m]) > 1"
+        duration: "1m"
+        severity: "warning"
+        description: "Mailbox overflow (backpressure not working)"
+        action: "Check receiver processing latency, increase mailbox capacity"
+
+      - alert: "RouterRoutingLatencyP95High"
+        expr: "histogram_quantile(0.95, router_routing_latency_ms) > 1"
+        duration: "5m"
+        severity: "warning"
+        description: "Routing latency P95 >1ms (target <0.1ms)"
+        action: "Profile router, check for slow admission checks"
+
+      - alert: "RouterSessionQuotaExceeded"
+        expr: "rate(router_session_limit_rejections_total[5m]) > 10"
+        duration: "5m"
+        severity: "warning"
+        description: "Session quota rejections >10/sec (session overloaded)"
+        action: "Check session memory usage, investigate message backlog"
+
+  performance_budgets:
+    metric_collection_overhead:
+      counter_increment: "<10ns (atomic add)"
+      gauge_update: "<10ns (atomic store)"
+      histogram_record: "<100ns (bucket lookup + atomic add)"
+      total_overhead: "<0.01ms per message (<10% of routing budget)"
+
+    trace_overhead:
+      span_creation: "<50ns"
+      attribute_add: "<10ns per attribute"
+      span_end: "<50ns"
+      total_overhead: "<1μs per message (sampled)"
+
+    log_overhead:
+      structured_log: "<100μs (JSON serialization + write)"
+      rate_limiting: "100 logs/sec for DEBUG (prevents flood)"
+      total_overhead: "<0.1ms per rejection (acceptable)"
+
+  related_contracts:
+    - contract: "admission_control.yml"
+      relation: "Observability metrics for all 5 admission layers"
+
+    - contract: "routing_table_schema.yml"
+      relation: "Routing table size and lookup metrics"
+
+    - contract: "priority_routing.yml"
+      relation: "Mailbox queue depth and priority distribution metrics"
+
+  related_adrs:
+    - adr: "ADR-0002c"
+      section: "Router Observability"
+      lines: "650-713 (metrics, tracing, logging)"
+
+    - adr: "ADR-0010"
+      section: "Observability"
+      lines: "General observability standards (Prometheus, OpenTelemetry)"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.2.3"
+      author: "Infrastructure Lead"

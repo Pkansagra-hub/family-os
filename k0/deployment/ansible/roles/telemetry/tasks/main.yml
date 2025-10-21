@@ -1,0 +1,74 @@
+---
+- name: "familyos.telemetry | ensure bundle manifest exists"
+  ansible.builtin.stat:
+    path: "{{ familyos_bundle_manifest }}"
+  register: familyos_telemetry_manifest_stat
+
+- name: "familyos.telemetry | fail when manifest missing"
+  ansible.builtin.fail:
+    msg: >-
+      FamilyOS bundle manifest '{{ familyos_bundle_manifest }}' could not be located.
+      Generate Pulumi artifacts with telemetry outputs before running this role.
+  when: not familyos_telemetry_manifest_stat.stat.exists
+
+- name: "familyos.telemetry | load bundle manifest"
+  ansible.builtin.slurp:
+    src: "{{ familyos_bundle_manifest }}"
+  register: familyos_telemetry_manifest_raw
+
+- name: "familyos.telemetry | parse manifest JSON"
+  ansible.builtin.set_fact:
+    familyos_telemetry_manifest: "{{ familyos_telemetry_manifest_raw.content | b64decode | from_json }}"
+
+- name: "familyos.telemetry | collect telemetry artifacts"
+  ansible.builtin.set_fact:
+    familyos_telemetry_components: >-
+      {{ familyos_telemetry_manifest.get('components', [])
+         | selectattr('component', 'equalto', 'telemetry')
+         | selectattr('path', 'defined')
+         | list }}
+    familyos_telemetry_outputs: >-
+      {{ familyos_telemetry_manifest.get('extra', {}).get('outputs', {}).get('telemetry', {}) }}
+
+- name: "familyos.telemetry | ensure destination directory"
+  ansible.builtin.file:
+    path: "{{ familyos_telemetry_destination_root }}"
+    state: directory
+    mode: "0755"
+
+- name: "familyos.telemetry | stage telemetry artifacts"
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ familyos_telemetry_destination_root }}/{{ item.path | basename }}"
+    mode: "0644"
+  loop: "{{ familyos_telemetry_components }}"
+
+- name: "familyos.telemetry | summarise telemetry outputs"
+  ansible.builtin.copy:
+    dest: "{{ familyos_telemetry_destination_root }}/telemetry-outputs.json"
+    mode: "0644"
+    content: "{{ familyos_telemetry_outputs | to_nice_json }}"
+
+- name: "familyos.telemetry | verify security telemetry snapshots"
+  ansible.builtin.command:
+    argv:
+      - "{{ familyos_python }}"
+      - -m
+      - k0.automation.verify_security_telemetry
+      - --directory
+      - "{{ familyos_telemetry_snapshot_directory }}"
+    chdir: "{{ familyos_repo_root }}"
+  environment:
+    PYTHONPATH: "{{ familyos_repo_root }}"
+  register: familyos_telemetry_verify
+  changed_when: false
+  when: not familyos_telemetry_skip_verification | bool
+
+- name: "familyos.telemetry | record verification output"
+  ansible.builtin.copy:
+    dest: "{{ familyos_telemetry_destination_root }}/verification.log"
+    content: "{{ familyos_telemetry_verify.stdout }}"
+    mode: "0644"
+  when:
+    - not familyos_telemetry_skip_verification | bool
+    - familyos_telemetry_verify is defined

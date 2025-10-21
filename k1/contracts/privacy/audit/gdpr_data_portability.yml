@@ -1,0 +1,60 @@
+# Contract: GDPR Data Portability Implementation
+# Source: ADR-0035d | Status: Production-Ready | Last Updated: 2025-10-14
+
+contract:
+  id: "C_PRIVACY_GDPR_PORTABILITY_026"
+  name: "GDPR Data Portability Implementation"
+  version: "1.0.0"
+
+  gdpr_article_20: "Data portability (user can export data in structured format)"
+
+  portability_request_process:
+    user_request:
+      trigger: "User requests data port to third party"
+      action: "INSERT into gdpr_requests (type: portability)"
+      status: "pending"
+
+    fulfillment:
+      generate_export: "JSON/CSV with all PII"
+      include_metadata: "Detection timestamps, methods, confidence"
+      format_options: "JSON (preferred), CSV, XML"
+      machine_readable: true
+
+    delivery:
+      method: "Download link + email backup"
+      expiration: "24 hours (download link)"
+      encryption: "End-to-end encrypted"
+
+    third_party_transfer:
+      trigger: "User provides third-party email"
+      action: "Send encrypted export to third party"
+      user_consent: "Required (email confirmation)"
+
+  export_format_json:
+    structure:
+      metadata:
+        user_id: "..."
+        export_date: "2025-10-14T10:00:00Z"
+        format_version: "1.0"
+      pii_records:
+        - type: "ssn"
+          value: "123-45-6789"
+          detected_at: "2025-10-01T08:30:00Z"
+          method: "regex"
+        - type: "email"
+          value: "user@example.com"
+          detected_at: "2025-10-05T14:22:00Z"
+          method: "bert_ner"
+
+  compliance:
+    30_day_response_requirement: true
+    portable_format_required: true
+    no_technical_barriers: true
+    fee_not_required: true
+
+  performance:
+    export_generation_sec: 10
+    export_size_mb: "1-10 MB (typical)"
+
+  architecture:
+    adr_references: ["ADR-0035d: GDPR Compliance"]

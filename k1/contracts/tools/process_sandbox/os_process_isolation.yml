@@ -1,0 +1,395 @@
+# Process Sandbox: OS Process Isolation
+# Purpose: Explain how K1 isolates tool execution via OS processes
+# Research: Process model, PID namespaces, subprocess isolation
+# Part of ADR-0033c (Process Sandbox Implementation)
+
+---
+contract_id: "TOOL_EXEC_PROCESS_OS_PROCESS_ISOLATION"
+contract_type: "sandbox_architecture"
+applies_to: ["k1.orchestrator.tool_runner", "k1.process_sandbox"]
+
+# ============================================================================
+# PROCESS ISOLATION PRINCIPLE
+# ============================================================================
+
+principle: |
+  Each untrusted tool runs in separate OS process (separate PID).
+
+  Why separate processes:
+  - PID namespace isolation (process cannot see other processes)
+  - Memory protection (memory corruption doesn't affect others)
+  - Resource limits (cgroups enforce per-process quotas)
+  - Privilege separation (each process has limited capabilities)
+
+  Architecture:
+  K1 Host (PID 1)
+    ├─ K1 Orchestrator (PID 100)
+    ├─ Tool A Process (PID 200) → Resource limits via cgroups
+    ├─ Tool B Process (PID 201) → Resource limits via cgroups
+    ├─ Tool C Process (PID 202) → Resource limits via cgroups
+    └─ ... (up to MAX_TOOLS_PER_SESSION = 3)
+
+  Each tool process:
+  - Separate PID (cannot interfere)
+  - Separate memory (protected from corruption)
+  - Separate file descriptors (limited access)
+  - Separate resources (CPU, memory, I/O quota)
+
+# ============================================================================
+# PROCESS LIFECYCLE: Spawn, Execute, Terminate
+# ============================================================================
+
+process_lifecycle:
+  spawn_phase: |
+    K1 creates new process for tool execution:
+
+    Python subprocess API:
+    import subprocess
+
+    process = subprocess.Popen(
+        args=["/usr/bin/python3", "/k1/tools/my_tool.py"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        preexec_fn=setup_sandbox,  # Apply seccomp, chroot, etc.
+    )
+
+    Process creation overhead: <10ms
+    - Fork system call: 5-10ms (copy parent process state)
+    - Exec system call: 2-5ms (load new binary)
+    - Total spawn time: 10-20ms
+
+    Process ID assigned: PID 202 (example)
+    Process state: RUNNING
+
+  execution_phase: |
+    K1 communicates with tool via stdin/stdout pipes:
+
+    MCP Protocol over stdio:
+    1. K1 writes MCP request JSON to process stdin
+    2. Process reads from stdin (blocking read)
+    3. Process executes tool logic
+    4. Process writes MCP response JSON to stdout
+    5. K1 reads from stdout (blocking read)
+    6. Process waits for next request (or terminates)
+
+    Example:
+    K1 writes: {"jsonrpc":"2.0","method":"tools/call","id":1,...}
+    Tool reads, executes, writes response
+    K1 reads: {"jsonrpc":"2.0","result":{...},"id":1}
+
+  termination_phase: |
+    K1 terminates process when:
+    1. Tool execution completes (normal exit)
+    2. Timeout exceeded (forced termination)
+    3. Resource limit exceeded (cgroups OOM kill)
+    4. Memory limit exceeded (SIGSEGV or killed by kernel)
+    5. Process exceeds CPU quota (killed by cgroups)
+
+    Termination sequence:
+    1. Send SIGTERM to process (graceful shutdown, 5-second window)
+    2. If not exited: Send SIGKILL (force kill)
+    3. Reap child process (collect exit status)
+    4. Clean up resources (close pipes, free memory)
+    5. Destroy cgroups (release quota reservations)
+
+    Total cleanup time: <100ms
+
+# ============================================================================
+# PID ISOLATION: Separate Process Namespace
+# ============================================================================
+
+pid_isolation:
+  separate_pid_namespace: |
+    Each tool process has isolated PID:
+
+    Process A (PID 200):
+    - Can see itself (PID 200)
+    - Can see parent K1 (PID 100)
+    - Cannot see Process B (PID 201)
+    - Cannot see Process C (PID 202)
+
+    Example (inside tool process):
+    $ ps aux
+    UID PID PPID COMMAND
+    root 100 1 /k1/orchestrator
+    root 200 100 /k1/tools/my_tool.py
+
+    (Only parent and self visible)
+
+  process_listing_isolation: |
+    Tool cannot discover sibling processes:
+
+    Untrusted tool tries: ps aux
+    Result: Only sees itself and parent
+    Attempt to discover siblings: BLOCKED (no visibility)
+
+    Benefit: Tools cannot coordinate attacks
+    Benefit: Process data remains private
+
+# ============================================================================
+# MEMORY PROTECTION: Separate Address Spaces
+# ============================================================================
+
+memory_isolation:
+  separate_memory_space: |
+    Each process has separate virtual address space:
+
+    Process A memory:
+    - 0x00000000 - 0x7fffffff: User space (4GB on 32-bit)
+    - 0x80000000 - 0xffffffff: Kernel space (protected)
+
+    Process B memory:
+    - 0x00000000 - 0x7fffffff: User space (different physical memory)
+    - 0x80000000 - 0xffffffff: Kernel space (protected)
+
+    Example attack (buffer overflow in Process A):
+    - Write 1MB of data at address 0x7ffffeff
+    - Corrupt memory up to 0x7fffffff
+    - Cannot affect Process B (different address space)
+
+  memory_corruption_containment: |
+    Memory exploit in tool stays within tool:
+
+    1. Tool has buffer overflow vulnerability
+    2. Attacker overwrites function pointer
+    3. ROP gadget execution possible
+    4. But can only access Process A memory
+    5. Cannot corrupt Process B or K1 memory
+
+    Result: Exploit contained to single process
+
+# ============================================================================
+# RESOURCE ISOLATION: cgroups Integration
+# ============================================================================
+
+resource_isolation:
+  cpu_limits: |
+    Each process has limited CPU quota:
+
+    Via cgroups (covered in detail in separate contract):
+    - Total K1 CPU quota: 4 cores (400% on single machine)
+    - Per-tool quota: 1 core (100%)
+    - Example: Tool A gets 100% of 1 core
+    - If tool uses 100% CPU: Kernel throttles at cgroup limit
+
+    Result: Tool cannot monopolize CPU
+
+  memory_limits: |
+    Each process has limited memory quota:
+
+    Via cgroups (covered in detail in separate contract):
+    - Total K1 memory quota: 8GB
+    - Per-tool quota: 512MB (worst-case)
+    - Example: Tool A allocated 512MB max
+    - If tool tries to allocate 600MB: Out-of-memory kill
+
+    Result: Tool cannot exhaust system memory
+
+  io_limits: |
+    Each process has limited I/O rate:
+
+    Via cgroups:
+    - Disk read rate: 100MB/sec per tool
+    - Disk write rate: 50MB/sec per tool
+    - I/O operations per second: 1000 IOPS per tool
+
+    Result: Tool cannot flood disk I/O
+
+# ============================================================================
+# FILE DESCRIPTOR ISOLATION: Limited Access
+# ============================================================================
+
+file_descriptor_isolation:
+  inherited_file_descriptors: |
+    Tool process inherits only safe FDs from parent:
+
+    FDs inherited:
+    - stdin (0): Connected to K1 for MCP protocol
+    - stdout (1): Connected to K1 for MCP responses
+    - stderr (2): Connected to K1 for error logging
+
+    FDs NOT inherited:
+    - FDs to sensitive files (/etc/shadow, /etc/passwd)
+    - FDs to other tool processes
+    - FDs to K1 internal sockets
+
+  fd_limit: |
+    Process can open limited file descriptors:
+
+    Default soft limit: 1024 FDs
+    K1 enforces: 256 FDs per tool (stricter)
+
+    If tool tries to open 300 files: 257th open() fails (EMFILE)
+
+    Result: Tool cannot exhaust FD pool
+
+# ============================================================================
+# CAPABILITY ISOLATION: Limited Permissions
+# ============================================================================
+
+capability_isolation:
+  linux_capabilities: |
+    Process runs with minimal capabilities:
+
+    Dropped capabilities (untrusted tools cannot):
+    - CAP_SYS_ADMIN (cannot mount filesystems)
+    - CAP_NET_ADMIN (cannot modify network)
+    - CAP_SYS_PTRACE (cannot debug other processes)
+    - CAP_SYS_MODULE (cannot load kernel modules)
+    - CAP_SETUID (cannot change UID)
+    - CAP_SETGID (cannot change GID)
+
+    Retained capabilities (tools can):
+    - CAP_CHOWN (limited, for tool output)
+    - CAP_DAC_OVERRIDE (within sandbox)
+
+  privilege_drop: |
+    Tools run as unprivileged user:
+
+    K1 orchestrator: UID 0 (root)
+    Tool process: UID 1000 (unprivileged user)
+
+    Result: Tool cannot access root-owned files
+    Result: Tool cannot gain root privilege
+
+# ============================================================================
+# OVERHEAD: Process Spawn Cost
+# ============================================================================
+
+overhead:
+  spawn_latency: |
+    Creating new process has latency cost:
+
+    Breakdown:
+    - fork() system call: 5-10ms
+    - exec() system call: 2-5ms
+    - Load binary from disk: 5-10ms (1-5MB binary)
+    - Dynamic linker execution: 5-10ms (link dependencies)
+    - Total: 20-35ms per process
+
+    Optimization: Pre-warm pool of processes
+    - K1 pre-forks N processes at startup
+    - Reuse existing processes (no spawn cost)
+    - Downside: Memory overhead (N processes * 20MB each)
+
+  memory_overhead: |
+    Each process consumes minimum memory:
+
+    Per-process baseline (empty process):
+    - Binary (code, constants): 5-10MB
+    - Heap + stack: 2-5MB
+    - Memory mapping overhead: 1-2MB
+    - Total minimum: 8-17MB per process
+
+    Scaling: 3 processes = 24-51MB overhead
+    (vs WASM: 10-20MB overhead, similar)
+
+  file_descriptor_overhead: |
+    Each process has FD overhead:
+
+    Per-process FDs:
+    - stdin (1 FD): pipe to K1
+    - stdout (1 FD): pipe to K1
+    - stderr (1 FD): pipe to K1
+    - Total: 3 FDs per process
+
+    K1 total FD usage: 3 FDs × MAX_TOOLS = 9 FDs
+    (minimal, not a constraint)
+
+# ============================================================================
+# COMPARISON: Process vs WASM
+# ============================================================================
+
+comparison:
+  process_sandbox_pros: |
+    ✅ Native execution speed (no 10x penalty)
+    ✅ Full tool flexibility (any compiled code)
+    ✅ Proven isolation model (decades of use)
+    ✅ Standard debugging tools (gdb, strace)
+    ✅ Simple deployment (normal binary)
+
+  process_sandbox_cons: |
+    ❌ OS-level sandboxing required (seccomp, chroot, cgroups)
+    ❌ Higher per-process memory (~20MB base)
+    ❌ Complex setup (iptables, chroot, seccomp rules)
+    ❌ Less portable (Linux-specific features)
+    ❌ Requires root privilege to set up
+
+  wasm_sandbox_pros: |
+    ✅ 100% safe isolation (no OS-level defenses needed)
+    ✅ Lower per-instance memory (~10MB base)
+    ✅ Cross-platform (Linux, macOS, Windows)
+    ✅ Simple setup (just run wasmtime)
+    ✅ No root privilege needed
+
+  wasm_sandbox_cons: |
+    ❌ 10x performance penalty
+    ❌ Must recompile code to WASM
+    ❌ Limited tool flexibility
+    ❌ Harder to debug (no standard tools)
+    ❌ Smaller ecosystem
+
+# ============================================================================
+# DEPLOYMENT: When to Use Process vs WASM
+# ============================================================================
+
+deployment_strategy:
+  trusted_tools_use_process: |
+    GREEN/AMBER tools: Use process sandbox
+    - Reason: Trust justifies performance cost
+    - Overhead: OS-level sandboxing +5-10%
+    - Isolation: Very strong (process + seccomp + chroot)
+    - Performance: Native speed (no penalty)
+
+    Tools affected: 85% of catalog (645 tools)
+
+  untrusted_io_bound_use_wasm: |
+    RED tools (I/O bound): Use WASM sandbox
+    - Reason: WASM overhead minimal on I/O (I/O dominates)
+    - Overhead: ~10% (much less than 10x on compute)
+    - Isolation: Maximum (100% zero-syscall)
+    - Performance: Acceptable for I/O workloads
+
+    Tools affected: 8% of untrusted (6 tools)
+    Examples: API wrappers, database queries
+
+  untrusted_compute_use_process: |
+    RED tools (compute bound): Use process sandbox
+    - Reason: 10x WASM penalty too high
+    - Overhead: OS-level sandboxing +5-10% (much less than 10x)
+    - Isolation: Strong (process + seccomp + chroot)
+    - Performance: Near-native speed
+
+    Tools affected: 2% of untrusted (2 tools)
+    Examples: Image processor, large computation
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: Each tool MUST run in separate OS process
+    ENFORCEMENT: K1 tool_runner spawns Popen() for each invocation
+    RATIONALE: Ensure PID isolation and memory protection
+
+  rule_2: |
+    RULE: Process spawn MUST include sandbox setup (seccomp, chroot, cgroups)
+    ENFORCEMENT: K1 calls preexec_fn in Popen() before exec
+    RATIONALE: Apply all 3 layers of egress control
+
+  rule_3: |
+    RULE: Tool process MUST NOT inherit unsafe file descriptors
+    ENFORCEMENT: K1 closes inherited FDs, opens only stdin/stdout/stderr
+    RATIONALE: Prevent access to sensitive host resources
+
+  rule_4: |
+    RULE: Process MUST timeout if execution exceeds budget
+    ENFORCEMENT: K1 enforces timeout + SIGKILL if needed
+    RATIONALE: Prevent runaway processes
+
+  rule_5: |
+    RULE: Tool process MUST NOT exceed resource limits (CPU/memory/I/O)
+    ENFORCEMENT: cgroups enforces limits at kernel level
+    RATIONALE: Prevent resource exhaustion of host

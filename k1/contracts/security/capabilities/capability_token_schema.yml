@@ -1,0 +1,559 @@
+#
+# Capability Token Schema
+# EPIC 2.5.1: Capability Token Design Contracts
+# ADR-0010: Capability-Based Security with Unforgeable Tokens
+# ADR-0010a: Capability Token Design & Lifecycle
+#
+# Purpose: Define JWT-based capability token structure for K1 security model
+# Research: Dennis & Van Horn (1966) - Capability-Based Security
+# Performance: Token size 256-512 bytes, sig verification <0.3ms
+#
+
+metadata:
+  title: "Capability Token Schema"
+  version: "1.0"
+  status: "accepted"
+  updated: "2025-10-12"
+  adr_references:
+    - "ADR-0010: Capability-Based Security"
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+  principles:
+    - "Unforgeable tokens (HMAC-SHA256 signature)"
+    - "Non-transferable (bound to agent_id)"
+    - "Tamper-proof (signature verification)"
+    - "Expirable (time-based and constraint-based)"
+    - "Revocable (immediate via blacklist)"
+
+jwt_format:
+  description: "Capability tokens use JWT format (RFC 7519) with HMAC-SHA256"
+  encoding: "header.payload.signature (compact serialization)"
+  size_bytes: 256-512
+
+header:
+  description: "JWT header specifies algorithm and type"
+  alg: "HS256"
+  typ: "JWT"
+
+payload_claims:
+  description: "JWT payload with capability claims"
+
+  core_identity:
+    cap_id:
+      type: "string (ULID)"
+      description: "Unique capability ID"
+      format: "cap_<resource_type>_<resource_id>_<timestamp>_<seq>"
+      example: "cap_tool_book_hotel_20251012_001"
+      immutable: true
+
+    agent_id:
+      type: "string"
+      description: "Owner agent (non-transferable, cannot be transferred to another agent)"
+      format: "agent_<role>_<id>"
+      example: "agent_planning_001"
+      immutable: true
+
+    resource_type:
+      type: "string"
+      enum: ["TOOL", "MEMORY", "LLM", "K0_WAL", "MCP"]
+      description: "Type of resource"
+      example: "TOOL"
+      immutable: true
+
+    resource_id:
+      type: "string"
+      description: "Specific resource or '*' for wildcard"
+      example: "book_hotel"
+      wildcard: "*"
+      immutable: true
+
+    permissions:
+      type: "array of string"
+      enum: ["execute", "read", "write", "delete", "delegate", "attenuate", "admin"]
+      description: "List of allowed operations"
+      example: ["execute", "read"]
+      immutable: true
+
+  timing:
+    issued_at:
+      type: "ISO 8601 timestamp"
+      description: "RFC 7519 'iat' claim - when token was issued"
+      example: "2025-10-12T14:00:00Z"
+      immutable: true
+
+    issued_by:
+      type: "string"
+      enum: ["supervisor", "system", "user", "parent_agent"]
+      description: "Who issued the capability"
+      example: "supervisor"
+      immutable: true
+
+    expires_at:
+      type: "ISO 8601 timestamp"
+      description: "RFC 7519 'exp' claim - when token expires"
+      example: "2025-10-12T15:00:00Z"
+      immutable: true
+
+  constraints:
+    description: "Usage constraints (cannot be loosened, only tightened)"
+    type: "object"
+    mutable: false
+
+    max_invocations:
+      type: "integer"
+      description: "Max uses before auto-revoked"
+      example: 10
+      tracking: "Redis INCR on each use"
+
+    max_invocations_per_minute:
+      type: "integer"
+      description: "Rate limit (invocations per 60s window)"
+      example: 5
+      tracking: "Redis sliding window"
+
+    budget_usd:
+      type: "float"
+      description: "Cost budget in USD (LLM/payment tools)"
+      example: 1.0
+      tracking: "Redis INCRBYFLOAT"
+
+    privacy_band:
+      type: "string"
+      enum: ["GREEN", "AMBER", "RED", "BLACK"]
+      description: "Privacy classification of accessible data"
+      example: "AMBER"
+
+    requires_approval:
+      type: "boolean"
+      default: false
+      description: "User must approve operations"
+      example: true
+
+    allowed_params:
+      type: "object"
+      description: "If specified, only these parameters allowed"
+      example: {"region": "us-east-1"}
+
+    forbidden_params:
+      type: "array of string"
+      description: "Parameters that cannot be used"
+      example: ["admin_mode", "force_delete"]
+
+    delegation_max_depth:
+      type: "integer"
+      default: 3
+      description: "Max times this capability can be delegated"
+      example: 2
+
+  session_and_delegation:
+    session_id:
+      type: "string"
+      optional: true
+      description: "Session binding (revoked on session end)"
+      example: "session_abc"
+
+    delegated_from:
+      type: "string"
+      optional: true
+      description: "Parent capability ID (None if issued)"
+      example: "cap_parent_001"
+
+    delegation_depth:
+      type: "integer"
+      default: 0
+      description: "Delegation level (0=issued, 1=delegated once)"
+      example: 1
+
+  authentication:
+    signature:
+      type: "string"
+      format: "sha256:<hex>"
+      description: "HMAC-SHA256 signature (unforgeable)"
+      example: "sha256:abcdef123456789..."
+      generation: "HMAC-SHA256(secret_key, header.payload)"
+      immutable: true
+
+resource_types:
+  TOOL:
+    description: "Tool execution capability"
+    example_resources: ["search_web", "book_hotel", "charge_payment"]
+    permitted_permissions: ["execute", "read", "delegate", "attenuate"]
+    typical_constraints:
+      - max_invocations: 10
+      - budget_usd: 100.0
+      - privacy_band: "AMBER"
+      - requires_approval: true
+
+  MEMORY:
+    description: "Memory section access"
+    example_resources: ["beliefs", "scoreboard", "control", "persona", "multimodal", "meta"]
+    permitted_permissions: ["read", "write", "delegate"]
+    typical_constraints:
+      - privacy_band: "GREEN|AMBER|RED"
+      - requires_approval: true
+
+  LLM:
+    description: "LLM inference capability"
+    example_resources: ["gemma-2b", "gpt-4o-mini", "gpt-4o"]
+    permitted_permissions: ["execute", "read", "delegate"]
+    typical_constraints:
+      - max_invocations: 100
+      - budget_usd: 1.0
+      - max_invocations_per_minute: 5
+
+  K0_WAL:
+    description: "K0 WAL write access"
+    example_resources: ["write", "read"]
+    permitted_permissions: ["read", "write"]
+    typical_constraints: []
+
+  MCP:
+    description: "MCP call capability"
+    example_resources: ["call", "tool", "resource"]
+    permitted_permissions: ["execute", "read"]
+    typical_constraints:
+      - max_invocations: 50
+      - budget_usd: 10.0
+
+token_lifecycle:
+  ISSUED:
+    description: "Token created, ready to use"
+    properties:
+      - "Signature valid"
+      - "Not expired"
+      - "Not revoked"
+      - "Constraints not exceeded"
+
+  ACTIVE:
+    description: "Token in use, operations ongoing"
+    properties:
+      - "Constraints being tracked"
+      - "Invocation count increasing"
+      - "Budget being decremented"
+
+  EXHAUSTED:
+    description: "Constraint limit reached (max_invocations or budget)"
+    properties:
+      - "Auto-revoked by system"
+      - "Cannot be used"
+
+  EXPIRED:
+    description: "expires_at timestamp reached"
+    properties:
+      - "Auto-revoked"
+      - "Cleanup after 24h TTL"
+
+  REVOKED:
+    description: "Manually revoked by supervisor"
+    properties:
+      - "Added to revocation blacklist"
+      - "Cleanup after 24h TTL"
+
+security_properties:
+  unforgeable:
+    guarantee: "Only server with secret_key can create valid signature"
+    mechanism: "HMAC-SHA256(secret_key, header.payload)"
+    attack_resistance: "2^256 possibilities (infeasible brute force)"
+
+  non_transferable:
+    guarantee: "Token can only be used by agent it was issued to"
+    mechanism: "agent_id claim verified during validation"
+    benefit: "Prevents privilege escalation via token theft"
+
+  tamper_proof:
+    guarantee: "Any modification to claims invalidates signature"
+    mechanism: "Signature computed over all claims"
+    benefit: "Ensures token integrity"
+
+  expirable:
+    guarantee: "Token automatically becomes invalid after expires_at"
+    mechanism: "Time-based expiration + constraint-based auto-revocation"
+    benefit: "Limits blast radius of compromised token"
+
+  revocable:
+    guarantee: "Supervisor can immediately revoke token"
+    mechanism: "Add cap_id to Redis blacklist"
+    speed: "<1ms propagation"
+    benefit: "Handles security incidents quickly"
+
+validation_flow:
+  description: "10-step validation process"
+  steps:
+    1_cache_check:
+      description: "Check in-memory validation cache"
+      performance_ms: 0.05
+
+    2_signature_verify:
+      description: "Verify HMAC-SHA256 signature"
+      performance_ms: 0.3
+
+    3_revocation_check:
+      description: "Check Redis revocation blacklist"
+      performance_ms: 0.1
+
+    4_expiration_check:
+      description: "Check expires_at timestamp"
+      performance_ms: 0.05
+
+    5_agent_ownership:
+      description: "Verify agent_id matches request"
+      performance_ms: 0.05
+
+    6_resource_type_match:
+      description: "Check resource_type matches"
+      performance_ms: 0.05
+
+    7_resource_id_match:
+      description: "Check resource_id matches (allow wildcards)"
+      performance_ms: 0.05
+
+    8_permission_check:
+      description: "Verify permission in token"
+      performance_ms: 0.05
+
+    9_constraints_check:
+      description: "Validate constraints (invocations, budget)"
+      performance_ms: 0.2
+
+    10_cache_result:
+      description: "Cache validation result (TTL=10s)"
+      performance_ms: 0.05
+
+  total_performance:
+    cached_ms: 0.1
+    uncached_ms: 0.5
+    target_p95_ms: 0.3
+    cache_hit_rate_target: 0.80
+
+storage:
+  redis:
+    description: "Live token storage and revocation list"
+    key_format: "cap:{cap_id}"
+    ttl_hours: 24
+
+  k0_wal:
+    description: "Audit trail of all capability events"
+    topic: "CAPABILITY_AUDIT"
+    retention_days: 30
+
+  elasticsearch:
+    description: "Searchable index for audit trail"
+    index: "capability-audit"
+    retention_days: 90
+
+  s3:
+    description: "Long-term compliance archive"
+    retention_years: 7
+    storage_class: "GLACIER"
+
+references:
+  adr_0010: "Capability-Based Security with Unforgeable Tokens"
+  adr_0010a: "Capability Token Design & Lifecycle"
+  dennis_van_horn_1966: "Programming Semantics for Multiprogrammed Computations"
+  rfc_7519: "JSON Web Token (JWT)"
+
+token_claims_reference:
+  core_identity:
+    cap_id:
+      type: "string (ULID)"
+      format: "cap_<resource_type>_<resource_id>_<timestamp>_<sequence>"
+      example: "cap_tool_book_hotel_20251012_001"
+      immutable: true
+      description: "Unique identifier for this capability token"
+
+    agent_id:
+      type: "string"
+      format: "agent_<role>_<id>"
+      example: "agent_planning_001"
+      immutable: true
+      description: "Agent that owns this capability (non-transferable)"
+
+    resource_type:
+      type: "string"
+      enum: ["TOOL", "MEMORY", "LLM", "K0_WAL", "MCP"]
+      example: "TOOL"
+      immutable: true
+      description: "Type of resource (tool, memory section, LLM, K0 WAL, MCP)"
+
+    resource_id:
+      type: "string"
+      example: "book_hotel"
+      wildcard: "*"
+      immutable: true
+      description: "ID of specific resource or wildcard for all resources"
+
+    permissions:
+      type: "array of string"
+      enum: ["execute", "read", "write", "delete", "delegate", "attenuate", "admin"]
+      example: ["execute", "read"]
+      immutable: true
+      description: "List of operations allowed on resource"
+
+  timing:
+    issued_at:
+      type: "ISO 8601 timestamp"
+      format: "YYYY-MM-DDTHH:MM:SSZ"
+      example: "2025-10-12T14:00:00Z"
+      immutable: true
+      description: "RFC 7519 'iat' claim - when token was issued"
+
+    issued_by:
+      type: "string"
+      enum: ["supervisor", "system", "user", "parent_agent"]
+      example: "supervisor"
+      immutable: true
+      description: "Who issued the capability"
+
+    expires_at:
+      type: "ISO 8601 timestamp"
+      format: "YYYY-MM-DDTHH:MM:SSZ"
+      example: "2025-10-12T15:00:00Z"
+      immutable: true
+      description: "RFC 7519 'exp' claim - when token expires"
+
+resource_types_matrix:
+  TOOL:
+    example_resources: ["search_web", "book_hotel", "charge_payment"]
+    permitted_permissions: ["execute", "read", "delegate", "attenuate"]
+    typical_constraints:
+      - "max_invocations: 10"
+      - "budget_usd: 100.0"
+      - "privacy_band: AMBER"
+      - "requires_approval: true"
+
+  MEMORY:
+    example_resources: ["beliefs", "scoreboard", "control", "persona", "multimodal", "meta"]
+    permitted_permissions: ["read", "write", "delegate"]
+    typical_constraints:
+      - "privacy_band: GREEN|AMBER|RED"
+      - "requires_approval: true"
+
+  LLM:
+    example_resources: ["gemma-2b", "gpt-4o-mini", "gpt-4o"]
+    permitted_permissions: ["execute", "read", "delegate"]
+    typical_constraints:
+      - "max_invocations: 100"
+      - "budget_usd: 1.0"
+      - "max_invocations_per_minute: 5"
+
+  K0_WAL:
+    example_resources: ["write", "read"]
+    permitted_permissions: ["read", "write"]
+    typical_constraints: []
+
+  MCP:
+    example_resources: ["call", "tool", "resource"]
+    permitted_permissions: ["execute", "read"]
+    typical_constraints:
+      - "max_invocations: 50"
+      - "budget_usd: 10.0"
+
+token_lifecycle_stages:
+  ISSUED:
+    description: "Token created, ready to use"
+    properties: ["Signature valid", "Not expired", "Not revoked"]
+
+  ACTIVE:
+    description: "Token in use, operations ongoing"
+    properties: ["Constraints being tracked", "Invocation count increasing"]
+
+  EXHAUSTED:
+    description: "Constraint limit reached (max_invocations or budget)"
+    properties: ["Auto-revoked by system", "Cannot be used"]
+
+  EXPIRED:
+    description: "expires_at timestamp reached"
+    properties: ["Auto-revoked", "Cleanup after 24h TTL"]
+
+  REVOKED:
+    description: "Manually revoked by supervisor"
+    properties: ["Added to revocation blacklist"]
+
+security_properties_summary:
+  unforgeable:
+    guarantee: "Only server with secret_key can create valid signature"
+    mechanism: "HMAC-SHA256(secret_key, header.payload)"
+
+  non_transferable:
+    guarantee: "Token can only be used by agent it was issued to"
+    mechanism: "agent_id claim verified during validation"
+
+  tamper_proof:
+    guarantee: "Any modification to claims invalidates signature"
+    mechanism: "Signature computed over all claims"
+
+  expirable:
+    guarantee: "Token automatically becomes invalid after expires_at"
+    mechanism: "Time-based expiration + constraint-based auto-revocation"
+
+  revocable:
+    guarantee: "Supervisor can immediately revoke token"
+    mechanism: "Add cap_id to Redis blacklist"
+    speed_ms: 1
+
+validation_checklist:
+  step_1_cache_check:
+    description: "Check in-memory validation cache"
+    performance_ms: 0.05
+
+  step_2_signature_verify:
+    description: "Verify HMAC-SHA256 signature"
+    performance_ms: 0.3
+
+  step_3_revocation_check:
+    description: "Check Redis revocation blacklist"
+    performance_ms: 0.1
+
+  step_4_expiration_check:
+    description: "Check expires_at timestamp"
+    performance_ms: 0.05
+
+  step_5_agent_ownership:
+    description: "Verify agent_id matches request"
+    performance_ms: 0.05
+
+  step_6_resource_type_match:
+    description: "Check resource_type matches"
+    performance_ms: 0.05
+
+  step_7_resource_id_match:
+    description: "Check resource_id matches (allow wildcards)"
+    performance_ms: 0.05
+
+  step_8_permission_check:
+    description: "Verify permission in token"
+    performance_ms: 0.05
+
+  step_9_constraints_check:
+    description: "Validate constraints (invocations, budget)"
+    performance_ms: 0.2
+
+  step_10_cache_result:
+    description: "Cache validation result (TTL=10s)"
+    performance_ms: 0.05
+
+total_performance_metrics:
+  cached_ms: 0.1
+  uncached_ms: 0.5
+  target_p95_ms: 0.3
+  cache_hit_rate_target: 0.80
+
+storage_strategy:
+  redis:
+    description: "Live token storage and revocation list"
+    key_format: "cap:{cap_id}"
+    ttl_hours: 24
+
+  k0_wal:
+    description: "Audit trail of all capability events"
+    topic: "CAPABILITY_AUDIT"
+    retention_days: 30
+
+  elasticsearch:
+    description: "Searchable index for audit trail"
+    index: "capability-audit"
+    retention_days: 90
+
+  s3:
+    description: "Long-term compliance archive"
+    retention_years: 7
+    storage_class: "GLACIER"

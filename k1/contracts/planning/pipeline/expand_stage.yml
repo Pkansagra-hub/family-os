@@ -1,0 +1,585 @@
+---
+# 4-Stage Planning Pipeline - Expand Stage
+# ADR Source: ADR-0007-4stage-planning-pipeline.md, ADR-0007b-expand-stage.md
+# Research: Program Synthesis (Gulwani), Tool Use Planning (Schick et al., 2023)
+#
+# The Expand stage takes a rough sketch and concretizes it with:
+# - Tool registry lookups (find actual tool implementations)
+# - Prompt template selection (match domain templates)
+# - Capability-to-implementation mapping (agent assignment)
+# - Error handler insertion (timeouts, retries, fallbacks)
+
+expand_stage:
+  purpose: |
+    Expand sketch into concrete executable plan with tool specifications,
+    agent assignments, error handlers, and implementation details.
+
+    Input: Plan sketch from Sketch stage
+    Output: Expanded plan ready for Validation stage
+
+    Why separate from Sketch?
+    - Sketch is creative (LLM-generated)
+    - Expand is deterministic (registry lookups, mappings)
+    - Clear separation of concerns enables testing and debugging
+
+  stage_position: "Stage 2 of 4 in Planner Pipeline"
+  duration_target_ms: 50   # Deterministic lookups, should be fast
+  max_duration_ms: 200     # Timeout if expansion stalls
+
+---
+
+## Tool Registry Integration
+
+tool_registry:
+  location: "contracts/planning/registries/tool_registry_schema.yml"
+
+  concept: |
+    Tool Registry = Central catalog of all available tools/functions
+
+    Contains:
+    - Tool name and description
+    - Input schema (parameters)
+    - Output schema (result structure)
+    - Estimated duration and cost
+    - Tags (domain, capability level, risk)
+    - Which agents implement this tool
+    - Alternative implementations
+
+  registry_entry_schema: |
+    tools:
+      SearchProduct:
+        description: "Search product catalog"
+        parameters:
+          query: {type: string, required: true}
+          filters: {type: object, required: false}
+          max_results: {type: integer, default: 10}
+        outputs:
+          products: {type: array}
+          count: {type: integer}
+        duration_ms:
+          p50: 150
+          p95: 300
+          p99: 500
+        cost_cents: 5
+        tags: [shopping, search, fast, idempotent]
+        agents: ["SearchAgent-01", "SearchAgent-02"]
+        alternatives:
+          - BrowseCategory (slower but better for discovery)
+          - RecommendationEngine (personalized, slower)
+
+  expand_workflow: |
+    For each step in sketch:
+    1. Extract step.action (e.g., "SearchProduct")
+    2. Lookup in tool registry
+    3. If found:
+         - Get tool schema
+         - Validate parameters match schema
+         - Assign best agent (via agent capability matching)
+         - Add error handlers (timeout, retry, fallback)
+      Else:
+         - Mark step as UNRESOLVED
+         - Add to validation errors
+
+  validation_during_expand: |
+    For each parameter in step:
+    - Is parameter name in tool schema?
+    - Does parameter type match schema?
+    - Are required parameters present?
+    - Can variable substitutions be resolved?
+
+    If any validation fails:
+      - Log error but continue (don't abort)
+      - Mark step as requiring manual review
+
+---
+
+## Agent Capability Matching
+
+agent_capability_matching:
+  concept: |
+    For each tool, find the best agent to execute it.
+
+    Selection criteria (in priority order):
+    1. Capability match (agent has capability?)
+    2. Specialization (agent specialized for this domain?)
+    3. Availability (agent not at capacity?)
+    4. Recent success (agent successfully executed this before?)
+    5. Load balancing (prefer less-busy agents)
+
+  matching_algorithm: |
+    FOR EACH step with tool assignment:
+      candidates = agents_with_capability(step.action)
+
+      IF candidates is empty:
+        → ERROR: No agents can execute this tool
+
+      scoring = {
+        agent_id: score,
+        ...
+      }
+
+      FOR EACH agent in candidates:
+        score = 0
+
+        # Capability match (must-have)
+        if agent.capabilities contains step.action:
+          score += 1.0
+        else:
+          score -= 100  # Disqualify
+
+        # Specialization bonus
+        if agent.specialization == step.domain:
+          score += 0.3
+
+        # Availability
+        utilization = agent.current_tasks / agent.max_capacity
+        score -= 0.2 * utilization
+
+        # Recent success
+        recent_success_rate = agent.execution_stats.success_rate
+        score += 0.1 * recent_success_rate
+
+      best_agent = argmax(scoring)
+      step.assigned_agent = best_agent
+
+  example_shopping_domain: |
+    Step: SearchProduct
+    Candidates: [SearchAgent-01, SearchAgent-02, GenericAgent-05]
+
+    Scoring:
+      SearchAgent-01:
+        - Capability match: +1.0
+        - Specialization (shopping): +0.3
+        - Availability (20% busy): -0.04
+        - Recent success (98%): +0.098
+        - Total: 1.358 ← WINNER
+
+      SearchAgent-02:
+        - Capability match: +1.0
+        - Specialization: +0.3
+        - Availability (80% busy): -0.16
+        - Recent success (95%): +0.095
+        - Total: 1.235
+
+      GenericAgent-05:
+        - Capability match: -100 (doesn't have search capability)
+        - DISQUALIFIED
+
+---
+
+## Prompt Template Selection & Specialization
+
+prompt_registry:
+  location: "contracts/planning/registries/prompt_registry_schema.yml"
+
+  concept: |
+    Prompt Registry = Library of Jinja2 templates for each tool
+
+    Each tool can have multiple prompt templates:
+    - Default template (generic instructions)
+    - Domain-specific templates (shopping, travel, etc.)
+    - Role-specific templates (for different agent types)
+    - Edge-case templates (for error recovery)
+
+  registry_entry: |
+    tools:
+      SearchProduct:
+        default_prompt: "search_default.j2"
+        templates:
+          shopping_domain: "search_shopping.j2"
+          recommendation: "search_recommendations.j2"
+          error_recovery: "search_retry.j2"
+          budget_constrained: "search_budget_aware.j2"
+
+  expand_workflow: |
+    FOR EACH step:
+      1. Identify step.domain (from context or sketch reasoning)
+      2. Lookup tool in prompt registry
+      3. Find best matching template:
+         - If domain-specific template exists: use it
+         - Else: use default template
+      4. Render template with step parameters
+      5. Assign rendered prompt to step
+
+    Example:
+      Step: SearchProduct for shopping task
+      → Use shopping_domain template
+      → Template includes shopping-specific search tips
+      → Rendered prompt explains to search for quality, not just cheap items
+
+---
+
+## Error Handler Insertion
+
+error_handlers:
+  purpose: |
+    Expand stage adds error handling to each step:
+    - Timeout handlers (what if step takes too long?)
+    - Retry policies (when to retry?)
+    - Fallback strategies (what if step fails?)
+
+  timeout_policies: |
+    Default timeout = tool.duration_ms.p95 * 1.5 + 100ms
+
+    Example:
+      SearchProduct P95: 300ms
+      Timeout: 300 * 1.5 + 100 = 550ms
+
+    Rationale:
+    - Use P95 (covers 95% of normal cases)
+    - Multiply by 1.5 (50% safety margin)
+    - Add 100ms (minimum overhead)
+
+  retry_policies: |
+    Retry = re-execute a failed step
+
+    When to retry:
+    - Network errors (transient)
+    - Timeout (might just be slow)
+    - Capacity exceeded (might clear)
+
+    When NOT to retry:
+    - Invalid parameters (won't fix by retry)
+    - Business logic errors (not step error)
+    - After max_retries exceeded
+
+    Default retry config:
+    max_retries: 2
+    backoff_strategy: exponential
+    backoff_initial_ms: 100
+    backoff_max_ms: 1000
+
+  fallback_strategies: |
+    Fallback = use alternative tool/step if primary fails
+
+    Fallback chain:
+      Primary tool → Fallback 1 → Fallback 2 → Manual
+
+    Example search chain:
+      SearchProduct → BrowseCategory → ManualSearch
+
+    Expand stage responsibility:
+    - Identify fallback tools from registry
+    - Order them by cost/speed tradeoff
+    - Insert into plan with clear conditions
+
+  expanded_step_with_errors: |
+    {
+      "step_id": "step_1",
+      "action": "SearchProduct",
+      "primary_execution": {
+        "tool": "SearchProduct",
+        "agent": "SearchAgent-01",
+        "timeout_ms": 550
+      },
+
+      "error_handlers": {
+        "timeout": {
+          "retry": true,
+          "max_retries": 2,
+          "backoff_ms": [100, 500],
+          "fallback_on_final_retry": "BrowseCategory"
+        },
+        "network_error": {
+          "retry": true,
+          "max_retries": 3,
+          "backoff_ms": [100, 300, 1000]
+        },
+        "invalid_parameters": {
+          "retry": false,
+          "escalate": "validation_error"
+        },
+        "no_results": {
+          "fallback": "RecommendationEngine",
+          "reason": "Try ML-based search if no matches"
+        }
+      }
+    }
+
+---
+
+## Error Handler Insertion Patterns
+
+handler_patterns:
+
+  simple_retry: |
+    Condition: Transient network error
+    Action: Retry up to N times with backoff
+    Backoff: exponential (100ms, 300ms, 1000ms)
+
+  timeout_with_fallback: |
+    Condition: Step takes too long
+    Action 1: Retry with longer timeout (once)
+    Action 2: If still timeout, use fallback tool
+
+  capability_degradation: |
+    Condition: Desired capability unavailable
+    Action: Use lower-fidelity fallback
+    Example: SearchProduct → BrowseCategory (slower, less targeted)
+
+  manual_escalation: |
+    Condition: Repeated failures after retries
+    Action: Escalate to human arbiter
+    Applies to: RED band tasks, high-stakes decisions
+
+  cost_optimization: |
+    Condition: Primary tool too expensive
+    Action: Use cheaper alternative (accept slower/lower quality)
+    Example: ExpensiveSearch → CheapSearch if over budget
+
+  parallel_fallback: |
+    Condition: Try multiple tools simultaneously
+    Action: Run primary + fallback in parallel, use first success
+    Benefit: Faster recovery, but higher resource cost
+    Trade-off: Use only for latency-critical steps
+
+---
+
+## Parameter Resolution & Variable Substitution
+
+parameter_resolution:
+  concept: |
+    Steps often reference results from previous steps:
+    step_2.parameters.product_ids = "{{step_1.result.top_3_ids}}"
+
+    During Expand, resolve these references:
+    - Check if referenced step (step_1) exists
+    - Check if result.top_3_ids is reasonable (array of IDs)
+    - Validate types match
+
+  resolution_workflow: |
+    FOR EACH parameter in step:
+      if parameter looks like "{{...}}":
+        1. Parse reference: {{step_1.result.top_3_ids}}
+        2. Validate referenced step exists
+        3. Validate referenced field exists
+        4. Validate step_1 dependency listed in step_2.dependencies
+        5. Validate output type matches expected input type
+        6. If all valid: mark for runtime substitution
+        7. Else: log error, mark step for manual review
+
+  error_cases: |
+    Missing reference:
+      Parameter: {{step_99.result.field}}
+      Error: Step 99 not found in plan
+      Action: Mark step for validation failure
+
+    Circular dependency:
+      step_1 depends on step_2
+      step_2 depends on step_1
+      Error: Circular reference
+      Action: Mark entire plan as invalid
+
+    Type mismatch:
+      step_1.result.ids = ["id1", "id2"]  (array)
+      step_2.parameter.product_id expects string
+      Error: Array vs string type mismatch
+      Action: Log warning, may need manual fix
+
+---
+
+## Expanded Plan Data Structure
+
+expanded_plan:
+  schema: |
+    ExpandedPlan = {
+      plan_id: UUID,
+      sketch_id: UUID,
+      created_at: ISO8601,
+
+      # Full expanded steps with all details
+      steps: [{
+        step_id: str,
+        description: str,
+
+        # Execution configuration
+        tool: {
+          name: str,              # From registry
+          schema: {...},          # Tool input/output schema
+          agent: str,             # Assigned agent
+          timeout_ms: int,        # With safety margin
+        },
+
+        # Parameters with variable refs resolved/validated
+        parameters: {
+          key1: value1,
+          key2_ref: "step_1.result.field"  # Still needs runtime resolution
+        },
+
+        # Error handling
+        error_handlers: {...},     # Retry, fallback, escalation
+
+        # Prompt for tool
+        prompt: str,               # Rendered from template
+
+        # Execution metadata
+        dependencies: [str],       # step IDs this depends on
+        estimated_duration_ms: int,
+        estimated_cost_cents: float
+      }],
+
+      # Plan-level metrics
+      total_estimated_duration_ms: int,
+      critical_path_steps: [str],
+      total_estimated_cost_cents: float,
+      error_handler_coverage: float,  # % of steps with error handlers
+
+      # Validation readiness
+      is_ready_for_validation: bool,
+      validation_warnings: [str],
+
+      # Expansion metadata
+      expansion_version: int
+    }
+
+  example_expanded_step: |
+    {
+      "step_id": "step_1",
+      "description": "Search for running shoes under $150",
+      "tool": {
+        "name": "SearchProduct",
+        "schema": {
+          "inputs": {
+            "query": "string",
+            "filters": "object",
+            "max_results": "integer"
+          },
+          "outputs": {
+            "products": "array",
+            "count": "integer"
+          }
+        },
+        "agent": "SearchAgent-01",
+        "timeout_ms": 550
+      },
+
+      "parameters": {
+        "query": "running shoes",
+        "filters": {
+          "max_price": 150,
+          "category": "shoes",
+          "minimum_rating": 4.0
+        },
+        "max_results": 3
+      },
+
+      "error_handlers": {
+        "timeout": {
+          "retry": true,
+          "max_retries": 2,
+          "backoff_ms": [100, 500],
+          "fallback_on_exhausted_retries": {
+            "tool": "BrowseCategory",
+            "parameters": {
+              "category": "shoes",
+              "max_price": 150
+            }
+          }
+        },
+        "no_results": {
+          "fallback": "RecommendationEngine",
+          "parameters": {
+            "query": "running shoes"
+          }
+        }
+      },
+
+      "prompt": "You are searching for running shoes. Find shoes under $150 with good ratings. Return top 3 results ordered by rating.",
+
+      "dependencies": [],
+      "estimated_duration_ms": 300,
+      "estimated_cost_cents": 5
+    }
+
+---
+
+## Observability: Expand Stage Metrics
+
+observability:
+  key_traces:
+    expand_trace:
+      span_name: "planner.expand"
+      spans:
+        - tool_lookup: "Time to lookup tools in registry"
+        - agent_matching: "Time to select best agent"
+        - prompt_selection: "Time to select/render prompt"
+        - error_handler_insertion: "Time to add error handlers"
+        - parameter_validation: "Time to validate parameters"
+      events:
+        - expand.started
+        - expand.tools_resolved
+        - expand.agents_assigned
+        - expand.prompts_rendered
+        - expand.error_handlers_added
+        - expand.completed
+
+  key_metrics:
+    expand_duration_ms:
+      type: "Histogram"
+      buckets: [10, 25, 50, 75, 100]
+      p95_target: 50
+      description: "Total expand stage latency"
+
+    tool_resolution_success_rate:
+      type: "Counter"
+      rate_target: "> 98%"
+      description: "% of steps with tools found in registry"
+
+    unresolved_steps_count:
+      type: "Gauge"
+      alert_if: "> 0"
+      description: "Steps that couldn't be resolved in registry"
+
+    agent_assignment_attempts:
+      type: "Histogram"
+      buckets: [1, 2, 3, 5, 10]
+      description: "Attempts needed to find suitable agent"
+
+    parameter_validation_errors:
+      type: "Counter"
+      labels: [error_type: missing | type_mismatch | invalid_reference]
+
+---
+
+## Expand Stage Workflow
+
+expand_workflow:
+  algorithm: |
+    1. Load sketch from Sketch stage
+    2. FOR EACH step in sketch:
+       a. Lookup tool in registry
+       b. Validate tool exists
+       c. Match agent via capability scoring
+       d. Select prompt template
+       e. Render prompt
+       f. Insert error handlers
+       g. Validate parameters
+    3. Compute critical path
+    4. Sum total cost and duration
+    5. Return expanded plan to Validation stage
+
+  performance_characteristics: |
+    Tool lookup: O(1) hash map
+    Agent matching: O(n) where n = candidate agents
+    Prompt rendering: O(m) where m = template size
+    Total: O(steps * max_agents) → typically < 50ms
+
+---
+
+## Implementation Checklist
+
+implementation_status:
+  phase_1_tool_registry_integration: "TODO"
+  phase_2_agent_capability_matching: "TODO"
+  phase_3_prompt_template_selection: "TODO"
+  phase_4_error_handler_insertion: "TODO"
+  phase_5_metrics_and_observability: "TODO"
+
+  notes: |
+    Expand stage transforms creative sketch into executable plan with:
+    - Tool specifications from registry
+    - Agent assignments via capability matching
+    - Rendered prompts for each tool
+    - Comprehensive error handlers
+
+    Performance target: P95 < 50ms (mostly registry lookups)

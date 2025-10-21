@@ -1,0 +1,1138 @@
+---
+config:
+  flowchart:
+    htmlLabels: true
+    curve: linear
+  theme: neo
+  layout: elk
+  look: neo
+---
+flowchart TB
+
+%% ====== MEMORY-CENTRIC FAMILY AI ARCHITECTURE (K0 UPDATED + COGNITIVE DETAIL MERGED) ======
+%% PRODUCTION: Kernelized durability & ports; cognition/policy in user space
+%% Merge notes:
+%% • Added Enhanced Hippocampus/Attention/Workspace/Affect/Retrieval/Services/Perception blocks
+%% • All durability (WAL/Offsets/DLQ/Outbox/Receipts) remains in K0; new storage names are DRIVER ALIASES in K0_DRIVERS
+
+%% ====== VISUAL STYLE DEFINITIONS ======
+classDef plane fill:#eef7ff,stroke:#2a6ebb,stroke-width:1px,rx:8,ry:8
+classDef mid fill:#f8fff0,stroke:#6b8e23,stroke-width:1px,rx:8,ry:8
+classDef gate fill:#fff7e6,stroke:#d48806,stroke-width:1px,rx:8,ry:8
+classDef bus fill:#f0f0f0,stroke:#666,stroke-width:2px,rx:8,ry:8
+classDef storage fill:#f3f8ff,stroke:#1f4aa1,stroke-width:1px,rx:8,ry:8
+classDef brain fill:#fffdf0,stroke:#b38b00,stroke-width:1px,rx:10,ry:10
+classDef fast stroke:#00897b,stroke-width:2px
+classDef smart stroke:#d46b08,stroke-width:2px,stroke-dasharray:4 3
+classDef card fill:#fff,stroke:#999,stroke-width:1px,rx:8,ry:8
+classDef realtime fill:#e6ffe6,stroke:#00cc00,stroke-width:2px,rx:8,ry:8
+
+%% Kernel/User-Space Boundary Styling
+classDef kernel_space fill:#fff9e6,stroke:#ff6b35,stroke-width:3px,stroke-dasharray:5 5,rx:8,ry:8
+classDef user_space fill:#f0f5ff,stroke:#2f54eb,stroke-width:2px,rx:8,ry:8
+classDef privileged_boundary stroke:#d9534f,stroke-width:3px,stroke-dasharray:8 4
+
+%% ====== COGNITIVE REGION STYLES ======
+classDef cognitive fill:#fff7e6,stroke:#d48806,stroke-width:2px,rx:8,ry:8
+classDef steward fill:#e6f7ff,stroke:#1890ff,stroke-width:2px,rx:8,ry:8
+classDef context_builder fill:#f6ffed,stroke:#52c41a,stroke-width:2px,rx:8,ry:8
+classDef working_memory fill:#fff1f0,stroke:#ff4d4f,stroke-width:2px,rx:8,ry:8
+classDef thalamus fill:#fff7e6,stroke:#d48806,stroke-width:2px,rx:8,ry:8
+classDef hippocampus fill:#e6f7ff,stroke:#1890ff,stroke-width:2px,rx:8,ry:8
+classDef global_workspace fill:#f6ffed,stroke:#52c41a,stroke-width:2px,rx:8,ry:8
+classDef affect_system fill:#f9f0ff,stroke:#722ed1,stroke-width:2px,rx:8,ry:8
+classDef cognitive_control fill:#fff2e6,stroke:#fa8c16,stroke-width:2px,rx:8,ry:8
+
+%% ====== LEGEND ======
+subgraph LEGEND["🎨 Memory-Centric Architecture Guide"]
+  direction TB
+  subgraph COLORS["Component Types"]
+    L_MEMORY["🧠 Memory Backbone (gold)"]:::brain
+    L_PLANE["🔵 API Planes (blue)"]:::plane
+    L_MID["🟢 Processing (green)"]:::mid
+    L_GATE["🟡 Gateways (yellow)"]:::gate
+    L_BUS["⚫ Buses (gray)"]:::bus
+    L_STORAGE["🔷 Storage (light blue)"]:::storage
+  end
+  subgraph MEMORY_FLOWS["Memory-Centric Flows"]
+    L_TO_MEMORY["→ TO Memory"]
+    L_FROM_MEMORY["← FROM Memory"]
+    L_SERVE_MEMORY["⚡ SERVE Memory"]
+    L_SYNC_MEMORY["-.- Memory Sync"]
+  end
+  subgraph IMPLEMENTATION_STATUS["🏆 System Status"]
+    L_MEMORY_CORE["✅ Memory backbone"]
+    L_KERNEL["✅ K0 Kernel (ports + durability)"]
+    L_DEVICE_INSTANCES["📱 Device-local + E2EE sync"]
+  end
+end
+class LEGEND card
+
+%% ====== K0 KERNEL ======
+subgraph K0_KERNEL["🧠 K0 KERNEL - Central Nervous System of Family AI"]
+  direction TB
+  subgraph MEMORY_CORE["Memory Core"]
+    MEMORY_ENGINE["🧠 Memory Engine"]:::brain
+    MEMORY_SPACES["📊 Memory Spaces<br/>Episodic · Semantic · Procedural · Working"]:::brain
+    MEMORY_INDEX["🗂️ Memory Index<br/>Search · Relations · Relevance"]:::brain
+  end
+  subgraph DEVICE_LOCAL_MEMORY["Device-Local Memory"]
+    DEVICE_STORAGE["📱 Device Storage<br/>SQLite+Vector (E2EE)"]:::storage
+    MEMORY_SYNC["🔄 CRDT Sync (E2EE)"]:::mid
+    MEMORY_CACHE["⚡ L1/L2/L3 Cache"]:::fast
+  end
+  subgraph FAMILY_MEMORY_NETWORK["Family Memory Network"]
+    FAMILY_GRAPH["👨‍👩‍👧‍👦 Family Graph"]:::brain
+    MEMORY_PERMISSIONS["🔐 Memory Permissions"]:::gate
+    MEMORY_CONSENSUS["🤝 Memory Consensus"]:::smart
+  end
+  subgraph MEMORY_API_SERVANTS["Memory API Servants"]
+    AGENT_MEMORY_API["🤖 Agent Memory API"]:::plane
+    TOOL_MEMORY_API["🔧 Tool Memory API"]:::plane
+    CONTROL_MEMORY_API["👑 Control Memory API"]:::plane
+  end
+end
+class K0_KERNEL card
+class K0_KERNEL kernel_space
+
+%% ====== KERNEL-SPACE BOUNDARY ======
+subgraph PIPE_COLORS["🚦 Pipeline Colors Reference"]
+  L01["P01 Recall/Read — teal"]
+  L02["P02 Write/Ingest — red"]
+  L03["P03 Consolidation/Forgetting — green"]
+  L04["P04 Arbitration/Action — blue"]
+  L05["P05 Prospective/Triggers — orange"]
+  L06["P06 Learning/Neuromod — purple"]
+  L07["P07 Sync/CRDT — darkturquoise"]
+  L08["P08 Embedding Lifecycle — gold"]
+  L09["P09 Connector Ingestion — brown"]
+  L10["P10 PII/Minimization — deeppink"]
+  L11["P11 DSAR/GDPR — royalblue"]
+  L12["P12 Device/E2EE — seagreen"]
+  L13["P13 Index Rebuild — firebrick"]
+  L14["P14 Near-Duplicate/Canon — orchid"]
+  L15["P15 Rollups/Summaries — steelblue"]
+  L16["P16 Feature Flags/A-B — olive"]
+  L17["P17 QoS/Cost Governance — saddlebrown"]
+  L18["P18 Safety/Abuse — orangered"]
+  L19["P19 Personalization/Reco — DarkOrchid"]
+  L20["P20 Procedure/Habits — dimgray"]
+end
+class PIPE_COLORS card
+
+%% ====== CLIENTS & DEVICES ======
+subgraph FAMILY_DEVICES["🧠 Device-Local Memory Ecosystem"]
+  PERSONAL_FULL["📱 Personal Memory Devices"]:::plane
+  FAMILY_HUB["🏠 Family Memory Hub"]:::mid
+  WORK_DEVICE["💼 Work Memory Context"]:::gate
+  GUEST_DEVICE["🚪 Guest Memory Access"]:::gate
+end
+class FAMILY_DEVICES card
+
+subgraph CLIENTS["🧠 Memory-Driven Clients"]
+  WEB["🌐 Web Apps"]
+  MOBILE["📱 Mobile Apps"]
+  CLI["⌨️ CLI Tools"]
+  AGENTS["🤖 LLM Agents"]
+  ADMIN["👑 Admin Console"]
+  FAMILY_APP["👨‍👩‍👧‍👦 Family App"]:::realtime
+end
+class CLIENTS card
+
+subgraph API_GATEWAY["🧠 Memory-Aware API Gateway"]
+  PROXY["Auth Proxy :8080"]:::gate
+  DEVICE_DETECTOR["Device Intelligence Service"]:::smart
+end
+class API_GATEWAY card
+class API_GATEWAY user_space
+
+subgraph API_TIERS["🧠 API Planes (serve Memory)"]
+  TIER1[🤖 Agent Plane :7443]:::plane
+  TIER2[👤 Family Plane :8443]:::plane
+  TIER3[🔐 Control Plane :9443]:::plane
+end
+class API_TIERS card
+class API_TIERS user_space
+
+%% ====== API INGRESS (user-space) ======
+subgraph API_INGRESS["🧠 API Ingress → K0 Ports (USER-SPACE)"]
+  direction TB
+  APL["api/routers/memory_agents.py"]:::plane
+  APP["api/routers/memory_family_app.py"]:::plane
+  CTRL["api/routers/memory_control.py"]:::plane
+  MW_AUTH["api/memory_auth.py (SecurityContext)"]:::fast
+  MW_PEP["policy/memory_decision.py (User-space PEP hints)"]:::smart
+  MW_SEC["security/* (mls_group/keys/ratchet)"]:::mid
+  MW_QOS["retrieval/memory_qos_gate.py (QoS hints)"]:::smart
+  MW_SAF["policy/memory_safety.py"]:::smart
+  MW_OBS["observability/* (audit/receipts)"]:::mid
+  ING["ingress/memory_adapter.py (HTTP→Ports)"]:::fast
+end
+class API_INGRESS card
+
+%% ====== K0 HYBRID MICROKERNEL ======
+subgraph K0["🟡 K0 Hybrid Microkernel (privileged boundary)"]
+  direction TB
+
+  subgraph K0_PORTS["🔌 K0 Ports (syscall/ABI)"]
+    CMD["Command Port: submit(envelope)"]:::bus
+    QRY["Query Port: recall(query)"]:::fast
+    SSE["SSE Port: subscribe/ack"]:::fast
+    OBS["Observability Port: metrics/spans/logs"]:::mid
+  end
+
+  K0_PEP["PEP@syscall (caps/bands/ABAC)"]:::gate
+  K0_SCHED["QoS Scheduler (W-DRR · P17 budgets)"]:::mid
+  K0_IDEMP["Idempotency Ledger"]:::mid
+  K0_RCPT["Receipts (device-signed)"]:::mid
+  K0_TIMERS["Timers: T‑15 / T / T+5"]:::mid
+  K0_BUS["In‑Kernel Bus (fan‑out/backpressure)"]:::bus
+  K0_REPLAY["K‑Replayer (WAL→Offsets, DLQ requeue)"]:::mid
+  K0_REG["Registry/Loader (modules/*/module.yaml)"]:::mid
+
+  %% === Drivers (SPI) — add store aliases used by cognitive detail ===
+  subgraph K0_DRIVERS["Drivers (SPI)"]
+    K0_SQL["st_sqlite (WAL)"]:::storage
+    st_outbox["Outbox (in‑kernel)"]:::storage
+    st_receipts["Receipts (in‑kernel)"]:::storage
+    K0_FTS["st_fts (FTS5)"]:::storage
+    K0_VEC["st_vector"]:::storage
+    K0_KG["st_kg"]:::storage
+    K0_BLOB["st_blob (CAS)"]:::storage
+    K0_MLS["crypto_mls (keys/ratchet)"]:::mid
+    K0_SYNC["sync_crdt"]:::mid
+    K0_SSE_DRV["sse_driver (ACL/cursors)"]:::mid
+    evt_wal["WAL (in‑kernel)"]:::storage
+    evt_offsets["Offsets (in‑kernel)"]:::storage
+    evt_dlq["DLQ (in‑kernel)"]:::storage
+
+    %% Aliases so cognitive detail can target kernel drivers (no user-space storage)
+    st_fts["st_fts (alias)"]:::storage
+    st_vec["st_vec (alias)"]:::storage
+    st_epi["st_episodic (alias)"]:::storage
+    st_sem["st_semantic (alias)"]:::storage
+    st_kg_dom["st_kg_domain (alias)"]:::storage
+    st_hipp_store["st_hipp_store (alias)"]:::storage
+    st_emb["st_embeddings (alias)"]:::storage
+    st_ws["st_workspace (alias)"]:::storage
+  end
+
+  %% core data path inside kernel
+  CMD-->K0_PEP-->K0_SCHED-->K0_IDEMP-->K0_SQL
+  K0_SQL-->st_outbox
+  K0_SQL-->st_receipts
+  K0_SQL-.durable.->evt_wal
+  K0_TIMERS-->K0_BUS
+  K0_SSE_DRV<-->SSE
+  K0_BUS<-->K0_SSE_DRV
+  K0_BUS<-->K0_REPLAY
+  K0_REPLAY-->evt_dlq
+  K0_REPLAY-->evt_offsets
+
+  %% idempotency wiring - explicit link to kernel
+  SHARED_IDEMPOTENCY-->K0_IDEMP
+
+  %% alias wiring to drivers (dashed = alias)
+  st_fts-.alias.->K0_FTS
+  st_vec-.alias.->K0_VEC
+  st_epi-.alias.->K0_SQL
+  st_sem-.alias.->K0_SQL
+  st_kg_dom-.alias.->K0_KG
+  st_hipp_store-.alias.->K0_SQL
+  st_emb-.alias.->K0_VEC
+  st_ws-.alias.->K0_SQL
+end
+
+%% ====== PIPELINES ======
+subgraph PIPELINES["🧠 Pipelines P01–P20 (serve Memory)"]
+  direction TB
+  P01["P01 Recall/Read"]:::card
+  P02["P02 Write/Ingest"]:::card
+  P03["P03 Consolidation"]:::card
+  P04["P04 Arbitration/Action"]:::brain
+  P05["P05 Triggers"]:::card
+  P06["P06 Learning"]:::card
+  P07["P07 Sync/CRDT"]:::card
+  P08["P08 Embedding"]:::card
+  P09["P09 Ingestion"]:::card
+  P10["P10 Privacy/PII"]:::card
+  P11["P11 DSAR/GDPR"]:::card
+  P12["P12 Device/E2EE"]:::card
+  P13["P13 Index Rebuild"]:::card
+  P14["P14 Dedup/Canon"]:::card
+  P15["P15 Summaries"]:::card
+  P16["P16 Feature Flags/A-B"]:::card
+  P17["P17 QoS/Cost"]:::card
+  P18["P18 Safety"]:::card
+  P19["P19 Personalization"]:::card
+  P20["P20 Procedures/Habits"]:::card
+end
+class PIPELINES card
+
+%% ====== PIPELINE INFRA (Facade → K0 Bus) ======
+subgraph PIPE_SYS["🧩 Pipeline Infrastructure"]
+  pip_bus["pipelines/memory_bus.py (Facade→K0 Bus)"]:::bus
+  pip_mgr["pipelines/memory_manager.py"]
+  pip_reg["pipelines/memory_registry.py"]
+  pip_stages["pipelines/memory_stages.py"]
+  pip_events_shim["pipelines/memory_events_shim.py"]
+  p01_mod["pipelines/memory_p01.py"]
+  p02_mod["pipelines/p02.py"]
+  p03_mod["pipelines/memory_p03.py"]
+  p04_mod["pipelines/memory_p04.py"]
+  p05_mod["pipelines/p05.py"]
+  p06_mod["pipelines/p06.py"]
+  p07_mod["pipelines/p07.py"]
+  p08_mod["pipelines/p08.py"]
+  p09_mod["pipelines/p09.py"]
+  p10_mod["pipelines/p10.py"]
+  p11_mod["pipelines/p11.py"]
+  p12_mod["pipelines/p12.py"]
+  p13_mod["pipelines/p13.py"]
+  p14_mod["pipelines/p14.py"]
+  p15_mod["pipelines/p15.py"]
+  p16_mod["pipelines/p16.py"]
+  p17_mod["pipelines/p17.py"]
+  p18_mod["pipelines/p18.py"]
+  p19_mod["pipelines/p19.py"]
+  p20_mod["pipelines/p20.py"]
+end
+class PIPE_SYS card
+
+%% ====== EVENTS BUS (Facade → K0 Bus) ======
+subgraph EVENTS_BUS["📡 Events Bus (Facade → K0 Bus)"]
+  direction TB
+  evt_bus["events/bus.py (Facade→K0 Bus)"]:::bus
+  evt_sub["events/subscription.py (Registry)"]:::mid
+  evt_dispatch["events/dispatcher.py (Routing)"]:::fast
+  evt_handlers["events/handlers.py (Pipeline)"]:::mid
+  evt_middleware["events/middleware.py (Interceptors)"]:::mid
+  evt_filters["events/filters.py (Advanced Filtering)"]:::smart
+  evt_types["events/types.py (Event/Envelope + cognitive_trace_id)"]:::gate
+  evt_validation["events/validation.py (Schema + correlation)"]:::gate
+  evt_rejects["validation_rejects.log (Reject Sink)"]:::storage
+  evt_schema_note["🔗 All events share cognitive_trace_id<br/>cognitive.* ↔ intelligence.* ↔ events.*"]:::mid
+end
+class EVENTS_BUS card
+
+%% ====== CONTRACTS SYSTEM ======
+subgraph CONTRACTS_SYSTEM["📋 Contracts-First Architecture"]
+  direction TB
+  contract_api["contracts/api/* (OpenAPI)"]:::plane
+  contract_events["contracts/events/* (schemas)"]:::bus
+  contract_storage["contracts/storage/* (data schemas)"]:::storage
+  contract_security["contracts/security/* (Auth/crypto)"]:::gate
+  contract_policy["contracts/policy/* (ABAC/RBAC rules)"]:::mid
+  contract_jobs["contracts/jobs/* (workflows)"]:::mid
+  contract_ci["contracts/ci/* (validation pipeline)"]:::gate
+  contract_manifest["contracts/_manifest/* (version control)"]:::gate
+end
+class CONTRACTS_SYSTEM card
+
+%% ====== POLICY FRAMEWORK ======
+subgraph POLICY_FRAMEWORK["🛡️ Policy & Family Intelligence"]
+  direction TB
+  pol_pep["policy/memory_decision.py (PEP)"]:::gate
+  pol_abac["policy/memory_abac.py"]:::smart
+  pol_rbac["policy/memory_rbac.py"]:::fast
+  pol_redactor["policy/memory_redactor.py"]:::smart
+  pol_safety["policy/memory_safety.py"]:::smart
+  pol_consent["policy/memory_consent.py"]:::mid
+  pol_space["policy/memory_space_policy.py"]:::mid
+  pol_audit["policy/memory_audit.py"]:::storage
+  pol_config["policy/memory_config/*"]:::gate
+
+  subgraph FAMILY_MEMORY_INTELLIGENCE["Family Intelligence"]
+    pol_family["policy/family_memory_intelligence.py"]:::smart
+    pol_relationship["policy/memory_relationship_intelligence.py"]:::smart
+    pol_emergency["policy/memory_emergency_intelligence.py"]:::gate
+    pol_subscription["policy/memory_subscription_intelligence.py"]:::smart
+  end
+
+  subgraph COGNITIVE_MEMORY_INTEGRATION["Cognitive Integration"]
+    pol_cognitive["policy/memory_cognitive.py"]:::smart
+    pol_attention["policy/memory_attention.py"]:::gate
+    pol_memory_lifecycle["policy/memory_lifecycle.py"]:::smart
+    pol_memory_coordination["policy/memory_coordination.py"]:::smart
+  end
+end
+class POLICY_FRAMEWORK card
+
+%% ====== FAMILY API INGRESS → K0 ======
+PERSONAL_FULL-->PROXY
+FAMILY_HUB-->PROXY
+WORK_DEVICE-->PROXY
+GUEST_DEVICE-->PROXY
+WEB-->PROXY
+MOBILE-->PROXY
+FAMILY_APP-->PROXY
+ADMIN-->PROXY
+AGENTS-->PROXY
+CLI-->PROXY
+PROXY-->DEVICE_DETECTOR
+DEVICE_DETECTOR-->TIER1
+DEVICE_DETECTOR-->TIER2
+DEVICE_DETECTOR-->TIER3
+TIER1-->APL
+TIER2-->APP
+TIER3-->CTRL
+
+APL-->MW_AUTH
+APP-->MW_AUTH
+CTRL-->MW_AUTH
+MW_AUTH-->MW_PEP
+MW_PEP-->MW_SEC
+MW_SEC-->MW_QOS
+MW_QOS-->MW_SAF
+MW_SAF-->MW_OBS
+MW_OBS-->ING
+
+%% Direct to kernel ports (no duplicate idempotency hop)
+ING-->CMD
+ING-->QRY
+ING<-->SSE
+ING-->OBS
+
+%% ====== FAST vs SMART LANES ======
+CMD-- "GREEN ∧ obligations=∅ → fast lane" -->evt_types
+CMD-- "AMBER/RED ∨ obligations≠∅ → smart lane" --> INTENT_RT
+
+%% ====== QUERY PATH ======
+subgraph QUERY_PATH["🔍 Query (wired through QRY)"]
+  q_broker["retrieval/query_broker.py"]:::mid
+  q_services["retrieval/services.py"]:::mid
+  st_read["storage/* (read indices)"]:::storage
+end
+QRY-->q_broker-->q_services-->st_read
+q_broker-. optional evented read .->P01
+
+%% ====== ACTIONS ======
+subgraph ACTIONS["⚡ Action Runner (safe effects)"]
+  action_runner["action/runner.py"]:::mid
+end
+P04-- "ACTION_DECISION" -->action_runner
+action_runner-- "emit events" -->evt_bus
+
+%% ====== REAL-TIME TOPICS ======
+subgraph TICK_TOPICS["🧠 Real-time Topics"]
+  UI_T["ui.*"]:::mid
+  JOB_T["job.*"]:::mid
+  PROS_T["prospective.*"]:::mid
+  MEM_T["memory.*"]:::mid
+  WS_T["workspace.*"]:::mid
+  PRES_T["presence.*"]:::mid
+  INT_T["integration.*"]:::mid
+  SAF_T["safety.*"]:::mid
+  EVT_T["events.* (trace_id)"]:::bus
+  POL_T["policy.* (CTRL only)"]:::gate
+  CONTRACT_T["contract.* (CTRL only)"]:::plane
+
+  subgraph MEMORY_INTELLIGENCE_TOPICS["Family Memory Intelligence"]
+    MEM_SYNC_T["memory.sync.* (trace_id)"]:::bus
+    MEM_FORM_T["memory.formation.* (trace_id)"]:::bus
+    MEM_RECALL_T["memory.recall.* (trace_id)"]:::bus
+    MEM_LEARN_T["memory.learning.* (trace_id)"]:::bus
+    MEM_COORD_T["memory.coordination.* (trace_id)"]:::bus
+    MEM_EMERG_T["memory.emergency.* (trace_id)"]:::bus
+  end
+
+  subgraph COGNITIVE_MEMORY_INTELLIGENCE["Cognitive Memory Intelligence"]
+    COG_MEM_FORM_T["cognitive.memory.formation.*"]:::bus
+    COG_MEM_RECALL_T["cognitive.memory.recall.*"]:::bus
+    COG_MEM_DECIDE_T["cognitive.memory.decision.*"]:::bus
+    COG_MEM_LEARN_T["cognitive.memory.learning.*"]:::bus
+    COG_MEM_ATT_T["cognitive.memory.attention.*"]:::bus
+    COG_MEM_WM_T["cognitive.memory.working.*"]:::bus
+  end
+end
+class TICK_TOPICS card
+
+subgraph PRODUCERS["⚙️ Event Producers"]
+  JOB["Jobs (Index/DSAR/Actions)"]:::mid
+  PROS_P["Prospective Engine"]:::mid
+  WS_P["Workspace Broadcast"]:::mid
+  PRES_P["Presence Service"]:::mid
+  IOT_P["Integrations / IoT Adapter"]:::mid
+  SAF_P["Policy/Safety Monitor"]:::mid
+  EVT_P["Events Publisher (app)"]:::bus
+  CONTRACT_P["Contract Validator"]:::plane
+end
+class PRODUCERS card
+
+%% ====== EXTERNAL CONNECTIONS ======
+INTENT_RT["intent/router.py → Diagram 2"]:::mid
+subgraph EXTERNAL_CONNECTIONS["🔗 Connections to Other Diagrams"]
+  TO_COGNITIVE["→ Diagram 2: Cognitive Core"]:::mid
+  TO_INTELLIGENCE["→ Diagram 3: Intelligence Systems"]:::mid
+  TO_INFRASTRUCTURE["→ Diagram 4: Infrastructure"]:::mid
+end
+class EXTERNAL_CONNECTIONS card
+
+%% ====== COGNITIVE ORCHESTRATION ======
+subgraph COGNITIVE_ORCHESTRATION["🧠 Cognitive Orchestration Layer"]
+  direction TB
+
+  %% Attention / Thalamus (existing core)
+  subgraph ATTENTION_BRAIN["👁️ Attention Gate (Thalamus)"]
+    GATE["attention_gate/gate_service.py"]:::gate
+    SALIENCE["attention_gate/salience.py"]:::smart
+    BACKPRESSURE["attention_gate/backpressure.py"]:::smart
+    INTENT_CLASS["attention_gate/intent_rules.py"]:::smart
+  end
+
+  %% Steward (existing core)
+  subgraph MEMORY_STEWARD["🧠 Memory Steward (policy & workflow)"]
+    direction TB
+    MS_STEWARD["memory_steward/__init__.py"]:::mid
+    MS_SPACE["Space Resolver"]:::memory_steward
+    MS_REDACT["Redaction Coordinator"]:::memory_steward
+    MS_DEDUPE["Deduplication Engine"]:::memory_steward
+    MS_COMMIT["Commit Manager (UoW orchestration)"]:::memory_steward
+  end
+
+  %% Hippocampus (existing core regions)
+  subgraph HIPPOCAMPUS_LAYER["🌊 Hippocampus Layer"]
+    HIPPO_API["hippocampus/api.py"]:::brain
+    HIPPO_DG["hippocampus/separator.py (DG)"]:::brain
+    HIPPO_CA3["hippocampus/completer.py (CA3)"]:::brain
+    HIPPO_CA1["hippocampus/bridge.py (CA1)"]:::brain
+  end
+
+  %% Integration (existing)
+  subgraph INTEGRATION_LAYER["⚙️ Integration & Pipelines"]
+    P02_PIPELINE["pipelines/p02.py"]:::bus
+    MS_EVENTS["cognitive.memory.write.*"]:::bus
+  end
+
+  %% Context builder (existing)
+  subgraph CONTEXT_BUILDER["🧠 Context Bundle Builder"]
+    CB_ORCH["context_bundle/orchestrator.py"]:::mid
+    CB_FANOUT["context_bundle/store_fanout.py"]:::fast
+    CB_FUSION["context_bundle/result_fuser.py"]:::smart
+    CB_MMR["context_bundle/mmr_diversifier.py"]:::smart
+    CB_PROVENANCE["context_bundle/provenance_tracer.py"]:::mid
+    CB_BUDGET["context_bundle/budget_enforcer.py"]:::fast
+  end
+
+  %% Event router (existing)
+  subgraph COGNITIVE_EVENT_ROUTER["📡 Cognitive Event Router"]
+    CER_DISPATCH["cognitive_events/dispatcher.py"]:::bus
+    CER_CONSUMER["cognitive_events/consumer_groups.py"]:::bus
+    CER_BACKPRESSURE["cognitive_events/backpressure_handler.py"]:::smart
+    CER_DLQ["cognitive_events/dlq_manager.py"]:::storage
+    SHARED_IDEMPOTENCY["shared/idempotency_client.py (→ K0.Idempotency)"]:::fast
+  end
+
+  %% Working memory (existing cache)
+  subgraph WM_SESSION["🧮 Working Memory Manager"]
+    direction TB
+    WM_L1["working_memory/cache.py (L1)"]:::fast
+    WM_L2["working_memory/cache.py (L2)"]:::mid
+    WM_L3["working_memory/cache.py (L3)"]:::storage
+    WM_MGR["working_memory/manager.py"]:::mid
+    WM_STORE["working_memory/store.py"]:::storage
+    WM_ADMISSION["working_memory/admission_controller.py"]:::smart
+    WM_LOAD_MON["working_memory/load_monitor.py"]:::smart
+
+    %% NEW: buffer/executive from merged diagram
+    WM_BUFFER["core/family_working_memory_buffer.py"]:::fast
+    WM_ATTENTION["core/family_working_memory_attention.py"]:::smart
+    WM_EXECUTIVE["core/family_working_memory_executive.py"]:::smart
+  end
+end
+class COGNITIVE_ORCHESTRATION brain
+
+%% ====== MERGED COGNITIVE DETAIL BLOCKS ======
+subgraph COGNITIVE_DETAILS["🧠 Cognitive Detail (Merged from secondary diagram)"]
+  direction TB
+
+  %% Family Thalamus — extended
+  subgraph THAL_FAMILY["👁️ Enhanced Family Attention Gate"]
+    SALIENCE_EVAL["attention_gate/family_salience_evaluator.py"]:::smart
+    ADMISSION_CTRL["attention_gate/family_admission_controller.py"]:::smart
+    INTENT_ANALYZER["attention_gate/family_intent_analyzer.py"]:::smart
+    RELAY_MEMORY["attention_gate/family_memory_relay.py"]:::mid
+    RELAY_RECALL["attention_gate/family_recall_relay.py"]:::mid
+    RELAY_EXECUTIVE["attention_gate/family_executive_relay.py"]:::mid
+    RELAY_LEARNING["attention_gate/family_learning_relay.py"]:::mid
+    SPATIAL_ATT["attention_gate/family_spatial_attention.py"]:::smart
+    TEMPORAL_ATT["attention_gate/family_temporal_attention.py"]:::smart
+    FEATURE_ATT["attention_gate/family_feature_attention.py"]:::smart
+    OBJECT_ATT["attention_gate/family_object_attention.py"]:::smart
+  end
+
+  %% Hippocampus detail
+  subgraph HIPPO_DETAIL["🧠 Enhanced Hippocampus — Formation & Retrieval"]
+    DG_SEPARATOR_F["dentate_gyrus/separator.py (pattern separation)"]:::smart
+    DG_NEUROGENESIS_F["dentate_gyrus/neurogenesis.py (capacity)"]:::brain
+    DG_GATING_F["dentate_gyrus/gating.py (selection)"]:::gate
+
+    CA3_COMPLETER["ca3/pattern_completer.py (completion)"]:::smart
+    CA3_RECURRENT["ca3/recurrent_network.py (associations)"]:::brain
+    CA3_CONSOLIDATION["ca3/consolidation_coordinator.py"]:::mid
+
+    CA1_BRIDGE["ca1/cortical_bridge.py (to backbone)"]:::mid
+    CA1_COMPARATOR["ca1/novelty_comparator.py"]:::smart
+    CA1_THETA["ca1/theta_rhythm.py"]:::brain
+
+    hipp_orchestrator["hippocampus/memory_orchestrator.py"]:::mid
+    hipp_encoder["hippocampus/episodic_encoder.py"]:::mid
+    hipp_retrieval["hippocampus/retrieval_coordinator.py"]:::fast
+    hipp_consolidation["hippocampus/consolidation_scheduler.py"]:::mid
+  end
+
+  %% Global workspace & control
+  subgraph GLOBAL_WORKSPACE["🌐 Global Workspace"]
+    GW_BROADCAST["workspace/family_global_broadcaster.py"]:::mid
+    GW_COALITION["workspace/family_coalition_manager.py"]:::smart
+    GW_ATTENTION["workspace/attention_router.py"]:::smart
+    GW_CONSCIOUSNESS["workspace/consciousness_gateway.py"]:::brain
+  end
+
+  subgraph COGNITIVE_CONTROL["⚙️ Cognitive Control"]
+    CC_MONITOR["core/cognitive_monitor.py"]:::smart
+    CC_CONTROL["core/cognitive_controller.py"]:::smart
+    CC_ADAPTATION["core/adaptive_controller.py"]:::smart
+  end
+
+  subgraph CORE_SYSTEMS["🔧 Core Processing Systems"]
+    core_writer["core/writer.py"]:::mid
+    core_curator["core/curator.py"]:::mid
+    core_salience["core/salience_processor.py"]:::smart
+    core_goals["core/goal_manager.py"]:::mid
+  end
+
+  %% Services & adapters
+  subgraph COG_SERVICES["🧩 Cognitive Services"]
+    svc_memory_adapter["services/memory_adapter_service.py"]:::mid
+    svc_context_adapter["services/context_adapter_service.py"]:::mid
+    svc_attention["services/attention_service.py"]:::smart
+    svc_affect_integration["services/affect_integration_service.py"]:::smart
+
+    subgraph TRADITIONAL_SERVICES["Supporting Services"]
+      svc_mgr["services/service_manager.py"]:::mid
+      svc_cogarch["services/cognitive_architecture.py"]:::brain
+      svc_write["services/write_service.py"]:::fast
+      svc_recall["services/retrieval_service.py"]:::fast
+      svc_consol["services/consolidation_service.py"]:::mid
+      svc_index["services/indexing_service.py"]:::fast
+      svc_identity["services/personal_identity_service.py"]:::mid
+    end
+
+    subgraph SERVICE_INTEGRATION["Integration"]
+      svc_event_coordinator["services/event_coordinator.py"]:::bus
+      svc_workflow_manager["services/workflow_manager.py"]:::mid
+      svc_performance_monitor["services/performance_monitor.py"]:::smart
+    end
+  end
+
+  %% Perception
+  subgraph PERCEPTION["👀 Perception"]
+    per_api["perception/api.py"]:::card
+    per_sensors["perception/sensors.py"]:::card
+    per_fusion["perception/fusion.py"]:::card
+    per_preatt["perception/preattentive.py"]:::card
+  end
+
+  %% Retrieval detail
+  subgraph RET["🔎 Enhanced Retrieval — Context Assembly & Fusion"]
+    direction TB
+    ret_context_adapter["retrieval/context_adapter.py"]:::mid
+    ret_broker_enhanced["retrieval/enhanced_broker.py"]:::mid
+    ret_fusion_engine["retrieval/fusion_engine.py"]:::smart
+    ret_mmr_engine["retrieval/mmr_engine.py"]:::smart
+
+    subgraph COGNITIVE_RETRIEVAL["Cognitive Retrieval"]
+      ret_working_memory["retrieval/working_memory_boost.py"]:::fast
+      ret_affect_bias["retrieval/affective_bias.py"]:::smart
+      ret_temporal_bias["retrieval/temporal_bias.py"]:::smart
+      ret_social_bias["retrieval/social_bias.py"]:::smart
+    end
+
+    subgraph TRAD_RETRIEVAL["Traditional Retrieval"]
+      ret_qos["retrieval/qos_gate.py"]:::fast
+      ret_features["retrieval/features.py"]:::mid
+      ret_ranker["retrieval/ranker.py"]:::smart
+      ret_calibration["retrieval/calibration.py"]:::smart
+      ret_trace_builder["retrieval/trace_builder.py"]:::mid
+    end
+
+    subgraph STORE_ADAPTERS["Store Adapters"]
+      ret_fts_adapter["stores/fts_adapter.py"]:::fast
+      ret_vec_adapter["stores/vector_adapter.py"]:::fast
+      ret_kg_adapter["stores/kg_adapter.py"]:::smart
+      ret_episodic_adapter["stores/episodic_adapter.py"]:::mid
+    end
+  end
+
+  %% Episodic & Cortex shells (for links)
+  subgraph EPI["📦 Episodic"]
+    epi_service["episodic/service.py"]:::card
+    epi_store["episodic/store.py"]:::card
+    epi_seq["episodic/sequences.py"]:::card
+    epi_types["episodic/types.py"]:::card
+    epi_utils["episodic/utils.py"]:::card
+  end
+  subgraph CORTEX["🧠 Cortex / Prediction"]
+    cortex_pred["cortex/predictive_model.py"]:::card
+    cortex_bandit["cortex/bandit.py"]:::card
+    cortex_calib["cortex/calibration.py"]:::card
+    cortex_feats["cortex/features.py"]:::card
+  end
+
+  %% Affect
+  subgraph AFFECT["💝 Affect-Aware Processing"]
+    affect_threat["affect/threat_detector.py"]:::smart
+    affect_salience["affect/emotional_salience.py"]:::smart
+    affect_memory_mod["affect/memory_modulation.py"]:::brain
+    affect_classifier["affect/realtime_classifier.py"]:::smart
+    affect_state["affect/affect_state.py"]:::mid
+    affect_regulation["affect/emotion_regulation.py"]:::smart
+    affect_contagion["affect/emotional_contagion.py"]:::mid
+    affect_attention["affect/attention_bias.py"]:::smart
+    affect_memory["affect/memory_bias.py"]:::smart
+    affect_decision["affect/decision_bias.py"]:::smart
+    affect_learning["affect/affective_learning.py"]:::smart
+  end
+
+  %% Embeddings
+  subgraph EMB_CORE["🔤 Embeddings (Core)"]
+    emb_svc["embeddings/service.py"]:::card
+    emb_impl["embeddings/embedding_service.py"]:::card
+    emb_index["embeddings/index.py"]:::card
+    emb_store["embeddings/store.py"]:::card
+    emb_types["embeddings/types.py"]:::card
+  end
+
+  %% Cognitive event types & workflows (link to existing bus/types)
+  subgraph EVT_TYPES["🧾 Cognitive Events"]
+    ev_sens["SENSORY_FRAME"]:::card
+    ev_ws_b["WORKSPACE_BROADCAST"]:::card
+    ev_mcg["METACOG_REPORT"]:::card
+    ev_drv["DRIVE_TICK"]:::card
+    ev_bel["BELIEF_UPDATE"]:::card
+    ev_sim_req["SIMULATION_REQUEST"]:::card
+    ev_sim_res["SIMULATION_RESULT"]:::card
+    ev_act_dec["ACTION_DECISION"]:::card
+    ev_act_exe["ACTION_EXECUTED"]:::card
+    ev_hipp_enc["HIPPO_ENCODE"]:::card
+    ev_sleep["NREM/REM START/END"]:::card
+    ev_neurom["NEUROM_TICK"]:::card
+    ev_dsar["DSAR_EXPORT"]:::card
+    ev_reindex["REINDEX_REQUEST"]:::card
+    ev_ml["ML_RUN_EVENT"]:::card
+  end
+
+  subgraph WF_EVT["🪩 Workflows & Events (Core)"]
+    wf_base["workflows/workflow_base.py"]:::card
+    wf_store["workflows/store.py"]:::card
+    wf_recall["workflows/recall_workflow.py"]:::card
+    wf_seq["workflows/sequence_flow_workflow.py"]:::card
+    evt_write_h["events/write_handler.py"]:::card
+  end
+end
+class COGNITIVE_DETAILS card
+
+%% ====== COGNITIVE EVENT TOPICS (existing) ======
+subgraph COGNITIVE_TOPICS["📡 Cognitive Event Topics"]
+  direction TB
+  subgraph MEMORY_EVENTS["Memory Formation"]
+    MEM_INIT["cognitive.memory.write.initiated"]:::bus
+    MEM_SPACE["cognitive.memory.write.space_resolved"]:::bus
+    MEM_REDACT["cognitive.memory.write.redacted"]:::bus
+    MEM_COMMIT["cognitive.memory.write.committed"]:::bus
+    MEM_FAIL["cognitive.memory.write.failed"]:::bus
+  end
+  subgraph RECALL_EVENTS["Context Assembly"]
+    REC_REQ["cognitive.recall.context.requested"]:::bus
+    REC_QUERY["cognitive.recall.stores.queried"]:::bus
+    REC_FUSE["cognitive.recall.results.fused"]:::bus
+    REC_BUNDLE["cognitive.recall.bundle.assembled"]:::bus
+    REC_FAIL["cognitive.recall.bundle.failed"]:::bus
+  end
+  subgraph ARBITRATION_EVENTS["Decision Making"]
+    ARB_REQ["cognitive.arbitration.decision.requested"]:::bus
+    ARB_HABIT["cognitive.arbitration.habit.evaluated"]:::bus
+    ARB_PLAN["cognitive.arbitration.planner.evaluated"]:::bus
+    ARB_DECIDE["cognitive.arbitration.decision.made"]:::bus
+    ARB_FAIL["cognitive.arbitration.decision.failed"]:::bus
+  end
+  subgraph LEARNING_EVENTS["Learning & Adaptation"]
+    LRN_OUT["cognitive.learning.outcome.received"]:::bus
+    LRN_HABIT["cognitive.learning.habit.updated"]:::bus
+    LRN_PLAN["cognitive.learning.planner.updated"]:::bus
+    LRN_SELF["cognitive.learning.self_model.updated"]:::bus
+  end
+  subgraph ATTENTION_EVENTS["Attention & Working Memory"]
+    ATT_ADMIT["cognitive.attention.gate.admit"]:::bus
+    ATT_DEFER["cognitive.attention.gate.defer"]:::bus
+    ATT_BOOST["cognitive.attention.gate.boost"]:::bus
+    ATT_DROP["cognitive.attention.gate.drop"]:::bus
+    WM_UPDATE["cognitive.working_memory.updated"]:::bus
+    WM_EVICT["cognitive.working_memory.evicted"]:::bus
+  end
+end
+class COGNITIVE_TOPICS card
+
+%% ====== SMART LANE PROCESSING & WORKFLOWS (extended) ======
+INTENT_RT--"unset/low‑confidence intent · high‑risk · obligations"-->GATE
+GATE-->SALIENCE
+SALIENCE-->BACKPRESSURE
+BACKPRESSURE-->INTENT_CLASS
+INTENT_CLASS-->CER_DISPATCH
+
+%% New: attention detail path
+GATE-->SALIENCE_EVAL-->ADMISSION_CTRL-->INTENT_ANALYZER
+GATE-->RELAY_MEMORY
+GATE-->RELAY_RECALL
+GATE-->RELAY_EXECUTIVE
+GATE-->RELAY_LEARNING
+INTENT_ANALYZER-->SPATIAL_ATT
+INTENT_ANALYZER-->TEMPORAL_ATT
+INTENT_ANALYZER-->FEATURE_ATT
+INTENT_ANALYZER-->OBJECT_ATT
+
+%% Existing write/recall orchestration
+GATE-- "ADMIT WriteIntent" -->MS_STEWARD
+MS_STEWARD-->HIPPO_API
+HIPPO_API-->HIPPO_DG-->HIPPO_CA3-->HIPPO_CA1
+P02_PIPELINE-->HIPPO_API
+MS_STEWARD-->MS_EVENTS
+
+GATE-- "ADMIT RecallIntent" -->CB_ORCH
+CB_ORCH-->CB_FANOUT-->CB_FUSION-->CB_MMR-->CB_PROVENANCE-->CB_BUDGET
+
+%% WM integration + workspace
+GATE-->WM_MGR
+WM_MGR-->WM_L1-->WM_L2-->WM_L3
+WM_MGR-->WM_ADMISSION-->WM_LOAD_MON
+WM_MGR-->WM_BUFFER
+WM_MGR-->WM_ATTENTION
+WM_MGR-->WM_EXECUTIVE
+WM_ATTENTION<-->GATE
+WM_EXECUTIVE<-->CC_CONTROL
+WM_BUFFER-->GW_BROADCAST
+GW_BROADCAST<-->GW_COALITION
+GW_BROADCAST<-->GW_ATTENTION
+GW_BROADCAST<-->GW_CONSCIOUSNESS
+GW_ATTENTION<-->GATE
+
+%% Hippocampus detail wiring
+RELAY_MEMORY-->hipp_orchestrator
+hipp_orchestrator-->DG_SEPARATOR_F-->CA3_COMPLETER-->CA1_BRIDGE
+DG_SEPARATOR_F<-->DG_NEUROGENESIS_F
+DG_SEPARATOR_F<-->DG_GATING_F
+CA3_COMPLETER<-->CA3_RECURRENT
+CA3_COMPLETER<-->CA3_CONSOLIDATION
+CA1_BRIDGE<-->CA1_COMPARATOR
+CA1_BRIDGE<-->CA1_THETA
+
+%% Link detail to core regions
+HIPPO_DG-->DG_SEPARATOR_F
+HIPPO_CA3-->CA3_COMPLETER
+HIPPO_CA1-->CA1_BRIDGE
+
+%% Affect integration
+affect_threat<-->GATE
+affect_threat<-->SALIENCE_EVAL
+affect_classifier-->affect_state-->affect_regulation
+affect_memory_mod<-->hipp_orchestrator
+affect_attention<-->WM_ATTENTION
+affect_decision<-->CC_CONTROL
+
+%% Services orchestration
+svc_memory_adapter<-->hipp_orchestrator
+svc_memory_adapter<-->WM_MGR
+svc_context_adapter<-->ret_context_adapter
+svc_context_adapter<-->WM_BUFFER
+svc_attention<-->GATE
+svc_attention<-->SALIENCE_EVAL
+svc_affect_integration<-->affect_state
+svc_affect_integration<-->affect_classifier
+
+%% Retrieval integration
+RELAY_RECALL-->ret_context_adapter
+ret_context_adapter-->ret_broker_enhanced-->ret_fusion_engine
+ret_working_memory<-->WM_BUFFER
+ret_affect_bias<-->affect_state
+ret_fusion_engine-->ret_mmr_engine
+ret_fusion_engine-->ret_ranker
+ret_ranker-->cortex_pred
+ret_calibration-->ret_trace_builder
+
+%% Perception integration
+per_api-->per_sensors-->per_fusion-->per_preatt
+per_preatt-->WM_BUFFER
+per_preatt-->affect_classifier
+WM_BUFFER<-->GW_BROADCAST
+
+%% Event & workflow hooks
+evt_bus-->ev_sens
+evt_bus-->ev_ws_b
+evt_bus-->ev_mcg
+evt_bus-->ev_hipp_enc
+GW_CONSCIOUSNESS-->ev_ws_b
+evt_write_h-->st_receipts
+wf_recall-->ret_broker_enhanced
+wf_seq-->epi_seq
+wf_store-->st_ws
+
+%% Storage mapping to K0 drivers (no user-space durability)
+hipp_encoder-->st_hipp_store
+hipp_encoder-->st_epi
+hipp_encoder-->st_sem
+CA1_BRIDGE-->st_sem
+CA1_BRIDGE-->st_kg_dom
+ret_fusion_engine-->st_fts
+ret_fusion_engine-->st_vec
+ret_fusion_engine-->st_sem
+ret_fusion_engine-->st_epi
+ret_fts_adapter-->st_fts
+ret_vec_adapter-->st_vec
+ret_kg_adapter-->st_kg_dom
+ret_episodic_adapter-->st_epi
+emb_svc<-->hipp_encoder
+emb_svc<-->ret_context_adapter
+emb_impl-->emb_index
+emb_impl-->emb_store
+emb_impl-->emb_types
+emb_index<-->st_emb
+emb_index<-->st_vec
+svc_index<-->emb_svc
+svc_index<-->hipp_consolidation
+
+%% ====== BUS BRIDGES & FLOWS (Kernelized) ======
+evt_bus<-->K0_BUS
+MS_STEWARD-->evt_bus
+HIPPO_API-->evt_bus
+CB_ORCH-->evt_bus
+WM_MGR-->evt_bus
+P02_PIPELINE-->evt_bus
+GATE-->evt_bus
+
+evt_types-->evt_validation
+evt_validation-->evt_bus
+evt_validation-. "invalid" .->evt_rejects
+CER_DISPATCH-->evt_bus
+CER_CONSUMER<-->evt_handlers
+CER_BACKPRESSURE<-->evt_handlers
+CER_DLQ<-->evt_dlq
+evt_handlers-. errors/nack .->evt_dlq
+
+evt_bus<-->evt_dispatch
+evt_bus<-->evt_sub
+evt_dispatch<-->evt_handlers
+evt_handlers<-->evt_middleware
+evt_sub<-->evt_filters
+evt_handlers-->pip_bus
+pip_bus-->P01-->TO_COGNITIVE
+pip_bus-->P02-->TO_COGNITIVE
+pip_bus-->P03-->TO_INFRASTRUCTURE
+pip_bus-->P04-->TO_INTELLIGENCE
+pip_bus-->P05-->TO_INFRASTRUCTURE
+pip_bus-->P06-->TO_INTELLIGENCE
+pip_bus-->P07-->TO_INFRASTRUCTURE
+pip_bus-->P08-->TO_INFRASTRUCTURE
+pip_bus-->P09-->TO_COGNITIVE
+pip_bus-->P10-->TO_INFRASTRUCTURE
+pip_bus-->P11-->TO_INFRASTRUCTURE
+pip_bus-->P12-->TO_INFRASTRUCTURE
+pip_bus-->P13-->TO_INFRASTRUCTURE
+pip_bus-->P14-->TO_INFRASTRUCTURE
+pip_bus-->P15-->TO_INFRASTRUCTURE
+pip_bus-->P16-->TO_INFRASTRUCTURE
+pip_bus-->P17-->TO_COGNITIVE
+pip_bus-->P18-->TO_INFRASTRUCTURE
+pip_bus-->P19-->TO_COGNITIVE
+pip_bus-->P20-->TO_INTELLIGENCE
+
+%% ====== CONTRACTS & POLICY LINKS ======
+contract_api-->APL
+contract_api-->APP
+contract_api-->CTRL
+contract_events-->evt_types
+contract_storage-->TO_INFRASTRUCTURE
+contract_security-->MW_SEC
+contract_policy-->pol_pep
+
+MW_PEP-->pol_pep
+pol_pep-->pol_abac
+pol_pep-->pol_rbac
+pol_abac-->pol_redactor
+pol_rbac-->pol_safety
+pol_safety-->pol_consent
+pol_consent-->pol_space
+pol_space-->pol_audit
+pol_cognitive-->pol_attention
+pol_attention-->GATE
+pol_memory_lifecycle-->MS_REDACT
+
+%% ====== SSE STREAMING (via K0.SSE) ======
+SSE_ACL["sse/family_acl (topic filters)"]:::gate
+SSE<-->SSE_ACL
+SSE_ACL<-->UI_T
+SSE_ACL<-->JOB_T
+SSE_ACL<-->PROS_T
+SSE_ACL<-->MEM_T
+SSE_ACL<-->WS_T
+SSE_ACL<-->PRES_T
+SSE_ACL<-->INT_T
+SSE_ACL<-->SAF_T
+SSE_ACL<-->EVT_T
+SSE_ACL-- "[ADMIN-only]" ---POL_T
+SSE_ACL-- "[ADMIN-only]" ---CONTRACT_T
+
+%% ====== TOPIC ALIASES ======
+FAM_MEM_T["family.memory.*"]
+FAM_SYNC_T["family.sync.*"]
+FAM_REL_T["family.relationships.*"]
+FAM_SUB_T["family.subscription.*"]
+FAM_EMG_T["family.emergency.*"]
+FAM_DEV_T["family.device.*"]
+COG_FAM_MEM_T["cognitive.family.memory.*"]
+COG_FAM_REC_T["cognitive.family.recall.*"]
+COG_FAM_ARB_T["cognitive.family.arbitration.*"]
+COG_FAM_LRN_T["cognitive.family.learning.*"]
+COG_FAM_ATT_T["cognitive.family.attention.*"]
+COG_FAM_WM_T["cognitive.family.working_memory.*"]
+SSE_ACL<-->FAM_MEM_T
+SSE_ACL<-->FAM_SYNC_T
+SSE_ACL<-->FAM_REL_T
+SSE_ACL<-->FAM_SUB_T
+SSE_ACL<-->FAM_EMG_T
+SSE_ACL<-->FAM_DEV_T
+SSE_ACL<-->COG_FAM_MEM_T
+SSE_ACL<-->COG_FAM_REC_T
+SSE_ACL<-->COG_FAM_ARB_T
+SSE_ACL<-->COG_FAM_LRN_T
+SSE_ACL<-->COG_FAM_ATT_T
+SSE_ACL<-->COG_FAM_WM_T
+
+%% ====== MEMORY HIERARCHY CONNECTIONS ======
+TIER1-- "Read/Write" -->MEMORY_ENGINE
+TIER2-- "Family Coordination" -->MEMORY_SPACES
+TIER3-- "Administration" -->MEMORY_PERMISSIONS
+
+P01-- "TO Recall" -->MEMORY_INDEX
+P02-- "TO Formation" -->MEMORY_ENGINE
+P03-- "WITHIN Consolidation" -->MEMORY_SPACES
+P04-- "FROM Decisions" -->MEMORY_ENGINE
+P05-- "FROM Triggers" -->MEMORY_INDEX
+P06-- "TO Learning" -->MEMORY_ENGINE
+P07-- "Sync Ops" -->MEMORY_SYNC
+P08-- "TO Embeddings" -->MEMORY_INDEX
+P09-- "TO Ingestion" -->MEMORY_ENGINE
+P10-- "Protection" -->MEMORY_PERMISSIONS
+
+PERSONAL_FULL-- "Device-Local" -->DEVICE_STORAGE
+FAMILY_HUB-- "Shared Hub" -->MEMORY_SYNC
+WORK_DEVICE-- "Contextual Memory" -->DEVICE_STORAGE
+GUEST_DEVICE-- "Limited Access" -->MEMORY_PERMISSIONS
+
+MEMORY_ENGINE-- "Intelligence" -->pol_cognitive
+MEMORY_SPACES-- "Family Intelligence" -->pol_relationship
+MEMORY_INDEX-- "Experience Decisions" -->pol_memory_lifecycle
+MEMORY_SYNC-- "Coordinated Intelligence" -->pol_memory_coordination
+
+%% Memory events loop
+evt_bus-- "Memory Events" -->MEMORY_ENGINE
+MEMORY_ENGINE-- "State Changes" -->evt_bus
+
+%% ====== FLOW SUMMARY ======
+subgraph FLOW_SUMMARY["🔄 End-to-End Flow"]
+  direction TB
+  FLOW1["1️⃣ Device → Gateway → Planes → Ingress → **K0 Ports**"]:::plane
+  FLOW2["2️⃣ Security/QoS/Safety (user-space hints) → **PEP@K0 syscall is authority**"]:::gate
+  FLOW3["3️⃣ **Single durable commit** in K0 (Idempotency → WAL → Outbox → Receipts)"]:::mid
+  FLOW4["4️⃣ Facade→K0 Bus → Pipelines P01–P20"]:::bus
+  FLOW5["5️⃣ Cognition: Attention · Steward · Hippocampus · Context · Workspace · Affect · Retrieval"]:::brain
+  FLOW6["6️⃣ Real-time SSE via **K0.SSE** with ACL by role/age/device"]:::realtime
+end
+class FLOW_SUMMARY card
+
+%% ====== CLASS GROUPS ======
+%% Extended Thalamus block uses a visually distinct style for clarity
+classDef thalamus_ext fill:#fffbe6,stroke:#d48806,stroke-width:2px,stroke-dasharray:4 2,rx:8,ry:8
+class SALIENCE_EVAL,ADMISSION_CTRL,INTENT_ANALYZER,RELAY_MEMORY,RELAY_RECALL,RELAY_EXECUTIVE,RELAY_LEARNING,SPATIAL_ATT,TEMPORAL_ATT,FEATURE_ATT,OBJECT_ATT thalamus_ext
+
+class MS_STEWARD,MS_SPACE,MS_REDACT,MS_DEDUPE,MS_COMMIT steward
+class SALIENCE_EVAL,ADMISSION_CTRL,INTENT_ANALYZER,RELAY_MEMORY,RELAY_RECALL,RELAY_EXECUTIVE,RELAY_LEARNING,SPATIAL_ATT,TEMPORAL_ATT,FEATURE_ATT,OBJECT_ATT thalamus
+class MS_STEWARD,MS_SPACE,MS_REDACT,MS_DEDUPE,MS_COMMIT memory_steward
+%% ====== CONTEXT BUILDER CLASS GROUP ======
+%% Working Memory Class Groups
+%% -- Cache Layers
+%% Hippocampus class group: core components
+class HIPPO_API,HIPPO_DG,HIPPO_CA3,HIPPO_CA1 hippocampus
+%% Hippocampus class group: extension/detail components
+class DG_SEPARATOR_F,DG_NEUROGENESIS_F,DG_GATING_F,CA3_COMPLETER,CA3_RECURRENT,CA3_CONSOLIDATION,CA1_BRIDGE,CA1_COMPARATOR,CA1_THETA hippocampus_ext
+%% -- Manager & Admission
+class WM_MGR,WM_ADMISSION,WM_LOAD_MON working_memory
+%% -- Executive & Attention
+%% Global Workspace class group: visually distinct, serves as the coordination hub for working memory and cognitive control.
+%% Architectural traceability:
+%% - GW_BROADCAST, GW_ATTENTION, GW_COALITION, GW_CONSCIOUSNESS interact with WM_BUFFER, WM_EXECUTIVE, CC_CONTROL (see flow wiring above).
+%% - See: workspace section in ADR_MASTER_REFERENCE and cognitive_control module in k1_module_analysis.md for rationale.
+class GW_BROADCAST,GW_COALITION,GW_ATTENTION,GW_CONSCIOUSNESS global_workspace
+
+%% Cognitive Control class group: orchestrates executive functions, receives input from global workspace and working memory.
+%% Integration points:
+%% - CC_CONTROL <--> WM_EXECUTIVE (executive function coordination)
+%% - CC_CONTROL <--> GW_BROADCAST (global workspace coordination)
+%% - CC_CONTROL <--> GW_ATTENTION (attention routing)
+%% - CC_MONITOR <--> GW_CONSCIOUSNESS (monitoring conscious state)
+%% - CC_ADAPTATION <--> WM_LOAD_MON (adaptive control based on working memory load)
+class CC_MONITOR,CC_CONTROL,CC_ADAPTATION cognitive_control
+
+%% Explicit integration links for cognitive control
+CC_CONTROL<-->WM_EXECUTIVE
+CC_CONTROL<-->GW_BROADCAST
+CC_CONTROL<-->GW_ATTENTION
+CC_MONITOR<-->GW_CONSCIOUSNESS
+CC_ADAPTATION<-->WM_LOAD_MON
+
+%% Working Memory class group: cache layers and executive/attention modules, linked to global workspace and cognitive control.
+class WM_L1,WM_L2,WM_L3,WM_STORE,WM_MGR,WM_ADMISSION,WM_LOAD_MON,WM_BUFFER,WM_ATTENTION,WM_EXECUTIVE working_memory
+
+%% Cognitive Control class group: orchestrates executive functions, receives input from global workspace and working memory.
+class CC_MONITOR,CC_CONTROL,CC_ADAPTATION cognitive_control
+
+%% Working Memory class group: cache layers and executive/attention modules, linked to global workspace and cognitive control.
+class WM_L1,WM_L2,WM_L3,WM_STORE,WM_MGR,WM_ADMISSION,WM_LOAD_MON,WM_BUFFER,WM_ATTENTION,WM_EXECUTIVE working_memory
+
+class affect_threat,affect_salience,affect_memory_mod,affect_classifier,affect_state,affect_regulation,affect_contagion,affect_attention,affect_memory,affect_decision,affect_learning affect_system
+class CER_DISPATCH,CER_CONSUMER,CER_BACKPRESSURE,CER_DLQ,SHARED_IDEMPOTENCY bus
+%% Cognitive class group: links to Policy Framework and Cognitive Orchestration for architectural traceability.
+%% - pol_cognitive, pol_attention, pol_memory_lifecycle are core cognitive policy modules.
+%% - See: policy framework section for integration points.
+%% - See: cognitive orchestration for runtime coordination.
+
+class pol_cognitive,pol_attention,pol_memory_lifecycle cognitive
+
+%% Visual links for clarity:
+pol_cognitive---POLICY_FRAMEWORK
+pol_attention---COGNITIVE_ORCHESTRATION
+pol_memory_lifecycle---COGNITIVE_ORCHESTRATION
+class CC_MONITOR,CC_CONTROL,CC_ADAPTATION cognitive_control
+class CER_DISPATCH,CER_CONSUMER,CER_BACKPRESSURE,CER_DLQ,SHARED_IDEMPOTENCY bus
+class pol_cognitive,pol_attention,pol_memory_lifecycle cognitive
+
+style P01 fill:#e6f5f5,stroke:#008080,stroke-width:2px
+style P02 fill:#ffecec,stroke:#FF0000,stroke-width:2px
+style P03 fill:#eaf7ea,stroke:#008000,stroke-width:2px
+style P04 fill:#ecf0ff,stroke:#0000FF,stroke-width:2px
+style P05 fill:#fff2e6,stroke:#FF8800,stroke-width:2px
+style P06 fill:#f7e6f7,stroke:#AA00AA,stroke-width:2px
+style P07 fill:#e9fbfc,stroke:#00CED1,stroke-width:2px
+style P08 fill:#fff9e3,stroke:#FFD700,stroke-width:2px
+style P09 fill:#f6ece8,stroke:#A52A2A,stroke-width:2px
+style P10 fill:#ffe7f2,stroke:#FF1493,stroke-width:2px
+style P11 fill:#eaf0ff,stroke:#4169E1,stroke-width:2px
+style P12 fill:#e9f6f0,stroke:#2E8B57,stroke-width:2px
+style P13 fill:#fbeaea,stroke:#B22222,stroke-width:2px
+style P14 fill:#fbecfe,stroke:#DA70D6,stroke-width:2px
+style P15 fill:#eaf3f9,stroke:#4682B4,stroke-width:2px
+style P16 fill:#f6f7ea,stroke:#808000,stroke-width:2px
+style P17 fill:#f5eee8,stroke:#8B4513,stroke-width:2px
+style P18 fill:#fff0ea,stroke:#FF4500,stroke-width:2px
+style P19 fill:#f4eafb,stroke:#9932CC,stroke-width:2px
+style P20 fill:#f2f2f2,stroke:#696969,stroke-width:2px

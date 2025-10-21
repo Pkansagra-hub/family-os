@@ -1,0 +1,723 @@
+# JSON-RPC 2.0 Protocol Specification
+#
+# **Purpose:** Define the JSON-RPC 2.0 protocol format for MCP (Model Context Protocol)
+# communication between K1 and tool servers.
+#
+# **Source ADR:** ADR-0033a (MCP Protocol Integration - Layer 1)
+# **Related ADRs:** ADR-0033 (Tool Execution Architecture), ADR-0033d (2D Selection)
+#
+# **Standard Reference:** JSON-RPC 2.0 Specification (RFC 2119)
+# **Transport:** Stdio (newline-delimited) or HTTP POST
+# **Adoption:** 80% of K1 tools use MCP Protocol
+
+---
+json_rpc_protocol:
+  name: "JSON-RPC 2.0 Protocol"
+  version: "2.0"
+  rfc: "RFC 2119 (JSON-RPC 2.0 Specification)"
+  status: "Standardized"
+  adoption: "80% (608 tools)"
+
+  overview:
+    purpose: "Standardized communication protocol for tool discovery and invocation"
+    philosophy: |
+      JSON-RPC is a stateless, lightweight RPC protocol using JSON for serialization.
+      Provides request/response semantics with unique ID matching.
+      Transport-agnostic (works over stdio, HTTP, WebSockets, etc).
+
+    design_principles:
+      - "Stateless: Each request is independent"
+      - "Lightweight: Minimal overhead (<5ms for stdio)"
+      - "Language-agnostic: Works with any language"
+      - "Standards-based: RFC 2119 compliance"
+      - "Extensible: Supports custom methods"
+
+  ## REQUEST FORMAT
+  request_format:
+    structure:
+      jsonrpc:
+        type: "string"
+        value: "2.0"
+        description: "Protocol version (must be '2.0')"
+        required: true
+
+      method:
+        type: "string"
+        description: "Method name to invoke (e.g., 'tools/call')"
+        required: true
+        examples:
+          - "initialize"
+          - "tools/list"
+          - "tools/call"
+          - "shutdown"
+          - "custom_method"  # Custom methods allowed
+
+      params:
+        type: "object or array"
+        description: "Method parameters (tool-specific)"
+        required: false
+        default: "{}"
+        note: "Object keys match method spec, array indices match positional args"
+
+      id:
+        type: "string, number, or NULL"
+        description: "Request identifier for response matching"
+        required: false
+        default: "NULL"
+        note: |
+          Client assigns unique ID (recommend UUID).
+          Server echoes ID in response (for request/response matching).
+          If omitted, this is a NOTIFICATION (no response expected).
+
+    schema_json: |
+      {
+        "type": "object",
+        "required": ["jsonrpc", "method"],
+        "properties": {
+          "jsonrpc": {"const": "2.0"},
+          "method": {"type": "string"},
+          "params": {"oneOf": [{"type": "object"}, {"type": "array"}]},
+          "id": {"oneOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]}
+        }
+      }
+
+    examples:
+      example_1:
+        description: "Request with object params"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+              "tool_name": "weather_api",
+              "arguments": {"lat": 40.7128, "lon": -74.0060}
+            },
+            "id": "req-001"
+          }
+
+      example_2:
+        description: "Request with array params"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "method": "add",
+            "params": [10, 20],
+            "id": 42
+          }
+
+      example_3:
+        description: "Notification (no response expected)"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "method": "log",
+            "params": {"message": "Tool initialized successfully"}
+          }
+
+  ## RESPONSE FORMAT (SUCCESS)
+  response_success_format:
+    structure:
+      jsonrpc:
+        type: "string"
+        value: "2.0"
+        description: "Protocol version"
+        required: true
+
+      result:
+        type: "object, string, number, array, boolean, or null"
+        description: "Method result (success)"
+        required: true
+        note: "Must NOT be present if error occurred"
+
+      id:
+        type: "string, number, or NULL"
+        description: "Request ID (echoed from request)"
+        required: true
+        note: "Matches request ID for request/response correlation"
+
+    schema_json: |
+      {
+        "type": "object",
+        "required": ["jsonrpc", "result", "id"],
+        "properties": {
+          "jsonrpc": {"const": "2.0"},
+          "result": {},
+          "id": {"oneOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]}
+        }
+      }
+
+    examples:
+      example_1:
+        description: "Success response with object result"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "result": {
+              "temperature": 72.5,
+              "condition": "Partly Cloudy",
+              "humidity": 65
+            },
+            "id": "req-001"
+          }
+
+      example_2:
+        description: "Success response with string result"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "result": "OK",
+            "id": 42
+          }
+
+      example_3:
+        description: "Success response with array result"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "result": [{"tool": "weather_api"}, {"tool": "calendar"}],
+            "id": "req-list-001"
+          }
+
+  ## ERROR RESPONSE FORMAT
+  error_response_format:
+    structure:
+      jsonrpc:
+        type: "string"
+        value: "2.0"
+        required: true
+
+      error:
+        type: "object"
+        required: true
+        note: "Must NOT be present if result occurred"
+        fields:
+          code:
+            type: "integer"
+            description: "Error code"
+            required: true
+            reserved_ranges:
+              standard: "-32768 to -32000 (reserved by JSON-RPC)"
+              server: "-32000 to -32099 (server reserved)"
+              custom: "-1 to -32768 (custom application errors)"
+
+            standard_codes:
+              parse_error: "-32700"
+              invalid_request: "-32600"
+              method_not_found: "-32601"
+              invalid_params: "-32602"
+              internal_error: "-32603"
+
+          message:
+            type: "string"
+            description: "Error message (human-readable)"
+            required: true
+            examples:
+              - "Parse error"
+              - "Invalid Request"
+              - "Method not found"
+              - "Invalid params"
+              - "Internal error"
+
+          data:
+            type: "object, string, number, or null"
+            description: "Additional error details (optional)"
+            required: false
+            note: "Can include stack trace, error context, etc"
+
+      id:
+        type: "string, number, or NULL"
+        description: "Request ID (echoed from request)"
+        required: true
+
+    schema_json: |
+      {
+        "type": "object",
+        "required": ["jsonrpc", "error", "id"],
+        "properties": {
+          "jsonrpc": {"const": "2.0"},
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {"type": "integer"},
+              "message": {"type": "string"},
+              "data": {}
+            }
+          },
+          "id": {"oneOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]}
+        }
+      }
+
+    examples:
+      example_1:
+        description: "Error: Method not found"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "error": {
+              "code": -32601,
+              "message": "Method not found",
+              "data": {"method": "unknown_method"}
+            },
+            "id": "req-001"
+          }
+
+      example_2:
+        description: "Error: Invalid params"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "error": {
+              "code": -32602,
+              "message": "Invalid params",
+              "data": {
+                "missing_field": "lat",
+                "expected": {"lat": "number", "lon": "number"}
+              }
+            },
+            "id": "req-001"
+          }
+
+      example_3:
+        description: "Error: Internal error (timeout)"
+        json: |
+          {
+            "jsonrpc": "2.0",
+            "error": {
+              "code": -32603,
+              "message": "Internal error",
+              "data": {
+                "reason": "Tool execution timeout",
+                "timeout_ms": 5000
+              }
+            },
+            "id": "req-001"
+          }
+
+  ## STANDARD METHODS
+  standard_methods:
+
+    method_1_initialize:
+      name: "initialize"
+      description: "Initialize MCP server and return capabilities"
+      required: true
+
+      request:
+        method: "initialize"
+        params: {}
+
+      response:
+        result:
+          capabilities:
+            type: "array[string]"
+            description: "Server capabilities"
+            examples:
+              - ["tools/list", "tools/call"]
+              - ["ai_inference", "custom_analysis"]
+
+          server_info:
+            type: "object"
+            description: "Server metadata"
+            fields:
+              name: "string"
+              version: "string"
+              implementation: "string (e.g., 'Python MCP Server')"
+
+      example: |
+        Request:
+        {
+          "jsonrpc": "2.0",
+          "method": "initialize",
+          "id": "init-001"
+        }
+
+        Response:
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "capabilities": ["tools/list", "tools/call"],
+            "server_info": {
+              "name": "weather_api",
+              "version": "1.0.0",
+              "implementation": "Python MCP Server"
+            }
+          },
+          "id": "init-001"
+        }
+
+    method_2_tools_list:
+      name: "tools/list"
+      description: "List all available tools"
+      note: "Called after initialize to discover tools"
+
+      request:
+        method: "tools/list"
+        params: {}
+
+      response:
+        result:
+          tools:
+            type: "array[object]"
+            description: "Array of tool definitions"
+            fields_per_tool:
+              name:
+                type: "string"
+                description: "Tool name"
+
+              description:
+                type: "string"
+                description: "Tool description"
+
+              inputSchema:
+                type: "object"
+                description: "JSON Schema for tool arguments"
+
+      example: |
+        Request:
+        {
+          "jsonrpc": "2.0",
+          "method": "tools/list",
+          "id": "list-001"
+        }
+
+        Response:
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "tools": [
+              {
+                "name": "get_weather",
+                "description": "Get weather for location",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "lat": {"type": "number"},
+                    "lon": {"type": "number"}
+                  },
+                  "required": ["lat", "lon"]
+                }
+              }
+            ]
+          },
+          "id": "list-001"
+        }
+
+    method_3_tools_call:
+      name: "tools/call"
+      description: "Invoke a tool"
+      note: "Main method for tool execution"
+
+      request:
+        method: "tools/call"
+        params:
+          tool_name:
+            type: "string"
+            description: "Name of tool to invoke"
+
+          arguments:
+            type: "object"
+            description: "Tool-specific arguments"
+
+      response:
+        result:
+          tool_result:
+            type: "object"
+            description: "Tool execution result"
+            note: "Format is tool-specific"
+
+      example: |
+        Request:
+        {
+          "jsonrpc": "2.0",
+          "method": "tools/call",
+          "params": {
+            "tool_name": "get_weather",
+            "arguments": {"lat": 40.7128, "lon": -74.0060}
+          },
+          "id": "call-001"
+        }
+
+        Response:
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "tool_result": {
+              "temperature": 72.5,
+              "condition": "Partly Cloudy",
+              "humidity": 65
+            }
+          },
+          "id": "call-001"
+        }
+
+    method_4_shutdown:
+      name: "shutdown"
+      description: "Graceful server shutdown"
+
+      request:
+        method: "shutdown"
+        params: {}
+
+      response:
+        result: "ok"
+
+      example: |
+        Request:
+        {
+          "jsonrpc": "2.0",
+          "method": "shutdown",
+          "id": "shutdown-001"
+        }
+
+        Response:
+        {
+          "jsonrpc": "2.0",
+          "result": "ok",
+          "id": "shutdown-001"
+        }
+
+  ## REQUEST/RESPONSE LIFECYCLE
+  request_response_lifecycle:
+
+    scenario_1_successful_call:
+      steps:
+        1_client_sends: |
+          Client sends JSON-RPC request with unique ID
+          {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":"req-001"}
+
+        2_server_receives: |
+          Server parses JSON, validates schema
+
+        3_server_processes: |
+          Server executes method, generates result
+
+        4_server_responds: |
+          Server sends JSON-RPC response with matching ID
+          {"jsonrpc":"2.0","result":{...},"id":"req-001"}
+
+        5_client_receives: |
+          Client parses response, matches ID to request
+          Delivers result to caller
+
+    scenario_2_error_call:
+      steps:
+        1_client_sends: "Request"
+        2_server_validates: "Invalid params detected"
+        3_server_responds: |
+          {"jsonrpc":"2.0","error":{"code":-32602,"message":"Invalid params"},"id":"req-001"}
+        4_client_receives: "Error result"
+
+    scenario_3_notification:
+      steps:
+        1_client_sends: |
+          Sends request WITHOUT id field
+          {"jsonrpc":"2.0","method":"log","params":{...}}
+        2_server_processes: "Processes request"
+        3_server_does_not_respond: "No response sent (notification)"
+        4_client_continues: "No response expected"
+
+  ## TRANSPORT MECHANISMS
+  transports:
+
+    transport_1_stdio:
+      name: "Stdio Transport"
+      description: "JSON-RPC over stdin/stdout pipes (newline-delimited JSON)"
+      protocol_usage: "Process Sandbox MCP servers"
+      adoption: "70% (424 tools)"
+
+      format: "Newline-delimited JSON"
+      line_terminator: "\n (LF only, not CRLF)"
+      encoding: "UTF-8"
+
+      implementation:
+        server_side: |
+          #!/usr/bin/env python3
+          import sys
+          import json
+
+          while True:
+              line = sys.stdin.readline()
+              if not line:
+                  break
+              request = json.loads(line)
+              result = handle_method(request)
+              response = {
+                  "jsonrpc": "2.0",
+                  "result": result,
+                  "id": request.get("id")
+              }
+              print(json.dumps(response))
+              sys.stdout.flush()
+
+        client_side: |
+          import subprocess
+          import json
+
+          proc = subprocess.Popen(
+              ["python", "weather_api.py"],
+              stdin=subprocess.PIPE,
+              stdout=subprocess.PIPE,
+              text=True
+          )
+
+          request = {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":"req-001"}
+          proc.stdin.write(json.dumps(request) + "\n")
+          proc.stdin.flush()
+
+          response_line = proc.stdout.readline()
+          response = json.loads(response_line)
+
+      latency: "<5ms per request"
+      overhead: "Minimal (same process)"
+      reliability: "Process exit = connection loss"
+
+    transport_2_http:
+      name: "HTTP Transport"
+      description: "JSON-RPC over HTTP POST requests"
+      protocol_usage: "WASM Sandbox MCP servers, remote invocation"
+      adoption: "10% (61 tools)"
+
+      format: "JSON in HTTP request/response body"
+      content_type: "application/json"
+      http_method: "POST"
+      http_path: "/rpc (conventional, not required)"
+
+      request_format: |
+        POST /rpc HTTP/1.1
+        Host: localhost:8001
+        Content-Type: application/json
+        Content-Length: 123
+
+        {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":"req-001"}
+
+      response_format: |
+        HTTP/1.1 200 OK
+        Content-Type: application/json
+        Content-Length: 150
+
+        {"jsonrpc":"2.0","result":{...},"id":"req-001"}
+
+      implementation:
+        server_side: |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+
+          class RPCHandler(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  content_length = int(self.headers['Content-Length'])
+                  request_data = self.rfile.read(content_length)
+                  request = json.loads(request_data)
+
+                  result = handle_method(request)
+                  response = {"jsonrpc":"2.0","result":result,"id":request.get("id")}
+
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(json.dumps(response).encode())
+
+        client_side: |
+          import requests
+          import json
+
+          request = {"jsonrpc":"2.0","method":"tools/call","params":{...},"id":"req-001"}
+          response = requests.post(
+              "http://localhost:8001/rpc",
+              json=request
+          )
+          result = response.json()
+
+      latency: "<10ms per request (network latency typical)"
+      overhead: "HTTP protocol overhead"
+      reliability: "HTTP status codes (200, 500, etc)"
+
+  ## VALIDATION RULES
+  validation_rules:
+    rule_1_jsonrpc_version:
+      description: "All messages must have jsonrpc='2.0'"
+      check: "jsonrpc field == '2.0'"
+      violation: "Parse error (-32700) if missing"
+
+    rule_2_method_required:
+      description: "Requests must have method field"
+      check: "method is string"
+      violation: "Invalid Request (-32600) if missing"
+
+    rule_3_id_for_correlation:
+      description: "Request/response matched by ID"
+      check: "Response ID == Request ID"
+      violation: "Log warning if mismatch"
+
+    rule_4_params_format:
+      description: "Params must be object or array"
+      check: "typeof params in [object, array]"
+      violation: "Invalid Params (-32602) if invalid"
+
+    rule_5_result_or_error_not_both:
+      description: "Response has result OR error, never both"
+      check: "!result || !error"
+      violation: "Parse error (-32700)"
+
+    rule_6_notification_no_response:
+      description: "Requests without id are notifications"
+      check: "!id → server doesn't send response"
+      note: "Used for fire-and-forget messages"
+
+  ## ERROR CODES (RESERVED)
+  standard_error_codes:
+    parse_error:
+      code: -32700
+      message: "Parse error"
+      description: "Invalid JSON received"
+
+    invalid_request:
+      code: -32600
+      message: "Invalid Request"
+      description: "JSON-RPC request malformed"
+
+    method_not_found:
+      code: -32601
+      message: "Method not found"
+      description: "Method does not exist"
+
+    invalid_params:
+      code: -32602
+      message: "Invalid params"
+      description: "Invalid method parameters"
+
+    internal_error:
+      code: -32603
+      message: "Internal error"
+      description: "Internal server error"
+
+  ## OBSERVABILITY
+  observability:
+    metrics:
+      - name: "k1_jsonrpc_requests_total"
+        labels: ["method", "status"]
+        type: "Counter"
+        description: "Total JSON-RPC requests"
+
+      - name: "k1_jsonrpc_request_latency_ms"
+        labels: ["method", "transport"]
+        type: "Histogram"
+        description: "Request latency (stdio vs HTTP)"
+
+      - name: "k1_jsonrpc_errors_total"
+        labels: ["method", "error_code"]
+        type: "Counter"
+        description: "JSON-RPC errors"
+
+    tracing:
+      - span_name: "jsonrpc_request"
+        attributes:
+          - method: "string"
+          - request_id: "string"
+          - params_size: "bytes"
+          - result_size: "bytes"
+          - latency_ms: "number"
+
+    logging:
+      - "jsonrpc_request_received (method, id)"
+      - "jsonrpc_request_completed (method, latency_ms)"
+      - "jsonrpc_error (method, error_code, error_message)"

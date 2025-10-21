@@ -1,0 +1,12 @@
+# Default driver alias bindings. Update alongside qos/config changes.
+aliases:
+  st_epi: sqlite
+  st_sem: sqlite
+  st_ws: sqlite
+  st_fts: fts5
+  st_vector: faiss
+  st_emb: faiss
+  st_kg_dom: sqlite_kg
+  st_blob: blob_localfs
+  # Traffic generator test drivers (burn-in/load testing)
+  traffic-gen: sqlite

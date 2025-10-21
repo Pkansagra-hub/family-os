@@ -1,0 +1,54 @@
+# Contract: HIPAA Audit Controls Implementation
+# Source: ADR-0035d | Status: Production-Ready | Last Updated: 2025-10-14
+
+contract:
+  id: "C_PRIVACY_HIPAA_AUDIT_027"
+  name: "HIPAA Audit Controls Implementation"
+  version: "1.0.0"
+
+  hipaa_requirements:
+    "164.308(a)(1)(ii)(D)": "Audit controls required for data access"
+    "164.312(b)": "Audit trail (who accessed what, when)"
+    "164.528(a)": "Accounting of disclosures (user right to access)"
+
+  audit_controls:
+    access_logging:
+      requirement: "Log all PHI access (PII containing health data)"
+      implementation: "audit_log table (operation: retrieve)"
+      fields_logged: ["user_id", "pii_type", "vault_key", "timestamp"]
+      who_accessed: "K1 user or service"
+      what_accessed: "PII type (ssn, health_insurance, etc)"
+      when_accessed: "Timestamp"
+
+    accounting_of_disclosures:
+      requirement: "User can request who accessed their PHI"
+      implementation: "Query audit_log for user_id"
+      response: "JSON report with all access events"
+      response_deadline_days: 60
+
+    tamper_protection:
+      requirement: "Audit logs cannot be altered"
+      implementation: "Append-only table (no UPDATE/DELETE)"
+      integrity_verification: "Hash chain or digital signature"
+
+  retention_requirements:
+    minimum_retention_years: 6
+    minimum_retention_days: 2190
+    auto_deletion_policy: "Delete after retention period"
+
+  monitoring:
+    metrics:
+      - "hipaa_phi_access_total (counter)"
+      - "hipaa_access_latency_ms (histogram)"
+      - "hipaa_disclosure_requests_total (counter)"
+    alerts:
+      - "alert_unusual_access: User accesses 1000+ PHI in 1 hour"
+      - "alert_privileged_access: Admin accesses user PHI"
+
+  compliance_reporting:
+    audit_reports: "Monthly compliance report"
+    breach_notification: "72-hour notification (165.400)"
+    documentation: "Business Associate Agreement (BAA)"
+
+  architecture:
+    adr_references: ["ADR-0035d: GDPR Compliance"]

@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  k0-kernel:
+    image: k0-kernel-local:latest
+    container_name: k0-kernel
+    env_file:
+      - ./env/k0.env
+    volumes:
+      - ./data:/data
+      - ./secrets:/secrets:ro
+      - ../../../../contracts/policy/pep.schema.json:/app/k0/contracts/policy/pep.schema.json:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - k0-local
+
+  # Scheduler worker is optional and will be added in future milestones
+  # scheduler-worker:
+  #   image: ghcr.io/familyos/k0-scheduler:latest
+  #   depends_on:
+  #     - k0-kernel
+  #   environment:
+  #     K0_KERNEL_ENDPOINT: http://k0-kernel:8080
+  #   networks:
+  #     - k0-local
+
+networks:
+  k0-local:
+    driver: bridge

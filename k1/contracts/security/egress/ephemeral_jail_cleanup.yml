@@ -1,0 +1,437 @@
+# Ephemeral Jail Cleanup Contract - Issue 2.5.5, Filesystem Layer 5
+# Purpose: Destroy ephemeral jails, unmount, and cleanup after tool exit
+# Source ADR: ADR-0032b (Filesystem Egress Control)
+# Last Updated: 2025-10-15
+
+name: "Ephemeral Jail Cleanup"
+purpose: "Destroy jails and cleanup resources (<100ms teardown)"
+scope: ["Jail Cleanup", "Resource Deallocation", "Mount Unmounting"]
+version: "1.0"
+
+# ============================================================================
+# CLEANUP WORKFLOW (PER-TOOL EXIT)
+# ============================================================================
+
+cleanup_workflow:
+
+  trigger_events:
+    - "Tool process exits normally (exit code 0)"
+    - "Tool process fails (non-zero exit code)"
+    - "Tool times out (5min default, K1_TIMEOUT)"
+    - "Tool OOM killed (SIGKILL from cgroups)"
+    - "Tool killed manually (K1 operator request)"
+
+  cleanup_initiator:
+    - "K1 Orchestrator (monitors tool process)"
+    - "Timer (on timeout)"
+    - "Resource monitor (on OOM)"
+    - "Admin request (manual)"
+
+# ============================================================================
+# CLEANUP STEPS (ORDERED)
+# ============================================================================
+
+cleanup_steps:
+
+  step_1_terminate_process:
+    action: "Ensure tool process is dead"
+
+    if_already_exited:
+      - "Skip this step (process already reaped)"
+      - "Move to step 2"
+
+    if_still_running:
+      - "Send SIGTERM (graceful exit, 2s timeout)"
+      - "If not exited after 2s: Send SIGKILL (force kill)"
+      - "Reap zombie process (waitpid)"
+
+    latency: "<1ms typical (if already dead), <2s worst case (SIGTERM)"
+
+  step_2_collect_exit_status:
+    action: "Record tool exit status for audit"
+
+    information_collected:
+      - "exit_code (0 for success, non-zero for failure)"
+      - "signal_if_killed (SIGTERM, SIGKILL, SIGSEGV, etc.)"
+      - "resource_usage (CPU time, memory peak, I/O bytes)"
+      - "exit_timestamp"
+
+    storage: "K0 ToolReceipt (FlatBuffers)"
+    latency: "<1ms"
+
+  step_3_unmount_binds:
+    action: "Unmount all bind mounts in jail (in reverse order)"
+
+    mounts_to_unmount:
+      - "/tmp/output (tool output bind mount)"
+      - "/tmp/input (tool input bind mount)"
+      - "/usr/lib (system libraries bind mount)"
+      - "/usr/bin (system binaries bind mount)"
+      - "/lib, /lib64 (other system libs)"
+      - "/etc/ld.so.cache (dynamic linker cache)"
+
+    unmount_procedure: |
+      1. Get list of all mounts in jail:
+         findmnt -R -n -o TARGET {jail_root}
+
+      2. Unmount in REVERSE order:
+         sort -r | xargs umount
+
+      3. Example unmount sequence:
+         umount {jail_root}/usr/lib (last mounted)
+         umount {jail_root}/usr/bin
+         umount {jail_root}/lib
+         umount {jail_root}/lib64
+         umount {jail_root}/tmp/output
+         umount {jail_root}/tmp/input
+
+    why_reverse_order:
+      - "Depends matter (if /tmp nested under /var, unmount /tmp first)"
+      - "Prevents EBUSY (device busy) errors"
+
+    error_handling:
+      - "If umount fails (EBUSY): Try force unmount (-l lazy unmount)"
+      - "If still fails: Log warning, continue anyway"
+      - "rm -rf will cleanup even if unmount partially fails"
+
+    latency: "<2ms typical (3-5 mounts * <0.5ms each)"
+
+  step_4_unmount_ephemeral_storage:
+    description: "Unmount tmpfs for RED band ephemeral storage"
+
+    applicable_bands: "RED band only"
+    command: "umount {jail_root}/tmp/output"
+    effect: "Ephemeral data destroyed (tmpfs in-memory storage)"
+
+    data_loss: "INTENTIONAL (RED band ephemeral outputs)"
+
+    latency: "<1ms"
+
+  step_5_kill_remaining_processes:
+    action: "Kill any remaining processes in jail namespace"
+
+    reason: "Some tools may fork child processes"
+
+    procedure: |
+      1. Check if any processes still in namespace:
+         ps aux | grep {jail_root}
+
+      2. If any exist:
+         fuser -9 {jail_root}  # Kill all processes using jail files
+
+      3. Verify all dead:
+         ps aux | grep {jail_root} (should be empty)
+
+    latency: "<2ms"
+
+  step_6_delete_jail_directory:
+    action: "Recursively delete entire jail directory"
+
+    command: "rm -rf {jail_root}"
+
+    what_gets_deleted:
+      - "Jail subdirectories (copies of template)"
+      - "Any files created by tool (if somehow persisted)"
+      - "Symlinks, device files, etc."
+
+    what_does_NOT_get_deleted:
+      - "Session input files (outside jail, user's files)"
+      - "Session output files (bind mounted, returned to user)"
+      - "Host /usr/lib, /usr/bin (only copies were in jail)"
+
+    latency: "<2ms typical (jail is minimal filesystem, mostly symlinks)"
+    note: "Fast because jail templates are shared (copy-on-write)"
+
+  step_7_verify_jail_destroyed:
+    action: "Quick sanity check that jail is gone"
+
+    verification: |
+      1. ls {jail_root} (should return "No such file or directory")
+      2. findmnt {jail_root} (should return nothing)
+      3. pgrep -f {jail_id} (should return nothing)
+
+    latency: "<1ms"
+
+  step_8_cleanup_namespaces:
+    action: "Ensure PID/mount namespaces are cleaned up"
+
+    automatic: "Kernel cleans up namespaces when last process exits"
+
+    manual_check:
+      - "Verify no orphaned namespace directories in /proc"
+      - "Usually automatic, no manual action needed"
+
+    latency: "0ms (kernel automatic)"
+
+  step_9_log_cleanup_completion:
+    action: "Record cleanup event in audit trail"
+
+    event_fields:
+      - "cleanup_event: jail_destroyed"
+      - "jail_id"
+      - "session_id"
+      - "tool_id"
+      - "duration_ms (total cleanup time)"
+      - "resources_freed (jail directory size)"
+      - "status: SUCCESS or WARNING"
+
+    storage: "K0 ToolReceipt"
+    latency: "<1ms"
+
+  total_cleanup_time: "<100ms P95"
+  breakdown: |
+    1ms terminate + 1ms collect + 2ms unmount + 1ms ephemeral +
+    2ms kill + 2ms delete + 1ms verify + 0ms namespaces + 1ms log
+    ≈ 11ms typical, <100ms worst case
+
+# ============================================================================
+# CLEANUP BY BAND
+# ============================================================================
+
+cleanup_variations:
+
+  green_band:
+    description: "Standard cleanup with output preservation"
+
+    steps:
+      - "Kill tool process"
+      - "Unmount all bind mounts"
+      - "Delete jail directory"
+      - "Output files returned to user (already on host filesystem)"
+
+    data_preservation:
+      - "Tool outputs: Preserved ✅ (bind mounted from host, user retrieves)"
+      - "Tool state: Destroyed ✅ (jail directory deleted)"
+      - "Input files: Preserved ✅ (on host, user's responsibility)"
+
+  amber_band:
+    description: "Cleanup with PII masking verification"
+
+    additional_steps:
+      - "Verify outputs are masked (spot-check a few files)"
+      - "Log verification status"
+      - "Masked outputs returned to user"
+
+    note: "Same cleanup as GREEN (PII masking happened during execution)"
+
+  red_band:
+    description: "Cleanup with ephemeral storage destruction"
+
+    steps:
+      - "Kill tool process"
+      - "Unmount tmpfs /tmp/output (ephemeral storage destroyed)"
+      - "Unmount other bind mounts"
+      - "Delete jail directory"
+      - "Verify NO output persists ✅"
+
+    data_destruction:
+      - "Tool outputs: Destroyed ✅ (tmpfs, in-memory only)"
+      - "Tool state: Destroyed ✅ (jail directory deleted)"
+      - "No audit trail of computation ✅ (privacy goal)"
+
+  black_band:
+    description: "Cleanup of never-executed tool (seccomp kills immediately)"
+
+    steps:
+      - "Process already dead (seccomp killed on first syscall)"
+      - "Jail directory deletion (minimal, no execution happened)"
+      - "Verify destroyed"
+
+    note: "Fastest cleanup (least resource usage)"
+
+# ============================================================================
+# ERROR SCENARIOS & RECOVERY
+# ============================================================================
+
+error_recovery:
+
+  scenario_1_umount_fails_ebusy:
+    trigger: "umount() returns EBUSY (device busy)"
+
+    reason: "Process still has files open in mount"
+
+    recovery: |
+      1. Kill all processes in jail (step 5: fuser -9)
+      2. Retry umount
+      3. If still EBUSY: Use lazy unmount
+         umount -l {jail_root}/path
+      4. If persistent: Delete jail anyway (files handled asynchronously)
+
+    result: "Cleanup continues, jail eventually cleaned"
+
+  scenario_2_cannot_delete_jail:
+    trigger: "rm -rf fails (e.g., permission denied)"
+
+    reason: "Filesystem permissions, SELinux denial, or stale process lock"
+
+    recovery: |
+      1. Verify process is actually dead (ps)
+      2. Check permissions: ls -la {jail_root}/.., uid/gid
+      3. If owned by different user: Use sudo (dangerous, requires audit)
+      4. Schedule retry in 60s
+      5. Log: WARNING
+
+    result: "Jail eventually cleaned, manual review if persistent"
+
+  scenario_3_orphaned_jail:
+    trigger: "Cleanup process crashes before finishing"
+
+    result: "Jail directory orphaned on filesystem"
+
+    recovery: |
+      1. Background cleanup task: Scan /var/k1/jails/ for old jails
+      2. Check modification time (> 1 hour old = orphaned)
+      3. Try cleanup again
+      4. If still fails: Force delete with elevated privileges
+
+    monitoring: "Alert if orphaned jails accumulate (>10 in 1 hour)"
+
+  scenario_4_tmpfs_not_unmounting:
+    trigger: "tmpfs remains mounted after RED band cleanup"
+
+    reason: "Process still has /tmp/output open (shouldn't happen)"
+
+    recovery: |
+      1. fuser -9 /tmp/output (kill processes)
+      2. umount -l /tmp/output (lazy unmount)
+      3. Verify unmounted: findmnt /tmp/output (should be gone)
+
+    result: "tmpfs eventually unmounted, data destroyed"
+
+# ============================================================================
+# CLEANUP CONCURRENCY
+# ============================================================================
+
+concurrency_safety:
+
+  scenario_multiple_tools_same_session:
+    description: "Session has 3 tools, all exiting together"
+
+    cleanup_order: "Independent per jail (no shared resources)"
+
+    parallel_cleanup: |
+      Thread 1: Cleanup jail_sess_001_tool_a
+      Thread 2: Cleanup jail_sess_001_tool_b
+      Thread 3: Cleanup jail_sess_001_tool_c
+
+      Each cleanup:
+      - Unmounts only its own /tmp/output, /tmp/input
+      - Deletes only its own jail directory
+      - No conflicts (each tool has unique jail_id)
+
+    result: "Safe to parallelize (no race conditions)"
+
+  scenario_cleanup_while_tool_running:
+    description: "Operator requests cleanup while tool still executing"
+
+    sequence: |
+      1. Send SIGTERM to tool
+      2. Wait 2s
+      3. Send SIGKILL if not exited
+      4. Proceed with cleanup
+
+    guarantee: "Process definitely dead before unmount"
+
+# ============================================================================
+# RESOURCE ACCOUNTING
+# ============================================================================
+
+resource_cleanup:
+
+  memory_released:
+    per_tool: "~150MB (template copy memory)"
+    or_zero: "If using copy-on-write (CoW)"
+    note: "Physical memory returned to system"
+
+  disk_space_released:
+    per_green_tool: "~1MB (jail directory, template links)"
+    per_red_tool: "~0.1MB (minimal template)"
+    note: "Shared templates not deleted (other jails use them)"
+
+  file_descriptors_released:
+    per_tool: "~10-20 (open files during execution)"
+    after_cleanup: "All closed (process terminated)"
+
+  network_connections_released:
+    per_tool: "~0-5 (depend on tool activity)"
+    cleanup: "Auto-closed by kernel (socket associated with jail process)"
+
+  mount_points_released:
+    per_tool: "~5-8 bind mounts + 1 tmpfs (RED)"
+    after_unmount: "All freed"
+
+# ============================================================================
+# MONITORING & OBSERVABILITY
+# ============================================================================
+
+monitoring:
+
+  metrics:
+
+    cleanup_latency:
+      type: "Histogram"
+      unit: "milliseconds"
+      labels: ["band", "tool_type"]
+      target: "P95 <100ms"
+      alert: "P95 > 500ms"
+
+    cleanup_failures:
+      type: "Counter"
+      labels: ["reason", "band"]
+      reasons: ["umount_failed", "delete_failed", "process_not_dead"]
+      alert: ">5 failures/hour (investigate)"
+
+    orphaned_jails:
+      type: "Gauge"
+      description: "Jails that weren't properly cleaned up"
+      alert: ">10 orphaned (resource leak)"
+
+    cleanup_resource_freed:
+      type: "Gauge"
+      unit: "bytes"
+      labels: ["band"]
+      description: "Memory/disk freed per cleanup"
+
+# ============================================================================
+# COMPLIANCE & AUDIT
+# ============================================================================
+
+audit_trail:
+
+  events_logged:
+    - "cleanup_started: tool_id, jail_id, trigger_reason"
+    - "process_terminated: tool_id, exit_code, signal"
+    - "jail_unmounted: tool_id, mount_path"
+    - "jail_deleted: tool_id, size_bytes"
+    - "cleanup_completed: tool_id, duration_ms, status"
+
+  retention: "7 years (SOC2/ISO27001)"
+  storage: "K0 ToolReceipt (FlatBuffers)"
+
+---
+
+summary:
+  capabilities:
+    - "9-step cleanup workflow (<100ms total)"
+    - "Kill process (SIGTERM→SIGKILL)"
+    - "Unmount all bind mounts (reverse order)"
+    - "Destroy ephemeral tmpfs (RED band)"
+    - "Delete jail directory recursively"
+    - "Verify jail destroyed"
+    - "Error recovery (EBUSY, permission denied, orphaned)"
+    - "Parallel cleanup (independent jails safe)"
+    - "Resource accounting (memory, disk, files freed)"
+    - "Full audit trail (7-year retention)"
+
+related_contracts:
+  chroot_jail:
+    file: "chroot_jail_manager.yml"
+    purpose: "Jail that this contract destroys"
+
+  readonly_mounts:
+    file: "readonly_mounts_system.yml"
+    purpose: "Mounts being unmounted in this cleanup"
+
+  output_isolation:
+    file: "writable_output_isolation.yml"
+    purpose: "Output that persists or is destroyed (band-dependent)"

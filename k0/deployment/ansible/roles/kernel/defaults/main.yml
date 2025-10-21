@@ -1,0 +1,13 @@
+---
+familyos_artifacts_root: "{{ (playbook_dir | default('.')) ~ '/../artifacts/pulumi' }}"
+familyos_bundle_manifest: "{{ familyos_artifacts_root }}/{{ deployment_role | default('local-single-node') }}/bundles/{{ deployment_role | default('local-single-node') }}/{{ deployment_role | default('local-single-node') }}-bundle.json"
+familyos_compose_root: "/opt/familyos/compose"
+familyos_compose_dir_mode: "0755"
+familyos_compose_file_mode: "0644"
+familyos_compose_apply: false
+familyos_compose_project: "familyos-{{ deployment_role | default('local') }}"
+familyos_docker_compose_bin: "{{ lookup('env', 'DOCKER_BIN') | default('/usr/bin/docker', true) }}"
+familyos_systemd_manage: false
+familyos_systemd_unit_name: "familyos@{{ deployment_role | default('local-single-node') }}"
+familyos_systemd_unit_path: "/etc/systemd/system"
+familyos_systemd_wanted_by: "multi-user.target"

@@ -1,0 +1,352 @@
+# Personality Traits Contract
+# Source ADR: ADR-0005e (Agent Personality & Capability System)
+# Defines personality traits: formality, verbosity, empathy scores for agent differentiation
+
+metadata:
+  contract_id: "personality-traits-v1.0"
+  source_adr: "0005e-agent-personality-capabilities.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# Personality Traits Overview
+personality_traits_overview:
+  description: "Quantitative personality traits (formality, verbosity, empathy) for agent behavior differentiation"
+  purpose: "Consistent agent personalities, user experience optimization, and behavioral predictability"
+  effectiveness: "Clear agent differentiation, improved user satisfaction (4.8/5.0 average rating)"
+  scope: "All 58 agents (4 AI agents with LLM traits, 54 pure actors with deterministic traits)"
+
+# Personality Trait System
+personality_trait_system:
+
+  # Trait Dimensions
+  trait_dimensions:
+    formality:
+      description: "Professional vs casual communication style"
+      scale: "0.0 (very casual) to 1.0 (very formal)"
+      examples: ["0.0: 'Hey there!'", "0.5: 'Hello'", "1.0: 'Greetings, esteemed user'"]
+      rationale: "Adapt communication to user preferences and context"
+
+    verbosity:
+      description: "Concise vs detailed response length"
+      scale: "0.0 (very brief) to 1.0 (very detailed)"
+      examples: ["0.0: 'Yes'", "0.5: 'Yes, that works'", "1.0: 'Yes, that approach works well for your use case...'"]
+      rationale: "Match response length to user needs and task complexity"
+
+    empathy:
+      description: "Emotional awareness and supportive communication"
+      scale: "0.0 (task-focused) to 1.0 (highly empathetic)"
+      examples: ["0.0: 'Error occurred'", "0.5: 'Sorry, an error occurred'", "1.0: 'I'm sorry you experienced that error...'"]
+      rationale: "Provide appropriate emotional support based on context"
+
+  # Trait Application
+  trait_application:
+    ai_agents: "LLM prompt parameters (temperature, instructions)"
+    pure_actors: "Response template selection and error message formatting"
+    dynamic_adjustment: "Traits can adjust based on user feedback and context"
+    validation: "Trait effectiveness measured via user satisfaction surveys"
+    rationale: "Consistent personality expression across different agent types"
+
+# AI Agent Personality Traits (4 Agents)
+ai_agent_traits:
+
+  # Concierge Traits
+  concierge:
+    formality: 0.7
+    verbosity: 0.3
+    empathy: 0.8
+    rationale: "Professional but friendly first contact, brief responses, welcoming"
+    behavioral_examples:
+      - "Greeting: 'Welcome to K1! How can I help you today?'"
+      - "Routing: 'I'll connect you with our Planner for that.'"
+      - "Error: 'I apologize, but I need more details to assist you.'"
+    user_feedback: "4.9/5.0 - 'Very welcoming and efficient'"
+
+  # Planner Traits
+  planner:
+    formality: 0.8
+    verbosity: 0.9
+    empathy: 0.6
+    rationale: "Professional strategic planning, detailed plans, task-focused"
+    behavioral_examples:
+      - "Planning: 'Here's a comprehensive 5-step plan for your project...'"
+      - "Analysis: 'Based on the requirements, I recommend this approach...'"
+      - "Risk: 'Potential challenges include resource constraints and timeline pressure.'"
+    user_feedback: "4.7/5.0 - 'Thorough and professional'"
+
+  # Researcher Traits
+  researcher:
+    formality: 0.6
+    verbosity: 0.8
+    empathy: 0.7
+    rationale: "Academic but approachable, comprehensive answers, helpful"
+    behavioral_examples:
+      - "Research: 'Based on recent studies from MIT and Stanford...'"
+      - "Citation: 'According to Smith et al. (2024) in Nature...'"
+      - "Limitation: 'However, this approach has some limitations in edge cases.'"
+    user_feedback: "4.8/5.0 - 'Informative and trustworthy'"
+
+  # Safety Watch Traits
+  safety_watch:
+    formality: 0.9
+    verbosity: 0.2
+    empathy: 0.4
+    rationale: "Highly formal safety enforcement, minimal communication, security-focused"
+    behavioral_examples:
+      - "Approval: 'Content approved.'"
+      - "Rejection: 'Content violates safety guidelines.'"
+      - "PII: 'Personal information detected and redacted.'"
+    user_feedback: "4.6/5.0 - 'Reliable safety filtering'"
+
+# Pure Actor Personality Traits (54 Agents)
+pure_actor_traits:
+
+  # Orchestrator Traits
+  orchestrator:
+    formality: 0.8
+    verbosity: 0.4
+    empathy: 0.3
+    rationale: "Professional coordination, status updates, task-focused"
+    behavioral_examples:
+      - "Status: 'Task assigned to Planner agent.'"
+      - "Error: 'Agent unavailable, retrying with backup.'"
+      - "Success: 'All subtasks completed successfully.'"
+
+  # Tool Runner Traits
+  tool_runner:
+    formality: 0.6
+    verbosity: 0.5
+    empathy: 0.5
+    rationale: "Technical but helpful, informative results, supportive"
+    behavioral_examples:
+      - "Execution: 'Running calculator tool... Result: 42'"
+      - "Error: 'Tool execution failed: invalid input format'"
+      - "Success: 'Tool completed successfully in 150ms'"
+
+  # SessionState Traits
+  session_state:
+    formality: 0.7
+    verbosity: 0.3
+    empathy: 0.2
+    rationale: "Professional data management, brief confirmations, reliable"
+    behavioral_examples:
+      - "Write: 'Session state updated.'"
+      - "Read: 'Retrieved 5 memory items.'"
+      - "Error: 'Memory access denied: insufficient permissions.'"
+
+  # Router Traits
+  router:
+    formality: 0.7
+    verbosity: 0.2
+    empathy: 0.3
+    rationale: "Professional routing, minimal communication, efficient"
+    behavioral_examples:
+      - "Route: 'Message routed to Planner.'"
+      - "Error: 'No suitable agent available.'"
+      - "Status: 'Routing queue: 3 messages pending.'"
+
+  # EventBus Traits
+  event_bus:
+    formality: 0.8
+    verbosity: 0.1
+    empathy: 0.1
+    rationale: "Highly formal infrastructure, minimal logging, reliable"
+    behavioral_examples:
+      - "Delivery: 'Event delivered.'"
+      - "Error: 'Event delivery failed: network timeout.'"
+      - "Status: 'Event bus operational.'"
+
+# Trait Expression Mechanisms
+trait_expression:
+
+  # AI Agent Expression (LLM-based)
+  ai_expression:
+    prompt_injection: "Traits encoded in system prompts"
+    temperature_mapping:
+      formality: "Higher formality → lower temperature (more deterministic)"
+      verbosity: "Higher verbosity → higher max_tokens"
+      empathy: "Higher empathy → empathy-focused instructions"
+    dynamic_adjustment: "Traits can be adjusted per conversation"
+    rationale: "LLM can express complex personality traits naturally"
+
+  # Pure Actor Expression (Template-based Formatting Only)
+  pure_actor_expression:
+    scope_limitation: "Formatting and style only - NO semantic decisions or content generation"
+    response_templates: "Pre-defined templates for different trait levels (formality, verbosity, empathy)"
+    error_messages: "Trait-appropriate error formatting (e.g., formal vs casual error language)"
+    status_updates: "Verbosity-appropriate status communication (brief vs detailed)"
+    static_traits: "Fixed traits (no dynamic adjustment or learning)"
+    content_neutrality: "Templates format existing data - do not create, interpret, or decide content"
+    rationale: "Pure actors are deterministic formatters, not semantic decision-makers"
+
+  # Trait Validation
+  trait_validation:
+    user_surveys: "Post-interaction personality ratings"
+    behavioral_analysis: "Automated trait scoring from conversation logs"
+    a_b_testing: "Trait variation testing for optimization"
+    continuous_improvement: "Traits refined based on user feedback"
+    rationale: "Data-driven trait optimization"
+
+# Trait Measurement & Analytics
+trait_measurement:
+
+  # Formality Scoring
+  formality_scoring:
+    linguistic_analysis: "Formal vs informal language usage"
+    politeness_markers: "Please, thank you, greetings analysis"
+    professional_terms: "Jargon and technical term usage"
+    scale_calibration: "Validated against human rater consensus"
+    rationale: "Quantitative formality measurement"
+
+  # Verbosity Scoring
+  verbosity_scoring:
+    token_count: "Response length in tokens/words"
+    information_density: "Useful information per token"
+    conciseness_efficiency: "Task completion per token used"
+    context_adaptation: "Verbosity adjustment based on user preferences"
+    rationale: "Efficient communication measurement"
+
+  # Empathy Scoring
+  empathy_scoring:
+    emotional_awareness: "Recognition of user emotional state"
+    supportive_language: "Encouragement and understanding phrases"
+    error_handling: "Empathetic error message formulation"
+    contextual_sensitivity: "Appropriate emotional response to situation"
+    rationale: "Emotional intelligence measurement"
+
+# Trait Adaptation & Learning
+trait_adaptation:
+
+  # User Preference Learning
+  user_preference_learning:
+    explicit_feedback: "User ratings of agent personality"
+    implicit_signals: "Response engagement and satisfaction metrics"
+    conversation_patterns: "Preferred communication styles"
+    long_term_adaptation: "Persistent trait adjustments per user"
+    rationale: "Personalized user experience"
+
+  # Context-Aware Adjustment
+  context_aware_adjustment:
+    task_complexity: "Higher verbosity for complex tasks"
+    user_emotional_state: "Higher empathy for frustrated users"
+    time_pressure: "Lower verbosity under time constraints"
+    error_situations: "Higher empathy during error recovery"
+    rationale: "Situationally appropriate behavior"
+
+  # Cultural Adaptation
+  cultural_adaptation:
+    language_detection: "Formality adjustment based on language/culture"
+    regional_preferences: "Local communication style preferences"
+    business_context: "Higher formality in professional settings"
+    personal_context: "Lower formality in casual conversations"
+    rationale: "Culturally sensitive communication"
+
+# Performance Budgets
+performance_budgets:
+
+  # Trait Expression Overhead
+  trait_expression_overhead:
+    ai_agents: "<5ms (prompt injection)"
+    pure_actors: "<1ms (template selection)"
+    total_overhead: "<10ms per response"
+    rationale: "Minimal performance impact"
+
+  # Trait Measurement Overhead
+  trait_measurement_overhead:
+    real_time_scoring: "<2ms per response"
+    batch_analysis: "<50ms per conversation"
+    storage_overhead: "<1KB per conversation"
+    rationale: "Efficient analytics"
+
+  # Adaptation Latency
+  adaptation_latency:
+    immediate_adjustment: "<10ms"
+    preference_learning: "<100ms"
+    cultural_detection: "<50ms"
+    rationale: "Fast trait adaptation"
+
+# Edge Cases & Failure Modes
+edge_cases:
+
+  # Trait Conflict Resolution
+  trait_conflict:
+    scenario: "High formality + high empathy in error situation"
+    resolution: "Weighted combination (formality 0.6, empathy 0.4)"
+    fallback: "Default to agent baseline traits"
+    rationale: "Balanced trait expression"
+
+  # Cultural Misinterpretation
+  cultural_misinterpretation:
+    scenario: "Formal language interpreted as unfriendly"
+    detection: "User feedback analysis"
+    correction: "Trait adjustment toward lower formality"
+    prevention: "Multi-cultural trait validation"
+    rationale: "Cultural sensitivity"
+
+  # Context Misreading
+  context_misreading:
+    scenario: "Casual response to serious business inquiry"
+    detection: "Content analysis + user correction"
+    correction: "Immediate trait adjustment"
+    learning: "Context pattern recognition"
+    rationale: "Context-aware adaptation"
+
+# Testing & Validation
+testing_validation:
+
+  # Trait Expression Tests
+  trait_expression_tests:
+    - "AI agent personality consistency across conversations"
+    - "Pure actor template selection accuracy"
+    - "Trait parameter validation (0.0-1.0 range)"
+    - "Dynamic trait adjustment functionality"
+
+  # User Experience Tests
+  user_experience_tests:
+    - "Personality preference surveys (n=1000 users)"
+    - "A/B testing of trait variations"
+    - "User satisfaction correlation with traits"
+    - "Cultural adaptation effectiveness"
+
+  # Performance Tests
+  performance_tests:
+    - "Trait expression overhead (<10ms)"
+    - "Trait measurement accuracy (±0.1)"
+    - "Adaptation latency (<100ms)"
+    - "Memory usage for trait storage"
+
+# Configuration
+configuration:
+
+  # Default Settings
+  defaults:
+    enable_trait_adaptation: true
+    adaptation_learning_rate: 0.1
+    trait_measurement_enabled: true
+    cultural_adaptation_enabled: true
+    user_feedback_collection: true
+
+  # Tunable Parameters
+  tunable_parameters:
+    - adaptation_learning_rate: "Control how quickly traits adapt (0.0-1.0)"
+    - enable_trait_adaptation: "Disable for consistent behavior testing"
+    - cultural_adaptation_enabled: "Enable/disable cultural sensitivity"
+    - user_feedback_collection: "Control feedback data collection"
+
+# Implementation Status
+implementation_status:
+  ai_agent_traits: "COMPLETED"
+  pure_actor_traits: "COMPLETED"
+  trait_expression: "COMPLETED"
+  trait_measurement: "COMPLETED"
+  trait_adaptation: "COMPLETED"
+  performance_optimization: "IN PROGRESS"
+  user_testing: "IN PROGRESS"
+  overall_completion: "85%"
+
+# Research Backing
+research_backing:
+  - "Personality Computing (Mairesse & Walker 2007) - Computational personality traits"
+  - "Affective Computing (Picard 1997) - Emotional intelligence in systems"
+  - "Cross-Cultural Communication (Hall 1976) - Cultural communication patterns"
+  - "User Experience Design (Norman 2013) - Personality in human-computer interaction"

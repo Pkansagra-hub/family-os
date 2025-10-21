@@ -1,0 +1,317 @@
+# MCP Process Lifecycle FSM - 5 States
+# Purpose: Define state machine for MCP server process lifecycle management
+# Source ADR: ADR-0034b (MCP Process Lifecycle & Timeout Enforcement)
+# Lines: 1-800 (5-state FSM specification)
+# Issue: 2.7.4.1 (Enhanced Process Lifecycle & Timeout Enforcement)
+
+lifecycle_fsm:
+  name: "MCP Server Process Lifecycle FSM"
+  version: "1.0"
+  description: "5-state finite state machine for MCP process lifecycle: SPAWNING → RUNNING → TERMINATING → TERMINATED → CRASHED"
+  applies_to: "All MCP tools (708 tools = 80% of 883 total tools)"
+
+  # Core states definition
+  states:
+    - state: "SPAWNING"
+      id: 0
+      description: "Process starting, subprocess created, awaiting initialization"
+      entry_actions:
+        - action: "asyncio.create_subprocess_exec()"
+          description: "Spawn subprocess with stdin/stdout pipes"
+          latency_ms: 30
+        - action: "Emit spawn event to metrics"
+          description: "mcp_process_spawns_total{tool_id}++"
+      timeout_ms: 5000
+      timeout_action: "Transition to TERMINATED (failed initialization)"
+      characteristics:
+        process_alive: true
+        accepts_requests: false
+        responsive: false
+      transitions_from:
+        - to: "RUNNING"
+          trigger: "initialize JSON-RPC succeeds"
+          guard: "Server responds with protocol_version"
+          latency_ms: 50
+        - to: "CRASHED"
+          trigger: "Process exits unexpectedly"
+          guard: "process.wait() returns non-zero"
+          latency_ms: 10
+        - to: "TERMINATED"
+          trigger: "Timeout (5s) exceeded"
+          guard: "initialize response timeout"
+          latency_ms: 5000
+
+    - state: "RUNNING"
+      id: 1
+      description: "Process healthy, ready for tools/call requests"
+      entry_actions:
+        - action: "Mark process state = RUNNING"
+        - action: "Start background monitor task"
+          description: "Monitor for unexpected crashes"
+        - action: "Emit ready event"
+          description: "mcp_process_ready_total{tool_id}++"
+      characteristics:
+        process_alive: true
+        accepts_requests: true
+        responsive: true
+        inference_ready: true
+      request_handling:
+        tools_call: "Accepted, processed via asyncio.wait_for(timeout_seconds)"
+        tools_list: "Accepted"
+        methods: "All JSON-RPC methods allowed"
+      timeout_per_request_ms: "Tool-specific (calculator: 5000ms, video: 300000ms, default: 30000ms)"
+      transitions_from:
+        - to: "TERMINATING"
+          trigger: "stop() called"
+          guard: "User initiates graceful shutdown"
+          latency_ms: 10
+        - to: "CRASHED"
+          trigger: "Process exits unexpectedly"
+          guard: "Monitor detects process.wait() completion"
+          latency_ms: 10
+        - to: "IDLE"
+          trigger: "No requests for idle_timeout (60s default)"
+          guard: "Optional: transition to idle pool (future enhancement)"
+          latency_ms: 1
+
+    - state: "TERMINATING"
+      id: 2
+      description: "Graceful shutdown in progress"
+      entry_actions:
+        - action: "Send shutdown JSON-RPC request"
+          description: "Server has 5s to cleanup"
+          latency_ms: 5
+        - action: "Start graceful shutdown timer"
+          description: "Timer = 5000ms (grace period)"
+      characteristics:
+        process_alive: true
+        accepts_requests: false
+        responsive: true
+        shutdown_in_progress: true
+      shutdown_sequence:
+        step_1:
+          action: "Send 'shutdown' JSON-RPC request"
+          timeout_ms: 2000
+          description: "Allow server to prepare for termination"
+        step_2:
+          action: "Wait for process exit"
+          timeout_ms: 5000
+          description: "Wait 5s for graceful exit (clean exit code 0)"
+        step_3_on_timeout:
+          action: "Send SIGTERM (interrupt signal)"
+          timeout_ms: 5000
+          description: "If not exited after 5s: send SIGTERM, wait 5s"
+        step_4_on_timeout:
+          action: "Send SIGKILL (force kill)"
+          timeout_ms: 1000
+          description: "If not exited after 5s more: SIGKILL (force)"
+      transitions_from:
+        - to: "TERMINATED"
+          trigger: "Process exits cleanly"
+          guard: "process.returncode == 0 OR signal handled"
+          latency_ms: 100
+        - to: "TERMINATED"
+          trigger: "SIGKILL sent and waited"
+          guard: "process.wait() completes after SIGKILL"
+          latency_ms: 10
+
+    - state: "TERMINATED"
+      id: 3
+      description: "Process exited, resources cleaned up"
+      entry_actions:
+        - action: "Close stdin/stdout pipes"
+          description: "Prevent PIPE buffer leaks"
+          latency_ms: 5
+        - action: "Release file descriptors"
+          description: "Free OS resources"
+        - action: "Emit termination event"
+          description: "mcp_process_exits_total{tool_id, reason}++"
+          reason: "clean | timeout | crash"
+      characteristics:
+        process_alive: false
+        accepts_requests: false
+        responsive: false
+        resources_freed: true
+      exit_code:
+        clean: "0 (normal exit)"
+        error: ">0 (error code)"
+        signal: "<0 (killed by signal, e.g., -15 = SIGTERM, -9 = SIGKILL)"
+      transitions_from: []  # Terminal state (no outgoing transitions)
+
+    - state: "CRASHED"
+      id: 4
+      description: "Process crashed unexpectedly (non-zero exit or signal)"
+      entry_actions:
+        - action: "Log crash event"
+          description: "Capture exit code and signal"
+          latency_ms: 5
+        - action: "Emit crash event"
+          description: "mcp_process_crashes_total{tool_id}++"
+        - action: "Notify supervisor"
+          description: "Send crash notification (ADR-0002b)"
+      characteristics:
+        process_alive: false
+        accepts_requests: false
+        responsive: false
+        crash: true
+        error_occurred: true
+      crash_detection:
+        criteria_1: "process.returncode != 0 (non-zero exit)"
+        criteria_2: "Signal detection (SIGSEGV, SIGABRT, SIGTERM, SIGKILL)"
+        detection_latency_ms: "<10ms (via background monitor)"
+      transitions_from:
+        - to: "TERMINATED"
+          trigger: "Cleanup initiated"
+          guard: "Resources freed after crash"
+          latency_ms: 50
+
+  # Lifecycle state data structure
+  process_info_tracking:
+    fields:
+      - name: "pid"
+        type: "int"
+        description: "Process ID (>0 for SPAWNING/RUNNING/TERMINATING, frozen at crash)"
+      - name: "state"
+        type: "enum[ProcessState]"
+        description: "Current state (SPAWNING, RUNNING, TERMINATING, TERMINATED, CRASHED)"
+      - name: "started_at"
+        type: "float (Unix timestamp)"
+        description: "When process spawned (used for uptime calculation)"
+      - name: "terminated_at"
+        type: "float (Unix timestamp)"
+        description: "When process terminated (0 if still running)"
+      - name: "exit_code"
+        type: "Optional[int]"
+        description: "Process exit code (None if running, 0=clean, >0=error, <0=signal)"
+      - name: "signal"
+        type: "Optional[int]"
+        description: "Signal that terminated process (e.g., -15=SIGTERM, -9=SIGKILL)"
+      - name: "total_requests"
+        type: "int"
+        description: "Total tools/call requests handled"
+      - name: "total_timeouts"
+        type: "int"
+        description: "Total requests that timed out"
+      - name: "crash_count"
+        type: "int"
+        description: "Number of crashes (used for circuit breaker, blacklist)"
+      - name: "uptime_seconds"
+        type: "float (computed)"
+        description: "Duration from started_at to terminated_at (or now if running)"
+
+  # Transition rules and guard conditions
+  transition_guards:
+    rule_1:
+      description: "SPAWNING → RUNNING only if initialize succeeds"
+      code: "initialize_response.protocolVersion != null"
+    rule_2:
+      description: "SPAWNING → CRASHED only if process exits unexpectedly"
+      code: "process.returncode != None AND not terminating"
+    rule_3:
+      description: "RUNNING → TERMINATING only via stop() call"
+      code: "user_initiated AND stop() called"
+    rule_4:
+      description: "TERMINATING → TERMINATED after cleanup"
+      code: "process exited AND pipes closed"
+    rule_5:
+      description: "CRASHED state is terminal (no transitions out except to TERMINATED for cleanup)"
+      code: "Resources freed → TERMINATED (if needed)"
+
+  # Performance SLAs and timeouts
+  performance_slas:
+    spawn_latency:
+      p50_ms: 20
+      p95_ms: 40
+      p99_ms: 60
+      budget_ms: 50
+    initialization_timeout:
+      default_ms: 5000
+      min_ms: 1000
+      max_ms: 10000
+    graceful_shutdown:
+      step1_shutdown_request_ms: 2000
+      step2_wait_for_exit_ms: 5000
+      step3_sigterm_ms: 5000
+      step4_sigkill_ms: 1000
+      total_max_ms: 13000
+    crash_detection:
+      p50_ms: 2
+      p95_ms: 5
+      p99_ms: 10
+      budget_ms: 10
+
+  # State transitions diagram (ASCII)
+  state_diagram: |
+    ┌────────────────────────────────────────────────────────────┐
+    │                  MCP Process Lifecycle                      │
+    │              (5-state FSM with timeouts)                   │
+    └────────────────────────────────────────────────────────────┘
+
+                     ┌──────────────┐
+                     │  SPAWNING    │ (subprocess created)
+                     │ timeout: 5s  │
+                     └──────┬───────┘
+                            │
+           ┌────────────────┼────────────────┐
+           │                │                │
+        initialize      [process crash]    [timeout]
+        succeeds        or exits           (5s elapsed)
+           │                │                │
+           ↓                ↓                ↓
+    ┌────────────┐   ┌─────────────┐   ┌───────────┐
+    │  RUNNING   │   │   CRASHED   │   │TERMINATED │
+    │ (healthy)  │   │  (crashed)  │   │ (failed)  │
+    └────┬───────┘   └─────────────┘   └───────────┘
+         │
+    stop() or crash
+         │
+         ↓
+    ┌──────────────┐
+    │ TERMINATING  │ (graceful: shutdown → SIGTERM → SIGKILL)
+    │ max: 13s     │
+    └──────┬───────┘
+           │
+      [process exits
+       or cleanup done]
+           │
+           ↓
+    ┌──────────────┐
+    │ TERMINATED   │ (final state)
+    │ (cleaned up) │
+    └──────────────┘
+
+  # Implementation considerations
+  implementation_notes:
+    note_1: "ProcessInfo dataclass tracks all state and metadata"
+    note_2: "Background monitor task (asyncio) detects crashes automatically"
+    note_3: "Timeouts enforced with asyncio.wait_for()"
+    note_4: "State transitions are atomic (no race conditions with locks)"
+    note_5: "All state transitions logged and emit Prometheus metrics"
+    note_6: "Uptime calculated: if terminated: terminated_at - started_at; else: now - started_at"
+
+  # ADR compliance
+  related_adrs:
+    - adr: "ADR-0034b"
+      section: "MCP Process Lifecycle FSM"
+      lines: "1-800"
+    - adr: "ADR-0034a"
+      section: "JSON-RPC initialize/shutdown methods"
+    - adr: "ADR-0002b"
+      section: "Supervisor crash detection and notification"
+
+  # Testing requirements (WARD framework)
+  testing:
+    test_1: "State transition SPAWNING → RUNNING succeeds on initialize"
+    test_2: "State transition SPAWNING → CRASHED on process exit (non-zero)"
+    test_3: "State transition RUNNING → TERMINATING via stop() call"
+    test_4: "Graceful shutdown sequence: shutdown → SIGTERM → SIGKILL"
+    test_5: "Crash detection: monitor detects unexpected process exit"
+    test_6: "Uptime calculation: terminated_at - started_at (or now - started_at)"
+    test_7: "ProcessInfo fields correctly populated for each state"
+    test_8: "Timeout enforcement: SPAWNING timeout triggers after 5s"
+
+  # Changelog
+  changelog:
+    - version: "1.0"
+      date: "2025-10-16"
+      changes: "Initial 5-state FSM definition with comprehensive state descriptions"

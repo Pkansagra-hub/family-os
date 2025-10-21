@@ -1,0 +1,96 @@
+# K0 Memory Kernel - Local Single Node Deployment
+# Generated from: k0/deployment/compose/templates/base.yml.j2
+# Stack: local-single-node
+# Generated: 2025-10-03
+
+version: "3.8"
+
+services:
+  k0-kernel:
+    build:
+      context: ../../../..
+      dockerfile: Dockerfile
+    image: familyos/k0-kernel:latest
+    container_name: k0-kernel
+
+    networks:
+      - k0-local
+
+    ports:
+      - "8000:8080" # Main HTTP API (internal 8080 → external 8000)
+      - "9090:8080" # Observability port (metrics, health)
+
+    environment:
+      # Core settings
+      K0_LOG_LEVEL: INFO
+
+      # Database (local SQLite with WAL)
+      K0_DB_PATH: /data/k0_kernel.db
+      K0_DB_WAL_MODE: "true"
+
+      # Device identity
+      K0_TENANT_ID: ${K0_TENANT_ID:-tenant-001}
+      K0_SPACE_ID: ${K0_SPACE_ID:-space-home}
+      K0_DEVICE_ID: ${K0_DEVICE_ID:-device-local-001}
+
+      # Secrets
+      K0_DEVICE_KEY_PATH: /secrets/device.key
+
+      # QoS
+      K0_QOS_COMMAND_TIMEOUT_MS: 5000
+      K0_QOS_QUERY_TIMEOUT_MS: 3000
+      K0_QOS_MAX_FANOUT: 10
+
+      # Telemetry
+      K0_OTEL_ENABLED: "false"
+      K0_METRICS_ENABLED: "true"
+
+    volumes:
+      # Data persistence
+      - ./data/k0:/data
+
+      # Secrets (read-only)
+      - ./secrets:/secrets:ro
+
+      # Config overrides
+      - ./config:/config:ro
+
+      # Logs
+      - ./logs/k0:/logs
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+    restart: unless-stopped
+
+    # Security: Non-root user
+    # user: "1000:1000"  # Disabled for Windows
+
+    # Read-only root filesystem
+    read_only: true
+
+    # Tmpfs for runtime state
+    tmpfs:
+      - /tmp:size=100M,mode=1777
+      - /run:size=10M,mode=755
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+networks:
+  k0-local:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

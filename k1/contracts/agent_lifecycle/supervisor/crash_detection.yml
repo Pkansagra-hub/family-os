@@ -1,0 +1,312 @@
+# Crash Detection Contract
+# Source ADR: ADR-0005d (Supervisor Monitoring & Blacklist Management)
+# Defines crash criteria, logging, and recovery procedures
+
+metadata:
+  contract_id: "crash-detection-v1.0"
+  source_adr: "0005d-supervisor-blacklist.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# Crash Detection Overview
+crash_detection_overview:
+  description: "Comprehensive crash detection with classification, logging, and recovery"
+  purpose: "Detect all agent failures, log root causes, trigger appropriate recovery"
+  detection_latency: "<100ms from crash to supervisor notification"
+  classification_types: "OOM, timeout, exception, protocol violation, resource exhaustion"
+
+# Crash Types & Criteria
+crash_types:
+
+  # Memory Exhaustion (OOM)
+  out_of_memory:
+    description: "Agent exceeded memory limits (150MB for AI agents, 10MB for pure actors)"
+    detection_criteria:
+      - "SIGKILL from OS (OOM killer)"
+      - "Memory allocation failure exception"
+      - "malloc() returns NULL"
+      - "Python MemoryError exception"
+    frequency: "Common (5-10% of crashes)"
+    root_causes:
+      - "Model too large for NPU/GPU"
+      - "KV cache growth beyond limits"
+      - "Memory leak in agent code"
+      - "Concurrent agents exceeding total K1 memory (500MB)"
+
+  # Timeout Violations
+  timeout_violations:
+    description: "Agent exceeded time limits for operations"
+    detection_criteria:
+      - "WARMING timeout (5s)"
+      - "DRAINING timeout (10s)"
+      - "Tool call timeout (30s)"
+      - "LLM inference timeout (60s)"
+    frequency: "Common (10-15% of crashes)"
+    root_causes:
+      - "Slow NPU/GPU inference"
+      - "Network timeout to remote LLM"
+      - "Infinite loop in agent logic"
+      - "Deadlock in concurrent operations"
+
+  # Unhandled Exceptions
+  unhandled_exceptions:
+    description: "Runtime errors not caught by agent error handling"
+    detection_criteria:
+      - "Python Exception (ValueError, KeyError, etc.)"
+      - "AssertionError in agent logic"
+      - "ImportError (missing dependencies)"
+      - "TypeError (incorrect data types)"
+    frequency: "Common (20-30% of crashes)"
+    root_causes:
+      - "Invalid LLM response parsing"
+      - "Malformed tool schemas"
+      - "Configuration errors"
+      - "Protocol violations"
+
+  # Protocol Violations
+  protocol_violations:
+    description: "Agent violated MPST protocols or actor model rules"
+    detection_criteria:
+      - "Invalid state transition (TERMINATED → ACTIVE)"
+      - "MPST violation (send after DrainBegin)"
+      - "Mailbox overflow (too many pending messages)"
+      - "Capability misuse (unauthorized tool access)"
+    frequency: "Rare (1-2% of crashes)"
+    root_causes:
+      - "Race conditions in state management"
+      - "Incorrect protocol implementation"
+      - "Message ordering issues"
+
+  # Resource Exhaustion
+  resource_exhaustion:
+    description: "System resources exhausted (CPU, thermal, network)"
+    detection_criteria:
+      - "CPU usage >95% sustained"
+      - "Thermal throttling (T > T_hot)"
+      - "Network connection failures"
+      - "Disk I/O blocking"
+    frequency: "Uncommon (2-5% of crashes)"
+    root_causes:
+      - "Thermal runaway on mobile devices"
+      - "Network partition during LLM calls"
+      - "Disk space exhaustion"
+      - "CPU contention with other apps"
+
+  # Heartbeat Timeouts
+  heartbeat_timeouts:
+    description: "Agent became unresponsive (detected via heartbeat monitoring)"
+    detection_criteria:
+      - "3s without heartbeat (>2 missed 1s intervals)"
+      - "Event loop stall (400ms without internal heartbeat)"
+    frequency: "Common (15-20% of crashes)"
+    root_causes:
+      - "Infinite loop in agent processing"
+      - "Deadlock in concurrent operations"
+      - "Garbage collection pause (Python)"
+      - "OS scheduling delays"
+
+# Crash Reporting Protocol
+crash_reporting:
+
+  # Agent Responsibilities
+  agent_reporting:
+    required_actions:
+      - "Catch all exceptions (try/except blocks)"
+      - "Report crash to supervisor before termination"
+      - "Include stack trace and context"
+      - "Clean up resources (close connections, release locks)"
+    message_format:
+      agent_id: "UUID"
+      agent_type: "enum"
+      crash_type: "enum (OOM, timeout, exception, etc.)"
+      reason: "string (human-readable)"
+      stack_trace: "string (full traceback)"
+      context: "dict (agent state, memory usage, etc.)"
+      timestamp: "datetime"
+
+  # Supervisor Processing
+  supervisor_processing:
+    immediate_actions:
+      - "Log crash event with full context"
+      - "Update crash counters for agent type"
+      - "Check blacklist threshold (3 crashes in 10 min)"
+      - "Emit metrics and alerts"
+    async_actions:
+      - "Spawn replacement agent (if not blacklisted)"
+      - "Clean up orphaned resources"
+      - "Update crash history database"
+
+# Crash History Tracking
+crash_history:
+
+  # Data Structure
+  crash_record:
+    fields:
+      - agent_type: "enum (Planner, Orchestrator, etc.)"
+      - timestamp: "datetime (monotonic clock)"
+      - crash_type: "enum"
+      - reason: "string"
+      - stack_trace: "string (optional)"
+      - agent_version: "string (for versioned blacklisting)"
+      - k1_version: "string (system version)"
+      - session_id: "UUID (for correlation)"
+
+  # Retention Policy
+  retention:
+    time_window_ms: 600000  # 10 minutes for blacklist calculation
+    max_records_per_type: 100  # Prevent unbounded growth
+    cleanup_interval_ms: 300000  # Clean every 5 minutes
+
+  # Analysis Queries
+  analysis_queries:
+    recent_crashes: "SELECT * FROM crash_history WHERE agent_type = ? AND timestamp > ?"
+    crash_rate: "SELECT COUNT(*) FROM crash_history WHERE agent_type = ? AND timestamp > ?"
+    top_crash_types: "SELECT crash_type, COUNT(*) FROM crash_history GROUP BY crash_type ORDER BY COUNT(*) DESC"
+
+# Recovery Procedures
+recovery_procedures:
+
+  # Immediate Recovery (<100ms)
+  immediate_recovery:
+    actions:
+      - "Log crash with full context"
+      - "Update crash counters"
+      - "Check blacklist threshold"
+    performance_budget_ms: "<10"
+
+  # Fast Recovery (<5s)
+  fast_recovery:
+    conditions: "Agent type not blacklisted"
+    actions:
+      - "Spawn replacement agent"
+      - "Route pending work to replacement"
+      - "Update routing tables"
+    performance_budget_ms: "<5000"
+    success_criteria: "Replacement agent reaches ACTIVE state"
+
+  # Blacklist Recovery (Manual)
+  blacklist_recovery:
+    conditions: "Agent type blacklisted (3+ crashes in 10 min)"
+    actions:
+      - "Block new spawns for 1 hour"
+      - "Alert operations team"
+      - "Manual investigation required"
+      - "Code fix or config change needed"
+    duration_ms: 3600000  # 1 hour blacklist
+    escalation: "Page on-call engineer for investigation"
+
+# Observability & Monitoring
+observability:
+
+  # Metrics
+  metrics:
+    agent_crash_total:
+      type: "counter"
+      labels: ["agent_type", "crash_type", "reason"]
+      description: "Total agent crashes"
+
+    agent_crash_rate_per_minute:
+      type: "gauge"
+      labels: ["agent_type"]
+      description: "Crash rate per minute (rolling average)"
+
+    crash_detection_latency_ms:
+      type: "histogram"
+      labels: ["crash_type"]
+      buckets: [10, 50, 100, 500, 1000]
+      description: "Time from crash to detection"
+
+    replacement_spawn_success_total:
+      type: "counter"
+      labels: ["agent_type", "success"]
+      description: "Successful replacement spawns"
+
+  # Alerts
+  alerts:
+    crash_rate_high:
+      condition: "crash_rate > 5 per minute for 5 minutes"
+      severity: "WARNING"
+      message: "High crash rate detected for {{agent_type}}"
+
+    blacklist_triggered:
+      condition: "agent_type blacklisted"
+      severity: "ERROR"
+      message: "Agent type {{agent_type}} blacklisted due to {{crash_count}} crashes"
+
+    crash_detection_failed:
+      condition: "crash reported but no recovery action taken"
+      severity: "ERROR"
+      message: "Crash detection failure for agent {{agent_id}}"
+
+  # Dashboards
+  dashboards:
+    crash_overview:
+      panels:
+        - "Crash rate by agent type (time series)"
+        - "Top crash types (pie chart)"
+        - "Blacklist status (table)"
+        - "Crash detection latency (histogram)"
+
+# Performance Budgets
+performance_budgets:
+
+  # Detection Latency
+  detection_latency:
+    target_ms: "<100"
+    breakdown:
+      crash_report_ms: "<10"      # Agent → Supervisor message
+      logging_ms: "<50"           # Structured logging
+      counter_update_ms: "<10"    # Crash counter increment
+      blacklist_check_ms: "<30"   # Threshold evaluation
+
+  # Recovery Latency
+  recovery_latency:
+    replacement_spawn_ms: "<240"  # PENDING → ACTIVE
+    total_failover_ms: "<340"     # Detection + spawn
+
+  # Resource Overhead
+  resource_overhead:
+    memory_mb: "<10"              # Crash history storage
+    cpu_percent: "<0.1"           # Background processing
+    storage_mb_per_day: "<100"    # Log retention
+
+# Testing Scenarios
+testing_scenarios:
+
+  # Unit Tests
+  unit_tests:
+    - "Crash type classification accuracy"
+    - "Crash counter increment logic"
+    - "Blacklist threshold evaluation"
+    - "Crash history cleanup"
+
+  # Integration Tests
+  integration_tests:
+    - "Agent crash → supervisor detection → replacement spawn"
+    - "Multiple crashes → blacklist trigger"
+    - "Blacklist expiry → allow new spawns"
+    - "Crash during draining → proper cleanup"
+
+  # Load Tests
+  load_tests:
+    - "100 concurrent agents, 10% crash rate"
+    - "Crash storm (50 crashes in 1 minute)"
+    - "Memory pressure + crash recovery"
+
+# Implementation Status
+implementation_status:
+  crash_type_classification: "COMPLETED"
+  crash_reporting_protocol: "COMPLETED"
+  crash_history_tracking: "COMPLETED"
+  recovery_procedures: "COMPLETED"
+  observability: "COMPLETED"
+  performance_optimization: "IN PROGRESS"
+  overall_completion: "90%"
+
+# Research Backing
+research_backing:
+  - "Failure detection in distributed systems (Chandra & Toueg 1996)"
+  - "Crash recovery patterns (Erlang 'let it crash' philosophy)"
+  - "Root cause analysis for microservices (Google SRE book)"
+  - "Circuit breaker pattern for fault tolerance (Nygard 2007)"

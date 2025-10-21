@@ -1,0 +1,41 @@
+{
+  "$id": "pep.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "band",
+    "abac",
+    "caps",
+    "decision"
+  ],
+  "properties": {
+    "band": {
+      "type": "string",
+      "enum": ["GREEN", "AMBER", "RED"]
+    },
+    "abac": {
+      "type": "object",
+      "description": "Attribute-based access control context (tenant, actor roles, device posture, etc.)"
+    },
+    "caps": {
+      "type": "object",
+      "description": "Hard limits evaluated by the policy engine (fanout, concurrency, quotas, etc.)"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["ALLOW", "DENY"]
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Advisory or mandatory actions attached to the decision (e.g., re-encrypt, rotate keys)."
+    },
+    "denial_reason": {
+      "type": "string",
+      "description": "Stable reason code when decision is DENY."
+    }
+  },
+  "additionalProperties": true
+}

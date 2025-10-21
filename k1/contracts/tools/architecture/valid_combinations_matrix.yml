@@ -1,0 +1,486 @@
+# Valid Combinations Matrix: Protocol × Sandbox
+#
+# **Purpose:** Define all 6 valid Protocol × Sandbox combinations that provide
+# 100% coverage of 760 K1 tools. Each combination specifies adoption %, rationale,
+# use cases, performance characteristics, and examples.
+#
+# **Source ADR:** ADR-0033 (Three-Tier Sandbox Strategy), ADR-0033d (2D Selection)
+# **Key Principle:** Only 6 valid combinations; all others either impractical or
+# non-existent (e.g., WASM cannot use stdio transport, so no Direct+WASM practical).
+
+---
+valid_combinations_matrix:
+  name: "2D Tool Execution Matrix (Protocol × Sandbox)"
+  version: "1.0"
+  description: "All 6 valid Protocol × Sandbox combinations with coverage analysis"
+
+  ## COMBINATION 1: MCP + WASM (10% - UNTRUSTED CODE)
+  combination_1:
+    id: "mcp_wasm"
+    name: "MCP Protocol + WASM Sandbox"
+    adoption: "10% (76 tools)"
+    priority: "P3 (emerging)"
+
+    description: |
+      MCP server implemented in WASM (untrusted code). Uses HTTP transport
+      (stdio unavailable in WASM). Maximum security for user plugins.
+
+    protocol: "MCP"
+    protocol_transport: "HTTP"
+    sandbox: "WASM"
+
+    rationale:
+      trust_level: "UNTRUSTED - user plugins, experimental tools"
+      security_priority: "MAXIMUM (zero syscalls, capability-based I/O)"
+      performance_requirement: "LOW (user plugins not performance-critical)"
+      cross_platform: "YES (WASM runs on Linux/macOS/Windows)"
+
+    use_cases:
+      - "User plugins (untrusted WASM code uploaded by users)"
+      - "Experimental tools (new research, unverified)"
+      - "Community contributions (unaudited third-party code)"
+      - "Capability-based tool design (WASI interfaces)"
+
+    tool_examples:
+      - tool_name: "user_plugin"
+        description: "User-submitted plugin (untrusted)"
+        band: "GREEN"
+        implementation: "user_plugin.wasm"
+
+      - tool_name: "experimental_ai"
+        description: "Experimental AI model (new research)"
+        band: "GREEN"
+        implementation: "experimental_model.wasm"
+
+      - tool_name: "community_tool"
+        description: "Community contribution (unverified)"
+        band: "GREEN"
+        implementation: "community_tool.wasm"
+
+    performance:
+      latency: "10x slower than native (5ms per call)"
+      memory: "<5MB per module"
+      boot_time: "<10ms instantiation"
+      overhead: "Acceptable for untrusted code"
+
+    implementation:
+      transport: "HTTP POST to Wasmtime HTTP server"
+      mcp_server: "Implemented as WASM module"
+      communication_pattern: |
+        Client → HTTP POST /rpc → WASM module
+        WASM processes → HTTP response
+
+    security:
+      isolation_level: "MAXIMUM"
+      syscalls: "Zero (100% capability-based)"
+      network_access: "Whitelist only (WASI hosts)"
+      filesystem_access: "Preopen dirs only (WASI)"
+
+    advantages:
+      - "Maximum security for untrusted code"
+      - "Capability-based isolation (no ambient authority)"
+      - "Cross-platform execution"
+      - "Deterministic behavior"
+
+    disadvantages:
+      - "10x slower than native"
+      - "Limited ecosystem (fewer WASM tools)"
+      - "Not suitable for performance-critical tools"
+
+    deployment_notes:
+      - "HTTP server overhead (vs stdio native performance)"
+      - "Requires WASM module compilation"
+      - "Limited to tools available as WASM"
+
+  ## COMBINATION 2: MCP + PROCESS (70% - STANDARD TOOLS)
+  combination_2:
+    id: "mcp_process"
+    name: "MCP Protocol + Process Sandbox"
+    adoption: "70% (532 tools)"
+    priority: "P1 (critical)"
+
+    description: |
+      Standard MCP server in process sandbox. Stdio transport (newline-delimited JSON).
+      Best for verified third-party APIs with MCP support. Native performance with
+      comprehensive ADR-0032 egress controls (network, filesystem, resources).
+
+    protocol: "MCP"
+    protocol_transport: "stdio"
+    sandbox: "Process"
+
+    rationale:
+      trust_level: "STANDARD/VERIFIED - audited APIs, known tools"
+      security_priority: "BALANCED (syscalls filtered, egress controlled)"
+      performance_requirement: "HIGH (native speed for real-time tools)"
+      cross_platform: "NO (Linux-focused, secondary macOS/Windows)"
+
+    use_cases:
+      - "Standard tools (70% of K1 tools)"
+      - "Verified third-party APIs (OpenWeatherMap, Google Calendar, etc)"
+      - "Performance-critical tools (must be fast)"
+      - "MCP-native tools (already have MCP servers)"
+      - "Internal services (known, trusted)"
+
+    tool_examples:
+      - tool_name: "weather_api"
+        description: "OpenWeatherMap API wrapper (verified)"
+        band: "AMBER"
+        implementation: "weather_api.py (MCP server)"
+        adoption: "250+ tools"
+
+      - tool_name: "calendar_sync"
+        description: "Google Calendar integration (verified)"
+        band: "AMBER"
+        implementation: "calendar_sync.py (MCP server)"
+
+      - tool_name: "image_processor"
+        description: "Image processing (ImageMagick wrapper)"
+        band: "GREEN"
+        implementation: "image_processor.py (MCP server)"
+
+      - tool_name: "llm_call"
+        description: "LLM API calls (Claude, GPT, Gemini)"
+        band: "AMBER"
+        implementation: "llm_call.py (MCP server)"
+        adoption: "150+ tools"
+
+    performance:
+      latency: "Native speed (<5ms overhead)"
+      memory: "<50MB per process"
+      boot_time: "<100ms process spawn"
+      overhead: "Minimal"
+      p95_target: "<50ms total (protocol + sandbox)"
+
+    implementation:
+      transport: "Stdio (JSON-RPC over pipes)"
+      mcp_server: "Native Python process"
+      communication_pattern: |
+        MCPClient → subprocess stdin → MCP server
+        MCP server → subprocess stdout → MCPClient
+        (newline-delimited JSON requests/responses)
+
+    security_layers:
+      layer_1_network: "ADR-0032a (iptables --pid-owner + bands)"
+      layer_2_filesystem: "ADR-0032b (chroot + seccomp)"
+      layer_3_resources: "ADR-0032c (cgroups v2)"
+      layer_4_audit: "ADR-0032d (K0 violation logging)"
+
+    advantages:
+      - "Native performance"
+      - "Most K1 tools use this combination"
+      - "Well-tested with ADR-0032 egress controls"
+      - "Comprehensive isolation (4-layer approach)"
+      - "Low memory overhead"
+
+    disadvantages:
+      - "Linux-primary (macOS/Windows secondary)"
+      - "More complex setup than WASM"
+      - "Syscalls allowed (can exploit kernel 0-day)"
+
+    deployment_notes:
+      - "Use for all verified, standard tools"
+      - "Recommended combination for production"
+      - "Integrate ADR-0032 egress rules"
+
+  ## COMBINATION 3: MCP + CONTAINER (5% - RED BAND HIGH-RISK)
+  combination_3:
+    id: "mcp_container"
+    name: "MCP Protocol + Container Sandbox"
+    adoption: "5% (38 tools)"
+    priority: "P2 (important)"
+
+    description: |
+      MCP server in container for RED band tools. Hardware-level isolation via
+      Firecracker microVM or gVisor. 125ms boot overhead acceptable for non-real-time
+      operations (booking, payment, PII). Use when process sandbox insufficient.
+
+    protocol: "MCP"
+    protocol_transport: "HTTP"  # HTTP from host into container
+    sandbox: "Container (Firecracker or gVisor)"
+
+    rationale:
+      trust_level: "CRITICAL/UNTRUSTED - RED band operations"
+      security_priority: "MAXIMUM (hardware isolation, no host compromise)"
+      performance_requirement: "LOW (125ms overhead ok for non-real-time)"
+      cross_platform: "NO (Linux only, requires Firecracker/gVisor)"
+
+    use_cases:
+      - "RED band tools (booking, payment, PII operations)"
+      - "High-risk operations (maximum isolation required)"
+      - "Code execution tools (sandboxing user code)"
+      - "Security-critical services"
+      - "Operations requiring isolation from host kernel"
+
+    tool_examples:
+      - tool_name: "booking_engine"
+        description: "Hotel/flight booking (RED: payment)"
+        band: "RED"
+        implementation: "booking_engine.py (in Firecracker VM)"
+
+      - tool_name: "payment_processor"
+        description: "Credit card processing (RED: payment)"
+        band: "RED"
+        implementation: "payment_processor.py (in Firecracker VM)"
+
+      - tool_name: "pii_handler"
+        description: "PII data processing (RED: sensitive)"
+        band: "RED"
+        implementation: "pii_handler.py (in Firecracker VM)"
+
+      - tool_name: "code_executor"
+        description: "Execute user code (RED: untrusted)"
+        band: "RED"
+        implementation: "code_executor.py (in Firecracker VM)"
+
+    performance:
+      latency: "125ms boot time (per instance)"
+      memory: "100MB per instance"
+      overhead: "125ms boot acceptable for <1% time-critical operations"
+      note: "Use persistent containers to amortize boot cost"
+
+    implementation:
+      transport: "HTTP from host firewall into container"
+      runtime: "Firecracker microVM or gVisor"
+      boot_strategy: "Persistent containers (boot once, reuse)"
+      communication_pattern: |
+        Host → Firecracker HTTP interface → MCP server in VM
+        MCP server → response → Host
+
+    security_layers:
+      layer_1_isolation: "Hardware-level (KVM hypervisor)"
+      layer_2_network: "Firecracker network interface + host firewall"
+      layer_3_filesystem: "Independent guest OS root filesystem"
+      layer_4_resources: "Hypervisor-enforced limits"
+
+    advantages:
+      - "Hardware-level isolation (no host compromise)"
+      - "Maximum security for RED band operations"
+      - "Independent OS instance per tool"
+      - "Deterministic behavior"
+
+    disadvantages:
+      - "125ms boot overhead"
+      - "100MB memory overhead per instance"
+      - "Linux only"
+      - "Use only for <5% critical tools"
+
+    deployment_notes:
+      - "Use persistent containers (not ephemeral)"
+      - "Deploy only for RED band operations"
+      - "Monitor container resource usage"
+      - "Implement container recycling (periodic restart)"
+
+  ## COMBINATION 4: DIRECT + PROCESS (15% - LEGACY CLI TOOLS)
+  combination_4:
+    id: "direct_process"
+    name: "Direct API + Process Sandbox"
+    adoption: "15% (114 tools)"
+    priority: "P1 (critical)"
+
+    description: |
+      Direct CLI command execution (legacy tools without MCP servers). Native performance
+      with ADR-0032 egress controls. Use for ffmpeg, imagemagick, graphviz, pandoc, etc.
+
+    protocol: "Direct"
+    protocol_subtype: "CLI"
+    sandbox: "Process"
+
+    rationale:
+      trust_level: "STANDARD/VERIFIED - legacy CLI tools, known software"
+      security_priority: "BALANCED (syscalls filtered, egress controlled)"
+      performance_requirement: "HIGH (native speed for batch processing)"
+      cross_platform: "YES (most CLI tools cross-platform)"
+
+    use_cases:
+      - "Legacy CLI tools (no MCP server available)"
+      - "Performance-critical batch processing"
+      - "Video/image processing (ffmpeg, ImageMagick)"
+      - "Document conversion (Pandoc)"
+      - "Graph rendering (Graphviz)"
+      - "Audio processing (FFmpeg, SoX)"
+
+    tool_examples:
+      - tool_name: "ffmpeg"
+        description: "Video/audio transcoding"
+        band: "GREEN"
+        implementation: "CLI: ffmpeg -i input.mp4 -c:v libx264 output.mp4"
+        adoption: "30+ tools"
+
+      - tool_name: "imagemagick"
+        description: "Image processing and conversion"
+        band: "GREEN"
+        implementation: "CLI: convert input.png -resize 800x600 output.png"
+        adoption: "20+ tools"
+
+      - tool_name: "graphviz"
+        description: "Graph visualization"
+        band: "GREEN"
+        implementation: "CLI: dot -Tpng input.dot -o output.png"
+
+      - tool_name: "pandoc"
+        description: "Document conversion"
+        band: "GREEN"
+        implementation: "CLI: pandoc input.md -o output.pdf"
+
+      - tool_name: "sox"
+        description: "Audio processing"
+        band: "GREEN"
+        implementation: "CLI: sox input.wav -b 16 output.wav"
+
+    performance:
+      latency: "Native speed + 50ms process spawn"
+      memory: "<50MB per process"
+      boot_time: "<50ms process spawn"
+      p95_target: "<100ms total"
+      overhead: "Process spawn only (acceptable for batch work)"
+
+    implementation:
+      transport: "subprocess.Popen() (direct execution)"
+      cli_pattern: |
+        client.run(["ffmpeg", "-i", "input.mp4", "-c:v", "libx264", "output.mp4"])
+        → subprocess spawns native ffmpeg process
+        → reads stdout/stderr for output
+
+      argument_handling: "Tool-specific (custom CLI parsing)"
+      output_parsing: "Tool-specific (parse stdout/stderr)"
+
+    security_layers:
+      layer_1_network: "ADR-0032a (iptables --pid-owner + bands)"
+      layer_2_filesystem: "ADR-0032b (chroot + seccomp)"
+      layer_3_resources: "ADR-0032c (cgroups v2)"
+      layer_4_audit: "ADR-0032d (K0 violation logging)"
+
+    advantages:
+      - "Works with ANY Unix tool (no MCP required)"
+      - "Native performance"
+      - "Well-tested (Unix tools stable)"
+      - "Cross-platform support"
+      - "Comprehensive ADR-0032 egress controls"
+
+    disadvantages:
+      - "No standardized discovery (tool-specific)"
+      - "50ms process spawn overhead"
+      - "Tool-specific argument/output parsing"
+
+    deployment_notes:
+      - "Use for CLI tools without MCP servers"
+      - "Document tool-specific CLI arguments"
+      - "Implement output parsing for each tool"
+      - "Use for batch processing (spawn overhead acceptable)"
+
+  ## COMBINATION 5: DIRECT + WASM (RARE - UNTRUSTED UNTESTED)
+  combination_5:
+    id: "direct_wasm"
+    name: "Direct API + WASM Sandbox"
+    adoption: "<1% (rare)"
+    priority: "P4 (rarely used)"
+
+    description: |
+      Direct invocation of WASM tool (no HTTP wrapper). Rare - most WASM tools use
+      HTTP transport for protocol compatibility. Consider only for experimental
+      untrusted WASM code.
+
+    protocol: "Direct"
+    protocol_subtype: "WASM function call"
+    sandbox: "WASM"
+
+    rationale: "Experimental, not recommended for production"
+
+    use_cases: "Experimental untrusted WASM code (research only)"
+
+    advantages: "Maximum security + custom invocation"
+    disadvantages: "No standardization, rarely useful"
+
+    deployment_notes: "Avoid in production - use MCP + WASM instead"
+
+  ## COMBINATION 6: DIRECT + CONTAINER (RARE - EDGE CASE)
+  combination_6:
+    id: "direct_container"
+    name: "Direct API + Container Sandbox"
+    adoption: "<1% (edge cases)"
+    priority: "P4 (rarely used)"
+
+    description: |
+      Direct command execution in container. Very rare edge case - use only if
+      tool MUST have hardware isolation AND no MCP available AND no WASM option.
+
+    protocol: "Direct"
+    protocol_subtype: "CLI in container"
+    sandbox: "Container (Firecracker)"
+
+    rationale: "Edge case: RED band + legacy tool + no MCP"
+
+    use_cases: "RED band legacy tool (very rare)"
+
+    advantages: "Hardware isolation for legacy tool"
+    disadvantages: "125ms boot overhead, rarely justified"
+
+    deployment_notes: "Avoid - prefer MCP + Container or migrate to MCP"
+
+  ## COVERAGE SUMMARY
+  coverage:
+    total_tools: 760
+
+    by_combination:
+      mcp_wasm: "76 tools (10%)"
+      mcp_process: "532 tools (70%)"
+      mcp_container: "38 tools (5%)"
+      direct_process: "114 tools (15%)"
+      direct_wasm: "<1% (rare)"
+      direct_container: "<1% (rare)"
+
+    total_coverage: "100% (all 760 tools covered)"
+
+    by_band:
+      green_band: "MCP+Process (70%), MCP+WASM (10%), Direct+Process (15%), others (<5%)"
+      amber_band: "MCP+Process (preferred), MCP+WASM (fallback)"
+      red_band: "MCP+Container (preferred), MCP+Process with strict egress (fallback)"
+      black_band: "MCP+Container (highly restricted)"
+
+  ## SELECTION DECISION TREE
+  selection_decision_tree:
+    question_1:
+      text: "Is tool code trusted?"
+      if_yes: "WASM not necessary, consider PROCESS or CONTAINER"
+      if_no: "Use WASM (maximum security)"
+
+    question_2:
+      text: "Does tool have MCP server?"
+      if_yes: "Use MCP (recommended)"
+      if_no: "Check if CLI tool → Use DIRECT, or migrate to MCP"
+
+    question_3:
+      text: "Is performance critical (real-time)?"
+      if_yes: "Use PROCESS (native speed)"
+      if_no: "CONTAINER acceptable (125ms boot ok)"
+
+    question_4:
+      text: "Is tool RED band (high-risk)?"
+      if_yes: "Use CONTAINER (hardware isolation)"
+      if_no: "Use PROCESS (standard isolation)"
+
+---
+
+# REFERENCE: All Tools Categorized by Combination
+
+tools_by_combination:
+
+  mcp_wasm_10_percent:
+    count: 76
+    category: "Untrusted code, experimental tools"
+    examples: ["user_plugin", "experimental_ai", "community_tool"]
+
+  mcp_process_70_percent:
+    count: 532
+    category: "Standard tools, verified APIs"
+    examples: ["weather_api", "calendar_sync", "llm_call", "image_processor"]
+
+  mcp_container_5_percent:
+    count: 38
+    category: "RED band high-risk operations"
+    examples: ["booking_engine", "payment_processor", "pii_handler"]
+
+  direct_process_15_percent:
+    count: 114
+    category: "Legacy CLI tools"
+    examples: ["ffmpeg", "imagemagick", "graphviz", "pandoc", "sox"]

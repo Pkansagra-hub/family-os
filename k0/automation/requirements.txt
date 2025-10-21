@@ -1,0 +1,11 @@
+# K0 Automation Service - Python Dependencies
+
+# Web framework
+flask==3.0.0
+werkzeug==3.0.1
+
+# HTTP client
+requests==2.31.0
+
+# Optional: Gunicorn for production deployment
+gunicorn==21.2.0

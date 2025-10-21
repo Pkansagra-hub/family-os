@@ -1,0 +1,631 @@
+metadata:
+  title: "Booking Agent Capability Assignment Contract"
+  description: "Default and escalation capabilities for booking/reservation agents (tool agents with financial constraints)"
+  adr_references:
+    - "ADR-0010b: Agent Capability Assignment Policy"
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+
+########################################
+# SECTION 1: AGENT ROLE DEFINITION
+########################################
+agent_role:
+  name: "booking_agent"
+  parent_role: "tool_agent"
+  purpose: "Execute booking and reservation tools with financial constraints and user approval requirements"
+  classification: "AI Agent (Tool Executor with Financial Risk)"
+  trust_level_default: 1                # Low trust (new agent)
+
+  operational_characteristics:
+    - "Executes booking tools (book_hotel, book_flight, book_restaurant)"
+    - "Requires user confirmation for all bookings (financial risk)"
+    - "Subject to cost limits based on trust level ($100 to $1000)"
+    - "Writes booking results to scoreboard (memory write capability)"
+    - "Does NOT execute payment tools (charge_payment separate agent)"
+    - "Does NOT access beliefs or persona (booking agent is task-focused)"
+
+  least_privilege_principle: |
+    Booking agent receives minimum capabilities for reservation tasks:
+    - Specific booking tool only (assigned on hire)
+    - User confirmation required for all bookings (financial risk mitigation)
+    - Cost limits enforced via capability constraints
+    - No access to sensitive memory sections (beliefs, persona)
+    - No payment execution (separate payment agent)
+
+########################################
+# SECTION 2: DEFAULT CAPABILITIES
+########################################
+default_capabilities:
+  capability_1_assigned_booking_tool:
+    resource_type: "TOOL"
+    resource_id: "${assigned_tool}"     # Dynamic (e.g., book_hotel, book_flight, book_restaurant)
+    permissions:
+      - "execute"
+
+    constraints:
+      max_invocations: 10
+      expires_at: "session_end"
+      requires_user_approval: true      # CRITICAL: User must confirm booking
+      max_cost_usd: 100.0               # Max $100 for trust level 1
+      rate_limit:
+        requests_per_minute: 2
+        burst: 1
+
+    justification: "Booking agent executes specific booking tool assigned by orchestrator"
+
+    performance_cost:
+      latency_ms: 3500                  # P95 latency for booking API (external service)
+      cost_usd_per_invocation: 0.0      # No API cost (user pays booking fee)
+      memory_mb: 0                      # No model loading
+
+    tool_characteristics:
+      side_effects: true                # Booking creates external state (reservation)
+      privacy_band: "AMBER"             # Contains user PII (name, email, payment method)
+      financial_risk: true              # User incurs cost
+      requires_user_approval: true      # User must confirm before execution
+      rollback_available: true          # Booking can be cancelled (compensation)
+
+    issued_at: "agent_hire"
+    issued_by: "capability_manager"
+    revoked_on:
+      - "agent_crash"
+      - "session_end"
+      - "policy_violation"
+      - "max_cost_exceeded"
+
+    example_booking_tools:
+      - "book_hotel"
+      - "book_flight"
+      - "book_restaurant"
+      - "book_car_rental"
+      - "book_event_tickets"
+
+  capability_2_memory_scoreboard_write:
+    resource_type: "MEMORY"
+    resource_id: "scoreboard"
+    permissions:
+      - "write"
+
+    constraints:
+      expires_at: "session_end"
+      max_writes_per_minute: 10
+
+    justification: "Booking agent writes booking confirmation to scoreboard (results)"
+
+    performance_cost:
+      latency_ms: 8                     # P95 latency for memory write (L0 cache + K0 WAL)
+      cost_usd_per_invocation: 0.0      # In-memory operation
+      memory_mb: 0                      # Shared memory (no allocation)
+
+    memory_section_characteristics:
+      section: "scoreboard"
+      privacy_band: "AMBER"             # Booking results contain PII
+      size_kb_typical: 20               # Typical scoreboard entry size
+      write_only: true                  # No read access (results-only)
+
+    issued_at: "agent_hire"
+    issued_by: "capability_manager"
+    revoked_on:
+      - "agent_crash"
+      - "session_end"
+
+########################################
+# SECTION 3: USER APPROVAL WORKFLOW
+########################################
+user_approval_workflow:
+  description: "All booking tools require explicit user confirmation before execution"
+
+  step_1_agent_requests_booking:
+    action: "Booking agent calls book_hotel(hotel_id, check_in, check_out, guests)"
+    latency_ms: 5                       # Capability verification
+
+    validation:
+      - "Verify capability token signature (HMAC-SHA256)"
+      - "Check max_cost_usd constraint (booking cost <= $100 for trust level 1)"
+      - "Check requires_user_approval=true"
+
+    if_validation_fails:
+      result: "DENIED"
+      reason: "Capability verification failed or max cost exceeded"
+      logging: "capability_verification_denied (ALERT level)"
+
+  step_2_suspend_execution_request_user_approval:
+    action: "Tool runner suspends execution, sends user approval request"
+    latency_ms: 10                      # Message routing to frontend
+
+    user_approval_message:
+      message_type: "BOOKING_APPROVAL_REQUEST"
+      booking_details:
+        tool: "book_hotel"
+        hotel_name: "Tokyo Imperial Hotel"
+        check_in: "2025-11-01"
+        check_out: "2025-11-04"
+        guests: 2
+        estimated_cost_usd: 450.00
+        cancellation_policy: "Free cancellation before 2025-10-25"
+
+      approval_options:
+        - action: "APPROVE"
+          label: "Confirm Booking ($450)"
+        - action: "DENY"
+          label: "Cancel Booking"
+        - action: "MODIFY"
+          label: "Change Details"
+
+      timeout: "5 minutes"              # User has 5 min to respond
+
+  step_3_user_responds:
+    scenario_a_user_approves:
+      action: "User clicks 'Confirm Booking'"
+      latency_ms: 5                     # Message routing from frontend
+
+      result: "APPROVED"
+      next_step: "Execute booking tool with user_approval_token"
+
+      user_approval_token:
+        approval_id: "01JCAPPROVAL123"
+        user_id: "user_001"
+        agent_id: "agent_booking_001"
+        tool: "book_hotel"
+        booking_params_hash: "sha256:abcd1234..."
+        approved_at: "2025-10-15T14:45:00Z"
+        signature: "hmac-sha256:xyz789..."
+
+    scenario_b_user_denies:
+      action: "User clicks 'Cancel Booking'"
+      latency_ms: 5
+
+      result: "DENIED"
+      next_step: "Return error to agent, revoke booking capability"
+
+      error_message:
+        type: "USER_DENIED"
+        reason: "User cancelled booking request"
+        fallback: "Agent should explore alternative options"
+
+    scenario_c_timeout:
+      action: "User does not respond within 5 minutes"
+      latency_ms: 0                     # Automatic timeout
+
+      result: "DENIED"
+      next_step: "Return timeout error to agent"
+
+      error_message:
+        type: "APPROVAL_TIMEOUT"
+        reason: "User did not respond within 5 minutes"
+        fallback: "Agent should retry with simpler request"
+
+  step_4_execute_booking_tool:
+    action: "Tool runner executes book_hotel with user approval token"
+    latency_ms: 3500                    # External API call
+
+    input_validation:
+      - "Verify user_approval_token signature"
+      - "Verify booking_params_hash matches current params (prevent TOCTOU)"
+      - "Check approval_id not used before (prevent replay)"
+
+    booking_execution:
+      external_api: "HotelBookingAPI.reserve(hotel_id, check_in, check_out, guests)"
+      retry_policy: "3 attempts with exponential backoff (1s, 2s, 4s)"
+      timeout: "10 seconds per attempt"
+
+    success_result:
+      booking_confirmation:
+        confirmation_id: "HOTEL-ABC123"
+        hotel_name: "Tokyo Imperial Hotel"
+        check_in: "2025-11-01"
+        check_out: "2025-11-04"
+        guests: 2
+        total_cost_usd: 450.00
+        cancellation_policy: "Free cancellation before 2025-10-25"
+
+      write_to_scoreboard: |
+        await memory_manager.write_scoreboard(
+            agent_id="agent_booking_001",
+            key="booking_result",
+            value=booking_confirmation
+        )
+
+    failure_result:
+      error_type: "BOOKING_FAILED"
+      error_message: "Hotel unavailable for selected dates"
+      retry_suggestion: "Try alternative dates or hotels"
+
+########################################
+# SECTION 4: ESCALATION CAPABILITIES (TRUST LEVEL 1)
+########################################
+escalation_capabilities_trust_level_1:
+  trust_level: 1
+  trust_level_definition: "Low trust (1-9 successful tasks completed)"
+
+  escalation_1_increased_cost_limit_200:
+    resource_type: "TOOL"
+    resource_id: "${assigned_tool}"     # Same tool, higher cost limit
+    permissions:
+      - "execute"
+
+    approval_required: true             # Requires supervisor approval
+    approval_criteria:
+      user_request_higher_cost: true    # User explicitly requested higher-cost option
+      previous_bookings_successful: true # Agent has completed bookings successfully
+
+    constraints:
+      max_invocations: 5
+      expires_at: "session_end"
+      requires_user_approval: true      # Still requires user confirmation
+      max_cost_usd: 200.0               # Increased from $100 to $200
+      rate_limit:
+        requests_per_minute: 2
+        burst: 1
+
+    justification: "User requested higher-cost booking option (e.g., luxury hotel)"
+
+    issued_at: "escalation_request"
+    issued_by: "supervisor_agent"
+    revoked_on:
+      - "budget_exhausted"
+      - "agent_crash"
+      - "session_end"
+
+    escalation_request_example: |
+      request = CapabilityRequestMessage(
+          agent_id="agent_booking_001",
+          resource_type="TOOL",
+          resource_id="book_hotel",
+          permissions=["execute"],
+          constraints={"max_cost_usd": 200.0, "max_invocations": 5},
+          justification="User requested luxury hotel ($180/night) exceeding $100 limit",
+          context={
+              "task": "Book luxury hotel in Tokyo",
+              "current_limit": 100.0,
+              "requested_limit": 200.0,
+              "user_confirmed": true
+          }
+      )
+
+########################################
+# SECTION 5: ESCALATION CAPABILITIES (TRUST LEVEL 2)
+########################################
+escalation_capabilities_trust_level_2:
+  trust_level: 2
+  trust_level_definition: "Medium trust (10-49 successful tasks completed, <5% failure rate)"
+
+  escalation_1_increased_cost_limit_500_auto_approved:
+    resource_type: "TOOL"
+    resource_id: "${assigned_tool}"
+    permissions:
+      - "execute"
+
+    approval_required: false            # Auto-approved for medium trust
+    approval_criteria: {}               # No additional criteria
+
+    constraints:
+      max_invocations: 10
+      expires_at: "session_end"
+      requires_user_approval: true      # Still requires user confirmation
+      max_cost_usd: 500.0               # Increased to $500
+      rate_limit:
+        requests_per_minute: 3
+        burst: 2
+
+    justification: "Medium trust agent can book up to $500 without supervisor approval"
+
+    issued_at: "escalation_request"
+    issued_by: "capability_manager"     # Auto-issued
+    revoked_on:
+      - "budget_exhausted"
+      - "agent_crash"
+      - "session_end"
+
+########################################
+# SECTION 6: ESCALATION CAPABILITIES (TRUST LEVEL 3)
+########################################
+escalation_capabilities_trust_level_3:
+  trust_level: 3
+  trust_level_definition: "High trust (50-199 successful tasks completed, <2% failure rate)"
+
+  escalation_1_increased_cost_limit_1000_auto_approved:
+    resource_type: "TOOL"
+    resource_id: "${assigned_tool}"
+    permissions:
+      - "execute"
+
+    approval_required: false            # Auto-approved for high trust
+    approval_criteria: {}
+
+    constraints:
+      max_invocations: 20
+      expires_at: "session_end"
+      requires_user_approval: true      # ALWAYS requires user confirmation (financial risk)
+      max_cost_usd: 1000.0              # Increased to $1000
+      rate_limit:
+        requests_per_minute: 5
+        burst: 3
+
+    justification: "High trust agent can book up to $1000 without supervisor approval"
+
+    issued_at: "escalation_request"
+    issued_by: "capability_manager"
+    revoked_on:
+      - "budget_exhausted"
+      - "agent_crash"
+      - "session_end"
+
+########################################
+# SECTION 7: FORBIDDEN CAPABILITIES
+########################################
+forbidden_capabilities:
+  description: "Capabilities that booking agent CANNOT escalate to (security boundaries)"
+
+  forbidden_1_payment_tools:
+    resource_type: "TOOL"
+    resource_ids:
+      - "charge_payment"
+      - "refund_payment"
+      - "transfer_funds"
+    reason: "Booking agent handles reservations only. Payment execution is separate agent role (payment_agent)."
+    enforcement: "Escalation request rejected at supervisor evaluation"
+
+  forbidden_2_memory_read:
+    resource_type: "MEMORY"
+    resource_ids:
+      - "beliefs"
+      - "persona"
+      - "control"
+    permissions: ["read"]
+    reason: "Booking agent is task-focused (no context needed). Only writes to scoreboard for results."
+    enforcement: "Escalation request rejected at supervisor evaluation"
+
+  forbidden_3_llm_access:
+    resource_type: "LLM"
+    resource_ids: ["*"]
+    permissions: ["execute"]
+    reason: "Booking agent executes deterministic tools (no LLM reasoning needed). Planning agent handles LLM tasks."
+    enforcement: "Escalation request rejected at supervisor evaluation"
+
+########################################
+# SECTION 8: COST TRACKING & BUDGET ENFORCEMENT
+########################################
+cost_tracking:
+  per_agent_budget:
+    total_budget_usd: 1000.0            # Max total booking cost per agent per session
+    spent_usd: 0.0                      # Cumulative spent
+    remaining_usd: 1000.0               # Remaining budget
+
+    update_on_booking:
+      action: "Increment spent_usd by booking cost"
+      latency_ms: 1                     # Atomic counter update
+
+      example: |
+        # After booking $450 hotel
+        spent_usd += 450.0
+        remaining_usd = total_budget_usd - spent_usd  # 1000 - 450 = 550
+
+  budget_exhausted_behavior:
+    trigger: "spent_usd >= total_budget_usd"
+    action: "Revoke booking capability immediately"
+    latency_ms: 5
+
+    implementation: |
+      if agent_budget.spent_usd >= agent_budget.total_budget_usd:
+          await capability_supervisor.revoke_capability(
+              cap_id=booking_cap.cap_id,
+              reason="Total booking budget exhausted"
+          )
+
+          logger.warning(
+              "booking_budget_exhausted",
+              agent_id=agent.id,
+              total_budget=agent_budget.total_budget_usd,
+              spent=agent_budget.spent_usd
+          )
+
+  per_booking_cost_validation:
+    validation_step: "Before user approval request"
+
+    check_1_max_cost_usd:
+      constraint: "booking_cost <= capability.max_cost_usd"
+      example: "booking_cost=$450, max_cost_usd=$500 (trust level 2) → PASS"
+
+      if_fails:
+        result: "DENIED"
+        reason: "Booking cost ($450) exceeds capability max_cost_usd ($100)"
+        escalation_suggestion: "Request escalation to higher cost limit"
+
+    check_2_remaining_budget:
+      constraint: "booking_cost <= agent_budget.remaining_usd"
+      example: "booking_cost=$450, remaining_usd=$550 → PASS"
+
+      if_fails:
+        result: "DENIED"
+        reason: "Booking cost ($450) exceeds remaining budget ($200)"
+        escalation_suggestion: "Cannot escalate (budget exhausted)"
+
+########################################
+# SECTION 9: REVOCATION TRIGGERS
+########################################
+revocation_triggers:
+  trigger_1_max_cost_exceeded:
+    trigger: "Booking cost exceeds max_cost_usd capability constraint"
+    action: "Deny booking execution, do NOT revoke capability (agent can retry with lower cost)"
+    latency_ms: 1
+    reason: "Prevent unauthorized high-cost bookings"
+
+    implementation: |
+      if booking_cost > capability.max_cost_usd:
+          return ExecutionError(
+              type="MAX_COST_EXCEEDED",
+              message=f"Booking cost (${booking_cost}) exceeds limit (${capability.max_cost_usd})"
+          )
+
+  trigger_2_budget_exhausted:
+    trigger: "Agent total booking budget exhausted (spent_usd >= total_budget_usd)"
+    action: "Revoke booking capability immediately"
+    latency_ms: 5
+    reason: "Prevent cost overrun"
+
+    implementation: |
+      if agent_budget.spent_usd >= agent_budget.total_budget_usd:
+          await capability_supervisor.revoke_capability(
+              cap_id=booking_cap.cap_id,
+              reason="Total booking budget exhausted"
+          )
+
+  trigger_3_user_denied_3_times:
+    trigger: "User denies booking approval 3 consecutive times"
+    action: "Revoke booking capability, flag agent for review"
+    latency_ms: 5
+    reason: "Agent making inappropriate booking suggestions"
+
+    implementation: |
+      if agent_stats.user_denials_consecutive >= 3:
+          await capability_supervisor.revoke_capability(
+              cap_id=booking_cap.cap_id,
+              reason="User denied booking 3 consecutive times"
+          )
+
+          # Flag for supervisor review
+          await supervisor.flag_agent_for_review(
+              agent_id=agent.id,
+              reason="High user denial rate (3 consecutive)"
+          )
+
+  trigger_4_booking_failed_repeatedly:
+    trigger: "Booking API fails 5 times in a row (external service issue)"
+    action: "Revoke booking capability, notify supervisor"
+    latency_ms: 5
+    reason: "External service unavailable"
+
+    implementation: |
+      if booking_failures_consecutive >= 5:
+          await capability_supervisor.revoke_capability(
+              cap_id=booking_cap.cap_id,
+              reason="Booking API failed 5 consecutive times"
+          )
+
+          await supervisor.notify(
+              message="Booking API unavailable",
+              severity="HIGH"
+          )
+
+########################################
+# SECTION 10: TESTING SCENARIOS
+########################################
+testing_scenarios:
+  scenario_1_default_capabilities_at_hire:
+    description: "Booking agent hired with book_hotel tool, receives default capabilities"
+
+    setup: |
+      agent = await agent_fabric.hire_agent(
+          role="booking_agent",
+          assigned_tool="book_hotel"
+      )
+
+    expected_capabilities:
+      - "TOOL:book_hotel (execute, max_cost_usd=$100, requires_user_approval=true)"
+      - "MEMORY:scoreboard (write)"
+
+    validation: |
+      caps = await capability_manager.list_agent_capabilities(agent.id)
+      assert len(caps) == 2
+
+      booking_cap = next(c for c in caps if c.resource_id == "book_hotel")
+      assert booking_cap.constraints["max_cost_usd"] == 100.0
+      assert booking_cap.constraints["requires_user_approval"] is True
+
+  scenario_2_user_approval_workflow:
+    description: "Booking agent requests hotel booking, user approves, booking executed"
+
+    setup: |
+      agent = await agent_fabric.hire_agent(role="booking_agent", assigned_tool="book_hotel")
+
+      booking_params = {
+          "hotel_id": "tokyo_imperial",
+          "check_in": "2025-11-01",
+          "check_out": "2025-11-04",
+          "guests": 2
+      }
+
+    execution: |
+      # Agent calls book_hotel
+      result = await tool_runner.execute_tool(
+          agent_id=agent.id,
+          tool="book_hotel",
+          params=booking_params
+      )
+
+      # Tool runner suspends, requests user approval
+      assert result.status == "AWAITING_USER_APPROVAL"
+
+      # User approves
+      approval = await user_interface.request_approval(
+          booking_details=result.booking_details,
+          timeout=timedelta(minutes=5)
+      )
+
+      assert approval.status == "APPROVED"
+
+      # Tool runner executes booking with approval token
+      final_result = await tool_runner.execute_with_approval(
+          execution_id=result.execution_id,
+          approval_token=approval.token
+      )
+
+      assert final_result.status == "SUCCESS"
+      assert final_result.confirmation_id == "HOTEL-ABC123"
+
+  scenario_3_escalation_increased_cost_limit:
+    description: "Booking agent (trust level 1) requests escalation to $200 limit, supervisor approves"
+
+    setup: |
+      agent = await agent_fabric.hire_agent(role="booking_agent", assigned_tool="book_hotel")
+      agent.trust_level = 1
+      agent.successful_tasks = 5
+
+    escalation_request: |
+      request = CapabilityRequestMessage(
+          agent_id=agent.id,
+          resource_type="TOOL",
+          resource_id="book_hotel",
+          permissions=["execute"],
+          constraints={"max_cost_usd": 200.0},
+          justification="User requested luxury hotel ($180/night)",
+          context={"user_confirmed": True}
+      )
+
+    expected_result: "APPROVED"
+    expected_reason: "Supervisor approved escalation (user confirmed higher cost)"
+
+  scenario_4_budget_exhausted_revocation:
+    description: "Booking agent exhausts total budget ($1000), capability revoked"
+
+    setup: |
+      agent = await agent_fabric.hire_agent(role="booking_agent", assigned_tool="book_hotel")
+      agent_budget = {"total_budget_usd": 1000.0, "spent_usd": 950.0}
+
+      # Agent attempts $100 booking (would exceed budget)
+      booking_cost = 100.0
+
+    execution: |
+      # Check remaining budget before booking
+      remaining = agent_budget["total_budget_usd"] - agent_budget["spent_usd"]  # 50
+
+      if booking_cost > remaining:
+          # Deny booking
+          result = ExecutionError(
+              type="BUDGET_EXCEEDED",
+              message=f"Booking cost (${booking_cost}) exceeds remaining budget (${remaining})"
+          )
+
+      # If agent somehow spent $1000, revoke capability
+      if agent_budget["spent_usd"] >= agent_budget["total_budget_usd"]:
+          await capability_supervisor.revoke_capability(
+              cap_id=booking_cap.cap_id,
+              reason="Budget exhausted"
+          )
+
+    validation: |
+      caps = await capability_manager.list_agent_capabilities(agent.id)
+      booking_cap = next((c for c in caps if c.resource_id == "book_hotel"), None)
+      assert booking_cap is None  # Capability revoked

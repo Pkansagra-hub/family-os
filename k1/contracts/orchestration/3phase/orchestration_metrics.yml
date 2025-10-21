@@ -1,0 +1,554 @@
+# Orchestration Metrics & Observability
+# Source ADR: ADR-0006 (3-Phase Orchestration)
+# Defines observability, latency targets, success rate monitoring, alerting
+
+metadata:
+  contract_id: "orchestration-metrics-v1.0"
+  source_adr: "0006-3phase-orchestration-contract-net.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# Observability Philosophy
+observability_philosophy:
+  principle: "Three pillars of observability: Metrics, Logs, Traces"
+  goal: "Full visibility into orchestration phases and agent coordination"
+  integration: "OpenTelemetry + Prometheus + Structured Logging"
+  performance_impact: "<5% overhead"
+
+# Performance Budgets & Targets
+performance_budgets:
+
+  # Phase-Level P95 Targets
+  negotiation_phase_p95_ms:
+    target: 50
+    breakdown:
+      broadcast_ms: 5
+      collection_ms: 45
+    rationale: "Non-blocking message passing + deadline-based collection"
+
+  selection_phase_p95_ms:
+    target: 30
+    breakdown:
+      scoring_ms: 25
+      ranking_ms: 5
+    rationale: "Fast deterministic scoring algorithm"
+
+  execution_phase_p95_ms:
+    target: 200
+    range: "Depends on steps (50-2000ms typical)"
+    rationale: "Variable - task-dependent execution"
+
+  total_orchestration_p95_ms:
+    target: 250
+    calculation: "negotiate + select + execute (simplified path)"
+    note: "Within E2E 2000ms turn budget"
+
+  # Turn-Level Budget (E2E)
+  end_to_end_turn_p95_ms:
+    target: 2000
+    breakdown:
+      planner_ms: 500
+      orchestration_ms: 250
+      other_ms: 1250
+    rationale: "User-facing latency target"
+
+# Prometheus Metrics
+prometheus_metrics:
+
+  # Phase 1: Negotiation Metrics
+  orchestration_negotiation_latency_ms:
+    type: Histogram
+    description: "Phase 1 negotiation latency (broadcast + collect proposals)"
+    labels:
+      - "session_id"
+      - "turn_id"
+    buckets: [5, 10, 20, 30, 40, 50, 75, 100]
+    recording_rule: |
+      histogram_quantile(0.95, rate(orchestration_negotiation_latency_ms[5m]))
+    p95_alert: "> 50ms"
+
+  orchestration_proposals_received:
+    type: Histogram
+    description: "Number of proposals per task announcement"
+    labels:
+      - "agent_count_total"  # Total agents active
+    buckets: [0, 1, 2, 3, 4, 5, 10, 20, 58]
+    calculation: |
+      # Bidding rate analysis
+      bidding_rate = proposals_received / agent_count_total * 100
+
+  orchestration_proposal_latency_ms:
+    type: Histogram
+    description: "Individual proposal latency (evaluation + submission)"
+    labels:
+      - "agent_type"  # AI | PURE_ACTOR
+      - "proposal_result"  # ACCEPTED | REJECTED | TIMEOUT
+    buckets: [1, 2, 5, 10, 20, 50, 100]
+
+  orchestration_proposal_queue_size:
+    type: Gauge
+    description: "Current proposal queue depth"
+    labels:
+      - "session_id"
+
+  # Phase 2: Selection Metrics
+  orchestration_selection_latency_ms:
+    type: Histogram
+    description: "Phase 2 selection latency (scoring + ranking)"
+    labels:
+      - "proposal_count"
+      - "scoring_algorithm"  # WEIGHTED_SUM | MCDM
+    buckets: [1, 2, 5, 10, 20, 30]
+
+  orchestration_selection_score_distribution:
+    type: Histogram
+    description: "Distribution of winning proposal scores"
+    labels:
+      - "scenario"  # SINGLE_PROPOSAL | MULTIPLE_PROPOSALS
+    buckets: [0, 5, 10, 15, 20, 25, 30, 40, 50]
+
+  orchestration_winning_agent_frequency:
+    type: Counter
+    description: "How often each agent wins the selection"
+    labels:
+      - "agent_id"
+      - "agent_type"  # AI | PURE_ACTOR
+    note: "Use to detect monopolies or underutilization"
+
+  orchestration_selection_tie_breaks:
+    type: Counter
+    description: "Tie-breaking events"
+    labels:
+      - "tie_break_reason"  # RESIDENT | LATENCY | RANDOM
+
+  # Phase 3: Execution Metrics
+  orchestration_execution_latency_ms:
+    type: Histogram
+    description: "Phase 3 execution latency (all steps)"
+    labels:
+      - "step_count"
+      - "execution_strategy"  # PARALLEL | SEQUENTIAL | HYBRID
+      - "execution_result"  # SUCCESS | FAILURE | PARTIAL
+    buckets: [50, 100, 150, 200, 300, 500, 1000, 2000, 5000]
+    p95_alert: "execution_result=SUCCESS > 250ms"
+
+  orchestration_step_execution_latency_ms:
+    type: Histogram
+    description: "Per-step execution latency"
+    labels:
+      - "step_type"  # TOOL | MODEL | ASK | MEMORY
+      - "step_id"
+    buckets: [1, 5, 10, 50, 100, 500, 1000, 3000]
+
+  orchestration_parallelism_factor:
+    type: Gauge
+    description: "Average parallelism during execution"
+    labels:
+      - "session_id"
+    calculation: "sum(step durations) / execution time"
+    interpretation: |
+      1.0 = purely sequential
+      3.0 = 3x average concurrency
+
+  orchestration_execution_concurrency:
+    type: Gauge
+    description: "Current concurrent step execution"
+    labels:
+      - "session_id"
+    range: [0, 3]  # Limited by semaphore
+
+  # DAG Metrics
+  orchestration_dag_nodes_total:
+    type: Histogram
+    description: "Number of steps in DAG"
+    labels:
+      - "session_id"
+    buckets: [1, 2, 5, 10, 20, 50, 100]
+
+  orchestration_dag_depth:
+    type: Histogram
+    description: "DAG depth (longest dependency chain)"
+    labels:
+      - "session_id"
+    buckets: [1, 2, 5, 10, 20, 50]
+    note: "Minimum execution time for sequential paths"
+
+  # Error Metrics
+  orchestration_errors_total:
+    type: Counter
+    description: "Orchestration errors"
+    labels:
+      - "error_category"  # TRANSIENT | TOOL | USER | RESOURCE
+      - "phase"  # NEGOTIATION | SELECTION | EXECUTION
+      - "error_type"  # TIMEOUT | INVALID | CRASH | etc
+
+  orchestration_step_failures_total:
+    type: Counter
+    description: "Steps that failed during execution"
+    labels:
+      - "step_type"
+      - "failure_reason"  # TIMEOUT | INVALID_INPUT | API_ERROR
+
+  orchestration_retry_total:
+    type: Counter
+    description: "Retry attempts"
+    labels:
+      - "retry_reason"  # TRANSIENT | QUOTA | BACKOFF
+
+  orchestration_compensation_total:
+    type: Counter
+    description: "Saga compensations executed"
+    labels:
+      - "compensation_type"  # ROLLBACK | FALLBACK
+
+  # Success Rate Metrics
+  orchestration_task_success_rate:
+    type: Counter
+    description: "Task success/failure"
+    labels:
+      - "result"  # SUCCESS | FAILURE | PARTIAL | DEGRADED
+    example_query: |
+      success_rate = sum(orchestration_task_success_rate{result="SUCCESS"}) /
+                     sum(orchestration_task_success_rate)
+
+  orchestration_agent_success_rate:
+    type: Counter
+    description: "Per-agent success rate"
+    labels:
+      - "agent_id"
+      - "result"  # SUCCESS | FAILURE | TIMEOUT
+
+# OpenTelemetry Traces
+opentelemetry_tracing:
+
+  # Trace Structure
+  trace_root_span: "orchestration_3phase"
+  trace_child_spans:
+    - "orchestration_phase_1_negotiation"
+    - "orchestration_phase_2_selection"
+    - "orchestration_phase_3_execution"
+
+  # Phase 1 Span
+  negotiation_span:
+    span_name: "orchestration_phase_1_negotiation"
+    attributes:
+      - "session_id: str"
+      - "turn_id: str"
+      - "task_id: str"
+      - "announcement_sent_count: int"
+      - "proposal_received_count: int"
+      - "deadline_ms: int"
+    timing: "Start broadcast, end collection"
+    child_spans:
+      - "task_announcement_broadcast"
+      - "proposal_collection_loop"
+
+  # Phase 2 Span
+  selection_span:
+    span_name: "orchestration_phase_2_selection"
+    attributes:
+      - "session_id: str"
+      - "task_id: str"
+      - "proposal_count: int"
+      - "winning_agent_id: str"
+      - "winner_score: float"
+      - "scoring_weights: dict"
+    timing: "Start scoring, end winner selection"
+    child_spans:
+      - "proposal_scoring"
+      - "proposal_ranking"
+
+  # Phase 3 Span
+  execution_span:
+    span_name: "orchestration_phase_3_execution"
+    attributes:
+      - "session_id: str"
+      - "task_id: str"
+      - "winning_agent_id: str"
+      - "step_count: int"
+      - "execution_strategy: str"  # PARALLEL | SEQUENTIAL
+      - "execution_result: str"  # SUCCESS | FAILURE | PARTIAL
+      - "total_latency_ms: int"
+      - "parallelism_factor: float"
+    timing: "Start first step, end last step"
+    child_spans:
+      - "dag_execution_wave_1"
+      - "dag_execution_wave_2"
+      - "dag_execution_wave_N"
+
+  # Step Span
+  step_span:
+    span_name: "orchestration_step_execution"
+    attributes:
+      - "step_id: str"
+      - "step_type: str"  # TOOL | MODEL | ASK | MEMORY
+      - "step_duration_ms: int"
+      - "step_result: str"  # SUCCESS | FAILURE | TIMEOUT
+      - "tool_name: str"  # If TOOL
+      - "tool_latency_ms: int"
+    events:
+      - "step_started"
+      - "step_completed"
+      - "step_failed"
+
+# Structured Logging
+structured_logging:
+
+  # Log Level Strategy
+  log_levels:
+    DEBUG: "Agent proposal details, step-by-step execution"
+    INFO: "Phase completion, agent selection, task results"
+    WARNING: "Slow operations, near-timeout conditions, fallbacks"
+    ERROR: "Failed tasks, exceptions, timeouts"
+    CRITICAL: "Orchestrator crashes, protocol violations"
+
+  # Log Events
+  log_events:
+
+    # Phase 1
+    event_task_announcement_sent:
+      level: INFO
+      message: "Task announced to {agent_count} agents"
+      fields:
+        - "task_id, session_id, agent_count, deadline_ms"
+
+    event_proposal_received:
+      level: DEBUG
+      message: "Proposal received from {agent_id}"
+      fields:
+        - "task_id, agent_id, estimated_latency_ms, confidence"
+
+    event_proposal_collection_complete:
+      level: INFO
+      message: "Proposal collection complete: {proposal_count} proposals, {elapsed_ms}ms elapsed"
+      fields:
+        - "task_id, proposal_count, elapsed_ms, deadline_exceeded"
+
+    # Phase 2
+    event_selection_winner:
+      level: INFO
+      message: "Selection: {winning_agent_id} selected (score: {score:.2f})"
+      fields:
+        - "task_id, winning_agent_id, winner_score, all_scores"
+
+    event_selection_tie_break:
+      level: WARNING
+      message: "Tie-break applied: {tie_break_reason}"
+      fields:
+        - "task_id, tied_agents, tie_break_reason"
+
+    # Phase 3
+    event_execution_started:
+      level: INFO
+      message: "Execution started: {step_count} steps, strategy={strategy}"
+      fields:
+        - "task_id, agent_id, step_count, execution_strategy"
+
+    event_step_completed:
+      level: DEBUG
+      message: "Step {step_id} completed: {step_type} ({duration_ms}ms)"
+      fields:
+        - "task_id, step_id, step_type, duration_ms, result"
+
+    event_execution_complete:
+      level: INFO
+      message: "Execution complete: {status} ({total_ms}ms, parallelism={factor:.1f}x)"
+      fields:
+        - "task_id, status, total_ms, parallelism_factor, step_count"
+
+    # Errors
+    event_no_proposals:
+      level: ERROR
+      message: "No proposals received for task (fallback: {fallback_action})"
+      fields:
+        - "task_id, fallback_action"
+
+    event_execution_failure:
+      level: ERROR
+      message: "Execution failed: {reason}"
+      fields:
+        - "task_id, agent_id, reason, step_id, error_type"
+
+    event_protocol_timeout:
+      level: WARNING
+      message: "Protocol timeout in {phase}: {elapsed_ms}ms (budget: {budget_ms}ms)"
+      fields:
+        - "task_id, phase, elapsed_ms, budget_ms"
+
+# Alerting Rules
+alerting:
+
+  # Latency Alerts
+  alert_slow_negotiation:
+    condition: "negotiation_latency_ms > 50ms for 5% of tasks (1 hour window)"
+    severity: WARNING
+    action: "Investigate proposal collection efficiency"
+    dashboard: "Orchestration / Negotiation Phase"
+
+  alert_slow_selection:
+    condition: "selection_latency_ms > 30ms for 5% of tasks"
+    severity: WARNING
+    action: "Profile scoring function, check proposal count"
+
+  alert_slow_execution:
+    condition: "execution_latency_ms > 250ms for 5% of tasks (AND execution_result=SUCCESS)"
+    severity: WARNING
+    action: "Identify slow steps, check concurrency limits"
+
+  alert_slow_e2e_turn:
+    condition: "end_to_end_turn_latency_ms > 2000ms for P95"
+    severity: CRITICAL
+    action: "Investigate phases, check agent availability"
+
+  # Error Rate Alerts
+  alert_high_error_rate:
+    condition: "orchestration_errors_total / orchestration_task_success_rate > 5% (1 hour)"
+    severity: CRITICAL
+    action: "Check agent health, tool availability, network status"
+
+  alert_no_proposals_rate:
+    condition: "no_proposals_received / task_count > 1% (1 hour)"
+    severity: WARNING
+    action: "Check agent blacklist, roster health"
+
+  alert_retry_spike:
+    condition: "orchestration_retry_total increase by 3x over baseline (5 min)"
+    severity: WARNING
+    action: "Investigate transient errors, rate limiting"
+
+  alert_compensation_spike:
+    condition: "orchestration_compensation_total increase by 2x (5 min)"
+    severity: WARNING
+    action: "Check for systematic failures in saga steps"
+
+  # Agent Health Alerts
+  alert_agent_monopoly:
+    condition: "One agent wins >80% of selections (1 hour)"
+    severity: WARNING
+    action: "Check if other agents are unhealthy, blacklisted, or unqualified"
+
+  alert_agent_failure_rate:
+    condition: "agent_success_rate < 50% (1 hour)"
+    severity: CRITICAL
+    action: "Blacklist agent or investigate root cause"
+
+  alert_agent_not_winning:
+    condition: "Agent never selected despite high availability (8 hours)"
+    severity: INFO
+    action: "Agent may have inferior proposal quality or over-specialized"
+
+# Dashboard Layout
+dashboards:
+
+  # Overview Dashboard
+  orchestration_overview:
+    title: "3-Phase Orchestration Overview"
+    panels:
+      - "Phase Latency (Negotiation, Selection, Execution)"
+      - "Success Rate (last 1 hour)"
+      - "Proposal Count Distribution"
+      - "Error Rate by Category"
+      - "Agent Selection Frequency (heatmap)"
+
+  # Negotiation Phase Dashboard
+  negotiation_detail:
+    title: "Phase 1: Negotiation Detail"
+    panels:
+      - "Proposal Count Histogram"
+      - "Bidding Rate by Agent Type"
+      - "Negotiation Latency Percentiles"
+      - "Proposal Queue Depth (timeseries)"
+      - "Top Proposing Agents"
+
+  # Selection Phase Dashboard
+  selection_detail:
+    title: "Phase 2: Selection Detail"
+    panels:
+      - "Selection Score Distribution"
+      - "Winner Frequency (bar chart)"
+      - "Tie-Break Frequency"
+      - "Selection Latency Percentiles"
+      - "Weight Configuration Current"
+
+  # Execution Phase Dashboard
+  execution_detail:
+    title: "Phase 3: Execution Detail"
+    panels:
+      - "Execution Latency by Strategy (PARALLEL | SEQUENTIAL)"
+      - "Step Type Latency Breakdown (Tool, Model, Ask, Memory)"
+      - "Parallelism Factor Over Time"
+      - "DAG Depth Distribution"
+      - "Step Failure Rate by Type"
+
+  # Agent Health Dashboard
+  agent_health:
+    title: "Agent Health & Performance"
+    panels:
+      - "Agent Success Rate"
+      - "Agent Selection Frequency"
+      - "Agent Proposal Score Distribution"
+      - "Agent Proposal Latency"
+      - "Agent Blacklist Status"
+
+# Testing & Validation
+testing_validation:
+
+  # Metric Correctness Tests
+  unit_tests:
+    - "Histogram bucket edge cases (0, negative, extremely large)"
+    - "Counter monotonicity (never decreases)"
+    - "Gauge range validation (0-100% for rates)"
+    - "Label cardinality (prevent cardinality explosion)"
+
+  # Integration Tests
+  integration_tests:
+    - "End-to-end metric collection for full 3-phase"
+    - "Trace correlation across phases"
+    - "Log event sequence correctness"
+    - "Alert firing for synthetic slow/error scenarios"
+
+  # Performance Tests
+  performance_tests:
+    - "Metric collection overhead (<5%)"
+    - "Trace buffer memory usage (<10MB)"
+    - "Log I/O throughput (>1000 events/sec)"
+
+# Configuration
+configuration:
+
+  # Metric Collection
+  enable_metrics: true
+  enable_traces: true
+  enable_structured_logs: true
+
+  # Sampling (reduce cost)
+  trace_sampling_rate: 0.1  # 10% of traces
+  debug_log_sampling_rate: 0.01  # 1% of debug logs
+
+  # Retention
+  metric_retention_days: 30
+  trace_retention_days: 7
+  log_retention_days: 14
+
+  # Tunable Parameters
+  tunable_parameters:
+    - "alert_thresholds: Adjust based on SLO requirements"
+    - "trace_sampling_rate: Balance detail vs overhead"
+    - "dashboard_refresh_rate: Adjust dashboard responsiveness"
+
+# Implementation Status
+implementation_status:
+  prometheus_metrics: "COMPLETED"
+  opentelemetry_tracing: "COMPLETED"
+  structured_logging: "COMPLETED"
+  alerting_rules: "COMPLETED"
+  dashboards: "COMPLETED"
+  overall_completion: "90%"
+
+# Research Backing
+research_backing:
+  - "Observability (Newman, 2015) - Three pillars: metrics, logs, traces"
+  - "Prometheus Monitoring (Prometheus project)"
+  - "OpenTelemetry Standard (Cloud Native Computing Foundation)"
+  - "SLO/SLI Framework (Google Cloud Ops, 2020)"

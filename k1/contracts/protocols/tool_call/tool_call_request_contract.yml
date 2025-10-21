@@ -1,0 +1,557 @@
+tool_call_request_contract:
+  name: "Tool Call Request - FlatBuffers Schema"
+  description: "Message contract for agent → tool runner tool execution request"
+  adr_reference:
+    - "ADR-0003b: 6 Core Protocol Implementations"
+    - "ADR-0010: Capability-Based Security"
+    - "ADR-0016: FlatBuffers Schemas"
+    - "ADR-0033: Three-Tier Sandbox Strategy"
+  version: "1.0.0"
+
+  # ============================================================================
+  # Core Message Fields
+  # ============================================================================
+  message_type: "ToolCallRequest"
+
+  fields:
+    # Identity & Tracing
+    tool_call_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Unique identifier for this tool call"
+      example: "550e8400-e29b-41d4-a716-446655440000"
+      validation:
+        - "UUID v4 format"
+        - "Non-empty"
+
+    cognitive_trace_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Distributed trace ID for end-to-end tracing"
+      example: "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f789"
+      validation:
+        - "UUID v4 format"
+        - "Propagated from parent protocol (Task Execution or Planning)"
+
+    task_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Parent task ID (from Task Execution protocol)"
+      example: "123e4567-e89b-12d3-a456-426614174000"
+      validation:
+        - "UUID v4 format"
+        - "Must exist in active tasks"
+
+    session_id:
+      type: "string (UUID v4)"
+      required: true
+      description: "Session ID for audit and tracing"
+      example: "987fcdba-dcba-4321-8765-fedcba987654"
+
+    # Tool Specification
+    tool_name:
+      type: "string"
+      required: true
+      description: "Name of tool to execute (from tool registry)"
+      examples:
+        - "weather_api"
+        - "calculator"
+        - "image_generator"
+        - "video_transcoder"
+      max_length: 128
+      validation:
+        - "Non-empty"
+        - "Must exist in tool registry"
+        - "Tool must not be disabled"
+
+    tool_version:
+      type: "string"
+      required: false
+      description: "Tool version (default: latest)"
+      example: "1.0.5"
+      validation:
+        - "Semantic versioning"
+
+    tool_arguments:
+      type: "string (JSON)"
+      required: true
+      description: "Tool arguments as JSON object"
+      examples:
+        - '{"location": "San Francisco", "units": "fahrenheit"}'
+        - '{"expression": "2 + 2"}'
+      max_size_bytes: 65536  # 64KB max argument size
+      validation:
+        - "Valid JSON"
+        - "Size < 64KB"
+        - "All required parameters present per tool schema"
+
+    tool_input_format:
+      type: "enum"
+      required: true
+      description: "Format of tool arguments"
+      values: ["json", "yaml", "text"]
+      default: "json"
+
+    # Sandbox Configuration
+    sandbox_type:
+      type: "enum"
+      required: true
+      description: "Requested sandbox type for tool execution"
+      values: ["WASM", "PROCESS", "CONTAINER"]
+      default: "PROCESS"
+      validation:
+        - "Must be valid per tool's 2D architecture"
+        - "Tool must support selected sandbox type"
+
+    sandbox_preference_fallback:
+      type: "array of enum"
+      required: false
+      description: "Fallback sandbox types if primary unavailable"
+      example: ["PROCESS", "WASM", "CONTAINER"]
+      validation:
+        - "Each value in [WASM, PROCESS, CONTAINER]"
+        - "No duplicates"
+
+    sandbox_resource_limits:
+      type: "object"
+      required: false
+      description: "Override default resource limits for this tool call"
+      sub_fields:
+        cpu_millis:
+          type: "integer"
+          description: "CPU allocation in millicores (1000 = 1 core)"
+          example: 2000  # 2 cores
+          validation:
+            - "Range: 100-16000"
+            - "Must respect privacy_band limits"
+
+        memory_mb:
+          type: "integer"
+          description: "Memory allocation in MB"
+          example: 512
+          validation:
+            - "Range: 64-8192"
+            - "Must respect privacy_band limits"
+
+        timeout_ms:
+          type: "integer"
+          description: "Execution timeout in milliseconds"
+          example: 5000
+          validation:
+            - "Range: 500-30000"
+            - "Default from tool registry if not specified"
+
+        max_output_size_bytes:
+          type: "integer"
+          description: "Maximum result size in bytes"
+          example: 1048576  # 1MB
+          validation:
+            - "Range: 1024-104857600"  # 1KB-100MB
+
+    # Privacy & Security
+    privacy_band:
+      type: "enum"
+      required: true
+      description: "Privacy classification for this tool call"
+      values: ["GREEN", "AMBER", "RED", "BLACK"]
+      default: "GREEN"
+      validation:
+        - "Must match tool's privacy_band"
+        - "User must have access to this privacy_band"
+
+      # Privacy band implications
+      band_implications:
+        GREEN:
+          description: "Public tool, no PII, no approval needed"
+          user_approval_required: false
+          network_allowed: "public endpoints only"
+
+        AMBER:
+          description: "Internal tool, may contain identifiable info, no approval needed"
+          user_approval_required: false
+          network_allowed: "internal network + public APIs"
+
+        RED:
+          description: "Sensitive tool, explicit user approval required"
+          user_approval_required: true
+          network_allowed: "restricted endpoints only"
+
+        BLACK:
+          description: "Highly restricted, requires special permissions"
+          user_approval_required: true
+          network_allowed: "blacklist only"
+
+    # Capability Token
+    capability_token:
+      type: "string (JWT)"
+      required: true
+      description: "Signed capability token authorizing tool execution"
+      jwt_structure:
+        header:
+          typ: "JWT"
+          alg: "HS256"
+        payload:
+          agent_id: "string"
+          tool_name: "string"
+          rights: "array of [READ, WRITE, EXECUTE, DELETE]"
+          constraints:
+            - "max_cost_usd"
+            - "max_invocations"
+            - "privacy_band"
+          exp: "timestamp_ms"
+          issued_at: "timestamp_ms"
+        signature: "HMAC-SHA256(header.payload, secret_key)"
+      validation:
+        - "Valid JWT format"
+        - "Signature verifies correctly"
+        - "Expiration not exceeded"
+        - "Rights include EXECUTE_TOOL"
+        - "Constraints compatible with this request"
+
+    # Budget & Cost
+    estimated_cost_usd:
+      type: "float"
+      required: false
+      description: "Estimated cost in USD for this tool call"
+      example: 0.01
+      validation:
+        - "≥ 0.0"
+        - "Within capability token max_cost_usd"
+
+    budget_remaining_usd:
+      type: "float"
+      required: false
+      description: "Remaining budget for this session/task"
+      example: 9.99
+
+    # Scheduling & Timing
+    priority:
+      type: "enum"
+      required: true
+      description: "Priority level for tool execution"
+      values: ["CRITICAL", "HIGH", "NORMAL", "LOW"]
+      default: "NORMAL"
+      validation:
+        - "enum value"
+
+      priority_implications:
+        CRITICAL:
+          queue_priority: "front of queue"
+          timeout_ms: 10000
+          retry_strategy: "exponential_backoff, max 3 retries"
+          user_approval_required: true
+
+        HIGH:
+          queue_priority: "expedited"
+          timeout_ms: 5000
+          retry_strategy: "exponential_backoff, max 2 retries"
+          user_approval_required: true
+
+        NORMAL:
+          queue_priority: "normal"
+          timeout_ms: 3000
+          retry_strategy: "exponential_backoff, max 1 retry"
+          user_approval_required: false
+
+        LOW:
+          queue_priority: "background"
+          timeout_ms: 1000
+          retry_strategy: "no retry"
+          user_approval_required: false
+
+    requested_at_ms:
+      type: "timestamp (milliseconds since epoch)"
+      required: true
+      description: "Timestamp when tool call was requested"
+      example: 1729108800000
+      validation:
+        - "≤ current time"
+        - "Within last 1 hour"
+
+    deadline_ms:
+      type: "timestamp (milliseconds since epoch)"
+      required: false
+      description: "Hard deadline for tool execution completion"
+      validation:
+        - "> requested_at_ms"
+        - "≤ parent task deadline"
+
+    # Context & Metadata
+    agent_id:
+      type: "string (UUID)"
+      required: true
+      description: "ID of agent requesting tool execution"
+      example: "concierge-agent-001"
+
+    agent_name:
+      type: "enum"
+      required: true
+      description: "Name of requesting agent"
+      values: ["concierge", "planner", "researcher", "safety_watch", "tool_runner"]
+
+    user_id:
+      type: "string"
+      required: true
+      description: "User ID for audit trail"
+
+    device_id:
+      type: "string"
+      required: false
+      description: "Device ID for context"
+
+    # Error Handling & Fallback
+    fallback_tool:
+      type: "string"
+      required: false
+      description: "Name of alternative tool if this one fails"
+      example: "weather_backup_api"
+      validation:
+        - "Must exist in tool registry"
+        - "Must have similar capability"
+
+    retry_strategy:
+      type: "object"
+      required: false
+      description: "Custom retry configuration"
+      sub_fields:
+        max_retries:
+          type: "integer"
+          description: "Maximum retry attempts"
+          example: 3
+          validation:
+            - "Range: 0-10"
+
+        backoff_strategy:
+          type: "enum"
+          description: "Backoff strategy"
+          values: ["exponential", "linear", "fixed"]
+          default: "exponential"
+
+        backoff_base_ms:
+          type: "integer"
+          description: "Base delay in milliseconds"
+          example: 100
+          validation:
+            - "Range: 10-5000"
+
+        jitter_ms:
+          type: "integer"
+          description: "Random jitter to add to backoff"
+          example: 50
+          validation:
+            - "Range: 0-1000"
+
+    # Observability
+    trace_sampling_rate:
+      type: "float"
+      required: false
+      description: "Trace sampling rate for this tool call"
+      example: 1.0  # Sample 100%
+      validation:
+        - "Range: 0.0-1.0"
+
+    log_level:
+      type: "enum"
+      required: false
+      description: "Logging verbosity"
+      values: ["DEBUG", "INFO", "WARNING", "ERROR"]
+      default: "INFO"
+
+  # ============================================================================
+  # Validation Rules (15 rules)
+  # ============================================================================
+  validation_rules:
+    rule_1_tool_exists:
+      description: "Tool must exist in registry"
+      condition: "tool_name in tool_registry AND tool_registry[tool_name].enabled == true"
+      on_violation: "reject_request"
+      error_code: "TOOL_NOT_FOUND"
+
+    rule_2_capability_token_valid:
+      description: "Capability token must be valid and signed"
+      condition: "verify_jwt_signature(capability_token, secret_key) == true"
+      on_violation: "reject_request"
+      error_code: "INVALID_CAPABILITY_TOKEN"
+
+    rule_3_capability_token_not_expired:
+      description: "Capability token must not be expired"
+      condition: "capability_token.exp_ms > current_time_ms"
+      on_violation: "reject_request"
+      error_code: "CAPABILITY_TOKEN_EXPIRED"
+
+    rule_4_rights_include_execute:
+      description: "Token must have EXECUTE_TOOL right"
+      condition: "EXECUTE_TOOL in capability_token.rights"
+      on_violation: "reject_request"
+      error_code: "INSUFFICIENT_CAPABILITY"
+
+    rule_5_tool_name_matches_capability:
+      description: "Capability token tool_name must match request"
+      condition: "capability_token.tool_name == tool_name"
+      on_violation: "reject_request"
+      error_code: "CAPABILITY_TOOL_MISMATCH"
+
+    rule_6_privacy_band_authorized:
+      description: "User must have access to privacy_band"
+      condition: "user_privacy_bands contains privacy_band OR privacy_band == GREEN"
+      on_violation: "reject_request"
+      error_code: "PRIVACY_BAND_UNAUTHORIZED"
+
+    rule_7_privacy_band_matches_tool:
+      description: "Request privacy_band must match tool's default band"
+      condition: "privacy_band >= tool_registry[tool_name].min_privacy_band"
+      on_violation: "reject_request"
+      error_code: "PRIVACY_BAND_MISMATCH"
+
+    rule_8_arguments_valid_json:
+      description: "Tool arguments must be valid JSON"
+      condition: "is_valid_json(tool_arguments)"
+      on_violation: "reject_request"
+      error_code: "INVALID_JSON_ARGUMENTS"
+
+    rule_9_arguments_match_tool_schema:
+      description: "Arguments must match tool's parameter schema"
+      condition: "validate_against_schema(tool_arguments, tool_schema)"
+      on_violation: "reject_request"
+      error_code: "INVALID_TOOL_ARGUMENTS"
+
+    rule_10_arguments_size_limit:
+      description: "Arguments must not exceed 64KB"
+      condition: "len(tool_arguments) < 65536"
+      on_violation: "reject_request"
+      error_code: "ARGUMENTS_TOO_LARGE"
+
+    rule_11_cost_within_budget:
+      description: "Estimated cost must not exceed remaining budget"
+      condition: "estimated_cost_usd <= budget_remaining_usd AND estimated_cost_usd <= capability_token.max_cost_usd"
+      on_violation: "reject_request"
+      error_code: "BUDGET_EXCEEDED"
+
+    rule_12_sandbox_type_supported:
+      description: "Tool must support requested sandbox type"
+      condition: "sandbox_type in tool_registry[tool_name].supported_sandboxes"
+      on_violation: "fallback_to_alternative_sandbox"
+      error_code: "SANDBOX_NOT_SUPPORTED"
+
+    rule_13_resource_limits_reasonable:
+      description: "Resource limits must be within system capabilities"
+      condition: "sandbox_resource_limits.cpu_millis <= system_total_cpu_millis AND sandbox_resource_limits.memory_mb <= system_available_memory_mb"
+      on_violation: "use_default_limits"
+      error_code: "RESOURCE_LIMITS_INVALID"
+
+    rule_14_deadline_valid:
+      description: "Deadline must be in future and within parent task deadline"
+      condition: "deadline_ms > current_time_ms AND deadline_ms <= parent_task_deadline_ms"
+      on_violation: "use_default_deadline"
+      error_code: "DEADLINE_INVALID"
+
+    rule_15_trace_id_not_empty:
+      description: "Trace ID must be non-empty for tracing"
+      condition: "len(cognitive_trace_id) > 0"
+      on_violation: "generate_new_trace_id"
+      error_code: "MISSING_TRACE_ID"
+
+  # ============================================================================
+  # Examples (Realistic Scenarios)
+  # ============================================================================
+  examples:
+    example_1_green_band_weather_api:
+      description: "Simple GREEN band tool call (no approval needed)"
+      tool_call_id: "550e8400-e29b-41d4-a716-446655440001"
+      cognitive_trace_id: "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f001"
+      task_id: "123e4567-e89b-12d3-a456-426614174001"
+      session_id: "987fcdba-dcba-4321-8765-fedcba987001"
+      tool_name: "weather_api"
+      tool_version: "1.0.5"
+      tool_arguments: '{"location": "San Francisco", "units": "fahrenheit"}'
+      sandbox_type: "PROCESS"
+      privacy_band: "GREEN"
+      capability_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6ImNvbmNpZXJnZS1hZ2VudC0wMDEiLCJ0b29sX25hbWUiOiJ3ZWF0aGVyX2FwaSIsInJpZ2h0cyI6WyJFWEVDVVRFIl0sImV4cCI6MTcyOTEwODkwMDAwMH0.XXX"
+      estimated_cost_usd: 0.001
+      priority: "NORMAL"
+      agent_id: "concierge-agent-001"
+      agent_name: "concierge"
+      user_id: "user123"
+      requested_at_ms: 1729108800000
+
+    example_2_red_band_booking_approval_needed:
+      description: "RED band tool requiring user approval"
+      tool_call_id: "550e8400-e29b-41d4-a716-446655440002"
+      cognitive_trace_id: "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f002"
+      task_id: "123e4567-e89b-12d3-a456-426614174002"
+      session_id: "987fcdba-dcba-4321-8765-fedcba987002"
+      tool_name: "booking_engine"
+      tool_version: "2.1.0"
+      tool_arguments: '{"hotel_id": "marriott_sf", "check_in": "2025-10-20", "nights": 3, "room_type": "deluxe"}'
+      sandbox_type: "CONTAINER"
+      privacy_band: "RED"
+      capability_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6ImJvb2tpbmdfYWdlbnQiLCJ0b29sX25hbWUiOiJib29raW5nX2VuZ2luZSIsInJpZ2h0cyI6WyJFWEVDVVRFIl0sIm1heF9jb3N0X3VzZCI6NTAwLjAwLCJleHAiOjE3MjkxMDg5MDAwMDB9.XXX"
+      estimated_cost_usd: 199.99
+      budget_remaining_usd: 300.00
+      priority: "CRITICAL"
+      agent_id: "booking-agent-001"
+      agent_name: "tool_runner"
+      user_id: "user123"
+      requested_at_ms: 1729108800000
+      deadline_ms: 1729108860000
+      fallback_tool: "booking_backup_service"
+
+    example_3_video_transcoder_high_priority:
+      description: "HIGH priority tool with extended timeout"
+      tool_call_id: "550e8400-e29b-41d4-a716-446655440003"
+      cognitive_trace_id: "a1b2c3d4-e5f6-4789-a012-b3c4d5e6f003"
+      task_id: "123e4567-e89b-12d3-a456-426614174003"
+      session_id: "987fcdba-dcba-4321-8765-fedcba987003"
+      tool_name: "video_transcoder"
+      tool_version: "3.0.0"
+      tool_arguments: '{"video_url": "s3://bucket/video.mp4", "target_format": "webm", "resolution": "1080p"}'
+      sandbox_type: "PROCESS"
+      sandbox_resource_limits:
+        cpu_millis: 4000
+        memory_mb: 2048
+        timeout_ms: 300000  # 5 minutes for video transcoding
+      privacy_band: "AMBER"
+      capability_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6InRvb2xfcnVubmVyIiwidG9vbF9uYW1lIjoidmlkZW9fdHJhbnNjb2RlciIsInJpZ2h0cyI6WyJFWEVDVVRFIl0sImV4cCI6MTcyOTEwODkwMDAwMH0.XXX"
+      estimated_cost_usd: 0.50
+      priority: "HIGH"
+      agent_id: "tool_runner"
+      agent_name: "tool_runner"
+      user_id: "user123"
+      requested_at_ms: 1729108800000
+
+  # ============================================================================
+  # Observability & Logging
+  # ============================================================================
+  observability:
+    structured_logging:
+      log_on_creation:
+        fields:
+          - "tool_call_id"
+          - "tool_name"
+          - "sandbox_type"
+          - "privacy_band"
+          - "priority"
+          - "estimated_cost_usd"
+          - "capability_token_valid"
+          - "cognitive_trace_id"
+      log_level: "INFO"
+
+    metrics:
+      - metric_name: "tool_call_request_received_total"
+        labels: ["tool_name", "privacy_band", "priority", "sandbox_type"]
+
+      - metric_name: "tool_call_request_validation_errors_total"
+        labels: ["tool_name", "error_code"]
+
+      - metric_name: "tool_call_capability_check_latency_ms"
+        type: "histogram"
+        buckets: [1, 5, 10, 50, 100, 500]
+
+    tracing:
+      span_name: "tool_call_request_created"
+      attributes:
+        - "tool_name"
+        - "sandbox_type"
+        - "privacy_band"
+        - "priority"
+        - "parent_span_id"

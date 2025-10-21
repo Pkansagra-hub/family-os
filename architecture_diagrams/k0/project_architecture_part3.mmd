@@ -1,0 +1,550 @@
+---
+config:
+  flowchart:
+    htmlLabels: true
+    curve: linear
+  theme: neo
+  layout: elk
+  look: neo
+---
+
+flowchart TB
+
+%% ====== CORE CLASS STYLES (match Diagram 1) ======
+classDef plane fill:#eef7ff,stroke:#2a6ebb,stroke-width:1px,rx:8,ry:8
+classDef mid fill:#f8fff0,stroke:#6b8e23,stroke-width:1px,rx:8,ry:8
+classDef gate fill:#fff7e6,stroke:#d48806,stroke-width:1px,rx:8,ry:8
+classDef bus fill:#f0f0f0,stroke:#666,stroke-width:2px,rx:8,ry:8
+classDef storage fill:#f3f8ff,stroke:#1f4aa1,stroke-width:1px,rx:8,ry:8
+classDef brain fill:#fffdf0,stroke:#b38b00,stroke-width:1px,rx:10,ry:10
+classDef fast stroke:#00897b,stroke-width:2px
+classDef smart stroke:#d46b08,stroke-width:2px,stroke-dasharray:4 3
+classDef card fill:#fff,stroke:#999,stroke-width:1px,rx:8,ry:8
+
+%% Category tints (kept, but aligned to style)
+classDef intelligence_core fill:#fff9c4,stroke:#faad14,stroke-width:2px,rx:10,ry:10
+classDef learning_loop fill:#f6ffed,stroke:#52c41a,stroke-width:2px,rx:8,ry:8
+classDef social_cognition fill:#e6f7ff,stroke:#1890ff,stroke-width:2px,rx:8,ry:8
+classDef metacognitive fill:#f9f0ff,stroke:#722ed1,stroke-width:2px,rx:8,ry:8
+classDef procedural_memory fill:#fff1f0,stroke:#ff4d4f,stroke-width:2px,rx:8,ry:8
+classDef reward_system fill:#fff7e6,stroke:#d48806,stroke-width:2px,rx:8,ry:8
+classDef action_selection fill:#f0f5ff,stroke:#2f54eb,stroke-width:2px,rx:8,ry:8
+
+%% ====== K0 PIPELINE COLOR CLASSES (Diagram 1 Reference) ======
+classDef pipe_action fill:#e3f2fd,stroke:#1976d2,stroke-width:3px,rx:8,ry:8
+classDef pipe_prospective fill:#fff3e0,stroke:#f57c00,stroke-width:3px,rx:8,ry:8
+classDef pipe_learning fill:#f3e5f5,stroke:#7b1fa2,stroke-width:3px,rx:8,ry:8
+classDef pipe_personalization fill:#f3e5ff,stroke:#9c27b0,stroke-width:3px,rx:8,ry:8
+classDef pipe_procedural fill:#f5f5f5,stroke:#696969,stroke-width:3px,rx:8,ry:8
+classDef kernel_space fill:#fff9e6,stroke:#ff9800,stroke-width:3px,stroke-dasharray:8 4,rx:8,ry:8
+
+%% ====== FAMILY INTELLIGENCE LEGEND & BOUNDARY ======
+subgraph FAMILY_LEGEND["🎨 Family Intelligence Diagram Guide"]
+  direction TB
+  L1["🔵/🟢/🟡/⚫/🔷 = same classes as Diagram 1"]:::card
+  L2["🧠 = Family Cognitive/Intelligence modules (brain style)"]:::card
+  L3["👨‍👩‍👧‍👦 = Family relationship-aware processing"]:::card
+  L4["📱 = Cross-device intelligence coordination"]:::card
+  L5["⚠️ Advisory-only: Family Intelligence emits signals → P04; never executes actions"]:::card
+  L6["🟡 K0 Kernel = Privileged boundary (orange dashed) - advisory systems OUTSIDE"]:::card
+end
+
+subgraph FAMILY_ADVISORY_BOUNDARY["🚧 Family Architectural Boundary"]
+  B1["Family Intelligence Systems provide ADVISORY SIGNALS ONLY"]:::gate
+  B2["D1 K0 P04 (Arbitration/Action) is IN K0 KERNEL - SOLE action executor"]:::gate
+  B3["👨‍👩‍👧‍👦 Family relationship context respected in all decisions"]:::gate
+  B4["⚠️ All intelligence storage access VIA K0 ports ONLY (enforced by PEP@syscall)"]:::gate
+end
+
+%% ====== K0 KERNEL CORE (Diagram 3 View - Intelligence Focus) ======
+subgraph K0_KERNEL_D3["🟡 K0 Kernel Core (Intelligence Interface - Diagram 1 Reference)"]
+  direction TB
+
+  subgraph K0_INTELLIGENCE_PIPELINES_D3["🚀 K0 Pipelines for Intelligence Systems"]
+    P04_D3["P04 Arbitration/Action<br/>🎯 ACTION EXECUTION (IN KERNEL):<br/>← Action advisory signals<br/>← Decision recommendations<br/>→ K0 executes actions (SOLE EXECUTOR)<br/>⚠️ Intelligence systems provide ADVISORY ONLY"]:::pipe_action
+    P05_D3["P05 Prospective/Triggers<br/>⏰ PLANNING & MEMORY:<br/>← Prospective memory<br/>← Goal formation<br/>→ D4 prospective handlers"]:::pipe_prospective
+    P06_D3["P06 Learning/Neuromod<br/>📈 ADAPTIVE INTELLIGENCE:<br/>← Learning feedback<br/>← Reward signals<br/>← Metacognitive updates<br/>→ Adaptive intelligence"]:::pipe_learning
+    P19_D3["P19 Personalization<br/>👤 USER CONTEXT:<br/>→ User context<br/>→ Family preferences<br/>→ Social personalization<br/>← Identity updates"]:::pipe_personalization
+    P20_D3["P20 Procedures/Habits<br/>⚙️ SKILL STORAGE:<br/>← Skill storage<br/>← Habit formation<br/>→ Procedural memory"]:::pipe_procedural
+  end
+
+  subgraph K0_PORTS_D3["🔌 K0 Ports (Intelligence Access - Diagram 1 Reference)"]
+    K0_CMD_D3["Command Port<br/>⚡ submit(envelope):<br/>← Learning updates<br/>← Procedural writes<br/>→ WAL → P06/P20"]:::bus
+    K0_QRY_D3["Query Port<br/>🔍 recall(query):<br/>→ Social context<br/>→ Metacognitive state<br/>→ Skill/habit retrieval<br/>← st_sqlite/st_kg"]:::fast
+    K0_SSE_D3["SSE Port<br/>📡 subscribe(intelligence.*):<br/>→ Intelligence events<br/>→ Advisory signals<br/>← Event coordination"]:::fast
+  end
+
+  subgraph K0_INTELLIGENCE_DRIVERS_D3["💾 K0 Storage Drivers (Intelligence - Diagram 1 Reference)"]
+    K0_SQLITE_D3["K0::st_sqlite<br/>📊 learning_traces | social_beliefs | metacog_reports<br/>skills | habits | self_model | reward_history"]:::storage
+    K0_KG_D3["K0::st_kg<br/>🔗 social_beliefs | relationships | knowledge_models<br/>intention_models | cooperation_history"]:::storage
+    K0_VEC_D3["K0::st_vector<br/>🧬 semantic associations | insight connections"]:::storage
+  end
+
+  %% Minimal wiring (intelligence-focused)
+  K0_CMD_D3 --> P06_D3
+  K0_CMD_D3 --> P20_D3
+  K0_QRY_D3 --> K0_SQLITE_D3
+  K0_QRY_D3 --> K0_KG_D3
+  K0_QRY_D3 --> K0_VEC_D3
+  P04_D3 -.action execution.- K0_CMD_D3
+  P05_D3 -.prospective triggers.- P06_D3
+  P06_D3 -.learning updates.- K0_SQLITE_D3
+  P19_D3 -.personalization.- K0_QRY_D3
+
+  K0_INTELLIGENCE_NOTE_D3["📝 NOTE: Full K0 architecture in Diagram 1<br/>This is intelligence-focused subset showing P04/P05/P06/P19/P20 integration<br/>⚠️ ADVISORY BOUNDARY: Intelligence systems ADVISE, K0 P04 EXECUTES<br/>🔗 All storage access via K0 ports ONLY (no direct edges)"]:::card
+end
+class K0_KERNEL_D3 kernel_space
+
+%% ====== K0 GOVERNANCE RULES (Tight Fix Plan Step 2) ======
+%% CRITICAL: All storage access MUST route through K0 ports ONLY
+%% Enforced by: Tight Fix Plan step 2 (Kernel Boundary Enforcement)
+%% Rule: NO direct intelligence ↔ storage edges allowed
+%% Access Routes: K0 Command (P02/P06/P20), Query (Read), SSE (Subscribe)
+%% Specific Intelligence Pipelines: P04 (Action), P05 (Prospective), P06 (Learning), P19 (Personalization), P20 (Procedures)
+%% Exception: None. All storage access is mediated by D1 K0_KERNEL via ports only.
+
+%% ====== K0 INTELLIGENCE ROUTING (Cross-Diagram Connections) ======
+subgraph K0_INTELLIGENCE_ROUTING["🔗 K0 Intelligence Routing (Cross-Diagram Connections)"]
+  direction TB
+
+  subgraph FROM_D1_K0["← FROM D1 K0 Kernel"]
+    FROM_D1_K0_QUERY["← D1 K0 Query Port<br/>🔍 READ ACCESS:<br/>• Episodic context FROM K0::st_sqlite[episodic_memories]<br/>• Social memories FROM K0::st_kg[relationships]<br/>• User profiles FROM K0::st_sqlite[self_model]<br/>➡️ VIA: K0 Query Port (recall)"]:::fast
+    FROM_D1_K0_P19["← D1 K0 P19 (Personalization)<br/>👤 USER CONTEXT:<br/>• Family preferences<br/>• User personalization<br/>• Identity context<br/>➡️ PURPOSE: Social cognition personalization"]:::pipe_personalization
+  end
+
+  subgraph FROM_D2["← FROM D2 Cognitive Core"]
+    FROM_D2_COGNITIVE["← D2 Cognitive Core<br/>🧠 COGNITIVE STATE:<br/>• Working memory state<br/>• Attention focus<br/>• Global workspace broadcasts<br/>➡️ VIA: K0 Query Port (cognitive state)"]:::brain
+  end
+
+  subgraph TO_D1_K0["→ TO D1 K0 Kernel"]
+    TO_D1_K0_P06["→ D1 K0 P06 (Learning/Neuromod)<br/>📈 LEARNING FEEDBACK:<br/>• Learning feedback signals<br/>• Reward updates<br/>• Metacognitive adjustments<br/>➡️ PURPOSE: Adaptive intelligence"]:::pipe_learning
+    TO_D1_K0_P04["→ D1 K0 P04 (Arbitration)<br/>⚖️ ADVISORY SIGNALS ONLY:<br/>• Action recommendations<br/>• Decision suggestions<br/>• Planning proposals<br/>⚠️ K0 P04 IS SOLE EXECUTOR<br/>➡️ PURPOSE: Action recommendations"]:::pipe_action
+    TO_D1_K0_P20["→ D1 K0 P20 (Procedures/Habits)<br/>⚙️ SKILL STORAGE:<br/>• Skill formation<br/>• Habit consolidation<br/>• Procedural memory<br/>➡️ PURPOSE: Procedural memory"]:::pipe_procedural
+  end
+
+  subgraph TO_D4["→ TO D4 Infrastructure"]
+    TO_D4_INFRA["→ D4 Infrastructure<br/>📊 OBSERVABILITY:<br/>• Intelligence metrics (intelligence.*)<br/>• Learning traces<br/>• Social analytics<br/>➡️ VIA: intelligence.* events"]:::mid
+  end
+end
+class K0_INTELLIGENCE_ROUTING card
+
+%% ====== K0-POWERED INTELLIGENCE INFRASTRUCTURE ======
+subgraph K0_INTELLIGENCE_INFRASTRUCTURE["🧠 K0-Powered Intelligence Infrastructure"]
+  direction TB
+  subgraph K0_INTELLIGENCE_SERVICES["🧩 K0 Intelligence Coordination Services"]
+    INT_COORDINATOR["🎭 K0 Intelligence Coordinator<br/>🧠 K0-MEDIATED INTELLIGENCE ORCHESTRATION:<br/>• Coordinates intelligence systems VIA K0 ports<br/>• Routes learning feedback TO D1 K0 P06<br/>• Routes advisory signals TO D1 K0 P04<br/>• Manages intelligence workflows THROUGH K0<br/>➡️ COORDINATES: K0 intelligence operations"]:::intelligence_core
+    INT_MEMORY_MANAGER["💾 K0 Intelligence State Manager<br/>🧠 K0 INTELLIGENCE STATE:<br/>• Queries working memory VIA D1 K0 Query Port<br/>• Stores learning traces IN K0::st_sqlite[learning_traces]<br/>• Updates social beliefs IN K0::st_kg[social_beliefs]<br/>• Coordinates state THROUGH K0 Command Port<br/>➡️ MANAGES: K0 intelligence state"]:::intelligence_core
+    INT_EVENT_PROCESSOR["📡 K0 Intelligence Event Router<br/>🧠 K0 EVENT ROUTING:<br/>• Subscribes TO D1 K0 SSE Port (intelligence.* topics)<br/>• Emits intelligence.* events WITH cognitive_trace_id<br/>• Correlates intelligence flows THROUGH K0<br/>• Routes events VIA D1 K0 SSE Port<br/>➡️ ROUTES: K0 intelligence events"]:::intelligence_core
+  end
+
+  subgraph K0_LEGACY_INTEGRATION["⚙️ K0-Enhanced Legacy Systems Integration"]
+    LEG_SOCIAL["🧑‍🤝‍🧑 K0-Enhanced Social Cognition<br/>🧠 K0 SOCIAL INTELLIGENCE:<br/>• Social intelligence FROM K0 P19 (Personalization)<br/>• Social beliefs IN K0::st_kg[social_beliefs]<br/>• Queries VIA K0 Query Port<br/>➡️ SERVES: K0 social insights"]:::social_cognition
+    LEG_METACOG["🪞 K0-Powered Metacognition<br/>🧠 K0 SELF-REFLECTION:<br/>• Self-reflection VIA K0 Query Port (self-model)<br/>• Metacognitive updates TO K0 P06 (Learning)<br/>• Self-model IN K0::st_sqlite[self_model]<br/>➡️ SERVES: K0 self-awareness"]:::metacognitive
+    LEG_DRIVES["🔥 K0-Informed Drives & Motivation<br/>🧠 K0 MOTIVATION:<br/>• Motivation FROM K0 P19 (Personalization)<br/>• Drive signals TO K0 P06 (Learning)<br/>• User preferences VIA K0 Query Port<br/>➡️ SERVES: K0 motivation"]:::reward_system
+    LEG_AFFECT["💖 K0-Enhanced Affective Processing<br/>🧠 K0 EMOTIONAL INTELLIGENCE:<br/>• Emotions integrated WITH K0::st_sqlite[emotional_memories]<br/>• Affective learning TO K0 P06<br/>• Emotional context FROM K0 P19<br/>➡️ SERVES: K0 emotional intelligence"]:::social_cognition
+    LEG_ACTION["🤖 K0 Action Advisory System<br/>🧠 K0 ACTION RECOMMENDATIONS:<br/>• Action recommendations TO D1 K0 P04 (Arbitration)<br/>• Context FROM K0 Query Port<br/>⚠️ ADVISORY ONLY - K0 P04 EXECUTES<br/>➡️ ADVISES: K0 P04 actions"]:::action_selection
+    LEG_LEARNING["📊 K0-Coordinated Learning<br/>🧠 K0 ADAPTIVE INTELLIGENCE:<br/>• Learning coordinated THROUGH K0 P06<br/>• Feedback TO K0 P06 (Learning/Neuromod)<br/>• Learning traces IN K0::st_sqlite[learning_traces]<br/>➡️ SERVES: K0 adaptive intelligence"]:::learning_loop
+    LEG_IMAGINATION["🧪 K0-Powered Imagination<br/>🧠 K0 CREATIVE INTELLIGENCE:<br/>• Creativity FROM K0::st_sqlite[episodic_memories]<br/>• Insights FROM K0::st_kg + K0::st_vector<br/>• Creative learning TO K0 P06<br/>➡️ SERVES: K0 creative intelligence"]:::brain
+  end
+end
+class K0_INTELLIGENCE_INFRASTRUCTURE card
+
+%% ====== K0 P06-POWERED LEARNING LOOP & ADAPTIVE INTELLIGENCE ======
+subgraph K0_LEARNING_LOOP["🔄 K0 P06 Learning Loop & Adaptive Intelligence"]
+  direction TB
+  subgraph K0_LEARNING_CORE["🧠 K0 P06 Learning Core"]
+    LEARN_COORDINATOR["🎭 K0 Learning Coordinator<br/>🧠 K0 P06 LEARNING ORCHESTRATION:<br/>• Coordinates learning systems VIA K0 P06<br/>• Retrieves learning context FROM K0 Query Port<br/>• Stores learning traces IN K0::st_sqlite[learning_traces]<br/>• Feedback signals TO K0 P06 (Learning/Neuromod)<br/>➡️ COORDINATES: K0 P06 learning operations"]:::learning_loop
+    LEARN_PREDICT["🔮 K0-Enhanced Predictive Learning<br/>🧠 K0 PREDICTIONS:<br/>• Predictions FROM K0::st_sqlite[episodic_memories]<br/>• Model updates TO K0 P06 (Learning)<br/>• Context FROM K0 Query Port<br/>➡️ PREDICTS: K0-backed forecasting"]:::learning_loop
+    LEARN_ADAPT["🔄 K0 P06 Adaptive Controller<br/>🧠 K0 ADAPTATION:<br/>• Adaptation signals TO K0 P06 (Learning/Neuromod)<br/>• Context FROM K0 Query Port<br/>• Performance metrics VIA K0 Observability<br/>➡️ ADAPTS: K0 learning policies"]:::learning_loop
+    LEARN_FEEDBACK["📊 K0 Learning Feedback Integration<br/>🧠 K0 P06 FEEDBACK:<br/>• Feedback signals TO K0 P06 (Learning/Neuromod)<br/>• Reward updates FROM K0 P19 (Personalization)<br/>• Adaptation VIA K0 learning pipeline<br/>• Learning traces IN K0::st_sqlite[learning_traces]<br/>➡️ INTEGRATES: K0 P06 feedback loops"]:::learning_loop
+  end
+  subgraph K0_LEARNING_SPECIALIZED["🧠 K0-Enhanced Specialized Learning"]
+    LEARN_PROCEDURAL["⚙️ K0 P20 Procedural Learning<br/>🧠 K0 SKILL LEARNING:<br/>• Skills learned VIA K0 P06 (Learning)<br/>• Stored IN K0::st_sqlite[skills] via K0 P20<br/>• Consolidation THROUGH K0 P03<br/>• Skill retrieval VIA K0 Query Port<br/>➡️ LEARNS: K0 P20 skills"]:::learning_loop
+    LEARN_DECLARATIVE["📚 K0 Declarative Learning<br/>🧠 K0 KNOWLEDGE LEARNING:<br/>• Facts learned VIA K0 P06<br/>• Stored IN K0::st_sqlite[semantic_memories]<br/>• Semantic associations IN K0::st_kg<br/>• Knowledge retrieval VIA K0 Query Port<br/>➡️ LEARNS: K0 knowledge base"]:::learning_loop
+    LEARN_REINFORCEMENT["🎯 K0 P06 Reinforcement Learning<br/>🧠 K0 REWARD LEARNING:<br/>• Rewards processed VIA K0 P06<br/>• Reward updates IN K0::st_sqlite[reward_traces]<br/>• Prediction errors TO K0 P06<br/>• Value models IN K0::st_sqlite[value_estimates]<br/>➡️ LEARNS: K0 P06 reward signals"]:::learning_loop
+    LEARN_SOCIAL["🤝 K0 P06 + K0 P19 Social Learning<br/>🧠 K0 SOCIAL LEARNING:<br/>• Social learning VIA K0 P06<br/>• Context FROM K0 P19 (Personalization)<br/>• Social knowledge IN K0::st_kg[social_beliefs]<br/>👨‍👩‍👧‍👦 Family social intelligence<br/>➡️ LEARNS: K0 social development"]:::learning_loop
+  end
+  subgraph K0_META_LEARNING["🧠 K0 P06 Meta-Learning & Transfer"]
+    LEARN_META["🎭 K0 P06 Meta-Learning<br/>🧠 K0 LEARNING ABOUT LEARNING:<br/>• Meta-learning VIA K0 P06<br/>• Learning strategies IN K0::st_sqlite[learning_strategies]<br/>• Meta-updates TO K0 P06<br/>• Context FROM K0 Query Port<br/>➡️ LEARNS: K0 P06 meta-intelligence"]:::learning_loop
+    LEARN_TRANSFER["🔗 K0 Knowledge Transfer Learning<br/>🧠 K0 TRANSFER LEARNING:<br/>• Knowledge transfer FROM K0::st_kg (connections)<br/>• Semantic associations FROM K0::st_vector<br/>• Transfer learning TO K0 P06<br/>➡️ TRANSFERS: K0 knowledge"]:::learning_loop
+    LEARN_CURIOSITY["🔍 K0 P06 Curiosity-Driven Learning<br/>🧠 K0 EXPLORATION:<br/>• Curiosity gaps FROM K0 Query (knowledge assessment)<br/>• Exploration signals TO K0 P06<br/>• Guided BY K0 P19 (user interests)<br/>➡️ EXPLORES: K0-guided curiosity"]:::learning_loop
+  end
+end
+class K0_LEARNING_LOOP brain
+
+%% ====== K0 P19 + K0::st_kg SOCIAL COGNITION ======
+subgraph K0_SOCIAL_COGNITION["🤝 K0-Enhanced Social Cognition"]
+  direction TB
+  subgraph K0_TOM_CORE["🧠 K0 Theory of Mind Core"]
+    TOM_BELIEFS["💭 K0-Enhanced Belief Attribution<br/>🧠 K0 THEORY OF MIND:<br/>• Understanding others VIA K0::st_kg[social_beliefs]<br/>• Family context FROM K0 P19 (Personalization)<br/>👨‍👩‍👧‍👦 Family belief modeling IN K0 knowledge graph<br/>• Queries VIA K0 Query Port<br/>➡️ MODELS: K0-backed social intelligence"]:::social_cognition
+    TOM_INTENTIONS["🎯 K0-Enhanced Intention Recognition<br/>🧠 K0 INTENTION MODELING:<br/>• Intentions tracked IN K0::st_kg[intentions]<br/>• Context FROM K0 P19 (Personalization)<br/>👨‍👩‍👧‍👦 Family intention awareness FROM K0 knowledge graph<br/>• Queries VIA K0 Query Port<br/>➡️ RECOGNIZES: K0 intentions"]:::social_cognition
+    TOM_EMOTIONS["💗 K0-Enhanced Emotion Attribution<br/>🧠 K0 EMOTIONAL MODELING:<br/>• Emotional states IN K0::st_kg[emotional_states]<br/>• Affective context FROM K0 P19<br/>👨‍👩‍👧‍👦 Family emotional intelligence THROUGH K0 knowledge graph<br/>• Learning TO K0 P06<br/>➡️ ATTRIBUTES: K0 emotions"]:::social_cognition
+    TOM_KNOWLEDGE["📚 K0-Enhanced Knowledge Attribution<br/>🧠 K0 KNOWLEDGE MODELING:<br/>• Others' knowledge IN K0::st_kg[knowledge_models]<br/>• Context FROM K0 P19 (Personalization)<br/>👨‍👩‍👧‍👦 Family knowledge awareness THROUGH K0 knowledge graph<br/>• Queries VIA K0 Query Port<br/>➡️ MODELS: K0 knowledge"]:::social_cognition
+  end
+  subgraph K0_SOCIAL_REASONING["🧠 K0 Social Reasoning"]
+    SOC_NORMS["📋 K0 Social Norms<br/>🧠 K0 SOCIAL NORMS:<br/>• Social rules learned VIA K0 P06<br/>• Stored IN K0::st_kg[social_norms]<br/>• Family norms FROM K0 P19 (Personalization)<br/>👨‍👩‍👧‍👦 Family norm awareness<br/>➡️ LEARNS: K0 social rules"]:::social_cognition
+    SOC_RELATIONS["🔗 K0 Relationship Intelligence<br/>🧠 K0 SOCIAL GRAPH:<br/>• Relationships tracked IN K0::st_kg[relationships]<br/>• Family dynamics FROM K0 P19 user profiles<br/>👨‍👩‍👧‍👦 Family graph IN K0 knowledge graph<br/>• Queries VIA K0 Query Port<br/>➡️ TRACKS: K0-based relationship intelligence"]:::social_cognition
+    SOC_COMMUNICATION["💬 K0 Communication Intent<br/>🧠 K0 COMMUNICATION MODELING:<br/>• Communication patterns FROM K0 P19<br/>• Intent models IN K0::st_kg[communication_patterns]<br/>• Context VIA K0 Query Port<br/>👨‍👩‍👧‍👦 Family communication dynamics<br/>➡️ UNDERSTANDS: K0 communication"]:::social_cognition
+    SOC_COOPERATION["🤝 K0 Social Coordination<br/>🧠 K0 COOPERATION MODELING:<br/>• Social strategies IN K0::st_kg[cooperation_history]<br/>• Context FROM K0 P19 (Personalization)<br/>• Learning TO K0 P06<br/>👨‍👩‍👧‍👦 Family cooperation patterns<br/>➡️ COORDINATES: K0 social cooperation"]:::social_cognition
+  end
+  subgraph K0_SOCIAL_LEARNING["🧠 K0 Social Learning & Adaptation"]
+    SOC_IMITATION["👯 K0 P06 Imitation Learning<br/>🧠 K0 SOCIAL LEARNING:<br/>• Social learning VIA K0 P06<br/>• Examples FROM K0::st_kg + K0::st_sqlite[episodic_memories]<br/>• Updates TO K0 P06<br/>👨‍👩‍👧‍👦 Family behavior learning<br/>➡️ LEARNS: K0 social development"]:::social_cognition
+    SOC_FEEDBACK["📊 K0 Social Feedback Integration<br/>🧠 K0 SOCIAL FEEDBACK:<br/>• Social feedback integrated TO K0 P06<br/>• Patterns IN K0::st_kg[social_feedback]<br/>• Context FROM K0 P19<br/>👨‍👩‍👧‍👦 Family feedback patterns<br/>➡️ INTEGRATES: K0 social improvement"]:::social_cognition
+    SOC_PERSPECTIVE["👁️ K0 Perspective Switching<br/>🧠 K0 EMPATHY:<br/>• Perspective models IN K0::st_kg<br/>• Taking FROM K0::st_kg + K0 Query Port<br/>• Family perspective understanding THROUGH K0 knowledge graph<br/>👨‍👩‍👧‍👦 Family empathy intelligence<br/>➡️ EMPATHIZES: K0 social-emotional intelligence"]:::social_cognition
+  end
+end
+class K0_SOCIAL_COGNITION brain
+
+%% ====== K0 METACOGNITION & SELF-AWARENESS ======
+subgraph K0_METACOGNITION["🧠 K0 Metacognitive Feedback Systems"]
+  direction TB
+  subgraph K0_META_MONITORING["K0 Metacognitive Monitoring"]
+    META_CONFIDENCE["📈 K0-Enhanced Confidence Assessment<br/>🧠 CONFIDENCE VIA K0:<br/>• Queries metacognitive history FROM K0::st_sqlite[metacog_reports]<br/>• Updates confidence models TO K0 P06<br/>• Context VIA K0 Query Port<br/>➡️ ASSESSES: K0-backed confidence"]:::metacognitive
+    META_PERFORMANCE["⚡ K0 Performance Monitoring<br/>🧠 PERFORMANCE TRACKING:<br/>• Monitors intelligence metrics VIA K0 Observability Port<br/>• Stores performance traces IN K0::st_sqlite[performance_logs]<br/>• Feedback TO K0 P06 (Learning)<br/>➡️ MONITORS: K0 performance intelligence"]:::metacognitive
+    META_KNOWLEDGE["📚 K0 Knowledge Assessment<br/>🧠 KNOWLEDGE EVALUATION:<br/>• Assesses knowledge gaps VIA K0 Query Port<br/>• Stores assessment IN K0::st_sqlite[knowledge_assessment]<br/>• Updates TO K0 P06 (Learning)<br/>➡️ EVALUATES: K0 knowledge"]:::metacognitive
+    META_STRATEGY["🎯 K0 Strategy Monitoring<br/>🧠 STRATEGY TRACKING:<br/>• Monitors strategy effectiveness<br/>• Updates TO K0 P06 (Learning)<br/>• Context FROM K0 Query Port<br/>➡️ MONITORS: K0 strategy"]:::metacognitive
+  end
+  subgraph K0_META_CONTROL["K0 Metacognitive Control"]
+    META_REGULATION["🔧 K0 Cognitive Regulation<br/>🧠 REGULATION SIGNALS:<br/>• Regulation signals TO K0 P06<br/>• Strategies IN K0::st_sqlite[regulation_strategies]<br/>• Context FROM K0 Query Port<br/>➡️ REGULATES: K0 cognition"]:::metacognitive
+    META_PLANNING["📋 K0 Metacognitive Planning<br/>🧠 PLANNING VIA K0 P05:<br/>• Prospective planning VIA K0 P05 (Triggers)<br/>• Goal planning TO K0 P06<br/>• Context FROM K0 Query Port<br/>➡️ PLANS: K0 operations"]:::metacognitive
+    META_REFLECTION["🤔 K0 Reflective Processing<br/>🧠 SELF-REFLECTION:<br/>• Self-reflection VIA K0 Query Port<br/>• Reflective updates TO K0 P06<br/>• Context FROM K0::st_sqlite[self_model]<br/>➡️ REFLECTS: K0 self-awareness"]:::metacognitive
+  end
+  subgraph K0_SELF_MODEL["✨ K0 Self-Model & Identity"]
+    SELF_CONCEPT["🎭 K0 Self-Concept<br/>🧠 IDENTITY IN K0:<br/>• Self-model stored IN K0::st_sqlite[self_model]<br/>• Personalization VIA K0 P19<br/>• Updates FROM K0 Query (self-reflection)<br/>• Learning TO K0 P06<br/>➡️ MODELS: K0-based identity"]:::metacognitive
+    SELF_EFFICACY["💪 K0 Self-Efficacy<br/>🧠 CAPABILITY ASSESSMENT:<br/>• Efficacy models IN K0::st_sqlite[self_model]<br/>• Context FROM K0 P19 (Personalization)<br/>• Learning TO K0 P06<br/>➡️ ASSESSES: K0 capability"]:::metacognitive
+    SELF_AWARENESS["👁️ K0 Self-Awareness<br/>🧠 REFLEXIVE INTELLIGENCE:<br/>• Self-monitoring VIA K0 Query Port<br/>• Metacognitive updates TO K0 P06<br/>• Awareness integrated WITH K0 P19<br/>• State IN K0::st_sqlite[self_model]<br/>➡️ REFLECTS: K0-mediated self-awareness"]:::metacognitive
+  end
+end
+class K0_METACOGNITION brain
+
+%% ====== K0 P06 + K0 P19 REWARD SYSTEMS & MOTIVATION ======
+subgraph K0_REWARD_SYSTEMS["🔥 K0 Reward Systems & Motivation"]
+  direction TB
+  subgraph K0_REWARD_CORE["K0 Core Reward Processing"]
+    REWARD_PREDICTION["🔮 K0-Enhanced Reward Prediction<br/>🧠 REWARD VIA K0:<br/>• Predictions FROM K0::st_sqlite[reward_history]<br/>• Updates TO K0 P06 (Learning/Neuromod)<br/>• Context FROM K0 Query Port<br/>➡️ PREDICTS: K0-backed rewards"]:::reward_system
+    REWARD_ERROR["⚡ K0 Prediction Error Signals<br/>🧠 REWARD ERROR:<br/>• Calculates prediction errors<br/>• Signals TO K0 P06 (Learning) for reinforcement<br/>• Stored IN K0::st_sqlite[reward_traces]<br/>➡️ SIGNALS: K0 P06 learning updates"]:::reward_system
+    REWARD_VALUATION["💰 K0 Value Assessment<br/>🧠 VALUE ESTIMATION:<br/>• Value assessments IN K0::st_sqlite[value_assessments]<br/>• Updates TO K0 P06<br/>• Context FROM K0 Query Port<br/>➡️ ASSESSES: K0 values"]:::reward_system
+  end
+  subgraph K0_MOTIVATION_SYSTEMS["K0 P19 Motivational Systems"]
+    DRIVE_HOMEOSTASIS["⚖️ K0 P19 Homeostatic Drives<br/>🧠 HOMEOSTASIS:<br/>• Homeostatic preferences VIA K0 P19<br/>• Drives TO K0 P06<br/>• Personalized by K0 P19<br/>➡️ DRIVES: K0 homeostasis"]:::reward_system
+    DRIVE_CURIOSITY["🔍 K0 P06 Curiosity-Driven Learning<br/>🧠 EXPLORATION:<br/>• Curiosity gaps FROM K0 Query (knowledge assessment)<br/>• Exploration signals TO K0 P06<br/>• Guided BY K0 P19 user interests<br/>➡️ EXPLORES: K0-guided curiosity"]:::reward_system
+    DRIVE_ACHIEVEMENT["🏆 K0 P19 Achievement Drive<br/>🧠 ACHIEVEMENT:<br/>• Achievement goals VIA K0 P19<br/>• Goal signals TO K0 P06<br/>• Personalized by K0 P19<br/>➡️ DRIVES: K0 achievement"]:::reward_system
+    DRIVE_SOCIAL["🤝 K0 P19 + K0::st_kg Social Drive<br/>🧠 SOCIAL MOTIVATION:<br/>• Social drives FROM K0 P19<br/>• Social knowledge FROM K0::st_kg<br/>• Social learning TO K0 P06<br/>➡️ DRIVES: K0 social motivation"]:::reward_system
+  end
+  subgraph K0_INCENTIVE_PROCESSING["K0 Incentive Processing"]
+    INCENTIVE_SALIENCE["✨ K0 P06 Incentive Salience<br/>🧠 INCENTIVE LEARNING:<br/>• Salience signals TO K0 P06<br/>• Salience models IN K0::st_sqlite[incentive_salience]<br/>• Context FROM K0 Query Port<br/>➡️ LEARNS: K0 salience"]:::reward_system
+    INCENTIVE_LEARNING["📈 K0 P06 Incentive Learning<br/>🧠 MOTIVATION LEARNING:<br/>• Incentive models IN K0::st_sqlite[incentive_models]<br/>• Learning updates TO K0 P06<br/>• Personalization FROM K0 P19<br/>➡️ LEARNS: K0 P06 incentive adaptation"]:::reward_system
+    INCENTIVE_REGULATION["🎚️ K0 P19 Motivation Regulation<br/>🧠 MOTIVATION CONTROL:<br/>• Regulation strategies FROM K0 P19<br/>• Signals TO K0 P06<br/>• Personalized preferences<br/>➡️ REGULATES: K0 motivation"]:::reward_system
+  end
+end
+class K0_REWARD_SYSTEMS brain
+
+%% ====== K0 P20 PROCEDURAL MEMORY & HABITS ======
+subgraph K0_PROCEDURAL_MEMORY["🧠 K0 P20 Procedural Memory & Habits (Basal Ganglia + Motor Cortex)"]
+  direction TB
+  subgraph K0_HABIT_SYSTEM["K0 P20 Habit Formation System"]
+    HABIT_FORMATION["⚙️ K0 P20 Habit Formation<br/>🧠 K0 HABIT LEARNING:<br/>• Habits formed VIA K0 P20 (Procedures/Habits)<br/>• Stored IN K0::st_sqlite[habits]<br/>• Context FROM K0 Query Port<br/>• Learning updates TO K0 P06<br/>➡️ FORMS: K0 P20 habits"]:::procedural_memory
+    HABIT_EXECUTION["🏃 K0 P20 Habit Execution<br/>🧠 K0 HABIT RETRIEVAL:<br/>• Habits retrieved FROM K0::st_sqlite[habits]<br/>• VIA K0 Query Port (recall)<br/>• Motor execution signals TO action systems<br/>• Consolidation VIA K0 P03 (Memory Consolidation)<br/>➡️ EXECUTES: K0 P20 habits"]:::procedural_memory
+    HABIT_MODIFICATION["🔧 K0 P20 Habit Modification<br/>🧠 K0 HABIT ADAPTATION:<br/>• Habit updates VIA K0 P06 (Learning)<br/>• Habit modifications IN K0::st_sqlite[habits]<br/>• Procedural learning VIA K0 Command Port<br/>• Updates TO K0 P20 via Command Port<br/>➡️ MODIFIES: K0 P20 habits"]:::procedural_memory
+  end
+  subgraph K0_SKILL_LEARNING["K0 P20 Skill Learning & Motor Programs"]
+    SKILL_ACQUISITION["📚 K0 P20 Skill Acquisition<br/>🧠 K0 SKILL LEARNING:<br/>• Skills acquired VIA K0 P20<br/>• Stored IN K0::st_sqlite[skills]<br/>• Motor programs IN K0::st_sqlite[motor_programs]<br/>• Learning updates TO K0 P06<br/>➡️ LEARNS: K0 P20 skills"]:::procedural_memory
+    SKILL_REFINEMENT["✨ K0 P20 Skill Refinement<br/>🧠 K0 SKILL IMPROVEMENT:<br/>• Refinement VIA K0 P06 (Learning/Neuromod)<br/>• Skills updated IN K0::st_sqlite[skills]<br/>• Performance feedback FROM K0 Observability<br/>• Motor refinement THROUGH K0 P20<br/>➡️ REFINES: K0 P20 skills"]:::procedural_memory
+    SKILL_TRANSFER["🔗 K0 P20 Skill Transfer<br/>🧠 K0 SKILL TRANSFER:<br/>• Transfer knowledge FROM K0::st_kg (semantic connections)<br/>• Associations FROM K0::st_vector[skill_associations]<br/>• Transfer learning TO K0 P06<br/>➡️ TRANSFERS: K0 P20 skills"]:::procedural_memory
+  end
+  subgraph K0_ACTION_CONTROL["K0 P20 Action Selection & Control"]
+    ACT_SELECT["⚖️ K0 P20 Action Selection<br/>🧠 K0 ACTION SELECTION:<br/>• Action selection VIA K0 P05 (Prospective/Triggers)<br/>• Habit/skill context FROM K0 Query Port<br/>• Selection signals TO action systems<br/>• Advisory signals TO K0 P04<br/>➡️ SELECTS: K0 actions"]:::procedural_memory
+    ACT_INHIBIT["🛑 K0 P04 Action Inhibition<br/>🧠 K0 ACTION CONTROL:<br/>• Inhibition advisory TO K0 P04<br/>• Context FROM K0 Query Port (behavioral state)<br/>• Inhibition signals coordinate WITH K0 P04<br/>⚠️ K0 P04 is SOLE EXECUTOR<br/>➡️ ADVISES: K0 P04 inhibition"]:::procedural_memory
+    ACT_SWITCH["🔄 K0 P20 Action Switching<br/>🧠 K0 ACTION TRANSITIONS:<br/>• Switching VIA K0 P05 (Triggers)<br/>• Context FROM K0 Query Port<br/>• Motor program transitions IN K0::st_sqlite[motor_programs]<br/>• Consolidation VIA K0 P03<br/>➡️ SWITCHES: K0 motor programs"]:::procedural_memory
+  end
+end
+class K0_PROCEDURAL_MEMORY brain
+
+%% ====== K0 IMAGINATION & CREATIVE PROCESSES ======
+subgraph K0_IMAGINATION["🧠 K0-Powered Imagination & Simulation (Default Mode Network)"]
+  direction TB
+  subgraph K0_SIMULATION_ENGINE["K0 Mental Simulation Engine"]
+    SIM_FORWARD["🔮 K0 Forward Simulation<br/>🧠 K0 PROSPECTIVE MEMORY:<br/>• Simulations use K0::st_sqlite[episodic_memories]<br/>• Queries VIA K0 Query Port<br/>• Context FROM K0 P05 (Prospective/Triggers)<br/>• Consolidation VIA K0 P03<br/>➡️ SIMULATES: K0 forward models"]:::brain
+    SIM_COUNTERFACTUAL["🔁 K0 Counterfactual Thinking<br/>🧠 K0 CREATIVE SIMULATION:<br/>• Counterfactuals FROM K0::st_sqlite[episodic_memories]<br/>• Creative associations FROM K0::st_vector[creative_links]<br/>• Learning updates TO K0 P06<br/>• Consolidation VIA K0 P03<br/>➡️ SIMULATES: K0 counterfactuals"]:::brain
+    SIM_EPISODIC["📅 K0 Episodic Simulation<br/>🧠 K0 MEMORY REPLAY:<br/>• Episodic replays FROM K0::st_sqlite[episodic_memories]<br/>• Context FROM K0 Query Port (personal history)<br/>• Replay consolidation VIA K0 P03<br/>• Learning TO K0 P06<br/>➡️ SIMULATES: K0 episodic replays"]:::brain
+  end
+  subgraph K0_CREATIVE_PROCESSES["K0 Creative & Generative Processes"]
+    CREATIVITY_DIVERGENT["🌟 K0 P06 Divergent Thinking<br/>🧠 K0 CREATIVE GENERATION:<br/>• Divergent generation FROM K0::st_vector[creative_associations]<br/>• Knowledge FROM K0::st_kg[concepts]<br/>• Creativity learning TO K0 P06<br/>• Insight feedback TO K0 P06<br/>➡️ GENERATES: K0 alternatives"]:::brain
+    CREATIVITY_CONVERGENT["🎯 K0 Convergent Thinking<br/>🧠 K0 CREATIVE SYNTHESIS:<br/>• Synthesis FROM K0::st_vector[semantic_clusters]<br/>• Knowledge FROM K0::st_kg<br/>• Evaluation THROUGH K0 Query Port<br/>• Learning updates TO K0 P06<br/>➡️ SYNTHESIZES: K0 solutions"]:::brain
+    CREATIVITY_INSIGHT["💡 K0 P06 Insight Generation<br/>🧠 K0 CREATIVE BREAKTHROUGH:<br/>• Insights FROM K0::st_vector (semantic space)<br/>• Association FROM K0::st_kg (knowledge graph)<br/>• Insight learning TO K0 P06<br/>• Aha-moment signals TO K0 P06<br/>➡️ DISCOVERS: K0 insights"]:::brain
+  end
+  subgraph K0_DREAMING["K0 P03 Dreaming & Offline Processing"]
+    DREAM_CONSOLIDATION["💾 K0 P03 Memory Consolidation<br/>🧠 K0 OFFLINE CONSOLIDATION:<br/>• Consolidation THROUGH K0 P03 (Memory Consolidation)<br/>• Learning traces FROM K0::st_sqlite[learning_traces]<br/>• Integration INTO K0::st_sqlite[episodic_memories]<br/>• Sleep-like offline processing<br/>➡️ CONSOLIDATES: K0 memories"]:::brain
+    DREAM_EXPLORATION["🔍 K0 P03 Explorative Dreaming<br/>🧠 K0 CREATIVE EXPLORATION:<br/>• Exploration IN creative space (K0::st_vector)<br/>• Guided BY K0 P19 (Personalization)<br/>• Learning discoveries TO K0 P06<br/>• Offline creativity processing<br/>➡️ EXPLORES: K0 creative space"]:::brain
+    DREAM_REHEARSAL["🎭 K0 P03 Mental Rehearsal<br/>🧠 K0 SKILL PRACTICE:<br/>• Rehearsal FROM K0::st_sqlite[motor_programs]<br/>• Practice consolidation VIA K0 P03<br/>• Motor skill refinement TO K0 P06<br/>• Offline motor learning<br/>➡️ REHEARSES: K0 skills"]:::brain
+  end
+end
+class K0_IMAGINATION brain
+
+%% ====== ACTION SYSTEMS (ADVISORY ONLY → K0 P04) ======
+subgraph K0_ACTION_SYSTEMS["🎮 K0-Advisory Action Systems (Advisory Signals Only to P04)"]
+  direction TB
+  subgraph K0_ACTION_PLANNING["K0 P04-Advisory Action Planning"]
+    ACTION_GOALS["🎯 K0 P04-Advisory Goal Formation<br/>🧠 K0 GOAL SIGNALS:<br/>• Goals formed FROM K0 Query Port (context)<br/>• Goal signals → D1 K0 P04 (Arbitration)<br/>• Goal context FROM K0 P19 (Personalization)<br/>⚠️ ADVISORY ONLY - K0 P04 executes<br/>➡️ SIGNALS: K0 P04 goals"]:::action_selection
+    ACTION_PLAN_NODE["📋 K0 P04-Advisory Action Planning<br/>🧠 K0 ACTION PLANNING:<br/>• Plans from K0 P05 (Prospective/Triggers)<br/>• Planning signals → D1 K0 P04 (Arbitration)<br/>• Context FROM K0 Query Port<br/>⚠️ ADVISORY ONLY - K0 P04 executes<br/>➡️ SIGNALS: K0 P04 plans"]:::action_selection
+    ACTION_COORD_ADVISORY["⚡ K0 P04-Advisory Coordination<br/>🧠 K0 ACTION COORDINATION:<br/>• Coordination signals → D1 K0 P04 (Arbitration)<br/>• Context FROM K0 Query Port (behavioral state)<br/>• Procedural context FROM K0::st_sqlite[motor_programs]<br/>⚠️ ADVISORY ONLY - K0 P04 SOLE EXECUTOR<br/>➡️ SIGNALS: K0 P04 coordination"]:::action_selection
+  end
+  subgraph K0_MOTOR_LEARNING["K0 P06 Motor Learning & Adaptation"]
+    MOTOR_ACQUISITION["📚 K0 P06 Motor Acquisition<br/>🧠 K0 MOTOR LEARNING:<br/>• Motor learning VIA K0 P06<br/>• Motor programs stored IN K0::st_sqlite[motor_programs]<br/>• Acquired through K0 Command Port (P20 Procedures)<br/>• Consolidation VIA K0 P03<br/>➡️ LEARNS: K0 P06 motor skills"]:::action_selection
+    MOTOR_ADAPTATION["🔄 K0 P06 Motor Adaptation<br/>🧠 K0 MOTOR REFINEMENT:<br/>• Adaptation VIA K0 P06 (Learning/Neuromod)<br/>• Motor programs refined IN K0::st_sqlite[motor_programs]<br/>• Feedback FROM K0 Observability (performance)<br/>• Updates THROUGH K0 P20 (Procedures)<br/>➡️ ADAPTS: K0 P06 motor control"]:::action_selection
+    MOTOR_EXPERTISE["⭐ K0 P06 Motor Expertise<br/>🧠 K0 MOTOR MASTERY:<br/>• Expertise developed VIA K0 P06<br/>• Expert models IN K0::st_sqlite[motor_programs]<br/>• Automaticity consolidation VIA K0 P03<br/>• Expertise transfer FROM K0::st_kg<br/>➡️ MASTERS: K0 motor expertise"]:::action_selection
+  end
+  subgraph K0_ACTION_MONITORING["K0 Action Monitoring & Control"]
+    ACTION_FEEDBACK["📈 K0 Action Feedback<br/>🧠 K0 ACTION FEEDBACK:<br/>• Feedback FROM K0 Observability Port<br/>• Outcome evaluation THROUGH K0 Query Port<br/>• Learning updates TO K0 P06<br/>• Storage IN K0::st_sqlite[action_outcomes]<br/>➡️ EVALUATES: K0 action outcomes"]:::action_selection
+    ACT_INHIBIT_SIGNAL["� K0 P04-Advisory Inhibition<br/>🧠 K0 ACTION INHIBITION:<br/>• Inhibition signals → D1 K0 P04<br/>• Context FROM K0 Query Port (safety/constraints)<br/>• Behavioral monitoring THROUGH K0<br/>⚠️ ADVISORY ONLY - K0 P04 decides execution<br/>➡️ SIGNALS: K0 P04 inhibition"]:::action_selection
+    ACTION_OUTCOMES["🎯 K0 P06 Outcome Evaluation<br/>🧠 K0 OUTCOME LEARNING:<br/>• Outcomes evaluated VIA K0 Query Port<br/>• Outcomes stored IN K0::st_sqlite[action_outcomes]<br/>• Learning feedback TO K0 P06<br/>• Performance metrics TO K0 Observability<br/>➡️ LEARNS: K0 action results"]:::action_selection
+  end
+end
+class K0_ACTION_SYSTEMS brain
+
+%% ====== K0 P04-ADVISORY ARBITRATION & DECISION (ACTION EXECUTION IN K0) ======
+subgraph K0_ARBITRATION["⚖️ K0 P04-Advisory Arbitration & Decision (ACTION EXECUTION IN K0)"]
+  direction TB
+  subgraph K0_DECISION_CORE["K0 P04-Advisory Decision Architecture"]
+    DECISION_OPTIONS["📋 K0 P04-Advisory Option Generation<br/>🧠 K0 DECISION SIGNALS:<br/>• Options generated FROM K0 Query Port (context)<br/>• Options → D1 K0 P04 (Arbitration)<br/>• Personalization FROM K0 P19<br/>⚠️ ADVISORY ONLY - K0 P04 decides<br/>➡️ SIGNALS: K0 P04 options"]:::action_selection
+    DECISION_EVALUATION["📊 K0 P04-Advisory Option Evaluation<br/>🧠 K0 DECISION EVALUATION:<br/>• Evaluations FROM K0 Query Port (context)<br/>• Evaluations → D1 K0 P04<br/>• Social/emotional context FROM K0::st_kg + K0 P19<br/>⚠️ ADVISORY ONLY - K0 P04 evaluates<br/>➡️ SIGNALS: K0 P04 evaluation"]:::action_selection
+    DECISION_SELECTION["⚡ K0 P04-Advisory Decision Recommendation<br/>🧠 K0 DECISION SIGNALS:<br/>• Recommendations → D1 K0 P04 (Arbitration)<br/>• Context FROM K0 Query Port<br/>• Reward/motivation FROM K0 P19<br/>⚠️ K0 P04 IS SOLE EXECUTOR - NOT ADVISORY<br/>➡️ SIGNALS: K0 P04 recommendations"]:::action_selection
+  end
+  subgraph K0_STRATEGIC_PLANNING["K0 P05-Prospective Strategic Planning"]
+    PLAN_FORMATION["📋 K0 P05-Prospective Plan Formation<br/>🧠 K0 PLANNING SIGNALS:<br/>• Plans FROM K0 P05 (Prospective/Triggers)<br/>• Planning context FROM K0 Query Port<br/>• Signals → D1 K0 P04 (Action Execution)<br/>• Consolidation VIA K0 P03<br/>➡️ ADVISES: K0 P04 planning"]:::action_selection
+    PLAN_EXECUTION["⚡ K0 P05-Prospective Plan Monitoring<br/>🧠 K0 EXECUTION MONITORING:<br/>• Plan monitoring THROUGH K0 Query Port<br/>• Status signals → D1 K0 P04 (Execution)<br/>• Triggers FROM K0 P05<br/>• Outcomes TO K0 P06 (Learning)<br/>➡️ MONITORS: K0 P04 execution"]:::action_selection
+    PLAN_MONITORING["📊 K0 P05 Plan Assessment<br/>🧠 K0 PLAN EVALUATION:<br/>• Assessments FROM K0 P05 (prospective)<br/>• Context FROM K0 Query Port<br/>• Performance data FROM K0 Observability<br/>• Learning updates TO K0 P06<br/>➡️ EVALUATES: K0 plans"]:::action_selection
+  end
+  subgraph K0_CONFLICT_RESOLUTION["K0 Conflict Resolution & Control"]
+    CONFLICT_DETECTION["⚠️ K0 Conflict Detection<br/>🧠 K0 CONFLICT SIGNALS:<br/>• Detection FROM K0 Query Port (state conflicts)<br/>• Metacognitive awareness VIA K0 metacognition<br/>• Signals → D1 K0 P04<br/>➡️ DETECTS: K0 conflicts"]:::action_selection
+    CONFLICT_ARBITRATION["⚖️ K0 P04 Conflict Arbitration<br/>🧠 K0 ARBITRATION:<br/>• Arbitration IN K0 P04 (Arbitration/Action)<br/>• Context FROM advisory systems<br/>• Final decision BY K0 P04 (SOLE EXECUTOR)<br/>⚠️ K0 P04 EXECUTES FINAL DECISIONS<br/>➡️ ARBITRATES: K0 P04 execution"]:::action_selection
+    COGNITIVE_CONTROL["🎮 K0 Cognitive Control<br/>🧠 K0 CONTROL EXECUTION:<br/>• Control signals EXECUTED IN K0 P04<br/>• Context FROM K0 Query Port<br/>• Regulatory signals FROM metacognition<br/>• K0 P04 ENFORCES CONTROL<br/>➡️ CONTROLS: K0 P04 execution"]:::action_selection
+  end
+end
+class K0_ARBITRATION brain
+
+%% ====== K0-ENHANCED AFFECT & EMOTIONAL INTELLIGENCE ======
+subgraph K0_AFFECT_INTELLIGENCE["💖 K0-Enhanced Affect & Emotional Intelligence"]
+  direction TB
+  subgraph K0_EMOTION_CORE["K0 P06 Emotional Processing Core"]
+    EMOTION_RECOGNITION["🎭 K0 P06 Emotion Recognition<br/>🧠 K0 EMOTIONAL LEARNING:<br/>• Recognition FROM K0::st_sqlite[emotional_memories]<br/>• Learning updates TO K0 P06<br/>• Context FROM K0 Query Port<br/>• Social context FROM K0::st_kg<br/>➡️ RECOGNIZES: K0 emotions"]:::social_cognition
+    EMOTION_GENERATION["⚡ K0 P06 Emotion Generation<br/>🧠 K0 AFFECTIVE STATE:<br/>• Emotions generated THROUGH K0 P06<br/>• Emotional states IN K0::st_sqlite[emotional_memories]<br/>• Context FROM K0 P19 (Personalization)<br/>• Reward signals influence emotions<br/>➡️ GENERATES: K0 emotions"]:::social_cognition
+    EMOTION_REGULATION["🎚️ K0 P06 Emotion Regulation<br/>🧠 K0 EMOTIONAL CONTROL:<br/>• Regulation signals TO K0 P06<br/>• Regulation strategies IN K0::st_sqlite[emotional_strategies]<br/>• Metacognitive regulation influences<br/>• Context FROM K0 Query Port<br/>➡️ REGULATES: K0 emotions"]:::social_cognition
+  end
+  subgraph K0_SOCIAL_EMOTION["K0 P19 Social Emotional Intelligence"]
+    EMPATHY["💝 K0 P19 Empathy Systems<br/>🧠 K0 SOCIAL EMOTIONS:<br/>• Empathy context FROM K0 P19 (Personalization)<br/>• Social beliefs FROM K0::st_kg[social_beliefs]<br/>• Empathic signals TO K0 P06 (Learning)<br/>👨‍👩‍👧‍👦 Family empathy intelligence<br/>➡️ EMPATHIZES: K0 social emotions"]:::social_cognition
+    EMOTIONAL_COMMUNICATION["💬 K0 P06 Emotional Communication<br/>🧠 K0 EMOTIONAL EXPRESSION:<br/>• Communication patterns VIA K0::st_kg[communication]<br/>• Emotional expression TO advisory systems<br/>• Learning TO K0 P06<br/>• Context FROM K0 P19 (Personalization)<br/>➡️ COMMUNICATES: K0 emotions"]:::social_cognition
+    EMOTIONAL_MEMORY["📚 K0 Emotional Memory<br/>🧠 K0 AFFECTIVE STORAGE:<br/>• Emotional memories stored IN K0::st_sqlite[emotional_memories]<br/>• Retrieval VIA K0 Query Port<br/>• Integration WITH episodic memories<br/>• Consolidation VIA K0 P03<br/>➡️ STORES: K0 emotional experiences"]:::social_cognition
+  end
+end
+class K0_AFFECT_INTELLIGENCE brain
+
+%% ====== K0-MEDIATED INTELLIGENCE STORAGE & EVENTS (cognitive_trace_id) ======
+subgraph K0_INTELLIGENCE_STORAGE["💾 K0-Mediated Intelligence Storage & Events (cognitive_trace_id)"]
+  direction TB
+  subgraph K0_STORAGE_SYSTEMS["K0 Specialized Storage Drivers (from K0 Kernel)"]
+    ST_LEARNING["📚 K0::st_sqlite[learning_traces]<br/>Learning & neural adaptations<br/>via K0 P06 (Learning/Neuromod)"]:::storage
+    ST_SOCIAL["🤝 K0::st_kg[social_beliefs]<br/>Social knowledge graph<br/>via K0 Query Port + K0 P19"]:::storage
+    ST_METACOG["🪞 K0::st_sqlite[self_model]<br/>Metacognitive & self-awareness<br/>via K0 Query Port + K0 P06"]:::storage
+    ST_PROCEDURAL["⚙️ K0::st_sqlite[skills|habits|motor_programs]<br/>Procedural & motor memory<br/>via K0 P20 (Procedures/Habits)"]:::storage
+    ST_EMOTIONAL["💖 K0::st_sqlite[emotional_memories]<br/>Affective & emotional state<br/>via K0 P06 + K0 P19 (Personalization)"]:::storage
+    ST_EPISODIC["📅 K0::st_sqlite[episodic_memories]<br/>Personal experiences<br/>via K0 Query Port + K0 P03 (Consolidation)"]:::storage
+    ST_SEMANTIC["🧬 K0::st_kg + K0::st_vector<br/>Semantic associations & insights<br/>via K0 Query Port (retrieval)"]:::storage
+  end
+  subgraph K0_INTELLIGENCE_EVENTS["📡 intelligence.* events (trace_id correlation via K0 SSE Port)"]
+    EV_LEARNING["📈 intelligence.learning.* (K0 P06)<br/>Adaptive intelligence events"]:::bus
+    EV_SOCIAL["🤝 intelligence.social.* (K0 P19)<br/>Social cognition events"]:::bus
+    EV_METACOG["🪞 intelligence.metacog.* (K0 P06)<br/>Metacognitive events"]:::bus
+    EV_DECISION["⚖️ intelligence.decision.* (K0 P04)<br/>Decision & action events"]:::bus
+    EV_AFFECT["💖 intelligence.affect.* (K0 P06)<br/>Emotional events"]:::bus
+  end
+end
+class K0_INTELLIGENCE_STORAGE card
+
+%% ====== K0-COORDINATED INTELLIGENCE GUARDS (Policy/Safety/QoS for advisory) ======
+subgraph K0_INTELLIGENCE_GUARDS["🛡️ K0-Coordinated Intelligence Guards (advisory-only policy enforcement)"]
+  K0_INT_POLICY_GUARD["policy/intelligence_guard.py<br/>🔐 K0 POLICY ENFORCEMENT:<br/>ABAC/consent/redaction for advisory signals<br/>⚠️ Advices K0 P04, never executes"]:::gate
+  K0_INT_QOS_GUARD["retrieval/qos_gate.py<br/>📊 K0 QOS GOVERNANCE:<br/>Budget on planning/advice (via K0 Query Port)<br/>Coordination WITH K0 P17 (QoS/Cost)"]:::smart
+  K0_INT_SAFETY_MON["policy/safety.py<br/>⚠️ K0 SAFETY MONITORING:<br/>Harm/abuse heuristics on advice signals<br/>Coordination WITH K0 P18 (Safety/Abuse)"]:::smart
+end
+class K0_INTELLIGENCE_GUARDS card
+
+%% ====== K0 SSE-ROUTED INTELLIGENCE TOPICS (via K0 SSE Port) ======
+subgraph K0_INTELLIGENCE_TOPICS["📡 intelligence.* topics (K0 SSE Port routing with trace_id)"]
+  K0_INT_T["intelligence.* (generic)<br/>🔌 K0 SSE Port: intelligence.* subscription<br/>All intelligence events via K0"]:::bus
+  K0_INT_ADVISORY_T["intelligence.advisory.* (→ P04 signals)<br/>📢 Intelligence advisory signals<br/>Routed TO D1 K0 P04 (Arbitration)"]:::bus
+  K0_INT_TRACE_T["intelligence.trace.* (observability)<br/>📊 Intelligence observability events<br/>Routed to D4 infrastructure (analytics)"]:::bus
+end
+class K0_INTELLIGENCE_TOPICS card
+
+%% ====== EXTERNAL ANCHORS FOR K0 PIPELINES & SSE INTEGRATION ======
+subgraph K0_PIPELINE_ANCHORS["🔗 K0 Pipelines & SSE Anchors (Cross-Diagram Integration)"]
+  TO_D1_K0_P04_FINAL["→ D1 K0 P04 (Action Execution)<br/>⚖️ SOLE ACTION EXECUTOR<br/>← All advisory signals from intelligence<br/>Intelligence NEVER executes<br/>K0 P04 makes final decisions"]:::pipe_action
+  TO_D1_K0_P05_FINAL["→ D1 K0 P05 (Prospective/Triggers)<br/>⏰ PLANNING & MEMORY<br/>← Planning from intelligence systems<br/>← Prospective memory triggers"]:::pipe_prospective
+  TO_D1_K0_P06_FINAL["→ D1 K0 P06 (Learning/Neuromod)<br/>📈 ADAPTIVE INTELLIGENCE<br/>← Learning feedback from intelligence<br/>← Reward signals & metacognitive updates"]:::pipe_learning
+  FROM_D1_K0_P19_FINAL["← D1 K0 P19 (Personalization)<br/>👤 USER CONTEXT<br/>→ Family preferences & identity<br/>→ Personalization influences all intelligence"]:::pipe_personalization
+  TO_D1_K0_P20_FINAL["→ D1 K0 P20 (Procedures/Habits)<br/>⚙️ SKILL STORAGE<br/>← Skill & habit formation<br/>← Motor program learning"]:::pipe_procedural
+  TO_SSE_INTELLIGENCE_FINAL["→ K0 SSE Port: intelligence.* (sanitized)<br/>📡 EVENT PROPAGATION<br/>Intelligence events via K0 SSE<br/>cognitive_trace_id on all events"]:::plane
+  FROM_WORKSPACE_FINAL["← workspace.* (Global Workspace)<br/>🧠 COGNITIVE STATE INPUT<br/>From D2 cognitive core<br/>Workspace broadcasts to intelligence"]:::bus
+end
+class K0_PIPELINE_ANCHORS card
+
+%% ====== WIRING: Advice path → guards → topics → P04 ======
+DECISION_SELECTION-->INT_POLICY_GUARD-->INT_QOS_GUARD-->INT_SAFETY_MON-->INT_ADVISORY_T
+ACTION_COORD_ADVISORY-->INT_POLICY_GUARD
+ACT_SELECT-->INT_POLICY_GUARD
+INT_ADVISORY_T-->TO_P04_ACTIONS
+
+%% ====== WIRING: Learning, Prospective, QoS, Safety integration ======
+LEARN_ADAPT-->TO_P06_LEARNING
+META_PLANNING-->TO_P05_PROSPECTIVE
+PLAN_FORMATION-->TO_P05_PROSPECTIVE
+INT_COORDINATOR-->TO_P17_QOS
+INT_SAFETY_MON-->TO_P18_SAFETY
+
+%% ====== WIRING: Personalization influence ======
+FROM_P19_PROFILE-->DECISION_EVALUATION
+FROM_P19_PROFILE-->REWARD_VALUATION
+
+%% ====== WIRING: SSE exposure & tracing ======
+EV_LEARNING-->INT_T
+EV_SOCIAL-->INT_T
+EV_METACOG-->INT_T
+EV_DECISION-->INT_T
+INT_EVENT_PROCESSOR-->INT_T & INT_TRACE_T
+INT_T-->TO_SSE_INTELLIGENCE
+INT_TRACE_T-->TO_INFRASTRUCTURE
+%% flows into observability/receipts stack
+
+%% ====== WIRING: Explicit workspace inputs ======
+%% ====== PHASE 4 ENHANCEMENT COMPLETION & VALIDATION ======
+%% ✅ BLOCKS 1-10 COMPLETE: All intelligence systems transformed from Memory-Backbone to K0-Powered
+%% ✅ BLOCK 1: K0 Foundation & Routing (K0_KERNEL_D3, K0_INTELLIGENCE_ROUTING) ✅
+%% ✅ BLOCK 2: K0 Infrastructure (K0 P06/P19/P20 integration)  ✅
+%% ✅ BLOCK 3: K0 Learning Loop (K0 P06 + K0::st_sqlite[learning_traces]) ✅
+%% ✅ BLOCK 4: K0 Social Cognition (K0 P19 + K0::st_kg[social_beliefs]) ✅
+%% ✅ BLOCK 5: K0 Metacognition & Reward (K0 Query + K0 P06 + K0 P19) ✅
+%% ✅ BLOCK 6: K0 P20 Procedural Memory (K0::st_sqlite[skills|habits|motor_programs]) ✅
+%% ✅ BLOCK 7: K0 Imagination (K0 episodic + K0 P03 consolidation) ✅
+%% ✅ BLOCK 8: K0 Action Advisory (ALL signals → D1 K0 P04, ADVISORY ONLY) ✅
+%% ✅ BLOCK 9: K0 Affect & Storage Consolidation (K0::st_sqlite[emotional_memories] + K0 drivers) ✅
+%% ✅ BLOCK 10: Guards & Topics (K0 SSE routing + K0-coordinated policy) ✅
+%%
+%% NO "Memory Backbone" references remain in intelligence systems
+%% ALL cross-diagram connections use K0 ports/pipelines (P04/P05/P06/P19/P20)
+%% ADVISORY BOUNDARY strictly enforced: Intelligence → P04 (ADVISORY ONLY), K0 P04 executes
+%% ========================================================
+
+%% ====== K0-ROUTED INTELLIGENCE WIRING (normalized; K0-aware connections) ======
+
+%% K0 Port inputs to intelligence systems (via K0 Query & P19)
+FROM_D1_K0_QUERY-->INT_COORDINATOR
+FROM_D1_K0_QUERY-->LEARN_COORDINATOR
+FROM_D1_K0_P19_FINAL-->META_CONFIDENCE
+FROM_D1_K0_P19_FINAL-->TOM_BELIEFS
+FROM_D1_K0_QUERY-->INT_COORDINATOR
+FROM_D1_K0_P19_FINAL-->ACTION_GOALS
+
+%% Learning core loop (K0 P06 coordinated)
+LEARN_COORDINATOR-->LEARN_PREDICT-->LEARN_ADAPT-->LEARN_FEEDBACK-->LEARN_COORDINATOR
+LEARN_FEEDBACK-->REWARD_PREDICTION
+LEARN_FEEDBACK-->META_PERFORMANCE
+LEARN_ADAPT-->ACT_SELECT
+LEARN_ADAPT-->HABIT_MODIFICATION
+
+%% Specialized learning
+LEARN_COORDINATOR-->LEARN_PROCEDURAL & LEARN_DECLARATIVE & LEARN_REINFORCEMENT & LEARN_SOCIAL
+LEARN_PROCEDURAL-->HABIT_FORMATION & SKILL_ACQUISITION
+LEARN_REINFORCEMENT-->REWARD_PREDICTION & INCENTIVE_LEARNING
+LEARN_SOCIAL-->SOC_IMITATION
+SOC_IMITATION-->TOM_BELIEFS
+
+%% Meta-learning
+LEARN_META-->LEARN_TRANSFER-->LEARN_CURIOSITY
+LEARN_CURIOSITY-->DRIVE_CURIOSITY & SIM_FORWARD
+LEARN_TRANSFER-->CREATIVITY_INSIGHT & SKILL_TRANSFER
+
+%% Social cognition
+TOM_BELIEFS-->TOM_INTENTIONS-->TOM_EMOTIONS-->TOM_KNOWLEDGE
+SOC_NORMS<-->SOC_RELATIONS<-->SOC_COMMUNICATION<-->SOC_COOPERATION
+SOC_FEEDBACK-->EV_SOCIAL
+TOM_BELIEFS-->DECISION_EVALUATION
+TOM_BELIEFS-->EMPATHY
+
+%% Metacognition
+META_CONFIDENCE-->META_PERFORMANCE-->META_KNOWLEDGE-->META_STRATEGY
+META_REGULATION-->META_PLANNING-->META_REFLECTION
+SELF_CONCEPT<-->SELF_EFFICACY<-->SELF_AWARENESS
+META_PERFORMANCE-->LEARN_FEEDBACK
+META_PERFORMANCE-->CONFLICT_DETECTION
+
+%% Reward & motivation
+REWARD_PREDICTION-->REWARD_ERROR-->REWARD_VALUATION
+DRIVE_HOMEOSTASIS & DRIVE_CURIOSITY & DRIVE_ACHIEVEMENT & DRIVE_SOCIAL-->INCENTIVE_SALIENCE
+INCENTIVE_SALIENCE-->INCENTIVE_LEARNING-->INCENTIVE_REGULATION
+REWARD_ERROR-->LEARN_REINFORCEMENT
+REWARD_ERROR-->ACTION_OUTCOMES
+
+%% Procedural/habits
+HABIT_FORMATION-->HABIT_EXECUTION-->HABIT_MODIFICATION
+SKILL_ACQUISITION-->SKILL_REFINEMENT-->SKILL_TRANSFER
+ACT_SELECT<-->ACT_INHIBIT<-->ACT_SWITCH
+HABIT_EXECUTION-->ACTION_COORD_ADVISORY
+HABIT_EXECUTION-->MOTOR_ACQUISITION
+
+%% Imagination
+SIM_FORWARD<-->SIM_COUNTERFACTUAL<-->SIM_EPISODIC
+CREATIVITY_DIVERGENT<-->CREATIVITY_CONVERGENT-->CREATIVITY_INSIGHT
+DREAM_CONSOLIDATION<-->DREAM_EXPLORATION<-->DREAM_REHEARSAL
+SIM_FORWARD-->DECISION_EVALUATION
+SIM_FORWARD-->PLAN_FORMATION
+
+%% Action (advisory only)
+ACTION_GOALS-->ACTION_PLAN_NODE-->ACTION_COORD_ADVISORY-->ACTION_FEEDBACK
+MOTOR_ACQUISITION-->MOTOR_ADAPTATION-->MOTOR_EXPERTISE
+ACTION_FEEDBACK-->ACT_INHIBIT_SIGNAL & ACTION_OUTCOMES
+ACT_SELECT-->ACTION_COORD_ADVISORY
+ACT_SELECT-->ACT_INHIBIT
+
+%% Arbitration (advisory only)
+DECISION_OPTIONS-->DECISION_EVALUATION-->DECISION_SELECTION
+PLAN_FORMATION-->PLAN_EXECUTION-->PLAN_MONITORING
+CONFLICT_DETECTION-->CONFLICT_ARBITRATION-->COGNITIVE_CONTROL
+DECISION_EVALUATION<-->REWARD_VALUATION & META_CONFIDENCE
+
+%% Affect
+EMOTION_RECOGNITION-->EMOTION_GENERATION-->EMOTION_REGULATION
+EMPATHY<-->EMOTIONAL_COMMUNICATION<-->EMOTIONAL_MEMORY
+EMOTION_REGULATION-->META_REGULATION & COGNITIVE_CONTROL
+EMPATHY-->TOM_EMOTIONS & SOC_COOPERATION
+
+%% Coordination, storage, events
+INT_COORDINATOR<-->LEARN_COORDINATOR & META_REGULATION & DECISION_SELECTION
+INT_MEMORY_MANAGER<-->EMOTIONAL_MEMORY & ST_LEARNING & ST_SOCIAL
+INT_EVENT_PROCESSOR<-->EV_LEARNING & EV_SOCIAL & EV_METACOG & EV_DECISION
+
+LEARN_FEEDBACK-->ST_LEARNING
+SOC_RELATIONS-->ST_SOCIAL
+META_PERFORMANCE-->ST_METACOG
+SKILL_ACQUISITION-->ST_PROCEDURAL
+
+LEARN_ADAPT-->EV_LEARNING
+SOC_FEEDBACK-->EV_SOCIAL
+META_REFLECTION-->EV_METACOG
+DECISION_SELECTION-->EV_DECISION
+
+%% Legacy integration
+LEG_SOCIAL<-->TOM_BELIEFS & SOC_NORMS
+LEG_METACOG<-->META_CONFIDENCE & META_PERFORMANCE
+LEG_DRIVES<-->DRIVE_HOMEOSTASIS & REWARD_PREDICTION
+LEG_AFFECT<-->EMOTION_RECOGNITION & EMPATHY
+LEG_ACTION<-->ACTION_COORD_ADVISORY & MOTOR_ACQUISITION
+LEG_LEARNING<-->LEARN_COORDINATOR & LEARN_REINFORCEMENT
+LEG_IMAGINATION<-->SIM_FORWARD & CREATIVITY_DIVERGENT
+
+%% Cross-diagram advisory outputs
+LEARN_COORDINATOR-->TO_P04_ACTIONS
+META_REFLECTION-->TO_P04_ACTIONS
+DECISION_SELECTION-->TO_P04_ACTIONS
+DREAM_CONSOLIDATION-->TO_P04_ACTIONS
+INT_EVENT_PROCESSOR-->TO_P04_ACTIONS

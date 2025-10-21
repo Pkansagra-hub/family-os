@@ -1,0 +1,259 @@
+# Draining Shutdown Contract
+# Source ADR: ADR-0005 (Agent Lifecycle FSM with 6 States)
+# Defines graceful shutdown process and DRAINING state management
+
+metadata:
+  contract_id: "draining-shutdown-v1.0"
+  source_adr: "0005-agent-lifecycle-fsm.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# DRAINING State Overview
+draining_overview:
+  description: "Agent finishing last task before termination, rejecting new tasks"
+  purpose: "Graceful shutdown with state preservation and resource cleanup"
+  entry_triggers:
+    - "FIRE message from orchestrator"
+    - "IDLE TTL expired"
+    - "Memory pressure"
+    - "Thermal overshoot"
+    - "SIGTERM signal"
+  exit_condition: "State flushed and resources cleaned"
+  timeout_ms: 10000  # Max draining duration
+  failure_action: "Force TERMINATED with warning"
+
+# Entry Triggers
+entry_triggers:
+
+  # Orchestrator-Initiated
+  fire_message:
+    trigger: "Orchestrator sends FIRE message"
+    reason: "Task reassignment or session end"
+    drain_deadline_ms: 10000
+
+  # TTL Expiration
+  idle_ttl_expired:
+    trigger: "IDLE agent TTL exceeded (default 5 min)"
+    reason: "Resource reclamation"
+    drain_deadline_ms: 10000
+
+  # Memory Pressure
+  memory_pressure:
+    trigger: "K1 heap > 80%"
+    reason: "Prevent OOM"
+    drain_deadline_ms: 2000  # Aggressive for pressure
+    eviction_order: "largest RSS first"
+
+  # Thermal Pressure
+  thermal_pressure:
+    trigger: "Device temperature >= T_hot"
+    reason: "Prevent thermal throttling"
+    drain_deadline_ms: 2000  # Aggressive for thermal
+    eviction_order: "thermal contribution (NPU > GPU > CPU)"
+
+  # System Shutdown
+  sigterm_signal:
+    trigger: "SIGTERM received"
+    reason: "Graceful K1 shutdown"
+    drain_deadline_ms: 10000
+
+# Draining Process Sequence
+draining_sequence:
+
+  # Step 1: Reject New Tasks
+  reject_new_tasks:
+    description: "Stop accepting new task announcements"
+    actions:
+      - "Set accepting_tasks = false"
+      - "Reject Contract Net bids"
+      - "MPST-enforced: orchestrator cannot send Assign after DrainBegin"
+    router_enforcement: "admit-deny at receive-side, DLQ with reason='agent_draining'"
+    duration_ms: "<5"
+
+  # Step 2: Finish Current Task
+  finish_current_task:
+    description: "Complete in-progress work (tool calls, model inference)"
+    ai_agent_actions:
+      - "Complete current LLM inference"
+      - "Finish tool execution"
+      - "Cancel non-essential operations"
+    pure_actor_actions:
+      - "Complete current message processing"
+      - "Flush pending operations"
+    timeout_ms: 5000  # Most tasks complete within 5s
+    failure_handling: "Force termination if task hangs"
+
+  # Step 3: Flush State to K0
+  flush_state:
+    description: "Emit final STATE_DELTA and GROUNDING_COMMIT"
+    idempotent_flush:
+      key_scope: "(agent_id, seqno)"
+      semantics: "de-dup on key, retries safe"
+      compression: "delta compression for large state"
+    k0_bridge_batching: true
+    timeout_ms: 1000
+    current_status: "IN PROGRESS (delta compression pending)"
+
+  # Step 4: Flush Receipts
+  flush_receipts:
+    description: "Send all pending receipts to K0 bridge"
+    batching: true
+    idempotent: true
+    timeout_ms: 500
+
+  # Step 5: Revoke Capabilities
+  revoke_capabilities:
+    description: "Return capabilities to lease manager"
+    includes_revocation_on_crash: "tool/model tokens/handles marked non-reusable"
+    lease_manager_coordination: true
+    timeout_ms: 10
+
+  # Step 6: Notify Supervisor
+  notify_supervisor:
+    description: "Report DRAINING → TERMINATED transition"
+    message_type: "AGENT_TERMINATED"
+    includes_reason: true
+    timeout_ms: 5
+
+# MPST Drain Enforcement
+mpst_enforcement:
+  description: "Protocol-level guarantees for clean draining"
+  rules:
+    - "Orchestrator MUST NOT send Assign after DrainBegin"
+    - "Router enforces admit-deny at receive-side"
+    - "New task messages → DLQ with reason='agent_draining'"
+  violation_penalty: "Protocol violation logged, agent may be terminated"
+
+# Idempotent Flush Semantics
+idempotent_flush:
+  key_format: "(agent_id, seqno)"
+  deduplication: "K0 de-dupes on key"
+  safety: "Retries are safe (no double-apply)"
+  compression: "Delta compression reduces large state flush time"
+  current_implementation: "Basic flush works, compression pending"
+
+# Timeout Handling
+timeout_handling:
+
+  # Normal Timeout (10s)
+  normal_timeout:
+    condition: "draining_duration > 10000ms"
+    action: "Force TERMINATED"
+    logging: "WARNING: agent_{agent_id} draining timeout, forced termination"
+    metrics: "agent_draining_timeout_total +1"
+
+  # Pressure Timeout (2s)
+  pressure_timeout:
+    condition: "draining_duration > 2000ms AND (memory_pressure OR thermal_pressure)"
+    action: "Force TERMINATED"
+    logging: "WARNING: agent_{agent_id} pressure draining timeout"
+    escalation: "If pressure critical, force all draining agents"
+
+  # Task Completion Timeout (5s)
+  task_timeout:
+    condition: "current_task_duration > 5000ms"
+    action: "Cancel task, proceed with flush"
+    logging: "WARNING: agent_{agent_id} task completion timeout"
+
+# Force Termination Policy
+force_termination:
+  conditions:
+    - "drain_deadline exceeded"
+    - "task hangs (cannot cancel)"
+    - "pressure escalation (heap > 90% or thermal critical)"
+  actions:
+    - "Immediate state flush (best effort)"
+    - "Force capability revocation"
+    - "Terminate agent process"
+    - "Log incomplete work"
+  metrics: "forced_termination_total{reason}"
+
+# State Preservation Guarantees
+state_preservation:
+  guarantees:
+    - "All completed work flushed to K0"
+    - "Idempotent keys prevent duplicate application"
+    - "Lease revocation prevents resource leaks"
+    - "Audit trail maintained even on force termination"
+  failure_modes:
+    - "K0 unreachable: state lost (logged as error)"
+    - "Capability revocation fails: manual cleanup required"
+    - "Process crash during flush: partial state loss"
+
+# Performance Budget
+performance_budget:
+  total_budget_ms: 10000  # Max draining duration
+  breakdown:
+    reject_tasks: 5
+    finish_task: "varies (up to 5000)"
+    flush_state: 1000
+    flush_receipts: 500
+    revoke_caps: 10
+    notify_supervisor: 5
+  optimization_targets:
+    - "Delta compression for large state"
+    - "Parallel flush operations"
+    - "Fast capability revocation"
+
+# Observability
+observability:
+
+  # Metrics
+  metrics:
+    draining_agents_total:
+      type: "gauge"
+      description: "Number of agents in DRAINING state"
+
+    agent_draining_duration_ms:
+      type: "histogram"
+      labels: ["agent_id"]
+      buckets: [100, 500, 1000, 2000, 5000, 10000]
+      description: "Time spent in DRAINING state"
+
+    agent_draining_timeout_total:
+      type: "counter"
+      description: "Total forced terminations due to draining timeout"
+
+    forced_termination_total:
+      type: "counter"
+      labels: ["reason"]
+      description: "Total forced terminations"
+
+  # Events
+  events:
+    agent_draining_start:
+      fields: ["agent_id", "reason", "drain_deadline_ms"]
+    agent_draining_task_completed:
+      fields: ["agent_id", "task_duration_ms"]
+    agent_draining_state_flushed:
+      fields: ["agent_id", "flush_duration_ms", "bytes_flushed"]
+    agent_draining_completed:
+      fields: ["agent_id", "total_duration_ms"]
+    agent_draining_timeout:
+      fields: ["agent_id", "reason", "incomplete_work"]
+
+# Implementation Status
+implementation_status:
+  basic_draining: "COMPLETED"
+  mpst_enforcement: "COMPLETED"
+  timeout_policy: "IN PROGRESS (tuning needed)"
+  delta_compression: "PENDING (needed for large state)"
+  force_termination: "COMPLETED"
+  overall_completion: "70%"
+
+# Test Scenarios
+test_scenarios:
+  - "ACTIVE → DRAINING: finish current task, flush state"
+  - "IDLE → DRAINING: immediate flush (no current task)"
+  - "DRAINING timeout: force termination with warning"
+  - "Memory pressure draining: 2s deadline enforcement"
+  - "MPST violation: new task rejected to DLQ"
+  - "Idempotent flush: retry safe with same key"
+
+# Research Backing
+research_backing:
+  - "Kubernetes PreStop Hook (30s grace period for pod shutdown)"
+  - "Erlang terminate callback (cleanup logic before process exit)"
+  - "Akka postStop lifecycle method (resource cleanup and state persistence)"
+  - "SIGTERM + Grace Period (standard Unix graceful shutdown pattern)"

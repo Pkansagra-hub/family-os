@@ -1,0 +1,426 @@
+# State Size Budgets Contract
+# Issue: 1.1.3 - State Boundary Management Contracts
+# Source ADR: ADR-0001f (State Boundary Management K1 vs K0)
+# Related ADRs: ADR-0017 (SessionState 6-Section Design), ADR-0018 (3-Tier Eviction)
+
+state_size_budgets:
+  name: "K1 ↔ K0 State Size Budgets"
+  version: "1.0"
+  purpose: "Define size budgets, limits, and eviction policies for K1 and K0 state"
+
+  # ========================================
+  # K1 STATE SIZE BUDGET (Per Session)
+  # ========================================
+  k1_sessionstate_budget:
+    description: "K1 SessionState per-session memory budget"
+
+    per_section_budget:
+      - section_id: 1
+        name: "beliefs"
+        typical_size: "8KB"
+        soft_limit: "12KB"
+        hard_limit: "16KB"
+        critical_limit: "20KB"
+
+        eviction_trigger:
+          soft: "Section exceeds 12KB → trigger Tier 1 LRU eviction"
+          hard: "Section exceeds 16KB → trigger Tier 2 aggressive eviction"
+          critical: "Section exceeds 20KB → emergency drop oldest 50%"
+
+        eviction_policy:
+          strategy: "LRU (Least Recently Used)"
+          priority: "MEDIUM"
+          rule: "Keep top 10 beliefs by recency (last_accessed timestamp)"
+          example: "Drop beliefs not accessed in last 5 turns"
+
+        eviction_actions:
+          tier1_lru:
+            trigger: "size > 12KB"
+            action: "Evict LRU beliefs until size < 10KB"
+            preserve: "Keep beliefs accessed in last 5 turns"
+
+          tier2_aggressive:
+            trigger: "size > 16KB"
+            action: "Evict 50% oldest beliefs"
+            preserve: "Keep beliefs from current turn only"
+
+          tier3_emergency:
+            trigger: "size > 20KB (should never happen)"
+            action: "Drop all except top 5 beliefs"
+            alert: "Critical memory pressure, log error"
+
+      - section_id: 2
+        name: "scoreboard"
+        typical_size: "4KB"
+        soft_limit: "6KB"
+        hard_limit: "8KB"
+        critical_limit: "10KB"
+
+        eviction_policy:
+          strategy: "Keep current turn only"
+          priority: "MEDIUM"
+          rule: "Discard previous turn scores after new turn starts"
+          example: "Turn 5 scores discarded when turn 6 starts"
+
+        eviction_actions:
+          automatic_turn_boundary:
+            trigger: "New turn starts"
+            action: "Discard previous turn scores"
+            preserve: "Current turn scores only"
+
+      - section_id: 3
+        name: "control"
+        typical_size: "2KB"
+        soft_limit: "3KB"
+        hard_limit: "4KB"
+        critical_limit: "6KB"
+
+        eviction_policy:
+          strategy: "NEVER EVICT"
+          priority: "CRITICAL"
+          rule: "Essential flow state, required for turn execution"
+          note: "If control exceeds 6KB, something is seriously wrong (log critical error)"
+
+      - section_id: 4
+        name: "persona"
+        typical_size: "4KB"
+        soft_limit: "6KB"
+        hard_limit: "8KB"
+        critical_limit: "10KB"
+
+        eviction_policy:
+          strategy: "Keep top 20 traits by relevance score"
+          priority: "MEDIUM"
+          rule: "Evict lowest relevance traits first"
+
+        eviction_actions:
+          tier1_lru:
+            trigger: "size > 6KB"
+            action: "Evict lowest relevance traits until size < 5KB"
+            preserve: "Top 20 traits by relevance"
+
+      - section_id: 5
+        name: "multimodal"
+        typical_size: "32KB"
+        soft_limit: "40KB"
+        hard_limit: "48KB"
+        critical_limit: "60KB"
+
+        eviction_policy:
+          strategy: "LRU eviction for audio buffers"
+          priority: "LOW"
+          rule: "Keep last 5 seconds of audio, drop oldest first"
+
+        eviction_actions:
+          tier1_lru:
+            trigger: "size > 40KB"
+            action: "Evict oldest audio chunks until size < 35KB"
+            preserve: "Last 5 seconds of audio"
+
+          tier2_aggressive:
+            trigger: "size > 48KB"
+            action: "Evict all audio except last 3 seconds"
+            preserve: "Last 3 seconds of audio"
+
+      - section_id: 6
+        name: "meta"
+        typical_size: "4KB"
+        soft_limit: "6KB"
+        hard_limit: "8KB"
+        critical_limit: "10KB"
+
+        eviction_policy:
+          strategy: "Keep last 100 trace IDs only"
+          priority: "LOW"
+          rule: "Drop oldest trace IDs first"
+
+        eviction_actions:
+          tier1_lru:
+            trigger: "size > 6KB"
+            action: "Keep last 100 trace IDs, drop oldest"
+            preserve: "Last 100 trace IDs + current session metadata"
+
+    total_sessionstate_budget:
+      typical_size: "54KB"
+      soft_limit: "64KB"
+      hard_limit: "128KB"
+      critical_limit: "256KB"
+
+      eviction_triggers:
+        soft:
+          trigger: "Total size > 64KB"
+          action: "Trigger Tier 1 eviction across all sections"
+          priority_order: ["meta", "multimodal", "persona", "beliefs", "scoreboard", "control"]
+          note: "Evict LOW priority sections first (meta, multimodal)"
+
+        hard:
+          trigger: "Total size > 128KB"
+          action: "Trigger Tier 2 aggressive eviction"
+          priority_order: ["meta", "multimodal", "persona", "beliefs", "scoreboard", "control"]
+          note: "Evict 50% of LOW/MEDIUM priority sections"
+
+        critical:
+          trigger: "Total size > 256KB (OOM imminent)"
+          action: "Emergency eviction + alert"
+          priority_order: ["meta", "multimodal", "persona", "beliefs", "scoreboard", "control"]
+          note: "Drop all except CRITICAL sections (control), log critical error, alert ops team"
+
+  # ========================================
+  # K1 TOTAL MEMORY BUDGET (All Sessions)
+  # ========================================
+  k1_total_memory_budget:
+    description: "K1 Intelligence Module total memory budget (all sessions + infrastructure)"
+
+    component_budgets:
+      - component: "SessionState (all sessions)"
+        budget: "640KB - 960KB"
+        calculation: "10-15 concurrent sessions × 64KB per session"
+        eviction: "Per-session eviction (see above)"
+
+      - component: "Agent Fabric (4 AI agents + infrastructure)"
+        budget: "100MB"
+        breakdown:
+          - "Concierge Agent: 20MB"
+          - "Planner Agent: 30MB"
+          - "Researcher Agent: 30MB"
+          - "Safety Watch Agent: 10MB"
+          - "Agent infrastructure: 10MB"
+
+      - component: "Model Hub (KV cache, prompts)"
+        budget: "300MB"
+        breakdown:
+          - "KV cache (global): 128MB"
+          - "Prompt templates: 50MB"
+          - "Model adapters: 50MB"
+          - "Fallback cascade: 50MB"
+          - "Safety filter: 22MB"
+
+      - component: "Orchestrator & Protocols"
+        budget: "50MB"
+        breakdown:
+          - "Orchestrator core: 20MB"
+          - "Protocol Monitor (6 protocols): 20MB"
+          - "Router & admission control: 10MB"
+
+      - component: "Infrastructure (buffers, caches)"
+        budget: "50MB"
+        breakdown:
+          - "HTTP/2 buffers: 20MB"
+          - "WebSocket buffers: 10MB"
+          - "SSE streaming buffers: 10MB"
+          - "Backpressure buffers: 10MB"
+
+    total_k1_budget:
+      budget: "500MB"
+      calculation: "1MB SessionState + 100MB Agents + 300MB Model Hub + 50MB Orchestrator + 50MB Infrastructure"
+      note: "Typical usage: 450MB (90% utilization), leaves 50MB headroom"
+
+    memory_pressure_actions:
+      warning:
+        trigger: "Total memory > 450MB (90% utilization)"
+        action: "Log warning, start proactive eviction (Tier 1 LRU)"
+        metric: "k1_memory_pressure_ratio > 0.9"
+
+      critical:
+        trigger: "Total memory > 475MB (95% utilization)"
+        action: "Emergency eviction (Tier 2 aggressive), pause new sessions"
+        metric: "k1_memory_pressure_ratio > 0.95"
+
+      oom_imminent:
+        trigger: "Total memory > 490MB (98% utilization)"
+        action: "Terminate oldest sessions, log critical error, alert ops"
+        metric: "k1_memory_pressure_ratio > 0.98"
+
+  # ========================================
+  # K0 STATE SIZE BUDGET (Unbounded Growth)
+  # ========================================
+  k0_storage_budget:
+    description: "K0 Memory Module storage budget (unbounded, grows with family history)"
+
+    growth_projections:
+      daily:
+        episodic: "1MB/day"
+        semantic: "100KB/day"
+        procedural: "10KB/day"
+        snapshots: "50KB/day"
+        affect: "50KB/day"
+        self_model: "5KB/week (~700 bytes/day)"
+        social: "20KB/week (~3KB/day)"
+        total: "~1.2MB/day"
+
+      monthly:
+        episodic: "30MB/month"
+        semantic: "3MB/month"
+        procedural: "300KB/month"
+        snapshots: "1.5MB/month"
+        affect: "1.5MB/month"
+        self_model: "20KB/month"
+        social: "80KB/month"
+        total: "~36MB/month"
+
+      yearly:
+        episodic: "365MB/year"
+        semantic: "36MB/year"
+        procedural: "3.6MB/year"
+        snapshots: "18MB/year"
+        affect: "18MB/year"
+        self_model: "1.8MB/year"
+        social: "7.2MB/year"
+        total: "~450MB/year"
+
+      decade:
+        episodic: "3.65GB/10 years"
+        semantic: "360MB/10 years"
+        procedural: "36MB/10 years"
+        snapshots: "180MB/10 years"
+        affect: "180MB/10 years"
+        self_model: "18MB/10 years"
+        social: "72MB/10 years"
+        total: "~4.5GB/10 years"
+
+    storage_tier_budgets:
+      cache:
+        location: "RAM (K0 in-memory cache)"
+        capacity: "128MB"
+        retention: "Last 5 minutes (working memory boost)"
+        eviction: "LRU (Least Recently Used)"
+        growth: "Bounded (128MB hard limit)"
+
+      hot:
+        location: "SQLite database (k0_memory.db)"
+        capacity: "1GB"
+        retention: "Last 30 days (varies by memory type)"
+        eviction: "Time-based (>30 days → COLD tier)"
+        growth: "Bounded (1GB hard limit)"
+
+      cold:
+        location: "Disk (Parquet, Vector DB, KG files)"
+        capacity: "Unbounded"
+        retention: "Indefinite (varies by retention policy)"
+        eviction: "Retention policies (GDPR, user deletion)"
+        growth: "Unbounded (~450MB/year typical)"
+
+    retention_policies:
+      - memory_type: "episodic"
+        policy: "Indefinite (user controls deletion)"
+        eviction_trigger: "User explicit deletion OR DSAR request"
+        note: "Core conversation history, never auto-delete"
+
+      - memory_type: "semantic"
+        policy: "Indefinite (core identity facts)"
+        eviction_trigger: "User explicit deletion OR confidence < 0.1"
+        note: "Facts decay confidence over time, auto-delete when confidence drops"
+
+      - memory_type: "procedural"
+        policy: "90 days inactive → archive to COLD"
+        eviction_trigger: "Procedure not executed in 90 days"
+        note: "Habits archived if not used, restored on next execution"
+
+      - memory_type: "working_memory_snapshots"
+        policy: "30 days HOT, 90 days COLD, then delete"
+        eviction_trigger: "90 days old"
+        note: "Crash recovery + debugging only, not needed long-term"
+
+      - memory_type: "affect"
+        policy: "90 days detailed, then aggregate to monthly summaries"
+        eviction_trigger: "90 days old → aggregate to monthly average"
+        note: "Detailed mood deleted, monthly summary retained indefinitely"
+
+      - memory_type: "self_model"
+        policy: "Indefinite (core identity)"
+        eviction_trigger: "User explicit deletion only"
+        note: "Never auto-delete traits, update with new values"
+
+      - memory_type: "social"
+        policy: "Indefinite (social graph is long-term)"
+        eviction_trigger: "Relationship confidence < 0.1 (decay over time)"
+        note: "Old relationships decay confidence, auto-delete when weak"
+
+  observability:
+    prometheus_metrics:
+      # K1 SessionState metrics
+      - name: "sessionstate_size_bytes"
+        type: "gauge"
+        labels: ["session_id", "section"]
+        description: "Current size of each SessionState section"
+
+      - name: "sessionstate_total_size_bytes"
+        type: "gauge"
+        labels: ["session_id"]
+        description: "Total SessionState size per session"
+
+      - name: "sessionstate_eviction_total"
+        type: "counter"
+        labels: ["session_id", "section", "tier"]
+        description: "Total evictions per section (tier1_lru, tier2_aggressive, tier3_emergency)"
+
+      - name: "k1_memory_usage_bytes"
+        type: "gauge"
+        labels: ["component"]
+        description: "K1 memory usage by component (sessionstate, agents, model_hub, orchestrator, infrastructure)"
+
+      - name: "k1_memory_pressure_ratio"
+        type: "gauge"
+        labels: []
+        description: "K1 memory pressure ratio (0.0-1.0, >0.9 triggers warning)"
+
+      # K0 storage metrics
+      - name: "k0_storage_size_bytes"
+        type: "gauge"
+        labels: ["memory_type", "tier"]
+        description: "K0 storage size by memory type and tier"
+
+      - name: "k0_storage_growth_bytes_per_day"
+        type: "gauge"
+        labels: ["memory_type"]
+        description: "K0 daily growth rate per memory type"
+
+      - name: "k0_retention_eviction_total"
+        type: "counter"
+        labels: ["memory_type", "reason"]
+        description: "Total evictions due to retention policies"
+
+    alerts:
+      - alert: "K1SessionStateOversized"
+        condition: "sessionstate_total_size_bytes > 64KB"
+        severity: "warning"
+        action: "Trigger Tier 1 eviction"
+
+      - alert: "K1SessionStateCritical"
+        condition: "sessionstate_total_size_bytes > 128KB"
+        severity: "critical"
+        action: "Trigger Tier 2 aggressive eviction, alert ops"
+
+      - alert: "K1MemoryPressureHigh"
+        condition: "k1_memory_pressure_ratio > 0.9"
+        severity: "warning"
+        action: "Start proactive eviction, log warning"
+
+      - alert: "K1MemoryPressureCritical"
+        condition: "k1_memory_pressure_ratio > 0.95"
+        severity: "critical"
+        action: "Emergency eviction, pause new sessions, alert ops"
+
+      - alert: "K0StorageGrowthAbnormal"
+        condition: "k0_storage_growth_bytes_per_day > 10MB/day (10x normal)"
+        severity: "warning"
+        action: "Investigate abnormal growth, check for data leak"
+
+  related_adrs:
+    - adr: "ADR-0001f"
+      section: "State Size Budgets"
+      lines: "K1 64KB, K0 unbounded"
+
+    - adr: "ADR-0017"
+      section: "SessionState 6-Section Design"
+      lines: "Per-section size budgets"
+
+    - adr: "ADR-0018"
+      section: "3-Tier Eviction Strategy"
+      lines: "HOT tier (in-memory), WARM tier (K0 cache), COLD tier (K0 disk)"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.1.3"
+      author: "Contract Development Team"

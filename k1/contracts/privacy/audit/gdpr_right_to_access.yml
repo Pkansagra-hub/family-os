@@ -1,0 +1,61 @@
+# Contract: GDPR Right to Access Implementation
+# Source: ADR-0035d | Status: Production-Ready | Last Updated: 2025-10-14
+
+contract:
+  id: "C_PRIVACY_GDPR_ACCESS_024"
+  name: "GDPR Right to Access Implementation"
+  version: "1.0.0"
+
+  gdpr_article_15: "Right to be informed (user can access their PII)"
+
+  access_request_process:
+    user_request:
+      trigger: "User requests data export"
+      action: "INSERT into gdpr_requests (type: access)"
+      status: "pending"
+
+    fulfillment:
+      query_audit_log: "SELECT all PII operations for user_id"
+      retrieve_from_vault: "Fetch encrypted PII, decrypt"
+      generate_export: "JSON with all PII and metadata"
+      status: "fulfilled"
+
+    response:
+      format: "JSON (machine-readable)"
+      delivery: "Download link (24-hour expiration)"
+      encryption: "End-to-end encrypted"
+      notification: "User notified within 30 days"
+
+  json_export_structure:
+    metadata:
+      user_id: "..."
+      space_id: "..."
+      export_date: "ISO 8601"
+      total_pii_entries: "count"
+    pii_entries:
+      - pii_type: "ssn"
+        value: "123-45-6789"
+        detected_at: "timestamp"
+        detection_method: "regex"
+      - pii_type: "email"
+        value: "user@example.com"
+        detected_at: "timestamp"
+        detection_method: "bert_ner"
+
+  compliance:
+    30_day_response_requirement: true
+    user_notification_required: true
+    free_of_charge: true
+    no_excessive_requests_limit: "1 request per year"
+
+  performance:
+    response_generation_latency_sec: 10
+    export_size_mb: "Depends on PII count (typical: 1-5MB)"
+
+  security:
+    encryption: "End-to-end encrypted download"
+    access_control: "User authentication required"
+    audit_logging: "Export request logged"
+
+  architecture:
+    adr_references: ["ADR-0035d: GDPR Compliance"]

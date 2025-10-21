@@ -1,0 +1,394 @@
+# K0 Long-Term Memory Allocation Contract
+# Issue: 1.1.3 - State Boundary Management Contracts
+# Source ADR: ADR-0001f (State Boundary Management K1 vs K0)
+# Related ADRs: ADR-0020 (Multi-Tier Storage), ADR-0021 (Turn History Retention)
+
+k0_longterm_memory_allocation:
+  name: "K0 Memory Module - Long-Term Durable Storage"
+  version: "1.0"
+  purpose: "Durable, persistent storage for family history and memories"
+  location: "K0 Memory Module (SQLite HOT tier, Parquet/Vector/KG COLD tier)"
+
+  size_budget:
+    soft_limit: "Unbounded (grows with family history)"
+    typical_growth: "1-100GB over years (family-dependent)"
+    daily_growth: "~1.2MB/day typical"
+    yearly_growth: "~450MB/year typical"
+    decade_growth: "~4.5GB/10 years typical"
+
+  characteristics:
+    durability: "ACID guarantees (WAL ensures survival of K1 crashes)"
+    access_speed:
+      cache_tier: "<1ms (RAM, working memory boost, last 5 min)"
+      hot_tier: "<10ms (SQLite, recent memories, last 30 days)"
+      cold_tier: "<100ms (Vector DB, KG, old memories, >30 days)"
+    update_rate: "Every 250ms batch flush from K1 (low churn compared to K1)"
+    serialization: "JSON (primary), FlatBuffers (secondary for K1 deltas)"
+    consistency: "Strongly consistent (ACID via WAL)"
+
+  memory_types:
+    - memory_type_id: 1
+      name: "episodic"
+      description: "Conversations, events, experiences with timestamps"
+      typical_size: "~1MB/day"
+      growth_rate_1yr: "~365MB"
+      growth_rate_10yr: "~3.65GB"
+
+      storage_tiers:
+        cache:
+          location: "RAM (K0 in-memory cache)"
+          capacity: "128MB"
+          retention: "Last 5 minutes of conversation"
+          access_latency: "<1ms"
+
+        hot:
+          location: "SQLite (episodic_memories table)"
+          capacity: "1GB"
+          retention: "Last 30 days"
+          access_latency: "<10ms"
+          indices: ["timestamp", "user_id", "session_id"]
+
+        cold:
+          location: "Parquet files (columnar storage)"
+          capacity: "Unbounded"
+          retention: "Indefinite (user controls deletion)"
+          access_latency: "<100ms"
+          compression: "Snappy (2-3x compression ratio)"
+
+      example_data:
+        memory_id: "mem_001"
+        timestamp: "2024-03-15T10:30:00Z"
+        content: "Emma's soccer practice is Wednesday 4pm at Riverside Park"
+        participants: ["User", "Planner Agent"]
+        memory_type: "episodic"
+        provenance:
+          trace_id: "abc123"
+          turn_id: 5
+          session_id: "sess_xyz"
+
+      query_patterns:
+        - type: "temporal_range"
+          example: "Get memories from last 7 days"
+          latency: "<50ms (HOT tier SQLite)"
+
+        - type: "keyword_search"
+          example: "Search for 'Emma soccer'"
+          latency: "<100ms (FTS5 full-text search)"
+
+      retention_policy:
+        policy: "Indefinite (user controls deletion)"
+        gdpr_compliance: "Right to erasure (GDPR Article 17)"
+        delete_trigger: "User explicit deletion OR DSAR request"
+
+    - memory_type_id: 2
+      name: "semantic"
+      description: "Facts, knowledge, relationships, concepts"
+      typical_size: "~100KB/day"
+      growth_rate_1yr: "~36MB"
+      growth_rate_10yr: "~360MB"
+
+      storage_tiers:
+        hot:
+          location: "Vector DB (FAISS index)"
+          capacity: "1GB"
+          retention: "All semantic facts (no time-based eviction)"
+          access_latency: "<10ms"
+          index_type: "HNSW (Hierarchical Navigable Small World)"
+
+        cold:
+          location: "Knowledge Graph (NetworkX → disk serialization)"
+          capacity: "Unbounded"
+          retention: "Indefinite"
+          access_latency: "<100ms"
+
+      example_data:
+        fact_id: "fact_001"
+        subject: "Emma"
+        predicate: "is_daughter_of"
+        object: "Alice"
+        confidence: 1.0
+        source: "user_stated"
+        embedding: [0.123, 0.456, ...] # 768-dim vector
+
+      query_patterns:
+        - type: "similarity_search"
+          example: "Find facts similar to 'Emma sports activities'"
+          latency: "<10ms (FAISS k-NN search)"
+
+        - type: "relationship_traversal"
+          example: "Get all facts about Emma"
+          latency: "<50ms (KG traversal)"
+
+      retention_policy:
+        policy: "Indefinite (core identity facts)"
+        update_strategy: "Confidence decay over time (old facts lose confidence)"
+
+    - memory_type_id: 3
+      name: "procedural"
+      description: "Habits, routines, skills, learned procedures"
+      typical_size: "~10KB/day"
+      growth_rate_1yr: "~3.6MB"
+      growth_rate_10yr: "~36MB"
+
+      storage_tiers:
+        hot:
+          location: "SQLite (procedures table)"
+          capacity: "100MB"
+          retention: "All active procedures"
+          access_latency: "<10ms"
+
+      example_data:
+        procedure_id: "proc_001"
+        name: "morning_routine"
+        description: "Usual breakfast: oatmeal + banana at 7:30am"
+        frequency: "daily"
+        last_executed: "2024-03-15T07:30:00Z"
+        execution_count: 365
+        confidence: 0.95
+
+      query_patterns:
+        - type: "habit_lookup"
+          example: "Get morning routine"
+          latency: "<5ms (indexed by name)"
+
+      retention_policy:
+        policy: "Indefinite (habits are long-term)"
+        eviction_trigger: "Procedure not executed in 90 days → archive to COLD"
+
+    - memory_type_id: 4
+      name: "working_memory_snapshots"
+      description: "K1 SessionState checkpoints (every 10 turns)"
+      typical_size: "~50KB/day (64KB per snapshot × 10 snapshots/day)"
+      growth_rate_1yr: "~18MB"
+      growth_rate_10yr: "~180MB"
+
+      storage_tiers:
+        hot:
+          location: "SQLite (session_snapshots table)"
+          capacity: "500MB"
+          retention: "Last 30 days"
+          access_latency: "<10ms"
+
+        cold:
+          location: "Disk (gzip compressed JSON)"
+          capacity: "Unbounded"
+          retention: "90 days (then deleted)"
+          access_latency: "<100ms"
+
+      example_data:
+        snapshot_id: "snap_001"
+        session_id: "sess_xyz"
+        turn: 10
+        timestamp: "2024-03-15T10:35:00Z"
+        session_state:
+          beliefs: {...}
+          scoreboard: {...}
+          control: {...}
+          persona: {...}
+          multimodal: {...}
+          meta: {...}
+        size_bytes: 54321
+
+      query_patterns:
+        - type: "latest_snapshot"
+          example: "Get latest snapshot for session sess_xyz"
+          latency: "<5ms (indexed by session_id, turn DESC)"
+
+      retention_policy:
+        policy: "30 days HOT, 90 days COLD, then delete"
+        purpose: "Crash recovery (K1 WAL replay) + debugging"
+
+    - memory_type_id: 5
+      name: "affect"
+      description: "Emotional history, mood patterns, sentiment"
+      typical_size: "~50KB/day"
+      growth_rate_1yr: "~18MB"
+      growth_rate_10yr: "~180MB"
+
+      storage_tiers:
+        hot:
+          location: "SQLite (affect_states table)"
+          capacity: "100MB"
+          retention: "Last 90 days"
+          access_latency: "<10ms"
+
+        cold:
+          location: "Aggregated monthly summaries (JSON)"
+          capacity: "Unbounded"
+          retention: "Indefinite (monthly aggregates)"
+          access_latency: "<50ms"
+
+      example_data:
+        affect_id: "affect_001"
+        timestamp: "2024-03-15T10:45:00Z"
+        emotion: "frustrated"
+        intensity: 0.7
+        trigger: "calendar_conflict"
+        context: "User expressed frustration about scheduling"
+
+      query_patterns:
+        - type: "mood_history"
+          example: "Get user mood over last 7 days"
+          latency: "<20ms (time-range query)"
+
+      retention_policy:
+        policy: "90 days detailed, then aggregate to monthly summaries"
+        aggregation: "Monthly: average sentiment, emotion distribution"
+
+    - memory_type_id: 6
+      name: "self_model"
+      description: "Traits, preferences, health data, roles, identity"
+      typical_size: "~5KB/week"
+      growth_rate_1yr: "~1.8MB"
+      growth_rate_10yr: "~18MB"
+
+      storage_tiers:
+        hot:
+          location: "SQLite (self_model table)"
+          capacity: "50MB"
+          retention: "All traits (no eviction)"
+          access_latency: "<5ms"
+
+      example_data:
+        trait_id: "trait_001"
+        category: "diet"
+        key: "diet_type"
+        value: "vegetarian"
+        confidence: 0.95
+        source: "user_stated"
+        last_updated: "2024-01-15T08:00:00Z"
+
+      query_patterns:
+        - type: "persona_load"
+          example: "Get all traits for user_id='alice'"
+          latency: "<5ms (indexed by user_id)"
+          use_case: "K1 session start (P18 PersonalizationSync)"
+
+      retention_policy:
+        policy: "Indefinite (core identity)"
+        update_strategy: "Overwrite with new values, keep update history"
+
+    - memory_type_id: 7
+      name: "social"
+      description: "Theory of mind, relationship models, social beliefs"
+      typical_size: "~20KB/week"
+      growth_rate_1yr: "~7.2MB"
+      growth_rate_10yr: "~72MB"
+
+      storage_tiers:
+        hot:
+          location: "Knowledge Graph (NetworkX in-memory)"
+          capacity: "100MB"
+          retention: "All relationships"
+          access_latency: "<10ms"
+
+        cold:
+          location: "KG serialized to disk (GraphML)"
+          capacity: "Unbounded"
+          retention: "Indefinite"
+          access_latency: "<100ms"
+
+      example_data:
+        relationship_id: "rel_001"
+        subject: "Alice"
+        predicate: "trusts"
+        object: "Bob"
+        context: "financial_advice"
+        confidence: 0.8
+        evidence:
+          - "Alice asked Bob about investments"
+          - "Alice followed Bob's recommendation"
+
+      query_patterns:
+        - type: "relationship_lookup"
+          example: "Who does Alice trust for financial advice?"
+          latency: "<10ms (KG traversal)"
+
+      retention_policy:
+        policy: "Indefinite (social graph is long-term)"
+        update_strategy: "Confidence decay (old relationships lose strength)"
+
+  storage_tier_summary:
+    cache:
+      location: "RAM (K0 in-memory cache)"
+      capacity: "128MB"
+      retention: "Last 5 minutes (working memory boost)"
+      access_latency: "<1ms"
+      eviction: "LRU (Least Recently Used)"
+
+    hot:
+      location: "SQLite database (k0_memory.db)"
+      capacity: "1GB"
+      retention: "Last 30 days (varies by memory type)"
+      access_latency: "<10ms"
+      eviction: "Time-based (>30 days → COLD)"
+
+    cold:
+      location: "Disk (Parquet, Vector DB, KG files)"
+      capacity: "Unbounded"
+      retention: "Indefinite (varies by retention policy)"
+      access_latency: "<100ms"
+      eviction: "Retention policies (GDPR, user deletion)"
+
+  total_growth_projection:
+    daily: "~1.2MB/day"
+    monthly: "~36MB/month"
+    yearly: "~450MB/year"
+    decade: "~4.5GB/10 years"
+    note: "Actual growth varies by family size, conversation frequency, multimodal usage"
+
+  durability_guarantees:
+    wal:
+      mechanism: "SQLite Write-Ahead Log"
+      guarantee: "ACID transactions (Atomicity, Consistency, Isolation, Durability)"
+      recovery: "K0 crash → WAL replay → zero data loss"
+
+    receipts:
+      mechanism: "Signed receipts for all K1 writes"
+      guarantee: "Audit trail for all state changes"
+      storage: "receipts table in SQLite (indexed by trace_id)"
+
+    replication:
+      mechanism: "Multi-device sync via P07 (Sync/CRDT)"
+      guarantee: "Eventual consistency across devices"
+      conflict_resolution: "Last-write-wins with vector clocks"
+
+  observability:
+    prometheus_metrics:
+      - name: "k0_memory_size_bytes"
+        type: "gauge"
+        labels: ["memory_type", "tier"]
+        description: "Current size of each memory type per tier"
+
+      - name: "k0_memory_growth_bytes_per_day"
+        type: "gauge"
+        labels: ["memory_type"]
+        description: "Daily growth rate per memory type"
+
+      - name: "k0_query_latency_ms"
+        type: "histogram"
+        labels: ["memory_type", "query_type", "tier"]
+        buckets: [1, 5, 10, 25, 50, 100, 250]
+        description: "Query latency by memory type and tier"
+
+      - name: "k0_retention_eviction_total"
+        type: "counter"
+        labels: ["memory_type", "reason"]
+        description: "Total evictions due to retention policies"
+
+  related_adrs:
+    - adr: "ADR-0001f"
+      section: "State Allocation - K0 State"
+      lines: "Memory types with growth rates"
+
+    - adr: "ADR-0020"
+      section: "Multi-Tier Storage (CACHE → HOT → COLD)"
+
+    - adr: "ADR-0021"
+      section: "Turn History Retention Policies"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.1.3"
+      author: "Contract Development Team"

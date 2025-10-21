@@ -1,0 +1,9 @@
+# Placeholder scheduler defaults. Update with concrete budgets per README.
+reads:
+  max_fanout: 3
+  top_k: 8
+  per_store_slice_ms: 75
+writes:
+  max_concurrency: 8
+sse:
+  heartbeat_ms: 8000

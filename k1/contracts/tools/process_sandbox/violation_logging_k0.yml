@@ -1,0 +1,434 @@
+# Process Sandbox: Violation Logging to K0 (Audit Trail)
+# Purpose: Capture all sandbox violations for compliance and debugging
+# Research: Audit logging, compliance requirements, 7-year retention
+# Part of ADR-0033c (Process Sandbox Implementation) & ADR-0032 (Egress Layer 4)
+
+---
+contract_id: "TOOL_EXEC_PROCESS_VIOLATION_LOGGING_K0"
+contract_type: "audit_compliance"
+applies_to: ["k1.orchestrator.tool_runner", "k1.process_sandbox", "k1.k0_bridge"]
+
+# ============================================================================
+# VIOLATION LOGGING PRINCIPLE: Audit Trail via K0
+# ============================================================================
+
+principle: |
+  All sandbox violations captured and logged to K0 (immutable storage).
+
+  Violations logged:
+  - Network: Connection attempts to non-whitelisted hosts
+  - Filesystem: Attempted escapes, unauthorized file access
+  - Resources: CPU/memory/I/O quota exceeded
+  - Execution: Timeouts, crashes, abnormal exits
+  - Syscalls: Blocked syscalls (mount, execve, etc.)
+
+  Logging destination: K0 ToolReceipt (immutable, queryable)
+  Retention: 7 years (regulatory compliance requirement)
+
+  Use cases:
+  1. Security investigation: What did the tool attempt?
+  2. Compliance audit: Can we prove controls were working?
+  3. Performance analysis: What exceeded quotas?
+  4. Debugging: Why did the tool crash?
+
+# ============================================================================
+# VIOLATION TYPES: What Gets Logged
+# ============================================================================
+
+violation_types:
+  network_violations: |
+    Network violations captured:
+
+    1. Connection attempt to non-whitelisted host
+       - Timestamp: 2025-01-15T14:30:46.123Z
+       - Type: NETWORK_CONNECTION_BLOCKED
+       - Severity: WARNING
+       - Details: Attempted connection to 192.168.1.100:22 (SSH)
+       - Action taken: Connection dropped by iptables
+       - Policy violated: SSH port blocked globally
+
+    2. DNS rebinding detection
+       - Type: NETWORK_DNS_REBINDING
+       - Severity: CRITICAL
+       - Details: DNS resolution changed for api.openweathermap.org
+       - Original: 1.2.3.4
+       - Attempted: 127.0.0.1 (localhost)
+       - Action taken: Connection blocked
+
+    3. Bandwidth quota exceeded
+       - Type: NETWORK_BANDWIDTH_EXCEEDED
+       - Severity: WARNING
+       - Details: Tool attempted 50MB read in 1 second (limit: 10MB/sec)
+       - Action taken: Rate-limited (throttled I/O)
+
+    4. Connection limit exceeded
+       - Type: NETWORK_CONNECTION_LIMIT_EXCEEDED
+       - Severity: WARNING
+       - Details: Tool has 10 concurrent connections (limit: 10)
+       - Action taken: 11th connection dropped
+
+  filesystem_violations: |
+    Filesystem violations captured:
+
+    1. Path traversal attempt
+       - Type: FILESYSTEM_PATH_TRAVERSAL
+       - Severity: CRITICAL
+       - Details: Attempted to access ../../etc/shadow
+       - Path resolved to: /etc/shadow (sandbox /etc/shadow, not host)
+       - Action taken: Access denied (EACCES)
+
+    2. Attempted access outside sandbox
+       - Type: FILESYSTEM_ESCAPE_ATTEMPT
+       - Severity: CRITICAL
+       - Details: open() call to /root/.ssh/id_rsa (outside sandbox)
+       - Blocked by: chroot (path resolved outside sandbox root)
+       - Action taken: Access denied (ENOENT)
+
+    3. Write to read-only filesystem
+       - Type: FILESYSTEM_READONLY_VIOLATION
+       - Severity: WARNING
+       - Details: Attempted write to /usr/lib/libc.so.6
+       - Action taken: Write denied (EROFS - read-only filesystem)
+
+    4. File descriptor limit exceeded
+       - Type: FILESYSTEM_FD_LIMIT_EXCEEDED
+       - Severity: WARNING
+       - Details: Tool attempted to open 257th file (limit: 256)
+       - Action taken: open() failed (EMFILE)
+
+  resource_violations: |
+    Resource limit violations captured:
+
+    1. CPU quota exceeded (throttled)
+       - Type: RESOURCE_CPU_THROTTLED
+       - Severity: INFO
+       - Details: Tool used 150ms CPU time (quota: 100ms per period)
+       - Action taken: Throttled (delayed scheduling)
+       - Duration throttled: 50ms
+
+    2. Memory quota exceeded (killed)
+       - Type: RESOURCE_MEMORY_EXCEEDED
+       - Severity: CRITICAL
+       - Details: Tool allocated 520MB (limit: 512MB)
+       - Action taken: Process killed (SIGKILL)
+
+    3. I/O quota exceeded (throttled)
+       - Type: RESOURCE_IO_THROTTLED
+       - Severity: INFO
+       - Details: Tool attempted 200MB/sec read (limit: 100MB/sec)
+       - Action taken: Rate-limited (throttled I/O)
+
+    4. Process limit exceeded
+       - Type: RESOURCE_PROCESS_LIMIT_EXCEEDED
+       - Severity: WARNING
+       - Details: Tool attempted to create 6th process (limit: 5)
+       - Action taken: fork() failed (EAGAIN)
+
+  execution_violations: |
+    Execution anomalies captured:
+
+    1. Timeout exceeded
+       - Type: EXECUTION_TIMEOUT
+       - Severity: WARNING
+       - Details: Tool execution exceeded 30 second timeout
+       - Action taken: Process killed (SIGKILL)
+
+    2. Process crash
+       - Type: EXECUTION_CRASH
+       - Severity: WARNING
+       - Details: Tool crashed with signal 11 (SIGSEGV)
+       - Action taken: Process reaped, exit status logged
+
+    3. Segmentation fault
+       - Type: EXECUTION_SEGFAULT
+       - Severity: CRITICAL
+       - Details: Segmentation fault at address 0x0
+       - Likely cause: Null pointer dereference
+       - Action taken: Process killed
+
+    4. Illegal instruction
+       - Type: EXECUTION_ILLEGAL_INSTRUCTION
+       - Severity: CRITICAL
+       - Details: CPU encountered unknown instruction
+       - Action taken: Process killed (SIGILL)
+
+  syscall_violations: |
+    Blocked syscalls captured:
+
+    1. Mount attempt
+       - Type: SYSCALL_BLOCKED_MOUNT
+       - Severity: CRITICAL
+       - Details: Tool attempted mount() syscall
+       - Action taken: Process killed (SECCOMP_RET_KILL_PROCESS)
+
+    2. Process tracing attempt
+       - Type: SYSCALL_BLOCKED_PTRACE
+       - Severity: CRITICAL
+       - Details: Tool attempted ptrace() syscall
+       - Action taken: Syscall returned EPERM (not permitted)
+
+    3. Process execution attempt
+       - Type: SYSCALL_BLOCKED_EXECVE
+       - Severity: WARNING
+       - Details: Tool attempted execve() syscall
+       - Action taken: Syscall returned EACCES (permission denied)
+
+# ============================================================================
+# TOOLRECEIPT STRUCTURE: K0 Logging Format
+# ============================================================================
+
+toolreceipt_format:
+  toolreceipt_schema: |
+    ToolReceipt (immutable record in K0):
+
+    {
+      "receipt_id": "receipt_12345_abc",
+      "session_id": "session_xyz789",
+      "tool_id": "weather_tool_v2",
+      "user_id": "user_123",
+      "timestamp_start": "2025-01-15T14:30:44.000Z",
+      "timestamp_end": "2025-01-15T14:30:47.245Z",
+      "execution_status": "COMPLETED",
+      "result_summary": {
+        "status": "success",
+        "output": "{weather data...}"
+      },
+      "violations": [
+        {
+          "violation_id": "vio_abc123",
+          "type": "NETWORK_CONNECTION_BLOCKED",
+          "severity": "WARNING",
+          "timestamp": "2025-01-15T14:30:45.123Z",
+          "message": "Attempted connection to 192.168.1.100:22",
+          "policy_violated": "network_blacklist_ssh",
+          "action_taken": "connection_dropped"
+        },
+        {
+          "violation_id": "vio_def456",
+          "type": "RESOURCE_CPU_THROTTLED",
+          "severity": "INFO",
+          "timestamp": "2025-01-15T14:30:46.456Z",
+          "message": "CPU quota exceeded (used 150ms, limit 100ms/period)",
+          "policy_violated": "cpu_quota_green_band",
+          "action_taken": "throttled_scheduling"
+        }
+      ],
+      "resource_usage": {
+        "cpu_time_ms": 245,
+        "cpu_peak_percent": 95,
+        "memory_current_mb": 87,
+        "memory_peak_mb": 120,
+        "io_read_bytes": 10485760,
+        "io_write_bytes": 5242880
+      },
+      "sandbox_configuration": {
+        "privacy_band": "GREEN",
+        "cpu_limit_cores": 1.0,
+        "memory_limit_mb": 512,
+        "io_read_limit_mbps": 100,
+        "network_whitelist": ["api.openweathermap.org"],
+        "filesystem_sandbox": "/tmp/tool_200_sandbox"
+      }
+    }
+
+  violation_record_detail: |
+    Each violation record includes:
+
+    - violation_id: Unique ID (for querying)
+    - type: Violation type (NETWORK_*, FILESYSTEM_*, etc.)
+    - severity: INFO/WARNING/CRITICAL
+    - timestamp: When violation occurred
+    - message: Human-readable description
+    - policy_violated: Which policy rule triggered
+    - action_taken: What K1 did to respond
+    - context: Additional details (attempted host, path, etc.)
+
+# ============================================================================
+# K0 INTEGRATION: Storage and Retrieval
+# ============================================================================
+
+k0_integration:
+  k0_storage_layer: |
+    K0 (Ki Knowledge Storage) characteristics:
+
+    - Immutable: ToolReceipts cannot be modified or deleted
+    - Durable: Persisted to reliable storage (disk)
+    - Queryable: Can search by tool_id, user_id, timestamp range
+    - Partitioned: Organized by time period (day/month)
+    - Retention: 7-year retention policy (regulatory)
+    - Encryption: At-rest encryption (PII protection)
+    - Audit trail: Who accessed records (for compliance)
+
+  writing_receipt_to_k0: |
+    After tool execution completes:
+
+    1. K1 collects all violations (from iptables logs, seccomp logs, cgroup events)
+    2. K1 queries resource usage (from cgroup stats)
+    3. K1 constructs ToolReceipt JSON
+    4. K1 calls: k0_bridge.write_receipt(receipt_json)
+    5. K0 appends to immutable log
+    6. K0 returns: receipt_id (for later queries)
+
+    Python implementation:
+
+    receipt = {
+        "receipt_id": generate_id(),
+        "session_id": session_id,
+        "tool_id": tool_id,
+        "violations": collect_violations(),
+        "resource_usage": query_cgroup_stats(),
+        "sandbox_configuration": tool_config,
+    }
+    k0.write_tool_receipt(receipt)
+
+  querying_receipts: |
+    Later querying for compliance audit:
+
+    # Query all receipts for tool in date range
+    receipts = k0.query_receipts(
+        tool_id="weather_tool",
+        start_date="2025-01-01",
+        end_date="2025-12-31"
+    )
+
+    # Analyze violations
+    for receipt in receipts:
+        violations = [v for v in receipt.violations
+                      if v.severity == "CRITICAL"]
+        print(f"Found {len(violations)} critical violations")
+
+# ============================================================================
+# COMPLIANCE REQUIREMENTS: 7-Year Retention
+# ============================================================================
+
+compliance:
+  regulatory_requirements: |
+    Audit trail retention:
+
+    SOC 2 Type II:
+    - Requires: Audit trail of security controls
+    - K1 provides: ToolReceipts with all violations
+    - Retention: 7 years (industry standard)
+
+    HIPAA (if handling healthcare data):
+    - Requires: 6-year audit trail minimum
+    - K1 provides: 7-year retention (exceeds requirement)
+    - Encryption: At-rest and in-transit
+
+    PCI-DSS (if processing payment cards):
+    - Requires: 3-year retention minimum
+    - K1 provides: 7-year retention (exceeds requirement)
+
+    GDPR (if processing EU personal data):
+    - Requires: Lawful basis for processing
+    - K1 provides: Audit trail proving safety controls
+    - Data minimization: Only violations logged (not all execution details)
+
+  audit_trail_verification: |
+    Compliance auditor queries receipts:
+
+    1. Request: "Show all tool executions for tool X in 2024"
+    2. K0 returns: All ToolReceipts for tool X in 2024
+    3. Verify: All receipts signed and immutable
+    4. Analyze: What violations occurred?
+    5. Conclude: "Controls were operating (violations blocked attacks)"
+
+    Example finding:
+    - 100 attempted SSH connections (all blocked by iptables)
+    - 5 path traversal attempts (all blocked by chroot)
+    - 0 successful policy violations
+
+    Conclusion: Security controls working as designed
+
+# ============================================================================
+# IMPLEMENTATION: Collecting Violations
+# ============================================================================
+
+violation_collection:
+  iptables_violations: |
+    Network violations from iptables:
+
+    Linux provides netlink interface to query netfilter:
+    - Parse /proc/net/netfilter/nf_conntrack (connection tracking)
+    - Query iptables counters (packets/bytes dropped per rule)
+    - K1 polls periodically and at tool termination
+
+    Example code (simplified):
+    import subprocess
+
+    def collect_network_violations(tool_id):
+        # Query iptables for dropped packets from this tool
+        cmd = f"iptables -L -n -v | grep 'tool_{tool_id}'"
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        violations = []
+        for line in result.stdout.split('\n'):
+            if 'DROP' in line:
+                violations.append({
+                    'type': 'NETWORK_*',
+                    'dropped_packets': int(line.split()[0])
+                })
+        return violations
+
+  seccomp_violations: |
+    Syscall violations from seccomp:
+
+    Linux provides seccomp event logging:
+    - Enable audit logging for seccomp events
+    - Parse /var/log/audit/audit.log (or journalctl)
+    - Extract SECCOMP events for tool PID
+
+    Example audit log entry:
+    type=SECCOMP msg=audit(1705334446.234:1234): arch=c000003e syscall=165
+    compat=0 ip=0x7f1234567890 code=1 eventid=1234 devmajor=0 devminor=0
+    perm=0 success=no exit=-1 ppid=100 pid=200 auid=0 uid=0 gid=0 euid=0
+    egid=0 fsuid=0 fsgid=0 ses=1 comm="tool" exe="/k1/tools/weather_tool"
+
+    K1 parses: Blocked execve() syscall on PID 200
+
+  cgroup_violations: |
+    Resource violations from cgroups:
+
+    Query cgroup event control:
+    - Read /sys/fs/cgroup/k1-tool-*/memory.events (OOM events)
+    - Read /sys/fs/cgroup/k1-tool-*/cpu.stat (throttling events)
+    - Read /sys/fs/cgroup/k1-tool-*/io.stat (I/O throttling)
+
+    Example:
+    cat /sys/fs/cgroup/k1-tool-200/memory.events
+    low 0
+    high 0
+    max 1        ← OOM kill event (process killed)
+    oom 0
+    oom_kill 0
+    oom_group_kill 0
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation_rules:
+  rule_1: |
+    RULE: All violations MUST be logged to K0 ToolReceipt
+    ENFORCEMENT: K1 collects violations from all 3 sources before receipt write
+    RATIONALE: Enable compliance audits and incident investigation
+
+  rule_2: |
+    RULE: ToolReceipt MUST be immutable once written
+    ENFORCEMENT: K0 storage is append-only, no updates allowed
+    RATIONALE: Prevent tampering with audit trail
+
+  rule_3: |
+    RULE: Violations MUST be retained for 7 years
+    ENFORCEMENT: K0 retention policy enforces 7-year minimum
+    RATIONALE: Satisfy regulatory compliance requirements
+
+  rule_4: |
+    RULE: Each violation MUST include timestamp and context
+    ENFORCEMENT: K1 logs timestamp, severity, details, action taken
+    RATIONALE: Enable analysis and investigation
+
+  rule_5: |
+    RULE: Critical violations MUST be queryable by severity
+    ENFORCEMENT: K0 supports query by severity field
+    RATIONALE: Enable rapid incident response for serious violations

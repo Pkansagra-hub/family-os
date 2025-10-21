@@ -1,0 +1,853 @@
+# ADR 0076: KV Cache Optimization Strategy (M3 Epic 1)
+
+**Status**: Proposed
+**Last Updated**: 2025-01-15
+**Milestone**: M3 - Performance Optimization & Thermal Management
+**Epic**: 3.1 - KV Cache Optimization
+**Related ADRs**: 0025 (KV Cache Management), 0075 (Layer 5 Extensibility Framework), 0076 (KV Cache Optimization Strategy), 0005a-e (Agent Fabric Memory Management), 0013a (Schema Version Registry), 0077 (Thermal Placement Algorithm V2 - **NEW M3**)
+
+---
+
+## 1. Context
+
+K1 currently maintains a unified KV cache for model context windows with a target budget of 128MB per process (soft limit: 110MB at P95). Current state indicates steady-state memory usage around 450MB per K1 instance, with KV cache consuming approximately 25% of total memory budget (110MB / 450MB).
+
+Performance analysis reveals:
+- **Cache hit rate**: Currently ~65% (target: ≥75%)
+- **Memory fragmentation**: Uncompressed entries waste ~20-30% due to metadata overhead
+- **Eviction efficiency**: Current LRU lacks priority awareness, resulting in valuable context being evicted before less useful entries
+- **Access latency**: Decompression not yet implemented; compression overhead unknown
+
+**Research Foundation**:
+- Transformer KV cache compression patterns (Xia et al., SOSP 2023 - "LLMLite")
+- Priority-based cache replacement (Corbato & Graham, 1966 - "Multics")
+- Thermal-aware scheduling implications (Section 4 of ADR 0026)
+
+**Issue Mapping**:
+- Issue 3.1.1: Cache Entry Compression (ZSTD vs LZ4, compression threshold, decompress-on-access)
+- Issue 3.1.2: Cache Eviction Policy (LRU + priority tiers: HOT=1.0, WARM=0.7, COLD=0.3)
+
+---
+
+## 2. Decision
+
+Implement a **two-tier KV cache optimization strategy** combining:
+
+### 2.1 Compression Tier (Issue 3.1.1)
+
+**Compression Algorithm Selection**: Use **ZSTD** as primary with **LZ4** as fallback.
+
+**Rationale**:
+- ZSTD provides 25-35% compression ratio for transformer KV data vs LZ4's 15-20%
+- ZSTD decompression speed: ~500MB/s (adequate for 5ms latency budget)
+- LZ4 fallback: Ultra-fast compression (<1ms overhead) for performance-critical paths
+
+**Compression Threshold**: 1KB
+
+**Entry Compression Pattern**:
+```
+Original Entry (128-token context):
+├─ Token IDs: 1.2 KB (128 × int32)
+├─ Attention Scores: 8 KB (128² × float16)
+├─ KV Vectors: 4 KB (128 × 32-dim × float16)
+└─ Metadata: 256 bytes
+  Total: ~13.5 KB before compression
+
+Compressed Entry:
+├─ Compressed Blob: ~4-6 KB (35-45% of original)
+├─ Compression Method: 1 byte
+├─ Original Size: 4 bytes
+├─ Compressed Size: 4 bytes
+├─ Checksum (XXHASH): 8 bytes
+└─ Decompression Timestamp: 8 bytes (for eviction tracking)
+  Total: ~4.5-6.5 KB (60% reduction)
+```
+
+**Decompress-on-Access Pattern**:
+```python
+class KVCacheEntry:
+    """Entry with lazy decompression"""
+
+    compressed_blob: bytes          # ZSTD or LZ4 compressed
+    compression_type: CompressionType  # ZSTD (0) or LZ4 (1)
+    original_size: int              # For memory accounting
+    compressed_size: int            # For cache accounting
+    checksum: int                   # XXHASH64 validation
+
+    # Access tracking for priority calculation
+    last_access_time_ms: int
+    access_count: int
+
+    # Lazy cache for decompressed data (LRU eviction)
+    _decompressed: Optional[KVTensor] = None
+
+    def get_data(self) -> KVTensor:
+        """Return decompressed data with lazy evaluation"""
+        if self._decompressed is None:
+            self._decompressed = self._decompress()
+            self.last_access_time_ms = current_time_ms()
+            self.access_count += 1
+        return self._decompressed
+
+    def _decompress(self) -> KVTensor:
+        """Decompress with validation"""
+        decompressor = get_decompressor(self.compression_type)
+        blob = decompressor.decompress(
+            self.compressed_blob,
+            max_size=self.original_size * 1.1  # Prevent memory bombs
+        )
+        assert compute_checksum(blob) == self.checksum, \
+            f"KV entry corruption detected"
+        return parse_kv_tensor(blob)
+```
+
+**Performance Targets**:
+- Compression latency: <1ms (P95) for ZSTD, <0.2ms for LZ4
+- Decompression latency: <5ms (P95)
+- Memory reduction: 20-30% overall cache footprint
+- Cache hit rate target: ≥75% (P95)
+
+### 2.2 Eviction Tier (Issue 3.1.2)
+
+**Eviction Policy**: **Priority-Aware LRU** with thermal weight adjustment.
+
+**Priority Tiers**:
+
+| Tier   | Weight | Use Case                          | TTL Window |
+|--------|--------|-----------------------------------|------------|
+| HOT    | 1.0    | Active conversation context       | Last 5 turns |
+| WARM   | 0.7    | Related context, semi-relevant    | Last 10-20 turns |
+| COLD   | 0.3    | Historical context, backup only   | Last 50+ turns |
+
+**Entry Priority Calculation**:
+```
+priority_score = (access_count × weight_tier) +
+                 (recency_bonus × access_frequency) +
+                 (thermal_adjustment × thermal_state)
+
+where:
+  access_count = number of cache hits
+  weight_tier ∈ {HOT: 1.0, WARM: 0.7, COLD: 0.3}
+  recency_bonus = 1 - (age_ms / max_age_ms)  [decays over time]
+  access_frequency = hits_per_second × weight_tier
+  thermal_adjustment = 0.5-1.5 (from ADR 0026 Thermal Hysteresis)
+```
+
+**Eviction Candidate Selection**:
+```python
+class KVCacheManager:
+    """Priority-aware LRU eviction"""
+
+    def calculate_priority(self, entry: KVCacheEntry,
+                          current_time_ms: int,
+                          thermal_state: ThermalState) -> float:
+        """Calculate eviction priority (higher = keep longer)"""
+        age_ms = current_time_ms - entry.last_access_time_ms
+        recency_factor = max(0.0, 1.0 - (age_ms / 600000))  # 10min window
+        access_freq = entry.access_count / max(1, age_ms / 1000)  # hits/sec
+
+        # Thermal adjustment from ADR 0026 (ThermalPolicy extension)
+        thermal_weight = {
+            ThermalState.COOL: 1.0,
+            ThermalState.WARM: 0.9,
+            ThermalState.HOT: 0.7,
+            ThermalState.CRITICAL: 0.5
+        }[thermal_state]
+
+        priority = (
+            entry.tier.weight *
+            (1 + recency_factor) *
+            (1 + log(access_freq + 1)) *
+            thermal_weight
+        )
+        return priority
+
+    def evict_until_budget(self, target_size_mb: int):
+        """Evict lowest-priority entries until memory target met"""
+        current_size = sum(e.compressed_size for e in self.entries)
+
+        if current_size <= target_size_mb * 1024 * 1024:
+            return  # No eviction needed
+
+        # Sort by priority (ascending = evict first)
+        candidates = sorted(
+            self.entries,
+            key=lambda e: self.calculate_priority(e, now_ms(), thermal_state),
+            reverse=False
+        )
+
+        for entry in candidates:
+            self.entries.remove(entry)
+            current_size -= entry.compressed_size
+            metrics.kv_cache_evictions_total.labels(
+                tier=entry.tier.name
+            ).inc()
+
+            if current_size <= target_size_mb * 1024 * 1024:
+                break
+```
+
+**Memory Budget Enforcement**:
+
+| Limit              | Size   | Purpose                          |
+|-------------------|--------|----------------------------------|
+| Hard limit        | 128MB  | Process-level maximum (enforced) |
+| Soft limit        | 110MB  | Target P95 (trigger eviction)    |
+| Eviction trigger  | 105MB  | Start background eviction        |
+| Critical trigger  | 120MB  | Aggressive foreground eviction   |
+
+### 2.3 Integration with Layer 5 Extensibility (ADR 0075)
+
+Both compression and eviction mechanisms use **CachePolicy** extension point from ADR 0075:
+
+```python
+@dataclass
+class CachePolicy(ExtensionPoint):
+    """Layer 5 extension point for cache behavior customization"""
+
+    def select_compression(self, entry: KVCacheEntry) -> CompressionType:
+        """Choose compression algorithm per entry"""
+        # Default: ZSTD for large entries, LZ4 for hot entries
+        pass
+
+    def calculate_entry_priority(self, entry: KVCacheEntry,
+                                 thermal_state: ThermalState) -> float:
+        """Calculate priority for eviction decisions"""
+        # Default: Priority-Aware LRU from Section 2.2
+        pass
+
+    def should_decompress_now(self, entry: KVCacheEntry,
+                              access_frequency: float) -> bool:
+        """Decide if entry should be decompressed and cached"""
+        # Default: High-frequency entries (>5 hits/sec) stay decompressed
+        pass
+```
+
+**Capability Binding** (from ADR 0075):
+- `CachePolicy` extension requires `memory:kv_cache:control` capability
+- Resource limits: 10MB working memory for decompression buffers
+- Rate limits: Up to 1000 eviction operations per second
+
+---
+
+## 3. Consequences
+
+### 3.1 Benefits
+
+✅ **Memory Efficiency**
+- 20-30% reduction in KV cache footprint (110MB → 77-88MB average)
+- Allows 2-3× more concurrent agents per session (current: 3 → future: 6-9)
+- Overall K1 process memory: 450MB → 400-420MB (6-11% reduction)
+
+✅ **Cache Hit Rate Improvement**
+- Current 65% → Target 75%+ with priority-aware eviction
+- HOT tier entries retained 100% (conversation context preserved)
+- WARM tier retention: 90% (semi-relevant context preserved)
+
+✅ **Performance Under Thermal Stress**
+- Integration with thermal policy (ADR 0026) reduces latency spikes
+- Eviction adjusts based on device thermal state (COOL: full speed, CRITICAL: conservative)
+- Decompression latency (<5ms) stays within performance budget
+
+✅ **Thermal Efficiency**
+- Smaller cache footprint reduces CPU heat from memory access
+- Fewer cache misses → fewer model re-evaluations → lower thermal load
+- Thermal-aware eviction prioritizes cool devices
+
+### 3.2 Costs & Tradeoffs
+
+⚠️ **Compression Overhead**
+- ZSTD compression: ~1ms per entry (acceptable)
+- Decompression: ~5ms per access (within budget but notable)
+- Mitigation: Lazy decompression + decompressed entry caching
+
+⚠️ **Eviction Accuracy**
+- Priority calculation requires access tracking (8 bytes per entry)
+- Thermal adjustment adds dependency on ADR 0026 (Thermal Hysteresis)
+- Fallback: Simple LRU if thermal data unavailable
+
+⚠️ **Implementation Complexity**
+- Checksum validation adds 8 bytes per entry (0.6% overhead)
+- Extension point integration requires capability binding (ADR 0075)
+- Schema versioning: FlatBuffers schema change (see ADR 0013a)
+
+### 3.3 Migration Path
+
+**Phase 1 (Week 1-2)**:
+- Implement basic ZSTD compression without decompression caching
+- Keep existing simple LRU eviction
+- Measure baseline: memory reduction, cache hit rate
+
+**Phase 2 (Week 3-4)**:
+- Add decompress-on-access with lazy caching
+- Add access tracking for priority calculation
+- Pilot with thermal state data (ADR 0026)
+
+**Phase 3 (Week 5-6)**:
+- Implement priority-aware eviction tier system
+- Add extension point (CachePolicy) for customization
+- Production rollout with monitoring
+
+---
+
+## 4. Implementation Specifications
+
+### 4.1 FlatBuffers Schema Update
+
+**Current Schema** (from ADR 0025):
+```flatbuffers
+table KVCacheEntry {
+  token_ids: [uint32];
+  attention_scores: [float];
+  kv_vectors: [float];
+  metadata: KVMetadata;
+}
+
+table KVMetadata {
+  entry_id: string;
+  created_time_ms: uint64;
+  last_accessed_ms: uint64;
+}
+```
+
+**Updated Schema** (Issue 3.1.1 + 3.1.2):
+```flatbuffers
+table KVCacheEntry {
+  // Original fields (for backward compatibility)
+  token_ids: [uint32];          // DEPRECATED if compressed
+  attention_scores: [float];    // DEPRECATED if compressed
+  kv_vectors: [float];          // DEPRECATED if compressed
+
+  // New compression fields
+  compressed_blob: [ubyte];     // ZSTD or LZ4 blob
+  compression_type: CompressionType;  // 0=ZSTD, 1=LZ4
+  original_size: uint32;        // Size before compression
+  compressed_size: uint32;      // Actual compressed size
+  checksum: uint64;             // XXHASH64 validation
+
+  // Priority/eviction fields
+  metadata: KVMetadata;
+  access_count: uint32;
+  priority_tier: PriorityTier;  // 0=COLD, 1=WARM, 2=HOT
+  last_thermal_adjustment: float;  // From ADR 0026
+}
+
+enum CompressionType : ubyte {
+  UNCOMPRESSED = 0,
+  ZSTD = 1,
+  LZ4 = 2
+}
+
+enum PriorityTier : ubyte {
+  COLD = 0,
+  WARM = 1,
+  HOT = 2
+}
+
+table KVMetadata {
+  entry_id: string;
+  created_time_ms: uint64;
+  last_accessed_ms: uint64;
+  thermal_context: ThermalContext;  // From ADR 0026
+}
+
+table ThermalContext {
+  device_type: DeviceType;      // CPU, GPU, NPU, REMOTE
+  thermal_state: ThermalState;  // COOL, WARM, HOT, CRITICAL
+  temperature_celsius: float;
+}
+```
+
+**Schema Version**: Increment to v3 (from v2)
+**Backward Compatibility**: Entries without compression fields treated as uncompressed
+**Registry Update**: ADR 0013a schema registry updated to version 3
+
+### 4.2 Code Patterns
+
+**Compression Helper**:
+```python
+import zstandard
+import lz4.frame
+from xxhash import xxh64
+
+class CompressionStrategy(Enum):
+    ZSTD = 0
+    LZ4 = 1
+
+def compress_kv_entry(entry_data: bytes,
+                      strategy: CompressionStrategy) -> Tuple[bytes, int]:
+    """Compress KV entry, return (compressed_blob, original_size)"""
+    original_size = len(entry_data)
+
+    if strategy == CompressionStrategy.ZSTD:
+        cctx = zstandard.ZstdCompressor(level=3)  # Level 3 for speed
+        compressed = cctx.compress(entry_data)
+    elif strategy == CompressionStrategy.LZ4:
+        compressed = lz4.frame.compress(entry_data, compression_level=4)
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
+
+    return compressed, original_size
+
+def decompress_kv_entry(compressed_blob: bytes,
+                       compression_type: CompressionType,
+                       original_size: int,
+                       expected_checksum: int) -> bytes:
+    """Decompress and validate KV entry"""
+    if compression_type == CompressionType.ZSTD:
+        dctx = zstandard.ZstdDecompressor()
+        data = dctx.decompress(compressed_blob, max_output_size=original_size * 1.1)
+    elif compression_type == CompressionType.LZ4:
+        data = lz4.frame.decompress(compressed_blob)
+    else:
+        raise ValueError(f"Unknown compression type: {compression_type}")
+
+    # Validation
+    computed_checksum = xxh64(data).intdigest()
+    if computed_checksum != expected_checksum:
+        raise ValueError(f"KV entry checksum mismatch (corruption detected)")
+
+    assert len(data) == original_size, \
+        f"Decompressed size mismatch: {len(data)} != {original_size}"
+
+    return data
+```
+
+**Eviction Algorithm**:
+```python
+from dataclasses import dataclass
+from enum import Enum
+from math import log
+
+class PriorityTier(Enum):
+    COLD = (0, 0.3)    # (tier_id, weight)
+    WARM = (1, 0.7)
+    HOT = (2, 1.0)
+
+@dataclass
+class EvictionMetrics:
+    entries_evicted: int = 0
+    bytes_freed: int = 0
+    priority_distribution: dict = None  # {tier_name: count}
+
+class KVCacheEvictionManager:
+    """Priority-aware LRU eviction with thermal awareness"""
+
+    def __init__(self, soft_limit_mb: int = 110, hard_limit_mb: int = 128):
+        self.soft_limit_bytes = soft_limit_mb * 1024 * 1024
+        self.hard_limit_bytes = hard_limit_mb * 1024 * 1024
+        self.entries: Dict[str, KVCacheEntry] = {}
+        self.metrics = EvictionMetrics()
+
+    def calculate_priority(self, entry: KVCacheEntry,
+                          current_time_ms: int,
+                          thermal_state: Optional[str] = None) -> float:
+        """Calculate priority score (higher = keep longer)"""
+        # Age factor: entries older than 10 minutes decay
+        age_ms = max(0, current_time_ms - entry.last_accessed_ms)
+        age_factor = 1.0 - min(1.0, age_ms / 600000)  # 10 min window
+
+        # Access frequency: hits per second with diminishing returns
+        access_freq = entry.access_count / max(1.0, age_ms / 1000.0)
+        freq_factor = 1.0 + log(access_freq + 1)
+
+        # Thermal adjustment (from ADR 0026 ThermalPolicy)
+        thermal_weights = {
+            "COOL": 1.0,
+            "WARM": 0.9,
+            "HOT": 0.7,
+            "CRITICAL": 0.5
+        }
+        thermal_factor = thermal_weights.get(thermal_state, 1.0)
+
+        # Composite priority
+        tier_weight = entry.priority_tier.value[1]
+        priority = tier_weight * (1.0 + age_factor) * freq_factor * thermal_factor
+
+        return priority
+
+    def evict_to_soft_limit(self, thermal_state: Optional[str] = None):
+        """Evict entries until soft limit reached"""
+        current_size = sum(e.compressed_size for e in self.entries.values())
+
+        if current_size <= self.soft_limit_bytes:
+            return  # No eviction needed
+
+        current_time_ms = int(time.time() * 1000)
+
+        # Score all entries by priority
+        priorities = {
+            entry_id: self.calculate_priority(entry, current_time_ms, thermal_state)
+            for entry_id, entry in self.entries.items()
+        }
+
+        # Sort by priority ascending (evict lowest first)
+        sorted_entries = sorted(priorities.items(), key=lambda x: x[1])
+
+        evicted_count = 0
+        bytes_freed = 0
+
+        for entry_id, _ in sorted_entries:
+            if current_size <= self.soft_limit_bytes:
+                break
+
+            entry = self.entries.pop(entry_id)
+            bytes_freed += entry.compressed_size
+            current_size -= entry.compressed_size
+            evicted_count += 1
+
+            # Track metrics by tier
+            tier_name = entry.priority_tier.name
+            if self.metrics.priority_distribution is None:
+                self.metrics.priority_distribution = {}
+            self.metrics.priority_distribution[tier_name] = \
+                self.metrics.priority_distribution.get(tier_name, 0) + 1
+
+            # Export metrics
+            metrics.kv_cache_evictions_total.labels(
+                tier=tier_name
+            ).inc()
+            metrics.kv_cache_bytes_freed.add(entry.compressed_size)
+
+        self.metrics.entries_evicted += evicted_count
+        self.metrics.bytes_freed += bytes_freed
+```
+
+**Prometheus Metrics**:
+```python
+from prometheus_client import Counter, Histogram, Gauge
+
+# Counters
+kv_cache_compressions_total = Counter(
+    'kv_cache_compressions_total',
+    'Total KV cache entries compressed',
+    ['compression_type']  # ZSTD, LZ4
+)
+
+kv_cache_decompressions_total = Counter(
+    'kv_cache_decompressions_total',
+    'Total KV cache entries decompressed',
+    ['compression_type']
+)
+
+kv_cache_evictions_total = Counter(
+    'kv_cache_evictions_total',
+    'Total KV cache entries evicted',
+    ['priority_tier']  # COLD, WARM, HOT
+)
+
+kv_cache_bytes_freed = Counter(
+    'kv_cache_bytes_freed_total',
+    'Total bytes freed by eviction'
+)
+
+# Histograms
+kv_cache_compression_latency_ms = Histogram(
+    'kv_cache_compression_latency_ms',
+    'KV cache compression latency',
+    ['compression_type'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+)
+
+kv_cache_decompression_latency_ms = Histogram(
+    'kv_cache_decompression_latency_ms',
+    'KV cache decompression latency',
+    buckets=[0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+)
+
+# Gauges
+kv_cache_current_size_bytes = Gauge(
+    'kv_cache_current_size_bytes',
+    'Current KV cache size in bytes'
+)
+
+kv_cache_entries = Gauge(
+    'kv_cache_entries',
+    'Number of entries in KV cache',
+    ['priority_tier']  # COLD, WARM, HOT
+)
+
+kv_cache_hit_rate = Gauge(
+    'kv_cache_hit_rate',
+    'KV cache hit rate (0-1.0)',
+    ['priority_tier']
+)
+
+kv_cache_memory_utilization_percent = Gauge(
+    'kv_cache_memory_utilization_percent',
+    'KV cache memory utilization (0-100)'
+)
+```
+
+### 4.3 Performance Budgets (P95 targets)
+
+| Metric                           | Budget   | Current | Status |
+|----------------------------------|----------|---------|--------|
+| Compression latency (ZSTD)       | <1ms     | New     | ✅     |
+| Compression latency (LZ4)        | <0.2ms   | New     | ✅     |
+| Decompression latency            | <5ms     | New     | ✅     |
+| Eviction operation latency       | <10ms    | New     | ✅     |
+| Cache hit rate                   | ≥75%     | 65%     | 🟡     |
+| Memory reduction (vs uncompressed) | 20-30% | New     | ✅     |
+| Cache size (P95)                 | 110MB    | 110MB   | ✅     |
+| Total process memory (K1)        | 500MB    | 450MB   | ✅     |
+
+---
+
+## 5. Related ADRs & Integration Points
+
+### 5.1 Backward References (existing ADRs updated)
+
+- **ADR 0025** (KV Cache Management): CachePolicy extension point added for compression selection
+- **ADR 0026** (Thermal Hysteresis Matrix): ThermalPolicy integration for thermal-aware eviction
+- **ADR 0075** (Layer 5 Extensibility Framework): CachePolicy extension point defined
+- **ADR 0013a** (Schema Version Registry): FlatBuffers schema updated to v3
+- **ADR 0005a-e** (Agent Fabric Memory Management): Cache constraints updated
+
+### 5.2 Forward References (future ADRs building on this)
+
+- **ADR 0077** (Thermal Placement Algorithm V2): Uses thermal-aware eviction from this ADR
+- **ADR 0078** (Tool Call Batching Pipeline): May use KV cache compression for batched results
+
+---
+
+## 6. Testing Strategy (WARD Framework)
+
+### 6.1 Integration Test: Compression Pipeline
+
+```python
+from ward import test, fixture
+import asyncio
+
+@fixture
+async def kv_cache_with_compression():
+    """KV cache with compression enabled"""
+    cache = KVCacheManager(compression_enabled=True, strategy="ZSTD")
+    yield cache
+    await cache.shutdown()
+
+@test("compression reduces entry size by 20-30%")
+async def _(cache=kv_cache_with_compression):
+    # Create realistic KV entry (128-token context)
+    original_entry = create_test_kv_entry(num_tokens=128)
+    original_size = len(original_entry.serialize())
+
+    # Store in cache
+    cache.add_entry("test-1", original_entry)
+    stored_entry = cache.get_entry_raw("test-1")
+    compressed_size = len(stored_entry.compressed_blob)
+
+    # Verify compression ratio
+    ratio = 1.0 - (compressed_size / original_size)
+    assert 0.15 < ratio < 0.40, f"Compression ratio {ratio} outside 15-40%"
+    metrics_check(f"Compression ratio: {ratio:.1%}")
+
+@test("decompress-on-access returns identical data")
+async def _(cache=kv_cache_with_compression):
+    # Store compressed entry
+    original_entry = create_test_kv_entry(num_tokens=128)
+    cache.add_entry("test-2", original_entry)
+
+    # Access (triggers decompression)
+    retrieved_entry = await cache.get_entry("test-2")
+
+    # Verify identity
+    assert retrieved_entry.token_ids == original_entry.token_ids
+    assert np.allclose(retrieved_entry.attention_scores,
+                      original_entry.attention_scores, rtol=1e-5)
+    metrics_check("Decompression successful, data identical")
+
+@test("decompression latency < 5ms P95")
+async def _(cache=kv_cache_with_compression):
+    # Populate cache with 100 entries
+    for i in range(100):
+        entry = create_test_kv_entry(num_tokens=128)
+        cache.add_entry(f"test-{i}", entry)
+
+    # Measure decompression latency
+    latencies = []
+    for i in range(100):
+        start_ms = current_time_ms()
+        _ = await cache.get_entry(f"test-{i}")
+        latencies.append(current_time_ms() - start_ms)
+
+    p95_latency = percentile(latencies, 95)
+    assert p95_latency < 5.0, f"P95 latency {p95_latency}ms exceeds 5ms budget"
+    metrics_check(f"P95 decompression: {p95_latency:.1f}ms")
+```
+
+### 6.2 Integration Test: Priority-Aware Eviction
+
+```python
+@test("priority tiers affect eviction order (HOT preserved, COLD evicted first)")
+async def _(cache=kv_cache_with_compression):
+    # Create diverse entries
+    hot_entry = create_test_kv_entry(num_tokens=64)
+    hot_entry.priority_tier = PriorityTier.HOT
+    hot_entry.access_count = 100  # Frequently accessed
+
+    cold_entry = create_test_kv_entry(num_tokens=64)
+    cold_entry.priority_tier = PriorityTier.COLD
+    cold_entry.access_count = 1  # Rarely accessed
+
+    cache.add_entry("hot-1", hot_entry)
+    cache.add_entry("cold-1", cold_entry)
+
+    # Fill cache beyond soft limit
+    for i in range(50):
+        entry = create_test_kv_entry(num_tokens=128)
+        entry.priority_tier = PriorityTier.WARM
+        entry.access_count = 10
+        cache.add_entry(f"warm-{i}", entry)
+
+    # Force eviction
+    cache.evict_to_soft_limit()
+
+    # Verify: HOT entry retained, COLD entry evicted
+    assert cache.get_entry_raw("hot-1") is not None, "HOT entry should be retained"
+    assert cache.get_entry_raw("cold-1") is None, "COLD entry should be evicted"
+    metrics_check("Priority tiers respected in eviction order")
+
+@test("memory stays under soft limit after eviction")
+async def _(cache=kv_cache_with_compression):
+    # Fill cache with 200 entries (will exceed soft limit)
+    for i in range(200):
+        entry = create_test_kv_entry(num_tokens=128)
+        entry.priority_tier = random.choice(list(PriorityTier))
+        entry.access_count = random.randint(1, 100)
+        cache.add_entry(f"entry-{i}", entry)
+
+    # Force eviction
+    cache.evict_to_soft_limit()
+
+    # Verify size constraint
+    current_size = cache.current_size_bytes
+    soft_limit = cache.soft_limit_bytes
+    assert current_size <= soft_limit, \
+        f"Cache size {current_size} exceeds soft limit {soft_limit}"
+    metrics_check(f"Cache size: {current_size / 1024 / 1024:.1f}MB (limit: {soft_limit / 1024 / 1024:.0f}MB)")
+```
+
+### 6.3 Integration Test: Thermal-Aware Eviction (Issue 3.2 integration)
+
+```python
+@test("thermal state affects eviction priority")
+async def _(cache=kv_cache_with_compression):
+    # Create entries with priority tracking
+    entry_cool = create_test_kv_entry(num_tokens=64)
+    entry_cool.priority_tier = PriorityTier.COLD
+    entry_cool.access_count = 5
+
+    entry_hot = create_test_kv_entry(num_tokens=64)
+    entry_hot.priority_tier = PriorityTier.COLD
+    entry_hot.access_count = 5  # Same access count
+
+    cache.add_entry("cold-device", entry_cool)
+    cache.add_entry("hot-device", entry_hot)
+
+    # Eviction with COOL device (aggressive)
+    cache.evict_to_soft_limit(thermal_state="COOL")
+    evicted_cool = cache.get_entry_raw("cold-device") is None
+
+    # Eviction with CRITICAL device (conservative)
+    cache.evict_to_soft_limit(thermal_state="CRITICAL")
+    evicted_critical = cache.get_entry_raw("hot-device") is None
+
+    # Different thermal states lead to different eviction decisions
+    assert evicted_cool != evicted_critical, \
+        "Thermal state should affect eviction decisions"
+    metrics_check("Thermal-aware eviction working correctly")
+```
+
+---
+
+## 7. Monitoring & Observability
+
+### 7.1 Key Metrics to Track
+
+```yaml
+Compression Metrics:
+  - kv_cache_compressions_total (by type: ZSTD, LZ4)
+  - kv_cache_compression_latency_ms (histogram, by type)
+  - kv_cache_decompression_latency_ms (histogram)
+  - kv_cache_decompressions_total
+
+Eviction Metrics:
+  - kv_cache_evictions_total (by tier: COLD, WARM, HOT)
+  - kv_cache_bytes_freed_total
+  - kv_cache_current_size_bytes
+  - kv_cache_entries (by tier)
+  - kv_cache_memory_utilization_percent
+
+Performance Metrics:
+  - kv_cache_hit_rate (by tier)
+  - kv_cache_compression_ratio_percent
+  - orchestrator_3phase_latency_ms (downstream impact)
+
+Thermal Integration Metrics:
+  - kv_cache_evictions_by_thermal_state
+  - kv_cache_priority_adjustment_factor (thermal)
+```
+
+### 7.2 Alerting Rules
+
+```yaml
+# Alert if cache hit rate drops below target
+- alert: KVCacheHitRateLow
+  expr: kv_cache_hit_rate < 0.75
+  for: 5m
+  annotations:
+    summary: "KV cache hit rate {{ $value | humanizePercentage }} below target 75%"
+
+# Alert if decompression latency exceeds budget
+- alert: KVCacheDecompressionSlow
+  expr: histogram_quantile(0.95, kv_cache_decompression_latency_ms) > 5.0
+  for: 2m
+  annotations:
+    summary: "KV cache P95 decompression {{ $value }}ms exceeds 5ms budget"
+
+# Alert if memory limit exceeded
+- alert: KVCacheMemoryExceeded
+  expr: kv_cache_memory_utilization_percent > 100
+  for: 1m
+  annotations:
+    summary: "KV cache utilizing {{ $value }}% of hard limit"
+```
+
+---
+
+## 8. References
+
+### 8.1 Research
+
+- **Xia et al. (2023)** - "LLMLite: The Slim But Mighty Function Calling LLM" (SOSP 2023)
+  - KV cache compression techniques for transformer models
+  - 25-35% compression ratios for attention data
+
+- **Corbato & Graham (1966)** - "Multics Protection, Mechanisms and Languages" (History of Programming Languages)
+  - Priority-based cache replacement foundations
+
+- **Hennessy & Patterson (2017)** - "Computer Architecture: A Quantitative Approach" (6th ed.)
+  - Cache replacement policies and eviction strategies
+
+### 8.2 Related ADRs
+
+- ADR 0025: KV Cache Management (foundational)
+- ADR 0026: Thermal Hysteresis Matrix (thermal integration)
+- ADR 0075: Layer 5 Extensibility Framework (extension point)
+- ADR 0013a: Schema Version Registry (schema updates)
+
+### 8.3 Issues
+
+- Issue 3.1.1: Cache Entry Compression (ZSTD vs LZ4)
+- Issue 3.1.2: Cache Eviction Policy (LRU + priority)
+
+---
+
+## 9. Approval & Sign-off
+
+**Status**: Proposed
+**Architecture Review**: Pending
+**Implementation Lead**: TBD
+**Thermal Integration (ADR 0026)**: Pending review
+**Extension Point (ADR 0075)**: Pending review

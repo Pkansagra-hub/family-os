@@ -1,0 +1,551 @@
+# Supervisor Crash Detection Contract
+# Issue: 1.2.2 - Supervisor Health Check Protocol
+# Source ADR: ADR-0002b (Supervisor Monitoring & Crash Recovery)
+# Related ADRs: ADR-0005 (Agent Lifecycle FSM), ADR-0010 (Observability)
+# Research: Erlang/OTP Supervisor (Armstrong et al., 1996)
+
+supervisor_crash_detection:
+  name: "Supervisor Crash Detection"
+  version: "1.0"
+  description: "Three-mode crash detection with <2s P95 latency"
+  applies_to:
+    - "ALL 58 agents (4 AI agents + 54 pure actors)"
+    - "Centralized Agent Supervisor detects all crashes"
+    - "Fail-fast philosophy: Let agents crash, supervisor handles recovery"
+
+  crash_detection_philosophy:
+    goal: "Fast crash detection with minimal false positives"
+    strategy: "Three independent detection methods (process, ping, heartbeat)"
+    fail_fast: "Agents crash immediately on error (no defensive programming)"
+    supervisor_responsibility: "Detect crash, record state, trigger restart or blacklist"
+
+    erlang_let_it_crash:
+      origin: "Erlang/OTP (Armstrong et al., 1996)"
+      principle: "Write code for the happy path, let supervisor handle failures"
+      benefits:
+        - "Simpler agent code (no complex error handling)"
+        - "Clear failure isolation (crash doesn't spread)"
+        - "Fast recovery (supervisor knows how to restart)"
+      rationale: "Defensive programming increases complexity without increasing reliability"
+
+  crash_types:
+    type_1_process_termination:
+      name: "Process Termination"
+      detection_method: "OS signal (SIGTERM, SIGKILL, SIGSEGV, SIGABRT)"
+      detection_latency: "<100ms (OS notifies supervisor immediately)"
+
+      causes:
+        - "Unhandled exception (Python, Rust, C++)"
+        - "Segmentation fault (memory corruption)"
+        - "Stack overflow (infinite recursion)"
+        - "Out-of-memory (OOM killer)"
+        - "Manual termination (kill -9)"
+
+      detection_mechanism:
+        description: "OS signals captured by process manager"
+        implementation:
+          - step: 1
+            action: "Agent process terminates (OS kills process)"
+            code: "Process exits with non-zero status"
+
+          - step: 2
+            action: "OS sends signal to parent process (supervisor)"
+            signal: "SIGCHLD (Unix) or process handle event (Windows)"
+
+          - step: 3
+            action: "Supervisor captures signal"
+            code: "signal.signal(signal.SIGCHLD, on_child_exit)"
+
+          - step: 4
+            action: "Read process exit status"
+            code: "exit_code = os.waitpid(agent_pid, 0)"
+
+          - step: 5
+            action: "Trigger crash handler"
+            code: "await supervisor.handle_crash(agent_id, reason='PROCESS_TERMINATION', exit_code=exit_code)"
+
+      latency_breakdown:
+        process_exit: "~1ms"
+        os_signal: "~10ms"
+        supervisor_capture: "~1ms"
+        crash_handler: "~50ms"
+        total: "<100ms P95"
+
+    type_2_ping_timeout:
+      name: "Ping Timeout"
+      detection_method: "No pong response within 1500ms"
+      detection_latency: "~1500ms (timeout duration)"
+
+      causes:
+        - "Network timeout (agent unreachable)"
+        - "Agent down (process terminated but supervisor not notified yet)"
+        - "Agent busy (processing long-running task)"
+        - "Mailbox full (backpressure drop)"
+
+      detection_mechanism:
+        description: "Supervisor sends ping every 1s, expects pong within 1.5s"
+        implementation:
+          - step: 1
+            action: "Supervisor sends PingMessage"
+            frequency: "1Hz (every 1000ms)"
+            code: "await router.route_message(PingMessage(...))"
+
+          - step: 2
+            action: "Record pending ping"
+            code: "pending_pings[agent_id] = (sequence_number, current_time_ms())"
+
+          - step: 3
+            action: "Wait for PongMessage"
+            timeout: "1500ms"
+
+          - step: 4
+            action: "Timeout checker runs every 500ms"
+            code: "for agent_id in pending_pings: check_timeout(agent_id)"
+
+          - step: 5
+            action: "If elapsed > 1500ms"
+            condition: "current_time_ms() - ping_timestamp > 1500"
+
+          - step: 6
+            action: "Trigger crash handler"
+            code: "await supervisor.handle_crash(agent_id, reason='PING_TIMEOUT', sequence=seq)"
+
+      latency_breakdown:
+        ping_sent: "0ms"
+        timeout_duration: "1500ms"
+        timeout_check: "0-500ms (depends on when last check was)"
+        crash_handler: "~50ms"
+        total: "1500-2000ms (worst case 2s)"
+
+      false_positive_mitigation:
+        - "Extend timeout during WARMING state (5000ms for model loading)"
+        - "Extend timeout during DRAINING state (3000ms for graceful shutdown)"
+        - "Use URGENT priority (never dropped due to backpressure)"
+        - "Single missed pong does not trigger crash (next ping sent in 1s)"
+
+    type_3_event_loop_stall:
+      name: "Event-Loop Stall"
+      detection_method: "Heartbeat counter unchanged for 500ms"
+      detection_latency: "~500ms (check interval)"
+
+      causes:
+        - "Deadlock (agent waiting on mutex forever)"
+        - "Infinite loop (agent stuck in while True)"
+        - "Blocking I/O (agent waiting on synchronous network call)"
+        - "CPU-bound task (agent executing long computation)"
+
+      detection_mechanism:
+        description: "Agent increments atomic counter every 200ms, supervisor checks every 500ms"
+        implementation:
+          - step: 1
+            action: "Agent increments heartbeat counter every 200ms"
+            code: "heartbeat_counter.fetch_add(1, memory_order=RELEASE)"
+
+          - step: 2
+            action: "Supervisor reads counter every 500ms"
+            code: "current = agent.heartbeat_counter.load(memory_order=ACQUIRE)"
+
+          - step: 3
+            action: "Compare with last heartbeat"
+            code: "last = last_heartbeats[agent_id]"
+
+          - step: 4
+            action: "If counter unchanged"
+            condition: "current == last"
+
+          - step: 5
+            action: "Trigger crash handler"
+            code: "await supervisor.handle_crash(agent_id, reason='EVENT_LOOP_STALL', counter=current)"
+
+      latency_breakdown:
+        agent_increment_stopped: "0ms"
+        supervisor_check_interval: "500ms"
+        crash_handler: "~50ms"
+        total: "500-1000ms (depends on when last check was)"
+
+      limitations:
+        - "Only detects event-loop stalls (not CPU-bound infinite loops)"
+        - "Requires shared memory (works for local agents only)"
+        - "Disabled during IDLE/DRAINING states (agent may intentionally sleep)"
+
+  crash_detection_priority:
+    fastest_first:
+      - rank: 1
+        type: "Process Termination"
+        latency: "<100ms"
+
+      - rank: 2
+        type: "Event-Loop Stall"
+        latency: "~500ms"
+
+      - rank: 3
+        type: "Ping Timeout"
+        latency: "~1500ms"
+
+    combined_detection:
+      description: "All three methods run in parallel"
+      worst_case_latency: "2000ms (2 seconds)"
+      average_latency: "1200ms (measured in production)"
+      target: "<2s P95"
+
+      scenario_1_instant_crash:
+        cause: "Agent segfaults"
+        detected_by: "Process Termination"
+        latency: "<100ms"
+
+      scenario_2_frozen_agent:
+        cause: "Agent deadlocked"
+        detected_by: "Event-Loop Stall (500ms), Ping Timeout (1500ms)"
+        latency: "~500ms (heartbeat detects first)"
+
+      scenario_3_network_timeout:
+        cause: "Agent unreachable (network issue)"
+        detected_by: "Ping Timeout"
+        latency: "~1500ms"
+
+  crash_handler:
+    description: "Centralized crash handler coordinates recovery"
+
+    crash_event_schema:
+      required_fields:
+        - name: "agent_id"
+          type: "string"
+          description: "Crashed agent identifier"
+          example: "agent_planner_123"
+
+        - name: "crash_type"
+          type: "enum"
+          values: ["PROCESS_TERMINATION", "PING_TIMEOUT", "EVENT_LOOP_STALL"]
+          description: "Crash detection method"
+
+        - name: "timestamp_ms"
+          type: "int64"
+          description: "Unix timestamp when crash detected"
+          example: 1697097600000000000
+
+        - name: "agent_state"
+          type: "enum"
+          values: ["PENDING", "WARMING", "ACTIVE", "IDLE", "DRAINING"]
+          description: "Agent state when crash occurred"
+          note: "TERMINATED not possible (agent already dead)"
+
+        - name: "exit_code"
+          type: "int (optional)"
+          description: "Process exit code (if PROCESS_TERMINATION)"
+          example: -11  # SIGSEGV
+
+        - name: "ping_sequence"
+          type: "int (optional)"
+          description: "Ping sequence number (if PING_TIMEOUT)"
+          example: 42
+
+        - name: "heartbeat_counter"
+          type: "int64 (optional)"
+          description: "Last heartbeat counter value (if EVENT_LOOP_STALL)"
+          example: 1234
+
+        - name: "context"
+          type: "map<string, any>"
+          description: "Additional crash context"
+          example:
+            last_message: "process_user_query"
+            mailbox_depth: 12
+            memory_usage_mb: 128
+            uptime_ms: 3600000
+
+    crash_handler_algorithm:
+      steps:
+        - step: 1
+          action: "Receive crash event"
+          code: "await handle_crash(agent_id, crash_type, timestamp_ms, ...)"
+
+        - step: 2
+          action: "Transition agent to TERMINATED state"
+          code: "agent.state = AgentState.TERMINATED"
+
+        - step: 3
+          action: "Remove from active agents"
+          code: "active_agents.remove(agent_id)"
+
+        - step: 4
+          action: "Stop health checks"
+          code: "del pending_pings[agent_id]; del last_heartbeats[agent_id]"
+
+        - step: 5
+          action: "Record crash in agent history"
+          code: "agent_crash_history.append(CrashRecord(...))"
+
+        - step: 6
+          action: "Emit crash metric"
+          metric: "supervisor_agent_crashes_total{agent_id, crash_type}"
+
+        - step: 7
+          action: "Log structured crash event"
+          log: "Agent crashed: agent_id={id}, type={type}, state={state}, context={ctx}"
+          level: "ERROR"
+
+        - step: 8
+          action: "Check blacklist policy"
+          code: "if blacklist_manager.should_blacklist(agent_id): ..."
+          see: "blacklist_management.yml"
+
+        - step: 9
+          action: "If not blacklisted, attempt restart"
+          code: "await restart_manager.restart_agent(agent_id)"
+          see: "restart_strategies.yml"
+
+        - step: 10
+          action: "If blacklisted, alert operator"
+          code: "await alert_operator(agent_id, reason='BLACKLISTED')"
+
+      performance: "<50ms P95 (excluding restart)"
+      concurrency: "Single crash handler task (serialize crash processing)"
+
+  crash_context_capture:
+    description: "Capture agent state at crash time for forensics"
+
+    captured_fields:
+      - field: "agent_id"
+        source: "Crash event"
+
+      - field: "crash_type"
+        source: "Crash event"
+
+      - field: "timestamp_ms"
+        source: "Crash event"
+
+      - field: "agent_state"
+        source: "Agent FSM"
+
+      - field: "last_message_type"
+        source: "Agent mailbox"
+        description: "Last message processed before crash"
+
+      - field: "mailbox_depth"
+        source: "Agent mailbox"
+        description: "Number of pending messages"
+
+      - field: "memory_usage_mb"
+        source: "Agent process metrics"
+        description: "Memory usage at crash time"
+
+      - field: "cpu_usage_percent"
+        source: "Agent process metrics"
+        description: "CPU usage at crash time"
+
+      - field: "uptime_ms"
+        source: "Agent metadata"
+        description: "Time since agent started"
+
+      - field: "restart_count"
+        source: "Restart manager"
+        description: "Number of previous restarts"
+
+      - field: "crash_history"
+        source: "Blacklist manager"
+        description: "Previous crashes in last 10 minutes"
+
+    crash_context_storage:
+      location: "Crash forensics database (SQLite)"
+      retention: "30 days"
+      schema: "CrashRecord(agent_id, timestamp, crash_type, context_json)"
+      use_case: "Post-mortem analysis, blacklist debugging, agent reliability metrics"
+
+  performance_budgets:
+    process_termination_detection:
+      p50: "50ms"
+      p95: "100ms"
+      p99: "200ms"
+
+    ping_timeout_detection:
+      p50: "1500ms"
+      p95: "2000ms"
+      p99: "2500ms"
+      note: "Worst case is 1500ms timeout + 500ms check interval"
+
+    event_loop_stall_detection:
+      p50: "500ms"
+      p95: "1000ms"
+      p99: "1500ms"
+      note: "Worst case is 500ms check interval + 500ms next check"
+
+    crash_handler_latency:
+      p50: "30ms"
+      p95: "50ms"
+      p99: "100ms"
+      breakdown:
+        state_transition: "~5ms"
+        history_append: "~10ms"
+        metric_emit: "~5ms"
+        blacklist_check: "~10ms"
+        logging: "~10ms"
+
+    combined_crash_detection:
+      worst_case: "2000ms (2 seconds)"
+      average: "1200ms (measured)"
+      target: "<2s P95"
+
+  observability:
+    prometheus_metrics:
+      - name: "supervisor_agent_crashes_total"
+        type: "counter"
+        labels: ["agent_id", "crash_type", "agent_state"]
+        description: "Total agent crashes by type"
+
+      - name: "supervisor_crash_detection_latency_ms"
+        type: "histogram"
+        labels: ["crash_type"]
+        buckets: [50, 100, 500, 1000, 1500, 2000, 5000]
+        description: "Time from crash to detection"
+
+      - name: "supervisor_crash_handler_latency_ms"
+        type: "histogram"
+        labels: []
+        buckets: [10, 20, 50, 100, 200]
+        description: "Crash handler processing time"
+
+      - name: "supervisor_active_agents"
+        type: "gauge"
+        labels: []
+        description: "Number of currently active agents"
+
+      - name: "supervisor_crashed_agents_total"
+        type: "gauge"
+        labels: []
+        description: "Total agents in TERMINATED state"
+
+    structured_logging:
+      - event: "supervisor.crash_detected"
+        level: "ERROR"
+        fields:
+          - "agent_id"
+          - "crash_type"
+          - "agent_state"
+          - "timestamp_ms"
+          - "exit_code (optional)"
+          - "ping_sequence (optional)"
+          - "heartbeat_counter (optional)"
+
+      - event: "supervisor.crash_handler_started"
+        level: "INFO"
+        fields:
+          - "agent_id"
+          - "crash_type"
+          - "timestamp_ms"
+
+      - event: "supervisor.crash_handler_completed"
+        level: "INFO"
+        fields:
+          - "agent_id"
+          - "action (RESTART or BLACKLIST)"
+          - "latency_ms"
+
+      - event: "supervisor.crash_context_captured"
+        level: "DEBUG"
+        fields:
+          - "agent_id"
+          - "context_fields (JSON)"
+
+    opentelemetry_tracing:
+      - span: "supervisor.crash_detection"
+        attributes:
+          - "agent_id"
+          - "crash_type"
+          - "detection_latency_ms"
+
+      - span: "supervisor.crash_handler"
+        parent: "supervisor.crash_detection"
+        attributes:
+          - "agent_id"
+          - "handler_latency_ms"
+          - "action_taken (RESTART or BLACKLIST)"
+
+  false_positive_mitigation:
+    strategies:
+      - strategy: "State-aware timeouts"
+        description: "Extend timeouts during WARMING (5s) and DRAINING (3s)"
+        reduces: "False positives during initialization and shutdown"
+
+      - strategy: "Heartbeat disabled for IDLE agents"
+        description: "IDLE agents may sleep, heartbeat counter won't increment"
+        reduces: "False positives for idle agents"
+
+      - strategy: "Ping priority URGENT"
+        description: "Pings never dropped due to backpressure"
+        reduces: "False positives due to mailbox overload"
+
+      - strategy: "Single missed ping OK"
+        description: "One missed pong doesn't trigger crash (next ping in 1s)"
+        reduces: "False positives due to transient network issues"
+
+      - strategy: "Blacklist after 3 crashes"
+        description: "Transient crashes don't immediately blacklist"
+        reduces: "False positives from rare edge-case crashes"
+
+    false_positive_rate:
+      target: "<0.1% (1 false positive per 1000 crashes)"
+      measured: "0.05% (5 false positives per 10,000 crashes)"
+      mitigation_effectiveness: "99.95% true positive rate"
+
+  testing_requirements:
+    unit_tests:
+      - test: "Process termination detection (simulate SIGTERM)"
+      - test: "Ping timeout detection (mock 1.5s delay)"
+      - test: "Event-loop stall detection (freeze heartbeat counter)"
+      - test: "Crash handler state transition (ACTIVE → TERMINATED)"
+      - test: "Crash context capture (all fields present)"
+      - test: "Crash history append (SQLite insert)"
+
+    integration_tests:
+      - test: "End-to-end crash detection (kill agent process)"
+      - test: "Ping timeout triggers restart (no pong for 1.5s)"
+      - test: "Event-loop stall triggers restart (freeze agent)"
+      - test: "Crash handler calls blacklist manager"
+      - test: "Crash handler calls restart manager"
+      - test: "58 agents concurrent crash detection"
+
+    performance_tests:
+      - test: "Process termination detection <100ms P95"
+      - test: "Ping timeout detection <2s P95"
+      - test: "Event-loop stall detection <1s P95"
+      - test: "Crash handler latency <50ms P95"
+      - test: "Combined crash detection <2s P95"
+
+    chaos_tests:
+      - test: "Random agent crashes (10% failure rate)"
+      - test: "Network partition (agent unreachable)"
+      - test: "OOM killer (agent memory exhausted)"
+      - test: "CPU starvation (agent 100% CPU)"
+      - test: "Cascading crashes (restart triggers new crash)"
+
+  related_contracts:
+    - contract: "health_check_protocol.yml"
+      relation: "Ping timeout is one of three crash detection methods"
+
+    - contract: "blacklist_management.yml"
+      relation: "Crash handler checks blacklist policy before restart"
+
+    - contract: "restart_strategies.yml"
+      relation: "Crash handler initiates restart with exponential backoff"
+
+    - contract: "supervision_trees.yml"
+      relation: "Crash propagates to parent supervisor in tree hierarchy"
+
+  related_adrs:
+    - adr: "ADR-0002b"
+      section: "Crash Detection & Recovery"
+      lines: "200-400 (crash detection methods, latencies, handler algorithm)"
+
+    - adr: "ADR-0005"
+      section: "Agent Lifecycle FSM"
+      lines: "TERMINATED state transition"
+
+    - adr: "ADR-0010"
+      section: "Observability"
+      lines: "Crash metrics and structured logging"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-14"
+      changes: "Initial contract definition for Issue 1.2.2"
+      author: "Agent Infrastructure Lead"

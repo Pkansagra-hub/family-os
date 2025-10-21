@@ -1,0 +1,15 @@
+[Unit]
+Description=FamilyOS Compose Stack (%i)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory={{ familyos_compose_root }}
+RemainAfterExit=yes
+ExecStart={{ familyos_docker_compose_bin }} compose{% for file in familyos_compose_files %} -f {{ familyos_compose_root }}/{{ file }}{% endfor %} -p {{ familyos_compose_project }} up -d
+ExecStop={{ familyos_docker_compose_bin }} compose{% for file in familyos_compose_files %} -f {{ familyos_compose_root }}/{{ file }}{% endfor %} -p {{ familyos_compose_project }} down
+ExecReload={{ familyos_docker_compose_bin }} compose{% for file in familyos_compose_files %} -f {{ familyos_compose_root }}/{{ file }}{% endfor %} -p {{ familyos_compose_project }} up -d
+
+[Install]
+WantedBy={{ familyos_systemd_wanted_by }}

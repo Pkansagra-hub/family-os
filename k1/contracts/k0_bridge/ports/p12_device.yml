@@ -1,0 +1,650 @@
+# P12 Device - MLS Encryption & Device Management Pipeline
+# Port: P12 (K1 ↔ K0 device operations)
+# Command semantics: Device registration, key rotation, MLS group management
+# Performance budget: 100ms P95, 500ms timeout
+
+version: "1.0"
+port_id: "P12"
+port_name: "Device"
+direction: "BIDIRECTIONAL"
+semantics: "command"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0083"  # MLS Encryption Framework
+  - "ADR-0084"  # Device Key Management
+  - "ADR-0085"  # HSM/TEE Integration
+  - "ADR-0086"  # Forward Secrecy & Ratcheting
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P12"
+      description: "Port identifier for device operations"
+
+    command_type:
+      type: string
+      enum: ["register_device", "rotate_keys", "join_mls_group", "leave_mls_group", "attest_device", "revoke_device"]
+      required: true
+      description: |
+        Device operation type:
+        - register_device: Initial device registration with identity key
+        - rotate_keys: Rotate device keys (forward secrecy)
+        - join_mls_group: Add device to MLS encryption group
+        - leave_mls_group: Remove device from MLS group
+        - attest_device: HSM/TEE attestation for security validation
+        - revoke_device: Revoke device credentials
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for device operations"
+
+    capability:
+      type: string
+      value: "MANAGE_DEVICES"
+      required: true
+      description: "Required K0 capability for device management"
+
+  payload:
+    device_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Device identifier (persistent across key rotations)"
+      example: "device_abc123"
+
+    device_info:
+      type: object
+      required: false
+      description: "Device metadata (for register_device)"
+      properties:
+        device_type:
+          type: string
+          enum: ["mobile", "desktop", "tablet", "watch", "web"]
+
+        os:
+          type: string
+          example: "iOS 17.2"
+
+        app_version:
+          type: string
+          example: "K1-v1.0.0"
+
+        device_name:
+          type: string
+          example: "Alice's iPhone"
+
+    identity_key:
+      type: object
+      required: false
+      description: "Ed25519 identity key (for register_device)"
+      properties:
+        public_key:
+          type: string
+          format: base64
+          description: "Ed25519 public key (32 bytes)"
+
+        signature:
+          type: string
+          format: base64
+          description: "Self-signature for validation"
+
+    key_rotation:
+      type: object
+      required: false
+      description: "Key rotation parameters (for rotate_keys)"
+      properties:
+        new_identity_key:
+          type: object
+          properties:
+            public_key:
+              type: string
+              format: base64
+
+            signature:
+              type: string
+              format: base64
+
+        rotation_reason:
+          type: string
+          enum: ["scheduled", "compromise", "policy_update"]
+
+    mls_group_id:
+      type: string
+      format: uuid
+      required: false
+      description: "MLS group ID (for join_mls_group/leave_mls_group)"
+      example: "group_family123"
+
+    key_package:
+      type: object
+      required: false
+      description: "MLS KeyPackage (for join_mls_group)"
+      properties:
+        version:
+          type: string
+          value: "MLS 1.0"
+
+        cipher_suite:
+          type: string
+          enum: ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519", "MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519"]
+
+        init_key:
+          type: string
+          format: base64
+          description: "HPKE init key"
+
+        credential:
+          type: string
+          format: base64
+          description: "Device credential"
+
+        signature:
+          type: string
+          format: base64
+          description: "KeyPackage signature"
+
+    attestation:
+      type: object
+      required: false
+      description: "HSM/TEE attestation (for attest_device)"
+      properties:
+        attestation_type:
+          type: string
+          enum: ["apple_secure_enclave", "android_keystore", "windows_tpm", "hsm"]
+
+        challenge:
+          type: string
+          format: base64
+          description: "Server-issued challenge"
+
+        attestation_certificate:
+          type: string
+          format: base64
+          description: "Attestation certificate chain"
+
+        signature:
+          type: string
+          format: base64
+          description: "Challenge signature"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Device operation completed successfully"
+      payload:
+        device_id:
+          type: string
+          format: uuid
+          description: "Device identifier"
+
+        command_type:
+          type: string
+          description: "Echo of command type"
+
+        device_status:
+          type: string
+          enum: ["registered", "active", "revoked"]
+          description: "Device status after operation"
+
+        mls_group_id:
+          type: string
+          format: uuid
+          required: false
+          description: "MLS group ID (if join_mls_group)"
+
+        mls_epoch:
+          type: integer
+          required: false
+          description: "MLS group epoch after operation"
+
+        key_rotation_timestamp:
+          type: string
+          format: iso8601
+          required: false
+          description: "Key rotation timestamp (if rotate_keys)"
+
+        attestation_result:
+          type: object
+          required: false
+          description: "Attestation result (if attest_device)"
+          properties:
+            attestation_valid:
+              type: boolean
+
+            device_integrity:
+              type: string
+              enum: ["verified", "unverified", "compromised"]
+
+            hsm_backed:
+              type: boolean
+              description: "Keys stored in HSM/TEE"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "400":
+      description: "Invalid device operation"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_identity_key", "invalid_key_package", "invalid_attestation", "device_already_registered"]
+
+        details:
+          type: string
+
+    "401":
+      description: "Unauthorized - session_id invalid"
+
+    "403":
+      description: "Forbidden - insufficient capability"
+      payload:
+        required_capability:
+          type: string
+          example: "MANAGE_DEVICES"
+
+    "404":
+      description: "Device or MLS group not found"
+      payload:
+        error:
+          type: string
+          enum: ["device_not_found", "mls_group_not_found"]
+
+    "429":
+      description: "Rate limited - device operation quota exceeded"
+      payload:
+        retry_after_ms:
+          type: integer
+
+    "500":
+      description: "Device operation error"
+      payload:
+        error:
+          type: string
+          enum: ["key_generation_failed", "mls_group_error", "attestation_failed"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Register device with Ed25519 identity key"
+    request:
+      envelope:
+        port_id: "P12"
+        command_type: "register_device"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "MANAGE_DEVICES"
+      payload:
+        device_id: "device_abc123"
+        device_info:
+          device_type: "mobile"
+          os: "iOS 17.2"
+          app_version: "K1-v1.0.0"
+          device_name: "Alice's iPhone"
+        identity_key:
+          public_key: "MCowBQYDK2VwAyEA..."
+          signature: "sMGF3..."
+
+    response:
+      status: 200
+      payload:
+        device_id: "device_abc123"
+        command_type: "register_device"
+        device_status: "registered"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Join MLS group with KeyPackage"
+    request:
+      envelope:
+        port_id: "P12"
+        command_type: "join_mls_group"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_abc123"
+        privacy_band: "RED"
+        capability: "MANAGE_DEVICES"
+      payload:
+        device_id: "device_abc123"
+        mls_group_id: "group_family123"
+        key_package:
+          version: "MLS 1.0"
+          cipher_suite: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"
+          init_key: "BHHzPLp..."
+          credential: "eyJkZXZpY..."
+          signature: "jH7gT..."
+
+    response:
+      status: 200
+      payload:
+        device_id: "device_abc123"
+        command_type: "join_mls_group"
+        device_status: "active"
+        mls_group_id: "group_family123"
+        mls_epoch: 42
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Rotate keys (forward secrecy)"
+    request:
+      envelope:
+        port_id: "P12"
+        command_type: "rotate_keys"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "MANAGE_DEVICES"
+      payload:
+        device_id: "device_abc123"
+        key_rotation:
+          new_identity_key:
+            public_key: "MCowBQYDK2VwAyEA..."
+            signature: "sMGF3..."
+          rotation_reason: "scheduled"
+
+    response:
+      status: 200
+      payload:
+        device_id: "device_abc123"
+        command_type: "rotate_keys"
+        device_status: "active"
+        key_rotation_timestamp: "2025-10-18T14:32:00Z"
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+  - name: "Attest device with HSM/TEE"
+    request:
+      envelope:
+        port_id: "P12"
+        command_type: "attest_device"
+        cognitive_trace_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "MANAGE_DEVICES"
+      payload:
+        device_id: "device_abc123"
+        attestation:
+          attestation_type: "apple_secure_enclave"
+          challenge: "Y2hhbGxlbmdl..."
+          attestation_certificate: "MIIDhzCCAm+gAwIBAgIJAK..."
+          signature: "jH7gT..."
+
+    response:
+      status: 200
+      payload:
+        device_id: "device_abc123"
+        command_type: "attest_device"
+        device_status: "active"
+        attestation_result:
+          attestation_valid: true
+          device_integrity: "verified"
+          hsm_backed: true
+        receipt_id: "5b6c7d8e-9f0a-1b2c-3d4e-5f6a7b8c9d0e"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "device_identity_validation"
+      description: |
+        Validate device_id uniqueness
+        Verify identity_key signature (Ed25519)
+        Check device_info completeness
+
+    - step: "key_storage"
+      description: |
+        Store device keys in st_device_keys:
+        - identity_key (public key only)
+        - key_rotation_history
+        - attestation_status
+        Encrypt private keys in HSM/TEE if available
+
+    - step: "mls_group_management"
+      description: |
+        If command_type=join_mls_group:
+        - Validate KeyPackage (cipher suite, init key, credential)
+        - Add device to MLS group (st_mls_groups)
+        - Increment MLS epoch
+        - Distribute Welcome message
+
+        If command_type=leave_mls_group:
+        - Remove device from MLS group
+        - Increment MLS epoch
+        - Ratchet forward (forward secrecy)
+
+    - step: "key_rotation"
+      description: |
+        If command_type=rotate_keys:
+        - Validate new_identity_key signature
+        - Update st_device_keys (archive old key)
+        - Emit key_rotation event
+        - Update MLS KeyPackage if in group
+        Policy: rotate every 30 days (ADR-0084)
+
+    - step: "attestation_validation"
+      description: |
+        If command_type=attest_device:
+        - Verify attestation_certificate chain
+        - Validate challenge signature
+        - Check device_integrity (Apple Secure Enclave, Android KeyStore, Windows TPM)
+        - Update attestation_status in st_device_keys
+
+    - step: "device_revocation"
+      description: |
+        If command_type=revoke_device:
+        - Mark device as revoked in st_device_keys
+        - Remove from all MLS groups
+        - Invalidate device sessions
+        - Emit revocation event
+
+    - step: "receipt_issue"
+      description: "Issue receipt for audit trail"
+
+  storage_targets:
+    - "st_device_keys" # Device identity keys
+    - "st_mls_groups" # MLS encryption groups
+    - "st_key_rotation_log" # Key rotation history
+    - "st_attestation_log" # Attestation results
+
+  events_emitted:
+    - "device.registered"
+    - "device.key_rotated"
+    - "device.joined_mls_group"
+    - "device.left_mls_group"
+    - "device.attested"
+    - "device.revoked"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "identity_key must be valid Ed25519 public key (32 bytes)"
+  - rule: "identity_key.signature must verify with identity_key.public_key"
+  - rule: "key_package.cipher_suite must be supported MLS cipher suite"
+  - rule: "attestation.signature must verify with attestation_certificate"
+  - rule: "device_id must be unique (for register_device)"
+  - rule: "device_id must exist (for rotate_keys/join_mls_group/leave_mls_group/attest_device/revoke_device)"
+  - rule: "mls_group_id must exist (for join_mls_group/leave_mls_group)"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_device_operations_total"
+      type: "counter"
+      labels: ["command_type", "status"]
+      description: "Total device operations"
+
+    - name: "k0_device_operations_latency_ms"
+      type: "histogram"
+      labels: ["command_type"]
+      buckets: [10, 25, 50, 100, 250, 500]
+      description: "Device operation latency in milliseconds"
+
+    - name: "k0_mls_group_size"
+      type: "gauge"
+      labels: ["mls_group_id"]
+      description: "Number of devices in MLS group"
+
+    - name: "k0_mls_epochs_total"
+      type: "counter"
+      labels: ["mls_group_id"]
+      description: "Total MLS epoch increments (key rotations)"
+
+    - name: "k0_attestation_results_total"
+      type: "counter"
+      labels: ["attestation_type", "device_integrity"]
+      description: "Total attestation results"
+
+  traces:
+    span_name: "k0_device.operation"
+    attributes:
+      - "device_id"
+      - "command_type"
+      - "mls_group_id"
+      - "attestation_type"
+
+  logs:
+    - event: "device.registered"
+      level: "INFO"
+      fields: ["device_id", "device_type", "os"]
+
+    - event: "device.joined_mls_group"
+      level: "INFO"
+      fields: ["device_id", "mls_group_id", "mls_epoch"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    register_device: "100ms P95"
+    rotate_keys: "100ms P95"
+    join_mls_group: "150ms P95"
+    leave_mls_group: "50ms P95"
+    attest_device: "200ms P95" # Includes HSM/TEE round trip
+    revoke_device: "50ms P95"
+
+  throughput:
+    target_qps: 10
+    max_concurrent_requests: 50
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "MANAGE_DEVICES"
+
+  cryptography:
+    identity_key:
+      algorithm: "Ed25519"
+      key_size: "256 bits"
+
+    mls:
+      version: "MLS 1.0 (RFC 9420)"
+      cipher_suites:
+        - "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"
+        - "MLS_256_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519"
+      forward_secrecy: "Per-epoch ratcheting"
+
+    attestation:
+      supported_types:
+        - "apple_secure_enclave" # iOS Secure Enclave
+        - "android_keystore" # Android StrongBox/TEE
+        - "windows_tpm" # Windows TPM 2.0
+        - "hsm" # Hardware Security Module
+
+  key_rotation:
+    policy: "Rotate every 30 days (scheduled) or on compromise"
+    history_retention: "365 days"
+
+  audit_trail:
+    receipt_id: "Issued for all device operations"
+    retention: "7 years"
+
+# ============================================================================
+# MLS PROTOCOL DETAILS
+# ============================================================================
+
+mls_protocol:
+  version: "MLS 1.0 (RFC 9420)"
+
+  operations:
+    add_member:
+      description: "Add device to MLS group (join_mls_group)"
+      messages: ["Welcome", "Commit"]
+      epoch_increment: true
+
+    remove_member:
+      description: "Remove device from MLS group (leave_mls_group, revoke_device)"
+      messages: ["Commit"]
+      epoch_increment: true
+
+    update_key:
+      description: "Rotate device key (rotate_keys)"
+      messages: ["Update", "Commit"]
+      epoch_increment: true
+
+  forward_secrecy:
+    mechanism: "TreeKEM ratcheting (per-epoch key derivation)"
+    guarantees: "Past communications secure even if device compromised"
+
+  post_compromise_security:
+    mechanism: "Update operations refresh key material"
+    guarantees: "Future communications secure after device recovery"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Barnes, R., et al. (2023). The Messaging Layer Security (MLS) Protocol. RFC 9420."
+    url: "https://www.rfc-editor.org/rfc/rfc9420"
+    relevance: "MLS protocol specification"
+
+  - citation: "Bernstein, D. J., et al. (2012). High-speed high-security signatures. Journal of Cryptographic Engineering."
+    url: "https://ed25519.cr.yp.to/ed25519-20110926.pdf"
+    relevance: "Ed25519 signature algorithm"
+
+  - citation: "Apple. (2023). Secure Enclave Security Guide."
+    url: "https://support.apple.com/guide/security/secure-enclave-sec59b0b31ff"
+    relevance: "Hardware-backed key storage"

@@ -1,0 +1,34 @@
+{
+  "$id": "sse.ack.request.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "subscriber_id",
+    "topic",
+    "space_id",
+    "tenant_id",
+    "offset"
+  ],
+  "properties": {
+    "subscriber_id": {
+      "type": "string"
+    },
+    "topic": {
+      "type": "string"
+    },
+    "space_id": {
+      "type": "string"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ack_ts": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

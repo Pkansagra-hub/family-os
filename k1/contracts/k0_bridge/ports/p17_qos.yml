@@ -1,0 +1,566 @@
+# P17 QoS - Quality of Service & Cost Governance Pipeline
+# Port: P17 (K1 → K0 QoS queries/enforcement)
+# Query/Enforcement semantics: Budget queries, rate limiting, cost tracking
+# Performance budget: 15ms P95, 50ms timeout
+
+version: "1.0"
+port_id: "P17"
+port_name: "QoS"
+direction: "K1_TO_K0"
+semantics: "query_enforcement"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0140"  # QoS Scheduler (W-DRR)
+  - "ADR-0141"  # Cost Tracking & Budgets
+  - "ADR-0142"  # Rate Limiting Strategy
+  - "ADR-0143"  # Backpressure Cascade
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P17"
+      description: "Port identifier for QoS operations"
+
+    command_type:
+      type: string
+      enum: ["qos_query", "qos_enforcement_check"]
+      required: true
+      description: |
+        QoS operation type:
+        - qos_query: Query budget/cost status
+        - qos_enforcement_check: Check if operation allowed (pre-request validation)
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for QoS priority weighting"
+
+    capability:
+      type: string
+      value: "QUERY_QOS_BUDGETS"
+      required: true
+      description: "Required K0 capability for QoS queries"
+
+  payload:
+    query_type:
+      type: string
+      enum: ["budget_remaining", "rate_limits", "cost_breakdown", "scheduler_status"]
+      required: true
+      description: |
+        QoS query type:
+        - budget_remaining: Per-port token budgets remaining
+        - rate_limits: Per-session rate limit status
+        - cost_breakdown: LLM/storage/compute cost breakdown
+        - scheduler_status: W-DRR scheduler state
+
+    time_window:
+      type: string
+      enum: ["current_hour", "current_day", "current_month"]
+      default: "current_hour"
+      description: "Time window for budget/cost queries"
+
+    target_port:
+      type: string
+      required: false
+      description: "Target port for enforcement check (P01-P20)"
+      example: "P01"
+
+    operation_cost:
+      type: object
+      required: false
+      description: "Operation cost estimate (for qos_enforcement_check)"
+      properties:
+        tokens:
+          type: integer
+          description: "Operation token cost"
+
+        llm_cost_usd:
+          type: number
+          description: "LLM API cost (USD)"
+
+        compute_ms:
+          type: integer
+          description: "Compute time estimate (ms)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "QoS query successful"
+      payload:
+        query_type:
+          type: string
+          description: "Echo of query type"
+
+        budgets:
+          type: object
+          required: false
+          description: "Per-port token budgets (if query_type=budget_remaining)"
+          additionalProperties:
+            type: object
+            properties:
+              tokens_remaining:
+                type: integer
+                description: "Tokens remaining in budget"
+
+              tokens_total:
+                type: integer
+                description: "Total budget allocation"
+
+              refresh_time:
+                type: string
+                format: iso8601
+                description: "Next budget refresh timestamp"
+
+        rate_limits:
+          type: object
+          required: false
+          description: "Per-session rate limits (if query_type=rate_limits)"
+          properties:
+            requests_remaining:
+              type: integer
+              description: "Requests remaining in time window"
+
+            requests_total:
+              type: integer
+              description: "Total request limit"
+
+            window_reset_time:
+              type: string
+              format: iso8601
+              description: "Rate limit window reset time"
+
+        costs:
+          type: object
+          required: false
+          description: "Cost breakdown (if query_type=cost_breakdown)"
+          properties:
+            llm_cost_usd:
+              type: number
+              description: "LLM API costs (USD)"
+
+            storage_cost_usd:
+              type: number
+              description: "Storage costs (USD)"
+
+            compute_cost_usd:
+              type: number
+              description: "Compute costs (USD)"
+
+            total_cost_usd:
+              type: number
+              description: "Total costs (USD)"
+
+        scheduler_status:
+          type: object
+          required: false
+          description: "W-DRR scheduler state (if query_type=scheduler_status)"
+          properties:
+            active_ports:
+              type: array
+              items:
+                type: string
+              description: "Currently active ports"
+
+            queue_depths:
+              type: object
+              description: "Per-port queue depths"
+              additionalProperties:
+                type: integer
+
+            band_weights:
+              type: object
+              description: "Priority weights by band (GREEN: 3, AMBER: 2, RED: 1)"
+
+        enforcement_allowed:
+          type: boolean
+          required: false
+          description: "True if operation allowed (if command_type=qos_enforcement_check)"
+
+        enforcement_reason:
+          type: string
+          required: false
+          enum: ["budget_available", "budget_exceeded", "rate_limited", "backpressure"]
+          description: "Enforcement decision reason"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "429":
+      description: "Rate limited - QoS quota exceeded"
+      payload:
+        error:
+          type: string
+          value: "rate_limited"
+
+        retry_after_ms:
+          type: integer
+          description: "Milliseconds until retry allowed"
+
+        limit_type:
+          type: string
+          enum: ["port_budget", "session_rate_limit", "cost_budget"]
+
+    "509":
+      description: "Bandwidth limit exceeded - budget exhausted"
+      payload:
+        error:
+          type: string
+          value: "budget_exceeded"
+
+        budget_type:
+          type: string
+          enum: ["token_budget", "cost_budget", "storage_budget"]
+
+    "500":
+      description: "QoS system error"
+      payload:
+        error:
+          type: string
+          enum: ["scheduler_error", "budget_tracking_error"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Query remaining token budgets"
+    request:
+      envelope:
+        port_id: "P17"
+        command_type: "qos_query"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_QOS_BUDGETS"
+      payload:
+        query_type: "budget_remaining"
+        time_window: "current_hour"
+
+    response:
+      status: 200
+      payload:
+        query_type: "budget_remaining"
+        budgets:
+          P01:
+            tokens_remaining: 750
+            tokens_total: 1000
+            refresh_time: "2025-10-18T15:00:00Z"
+          P02:
+            tokens_remaining: 200
+            tokens_total: 500
+            refresh_time: "2025-10-18T15:00:00Z"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Query cost breakdown for current month"
+    request:
+      envelope:
+        port_id: "P17"
+        command_type: "qos_query"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_QOS_BUDGETS"
+      payload:
+        query_type: "cost_breakdown"
+        time_window: "current_month"
+
+    response:
+      status: 200
+      payload:
+        query_type: "cost_breakdown"
+        costs:
+          llm_cost_usd: 15.43
+          storage_cost_usd: 2.10
+          compute_cost_usd: 0.87
+          total_cost_usd: 18.40
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Check enforcement before expensive operation"
+    request:
+      envelope:
+        port_id: "P17"
+        command_type: "qos_enforcement_check"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_QOS_BUDGETS"
+      payload:
+        query_type: "budget_remaining"
+        target_port: "P08"
+        operation_cost:
+          tokens: 50
+          llm_cost_usd: 0.05
+          compute_ms: 5000
+
+    response:
+      status: 200
+      payload:
+        enforcement_allowed: true
+        enforcement_reason: "budget_available"
+        budgets:
+          P08:
+            tokens_remaining: 100
+            tokens_total: 500
+            refresh_time: "2025-10-18T15:00:00Z"
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "budget_query"
+      description: |
+        Query st_qos_budgets for session/port budgets:
+        - tokens_remaining per port (P01-P20)
+        - tokens_total (hourly/daily/monthly allocation)
+        - refresh_time (next replenishment)
+
+    - step: "usage_tracking"
+      description: |
+        Query st_qos_usage for consumption history:
+        - tokens_consumed per port
+        - costs_usd (LLM, storage, compute)
+        - time-windowed aggregation
+
+    - step: "rate_limit_check"
+      description: |
+        Check session rate limits:
+        - requests_per_minute (per session)
+        - requests_per_hour (per session)
+        - requests_per_day (per session)
+
+    - step: "cost_aggregation"
+      description: |
+        Aggregate costs by category:
+        - LLM API costs (OpenAI, Anthropic, etc.)
+        - Storage costs (SQLite, FAISS indices)
+        - Compute costs (CPU/GPU time)
+
+    - step: "scheduler_state_query"
+      description: |
+        Query W-DRR scheduler:
+        - active_ports (currently scheduled)
+        - queue_depths (pending requests per port)
+        - band_weights (GREEN: 3, AMBER: 2, RED: 1)
+        - deficit_counters (W-DRR state)
+
+    - step: "enforcement_decision"
+      description: |
+        If command_type=qos_enforcement_check:
+        - Compare operation_cost vs budgets
+        - Check rate limits
+        - Apply backpressure if high load
+        - Return enforcement_allowed (true/false)
+
+  storage_targets:
+    - "st_qos_budgets" # Budget allocations
+    - "st_qos_usage" # Consumption history
+    - "st_qos_rate_limits" # Rate limit tracking
+    - "st_qos_costs" # Cost breakdown
+
+  events_emitted:
+    - "infra.qos.budget_queried"
+    - "infra.qos.budget_exceeded"
+    - "infra.qos.rate_limited"
+    - "infra.qos.cost_threshold_reached"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "query_type must be [budget_remaining|rate_limits|cost_breakdown|scheduler_status]"
+  - rule: "time_window must be [current_hour|current_day|current_month]"
+  - rule: "if command_type=qos_enforcement_check then target_port required"
+  - rule: "if target_port provided then must be valid port (P01-P20)"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_qos_tokens_consumed_total"
+      type: "counter"
+      labels: ["port_id", "privacy_band"]
+      description: "Total tokens consumed per port"
+
+    - name: "k0_qos_budget_exceeded_total"
+      type: "counter"
+      labels: ["port_id", "budget_type"]
+      description: "Total budget exceeded events"
+
+    - name: "k0_qos_rate_limited_total"
+      type: "counter"
+      labels: ["session_id", "limit_type"]
+      description: "Total rate limit events"
+
+    - name: "k0_costs_usd_total"
+      type: "counter"
+      labels: ["cost_category"]
+      description: "Total costs in USD (llm, storage, compute)"
+
+    - name: "k0_qos_scheduler_latency_ms"
+      type: "histogram"
+      buckets: [1, 5, 10, 15, 25, 50]
+      description: "W-DRR scheduler decision latency"
+
+  traces:
+    span_name: "k0_qos.query"
+    attributes:
+      - "query_type"
+      - "session_id"
+      - "privacy_band"
+
+  logs:
+    - event: "infra.qos.budget_exceeded"
+      level: "WARN"
+      fields: ["session_id", "port_id", "budget_type"]
+
+    - event: "infra.qos.rate_limited"
+      level: "WARN"
+      fields: ["session_id", "limit_type", "retry_after_ms"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "8ms"
+    p95: "15ms"
+    p99: "30ms"
+    timeout: "50ms"
+
+  throughput:
+    target_qps: 500
+    max_concurrent_requests: 2000
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "QUERY_QOS_BUDGETS"
+
+  audit_trail:
+    receipt_id: "Issued for all QoS queries"
+    retention: "365 days"
+
+# ============================================================================
+# QOS BANDS & PRIORITY WEIGHTS
+# ============================================================================
+
+qos_bands:
+  GREEN:
+    priority_weight: 3
+    description: "High priority - standard operations"
+    token_budget_multiplier: 1.0
+
+  AMBER:
+    priority_weight: 2
+    description: "Medium priority - reduced budgets"
+    token_budget_multiplier: 0.5
+
+  RED:
+    priority_weight: 1
+    description: "Low priority - strict budgets, first to shed under load"
+    token_budget_multiplier: 0.25
+
+# ============================================================================
+# BUDGET TYPES
+# ============================================================================
+
+budget_types:
+  token_budgets:
+    description: "Per-port operation limits"
+    examples:
+      - "P01 (recall): 1000 tokens/hour"
+      - "P02 (memory_write): 500 tokens/hour"
+      - "P08 (embedding): 100 tokens/hour"
+
+  cost_budgets:
+    description: "Dollar limits for API calls"
+    examples:
+      - "LLM API: $10/day"
+      - "Storage: $5/month"
+      - "Compute: $2/day"
+
+  storage_budgets:
+    description: "Memory storage limits"
+    examples:
+      - "1GB per session"
+      - "10GB per family group"
+
+  compute_budgets:
+    description: "CPU/GPU time limits"
+    examples:
+      - "60s/day for embeddings"
+      - "30s/day for ML inference"
+
+# ============================================================================
+# W-DRR SCHEDULER
+# ============================================================================
+
+wdrr_scheduler:
+  algorithm: "Weighted Deficit Round-Robin"
+  description: "Fair scheduling with priority weights"
+
+  operation:
+    - "Each privacy band has weight (GREEN: 3, AMBER: 2, RED: 1)"
+    - "Each port maintains deficit counter"
+    - "Serve requests in round-robin, increment deficit by weight"
+    - "Serve until deficit >= packet size"
+    - "Fair long-term, priority short-term"
+
+  backpressure_cascade:
+    high_load: "Throttle AMBER band"
+    extreme_load: "Shed RED band (deny requests)"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Shreedhar, M., & Varghese, G. (1996). Efficient Fair Queuing Using Deficit Round-Robin. IEEE/ACM Transactions on Networking."
+    url: "https://doi.org/10.1109/90.502236"
+    relevance: "Deficit Round-Robin scheduling algorithm"
+
+  - citation: "Welsh, M., et al. (2001). SEDA: An Architecture for Well-Conditioned, Scalable Internet Services. SOSP 2001."
+    url: "https://dl.acm.org/doi/10.1145/502034.502057"
+    relevance: "Staged event-driven architecture with load shedding"

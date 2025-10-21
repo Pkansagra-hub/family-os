@@ -1,0 +1,352 @@
+# Barge-In Signal Contract
+# FlatBuffers Schema: BargeInSignal.fbs
+# Purpose: Define interrupt signal from user to orchestrator
+# ADR Reference: ADR-0003b (Protocols), ADR-0016 (FlatBuffers), ADR-0046 (Barge-In Fast-Path)
+# Latency Target: <5ms to receive and validate signal
+
+---
+barge_in_signal:
+  name: "BargeInSignal"
+  version: "1.0"
+  description: "User interrupt signal during agent task execution"
+
+  # ===== Core Fields =====
+  fields:
+    # Message ID and Correlation
+    - name: "signal_id"
+      type: "string"
+      description: "Unique UUID v4 for this barge-in signal"
+      required: true
+      example: "bi_550e8400-e29b-41d4-a716-446655440000"
+      observability: "indexed_in_k0"
+
+    - name: "cognitive_trace_id"
+      type: "string"
+      description: "Distributed trace ID for end-to-end tracing"
+      required: true
+      example: "trace_7f3e8c1a-9b2d-4e5c-b1f6-2a3d4e5f6a7b"
+      observability: "trace_correlation"
+      critical_path: true
+
+    - name: "interrupt_session_id"
+      type: "string"
+      description: "Session in which interrupt occurred"
+      required: true
+      example: "session_12345678"
+      observability: "indexed_in_k0"
+      security_check: "session_id must match user's current session"
+
+    - name: "interrupted_turn_id"
+      type: "string"
+      description: "Which turn/task is being interrupted"
+      required: true
+      example: "turn_abc123"
+      observability: "indexed_in_k0"
+
+    - name: "interrupted_agent_id"
+      type: "string"
+      description: "Which agent is being interrupted"
+      required: true
+      enum: ["concierge", "planner", "researcher", "safety_watch", "orchestrator"]
+      example: "planner"
+      observability: "metric_tag"
+
+    # Interrupt Reason
+    - name: "reason"
+      type: "string"
+      description: "Why user is interrupting"
+      required: true
+      enum: ["STOP", "NEW_INPUT", "RECONSIDER", "CLARIFICATION", "OTHER"]
+      example: "NEW_INPUT"
+      observability: "metric_tag"
+
+    - name: "reason_detail"
+      type: "string"
+      description: "Additional context about interrupt reason"
+      required: false
+      max_length: 200
+      example: "User wants to ask a followup question"
+
+    # Force Mode
+    - name: "force_mode"
+      type: "string"
+      description: "How aggressively to interrupt"
+      required: false
+      enum: ["graceful", "immediate"]
+      default: "graceful"  # Most interrupts are graceful
+      observability: "metric_tag"
+      logic: "STOP → immediate, NEW_INPUT → graceful, RECONSIDER → graceful"
+
+    - name: "force_timeout_ms"
+      type: "int32"
+      description: "Override timeout for drain (graceful only)"
+      required: false
+      min_value: 100
+      max_value: 5000
+      example: 500
+      observability: "metric_by_timeout_bucket"
+
+    # New Input (if reason == NEW_INPUT)
+    - name: "new_input"
+      type: "string"
+      description: "New input from user (when interrupting with new request)"
+      required: false
+      max_length: 5000
+      example: "Actually, let me try Thai restaurants instead"
+      condition: "reason == NEW_INPUT"
+      observability: "logged_with_pii_redaction"
+
+    - name: "new_input_tokens"
+      type: "int32"
+      description: "Estimated tokens in new input (for routing)"
+      required: false
+      example: 15
+      observability: "metric_by_token_bucket"
+
+    # User Context
+    - name: "user_id"
+      type: "string"
+      description: "Which user is interrupting"
+      required: true
+      example: "user_abc123"
+      observability: "indexed_in_k0"
+      security_check: "must match session user_id"
+
+    - name: "device_id"
+      type: "string"
+      description: "Which device sent interrupt"
+      required: true
+      example: "device_web_browser_abc123"
+      observability: "indexed_in_k0"
+
+    - name: "client_version"
+      type: "string"
+      description: "Client application version"
+      required: false
+      example: "web_app_v2.1"
+
+    # Timestamps
+    - name: "timestamp_ms"
+      type: "int64"
+      description: "When user clicked interrupt (client timestamp)"
+      required: true
+      example: 1697379950000
+      observability: "timestamp_indexed"
+      notes: "Client timestamp, may drift from server"
+
+    - name: "received_at_ms"
+      type: "int64"
+      description: "When orchestrator received signal (server timestamp)"
+      required: false
+      example: 1697379950050
+      observability: "computed_by_server"
+      validation: "must be >= timestamp_ms"
+
+    # Priority and Urgency
+    - name: "priority"
+      type: "string"
+      description: "Interrupt priority"
+      required: false
+      enum: ["URGENT", "HIGH", "NORMAL"]
+      default: "HIGH"
+      observability: "metric_tag"
+      logic: "STOP reason → URGENT, others → HIGH"
+
+    # Context About Interrupted State
+    - name: "interrupting_from_state"
+      type: "string"
+      description: "What state was agent in when interrupted"
+      required: false
+      enum: ["streaming_response", "executing_tool", "planning", "waiting", "unknown"]
+      example: "streaming_response"
+      observability: "metric_tag"
+
+    - name: "estimated_remaining_work_ms"
+      type: "int32"
+      description: "How long agent estimated to finish (before interrupt)"
+      required: false
+      min_value: 0
+      example: 2000
+      observability: "metric_by_remaining_work_bucket"
+
+    # Metadata
+    - name: "session_id"
+      type: "string"
+      description: "Full session ID"
+      required: true
+      example: "session_12345678"
+      observability: "indexed_in_k0"
+
+    - name: "space_id"
+      type: "string"
+      description: "Privacy space (GREEN/AMBER/RED)"
+      required: false
+      enum: ["GREEN", "AMBER", "RED", "BLACK"]
+      default: "GREEN"
+
+    - name: "source"
+      type: "string"
+      description: "Where interrupt originated"
+      required: true
+      enum: ["web_ui", "mobile_app", "voice_command", "api", "system"]
+      example: "web_ui"
+      observability: "metric_tag"
+
+    # Security
+    - name: "authentication_token"
+      type: "string"
+      description: "Session token for validation"
+      required: true
+      example: "tok_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      security_critical: true
+      observability: "not_logged"
+
+    - name: "signature"
+      type: "string"
+      description: "HMAC-SHA256 signature for tamper detection"
+      required: true
+      example: "3f4e5c6d7a8b9c0d1e2f3a4b5c6d7e8f"
+      security_critical: true
+      observability: "not_logged"
+
+  # ===== Validation Rules =====
+  validation:
+    rules:
+      - "signal_id must be valid UUID v4"
+      - "reason must be one of: STOP, NEW_INPUT, RECONSIDER, CLARIFICATION"
+      - "if reason == NEW_INPUT, new_input must not be empty"
+      - "user_id must match session.user_id"
+      - "device_id must be in user's registered devices"
+      - "timestamp_ms must be recent (< 10s old)"
+      - "force_mode must be 'immediate' for STOP, 'graceful' for others"
+      - "force_timeout_ms must be > 100 and < 5000"
+      - "authentication_token must be valid and not expired"
+      - "signature must verify against HMAC-SHA256"
+
+  # ===== FlatBuffers Schema (Code Generation) =====
+  flatbuffers_schema: |
+    namespace K1.Protocols;
+
+    table BargeInSignal {
+      signal_id: string;
+      cognitive_trace_id: string;
+      interrupt_session_id: string;
+      interrupted_turn_id: string;
+      interrupted_agent_id: string;
+      reason: string;
+      reason_detail: string;
+      force_mode: string;
+      force_timeout_ms: int32;
+      new_input: string;
+      new_input_tokens: int32;
+      user_id: string;
+      device_id: string;
+      client_version: string;
+      timestamp_ms: int64;
+      received_at_ms: int64;
+      priority: string;
+      interrupting_from_state: string;
+      estimated_remaining_work_ms: int32;
+      session_id: string;
+      space_id: string;
+      source: string;
+      authentication_token: string;
+      signature: string;
+    }
+
+    root_type BargeInSignal;
+
+  # ===== Usage Examples =====
+  examples:
+    - name: "STOP - Immediate Termination"
+      description: "User clicks stop button during streaming"
+      data:
+        signal_id: "bi_550e8400-e29b-41d4-a716-446655440000"
+        cognitive_trace_id: "trace_abc123"
+        interrupt_session_id: "session_12345678"
+        interrupted_turn_id: "turn_abc123"
+        interrupted_agent_id: "planner"
+        reason: "STOP"
+        reason_detail: "User clicked stop button"
+        force_mode: "immediate"
+        user_id: "user_abc123"
+        device_id: "device_web_abc"
+        timestamp_ms: 1697379950000
+        priority: "URGENT"
+        interrupting_from_state: "streaming_response"
+        estimated_remaining_work_ms: 5000
+        session_id: "session_12345678"
+        source: "web_ui"
+
+    - name: "NEW_INPUT - Switch Tasks"
+      description: "User starts typing new question (graceful drain)"
+      data:
+        signal_id: "bi_660e8400-e29b-41d4-a716-446655440001"
+        cognitive_trace_id: "trace_def456"
+        interrupt_session_id: "session_12345678"
+        interrupted_turn_id: "turn_abc123"
+        interrupted_agent_id: "planner"
+        reason: "NEW_INPUT"
+        reason_detail: "User switched to different task"
+        force_mode: "graceful"
+        force_timeout_ms: 500
+        new_input: "Actually, find me Japanese restaurants instead"
+        new_input_tokens: 9
+        user_id: "user_abc123"
+        device_id: "device_mobile_def"
+        timestamp_ms: 1697379952000
+        priority: "HIGH"
+        interrupting_from_state: "planning"
+        estimated_remaining_work_ms: 3000
+        session_id: "session_12345678"
+        source: "mobile_app"
+
+  # ===== Observability =====
+  observability:
+    metrics:
+      - "barge_in_signal_received_total"
+      - "barge_in_signal_by_reason_total"
+      - "barge_in_signal_by_source_total"
+      - "barge_in_signal_validation_error_total"
+
+    structured_logging:
+      enabled: true
+      format: "json"
+      fields:
+        - "signal_id"
+        - "cognitive_trace_id"
+        - "reason"
+        - "force_mode"
+        - "user_id"
+        - "source"
+        - "timestamp_ms"
+        - "priority"
+
+    distributed_tracing:
+      enabled: true
+      trace_id_field: "cognitive_trace_id"
+      parent_span_name: "barge_in_signal_received"
+
+  # ===== Security Considerations =====
+  security:
+    authentication:
+      required: true
+      mechanism: "JWT session token"
+      validation: "Check token validity and expiration"
+
+    authorization:
+      required: true
+      checks:
+        - "user_id must match session.user_id"
+        - "device_id must be registered to user"
+        - "session must be active"
+
+    tamper_protection:
+      enabled: true
+      mechanism: "HMAC-SHA256 signature"
+      verification: "Verify signature on receipt"
+
+    audit_trail:
+      enabled: true
+      storage: "k0_audit_log"
+      fields: ["signal_id", "user_id", "reason", "timestamp_ms"]

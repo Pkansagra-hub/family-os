@@ -1,0 +1,426 @@
+---
+# Tool Selection Rules - Algorithm for Matching Tools to Plan Steps
+# Purpose: Define deterministic rules for matching available tools to plan steps
+# Source ADR: ADR-0007b (Expand Stage Tool/Prompt Registry Integration)
+# Layer: Planning Layer (Layer 3 - Execution & Tools)
+
+contract:
+  name: "Tool Selection Rules"
+  version: "1.0.0"
+  purpose: "Deterministic algorithm for selecting best tools from registry during expand stage"
+  owner: "Planning Layer"
+  layer: "Layer 3 - Execution & Tools"
+  adr_references:
+    - "ADR-0007b: Expand Stage Tool/Prompt Registry Integration"
+    - "ADR-0006a: Multi-Criteria Scoring for Agent Selection"
+
+  research_citations:
+    - "Information retrieval and ranking (Robertson & Zaragoza, 2009)"
+    - "Semantic similarity (Devlin et al., 2019 - BERT)"
+
+---
+
+# SECTION 1: OVERVIEW
+
+overview:
+  description: "Tool selection is a deterministic O(1) lookup process in expand_stage"
+  input: "PlanStep with tool_id or tool_description"
+  output: "Best matching ToolSpec from registry with confidence score"
+  performance_budget: "<1ms latency (O(1) hash lookup)"
+  failure_mode: "Null tool (validation catches and rejects plan)"
+
+  matching_strategy: |
+    1. PRIMARY: Exact match by tool_id (best, deterministic)
+    2. SECONDARY: Fuzzy match by description (good, semantic)
+    3. TERTIARY: Category-based search (acceptable, fallback)
+    4. FAIL: Return null (validation will catch)
+
+---
+
+# SECTION 2: PRIMARY MATCHING - EXACT TOOL_ID
+
+exact_match:
+  description: "Direct hash map lookup by tool_id"
+  complexity: "O(1)"
+
+  algorithm: |
+    Function select_tool_exact(tool_id: string, registry: ToolRegistry) -> ToolSpec:
+      1. Normalize tool_id: lowercase, underscore-separated
+      2. Look up in registry.tools_by_id[tool_id]
+      3. If found: return ToolSpec with confidence 1.0
+      4. If not found: return null
+
+  example:
+    input:
+      sketch_step:
+        tool_id: "search_web"
+        description: "Search the web for laptop prices"
+    lookup: "registry.tools_by_id['search_web']"
+    output:
+      tool_id: "search_web"
+      name: "Web Search"
+      confidence: 1.0
+      match_type: "EXACT"
+    latency_ms: 0.05
+
+  normalization_rules:
+    - "Convert to lowercase"
+    - "Replace spaces with underscores"
+    - "Remove special characters except underscore"
+    - "Trim leading/trailing whitespace"
+
+  examples:
+    - "Search Web converts to search_web"
+    - "SEND_EMAIL converts to send_email"
+    - "api-call converts to api_call"
+
+---
+
+# SECTION 3: SECONDARY MATCHING - FUZZY DESCRIPTION
+
+fuzzy_match:
+  description: "Semantic similarity matching when exact tool_id not found"
+  complexity: "O(n) where n = number of tools in registry (~50 tools)"
+
+  algorithm: |
+    Function select_tool_fuzzy(step_description: string, registry: ToolRegistry) -> ToolSpec:
+      1. Get all tools in registry (cache to 50-100 tools)
+      2. For each tool:
+         a. Compute similarity(step_description, tool.description)
+         b. Apply domain filter if step.domain known
+         c. Calculate confidence score
+      3. Find tool with max confidence
+      4. If max_confidence > threshold (0.7): return tool
+      5. Else: return null
+
+  similarity_metrics:
+    - method: "Cosine similarity on BERT embeddings"
+      range: [0.0, 1.0]
+      where_1_0: "Perfect match"
+      where_0_7: "Good match (threshold)"
+      where_0_5: "Moderate match"
+      where_0_0: "No match"
+
+    - implementation: |
+        Use pre-computed embeddings (cached):
+        - tool.description_embedding (computed once on registration)
+        - step_description_embedding (computed in expand stage)
+        - similarity = dot_product(tool_emb, step_emb) / (norm(tool) * norm(step))
+
+  domain_filtering:
+    - description: "Prefer tools matching step domain"
+    - algorithm: |
+        If step.domain provided:
+          1. Filter tools to those in matching domain
+          2. Compute similarity only for candidates
+          3. Boost confidence by 0.1 if domain matches
+    - example: |
+        step.description = "Send message to user"
+        step.domain = "email"
+        candidates: [send_email, send_sms, send_notification]
+        boost: +0.1 for email tools, -0.05 for others
+
+  confidence_scoring: |
+    confidence = base_similarity_score
+                 + domain_boost (0.0 or 0.1)
+                 + recency_boost (0.0 to 0.05 based on recent usage)
+                 - deprecation_penalty (-0.2 if tool deprecated)
+
+  threshold_decision: |
+    if confidence >= 0.7:
+      return (tool, confidence, match_type="FUZZY_HIGH")
+    elif confidence >= 0.5:
+      return (tool, confidence, match_type="FUZZY_MEDIUM")
+      # Flagged in validation as potential issue
+    elif confidence >= 0.3:
+      return (tool, confidence, match_type="FUZZY_LOW")
+      # Likely invalid, validation will reject
+    else:
+      return null
+
+  examples:
+    input_1:
+      step_description: "Look up information on the web"
+      step_domain: "search"
+      registry_candidates:
+        - "search_web: similarity 0.92, domain search, with boost 0.1, confidence 0.95"
+        - "api_call: similarity 0.45, domain api, no boost, confidence 0.45"
+    output_1: "search_web with confidence 0.95"
+
+    input_2:
+      step_description: "Read a file from disk"
+      step_domain: "file_operations"
+      registry_candidates:
+        - "read_file: similarity 0.88, domain file_operations, with boost 0.1, confidence 0.88"
+        - "search_local_files: similarity 0.65, domain search, no boost, confidence 0.65"
+    output_2: "read_file with confidence 0.88"
+
+---
+
+# SECTION 4: CATEGORY-BASED FALLBACK
+
+category_fallback:
+  description: "When fuzzy match fails, try category-based lookup"
+  complexity: "O(n) filtered subset"
+
+  algorithm: |
+    Function select_tool_by_category(step: PlanStep, registry: ToolRegistry) -> ToolSpec:
+      1. Extract or infer category from step
+      2. Get all tools in category
+      3. Pick tool with:
+         a. Highest confidence from prior confidence scores
+         b. OR most used (via metrics)
+         c. OR first registered (stable default)
+      4. Return with confidence 0.5 (uncertain)
+
+  category_inference: |
+    If step.domain not provided, infer category:
+    - "search" keyword → search category
+    - "find/locate" keyword → search category
+    - "send" keyword → communication/email category
+    - "read/write" keyword → file category
+    - "payment/charge" keyword → payment category
+    - "schedule/calendar" keyword → calendar category
+    - Default: iterate through categories by tool count
+
+  category_defaults: |
+    search:
+      - Default: search_web (most common)
+      - Candidates: search_local_files, search_contacts, search_calendar, search_email
+
+    calendar:
+      - Default: create_event (most common)
+      - Candidates: update_event, delete_event, get_availability, send_meeting_invite
+
+    file_operations:
+      - Default: read_file (most common)
+      - Candidates: write_file, delete_file, list_files, create_folder
+
+    email:
+      - Default: send_email (most common)
+      - Candidates: read_email, reply_to_email, create_draft, search_email
+
+    payment:
+      - Default: charge_payment (most critical)
+      - Candidates: refund_payment, get_balance, get_transaction_history
+
+    communication:
+      - Default: send_notification (most safe)
+      - Candidates: send_sms, get_chat_history
+
+  confidence_rules: |
+    - Category exact match: confidence = 0.5
+    - Inferred category: confidence = 0.3
+    - Used as absolute fallback: confidence = 0.2
+
+---
+
+# SECTION 5: CAPABILITY FILTERING
+
+capability_filtering:
+  description: "Filter tools by required capabilities after matching"
+  where_applied: "After finding candidate tool, before returning"
+  complexity: "O(1) set intersection"
+
+  algorithm: |
+    Function validate_capabilities(tool: ToolSpec, available_capabilities: Set[str]) -> bool:
+      1. Get tool.capabilities_required (array)
+      2. Check if available_capabilities ⊇ tool.capabilities_required
+      3. If not: tool is not executable by current agent pool
+      4. Return success/failure
+
+  failure_modes: |
+    - Required capability missing → validation will flag (tier 1)
+    - Tool passes matching but fails capability check → tier 1 error
+    - Plan rejected, user prompted to use alternative tool
+
+  example:
+    tool: "execute_sql"
+    capabilities_required: ["database_access", "sql_execution"]
+    available_capabilities: ["internet_access", "http_client"]
+    result: FAILED (database capabilities not available)
+
+---
+
+# SECTION 6: BAND & SECURITY FILTERING
+
+band_filtering:
+  description: "Ensure tool band matches or exceeds session privacy band"
+  where_applied: "After capability check"
+  complexity: "O(1) enum comparison"
+
+  algorithm: |
+    Function validate_band(tool: ToolSpec, session_band: PrivacyBand) -> bool:
+      band_order = [GREEN, AMBER, RED]
+      1. Get tool.band_required
+      2. Check: band_order.index(session_band) >= band_order.index(tool.band_required)
+      3. Example: Session GREEN, tool requires AMBER → FAIL (GREEN < AMBER)
+      4. Example: Session RED, tool requires AMBER → OK (RED >= AMBER)
+
+  band_levels: |
+    GREEN: No PII, no financial, no sensitive health
+    AMBER: Might involve PII or minor financial
+    RED: Healthcare, legal, or high-value financial
+
+  matrix:
+    session_GREEN:
+      - can_use: [search_web, send_notification, get_embedding]
+      - cannot_use: [charge_payment (RED), read_email (AMBER), execute_sql (RED)]
+
+    session_AMBER:
+      - can_use: [all AMBER, all GREEN]
+      - cannot_use: [charge_payment (RED), execute_sql (RED)]
+
+    session_RED:
+      - can_use: [all tools]
+      - cannot_use: []
+
+---
+
+# SECTION 7: TOOL AVAILABILITY
+
+tool_availability:
+  description: "Check if tool is available for use (not deprecated/removed)"
+  where_applied: "After matching"
+  complexity: "O(1) flag check"
+
+  algorithm: |
+    Function is_tool_available(tool: ToolSpec) -> bool:
+      1. Check tool.status:
+         - ACTIVE → return true
+         - DEPRECATED → return true (but flag warning)
+         - REMOVED → return false
+      2. If deprecated: add note "Tool X deprecated, consider using Y"
+
+  deprecation_workflow: |
+    1. Tool marked DEPRECATED
+    2. 30-day grace period (can still use)
+    3. Warnings logged in metrics
+    4. After 30 days: tool moved to REMOVED
+    5. Plans using removed tools: validation rejects
+
+---
+
+# SECTION 8: FINAL SELECTION ALGORITHM
+
+final_selection:
+  description: "Complete tool selection workflow combining all filters"
+
+  algorithm: |
+    Function select_tool(step: PlanStep, context: SelectionContext) -> Selection:
+      # Phase 1: Matching
+      1. Try exact_match(step.tool_id) → result_exact
+      2. If found: confidence = 1.0, match = "EXACT"
+      3. Else: Try fuzzy_match(step.description, step.domain) → result_fuzzy
+      4. If found: confidence = result_fuzzy.confidence, match = "FUZZY"
+      5. Else: Try category_fallback(step) → result_category
+      6. If found: confidence = 0.5, match = "CATEGORY"
+      7. Else: Return Selection(tool=null, confidence=0.0, match="NOT_FOUND")
+
+      # Phase 2: Validation (all must pass)
+      8. validate_availability(tool) → check_available
+      9. validate_band(tool, context.session_band) → check_band
+      10. validate_capabilities(tool, context.available_capabilities) → check_capabilities
+
+      # Phase 3: Return
+      11. If all checks pass: return Selection(tool, confidence, match, metadata)
+      12. Else: return Selection(tool, confidence, match, metadata, failures=[...])
+
+  selection_return_type: |
+    class Selection:
+      tool: ToolSpec | None           # Selected tool or null
+      tool_id: string                 # Tool ID for reference
+      confidence: float               # Confidence 0.0-1.0
+      match_type: string              # EXACT, FUZZY, CATEGORY, NOT_FOUND
+      latency_ms: float               # Selection algorithm latency
+      checks_passed: [string]         # Passed checks
+      checks_failed: [string]         # Failed checks (if any)
+      warnings: [string]              # Deprecation, uncertain matches
+      recommendation: string | None   # Alternative if selection failed
+
+  example_successful:
+    step:
+      tool_id: "search_web"
+      description: "Search for hotels in Paris"
+      domain: "search"
+    selection:
+      tool_id: "search_web"
+      confidence: 1.0
+      match_type: "EXACT"
+      checks_passed: ["availability", "band", "capabilities"]
+      latency_ms: 0.08
+
+  example_fuzzy_match:
+    step:
+      tool_id: null
+      description: "Look up information"
+      domain: "search"
+    selection:
+      tool_id: "search_web"
+      confidence: 0.92
+      match_type: "FUZZY"
+      checks_passed: ["availability", "band", "capabilities"]
+      latency_ms: 12.5
+
+  example_failure:
+    step:
+      tool_id: "unknown_proprietary_tool"
+      description: "Do something custom"
+    selection:
+      tool_id: null
+      confidence: 0.0
+      match_type: "NOT_FOUND"
+      checks_failed: ["no_tool_found"]
+      recommendation: "Tool not registered. Register tool or use alternative."
+      latency_ms: 0.15
+
+---
+
+# SECTION 9: PERFORMANCE METRICS
+
+metrics:
+  lookups:
+    - "tool_selection_attempts_total"
+    - "tool_selection_by_match_type_total (exact, fuzzy, category, not_found)"
+    - "tool_selection_duration_ms (histogram)"
+    - "tool_selection_failures_total (by failure type)"
+
+  quality:
+    - "tool_confidence_distribution (histogram 0.0 to 1.0)"
+    - "tool_fuzzy_match_scores (histogram)"
+    - "tool_capability_check_failures_total"
+    - "tool_band_check_failures_total"
+
+  alerts:
+    - "HighToolSelectionFailureRate (greater than 10% failures)"
+    - "LowToolConfidenceAverage (average less than 0.8)"
+    - "ToolSelectionSlowdown (p95 greater than 1ms)"
+
+---
+
+# SECTION 10: DEPENDENCIES
+
+dependencies:
+  uses:
+    - "tool_registry_schema.yml"
+    - "BERT embeddings for fuzzy matching"
+
+  used_by:
+    - "expand_stage.yml"
+    - "validation_stage.yml"
+
+---
+
+# SECTION 11: FUTURE ENHANCEMENTS
+
+future:
+  v2:
+    - "Machine learning ranking (learn from success/failure)"
+    - "Context-aware tool selection (based on prior steps)"
+    - "Tool composition (suggesting multiple tools in sequence)"
+    - "Tool substitution (when primary unavailable)"
+
+  v3:
+    - "Learned tool similarity models"
+    - "Cross-domain tool mapping"
+    - "Tool marketplace suggestions"

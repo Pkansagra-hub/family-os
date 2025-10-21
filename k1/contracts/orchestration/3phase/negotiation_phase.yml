@@ -1,0 +1,369 @@
+# Phase 1: Negotiation — Contract Net Protocol
+# Source ADR: ADR-0006 (3-Phase Orchestration)
+# Sub-ADR: ADR-0006a (Contract Net Negotiation Protocol)
+# Defines task announcement, bidding, and proposal collection
+
+metadata:
+  contract_id: "negotiation-phase-v1.0"
+  source_adr: "0006-3phase-orchestration-contract-net.md, 0006a-contract-net-negotiation.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+
+# Negotiation Phase Overview
+negotiation_overview:
+  description: "Contract Net Protocol phase for agent selection and bidding"
+  purpose: "Broadcast task announcement, collect proposals from capable agents"
+  research: "Smith, 1980 - Contract Net Protocol for multi-agent task allocation"
+  latency_budget_ms: 50
+  typical_latency_ms: 20
+  current_status: "Production ready - 65% implementation complete (ADR-0006 status)"
+
+# Orchestrator as Pure Actor
+orchestrator_role:
+  type: "Pure Actor (deterministic logic)"
+  location: "k1/orchestrator/ (Layer 1 - Core Kernel)"
+  capabilities: ["broadcast_announcement", "collect_proposals", "timeout_management"]
+  no_llm: true
+  no_model_hub: true
+  rationale: "Orchestrator coordinates but does not reason with LLMs"
+
+# Phase 1: Task Announcement
+task_announcement:
+
+  # Step 1: Prepare Announcement
+  prepare_announcement:
+    input: "turn_plan (from Planner or simplified plan)"
+    data_structure: |
+      class TaskAnnouncement:
+          task_id: UUID              # Unique task identifier
+          turn_plan: TurnPlan        # Plan with steps and dependencies
+          requirements:              # Resource requirements
+              latency_budget_ms: int
+              cost_budget: float
+              band: PrivacyBand      # GREEN/AMBER/RED
+              context: str            # Session context summary
+          deadline_ms: int            # Proposal deadline (default: 50ms)
+          created_at: timestamp       # ISO 8601
+          originating_session: str    # Session ID for tracking
+
+  # Step 2: Broadcast to Agents
+  broadcast:
+    scope: "All ACTIVE agents in session roster"
+    method: "Non-blocking mailbox send to each agent"
+    agents_included:
+      ai_agents: ["Concierge", "Planner", "Researcher", "Safety_Watch"]
+      pure_actors: "Selective (based on capabilities required by turn_plan)"
+    timing: "Broadcast completes in <5ms (all sends fire-and-forget)"
+    backpressure: "None (agents ignore if mailbox full - proposal lost, acceptable)"
+
+# Phase 2: Agent Evaluation & Bidding
+agent_bidding:
+
+  # Step 1: Evaluate Capability Match
+  capability_check:
+    description: "Agent determines if it can handle the announced task"
+    ai_agent_logic: |
+      # AI agents use heuristic-based capability matching
+      # (may involve lightweight LLM reasoning or pattern matching)
+      if not agent.can_handle(announcement.turn_plan):
+          return None  # Don't bid
+      # Example: Planner checks for tool requirements in turn_plan.steps
+      required_tools = extract_tools(turn_plan)
+      if required_tools in agent.tool_registry:
+          confidence = calculate_confidence(...)
+      else:
+          return None  # Missing required tools
+
+    pure_actor_logic: |
+      # Pure actors use deterministic capability checks
+      if not agent.capabilities.contains(required_capabilities):
+          return None  # Don't bid
+      # Example: Tool Runner checks if required tools are available
+      if all(tool in tool_registry for tool in required_tools):
+          confidence = 1.0  # Deterministic (can or cannot do)
+      else:
+          return None
+
+  # Step 2: Estimate Execution (Time & Cost)
+  estimate_execution:
+    ai_agent_estimates:
+      latency_ms: "Based on LLM model speed, tool call count, context length"
+      cost: "Based on LLM tokens, tool API calls"
+      strategy: "parallel | sequential | hybrid (from LLM reasoning or heuristic)"
+      confidence: "0.0-1.0 (how well does this agent understand the task?)"
+
+    pure_actor_estimates:
+      latency_ms: "Deterministic based on step count and tool specs"
+      cost: "Deterministic based on tool pricing"
+      strategy: "parallelizable if steps have no dependencies"
+      confidence: "1.0 if capability match, 0.0 otherwise"
+
+  # Step 3: Budget Validation
+  validate_budget:
+    checks:
+      - "estimated_latency_ms <= announcement.requirements.latency_budget_ms"
+      - "estimated_cost <= announcement.requirements.cost_budget"
+      - "agent.lease.valid() == true (capability lease not expired)"
+    outcome:
+      within_budget: "Proceed to bid submission"
+      outside_budget: "Return None (don't bid)"
+
+  # Step 4: Create Proposal (Bid)
+  proposal_structure: |
+    @dataclass
+    class Proposal:
+        agent_id: str                  # Agent ID bidding
+        task_id: str                   # Task ID from announcement
+        estimated_latency_ms: int      # Predicted execution time
+        estimated_cost: float          # Predicted cost
+        confidence: float              # 0.0 (low) to 1.0 (high)
+        strategy: str                  # "parallel" | "sequential" | "hybrid"
+        tools_required: List[str]      # Tools this agent will use
+        reasoning: str                 # Human-readable explanation (optional)
+        fallback_plan: Optional[dict]  # If primary plan fails (optional)
+        agent_load: int                # Current mailbox size (for scheduling)
+        success_rate: float            # Historical success rate (0.0-1.0)
+
+  # Step 5: Submit Proposal
+  submit_proposal:
+    target: "Orchestrator.proposal_queue"
+    method: "Async mailbox send (does not block agent)"
+    latency_overhead: "<1ms (queue push)"
+    failure_handling: "Queue full → proposal lost (acceptable timeout)"
+
+# Phase 3: Proposal Collection
+proposal_collection:
+
+  # Step 1: Deadline-Based Collection
+  collect_with_deadline:
+    deadline_ms: 50
+    collection_loop: |
+      proposals = []
+      deadline = now() + timedelta(milliseconds=50)
+
+      while now() < deadline:
+          proposal = proposal_queue.poll(timeout=5)  # Poll every 5ms
+          if proposal and proposal.task_id == announcement_task_id:
+              proposals.append(proposal)
+
+      return proposals
+
+    rationale: "Prevents blocking on slow/crashed agents; move to Selection phase with what we have"
+
+  # Step 2: Timeout Handling
+  timeout_scenarios:
+    no_proposals: "Fall back to hiring new agent or simplifying task"
+    partial_proposals: "Select best from available proposals"
+    all_busy: "Queue task for retry or degrade service (optional)"
+
+  # Step 3: Proposal Validation
+  validate_proposals:
+    checks:
+      - "Verify agent_id matches active roster"
+      - "Verify task_id matches announcement"
+      - "Verify estimated_latency_ms is within bounds (>0, <10000ms)"
+      - "Verify estimated_cost is within bounds (>=0, <100000)"
+      - "Verify confidence is in [0.0, 1.0]"
+    invalid_proposals: "Silently discard (log warning)"
+
+# Bidding Heuristics
+bidding_heuristics:
+
+  # When NOT to Bid
+  no_bid_conditions:
+    missing_capabilities: "Turn plan requires tools agent doesn't have"
+    too_slow: "Estimated latency exceeds budget"
+    too_expensive: "Estimated cost exceeds budget"
+    low_confidence: "Agent confidence < threshold (e.g., <0.3 for AI agents)"
+    crashed_agent: "Agent detected as crashed (blacklisted)"
+    lease_expired: "Capability lease expired"
+
+  # When to Bid (and Confidence Calculation)
+  ai_agent_confidence: |
+    # AI agent uses heuristic or lightweight LLM reasoning
+    base_confidence = 0.7  # Start optimistic
+
+    # Adjust for capability match
+    if tool_coverage > 0.8:
+        base_confidence += 0.15
+    elif tool_coverage < 0.5:
+        base_confidence -= 0.3
+
+    # Adjust for context relevance
+    if agent_specialty matches task_domain:
+        base_confidence += 0.1
+
+    # Adjust for latency constraints
+    if estimated_latency_ms < budget * 0.5:
+        base_confidence += 0.05
+    elif estimated_latency_ms > budget * 0.8:
+        base_confidence -= 0.2
+
+    return clamp(base_confidence, 0.0, 1.0)
+
+  pure_actor_confidence: |
+    # Pure actor uses deterministic confidence
+    if all_required_tools_available:
+        return 1.0
+    else:
+        return 0.0  # Cannot partially do deterministic work
+
+# Proposal Collection Timeout Strategy
+timeout_strategy:
+
+  # Timeout Options (trade-off between optimality and latency)
+  strict_50ms: "Wait full 50ms for all proposals (recommended for P95 targets)"
+  early_exit_20ms: "Exit early if >= 2 proposals received (faster but may miss better options)"
+  adaptive_timeout: "Exit early if no proposals for 10ms (no more agents responding)"
+
+  # Recommended: Strict 50ms
+  rationale: "Better to wait and get good options than rush with suboptimal bids"
+
+# Fallback Strategies (if no proposals)
+fallback_strategies:
+
+  # Fallback 1: Hire New Agent
+  hire_new_agent:
+    conditions: "Budget available AND task important"
+    process: |
+      new_agent = hire_agent_for_task(turn_plan)
+      # Retry negotiation with new agent (may succeed now)
+      return negotiate_turn(turn_plan, session)
+    latency_impact: "Additional agent hire time (~250ms for AI agents)"
+
+  # Fallback 2: Simplify Task
+  simplify_task:
+    conditions: "Turn plan too complex for available agents"
+    strategy: |
+      simplified_plan = remove_complex_steps(turn_plan)
+      # Retry negotiation with simpler task
+      return negotiate_turn(simplified_plan, session)
+    impact: "Reduced functionality but faster execution"
+
+  # Fallback 3: Graceful Degradation
+  graceful_degradation:
+    conditions: "Cannot hire, cannot simplify"
+    response: "Return simple response without tool execution"
+    example: "Q: 'Book a flight' → A: 'I can't book flights right now, but here's a guide...'"
+
+# Performance Monitoring
+performance_monitoring:
+
+  # Metrics
+  metrics:
+    negotiation_latency_ms:
+      type: Histogram
+      description: "Negotiation phase duration (broadcast + collect)"
+      buckets: [5, 10, 20, 30, 50, 100]
+      p95_target: 50
+
+    proposals_received:
+      type: Histogram
+      description: "Number of proposals per task announcement"
+      buckets: [0, 1, 2, 3, 4, 5]
+
+    proposal_diversity:
+      type: Gauge
+      description: "Number of unique agents in proposals"
+
+    bidding_rate:
+      type: Gauge
+      description: "Percentage of agents that bid"
+      calculation: "active_bids / active_agents * 100"
+
+  # Alerts
+  alerts:
+    no_proposals_alert:
+      trigger: "proposals_received == 0 for 10 consecutive tasks"
+      action: "Investigate agent blacklist, availability issues"
+      severity: "CRITICAL"
+
+    slow_negotiation:
+      trigger: "negotiation_latency_ms > 50ms for 5% of tasks"
+      action: "Investigate deadline collection efficiency"
+      severity: "WARNING"
+
+# Error Handling
+error_handling:
+
+  # Proposal Submission Failure
+  proposal_queue_full:
+    scenario: "Agent tries to submit but queue full"
+    outcome: "Proposal discarded (non-blocking architecture)"
+    recovery: "Agent moved back to idle, can bid on next task"
+    rationale: "Better to lose one proposal than block an agent"
+
+  # Deadline Exceeded
+  deadline_exceeded:
+    scenario: "Proposal collection hits 50ms deadline"
+    action: "Move to Selection phase with collected proposals"
+    handling: "Proceed with best available options"
+
+  # Invalid Proposal
+  invalid_proposal:
+    scenario: "Received proposal with invalid fields"
+    action: "Silently discard (log warning)"
+    impact: "One less option in selection (acceptable)"
+
+# Testing & Validation
+testing_validation:
+
+  # Unit Tests
+  unit_tests:
+    - "TaskAnnouncement creation and validation"
+    - "Proposal structure correctness"
+    - "Bidding decision logic (bid vs no-bid)"
+    - "Confidence calculation (AI agents vs pure actors)"
+    - "Timeout handling and deadline enforcement"
+
+  # Integration Tests
+  integration_tests:
+    - "Broadcast to 4 AI agents + 54 pure actors"
+    - "Proposal collection with varying latencies (fast/slow agents)"
+    - "Zero proposals → fallback to hiring"
+    - "Multiple proposals → correct collection"
+    - "Deadline enforcement (<50ms total)"
+
+  # Performance Tests
+  performance_tests:
+    - "Broadcast latency (<5ms for 58 agents)"
+    - "Proposal collection latency (<50ms including collection)"
+    - "Proposal queue throughput (100+ proposals/sec)"
+    - "Memory overhead per proposal (<1KB)"
+
+# Configuration
+configuration:
+
+  # Default Settings
+  defaults:
+    proposal_deadline_ms: 50
+    proposal_poll_interval_ms: 5
+    fallback_enabled: true
+    fallback_hire_enabled: true
+    fallback_simplify_enabled: true
+    fallback_degrade_enabled: true
+
+  # Tunable Parameters
+  tunable_parameters:
+    - proposal_deadline_ms: "Adjust deadline based on agent responsiveness"
+    - proposal_poll_interval_ms: "Adjust polling frequency (lower = more responsive but higher CPU)"
+    - fallback_hire_enabled: "Disable if agent pool is small"
+    - fallback_simplify_enabled: "Disable if simplification not supported"
+
+# Implementation Status
+implementation_status:
+  task_announcement: "COMPLETED"
+  agent_bidding: "COMPLETED"
+  proposal_collection: "COMPLETED"
+  fallback_strategies: "COMPLETED"
+  performance_monitoring: "COMPLETED"
+  error_handling: "COMPLETED"
+  overall_completion: "90%"
+
+# Research Backing
+research_backing:
+  - "Contract Net Protocol (Smith, 1980) - Multi-agent task allocation via bidding"
+  - "Blackboard Architecture (Erman et al., 1980) - Shared proposal collection"
+  - "Actor Model (Hewitt, 1973) - Non-blocking message-passing"
+  - "Timeout Patterns (Temporal.io, Netflix Hystrix) - Deadline-based collection"

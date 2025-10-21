@@ -1,0 +1,474 @@
+# P13 Reindex - Index Rebuild & Maintenance Pipeline
+# Port: P13 (K0_INTERNAL)
+# Background job semantics: Index maintenance, corruption recovery, schema migration
+# Performance budget: N/A (async maintenance, hours to complete)
+
+version: "1.0"
+port_id: "P13"
+port_name: "Reindex"
+direction: "K0_INTERNAL"
+semantics: "background_job"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0100"  # Index Maintenance Strategy
+  - "ADR-0101"  # Checkpointing & Recovery
+  - "ADR-0102"  # Parallel Batch Processing
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P13"
+      description: "Port identifier for reindex operations"
+
+    command_type:
+      type: string
+      enum: ["reindex_request", "reindex_status", "reindex_cancel"]
+      required: true
+      description: |
+        Reindex operation type:
+        - reindex_request: Trigger index rebuild
+        - reindex_status: Query reindex job status
+        - reindex_cancel: Cancel running reindex job
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    capability:
+      type: string
+      value: "TRIGGER_REINDEX"
+      required: true
+      description: "Required K0 capability for index maintenance"
+
+  payload:
+    index_type:
+      type: string
+      enum: ["fts5", "vector", "kg", "all"]
+      required: true
+      description: |
+        Index type to rebuild:
+        - fts5: Full-text search (SQLite FTS5 virtual tables)
+        - vector: FAISS indices (IVF, HNSW structures)
+        - kg: Knowledge graph indices (node/edge lookups)
+        - all: Rebuild all indices (full maintenance)
+
+    rebuild_mode:
+      type: string
+      enum: ["incremental", "full"]
+      default: "incremental"
+      description: |
+        Rebuild mode:
+        - incremental: Rebuild only changed records (faster)
+        - full: Rebuild entire index (schema migration, corruption recovery)
+
+    batch_size:
+      type: integer
+      default: 1000
+      description: "Number of records per batch (balance throughput vs memory)"
+
+    parallelism:
+      type: integer
+      default: 4
+      description: "Number of parallel workers (CPU-bound)"
+
+    checkpoint_interval_ms:
+      type: integer
+      default: 300000
+      description: "Checkpoint interval (5 minutes default)"
+
+    job_id:
+      type: string
+      format: uuid
+      required: false
+      description: "Job ID (for reindex_status/reindex_cancel)"
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "202":
+      description: "Reindex job accepted (async processing)"
+      payload:
+        job_id:
+          type: string
+          format: uuid
+          description: "Unique reindex job identifier"
+          example: "reindex_job_123"
+
+        index_type:
+          type: string
+          description: "Echo of index type"
+          example: "fts5"
+
+        total_records:
+          type: integer
+          description: "Total records to reindex"
+          example: 1000000
+
+        estimated_duration_ms:
+          type: integer
+          description: "Estimated completion time"
+          example: 3600000
+
+        checkpoint_enabled:
+          type: boolean
+          description: "Checkpoint enabled for recovery"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "200":
+      description: "Reindex job status (for reindex_status)"
+      payload:
+        job_id:
+          type: string
+          format: uuid
+          description: "Job identifier"
+
+        status:
+          type: string
+          enum: ["queued", "running", "checkpointed", "completed", "failed", "cancelled"]
+          description: "Job status"
+
+        progress:
+          type: object
+          properties:
+            records_processed:
+              type: integer
+              description: "Records processed so far"
+
+            records_total:
+              type: integer
+              description: "Total records"
+
+            progress_percentage:
+              type: number
+              description: "Completion percentage"
+
+            current_batch:
+              type: integer
+              description: "Current batch number"
+
+            elapsed_ms:
+              type: integer
+              description: "Elapsed time"
+
+            estimated_remaining_ms:
+              type: integer
+              description: "Estimated time remaining"
+
+        last_checkpoint:
+          type: string
+          format: iso8601
+          description: "Last checkpoint timestamp"
+
+    "400":
+      description: "Invalid reindex request"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_index_type", "invalid_rebuild_mode", "invalid_batch_size", "invalid_parallelism"]
+
+        details:
+          type: string
+
+    "409":
+      description: "Reindex already in progress (prevent concurrent rebuilds)"
+      payload:
+        existing_job_id:
+          type: string
+          format: uuid
+
+    "500":
+      description: "Reindex error"
+      payload:
+        error:
+          type: string
+          enum: ["index_corruption", "checkpoint_failure", "batch_processing_error"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Full FTS5 index rebuild (schema migration)"
+    request:
+      envelope:
+        port_id: "P13"
+        command_type: "reindex_request"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        capability: "TRIGGER_REINDEX"
+      payload:
+        index_type: "fts5"
+        rebuild_mode: "full"
+        batch_size: 1000
+        parallelism: 4
+        checkpoint_interval_ms: 300000
+
+    response:
+      status: 202
+      payload:
+        job_id: "reindex_job_123"
+        index_type: "fts5"
+        total_records: 1000000
+        estimated_duration_ms: 3600000
+        checkpoint_enabled: true
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Incremental FAISS index rebuild"
+    request:
+      envelope:
+        port_id: "P13"
+        command_type: "reindex_request"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        capability: "TRIGGER_REINDEX"
+      payload:
+        index_type: "vector"
+        rebuild_mode: "incremental"
+        batch_size: 500
+        parallelism: 8
+        checkpoint_interval_ms: 600000
+
+    response:
+      status: 202
+      payload:
+        job_id: "reindex_job_124"
+        index_type: "vector"
+        total_records: 250000
+        estimated_duration_ms: 1800000
+        checkpoint_enabled: true
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Query reindex job status"
+    request:
+      envelope:
+        port_id: "P13"
+        command_type: "reindex_status"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        capability: "TRIGGER_REINDEX"
+      payload:
+        job_id: "reindex_job_123"
+
+    response:
+      status: 200
+      payload:
+        job_id: "reindex_job_123"
+        status: "running"
+        progress:
+          records_processed: 450000
+          records_total: 1000000
+          progress_percentage: 45.0
+          current_batch: 450
+          elapsed_ms: 1620000
+          estimated_remaining_ms: 1980000
+        last_checkpoint: "2025-10-18T14:32:00Z"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "conflict_detection"
+      description: |
+        Check for concurrent reindex jobs
+        If existing job: return 409 with existing_job_id
+        Prevent parallel rebuilds (data consistency)
+
+    - step: "job_initialization"
+      description: |
+        Create reindex job in st_reindex_jobs
+        Initialize progress tracking in st_reindex_progress
+        Set status to "queued"
+
+    - step: "batch_processing"
+      description: |
+        Read memories in batches (configurable batch_size)
+        Parallel workers process batches (configurable parallelism)
+        For FTS5: rebuild FTS5 virtual tables
+        For vector: rebuild FAISS indices (IVF, HNSW)
+        For KG: rebuild knowledge graph indices
+
+    - step: "checkpointing"
+      description: |
+        Save progress every checkpoint_interval_ms
+        Store batch number, records processed, timestamp
+        Enable resumption on failure (crash recovery)
+
+    - step: "validation"
+      description: |
+        Verify record counts match
+        Integrity checks (hash verification)
+        Compare old vs new index sizes
+
+    - step: "vacuum_analyze"
+      description: |
+        SQLite VACUUM: reclaim disk space
+        SQLite ANALYZE: update statistics
+        Optimize query planner
+
+    - step: "job_completion"
+      description: |
+        Update st_reindex_jobs status to "completed"
+        Emit completion event
+        Cleanup temporary files
+
+  storage_targets:
+    - "st_reindex_jobs" # Job status tracking
+    - "st_reindex_progress" # Checkpoint data
+    - "st_episodic" # FTS5 source
+    - "st_embeddings" # FAISS source
+    - "st_kg" # Knowledge graph source
+
+  events_emitted:
+    - "infra.reindex_started"
+    - "infra.reindex_batch_completed"
+    - "infra.reindex_checkpoint_saved"
+    - "infra.reindex_completed"
+    - "infra.reindex_failed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "index_type must be [fts5|vector|kg|all]"
+  - rule: "rebuild_mode must be [incremental|full]"
+  - rule: "batch_size must be between 100 and 10000"
+  - rule: "parallelism must be between 1 and 16"
+  - rule: "checkpoint_interval_ms must be ≥ 60000 (1 minute)"
+  - rule: "Cannot start reindex if job already running (409 conflict)"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_reindex_jobs_total"
+      type: "counter"
+      labels: ["index_type", "rebuild_mode", "status"]
+      description: "Total reindex jobs"
+
+    - name: "k0_reindex_duration_ms"
+      type: "histogram"
+      labels: ["index_type", "rebuild_mode"]
+      buckets: [600000, 1800000, 3600000, 7200000, 14400000]
+      description: "Reindex job duration (10min to 4hr)"
+
+    - name: "k0_reindex_records_processed"
+      type: "counter"
+      labels: ["index_type"]
+      description: "Total records reindexed"
+
+    - name: "k0_reindex_failures_total"
+      type: "counter"
+      labels: ["index_type", "error_type"]
+      description: "Total reindex failures"
+
+    - name: "k0_reindex_checkpoint_saves_total"
+      type: "counter"
+      labels: ["index_type"]
+      description: "Total checkpoint saves"
+
+  traces:
+    span_name: "k0_reindex.job"
+    attributes:
+      - "job_id"
+      - "index_type"
+      - "rebuild_mode"
+      - "batch_size"
+      - "parallelism"
+
+  logs:
+    - event: "infra.reindex_started"
+      level: "INFO"
+      fields: ["job_id", "index_type", "total_records"]
+
+    - event: "infra.reindex_completed"
+      level: "INFO"
+      fields: ["job_id", "duration_ms", "records_processed"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    request_acceptance: "50ms" # Job queuing
+
+  throughput:
+    fts5_rebuild: "1000 records/second" # FTS5 virtual table rebuild
+    vector_rebuild: "500 records/second" # FAISS index rebuild
+    kg_rebuild: "2000 records/second" # Knowledge graph index rebuild
+
+  duration_estimates:
+    small_dataset: "10 minutes (100K records)"
+    medium_dataset: "1 hour (1M records)"
+    large_dataset: "4 hours (10M records)"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "TRIGGER_REINDEX"
+    admin_only: true
+
+  audit_trail:
+    receipt_id: "Issued for all reindex jobs"
+    retention: "365 days"
+
+# ============================================================================
+# TRIGGERS
+# ============================================================================
+
+triggers:
+  corruption_detected:
+    description: "Integrity check failures trigger automatic reindex"
+    action: "Full rebuild with validation"
+
+  schema_migration:
+    description: "FlatBuffers schema version upgrade"
+    action: "Full rebuild with new schema"
+
+  manual_request:
+    description: "Admin/ops triggered maintenance"
+    action: "User-specified rebuild_mode"
+
+  scheduled_maintenance:
+    description: "Weekly full rebuild (preventive)"
+    action: "Full rebuild, all indices"
+    schedule: "Sunday 2 AM UTC"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Gray, J., & Reuter, A. (1992). Transaction Processing: Concepts and Techniques."
+    url: "https://www.amazon.com/Transaction-Processing-Concepts-Techniques-Management/dp/1558601902"
+    relevance: "Checkpoint/recovery mechanisms"
+
+  - citation: "Johnson, J., et al. (2019). Billion-scale similarity search with GPUs. IEEE Transactions on Big Data."
+    url: "https://github.com/facebookresearch/faiss"
+    relevance: "FAISS index construction performance"

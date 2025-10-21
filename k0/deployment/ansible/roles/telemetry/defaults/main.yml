@@ -1,0 +1,8 @@
+---
+familyos_artifacts_root: "{{ (playbook_dir | default('.')) ~ '/../artifacts/pulumi' }}"
+familyos_bundle_manifest: "{{ familyos_artifacts_root }}/{{ deployment_role | default('local-single-node') }}/bundles/{{ deployment_role | default('local-single-node') }}/{{ deployment_role | default('local-single-node') }}-bundle.json"
+familyos_telemetry_destination_root: "/opt/familyos/telemetry"
+familyos_telemetry_skip_verification: false
+familyos_telemetry_snapshot_directory: "artifacts/security-telemetry"
+familyos_repo_root: "{{ (playbook_dir | default('.')) ~ '/../../..' }}"
+familyos_python: "python3"

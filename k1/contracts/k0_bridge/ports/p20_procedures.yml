@@ -1,0 +1,631 @@
+# P20 Procedures - Routine Automation & Skill Learning Pipeline
+# Port: P20 (K1 → K0 procedural memory queries)
+# Query semantics: Routine retrieval, habit tracking, skill execution
+# Performance budget: 40ms P95, 150ms timeout
+
+version: "1.0"
+port_id: "P20"
+port_name: "Procedures"
+direction: "K1_TO_K0"
+semantics: "query"
+transport: "HTTP/2"
+related_adrs:
+  - "ADR-0001a" # K0/K1 Bridge Protocol
+  - "ADR-0170"  # Procedural Memory Framework
+  - "ADR-0171"  # Habit Formation (Duhigg 2012)
+  - "ADR-0172"  # Routine Automation
+  - "ADR-0173"  # Skill Acquisition (ACT-R)
+  - "ADR-0044"  # HTTP/2 Transport
+
+# ============================================================================
+# REQUEST SPECIFICATION
+# ============================================================================
+
+request:
+  envelope:
+    port_id:
+      type: string
+      value: "P20"
+      description: "Port identifier for procedural memory queries"
+
+    command_type:
+      type: string
+      value: "procedure_query"
+      description: "Procedural memory/routine retrieval request"
+
+    cognitive_trace_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Cognitive trace ID for distributed tracing"
+      example: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+
+    session_id:
+      type: string
+      format: uuid
+      required: true
+      description: "Active session identifier"
+      example: "sess_abc123"
+
+    privacy_band:
+      type: string
+      enum: ["GREEN", "AMBER", "RED"]
+      required: true
+      description: "Privacy band for procedural queries"
+
+    capability:
+      type: string
+      value: "QUERY_PROCEDURES"
+      required: true
+      description: "Required K0 capability for procedural queries"
+
+  payload:
+    query_type:
+      type: string
+      enum: ["procedure", "habit", "routine"]
+      required: true
+      description: |
+        Procedural query type:
+        - procedure: Retrieve routine template (e.g., "morning_routine")
+        - habit: Query habit status (e.g., "daily_meditation" → streak: 14 days)
+        - routine: Active routine execution state (e.g., current step in routine)
+
+    procedure_name:
+      type: string
+      required: false
+      description: "Procedure identifier (if query_type=procedure)"
+      example: "morning_routine"
+
+    context:
+      type: object
+      required: true
+      description: "Contextual factors for procedure selection"
+      properties:
+        time_of_day:
+          type: string
+          enum: ["morning", "afternoon", "evening", "night"]
+
+        location:
+          type: string
+          enum: ["home", "work", "gym", "commute", "other"]
+
+        trigger_event:
+          type: string
+          required: false
+          description: "Event that triggered procedure (e.g., 'alarm_9am', 'arrive_home')"
+
+    execution_mode:
+      type: string
+      enum: ["suggested", "scheduled", "triggered"]
+      default: "suggested"
+      description: |
+        Execution mode:
+        - suggested: Passive recommendations (e.g., "You usually exercise now")
+        - scheduled: Pre-planned routines (e.g., "Evening wind-down at 9 PM")
+        - triggered: Event-driven automation (e.g., "Arrive home → start dinner prep")
+
+# ============================================================================
+# RESPONSE SPECIFICATION
+# ============================================================================
+
+response:
+  status_codes:
+    "200":
+      description: "Procedure query successful"
+      payload:
+        query_type:
+          type: string
+          description: "Echo of query type"
+
+        procedures:
+          type: array
+          required: false
+          description: "Routine templates (if query_type=procedure)"
+          items:
+            type: object
+            properties:
+              procedure_name:
+                type: string
+                description: "Procedure identifier"
+                example: "morning_routine"
+
+              steps:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    step_id:
+                      type: string
+
+                    action:
+                      type: string
+                      description: "Action description"
+                      example: "Brew coffee"
+
+                    duration_minutes:
+                      type: integer
+                      required: false
+                      description: "Step duration"
+
+                    prerequisites:
+                      type: array
+                      items:
+                        type: string
+                      description: "Required prior steps"
+
+              total_duration_minutes:
+                type: integer
+                description: "Total routine duration"
+
+              learning_phase:
+                type: string
+                enum: ["declarative", "transitional", "procedural"]
+                description: "ACT-R learning phase"
+
+        habits:
+          type: array
+          required: false
+          description: "Habit status (if query_type=habit)"
+          items:
+            type: object
+            properties:
+              habit_name:
+                type: string
+                description: "Habit identifier"
+                example: "daily_meditation"
+
+              streak:
+                type: integer
+                description: "Consecutive days completed"
+                example: 14
+
+              completion_rate:
+                type: number
+                description: "% of scheduled executions completed"
+                example: 0.87
+
+              consistency_score:
+                type: number
+                description: "Time-of-day variance (lower is better)"
+                example: 0.15
+
+              automaticity:
+                type: number
+                description: "% initiated without prompt"
+                example: 0.73
+
+              cue:
+                type: string
+                description: "Habit loop cue"
+                example: "9:00 AM alarm"
+
+              reward:
+                type: string
+                description: "Habit loop reward"
+                example: "Feeling calm and focused"
+
+        execution_plan:
+          type: object
+          required: false
+          description: "Scheduled execution plan (if query_type=routine)"
+          properties:
+            routine_id:
+              type: string
+              format: uuid
+              description: "Active routine instance"
+
+            current_step:
+              type: string
+              description: "Current step in execution"
+              example: "Brew coffee"
+
+            steps_completed:
+              type: integer
+              description: "Steps completed so far"
+
+            steps_total:
+              type: integer
+              description: "Total steps in routine"
+
+            estimated_completion_time:
+              type: string
+              format: iso8601
+              description: "Expected completion timestamp"
+
+        receipt_id:
+          type: string
+          format: uuid
+          description: "Receipt ID for audit trail"
+
+    "400":
+      description: "Invalid procedure query"
+      payload:
+        error:
+          type: string
+          enum: ["invalid_query_type", "invalid_procedure_name", "invalid_context"]
+
+        details:
+          type: string
+
+    "404":
+      description: "Procedure not found"
+      payload:
+        error:
+          type: string
+          value: "procedure_not_found"
+
+        procedure_name:
+          type: string
+
+    "500":
+      description: "Procedure query error"
+      payload:
+        error:
+          type: string
+          enum: ["procedure_retrieval_error", "habit_tracking_error"]
+
+# ============================================================================
+# USAGE EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "Query morning routine procedure"
+    request:
+      envelope:
+        port_id: "P20"
+        command_type: "procedure_query"
+        cognitive_trace_id: "1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PROCEDURES"
+      payload:
+        query_type: "procedure"
+        procedure_name: "morning_routine"
+        context:
+          time_of_day: "morning"
+          location: "home"
+        execution_mode: "suggested"
+
+    response:
+      status: 200
+      payload:
+        query_type: "procedure"
+        procedures:
+          - procedure_name: "morning_routine"
+            steps:
+              - step_id: "step_1"
+                action: "Alarm (wake up)"
+                duration_minutes: 0
+                prerequisites: []
+              - step_id: "step_2"
+                action: "Brew coffee"
+                duration_minutes: 5
+                prerequisites: ["step_1"]
+              - step_id: "step_3"
+                action: "Exercise (30 min)"
+                duration_minutes: 30
+                prerequisites: ["step_1"]
+              - step_id: "step_4"
+                action: "Shower"
+                duration_minutes: 10
+                prerequisites: ["step_3"]
+              - step_id: "step_5"
+                action: "Breakfast"
+                duration_minutes: 15
+                prerequisites: ["step_2", "step_4"]
+            total_duration_minutes: 60
+            learning_phase: "procedural"
+        receipt_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+
+  - name: "Query habit status (meditation habit)"
+    request:
+      envelope:
+        port_id: "P20"
+        command_type: "procedure_query"
+        cognitive_trace_id: "2e3f4a5b-6c7d-8e9f-0a1b-2c3d4e5f6a7b"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PROCEDURES"
+      payload:
+        query_type: "habit"
+        procedure_name: "daily_meditation"
+        context:
+          time_of_day: "morning"
+          location: "home"
+
+    response:
+      status: 200
+      payload:
+        query_type: "habit"
+        habits:
+          - habit_name: "daily_meditation"
+            streak: 14
+            completion_rate: 0.87
+            consistency_score: 0.15
+            automaticity: 0.73
+            cue: "9:00 AM alarm"
+            reward: "Feeling calm and focused"
+        receipt_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+
+  - name: "Query active routine execution state"
+    request:
+      envelope:
+        port_id: "P20"
+        command_type: "procedure_query"
+        cognitive_trace_id: "3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c"
+        session_id: "sess_abc123"
+        privacy_band: "GREEN"
+        capability: "QUERY_PROCEDURES"
+      payload:
+        query_type: "routine"
+        procedure_name: "evening_wind_down"
+        context:
+          time_of_day: "evening"
+          location: "home"
+        execution_mode: "triggered"
+
+    response:
+      status: 200
+      payload:
+        query_type: "routine"
+        execution_plan:
+          routine_id: "routine_instance_123"
+          current_step: "Dim lights"
+          steps_completed: 2
+          steps_total: 5
+          estimated_completion_time: "2025-10-18T21:30:00Z"
+        receipt_id: "4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d"
+
+# ============================================================================
+# K0 PROCESSING DETAILS
+# ============================================================================
+
+k0_processing:
+  pipeline:
+    - step: "procedure_retrieval"
+      description: |
+        If query_type=procedure:
+        - Fetch routine template from st_procedures (e.g., "morning_routine")
+        - Include steps (action, duration, prerequisites)
+        - Include total_duration, learning_phase (ACT-R)
+
+    - step: "habit_analysis"
+      description: |
+        If query_type=habit:
+        - Query st_habit_log for habit history
+        - Compute streak (consecutive days)
+        - Compute completion_rate (% scheduled executions completed)
+        - Compute consistency_score (time-of-day variance)
+        - Compute automaticity (% initiated without prompt)
+
+    - step: "contextual_matching"
+      description: |
+        Select procedures based on context:
+        - time_of_day: "morning_routine" at 7 AM, "evening_wind_down" at 9 PM
+        - location: "gym_workout" at gym, "commute_routine" in commute
+        - trigger_event: "arrive_home" → "dinner_prep", "alarm_6am" → "morning_routine"
+
+    - step: "execution_planning"
+      description: |
+        If query_type=routine:
+        - Query st_activity for active routine execution
+        - Return current_step, steps_completed, estimated_completion_time
+
+    - step: "caching"
+      description: |
+        Cache frequently-used procedures in K1:
+        - TTL: 15 minutes (configurable)
+        - Invalidate on procedure update
+
+  storage_targets:
+    - "st_procedures" # Routine templates
+    - "st_habit_log" # Habit tracking
+    - "st_activity" # Active routine execution
+
+  events_emitted:
+    - "infra.procedures.procedure_queried"
+    - "infra.procedures.habit_updated"
+    - "infra.procedures.routine_executed"
+
+# ============================================================================
+# VALIDATION RULES
+# ============================================================================
+
+validation:
+  - rule: "query_type must be [procedure|habit|routine]"
+  - rule: "context.time_of_day must be [morning|afternoon|evening|night]"
+  - rule: "context.location must be [home|work|gym|commute|other]"
+  - rule: "execution_mode must be [suggested|scheduled|triggered]"
+
+# ============================================================================
+# OBSERVABILITY
+# ============================================================================
+
+observability:
+  metrics:
+    - name: "k0_procedure_queries_total"
+      type: "counter"
+      labels: ["query_type"]
+      description: "Total procedure queries"
+
+    - name: "k0_habits_tracked_total"
+      type: "gauge"
+      description: "Total habits being tracked"
+
+    - name: "k0_procedure_latency_ms"
+      type: "histogram"
+      buckets: [10, 20, 40, 60, 100, 150]
+      description: "Procedure query latency"
+
+    - name: "k0_routine_completion_rate"
+      type: "gauge"
+      labels: ["procedure_name"]
+      description: "Routine completion rate (% completed)"
+
+  traces:
+    span_name: "k0_procedures.query"
+    attributes:
+      - "query_type"
+      - "procedure_name"
+      - "context_time_of_day"
+
+  logs:
+    - event: "infra.procedures.procedure_queried"
+      level: "INFO"
+      fields: ["session_id", "procedure_name", "query_type"]
+
+    - event: "infra.procedures.routine_executed"
+      level: "INFO"
+      fields: ["session_id", "procedure_name", "completion_status"]
+
+# ============================================================================
+# PERFORMANCE CHARACTERISTICS
+# ============================================================================
+
+performance:
+  latency_budget:
+    p50: "20ms"
+    p95: "40ms"
+    p99: "80ms"
+    timeout: "150ms"
+
+  throughput:
+    target_qps: 100
+    max_concurrent_requests: 300
+
+  caching:
+    k1_cache_ttl: "15 minutes (procedures, habits)"
+    cache_hit_rate_target: "85%"
+
+# ============================================================================
+# SECURITY
+# ============================================================================
+
+security:
+  authentication:
+    mechanism: "Bearer token (JWT)"
+    required: true
+
+  authorization:
+    capability_required: "QUERY_PROCEDURES"
+
+  audit_trail:
+    receipt_id: "Issued for all procedure queries"
+    retention: "365 days"
+
+# ============================================================================
+# HABIT LOOP (DUHIGG 2012)
+# ============================================================================
+
+habit_loop:
+  cue:
+    description: "Contextual trigger that initiates behavior"
+    examples:
+      - "9:00 AM alarm → morning_routine"
+      - "Arrive home → start_dinner_prep"
+      - "Open laptop → check_email"
+
+  routine:
+    description: "Behavior sequence (automated actions)"
+    examples:
+      - "[alarm, coffee, exercise, shower]"
+      - "[wash_hands, chop_vegetables, cook]"
+      - "[login, scan_inbox, respond_urgent]"
+
+  reward:
+    description: "Positive reinforcement that strengthens habit"
+    examples:
+      - "Feeling energized after exercise"
+      - "Satisfaction of healthy meal"
+      - "Peace of mind (inbox cleared)"
+
+# ============================================================================
+# PROCEDURAL LEARNING (ANDERSON'S ACT-R)
+# ============================================================================
+
+procedural_learning:
+  declarative_phase:
+    description: "Explicit knowledge (conscious effort)"
+    characteristics:
+      - "Slow, effortful execution"
+      - "Frequent errors, corrections"
+      - "High cognitive load"
+    example: "Learning to drive: consciously think about each step (mirror, signal, accelerate)"
+
+  transitional_phase:
+    description: "Reducing cognitive load (practice)"
+    characteristics:
+      - "Faster execution"
+      - "Fewer errors"
+      - "Lower cognitive load"
+    example: "Driving after a few months: less conscious effort, smoother transitions"
+
+  procedural_phase:
+    description: "Automatic execution (muscle memory)"
+    characteristics:
+      - "Fast, effortless execution"
+      - "Minimal errors"
+      - "Near-zero cognitive load"
+    example: "Experienced driver: automatic gear shifting, lane changes without conscious thought"
+
+# ============================================================================
+# EXECUTION MODES
+# ============================================================================
+
+execution_modes:
+  suggested:
+    description: "Passive recommendations (no automation)"
+    example: "K1: 'You usually exercise at this time. Would you like to start your workout?'"
+    use_case: "Discovery, habit reinforcement"
+
+  scheduled:
+    description: "Pre-planned routines (proactive)"
+    example: "K1: 'It's 9 PM. Time for your evening wind-down routine.'"
+    use_case: "Time-based automation, consistency"
+
+  triggered:
+    description: "Event-driven automation (reactive)"
+    example: "User arrives home → K1: 'Starting dinner prep routine.'"
+    use_case: "Context-aware automation, seamless transitions"
+
+# ============================================================================
+# HABIT FORMATION METRICS
+# ============================================================================
+
+habit_metrics:
+  streak:
+    description: "Consecutive days completed"
+    calculation: "Count days since last miss"
+    target: "21 days (habit formation threshold)"
+
+  completion_rate:
+    description: "% of scheduled executions completed"
+    calculation: "(completed / scheduled) * 100"
+    target: "≥ 80% (consistent habit)"
+
+  consistency_score:
+    description: "Time-of-day variance (lower is better)"
+    calculation: "Standard deviation of execution times"
+    target: "< 0.2 (highly consistent)"
+
+  automaticity:
+    description: "% initiated without prompt"
+    calculation: "(unprompted / total) * 100"
+    target: "≥ 70% (automatic habit)"
+
+# ============================================================================
+# RESEARCH FOUNDATIONS
+# ============================================================================
+
+research_foundations:
+  - citation: "Duhigg, C. (2012). The Power of Habit: Why We Do What We Do in Life and Business."
+    url: "https://charlesduhigg.com/the-power-of-habit/"
+    relevance: "Habit loop framework (cue → routine → reward)"
+
+  - citation: "Anderson, J. R. (1982). Acquisition of Cognitive Skill. Psychological Review."
+    url: "https://doi.org/10.1037/0033-295X.89.4.369"
+    relevance: "ACT-R theory of skill acquisition (declarative → procedural)"
+
+  - citation: "Lally, P., et al. (2010). How are habits formed: Modelling habit formation in the real world. European Journal of Social Psychology."
+    url: "https://doi.org/10.1002/ejsp.674"
+    relevance: "66-day habit formation timeline (median)"

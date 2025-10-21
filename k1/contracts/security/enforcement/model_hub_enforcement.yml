@@ -1,0 +1,568 @@
+# Model Hub Capability Enforcement Contract
+# ADR-0010c & 0001b: Capability Enforcement at Runtime + Model Hub Architecture
+# Issue 2.5.4: Capability Enforcement & Audit Contracts
+#
+# Purpose: Define capability validation requirements for Model Hub before LLM model calls
+# Scope: Model Hub (P009 in K1 Model layer) acts as Reference Monitor for model authorization
+# Performance Target: <50ms validation + model call setup (MODEL_CALL capability check)
+
+---
+contract:
+  name: "Model Hub Capability Enforcement"
+  version: "1.0.0"
+  status: "approved"
+  date: "2025-10-15"
+  parent_adr:
+    - "ADR-0010c-capability-enforcement-runtime"
+    - "ADR-0001b-model-hub-architecture"
+  owner: "AI Architecture Team"
+  related_contracts:
+    - "tool_runner_enforcement.yml"
+    - "hot_path_validation.yml"
+
+# ============================================================================
+# SECTION 1: MODEL CALL CAPABILITY VALIDATION
+# ============================================================================
+
+validation:
+  enforcement_point: "Model Hub before_inference()"
+  enforcement_model: "Reference Monitor Pattern (Anderson 1972)"
+
+  validation_flow:
+    # Model Hub receives inference request from Agent (Planner, Concierge, Researcher)
+    # Before calling LLM API (OpenAI, Anthropic) or local inference (vLLM, Ollama),
+    # Model Hub validates agent has MODEL_CALL capability
+
+    trigger: "agent.infer(prompt, model_id, model_class, budget_tokens)"
+    sequence:
+      - step: 1
+        name: "Extract Capability Token"
+        description: "Get agent's MODEL_CALL capability from lease"
+        source: "agent.active_leases[MODEL_CALL]"
+        latency_ms: 0.1
+
+      - step: 2
+        name: "Cache Lookup"
+        description: "Check in-memory cache for recently validated capability"
+        cache_key: "MODEL_CALL:{model_class}:{inference_type}"
+        # MODEL_CALL capability typically long-lived (1 hour),
+        # so cache hit rate should be >90% for repeated inference calls
+        cache_ttl_seconds: 600  # 10 minutes
+        latency_ms: 0.05
+
+      - step: 3
+        name: "Signature Verification"
+        description: "Verify HMAC-SHA256 signature of capability token"
+        algorithm: "HMAC-SHA256"
+        latency_ms: 0.3
+
+      - step: 4
+        name: "Expiration Check"
+        description: "Verify capability not expired"
+        check: "token.expires_at > now()"
+        latency_ms: 0.1
+
+      - step: 5
+        name: "Agent Identity Validation"
+        description: "Verify token subject matches calling agent_id"
+        check: "token.subject == agent_id"
+        latency_ms: 0.1
+
+      - step: 6
+        name: "Model Access Validation"
+        description: "Verify agent has access to requested model"
+        resources: ["gpt-4o", "gpt-4o-mini", "claude-3-opus", "gemma-2b", "mistral-7b", "llama-3.1-70b"]
+        check: "model_id in token.resources"
+        latency_ms: 0.1
+
+      - step: 7
+        name: "Permission Validation"
+        description: "Verify MODEL_CALL permission in token rights"
+        permissions: ["INFER", "FINE_TUNE", "EVALUATE"]
+        requested: "INFER"
+        check: "INFER in token.rights"
+        latency_ms: 0.1
+
+      - step: 8
+        name: "Constraint Enforcement"
+        description: "Verify token constraints (max_tokens, max_cost, rate_limit, model_class)"
+        constraints:
+          - name: "max_input_tokens"
+            type: "numeric"
+            description: "Max input tokens per call (context window limit)"
+            values:
+              gpt-4o: 128000  # 128K context
+              gpt-4o-mini: 128000
+              claude-3-opus: 200000
+              gemma-2b: 8000
+              mistral-7b: 32000
+              llama-3.1-70b: 8192
+            check: "input_tokens + output_tokens < max_tokens"
+
+          - name: "max_cost_per_call"
+            type: "currency"
+            description: "Max cost per inference call (USD)"
+            values:
+              gpt-4o: 0.10  # Expensive
+              gpt-4o-mini: 0.01  # Cheap
+              claude-3-opus: 0.05
+              gemma-2b: 0.00  # Free (local)
+              mistral-7b: 0.00  # Free (local)
+            check: "estimated_cost <= max_cost_per_call"
+
+          - name: "max_requests_per_minute"
+            type: "rate_limit"
+            description: "Rate limiting for inference calls"
+            values:
+              gpt-4o: 500  # RPM limit
+              gpt-4o-mini: 1000
+              claude-3-opus: 500
+              gemma-2b: 999999  # Local, no limit
+            check: "request_count_last_60s < rate_limit"
+
+          - name: "model_class_restriction"
+            type: "enum"
+            description: "Agent restricted to certain model classes"
+            values:
+              Concierge: ["gpt-4o-mini", "claude-3-haiku"]  # Fast, responsive
+              Planner: ["gpt-4o", "claude-3-opus"]  # Powerful reasoning
+              Researcher: ["gpt-4o", "claude-3-opus", "llama-3.1-70b"]  # Multi-model research
+              SafetyWatch: ["gpt-4o-mini", "distilbert"]  # Fast filtering
+            check: "model_class in token.model_class_restrictions"
+
+          - name: "privacy_band"
+            type: "enum"
+            description: "Privacy band constraint (model selection depends on band)"
+            bands: ["GREEN", "AMBER", "RED", "BLACK"]
+            policy:
+              GREEN: "All models allowed (GPT-4, local models, APIs)"
+              AMBER: "Local models + private APIs only (block OpenAI/Anthropic)"
+              RED: "Local inference only (gemma-2b, mistral-7b, llama)"
+              BLACK: "No inference allowed"
+            check: "model_class matches privacy_band requirements"
+
+          - name: "requires_approval_for_expensive_models"
+            type: "boolean"
+            description: "Expensive models (GPT-4) require explicit approval"
+            models_requiring_approval:
+              - "gpt-4o: cost >$0.05 per call"
+              - "claude-3-opus: cost >$0.05 per call"
+            check: "if expensive and not approved, DENY"
+
+  # Total validation latency budget (before LLM call)
+  total_latency_budget_ms: 10.0
+  percentile: "P95"
+  justification: "LLM inference typically 100-5000ms, <10ms overhead acceptable"
+
+# ============================================================================
+# SECTION 2: MODEL-SPECIFIC ENFORCEMENT RULES
+# ============================================================================
+
+model_specific_rules:
+  # OpenAI Models (gpt-4o, gpt-4o-mini)
+  gpt-4o:
+    provider: "OpenAI"
+    deployment: "Remote API"
+    model_id: "gpt-4o"
+    context_window: 128000
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_input_tokens: 0.005  # USD
+    cost_per_1k_output_tokens: 0.015
+    rate_limit_rpm: 500
+    rate_limit_tpm: 200000  # Tokens per minute
+    privacy_band_support: ["GREEN", "AMBER"]  # Not RED/BLACK (external API)
+    approval_required: true
+    audit_level: "high"  # Log every call
+
+  gpt-4o-mini:
+    provider: "OpenAI"
+    deployment: "Remote API"
+    model_id: "gpt-4o-mini"
+    context_window: 128000
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_input_tokens: 0.00015  # Much cheaper
+    cost_per_1k_output_tokens: 0.0006
+    rate_limit_rpm: 1000
+    rate_limit_tpm: 200000
+    privacy_band_support: ["GREEN", "AMBER"]
+    approval_required: false  # Cheap, auto-allowed
+    audit_level: "medium"  # Log summary stats
+
+  # Anthropic Models (claude-3-*)
+  claude-3-opus:
+    provider: "Anthropic"
+    deployment: "Remote API"
+    model_id: "claude-3-opus"
+    context_window: 200000  # 200K context
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_input_tokens: 0.015
+    cost_per_1k_output_tokens: 0.075  # Expensive
+    rate_limit_rpm: 500
+    rate_limit_tpm: 400000
+    privacy_band_support: ["GREEN", "AMBER"]
+    approval_required: true  # Expensive
+    audit_level: "high"
+
+  claude-3-haiku:
+    provider: "Anthropic"
+    deployment: "Remote API"
+    model_id: "claude-3-haiku"
+    context_window: 200000
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_input_tokens: 0.00080
+    cost_per_1k_output_tokens: 0.0024  # Cheap
+    rate_limit_rpm: 1000
+    rate_limit_tpm: 200000
+    privacy_band_support: ["GREEN", "AMBER"]
+    approval_required: false  # Cheap
+    audit_level: "medium"
+
+  # Local Models (vLLM, Ollama - no API calls, free)
+  gemma-2b:
+    provider: "Google"
+    deployment: "Local inference (vLLM on device)"
+    model_id: "gemma-2b"
+    context_window: 8000
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_tokens: 0.0  # Free (local)
+    rate_limit_rpm: 999999  # No limit (local)
+    privacy_band_support: ["GREEN", "AMBER", "RED", "BLACK"]  # Supports all bands
+    approval_required: false  # Free
+    audit_level: "low"  # Just log counts, not content
+    thermal_impact: "medium"  # 2GB RAM, 50% CPU
+    requires_warmup_ms: 200  # First load 200ms
+
+  mistral-7b:
+    provider: "Mistral AI"
+    deployment: "Local inference (vLLM on device)"
+    model_id: "mistral-7b"
+    context_window: 32000
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_tokens: 0.0
+    rate_limit_rpm: 999999
+    privacy_band_support: ["GREEN", "AMBER", "RED", "BLACK"]
+    approval_required: false
+    audit_level: "low"
+    thermal_impact: "high"  # 15GB RAM, 90% CPU
+    requires_warmup_ms: 500  # Larger model, longer warmup
+
+  llama-3.1-70b:
+    provider: "Meta"
+    deployment: "Local inference (vLLM on device with quantization)"
+    model_id: "llama-3.1-70b"
+    context_window: 8192
+    capability_required: "MODEL_CALL"
+    rights_required: ["INFER"]
+    cost_per_1k_tokens: 0.0
+    rate_limit_rpm: 999999
+    privacy_band_support: ["GREEN", "AMBER", "RED", "BLACK"]
+    approval_required: false
+    audit_level: "low"
+    thermal_impact: "very_high"  # 25GB RAM, 99% CPU, thermal throttling likely
+    requires_warmup_ms: 800
+
+# ============================================================================
+# SECTION 3: REVOCATION INTEGRATION
+# ============================================================================
+
+revocation:
+  enforcement_point: "Model Hub before inference call"
+
+  revocation_check:
+    storage: "Redis hash with TTL"
+    key: "inference_revocations:{agent_id}:{model_id}"
+    ttl_seconds: 300
+    update_mechanism: "Redis pub/sub from Capability Manager"
+    latency_budget_ms: 0.2
+    check: "Redis HEXISTS revoked_model_calls {agent_id}:{model_id}"
+
+    if_revoked:
+      action: "Reject inference call, return error"
+      error_code: 403
+      message: "Model access revoked. Please contact administrator."
+      logging: "model_call_revoked event"
+
+    if_not_revoked:
+      action: "Proceed with model selection and inference"
+
+  cascading_revocation:
+    policy: "Revoke agent MODEL_CALL capability → blocks ALL model inference"
+    implementation: "Revoke parent capability, all model_id entries revoked"
+    propagation: "<100ms via Redis pub/sub"
+
+# ============================================================================
+# SECTION 4: COST TRACKING INTEGRATION
+# ============================================================================
+
+cost_tracking:
+  purpose: "Prevent cost overruns, enforce budget constraints"
+
+  cost_estimation:
+    formula: "(input_tokens + output_tokens) * (cost_per_token)"
+    cost_per_token_formula: "cost_per_1k_tokens / 1000"
+    example:
+      model: "gpt-4o"
+      input_tokens: 1000
+      output_tokens: 500
+      cost: "(1000 * 0.000005) + (500 * 0.000015) = 0.0125 USD"
+
+  pre_call_cost_check:
+    check: "estimated_cost + accumulated_session_cost <= session_budget"
+    if_budget_exceeded:
+      action: "Reject call, suggest cheaper model"
+      message: "This call would exceed your session budget. Try gpt-4o-mini instead?"
+      fallback_model: "gpt-4o-mini or gemma-2b"
+      logging: "model_call_budget_exceeded event"
+
+    if_within_budget:
+      action: "Proceed with inference"
+
+  post_call_cost_tracking:
+    action: "Record actual tokens consumed, update session cost accumulator"
+    logging: "model_call_tokens_consumed event"
+    fields:
+      - "model_id"
+      - "input_tokens_actual"
+      - "output_tokens_actual"
+      - "cost_actual_usd"
+      - "total_session_cost_usd"
+
+  cost_observability:
+    metrics:
+      - "model_call_cost_total_usd_per_agent"
+      - "model_call_cost_total_usd_per_model"
+      - "model_call_budget_exceeded_total"
+      - "model_call_cost_per_turn_ms"
+
+    alerts:
+      - name: "SessionBudgetExceeded"
+        condition: "session_cost >= 0.9 * session_budget"
+        action: "Notify user, suggest cost reduction strategies"
+
+      - name: "DailyBudgetTrajectory"
+        condition: "projected_daily_cost > daily_budget_limit"
+        action: "Warn user about potential overage"
+
+# ============================================================================
+# SECTION 5: PERFORMANCE TARGETS
+# ============================================================================
+
+performance:
+  validation_latency:
+    cache_hit:
+      percentile: "P95"
+      budget_ms: 0.5  # Fast path for cached capability
+      typical_ms: 0.2
+
+    cache_miss:
+      percentile: "P95"
+      budget_ms: 10.0  # Slow path with signature verification
+      typical_ms: 5.0
+
+    revocation_check:
+      percentile: "P95"
+      budget_ms: 0.2
+      typical_ms: 0.1
+
+    constraint_check:
+      percentile: "P95"
+      budget_ms: 1.0
+      typical_ms: 0.5
+
+  overall_inference_latency:
+    description: "Total time from agent.infer() call to model output"
+    breakdown:
+      capability_validation: "~10ms P95"
+      model_placement_decision: "~5ms"
+      model_warmup_if_needed: "200ms (one-time on first load)"
+      inference_call: "100-5000ms (model-dependent)"
+      post_processing: "~5ms"
+
+    total_first_call: "~300-5000ms (with warmup)"
+    total_subsequent_calls: "~100-5000ms (no warmup)"
+
+    impact_of_validation: "<0.1% of total time"
+
+# ============================================================================
+# SECTION 6: AGENT-SPECIFIC MODEL ACCESS
+# ============================================================================
+
+agent_model_access:
+  # Each agent type has specific model access policies
+
+  Concierge:
+    description: "Conversational agent, handles user NLU"
+    required_models: ["gpt-4o-mini", "claude-3-haiku"]
+    optional_models: ["gpt-4o"]  # If user requests powerful understanding
+    forbidden_models: ["llama-3.1-70b"]  # Too slow
+    budget_per_turn: 0.01  # 1 cent
+    latency_requirement: "TTFT <150ms"
+    privacy_band_support: ["GREEN", "AMBER", "RED"]
+    model_class: "fast_response_models"
+
+  Planner:
+    description: "Strategic planning agent, generates multi-step plans"
+    required_models: ["gpt-4o", "claude-3-opus"]
+    optional_models: ["gpt-4o-mini", "gemma-2b"]  # Fallback options
+    forbidden_models: []
+    budget_per_turn: 0.20  # 20 cents for complex planning
+    latency_requirement: "Plan generation <5000ms"
+    privacy_band_support: ["GREEN", "AMBER", "RED"]
+    model_class: "reasoning_models"
+
+  Researcher:
+    description: "Information synthesis, multi-model evaluation"
+    required_models: ["gpt-4o", "claude-3-opus", "llama-3.1-70b"]
+    optional_models: []
+    forbidden_models: []
+    budget_per_turn: 0.50  # 50 cents for multi-model research
+    latency_requirement: "Research synthesis <10000ms"
+    privacy_band_support: ["GREEN", "AMBER", "RED"]
+    model_class: "research_models"
+
+  SafetyWatch:
+    description: "Fast content filtering and safety checks"
+    required_models: ["gpt-4o-mini", "distilbert-base"]
+    optional_models: []
+    forbidden_models: ["gpt-4o", "claude-3-opus"]  # Overkill for filtering
+    budget_per_turn: 0.001  # 0.1 cents
+    latency_requirement: "Safety check <100ms"
+    privacy_band_support: ["GREEN", "AMBER", "RED", "BLACK"]
+    model_class: "fast_filters"
+
+# ============================================================================
+# SECTION 7: AUDIT LOGGING & OBSERVABILITY
+# ============================================================================
+
+audit_logging:
+  event_source: "Model Hub Inference"
+
+  events_logged:
+    - event: "model_call_started"
+      when: "Inference call begins"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "input_tokens"
+        - "model_class"
+        - "validation_latency_ms"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "INFO"
+
+    - event: "model_call_succeeded"
+      when: "Inference call succeeded"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "input_tokens"
+        - "output_tokens"
+        - "cost_usd"
+        - "latency_ms"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "INFO"
+
+    - event: "model_call_failed"
+      when: "Inference call failed"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "error_code"
+        - "error_message"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "WARNING"
+
+    - event: "capability_validation_failed"
+      when: "Agent lacks MODEL_CALL capability"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "reason (signature_invalid | expired | revoked | no_permission)"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "WARNING"
+
+    - event: "constraint_violated"
+      when: "Model call would exceed constraint"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "constraint_name (max_tokens | max_cost | rate_limit | privacy_band)"
+        - "constraint_limit"
+        - "requested_value"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "WARNING"
+
+    - event: "model_call_revoked"
+      when: "Agent capability revoked mid-session"
+      fields:
+        - "agent_id"
+        - "model_id"
+        - "revoked_at"
+        - "trace_id"
+      audit_topic: "MODEL_INFERENCE"
+      severity: "WARNING"
+
+  audit_destination: "K0 WAL (Write-Ahead Log)"
+  retention: "90 days"
+
+metrics:
+  prometheus_metrics:
+    - metric: "model_call_total"
+      type: "Counter"
+      labels: ["agent_id", "model_id", "status"]
+      query: "rate(model_call_total{status='succeeded'}[5m])"
+
+    - metric: "model_call_latency_ms"
+      type: "Histogram"
+      labels: ["agent_id", "model_id"]
+      buckets: [50, 100, 200, 500, 1000, 2000, 5000, 10000]
+      percentiles: ["p50", "p95", "p99"]
+
+    - metric: "model_call_cost_usd"
+      type: "Histogram"
+      labels: ["model_id"]
+      buckets: [0.001, 0.01, 0.05, 0.10, 0.50, 1.00]
+
+    - metric: "model_call_validation_latency_ms"
+      type: "Histogram"
+      labels: ["cached"]
+      buckets: [0.1, 0.5, 1.0, 5.0, 10.0]
+
+    - metric: "model_capability_violations_total"
+      type: "Counter"
+      labels: ["agent_id", "violation_reason"]
+
+# ============================================================================
+# SECTION 8: SECURITY GUARANTEES
+# ============================================================================
+
+security_guarantees:
+  - guarantee: "Only agents with valid MODEL_CALL capability can invoke models"
+    enforcement: "Signature verification + capability check"
+    audit: "capability_validation_failed events logged"
+
+  - guarantee: "No agent can exceed their privacy band model restrictions"
+    enforcement: "Privacy band validation in constraint check"
+    audit: "constraint_violated events logged"
+
+  - guarantee: "No agent can exceed rate limits per model"
+    enforcement: "RPM/TPM tracking + enforcement"
+    audit: "rate_limit_exceeded events logged"
+
+  - guarantee: "All model calls are fully audited"
+    enforcement: "Audit logging at every call point"
+    audit: "model_call_started/succeeded/failed events"
+
+  - guarantee: "Revoked capabilities are immediately ineffective"
+    enforcement: "Redis revocation list checked before inference"
+    audit: "model_call_revoked events logged"

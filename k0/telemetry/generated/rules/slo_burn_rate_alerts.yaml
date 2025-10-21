@@ -1,0 +1,331 @@
+groups:
+  - name: slo_burn_rate_alerts
+    interval: 30s
+    rules:
+      # ============================================================================
+      # Command Latency SLO Burn Rate Alerts
+      # Target: 95% of requests complete within 100ms over 30 days
+      # ============================================================================
+
+      - alert: CommandLatencySLOFastBurn
+        expr: |
+          (
+            clamp_min(
+              (
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[1h]))
+                - sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="command",le="0.1"}[1h]))
+              )
+              / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[1h])), 1),
+              0
+            )
+            / (1 - 0.95)
+          ) > bool 14.4
+          and
+          (
+            (
+              1 - max(
+                sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="command",le="0.1"}[5m]))
+                  / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[5m])), 1),
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[5m])) == bool 0
+              )
+            )
+            / (1 - 0.95)
+          ) > bool 14.4
+        for: 2m
+        labels:
+          severity: critical
+          component: command
+          slo: latency
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Command latency burn rate exceeded fast threshold"
+          description: |
+            Command API latency error budget is burning {{ printf "%.2f" $value }}x faster than allowed.
+
+            Threshold: 95% of requests under 100ms.
+            Burn rate threshold: 14.4x (entire 30-day budget exhausted within 2 days).
+
+            Action Required: IMMEDIATE investigation
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      - alert: CommandLatencySLOSlowBurn
+        expr: |
+          (
+            clamp_min(
+              (
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[6h]))
+                - sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="command",le="0.1"}[6h]))
+              )
+              / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[6h])), 1),
+              0
+            )
+            / (1 - 0.95)
+          ) > bool 6
+          and
+          (
+            (
+              1 - max(
+                sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="command",le="0.1"}[30m]))
+                  / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[30m])), 1),
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="command"}[30m])) == bool 0
+              )
+            )
+            / (1 - 0.95)
+          ) > bool 6
+        for: 10m
+        labels:
+          severity: warning
+          component: command
+          slo: latency
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Command latency burn rate exceeded slow threshold"
+          description: |
+            Command API latency error budget is burning {{ printf "%.2f" $value }}x faster than allowed for the slow window.
+
+            Threshold: 95% of requests under 100ms.
+            Burn rate threshold: 6x (entire 30-day budget exhausted in 5 days).
+
+            Action Required: Investigate during next business day
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      # ============================================================================
+      # Command Availability SLO Burn Rate Alerts
+      # Target: 99.9% availability (0.1% error rate) over 30 days
+      # ============================================================================
+
+      - alert: CommandAvailabilitySLOFastBurn
+        expr: |
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="command",status=~"5.."}[1h]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="command"}[1h])), 1)
+            )
+            / 0.001
+          ) > bool 14.4
+          and
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="command",status=~"5.."}[5m]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="command"}[5m])), 1)
+            )
+            / 0.001
+          ) > bool 14.4
+        for: 2m
+        labels:
+          severity: critical
+          component: command
+          slo: availability
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Command availability burn rate exceeded fast threshold"
+          description: |
+            Command API availability error budget is burning {{ printf "%.2f" $value }}x faster than allowed.
+
+            Threshold: <0.1% errors (99.9% availability).
+            Burn rate threshold: 14.4x (entire 30-day budget exhausted in 2 days).
+
+            Action Required: IMMEDIATE incident response
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      - alert: CommandAvailabilitySLOSlowBurn
+        expr: |
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="command",status=~"5.."}[6h]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="command"}[6h])), 1)
+            )
+            / 0.001
+          ) > bool 6
+          and
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="command",status=~"5.."}[30m]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="command"}[30m])), 1)
+            )
+            / 0.001
+          ) > bool 6
+        for: 10m
+        labels:
+          severity: warning
+          component: command
+          slo: availability
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Command availability burn rate exceeded slow threshold"
+          description: |
+            Command API availability error budget is burning {{ printf "%.2f" $value }}x faster than allowed for the slow window.
+
+            Threshold: <0.1% errors (99.9% availability).
+            Burn rate threshold: 6x (entire 30-day budget exhausted in 5 days).
+
+            Action Required: Scheduled investigation
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      # ============================================================================
+      # Query Latency SLO Burn Rate Alerts
+      # Target: 95% of requests complete within 50ms over 30 days
+      # ============================================================================
+
+      - alert: QueryLatencySLOFastBurn
+        expr: |
+          (
+            clamp_min(
+              (
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[1h]))
+                - sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="query",le="0.05"}[1h]))
+              )
+              / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[1h])), 1),
+              0
+            )
+            / (1 - 0.95)
+          ) > bool 14.4
+          and
+          (
+            (
+              1 - max(
+                sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="query",le="0.05"}[5m]))
+                  / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[5m])), 1),
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[5m])) == bool 0
+              )
+            )
+            / (1 - 0.95)
+          ) > bool 14.4
+        for: 2m
+        labels:
+          severity: critical
+          component: query
+          slo: latency
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Query latency burn rate exceeded fast threshold"
+          description: |
+            Query API latency error budget is burning {{ printf "%.2f" $value }}x faster than allowed.
+
+            Threshold: 95% of requests under 50ms.
+            Burn rate threshold: 14.4x (entire 30-day budget exhausted in 2 days).
+
+            Action Required: IMMEDIATE investigation
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      - alert: QueryLatencySLOSlowBurn
+        expr: |
+          (
+            clamp_min(
+              (
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[6h]))
+                - sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="query",le="0.05"}[6h]))
+              )
+              / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[6h])), 1),
+              0
+            )
+            / (1 - 0.95)
+          ) > bool 6
+          and
+          (
+            (
+              1 - max(
+                sum(increase(k0_kernel_http_request_latency_seconds_bucket{operation="query",le="0.05"}[30m]))
+                  / clamp_min(sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[30m])), 1),
+                sum(increase(k0_kernel_http_request_latency_seconds_count{operation="query"}[30m])) == bool 0
+              )
+            )
+            / (1 - 0.95)
+          ) > bool 6
+        for: 10m
+        labels:
+          severity: warning
+          component: query
+          slo: latency
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Query latency burn rate exceeded slow threshold"
+          description: |
+            Query API latency error budget is burning {{ printf "%.2f" $value }}x faster than allowed for the slow window.
+
+            Threshold: 95% of requests under 50ms.
+            Burn rate threshold: 6x (entire 30-day budget exhausted in 5 days).
+
+            Action Required: Scheduled investigation
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      # ============================================================================
+      # Query Availability SLO Burn Rate Alerts
+      # Target: 99.95% availability (0.05% error rate) over 30 days
+      # ============================================================================
+
+      - alert: QueryAvailabilitySLOFastBurn
+        expr: |
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="query",status=~"5.."}[1h]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="query"}[1h])), 1)
+            )
+            / 0.0005
+          ) > bool 14.4
+          and
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="query",status=~"5.."}[5m]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="query"}[5m])), 1)
+            )
+            / 0.0005
+          ) > bool 14.4
+        for: 2m
+        labels:
+          severity: critical
+          component: query
+          slo: availability
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Query availability burn rate exceeded fast threshold"
+          description: |
+            Query API availability error budget is burning {{ printf "%.2f" $value }}x faster than allowed.
+
+            Threshold: <0.05% errors (99.95% availability).
+            Burn rate threshold: 14.4x (entire 30-day budget exhausted in 2 days).
+
+            Action Required: IMMEDIATE incident response
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md
+
+      - alert: QueryAvailabilitySLOSlowBurn
+        expr: |
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="query",status=~"5.."}[6h]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="query"}[6h])), 1)
+            )
+            / 0.0005
+          ) > bool 6
+          and
+          (
+            (
+              sum(increase(k0_kernel_http_requests_total{operation="query",status=~"5.."}[30m]))
+              / clamp_min(sum(increase(k0_kernel_http_requests_total{operation="query"}[30m])), 1)
+            )
+            / 0.0005
+          ) > bool 6
+        for: 10m
+        labels:
+          severity: warning
+          component: query
+          slo: availability
+          team: kernel
+          alert_type: burn_rate
+        annotations:
+          summary: "Query availability burn rate exceeded slow threshold"
+          description: |
+            Query API availability error budget is burning {{ printf "%.2f" $value }}x faster than allowed for the slow window.
+
+            Threshold: <0.05% errors (99.95% availability).
+            Burn rate threshold: 6x (entire 30-day budget exhausted in 5 days).
+
+            Action Required: Scheduled investigation
+          runbook: https://github.com/Pkansagra-hub/memory_kernel/tree/main/docs/development/runbooks/slo-burn-rate-response.md

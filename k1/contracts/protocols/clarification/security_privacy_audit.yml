@@ -1,0 +1,368 @@
+# Clarification Protocol - Security & Audit Contract
+# Purpose: Security, privacy bands, audit trails, PII protection
+# ADR Reference: ADR-0003b (Protocols), ADR-0010 (Capability-Based Security), ADR-0035 (PII Detection)
+# Compliance: GDPR (Right to Erasure), HIPAA (PHI protection), SOC2 Type II
+
+---
+security:
+  name: "clarification_protocol_security"
+  version: "1.0"
+  description: "Security and audit controls for clarification protocol"
+
+  # ===== PRIVACY BANDS =====
+  privacy_bands:
+    GREEN:
+      description: "No PII typically in questions, publicly discussable"
+      examples:
+        - "Which restaurant do you prefer: Italian or French?"
+        - "Should I book for 2 or 4 people?"
+      pii_risk: "low"
+      storage: "k0_clarification_log"  # Can store full text
+      retention_policy: "90_days"
+      audit_required: false
+      user_notification: "optional"
+      allowed_agents: ["all"]
+
+    AMBER:
+      description: "May contain identifiable info but not highly sensitive"
+      examples:
+        - "Is your address still 123 Main Street?"
+        - "Should we invite John and Mary?"
+      pii_risk: "medium"
+      storage: "k0_clarification_log_encrypted"  # Store encrypted
+      retention_policy: "30_days"
+      audit_required: true
+      user_notification: "required"  # Notify user of clarification
+      allowed_agents: ["planner", "concierge"]  # Restricted agents
+      pii_redaction:
+        enabled: true
+        fields: ["question", "answer", "context"]
+
+    RED:
+      description: "Highly sensitive, may contain health/financial data"
+      examples:
+        - "Your annual income for medical plan adjustment?"
+        - "Do you have any allergies we should know about?"
+      pii_risk: "critical"
+      storage: "pii_vault_encrypted_aws_kms"  # PII vault only
+      retention_policy: "7_days"  # Minimal retention
+      audit_required: true
+      user_notification: "explicit_approval_required"  # User must approve
+      allowed_agents: ["safety_watch"]  # Highly restricted
+      pii_redaction:
+        enabled: true
+        redaction_strategy: "vault_with_placeholder"  # Store in vault, show [REDACTED]
+        placeholder_format: "[{space_id}_REDACTED_{hash}]"
+
+    BLACK:
+      description: "Highly restricted, legal/law enforcement only"
+      pii_risk: "extreme"
+      storage: "isolated_encrypted_storage"
+      retention_policy: "audit_trail_only_30_days"
+      audit_required: true
+      user_notification: "explicit_written_consent"
+      allowed_agents: ["none"]  # Not used for clarification
+      special_handling: "requires_legal_review"
+
+  # ===== AUTHENTICATION & AUTHORIZATION =====
+  authentication:
+    - name: "User Authentication"
+      requirement: "Required before clarification is sent"
+      mechanism: "session_token_validation"
+      fields_checked:
+        - "session_id"
+        - "user_id"
+        - "user_device_fingerprint"  # Optional device binding
+      failure_action: "reject_clarification"
+      failure_log: "security_audit_log"
+
+    - name: "Agent Authorization"
+      requirement: "Only authorized agents can request clarifications"
+      mechanism: "capability_token_validation"
+      required_capability: "REQUEST_CLARIFICATION"
+      granted_to: ["concierge", "planner", "researcher", "safety_watch"]
+      denied_to: ["tool_runner", "orchestrator"]  # Pure actors
+      verification: "Check capability token before sending ClarificationRequest"
+
+    - name: "Space-Agent Pairing"
+      requirement: "Agent must have clearance for privacy band"
+      validation_rules:
+        - "GREEN: all agents allowed"
+        - "AMBER: concierge, planner allowed"
+        - "RED: safety_watch only"
+        - "BLACK: none"
+      failure_action: "log_authorization_failure, reject_request"
+
+  # ===== PII DETECTION & REDACTION =====
+  pii_protection:
+    detection:
+      framework: "Hybrid (Regex + ML-based NER)"
+      regex_patterns:
+        - type: "email"
+          pattern: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+          confidence: "high"
+          redaction_type: "hash"
+
+        - type: "ssn"
+          pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+          confidence: "high"
+          redaction_type: "vault"
+
+        - type: "phone"
+          pattern: "\\b(\\d{3}[-.]?){2}\\d{4}\\b"
+          confidence: "medium"
+          redaction_type: "hash"
+
+        - type: "credit_card"
+          pattern: "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b"
+          confidence: "high"
+          redaction_type: "vault"
+
+        - type: "date_of_birth"
+          pattern: "\\b(0?[1-9]|1[0-2])/(0?[1-9]|[12][0-9]|3[01])/(\\d{4}|\\d{2})\\b"
+          confidence: "medium"
+          redaction_type: "hash"
+
+      ml_ner_model:
+        name: "BERT-NER for PII"
+        model_size: "110M parameters"
+        inference_engine: "ONNX Runtime"
+        entities: ["PERSON", "LOCATION", "ORGANIZATION", "EMAIL", "PHONE", "ADDRESS"]
+        confidence_threshold: 0.8
+        latency_budget_ms: 5  # <5ms NER inference
+        fallback: "regex_only if NER times out"
+
+    redaction:
+      strategies:
+        - type: "hash"
+          description: "One-way hash for low-sensitivity PII"
+          application: "email, phone (non-critical)"
+          reversible: false
+          collisions_acceptable: true
+
+        - type: "vault"
+          description: "Store in PII vault, show placeholder"
+          application: "SSN, credit card, health data"
+          encryption: "AES-256-GCM"
+          key_storage: "AWS KMS"
+          reversible: true
+          access_control: "capability_token required"
+          audit_trail: "all vault accesses logged"
+
+        - type: "tokenization"
+          description: "Replace with synthetic token"
+          application: "names, addresses (AMBER/RED)"
+          token_format: "[TOKEN_12345678]"
+          token_lookup: "k0_token_map_encrypted"
+          reversible: true
+
+      storage_after_redaction:
+        GREEN:
+          store_original: true
+          store_redacted: true
+          storage_location: "k0_clarification_log"
+
+        AMBER:
+          store_original: false
+          store_redacted: true
+          store_redacted_in_vault: true
+          original_location: "pii_vault_encrypted"
+
+        RED:
+          store_original: false
+          store_redacted: false
+          original_location: "pii_vault_encrypted_aws_kms"
+          access_audit: "every_access_logged"
+
+  # ===== AUDIT TRAIL =====
+  audit_trail:
+    storage:
+      table: "clarification_audit_log"
+      database: "k0_compliance"
+      retention_period_days: 2555  # 7 years for GDPR/HIPAA
+      encryption: "AES-256-GCM"
+      backup_frequency: "daily"
+      backup_location: "s3_encrypted_backup"
+
+    logged_events:
+      - event: "clarification_request_generated"
+        fields:
+          - "clarification_id"
+          - "agent_id"
+          - "user_id"
+          - "session_id"
+          - "question_hash"  # Not full question
+          - "question_type"
+          - "priority"
+          - "space_id"
+          - "pii_detected"
+          - "pii_types_detected"
+          - "redaction_applied"
+          - "timestamp_utc"
+        retention: "7 years"
+
+      - event: "clarification_response_received"
+        fields:
+          - "response_id"
+          - "clarification_id"
+          - "user_id"
+          - "response_hash"  # Not full response
+          - "response_time_ms"
+          - "user_confidence"
+          - "answer_ambiguous"
+          - "pii_detected_in_response"
+          - "redaction_applied"
+          - "timestamp_utc"
+        retention: "7 years"
+
+      - event: "clarification_timeout"
+        fields:
+          - "clarification_id"
+          - "agent_id"
+          - "user_id"
+          - "priority"
+          - "fallback_strategy_applied"
+          - "timestamp_utc"
+        retention: "7 years"
+
+      - event: "clarification_access"
+        fields:
+          - "clarification_id"
+          - "accessed_by_agent_id"
+          - "access_purpose"
+          - "timestamp_utc"
+          - "accessed_fields"  # What data was accessed
+        retention: "7 years"
+
+      - event: "clarification_deletion"
+        fields:
+          - "clarification_id"
+          - "deletion_reason"  # "user_gdpr_request", "retention_policy", etc.
+          - "deleted_by"
+          - "timestamp_utc"
+          - "data_destroyed"  # Did we actually delete or just mark?
+        retention: "30 years"  # Deletion audits retained longer
+
+    access_control:
+      who_can_access:
+        - role: "safety_watch_agent"
+          access: "read_for_compliance_review"
+          fields: "all"
+
+        - role: "compliance_officer"
+          access: "read_for_audit"
+          fields: ["question_hash", "response_hash", "metadata"]
+
+        - role: "security_team"
+          access: "investigate_security_events"
+          fields: ["pii_detected", "security_flags", "access_logs"]
+
+      query_requirements:
+        - "require_capability_token(READ_AUDIT_LOG)"
+        - "require_mfa_for_sensitive_queries"
+        - "require_audit_of_audit_accesses"
+
+    integrity_protection:
+      mechanism: "HMAC-SHA256 per record"
+      verification_on_read: true
+      tamper_detection: "alert_security_team"
+      key_rotation: "quarterly"
+
+  # ===== COMPLIANCE & REGULATORY =====
+  compliance:
+    gdpr:
+      article_6_lawfulness:
+        basis: "Consent (Article 6.1.a)"
+        documentation: "User opts-in to clarification feature"
+
+      article_13_information:
+        requirement: "User must be informed about data processing"
+        implementation: "Show privacy notice before clarification"
+        languages: "all_supported_languages"
+
+      article_17_erasure:
+        right: "User can request deletion of clarification"
+        implementation: "Hard delete from k0 within 30 days"
+        exceptions: "None (full deletion required)"
+
+      article_20_portability:
+        right: "User can export their clarifications"
+        implementation: "Export endpoint with full clarification data"
+        format: "JSON with timestamps and metadata"
+
+    hipaa:
+      phi_protection:
+        requirement: "PHI (Protected Health Information) must be encrypted"
+        application: "Health-related clarifications marked RED"
+        encryption: "AES-256-GCM, key in AWS KMS"
+
+      access_controls:
+        requirement: "Only authorized personnel can access PHI"
+        implementation: "Capability token validation, role-based access"
+
+      audit_controls:
+        requirement: "All PHI accesses must be logged and auditable"
+        implementation: "clarification_audit_log with all access events"
+
+      minimum_necessary:
+        requirement: "Only collect PII necessary for clarification"
+        implementation: "Agent must justify why clarification is needed"
+
+    pci_dss:
+      requirement: "If collecting payment data, must be PCI compliant"
+      application: "Credit card clarifications"
+      tokenization: "Must tokenize card data"
+      storage: "Cannot store full card in k0"
+      transmission: "Must use TLS 1.2+"
+
+  # ===== INCIDENT RESPONSE =====
+  incident_response:
+    pii_breach:
+      detection: "security_flag on pii_detected + unauthorized_access"
+      escalation: "immediate_alert_to_security_team"
+      investigation: "Review audit_log for access patterns"
+      notification: "Notify affected users within 72 hours (GDPR)"
+
+    unauthorized_clarification:
+      detection: "authentication_failure or authorization_failure logs"
+      escalation: "warn_log, block_clarification"
+      investigation: "Review session logs, check for account compromise"
+
+    data_integrity_violation:
+      detection: "HMAC mismatch on audit record"
+      escalation: "critical_alert"
+      investigation: "Check backup integrity, verify not tampered"
+
+  # ===== DATA RETENTION & DELETION =====
+  data_lifecycle:
+    retention_policies:
+      - space: "GREEN"
+        retention_days: 90
+        deletion_method: "soft_delete_then_hard_delete"
+        grace_period_days: 30
+
+      - space: "AMBER"
+        retention_days: 30
+        deletion_method: "immediate_hard_delete"
+        grace_period_days: 0
+
+      - space: "RED"
+        retention_days: 7
+        deletion_method: "immediate_hard_delete"
+        grace_period_days: 0
+
+    user_deletion_requests:
+      gdpr_article_17: "User can request erasure"
+      implementation_sla: "30 days"
+      verification: "2-factor verification of user identity"
+      scope: "Delete all clarifications for user across all sessions"
+      audit: "Log deletion reason and timestamp"
+
+  # ===== NOTES =====
+  notes:
+    - "All PII protection is per-space (GREEN/AMBER/RED/BLACK)"
+    - "Redacted data is still searchable via hash lookups"
+    - "Audit trail is immutable (HMAC protected)"
+    - "7-year retention meets GDPR/HIPAA requirements"
+    - "Compliance review dashboard available to compliance team"
+    - "Integration with K0 bridge for cross-system compliance"

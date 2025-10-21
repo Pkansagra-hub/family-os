@@ -1,0 +1,21 @@
+{
+  "cognitive_trace_id": "11111111-2222-3333-4444-555555555555",
+  "tenant_id": "tenant-123",
+  "space_id": "space-alpha",
+  "topic": "memory.snapshot.commit",
+  "schema_uri": "https://contracts.family-ai.dev/schemas/memory.snapshot.json",
+  "schema_version": "1.0.0",
+  "actor": "device-123",
+  "device_id": "device-123",
+  "band": "GREEN",
+  "policy_version": "2025-09-01",
+  "ts": "2025-09-28T12:00:00Z",
+  "sig": "MEUCIQD1lF8Qvf9wG0Cjd8nYQ0BfJ4ZC2x7Lrv3N5YFhV6t9WgIgS5n4xv7QzSp6Yjpm3zDR6hccgZL4z6hA1Pd1yEi8Zv8=",
+  "payload_sha256": "4f2a6b7c0d9e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2",
+  "idem_key": "tenant-123:space-alpha:memory.snapshot.commit:42",
+  "body": {
+    "snapshot_id": "snap-2025-09-28-001",
+    "watermark": 982341,
+    "duration_ms": 1800
+  }
+}

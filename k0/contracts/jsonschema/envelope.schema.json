@@ -1,0 +1,74 @@
+{
+  "$id": "envelope.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "cognitive_trace_id",
+    "tenant_id",
+    "space_id",
+    "topic",
+    "schema_uri",
+    "schema_version",
+    "actor",
+    "device_id",
+    "band",
+    "policy_version",
+    "ts",
+    "sig"
+  ],
+  "properties": {
+    "cognitive_trace_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "space_id": {
+      "type": "string"
+    },
+    "topic": {
+      "type": "string",
+      "pattern": "^(memory|events|ui|policy|infra\\.sanitized|privacy|intelligence\\.advisory)\\..+"
+    },
+    "schema_uri": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "actor": {
+      "type": "string"
+    },
+    "device_id": {
+      "type": "string"
+    },
+    "band": {
+      "type": "string",
+      "enum": ["GREEN", "AMBER", "RED"]
+    },
+    "policy_version": {
+      "type": "string"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sig": {
+      "type": "string"
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "idem_key": {
+      "type": "string"
+    },
+    "body": {
+      "description": "Domain payload matching schema_uri/schema_version",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
+  },
+  "additionalProperties": true
+}

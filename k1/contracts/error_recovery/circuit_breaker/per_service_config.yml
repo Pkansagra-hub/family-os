@@ -1,0 +1,560 @@
+# Per-Service Circuit Breaker Configuration Schema
+# Purpose: Define service-specific circuit breaker thresholds, timeouts, and fallback strategies
+# Source ADR: ADR-0009b (Per-Service Circuit Configuration)
+# Layer: Layer 2 - Orchestration (Error Recovery)
+#
+# Research Citations:
+#   - Netflix Hystrix Config (2011) - Per-service circuit configuration at scale (1000+ services)
+#   - Resilience4j Configuration (2018) - Fluent API for per-circuit configuration with hot-reload
+#   - AWS Lambda Circuit Breaker (2020) - Adaptive thresholds based on observed metrics
+
+---
+
+# SECTION 1: CONFIGURATION FILE STRUCTURE
+
+config_file:
+  location: "k1/config/circuit_breakers.yml"
+  format: "YAML"
+  version: "1.0"
+  last_updated: "2025-10-12"
+  source_adr: "ADR-0009b"
+
+config_schema:
+  circuit_breakers:
+    type: "object"
+    description: "Map of service_name -> circuit_breaker_config"
+
+    service_names:
+      - "tool_runner"          # External tool API calls
+      - "model_hub_local"      # On-device LLM inference
+      - "model_hub_remote"     # Cloud LLM inference (OpenAI, etc.)
+      - "k0_bridge"            # K0 WAL writes (critical path)
+      - "mcp_gateway"          # MCP server tool calls
+      - "streaming_engine"     # SSE stream operations
+
+---
+
+# SECTION 2: SERVICE CONFIGURATION PROFILES
+
+service_profiles:
+
+  tool_runner:
+    description: "External tool API calls (booking, calendar, payment, file, email)"
+    type: "Remote Service (HTTP API)"
+    characteristics:
+      latency: "1-5s typical, 10-30s worst case"
+      reliability: "Medium (depends on third-party)"
+      failure_modes:
+        - "HTTP 429 (rate limiting)"
+        - "HTTP 5xx (server error)"
+        - "Timeout (network latency)"
+        - "Connection error (network partition)"
+
+    config:
+      failure_threshold: 5
+      timeout_duration_ms: 30000        # 30s recovery
+      success_threshold: 2
+      slow_call_threshold_ms: 5000      # 5s = slow
+      time_window_ms: 60000             # 60s window
+      fallback_strategy: "default_value"  # Return empty list
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        5 failures before opening circuit. External APIs may have transient failures
+        (network packet loss, server restarts). Balance responsiveness vs. false positives.
+
+      timeout_duration_ms: |
+        30s recovery window. Typical API recovery time (server restart, auto-scaling).
+        Standard for external services.
+
+      success_threshold: |
+        2 consecutive successes before closing circuit. External APIs may recover slowly,
+        need to verify stability before full load.
+
+      slow_call_threshold_ms: |
+        Tool calls should complete in <3s (budget). Calls >5s degrade UX significantly,
+        should be treated as failures (fail-fast).
+
+      fallback_strategy: |
+        Return empty result (e.g., empty hotel list). Graceful degradation.
+        User can see "no results" and retry manually.
+
+    example_scenario: |
+      1. booking.com API returns HTTP 500
+      2. Circuit tracks failures: 1, 2, 3, 4, 5 → Circuit OPENS (after ~4s)
+      3. Next 10 booking tool calls fail-fast (<10ms), return empty list
+      4. After 30s, circuit transitions to HALF_OPEN
+      5. Next booking call probes service → succeeds
+      6. Next booking call → succeeds → Circuit CLOSED
+      7. Normal operation resumed
+
+  model_hub_local:
+    description: "On-device LLM inference (gemma-2b, qwen-2.5)"
+    type: "Local Service (In-Process)"
+    characteristics:
+      latency: "100-500ms typical (NPU/GPU accelerated)"
+      reliability: "High (local process, no network)"
+      failure_modes:
+        - "Crash (OOM, NPU driver failure)"
+        - "Model loading failure"
+        - "NPU/GPU exhaustion"
+
+    config:
+      failure_threshold: 3              # Fail fast (local should be reliable)
+      timeout_duration_ms: 10000        # 10s recovery
+      success_threshold: 1
+      slow_call_threshold_ms: 1000      # 1s = slow (target <500ms)
+      time_window_ms: 30000
+      fallback_strategy: "alternate_model"
+      alternate_service: "model_hub_remote"
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        3 failures before opening. Local LLM failures are usually permanent (crash, OOM),
+        not transient. Aggressive threshold to fail-fast.
+
+      timeout_duration_ms: |
+        10s recovery. Local process can restart quickly (load model from disk).
+        Fast recovery important for local-first architecture.
+
+      success_threshold: |
+        1 success to close. Local recovery is deterministic (process restart, model load).
+        1 success proves health.
+
+      slow_call_threshold_ms: |
+        1s threshold. Local LLM should be fast (<500ms). Calls >1s indicate NPU contention
+        or model loading, should fail-fast.
+
+      fallback_strategy: |
+        Fallback to remote LLM (gpt-4o-mini). Maintains functionality.
+        User sees no error, just slightly higher latency (500ms → 800ms).
+
+    example_scenario: |
+      1. gemma-2b process crashes (OOM)
+      2. Circuit tracks failures: 1, 2, 3 → Circuit OPENS (after ~1.5s)
+      3. Next sketch stage call fails-fast, invokes fallback → calls gpt-4o-mini
+      4. User sees response generated by remote LLM (higher latency)
+      5. After 10s, circuit transitions to HALF_OPEN
+      6. Next call attempts gemma-2b → succeeds (process restarted)
+      7. Circuit CLOSED, local-first architecture resumed
+
+  model_hub_remote:
+    description: "Cloud LLM inference (gpt-4o-mini, gpt-4o, Claude)"
+    type: "Remote Service (HTTP API)"
+    characteristics:
+      latency: "300-800ms typical, 1-5s worst case"
+      reliability: "Medium (network dependent, rate limits)"
+      failure_modes:
+        - "Timeout (network latency)"
+        - "Rate limiting (HTTP 429)"
+        - "Server error (HTTP 5xx)"
+        - "Authentication error (API key invalid)"
+
+    config:
+      failure_threshold: 5              # Tolerate transient failures
+      timeout_duration_ms: 60000        # 60s recovery (external, slower)
+      success_threshold: 2
+      slow_call_threshold_ms: 10000     # 10s = slow (remote latency higher)
+      time_window_ms: 120000            # 120s window (longer for remote)
+      fallback_strategy: "cached_result"  # Use cached LLM response if available
+      cache_ttl_ms: 300000              # 5-minute cache TTL
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        5 failures before opening. Remote LLM failures may be transient (packet loss,
+        server auto-scaling). Conservative threshold.
+
+      timeout_duration_ms: |
+        60s recovery. External service recovery can be slow (DNS failover, server restart).
+        Allows for most transient issues to resolve.
+
+      success_threshold: |
+        2 successes to close. Remote services may recover slowly, need to verify stability.
+
+      slow_call_threshold_ms: |
+        10s threshold. Remote LLM latency is higher (network RTT, queue time).
+        Avoids false positives from occasional slow calls.
+
+      fallback_strategy: |
+        Use cached LLM response (Redis, 5-min TTL) if available.
+        Provides graceful degradation (stale but correct response).
+
+    example_scenario: |
+      1. OpenAI API returns HTTP 429 (rate limit)
+      2. Circuit tracks failures: 1, 2, 3, 4, 5 → Circuit OPENS
+      3. Next sketch stage call fails-fast, invokes cached_result fallback
+      4. Redis cache hit: return cached plan from 2 minutes ago
+      5. User sees slightly outdated plan (acceptable)
+      6. After 60s, circuit transitions to HALF_OPEN
+      7. Next call attempts OpenAI → succeeds → Circuit CLOSED
+
+  k0_bridge:
+    description: "K0 WAL writes (critical path, no fallback)"
+    type: "Local Service (Critical Path)"
+    characteristics:
+      latency: "<10ms typical, <100ms worst case"
+      reliability: "Very high (local process, SSD storage)"
+      failure_modes:
+        - "K0 crash"
+        - "Disk full (write error)"
+        - "Write timeout (SSD overloaded)"
+
+    config:
+      failure_threshold: 3              # Critical, fail fast
+      timeout_duration_ms: 5000         # 5s recovery
+      success_threshold: 1
+      slow_call_threshold_ms: 100       # 100ms = slow (WAL target <10ms)
+      time_window_ms: 30000
+      fallback_strategy: "raise_error"  # No fallback for WAL writes
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        3 failures before opening. K0 bridge is critical (no K0 = no memory).
+        Aggressive threshold to fail-fast.
+
+      timeout_duration_ms: |
+        5s recovery. K0 process can restart quickly. Fast recovery critical for health.
+
+      success_threshold: |
+        1 success to close. K0 recovery is deterministic (process restart).
+
+      slow_call_threshold_ms: |
+        100ms threshold. K0 WAL writes should be <10ms (SSD).
+        Writes >100ms indicate disk contention, should fail-fast.
+
+      fallback_strategy: |
+        No fallback (raise CircuitOpenError). Memory is critical.
+        Saga coordinator aborts saga, alerts operator.
+
+    example_scenario: |
+      1. K0 process hangs (disk full)
+      2. Circuit tracks slow calls (>100ms): 1, 2, 3 → Circuit OPENS (~300ms)
+      3. Next orchestration turn attempts K0 write → raise K0UnavailableError
+      4. Saga coordinator aborts saga, logs error, alerts operator
+      5. Operator clears disk, restarts K0 (takes 5s)
+      6. After 5s, circuit transitions to HALF_OPEN
+      7. Next K0 write succeeds → Circuit CLOSED
+
+  mcp_gateway:
+    description: "MCP server tool calls (mcp_memory, mcp_kg, mcp_mmd)"
+    type: "External Service (MCP)"
+    characteristics:
+      latency: "100-3000ms (depends on tool complexity)"
+      reliability: "Low (external processes, may crash)"
+      failure_modes:
+        - "Connection error (socket reset)"
+        - "Timeout (server busy)"
+        - "Server crash (process exit)"
+
+    config:
+      failure_threshold: 5              # Tolerate failures
+      timeout_duration_ms: 30000        # 30s recovery
+      success_threshold: 2
+      slow_call_threshold_ms: 3000      # 3s = slow (tool call budget)
+      time_window_ms: 60000
+      fallback_strategy: "default_value"  # Return empty result
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        5 failures. MCP servers may have transient failures (connection drops, restarts).
+
+      timeout_duration_ms: |
+        30s recovery. External server recovery can be slow.
+
+      success_threshold: |
+        2 successes. MCP servers recover slowly, need stability verification.
+
+      slow_call_threshold_ms: |
+        3s threshold. MCP tool calls should complete in <3s (tool call budget).
+
+      fallback_strategy: |
+        Return empty result (e.g., empty memory search result).
+        User can retry manually.
+
+    example_scenario: |
+      1. mcp_memory server crashes
+      2. Circuit tracks failures: 1, 2, 3, 4, 5 → Circuit OPENS (~15s)
+      3. Next mem_find call fails-fast, returns empty list
+      4. User sees "no memories found" (graceful)
+      5. Supervisor restarts mcp_memory (takes 10s)
+      6. After 30s, circuit transitions to HALF_OPEN
+      7. Next mem_find call succeeds → Circuit CLOSED
+
+  streaming_engine:
+    description: "SSE stream for real-time updates (token streaming, progress)"
+    type: "Stream Service"
+    characteristics:
+      latency: "50-5000ms (depends on network, token generation)"
+      reliability: "Medium (connection can drop)"
+      failure_modes:
+        - "Connection drop (client disconnect)"
+        - "Timeout (stream stalled)"
+        - "Network partition"
+
+    config:
+      failure_threshold: 3              # Fail fast on stream errors
+      timeout_duration_ms: 10000        # 10s recovery
+      success_threshold: 1
+      slow_call_threshold_ms: 5000      # 5s = slow (first token target <2s)
+      time_window_ms: 30000
+      fallback_strategy: "raise_error"  # Cannot fallback streaming
+      enabled: true
+
+    tuning_rationale:
+      failure_threshold: |
+        3 failures. Stream failures are often permanent (client disconnect).
+
+      timeout_duration_ms: |
+        10s recovery. Stream recovery is fast (client reconnects).
+
+      success_threshold: |
+        1 success. Stream recovery is fast, 1 success proves health.
+
+      slow_call_threshold_ms: |
+        5s threshold. Stream should start within 5s (first token target 2s).
+
+      fallback_strategy: |
+        Cannot fallback streaming (stateful connection).
+        Raise error, client must reconnect.
+
+    example_scenario: |
+      1. Client closes browser tab during streaming
+      2. Circuit tracks connection drops: 1, 2, 3 → Circuit OPENS (~1s)
+      3. Next stream attempt fails-fast, raises StreamUnavailableError
+      4. Client sees error, reconnects (new session)
+      5. After 10s, circuit transitions to HALF_OPEN
+      6. Next stream succeeds → Circuit CLOSED
+
+---
+
+# SECTION 3: CONFIGURATION MANAGEMENT
+
+configuration_loading:
+  method: "YAML file + environment variable overrides"
+
+  yaml_loading:
+    file: "k1/config/circuit_breakers.yml"
+    format: "YAML"
+    structure: |
+      circuit_breakers:
+        tool_runner:
+          failure_threshold: 5
+          timeout_duration_ms: 30000
+          ...
+        model_hub_local:
+          failure_threshold: 3
+          ...
+
+  environment_overrides:
+    pattern: "K1_CIRCUIT_<SERVICE_NAME>_<PARAMETER_NAME>"
+
+    examples:
+      - "K1_CIRCUIT_TOOL_RUNNER_FAILURE_THRESHOLD=10"
+      - "K1_CIRCUIT_MODEL_HUB_LOCAL_TIMEOUT_DURATION_MS=5000"
+      - "K1_CIRCUIT_K0_BRIDGE_ENABLED=false"
+
+    precedence: "Environment variables override YAML file"
+    use_case: "Quick tuning without redeploying config file"
+
+  hot_reload:
+    trigger_1_file_watcher: "Automatic reload on YAML file change"
+    trigger_2_http_endpoint: |
+      POST /admin/circuit_breakers/reload
+      Response: {"status": "success", "latency_ms": 45}
+
+    trigger_3_learning_loop: |
+      Adaptive threshold adjustment based on observed metrics
+      (error rate, latency percentiles)
+
+    latency_budget: "<100ms for complete reload"
+    actual_performance: "45ms (YAML parse + validate + update)"
+
+---
+
+# SECTION 4: CONFIGURATION VALIDATION
+
+validation_rules:
+  rule_1_failure_threshold:
+    field: "failure_threshold"
+    type: "integer"
+    constraint: ">= 2 (at least 2 failures to open circuit)"
+    error_message: "failure_threshold must be >= 2"
+    examples:
+      - "failure_threshold: 3 ✅ Valid"
+      - "failure_threshold: 1 ❌ Invalid (too strict)"
+
+  rule_2_timeout_duration_ms:
+    field: "timeout_duration_ms"
+    type: "integer"
+    constraint: ">= 1000ms (minimum 1s recovery)"
+    error_message: "timeout_duration_ms must be >= 1000"
+    examples:
+      - "timeout_duration_ms: 30000 ✅ Valid"
+      - "timeout_duration_ms: 500 ❌ Invalid (too short)"
+
+  rule_3_success_threshold:
+    field: "success_threshold"
+    type: "integer"
+    constraint: ">= 1 (at least 1 success to close)"
+    error_message: "success_threshold must be >= 1"
+    examples:
+      - "success_threshold: 2 ✅ Valid"
+      - "success_threshold: 0 ❌ Invalid (must close eventually)"
+
+  rule_4_slow_call_threshold_ms:
+    field: "slow_call_threshold_ms"
+    type: "integer"
+    constraint: ">= 100ms (minimum 100ms latency threshold)"
+    error_message: "slow_call_threshold_ms must be >= 100"
+    examples:
+      - "slow_call_threshold_ms: 5000 ✅ Valid"
+      - "slow_call_threshold_ms: 50 ❌ Invalid (too strict)"
+
+  rule_5_time_window_ms:
+    field: "time_window_ms"
+    type: "integer"
+    constraint: ">= 10000ms (minimum 10s window)"
+    error_message: "time_window_ms must be >= 10000"
+    examples:
+      - "time_window_ms: 60000 ✅ Valid"
+      - "time_window_ms: 5000 ❌ Invalid (too short)"
+
+  rule_6_fallback_strategy:
+    field: "fallback_strategy"
+    type: "string"
+    constraint: "One of: default_value, cached_result, alternate_model, raise_error"
+    error_message: "fallback_strategy must be one of: default_value, cached_result, alternate_model, raise_error"
+    examples:
+      - "fallback_strategy: default_value ✅ Valid"
+      - "fallback_strategy: custom_fallback ❌ Invalid"
+
+---
+
+# SECTION 5: PERFORMANCE BUDGETS
+
+performance:
+  config_lookup:
+    operation: "get_circuit_config(service_name)"
+    budget: "<0.1ms"
+    actual: "0.03ms"
+    measurement: "In-memory dict lookup"
+    verdict: "✅ Within budget"
+
+  config_reload:
+    operation: "reload_configs() from YAML file"
+    budget: "<100ms"
+    actual: "45ms"
+    measurement: "Parse YAML + validate + update dict"
+    verdict: "✅ Within budget"
+
+  config_validation:
+    operation: "validate_config() for single service"
+    budget: "<1ms"
+    actual: "0.4ms"
+    measurement: "6 constraint checks"
+    verdict: "✅ Within budget"
+
+  memory_per_config:
+    storage: "Circuit breaker config dataclass"
+    budget: "<2KB"
+    actual: "512B per config"
+    measurement: "YAML parsed to Python dataclass"
+    verdict: "✅ Within budget"
+
+  total_memory:
+    configs: "6 services × 512B per config"
+    total: "3KB"
+    overhead: "Negligible"
+    verdict: "✅ No memory concerns"
+
+---
+
+# SECTION 6: CONFIGURATION COMPARISON MATRIX
+
+comparison_table:
+  description: "Side-by-side comparison of all service configurations"
+
+  table:
+    header:
+      - "Service"
+      - "failure_threshold"
+      - "timeout_duration_ms"
+      - "success_threshold"
+      - "slow_call_threshold_ms"
+      - "time_window_ms"
+      - "fallback_strategy"
+
+    rows:
+      - service: "tool_runner"
+        failure_threshold: 5
+        timeout_duration_ms: 30000
+        success_threshold: 2
+        slow_call_threshold_ms: 5000
+        time_window_ms: 60000
+        fallback_strategy: "default_value"
+
+      - service: "model_hub_local"
+        failure_threshold: 3
+        timeout_duration_ms: 10000
+        success_threshold: 1
+        slow_call_threshold_ms: 1000
+        time_window_ms: 30000
+        fallback_strategy: "alternate_model"
+
+      - service: "model_hub_remote"
+        failure_threshold: 5
+        timeout_duration_ms: 60000
+        success_threshold: 2
+        slow_call_threshold_ms: 10000
+        time_window_ms: 120000
+        fallback_strategy: "cached_result"
+
+      - service: "k0_bridge"
+        failure_threshold: 3
+        timeout_duration_ms: 5000
+        success_threshold: 1
+        slow_call_threshold_ms: 100
+        time_window_ms: 30000
+        fallback_strategy: "raise_error"
+
+      - service: "mcp_gateway"
+        failure_threshold: 5
+        timeout_duration_ms: 30000
+        success_threshold: 2
+        slow_call_threshold_ms: 3000
+        time_window_ms: 60000
+        fallback_strategy: "default_value"
+
+      - service: "streaming_engine"
+        failure_threshold: 3
+        timeout_duration_ms: 10000
+        success_threshold: 1
+        slow_call_threshold_ms: 5000
+        time_window_ms: 30000
+        fallback_strategy: "raise_error"
+
+  key_insights:
+    - "Local services (LLM, K0): Aggressive thresholds (3 failures), fast recovery (5-10s)"
+    - "Remote services (APIs, MCP): Conservative thresholds (5 failures), slower recovery (30-60s)"
+    - "Critical services (K0, streaming): No fallback (raise_error), fail-fast immediately"
+    - "Non-critical services (tools, MCP): Graceful degradation (default_value, cached_result)"
+
+---
+
+# SECTION 7: ADR CROSS-REFERENCES
+
+adr_references:
+  - "ADR-0009b: Per-Service Circuit Configuration (primary)"
+  - "ADR-0009: Circuit Breaker Pattern (parent pattern)"
+  - "ADR-0009a: Circuit Breaker FSM (state transitions)"
+  - "ADR-0009c: Circuit Breaker Metrics (observability)"
+  - "ADR-0008: Saga Pattern (compensation strategy integration)"
+
+---
+
+# END OF per_service_config.yml

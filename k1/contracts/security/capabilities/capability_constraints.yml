@@ -1,0 +1,263 @@
+#
+# Capability Constraints Schema
+# EPIC 2.5.1: Capability Token Design Contracts
+# ADR-0010a: Capability Token Design & Lifecycle
+#
+# Purpose: Define constraint types and enforcement rules for capabilities
+# Foundation: Least Privilege Principle
+# Usage: Constraints limit capability usage (invocations, cost, rate, approval)
+#
+
+metadata:
+  title: "Capability Constraints Schema"
+  version: "1.0"
+  status: "accepted"
+  updated: "2025-10-12"
+  adr_references:
+    - "ADR-0010a: Capability Token Design & Lifecycle"
+    - "ADR-0010c: Capability Enforcement at Runtime"
+
+constraint_types:
+  max_invocations:
+    description: "Maximum total invocations before auto-revocation"
+    data_type: "integer"
+    range: "1 to 1,000,000"
+    default: "unlimited"
+    examples:
+      - "max_invocations: 100 (100 uses max)"
+      - "max_invocations: 10 (10-use tool token)"
+    enforcement_mechanism: "Redis INCR (atomic counter)"
+    check_timing: "Before operation (pre-check)"
+    failure_mode: "CAPABILITY_EXHAUSTED (auto-revoke)"
+    storage: "Redis key: capability:cap_id:invocations (24h TTL)"
+    performance_ms: 0.1
+
+  max_invocations_per_minute:
+    description: "Rate limit: max invocations per minute"
+    data_type: "integer"
+    range: "1 to 1,000"
+    default: "unlimited"
+    examples:
+      - "max_invocations_per_minute: 10 (10 calls/min)"
+      - "max_invocations_per_minute: 60 (burst protection)"
+    enforcement_mechanism: "Redis sliding window counter"
+    check_timing: "Before operation (pre-check)"
+    failure_mode: "RATE_LIMIT_EXCEEDED (temporary denial)"
+    storage: "Redis key: capability:cap_id:rate_window (60s rolling)"
+    performance_ms: 0.15
+
+  budget_usd:
+    description: "Cost budget in USD (for LLM/payment tools)"
+    data_type: "float"
+    range: "0.01 to 10,000.00"
+    default: "unlimited"
+    examples:
+      - "budget_usd: 1.50 (max $1.50)"
+      - "budget_usd: 0.05 (micro-budget)"
+    enforcement_mechanism: "Redis float accumulation (INCRBYFLOAT)"
+    check_timing: "Pre-check + post-check"
+    failure_mode: "BUDGET_EXHAUSTED (auto-revoke)"
+    storage: "Redis key: capability:cap_id:cost_spent (24h TTL)"
+    performance_ms: 0.12
+
+  requires_approval:
+    description: "Require user/supervisor approval for operation"
+    data_type: "boolean"
+    default: false
+    examples:
+      - "requires_approval: true (user must confirm)"
+      - "requires_approval: false (auto-allowed)"
+    enforcement_mechanism: "Check approval flow before execution"
+    check_timing: "Pre-check (block until approved)"
+    failure_mode: "APPROVAL_PENDING (async notification)"
+    performance_ms: 0.0 (check only, approval async)
+
+  allowed_parameters:
+    description: "Whitelist of allowed parameter values"
+    data_type: "object"
+    examples:
+      - "allowed_parameters: {user_id: ['123', '456'], action: ['read']}"
+      - "allowed_parameters: {model: ['gpt-4o-mini']}"
+    enforcement_mechanism: "Parameter extraction + membership check"
+    check_timing: "Pre-operation validation"
+    failure_mode: "INVALID_PARAMETER (denied)"
+    performance_ms: 0.05
+
+  forbidden_parameters:
+    description: "Blacklist of forbidden parameter values"
+    data_type: "object"
+    examples:
+      - "forbidden_parameters: {amount: ['>100.0'], user_id: ['admin']}"
+      - "forbidden_parameters: {model: ['gpt-4']}"
+    enforcement_mechanism: "Parameter extraction + exclusion check"
+    check_timing: "Pre-operation validation"
+    failure_mode: "FORBIDDEN_PARAMETER (denied)"
+    performance_ms: 0.05
+
+  delegation_max_depth:
+    description: "Maximum depth of capability delegation chain"
+    data_type: "integer"
+    range: "0 to 10"
+    default: 3
+    examples:
+      - "delegation_max_depth: 0 (non-delegable)"
+      - "delegation_max_depth: 3 (3 levels: A→B→C→D denied)"
+    enforcement_mechanism: "Check current_depth in capability chain"
+    check_timing: "At delegation time"
+    failure_mode: "DELEGATION_DEPTH_EXCEEDED"
+    performance_ms: 0.05
+
+  privacy_band:
+    description: "Privacy band requirement (GREEN|AMBER|RED)"
+    data_type: "enum"
+    values: ["GREEN", "AMBER", "RED"]
+    examples:
+      - "privacy_band: GREEN (public access)"
+      - "privacy_band: RED (user approval needed)"
+    enforcement_mechanism: "Check resource privacy band against requirement"
+    check_timing: "Pre-check"
+    failure_mode: "PRIVACY_BAND_MISMATCH"
+    performance_ms: 0.05
+
+  time_window_start:
+    description: "Earliest time capability is valid (ISO 8601)"
+    data_type: "datetime"
+    examples:
+      - "time_window_start: 2025-10-12T14:00:00Z"
+    enforcement_mechanism: "Compare current_time >= window_start"
+    check_timing: "Pre-check"
+    failure_mode: "CAPABILITY_NOT_YET_VALID"
+
+  time_window_end:
+    description: "Latest time capability is valid (ISO 8601)"
+    data_type: "datetime"
+    examples:
+      - "time_window_end: 2025-10-13T14:00:00Z"
+    enforcement_mechanism: "Compare current_time <= window_end"
+    check_timing: "Pre-check"
+    failure_mode: "CAPABILITY_EXPIRED"
+
+constraint_combinations:
+  safe_tool_access:
+    constraints:
+      - "max_invocations: 100"
+      - "budget_usd: 0"
+      - "allowed_parameters: {tool_id: ['search_web']}"
+    use_case: "Limited tool access"
+    ttl_hours: 24
+
+  rate_limited_api:
+    constraints:
+      - "max_invocations_per_minute: 10"
+      - "budget_usd: 5.0"
+    use_case: "API rate limiting"
+    ttl_hours: 1
+
+  approval_required_payment:
+    constraints:
+      - "requires_approval: true"
+      - "budget_usd: 100.0"
+      - "privacy_band: RED"
+    use_case: "Payment operations requiring approval"
+
+  temporary_access:
+    constraints:
+      - "time_window_start: 2025-10-12T00:00:00Z"
+      - "time_window_end: 2025-10-13T00:00:00Z"
+      - "max_invocations: 50"
+    use_case: "Time-limited temporary access"
+
+constraint_enforcement_flow:
+  pre_check:
+    step_1: "Extract capability constraints"
+    step_2: "Check max_invocations counter"
+    step_3: "Check max_invocations_per_minute rate"
+    step_4: "Check budget_usd spent"
+    step_5: "Check time_window (if set)"
+    step_6: "Check privacy_band requirement"
+    step_7: "Check allowed_parameters (if set)"
+    step_8: "Check forbidden_parameters (if set)"
+    step_9: "Check delegation_max_depth (if delegating)"
+    step_10: "Check requires_approval (if true, block until approved)"
+    total_latency_ms: 0.4
+
+  post_execution:
+    step_1: "Increment max_invocations counter (INCR)"
+    step_2: "Decrement budget_usd (INCRBYFLOAT with operation_cost)"
+    step_3: "Update rate_limit sliding window"
+    step_4: "Check auto-revocation triggers"
+    total_latency_ms: 0.2
+
+constraint_auto_revocation_triggers:
+  exhausted_invocations:
+    trigger: "max_invocations counter >= threshold"
+    action: "Auto-revoke capability (set status=EXHAUSTED)"
+    audit_log: "REVOKED (auto - invocations exhausted)"
+
+  budget_exceeded:
+    trigger: "cost_spent >= budget_usd"
+    action: "Auto-revoke capability (set status=EXHAUSTED)"
+    audit_log: "REVOKED (auto - budget exceeded)"
+
+  expired_time_window:
+    trigger: "current_time > time_window_end"
+    action: "Auto-revoke capability (set status=EXPIRED)"
+    audit_log: "REVOKED (auto - time window expired)"
+
+storage_strategy:
+  redis_keys:
+    - "capability:cap_id:invocations → count (24h TTL)"
+    - "capability:cap_id:cost_spent → float (24h TTL)"
+    - "capability:cap_id:rate_window → {timestamp, count} (60s rolling)"
+    - "capability:cap_id:approval_status → {pending/approved/denied} (1h TTL)"
+
+  k0_wal_event:
+    event_type: "CONSTRAINT_VIOLATION"
+    payload: "constraint_type, capability_id, violation_reason, timestamp"
+
+  elasticsearch_audit:
+    document: "{constraint_type, capability_id, check_time, result, latency_ms}"
+    retention: "90 days"
+    index: "capability-constraints-*"
+
+performance_budgets:
+  constraint_check_latency:
+    target_ms: 0.4
+    p95_ms: 0.45
+    includes: "All pre-check constraint validation"
+
+  post_execution_update:
+    target_ms: 0.2
+    p95_ms: 0.25
+    includes: "Counter updates + revocation checks"
+
+  total_overhead_per_operation:
+    target_ms: 0.6
+    p95_ms: 0.7
+    includes: "Pre-check + execution + post-check"
+
+constraint_validation_schema:
+  max_invocations:
+    validation: "1 <= value <= 1000000"
+    mutually_exclusive: []
+
+  max_invocations_per_minute:
+    validation: "1 <= value <= 1000"
+    mutually_exclusive: []
+
+  budget_usd:
+    validation: "0.01 <= value <= 10000.00"
+    mutually_exclusive: []
+
+  allowed_parameters:
+    validation: "JSON object with string keys/values"
+    mutually_exclusive: ["forbidden_parameters"]
+
+  forbidden_parameters:
+    validation: "JSON object with string keys/values"
+    mutually_exclusive: ["allowed_parameters"]
+
+references:
+  adr_0010a: "Capability Token Design & Lifecycle"
+  adr_0010c: "Capability Enforcement at Runtime"
+  least_privilege: "Classical security principle"

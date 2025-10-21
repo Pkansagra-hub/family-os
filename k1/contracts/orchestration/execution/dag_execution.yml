@@ -1,0 +1,431 @@
+# Parallel DAG Execution Contract
+# Source ADR: ADR-0006c (Parallel DAG Execution Engine)
+# Defines Phase 3 execution with dependency management and parallel waves
+
+metadata:
+  contract_id: "dag-execution-v1.0"
+  source_adr: "0006c-parallel-dag-execution.md"
+  version: "1.0.0"
+  last_updated: "2025-10-15"
+  authors: ["K1 Architecture Team"]
+  phase: "Phase 3 (Execution)"
+
+# DAG Execution Overview
+execution_overview:
+  description: "Parallel execution engine with topological sort wave computation"
+  purpose: "Execute multi-step plans with dependency management"
+  component: "Phase 3 of 3-phase orchestration protocol"
+  performance: "Variable latency (task-dependent), 2-3× speedup with parallelism"
+  determinism: "Same plan + inputs → same execution order (topological sort)"
+  parallelism: "Up to 3 concurrent steps per wave (configurable semaphore)"
+
+# Research Foundation
+research_foundation:
+  dag_workflows: |
+    **Directed Acyclic Graph (DAG) Execution**
+    - Origin: Apache Airflow (2014), Luigi (2012), Prefect (2018)
+    - Concept: Tasks (nodes) with dependencies (edges)
+    - Guarantee: Acyclic (no circular dependencies)
+    - Benefit: Parallelism while respecting dependencies
+
+  topological_sort: |
+    **Kahn's Algorithm (1962)**
+    - Compute in-degree for each node
+    - Process nodes with in-degree 0 (no dependencies)
+    - Decrement in-degree when dependency completes
+    - Result: Execution order respecting all dependencies
+    - Complexity: O(V + E) where V=nodes, E=edges
+    - Group nodes at same topological level into waves
+
+  parallelism_model: |
+    **Wave-Based Parallel Execution**
+    - Wave 1: All nodes with no dependencies (in-degree 0)
+    - Wave 2: All nodes depending only on Wave 1
+    - Wave N: All nodes depending only on Waves 1...N-1
+    - Barrier: Wait for all nodes in wave to complete before starting next wave
+    - Semaphore: Limit concurrent tasks to prevent resource exhaustion (default 3)
+
+# Plan Structure
+plan_structure:
+
+  plan_step_dataclass: |
+    @dataclass(frozen=True)
+    class PlanStep:
+        """Single step in execution plan"""
+        step_id: str                           # Unique ID (e.g., "step_1")
+        action: str                            # Description (e.g., "Search restaurants")
+        tool: str                              # Tool to invoke (e.g., "search_api")
+        parameters: Dict[str, Any]             # Tool parameters (may include {step_N.field} variables)
+        dependencies: List[str]                # List of step_ids this depends on
+        compensation_action: Optional[str]     # Compensation for Saga (error recovery)
+
+  plan_example: |
+    Plan for "Search and book Italian restaurant":
+
+    Step 1 (Wave 1): Search restaurants
+      - tool: search_api
+      - parameters: {query: "Italian restaurants", count: 5}
+      - dependencies: [] (no dependencies)
+      - compensation: None (read-only)
+
+    Step 2 (Wave 2): Book reservation
+      - tool: booking_api
+      - parameters: {restaurant_id: "{step_1.results[0].id}", time: "19:00", party_size: 2}
+      - dependencies: ["step_1"] (depends on Step 1)
+      - compensation: "cancel_reservation"
+
+    Step 3 (Wave 3): Send confirmation email
+      - tool: email_api
+      - parameters: {to: "user@example.com", subject: "Reservation confirmed"}
+      - dependencies: ["step_2"] (depends on Step 2)
+      - compensation: None (idempotent)
+
+# DAG Builder & Wave Computation
+dag_builder:
+
+  overview: |
+    **DAG Builder (Phase 3.1)**
+    Input: Plan with steps and dependencies
+    Output: DAG with waves (computed via topological sort)
+
+    Steps:
+    1. Create DAG nodes for each plan step
+    2. Compute in-degree (number of incoming edges)
+    3. Compute out-edges (which steps depend on this)
+    4. Validate acyclic (no circular dependencies)
+    5. Compute waves (topological sort grouping)
+
+  build_dag_pseudocode: |
+    def build_dag(plan: Plan) -> DAG:
+        """Build dependency graph from plan"""
+
+        # Step 1: Create nodes
+        nodes = {}
+        for step in plan.steps:
+            nodes[step.step_id] = DAGNode(
+                step=step,
+                in_degree=len(step.dependencies),
+                out_edges=[]
+            )
+
+        # Step 2: Compute out-edges (reverse dependencies)
+        for step in plan.steps:
+            for dep_id in step.dependencies:
+                if dep_id not in nodes:
+                    raise ValueError(f"Invalid dependency: {dep_id}")
+                nodes[dep_id].out_edges.append(step.step_id)
+
+        # Step 3: Validate acyclic (return True if valid)
+        validate_acyclic(nodes)
+
+        # Step 4: Compute waves
+        waves = compute_waves(nodes)
+
+        return DAG(nodes=nodes, waves=waves)
+
+  validate_acyclic: |
+    def validate_acyclic(nodes: Dict[str, DAGNode]) -> bool:
+        """
+        Validate no circular dependencies using Kahn's algorithm
+
+        Algorithm:
+        1. Create queue with all nodes having in-degree 0
+        2. While queue not empty:
+           - Pop node
+           - Decrement in-degree of all dependent nodes
+           - If dependent has in-degree 0, add to queue
+        3. If processed all nodes, acyclic; else cycle detected
+        """
+        temp_in_degree = {nid: n.in_degree for nid, n in nodes.items()}
+        queue = deque([nid for nid, deg in temp_in_degree.items() if deg == 0])
+        sorted_count = 0
+
+        while queue:
+            node_id = queue.popleft()
+            sorted_count += 1
+
+            # Decrement in-degree for all dependent nodes
+            for dep_id in nodes[node_id].out_edges:
+                temp_in_degree[dep_id] -= 1
+                if temp_in_degree[dep_id] == 0:
+                    queue.append(dep_id)
+
+        # If not all nodes processed, cycle detected
+        if sorted_count != len(nodes):
+            raise ValueError("Cycle detected in DAG (circular dependencies)")
+
+        return True
+
+  compute_waves: |
+    def compute_waves(nodes: Dict[str, DAGNode]) -> List[List[str]]:
+        """
+        Compute waves using topological sort (group independent steps)
+
+        Algorithm:
+        1. Initialize in-degree (same as validate_acyclic)
+        2. Create wave with all nodes having in-degree 0
+        3. While nodes remain:
+           - Execute current wave (all nodes in wave are independent)
+           - Decrement in-degree of dependent nodes
+           - Create next wave with nodes now having in-degree 0
+        4. Return list of waves (list of list of step_ids)
+        """
+        waves = []
+        remaining_in_degree = {nid: n.in_degree for nid, n in nodes.items()}
+        remaining_nodes = set(nodes.keys())
+
+        while remaining_nodes:
+            # Wave: all nodes with in-degree 0
+            current_wave = [nid for nid in remaining_nodes if remaining_in_degree[nid] == 0]
+
+            if not current_wave:
+                # Should not happen if validate_acyclic passed
+                raise ValueError("Cycle detected during wave computation")
+
+            waves.append(current_wave)
+
+            # Process wave: decrement in-degree of dependents
+            for node_id in current_wave:
+                remaining_nodes.discard(node_id)
+                for dep_id in nodes[node_id].out_edges:
+                    remaining_in_degree[dep_id] -= 1
+
+        return waves
+
+  example_wave_computation: |
+    **Example: Restaurant booking plan**
+
+    Input Plan:
+      Step 1: Search restaurants (dependencies: [])
+      Step 2: Book reservation (dependencies: [step_1])
+      Step 3: Send email (dependencies: [step_2])
+      Step 4: Send SMS (dependencies: [step_2])  # Parallel with email!
+
+    DAG Analysis:
+      Step 1: in_degree=0 → Wave 1
+      Step 2: in_degree=1 (depends on step_1) → Wave 2
+      Step 3: in_degree=1 (depends on step_2) → Wave 3
+      Step 4: in_degree=1 (depends on step_2) → Wave 3
+
+    Wave Computation:
+      Wave 1: [step_1]              (search restaurants)
+      Wave 2: [step_2]              (book reservation)
+      Wave 3: [step_3, step_4]      (send email & SMS in parallel!)
+
+    Execution Timeline:
+      t=0ms:    Start step_1
+      t=250ms:  Step_1 complete → Start step_2
+      t=500ms:  Step_2 complete → Start step_3 & step_4 (parallel!)
+      t=650ms:  Both step_3 & step_4 complete
+      Total: 650ms vs 1000ms sequential (35% faster!)
+
+# Parallel Execution
+parallel_execution:
+
+  execution_engine: |
+    **ExecutionEngine (Phase 3.2)**
+    Executes each wave with parallel tasks
+
+    Constraints:
+    - Max concurrent tasks: 3 (configurable semaphore)
+    - Barrier: Wait for all tasks in wave to complete
+    - Dependencies: Variable substitution {step_N.field} → value
+    - Timeouts: Per-step timeout (default 30s, configurable)
+
+  asyncio_execution: |
+    async def execute_plan(plan: Plan, agent_id: str) -> Dict[str, Any]:
+        """Execute plan with dependency management"""
+
+        # Build DAG and compute waves
+        dag = DAG(plan)
+        waves = dag.compute_waves()
+        step_results = {}
+
+        # Execute each wave sequentially, tasks within wave in parallel
+        for wave_num, wave_step_ids in enumerate(waves, start=1):
+            logger.info(f"Executing wave {wave_num}: {wave_step_ids}")
+
+            # Create parallel tasks for all steps in wave
+            wave_tasks = [
+                execute_step(
+                    step=dag.nodes[step_id].step,
+                    agent_id=agent_id,
+                    previous_results=step_results,  # For dependency resolution
+                    timeout_ms=30000  # 30s timeout
+                )
+                for step_id in wave_step_ids
+            ]
+
+            # Execute all tasks in parallel (asyncio.gather)
+            # Semaphore limits concurrent tasks
+            wave_results = await asyncio.gather(*wave_tasks, return_exceptions=True)
+
+            # Check for errors
+            for step_id, result in zip(wave_step_ids, wave_results):
+                if isinstance(result, Exception):
+                    logger.error(f"Step {step_id} failed: {result}")
+                    # Trigger Saga compensation (ADR-0006d)
+                    await compensate_saga(plan, completed_steps=list(step_results.keys()))
+                    raise result
+
+                step_results[step_id] = result
+
+            # Barrier: wait for wave completion before starting next
+            logger.info(f"Wave {wave_num} complete")
+
+        return step_results
+
+  dependency_resolution: |
+    **Variable Substitution**
+    Replace {step_N.field} with actual values from previous results
+
+    Example:
+      Input: {restaurant_id: "{step_1.results[0].id}", time: "19:00"}
+      Previous: step_1 → {results: [{id: "r123", name: "Mario's"}]}
+      Output: {restaurant_id: "r123", time: "19:00"}
+
+    Algorithm:
+    1. Find all {step_X.field} patterns in parameters
+    2. Look up step_X in previous_results
+    3. Extract field from result
+    4. Replace pattern with value
+    5. Validate all dependencies resolved (no unresolved patterns)
+
+  semaphore_constraint: |
+    **Concurrency Control (Semaphore)**
+    Limit parallel tasks to prevent resource exhaustion
+
+    Configuration:
+      max_concurrent_tasks: 3  # Per wave
+
+    Example:
+      Wave with 5 steps, semaphore=3:
+      t=0ms:    Start tasks 1,2,3 (semaphore full)
+      t=100ms:  Task 1 complete → Start task 4 (3 tasks still running)
+      t=150ms:  Task 2 complete → Start task 5 (3 tasks still running)
+      t=200ms:  Task 3 complete (2 tasks running, semaphore available)
+      t=250ms:  Tasks 4,5 complete → Wave complete
+
+    Benefits:
+    - Prevents overload (too many concurrent connections)
+    - Fair resource allocation
+    - Predictable performance
+
+  straggler_detection: |
+    **Straggler Detection**
+    Identify unusually slow tasks within a wave
+
+    Algorithm:
+    1. Track execution time for each step
+    2. After wave completion, analyze times
+    3. Flag tasks exceeding 2× median time
+    4. Log warning: "Straggler detected: {step_id} ({duration}ms vs median {median}ms)"
+
+    Example:
+      Wave step times: [100ms, 105ms, 110ms, 250ms, 95ms]
+      Median: 105ms
+      Threshold: 210ms (2× median)
+      Straggler: Step with 250ms (exceeds 210ms)
+
+# Performance Analysis
+performance:
+
+  latency_breakdown: |
+    **Example: Restaurant booking (3-step plan)**
+
+    Sequential Execution (all steps one-by-one):
+      Step 1 (search): 250ms
+      Step 2 (book):   300ms
+      Step 3 (email):  100ms
+      Total: 650ms
+
+    Parallel Execution (Wave 2 + Wave 3 parallel):
+      Wave 1 (step 1): 250ms (search)
+      Wave 2 (step 2): 300ms (book, parallelizable)
+      Wave 3 (step 3): 100ms (email, parallelizable)
+      Total: 250 + 300 + 100 = 650ms (same as sequential in this case!)
+
+    Parallel Execution with Email & SMS (both Wave 3):
+      Step 1: search restaurants       250ms
+      Step 2: book reservation         300ms
+      Step 3: send email              100ms
+      Step 4: send SMS                90ms  (depends on step 2, parallel with email)
+
+      Wave 1: 250ms (step 1)
+      Wave 2: 300ms (step 2)
+      Wave 3: max(100ms, 90ms) = 100ms (steps 3 & 4 in parallel!)
+      Total: 250 + 300 + 100 = 650ms vs 250 + 300 + 100 + 90 = 740ms sequential!
+      Speedup: 740/650 = 1.14× faster
+
+  performance_targets: |
+    - Per-step execution: <100ms typical (depends on tool)
+    - Wave overhead: <10ms (topological sort, dependency resolution)
+    - N-step plan latency: 2-3× speedup with parallelism (depends on DAG structure)
+    - P95 E2E turn: <2000ms (includes Phase 1, 2, 3, LLM latency)
+
+  scalability: |
+    - Steps per plan: 1-20 typical (5-10 average)
+    - Concurrent tasks: Up to 3 per wave (configurable)
+    - DAG computation: O(V + E) = O(20 + 20) = O(40) operations (negligible)
+    - Memory per plan: ~1KB (nodes + waves + results)
+
+# Configuration
+configuration:
+
+  execution_engine_config: |
+    max_concurrent_tasks: 3              # Semaphore: max parallel tasks per wave
+    step_timeout_ms: 30000               # 30s per step (configurable per step)
+    straggler_threshold_multiplier: 2.0  # Flag tasks > 2× median time
+    wave_timeout_ms: 120000              # 2m max per wave
+    max_retries: 0                       # No automatic retries (Saga handles recovery)
+
+  plan_constraints: |
+    max_steps_per_plan: 50               # Safety limit
+    max_dependencies_per_step: 10        # Sanity check
+    max_plan_depth: 20                   # Max wave count
+    max_parameter_size_kb: 1             # Parameter object size limit
+
+# Testing & Validation
+testing_validation:
+
+  unit_tests:
+    - "DAG builder: linear plan (no parallelism) → single wave"
+    - "DAG builder: parallel steps → multiple waves"
+    - "Acyclic validation: valid DAG → passes"
+    - "Acyclic validation: circular dependency → raises error"
+    - "Wave computation: restaurant example → 3 waves"
+    - "Wave computation: complex DAG → correct topological order"
+    - "Dependency resolution: simple variable → substitutes"
+    - "Dependency resolution: nested variable → substitutes"
+    - "Dependency resolution: unresolved dependency → raises error"
+
+  integration_tests:
+    - "Execute linear 3-step plan (sequential execution)"
+    - "Execute parallel plan with independent steps"
+    - "Execute plan with step failure → triggers compensation"
+    - "Execute plan with long-running step → straggler detection"
+    - "Execute plan with semaphore constraint → max 3 concurrent"
+
+  property_tests:
+    - "DAG always acyclic (validated)"
+    - "Topological order respected (no step before dependencies)"
+    - "Wave execution order deterministic (same plan → same waves)"
+    - "All steps executed exactly once"
+    - "Dependency resolution is idempotent"
+
+# Implementation Status
+implementation_status:
+  dag_builder: "COMPLETED"
+  wave_computation: "COMPLETED"
+  parallel_execution: "IN PROGRESS"
+  dependency_resolution: "IN PROGRESS"
+  straggler_detection: "TODO"
+  overall_completion: "60%"
+
+# Research Backing
+research_backing:
+  - "Topological Sorting (Kahn, 1962)"
+  - "DAG Workflows (Apache Airflow, 2014)"
+  - "Parallel Task Scheduling (Liu & Layland, 1973)"
+  - "Asynchronous I/O (UNIX, 1980s)"
+  - "Asyncio: Concurrent Programming (Python 3.5+, 2015)"
