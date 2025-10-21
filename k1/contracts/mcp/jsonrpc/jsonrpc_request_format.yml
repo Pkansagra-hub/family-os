@@ -1,0 +1,512 @@
+# JSON-RPC 2.0 Request Format Contract
+# ADR: 0034a-mcp-jsonrpc-protocol.md (lines 1-251)
+# Purpose: Define JSON-RPC 2.0 compliant request message format for K1 ↔ MCP server communication
+# Research: JSON-RPC 2.0 Specification (2010) - https://www.jsonrpc.org/specification
+
+contract_metadata:
+  name: "jsonrpc_request_format"
+  version: "1.0.0"
+  parent_adr: "ADR-0034a"
+  related_adrs:
+    - "ADR-0034: MCP Protocol Adoption"
+    - "ADR-0033: Three-Tier Sandbox Strategy"
+  status: "approved"
+  created: "2025-10-21"
+  priority: "CRITICAL"
+
+# =============================================================================
+# JSON-RPC 2.0 REQUEST FORMAT
+# =============================================================================
+
+jsonrpc_request_schema:
+  description: |
+    JSON-RPC 2.0 request message schema.
+
+    Specification: https://www.jsonrpc.org/specification
+
+    **Core Fields:**
+    - jsonrpc: MUST be "2.0" (version identifier)
+    - method: String method name (e.g., "tools/call")
+    - params: Method parameters (MUST be structured value: Object or Array)
+    - id: Request identifier (MUST be String, Number, or null)
+
+    **Design Decisions:**
+    - Use UUID v4 for id (better than sequential integers for distributed systems)
+    - params always Object (easier to extend than Array)
+    - No "notifications" (requests without id) - all requests require responses
+
+  flatbuffers_schema: "contracts/flatbuffers/mcp/jsonrpc_request.fbs"
+
+  fields:
+    jsonrpc:
+      type: "string"
+      required: true
+      constant: "2.0"
+      validation:
+        - rule: "MUST equal '2.0'"
+          error_code: -32600  # Invalid Request
+          error_message: "Invalid JSON-RPC version: {value}. Expected '2.0'"
+      description: "JSON-RPC protocol version identifier"
+
+    method:
+      type: "string"
+      required: true
+      pattern: "^[a-zA-Z0-9_/]+$"  # Alphanumeric, underscore, forward slash
+      validation:
+        - rule: "MUST NOT be empty"
+          error_code: -32600
+          error_message: "Missing 'method' field"
+        - rule: "MUST match pattern ^[a-zA-Z0-9_/]+$"
+          error_code: -32600
+          error_message: "Invalid method name: {value}"
+        - rule: "Method names starting with 'rpc.' are reserved"
+          error_code: -32601  # Method Not Found
+          error_message: "Method {value} is reserved"
+      description: |
+        Method name to invoke (case-sensitive).
+
+        **Standard MCP Methods:**
+        - initialize
+        - tools/list
+        - tools/call
+        - shutdown
+      examples:
+        - "initialize"
+        - "tools/list"
+        - "tools/call"
+        - "shutdown"
+
+    params:
+      type: "object"
+      required: false
+      default: {}
+      validation:
+        - rule: "MUST be JSON Object (not Array)"
+          error_code: -32600
+          error_message: "Invalid params: expected Object, got {type}"
+        - rule: "MUST be JSON-serializable"
+          error_code: -32600
+          error_message: "Params contain non-serializable values"
+      description: |
+        Method parameters (named parameters as JSON Object).
+
+        **Design Choice:** Always use Object (not Array) for extensibility.
+        Empty Object {} if no parameters.
+      examples:
+        - {}  # No parameters
+        - {"name": "get_weather", "arguments": {"city": "Seattle"}}
+        - {"protocolVersion": "2024-11-05", "capabilities": {}}
+
+    id:
+      type: "string"
+      required: true
+      format: "uuid-v4"
+      validation:
+        - rule: "MUST NOT be null (no notifications)"
+          error_code: -32600
+          error_message: "Missing 'id' field (notifications not supported)"
+        - rule: "MUST be UUID v4 format"
+          error_code: -32600
+          error_message: "Invalid id format: expected UUID v4"
+      description: |
+        Unique request identifier for matching async responses.
+
+        **Format:** UUID v4 (e.g., "550e8400-e29b-41d4-a716-446655440000")
+        **Uniqueness:** MUST be unique per client session
+        **Purpose:** Match response to request in async environments
+      examples:
+        - "550e8400-e29b-41d4-a716-446655440000"
+        - "c9bf9e57-1685-4c89-bafb-ff5af830be8a"
+
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+
+validation_rules:
+  description: "Request validation must occur before transmission"
+
+  pre_send_validation:
+    - check: "jsonrpc == '2.0'"
+      error_code: -32600
+      action: "reject_request"
+
+    - check: "method is non-empty string"
+      error_code: -32600
+      action: "reject_request"
+
+    - check: "method does not start with 'rpc.'"
+      error_code: -32601
+      action: "reject_request"
+
+    - check: "params is valid JSON Object"
+      error_code: -32600
+      action: "reject_request"
+
+    - check: "id is non-null UUID v4"
+      error_code: -32600
+      action: "reject_request"
+
+  serialization_validation:
+    - check: "Entire request is valid JSON"
+      error_code: -32700  # Parse Error
+      action: "log_error_and_abort"
+
+    - check: "JSON size < 10MB"
+      error_code: -32600
+      action: "reject_request"
+      rationale: "Prevent memory exhaustion"
+
+# =============================================================================
+# EXAMPLE REQUESTS
+# =============================================================================
+
+example_requests:
+  initialize_request:
+    description: "MCP initialize handshake"
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {},
+          "clientInfo": {
+            "name": "k1-intelligence",
+            "version": "1.0.0"
+          }
+        },
+        "id": "550e8400-e29b-41d4-a716-446655440000"
+      }
+    expected_response: "JsonRpcResponse with server capabilities"
+
+  tools_list_request:
+    description: "Discover available tools"
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/list",
+        "params": {},
+        "id": "c9bf9e57-1685-4c89-bafb-ff5af830be8a"
+      }
+    expected_response: "JsonRpcResponse with tools array"
+
+  tools_call_request:
+    description: "Invoke tool with arguments"
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "name": "get_weather",
+          "arguments": {
+            "city": "Seattle",
+            "units": "metric"
+          }
+        },
+        "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+      }
+    expected_response: "JsonRpcResponse with tool result"
+
+  shutdown_request:
+    description: "Graceful server termination"
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "shutdown",
+        "params": {},
+        "id": "d5f3a4b2-8c1e-4d9a-b7f6-a3e2c1d4e5f6"
+      }
+    expected_response: "JsonRpcResponse with shutdown confirmation"
+
+# =============================================================================
+# INVALID REQUEST EXAMPLES
+# =============================================================================
+
+invalid_request_examples:
+  missing_jsonrpc:
+    json: |
+      {
+        "method": "tools/call",
+        "params": {},
+        "id": "req-123"
+      }
+    error_code: -32600
+    error_message: "Missing 'jsonrpc' field"
+
+  wrong_version:
+    json: |
+      {
+        "jsonrpc": "1.0",
+        "method": "tools/call",
+        "params": {},
+        "id": "req-123"
+      }
+    error_code: -32600
+    error_message: "Invalid JSON-RPC version: 1.0. Expected '2.0'"
+
+  missing_method:
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "params": {},
+        "id": "req-123"
+      }
+    error_code: -32600
+    error_message: "Missing 'method' field"
+
+  reserved_method:
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "rpc.internal",
+        "params": {},
+        "id": "req-123"
+      }
+    error_code: -32601
+    error_message: "Method rpc.internal is reserved"
+
+  missing_id:
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {}
+      }
+    error_code: -32600
+    error_message: "Missing 'id' field (notifications not supported)"
+
+  params_as_array:
+    json: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": ["get_weather", "Seattle"],
+        "id": "req-123"
+      }
+    error_code: -32600
+    error_message: "Invalid params: expected Object, got Array"
+
+# =============================================================================
+# IMPLEMENTATION REFERENCE
+# =============================================================================
+
+python_implementation_reference:
+  description: "Reference implementation (from ADR-0034a)"
+
+  dataclass_definition: |
+    from dataclasses import dataclass
+    from typing import Any, Optional
+    import json
+    import uuid
+
+    @dataclass
+    class JsonRpcRequest:
+        """JSON-RPC 2.0 request"""
+        jsonrpc: str = "2.0"
+        method: str
+        params: dict
+        id: str
+
+        def to_json(self) -> str:
+            """Serialize to JSON"""
+            return json.dumps({
+                "jsonrpc": self.jsonrpc,
+                "method": self.method,
+                "params": self.params,
+                "id": self.id
+            })
+
+        @classmethod
+        def from_json(cls, json_str: str) -> 'JsonRpcRequest':
+            """Deserialize from JSON"""
+            data = json.loads(json_str)
+            return cls(
+                jsonrpc=data.get("jsonrpc", "2.0"),
+                method=data["method"],
+                params=data.get("params", {}),
+                id=data["id"]
+            )
+
+        def validate(self):
+            """Validate JSON-RPC 2.0 request format"""
+            if self.jsonrpc != "2.0":
+                raise JsonRpcError(-32600, f"Invalid JSON-RPC version: {self.jsonrpc}")
+            if not self.method:
+                raise JsonRpcError(-32600, "Missing 'method' field")
+            if self.method.startswith("rpc."):
+                raise JsonRpcError(-32601, f"Method {self.method} is reserved")
+            if not self.id:
+                raise JsonRpcError(-32600, "Missing 'id' field")
+            if not isinstance(self.params, dict):
+                raise JsonRpcError(-32600, f"Invalid params: expected dict, got {type(self.params).__name__}")
+
+  usage_example: |
+    # Create request
+    request = JsonRpcRequest(
+        method="tools/call",
+        params={"name": "get_weather", "arguments": {"city": "Seattle"}},
+        id=str(uuid.uuid4())
+    )
+
+    # Validate before sending
+    request.validate()
+
+    # Serialize to JSON
+    json_str = request.to_json()
+
+# =============================================================================
+# PERFORMANCE REQUIREMENTS
+# =============================================================================
+
+performance_requirements:
+  serialization_latency:
+    target: "<0.5ms P95"
+    measurement: "Time to convert JsonRpcRequest to JSON string"
+    rationale: "Negligible overhead (0.25% of 200ms tool execution)"
+
+  deserialization_latency:
+    target: "<0.5ms P95"
+    measurement: "Time to parse JSON string to JsonRpcRequest"
+    rationale: "Negligible overhead"
+
+  validation_latency:
+    target: "<0.1ms P95"
+    measurement: "Time to validate all fields"
+    rationale: "Fail-fast before transmission"
+
+  request_size:
+    max: "10MB"
+    typical: "1-10KB"
+    rationale: "Prevent memory exhaustion, enforce reasonable message sizes"
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+metrics:
+  jsonrpc_requests_created_total:
+    type: "counter"
+    labels: ["method"]
+    description: "Total JSON-RPC requests created"
+
+  jsonrpc_request_validation_errors_total:
+    type: "counter"
+    labels: ["error_code", "method"]
+    description: "Total request validation failures"
+
+  jsonrpc_request_serialization_duration_ms:
+    type: "histogram"
+    buckets: [0.1, 0.5, 1, 5, 10]
+    labels: ["method"]
+    description: "Request serialization latency in milliseconds"
+
+logging:
+  request_created:
+    level: "DEBUG"
+    message: "JSON-RPC request created"
+    fields:
+      - "request_id"
+      - "method"
+      - "params_size_bytes"
+
+  request_validation_failed:
+    level: "ERROR"
+    message: "JSON-RPC request validation failed"
+    fields:
+      - "request_id"
+      - "method"
+      - "error_code"
+      - "error_message"
+
+# =============================================================================
+# TESTING REQUIREMENTS
+# =============================================================================
+
+test_coverage:
+  unit_tests:
+    - test_name: "test_valid_request_serialization"
+      description: "Valid request serializes to correct JSON"
+      assertion: "JSON matches expected structure"
+
+    - test_name: "test_valid_request_deserialization"
+      description: "Valid JSON deserializes to JsonRpcRequest"
+      assertion: "All fields populated correctly"
+
+    - test_name: "test_validation_rejects_wrong_version"
+      description: "Validate rejects jsonrpc != '2.0'"
+      assertion: "Raises JsonRpcError with code -32600"
+
+    - test_name: "test_validation_rejects_empty_method"
+      description: "Validate rejects empty method"
+      assertion: "Raises JsonRpcError with code -32600"
+
+    - test_name: "test_validation_rejects_reserved_method"
+      description: "Validate rejects method starting with 'rpc.'"
+      assertion: "Raises JsonRpcError with code -32601"
+
+    - test_name: "test_validation_rejects_missing_id"
+      description: "Validate rejects missing id"
+      assertion: "Raises JsonRpcError with code -32600"
+
+    - test_name: "test_validation_rejects_params_as_array"
+      description: "Validate rejects params as Array"
+      assertion: "Raises JsonRpcError with code -32600"
+
+  integration_tests:
+    - test_name: "test_request_round_trip"
+      description: "Request serializes, sends, deserializes correctly"
+      assertion: "Original request equals deserialized request"
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+references:
+  standards:
+    - name: "JSON-RPC 2.0 Specification"
+      url: "https://www.jsonrpc.org/specification"
+      year: 2010
+      description: "Official JSON-RPC 2.0 protocol specification"
+
+    - name: "Model Context Protocol (MCP)"
+      url: "https://github.com/anthropics/model-context-protocol"
+      year: 2024
+      description: "Anthropic's MCP uses JSON-RPC 2.0 for tool integration"
+
+    - name: "RFC 4122 - UUID URN Namespace"
+      url: "https://datatracker.ietf.org/doc/html/rfc4122"
+      year: 2005
+      description: "UUID v4 format specification for request IDs"
+
+  related_contracts:
+    - "jsonrpc_response_format.yml"
+    - "jsonrpc_error_codes.yml"
+    - "request_id_tracking.yml"
+    - "method_routing.yml"
+
+# =============================================================================
+# GLOSSARY
+# =============================================================================
+
+glossary:
+  json_rpc: "Remote procedure call protocol encoded in JSON (2010 spec)"
+  request_id: "Unique identifier (UUID v4) for matching async responses"
+  method: "String identifying the method to invoke on the server"
+  params: "Structured parameters (always Object, not Array in K1)"
+  validation: "Pre-send checks ensuring request meets JSON-RPC 2.0 spec"
+
+# =============================================================================
+# CONTRACT VERSION & APPROVAL
+# =============================================================================
+
+contract_status:
+  version: "1.0.0"
+  status: "approved"
+  approved_by: "K1 Architecture Team"
+  approved_date: "2025-10-21"
+  next_review: "2026-04-21"
+  change_history:
+    - version: "1.0.0"
+      date: "2025-10-21"
+      author: "K1 Architecture Team"
+      changes: "Initial contract based on ADR-0034a"

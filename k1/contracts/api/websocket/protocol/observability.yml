@@ -1,0 +1,410 @@
+classes:
+  - name: ProtocolMetrics
+    description: Prometheus metrics for WebSocket protocol performance and message statistics
+    research: Prometheus best practices, RED method, protocol-specific metrics
+    performance_impact: <0.1ms per metric operation
+    reliability_properties:
+      - comprehensive_coverage: All message types tracked
+      - performance_validation: Serialization/deserialization budgets monitored
+      - bandwidth_tracking: Message size and bandwidth savings measured
+      - error_visibility: All error types tracked
+    methods:
+      - name: record_message_sent
+        description: Record outbound message sent to client
+        parameters:
+          - name: message_type
+            type: MessageType
+            description: Type of message sent
+          - name: size_bytes
+            type: u32
+            description: Message size in bytes
+          - name: latency
+            type: Duration
+            description: Serialization latency
+        implementation:
+          rust: |
+            use prometheus::{IntCounterVec, HistogramVec, Histogram, Registry};
+            use std::time::Duration;
+            use k1_websocket::MessageType;
+
+            pub struct ProtocolMetrics {
+                // Message counters
+                messages_sent_total: IntCounterVec,
+                messages_received_total: IntCounterVec,
+
+                // Serialization/deserialization
+                serialization_latency_ms: HistogramVec,
+                deserialization_latency_ms: HistogramVec,
+
+                // Message sizes
+                message_size_bytes: HistogramVec,
+
+                // Errors
+                serialization_errors_total: IntCounterVec,
+                deserialization_errors_total: IntCounterVec,
+
+                // Routing
+                messages_routed_total: IntCounterVec,
+                routing_latency_us: Histogram,
+                handler_failures_total: IntCounterVec,
+
+                // Bandwidth savings
+                bandwidth_saved_bytes: IntCounterVec,
+            }
+
+            impl ProtocolMetrics {
+                pub fn new(registry: &Registry) -> Self {
+                    let messages_sent_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_messages_sent_total", "Total messages sent by type"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let messages_received_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_messages_received_total", "Total messages received by type"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let serialization_latency_ms = HistogramVec::new(
+                        prometheus::HistogramOpts::new(
+                            "websocket_serialization_latency_ms",
+                            "FlatBuffers serialization latency in milliseconds"
+                        ).buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0]),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let deserialization_latency_ms = HistogramVec::new(
+                        prometheus::HistogramOpts::new(
+                            "websocket_deserialization_latency_ms",
+                            "FlatBuffers deserialization latency in milliseconds"
+                        ).buckets(vec![0.05, 0.1, 0.5, 1.0, 2.0]),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let message_size_bytes = HistogramVec::new(
+                        prometheus::HistogramOpts::new(
+                            "websocket_message_size_bytes",
+                            "Message size in bytes"
+                        ).buckets(vec![50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0]),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let serialization_errors_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_serialization_errors_total", "Serialization errors"),
+                        &["error_type"]
+                    ).unwrap();
+
+                    let deserialization_errors_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_deserialization_errors_total", "Deserialization errors"),
+                        &["error_type"]
+                    ).unwrap();
+
+                    let messages_routed_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_messages_routed_total", "Messages routed by type"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    let routing_latency_us = Histogram::with_opts(
+                        prometheus::HistogramOpts::new(
+                            "websocket_routing_latency_us",
+                            "Message routing latency in microseconds"
+                        ).buckets(vec![10.0, 50.0, 100.0, 500.0, 1000.0])
+                    ).unwrap();
+
+                    let handler_failures_total = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_handler_failures_total", "Handler failures by type"),
+                        &["message_type", "error_type"]
+                    ).unwrap();
+
+                    let bandwidth_saved_bytes = IntCounterVec::new(
+                        prometheus::Opts::new("websocket_bandwidth_saved_bytes", "Bandwidth saved vs JSON"),
+                        &["message_type"]
+                    ).unwrap();
+
+                    // Register all metrics
+                    registry.register(Box::new(messages_sent_total.clone())).unwrap();
+                    registry.register(Box::new(messages_received_total.clone())).unwrap();
+                    registry.register(Box::new(serialization_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(deserialization_latency_ms.clone())).unwrap();
+                    registry.register(Box::new(message_size_bytes.clone())).unwrap();
+                    registry.register(Box::new(serialization_errors_total.clone())).unwrap();
+                    registry.register(Box::new(deserialization_errors_total.clone())).unwrap();
+                    registry.register(Box::new(messages_routed_total.clone())).unwrap();
+                    registry.register(Box::new(routing_latency_us.clone())).unwrap();
+                    registry.register(Box::new(handler_failures_total.clone())).unwrap();
+                    registry.register(Box::new(bandwidth_saved_bytes.clone())).unwrap();
+
+                    Self {
+                        messages_sent_total,
+                        messages_received_total,
+                        serialization_latency_ms,
+                        deserialization_latency_ms,
+                        message_size_bytes,
+                        serialization_errors_total,
+                        deserialization_errors_total,
+                        messages_routed_total,
+                        routing_latency_us,
+                        handler_failures_total,
+                        bandwidth_saved_bytes,
+                    }
+                }
+
+                pub fn record_message_sent(
+                    &self,
+                    message_type: MessageType,
+                    size_bytes: u32,
+                    latency: Duration,
+                ) {
+                    let type_label = format!("{:?}", message_type);
+                    self.messages_sent_total.with_label_values(&[&type_label]).inc();
+                    self.serialization_latency_ms.with_label_values(&[&type_label])
+                        .observe(latency.as_secs_f64() * 1000.0);
+                    self.message_size_bytes.with_label_values(&[&type_label])
+                        .observe(size_bytes as f64);
+                }
+
+                pub fn record_message_received(
+                    &self,
+                    message_type: MessageType,
+                    size_bytes: u32,
+                    latency: Duration,
+                ) {
+                    let type_label = format!("{:?}", message_type);
+                    self.messages_received_total.with_label_values(&[&type_label]).inc();
+                    self.deserialization_latency_ms.with_label_values(&[&type_label])
+                        .observe(latency.as_secs_f64() * 1000.0);
+                    self.message_size_bytes.with_label_values(&[&type_label])
+                        .observe(size_bytes as f64);
+                }
+
+                pub fn record_serialization_error(&self, error_type: &str) {
+                    self.serialization_errors_total.with_label_values(&[error_type]).inc();
+                }
+
+                pub fn record_deserialization_error(&self, error_type: &str) {
+                    self.deserialization_errors_total.with_label_values(&[error_type]).inc();
+                }
+
+                pub fn record_message_routed(
+                    &self,
+                    message_type: MessageType,
+                    latency: Duration,
+                    success: bool,
+                ) {
+                    let type_label = format!("{:?}", message_type);
+                    self.messages_routed_total.with_label_values(&[&type_label]).inc();
+                    self.routing_latency_us.observe(latency.as_micros() as f64);
+
+                    if !success {
+                        self.handler_failures_total.with_label_values(&[&type_label, "unknown"]).inc();
+                    }
+                }
+
+                pub fn record_bandwidth_saved(
+                    &self,
+                    message_type: MessageType,
+                    saved_bytes: u32,
+                ) {
+                    let type_label = format!("{:?}", message_type);
+                    self.bandwidth_saved_bytes.with_label_values(&[&type_label])
+                        .inc_by(saved_bytes as u64);
+                }
+            }
+          python: |
+            from prometheus_client import Counter, Histogram, CollectorRegistry
+
+            class ProtocolMetrics:
+                """Prometheus metrics for WebSocket protocol"""
+
+                def __init__(self, registry: CollectorRegistry):
+                    self.messages_sent_total = Counter(
+                        'websocket_messages_sent_total',
+                        'Total messages sent by type',
+                        ['message_type'],
+                        registry=registry
+                    )
+                    self.messages_received_total = Counter(
+                        'websocket_messages_received_total',
+                        'Total messages received by type',
+                        ['message_type'],
+                        registry=registry
+                    )
+                    self.serialization_latency_ms = Histogram(
+                        'websocket_serialization_latency_ms',
+                        'Serialization latency in milliseconds',
+                        ['message_type'],
+                        buckets=[0.1, 0.5, 1.0, 2.0, 5.0],
+                        registry=registry
+                    )
+                    self.message_size_bytes = Histogram(
+                        'websocket_message_size_bytes',
+                        'Message size in bytes',
+                        ['message_type'],
+                        buckets=[50, 100, 500, 1000, 5000, 10000],
+                        registry=registry
+                    )
+
+                def record_message_sent(self, message_type: str, size_bytes: int, latency_ms: float):
+                    self.messages_sent_total.labels(message_type=message_type).inc()
+                    self.serialization_latency_ms.labels(message_type=message_type).observe(latency_ms)
+                    self.message_size_bytes.labels(message_type=message_type).observe(size_bytes)
+
+prometheus_metrics:
+  message_counters:
+    - name: websocket_messages_sent_total
+      type: Counter
+      labels: [message_type]
+      description: Total outbound messages by type
+      values: [ConnectionEstablished, Heartbeat, AgentMessageChunk, ToolCallStarted, Error, etc.]
+    - name: websocket_messages_received_total
+      type: Counter
+      labels: [message_type]
+      description: Total inbound messages by type
+      values: [UserMessage, HeartbeatAck, ClarificationResponse, etc.]
+
+  serialization_metrics:
+    - name: websocket_serialization_latency_ms
+      type: Histogram
+      labels: [message_type]
+      buckets: [0.1, 0.5, 1.0, 2.0, 5.0]
+      description: FlatBuffers serialization latency
+      target: P95 < 1ms
+    - name: websocket_deserialization_latency_ms
+      type: Histogram
+      labels: [message_type]
+      buckets: [0.05, 0.1, 0.5, 1.0, 2.0]
+      description: FlatBuffers deserialization latency
+      target: P95 < 0.5ms
+
+  message_size_metrics:
+    - name: websocket_message_size_bytes
+      type: Histogram
+      labels: [message_type]
+      buckets: [50, 100, 500, 1000, 5000, 10000]
+      description: Message size distribution
+      targets:
+        ConnectionEstablished: ~500 bytes
+        Heartbeat: ~50 bytes
+        AgentMessageChunk: ~100 bytes
+        ToolCallStarted: ~500 bytes
+
+  error_metrics:
+    - name: websocket_serialization_errors_total
+      type: Counter
+      labels: [error_type]
+      description: Serialization errors by type
+      values: [unsupported_type, invalid_payload, builder_failed]
+    - name: websocket_deserialization_errors_total
+      type: Counter
+      labels: [error_type]
+      description: Deserialization errors by type
+      values: [invalid_flatbuffers, missing_payload, schema_validation_failed]
+
+  routing_metrics:
+    - name: websocket_messages_routed_total
+      type: Counter
+      labels: [message_type]
+      description: Messages routed by type
+    - name: websocket_routing_latency_us
+      type: Histogram
+      buckets: [10, 50, 100, 500, 1000]
+      description: Message routing latency in microseconds
+      target: P95 < 100us
+    - name: websocket_handler_failures_total
+      type: Counter
+      labels: [message_type, error_type]
+      description: Handler failures by type
+
+  bandwidth_metrics:
+    - name: websocket_bandwidth_saved_bytes
+      type: Counter
+      labels: [message_type]
+      description: Bandwidth saved vs JSON (cumulative)
+      calculation: json_size - flatbuffers_size
+
+grafana_dashboard:
+  title: WebSocket Protocol Performance
+  panels:
+    - title: Messages Sent (Rate)
+      type: graph
+      query: rate(websocket_messages_sent_total[1m])
+      description: Outbound message rate by type
+      legend: By message_type
+    - title: Messages Received (Rate)
+      type: graph
+      query: rate(websocket_messages_received_total[1m])
+      description: Inbound message rate by type
+    - title: Serialization Latency (P50/P95/P99)
+      type: graph
+      queries:
+        - histogram_quantile(0.50, rate(websocket_serialization_latency_ms_bucket[5m]))
+        - histogram_quantile(0.95, rate(websocket_serialization_latency_ms_bucket[5m]))
+        - histogram_quantile(0.99, rate(websocket_serialization_latency_ms_bucket[5m]))
+      thresholds:
+        - value: 1.0
+          color: orange
+          label: P95 budget
+    - title: Deserialization Latency
+      type: graph
+      query: histogram_quantile(0.95, rate(websocket_deserialization_latency_ms_bucket[5m]))
+      threshold: 0.5
+    - title: Message Size Distribution
+      type: heatmap
+      query: websocket_message_size_bytes
+      description: Message size distribution by type
+    - title: Routing Latency
+      type: graph
+      query: histogram_quantile(0.95, rate(websocket_routing_latency_us_bucket[5m]))
+      threshold: 100
+      unit: microseconds
+    - title: Error Rates
+      type: graph
+      queries:
+        - rate(websocket_serialization_errors_total[1m])
+        - rate(websocket_deserialization_errors_total[1m])
+        - rate(websocket_handler_failures_total[1m])
+    - title: Bandwidth Saved (Cumulative)
+      type: graph
+      query: websocket_bandwidth_saved_bytes
+      description: Total bandwidth saved vs JSON
+      unit: bytes
+    - title: Message Type Distribution
+      type: pie
+      query: sum by (message_type) (websocket_messages_sent_total)
+
+alerting_rules:
+  - alert: HighSerializationLatency
+    expr: histogram_quantile(0.95, rate(websocket_serialization_latency_ms_bucket[5m])) > 1.0
+    for: 5m
+    severity: warning
+    description: P95 serialization latency >1ms
+  - alert: HighDeserializationLatency
+    expr: histogram_quantile(0.95, rate(websocket_deserialization_latency_ms_bucket[5m])) > 0.5
+    for: 5m
+    severity: warning
+    description: P95 deserialization latency >0.5ms
+  - alert: HighRoutingLatency
+    expr: histogram_quantile(0.95, rate(websocket_routing_latency_us_bucket[5m])) > 100
+    for: 5m
+    severity: warning
+    description: P95 routing latency >100us
+  - alert: HighSerializationErrorRate
+    expr: rate(websocket_serialization_errors_total[5m]) > 1
+    for: 2m
+    severity: critical
+    description: Serialization errors >1/sec
+  - alert: HighHandlerFailureRate
+    expr: rate(websocket_handler_failures_total[5m]) > 5
+    for: 2m
+    severity: critical
+    description: Handler failures >5/sec
+
+cardinality_control:
+  - metric: websocket_messages_sent_total
+    max_labels: 17
+    strategy: Limit message_type to 17 defined types
+  - metric: websocket_message_size_bytes
+    max_labels: 17
+    strategy: Limit message_type to 17 defined types
+  - metric: websocket_serialization_errors_total
+    max_labels: 5
+    strategy: Limit error_type to 5 common errors

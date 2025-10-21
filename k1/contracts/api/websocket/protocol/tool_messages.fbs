@@ -1,0 +1,390 @@
+// Tool Message Types FlatBuffers Schema
+// Purpose: Tool execution lifecycle messages (3 types)
+// Research: Tool calling patterns, streaming tool output, ADR-0032 tool governance
+
+namespace K1.WebSocket;
+
+// ============================================================================
+// 1. ToolCallStarted
+// ============================================================================
+
+table ToolCallStarted {
+  turn_id: string (required);                  // Turn ID (matches UserMessage)
+  tool_call_id: string (required);             // Unique tool call ID (UUID)
+  tool_name: string (required);                // Tool name (e.g., "calculator", "web_search")
+  tool_category: string (required);            // Category (SYSTEM, EXTERNAL, USER, ADMIN)
+  arguments: string (required);                // Tool arguments (JSON string, redacted PII)
+  agent_id: string (required);                 // Agent that requested tool call
+  timestamp_ms: int64 (required);              // Server timestamp when tool execution started
+
+  // Optional metadata
+  estimated_duration_ms: uint32;               // Estimated execution time
+  privacy_band: string (required);             // Privacy band
+  requires_approval: bool = false;             // Whether tool requires human approval
+}
+
+// ============================================================================
+// 2. ToolCallChunk (Streaming Tool Output)
+// ============================================================================
+
+table ToolCallChunk {
+  turn_id: string (required);                  // Turn ID
+  tool_call_id: string (required);             // Tool call ID
+  output_delta: string (required);             // NEW output only (not cumulative)
+  chunk_index: uint32 (required);              // Monotonic chunk index (0, 1, 2, ...)
+  timestamp_ms: int64 (required);              // Server timestamp when chunk sent
+
+  // Optional metadata
+  output_type: string = "text";                // text, json, binary, image, etc.
+  mime_type: string;                           // MIME type for binary/image output
+}
+
+// ============================================================================
+// 3. ToolCallCompleted
+// ============================================================================
+
+table ToolCallCompleted {
+  turn_id: string (required);                  // Turn ID
+  tool_call_id: string (required);             // Tool call ID
+  tool_name: string (required);                // Tool name
+  success: bool (required);                    // true = success, false = error
+  result: string;                              // Tool result (JSON string, redacted PII)
+  error_code: string;                          // Error code if success = false
+  error_message: string;                       // Human-readable error message
+  latency_ms: uint32 (required);               // Total execution latency
+  timestamp_ms: int64 (required);              // Server timestamp when tool execution completed
+
+  // Optional metadata
+  result_size_bytes: uint32;                   // Size of result in bytes
+  exit_code: int32;                            // Exit code for shell tools
+  violation_type: string;                      // Violation type from ADR-0032 (SAFETY, PRIVACY, QUOTA, DEPENDENCY)
+  retry_allowed: bool = true;                  // Whether retry is allowed
+}
+
+// ============================================================================
+// 4. ClarificationRequest (Tool Approval)
+// ============================================================================
+
+table ClarificationRequest {
+  turn_id: string (required);                  // Turn ID
+  tool_call_id: string (required);             // Tool call ID requesting approval
+  tool_name: string (required);                // Tool name
+  clarification_type: string (required);       // approval_required, ambiguous_input, missing_context
+  prompt: string (required);                   // Human-readable prompt (e.g., "Allow web_search to access example.com?")
+  options: [string];                           // Available options (["allow", "deny"], ["option1", "option2"])
+  timeout_ms: uint32 = 30000;                  // Timeout for user response (30 seconds)
+  timestamp_ms: int64 (required);              // Server timestamp
+}
+
+// ============================================================================
+// 5. ClarificationResponse (User Approval)
+// ============================================================================
+
+table ClarificationResponse {
+  turn_id: string (required);                  // Turn ID
+  tool_call_id: string (required);             // Tool call ID
+  response: string (required);                 // User response (e.g., "allow", "deny", "option1")
+  timestamp_ms: int64 (required);              // Client timestamp
+}
+
+// ============================================================================
+// 6. Error (General Error Message)
+// ============================================================================
+
+table Error {
+  turn_id: string;                             // Optional turn ID
+  error_code: string (required);               // Error code (e.g., "RATE_LIMIT_EXCEEDED", "TOOL_NOT_FOUND")
+  message: string (required);                  // Human-readable error message
+  details: string;                             // Optional detailed error information (JSON string)
+  retry_allowed: bool = true;                  // Whether retry is allowed
+  retry_after_ms: uint32;                      // Optional retry delay (milliseconds)
+  timestamp_ms: int64 (required);              // Server timestamp
+}
+
+// ============================================================================
+// Usage Examples
+// ============================================================================
+
+// Rust ToolCallStarted serialization:
+/*
+use flatbuffers::FlatBufferBuilder;
+use k1_websocket::{ToolCallStarted, ToolCallStartedArgs};
+use serde_json::json;
+
+fn send_tool_call_started(
+    turn_id: &str,
+    tool_call_id: &str,
+    tool_name: &str,
+    tool_category: &str,
+    arguments: &serde_json::Value,
+    agent_id: &str,
+    privacy_band: &str,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let turn_id_offset = builder.create_string(turn_id);
+    let tool_call_id_offset = builder.create_string(tool_call_id);
+    let tool_name_offset = builder.create_string(tool_name);
+    let tool_category_offset = builder.create_string(tool_category);
+    let arguments_offset = builder.create_string(&arguments.to_string());
+    let agent_id_offset = builder.create_string(agent_id);
+    let privacy_band_offset = builder.create_string(privacy_band);
+
+    let started = ToolCallStartedArgs {
+        turn_id: Some(turn_id_offset),
+        tool_call_id: Some(tool_call_id_offset),
+        tool_name: Some(tool_name_offset),
+        tool_category: Some(tool_category_offset),
+        arguments: Some(arguments_offset),
+        agent_id: Some(agent_id_offset),
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        estimated_duration_ms: 5000,
+        privacy_band: Some(privacy_band_offset),
+        requires_approval: false,
+    };
+
+    let msg_offset = ToolCallStarted::create(&mut builder, &started);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Rust ToolCallChunk serialization (streaming output):
+/*
+fn send_tool_call_chunk(
+    turn_id: &str,
+    tool_call_id: &str,
+    output_delta: &str,  // NEW output only
+    chunk_index: u32,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let turn_id_offset = builder.create_string(turn_id);
+    let tool_call_id_offset = builder.create_string(tool_call_id);
+    let output_delta_offset = builder.create_string(output_delta);
+    let output_type_offset = builder.create_string("text");
+
+    let chunk = ToolCallChunkArgs {
+        turn_id: Some(turn_id_offset),
+        tool_call_id: Some(tool_call_id_offset),
+        output_delta: Some(output_delta_offset),
+        chunk_index,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        output_type: Some(output_type_offset),
+        mime_type: None,
+    };
+
+    let msg_offset = ToolCallChunk::create(&mut builder, &chunk);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Python ToolCallCompleted handling:
+/*
+from k1_websocket import ToolCallCompleted
+import json
+
+def handle_tool_call_completed(binary_data: bytes):
+    completed = ToolCallCompleted.GetRootAs(binary_data)
+
+    turn_id = completed.TurnId().decode('utf-8')
+    tool_call_id = completed.ToolCallId().decode('utf-8')
+    tool_name = completed.ToolName().decode('utf-8')
+    success = completed.Success()
+    latency_ms = completed.LatencyMs()
+
+    if success:
+        result = completed.Result().decode('utf-8')
+        result_data = json.loads(result)
+        print(f"Tool {tool_name} completed: {result_data} ({latency_ms}ms)")
+        return result_data
+    else:
+        error_code = completed.ErrorCode().decode('utf-8') if completed.ErrorCode() else None
+        error_message = completed.ErrorMessage().decode('utf-8') if completed.ErrorMessage() else None
+        print(f"Tool {tool_name} failed: {error_code} - {error_message}")
+        return None
+*/
+
+// Python ClarificationRequest handling (tool approval):
+/*
+from k1_websocket import ClarificationRequest
+
+def handle_clarification_request(binary_data: bytes) -> str:
+    request = ClarificationRequest.GetRootAs(binary_data)
+
+    turn_id = request.TurnId().decode('utf-8')
+    tool_call_id = request.ToolCallId().decode('utf-8')
+    tool_name = request.ToolName().decode('utf-8')
+    clarification_type = request.ClarificationType().decode('utf-8')
+    prompt = request.Prompt().decode('utf-8')
+    timeout_ms = request.TimeoutMs()
+
+    # Extract options
+    options = []
+    for i in range(request.OptionsLength()):
+        option = request.Options(i).decode('utf-8')
+        options.append(option)
+
+    # Display prompt to user
+    print(f"Clarification needed: {prompt}")
+    print(f"Options: {', '.join(options)}")
+    print(f"Timeout: {timeout_ms}ms")
+
+    # User selects option (in real app, this would be a UI dialog)
+    user_response = input("Select option: ")
+
+    # Send ClarificationResponse
+    return user_response
+*/
+
+// ============================================================================
+// Tool Execution Lifecycle
+// ============================================================================
+
+tool_execution_lifecycle:
+  1_tool_call_started:
+    - Server: Agent requests tool call
+    - Server: Validate tool governance rules (ADR-0032)
+    - Server: Send ToolCallStarted (tool_name, arguments, agent_id)
+    - Client: Display "Executing tool X..." UI
+    - Timing: <50ms from tool request to message sent
+
+  2_tool_approval_if_required:
+    - Server: Detect requires_approval = true (ADMIN tools, sensitive operations)
+    - Server: Send ClarificationRequest (prompt, options, timeout)
+    - Client: Display approval dialog to user
+    - Client: Send ClarificationResponse (allow/deny)
+    - Server: Proceed with execution or abort
+    - Timing: <30000ms timeout for user response
+
+  3_tool_execution_streaming:
+    - Server: Execute tool (shell command, API call, etc.)
+    - Server: Stream output as ToolCallChunk (delta-based)
+    - Client: Append output_delta to accumulator, update UI
+    - Timing: Variable (depends on tool)
+
+  4_tool_call_completed:
+    - Server: Tool execution finished
+    - Server: Send ToolCallCompleted (success, result, latency_ms)
+    - Client: Display final result, show metrics
+    - Timing: <10ms after tool completion
+
+  error_handling:
+    - If tool timeout:
+      - Send ToolCallCompleted with success=false, error_code="TIMEOUT"
+    - If tool violation (ADR-0032):
+      - Send ToolCallCompleted with violation_type, error_message
+    - If network interruption:
+      - Auto-reconnect (ADR-0040d) resumes from last chunk_index
+
+// ============================================================================
+// Tool Categories (ADR-0032)
+// ============================================================================
+
+tool_categories:
+  SYSTEM:
+    description: Built-in K1 tools (SessionState queries, memory retrieval)
+    requires_approval: false
+    max_latency_budget: 1000ms
+    examples: [get_beliefs, query_memory, list_agents]
+  EXTERNAL:
+    description: External API calls (web search, weather, stock prices)
+    requires_approval: false
+    max_latency_budget: 5000ms
+    examples: [web_search, wikipedia, weather_api]
+  USER:
+    description: User-defined tools (custom scripts, local files)
+    requires_approval: true
+    max_latency_budget: 10000ms
+    examples: [run_python_script, read_file, execute_shell]
+  ADMIN:
+    description: Administrative tools (system config, database access)
+    requires_approval: true
+    max_latency_budget: 30000ms
+    examples: [update_config, reset_session, delete_user_data]
+
+// ============================================================================
+// Violation Types (ADR-0032)
+// ============================================================================
+
+violation_types:
+  SAFETY:
+    description: Tool attempted unsafe operation (file deletion, network access)
+    action: Abort tool execution, send ToolCallCompleted with violation_type
+    retry_allowed: false
+  PRIVACY:
+    description: Tool attempted to access PII without authorization
+    action: Abort, log security event, notify user
+    retry_allowed: false
+  QUOTA:
+    description: Tool exceeded quota (rate limit, token limit, storage limit)
+    action: Abort, wait for quota reset
+    retry_allowed: true (after quota reset)
+  DEPENDENCY:
+    description: Tool dependency unavailable (API down, network error)
+    action: Abort, retry with exponential backoff
+    retry_allowed: true
+
+// ============================================================================
+// Performance Budgets
+// ============================================================================
+
+performance_budgets:
+  tool_call_started:
+    serialization: <1ms
+    size: ~500 bytes (tool_name + arguments)
+    target: <50ms from tool request to message sent
+  tool_call_chunk:
+    serialization: <0.5ms
+    size: ~200 bytes (output_delta)
+    target: <100ms between chunks
+  tool_call_completed:
+    serialization: <1ms
+    size: ~300 bytes (result + metadata)
+    target: <10ms after tool completion
+
+  tool_execution_latency:
+    SYSTEM: <1000ms (P95)
+    EXTERNAL: <5000ms (P95)
+    USER: <10000ms (P95)
+    ADMIN: <30000ms (P95)
+
+// ============================================================================
+// Security Considerations
+// ============================================================================
+
+security:
+  pii_redaction:
+    - Redact PII in ToolCallStarted.arguments (ADR-0035)
+    - Redact PII in ToolCallCompleted.result
+    - Store redacted data in SessionState, original in encrypted vault
+  tool_approval:
+    - Require human approval for ADMIN and USER tools
+    - 30-second timeout for approval (abort if no response)
+    - Log approval decisions to audit trail (ADR-0038)
+  tool_isolation:
+    - Execute tools in sandboxed environment (Docker container, VM)
+    - Limit network access (whitelist approved domains)
+    - Prevent file system access outside allowed directories
+  rate_limiting:
+    - Max 10 tool calls per minute per user (prevent abuse)
+    - Max 100 tool calls per hour per user
+    - Emit rate_limit_exceeded metric
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+metrics:
+  - tool_calls_started_total (counter by tool_name, tool_category)
+  - tool_call_chunks_sent_total (counter)
+  - tool_calls_completed_total (counter by tool_name, success)
+  - tool_execution_latency_ms (histogram by tool_name, tool_category)
+  - tool_failures_total (counter by tool_name, error_code)
+  - tool_violations_total (counter by tool_name, violation_type)
+  - clarification_requests_total (counter by clarification_type)
+  - clarification_timeouts_total (counter)
+  - tool_approval_decisions_total (counter by tool_name, decision: allow/deny)

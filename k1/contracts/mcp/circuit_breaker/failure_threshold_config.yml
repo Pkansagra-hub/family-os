@@ -1,0 +1,398 @@
+# Failure Threshold Configuration Contract
+# Issue: 2.8.3 - Circuit Breaker Integration
+# Source: ADR-0034c (MCP Circuit Breaker Integration), lines 501-650
+
+contract:
+  name: "failure_threshold_config"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  source_adr: "ADR-0034c"
+  parent_issue: "2.8.3"
+
+overview:
+  purpose: "Define configurable per-tool failure thresholds for circuit breaker state transitions"
+  scope: "Failure threshold values, sliding window configuration, per-tool customization"
+  context: "Different tools have different reliability profiles requiring customized failure thresholds (weather_api: 5 failures, calendar_sync: 3 failures)"
+
+failure_threshold_concept:
+  definition: "Number of failures within sliding window before circuit transitions from CLOSED to OPEN"
+  unit: "count (integer)"
+  range: "2-10 failures (typical)"
+  default: 5
+
+sliding_window_concept:
+  definition: "Time window for counting failures (only failures within window count toward threshold)"
+  unit: "seconds"
+  range: "300-600 seconds (5-10 minutes typical)"
+  default: "600 seconds (10 minutes)"
+  behavior:
+    - "Failures older than window are discarded"
+    - "Failure count resets if all failures outside window"
+    - "Success resets failure count to 0 immediately"
+
+configuration_structure:
+  yaml_format:
+    circuit_breaker:
+      tool_id:
+        failure_threshold: "int (failures before OPEN)"
+        failure_window_seconds: "int (sliding window duration)"
+      default:
+        failure_threshold: "int"
+        failure_window_seconds: "int"
+
+per_tool_thresholds:
+  weather_api:
+    tool_id: "weather_api"
+    failure_threshold: 5
+    failure_window_seconds: 600
+    rationale:
+      - "Public API (OpenWeatherMap, Weather.gov)"
+      - "Transient failures common (network blips, rate limits)"
+      - "Moderate reliability expected"
+      - "Allow 5 failures before opening circuit"
+    failure_scenarios:
+      - "Network timeout (30s)"
+      - "Rate limit 429 (temporary)"
+      - "Service unavailable 503 (maintenance)"
+      - "DNS resolution failure"
+      - "Connection refused"
+
+  calendar_sync:
+    tool_id: "calendar_sync"
+    failure_threshold: 3
+    failure_window_seconds: 600
+    rationale:
+      - "Internal API (Google Calendar, Outlook)"
+      - "Should be reliable (OAuth2 authenticated)"
+      - "Stricter threshold (3 vs 5)"
+      - "Failure indicates serious issue"
+    failure_scenarios:
+      - "OAuth token expired"
+      - "API quota exceeded"
+      - "Service outage (rare)"
+
+  booking_api:
+    tool_id: "booking_api"
+    failure_threshold: 3
+    failure_window_seconds: 600
+    rationale:
+      - "External API (OpenTable, Resy)"
+      - "Rate limited (strict quotas)"
+      - "Failure impacts user experience"
+      - "Stricter threshold to avoid wasted requests"
+    failure_scenarios:
+      - "Rate limit 429 (common)"
+      - "Invalid parameters 400"
+      - "Restaurant unavailable 404"
+      - "Timeout during high load"
+
+  model_hub:
+    tool_id: "model_hub"
+    failure_threshold: 5
+    failure_window_seconds: 600
+    rationale:
+      - "LLM inference (OpenAI, Anthropic)"
+      - "May have cold start issues"
+      - "Expensive failures (API costs)"
+      - "Moderate threshold with longer cooldown"
+    failure_scenarios:
+      - "Model loading timeout"
+      - "Context length exceeded"
+      - "Rate limit 429"
+      - "Service overloaded 503"
+
+  video_transcoder:
+    tool_id: "video_transcoder"
+    failure_threshold: 2
+    failure_window_seconds: 300
+    rationale:
+      - "Resource-intensive operation"
+      - "Failures are expensive (CPU/memory)"
+      - "Strict threshold (2 failures only)"
+      - "Shorter window (5 min) for faster detection"
+      - "Prevent resource exhaustion"
+    failure_scenarios:
+      - "Out of memory (OOM kill)"
+      - "Timeout (video too large)"
+      - "Codec not supported"
+      - "GPU unavailable"
+
+  email_send:
+    tool_id: "email_send"
+    failure_threshold: 4
+    failure_window_seconds: 600
+    rationale:
+      - "External SMTP/SendGrid"
+      - "Transient failures possible"
+      - "Moderate reliability"
+    failure_scenarios:
+      - "SMTP connection timeout"
+      - "Rate limit (daily quota)"
+      - "Recipient invalid 550"
+      - "Mailbox full 552"
+
+  web_search:
+    tool_id: "web_search"
+    failure_threshold: 5
+    failure_window_seconds: 600
+    rationale:
+      - "Public API (Google, Bing)"
+      - "Transient failures common"
+      - "Default threshold sufficient"
+    failure_scenarios:
+      - "Rate limit 429"
+      - "Network timeout"
+      - "Quota exceeded"
+
+  default:
+    failure_threshold: 5
+    failure_window_seconds: 600
+    rationale:
+      - "Fallback for unconfigured tools"
+      - "Balanced threshold (not too strict, not too lenient)"
+      - "10-minute window (standard practice)"
+
+threshold_selection_guidelines:
+  high_threshold_7_10:
+    use_when:
+      - "Public API with known reliability issues"
+      - "Transient failures expected and acceptable"
+      - "Tool is non-critical (can tolerate multiple retries)"
+    examples: ["web_scraper", "image_generator"]
+
+  moderate_threshold_4_6:
+    use_when:
+      - "Standard external API"
+      - "Moderate reliability expected"
+      - "Default for most tools"
+    examples: ["weather_api", "model_hub", "email_send"]
+
+  strict_threshold_2_3:
+    use_when:
+      - "Internal API (should be reliable)"
+      - "Resource-intensive operation (prevent exhaustion)"
+      - "Expensive failures (API costs, compute)"
+      - "Critical tool (failure indicates serious issue)"
+    examples: ["calendar_sync", "booking_api", "video_transcoder"]
+
+window_selection_guidelines:
+  long_window_600_900:
+    duration: "600-900 seconds (10-15 minutes)"
+    use_when:
+      - "Transient failures expected"
+      - "Allow time for self-recovery"
+      - "Standard for most tools"
+    examples: ["weather_api", "calendar_sync", "model_hub"]
+
+  short_window_300_600:
+    duration: "300-600 seconds (5-10 minutes)"
+    use_when:
+      - "Fast failure detection needed"
+      - "Resource-intensive operations"
+      - "Strict failure tolerance"
+    examples: ["video_transcoder", "large_file_processor"]
+
+failure_counting_algorithm:
+  pseudocode: |
+    def count_failures(tool_id: str) -> int:
+        now = current_time()
+        window = config[tool_id].failure_window_seconds
+
+        # Get failures within window
+        failures = get_failures(tool_id)
+        recent_failures = [f for f in failures if (now - f.timestamp) <= window]
+
+        return len(recent_failures)
+
+  sliding_window_behavior:
+    scenario: "5 failures over 15 minutes with 10-minute window"
+    timeline:
+      - {time: "10:00", event: "Failure 1", in_window: true, count: 1}
+      - {time: "10:03", event: "Failure 2", in_window: true, count: 2}
+      - {time: "10:06", event: "Failure 3", in_window: true, count: 3}
+      - {time: "10:09", event: "Failure 4", in_window: true, count: 4}
+      - {time: "10:12", event: "Check", note: "Failure 1 expired (12 min old)", count: 3}
+      - {time: "10:14", event: "Failure 5", in_window: true, count: 4}
+    result: "Count never reaches 5 due to sliding window expiration"
+
+  reset_on_success:
+    scenario: "4 failures, then 1 success, then 1 failure"
+    timeline:
+      - {time: "10:00", event: "Failure 1", count: 1}
+      - {time: "10:02", event: "Failure 2", count: 2}
+      - {time: "10:04", event: "Failure 3", count: 3}
+      - {time: "10:06", event: "Failure 4", count: 4}
+      - {time: "10:08", event: "Success", count: 0, note: "Reset"}
+      - {time: "10:10", event: "Failure 5", count: 1, note: "Not 5"}
+    result: "Circuit remains CLOSED (success reset count)"
+
+implementation_example:
+  yaml_config: |
+    # k1/config/circuit_breaker.yml
+    circuit_breaker:
+      weather_api:
+        failure_threshold: 5
+        failure_window_seconds: 600
+
+      calendar_sync:
+        failure_threshold: 3
+        failure_window_seconds: 600
+
+      booking_api:
+        failure_threshold: 3
+        failure_window_seconds: 600
+
+      model_hub:
+        failure_threshold: 5
+        failure_window_seconds: 600
+
+      video_transcoder:
+        failure_threshold: 2
+        failure_window_seconds: 300
+
+      email_send:
+        failure_threshold: 4
+        failure_window_seconds: 600
+
+      web_search:
+        failure_threshold: 5
+        failure_window_seconds: 600
+
+      default:
+        failure_threshold: 5
+        failure_window_seconds: 600
+
+  python_code: |
+    @dataclass
+    class CircuitBreakerConfig:
+        tool_id: str
+        failure_threshold: int = 5
+        failure_window_seconds: int = 600
+
+        @classmethod
+        def from_yaml(cls, tool_id: str, config: dict, defaults: dict):
+            return cls(
+                tool_id=tool_id,
+                failure_threshold=config.get("failure_threshold", defaults["failure_threshold"]),
+                failure_window_seconds=config.get("failure_window_seconds", defaults["failure_window_seconds"])
+            )
+
+    # Check if threshold exceeded
+    def should_open_circuit(cb_state: CircuitBreakerState) -> bool:
+        return cb_state.failure_count >= cb_state.config.failure_threshold
+
+threshold_tuning_guidance:
+  increase_threshold:
+    when:
+      - "Too many false positives (circuit opening unnecessarily)"
+      - "Transient failures more common than expected"
+      - "Tool reliability improved"
+    action: "Increase by 1-2 (5 → 6 or 7)"
+    example: "weather_api: 5 → 7 (too sensitive to network blips)"
+
+  decrease_threshold:
+    when:
+      - "Circuit not opening fast enough"
+      - "Resource exhaustion before circuit opens"
+      - "Failures are expensive (cost/compute)"
+    action: "Decrease by 1-2 (5 → 3 or 4)"
+    example: "video_transcoder: 5 → 2 (prevent OOM from repeated failures)"
+
+  adjust_window:
+    when:
+      - "Failures clustered in short bursts"
+      - "Window too long (old failures counted)"
+      - "Window too short (missing failure pattern)"
+    action: "Adjust by 100-300 seconds"
+    example: "video_transcoder: 600 → 300 (faster detection for expensive failures)"
+
+monitoring_recommendations:
+  track_metrics:
+    - "Failure count per tool (over time)"
+    - "Circuit open events per tool"
+    - "Time to threshold (how quickly circuit opens)"
+    - "False positive rate (circuit opens unnecessarily)"
+
+  alert_conditions:
+    - "Circuit open >10 times per hour (tool unreliable)"
+    - "Circuit open immediately after CLOSED (threshold too strict)"
+    - "Circuit never opens despite failures (threshold too lenient)"
+
+  optimization_signals:
+    high_rejection_rate:
+      metric: "rejection_rate > 20%"
+      diagnosis: "Circuit opening too frequently"
+      action: "Increase threshold or cooldown"
+
+    frequent_open_events:
+      metric: "open_events > 10 per hour"
+      diagnosis: "Tool unreliable or threshold too strict"
+      action: "Investigate tool reliability, adjust threshold"
+
+    never_opens:
+      metric: "open_events = 0 and failures > 0"
+      diagnosis: "Threshold too high or window too short"
+      action: "Decrease threshold or increase window"
+
+performance_characteristics:
+  threshold_check: "<0.01ms (integer comparison)"
+  window_check: "<0.1ms (timestamp subtraction + comparison)"
+  memory_per_threshold: "~20 bytes (2 integers)"
+
+testing_requirements:
+  unit_tests:
+    - "Load threshold config from YAML"
+    - "Apply default threshold for unconfigured tool"
+    - "Threshold triggers CLOSED → OPEN transition"
+    - "Sliding window expires old failures"
+    - "Success resets failure count"
+
+  integration_tests:
+    - "weather_api opens at 5 failures"
+    - "video_transcoder opens at 2 failures"
+    - "Multiple tools have independent thresholds"
+    - "Config reload updates thresholds"
+
+  performance_tests:
+    - "Threshold check <0.01ms"
+    - "Window calculation <0.1ms"
+    - "1000 tools with independent thresholds"
+
+observability:
+  metrics:
+    circuit_breaker_threshold:
+      type: "Gauge"
+      labels: ["tool_id"]
+      description: "Configured failure threshold per tool"
+      query: "circuit_breaker_threshold{tool_id='weather_api'}"
+
+    circuit_breaker_failure_count:
+      type: "Gauge"
+      labels: ["tool_id"]
+      description: "Current failure count (within window)"
+      query: "circuit_breaker_failure_count{tool_id='weather_api'}"
+
+    circuit_breaker_threshold_reached:
+      type: "Counter"
+      labels: ["tool_id"]
+      description: "Times threshold reached (circuit opened)"
+      query: "rate(circuit_breaker_threshold_reached{tool_id='weather_api'}[1h])"
+
+references:
+  - type: "ADR"
+    id: "ADR-0034c"
+    title: "MCP Circuit Breaker Integration"
+    lines: "501-650 (failure threshold configuration)"
+
+  - type: "Contract"
+    id: "circuit_breaker_fsm_3_states.yml"
+    description: "Circuit breaker FSM with failure count tracking"
+
+  - type: "Contract"
+    id: "per_tool_circuit_breaker.yml"
+    description: "Per-tool circuit breaker management"
+
+  - type: "Research"
+    citation: "Netflix Hystrix - Circuit Breaker Configuration"
+    url: "https://github.com/Netflix/Hystrix/wiki/Configuration"
+    topic: "Failure threshold best practices"

@@ -1,0 +1,259 @@
+---
+# ADR-0036a: AES-256-GCM Decrypt Operation Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Decrypt Operation Contract
+# Defines the AES-256-GCM decryption operation for SessionState sections
+
+contract:
+  name: decrypt_operation
+  version: "1.0.0"
+  description: "AES-256-GCM decryption operation for RED band SessionState sections"
+  parent_adr: "ADR-0036a"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# Operation Overview
+operation_overview:
+  algorithm: "AES-256-GCM"
+  mode: "Authenticated Encryption with Associated Data (AEAD)"
+  key_size: "256 bits"
+  nonce_size: "96 bits"
+  auth_tag_size: "128 bits"
+  associated_data: "section_name (beliefs/scoreboard/control)"
+
+# Input Parameters
+input_parameters:
+  ciphertext:
+    type: "bytes"
+    description: "Encrypted SessionState section data"
+    max_size_bytes: 1048576  # 1MB per section
+    validation: "Binary data from encryption operation"
+
+  encryption_key:
+    type: "EncryptionKey"
+    description: "256-bit AES key (must match encryption key)"
+    validation: "32 bytes exactly, same key used for encryption"
+
+  nonce:
+    type: "bytes"
+    description: "96-bit nonce (must match encryption nonce)"
+    validation: "12 bytes exactly, same nonce used for encryption"
+
+  authentication_tag:
+    type: "bytes"
+    description: "128-bit GMAC authentication tag"
+    validation: "16 bytes exactly from encryption operation"
+
+  associated_data:
+    type: "string"
+    description: "Section identifier (must match encryption)"
+    examples: ["beliefs", "scoreboard", "control"]
+    validation: "ASCII, max 32 characters, same as encryption"
+
+# Output Parameters
+output_parameters:
+  plaintext:
+    type: "bytes"
+    description: "Decrypted SessionState section data"
+    size: "ciphertext_size (no padding removed)"
+    validation: "UTF-8 JSON or binary data matching original"
+
+# Operation Flow
+operation_flow:
+  1:
+    name: "Validate inputs"
+    description: "Check key length, nonce format, tag size, associated data"
+    error_handling: "Return DecryptionError::InvalidInput"
+
+  2:
+    name: "Initialize AES-256-GCM"
+    description: "Set up cipher with key and nonce"
+    hardware_acceleration: "Use AES-NI when available"
+
+  3:
+    name: "Process associated data"
+    description: "Include section_name in authentication (must match encryption)"
+    validation: "Associated data binding verified"
+
+  4:
+    name: "Decrypt ciphertext"
+    description: "AES-256-GCM decryption"
+    performance_budget: "<1ms for 1KB data"
+
+  5:
+    name: "Verify authentication tag"
+    description: "Validate 128-bit GMAC tag for integrity"
+    failure_action: "Abort decryption, return error"
+
+  6:
+    name: "Return plaintext"
+    description: "Decrypted data with integrity verified"
+
+# Error Handling
+error_handling:
+  invalid_key:
+    error_code: "DECRYPTION_KEY_INVALID"
+    description: "Key must be 32 bytes or wrong key used"
+    recovery: "Check key_id matches encryption key"
+
+  invalid_nonce:
+    error_code: "NONCE_INVALID"
+    description: "Nonce must be 12 bytes or wrong nonce used"
+    recovery: "Verify nonce matches encryption nonce"
+
+  invalid_tag:
+    error_code: "AUTHENTICATION_FAILED"
+    description: "Authentication tag verification failed"
+    causes: ["Data tampered", "Wrong key", "Wrong nonce", "Wrong associated data"]
+    recovery: "Log security incident, abort decryption"
+
+  ciphertext_corrupted:
+    error_code: "CIPHERTEXT_CORRUPTED"
+    description: "Ciphertext malformed or truncated"
+    recovery: "Check data integrity, possibly re-encrypt"
+
+  hardware_unavailable:
+    error_code: "HARDWARE_UNAVAILABLE"
+    description: "AES-NI not available"
+    recovery: "Fallback to software AES"
+
+# Security Incident Response
+security_incident_response:
+  authentication_failure:
+    - "Log incident with trace_id"
+    - "Alert security team"
+    - "Do not return any decrypted data"
+    - "Increment security violation counter"
+    - "Possibly revoke encryption key"
+
+  key_mismatch:
+    - "Log key mismatch attempt"
+    - "Check for key rotation issues"
+    - "Verify key_id consistency"
+
+  nonce_reuse_attempt:
+    - "Log nonce reuse detection"
+    - "This should never happen (counter-based nonces)"
+
+# Performance Budget
+performance_budget:
+  decryption_1kb_ms: 0.1
+  decryption_100kb_ms: 1.0
+  decryption_1mb_ms: 10.0
+  memory_usage_mb: 0.01
+  cpu_usage_percent: 5
+
+# Security Properties
+security_properties:
+  confidentiality:
+    description: "AES-256 decryption recovers original data"
+    validation: "Only correct key can decrypt"
+
+  integrity:
+    description: "GMAC tag verification detects any tampering"
+    probability: "2^-128 chance of false positive"
+
+  authenticity:
+    description: "Associated data binding prevents mix-up attacks"
+    validation: "Tag only valid for specific section + nonce"
+
+  replay_attack_protection:
+    description: "Nonce uniqueness prevents replay attacks"
+    mechanism: "Counter-based nonce generation"
+
+# Hardware Acceleration
+hardware_acceleration:
+  aes_ni:
+    description: "Intel AES-NI instruction set"
+    speedup: "5-10x faster than software"
+    availability: "95%+ modern CPUs"
+    fallback: "Software AES implementation"
+
+  arm_crypto:
+    description: "ARM Cryptographic Extensions"
+    speedup: "3-5x faster than software"
+    availability: "ARM64 devices (Apple M1/M2, etc.)"
+
+# Implementation Interface
+implementation:
+  rust:
+    function: "decrypt_section"
+    signature: "fn decrypt_section(key: &EncryptionKey, ciphertext: &[u8], nonce: &[u8; 12], tag: &[u8; 16], section_name: &str) -> Result<Vec<u8>, DecryptionError>"
+    async: false
+    hardware_detection: "Automatically detect AES-NI"
+    error_types: "DecryptionError enum with specific error codes"
+
+  python:
+    function: "decrypt_section"
+    signature: "def decrypt_section(key: EncryptionKey, ciphertext: bytes, nonce: bytes, tag: bytes, section_name: str) -> bytes"
+    library: "cryptography (hazmat) or pycryptodome"
+    exceptions: "DecryptionError with specific error codes"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Decryption recovers original plaintext"
+    - "Authentication tag validation works"
+    - "Wrong tag fails decryption"
+    - "Wrong key fails decryption"
+    - "Wrong nonce fails decryption"
+    - "Wrong associated data fails decryption"
+
+  performance_tests:
+    - "Decryption within <1ms budget"
+    - "Hardware acceleration utilized"
+    - "Memory usage within limits"
+
+  security_tests:
+    - "Tamper detection (bit flip in ciphertext/tag)"
+    - "Key recovery impossible without key"
+    - "Authentication failure handling"
+    - "Security incident logging"
+
+  fuzzing_tests:
+    - "Random ciphertext inputs"
+    - "Malformed inputs handled gracefully"
+    - "Corrupted authentication tags"
+
+  integration_tests:
+    - "Encrypt/decrypt round-trip works"
+    - "SessionState sections decrypt correctly"
+    - "Parallel decryption works"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "encryption_key.yml: Key structure"
+    - "encrypt_operation.yml: Corresponding encryption"
+    - "authentication_tag.yml: Tag validation"
+  downstream:
+    - "ADR-0036c: Selective encryption integration"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "AES-256-GCM decryption works correctly"
+    - "Authentication tag validation prevents tampering"
+    - "Associated data binding verified"
+    - "Hardware acceleration utilized"
+
+  performance:
+    - "<1ms decryption for SessionState sections"
+    - "Hardware acceleration provides 5-10x speedup"
+    - "Memory usage minimal"
+
+  security:
+    - "Authentication failures detected and logged"
+    - "No data returned on security failures"
+    - "Tamper-evident decryption"
+    - "Replay attack protection"
+
+  compliance:
+    - "FIPS 140-2 validated algorithms"
+    - "GDPR encryption requirements"
+    - "HIPAA PHI protection standards"
+    - "Security incident response procedures"

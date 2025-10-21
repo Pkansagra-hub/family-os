@@ -1,0 +1,227 @@
+---
+# ADR-0036a: AES-256-GCM Encrypt Operation Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Encrypt Operation Contract
+# Defines the AES-256-GCM encryption operation for SessionState sections
+
+contract:
+  name: encrypt_operation
+  version: "1.0.0"
+  description: "AES-256-GCM encryption operation for RED band SessionState sections"
+  parent_adr: "ADR-0036a"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# Operation Overview
+operation_overview:
+  algorithm: "AES-256-GCM"
+  mode: "Authenticated Encryption with Associated Data (AEAD)"
+  key_size: "256 bits"
+  nonce_size: "96 bits"
+  auth_tag_size: "128 bits"
+  associated_data: "section_name (beliefs/scoreboard/control)"
+
+# Input Parameters
+input_parameters:
+  plaintext:
+    type: "bytes"
+    description: "SessionState section data (beliefs/scoreboard/control)"
+    max_size_bytes: 1048576  # 1MB per section
+    validation: "UTF-8 JSON or binary data"
+
+  encryption_key:
+    type: "EncryptionKey"
+    description: "256-bit AES key"
+    validation: "32 bytes exactly"
+
+  nonce:
+    type: "bytes"
+    description: "96-bit unique nonce"
+    validation: "12 bytes exactly, never reused per key"
+    generation: "Counter-based (2^96 capacity)"
+
+  associated_data:
+    type: "string"
+    description: "Section identifier for authentication"
+    examples: ["beliefs", "scoreboard", "control"]
+    validation: "ASCII, max 32 characters"
+
+# Output Parameters
+output_parameters:
+  ciphertext:
+    type: "bytes"
+    description: "Encrypted data"
+    size: "plaintext_size (no padding)"
+
+  authentication_tag:
+    type: "bytes"
+    description: "128-bit GMAC authentication tag"
+    size: "16 bytes"
+    purpose: "Tamper detection and integrity verification"
+
+# Operation Flow
+operation_flow:
+  1:
+    name: "Validate inputs"
+    description: "Check key length, nonce uniqueness, plaintext size"
+    error_handling: "Return EncryptionError::InvalidInput"
+
+  2:
+    name: "Initialize AES-256-GCM"
+    description: "Set up cipher with key and nonce"
+    hardware_acceleration: "Use AES-NI when available"
+
+  3:
+    name: "Process associated data"
+    description: "Include section_name in authentication"
+    purpose: "Bind encryption to specific section"
+
+  4:
+    name: "Encrypt plaintext"
+    description: "AES-256-GCM encryption"
+    performance_budget: "<1ms for 1KB data"
+
+  5:
+    name: "Generate authentication tag"
+    description: "128-bit GMAC tag for integrity"
+    validation: "Tag must be 16 bytes"
+
+  6:
+    name: "Return ciphertext + tag"
+    description: "Encrypted data with integrity protection"
+
+# Error Handling
+error_handling:
+  invalid_key:
+    error_code: "ENCRYPTION_KEY_INVALID"
+    description: "Key must be 32 bytes"
+    recovery: "Generate new key"
+
+  nonce_reuse:
+    error_code: "NONCE_REUSED"
+    description: "Nonce must be unique per key"
+    recovery: "Generate new nonce"
+
+  plaintext_too_large:
+    error_code: "PLAINTEXT_TOO_LARGE"
+    description: "Section exceeds 1MB limit"
+    recovery: "Split section or compress"
+
+  hardware_unavailable:
+    error_code: "HARDWARE_UNAVAILABLE"
+    description: "AES-NI not available"
+    recovery: "Fallback to software AES"
+
+# Performance Budget
+performance_budget:
+  encryption_1kb_ms: 0.1
+  encryption_100kb_ms: 1.0
+  encryption_1mb_ms: 10.0
+  memory_usage_mb: 0.01
+  cpu_usage_percent: 5
+
+# Security Properties
+security_properties:
+  confidentiality:
+    description: "AES-256 encryption protects data secrecy"
+    strength: "2^256 key space"
+
+  integrity:
+    description: "GMAC authentication tag prevents tampering"
+    detection: "Any bit flip detected with high probability"
+
+  authenticity:
+    description: "Associated data binding prevents mix-up attacks"
+    binding: "Tag only valid for specific section"
+
+  forward_secrecy:
+    description: "Key rotation provides forward secrecy"
+    rotation: "90-day automatic rotation"
+
+# Hardware Acceleration
+hardware_acceleration:
+  aes_ni:
+    description: "Intel AES-NI instruction set"
+    speedup: "5-10x faster than software"
+    availability: "95%+ modern CPUs"
+    fallback: "Software AES implementation"
+
+  arm_crypto:
+    description: "ARM Cryptographic Extensions"
+    speedup: "3-5x faster than software"
+    availability: "ARM64 devices (Apple M1/M2, etc.)"
+
+# Implementation Interface
+implementation:
+  rust:
+    function: "encrypt_section"
+    signature: "fn encrypt_section(key: &EncryptionKey, plaintext: &[u8], nonce: &[u8; 12], section_name: &str) -> Result<(Vec<u8>, [u8; 16]), EncryptionError>"
+    async: false
+    hardware_detection: "Automatically detect AES-NI"
+
+  python:
+    function: "encrypt_section"
+    signature: "def encrypt_section(key: EncryptionKey, plaintext: bytes, nonce: bytes, section_name: str) -> tuple[bytes, bytes]"
+    library: "cryptography (hazmat) or pycryptodome"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Encryption produces correct ciphertext size"
+    - "Decryption round-trip recovers original plaintext"
+    - "Different nonces produce different ciphertexts"
+    - "Authentication tag validation works"
+    - "Associated data binding prevents attacks"
+
+  performance_tests:
+    - "Encryption within <1ms budget"
+    - "Hardware acceleration utilized when available"
+    - "Memory usage within limits"
+
+  security_tests:
+    - "Tamper detection (bit flip in ciphertext)"
+    - "Key recovery impossible without key"
+    - "Nonce reuse detection"
+    - "Associated data binding verified"
+
+  fuzzing_tests:
+    - "Random plaintext inputs"
+    - "Malformed inputs handled gracefully"
+    - "Large inputs processed correctly"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "encryption_key.yml: Key structure definition"
+    - "nonce_management.yml: Nonce generation"
+  downstream:
+    - "decrypt_operation.yml: Corresponding decryption"
+    - "ADR-0036c: Selective encryption integration"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "AES-256-GCM encryption works correctly"
+    - "Authentication tags generated and validated"
+    - "Associated data properly bound"
+    - "Hardware acceleration utilized"
+
+  performance:
+    - "<1ms encryption for SessionState sections"
+    - "Hardware acceleration provides 5-10x speedup"
+    - "Memory usage minimal"
+
+  security:
+    - "Confidentiality: AES-256 encryption"
+    - "Integrity: GMAC authentication tags"
+    - "Authenticity: Associated data binding"
+    - "Forward secrecy: Key rotation"
+
+  compliance:
+    - "FIPS 140-2 validated algorithms"
+    - "GDPR encryption requirements"
+    - "HIPAA PHI protection standards"

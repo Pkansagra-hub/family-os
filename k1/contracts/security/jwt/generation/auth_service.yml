@@ -1,0 +1,266 @@
+---
+# ADR-0037: Auth Service Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Auth Service Contract
+# Defines the AuthService class for issuing JWT tokens with RS256 signing
+
+contract:
+  name: auth_service
+  version: "1.0.0"
+  description: "AuthService class for issuing access and refresh tokens with RS256 signing"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# AuthService Class
+auth_service:
+  class_name: "AuthService"
+  description: "Central authentication service for issuing JWT tokens"
+
+  constructor:
+    parameters:
+      - name: "keystore_client"
+        type: "KeystoreClient"
+        description: "Client for accessing private keys from secure keystore"
+      - name: "redis_client"
+        type: "RedisClient"
+        description: "Redis client for storing refresh token metadata"
+      - name: "config"
+        type: "AuthConfig"
+        description: "Configuration for token lifetimes and security settings"
+
+    initialization:
+      - "Load RSA private key from keystore on startup"
+      - "Cache public key for validation operations"
+      - "Initialize Redis connection pool"
+      - "Set up Prometheus metrics collectors"
+
+  methods:
+    issue_tokens:
+      signature: "issue_tokens(user_id: String, space_id: String, roles: Vec<String>, privacy_band: String, capabilities: Vec<String>) -> Result<TokenPair, AuthError>"
+      description: "Issue both access and refresh tokens for authenticated user"
+      parameters:
+        - name: "user_id"
+          type: "String"
+          description: "Unique user identifier"
+        - name: "space_id"
+          type: "String"
+          description: "Space/workspace identifier for multi-tenancy"
+        - name: "roles"
+          type: "Vec<String>"
+          description: "User roles (admin, operator, user, etc.)"
+        - name: "privacy_band"
+          type: "String"
+          description: "User's privacy band (RED, AMBER, GREEN)"
+        - name: "capabilities"
+          type: "Vec<String>"
+          description: "Specific capabilities granted to user"
+
+      implementation:
+        - "Generate unique JTI for token pair"
+        - "Create access token claims (1-hour expiry)"
+        - "Create refresh token claims (7-day expiry)"
+        - "Sign both tokens with RS256 using private key"
+        - "Store refresh token in Redis with TTL"
+        - "Return TokenPair with both tokens"
+
+      performance_requirements:
+        - "Total latency: <50ms"
+        - "Private key access: <5ms"
+        - "Redis storage: <10ms"
+        - "Token signing: <35ms"
+
+      error_handling:
+        - "KeystoreError: Unable to access private key"
+        - "RedisError: Unable to store refresh token"
+        - "InvalidParameters: Missing or invalid user data"
+        - "KeyRotation: Private key expired, rotation required"
+
+    validate_refresh_token:
+      signature: "validate_refresh_token(refresh_token: String) -> Result<Claims, AuthError>"
+      description: "Validate refresh token and return claims"
+      implementation:
+        - "Parse and validate JWT signature"
+        - "Check token expiry"
+        - "Verify token exists in Redis"
+        - "Return claims for token refresh"
+
+    revoke_refresh_token:
+      signature: "revoke_refresh_token(jti: String) -> Result<(), AuthError>"
+      description: "Revoke a specific refresh token"
+      implementation:
+        - "Delete token from Redis"
+        - "Add to blacklist if needed"
+
+# Token Pair Response
+token_pair:
+  struct_name: "TokenPair"
+  fields:
+    - name: "access_token"
+      type: "String"
+      description: "JWT access token (1-hour expiry)"
+    - name: "refresh_token"
+      type: "String"
+      description: "JWT refresh token (7-day expiry)"
+    - name: "expires_in"
+      type: "u64"
+      description: "Access token expiry time in seconds (3600)"
+    - name: "token_type"
+      type: "String"
+      description: "Token type (always 'Bearer')"
+
+# Configuration
+auth_config:
+  struct_name: "AuthConfig"
+  fields:
+    - name: "access_token_lifetime_seconds"
+      type: "u64"
+      default: 3600
+      description: "Access token lifetime (1 hour)"
+    - name: "refresh_token_lifetime_seconds"
+      type: "u64"
+      default: 604800
+      description: "Refresh token lifetime (7 days)"
+    - name: "issuer"
+      type: "String"
+      default: "k1.familyos.com"
+      description: "JWT issuer claim"
+    - name: "audience"
+      type: "String"
+      default: "k1-api"
+      description: "JWT audience claim"
+    - name: "key_rotation_days"
+      type: "u64"
+      default: 90
+      description: "Private key rotation interval"
+
+# Error Types
+auth_errors:
+  enum_name: "AuthError"
+  variants:
+    - name: "KeystoreError"
+      description: "Unable to access cryptographic keys"
+    - name: "RedisError"
+      description: "Redis storage operation failed"
+    - name: "InvalidParameters"
+      description: "Invalid input parameters"
+    - name: "KeyRotationRequired"
+      description: "Private key rotation required"
+    - name: "TokenIssuanceFailed"
+      description: "Failed to issue tokens"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "jsonwebtoken = \"8.3\""
+      - "redis = \"0.23\""
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+
+    code_example: |
+      pub struct AuthService {
+          keystore: Arc<dyn KeystoreClient>,
+          redis: Arc<redis::Client>,
+          config: AuthConfig,
+          metrics: AuthMetrics,
+      }
+
+      impl AuthService {
+          pub async fn issue_tokens(
+              &self,
+              user_id: String,
+              space_id: String,
+              roles: Vec<String>,
+              privacy_band: String,
+              capabilities: Vec<String>,
+          ) -> Result<TokenPair, AuthError> {
+              // Implementation here
+          }
+      }
+
+  python:
+    dependencies:
+      - "PyJWT==2.8.0"
+      - "redis==4.5.5"
+      - "pydantic==2.0.0"
+
+    code_example: |
+      class AuthService:
+          def __init__(self, keystore_client, redis_client, config):
+              self.keystore = keystore_client
+              self.redis = redis_client
+              self.config = config
+
+          async def issue_tokens(self, user_id, space_id, roles, privacy_band, capabilities):
+              # Implementation here
+              pass
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Token issuance with valid parameters"
+    - "Token issuance with invalid parameters"
+    - "Refresh token storage in Redis"
+    - "Private key access from keystore"
+    - "Error handling for keystore failures"
+    - "Error handling for Redis failures"
+
+  integration_tests:
+    - "Full token issuance workflow"
+    - "Token validation after issuance"
+    - "Refresh token persistence"
+    - "Key rotation handling"
+    - "Concurrent token issuance"
+
+  performance_tests:
+    - "Token issuance latency (<50ms)"
+    - "Concurrent load testing (100 req/sec)"
+    - "Memory usage under load"
+    - "Redis connection pool efficiency"
+
+  security_tests:
+    - "Private key never exposed in memory"
+    - "Token entropy and randomness"
+    - "Timing attack resistance"
+    - "Key rotation security"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "keystore_client.yml: For private key access"
+    - "redis_client.yml: For refresh token storage"
+  downstream:
+    - "jwt_validator.yml: Uses issued tokens"
+    - "refresh_endpoint.yml: Uses token issuance"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Successfully issue access and refresh tokens"
+    - "Tokens contain correct claims and signatures"
+    - "Refresh tokens stored securely in Redis"
+    - "Private keys accessed securely from keystore"
+    - "All error conditions handled appropriately"
+
+  performance:
+    - "Token issuance completes in <50ms"
+    - "Handles 100 concurrent requests per second"
+    - "Memory usage remains stable under load"
+    - "Redis operations complete in <10ms"
+
+  security:
+    - "Private keys never exposed in application memory"
+    - "Tokens have sufficient entropy"
+    - "RS256 signatures cryptographically secure"
+    - "Key rotation works without service interruption"
+
+  reliability:
+    - "Service remains available during key rotation"
+    - "Graceful degradation on Redis failures"
+    - "Proper error messages for all failure modes"
+    - "Comprehensive logging for debugging"

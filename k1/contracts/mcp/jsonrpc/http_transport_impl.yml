@@ -1,0 +1,600 @@
+# HTTP Transport Implementation Contract
+# ADR: 0034a-mcp-jsonrpc-protocol.md (lines 1251-1500)
+# Purpose: JSON-RPC 2.0 over HTTP POST for MCP server communication (10% of tools, WASM sandbox)
+# Research: JSON-RPC 2.0 Specification (2010), HTTP/1.1 RFC 7231
+
+contract_metadata:
+  name: "http_transport_impl"
+  version: "1.0.0"
+  parent_adr: "ADR-0034a"
+  related_adrs:
+    - "ADR-0034: MCP Protocol Adoption"
+    - "ADR-0033b: WASM Sandbox Implementation"
+  status: "approved"
+  created: "2025-10-21"
+  priority: "HIGH"
+
+# =============================================================================
+# HTTP TRANSPORT OVERVIEW
+# =============================================================================
+
+http_transport_overview:
+  description: |
+    JSON-RPC 2.0 over HTTP POST.
+
+    **Communication Model:**
+    - K1 (client) sends HTTP POST to /jsonrpc endpoint with JSON-RPC request body
+    - MCP server responds with HTTP 200 + JSON-RPC response body
+    - Request/response per HTTP request (no streaming)
+
+    **Why HTTP?**
+    - WASM sandbox doesn't support stdio (no file descriptors)
+    - Standard HTTP tools (curl, Postman) for debugging
+    - Connection pooling (reuse TCP connections)
+    - TLS 1.3 support for encryption
+
+    **Use Cases:**
+    - 10% of tools (WASM sandbox from ADR-0033b)
+    - User-uploaded plugins (WASM modules)
+    - Remote MCP servers (future: federated tools)
+
+  transport_type: "http"
+  percentage_adoption: "10%"  # ~76 out of 758 tools
+  protocol: "HTTP/1.1 or HTTP/2"
+  method: "POST"
+  endpoint: "/jsonrpc"
+  content_type: "application/json"
+
+# =============================================================================
+# HTTP TRANSPORT ARCHITECTURE
+# =============================================================================
+
+architecture:
+  description: "K1 MCPClient sends HTTP POST to MCP server HTTP endpoint"
+
+  components:
+    k1_http_client:
+      library: "httpx (Python) or reqwest (Rust)"
+      responsibilities:
+        - "Send HTTP POST to /jsonrpc with JSON-RPC request"
+        - "Parse HTTP 200 response with JSON-RPC response"
+        - "Handle HTTP errors (4xx, 5xx)"
+        - "Enforce request timeout"
+        - "Maintain connection pool (reuse TCP connections)"
+
+    mcp_server_http:
+      framework: "FastAPI (Python) or Axum (Rust)"
+      responsibilities:
+        - "Listen on HTTP port (e.g., 8001)"
+        - "Parse POST body as JSON-RPC request"
+        - "Execute tool logic"
+        - "Return HTTP 200 with JSON-RPC response"
+        - "Return HTTP 500 on server error"
+
+    connection_pool:
+      description: "Reuse TCP connections for multiple requests"
+      max_connections_per_host: 100
+      keep_alive_timeout: 60  # seconds
+      connect_timeout: 5  # seconds
+
+# =============================================================================
+# HTTP TRANSPORT IMPLEMENTATION
+# =============================================================================
+
+python_implementation:
+  description: "Reference implementation from ADR-0034a"
+
+  HttpTransport_class: |
+    import httpx
+    import json
+    import uuid
+    from typing import Optional
+
+    class HttpTransport:
+        """
+        JSON-RPC 2.0 over HTTP POST.
+
+        Communication: HTTP POST to /jsonrpc endpoint
+        - Request: POST with JSON body
+        - Response: JSON body (success or error)
+
+        Used for 10% of tools (WASM sandbox, since stdio unavailable).
+        """
+
+        def __init__(self, base_url: str, timeout: float = 30.0):
+            """
+            Initialize HTTP transport.
+
+            Args:
+                base_url: MCP server base URL (e.g., "http://localhost:8001")
+                timeout: Request timeout in seconds
+            """
+            self.base_url = base_url
+            self.client = httpx.AsyncClient(
+                base_url=base_url,
+                timeout=httpx.Timeout(timeout),
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
+            )
+
+        async def send_request(self, method: str, params: dict, timeout_ms: float = 30000) -> JsonRpcResponse:
+            """
+            Send JSON-RPC request via HTTP POST.
+
+            Args:
+                method: JSON-RPC method name
+                params: Method parameters
+                timeout_ms: Request timeout in milliseconds
+
+            Returns:
+                JsonRpcResponse: Server response
+
+            Raises:
+                JsonRpcError: If server returns error
+                TimeoutError: If request times out
+                httpx.HTTPError: If HTTP request fails
+            """
+            # Generate request ID
+            request_id = str(uuid.uuid4())
+
+            # Build request
+            request = JsonRpcRequest(
+                method=method,
+                params=params,
+                id=request_id
+            )
+
+            # Validate request
+            request.validate()
+
+            # Send HTTP POST
+            try:
+                response = await self.client.post(
+                    "/jsonrpc",
+                    json=json.loads(request.to_json()),
+                    headers={"Content-Type": "application/json"},
+                    timeout=timeout_ms / 1000.0
+                )
+            except httpx.TimeoutException:
+                raise TimeoutError(f"Request {request_id} timed out after {timeout_ms}ms")
+
+            # Check HTTP status
+            if response.status_code != 200:
+                raise httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}: {response.text}",
+                    request=response.request,
+                    response=response
+                )
+
+            # Parse JSON response
+            response_data = response.json()
+
+            # Check if error response
+            if "error" in response_data:
+                error_detail = JsonRpcErrorDetail(
+                    code=response_data["error"]["code"],
+                    message=response_data["error"]["message"],
+                    data=response_data["error"].get("data")
+                )
+                raise JsonRpcError(error_detail.code, error_detail.message, error_detail.data)
+
+            # Success response
+            return JsonRpcResponse(
+                result=response_data["result"],
+                id=response_data["id"]
+            )
+
+        async def close(self):
+            """Close HTTP client"""
+            await self.client.aclose()
+
+  usage_example: |
+    # Create HTTP transport
+    transport = HttpTransport(base_url="http://localhost:8001", timeout=30.0)
+
+    # Send initialize request
+    response = await transport.send_request("initialize", {}, timeout_ms=5000)
+    print(f"Server capabilities: {response.result['capabilities']}")
+
+    # Send tools/call request
+    response = await transport.send_request(
+        "tools/call",
+        {"name": "user_plugin", "arguments": {"input": "hello"}},
+        timeout_ms=10000
+    )
+    print(f"Plugin result: {response.result}")
+
+    # Cleanup
+    await transport.close()
+
+# =============================================================================
+# HTTP REQUEST/RESPONSE FORMAT
+# =============================================================================
+
+http_request_format:
+  description: "HTTP POST request with JSON-RPC body"
+
+  http_method: "POST"
+  http_path: "/jsonrpc"
+  http_headers:
+    Content-Type: "application/json; charset=utf-8"
+    Content-Length: "auto"  # Set by HTTP client
+    User-Agent: "k1-intelligence/1.0.0"
+    Accept: "application/json"
+
+  http_body:
+    format: "JSON (JSON-RPC 2.0 request)"
+    example: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "name": "user_plugin",
+          "arguments": {"input": "hello"}
+        },
+        "id": "550e8400-e29b-41d4-a716-446655440000"
+      }
+
+http_response_format:
+  description: "HTTP 200 response with JSON-RPC body"
+
+  success_response:
+    http_status: 200
+    http_headers:
+      Content-Type: "application/json; charset=utf-8"
+      Content-Length: "auto"
+    http_body:
+      format: "JSON (JSON-RPC 2.0 success response)"
+      example: |
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "output": "Hello, world!"
+          },
+          "id": "550e8400-e29b-41d4-a716-446655440000"
+        }
+
+  error_response:
+    http_status: 200  # JSON-RPC errors still return HTTP 200
+    http_headers:
+      Content-Type: "application/json; charset=utf-8"
+    http_body:
+      format: "JSON (JSON-RPC 2.0 error response)"
+      example: |
+        {
+          "jsonrpc": "2.0",
+          "error": {
+            "code": -32603,
+            "message": "Internal error",
+            "data": "Plugin crashed"
+          },
+          "id": "550e8400-e29b-41d4-a716-446655440000"
+        }
+
+  http_error_response:
+    description: "Server-side HTTP errors (4xx, 5xx)"
+    http_status: "400, 404, 500, 503"
+    handling: "K1 wraps as JSON-RPC Internal Error (-32603)"
+    example:
+      http_status: 503
+      http_body: "Service Unavailable"
+      k1_action: "Convert to JsonRpcError(-32603, 'HTTP 503: Service Unavailable')"
+
+# =============================================================================
+# CONNECTION POOLING
+# =============================================================================
+
+connection_pooling:
+  description: "Reuse TCP connections for multiple HTTP requests"
+
+  benefits:
+    - "Avoid TCP handshake overhead (5-10ms per connection)"
+    - "Avoid TLS handshake overhead (20-50ms if HTTPS)"
+    - "Lower latency for subsequent requests"
+
+  configuration:
+    max_connections_per_host: 100
+    max_keepalive_connections: 20
+    keepalive_timeout: 60  # seconds
+    connect_timeout: 5  # seconds
+    read_timeout: 30  # seconds (per-request timeout)
+
+  implementation:
+    python_httpx: |
+      client = httpx.AsyncClient(
+          base_url="http://localhost:8001",
+          timeout=httpx.Timeout(30.0),
+          limits=httpx.Limits(
+              max_connections=100,
+              max_keepalive_connections=20,
+              keepalive_expiry=60.0
+          )
+      )
+
+# =============================================================================
+# TIMEOUT ENFORCEMENT
+# =============================================================================
+
+timeout_enforcement:
+  description: "Multi-level timeout enforcement"
+
+  timeouts:
+    connect_timeout:
+      value: 5  # seconds
+      description: "Time to establish TCP connection"
+      action_on_timeout: "Raise httpx.ConnectTimeout"
+
+    read_timeout:
+      value: 30  # seconds (default, overridden per-request)
+      description: "Time to receive full HTTP response"
+      action_on_timeout: "Raise httpx.ReadTimeout"
+
+    request_timeout:
+      value: "per-tool timeout_ms (from tool registry)"
+      description: "Total request duration (connect + read)"
+      action_on_timeout: "Raise TimeoutError, increment circuit breaker"
+
+  implementation:
+    python_httpx: |
+      # Per-request timeout override
+      response = await client.post(
+          "/jsonrpc",
+          json=request_dict,
+          timeout=timeout_ms / 1000.0  # Convert ms to seconds
+      )
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+
+error_handling:
+  http_4xx_errors:
+    description: "Client errors (bad request, not found)"
+    codes:
+      - 400: "Bad Request (malformed JSON-RPC)"
+      - 404: "Not Found (/jsonrpc endpoint missing)"
+      - 405: "Method Not Allowed (must be POST)"
+    action: "Wrap as JsonRpcError(-32600, 'Invalid Request')"
+
+  http_5xx_errors:
+    description: "Server errors (internal error, unavailable)"
+    codes:
+      - 500: "Internal Server Error"
+      - 503: "Service Unavailable"
+      - 504: "Gateway Timeout"
+    action: "Wrap as JsonRpcError(-32603, 'Internal error')"
+    retry: "Eligible for retry (transient error)"
+
+  network_errors:
+    description: "TCP/TLS errors (connection refused, timeout)"
+    errors:
+      - "httpx.ConnectError: Connection refused"
+      - "httpx.ConnectTimeout: Connect timeout"
+      - "httpx.ReadTimeout: Read timeout"
+    action: "Wrap as JsonRpcError(-32603, 'Internal error: network failure')"
+    retry: "Eligible for retry with exponential backoff"
+
+  invalid_json_response:
+    description: "HTTP 200 but response is not valid JSON"
+    action: "Wrap as JsonRpcError(-32700, 'Parse error')"
+    log_level: "ERROR"
+
+# =============================================================================
+# WASM SANDBOX INTEGRATION
+# =============================================================================
+
+wasm_sandbox_integration:
+  description: "HTTP transport used for WASM MCP servers (from ADR-0033b)"
+
+  why_http_for_wasm:
+    - "WASM cannot use stdio (no file descriptors in WASM)"
+    - "WASM can handle HTTP (via WASI http or fetch API)"
+    - "Wasmtime can expose HTTP server inside WASM module"
+
+  architecture:
+    k1_http_client:
+      description: "K1 sends HTTP POST to localhost:8001/jsonrpc"
+      transport: "HttpTransport"
+
+    wasmtime_runtime:
+      description: "Wasmtime loads WASM module, starts HTTP server"
+      wasm_module: "user_plugin.wasm"
+      http_server: "WASI http (embedded HTTP server in WASM)"
+      listen_address: "127.0.0.1:8001"
+
+    mcp_server_wasm:
+      description: "MCP server implemented in WASM"
+      language: "Rust (compiled to WASM)"
+      http_framework: "warp or axum (compiled to WASM)"
+      json_rpc_handling: "Parse POST body, execute tool, return JSON-RPC response"
+
+  latency_breakdown:
+    http_overhead: "10ms (localhost HTTP POST)"
+    wasm_execution: "50ms (tool logic)"
+    total: "60ms"
+    percentage: "16% overhead (acceptable for untrusted code isolation)"
+
+# =============================================================================
+# PERFORMANCE REQUIREMENTS
+# =============================================================================
+
+performance_requirements:
+  http_round_trip_latency:
+    target: "<10ms P95 (localhost)"
+    measurement: "Time from HTTP POST to response received"
+    breakdown:
+      tcp_connect: "0ms (connection pooling)"
+      http_request: "5ms (localhost)"
+      http_response: "5ms"
+    source: "ADR-0034a"
+
+  http_overhead:
+    target: "<26ms P95 (from ADR-0034a)"
+    measurement: "JSON serialization (0.5ms) + HTTP POST (10ms) + HTTP response (10ms) + JSON deserialization (0.5ms) + overhead (5ms)"
+    percentage: "52% of 50ms WASM execution (higher than stdio, acceptable tradeoff)"
+
+  connection_pool_hit_rate:
+    target: ">90%"
+    measurement: "% of requests reusing existing connection"
+    benefit: "Avoid 5-10ms TCP handshake per request"
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+metrics:
+  http_requests_sent_total:
+    type: "counter"
+    labels: ["method", "base_url"]
+    description: "Total JSON-RPC requests sent via HTTP"
+
+  http_responses_received_total:
+    type: "counter"
+    labels: ["method", "base_url", "status"]  # status: success | error | http_error
+    description: "Total JSON-RPC responses received via HTTP"
+
+  http_round_trip_latency_ms:
+    type: "histogram"
+    buckets: [1, 5, 10, 25, 50, 100, 250, 500]
+    labels: ["method", "base_url"]
+    description: "HTTP round-trip latency in milliseconds"
+
+  http_connection_pool_hits_total:
+    type: "counter"
+    labels: ["base_url"]
+    description: "Total connection pool hits (reused connection)"
+
+  http_connection_pool_misses_total:
+    type: "counter"
+    labels: ["base_url"]
+    description: "Total connection pool misses (new connection)"
+
+logging:
+  http_request_sent:
+    level: "DEBUG"
+    message: "HTTP POST sent to MCP server"
+    fields:
+      - "request_id"
+      - "method"
+      - "base_url"
+      - "timeout_ms"
+
+  http_response_received:
+    level: "DEBUG"
+    message: "HTTP response received from MCP server"
+    fields:
+      - "request_id"
+      - "method"
+      - "http_status"
+      - "latency_ms"
+
+  http_error:
+    level: "ERROR"
+    message: "HTTP error from MCP server"
+    fields:
+      - "request_id"
+      - "method"
+      - "http_status"
+      - "error_message"
+
+# =============================================================================
+# SECURITY CONSIDERATIONS
+# =============================================================================
+
+security:
+  tls_support:
+    description: "HTTPS for remote MCP servers (future)"
+    tls_version: "TLS 1.3"
+    certificate_validation: "Required (verify server certificate)"
+    client_certificates: "Optional (mutual TLS)"
+
+  localhost_only:
+    description: "Current deployment: MCP servers on localhost only"
+    listen_address: "127.0.0.1:8001"
+    firewall_rule: "Block external connections to port 8001"
+    rationale: "WASM sandbox tools are untrusted, should not be remotely accessible"
+
+  rate_limiting:
+    description: "Future: Rate limit HTTP requests per tool"
+    limit: "100 requests/minute per tool"
+    action_on_exceed: "Return HTTP 429 Too Many Requests"
+
+# =============================================================================
+# TESTING REQUIREMENTS
+# =============================================================================
+
+test_coverage:
+  unit_tests:
+    - test_name: "test_http_transport_send_request"
+      description: "HTTP POST sends valid JSON-RPC request"
+      assertion: "Request body matches JsonRpcRequest format"
+
+    - test_name: "test_http_transport_parse_success_response"
+      description: "HTTP 200 with JSON-RPC success response parsed correctly"
+      assertion: "JsonRpcResponse returned with result"
+
+    - test_name: "test_http_transport_parse_error_response"
+      description: "HTTP 200 with JSON-RPC error response parsed correctly"
+      assertion: "JsonRpcError raised with correct code/message"
+
+    - test_name: "test_http_transport_http_500_wrapped"
+      description: "HTTP 500 wrapped as JsonRpcError"
+      assertion: "JsonRpcError(-32603, 'Internal error: HTTP 500')"
+
+    - test_name: "test_http_transport_timeout"
+      description: "Request timeout raises TimeoutError"
+      assertion: "TimeoutError raised after timeout_ms"
+
+    - test_name: "test_http_transport_connection_pooling"
+      description: "Multiple requests reuse same TCP connection"
+      assertion: "Connection pool hit rate >90%"
+
+  integration_tests:
+    - test_name: "test_http_transport_with_wasm_server"
+      description: "End-to-end HTTP transport with WASM MCP server"
+      setup: "Start Wasmtime with user_plugin.wasm on port 8001"
+      assertion: "Initialize, list_tools, call_tool all succeed"
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+references:
+  standards:
+    - name: "JSON-RPC 2.0 Specification"
+      url: "https://www.jsonrpc.org/specification"
+      year: 2010
+
+    - name: "HTTP/1.1 RFC 7231"
+      url: "https://datatracker.ietf.org/doc/html/rfc7231"
+      year: 2014
+      description: "HTTP POST method, status codes"
+
+    - name: "WASI HTTP"
+      url: "https://github.com/WebAssembly/wasi-http"
+      year: 2023
+      description: "HTTP support for WebAssembly"
+
+  related_adrs:
+    - "ADR-0033b: WASM Sandbox Implementation"
+    - "ADR-0034a: MCP JSON-RPC 2.0 Protocol"
+
+  related_contracts:
+    - "stdio_transport_impl.yml"
+    - "jsonrpc_request_format.yml"
+    - "jsonrpc_response_format.yml"
+
+# =============================================================================
+# CONTRACT VERSION & APPROVAL
+# =============================================================================
+
+contract_status:
+  version: "1.0.0"
+  status: "approved"
+  approved_by: "K1 Architecture Team"
+  approved_date: "2025-10-21"
+  next_review: "2026-04-21"
+  change_history:
+    - version: "1.0.0"
+      date: "2025-10-21"
+      author: "K1 Architecture Team"
+      changes: "Initial contract based on ADR-0034a"

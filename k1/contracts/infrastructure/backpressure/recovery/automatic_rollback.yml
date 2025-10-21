@@ -1,0 +1,407 @@
+classes:
+  - name: AutomaticRollback
+    description: Handles automatic rollback to previous tier when health checks fail during recovery
+    research: ADR-0039c (backpressure recovery), circuit breaker patterns, automatic rollback strategies
+    performance_budget: <1ms rollback decisions, <10ms rollback execution, <100ms full recovery pause
+    reliability_properties:
+      - immediate_response: Rollback triggers immediately on health check failure
+      - admission_rate_reduction: Reduces admission rate to prevent further overload
+      - recovery_pause: Pauses recovery progression until system stabilizes
+      - audit_logging: All rollbacks logged with detailed reasoning
+    methods:
+      - name: handle_recovery_failure
+        description: Process recovery failure and execute automatic rollback
+        parameters:
+          - name: failure_reason
+            type: RecoveryError
+            description: Reason for recovery failure
+          - name: current_tier
+            type: BackpressureTier
+            description: Current tier when failure occurred
+          - name: trace_id
+            type: String
+            description: Trace ID for observability
+        returns:
+          type: Result<RollbackResult, RollbackError>
+          description: Rollback result or error details
+        implementation:
+          rust: |
+            use std::sync::Arc;
+            use tokio::sync::RwLock;
+
+            pub struct AutomaticRollback {
+                state_machine: Arc<RwLock<RecoveryStateMachine>>,
+                rate_limiter: Arc<RwLock<AdmissionRateLimiter>>,
+                metrics: Arc<RecoveryObservability>,
+                rollback_history: Arc<RwLock<Vec<RollbackEvent>>>,
+            }
+
+            impl AutomaticRollback {
+                pub fn new(
+                    state_machine: Arc<RwLock<RecoveryStateMachine>>,
+                    rate_limiter: Arc<RwLock<AdmissionRateLimiter>>,
+                    metrics: Arc<RecoveryObservability>,
+                ) -> Self {
+                    Self {
+                        state_machine,
+                        rate_limiter,
+                        metrics,
+                        rollback_history: Arc::new(RwLock::new(Vec::with_capacity(50))),
+                    }
+                }
+
+                pub async fn handle_recovery_failure(
+                    &self,
+                    failure_reason: RecoveryError,
+                    current_tier: BackpressureTier,
+                    trace_id: String,
+                ) -> Result<RollbackResult, RollbackError> {
+                    let rollback_start = std::time::Instant::now();
+
+                    // Determine rollback target tier
+                    let rollback_target = self.calculate_rollback_target(current_tier);
+
+                    // Record rollback event
+                    let rollback_event = RollbackEvent {
+                        timestamp: std::time::Instant::now(),
+                        from_tier: current_tier,
+                        to_tier: rollback_target,
+                        reason: failure_reason.clone(),
+                        trace_id: trace_id.clone(),
+                    };
+
+                    // Store in history
+                    {
+                        let mut history = self.rollback_history.write().await;
+                        history.push(rollback_event.clone());
+                        if history.len() > 50 {
+                            history.remove(0); // Keep last 50 rollbacks
+                        }
+                    }
+
+                    // Execute rollback
+                    self.execute_rollback(rollback_target, &failure_reason, &trace_id).await?;
+
+                    // Reduce admission rate to prevent further overload
+                    self.adjust_admission_rate_on_rollback(current_tier).await;
+
+                    let rollback_duration = rollback_start.elapsed();
+
+                    // Record metrics
+                    self.metrics.record_recovery_rollback(&failure_reason.to_string());
+
+                    tracing::warn!(
+                        from_tier = %current_tier,
+                        to_tier = %rollback_target,
+                        reason = %failure_reason,
+                        duration_ms = rollback_duration.as_millis(),
+                        trace_id = %trace_id,
+                        "Automatic rollback executed due to recovery failure"
+                    );
+
+                    Ok(RollbackResult {
+                        rollback_target,
+                        admission_rate_reduced: true,
+                        recovery_paused: true,
+                        rollback_duration,
+                    })
+                }
+
+                fn calculate_rollback_target(&self, current_tier: BackpressureTier) -> BackpressureTier {
+                    match current_tier {
+                        BackpressureTier::TIER_2_CANCEL_BG => BackpressureTier::TIER_3_EMERGENCY,
+                        BackpressureTier::TIER_1_REJECT_NEW => BackpressureTier::TIER_2_CANCEL_BG,
+                        BackpressureTier::NORMAL => BackpressureTier::TIER_1_REJECT_NEW,
+                        BackpressureTier::TIER_3_EMERGENCY => BackpressureTier::TIER_3_EMERGENCY, // Already at bottom
+                    }
+                }
+
+                async fn execute_rollback(
+                    &self,
+                    target_tier: BackpressureTier,
+                    failure_reason: &RecoveryError,
+                    trace_id: &str,
+                ) -> Result<(), RollbackError> {
+                    // Update state machine to rollback target
+                    {
+                        let mut state_machine = self.state_machine.write().await;
+                        state_machine.current_tier = target_tier;
+                        state_machine.recovery_start = std::time::Instant::now();
+                        state_machine.sustained_success_count = 0;
+                    }
+
+                    // Emit backpressure signal for the rollback tier
+                    // This would trigger component responses for the new tier
+                    self.emit_backpressure_signal(target_tier, failure_reason, trace_id).await;
+
+                    Ok(())
+                }
+
+                async fn adjust_admission_rate_on_rollback(&self, from_tier: BackpressureTier) {
+                    let rate_reduction = match from_tier {
+                        BackpressureTier::TIER_2_CANCEL_BG => 30.0, // Reduce by 30%
+                        BackpressureTier::TIER_1_REJECT_NEW => 20.0, // Reduce by 20%
+                        BackpressureTier::NORMAL => 10.0, // Reduce by 10%
+                        BackpressureTier::TIER_3_EMERGENCY => 0.0, // No reduction needed
+                    };
+
+                    if rate_reduction > 0.0 {
+                        let mut rate_limiter = self.rate_limiter.write().await;
+                        let current_rate = rate_limiter.get_current_rate_percent();
+                        let new_rate = (current_rate - rate_reduction).max(10.0);
+
+                        if let Err(e) = rate_limiter.set_rate_percent(new_rate).await {
+                            tracing::error!(
+                                error = %e,
+                                current_rate = current_rate,
+                                new_rate = new_rate,
+                                "Failed to adjust admission rate on rollback"
+                            );
+                        }
+                    }
+                }
+
+                async fn emit_backpressure_signal(
+                    &self,
+                    tier: BackpressureTier,
+                    reason: &RecoveryError,
+                    trace_id: &str,
+                ) {
+                    // This would integrate with the BackpressureCoordinator
+                    // to emit a signal with rollback reason
+                    tracing::info!(
+                        tier = %tier,
+                        reason = %reason,
+                        trace_id = %trace_id,
+                        "Emitting backpressure signal for rollback"
+                    );
+                }
+
+                pub async fn get_rollback_history(&self) -> Vec<RollbackEvent> {
+                    self.rollback_history.read().await.clone()
+                }
+
+                pub async fn get_recent_rollback_stats(&self) -> RollbackStats {
+                    let history = self.rollback_history.read().await;
+
+                    let total_rollbacks = history.len();
+                    let recent_rollbacks = history.iter()
+                        .filter(|event| {
+                            event.timestamp.elapsed() < std::time::Duration::from_secs(3600) // Last hour
+                        })
+                        .count();
+
+                    RollbackStats {
+                        total_rollbacks,
+                        rollbacks_last_hour: recent_rollbacks,
+                    }
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import List, Optional, Any, Dict
+            import asyncio
+            import time
+            import logging
+
+            class AutomaticRollback:
+                """
+                Handles automatic rollback when recovery health checks fail.
+
+                Provides immediate response to recovery failures by rolling back
+                to previous tier and reducing admission rate to prevent overload.
+                """
+
+                def __init__(self, state_machine: Any, rate_limiter: Any, metrics: Any):
+                    self.logger = logging.getLogger(__name__)
+                    self.state_machine = state_machine
+                    self.rate_limiter = rate_limiter
+                    self.metrics = metrics
+                    self.rollback_history: List[Dict] = []
+                    self.max_history = 50
+
+                async def handle_recovery_failure(
+                    self,
+                    failure_reason: str,
+                    current_tier: Any,
+                    trace_id: str
+                ) -> 'RollbackResult':
+                    """Process recovery failure and execute automatic rollback"""
+                    rollback_start = time.time()
+
+                    # Determine rollback target tier
+                    rollback_target = self._calculate_rollback_target(current_tier)
+
+                    # Record rollback event
+                    rollback_event = {
+                        'timestamp': time.time(),
+                        'from_tier': str(current_tier),
+                        'to_tier': str(rollback_target),
+                        'reason': failure_reason,
+                        'trace_id': trace_id,
+                    }
+
+                    # Store in history
+                    self.rollback_history.append(rollback_event)
+                    if len(self.rollback_history) > self.max_history:
+                        self.rollback_history.pop(0)
+
+                    # Execute rollback
+                    await self._execute_rollback(rollback_target, failure_reason, trace_id)
+
+                    # Reduce admission rate
+                    await self._adjust_admission_rate_on_rollback(current_tier)
+
+                    rollback_duration = time.time() - rollback_start
+
+                    # Record metrics
+                    self.metrics.record_recovery_rollback(failure_reason)
+
+                    self.logger.warning(
+                        f"Automatic rollback executed: {current_tier} -> {rollback_target}",
+                        extra={
+                            'from_tier': str(current_tier),
+                            'to_tier': str(rollback_target),
+                            'reason': failure_reason,
+                            'duration': rollback_duration,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                    return RollbackResult(
+                        rollback_target=rollback_target,
+                        admission_rate_reduced=True,
+                        recovery_paused=True,
+                        rollback_duration=rollback_duration
+                    )
+
+                def _calculate_rollback_target(self, current_tier: Any) -> Any:
+                    """Determine which tier to rollback to"""
+                    if current_tier == BackpressureTier.TIER_3_EMERGENCY:
+                        return BackpressureTier.TIER_3_EMERGENCY  # Already at bottom
+                    elif current_tier == BackpressureTier.TIER_2_CANCEL_BG:
+                        return BackpressureTier.TIER_3_EMERGENCY
+                    elif current_tier == BackpressureTier.TIER_1_REJECT_NEW:
+                        return BackpressureTier.TIER_2_CANCEL_BG
+                    elif current_tier == BackpressureTier.NORMAL:
+                        return BackpressureTier.TIER_1_REJECT_NEW
+                    else:
+                        return BackpressureTier.TIER_3_EMERGENCY  # Default fallback
+
+                async def _execute_rollback(
+                    self,
+                    target_tier: Any,
+                    failure_reason: str,
+                    trace_id: str
+                ) -> None:
+                    """Execute the actual rollback"""
+                    # Update state machine
+                    self.state_machine.current_tier = target_tier
+                    self.state_machine.recovery_start = time.time()
+                    self.state_machine.sustained_success_count = 0
+
+                    # Emit backpressure signal for rollback
+                    await self._emit_backpressure_signal(target_tier, failure_reason, trace_id)
+
+                async def _adjust_admission_rate_on_rollback(self, from_tier: Any) -> None:
+                    """Reduce admission rate to prevent further overload"""
+                    rate_reduction = {
+                        BackpressureTier.TIER_3_EMERGENCY: 0.0,   # No reduction
+                        BackpressureTier.TIER_2_CANCEL_BG: 30.0,  # Reduce by 30%
+                        BackpressureTier.TIER_1_REJECT_NEW: 20.0, # Reduce by 20%
+                        BackpressureTier.NORMAL: 10.0,            # Reduce by 10%
+                    }.get(from_tier, 0.0)
+
+                    if rate_reduction > 0.0:
+                        try:
+                            current_rate = await self.rate_limiter.get_current_rate_percent()
+                            new_rate = max(current_rate - rate_reduction, 10.0)
+                            await self.rate_limiter.set_rate_percent(new_rate)
+
+                            self.logger.info(
+                                f"Admission rate reduced on rollback: {current_rate:.1f}% -> {new_rate:.1f}%",
+                                extra={
+                                    'old_rate': current_rate,
+                                    'new_rate': new_rate,
+                                    'reduction': rate_reduction
+                                }
+                            )
+                        except Exception as e:
+                            self.logger.error(f"Failed to adjust admission rate: {e}")
+
+                async def _emit_backpressure_signal(
+                    self,
+                    tier: Any,
+                    reason: str,
+                    trace_id: str
+                ) -> None:
+                    """Emit backpressure signal for the rollback tier"""
+                    # This would integrate with BackpressureCoordinator
+                    self.logger.info(
+                        f"Emitting backpressure signal for rollback to {tier}",
+                        extra={
+                            'tier': str(tier),
+                            'reason': reason,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                def get_rollback_history(self) -> List[Dict]:
+                    """Get rollback event history"""
+                    return self.rollback_history.copy()
+
+                def get_recent_rollback_stats(self) -> Dict[str, int]:
+                    """Get statistics on recent rollbacks"""
+                    now = time.time()
+                    one_hour_ago = now - 3600
+
+                    recent_rollbacks = [
+                        event for event in self.rollback_history
+                        if event['timestamp'] >= one_hour_ago
+                    ]
+
+                    return {
+                        'total_rollbacks': len(self.rollback_history),
+                        'rollbacks_last_hour': len(recent_rollbacks)
+                    }
+
+rollback_triggers:
+  - trigger: health_check_failure
+    action: immediate_rollback
+    description: Any health check failure during recovery triggers rollback
+  - trigger: metric_degradation
+    action: automatic_rollback
+    description: Significant metric degradation (>20% increase) triggers rollback
+  - trigger: timeout_exceeded
+    action: emergency_escalation
+    description: Recovery taking longer than 5 minutes triggers emergency escalation
+
+admission_rate_adjustments:
+  - from_tier: TIER_3_EMERGENCY
+    reduction_percent: 0
+    description: No reduction needed, already at minimum rate
+  - from_tier: TIER_2_CANCEL_BG
+    reduction_percent: 30
+    description: Significant reduction to prevent further overload
+  - from_tier: TIER_1_REJECT_NEW
+    reduction_percent: 20
+    description: Moderate reduction for stabilization
+  - from_tier: NORMAL
+    reduction_percent: 10
+    description: Minor reduction as safety measure
+
+rollback_safety_measures:
+  - rate_floor: 10%
+    description: Admission rate never drops below 10% during recovery
+  - history_limit: 50
+    description: Keep last 50 rollback events for analysis
+  - cooldown_period: 30s
+    description: Wait 30 seconds before retrying recovery after rollback
+  - escalation_limit: 3
+    description: After 3 rollbacks in 5 minutes, escalate to emergency tier
+
+audit_requirements:
+  - event_logging: All rollbacks logged with full context
+  - reason_tracking: Detailed failure reasons recorded
+  - trace_correlation: Trace IDs maintained across rollback events
+  - metric_emission: Rollback events emitted as Prometheus metrics

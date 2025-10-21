@@ -1,0 +1,402 @@
+# State Transitions Contract
+# Issue: 2.8.3 - Circuit Breaker Integration
+# Source: ADR-0034c (MCP Circuit Breaker Integration), lines 801-950
+
+contract:
+  name: "state_transitions"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  source_adr: "ADR-0034c"
+  parent_issue: "2.8.3"
+
+overview:
+  purpose: "Define circuit breaker state transition rules, triggers, guards, and actions"
+  scope: "FSM transitions, transition conditions, state update logic, metrics emission"
+  context: "Circuit breaker uses 3-state FSM (CLOSED/OPEN/HALF_OPEN) with 4 primary transitions for automatic failure detection and recovery"
+
+state_transition_diagram:
+  states: ["CLOSED", "OPEN", "HALF_OPEN"]
+  initial_state: "CLOSED"
+  final_states: []  # No final state, circuit runs continuously
+
+  transitions:
+    - {from: "CLOSED", to: "OPEN", trigger: "Failure threshold reached"}
+    - {from: "OPEN", to: "HALF_OPEN", trigger: "Cooldown elapsed"}
+    - {from: "HALF_OPEN", to: "CLOSED", trigger: "Probe succeeds"}
+    - {from: "HALF_OPEN", to: "OPEN", trigger: "Probe fails"}
+
+transitions:
+  CLOSED_to_OPEN:
+    name: "Circuit opening (failure threshold exceeded)"
+    trigger: "Failure count reaches or exceeds configured threshold"
+
+    guard:
+      condition: "failure_count ≥ failure_threshold"
+      evaluation: "On every record_failure() call in CLOSED state"
+
+    preconditions:
+      - "state = CLOSED"
+      - "failure_count tracked in sliding window"
+      - "Failure recorded via record_failure()"
+
+    actions:
+      - "Set state = OPEN"
+      - "Record circuit_open_time = current_timestamp"
+      - "Log warning: Circuit opened due to failures"
+      - "Emit metric: circuit_breaker_transitions_total{from=CLOSED,to=OPEN}"
+      - "Emit metric: circuit_breaker_state=1 (OPEN)"
+
+    postconditions:
+      - "state = OPEN"
+      - "circuit_open_time set"
+      - "All subsequent requests rejected until cooldown"
+
+    example:
+      tool_id: "weather_api"
+      failure_threshold: 5
+      scenario:
+        - {time: "10:00:00", event: "Failure 1", failure_count: 1, state: "CLOSED"}
+        - {time: "10:01:00", event: "Failure 2", failure_count: 2, state: "CLOSED"}
+        - {time: "10:02:00", event: "Failure 3", failure_count: 3, state: "CLOSED"}
+        - {time: "10:03:00", event: "Failure 4", failure_count: 4, state: "CLOSED"}
+        - {time: "10:04:00", event: "Failure 5", failure_count: 5, state: "OPEN", action: "Transition triggered"}
+      result: "Circuit opens after 5th failure in 4 minutes"
+      log: "[CircuitBreaker] weather_api: CLOSED → OPEN (5 failures in 600s window)"
+
+  OPEN_to_HALF_OPEN:
+    name: "Recovery testing (cooldown elapsed)"
+    trigger: "Timeout duration elapsed since circuit opened"
+
+    guard:
+      condition: "(current_time - circuit_open_time) ≥ timeout_seconds"
+      evaluation: "On every should_allow_request() call in OPEN state"
+
+    preconditions:
+      - "state = OPEN"
+      - "circuit_open_time set"
+      - "Cooldown period (timeout_seconds) elapsed"
+
+    actions:
+      - "Set state = HALF_OPEN"
+      - "Reset half_open_attempts_made = 0"
+      - "Log info: Circuit testing recovery"
+      - "Emit metric: circuit_breaker_transitions_total{from=OPEN,to=HALF_OPEN}"
+      - "Emit metric: circuit_breaker_state=2 (HALF_OPEN)"
+      - "Calculate and emit open_duration = current_time - circuit_open_time"
+
+    postconditions:
+      - "state = HALF_OPEN"
+      - "half_open_attempts_made = 0"
+      - "Ready to allow probe request(s)"
+
+    example:
+      tool_id: "weather_api"
+      timeout_seconds: 30
+      scenario:
+        - {time: "10:04:00", event: "Circuit opens", state: "OPEN"}
+        - {time: "10:04:15", event: "Request rejected", state: "OPEN", reason: "Cooldown not elapsed (15s < 30s)"}
+        - {time: "10:04:30", event: "should_allow_request() called", state: "HALF_OPEN", action: "Transition triggered"}
+      result: "Circuit transitions to HALF_OPEN after 30s cooldown"
+      log: "[CircuitBreaker] weather_api: OPEN → HALF_OPEN (timeout elapsed: 30s)"
+
+  HALF_OPEN_to_CLOSED:
+    name: "Recovery confirmed (probe succeeds)"
+    trigger: "Probe request completes successfully"
+
+    guard:
+      condition: "probe_result = SUCCESS"
+      evaluation: "On record_success() call in HALF_OPEN state"
+
+    preconditions:
+      - "state = HALF_OPEN"
+      - "Probe request executed"
+      - "Tool returned successful result"
+
+    actions:
+      - "Set state = CLOSED"
+      - "Reset failure_count = 0"
+      - "Log info: Circuit recovery confirmed"
+      - "Emit metric: circuit_breaker_transitions_total{from=HALF_OPEN,to=CLOSED}"
+      - "Emit metric: circuit_breaker_state=0 (CLOSED)"
+      - "Emit metric: circuit_breaker_probe_success_total"
+
+    postconditions:
+      - "state = CLOSED"
+      - "failure_count = 0"
+      - "Normal operation resumed"
+
+    example:
+      tool_id: "weather_api"
+      scenario:
+        - {time: "10:04:30", event: "Transition to HALF_OPEN", state: "HALF_OPEN"}
+        - {time: "10:04:31", event: "Probe request: get_weather(Seattle)", status: "Sent"}
+        - {time: "10:04:31.250", event: "Probe result: SUCCESS (250ms, weather data)", state: "CLOSED", action: "Transition triggered"}
+      result: "Circuit closes after successful probe"
+      log: "[CircuitBreaker] weather_api: HALF_OPEN → CLOSED (probe succeeded, recovery confirmed)"
+
+  HALF_OPEN_to_OPEN:
+    name: "Recovery failed (probe fails)"
+    trigger: "Probe request fails"
+
+    guard:
+      condition: "probe_result = FAILURE"
+      evaluation: "On record_failure() call in HALF_OPEN state"
+
+    preconditions:
+      - "state = HALF_OPEN"
+      - "Probe request executed"
+      - "Tool returned error or timeout"
+
+    actions:
+      - "Set state = OPEN"
+      - "Reset circuit_open_time = current_timestamp (restart cooldown)"
+      - "Log warning: Circuit recovery failed"
+      - "Emit metric: circuit_breaker_transitions_total{from=HALF_OPEN,to=OPEN}"
+      - "Emit metric: circuit_breaker_state=1 (OPEN)"
+      - "Emit metric: circuit_breaker_probe_failure_total"
+
+    postconditions:
+      - "state = OPEN"
+      - "circuit_open_time reset (new cooldown period)"
+      - "Must wait another timeout_seconds before next HALF_OPEN"
+
+    example:
+      tool_id: "weather_api"
+      timeout_seconds: 30
+      scenario:
+        - {time: "10:04:30", event: "Transition to HALF_OPEN", state: "HALF_OPEN"}
+        - {time: "10:04:31", event: "Probe request: get_weather(Seattle)", status: "Sent"}
+        - {time: "10:05:01", event: "Probe result: FAILURE (TimeoutError: 30s)", state: "OPEN", action: "Transition triggered, cooldown reset"}
+        - {time: "10:05:31", event: "Cooldown elapsed again", state: "HALF_OPEN"}
+      result: "Circuit reopens after probe failure, restarts cooldown"
+      log: "[CircuitBreaker] weather_api: HALF_OPEN → OPEN (probe failed, cooldown reset)"
+
+auxiliary_transitions:
+  CLOSED_success_reset:
+    name: "Success resets failure count (not a state transition)"
+    trigger: "Successful request in CLOSED state"
+
+    guard:
+      condition: "state = CLOSED AND request_result = SUCCESS"
+      evaluation: "On record_success() call in CLOSED state"
+
+    actions:
+      - "Reset failure_count = 0"
+      - "Update total_requests counter"
+      - "Log debug: Failure count reset"
+
+    postconditions:
+      - "state = CLOSED (unchanged)"
+      - "failure_count = 0"
+
+    note: "Prevents failure count accumulation from old failures"
+
+    example:
+      scenario:
+        - {time: "10:00:00", event: "Failure 1", failure_count: 1}
+        - {time: "10:02:00", event: "Failure 2", failure_count: 2}
+        - {time: "10:04:00", event: "Failure 3", failure_count: 3}
+        - {time: "10:06:00", event: "Success", failure_count: 0, action: "Reset triggered"}
+        - {time: "10:08:00", event: "Failure 4", failure_count: 1}
+      result: "Success resets count, preventing circuit open"
+
+  sliding_window_expiration:
+    name: "Old failures expire from sliding window"
+    trigger: "Failure older than failure_window_seconds"
+
+    guard:
+      condition: "(current_time - last_failure_time) > failure_window_seconds"
+      evaluation: "On record_failure() call"
+
+    actions:
+      - "Reset failure_count = 0"
+      - "Discard old failures (outside window)"
+      - "Log debug: Sliding window reset"
+
+    postconditions:
+      - "failure_count = 0 (if all failures outside window)"
+      - "Only recent failures counted"
+
+    note: "Prevents stale failures from triggering circuit open"
+
+    example:
+      failure_window_seconds: 600
+      scenario:
+        - {time: "10:00:00", event: "Failure 1", failure_count: 1}
+        - {time: "10:02:00", event: "Failure 2", failure_count: 2}
+        - {time: "10:12:00", event: "record_failure() called", note: "Failures 1-2 expired (>10min old)", failure_count: 0}
+        - {time: "10:12:00", event: "Failure 3", failure_count: 1}
+      result: "Old failures don't count toward threshold"
+
+transition_invariants:
+  state_consistency:
+    - "Circuit is always in exactly one state (CLOSED, OPEN, or HALF_OPEN)"
+    - "State transitions are atomic (no intermediate states)"
+    - "State transitions logged and metered"
+
+  failure_count_consistency:
+    - "failure_count ≥ 0 always"
+    - "failure_count reset on HALF_OPEN → CLOSED"
+    - "failure_count only counts failures within sliding window"
+
+  timing_consistency:
+    - "circuit_open_time set only in OPEN state"
+    - "Cooldown check: (now - circuit_open_time) ≥ timeout_seconds"
+    - "circuit_open_time reset on HALF_OPEN → OPEN"
+
+  probe_consistency:
+    - "half_open_attempts_made ≤ half_open_attempts"
+    - "half_open_attempts_made reset on OPEN → HALF_OPEN"
+    - "Probe allowed only if half_open_attempts_made < half_open_attempts"
+
+transition_performance:
+  CLOSED_to_OPEN: "<0.1ms (state update, timestamp record, metric emit)"
+  OPEN_to_HALF_OPEN: "<0.1ms (state update, counter reset)"
+  HALF_OPEN_to_CLOSED: "<0.1ms (state update, failure_count reset)"
+  HALF_OPEN_to_OPEN: "<0.1ms (state update, timestamp reset)"
+
+implementation_example:
+  python_code: |
+    def record_failure(self):
+        """Record failed request and handle state transitions"""
+        now = time.time()
+        self.total_requests += 1
+        self.total_failures += 1
+
+        # Sliding window check
+        if now - self.last_failure_time > self.config.failure_window_seconds:
+            self.failure_count = 0  # Reset if outside window
+
+        self.failure_count += 1
+        self.last_failure_time = now
+
+        # State transition logic
+        if self.state == CircuitState.CLOSED:
+            if self.failure_count >= self.config.failure_threshold:
+                # CLOSED → OPEN
+                self.state = CircuitState.OPEN
+                self.circuit_open_time = now
+                print(f"[CircuitBreaker] {self.config.tool_id}: CLOSED → OPEN ({self.failure_count} failures)")
+                emit_metric("circuit_breaker_transitions_total",
+                           labels={"tool_id": self.config.tool_id, "from": "CLOSED", "to": "OPEN"})
+
+        elif self.state == CircuitState.HALF_OPEN:
+            # HALF_OPEN → OPEN (probe failed)
+            self.state = CircuitState.OPEN
+            self.circuit_open_time = now  # Reset cooldown
+            print(f"[CircuitBreaker] {self.config.tool_id}: HALF_OPEN → OPEN (probe failed)")
+            emit_metric("circuit_breaker_transitions_total",
+                       labels={"tool_id": self.config.tool_id, "from": "HALF_OPEN", "to": "OPEN"})
+
+    def record_success(self):
+        """Record successful request and handle state transitions"""
+        self.total_requests += 1
+
+        if self.state == CircuitState.HALF_OPEN:
+            # HALF_OPEN → CLOSED (recovery confirmed)
+            self.state = CircuitState.CLOSED
+            self.failure_count = 0
+            print(f"[CircuitBreaker] {self.config.tool_id}: HALF_OPEN → CLOSED (probe succeeded)")
+            emit_metric("circuit_breaker_transitions_total",
+                       labels={"tool_id": self.config.tool_id, "from": "HALF_OPEN", "to": "CLOSED"})
+
+        elif self.state == CircuitState.CLOSED:
+            # Reset failure count on success
+            self.failure_count = 0
+
+    def should_allow_request(self) -> bool:
+        """Check if request should be allowed (may trigger OPEN → HALF_OPEN)"""
+        now = time.time()
+
+        if self.state == CircuitState.CLOSED:
+            return True
+
+        elif self.state == CircuitState.OPEN:
+            # Check if cooldown elapsed
+            if now - self.circuit_open_time >= self.config.timeout_seconds:
+                # OPEN → HALF_OPEN
+                self.state = CircuitState.HALF_OPEN
+                self.half_open_attempts_made = 0
+                print(f"[CircuitBreaker] {self.config.tool_id}: OPEN → HALF_OPEN (timeout elapsed)")
+                emit_metric("circuit_breaker_transitions_total",
+                           labels={"tool_id": self.config.tool_id, "from": "OPEN", "to": "HALF_OPEN"})
+                return True  # Allow probe
+            else:
+                return False  # Still cooling down
+
+        elif self.state == CircuitState.HALF_OPEN:
+            # Allow probe if under limit
+            if self.half_open_attempts_made < self.config.half_open_attempts:
+                self.half_open_attempts_made += 1
+                return True
+            else:
+                return False  # Already probed
+
+        return False
+
+testing_requirements:
+  unit_tests:
+    - "CLOSED → OPEN on failure threshold"
+    - "OPEN → HALF_OPEN after timeout"
+    - "HALF_OPEN → CLOSED on probe success"
+    - "HALF_OPEN → OPEN on probe failure"
+    - "Success resets failure count in CLOSED"
+    - "Sliding window expires old failures"
+    - "Transitions emit metrics"
+    - "State transitions are atomic"
+
+  integration_tests:
+    - "Full cycle: CLOSED → OPEN → HALF_OPEN → CLOSED"
+    - "Failed recovery: CLOSED → OPEN → HALF_OPEN → OPEN → HALF_OPEN → CLOSED"
+    - "Multiple tools transition independently"
+    - "Concurrent requests during transitions"
+
+  property_tests:
+    - "State invariants always hold"
+    - "failure_count never negative"
+    - "circuit_open_time set only in OPEN"
+    - "Transitions always logged"
+
+observability:
+  metrics:
+    circuit_breaker_transitions_total:
+      type: "Counter"
+      labels: ["tool_id", "from_state", "to_state"]
+      description: "Total state transitions"
+      query: "rate(circuit_breaker_transitions_total{tool_id='weather_api'}[5m])"
+
+    circuit_breaker_state:
+      type: "Gauge"
+      labels: ["tool_id"]
+      values: {CLOSED: 0, OPEN: 1, HALF_OPEN: 2}
+      description: "Current circuit state"
+      query: "circuit_breaker_state{tool_id='weather_api'}"
+
+  logging:
+    all_transitions:
+      format: "[CircuitBreaker] {tool_id}: {from_state} → {to_state} ({reason})"
+      level: "WARNING (CLOSED → OPEN), INFO (others)"
+      fields: ["tool_id", "from_state", "to_state", "reason", "timestamp"]
+
+references:
+  - type: "ADR"
+    id: "ADR-0034c"
+    title: "MCP Circuit Breaker Integration"
+    lines: "801-950 (state transitions)"
+
+  - type: "Contract"
+    id: "circuit_breaker_fsm_3_states.yml"
+    description: "3-state FSM definition"
+
+  - type: "Contract"
+    id: "failure_threshold_config.yml"
+    description: "Failure threshold for CLOSED → OPEN"
+
+  - type: "Contract"
+    id: "timeout_cooldown_config.yml"
+    description: "Timeout for OPEN → HALF_OPEN"
+
+  - type: "Research"
+    citation: "Martin Fowler, 'CircuitBreaker' pattern, 2014"
+    url: "https://martinfowler.com/bliki/CircuitBreaker.html"
+    topic: "State transition patterns"

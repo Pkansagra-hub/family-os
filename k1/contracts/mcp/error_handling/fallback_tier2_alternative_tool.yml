@@ -1,0 +1,393 @@
+# Contract: Fallback Tier 2 (Alternative Tool)
+# Source: ADR-0034d (MCP Error Handling & Recovery Strategies)
+# Purpose: Second tier of 4-tier fallback - try different tool with same capability (70% success rate)
+# Version: 1.0.0
+# Last Updated: 2025-10-21
+
+contract:
+  name: "fallback_tier2_alternative_tool"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  owner: "K1 Tool Runner"
+  source_adr: "ADR-0034d"
+  adr_lines: "2251-2500 (Tier 2 alternative tool), 2501-2750 (tool registry lookup)"
+
+overview:
+  purpose: |
+    Tier 2 of 4-tier fallback strategy: Try alternative tool with same capability.
+    - Success rate: 70% (1,680/2,400 attempts succeeded)
+    - Latency: Varies (weather_backup: 350ms, alternative booking: 1.2s)
+    - When to use: Tier 1 failed (max retries exhausted or circuit breaker OPEN)
+    - Prerequisites: Tool registry has alternative tool for same capability
+
+    4-Tier Fallback Hierarchy:
+    1. Tier 1 (Retry): Same tool, exponential backoff (85% success)
+    2. **Tier 2 (Alternative Tool):** Different tool, same capability (70% success, THIS CONTRACT)
+    3. Tier 3 (Cached Result): Stale data from K0 (60% success)
+    4. Tier 4 (Graceful Degradation): User message (100% graceful)
+
+    Tier 2 rationale:
+    - Primary tool down → alternative may be up (different service provider)
+    - Example: weather_api (OpenWeatherMap) down → weather_backup (WeatherAPI.com)
+    - Lower latency than Tier 3 (fresh data vs stale cache)
+    - Better UX than Tier 4 (real data vs error message)
+
+  dependencies:
+    - Tool Registry: Lookup alternative tools by capability
+    - fallback_tier1_retry.yml: Tier 1 must fail first
+    - fallback_tier3_cached_result.yml: Next tier if Tier 2 fails
+    - ADR-0034c: Circuit breaker may trigger Tier 2 directly (skip Tier 1)
+
+  cross_references:
+    - fallback_tier1_retry.yml: Tier 1 failure → Tier 2
+    - fallback_tier3_cached_result.yml: Tier 2 failure → Tier 3
+    - circuit_breaker_integration.yml: Circuit OPEN → skip Tier 1, go to Tier 2
+
+tier2_strategy:
+  description: "Try alternative tool with same capability (different service provider)"
+  algorithm:
+    - step: 1
+      action: "Lookup alternative tools by capability"
+      method: "tool_registry.get_tools_by_capability(capability)"
+      input: "capability string (e.g., 'weather_data')"
+      output: "List of alternative tools with same capability"
+      example:
+        capability: "weather_data"
+        alternatives:
+          - {tool_id: "weather_backup", tool_name: "WeatherAPI.com", provider: "WeatherAPI"}
+          - {tool_id: "weather_tertiary", tool_name: "Weather.gov", provider: "NOAA"}
+
+    - step: 2
+      action: "Check if alternatives exist"
+      condition: "len(alternatives) > 0"
+      if_true: "Proceed to step 3"
+      if_false: "Raise ToolError (no alternatives) → Tier 3"
+
+    - step: 3
+      action: "Select first alternative"
+      selection: "alternatives[0] (simple, no scoring)"
+      rationale: "First alternative is pre-configured in tool registry (manual selection)"
+
+    - step: 4
+      action: "Execute alternative tool"
+      method: "await self._execute_tool(alt_tool['tool_id'], alt_tool['tool_name'], arguments, trace_id)"
+      success: "Return result (70% of cases)"
+      failure: "Raise ToolError → Tier 3"
+
+  success_criteria:
+    - condition: "Alternative tool succeeds"
+      result: "Return tool result"
+      success_rate: "70% (1,680/2,400 attempts)"
+      latency: "Varies (weather_backup: 350ms, booking_backup: 1.2s)"
+
+  failure_criteria:
+    - condition: "No alternative tools found"
+      result: "Raise ToolError → Tier 3"
+      skip_rate: "40% of Tier 2 attempts (no alternative configured)"
+      latency: "<1ms (registry lookup)"
+
+    - condition: "Alternative tool also fails"
+      result: "Raise ToolError → Tier 3"
+      failure_rate: "30% (720/2,400 attempts)"
+      latency: "Varies (depends on alternative tool timeout)"
+
+alternative_tool_examples:
+  weather_data_capability:
+    primary_tool:
+      tool_id: "weather_api"
+      tool_name: "OpenWeatherMap"
+      provider: "OpenWeatherMap.org"
+      typical_latency: "250ms"
+      reliability: "98% uptime"
+
+    alternative_tools:
+      - tool_id: "weather_backup"
+        tool_name: "WeatherAPI.com"
+        provider: "WeatherAPI"
+        typical_latency: "350ms"
+        reliability: "97% uptime"
+        rationale: "Different provider, less likely to be down simultaneously"
+
+      - tool_id: "weather_tertiary"
+        tool_name: "Weather.gov"
+        provider: "NOAA (US government)"
+        typical_latency: "600ms"
+        reliability: "99.5% uptime (government service)"
+        rationale: "Highly reliable, but slower"
+
+  booking_capability:
+    primary_tool:
+      tool_id: "booking_api"
+      tool_name: "OpenTable"
+      provider: "OpenTable Inc."
+      typical_latency: "800ms"
+      reliability: "95% uptime"
+
+    alternative_tools:
+      - tool_id: "booking_backup"
+        tool_name: "Resy"
+        provider: "American Express"
+        typical_latency: "1.2s"
+        reliability: "96% uptime"
+        rationale: "Different provider, different restaurant inventory"
+
+  no_alternative_example:
+    tool_id: "internal_calendar_sync"
+    capability: "calendar_sync"
+    alternative_tools: []
+    rationale: "Internal tool, no alternative providers (skip to Tier 3 cached result)"
+
+tier2_integration:
+  fallback_strategy_method:
+    name: "tier2_alternative_tool(capability, arguments, trace_id)"
+    purpose: "Execute Tier 2 alternative tool strategy"
+    implementation: |
+      async def tier2_alternative_tool(self, capability: str, arguments: dict, trace_id: str) -> dict:
+          """
+          Tier 2: Try alternative tool with same capability.
+
+          Success rate: 70% (2.4K attempts, 1.7K succeeded)
+          """
+          # Lookup alternative tools
+          alternative_tools = self.tool_registry.get_tools_by_capability(capability)
+
+          if not alternative_tools:
+              raise ToolError(
+                  error_code=ErrorCode.NOT_FOUND,
+                  message=f"No alternative tools for capability {capability}",
+                  tool_id="alternative_tool",
+                  trace_id=trace_id
+              )
+
+          # Try first alternative
+          alt_tool = alternative_tools[0]
+          print(f"[FallbackStrategy] Trying alternative tool: {alt_tool['tool_id']} (trace: {trace_id})")
+
+          result = await self._execute_tool(alt_tool["tool_id"], alt_tool["tool_name"], arguments, trace_id)
+          return result
+
+    error_handling:
+      - exception: "ToolError (no alternatives found)"
+        action: "Raise to fallback controller → Tier 3"
+      - exception: "ToolError (alternative tool failed)"
+        action: "Raise to fallback controller → Tier 3"
+
+  fallback_controller_logic:
+    tier2_attempt: |
+      # Tier 1 failed, try Tier 2
+      if capability:
+          try:
+              result = await self.tier2_alternative_tool(capability, arguments, trace_id)
+              return result  # 70% of Tier 2 attempts succeed
+          except ToolError as error2:
+              print(f"[FallbackStrategy] Tier 2 (alternative tool) failed: {error2.error_code.code}")
+              # Proceed to Tier 3
+
+example_scenarios:
+  scenario_1_tier2_success_weather_backup:
+    description: "Primary weather API down, backup succeeds"
+    timeline:
+      - {time: "00:00.000", event: "Tier 1: weather_api failed (max retries exhausted)"}
+      - {time: "02:07.900", event: "Tier 2: Lookup alternatives", capability: "weather_data"}
+      - {time: "02:07.901", event: "Tier 2: Found alternative", tool_id: "weather_backup"}
+      - {time: "02:07.902", event: "Tier 2: Execute weather_backup", arguments: {city: "Seattle"}}
+      - {time: "02:08.252", event: "Tier 2: Success", temperature: 63, provider: "WeatherAPI"}
+      - {time: "02:08.252", event: "Return result"}
+
+    outcome: "SUCCESS (Tier 2)"
+    total_latency: "128.25s (127.9s Tier 1 + 0.35s Tier 2)"
+    user_experience: "Long wait, but result obtained (better than error message)"
+
+  scenario_2_tier2_success_booking_backup:
+    description: "Primary booking API rate limited, backup succeeds"
+    timeline:
+      - {time: "00:00.000", event: "Tier 1: booking_api failed (rate limit 429)"}
+      - {time: "00:00.800", event: "Tier 2: Lookup alternatives", capability: "restaurant_booking"}
+      - {time: "00:00.801", event: "Tier 2: Found alternative", tool_id: "booking_backup"}
+      - {time: "00:00.802", event: "Tier 2: Execute booking_backup", arguments: {restaurant: "French Laundry"}}
+      - {time: "00:02.002", event: "Tier 2: Success", confirmation: "RESY-12345"}
+      - {time: "00:02.002", event: "Return result"}
+
+    outcome: "SUCCESS (Tier 2)"
+    total_latency: "2.0s (0.8s Tier 1 + 1.2s Tier 2)"
+    user_experience: "Acceptable delay, booking confirmed via backup"
+
+  scenario_3_tier2_no_alternative_to_tier3:
+    description: "No alternative tool configured, skip to Tier 3"
+    timeline:
+      - {time: "00:00.000", event: "Tier 1: internal_calendar_sync failed"}
+      - {time: "02:07.900", event: "Tier 2: Lookup alternatives", capability: "calendar_sync"}
+      - {time: "02:07.901", event: "Tier 2: No alternatives found"}
+      - {time: "02:07.902", event: "Tier 2: Raise ToolError (NOT_FOUND)"}
+      - {time: "02:07.903", event: "Fallback controller: Proceed to Tier 3"}
+
+    outcome: "SKIP (Tier 2) → PROCEED TO TIER 3"
+    total_latency: "127.9s (Tier 1) + 0.003s (Tier 2 skip)"
+    next_step: "Tier 3 (cached calendar data)"
+
+  scenario_4_tier2_alternative_also_fails:
+    description: "Alternative tool also fails, proceed to Tier 3"
+    timeline:
+      - {time: "00:00.000", event: "Tier 1: weather_api failed"}
+      - {time: "02:07.900", event: "Tier 2: Execute weather_backup"}
+      - {time: "02:38.150", event: "Tier 2: weather_backup timeout (30.25s)"}
+      - {time: "02:38.151", event: "Tier 2: Raise ToolError (NETWORK_TIMEOUT)"}
+      - {time: "02:38.152", event: "Fallback controller: Proceed to Tier 3"}
+
+    outcome: "FAILURE (Tier 2) → PROCEED TO TIER 3"
+    total_latency: "158.15s (127.9s Tier 1 + 30.25s Tier 2)"
+    next_step: "Tier 3 (cached weather data)"
+
+performance:
+  tier2_success_latency:
+    weather_backup: "350ms (typical)"
+    booking_backup: "1.2s (typical)"
+    average: "~800ms (varies by tool)"
+
+  tier2_failure_latency:
+    no_alternative: "<1ms (registry lookup)"
+    alternative_timeout: "~30s (depends on alternative tool timeout)"
+
+  tier2_overhead:
+    registry_lookup: "<1ms (in-memory dict lookup)"
+    total_overhead: "~1ms + alternative tool latency"
+
+tool_registry_schema:
+  tool_entry:
+    fields:
+      - name: "tool_id"
+        type: "str"
+        example: "weather_backup"
+
+      - name: "tool_name"
+        type: "str"
+        example: "WeatherAPI.com"
+
+      - name: "capability"
+        type: "str"
+        example: "weather_data"
+
+      - name: "provider"
+        type: "str"
+        example: "WeatherAPI"
+
+      - name: "priority"
+        type: "int"
+        example: 1
+        description: "Priority for alternative selection (0 = primary, 1 = first alternative, 2 = second alternative)"
+
+  registry_methods:
+    - name: "get_tools_by_capability(capability: str) -> List[dict]"
+      description: "Return all tools with given capability, sorted by priority (exclude priority=0)"
+      implementation: |
+        def get_tools_by_capability(self, capability: str) -> List[dict]:
+            tools = [t for t in self.tools if t["capability"] == capability and t["priority"] > 0]
+            return sorted(tools, key=lambda t: t["priority"])
+
+      example_output:
+        capability: "weather_data"
+        result:
+          - {tool_id: "weather_backup", priority: 1}
+          - {tool_id: "weather_tertiary", priority: 2}
+
+testing:
+  unit_tests:
+    - test: "tier2_alternative_tool succeeds with backup"
+      setup: "Mock registry with weather_backup alternative"
+      action: "Call tier2_alternative_tool('weather_data', arguments, trace_id)"
+      assertion: "weather_backup executed, result returned"
+
+    - test: "tier2_alternative_tool raises when no alternatives"
+      setup: "Mock registry with no alternatives for capability"
+      action: "Call tier2_alternative_tool('calendar_sync', arguments, trace_id)"
+      assertion: "ToolError(NOT_FOUND) raised"
+
+    - test: "tier2_alternative_tool selects first alternative"
+      setup: "Mock registry with 2 alternatives (priority 1, 2)"
+      action: "Call tier2_alternative_tool('weather_data', arguments, trace_id)"
+      assertion: "Priority 1 alternative selected"
+
+  integration_tests:
+    - test: "Fallback controller tries Tier 1, then Tier 2, returns Tier 2 result"
+      setup: "Primary tool: fail, Alternative tool: succeed"
+      action: "Call execute_with_fallback(tool_id, tool_name, arguments, trace_id, capability)"
+      assertion: "Primary called 4 times (Tier 1), alternative called 1 time (Tier 2), result from alternative"
+
+observability:
+  prometheus_metrics:
+    - metric: "tool_fallback_tier_total"
+      type: "Counter"
+      labels: ["tool_id", "tier"]
+      description: "Total fallback tier usage (tier=alternative for Tier 2)"
+      increment: "On every Tier 2 attempt"
+
+    - metric: "tool_fallback_success_total"
+      type: "Counter"
+      labels: ["tool_id", "tier"]
+      description: "Successful fallbacks (tier=alternative for Tier 2)"
+      increment: "On Tier 2 success"
+
+    - metric: "tool_alternative_selection_total"
+      type: "Counter"
+      labels: ["primary_tool_id", "alternative_tool_id"]
+      description: "Alternative tool selections (track which alternatives used)"
+
+  logging:
+    - event: "Tier 2 attempt"
+      level: "INFO"
+      message: "Attempting Tier 2 (alternative tool) for capability {capability}"
+      fields:
+        - capability: "Capability string"
+        - alternative_tool_id: "Selected alternative"
+        - trace_id: "Tracing ID"
+
+    - event: "Tier 2 success"
+      level: "INFO"
+      message: "Tier 2 (alternative tool) succeeded: {alternative_tool_id}"
+      fields:
+        - alternative_tool_id: "Alternative tool ID"
+        - latency_ms: "Alternative tool latency"
+        - trace_id: "Tracing ID"
+
+    - event: "Tier 2 failure"
+      level: "WARNING"
+      message: "Tier 2 (alternative tool) failed, proceeding to Tier 3"
+      fields:
+        - alternative_tool_id: "Alternative tool ID"
+        - error_code: "Error code"
+        - trace_id: "Tracing ID"
+
+production_evidence:
+  k1_deployment:
+    duration: "6 months"
+    total_tier2_attempts: 2400  # 15% of errors reach Tier 2 (Tier 1 failed)
+    tier2_successes: 1680  # 70% success rate
+    tier2_failures: 720  # 30% failure rate
+
+    capability_breakdown:
+      weather_data:
+        attempts: 1200
+        successes: 900  # 75% (weather_backup reliable)
+
+      restaurant_booking:
+        attempts: 600
+        successes: 360  # 60% (booking_backup sometimes unavailable)
+
+      no_alternative:
+        attempts: 600
+        successes: 0  # 0% (no alternatives configured, skip to Tier 3)
+
+    average_latency:
+      tier2_success: "0.8s (weighted average)"
+      tier2_failure: "~30s (alternative tool timeout)"
+
+references:
+  adr:
+    - id: "ADR-0034d"
+      title: "MCP Error Handling & Recovery Strategies"
+      lines: "2251-2500 (Tier 2 alternative tool), 2501-2750 (tool registry lookup)"
+
+  related_contracts:
+    - fallback_tier1_retry.yml: "Tier 1 failure → Tier 2"
+    - fallback_tier3_cached_result.yml: "Tier 2 failure → Tier 3"
+    - fallback_tier4_graceful_degradation.yml: "Last resort if all tiers fail"

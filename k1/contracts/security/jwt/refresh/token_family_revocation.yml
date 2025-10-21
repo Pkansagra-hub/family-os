@@ -1,0 +1,533 @@
+---
+# ADR-0037: Token Family Revocation Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Token Family Revocation Contract
+# Defines family-based token revocation for security incidents
+
+contract:
+  name: token_family_revocation
+  version: "1.0.0"
+  description: "Family-based refresh token revocation for security"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "1.5 days"
+
+# Token Family Concept
+token_family_concept:
+  description: "Group tokens by family for collective management"
+  family_id: "UUID identifying related tokens"
+  inheritance: "New tokens inherit family from parent"
+  scope: "All tokens from same login session lineage"
+
+  family_properties:
+    creation: "Established on initial authentication"
+    membership: "All refresh tokens in rotation chain"
+    lifecycle: "Exists until all tokens expired/revoked"
+    isolation: "Families independent between users"
+
+  security_benefits:
+    - "Compromise one token = revoke family"
+    - "Session-level security controls"
+    - "Forward secrecy through rotation"
+    - "Granular revocation scope"
+
+# Revocation Triggers
+revocation_triggers:
+  security_incidents:
+    reuse_attack_detected:
+      description: "Refresh token reuse attempt"
+      severity: "CRITICAL"
+      immediate_action: "Revoke entire family"
+      notification: "Security alert"
+
+    suspicious_activity:
+      description: "Anomalous token usage patterns"
+      severity: "HIGH"
+      immediate_action: "Revoke family"
+      notification: "User warning"
+
+    compromised_credentials:
+      description: "Password change or reset"
+      severity: "HIGH"
+      immediate_action: "Revoke all user families"
+      notification: "Security notification"
+
+  user_actions:
+    logout:
+      description: "User explicitly logs out"
+      severity: "MEDIUM"
+      immediate_action: "Revoke session family"
+      notification: "Logout confirmation"
+
+    account_deactivation:
+      description: "Account disabled/deleted"
+      severity: "HIGH"
+      immediate_action: "Revoke all user families"
+      notification: "Account status change"
+
+  administrative_actions:
+    manual_revocation:
+      description: "Administrator revokes tokens"
+      severity: "HIGH"
+      immediate_action: "Revoke specified family"
+      notification: "Administrative action"
+
+    policy_violation:
+      description: "Security policy violation detected"
+      severity: "HIGH"
+      immediate_action: "Revoke family"
+      notification: "Policy violation alert"
+
+# Revocation Process
+revocation_process:
+  identify_family:
+    description: "Determine family to revoke"
+    operations:
+      - "Extract family_id from token"
+      - "Validate family exists"
+      - "Get all active family tokens"
+    error_handling: "Log if family not found"
+
+  collect_active_tokens:
+    description: "Find all active tokens in family"
+    operations:
+      - "Query tokens by family_id"
+      - "Filter active/unexpired tokens"
+      - "Collect token identifiers"
+    performance: "Efficient indexed queries"
+
+  revoke_tokens:
+    description: "Revoke all collected tokens"
+    operations:
+      - "Delete tokens from storage"
+      - "Update revocation metadata"
+      - "Log individual revocations"
+    atomicity: "Best effort (continue on failures)"
+
+  update_family_status:
+    description: "Mark family as revoked"
+    operations:
+      - "Set family revocation timestamp"
+      - "Update family metadata"
+      - "Prevent new token issuance"
+    persistence: "Durable storage"
+
+  notify_interested_parties:
+    description: "Notify systems of revocation"
+    notifications:
+      - "User notification (configurable)"
+      - "Security monitoring systems"
+      - "Audit logging systems"
+    async_processing: "Non-blocking notifications"
+
+# Family Management
+family_management:
+  family_creation:
+    description: "Create new token family"
+    operations:
+      - "Generate unique family_id"
+      - "Associate with user/session"
+      - "Initialize family metadata"
+    uniqueness: "Globally unique UUIDs"
+
+  family_tracking:
+    description: "Track family state and membership"
+    metadata:
+      - "family_id: Unique identifier"
+      - "user_id: Owning user"
+      - "created_at: Creation timestamp"
+      - "revoked_at: Revocation timestamp (optional)"
+      - "active_tokens: Current count"
+      - "total_tokens: Historical count"
+
+  family_cleanup:
+    description: "Clean up expired families"
+    triggers:
+      - "All tokens expired"
+      - "Family older than retention period"
+    operations:
+      - "Remove family metadata"
+      - "Archive revocation history"
+    retention: "90 days for security audit"
+
+# Performance Considerations
+performance_considerations:
+  revocation_latency:
+    target: "<500ms"
+    breakdown:
+      - "Family identification: <50ms"
+      - "Token collection: <200ms"
+      - "Bulk revocation: <200ms"
+      - "Notification: <50ms"
+
+  scalability:
+    large_families:
+      description: "Handle families with many tokens"
+      optimization: "Bulk operations, pagination"
+      limits: "Max 1000 tokens per family"
+
+    concurrent_revocations:
+      description: "Handle multiple simultaneous revocations"
+      synchronization: "Family-level locking"
+      queuing: "Serialize conflicting operations"
+
+  storage_efficiency:
+    indexing: "family_id indexed for fast queries"
+    batch_operations: "Bulk token deletion"
+    cleanup: "Automatic expired token removal"
+
+# Error Handling
+error_handling:
+  family_not_found:
+    error: "FamilyNotFound"
+    handling: "Log warning, continue with individual revocation"
+    logging: "Info level"
+
+  partial_revocation_failure:
+    error: "PartialRevocationFailure"
+    handling: "Continue with remaining tokens, log failures"
+    logging: "Error level"
+    recovery: "Retry failed operations"
+
+  notification_failure:
+    error: "NotificationFailure"
+    handling: "Log error, don't fail revocation"
+    logging: "Warning level"
+    retry: "Async retry mechanism"
+
+  concurrent_modification:
+    error: "ConcurrentModification"
+    handling: "Retry with backoff, or fail gracefully"
+    logging: "Warning level"
+
+# Security Auditing
+security_auditing:
+  revocation_events:
+    audit_trail:
+      - "Revocation trigger"
+      - "Family identifier"
+      - "Tokens revoked count"
+      - "Initiating user/system"
+      - "Timestamp and reason"
+    retention: "7 years for security events"
+
+  access_logging:
+    logged_operations:
+      - "Family creation"
+      - "Token addition to family"
+      - "Revocation execution"
+      - "Notification sending"
+    compliance: "GDPR, SOX, security standards"
+
+  monitoring_alerts:
+    security_events:
+      - "High revocation rate"
+      - "Failed revocations"
+      - "Unauthorized revocation attempts"
+    alerting: "Immediate security alerts"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "uuid = { version = \"1.0\", features = [\"v4\"] }"
+      - "chrono = \"0.4\""
+      - "prometheus = \"0.13\""
+
+    code_example: |
+      use uuid::Uuid;
+      use serde::{Deserialize, Serialize};
+
+      #[derive(Debug, Serialize, Deserialize)]
+      pub struct FamilyMetadata {
+          pub family_id: String,
+          pub user_id: String,
+          pub created_at: i64,
+          pub revoked_at: Option<i64>,
+          pub active_tokens: u32,
+          pub total_tokens: u32,
+      }
+
+      #[derive(Debug)]
+      pub enum RevocationTrigger {
+          SecurityIncident { reason: String },
+          UserLogout,
+          AccountDeactivation,
+          Administrative { admin_id: String },
+      }
+
+      #[derive(Debug)]
+      pub struct RevocationResult {
+          pub family_id: String,
+          pub tokens_revoked: u32,
+          pub success: bool,
+          pub errors: Vec<String>,
+      }
+
+      pub struct FamilyRevocator {
+          token_store: Arc<dyn RefreshTokenStore>,
+          family_store: Arc<dyn FamilyStore>,
+          notifier: Arc<dyn NotificationService>,
+      }
+
+      impl FamilyRevocator {
+          pub async fn revoke_family(
+              &self,
+              family_id: &str,
+              trigger: RevocationTrigger,
+          ) -> Result<RevocationResult, RevocationError> {
+              // Get family metadata
+              let family = self.family_store
+                  .get_family(family_id)
+                  .await?
+                  .ok_or(RevocationError::FamilyNotFound)?;
+
+              // Check if already revoked
+              if family.revoked_at.is_some() {
+                  return Ok(RevocationResult {
+                      family_id: family_id.to_string(),
+                      tokens_revoked: 0,
+                      success: true,
+                      errors: vec![],
+                  });
+              }
+
+              // Find all active tokens in family
+              let active_tokens = self.token_store
+                  .get_family_tokens(family_id, true)
+                  .await?;
+
+              // Revoke all tokens
+              let mut revoked_count = 0;
+              let mut errors = Vec::new();
+
+              for token_id in active_tokens {
+                  match self.token_store.revoke_token(&token_id).await {
+                      Ok(_) => revoked_count += 1,
+                      Err(e) => errors.push(format!("Failed to revoke {}: {}", token_id, e)),
+                  }
+              }
+
+              // Update family status
+              let now = chrono::Utc::now().timestamp();
+              self.family_store
+                  .update_family_revoked_at(family_id, now)
+                  .await?;
+
+              // Log revocation event
+              tracing::info!(
+                  family_id = %family_id,
+                  user_id = %family.user_id,
+                  tokens_revoked = %revoked_count,
+                  trigger = ?trigger,
+                  "Token family revoked"
+              );
+
+              // Send notifications
+              if let Err(e) = self.notifier
+                  .notify_family_revocation(&family.user_id, &trigger)
+                  .await
+              {
+                  tracing::warn!("Failed to send revocation notification: {}", e);
+              }
+
+              Ok(RevocationResult {
+                  family_id: family_id.to_string(),
+                  tokens_revoked: revoked_count,
+                  success: errors.is_empty(),
+                  errors,
+              })
+          }
+
+          pub async fn create_family(&self, user_id: &str) -> Result<String, RevocationError> {
+              let family_id = Uuid::new_v4().to_string();
+              let now = chrono::Utc::now().timestamp();
+
+              let family = FamilyMetadata {
+                  family_id: family_id.clone(),
+                  user_id: user_id.to_string(),
+                  created_at: now,
+                  revoked_at: None,
+                  active_tokens: 0,
+                  total_tokens: 0,
+              };
+
+              self.family_store.store_family(family).await?;
+              Ok(family_id)
+          }
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+      - "uuid"
+      - "asyncio"
+
+    code_example: |
+      from pydantic import BaseModel
+      from enum import Enum
+      from typing import Optional, List
+      import uuid
+      import time
+
+      class RevocationTrigger(str, Enum):
+          SECURITY_INCIDENT = "security_incident"
+          USER_LOGOUT = "user_logout"
+          ACCOUNT_DEACTIVATION = "account_deactivation"
+          ADMINISTRATIVE = "administrative"
+
+      class FamilyMetadata(BaseModel):
+          family_id: str
+          user_id: str
+          created_at: int
+          revoked_at: Optional[int] = None
+          active_tokens: int = 0
+          total_tokens: int = 0
+
+      class RevocationResult(BaseModel):
+          family_id: str
+          tokens_revoked: int
+          success: bool
+          errors: List[str]
+
+      class FamilyRevocator:
+          def __init__(self, token_store, family_store, notifier):
+              self.token_store = token_store
+              self.family_store = family_store
+              self.notifier = notifier
+
+          async def revoke_family(
+              self,
+              family_id: str,
+              trigger: RevocationTrigger
+          ) -> RevocationResult:
+              """Revoke all tokens in a family"""
+              # Get family metadata
+              family = await self.family_store.get_family(family_id)
+              if not family:
+                  raise RevocationError("Family not found")
+
+              # Check if already revoked
+              if family.revoked_at:
+                  return RevocationResult(
+                      family_id=family_id,
+                      tokens_revoked=0,
+                      success=True,
+                      errors=[]
+                  )
+
+              # Find active tokens in family
+              active_tokens = await self.token_store.get_family_tokens(family_id, active_only=True)
+
+              # Revoke all tokens
+              revoked_count = 0
+              errors = []
+
+              for token_id in active_tokens:
+                  try:
+                      await self.token_store.revoke_token(token_id)
+                      revoked_count += 1
+                  except Exception as e:
+                      errors.append(f"Failed to revoke {token_id}: {e}")
+
+              # Update family status
+              now = int(time.time())
+              await self.family_store.update_family_revoked_at(family_id, now)
+
+              # Log event
+              import logging
+              logging.info(
+                  f"Token family revoked: family={family_id}, user={family.user_id}, "
+                  f"tokens_revoked={revoked_count}, trigger={trigger}"
+              )
+
+              # Send notifications
+              try:
+                  await self.notifier.notify_family_revocation(family.user_id, trigger)
+              except Exception as e:
+                  logging.warning(f"Failed to send revocation notification: {e}")
+
+              return RevocationResult(
+                  family_id=family_id,
+                  tokens_revoked=revoked_count,
+                  success=len(errors) == 0,
+                  errors=errors
+              )
+
+          async def create_family(self, user_id: str) -> str:
+              """Create a new token family"""
+              family_id = str(uuid.uuid4())
+              now = int(time.time())
+
+              family = FamilyMetadata(
+                  family_id=family_id,
+                  user_id=user_id,
+                  created_at=now
+              )
+
+              await self.family_store.store_family(family)
+              return family_id
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Family revocation logic"
+    - "Token collection"
+    - "Error handling"
+    - "Notification sending"
+
+  integration_tests:
+    - "Full revocation workflow"
+    - "Multi-token family handling"
+    - "Concurrent revocations"
+    - "Notification delivery"
+
+  security_tests:
+    - "Unauthorized revocation attempts"
+    - "Family isolation"
+    - "Audit trail integrity"
+    - "Notification security"
+
+  performance_tests:
+    - "Revocation latency"
+    - "Large family handling"
+    - "Concurrent operations"
+    - "Storage efficiency"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "refresh_token_store.yml: Provides token storage"
+    - "single_use_rotation.yml: Creates family relationships"
+  downstream:
+    - "reuse_detection.yml: Triggers family revocation"
+    - "logout_flow.yml: Uses family revocation"
+    - "observability.yml: Monitors revocation metrics"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Families revoked completely"
+    - "Active tokens invalidated"
+    - "Notifications sent"
+    - "Audit trail maintained"
+
+  performance:
+    - "Revocation <500ms"
+    - "Scalable to large families"
+    - "Efficient storage operations"
+
+  security:
+    - "Family isolation maintained"
+    - "Unauthorized access prevented"
+    - "Security events logged"
+
+  reliability:
+    - "Partial failure handling"
+    - "Atomic operations where possible"
+    - "Monitoring and alerting"

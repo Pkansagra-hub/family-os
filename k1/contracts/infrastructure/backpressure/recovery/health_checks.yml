@@ -1,0 +1,454 @@
+classes:
+  - name: HealthChecker
+    description: Validates system health during recovery with multiple metric checks and trend analysis
+    research: ADR-0039c (backpressure recovery), health check patterns, system monitoring
+    performance_budget: <5s total validation time, <1s individual metric checks, <100ms trend analysis
+    reliability_properties:
+      - multi_metric_validation: Checks queue depth, latency, memory, and error rates
+      - trend_analysis: Validates metrics are stable or improving, not just within thresholds
+      - configurable_criteria: Different health criteria for each tier transition
+      - failure_tolerance: Allows minor fluctuations but catches significant degradation
+    methods:
+      - name: check_health
+        description: Comprehensive health check for recovery validation
+        parameters:
+          - name: target_tier
+            type: BackpressureTier
+            description: Target tier for health validation
+        returns:
+          type: Result<HealthStatus, HealthCheckError>
+          description: Health status with detailed metrics or error
+        implementation:
+          rust: |
+            use std::time::{Duration, Instant};
+            use async_trait::async_trait;
+
+            #[async_trait]
+            pub trait HealthChecker: Send + Sync {
+                async fn check_health(&self) -> Result<HealthStatus, HealthCheckError>;
+                async fn check_health_for_tier(&self, target_tier: BackpressureTier) -> Result<HealthStatus, HealthCheckError>;
+            }
+
+            pub struct SystemHealthChecker {
+                metrics_collector: Arc<dyn MetricsCollector>,
+                health_history: Arc<RwLock<Vec<HealthSnapshot>>>,
+                check_timeout: Duration,
+            }
+
+            impl SystemHealthChecker {
+                pub fn new(metrics_collector: Arc<dyn MetricsCollector>) -> Self {
+                    Self {
+                        metrics_collector,
+                        health_history: Arc::new(RwLock::new(Vec::with_capacity(100))),
+                        check_timeout: Duration::from_secs(5),
+                    }
+                }
+            }
+
+            #[async_trait]
+            impl HealthChecker for SystemHealthChecker {
+                async fn check_health(&self) -> Result<HealthStatus, HealthCheckError> {
+                    self.check_health_for_tier(BackpressureTier::NORMAL).await
+                }
+
+                async fn check_health_for_tier(&self, target_tier: BackpressureTier) -> Result<HealthStatus, HealthCheckError> {
+                    let start_time = Instant::now();
+
+                    // Collect current metrics
+                    let metrics = tokio::time::timeout(
+                        self.check_timeout,
+                        self.metrics_collector.collect_metrics()
+                    ).await.map_err(|_| HealthCheckError::Timeout)??;
+
+                    // Create health snapshot
+                    let snapshot = HealthSnapshot {
+                        timestamp: Instant::now(),
+                        queue_depth: metrics.queue_depth,
+                        e2e_latency_ms: metrics.e2e_latency_ms,
+                        memory_mb: metrics.memory_mb,
+                        cpu_percent: metrics.cpu_percent,
+                        active_turns: metrics.active_turns,
+                        error_rate: metrics.error_rate,
+                        thermal_status: metrics.thermal_status,
+                    };
+
+                    // Store in history
+                    {
+                        let mut history = self.health_history.write().await;
+                        history.push(snapshot.clone());
+                        if history.len() > 100 {
+                            history.remove(0); // Keep last 100 snapshots
+                        }
+                    }
+
+                    // Analyze health based on target tier
+                    let health_status = self.analyze_health_for_tier(&snapshot, target_tier, &metrics).await;
+
+                    let check_duration = start_time.elapsed();
+                    if check_duration > Duration::from_secs(5) {
+                        tracing::warn!(
+                            duration_ms = check_duration.as_millis(),
+                            "Health check exceeded 5s timeout"
+                        );
+                    }
+
+                    Ok(health_status)
+                }
+            }
+
+            impl SystemHealthChecker {
+                async fn analyze_health_for_tier(
+                    &self,
+                    snapshot: &HealthSnapshot,
+                    target_tier: BackpressureTier,
+                    metrics: &SystemMetrics,
+                ) -> HealthStatus {
+                    let mut issues = Vec::new();
+                    let mut is_healthy = true;
+
+                    // Check criteria based on target tier
+                    match target_tier {
+                        BackpressureTier::TIER_2_CANCEL_BG => {
+                            // From Tier 3: queue < 180, memory < 432MB, thermal WARM, error_rate < 5%
+                            if snapshot.queue_depth >= 180 {
+                                issues.push(HealthIssue::QueueTooHigh(snapshot.queue_depth));
+                                is_healthy = false;
+                            }
+                            if snapshot.memory_mb >= 432.0 {
+                                issues.push(HealthIssue::MemoryTooHigh(snapshot.memory_mb));
+                                is_healthy = false;
+                            }
+                            if snapshot.thermal_status != ThermalStatus::Warm {
+                                issues.push(HealthIssue::ThermalTooHigh(snapshot.thermal_status));
+                                is_healthy = false;
+                            }
+                            if snapshot.error_rate >= 0.05 {
+                                issues.push(HealthIssue::ErrorRateTooHigh(snapshot.error_rate));
+                                is_healthy = false;
+                            }
+                        }
+                        BackpressureTier::TIER_1_REJECT_NEW => {
+                            // From Tier 2: queue < 90, memory < 405MB, CPU < 77%, latency < 2250ms
+                            if snapshot.queue_depth >= 90 {
+                                issues.push(HealthIssue::QueueTooHigh(snapshot.queue_depth));
+                                is_healthy = false;
+                            }
+                            if snapshot.memory_mb >= 405.0 {
+                                issues.push(HealthIssue::MemoryTooHigh(snapshot.memory_mb));
+                                is_healthy = false;
+                            }
+                            if snapshot.cpu_percent >= 77.0 {
+                                issues.push(HealthIssue::CpuTooHigh(snapshot.cpu_percent));
+                                is_healthy = false;
+                            }
+                            if snapshot.e2e_latency_ms >= 2250.0 {
+                                issues.push(HealthIssue::LatencyTooHigh(snapshot.e2e_latency_ms));
+                                is_healthy = false;
+                            }
+                        }
+                        BackpressureTier::NORMAL => {
+                            // From Tier 1: queue < 45, latency < 2250ms, active_turns < 72, error_rate < 1%
+                            if snapshot.queue_depth >= 45 {
+                                issues.push(HealthIssue::QueueTooHigh(snapshot.queue_depth));
+                                is_healthy = false;
+                            }
+                            if snapshot.e2e_latency_ms >= 2250.0 {
+                                issues.push(HealthIssue::LatencyTooHigh(snapshot.e2e_latency_ms));
+                                is_healthy = false;
+                            }
+                            if snapshot.active_turns >= 72 {
+                                issues.push(HealthIssue::ActiveTurnsTooHigh(snapshot.active_turns));
+                                is_healthy = false;
+                            }
+                            if snapshot.error_rate >= 0.01 {
+                                issues.push(HealthIssue::ErrorRateTooHigh(snapshot.error_rate));
+                                is_healthy = false;
+                            }
+                        }
+                        _ => {} // Other tiers don't have specific criteria
+                    }
+
+                    // Check for improving trends
+                    let trend_healthy = self.check_improving_trends().await;
+                    if !trend_healthy {
+                        issues.push(HealthIssue::DegradingTrends);
+                        is_healthy = false;
+                    }
+
+                    HealthStatus {
+                        is_healthy,
+                        issues,
+                        snapshot: snapshot.clone(),
+                        check_duration: Instant::now().duration_since(snapshot.timestamp),
+                    }
+                }
+
+                async fn check_improving_trends(&self) -> bool {
+                    let history = self.health_history.read().await;
+
+                    if history.len() < 3 {
+                        return true; // Not enough data for trend analysis
+                    }
+
+                    // Check last 3 snapshots for improving trends
+                    let recent = &history[history.len().saturating_sub(3)..];
+
+                    // Queue depth should be stable or decreasing
+                    let queue_trend = Self::calculate_trend(recent.iter().map(|s| s.queue_depth as f64).collect());
+                    if queue_trend > 0.1 { // Increasing by more than 10%
+                        return false;
+                    }
+
+                    // Latency should be stable or decreasing
+                    let latency_trend = Self::calculate_trend(recent.iter().map(|s| s.e2e_latency_ms).collect());
+                    if latency_trend > 0.1 { // Increasing by more than 10%
+                        return false;
+                    }
+
+                    // Memory should be stable
+                    let memory_trend = Self::calculate_trend(recent.iter().map(|s| s.memory_mb).collect());
+                    if memory_trend.abs() > 0.05 { // More than 5% change
+                        return false;
+                    }
+
+                    true
+                }
+
+                fn calculate_trend(values: Vec<f64>) -> f64 {
+                    if values.len() < 2 {
+                        return 0.0;
+                    }
+
+                    // Simple linear trend: (last - first) / first
+                    let first = values[0];
+                    let last = values[values.len() - 1];
+
+                    if first == 0.0 {
+                        return 0.0;
+                    }
+
+                    (last - first) / first
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import List, Optional, Any, Dict
+            import asyncio
+            import time
+            import logging
+            import statistics
+
+            class HealthChecker:
+                """
+                Validates system health during backpressure recovery.
+
+                Performs comprehensive health checks with trend analysis
+                to ensure system stability before tier transitions.
+                """
+
+                def __init__(self, metrics_collector: Any):
+                    self.logger = logging.getLogger(__name__)
+                    self.metrics_collector = metrics_collector
+                    self.health_history: List[Dict] = []
+                    self.max_history = 100
+                    self.check_timeout = 5.0
+
+                async def check_health(self) -> 'HealthStatus':
+                    """Comprehensive health check for recovery validation"""
+                    return await self.check_health_for_tier(BackpressureTier.NORMAL)
+
+                async def check_health_for_tier(self, target_tier: Any) -> 'HealthStatus':
+                    """Health check with tier-specific criteria"""
+                    start_time = time.time()
+
+                    try:
+                        # Collect current metrics with timeout
+                        metrics = await asyncio.wait_for(
+                            self.metrics_collector.collect_metrics(),
+                            timeout=self.check_timeout
+                        )
+                    except asyncio.TimeoutError:
+                        raise HealthCheckError("Health check timeout")
+                    except Exception as e:
+                        raise HealthCheckError(f"Metrics collection failed: {e}")
+
+                    # Create health snapshot
+                    snapshot = {
+                        'timestamp': time.time(),
+                        'queue_depth': metrics.get('queue_depth', 0),
+                        'e2e_latency_ms': metrics.get('e2e_latency_ms', 0.0),
+                        'memory_mb': metrics.get('memory_mb', 0.0),
+                        'cpu_percent': metrics.get('cpu_percent', 0.0),
+                        'active_turns': metrics.get('active_turns', 0),
+                        'error_rate': metrics.get('error_rate', 0.0),
+                        'thermal_status': metrics.get('thermal_status', 'UNKNOWN'),
+                    }
+
+                    # Store in history
+                    self.health_history.append(snapshot)
+                    if len(self.health_history) > self.max_history:
+                        self.health_history.pop(0)
+
+                    # Analyze health based on target tier
+                    health_status = await self._analyze_health_for_tier(snapshot, target_tier, metrics)
+
+                    check_duration = time.time() - start_time
+                    if check_duration > 5.0:
+                        self.logger.warning(
+                            f"Health check exceeded 5s timeout: {check_duration:.2f}s",
+                            extra={'check_duration': check_duration}
+                        )
+
+                    return health_status
+
+                async def _analyze_health_for_tier(self, snapshot: Dict, target_tier: Any, metrics: Dict) -> 'HealthStatus':
+                    """Analyze health with tier-specific criteria"""
+                    issues = []
+                    is_healthy = True
+
+                    # Check criteria based on target tier
+                    if target_tier == BackpressureTier.TIER_2_CANCEL_BG:
+                        # From Tier 3: queue < 180, memory < 432MB, thermal WARM, error_rate < 5%
+                        if snapshot['queue_depth'] >= 180:
+                            issues.append(f"Queue depth too high: {snapshot['queue_depth']}")
+                            is_healthy = False
+                        if snapshot['memory_mb'] >= 432.0:
+                            issues.append(f"Memory usage too high: {snapshot['memory_mb']:.1f}MB")
+                            is_healthy = False
+                        if snapshot['thermal_status'] != 'WARM':
+                            issues.append(f"Thermal status too high: {snapshot['thermal_status']}")
+                            is_healthy = False
+                        if snapshot['error_rate'] >= 0.05:
+                            issues.append(f"Error rate too high: {snapshot['error_rate']:.3f}")
+                            is_healthy = False
+
+                    elif target_tier == BackpressureTier.TIER_1_REJECT_NEW:
+                        # From Tier 2: queue < 90, memory < 405MB, CPU < 77%, latency < 2250ms
+                        if snapshot['queue_depth'] >= 90:
+                            issues.append(f"Queue depth too high: {snapshot['queue_depth']}")
+                            is_healthy = False
+                        if snapshot['memory_mb'] >= 405.0:
+                            issues.append(f"Memory usage too high: {snapshot['memory_mb']:.1f}MB")
+                            is_healthy = False
+                        if snapshot['cpu_percent'] >= 77.0:
+                            issues.append(f"CPU usage too high: {snapshot['cpu_percent']:.1f}%")
+                            is_healthy = False
+                        if snapshot['e2e_latency_ms'] >= 2250.0:
+                            issues.append(f"Latency too high: {snapshot['e2e_latency_ms']:.1f}ms")
+                            is_healthy = False
+
+                    elif target_tier == BackpressureTier.NORMAL:
+                        # From Tier 1: queue < 45, latency < 2250ms, active_turns < 72, error_rate < 1%
+                        if snapshot['queue_depth'] >= 45:
+                            issues.append(f"Queue depth too high: {snapshot['queue_depth']}")
+                            is_healthy = False
+                        if snapshot['e2e_latency_ms'] >= 2250.0:
+                            issues.append(f"Latency too high: {snapshot['e2e_latency_ms']:.1f}ms")
+                            is_healthy = False
+                        if snapshot['active_turns'] >= 72:
+                            issues.append(f"Active turns too high: {snapshot['active_turns']}")
+                            is_healthy = False
+                        if snapshot['error_rate'] >= 0.01:
+                            issues.append(f"Error rate too high: {snapshot['error_rate']:.3f}")
+                            is_healthy = False
+
+                    # Check for improving trends
+                    trend_healthy = self._check_improving_trends()
+                    if not trend_healthy:
+                        issues.append("Metrics trending in wrong direction")
+                        is_healthy = False
+
+                    return HealthStatus(
+                        is_healthy=is_healthy,
+                        issues=issues,
+                        snapshot=snapshot,
+                        check_duration=time.time() - snapshot['timestamp']
+                    )
+
+                def _check_improving_trends(self) -> bool:
+                    """Check if recent metrics are stable or improving"""
+                    if len(self.health_history) < 3:
+                        return True  # Not enough data
+
+                    # Check last 3 snapshots
+                    recent = self.health_history[-3:]
+
+                    # Queue depth should be stable or decreasing
+                    queue_values = [s['queue_depth'] for s in recent]
+                    if len(queue_values) >= 2:
+                        queue_trend = self._calculate_trend(queue_values)
+                        if queue_trend > 0.1:  # Increasing by more than 10%
+                            return False
+
+                    # Latency should be stable or decreasing
+                    latency_values = [s['e2e_latency_ms'] for s in recent]
+                    if len(latency_values) >= 2:
+                        latency_trend = self._calculate_trend(latency_values)
+                        if latency_trend > 0.1:  # Increasing by more than 10%
+                            return False
+
+                    # Memory should be stable
+                    memory_values = [s['memory_mb'] for s in recent]
+                    if len(memory_values) >= 2:
+                        memory_trend = self._calculate_trend(memory_values)
+                        if abs(memory_trend) > 0.05:  # More than 5% change
+                            return False
+
+                    return True
+
+                def _calculate_trend(self, values: List[float]) -> float:
+                    """Calculate simple linear trend"""
+                    if len(values) < 2:
+                        return 0.0
+
+                    first = values[0]
+                    last = values[-1]
+
+                    if first == 0.0:
+                        return 0.0
+
+                    return (last - first) / first
+
+health_check_criteria:
+  - tier: TIER_2_CANCEL_BG
+    queue_depth_max: 180
+    memory_mb_max: 432
+    thermal_status_required: WARM
+    error_rate_max: 0.05
+    description: Recovery from emergency tier requires significant improvement
+  - tier: TIER_1_REJECT_NEW
+    queue_depth_max: 90
+    memory_mb_max: 405
+    cpu_percent_max: 77
+    latency_ms_max: 2250
+    description: Recovery to reject-new tier requires moderate improvement
+  - tier: NORMAL
+    queue_depth_max: 45
+    latency_ms_max: 2250
+    active_turns_max: 72
+    error_rate_max: 0.01
+    description: Full recovery to normal requires all metrics healthy
+
+trend_analysis:
+  - metric: queue_depth
+    acceptable_trend: "<= 10% increase"
+    description: Queue should not be growing during recovery
+  - metric: e2e_latency_ms
+    acceptable_trend: "<= 10% increase"
+    description: Latency should be stable or improving
+  - metric: memory_mb
+    acceptable_trend: "<= 5% change"
+    description: Memory usage should be stable
+  - metric: error_rate
+    acceptable_trend: "any (checked in thresholds)"
+    description: Error rate checked against absolute thresholds
+
+validation_window:
+  - duration_seconds: 5
+    description: Individual health checks complete within 5 seconds
+  - sustained_checks: "6-30"
+    description: Tier transitions require 6-30 sustained healthy checks
+  - history_window: 100
+    description: Keep last 100 health snapshots for trend analysis
+  - timeout_handling: strict
+    description: Health check timeouts treated as failures

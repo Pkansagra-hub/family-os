@@ -1,0 +1,218 @@
+# HIPAA Compliance Contract
+# Source ADR: 0035c-encrypted-vault-key-management.md
+# Epic 2.9, Issue 2.9.3
+# Purpose: HIPAA encryption, audit logging, access controls for PHI (Protected Health Information)
+
+contract:
+  name: hipaa_compliance
+  version: "1.0.0"
+  source_adr: "0035c-encrypted-vault-key-management.md"
+  epic: "2.9"
+  issue: "2.9.3"
+
+hipaa_overview:
+  act: "Health Insurance Portability and Accountability Act (1996)"
+  scope: "Protected Health Information (PHI) in healthcare"
+  enforcement: "HHS Office for Civil Rights"
+  penalties: "Up to $1.5M per violation category per year"
+
+hipaa_security_rule:
+  section_164_312_a_2_iv:
+    title: "Encryption and decryption"
+    requirement: "Implement mechanism to encrypt and decrypt ePHI"
+    addressable: true
+    implementation: "AES-256-GCM encryption (exceeds requirement)"
+    compliance: "✅ All PHI encrypted at rest"
+
+  section_164_308_a_1_ii_d:
+    title: "Information system activity review"
+    requirement: "Implement procedures to regularly review records of information system activity"
+    implementation: "vault_audit_log table logs all access"
+    compliance: "✅ All vault operations logged"
+
+  section_164_308_a_3_i:
+    title: "Workforce security - Authorization/supervision"
+    requirement: "Implement procedures for authorization/supervision of workforce members who work with ePHI"
+    implementation: "User-level authorization (user_id, space_id)"
+    compliance: "✅ Access controls enforced"
+
+encryption_standard:
+  requirement: "AES-256 encryption for ePHI"
+  implementation: "AES-256-GCM (authenticated encryption)"
+
+  compliance_checklist:
+    - "✅ 256-bit key size"
+    - "✅ NIST-approved algorithm (FIPS 197)"
+    - "✅ Authenticated encryption (confidentiality + integrity)"
+    - "✅ Hardware-backed key storage (TPM, Secure Enclave)"
+    - "✅ Key rotation every 90 days"
+
+audit_logging:
+  requirement: "Log all access to PHI"
+  implementation: "vault_audit_log table"
+
+  logged_fields:
+    operation: "store, retrieve, delete"
+    vault_key: "PHI identifier"
+    user_id: "Who accessed PHI"
+    space_id: "Where PHI was accessed"
+    trace_id: "Cognitive trace ID (for correlation)"
+    timestamp: "When PHI was accessed"
+    success: "Operation succeeded or failed"
+    error_message: "Error message if failed"
+
+  retention_period: "6 years (HIPAA standard)"
+  query: |
+    -- Audit log for user123 in last 24 hours
+    SELECT operation, vault_key, timestamp, success, error_message
+    FROM vault_audit_log
+    WHERE user_id = 'user123' AND timestamp > (strftime('%s','now') * 1000 - 86400000)
+    ORDER BY timestamp DESC;
+
+access_controls:
+  principle: "User can only access own PHI"
+
+  authorization_checks:
+    user_id_match:
+      enforcement: "WHERE user_id = ? in SQL queries"
+      error: "User {user_id} doesn't own PHI {vault_key}"
+
+    space_id_match:
+      enforcement: "WHERE space_id = ? in SQL queries"
+      error: "User {user_id} doesn't own PHI {vault_key}"
+
+  audit_trail:
+    successful_access: "Logged in vault_audit_log"
+    failed_access: "Logged with error_message"
+
+breach_notification:
+  hipaa_requirement: "Notification within 60 days"
+  safe_harbor: "Encrypted PHI not subject to breach notification"
+
+  breach_scenario:
+    k0_database_compromised: "Attacker gains access to pii_vault table"
+    encrypted_phi: "All PHI encrypted with AES-256-GCM"
+    keys_secure: "Encryption keys in OS keychain (not in database)"
+    impact: "Zero PHI leaked (encrypted data)"
+    notification_required: "NO (safe harbor applies)"
+
+phi_lifecycle:
+  creation:
+    trigger: "PHI detected by PII detection system"
+    operation: "Encrypt and store in vault"
+    audit_log: "Log 'store' operation"
+
+  access:
+    trigger: "User retrieves PHI"
+    authorization: "Check user_id and space_id"
+    operation: "Decrypt and return plaintext"
+    audit_log: "Log 'retrieve' operation"
+
+  deletion:
+    trigger: "User requests deletion or retention period expires"
+    operation: "Soft delete (30 days) → hard delete"
+    audit_log: "Log 'delete' operation"
+
+  retention:
+    period: "90 days (configurable)"
+    cleanup: "Automated daily cron job"
+
+minimum_necessary_standard:
+  principle: "Access only minimum PHI necessary"
+  implementation: "User accesses specific vault_key, not all PHI"
+
+  example:
+    request: "Retrieve SSN for user001"
+    vault_key: "ssn_user001_abc123_1698765432000"
+    not_allowed: "Retrieve all PII for user001 (unless GDPR request)"
+
+administrative_safeguards:
+  security_officer:
+    requirement: "Designate security official responsible for HIPAA compliance"
+    implementation: "Security team monitors vault_audit_log"
+
+  workforce_training:
+    requirement: "Train workforce on PHI handling"
+    implementation: "Developer onboarding includes PII vault training"
+
+  access_authorization:
+    requirement: "Implement procedures for granting access to ePHI"
+    implementation: "User-level authorization (user_id, space_id)"
+
+physical_safeguards:
+  facility_access:
+    requirement: "Limit physical access to systems containing ePHI"
+    implementation: "K0 database on secure servers, OS keychain on user devices"
+
+  workstation_security:
+    requirement: "Implement policies for workstation use"
+    implementation: "OS-level biometric unlock (Touch ID, Face ID, Windows Hello)"
+
+technical_safeguards:
+  access_control:
+    requirement: "Implement technical policies to allow only authorized persons to access ePHI"
+    implementation: "User-level authorization in vault operations"
+
+  audit_controls:
+    requirement: "Implement hardware, software, and/or procedural mechanisms to record and examine activity"
+    implementation: "vault_audit_log table logs all access"
+
+  integrity_controls:
+    requirement: "Implement policies to ensure ePHI is not altered or destroyed improperly"
+    implementation: "AES-GCM authentication tag (integrity protection)"
+
+  transmission_security:
+    requirement: "Implement technical security measures to guard against unauthorized access to ePHI transmitted over an electronic communications network"
+    implementation: "Not applicable (vault stores PHI at rest, not in transit)"
+
+observability:
+  metrics:
+    - name: "pii_vault_hipaa_access_total"
+      type: "counter"
+      labels: ["user_id", "operation"]
+      description: "PHI access by user and operation"
+
+    - name: "pii_vault_hipaa_unauthorized_access_total"
+      type: "counter"
+      description: "Unauthorized PHI access attempts"
+
+    - name: "pii_vault_hipaa_audit_log_size"
+      type: "gauge"
+      description: "Total audit log entries"
+
+compliance_checklist:
+  hipaa_requirements:
+    - "✅ Encryption (164.312(a)(2)(iv)) - AES-256-GCM"
+    - "✅ Audit logging (164.308(a)(1)(ii)(D)) - vault_audit_log"
+    - "✅ Access controls (164.308(a)(3)(i)) - user_id/space_id authorization"
+    - "✅ Integrity controls (164.312(c)(1)) - AES-GCM auth tag"
+    - "✅ Minimum necessary (164.502(b)) - Specific vault_key access"
+    - "✅ Breach safe harbor - Encrypted PHI"
+    - "✅ Audit retention (6 years) - Configurable"
+
+testing:
+  unit_tests:
+    - test_hipaa_encryption_aes_256
+    - test_hipaa_audit_logging
+    - test_hipaa_access_controls
+    - test_hipaa_integrity_protection
+
+  integration_tests:
+    - test_hipaa_full_phi_lifecycle
+    - test_hipaa_unauthorized_access_denied
+
+  compliance_tests:
+    - test_hipaa_164_312_compliance
+    - test_hipaa_164_308_compliance
+
+documentation:
+  hipaa_compliance_guide:
+    path: "docs/privacy/hipaa-compliance.md"
+    sections:
+      - "HIPAA overview"
+      - "Security Rule requirements"
+      - "Encryption standard"
+      - "Audit logging"
+      - "Access controls"
+      - "Breach notification safe harbor"
+      - "Compliance checklist"

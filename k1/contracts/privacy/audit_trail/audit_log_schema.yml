@@ -1,0 +1,318 @@
+# Audit Log Schema Contract
+# Source ADR: 0035d-audit-trail-gdpr-compliance.md
+# Epic 2.9, Issue 2.9.4
+# Purpose: K0 SQLite schema for audit_log, gdpr_requests, compliance_metrics tables
+
+contract:
+  name: audit_log_schema
+  version: "1.0.0"
+  source_adr: "0035d-audit-trail-gdpr-compliance.md"
+  epic: "2.9"
+  issue: "2.9.4"
+
+audit_log_table:
+  purpose: "Append-only audit trail for all PII operations (detect, redact, vault store/retrieve/delete)"
+  retention: "90 days (GDPR), 7 years (HIPAA)"
+  tamper_proof: "Append-only (no edits allowed)"
+  security: "SHA-256 hashes only (no plaintext PII storage)"
+
+  schema:
+    table_name: "audit_log"
+    columns:
+      - name: "id"
+        type: "INTEGER PRIMARY KEY AUTOINCREMENT"
+        description: "Unique audit log entry ID"
+
+      - name: "operation"
+        type: "TEXT NOT NULL"
+        description: "PII operation type"
+        values: ["detect", "redact", "vault_store", "vault_retrieve", "vault_delete", "phi_access"]
+
+      - name: "pii_type"
+        type: "TEXT NOT NULL"
+        description: "PII entity type (ssn, email, phone, name, etc.)"
+
+      - name: "user_id"
+        type: "TEXT NOT NULL"
+        description: "User identifier (who performed operation)"
+
+      - name: "space_id"
+        type: "TEXT NOT NULL"
+        description: "Space identifier (privacy boundary)"
+
+      - name: "trace_id"
+        type: "TEXT NOT NULL"
+        description: "Cognitive trace ID for correlation"
+
+      - name: "timestamp"
+        type: "INTEGER NOT NULL"
+        description: "Unix timestamp in milliseconds"
+
+      - name: "vault_key"
+        type: "TEXT"
+        description: "PII vault key (if applicable)"
+
+      - name: "original_value_hash"
+        type: "TEXT"
+        description: "SHA-256 hash of original PII value (for deduplication, no plaintext storage)"
+
+      - name: "redacted_placeholder"
+        type: "TEXT"
+        description: "Redacted placeholder ([SSN], [EMAIL], etc.)"
+
+      - name: "detection_method"
+        type: "TEXT"
+        description: "Detection method used"
+        values: ["regex", "bert_ner"]
+
+      - name: "confidence"
+        type: "REAL"
+        description: "NER confidence score (0.0-1.0)"
+
+      - name: "metadata"
+        type: "TEXT"
+        description: "JSON metadata (optional)"
+
+    indexes:
+      - name: "idx_user_space"
+        columns: ["user_id", "space_id"]
+        purpose: "GDPR queries (user's PII operations)"
+
+      - name: "idx_timestamp"
+        columns: ["timestamp"]
+        purpose: "Time-based queries (retention, compliance reports)"
+
+      - name: "idx_operation"
+        columns: ["operation"]
+        purpose: "Operation type filtering"
+
+      - name: "idx_pii_type"
+        columns: ["pii_type"]
+        purpose: "PII type analytics"
+
+  storage_estimate:
+    per_entry: "~250 bytes"
+    daily_entries: "1000 (typical)"
+    daily_storage: "~250KB"
+    retention_90_days: "~22.5MB"
+    retention_7_years: "~1.3GB"
+
+gdpr_requests_table:
+  purpose: "Track GDPR requests (access, erasure, portability) with fulfillment status"
+  retention: "7 years (HIPAA audit trail requirement)"
+
+  schema:
+    table_name: "gdpr_requests"
+    columns:
+      - name: "id"
+        type: "INTEGER PRIMARY KEY AUTOINCREMENT"
+        description: "Unique GDPR request ID"
+
+      - name: "request_type"
+        type: "TEXT NOT NULL"
+        description: "GDPR request type"
+        values: ["access", "erasure", "portability"]
+
+      - name: "user_id"
+        type: "TEXT NOT NULL"
+        description: "User making the request"
+
+      - name: "space_id"
+        type: "TEXT NOT NULL"
+        description: "Space identifier"
+
+      - name: "trace_id"
+        type: "TEXT NOT NULL"
+        description: "Request trace ID"
+
+      - name: "requested_at"
+        type: "INTEGER NOT NULL"
+        description: "Request timestamp (Unix ms)"
+
+      - name: "fulfilled_at"
+        type: "INTEGER"
+        description: "Fulfillment timestamp (Unix ms)"
+
+      - name: "status"
+        type: "TEXT NOT NULL"
+        description: "Request status"
+        values: ["pending", "fulfilled", "rejected"]
+
+      - name: "response_data"
+        type: "TEXT"
+        description: "JSON response data (PII export for access requests)"
+
+      - name: "metadata"
+        type: "TEXT"
+        description: "JSON metadata (optional)"
+
+    indexes:
+      - name: "idx_user_id"
+        columns: ["user_id"]
+        purpose: "User request history"
+
+      - name: "idx_requested_at"
+        columns: ["requested_at"]
+        purpose: "Time-based queries"
+
+      - name: "idx_status"
+        columns: ["status"]
+        purpose: "Status filtering (pending requests)"
+
+compliance_metrics_table:
+  purpose: "Aggregated compliance metrics (redactions, GDPR requests, HIPAA accesses)"
+  retention: "7 years"
+
+  schema:
+    table_name: "compliance_metrics"
+    columns:
+      - name: "id"
+        type: "INTEGER PRIMARY KEY AUTOINCREMENT"
+        description: "Unique metric entry ID"
+
+      - name: "metric_name"
+        type: "TEXT NOT NULL"
+        description: "Metric name"
+        values: ["redactions_total", "gdpr_requests_total", "hipaa_phi_accesses_total", "compliance_rate"]
+
+      - name: "metric_value"
+        type: "INTEGER NOT NULL"
+        description: "Current metric value"
+
+      - name: "timestamp"
+        type: "INTEGER NOT NULL"
+        description: "Metric timestamp (Unix ms)"
+
+    indexes:
+      - name: "idx_metric_name"
+        columns: ["metric_name"]
+        purpose: "Metric name queries"
+
+      - name: "idx_timestamp"
+        columns: ["timestamp"]
+        purpose: "Time-series queries"
+
+migration_script:
+  path: "k0/contracts/sql/004_audit_trail_schema.sql"
+  content: |
+    -- Migration: 004_audit_trail_schema.sql
+    -- Creates audit trail tables for PII operations and GDPR/HIPAA compliance
+
+    -- Enable WAL mode for better concurrent access
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+
+    -- Audit log table (append-only)
+    CREATE TABLE audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operation TEXT NOT NULL,
+        pii_type TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        space_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        vault_key TEXT,
+        original_value_hash TEXT,
+        redacted_placeholder TEXT,
+        detection_method TEXT,
+        confidence REAL,
+        metadata TEXT
+    );
+
+    -- Indexes for audit log
+    CREATE INDEX idx_audit_user_space ON audit_log(user_id, space_id);
+    CREATE INDEX idx_audit_timestamp ON audit_log(timestamp);
+    CREATE INDEX idx_audit_operation ON audit_log(operation);
+    CREATE INDEX idx_audit_pii_type ON audit_log(pii_type);
+
+    -- GDPR requests table
+    CREATE TABLE gdpr_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        request_type TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        space_id TEXT NOT NULL,
+        trace_id TEXT NOT NULL,
+        requested_at INTEGER NOT NULL,
+        fulfilled_at INTEGER,
+        status TEXT NOT NULL,
+        response_data TEXT,
+        metadata TEXT
+    );
+
+    -- Indexes for GDPR requests
+    CREATE INDEX idx_gdpr_user ON gdpr_requests(user_id);
+    CREATE INDEX idx_gdpr_requested_at ON gdpr_requests(requested_at);
+    CREATE INDEX idx_gdpr_status ON gdpr_requests(status);
+
+    -- Compliance metrics table
+    CREATE TABLE compliance_metrics (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        metric_name TEXT NOT NULL,
+        metric_value INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL
+    );
+
+    -- Indexes for compliance metrics
+    CREATE INDEX idx_metrics_name ON compliance_metrics(metric_name);
+    CREATE INDEX idx_metrics_timestamp ON compliance_metrics(timestamp);
+
+query_patterns:
+  user_audit_log: |
+    SELECT operation, pii_type, trace_id, timestamp, vault_key, redacted_placeholder, detection_method, confidence
+    FROM audit_log
+    WHERE user_id = ? AND space_id = ?
+    ORDER BY timestamp DESC
+
+  gdpr_access_export: |
+    SELECT operation, pii_type, timestamp, vault_key
+    FROM audit_log
+    WHERE user_id = ? AND space_id = ? AND operation IN ('vault_store', 'detect')
+    ORDER BY timestamp DESC
+
+  compliance_report: |
+    SELECT operation, COUNT(*) as count
+    FROM audit_log
+    WHERE timestamp >= ? AND timestamp <= ?
+    GROUP BY operation
+
+  retention_cleanup: |
+    DELETE FROM audit_log WHERE timestamp < ?
+    DELETE FROM gdpr_requests WHERE requested_at < ?
+    DELETE FROM compliance_metrics WHERE timestamp < ?
+
+anomaly_detection_queries:
+  high_frequency_access: |
+    SELECT user_id, COUNT(*) as access_count
+    FROM audit_log
+    WHERE operation = 'vault_retrieve' AND timestamp >= ?
+    GROUP BY user_id
+    HAVING access_count > 100
+
+  unusual_operation_pattern: |
+    SELECT user_id, operation, COUNT(*) as op_count
+    FROM audit_log
+    WHERE timestamp >= ?
+    GROUP BY user_id, operation
+    HAVING op_count > 50
+
+performance_considerations:
+  wal_mode: "Enabled for concurrent read/write access"
+  indexes: "Optimized for GDPR queries (user_id + space_id)"
+  partitioning: "Consider monthly partitions for large deployments"
+  compression: "SQLite built-in compression for metadata JSON"
+
+security_considerations:
+  no_plaintext: "Only SHA-256 hashes of PII values stored"
+  append_only: "No UPDATE/DELETE operations on audit_log"
+  authorization: "Queries require user_id + space_id match"
+  encryption: "Database encrypted with SQLCipher (optional)"
+
+observability:
+  table_sizes: |
+    SELECT 'audit_log' as table_name, COUNT(*) as rows,
+           (SELECT SUM(LENGTH(operation) + LENGTH(pii_type) + LENGTH(user_id) + LENGTH(space_id) + LENGTH(trace_id) + LENGTH(vault_key) + LENGTH(original_value_hash) + LENGTH(redacted_placeholder) + LENGTH(detection_method) + LENGTH(metadata)) FROM audit_log) as bytes
+    FROM audit_log
+    UNION ALL
+    SELECT 'gdpr_requests' as table_name, COUNT(*) as rows,
+           (SELECT SUM(LENGTH(request_type) + LENGTH(user_id) + LENGTH(space_id) + LENGTH(trace_id) + LENGTH(status) + LENGTH(response_data) + LENGTH(metadata)) FROM gdpr_requests) as bytes
+    FROM gdpr_requests

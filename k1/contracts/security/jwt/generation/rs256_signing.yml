@@ -1,0 +1,301 @@
+---
+# ADR-0037: RS256 Signing Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# RS256 Signing Contract
+# Defines RS256 signing process with RSA 2048-bit keys
+
+contract:
+  name: rs256_signing
+  version: "1.0.0"
+  description: "RS256 JWT signing with RSA 2048-bit keys and secure keystore"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "3 days"
+
+# RS256 Algorithm
+rs256_algorithm:
+  full_name: "RSASSA-PKCS1-v1_5 with SHA-256"
+  description: "RSA signature algorithm using PKCS#1 v1.5 padding with SHA-256 hash"
+
+  components:
+    hash_function: "SHA-256"
+    padding_scheme: "PKCS#1 v1.5"
+    key_type: "RSA"
+    key_size: "2048 bits"
+    signature_size: "256 bytes"
+
+  security_properties:
+    - "Cryptographically secure"
+    - "Widely supported"
+    - "No known practical attacks"
+    - "Used by major identity providers"
+
+# JWT Structure
+jwt_structure:
+  format: "header.payload.signature"
+  separator: "."
+  encoding: "UTF-8"
+
+  header:
+    format: "JSON"
+    required_fields:
+      - "alg: 'RS256'"
+      - "typ: 'JWT'"
+      - "kid: key identifier (optional)"
+    base64url_encoded: true
+
+  payload:
+    format: "JSON claims"
+    base64url_encoded: true
+
+  signature:
+    algorithm: "RS256"
+    input: "header.payload (ASCII string)"
+    output: "Base64URL encoded signature"
+    verification: "RSA public key verification"
+
+# Signing Process
+signing_process:
+  input_validation:
+    - "Validate header JSON structure"
+    - "Validate payload JSON structure"
+    - "Ensure proper encoding"
+
+  header_creation:
+    algorithm: "RS256"
+    type: "JWT"
+    key_id: "Current key identifier"
+    json_format: "Compact, no whitespace"
+
+  payload_encoding:
+    json_serialization: "Compact JSON"
+    base64url_encoding: "RFC 4648 Section 5"
+    no_padding: true
+
+  message_creation:
+    format: "header_b64.payload_b64"
+    encoding: "ASCII/UTF-8"
+    separator: "."
+
+  signature_generation:
+    hash_input: "message (header.payload)"
+    hash_algorithm: "SHA-256"
+    padding: "PKCS#1 v1.5"
+    private_key: "RSA 2048-bit"
+    signature_output: "256-byte signature"
+
+  base64url_encoding:
+    input: "Raw signature bytes"
+    output: "Base64URL string"
+    padding: "No padding"
+
+  jwt_assembly:
+    format: "header_b64.payload_b64.signature_b64"
+    validation: "Valid JWT format"
+
+# Key Management
+key_management:
+  key_type: "RSA"
+  key_size: "2048 bits"
+  format: "PEM-encoded"
+  storage: "OS Keychain/Local HSM"
+
+  private_key_usage:
+    access_method: "Secure keystore"
+    memory_exposure: "Never in application memory"
+    operation_type: "Sign-only"
+    rotation: "90-day automatic rotation"
+
+  public_key_distribution:
+    caching: "In-memory cache"
+    refresh: "On key rotation"
+    distribution: "All API Gateway instances"
+    validation: "Signature verification only"
+
+# Performance Requirements
+performance_requirements:
+  signing_latency: "<35ms"
+  breakdown:
+    - "Key access: <5ms"
+    - "Hash computation: <1ms"
+    - "RSA signing: <25ms"
+    - "Base64URL encoding: <1ms"
+
+  throughput: "1000+ signatures per second"
+  memory_usage: "Minimal, no key caching in app memory"
+
+# Security Considerations
+security_considerations:
+  algorithm_security:
+    - "SHA-256 provides collision resistance"
+    - "RSA 2048-bit provides adequate security"
+    - "PKCS#1 v1.5 padding is secure for this use case"
+
+  key_security:
+    - "Private keys never exposed to application"
+    - "Secure keystore with hardware protection"
+    - "Automatic key rotation prevents long-term compromise"
+
+  signature_integrity:
+    - "Cryptographic proof of token authenticity"
+    - "Tamper-evident tokens"
+    - "Non-repudiation of token issuance"
+
+  timing_attacks:
+    - "Constant-time signing operations"
+    - "No early exit on validation failures"
+    - "Side-channel attack resistance"
+
+# Error Handling
+error_handling:
+  keystore_unavailable:
+    error: "KeystoreError"
+    handling: "Fail signing operation"
+    logging: "Security event logging"
+
+  invalid_key:
+    error: "InvalidKeyError"
+    handling: "Fail signing operation"
+    logging: "Security event with key details"
+
+  signing_failure:
+    error: "SigningError"
+    handling: "Fail signing operation"
+    logging: "High-priority security event"
+
+  encoding_failure:
+    error: "EncodingError"
+    handling: "Fail JWT creation"
+    logging: "Application error"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "jsonwebtoken = \"8.3\""
+      - "rsa = \"0.9\""
+      - "sha2 = \"0.10\""
+      - "base64 = \"0.21\""
+
+    code_example: |
+      use jsonwebtoken::{encode, Header, Algorithm, EncodingKey};
+
+      pub async fn sign_jwt_rs256(
+          claims: &Claims,
+          keystore: &dyn KeystoreClient,
+      ) -> Result<String, SigningError> {
+          // Get private key from secure keystore
+          let private_key_pem = keystore.get_private_key().await?;
+
+          // Create JWT header
+          let header = Header {
+              alg: Algorithm::RS256,
+              typ: Some("JWT".to_string()),
+              kid: keystore.get_current_key_id().await?,
+              ..Default::default()
+          };
+
+          // Sign the JWT
+          let token = encode(
+              &header,
+              claims,
+              &EncodingKey::from_rsa_pem(private_key_pem.as_bytes())?,
+          )?;
+
+          Ok(token)
+      }
+
+  python:
+    dependencies:
+      - "PyJWT==2.8.0"
+      - "cryptography==41.0.0"
+
+    code_example: |
+      import jwt
+      from cryptography.hazmat.primitives import serialization
+
+      async def sign_jwt_rs256(claims: dict, keystore_client) -> str:
+          # Get private key from secure keystore
+          private_key_pem = await keystore_client.get_private_key()
+
+          # Load private key
+          private_key = serialization.load_pem_private_key(
+              private_key_pem.encode(),
+              password=None
+          )
+
+          # Sign the JWT
+          token = jwt.encode(
+              claims,
+              private_key,
+              algorithm='RS256',
+              headers={'kid': await keystore_client.get_current_key_id()}
+          )
+
+          return token
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "JWT header creation"
+    - "Payload encoding"
+    - "Signature generation"
+    - "Base64URL encoding"
+    - "JWT assembly"
+
+  integration_tests:
+    - "Full signing workflow"
+    - "Keystore integration"
+    - "Signature verification"
+    - "Key rotation handling"
+
+  security_tests:
+    - "Signature verification with public key"
+    - "Invalid signature rejection"
+    - "Key compromise simulation"
+    - "Timing attack resistance"
+
+  performance_tests:
+    - "Signing latency (<35ms)"
+    - "Concurrent signing (100 req/sec)"
+    - "Memory usage stability"
+    - "Key access performance"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "private_key_security.yml: Defines key access"
+    - "claims_structure.yml: Defines payload structure"
+  downstream:
+    - "jwt_validator.yml: Verifies RS256 signatures"
+    - "signature_verification.yml: Uses public key"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "JWT tokens signed correctly with RS256"
+    - "Signatures verifiable with public key"
+    - "Proper JWT format (header.payload.signature)"
+    - "All required header fields present"
+
+  performance:
+    - "Signing completes in <35ms"
+    - "Handles high throughput"
+    - "Minimal memory overhead"
+    - "No performance degradation"
+
+  security:
+    - "Cryptographically secure signatures"
+    - "Private keys never exposed"
+    - "Tamper-evident tokens"
+    - "Secure key management"
+
+  reliability:
+    - "High success rate (>99.9%)"
+    - "Proper error handling"
+    - "Graceful failure modes"
+    - "Comprehensive security logging"

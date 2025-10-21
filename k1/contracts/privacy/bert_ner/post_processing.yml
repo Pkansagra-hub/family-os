@@ -1,411 +1,566 @@
-# Contract: Post-Processing for NER Detections
-# Purpose: Define token merging, confidence filtering, deduplication logic
-# Source: ADR-0035b - ML-based NER
-# Status: Production-Ready | Last Updated: 2025-10-14
+# Post-Processing Contract
+# Source ADR: 0035b-ml-based-ner.md
+# Epic 2.9, Issue 2.9.2
+# Purpose: BIO tag decoding, entity merging, confidence filtering, deduplication
 
 contract:
-  id: "C_PRIVACY_NER_POSTPROCESSING_010"
-  name: "Post-Processing for NER Detections"
+  name: post_processing
   version: "1.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
+  source_adr: "0035b-ml-based-ner.md"
+  epic: "2.9"
+  issue: "2.9.2"
 
-  design:
-    purpose: "Convert token-level BERT predictions to entity-level detections"
-    post_processing_pipeline: "4-stage pipeline"
-    stage_1: "Token merging (BIO consolidation)"
-    stage_2: "Tag correction (invalid transitions)"
-    stage_3: "Confidence filtering (threshold-based)"
-    stage_4: "Deduplication & overlap resolution"
+post_processing_pipeline:
+  stages:
+    1_logits_to_labels:
+      input: "Logits tensor (batch_size, sequence_length, num_labels)"
+      operation: "Argmax along num_labels dimension"
+      output: "Label IDs (batch_size, sequence_length)"
+      latency: "<0.05ms"
 
-    conceptual_flow: |
-      BERT Output: [B-PERSON, I-PERSON, O, B-ORG, I-ORG]
-           ↓
-      Stage 1 (Merge): [PERSON_SPAN(0-2), ORG_SPAN(3-5)]
-           ↓
-      Stage 2 (Correct): Same (valid BIO sequence)
-           ↓
-      Stage 3 (Filter): Keep if conf > threshold
-           ↓
-      Stage 4 (Dedup): Remove overlaps, keep max confidence
-           ↓
-      Final Output: Entity-level detections with positions
+    2_labels_to_bio_tags:
+      input: "Label IDs (0-8)"
+      operation: "Map label ID to BIO tag string"
+      output: "BIO tags (O, B-PERSON, I-PERSON, ...)"
+      latency: "<0.01ms"
 
-  stage_1_token_merging:
-    description: "BERT outputs token-level tags. Merge adjacent tokens into entities."
+    3_bio_tag_decoding:
+      input: "BIO tags + tokenized text"
+      operation: "Merge B-* and I-* tokens into entities"
+      output: "Raw entities with spans"
+      latency: "<0.2ms"
 
-    why_needed: |
-      BERT tokenizer may split words: "Johnson" → ["John", "##son"]
-      But BERT tags at token level: [B-PERSON, I-PERSON]
-      Post-processing must reconstruct "Johnson" as single entity
+    4_confidence_filtering:
+      input: "Raw entities + logits"
+      operation: "Filter entities below threshold (0.8)"
+      output: "High-confidence entities"
+      latency: "<0.05ms"
 
-    algorithm_pseudocode: |
-      def merge_tokens_to_entities(tokens, tags, char_positions):
-          entities = []
-          current_entity = None
+    5_token_span_alignment:
+      input: "Token-level entities + original text"
+      operation: "Map subword tokens to character spans"
+      output: "Character-level entities"
+      latency: "<0.1ms"
 
-          for i, (token, tag, char_pos) in enumerate(zip(tokens, tags, char_positions)):
-              if tag == "O":
-                  # Outside entity - finalize current entity if any
-                  if current_entity:
-                      current_entity["end_pos"] = char_positions[i-1]
-                      entities.append(current_entity)
-                      current_entity = None
+    6_entity_deduplication:
+      input: "NER entities + regex entities"
+      operation: "Remove overlapping spans, prefer regex"
+      output: "Final deduplicated entities"
+      latency: "<0.1ms"
 
-              elif tag.startswith("B-"):
-                  # Begin new entity - finalize previous if any
-                  if current_entity:
-                      current_entity["end_pos"] = char_positions[i-1]
-                      entities.append(current_entity)
+  total_latency: "<0.5ms"
 
-                  entity_type = tag[2:]
-                  current_entity = {
-                      "type": entity_type,
-                      "start_pos": char_pos,
-                      "tokens": [token],
-                      "token_indices": [i],
-                      "confidences": [model_confidence[i]],
-                  }
+logits_to_labels:
+  algorithm: "Argmax"
 
-              elif tag.startswith("I-"):
-                  # Inside entity - continue current
-                  if current_entity and tag[2:] == current_entity["type"]:
-                      current_entity["tokens"].append(token)
-                      current_entity["token_indices"].append(i)
-                      current_entity["confidences"].append(model_confidence[i])
-                  else:
-                      # Invalid: I without preceding B - convert to B
-                      if current_entity:
-                          current_entity["end_pos"] = char_positions[i-1]
-                          entities.append(current_entity)
+  implementation:
+    language: "Rust"
+    code: |
+      // Input: logits (batch_size=1, seq_len, num_labels=9)
+      // Output: label_ids (seq_len)
 
-                      entity_type = tag[2:]
-                      current_entity = {
-                          "type": entity_type,
-                          "start_pos": char_pos,
-                          "tokens": [token],
-                          "token_indices": [i],
-                          "confidences": [model_confidence[i]],
-                      }
+      fn logits_to_labels(logits: &Array3<f32>) -> Vec<usize> {
+          let seq_len = logits.dim().1;
+          let mut label_ids = Vec::with_capacity(seq_len);
 
-          # Finalize last entity
-          if current_entity:
-              current_entity["end_pos"] = char_positions[-1]
-              entities.append(current_entity)
+          for token_idx in 0..seq_len {
+              let token_logits = logits.slice(s![0, token_idx, ..]);
+              let max_label = token_logits
+                  .iter()
+                  .enumerate()
+                  .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                  .map(|(idx, _)| idx)
+                  .unwrap();
 
-          return entities
+              label_ids.push(max_label);
+          }
 
-    example_1_simple_merge: |
-      Input:
-        Text: "Contact John Doe"
-        Tokens: ["Contact", "John", "Doe"]
-        Tags: ["O", "B-PERSON", "I-PERSON"]
-        Char positions: [(0, 7), (8, 12), (13, 16)]
-        Confidences: [0.99, 0.92, 0.88]
-
-      Processing:
-        Token 0: "Contact" with tag O → No entity
-        Token 1: "John" with tag B-PERSON → Start entity
-          entity = {type: PERSON, start_pos: 8, tokens: ["John"], conf: [0.92]}
-        Token 2: "Doe" with tag I-PERSON → Continue
-          entity = {type: PERSON, tokens: ["John", "Doe"], conf: [0.92, 0.88]}
-
-      Output:
-        Entity: {type: PERSON, value: "John Doe", start: 8, end: 16, confidence: 0.90}
-
-    example_2_subword_tokenization: |
-      Input:
-        Text: "Johnson Works"
-        BERT Tokens: ["Johnson", "##Works"] (BERT subword split)
-        BERT Tags: ["B-PERSON", "I-PERSON"]
-        Char positions: [(0, 7), (8, 13)]
-
-      Processing:
-        - Merge "Johnson" + "##Works" → "Johnson Works"
-        - Remove ## prefix (BERT continuation marker)
-
-      Output:
-        Entity: {type: PERSON, value: "Johnson Works", confidence: 0.91}
-
-    example_3_consecutive_entities: |
-      Input:
-        Text: "John Doe works at Acme Corp"
-        Tokens: ["John", "Doe", "works", "at", "Acme", "Corp"]
-        Tags: ["B-PERSON", "I-PERSON", "O", "O", "B-ORG", "I-ORG"]
-
-      Processing:
-        Tokens 0-1: B-PERSON + I-PERSON → Merge to "John Doe"
-        Tokens 2-3: O tags → Skip
-        Tokens 4-5: B-ORG + I-ORG → Merge to "Acme Corp"
-
-      Output:
-        Entity 1: {type: PERSON, value: "John Doe"}
-        Entity 2: {type: ORG, value: "Acme Corp"}
-
-    complexity: "O(n) where n = number of tokens"
-    latency_per_merge: "< 0.1ms for 512 tokens"
-
-  stage_2_tag_correction:
-    description: "Fix invalid BIO sequences"
-
-    common_errors:
-      error_1_i_without_b: |
-        Invalid: [O, I-PERSON, I-PERSON] (I-PERSON at position 0)
-        Correction: Convert to [O, B-PERSON, I-PERSON]
-        Reason: Every entity must start with B tag
-
-      error_2_type_mismatch: |
-        Invalid: [B-PERSON, I-LOCATION] (type changed)
-        Correction: Convert to [B-PERSON, B-LOCATION]
-        Reason: I tags must match preceding B tag type
-
-      error_3_incomplete_entity: |
-        Invalid: [B-PERSON] (no I-PERSON after)
-        Correction: Treat as valid single-token entity
-        Reason: BIO scheme allows entities of length 1
-
-    correction_strategy: |
-      For each invalid sequence:
-        1. If I without B: Prepend B tag
-        2. If type mismatch: Convert I to B
-        3. If orphaned B: Keep as single-token entity
-
-    impact: "Corrects ~2% of invalid BIO sequences in practice"
-    confidence_adjustment: "Reduce confidence by 0.05 for corrected tags"
-
-  stage_3_confidence_filtering:
-    description: "Remove low-confidence detections using entity-specific thresholds"
-
-    threshold_by_entity_type:
-      person_threshold: 0.85
-      person_rationale: "High sensitivity - names directly identify people"
-
-      location_threshold: 0.80
-      location_rationale: "High sensitivity - addresses are PII"
-
-      organization_threshold: 0.75
-      organization_rationale: "Medium sensitivity - employer info"
-
-      miscellaneous_threshold: 0.70
-      miscellaneous_rationale: "Low sensitivity - events/products"
-
-    confidence_calculation: |
-      Entity confidence = mean(token_confidences)
-
-      Example:
-        Tokens: ["John", "Doe"]
-        Token confidences: [0.92, 0.88]
-        Entity confidence = (0.92 + 0.88) / 2 = 0.90
-
-    confidence_weighting_option: |
-      Alternative: Weighted average (first token more reliable)
-      Entity confidence = 0.6 * first_token + 0.4 * mean(rest)
-
-      Example:
-        = 0.6 * 0.92 + 0.4 * 0.88 = 0.552 + 0.352 = 0.904
-
-    filtering_decision: |
-      if entity.confidence > threshold(entity.type):
-          keep entity
-      else:
-          discard entity (counts as false negative)
-
-    false_negative_rate: 0.05 (5% of true entities filtered)
-    false_positive_rate: 0.01 (1% of filter-outs incorrectly remove entities)
-
-  stage_4_deduplication_and_overlap_resolution:
-    description: "Handle overlapping entities, keep highest confidence"
-
-    overlap_definition: |
-      Entities A and B overlap if:
-        start_A < end_B AND start_B < end_A
-
-      Examples:
-        Overlap: A=(0, 10), B=(5, 15) → 5 to 10 is shared
-        No overlap: A=(0, 5), B=(10, 15) → gap between
-        Containment: A=(0, 15), B=(3, 12) → B inside A
-
-    deduplication_algorithm_v1_greedy: |
-      Algorithm: Process entities by confidence (highest first)
-
-      1. Sort entities by confidence DESC
-      2. Create result list
-      3. For each entity E:
-           - If E overlaps with any entity in result:
-               - Skip E (discard lower confidence)
-           - Else:
-               - Add E to result
-      4. Sort result by start position
-
-      Complexity: O(n^2) in worst case, O(n) average
-      Time: < 0.2ms for typical 50 entities
-
-    deduplication_algorithm_v2_interval: |
-      Algorithm: Interval merging approach
-
-      1. Create list of (start, end, confidence, type) tuples
-      2. Sort by start position
-      3. Use merge algorithm:
-         - Merge overlapping intervals (keep max confidence)
-         - If same type and confidence high: merge into single entity
-         - If different type: keep separate entities at boundaries
-      4. Return merged intervals
-
-      Benefit: O(n log n) sorting, O(n) merging
-      Better for large number of entities
-
-    deduplication_example_scenario: |
-      Input (from model):
-        Entity 1: PERSON "John" (0, 4) confidence 0.92
-        Entity 2: PERSON "John Doe" (0, 8) confidence 0.88
-        Entity 3: ORG "Doe Inc" (5, 13) confidence 0.91
-
-      Overlaps:
-        Entity 1 and 2: (0, 4) overlaps with (0, 8)
-        Entity 2 and 3: (0, 8) overlaps with (5, 13)
-
-      Processing (greedy, high confidence first):
-        1. Keep Entity 1 (0.92)
-        2. Skip Entity 2 (overlaps with Entity 1, lower confidence)
-        3. Skip Entity 3 (overlaps with Entity 1/2, lower confidence)
-
-      Output: Only Entity 1
-      Issue: Lost "Doe Inc" (ORG)
-
-      Better approach (interval merge):
-        1. Keep Entity 1: "John" (PERSON, 0-4, 0.92)
-        2. Keep Entity 3: "Doe Inc" (ORG, 5-13, 0.91) - different entity type, no overlap
-
-      Output: Entity 1 (PERSON "John"), Entity 3 (ORG "Doe Inc")
-
-    cross_entity_type_handling: |
-      Rule: Different entity types can coexist even if overlapping
-      Rationale: "New York" could be LOCATION (whole) + ORG ("York Bank" if in 2nd half)
-      Implementation: Allow overlaps only if entity types differ, else keep higher confidence
-
-    deduplication_statistics:
-      typical_duplicate_rate: 0.02 (2% of detections)
-      overlap_by_type:
-        same_type_overlap: 1.5%
-        different_type_overlap: 0.5%
-
-  output_format:
-    pii_detection_structure:
-      entity_type: "PERSON | LOCATION | ORG | MISC"
-      entity_value: "Detected entity text (from original)"
-      start_pos: "Character offset in original text"
-      end_pos: "Character offset (exclusive)"
-      confidence: "Float 0.0-1.0"
-      placeholder: "[NAME] | [ADDRESS] | [ORGANIZATION] | [ENTITY]"
-      token_indices: "[0, 1] (which tokens merged)"
-
-    example_output: |
-      {
-          "entity_type": "PERSON",
-          "entity_value": "John Doe",
-          "start_pos": 8,
-          "end_pos": 16,
-          "confidence": 0.90,
-          "placeholder": "[NAME]",
-          "token_indices": [1, 2]
+          label_ids
       }
 
-  integration_with_regex_pipeline:
-    concept: |
-      BERT-NER (unstructured) runs after regex (structured).
-      Both outputs merged for hybrid detection.
+  label_mapping:
+    0: "O"
+    1: "B-PERSON"
+    2: "I-PERSON"
+    3: "B-LOCATION"
+    4: "I-LOCATION"
+    5: "B-ORG"
+    6: "I-ORG"
+    7: "B-MISC"
+    8: "I-MISC"
 
-    merge_strategy: |
-      1. Collect BERT entities
-      2. Collect regex entities
-      3. Merge overlapping (by highest confidence)
-      4. Return combined list sorted by start position
+  performance:
+    latency: "<0.05ms"
+    memory: "O(sequence_length)"
 
-    example_hybrid_fusion: |
-      Regex detections:
-        - SSN "123-45-6789" (0, 11) confidence 1.0
-        - Phone "555-1234" (45, 53) confidence 1.0
+bio_tag_decoding:
+  algorithm: "FSM-based entity extraction"
 
-      BERT detections:
-        - PERSON "John Doe" (20, 28) confidence 0.92
-        - LOCATION "New York" (60, 68) confidence 0.85
+  state_machine:
+    states:
+      - "OUTSIDE"  # O tag, not in entity
+      - "INSIDE"   # I-* tag, continuing entity
+      - "BEGIN"    # B-* tag, starting new entity
 
-      Combined (sorted by start):
-        1. SSN (0, 11) 1.0
-        2. PERSON (20, 28) 0.92
-        3. Phone (45, 53) 1.0
-        4. LOCATION (60, 68) 0.85
+    transitions:
+      O_to_O: "Continue outside entity"
+      O_to_B: "Start new entity"
+      B_to_I: "Continue entity (same type)"
+      B_to_B: "End current entity, start new entity"
+      I_to_I: "Continue entity (same type)"
+      I_to_B: "End current entity, start new entity"
+      I_to_O: "End current entity"
 
-      Result: 4 entities, no overlaps, hybrid coverage
+  implementation:
+    language: "Rust"
+    code: |
+      struct RawEntity {
+          entity_type: String,  // PERSON, LOCATION, ORG, MISC
+          token_indices: Vec<usize>,
+          start_token: usize,
+          end_token: usize,
+      }
 
-  performance_analysis:
-    latency_breakdown:
-      token_merging_ms: 0.1
-      tag_correction_ms: 0.05
-      confidence_filtering_ms: 0.15
-      deduplication_ms: 0.2
-      total_overhead_ms: 0.5
+      fn decode_bio_tags(
+          tags: &[String],
+          tokens: &[String],
+      ) -> Vec<RawEntity> {
+          let mut entities = Vec::new();
+          let mut current_entity: Option<RawEntity> = None;
 
-    latency_vs_entities:
-      for_10_entities: 0.15ms
-      for_50_entities: 0.35ms
-      for_100_entities: 0.5ms
-      for_300_entities: 0.8ms
+          for (idx, tag) in tags.iter().enumerate() {
+              match tag.as_str() {
+                  "O" => {
+                      // End current entity if any
+                      if let Some(entity) = current_entity.take() {
+                          entities.push(entity);
+                      }
+                  }
+                  tag if tag.starts_with("B-") => {
+                      // End current entity, start new entity
+                      if let Some(entity) = current_entity.take() {
+                          entities.push(entity);
+                      }
 
-    memory_usage:
-      intermediate_entities_list: "50 entities × 200 bytes = 10 KB"
-      temporary_buffers: "~ 50 KB"
-      peak_memory: "~ 100 KB"
+                      let entity_type = tag[2..].to_string();
+                      current_entity = Some(RawEntity {
+                          entity_type,
+                          token_indices: vec![idx],
+                          start_token: idx,
+                          end_token: idx + 1,
+                      });
+                  }
+                  tag if tag.starts_with("I-") => {
+                      // Continue entity (only if same type)
+                      let entity_type = &tag[2..];
 
-  quality_metrics:
-    entity_boundary_accuracy: 0.98
-    entity_boundary_definition: "Exact match on start/end positions"
+                      if let Some(ref mut entity) = current_entity {
+                          if entity.entity_type == entity_type {
+                              entity.token_indices.push(idx);
+                              entity.end_token = idx + 1;
+                          } else {
+                              // Type mismatch, end current, start new
+                              entities.push(current_entity.take().unwrap());
+                              current_entity = Some(RawEntity {
+                                  entity_type: entity_type.to_string(),
+                                  token_indices: vec![idx],
+                                  start_token: idx,
+                                  end_token: idx + 1,
+                              });
+                          }
+                      } else {
+                          // I-* without B-*, treat as B-*
+                          current_entity = Some(RawEntity {
+                              entity_type: entity_type.to_string(),
+                              token_indices: vec![idx],
+                              start_token: idx,
+                              end_token: idx + 1,
+                          });
+                      }
+                  }
+                  _ => {}
+              }
+          }
 
-    entity_type_accuracy: 0.96
-    type_accuracy_definition: "Correct classification (PERSON vs LOCATION, etc.)"
+          // Push final entity if any
+          if let Some(entity) = current_entity {
+              entities.push(entity);
+          }
 
-    confidence_calibration: 0.92
-    calibration_definition: |
-      Does entity confidence reflect true probability of correctness?
-      High calibration = confidence scores are well-correlated with accuracy
+          entities
+      }
 
-    end_to_end_precision: 0.94
-    end_to_end_recall: 0.91
+  edge_cases:
+    i_without_b:
+      scenario: "I-PERSON without preceding B-PERSON"
+      handling: "Treat I-PERSON as B-PERSON (start new entity)"
 
-  architecture:
-    adr_references: ["ADR-0035b: ML-based NER"]
-    k1_module: "privacy.ner_postprocessing"
-    parent_contract: "C_PRIVACY_ENTITY_TYPES_009"
-    integration_points:
-      - "BERT NER inference (input)"
-      - "Hybrid detector (output merged with regex)"
-      - "Redaction engine (entity placeholder mapping)"
-      - "Audit logger (tracks deduplication decisions)"
+    type_mismatch:
+      scenario: "B-PERSON followed by I-LOCATION"
+      handling: "End PERSON entity, start new LOCATION entity"
 
-  testing:
-    unit_tests:
-      test_1_merge: "Token merging (B + I + I → single span)"
-      test_2_filter: "Confidence filtering (remove < threshold)"
-      test_3_dedup: "Overlap deduplication (keep max confidence)"
-      test_4_correct: "Tag correction (fix invalid BIO sequences)"
+    consecutive_b_tags:
+      scenario: "B-PERSON followed by B-PERSON"
+      handling: "End first entity, start second entity"
 
-    edge_cases:
-      case_1_single_token: "Entity with only B tag (no I)"
-      case_2_invalid_bio: "Consecutive I tags without B"
-      case_3_overlapping: "Same span detected twice (different confidences)"
-      case_4_nested: "Entity completely inside another"
-      case_5_type_mismatch: "B-PERSON followed by I-LOCATION"
-      case_6_empty_text: "Text with no entities"
-      case_7_all_entities: "Every token is entity"
-      case_8_long_entity: "Multi-word entity (5+ tokens)"
+  performance:
+    latency: "<0.2ms"
+    memory: "O(num_entities)"
 
-    test_vectors: 500
+confidence_filtering:
+  threshold: 0.8
+  description: "Filter entities with average token confidence below threshold"
 
-  notes: |
-    Post-processing converts token-level BERT predictions to entity-level detections.
-    Critical for converting subword tokens back to coherent entities. Deduplication
-    prevents double-counting from model redundancy. Hybrid integration with regex
-    enables 95% total recall (85% regex + 10% BERT-NER).
+  algorithm: "Average confidence across entity tokens"
 
-    Typical latency: <1ms per detection. Production deployment shows 0.98 boundary
-    accuracy, 0.96 type accuracy, 0.94 precision, 0.91 recall end-to-end.
+  implementation:
+    language: "Rust"
+    code: |
+      fn filter_by_confidence(
+          entities: Vec<RawEntity>,
+          logits: &Array3<f32>,
+          threshold: f32,
+      ) -> Vec<RawEntity> {
+          entities
+              .into_iter()
+              .filter(|entity| {
+                  let avg_confidence = compute_entity_confidence(entity, logits);
+                  avg_confidence >= threshold
+              })
+              .collect()
+      }
+
+      fn compute_entity_confidence(
+          entity: &RawEntity,
+          logits: &Array3<f32>,
+      ) -> f32 {
+          let mut total_confidence = 0.0;
+
+          for &token_idx in &entity.token_indices {
+              let token_logits = logits.slice(s![0, token_idx, ..]);
+              let max_logit = token_logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+
+              // Softmax for confidence score
+              let exp_sum: f32 = token_logits.iter().map(|&x| (x - max_logit).exp()).sum();
+              let max_confidence = (max_logit - max_logit).exp() / exp_sum;
+
+              total_confidence += max_confidence;
+          }
+
+          total_confidence / entity.token_indices.len() as f32
+      }
+
+  confidence_distribution:
+    high: ">0.95 (70% of entities pass)"
+    medium: "0.80-0.95 (25% of entities pass)"
+    low: "<0.80 (5% of entities filtered out)"
+
+  metrics:
+    - name: "pii_ner_filtered_low_confidence_total"
+      type: "counter"
+      labels: ["entity_type"]
+      description: "Entities filtered due to low confidence"
+
+  performance:
+    latency: "<0.05ms per entity"
+    memory: "O(num_entities)"
+
+token_span_alignment:
+  purpose: "Map subword tokens to character offsets in original text"
+
+  challenge: "Tokenization splits words into subwords (e.g., 'John' → ['Jo', '##hn'])"
+
+  algorithm: "Track character offsets during tokenization"
+
+  implementation:
+    language: "Rust"
+    code: |
+      use tokenizers::Encoding;
+
+      struct CharLevelEntity {
+          entity_type: String,
+          value: String,
+          start_pos: usize,  // Character offset
+          end_pos: usize,    // Character offset
+          confidence: f32,
+      }
+
+      fn align_to_char_spans(
+          entities: Vec<RawEntity>,
+          encoding: &Encoding,
+          original_text: &str,
+          confidences: Vec<f32>,
+      ) -> Vec<CharLevelEntity> {
+          entities
+              .into_iter()
+              .zip(confidences)
+              .map(|(entity, confidence)| {
+                  // Get character offsets for start and end tokens
+                  let start_offset = encoding.token_to_chars(entity.start_token)
+                      .map(|range| range.start)
+                      .unwrap_or(0);
+
+                  let end_offset = encoding.token_to_chars(entity.end_token - 1)
+                      .map(|range| range.end)
+                      .unwrap_or(original_text.len());
+
+                  let value = original_text[start_offset..end_offset].to_string();
+
+                  CharLevelEntity {
+                      entity_type: entity.entity_type,
+                      value,
+                      start_pos: start_offset,
+                      end_pos: end_offset,
+                      confidence,
+                  }
+              })
+              .collect()
+      }
+
+  tokenization_offsets:
+    feature: "tokenizers crate provides token_to_chars() method"
+    example:
+      text: "Contact John Doe"
+      tokens: ["Contact", "John", "Do", "##e"]
+      token_offsets:
+        - "Contact: (0, 7)"
+        - "John: (8, 12)"
+        - "Do: (13, 15)"
+        - "##e: (15, 16)"
+      entity_span:
+        tokens: ["John", "Do", "##e"]
+        char_span: (8, 16)
+        value: "John Doe"
+
+  edge_cases:
+    whitespace_handling:
+      scenario: "Multiple spaces between tokens"
+      handling: "token_to_chars() returns correct offsets"
+
+    special_characters:
+      scenario: "Punctuation adjacent to entity"
+      handling: "Exclude punctuation from entity span"
+      example:
+        text: "Call John."
+        entity: "John (not John.)"
+
+  performance:
+    latency: "<0.1ms"
+    memory: "O(num_entities)"
+
+entity_deduplication:
+  purpose: "Remove overlapping spans from NER and regex detection"
+
+  strategy: "Prefer regex over NER for overlapping spans"
+  rationale: "Regex has 100% precision for structured PII"
+
+  algorithm: "Interval tree for overlap detection"
+
+  implementation:
+    language: "Rust"
+    code: |
+      fn deduplicate_entities(
+          ner_entities: Vec<PiiDetection>,
+          regex_entities: Vec<PiiDetection>,
+      ) -> Vec<PiiDetection> {
+          let mut all_entities = regex_entities.clone();
+
+          // Add NER entities that don't overlap with regex
+          for ner_entity in ner_entities {
+              let overlaps = regex_entities.iter().any(|regex_entity| {
+                  spans_overlap(
+                      (ner_entity.start_pos, ner_entity.end_pos),
+                      (regex_entity.start_pos, regex_entity.end_pos),
+                  )
+              });
+
+              if !overlaps {
+                  all_entities.push(ner_entity);
+              }
+          }
+
+          // Sort by start position
+          all_entities.sort_by_key(|e| e.start_pos);
+          all_entities
+      }
+
+      fn spans_overlap(span1: (usize, usize), span2: (usize, usize)) -> bool {
+          let (start1, end1) = span1;
+          let (start2, end2) = span2;
+
+          // Overlaps if start1 < end2 AND start2 < end1
+          start1 < end2 && start2 < end1
+      }
+
+  overlap_scenarios:
+    exact_match:
+      example:
+        regex: "john@example.com - EMAIL"
+        ner: "john@example.com - MISC"
+        result: "Use regex (EMAIL)"
+
+    partial_overlap:
+      example:
+        regex: "123 Main Street - ADDRESS pattern with street suffix"
+        ner: "123 Main - LOCATION without suffix"
+        result: "Use regex (more complete)"
+
+    no_overlap:
+      example:
+        regex: "john@example.com - EMAIL"
+        ner: "John Doe - PERSON"
+        result: "Keep both"
+
+  metrics:
+    - name: "pii_deduplication_overlaps_total"
+      type: "counter"
+      labels: ["ner_type", "regex_type"]
+      description: "NER entities removed due to regex overlap"
+
+  performance:
+    latency: "<0.1ms"
+    complexity: "O(n * m) where n=NER entities, m=regex entities"
+    optimization: "Use interval tree for O(n log m) if >100 entities"
+
+final_output_format:
+  struct: "PiiDetection"
+  fields:
+    pii_type:
+      type: "String"
+      values: ["name", "email", "phone", "ssn", "credit_card", "address", "organization"]
+
+    value:
+      type: "String"
+      description: "Original PII text"
+
+    placeholder:
+      type: "String"
+      values: ["[NAME]", "[EMAIL]", "[PHONE]", "[SSN]", "[CREDIT_CARD]", "[ADDRESS]", "[ORGANIZATION]"]
+
+    start_pos:
+      type: "usize"
+      description: "Character offset (0-indexed)"
+
+    end_pos:
+      type: "usize"
+      description: "Character offset (exclusive)"
+
+    confidence:
+      type: "f32"
+      range: "[0.0, 1.0]"
+      description: "Detection confidence (1.0 for regex)"
+
+    detection_method:
+      type: "String"
+      values: ["bert_ner", "regex"]
+
+  example:
+    - pii_type: "email"
+      value: "john@example.com"
+      placeholder: "[EMAIL]"
+      start_pos: 15
+      end_pos: 31
+      confidence: 1.0
+      detection_method: "regex"
+
+    - pii_type: "name"
+      value: "John Doe"
+      placeholder: "[NAME]"
+      start_pos: 8
+      end_pos: 16
+      confidence: 0.95
+      detection_method: "bert_ner"
+
+error_handling:
+  invalid_token_index:
+    scenario: "token_to_chars() returns None"
+    handling: "Skip entity, log warning, emit metric"
+    metric: "pii_ner_alignment_errors_total"
+
+  confidence_computation_error:
+    scenario: "Logits contain NaN or Inf"
+    handling: "Set confidence to 0.0, filter entity"
+    metric: "pii_ner_confidence_errors_total"
+
+  deduplication_error:
+    scenario: "Overlap detection fails"
+    handling: "Keep both entities, log warning"
+    metric: "pii_deduplication_errors_total"
+
+performance_budget:
+  total_post_processing: "<0.5ms"
+  breakdown:
+    logits_to_labels: "<0.05ms"
+    bio_tag_decoding: "<0.2ms"
+    confidence_filtering: "<0.05ms"
+    token_span_alignment: "<0.1ms"
+    entity_deduplication: "<0.1ms"
+
+  scalability:
+    small_input: "<100 tokens → <0.3ms"
+    medium_input: "100-300 tokens → <0.5ms"
+    large_input: "300-512 tokens → <0.8ms"
+
+observability:
+  metrics:
+    - name: "pii_ner_post_processing_duration_ms"
+      type: "histogram"
+      labels: ["stage"]  # logits_to_labels, bio_tag_decoding, etc.
+      buckets: [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+
+    - name: "pii_ner_entities_decoded_total"
+      type: "counter"
+      labels: ["entity_type"]
+
+    - name: "pii_ner_entities_filtered_total"
+      type: "counter"
+      labels: ["entity_type", "reason"]  # low_confidence, alignment_error
+
+    - name: "pii_deduplication_overlaps_total"
+      type: "counter"
+      labels: ["ner_type", "regex_type"]
+
+  tracing:
+    spans:
+      - "post_processing.logits_to_labels"
+      - "post_processing.bio_tag_decoding"
+      - "post_processing.confidence_filtering"
+      - "post_processing.token_span_alignment"
+      - "post_processing.entity_deduplication"
+
+testing:
+  unit_tests:
+    - test_logits_to_labels_argmax
+    - test_bio_tag_decoding_fsm
+    - test_bio_tag_edge_cases_i_without_b
+    - test_bio_tag_edge_cases_type_mismatch
+    - test_confidence_filtering_threshold
+    - test_token_span_alignment_subwords
+    - test_entity_deduplication_overlap
+    - test_entity_deduplication_no_overlap
+
+  integration_tests:
+    - test_end_to_end_post_processing
+    - test_hybrid_ner_regex_deduplication
+
+  performance_tests:
+    - test_post_processing_latency_small_input
+    - test_post_processing_latency_medium_input
+    - test_post_processing_latency_large_input
+
+  edge_case_tests:
+    - test_empty_input
+    - test_no_entities_detected
+    - test_all_entities_filtered
+    - test_overlapping_entities_same_type
+    - test_adjacent_entities
+
+documentation:
+  post_processing_guide:
+    path: "docs/privacy/post-processing.md"
+    sections:
+      - "BIO tag decoding algorithm"
+      - "Confidence filtering"
+      - "Token span alignment"
+      - "Entity deduplication"
+      - "Performance characteristics"

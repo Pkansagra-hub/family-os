@@ -1,0 +1,336 @@
+# HIPAA Audit Controls Contract
+# Source ADR: 0035d-audit-trail-gdpr-compliance.md
+# Epic 2.9, Issue 2.9.4
+# Purpose: HIPAA Security Rule audit controls - log all PHI access with who/what/when
+
+contract:
+  name: hipaa_audit_controls
+  version: "1.0.0"
+  source_adr: "0035d-audit-trail-gdpr-compliance.md"
+  epic: "2.9"
+  issue: "2.9.4"
+
+hipaa_security_rule:
+  title: "Security Standards for the Protection of Electronic Protected Health Information"
+  citation: "45 CFR Parts 160, 162, and 164"
+  effective_date: "2003 (updated 2013)"
+  audit_controls: "164.308(a)(1)(ii)(D) - Audit controls"
+
+phi_identifiers:
+  description: "18 categories of Protected Health Information (PHI)"
+  identifiers:
+    - "name"                    # Names
+    - "address"                 # Geographic subdivisions smaller than state
+    - "date"                    # Dates (birth, admission, discharge, death)
+    - "phone"                   # Telephone numbers
+    - "fax"                     # Fax numbers
+    - "email"                   # Email addresses
+    - "ssn"                     # Social security numbers
+    - "mrn"                     # Medical record numbers
+    - "health_plan"             # Health plan beneficiary numbers
+    - "account"                 # Account numbers
+    - "certificate"             # Certificate/license numbers
+    - "vehicle_id"              # Vehicle identifiers and serial numbers
+    - "device_id"               # Device identifiers and serial numbers
+    - "url"                     # Web URLs
+    - "ip"                      # Internet protocol addresses
+    - "biometric"               # Biometric identifiers (fingerprints, retinal scan)
+    - "photo"                   # Full-face photos
+    - "unique_id"               # Any other unique identifying number
+
+audit_control_requirements:
+  log_all_phi_access: "Log all access to PHI with who/what/when"
+  accounting_of_disclosures: "Patient right to access PHI access log"
+  retention: "6 years minimum"
+  privileged_access: "Log all privileged operations"
+  emergency_access: "Log emergency access to PHI"
+
+hipaa_audit_logger:
+  purpose: "Log all PHI operations for HIPAA compliance"
+  integration: "Extends base AuditLogger with PHI-specific validation"
+
+  rust_implementation: |
+    use crate::privacy::audit_logger::{AuditLogger, AuditLogEntry};
+    use std::sync::Arc;
+
+    /// HIPAA PHI identifiers (18 categories)
+    pub const HIPAA_PHI_IDENTIFIERS: &[&str] = &[
+        "name", "address", "date", "phone", "fax", "email", "ssn", "mrn",
+        "health_plan", "account", "certificate", "vehicle_id", "device_id",
+        "url", "ip", "biometric", "photo", "unique_id"
+    ];
+
+    pub struct HIPAAAuditLogger {
+        base_logger: Arc<AuditLogger>,
+    }
+
+    impl HIPAAAuditLogger {
+        /// Initialize HIPAA audit logger
+        pub fn new(base_logger: Arc<AuditLogger>) -> Self {
+            Self { base_logger }
+        }
+
+        /// Validate PHI identifier (HIPAA compliance)
+        pub fn validate_phi_identifier(&self, pii_type: &str) -> bool {
+            HIPAA_PHI_IDENTIFIERS.contains(&pii_type)
+        }
+
+        /// Log PHI access (HIPAA audit control)
+        pub async fn log_phi_access(
+            &self,
+            pii_type: &str,
+            user_id: &str,
+            space_id: &str,
+            trace_id: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // Validate PHI identifier
+            if !self.validate_phi_identifier(pii_type) {
+                return Err(format!("Unknown PHI identifier: {}", pii_type).into());
+            }
+
+            // Log to audit trail
+            self.base_logger.log_vault_operation(
+                "phi_access",
+                "N/A",
+                pii_type,
+                user_id,
+                space_id,
+                trace_id,
+            ).await?;
+
+            println!(
+                "[HIPAAAuditLogger] Logged PHI access: {} (user: {}, trace: {})",
+                pii_type,
+                user_id,
+                trace_id
+            );
+
+            // Emit HIPAA-specific metrics
+            metrics::counter!("hipaa_phi_accesses_total", "phi_type" => pii_type.to_string()).increment(1);
+
+            Ok(())
+        }
+
+        /// Generate accounting of disclosures (HIPAA 164.528(a))
+        pub async fn generate_accounting_of_disclosures(
+            &self,
+            user_id: &str,
+            space_id: &str,
+        ) -> Result<Vec<DisclosureEntry>, Box<dyn std::error::Error>> {
+            // Query audit log for all PHI accesses
+            let audit_entries = self.base_logger.query_user_audit_log(user_id, space_id).await?;
+
+            let disclosures: Vec<DisclosureEntry> = audit_entries.iter()
+                .filter(|entry| self.validate_phi_identifier(&entry.pii_type))
+                .map(|entry| DisclosureEntry {
+                    phi_type: entry.pii_type.clone(),
+                    operation: entry.operation.clone(),
+                    timestamp: entry.timestamp,
+                    trace_id: entry.trace_id.clone(),
+                })
+                .collect();
+
+            println!(
+                "[HIPAAAuditLogger] Generated accounting of disclosures for user {}: {} entries",
+                user_id,
+                disclosures.len()
+            );
+
+            Ok(disclosures)
+        }
+
+        /// Log privileged PHI access (admin operations)
+        pub async fn log_privileged_phi_access(
+            &self,
+            pii_type: &str,
+            admin_user_id: &str,
+            patient_user_id: &str,
+            space_id: &str,
+            trace_id: &str,
+            justification: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // Validate PHI identifier
+            if !self.validate_phi_identifier(pii_type) {
+                return Err(format!("Unknown PHI identifier: {}", pii_type).into());
+            }
+
+            // Log privileged access with justification
+            self.base_logger.log_vault_operation(
+                "privileged_phi_access",
+                &format!("justification: {}", justification),
+                pii_type,
+                admin_user_id,
+                space_id,
+                trace_id,
+            ).await?;
+
+            println!(
+                "[HIPAAAuditLogger] Logged privileged PHI access: {} by admin {} for patient {} (trace: {})",
+                pii_type,
+                admin_user_id,
+                patient_user_id,
+                trace_id
+            );
+
+            // Emit privileged access metrics
+            metrics::counter!("hipaa_privileged_phi_accesses_total").increment(1);
+
+            Ok(())
+        }
+
+        /// Log emergency PHI access
+        pub async fn log_emergency_phi_access(
+            &self,
+            pii_type: &str,
+            user_id: &str,
+            space_id: &str,
+            trace_id: &str,
+            emergency_reason: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            // Validate PHI identifier
+            if !self.validate_phi_identifier(pii_type) {
+                return Err(format!("Unknown PHI identifier: {}", pii_type).into());
+            }
+
+            // Log emergency access
+            self.base_logger.log_vault_operation(
+                "emergency_phi_access",
+                &format!("emergency_reason: {}", emergency_reason),
+                pii_type,
+                user_id,
+                space_id,
+                trace_id,
+            ).await?;
+
+            println!(
+                "[HIPAAAuditLogger] Logged emergency PHI access: {} (user: {}, reason: {}, trace: {})",
+                pii_type,
+                user_id,
+                emergency_reason,
+                trace_id
+            );
+
+            // Emit emergency access metrics
+            metrics::counter!("hipaa_emergency_phi_accesses_total").increment(1);
+
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, serde::Serialize)]
+    pub struct DisclosureEntry {
+        pub phi_type: String,
+        pub operation: String,
+        pub timestamp: i64,
+        pub trace_id: String,
+    }
+
+accounting_of_disclosures_api:
+  endpoint: "GET /api/v1/privacy/hipaa/accounting-of-disclosures"
+  authentication: "JWT token required"
+  parameters:
+    user_id: "Patient user ID"
+    space_id: "Space identifier"
+    start_date: "Start date (optional, default: 6 years ago)"
+    end_date: "End date (optional, default: now)"
+
+  response: |
+    {
+      "user_id": "patient_12345",
+      "space_id": "space_001",
+      "disclosures": [
+        {
+          "phi_type": "ssn",
+          "operation": "vault_retrieve",
+          "timestamp": 1698765432000,
+          "trace_id": "trace_abc123"
+        },
+        {
+          "phi_type": "email",
+          "operation": "phi_access",
+          "timestamp": 1698765433000,
+          "trace_id": "trace_def456"
+        }
+      ],
+      "total_disclosures": 2,
+      "date_range": {
+        "start": 1483228800000,
+        "end": 1698765433000
+      }
+    }
+
+hipaa_compliance_validation:
+  phi_coverage_check: |
+    - All 18 PHI identifiers must be covered
+    - Unknown PII types rejected for PHI operations
+    - Validation occurs before logging
+
+  audit_trail_integrity: |
+    - All PHI operations logged
+    - Tamper-proof audit log
+    - 6-year retention minimum
+
+  access_controls: |
+    - User can only access own PHI disclosures
+    - Admin access logged with justification
+    - Emergency access logged with reason
+
+privileged_access_monitoring:
+  description: "Monitor and audit privileged PHI access"
+  triggers:
+    - "Admin accessing patient PHI"
+    - "Cross-space PHI access"
+    - "Bulk PHI operations"
+
+  logging:
+    - "Admin user ID"
+    - "Patient user ID"
+    - "PHI type accessed"
+    - "Justification required"
+    - "Timestamp and trace ID"
+
+emergency_access_procedures:
+  description: "Emergency access to PHI during system failures"
+  conditions:
+    - "System unavailable for >15 minutes"
+    - "Patient care at risk"
+    - "No alternative access available"
+
+  requirements:
+    - "Emergency reason documented"
+    - "Access logged with emergency flag"
+    - "Post-emergency audit review"
+    - "Access automatically revoked after emergency"
+
+hipaa_audit_report_generation:
+  monthly_report: |
+    - Total PHI accesses by type
+    - Privileged access incidents
+    - Emergency access incidents
+    - Compliance violations
+    - Audit log integrity checks
+
+  annual_report: |
+    - Complete accounting of disclosures
+    - Security incident reports
+    - Breach notification compliance
+    - Audit control effectiveness
+
+testing_scenarios:
+  unit_tests:
+    - test_phi_identifier_validation
+    - test_phi_access_logging
+    - test_accounting_of_disclosures
+    - test_privileged_access_logging
+    - test_emergency_access_logging
+
+  integration_tests:
+    - test_full_phi_workflow_audit_trail
+    - test_accounting_of_disclosures_api
+    - test_privileged_access_monitoring
+    - test_emergency_access_procedures
+
+  compliance_tests:
+    - test_all_18_phi_identifiers_covered
+    - test_audit_trail_tamper_proof
+    - test_6_year_retention_policy

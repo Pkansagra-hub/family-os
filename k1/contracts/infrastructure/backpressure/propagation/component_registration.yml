@@ -1,0 +1,304 @@
+classes:
+  - name: ComponentRegistration
+    description: Registry for backpressure-aware components with callback management and lifecycle tracking
+    research: ADR-0039b (backpressure propagation & signal flow), component registration patterns, dependency injection
+    performance_budget: <1ms registration/unregistration, <100ms startup registration, <10MB memory overhead
+    reliability_properties:
+      - startup_registration: All components register during initialization
+      - lifecycle_tracking: Components unregister on shutdown
+      - callback_validation: Registered callbacks are validated for correctness
+      - dependency_injection: Coordinator injected into components at registration
+    methods:
+      - name: register_component
+        description: Register a component with its backpressure callback and metadata
+        parameters:
+          - name: component
+            type: BackpressureComponent
+            description: Component instance with callback and metadata
+        returns:
+          type: Result<(), RegistrationError>
+          description: Success or error details if registration fails
+        implementation:
+          rust: |
+            use std::collections::HashMap;
+            use std::sync::Arc;
+            use tokio::sync::Mutex;
+            use serde::{Serialize, Deserialize};
+
+            #[derive(Serialize, Deserialize, Debug, Clone)]
+            pub struct ComponentMetadata {
+                pub name: String,
+                pub component_type: ComponentType,
+                pub priority: i32, // Higher priority components respond first
+                pub capabilities: Vec<String>,
+                pub registered_at: f64,
+            }
+
+            #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+            pub enum ComponentType {
+                ApiGateway,
+                Orchestrator,
+                AgentFabric,
+                ToolRunner,
+                Storage,
+                Telemetry,
+                Other(String),
+            }
+
+            impl ComponentType {
+                pub fn as_str(&self) -> &str {
+                    match self {
+                        ComponentType::ApiGateway => "api_gateway",
+                        ComponentType::Orchestrator => "orchestrator",
+                        ComponentType::AgentFabric => "agent_fabric",
+                        ComponentType::ToolRunner => "tool_runner",
+                        ComponentType::Storage => "storage",
+                        ComponentType::Telemetry => "telemetry",
+                        ComponentType::Other(s) => s,
+                    }
+                }
+            }
+
+            pub trait BackpressureComponent: Send + Sync {
+                fn name(&self) -> &str;
+                fn component_type(&self) -> ComponentType;
+                fn priority(&self) -> i32;
+                fn capabilities(&self) -> Vec<String>;
+                fn on_backpressure_signal(&self, signal: super::backpressure_signal::BackpressureSignal) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+            }
+
+            pub struct ComponentRegistration {
+                coordinator: Arc<super::backpressure_coordinator::BackpressureCoordinator>,
+                registered_components: Arc<Mutex<HashMap<String, ComponentMetadata>>>,
+            }
+
+            impl ComponentRegistration {
+                pub fn new(coordinator: Arc<super::backpressure_coordinator::BackpressureCoordinator>) -> Self {
+                    Self {
+                        coordinator,
+                        registered_components: Arc::new(Mutex::new(HashMap::new())),
+                    }
+                }
+
+                pub async fn register_component<T: BackpressureComponent + 'static>(
+                    &self,
+                    component: Arc<T>,
+                ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+                    let component_name = component.name().to_string();
+                    let component_type = component.component_type();
+                    let priority = component.priority();
+                    let capabilities = component.capabilities();
+
+                    // Create metadata
+                    let metadata = ComponentMetadata {
+                        name: component_name.clone(),
+                        component_type: component_type.clone(),
+                        priority,
+                        capabilities: capabilities.clone(),
+                        registered_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64(),
+                    };
+
+                    // Register callback with coordinator
+                    let component_clone = Arc::clone(&component);
+                    let callback = Arc::new(move |signal: super::backpressure_signal::BackpressureSignal| {
+                        component_clone.on_backpressure_signal(signal)
+                    });
+
+                    self.coordinator.register_callback(component_name.clone(), callback).await
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+                    // Store metadata
+                    {
+                        let mut registered = self.registered_components.lock().await;
+                        registered.insert(component_name.clone(), metadata);
+                    }
+
+                    tracing::info!(
+                        component = %component_name,
+                        component_type = %component_type.as_str(),
+                        priority = priority,
+                        capabilities = ?capabilities,
+                        "Backpressure component registered"
+                    );
+
+                    Ok(())
+                }
+
+                pub async fn unregister_component(&self, component_name: &str) -> bool {
+                    let removed_metadata = {
+                        let mut registered = self.registered_components.lock().await;
+                        registered.remove(component_name)
+                    };
+
+                    if removed_metadata.is_some() {
+                        let removed_callback = self.coordinator.unregister_callback(component_name).await;
+                        if removed_callback {
+                            tracing::info!(component = %component_name, "Backpressure component unregistered");
+                            true
+                        } else {
+                            tracing::warn!(component = %component_name, "Component metadata removed but callback not found");
+                            true
+                        }
+                    } else {
+                        false
+                    }
+                }
+
+                pub async fn get_registered_components(&self) -> Vec<ComponentMetadata> {
+                    let registered = self.registered_components.lock().await;
+                    registered.values().cloned().collect()
+                }
+
+                pub async fn get_component_metadata(&self, component_name: &str) -> Option<ComponentMetadata> {
+                    let registered = self.registered_components.lock().await;
+                    registered.get(component_name).cloned()
+                }
+
+                pub async fn get_components_by_type(&self, component_type: &ComponentType) -> Vec<ComponentMetadata> {
+                    let registered = self.registered_components.lock().await;
+                    registered.values()
+                        .filter(|metadata| metadata.component_type == *component_type)
+                        .cloned()
+                        .collect()
+                }
+            }
+          python: |
+            from dataclasses import dataclass, field
+            from typing import Dict, List, Optional, Protocol, Any
+            from enum import Enum
+            import time
+            import logging
+
+            class ComponentType(Enum):
+                """Types of backpressure-aware components"""
+                API_GATEWAY = "api_gateway"
+                ORCHESTRATOR = "orchestrator"
+                AGENT_FABRIC = "agent_fabric"
+                TOOL_RUNNER = "tool_runner"
+                STORAGE = "storage"
+                TELEMETRY = "telemetry"
+                OTHER = "other"
+
+            @dataclass
+            class ComponentMetadata:
+                """Metadata for registered backpressure components"""
+                name: str
+                component_type: ComponentType
+                priority: int  # Higher priority components respond first
+                capabilities: List[str]
+                registered_at: float
+
+            class BackpressureComponent(Protocol):
+                """Protocol for components that respond to backpressure signals"""
+
+                def name(self) -> str:
+                    """Component name"""
+                    ...
+
+                def component_type(self) -> ComponentType:
+                    """Component type"""
+                    ...
+
+                def priority(self) -> int:
+                    """Response priority (higher = responds first)"""
+                    ...
+
+                def capabilities(self) -> List[str]:
+                    """Component capabilities"""
+                    ...
+
+                async def on_backpressure_signal(self, signal: Any) -> None:  # signal: BackpressureSignal
+                    """Handle backpressure signal"""
+                    ...
+
+            class ComponentRegistration:
+                """Registry for backpressure-aware components"""
+
+                def __init__(self, coordinator: Any):  # coordinator: BackpressureCoordinator
+                    self.coordinator = coordinator
+                    self.registered_components: Dict[str, ComponentMetadata] = {}
+                    self.logger = logging.getLogger(__name__)
+
+                async def register_component(self, component: BackpressureComponent) -> None:
+                    """Register a component with the backpressure coordinator"""
+                    component_name = component.name()
+                    component_type = component.component_type()
+                    priority = component.priority()
+                    capabilities = component.capabilities()
+
+                    # Create metadata
+                    metadata = ComponentMetadata(
+                        name=component_name,
+                        component_type=component_type,
+                        priority=priority,
+                        capabilities=capabilities,
+                        registered_at=time.time()
+                    )
+
+                    # Register callback with coordinator
+                    await self.coordinator.register_callback(
+                        component.on_backpressure_signal,
+                        component_name
+                    )
+
+                    # Store metadata
+                    self.registered_components[component_name] = metadata
+
+                    self.logger.info(
+                        f"Backpressure component registered: {component_name}",
+                        extra={
+                            'component': component_name,
+                            'component_type': component_type.value,
+                            'priority': priority,
+                            'capabilities': capabilities
+                        }
+                    )
+
+                async def unregister_component(self, component_name: str) -> bool:
+                    """Unregister a component"""
+                    if component_name in self.registered_components:
+                        del self.registered_components[component_name]
+                        removed = self.coordinator.unregister_callback(component_name)
+                        if removed:
+                            self.logger.info(f"Backpressure component unregistered: {component_name}")
+                        return True
+                    return False
+
+                def get_registered_components(self) -> List[ComponentMetadata]:
+                    """Get all registered component metadata"""
+                    return list(self.registered_components.values())
+
+                def get_component_metadata(self, component_name: str) -> Optional[ComponentMetadata]:
+                    """Get metadata for a specific component"""
+                    return self.registered_components.get(component_name)
+
+                def get_components_by_type(self, component_type: ComponentType) -> List[ComponentMetadata]:
+                    """Get all components of a specific type"""
+                    return [
+                        metadata for metadata in self.registered_components.values()
+                        if metadata.component_type == component_type
+                    ]
+
+component_types:
+  - api_gateway: HTTP request admission control and response throttling
+  - orchestrator: Task scheduling and background job management
+  - agent_fabric: Agent lifecycle management and resource allocation
+  - tool_runner: Tool execution timeout and cancellation management
+  - storage: Database connection pooling and query throttling
+  - telemetry: Metrics collection and export rate limiting
+
+registration_requirements:
+  - startup_order: Components register during initialization in dependency order
+  - priority_assignment: Critical components (API Gateway) get higher priority
+  - capability_declaration: Components declare their backpressure response capabilities
+  - lifecycle_management: Components unregister on graceful shutdown
+  - validation: Callback functions are validated for correctness at registration
+
+callback_patterns:
+  - async_execution: All callbacks are async to prevent blocking
+  - error_handling: Callbacks handle errors gracefully without crashing
+  - timeout_resilience: Callbacks implement timeout handling
+  - logging_integration: Callbacks log signal receipt and response actions

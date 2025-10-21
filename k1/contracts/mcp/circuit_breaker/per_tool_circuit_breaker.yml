@@ -1,0 +1,436 @@
+# Per-Tool Circuit Breaker Contract
+# Issue: 2.8.3 - Circuit Breaker Integration
+# Source: ADR-0034c (MCP Circuit Breaker Integration), lines 252-500
+
+contract:
+  name: "per_tool_circuit_breaker"
+  version: "1.0.0"
+  status: "PENDING_IMPLEMENTATION"
+  source_adr: "ADR-0034c"
+  parent_issue: "2.8.3"
+
+overview:
+  purpose: "Manage separate circuit breaker instances per MCP tool with independent state tracking"
+  scope: "Circuit breaker manager, per-tool isolation, configuration loading, state retrieval"
+  context: "Each tool (weather_api, calendar_sync, video_transcoder) has dedicated circuit breaker instance to prevent tool failure from affecting other tools"
+
+architecture:
+  principle: "Per-tool isolation - weather_api failure ≠ calendar_sync failure"
+  storage: "In-memory (tool_id → CircuitBreakerState mapping)"
+  future: "Redis-backed for multi-instance K1 coordination"
+  concurrency: "Thread-safe access to circuit breaker state"
+
+circuit_breaker_manager:
+  class: "CircuitBreakerManager"
+  responsibility: "Manage circuit breakers for all MCP tools"
+
+  attributes:
+    circuit_breakers:
+      type: "Dict[str, CircuitBreakerState]"
+      description: "Mapping from tool_id to circuit breaker state"
+      example: {"weather_api": CircuitBreakerState(...), "calendar_sync": CircuitBreakerState(...)}
+
+    default_config:
+      type: "dict"
+      description: "Default configuration for tools not explicitly configured"
+      values:
+        failure_threshold: 5
+        failure_window_seconds: 600
+        timeout_seconds: 30
+        half_open_attempts: 1
+
+  methods:
+    __init__:
+      signature: "__init__(self, config_path: str = 'k1/config/circuit_breaker.yml')"
+      description: "Initialize circuit breaker manager, load configuration"
+      steps:
+        - "Initialize empty circuit_breakers dict"
+        - "Load configuration from YAML file"
+        - "Pre-create circuit breakers for configured tools"
+      performance: "<100ms (YAML load + dict initialization)"
+
+    load_config:
+      signature: "load_config(self, config_path: str)"
+      description: "Load circuit breaker configuration from YAML"
+      yaml_format: |
+        circuit_breaker:
+          weather_api:
+            failure_threshold: 5
+            failure_window_seconds: 600
+            timeout_seconds: 30
+          calendar_sync:
+            failure_threshold: 3
+            timeout_seconds: 20
+          default:
+            failure_threshold: 5
+            failure_window_seconds: 600
+            timeout_seconds: 30
+      steps:
+        - "Parse YAML file with yaml.safe_load()"
+        - "Extract default configuration"
+        - "For each tool: Create CircuitBreakerConfig with tool-specific overrides"
+        - "Create CircuitBreakerState for each configured tool"
+      error_handling:
+        - "FileNotFoundError → Use built-in defaults, log warning"
+        - "yaml.YAMLError → Use built-in defaults, log error"
+        - "Invalid config values → Use default values, log warning"
+
+    get_circuit_breaker:
+      signature: "get_circuit_breaker(self, tool_id: str) -> CircuitBreakerState"
+      description: "Get circuit breaker for tool (create if doesn't exist)"
+      logic:
+        - "If tool_id in circuit_breakers: return existing"
+        - "Else: Create new CircuitBreakerState with default config"
+        - "Store in circuit_breakers dict"
+        - "Return circuit breaker"
+      performance: "<0.01ms (dict lookup or creation)"
+      thread_safety: "Lock-protected for concurrent access"
+
+    should_allow_request:
+      signature: "should_allow_request(self, tool_id: str) -> bool"
+      description: "Check if request should be allowed for tool"
+      logic:
+        - "Get circuit breaker for tool_id"
+        - "Call circuit_breaker.should_allow_request()"
+        - "Return result"
+      performance: "<0.1ms"
+
+    record_success:
+      signature: "record_success(self, tool_id: str)"
+      description: "Record successful request for tool"
+      logic:
+        - "Get circuit breaker for tool_id"
+        - "Call circuit_breaker.record_success()"
+        - "Emit success metric"
+      performance: "<0.1ms"
+
+    record_failure:
+      signature: "record_failure(self, tool_id: str)"
+      description: "Record failed request for tool"
+      logic:
+        - "Get circuit breaker for tool_id"
+        - "Call circuit_breaker.record_failure()"
+        - "Emit failure metric"
+        - "Check for state transition (CLOSED → OPEN)"
+      performance: "<0.1ms"
+
+    record_rejection:
+      signature: "record_rejection(self, tool_id: str)"
+      description: "Record rejected request for tool"
+      logic:
+        - "Get circuit breaker for tool_id"
+        - "Call circuit_breaker.record_rejection()"
+        - "Emit rejection metric"
+      performance: "<0.01ms"
+
+    get_state:
+      signature: "get_state(self, tool_id: str) -> CircuitState"
+      description: "Get current circuit state for tool"
+      returns: "CircuitState enum (CLOSED/OPEN/HALF_OPEN)"
+      performance: "<0.01ms"
+
+    get_stats:
+      signature: "get_stats(self, tool_id: str) -> dict"
+      description: "Get circuit breaker statistics for tool"
+      returns:
+        tool_id: "string"
+        state: "string (CLOSED/OPEN/HALF_OPEN)"
+        failure_count: "int"
+        total_requests: "int"
+        total_failures: "int"
+        total_rejections: "int"
+        failure_rate: "float (total_failures / total_requests)"
+        rejection_rate: "float (total_rejections / (total_requests + total_rejections))"
+      performance: "<0.1ms"
+
+per_tool_isolation:
+  principle: "Independent circuit breakers prevent cross-tool contamination"
+
+  scenario_1:
+    description: "Weather API fails, but calendar sync unaffected"
+    steps:
+      - "weather_api: 5 failures → circuit OPEN"
+      - "calendar_sync: continues normal operation (circuit CLOSED)"
+      - "booking_api: continues normal operation (circuit CLOSED)"
+    result: "Only weather_api requests rejected, other tools unaffected"
+
+  scenario_2:
+    description: "Multiple tools fail independently"
+    steps:
+      - "weather_api: 5 failures → circuit OPEN (30s cooldown)"
+      - "booking_api: 3 failures → circuit OPEN (60s cooldown)"
+      - "calendar_sync: healthy (circuit CLOSED)"
+    result: "Each tool has independent recovery timeline"
+
+  scenario_3:
+    description: "Tool recovery doesn't affect other tools"
+    steps:
+      - "weather_api: circuit OPEN → wait 30s → HALF_OPEN → probe succeeds → CLOSED"
+      - "booking_api: still OPEN (different cooldown period)"
+    result: "weather_api recovers independently"
+
+configuration_examples:
+  weather_api:
+    tool_id: "weather_api"
+    failure_threshold: 5
+    failure_window_seconds: 600
+    timeout_seconds: 30
+    half_open_attempts: 1
+    rationale: "Public API, transient failures common, moderate recovery time"
+
+  calendar_sync:
+    tool_id: "calendar_sync"
+    failure_threshold: 3
+    failure_window_seconds: 600
+    timeout_seconds: 20
+    half_open_attempts: 1
+    rationale: "Internal API, should be reliable, faster recovery expected"
+
+  booking_api:
+    tool_id: "booking_api"
+    failure_threshold: 3
+    failure_window_seconds: 600
+    timeout_seconds: 60
+    half_open_attempts: 1
+    rationale: "External API, slower recovery due to rate limiting"
+
+  model_hub:
+    tool_id: "model_hub"
+    failure_threshold: 5
+    failure_window_seconds: 600
+    timeout_seconds: 90
+    half_open_attempts: 2
+    rationale: "LLM inference, needs model warmup, multiple probes for stability"
+
+  video_transcoder:
+    tool_id: "video_transcoder"
+    failure_threshold: 2
+    failure_window_seconds: 300
+    timeout_seconds: 120
+    half_open_attempts: 1
+    rationale: "Resource-intensive, strict threshold, long warmup needed"
+
+  default:
+    failure_threshold: 5
+    failure_window_seconds: 600
+    timeout_seconds: 30
+    half_open_attempts: 1
+    rationale: "Fallback for unconfigured tools"
+
+implementation_example:
+  language: "Python"
+  code: |
+    from typing import Dict
+    import yaml
+
+    class CircuitBreakerManager:
+        def __init__(self, config_path: str = "k1/config/circuit_breaker.yml"):
+            self.circuit_breakers: Dict[str, CircuitBreakerState] = {}
+            self.load_config(config_path)
+
+        def load_config(self, config_path: str):
+            with open(config_path) as f:
+                data = yaml.safe_load(f)
+
+            cb_config = data.get("circuit_breaker", {})
+            self.default_config = cb_config.get("default", {
+                "failure_threshold": 5,
+                "failure_window_seconds": 600,
+                "timeout_seconds": 30,
+                "half_open_attempts": 1
+            })
+
+            # Pre-create circuit breakers for configured tools
+            for tool_id, tool_config in cb_config.items():
+                if tool_id == "default":
+                    continue
+
+                config = CircuitBreakerConfig(
+                    tool_id=tool_id,
+                    failure_threshold=tool_config.get("failure_threshold", self.default_config["failure_threshold"]),
+                    failure_window_seconds=tool_config.get("failure_window_seconds", self.default_config["failure_window_seconds"]),
+                    timeout_seconds=tool_config.get("timeout_seconds", self.default_config["timeout_seconds"]),
+                    half_open_attempts=tool_config.get("half_open_attempts", self.default_config["half_open_attempts"])
+                )
+
+                self.circuit_breakers[tool_id] = CircuitBreakerState(config=config)
+
+        def get_circuit_breaker(self, tool_id: str) -> CircuitBreakerState:
+            if tool_id not in self.circuit_breakers:
+                # Create with default config
+                config = CircuitBreakerConfig(
+                    tool_id=tool_id,
+                    failure_threshold=self.default_config["failure_threshold"],
+                    failure_window_seconds=self.default_config["failure_window_seconds"],
+                    timeout_seconds=self.default_config["timeout_seconds"],
+                    half_open_attempts=self.default_config["half_open_attempts"]
+                )
+                self.circuit_breakers[tool_id] = CircuitBreakerState(config=config)
+
+            return self.circuit_breakers[tool_id]
+
+        def should_allow_request(self, tool_id: str) -> bool:
+            cb = self.get_circuit_breaker(tool_id)
+            return cb.should_allow_request()
+
+        def record_success(self, tool_id: str):
+            cb = self.get_circuit_breaker(tool_id)
+            cb.record_success()
+
+        def record_failure(self, tool_id: str):
+            cb = self.get_circuit_breaker(tool_id)
+            cb.record_failure()
+
+        def record_rejection(self, tool_id: str):
+            cb = self.get_circuit_breaker(tool_id)
+            cb.record_rejection()
+
+        def get_state(self, tool_id: str) -> CircuitState:
+            cb = self.get_circuit_breaker(tool_id)
+            return cb.state
+
+        def get_stats(self, tool_id: str) -> dict:
+            cb = self.get_circuit_breaker(tool_id)
+            return {
+                "tool_id": tool_id,
+                "state": cb.state.value,
+                "failure_count": cb.failure_count,
+                "total_requests": cb.total_requests,
+                "total_failures": cb.total_failures,
+                "total_rejections": cb.total_rejections,
+                "failure_rate": cb.total_failures / cb.total_requests if cb.total_requests > 0 else 0,
+                "rejection_rate": cb.total_rejections / (cb.total_requests + cb.total_rejections) if (cb.total_requests + cb.total_rejections) > 0 else 0
+            }
+
+usage_example:
+  initialization:
+    code: |
+      # Initialize manager with config
+      cb_manager = CircuitBreakerManager("k1/config/circuit_breaker.yml")
+
+  check_request:
+    code: |
+      # Check if request should be allowed
+      if cb_manager.should_allow_request("weather_api"):
+          result = await call_tool("weather_api", {...})
+          cb_manager.record_success("weather_api")
+      else:
+          cb_manager.record_rejection("weather_api")
+          raise CircuitBreakerOpenError("Circuit breaker OPEN for weather_api")
+
+  handle_failure:
+    code: |
+      try:
+          result = await call_tool("weather_api", {...})
+          cb_manager.record_success("weather_api")
+      except Exception as e:
+          cb_manager.record_failure("weather_api")
+          raise
+
+  get_statistics:
+    code: |
+      # Get circuit breaker stats
+      stats = cb_manager.get_stats("weather_api")
+      print(f"Tool: {stats['tool_id']}")
+      print(f"State: {stats['state']}")
+      print(f"Failure rate: {stats['failure_rate']:.2%}")
+      print(f"Rejection rate: {stats['rejection_rate']:.2%}")
+
+future_enhancements:
+  redis_backed_state:
+    description: "Store circuit breaker state in Redis for multi-instance K1 coordination"
+    benefits:
+      - "Shared state across K1 instances"
+      - "Circuit breaker state survives K1 restart"
+      - "Coordinated recovery testing (HALF_OPEN probe from single instance)"
+    implementation:
+      - "Use Redis hash: HSET circuit_breaker:{tool_id} state CLOSED"
+      - "Update on state transitions"
+      - "Pub/sub for state change notifications"
+    performance: "<5ms (Redis read/write over network)"
+
+  adaptive_thresholds:
+    description: "Adjust failure threshold based on tool reliability history"
+    algorithm:
+      - "Track long-term failure rate (30 days)"
+      - "If failure_rate < 1%: Increase threshold (5 → 7)"
+      - "If failure_rate > 10%: Decrease threshold (5 → 3)"
+    example:
+      - "calendar_sync: 0.5% failure rate → threshold 7 (more lenient)"
+      - "flaky_api: 15% failure rate → threshold 3 (stricter)"
+
+  dynamic_cooldown:
+    description: "Adjust cooldown period based on recovery pattern"
+    algorithm:
+      - "Track probe success rate in HALF_OPEN"
+      - "If probe_success_rate > 80%: Decrease cooldown (30s → 20s)"
+      - "If probe_success_rate < 50%: Increase cooldown (30s → 60s)"
+    example:
+      - "weather_api: 90% probe success → 20s cooldown (fast recovery)"
+      - "unreliable_api: 30% probe success → 90s cooldown (slow recovery)"
+
+performance_characteristics:
+  circuit_check: "<0.1ms (in-memory dict lookup)"
+  state_update: "<0.1ms (memory write)"
+  config_load: "<100ms (YAML parse, one-time at startup)"
+  memory_per_tool: "~1KB (CircuitBreakerState object)"
+  memory_100_tools: "~100KB (acceptable overhead)"
+
+observability:
+  metrics:
+    circuit_breaker_state:
+      type: "Gauge"
+      labels: ["tool_id"]
+      description: "Current circuit state per tool"
+      query: "circuit_breaker_state"
+
+    circuit_breaker_failure_rate:
+      type: "Gauge"
+      labels: ["tool_id"]
+      description: "Failure rate per tool"
+      query: "circuit_breaker_failure_rate{tool_id='weather_api'}"
+
+  logging:
+    initialization:
+      message: "[CircuitBreakerManager] Initialized with config: {config_path}"
+      level: "INFO"
+
+    tool_created:
+      message: "[CircuitBreakerManager] Created circuit breaker for {tool_id} with default config"
+      level: "INFO"
+
+    state_transition:
+      message: "[CircuitBreakerManager] {tool_id}: {from_state} → {to_state} ({reason})"
+      level: "WARNING"
+
+testing_requirements:
+  unit_tests:
+    - "CircuitBreakerManager loads config from YAML"
+    - "CircuitBreakerManager creates circuit breaker with default config"
+    - "CircuitBreakerManager returns existing circuit breaker"
+    - "get_stats() returns accurate statistics"
+    - "Multiple tools have independent states"
+
+  integration_tests:
+    - "weather_api circuit OPEN doesn't affect calendar_sync"
+    - "Tool-specific thresholds applied correctly"
+    - "Tool-specific cooldowns applied correctly"
+    - "Config hot-reload updates circuit breakers"
+
+references:
+  - type: "ADR"
+    id: "ADR-0034c"
+    title: "MCP Circuit Breaker Integration"
+    lines: "252-500 (per-tool isolation, configuration)"
+
+  - type: "Contract"
+    id: "circuit_breaker_fsm_3_states.yml"
+    description: "Circuit breaker FSM (3 states)"
+
+  - type: "Contract"
+    id: "failure_threshold_config.yml"
+    description: "Failure threshold configuration per tool"
+
+  - type: "Contract"
+    id: "timeout_cooldown_config.yml"
+    description: "Timeout cooldown configuration per tool"

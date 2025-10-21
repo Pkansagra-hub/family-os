@@ -1,0 +1,351 @@
+// Agent Streaming Message Types FlatBuffers Schema
+// Purpose: Delta-based streaming for agent responses (90% bandwidth reduction)
+// Research: Streaming LLM responses, delta encoding, <200ms TTFT (ADR-0040)
+
+namespace K1.WebSocket;
+
+// ============================================================================
+// 1. UserMessage
+// ============================================================================
+
+table UserMessage {
+  turn_id: string (required);                  // Unique turn ID (UUID)
+  text: string (required);                     // User message text (redacted PII per ADR-0035)
+  attachments: [Attachment];                   // Optional file attachments
+  timestamp_ms: int64 (required);              // Client timestamp
+  privacy_band: string (required);             // Privacy band (GREEN, AMBER, RED, BLACK)
+}
+
+table Attachment {
+  file_id: string (required);                  // File ID (UUID)
+  file_name: string (required);                // Original filename
+  mime_type: string (required);                // MIME type (image/png, application/pdf)
+  size_bytes: uint32 (required);               // File size in bytes
+  url: string;                                 // Optional presigned URL for download
+}
+
+// ============================================================================
+// 2. AgentMessageStart
+// ============================================================================
+
+table AgentMessageStart {
+  turn_id: string (required);                  // Turn ID (matches UserMessage)
+  agent_id: string (required);                 // Agent ID (UUID)
+  agent_name: string (required);               // Agent name (e.g., "Analyst", "Coder")
+  agent_type: string (required);               // Agent type (EXECUTIVE, TOOL, SPECIALIST)
+  estimated_tokens: uint32;                    // Estimated total tokens (for progress UI)
+  privacy_band: string (required);             // Privacy band
+  timestamp_ms: int64 (required);              // Server timestamp when generation started
+}
+
+// ============================================================================
+// 3. AgentMessageChunk (Delta-Based Streaming)
+// ============================================================================
+
+table AgentMessageChunk {
+  turn_id: string (required);                  // Turn ID
+  agent_id: string (required);                 // Agent ID
+  text_delta: string (required);               // NEW tokens only (not cumulative)
+  chunk_index: uint32 (required);              // Monotonic chunk index (0, 1, 2, ...)
+  timestamp_ms: int64 (required);              // Server timestamp when chunk sent
+
+  // Optional metadata
+  token_count: uint32;                         // Token count for this chunk
+  cumulative_token_count: uint32;              // Total tokens so far
+}
+
+// ============================================================================
+// 4. AgentMessageEnd
+// ============================================================================
+
+table AgentMessageEnd {
+  turn_id: string (required);                  // Turn ID
+  agent_id: string (required);                 // Agent ID
+  finish_reason: string (required);            // stop, length, tool_call, error
+  total_tokens: uint32 (required);             // Total tokens in complete message
+  latency_ms: uint32 (required);               // Total generation latency
+  timestamp_ms: int64 (required);              // Server timestamp when generation completed
+
+  // Optional error details
+  error_code: string;                          // Error code if finish_reason = error
+  error_message: string;                       // Human-readable error message
+}
+
+// ============================================================================
+// 5. TypingIndicator
+// ============================================================================
+
+table TypingIndicator {
+  agent_id: string (required);                 // Agent ID
+  agent_name: string (required);               // Agent name
+  is_typing: bool (required);                  // true = started typing, false = stopped
+  timestamp_ms: int64 (required);              // Server timestamp
+}
+
+// ============================================================================
+// Usage Examples
+// ============================================================================
+
+// Rust AgentMessageStart serialization:
+/*
+use flatbuffers::FlatBufferBuilder;
+use k1_websocket::{AgentMessageStart, AgentMessageStartArgs};
+
+fn send_agent_message_start(
+    turn_id: &str,
+    agent_id: &str,
+    agent_name: &str,
+    agent_type: &str,
+    privacy_band: &str,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let turn_id_offset = builder.create_string(turn_id);
+    let agent_id_offset = builder.create_string(agent_id);
+    let agent_name_offset = builder.create_string(agent_name);
+    let agent_type_offset = builder.create_string(agent_type);
+    let privacy_band_offset = builder.create_string(privacy_band);
+
+    let start = AgentMessageStartArgs {
+        turn_id: Some(turn_id_offset),
+        agent_id: Some(agent_id_offset),
+        agent_name: Some(agent_name_offset),
+        agent_type: Some(agent_type_offset),
+        estimated_tokens: 500,
+        privacy_band: Some(privacy_band_offset),
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    };
+
+    let msg_offset = AgentMessageStart::create(&mut builder, &start);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Rust AgentMessageChunk serialization (delta-based):
+/*
+fn send_agent_message_chunk(
+    turn_id: &str,
+    agent_id: &str,
+    text_delta: &str,  // NEW tokens only (e.g., "Hello ", "world", "!")
+    chunk_index: u32,
+) -> Vec<u8> {
+    let mut builder = FlatBufferBuilder::new();
+
+    let turn_id_offset = builder.create_string(turn_id);
+    let agent_id_offset = builder.create_string(agent_id);
+    let text_delta_offset = builder.create_string(text_delta);
+
+    let chunk = AgentMessageChunkArgs {
+        turn_id: Some(turn_id_offset),
+        agent_id: Some(agent_id_offset),
+        text_delta: Some(text_delta_offset),
+        chunk_index,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        token_count: text_delta.split_whitespace().count() as u32,
+        cumulative_token_count: 0,  // Calculate cumulative count
+    };
+
+    let msg_offset = AgentMessageChunk::create(&mut builder, &chunk);
+    builder.finish(msg_offset, None);
+
+    builder.finished_data().to_vec()
+}
+*/
+
+// Python client-side delta accumulation:
+/*
+from k1_websocket import AgentMessageChunk
+
+class StreamingMessageAccumulator:
+    def __init__(self):
+        self.full_text = ""
+        self.chunks_received = 0
+
+    def handle_chunk(self, binary_data: bytes) -> str:
+        chunk = AgentMessageChunk.GetRootAs(binary_data)
+
+        turn_id = chunk.TurnId().decode('utf-8')
+        agent_id = chunk.AgentId().decode('utf-8')
+        text_delta = chunk.TextDelta().decode('utf-8')  # NEW tokens only
+        chunk_index = chunk.ChunkIndex()
+
+        # Accumulate deltas (client reconstructs full text)
+        self.full_text += text_delta
+        self.chunks_received += 1
+
+        # Validate chunk order
+        assert chunk_index == self.chunks_received - 1, "Out-of-order chunk"
+
+        # Return full text so far (for UI display)
+        return self.full_text
+
+# Usage:
+accumulator = StreamingMessageAccumulator()
+chunk1 = accumulator.handle_chunk(chunk1_binary)  # "Hello "
+chunk2 = accumulator.handle_chunk(chunk2_binary)  # "world"
+chunk3 = accumulator.handle_chunk(chunk3_binary)  # "!"
+assert accumulator.full_text == "Hello world!"
+*/
+
+// Python AgentMessageEnd handling:
+/*
+from k1_websocket import AgentMessageEnd
+
+def handle_agent_message_end(binary_data: bytes):
+    end = AgentMessageEnd.GetRootAs(binary_data)
+
+    turn_id = end.TurnId().decode('utf-8')
+    agent_id = end.AgentId().decode('utf-8')
+    finish_reason = end.FinishReason().decode('utf-8')
+    total_tokens = end.TotalTokens()
+    latency_ms = end.LatencyMs()
+
+    print(f"Agent {agent_id} finished: {finish_reason}, {total_tokens} tokens in {latency_ms}ms")
+
+    # Check for errors
+    if finish_reason == "error":
+        error_code = end.ErrorCode().decode('utf-8') if end.ErrorCode() else None
+        error_message = end.ErrorMessage().decode('utf-8') if end.ErrorMessage() else None
+        print(f"Error: {error_code} - {error_message}")
+
+    return finish_reason, total_tokens, latency_ms
+*/
+
+// ============================================================================
+// Delta-Based Streaming Benefits
+// ============================================================================
+
+delta_streaming_benefits:
+  bandwidth_reduction:
+    # Traditional cumulative streaming (JSON)
+    chunk1: '{"text": "Hello "}'                          # 20 bytes
+    chunk2: '{"text": "Hello world"}'                     # 26 bytes
+    chunk3: '{"text": "Hello world!"}'                    # 27 bytes
+    total: 73 bytes
+
+    # Delta-based streaming (FlatBuffers)
+    chunk1: 'text_delta: "Hello "'                        # 7 bytes (delta)
+    chunk2: 'text_delta: "world"'                         # 5 bytes (delta)
+    chunk3: 'text_delta: "!"'                             # 1 byte (delta)
+    total: 13 bytes (82% reduction) + FlatBuffers overhead (~50 bytes) = ~63 bytes
+
+    # Real-world savings for 500-token response
+    cumulative_json: ~250KB (500 chunks × 500 bytes average)
+    delta_flatbuffers: ~50KB (500 chunks × 100 bytes average)
+    reduction: 80% bandwidth savings
+
+  client_reconstruction:
+    - Client maintains accumulator (simple string concatenation)
+    - Zero overhead on client side (<0.1ms per chunk)
+    - Full text available at all times for UI display
+
+  network_efficiency:
+    - Fewer bytes = faster transmission (<200ms TTFT target)
+    - Less congestion on slow networks (mobile, rural)
+    - Lower AWS egress costs (80% reduction)
+
+// ============================================================================
+// Streaming Sequence
+// ============================================================================
+
+streaming_sequence:
+  1_agent_message_start:
+    - Server: Agent selected to respond
+    - Server: Send AgentMessageStart (agent_id, agent_name, estimated_tokens)
+    - Client: Display "Agent X is thinking..." UI
+    - Timing: <50ms from agent selection
+
+  2_agent_message_chunks:
+    - Server: Stream tokens as they generate (LLM streaming)
+    - Server: Send AgentMessageChunk for each token (or small batch)
+    - Client: Append text_delta to accumulator, update UI
+    - Timing: <200ms TTFT (time to first token), ~50ms between chunks
+
+  3_agent_message_end:
+    - Server: LLM generation complete
+    - Server: Send AgentMessageEnd (finish_reason, total_tokens, latency_ms)
+    - Client: Display "Agent X finished" UI, show final metrics
+    - Timing: <5000ms total turn time (P95)
+
+  error_handling:
+    - If LLM error during generation:
+      - Send AgentMessageEnd with finish_reason="error", error_code, error_message
+    - If network interruption:
+      - Client accumulator preserves partial text
+      - Auto-reconnect (ADR-0040d) resumes from last chunk_index
+
+// ============================================================================
+// Performance Budgets
+// ============================================================================
+
+performance_budgets:
+  agent_message_start:
+    serialization: <1ms
+    size: ~300 bytes
+    target: <50ms from agent selection to message sent
+  agent_message_chunk:
+    serialization: <0.5ms
+    size: ~100 bytes (delta + metadata)
+    target: <200ms TTFT (first chunk), <50ms between chunks
+  agent_message_end:
+    serialization: <1ms
+    size: ~200 bytes
+    target: <10ms after LLM completion
+
+  bandwidth_comparison:
+    cumulative_json: 250KB for 500-token response
+    delta_flatbuffers: 50KB for 500-token response
+    savings: 80% (200KB saved per turn)
+
+// ============================================================================
+// Finish Reasons
+// ============================================================================
+
+finish_reasons:
+  stop:
+    description: Natural completion (LLM generated complete response)
+    client_action: Display full message, mark turn complete
+  length:
+    description: Max token limit reached (truncated response)
+    client_action: Display partial message, show "truncated" indicator
+  tool_call:
+    description: Agent requested tool call (response complete, now executing tool)
+    client_action: Display message, show "Executing tool..." UI
+  error:
+    description: LLM error during generation (model timeout, rate limit, etc.)
+    client_action: Display error message, allow retry
+
+// ============================================================================
+// Security Considerations
+// ============================================================================
+
+security:
+  pii_redaction:
+    - Redact PII in UserMessage.text before serialization (ADR-0035)
+    - Redact PII in AgentMessageChunk.text_delta (applied per chunk)
+    - Store redacted text in SessionState, original in encrypted vault
+  privacy_band_validation:
+    - Include privacy_band in AgentMessageStart
+    - Validate client has permission to receive band (JWT claims)
+    - Reject if user privacy_band < message privacy_band
+  chunk_ordering:
+    - Validate chunk_index is monotonic (detect out-of-order delivery)
+    - Drop duplicate chunks (same chunk_index)
+    - Alert on gaps in chunk_index sequence
+
+// ============================================================================
+// Observability
+// ============================================================================
+
+metrics:
+  - agent_messages_started_total (counter by agent_type)
+  - agent_message_chunks_sent_total (counter)
+  - agent_messages_completed_total (counter by finish_reason)
+  - ttft_ms (histogram, <200ms target, time to first chunk)
+  - chunk_latency_ms (histogram, <50ms target, time between chunks)
+  - total_generation_latency_ms (histogram, <5000ms target)
+  - chunk_size_bytes (histogram, ~100 bytes average)
+  - cumulative_bandwidth_saved_bytes (counter, vs cumulative JSON)
+  - out_of_order_chunks_total (counter)

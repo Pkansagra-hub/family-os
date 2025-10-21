@@ -14,18 +14,21 @@
 **Parent Problem:** ADR-0035 requires comprehensive audit trail for all PII operations with GDPR/HIPAA compliance. ADR-0035a detects structured PII with regex, ADR-0035b detects unstructured PII with ML, ADR-0035c encrypts PII in vault. This sub-ADR defines **audit trail & compliance framework** - logging all PII operations, GDPR rights (access, erasure), HIPAA requirements, and compliance metrics.
 
 **Why Audit Trail for PII?**
+
 - **GDPR compliance:** Right to access (user requests PII data), right to erasure (user deletes PII), data portability (export PII in structured format)
 - **HIPAA compliance:** 164.308(a)(1)(ii)(D) requires audit trail for all PHI access with who/what/when
 - **Security auditing:** Detect unauthorized PII access, insider threats, data breaches
 - **Compliance reporting:** Demonstrate GDPR/HIPAA compliance to regulators, generate audit reports
 
 **Current Challenge:** Without audit trail:
+
 - No record of who accessed PII → HIPAA violation (no audit controls)
 - No way to respond to GDPR requests → GDPR violation (right to access)
 - No way to detect data breaches → Security risk
 - No compliance metrics → Regulatory fines up to €20M or 4% revenue
 
 **Real-World Impact:**
+
 ```
 Scenario: GDPR right to access request (user wants all PII data)
 Without Audit Trail:
@@ -809,6 +812,7 @@ pub struct DisclosureEntry {
 **Input:** SSN "123-45-6789" detected
 
 **Performance:**
+
 - Hash PII value (SHA-256): 0.1ms
 - K0 INSERT (audit_log): 0.7ms
 - **Total: 0.8ms ✅**
@@ -822,6 +826,7 @@ pub struct DisclosureEntry {
 **Input:** User requests all PII data
 
 **Performance:**
+
 - Query audit_log (100 entries): 1.5ms
 - Retrieve 10 PII from vault: 50ms (5ms each)
 - Serialize JSON response: 2ms
@@ -836,6 +841,7 @@ pub struct DisclosureEntry {
 **Input:** User requests PII deletion
 
 **Performance:**
+
 - Query audit_log (100 entries): 1.5ms
 - Delete 10 PII from vault: 27ms (2.7ms each)
 - Delete audit_log entries: 5ms
@@ -850,6 +856,7 @@ pub struct DisclosureEntry {
 **Input:** Patient requests PHI access log
 
 **Performance:**
+
 - Query audit_log (200 entries): 2ms
 - Filter PHI identifiers: 0.5ms
 - Serialize JSON response: 1ms
@@ -994,7 +1001,7 @@ async def _():
     detection_result = detector.detect("My SSN is 123-45-6789", "trace_123")
 
     # Vault PII
-    vault = PIIVault::new("test.db", kms_manager).await
+    vault = PIIVault::new("test.db", keystore_manager).await
     vault_key = vault.store(
         detection_result.detections[0].value,
         detection_result.detections[0].pii_type,
@@ -1168,12 +1175,14 @@ COMPLIANCE_RATE.set(compliance_rate);
 ### Phase 1: Audit Logging (Week 1-2)
 
 **Deliverables:**
+
 - K0 audit_log schema
 - AuditLogger implementation (log detection/redaction/vault operations)
 - SHA-256 hashing for PII deduplication
 - Unit tests
 
 **Acceptance Criteria:**
+
 - Audit log write <1ms
 - All PII operations logged
 - No plaintext PII in audit log (hashes only)
@@ -1184,12 +1193,14 @@ COMPLIANCE_RATE.set(compliance_rate);
 ### Phase 2: GDPR Compliance (Week 2-3)
 
 **Deliverables:**
+
 - K0 gdpr_requests schema
 - GDPRCompliance implementation (access/erasure/portability)
 - JSON export format
 - Integration tests
 
 **Acceptance Criteria:**
+
 - GDPR access request <10s
 - GDPR erasure request <5s
 - JSON export includes all PII values
@@ -1200,12 +1211,14 @@ COMPLIANCE_RATE.set(compliance_rate);
 ### Phase 3: HIPAA Compliance (Week 3-4)
 
 **Deliverables:**
+
 - HIPAACompliance implementation (18 PHI identifiers, accounting of disclosures)
 - PHI validation
 - Accounting of disclosures report
 - Unit tests
 
 **Acceptance Criteria:**
+
 - All 18 PHI identifiers covered
 - Accounting of disclosures generated
 - HIPAA compliance validated
@@ -1216,12 +1229,14 @@ COMPLIANCE_RATE.set(compliance_rate);
 ### Phase 4: Monitoring & Production (Week 4)
 
 **Deliverables:**
+
 - Prometheus metrics (audit log, GDPR, HIPAA)
 - Grafana dashboard
 - Compliance rate calculation
 - Production deployment
 
 **Acceptance Criteria:**
+
 - Metrics exported
 - Dashboard operational
 - Compliance rate ≥99%
@@ -1232,14 +1247,17 @@ COMPLIANCE_RATE.set(compliance_rate);
 ## Dependencies
 
 **Upstream (Must Complete First):**
+
 - 0035a (Regex Pattern Library) - Detects PII to log
 - 0035b (ML-based NER) - Detects PII to log
 - 0035c (Encrypted Vault) - Stores PII to retrieve (GDPR access)
 
 **Downstream (Depends on This):**
+
 - None (this is the final sub-ADR)
 
 **Parallel Work:**
+
 - None (this is the final sub-ADR)
 
 ---
@@ -1247,29 +1265,34 @@ COMPLIANCE_RATE.set(compliance_rate);
 ## Success Criteria
 
 **Functional:**
+
 - ✅ Audit log implemented (all PII operations logged)
 - ✅ GDPR compliance (right to access, right to erasure, data portability)
 - ✅ HIPAA compliance (18 PHI identifiers, accounting of disclosures)
 
 **Performance:**
+
 - ✅ <1ms audit log write (avg 0.8ms)
 - ✅ <10s GDPR access request (avg 53.5ms)
 - ✅ <5s GDPR erasure request (avg 33.5ms)
 - ✅ <2s compliance query (avg 3.5ms)
 
 **Compliance:**
+
 - ✅ 100% GDPR compliance (0 violations in 6 months)
 - ✅ 100% HIPAA compliance (0 violations)
 - ✅ 47 GDPR requests processed (45 access, 2 erasure)
 - ✅ Compliance rate ≥99% (requests fulfilled within 30 days)
 
 **Security:**
+
 - ✅ No plaintext PII in audit log (SHA-256 hashes only)
 - ✅ Tamper-proof audit log (append-only)
 - ✅ Authorization enforced (user can only access own PII)
 - ✅ Audit trail retention: 90 days (GDPR), 7 years (HIPAA)
 
 **Observability:**
+
 - ✅ Prometheus metrics (audit log, GDPR, HIPAA)
 - ✅ Grafana dashboard (compliance overview panel)
 

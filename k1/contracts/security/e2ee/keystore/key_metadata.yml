@@ -1,0 +1,315 @@
+---
+# ADR-0036b: Key Metadata Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Key Metadata Contract
+# Defines metadata structure and lifecycle for encryption keys
+
+contract:
+  name: key_metadata
+  version: "1.0.0"
+  description: "Metadata structure and lifecycle for AES-256 encryption keys"
+  parent_adr: "ADR-0036b"
+  priority: "HIGH"
+  effort: "1 week"
+
+# Metadata Schema
+metadata_schema:
+  key_id:
+    type: "UUID"
+    description: "Unique key identifier"
+    format: "RFC 4122 UUID v4"
+    indexed: true
+
+  user_id:
+    type: "UUID"
+    description: "Owner of the key"
+    format: "RFC 4122 UUID v4"
+    indexed: true
+
+  space_id:
+    type: "UUID"
+    description: "Space this key belongs to"
+    format: "RFC 4122 UUID v4"
+    indexed: true
+
+  key_type:
+    type: "enum"
+    values: ["AES256", "HMAC", "RSA_PUBLIC", "RSA_PRIVATE"]
+    description: "Type of cryptographic key"
+    indexed: true
+
+  key_purpose:
+    type: "enum"
+    values: ["ENCRYPTION", "SIGNATURE", "DERIVATION"]
+    description: "Purpose of the key"
+    indexed: true
+
+  algorithm:
+    type: "string"
+    values: ["AES-256-GCM", "HMAC-SHA256", "RSA-2048"]
+    description: "Specific algorithm used"
+    indexed: true
+
+  created_at:
+    type: "timestamp"
+    description: "Key creation timestamp"
+    format: "ISO 8601 UTC"
+    indexed: true
+
+  expires_at:
+    type: "timestamp"
+    description: "Key expiration timestamp"
+    format: "ISO 8601 UTC"
+    indexed: true
+
+  revoked_at:
+    type: "timestamp"
+    description: "Key revocation timestamp (if revoked)"
+    format: "ISO 8601 UTC"
+    nullable: true
+    indexed: true
+
+  retention_expires_at:
+    type: "timestamp"
+    description: "When key can be deleted"
+    format: "ISO 8601 UTC"
+    indexed: true
+
+  last_used_at:
+    type: "timestamp"
+    description: "Last time key was used"
+    format: "ISO 8601 UTC"
+    nullable: true
+    indexed: true
+
+  usage_count:
+    type: "integer"
+    description: "Number of times key has been used"
+    default: 0
+    indexed: true
+
+  storage_backend:
+    type: "enum"
+    values: ["OS_KEYCHAIN", "ENCRYPTED_FILE", "LOCAL_HSM"]
+    description: "Where key is stored"
+    indexed: true
+
+  key_version:
+    type: "integer"
+    description: "Version number for key rotation"
+    default: 1
+    indexed: true
+
+  predecessor_key_id:
+    type: "UUID"
+    description: "Key this key replaced (for rotation)"
+    format: "RFC 4122 UUID v4"
+    nullable: true
+    indexed: true
+
+  successor_key_id:
+    type: "UUID"
+    description: "Key that replaced this key (for rotation)"
+    format: "RFC 4122 UUID v4"
+    nullable: true
+    indexed: true
+
+  security_level:
+    type: "enum"
+    values: ["SOFTWARE", "HARDWARE", "HSM"]
+    description: "Security level of key storage"
+    indexed: true
+
+  compliance_flags:
+    type: "array"
+    items: "string"
+    values: ["GDPR", "HIPAA", "PCI_DSS", "BYOK"]
+    description: "Compliance requirements for this key"
+    indexed: true
+
+  tags:
+    type: "object"
+    description: "Custom metadata tags"
+    additional_properties: true
+    nullable: true
+
+# Metadata Lifecycle
+metadata_lifecycle:
+  creation:
+    fields_required: ["key_id", "user_id", "space_id", "key_type", "key_purpose", "algorithm", "created_at", "expires_at", "retention_expires_at", "storage_backend", "security_level"]
+    validation: "All required fields present, timestamps valid"
+    audit: "Creation logged with full metadata"
+
+  updates:
+    allowed_fields: ["last_used_at", "usage_count", "revoked_at", "tags"]
+    atomic: "Updates must be atomic"
+    audit: "All updates logged"
+
+  rotation:
+    predecessor_update: "Set successor_key_id"
+    successor_creation: "Set predecessor_key_id"
+    validation: "Chain integrity maintained"
+
+  revocation:
+    timestamp: "Set revoked_at"
+    cascade: "Revoke successor keys if needed"
+    audit: "Revocation reason logged"
+
+  deletion:
+    conditions: "retention_expires_at passed, no active references"
+    cascade: "Delete related metadata"
+    audit: "Deletion logged before execution"
+
+# Indexing Strategy
+indexing_strategy:
+  primary_key: "key_id"
+  secondary_indexes:
+    - "user_id, created_at"
+    - "space_id, expires_at"
+    - "key_type, key_purpose"
+    - "storage_backend, security_level"
+    - "expires_at"
+    - "retention_expires_at"
+    - "last_used_at"
+    - "usage_count"
+
+# Query Patterns
+query_patterns:
+  active_keys_for_user:
+    query: "user_id = ? AND revoked_at IS NULL AND expires_at > now()"
+    index: "user_id, created_at"
+    use_case: "List active keys for user"
+
+  expired_keys:
+    query: "expires_at < now() AND revoked_at IS NULL"
+    index: "expires_at"
+    use_case: "Find keys needing rotation"
+
+  keys_for_deletion:
+    query: "retention_expires_at < now() AND revoked_at IS NOT NULL"
+    index: "retention_expires_at"
+    use_case: "Find keys ready for deletion"
+
+  space_keys:
+    query: "space_id = ? AND revoked_at IS NULL"
+    index: "space_id, expires_at"
+    use_case: "List all keys for a space"
+
+  usage_statistics:
+    query: "created_at BETWEEN ? AND ?"
+    index: "created_at"
+    use_case: "Key usage analytics"
+
+# Performance Requirements
+performance_requirements:
+  query_latency:
+    active_keys: "< 10ms"
+    expired_keys: "< 50ms"
+    space_keys: "< 20ms"
+    usage_stats: "< 100ms"
+
+  storage_overhead:
+    per_key: "< 1KB"
+    total_estimate: "< 100MB for 100K keys"
+
+  indexing_overhead:
+    write_amplification: "< 2x"
+    read_optimization: "Queries use indexes"
+
+# Security Considerations
+security_considerations:
+  access_control:
+    read: "Key owner or space admin"
+    write: "Key owner only"
+    delete: "System only (after retention)"
+
+  audit_logging:
+    all_operations: "CREATE, READ, UPDATE, DELETE"
+    sensitive_fields: "Never log key material"
+    retention: "7 years for compliance"
+
+  data_protection:
+    encryption: "Metadata encrypted at rest"
+    access_logging: "All metadata access logged"
+    pii_handling: "No PII in metadata"
+
+# Implementation Interface
+implementation:
+  rust:
+    struct: "KeyMetadata"
+    functions:
+      - "create(metadata: KeyMetadata) -> Result<KeyId, MetadataError>"
+      - "get(key_id: KeyId) -> Result<KeyMetadata, MetadataError>"
+      - "update(key_id: KeyId, updates: MetadataUpdate) -> Result<(), MetadataError>"
+      - "query(filter: MetadataFilter) -> Result<Vec<KeyMetadata>, MetadataError>"
+      - "delete(key_id: KeyId) -> Result<(), MetadataError>"
+
+  python:
+    class: "KeyMetadataManager"
+    methods:
+      - "create(metadata: dict) -> str"
+      - "get(key_id: str) -> dict"
+      - "update(key_id: str, updates: dict) -> None"
+      - "query(filter: dict) -> list"
+      - "delete(key_id: str) -> None"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Metadata validation on creation"
+    - "Index usage for queries"
+    - "Lifecycle state transitions"
+    - "Security access controls"
+
+  integration_tests:
+    - "Full key lifecycle with metadata"
+    - "Query performance under load"
+    - "Metadata consistency during rotation"
+    - "Audit logging completeness"
+
+  security_tests:
+    - "Access control enforcement"
+    - "Metadata encryption at rest"
+    - "Audit log integrity"
+
+  performance_tests:
+    - "Query latency within budgets"
+    - "Storage overhead acceptable"
+    - "Concurrent access handling"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "key_generation.yml: Provides initial metadata"
+    - "key_storage.yml: Metadata stored alongside keys"
+  downstream:
+    - "key_rotation.yml: Updates metadata on rotation"
+    - "key_revocation.yml: Updates metadata on revocation"
+    - "key_deletion.yml: Uses metadata for deletion decisions"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All metadata fields properly managed"
+    - "Queries perform within latency budgets"
+    - "Lifecycle transitions correctly tracked"
+    - "Indexing strategy supports query patterns"
+
+  security:
+    - "Access controls properly enforced"
+    - "Metadata encrypted at rest"
+    - "Complete audit trail maintained"
+
+  performance:
+    - "Query performance within requirements"
+    - "Storage overhead acceptable"
+    - "Indexing efficient"
+
+  reliability:
+    - "Metadata consistency maintained"
+    - "Concurrent access handled safely"
+    - "Recovery from failures possible"

@@ -1,1164 +1,171 @@
-# Contract: Pattern Validation Logic for Structured PII
-# Purpose: Define validation algorithms for credit cards (Luhn), SSN, email, phone formats
-# Source: ADR-0035a - Regex Pattern Library
-# Status: Production-Ready
-# Last Updated: 2025-10-16
-# Revision: 2.0 (EXPANDED - Comprehensive Algorithm Documentation)
+# Pattern Validation Logic Contract
+# Source ADR: 0035a-regex-pattern-library.md
+# Epic 2.9, Issue 2.9.1
+# Purpose: Define validation algorithms for structured PII (Luhn, SSN format, RFC 5322, E.164)
 
 contract:
-  id: "C_PRIVACY_REGEX_VALIDATION_002"
-  name: "Pattern Validation Logic for Structured PII"
-  version: "2.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
-  description: |
-    ================================================================================================
-    COMPREHENSIVE VALIDATION ALGORITHMS FOR STRUCTURED PII DETECTION
-    ================================================================================================
-
-    Core Purpose:
-    - Implement 7 validation algorithms to reduce regex false positives to 0%
-    - Transform regex-only precision (95%) to validated precision (100%)
-    - Detect typos, invalid checksums, and malformed data
-    - Enable 100% accuracy on structured PII types (SSN, email, phone, etc.)
-
-    System Context:
-    - Works with Regex Pattern Library (C_PRIVACY_REGEX_REGISTRY_001)
-    - Validates after regex match (pattern match → validation → redaction)
-    - Each validator is optional (can skip if validation not critical)
-    - Performance: <0.5ms total validation overhead for all patterns
-    - Reduces false positives from 5-10% (regex alone) to <0.1% (with validation)
-
-    Validation Algorithms Implemented:
-    1. **Luhn Algorithm** (Credit Card) - Checksum validation
-    2. **SSN Validator** (Social Security Number) - Range and format checks
-    3. **Email RFC5322 Validator** (Email) - Format and structure validation
-    4. **E.164 Phone Validator** (Phone) - International format support
-    5. **IP Octet Validator** (IPv4) - Range checks per octet
-    6. **IBAN Checksum Validator** (IBAN) - Mod97 algorithm
-    7. **Tax ID Validator** (EIN) - Format and area code validation
-
-    Research Foundation:
-    - Luhn Algorithm: Hans Peter Luhn (1960), US Patent 2,950,048
-    - RFC 5322: Email format standard (Resnick, 2008)
-    - E.164: ITU-T Recommendation for international telephone numbering
-    - ISO 13616: International Bank Account Number standard
-    - Production Evidence: 12,000 validations/day, 100% accuracy
-
-  # Architecture References
-  architecture:
-    adr_references: ["ADR-0035a: Regex Pattern Library"]
-    k1_module: "privacy.validators"
-    parent_contract: "C_PRIVACY_REGEX_REGISTRY_001"
-
-  # Core Validators (Phase 1b - COMPREHENSIVE EXPANSION)
-  validators:
-    - name: "validate_credit_card_luhn"
-      description: "Luhn algorithm for credit card checksum validation (100% accuracy)"
-      research_foundation: "Hans Peter Luhn (1960), US Patent 2,950,048"
-      algorithm_pseudocode: |
-        FUNCTION validate_luhn(card_number):
-          // Step 1: Extract digits (remove spaces, dashes, special chars)
-          digits = EXTRACT_DIGITS(card_number)
-          IF length(digits) < 13 OR length(digits) > 19:
-            RETURN false
-
-          // Step 2: Reverse digit sequence for processing
-          reversed = REVERSE(digits)
-
-          // Step 3: Double every second digit (starting from position 1)
-          sum = 0
-          FOR i = 0 TO length(reversed) - 1:
-            digit = integer(reversed[i])
-            IF i % 2 == 1:  // Every second digit
-              digit = digit * 2
-              IF digit > 9:
-                digit = digit - 9  // Double digit reduction
-            sum = sum + digit
-
-          // Step 4: Valid if sum is divisible by 10
-          RETURN (sum % 10 == 0)
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        pub fn validate_luhn(card: &str) -> bool {
-            let digits: Vec<u8> = card.chars()
-                .filter_map(|c| c.to_digit(10).map(|d| d as u8))
-                .collect();
-            if digits.len() < 13 || digits.len() > 19 { return false; }
-
-            let sum: u32 = digits.iter().rev().enumerate()
-                .map(|(i, &d)| {
-                    let mut digit = d as u32;
-                    if i % 2 == 1 { digit *= 2; if digit > 9 { digit -= 9; } }
-                    digit
-                })
-                .sum();
-            sum % 10 == 0
-        }
-
-        **Python Implementation:**
-        def validate_luhn(card: str) -> bool:
-            digits = [int(d) for d in card if d.isdigit()]
-            if not (13 <= len(digits) <= 19):
-                return False
-
-            total = sum(int(d) if i % 2 == 0 else
-                       int(d) * 2 - 9 if int(d) * 2 > 9 else int(d) * 2
-                       for i, d in enumerate(reversed(digits)))
-            return total % 10 == 0
-
-      performance_characteristics: |
-        - Algorithm complexity: O(n) where n = number of digits
-        - Typical latency: 0.05ms per card validation
-        - Batch processing: 10 cards in 0.4ms
-        - Memory overhead: 256 bytes per thread
-        - Cache efficiency: 100% (deterministic lookup)
-
-      accuracy_metrics: |
-        - Detects 99.9% of typos (single digit error detection rate)
-        - Detects ~80% of adjacent digit transpositions
-        - Detects 100% of correct checksums
-        - False positive rate: 0% (mathematically guaranteed)
-        - False negative rate: <0.1% (only very specific errors bypass)
-
-      test_vectors: |
-        VALID VISA (16 digits):
-        - 4532015112830366 → true (test card, valid checksum)
-        - 4539111111111111 → true (test card, valid)
-        - 4916000000000003 → true (test card, valid)
-        - 4532098765432109 → true (sequential pattern, valid)
-
-        VALID MASTERCARD (16 digits):
-        - 5425233010103442 → true (test card, valid checksum)
-        - 5555555555554444 → true (test card, valid)
-        - 5200828282828210 → true (test card, valid)
-
-        VALID AMEX (15 digits):
-        - 374245455400126 → true (test card, valid checksum)
-        - 341111111111111 → true (test card, valid)
-        - 378282246310005 → true (test card, valid)
-
-        INVALID (failed checksum):
-        - 4532015112830367 → false (last digit off by 1)
-        - 4539111111111112 → false (single digit changed)
-        - 5425233010103443 → false (checksum error)
-        - 4111111111111112 → false (invalid checksum)
-
-        INVALID (format issues):
-        - "4532-0151-1283-036" → true (spaces removed, revalidated)
-        - "4532 0151 1283 0366" → true (standard format, valid)
-        - "123456789" → false (too short)
-        - "" → false (empty)
-
-      card_type_detection: |
-        Visa:        16 digits, starts with 4
-        MasterCard:  16 digits, starts with 51-55
-        Amex:        15 digits, starts with 34 or 37
-        Discover:    16 digits, starts with 6011 or 65
-        Diners Club: 14 digits, starts with 36 or 38
-        JCB:         15-16 digits, starts with 35
-
-      production_evidence: |
-        - K1 Platform: Processing 5,000+ Luhn validations per day
-        - Accuracy: 100% on test dataset (2,000 cards)
-        - Deployment: 6 months, zero false failures
-        - SLA: P99 latency <0.2ms, P99.9 latency <0.5ms
-
-      security_considerations: |
-        - Never log full card numbers (log last 4 digits only)
-        - Validate server-side always (never trust client validation)
-        - Use PCI DSS compliant storage (encrypted vault)
-        - Implement rate limiting (prevent brute force: max 10 validations/sec per IP)
-        - Monitor for patterns (unusual validation volume indicates attack)
-
-      edge_cases: |
-        - Spaces/dashes: Remove before validation (4532-0151-1283-0366 valid)
-        - Leading zeros: Preserve (0-padded numbers valid)
-        - All same digits: Valid if Luhn passes (e.g., 4111111111111111)
-        - Very large numbers: Support up to 19 digits (ISO/IEC 7812)
-
-      compliance_mapping: |
-        PCI DSS 3.2.1: Render PAN unreadable anywhere data is stored
-        PCI DSS 3.4: Mask PAN in displays (show last 4 digits only)
-        GDPR Article 32: Pseudonymization of payment data
-        SOX Section 302: Controls over financial data (includes payment validation)
-
-      performance_overhead_ms: 0.05
-      false_positive_reduction_pct: 99
-
-    - name: "validate_ssn"
-      description: "US Social Security Number validation with area/group/serial range checks (85% false positive reduction)"
-      research_foundation: "Social Security Administration (SSA) guidelines, IRS Publication 1565"
-      algorithm_pseudocode: |
-        FUNCTION validate_ssn(ssn_string):
-          // Step 1: Format parsing
-          IF ssn_string does NOT match pattern /^\d{3}-\d{2}-\d{4}$/:
-            RETURN false
-
-          area, group, serial = PARSE_FORMAT(ssn_string)
-
-          // Step 2: Area code validation (001-899 valid, except 666)
-          IF area == 0 OR area == 666 OR area >= 900:
-            RETURN false
-
-          // Step 3: Group code validation (01-99)
-          IF group == 0:
-            RETURN false
-
-          // Step 4: Serial validation (0001-9999)
-          IF serial == 0:
-            RETURN false
-
-          // Step 5: Special exclusions (SSA maintained blacklist)
-          IF is_in_ssa_blacklist(area, group, serial):
-            RETURN false
-
-          RETURN true
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        pub fn validate_ssn(ssn: &str) -> bool {
-            let parts: Vec<&str> = ssn.split('-').collect();
-            if parts.len() != 3 { return false; }
-
-            let (area, group, serial) = match (
-                parts[0].parse::<u32>(),
-                parts[1].parse::<u32>(),
-                parts[2].parse::<u32>()
-            ) {
-                (Ok(a), Ok(g), Ok(s)) => (a, g, s),
-                _ => return false,
-            };
-
-            // Validation checks
-            if area == 0 || area == 666 || area >= 900 { return false; }
-            if group == 0 || group > 99 { return false; }
-            if serial == 0 || serial > 9999 { return false; }
-
-            // Optional: Check SSA blacklist
-            !is_ssa_blacklisted(area, group, serial)
-        }
-
-        **Python Implementation:**
-        import re
-        def validate_ssn(ssn: str) -> bool:
-            if not re.match(r'^\d{3}-\d{2}-\d{4}$', ssn):
-                return False
-
-            area, group, serial = map(int, ssn.split('-'))
-
-            # Validation rules
-            if area in (0, 666) or area >= 900:
-                return False
-            if group == 0:
-                return False
-            if serial == 0:
-                return False
-
-            return True
-
-      performance_characteristics: |
-        - Algorithm complexity: O(1) - constant time lookups
-        - Typical latency: 0.03ms per SSN validation
-        - Batch processing: 100 SSNs in 2.8ms
-        - Memory overhead: 8KB (pattern cache)
-        - Cache efficiency: 100% (deterministic checks)
-
-      accuracy_metrics: |
-        - Valid range coverage: 999,999,999 total possible SSNs
-        - Detects ~85% of invalid SSNs (format + range)
-        - Detects 100% of all zeros/nines patterns
-        - False positive rate: 0% for non-issued SSNs
-        - False negative rate: 0% (all valid checks pass)
-
-      area_code_validation: |
-        VALID RANGES:
-        - 001-003: Not currently issued, but technically valid
-        - 004-007: Not currently issued
-        - 008-899: Currently issuing
-        - 900-999: Invalid (government/special use)
-
-        INVALID RANGES:
-        - 000: Undefined
-        - 666: Invalid
-        - 900-999: Government/test range
-
-      group_code_validation: |
-        VALID RANGES:
-        - 01-99: Valid group codes
-        - 00: Invalid (never issued)
-
-        GROUP DISTRIBUTION:
-        - Groups typically issued: 01, 02, 04, 05, 06, 09, 10, ...
-        - Groups rarely issued: 00, 03, 07, 08, 11, 12, ...
-
-      serial_code_validation: |
-        VALID RANGES:
-        - 0001-9999: Valid serial numbers
-        - 0000: Invalid (never issued)
-
-        SERIAL DISTRIBUTION:
-        - Sequential by area/group
-        - Production starts: 0001
-
-      test_vectors: |
-        VALID SSNs (format + range correct):
-        - 123-45-6789 → true (standard format, valid ranges)
-        - 555-44-3333 → true (valid area 555, group 44, serial 3333)
-        - 001-01-0001 → true (area 001 valid, though rarely issued)
-        - 899-99-9999 → true (max valid area 899, max group/serial)
-
-        INVALID SSNs (format errors):
-        - 000-45-6789 → false (area 000 invalid)
-        - 666-45-6789 → false (area 666 invalid)
-        - 901-45-6789 → false (area 901 >= 900)
-        - 123-00-6789 → false (group 00 invalid)
-        - 123-45-0000 → false (serial 0000 invalid)
-        - 12345-6789 → false (format mismatch)
-        - "123-45-678" → false (serial too short)
-        - "123-4-6789" → false (group too short)
-
-        EDGE CASES:
-        - "123-45-6789 " → false (trailing space)
-        - " 123-45-6789" → false (leading space)
-        - "123 45 6789" → false (spaces instead of dashes)
-        - "123/45/6789" → false (slashes instead of dashes)
-
-      ssa_blacklist: |
-        The SSA maintains a list of never-issued SSN combinations. Common patterns:
-        - All zeros: 000-00-0000
-        - All nines: 999-99-9999
-        - Sequential: 123-45-6789 (commonly used as test/example SSN)
-        - Government test: 078-05-1120 (used in Soap operas)
-
-      production_evidence: |
-        - K1 Platform: Processing 8,000+ SSN validations per day
-        - Accuracy: 99.8% (caught 15 invalid SSNs in 1,000 test set)
-        - Deployment: 6 months, zero false positives
-        - SLA: P99 latency <0.1ms, P99.9 latency <0.15ms
-
-      security_considerations: |
-        - Never log full SSN (log last 4 digits only as XXX-XX-6789)
-        - Validate server-side always
-        - Use strong encryption (AES-256-GCM) for storage
-        - Implement rate limiting (max 100 validations/sec per user)
-        - Flag suspicious patterns (multiple SSNs per user, rapid validation)
-
-      compliance_mapping: |
-        GDPR Article 9: Special category data (national identification)
-        HIPAA 164.308: Administrative procedures for SSNs
-        FCRA Section 605: SSN display/transmission requirements
-        IRS Publication 1565: SSN format standards
-
-      performance_overhead_ms: 0.03
-      false_positive_reduction_pct: 85
-
-    - name: "validate_email"
-      description: "RFC 5322 basic email validation with special character handling (70% false positive reduction)"
-      research_foundation: "RFC 5322 (Resnick, 2008), RFC 6531 (SMTPUTF8 extension)"
-      algorithm_pseudocode: |
-        FUNCTION validate_email(email_string):
-          // Step 1: Basic format check (@)
-          IF email_string does NOT contain exactly 1 '@':
-            RETURN false
-
-          local_part, domain = SPLIT_BY('@', email_string)
-
-          // Step 2: Local part validation
-          IF length(local_part) < 1 OR length(local_part) > 64:
-            RETURN false
-          IF local_part STARTS_WITH '.' OR local_part ENDS_WITH '.':
-            RETURN false
-          IF '..', occurs in local_part:
-            RETURN false
-
-          // Step 3: Domain validation
-          IF length(domain) < 3 OR length(domain) > 253:
-            RETURN false
-          IF domain does NOT contain '.':
-            RETURN false
-          IF domain STARTS_WITH '.' OR domain ENDS_WITH '.':
-            RETURN false
-
-          // Step 4: TLD validation
-          tld = LAST_PART_AFTER_FINAL_DOT(domain)
-          IF length(tld) < 2:
-            RETURN false
-
-          // Step 5: DNS validation (optional, expensive)
-          IF DNS_CHECK_ENABLED:
-            RETURN dns_has_mx_record(domain)
-
-          RETURN true
-
-      implementation_guidance: |
-        **Rust Implementation (using regex):**
-        use regex::Regex;
-        pub fn validate_email(email: &str) -> bool {
-            let pattern = Regex::new(
-                r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
-            ).unwrap();
-            pattern.is_match(email) && email.len() <= 320
-        }
-
-        **Python Implementation:**
-        import re
-        def validate_email(email: str) -> bool:
-            pattern = r'^[a-zA-Z0-9.!#$%&\'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$'
-            if not re.match(pattern, email):
-                return False
-            if len(email) > 320:
-                return False
-            return True
-
-      performance_characteristics: |
-        - Algorithm complexity: O(n) where n = email length
-        - Typical latency: 0.02ms per email validation
-        - Batch processing: 500 emails in 8ms
-        - Memory overhead: 4KB (regex cache)
-        - Cache efficiency: 98% (common domains cached)
-
-      accuracy_metrics: |
-        - Valid email detection: 95% (RFC 5322 compliant emails)
-        - Special character support: +, -, _, ., !
-        - False positive rate: 1-2% (ambiguous edge cases)
-        - False negative rate: 5% (valid but unusual formats)
-
-      format_rules: |
-        LOCAL PART (before @):
-        - Length: 1-64 characters
-        - Allowed: A-Z, a-z, 0-9, . ! # $ % & ' * + / = ? ^ _ ` { | } ~
-        - Must NOT start/end with dot (.)
-        - Must NOT have consecutive dots (..)
-
-        DOMAIN PART (after @):
-        - Length: 3-253 characters
-        - Format: subdomain.subdomain.tld
-        - Allowed: A-Z, a-z, 0-9, - (hyphens allowed in middle)
-        - Must NOT start/end with hyphen
-        - Must have at least one dot
-        - TLD must be 2+ characters
-
-      test_vectors: |
-        VALID EMAILS:
-        - user@example.com → true (standard format)
-        - john.doe@company.co.uk → true (subdomain + dots in local)
-        - alice+tag@gmail.com → true (+ addressing)
-        - test_user@test-domain.org → true (underscores, hyphens)
-        - 123@numbers.io → true (numeric local part)
-        - a@b.co → true (minimal valid)
-
-        INVALID EMAILS:
-        - invalid.email@.com → false (missing domain name)
-        - user@domain → false (missing TLD)
-        - user @example.com → false (space in local)
-        - @example.com → false (no local part)
-        - user@.com → false (no domain name)
-        - user..name@example.com → false (consecutive dots)
-        - .user@example.com → false (leading dot)
-        - user.@example.com → false (trailing dot)
-        - user@example..com → false (consecutive dots in domain)
-        - user@domain.c → false (TLD too short)
-
-      rfc5322_extensions: |
-        - RFC 6531: SMTPUTF8 (international characters, non-ASCII)
-        - RFC 6532: UTF-8 Header Extensions
-        - RFC 5234: ABNF (formal syntax)
-        - RFC 1035: DNS Domain Names (validation)
-
-      production_evidence: |
-        - K1 Platform: Processing 50,000+ email validations per day
-        - Accuracy: 94.2% (caught 95 invalid emails in 1,000 test set)
-        - Deployment: 6 months, false positive rate 1.8%
-        - SLA: P99 latency <0.05ms, P99.9 latency <0.12ms
-
-      security_considerations: |
-        - Never log full email if contains sensitive info
-        - Use DNS MX record verification for critical operations
-        - Implement rate limiting (max 1000 email validations/sec per IP)
-        - Monitor email domains for suspicious patterns
-        - Validate on server-side (never trust client validation)
-
-      compliance_mapping: |
-        GDPR Article 6: Legal basis for processing email addresses
-        CAN-SPAM Act: Email address validation required
-        GDPR Article 21: Right to object to email communications
-        CCPA: Email used for user identification
-
-      performance_overhead_ms: 0.02
-      false_positive_reduction_pct: 70
-
-    - name: "validate_phone"
-      description: "E.164 international phone format validation (75% false positive reduction)"
-      research_foundation: "ITU-T Recommendation E.164, IETF RFC 3966"
-      algorithm_pseudocode: |
-        FUNCTION validate_phone(phone_string):
-          // Step 1: Extract digits only
-          digits = EXTRACT_DIGITS(phone_string)
-          IF length(digits) < 10 OR length(digits) > 15:
-            RETURN false
-
-          // Step 2: Country code validation (optional)
-          IF phone_string STARTS_WITH '+':
-            country_code = EXTRACT_COUNTRY_CODE(digits)
-            IF NOT is_valid_country_code(country_code):
-              RETURN false
-
-          // Step 3: Area code validation (optional, country-specific)
-          IF country_code == 1:  // US/Canada
-            area_code = digits[0:3]
-            IF area_code IN [0, 1, 11, 555]:  // Reserved codes
-              RETURN false
-
-          // Step 4: Length validation by country
-          expected_length = get_expected_length(country_code)
-          IF length(digits) < expected_length:
-            RETURN false
-
-          RETURN true
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        use regex::Regex;
-        pub fn validate_phone(phone: &str) -> bool {
-            // Extract digits
-            let digits: String = phone.chars()
-                .filter(|c| c.is_numeric()).collect();
-
-            if digits.len() < 10 || digits.len() > 15 {
-                return false;
-            }
-
-            // Country code validation
-            if let Some(country_code) = extract_country_code(&digits) {
-                if !is_valid_country_code(country_code) {
-                    return false;
-                }
-            }
-
-            true
-        }
-
-        **Python Implementation:**
-        import re
-        def validate_phone(phone: str) -> bool:
-            digits = re.sub(r'\D', '', phone)  # Remove non-digits
-
-            if not (10 <= len(digits) <= 15):
-                return False
-
-            # US/Canada specific
-            if digits.startswith('1'):
-                area = int(digits[1:4])
-                if area in [0, 1, 11, 555]:  # Reserved
-                    return False
-
-            return True
-
-      performance_characteristics: |
-        - Algorithm complexity: O(n) where n = phone length
-        - Typical latency: 0.02ms per phone validation
-        - Batch processing: 500 phones in 8ms
-        - Memory overhead: 16KB (country code lookup table)
-        - Cache efficiency: 99% (country codes cached)
-
-      accuracy_metrics: |
-        - E.164 format compliance: 98%
-        - Country code detection: 99.5%
-        - Area code validation: 95% (US/Canada)
-        - False positive rate: 2-3% (ambiguous lengths)
-        - False negative rate: 1% (valid non-standard formats)
-
-      e164_specification: |
-        **E.164 Format:**
-        - Prefix: + (optional in validation)
-        - Country code: 1-3 digits
-        - National number: 10-14 digits
-        - Total length: 15 digits maximum
-
-        **Examples:**
-        - US: +1-202-555-0123 (country code 1, 10 digits)
-        - UK: +44-20-7946-0958 (country code 44, varies)
-        - France: +33-1-4258-5555 (country code 33, varies)
-
-      country_code_validation: |
-        VALID COUNTRY CODES (sample):
-        - 1: USA, Canada
-        - 44: United Kingdom
-        - 33: France
-        - 49: Germany
-        - 39: Italy
-        - 34: Spain
-        - 31: Netherlands
-        - 32: Belgium
-        - 43: Austria
-        - 41: Switzerland
-        - 61: Australia
-        - 81: Japan
-        - 86: China
-
-        INVALID CODES:
-        - 0: Invalid (leading zero)
-        - 00: Double zero
-        - 999: Unassigned
-
-      test_vectors: |
-        VALID PHONES (E.164 format):
-        - +1-202-555-0123 → true (US format, valid area code)
-        - +44-20-7946-0958 → true (UK format, valid)
-        - +33-1-4258-5555 → true (France format, valid)
-        - (202) 555-0123 → true (US parentheses format)
-        - 202-555-0123 → true (US with dashes)
-        - 2025550123 → true (US numeric only)
-
-        INVALID PHONES:
-        - 555-0123 → false (too short)
-        - 0-555-0123 → false (leading zero)
-        - (202) 555-01234567 → false (too long)
-        - 12345 → false (too short)
-        - +1-555-555-5555 → false (reserved 555 code, US specific)
-        - 1-800-555-0123 → true (toll-free in US, valid)
-
-      area_code_validation_us: |
-        RESERVED AREA CODES (US/Canada):
-        - 0XX: Reserved for operator access
-        - 1XX: Reserved (N11 range)
-        - 555: Reserved (fictional numbers, except 555-0100 through 0199)
-        - 800, 888, 877, 866, 855: Toll-free (valid)
-        - 900, 901, 902, 903, ...: Premium rate (valid but special handling)
-
-      production_evidence: |
-        - K1 Platform: Processing 15,000+ phone validations per day
-        - Accuracy: 94.8% (caught 76 invalid phones in 1,000 test set)
-        - Deployment: 6 months, false positive rate 2.1%
-        - SLA: P99 latency <0.08ms, P99.9 latency <0.15ms
-
-      security_considerations: |
-        - Never log full phone number (log last 4 digits only as +1-***-***-0123)
-        - Validate server-side always
-        - Implement rate limiting (max 500 validations/sec per IP)
-        - Monitor for SMS bombing patterns (rapid validations)
-        - Use two-factor authentication safely (don't trust unvalidated phone)
-
-      compliance_mapping: |
-        GDPR Article 13: Phone numbers as personal data
-        CCPA: Phone numbers subject to CCPA (consumer rights)
-        TCPA: Telephone Consumer Protection Act (US, 47 CFR 64.1200)
-        GDPR Right to Erasure: Phone number deletion
-
-      performance_overhead_ms: 0.02
-      false_positive_reduction_pct: 75
-
-    - name: "validate_ip"
-      description: "IPv4 address octet validation with special range handling (95% false positive reduction)"
-      research_foundation: "RFC 791 (IPv4), RFC 1918 (Private addressing), RFC 3021 (Host routes)"
-      algorithm_pseudocode: |
-        FUNCTION validate_ip(ip_string):
-          // Step 1: Split by dots
-          octets = SPLIT_BY_DOT(ip_string)
-          IF length(octets) != 4:
-            RETURN false
-
-          // Step 2: Parse each octet
-          FOR each octet IN octets:
-            IF NOT is_numeric(octet):
-              RETURN false
-            value = parse_integer(octet)
-            IF value < 0 OR value > 255:
-              RETURN false
-
-          // Step 3: Validate ranges (optional)
-          IF is_reserved_ip(octets):
-            RETURN false  // Or return (true, "reserved")
-
-          // Step 4: Broadcast check (optional)
-          IF octets[3] == 0 OR octets[3] == 255:
-            RETURN false  // Or return (true, "special")
-
-          RETURN true
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        pub fn validate_ipv4(ip: &str) -> bool {
-            let octets: Vec<&str> = ip.split('.').collect();
-            if octets.len() != 4 { return false; }
-
-            for octet in octets {
-                match octet.parse::<u32>() {
-                    Ok(n) if n <= 255 => continue,
-                    _ => return false,
-                }
-            }
-
-            // Optional: reject broadcast/network addresses
-            match octets[3].parse::<u32>() {
-                Ok(0) | Ok(255) => false,
-                _ => true,
-            }
-        }
-
-        **Python Implementation:**
-        def validate_ipv4(ip: str) -> bool:
-            parts = ip.split('.')
-            if len(parts) != 4:
-                return False
-
-            for part in parts:
-                try:
-                    num = int(part)
-                    if not (0 <= num <= 255):
-                        return False
-                except ValueError:
-                    return False
-
-            # Reject broadcast/network
-            if int(parts[3]) in (0, 255):
-                return False
-
-            return True
-
-      performance_characteristics: |
-        - Algorithm complexity: O(1) - constant 4 octets
-        - Typical latency: 0.01ms per IP validation
-        - Batch processing: 1000 IPs in 9ms
-        - Memory overhead: 256 bytes (lookup table)
-        - Cache efficiency: 100% (deterministic)
-
-      accuracy_metrics: |
-        - Format compliance: 99.9%
-        - Octet range validation: 100%
-        - Special IP detection: 95% (reserved ranges)
-        - False positive rate: <0.1%
-        - False negative rate: 0%
-
-      ipv4_classes: |
-        CLASS A (10.0.0.0/8):
-        - Range: 10.0.0.0 - 10.255.255.255
-        - Type: Private (RFC 1918)
-        - Uses: Corporate networks
-
-        CLASS B (172.16.0.0/12):
-        - Range: 172.16.0.0 - 172.31.255.255
-        - Type: Private (RFC 1918)
-        - Uses: Medium enterprises
-
-        CLASS C (192.168.0.0/16):
-        - Range: 192.168.0.0 - 192.168.255.255
-        - Type: Private (RFC 1918)
-        - Uses: Small networks, home networks
-
-        LOOPBACK (127.0.0.1/8):
-        - Range: 127.0.0.0 - 127.255.255.255
-        - Uses: Local machine testing
-
-        LINK-LOCAL (169.254.0.0/16):
-        - Range: 169.254.0.0 - 169.254.255.255
-        - Uses: DHCP fallback
-
-        MULTICAST (224.0.0.0/4):
-        - Range: 224.0.0.0 - 239.255.255.255
-        - Uses: Group communication
-
-      special_addresses: |
-        0.0.0.0: This network (source address only)
-        255.255.255.255: Broadcast (limited broadcast)
-        127.0.0.1: Loopback (local machine)
-        169.254.x.x: Link-local (DHCP fallback)
-        224.0.0.0 - 239.255.255.255: Multicast
-        240.0.0.0 - 255.255.255.254: Reserved
-
-      test_vectors: |
-        VALID IPs (standard format):
-        - 192.168.1.1 → true (private, valid)
-        - 10.0.0.1 → true (private, valid)
-        - 172.16.0.1 → true (private, valid)
-        - 8.8.8.8 → true (Google DNS, public)
-        - 1.1.1.1 → true (Cloudflare DNS, public)
-        - 127.0.0.1 → true (loopback, valid but special)
-
-        INVALID IPs (format errors):
-        - 256.1.1.1 → false (octet > 255)
-        - 192.168.1 → false (too few octets)
-        - 192.168.1.1.1 → false (too many octets)
-        - 192.168.1.a → false (non-numeric)
-        - 192.168.-1.1 → false (negative)
-        - 192.168.1.0 → false (network address)
-        - 192.168.1.255 → false (broadcast address)
-
-      production_evidence: |
-        - K1 Platform: Processing 100,000+ IP validations per day
-        - Accuracy: 99.95% (caught all invalid IPs in test set)
-        - Deployment: 6 months, zero false positives
-        - SLA: P99 latency <0.02ms, P99.9 latency <0.05ms
-
-      security_considerations: |
-        - Reject private IPs if validating public addresses
-        - Reject loopback if validating remote connections
-        - Reject reserved ranges (240.0.0.0/4)
-        - Monitor for suspicious IP patterns (scanning)
-        - Implement IP reputation checking
-
-      compliance_mapping: |
-        RFC 791: IPv4 specification
-        RFC 1918: Private IP addressing
-        RFC 5735: Special use addresses
-        RFC 3021: Host routes (31-bit prefixes)
-
-      performance_overhead_ms: 0.01
-      false_positive_reduction_pct: 95
-
-    - name: "validate_iban_checksum"
-      description: "IBAN checksum validation using mod 97 algorithm (98% false positive reduction)"
-      research_foundation: "ISO 13616 (International Bank Account Number), IBAN Registry (SWIFT)"
-      algorithm_pseudocode: |
-        FUNCTION validate_iban(iban_string):
-          // Step 1: Format check
-          iban = REMOVE_SPACES(iban_string)
-          IF length(iban) < 15 OR length(iban) > 34:
-            RETURN false
-
-          // Step 2: Country code check (first 2 chars)
-          country_code = iban[0:2]
-          IF NOT is_valid_country_code(country_code):
-            RETURN false
-
-          // Step 3: Check digit validation (chars 2-4)
-          check_digits = iban[2:4]
-          IF NOT all_numeric(check_digits):
-            RETURN false
-
-          // Step 4: Rearrange (move first 4 chars to end)
-          rearranged = iban[4:] + iban[0:4]
-
-          // Step 5: Replace letters with numbers (A=10, B=11, ..., Z=35)
-          numeric_string = ""
-          FOR each char IN rearranged:
-            IF is_digit(char):
-              numeric_string += char
-            ELSE IF is_letter(char):
-              numeric_string += (char - 'A' + 10)
-
-          // Step 6: Calculate mod 97
-          remainder = calculate_mod97(numeric_string)
-
-          // Step 7: Valid if remainder == 1
-          RETURN remainder == 1
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        pub fn validate_iban(iban: &str) -> bool {
-            let iban = iban.replace(" ", "");
-            if iban.len() < 15 || iban.len() > 34 { return false; }
-
-            let mut rearranged = iban[4..].to_string() + &iban[..4];
-            let mut numeric = String::new();
-
-            for ch in rearranged.chars() {
-                if ch.is_numeric() {
-                    numeric.push(ch);
-                } else if ch.is_ascii_uppercase() {
-                    numeric.push_str(&((ch as u32 - 'A' as u32 + 10).to_string()));
-                }
-            }
-
-            calculate_mod97(&numeric) == 1
-        }
-
-        fn calculate_mod97(s: &str) -> u32 {
-            let mut result = 0u32;
-            for ch in s.chars() {
-                result = (result * 10 + ch.to_digit(10).unwrap()) % 97;
-            }
-            result
-        }
-
-        **Python Implementation:**
-        def validate_iban(iban: str) -> bool:
-            iban = iban.replace(" ", "")
-            if not (15 <= len(iban) <= 34):
-                return False
-
-            # Rearrange: move first 4 to end
-            rearranged = iban[4:] + iban[:4]
-
-            # Replace letters with numbers
-            numeric = ""
-            for ch in rearranged:
-                if ch.isdigit():
-                    numeric += ch
-                else:
-                    numeric += str(ord(ch) - ord('A') + 10)
-
-            # Calculate mod 97
-            remainder = int(numeric) % 97
-            return remainder == 1
-
-      performance_characteristics: |
-        - Algorithm complexity: O(n) where n = IBAN length (max 34)
-        - Typical latency: 0.04ms per IBAN validation
-        - Batch processing: 100 IBANs in 3.8ms
-        - Memory overhead: 4KB (country lookup)
-        - Cache efficiency: 100% (deterministic)
-
-      accuracy_metrics: |
-        - Checksum accuracy: 100% (mathematical guarantee)
-        - False positive rate: <0.01% (invalid checksums caught)
-        - False negative rate: 0% (valid IBANs always pass)
-        - Format compliance: 99.5%
-
-      country_iban_lengths: |
-        GB: 22 chars (UK: GB82 WEST 1234 5698 7654 32)
-        DE: 22 chars (Germany: DE89 3704 0044 0532 0130 00)
-        FR: 27 chars (France: FR14 2004 1010 0505 0001 3M02 606)
-        IT: 27 chars (Italy: IT60 X054 2811 1010 0000 0123 456)
-        ES: 24 chars (Spain: ES91 2100 0418 4502 0005 1332)
-        NL: 18 chars (Netherlands: NL91 ABNA 0417 1643 00)
-        BE: 16 chars (Belgium: BE68 5390 0754 7034)
-        AT: 20 chars (Austria: AT61 1904 3002 0570 4938)
-        CH: 21 chars (Switzerland: CH93 0076 2011 6238 5295 7)
-
-      mod97_algorithm: |
-        **Example: GB82 WEST 1234 5698 7654 32**
-
-        Step 1: Rearrange (move first 4 to end)
-          WEST 1234 5698 7654 32 GB82
-
-        Step 2: Remove spaces
-          WEST12345698765432GB82
-
-        Step 3: Replace letters
-          W=32, E=14, S=28, T=29, G=16, B=11
-          32142829123456987654321611 82
-          32142829123456987654321611 82
-
-        Step 4: Calculate mod 97
-          32142829123456987654321611 82 mod 97
-          = 1 ✓ (VALID)
-
-      test_vectors: |
-        VALID IBANs (checksum valid):
-        - GB82 WEST 1234 5698 7654 32 → true
-        - DE89 3704 0044 0532 0130 00 → true
-        - FR14 2004 1010 0505 0001 3M02 606 → true
-        - IT60 X054 2811 1010 0000 0123 456 → true
-        - ES91 2100 0418 4502 0005 1332 → true
-        - NL91 ABNA 0417 1643 00 → true
-
-        INVALID IBANs (checksum failed):
-        - GB82 WEST 1234 5698 7654 33 → false (last digit off by 1)
-        - DE89 3704 0044 0532 0130 01 → false (checksum error)
-        - FR14 2004 1010 0505 0001 3M02 607 → false (changed last digit)
-
-        INVALID IBANs (format):
-        - GB8 WEST 1234 5698 7654 32 → false (too short)
-        - INVALID12345678901234567890 → false (invalid country code)
-        - GB82 WEST → false (too short)
-
-      production_evidence: |
-        - K1 Platform: Processing 3,000+ IBAN validations per day
-        - Accuracy: 100% (caught 100/100 invalid IBANs in test set)
-        - Deployment: 6 months, zero false positives
-        - SLA: P99 latency <0.08ms, P99.9 latency <0.15ms
-
-      security_considerations: |
-        - Never log full IBAN (log as GB82 **** **** **** **** 32)
-        - Validate server-side always (client validation insufficient)
-        - Use AES-256-GCM encryption for IBAN storage
-        - Implement rate limiting (max 1000 validations/sec per IP)
-        - Monitor for brute force attempts (sequential checking)
-
-      compliance_mapping: |
-        PSD2 (Payment Services Directive 2): IBAN validation required
-        SEPA (Single Euro Payments Area): IBAN compliance mandatory
-        GDPR Article 32: Encryption of financial data
-        PCI DSS 3.2: Protect stored account data
-
-      performance_overhead_ms: 0.04
-      false_positive_reduction_pct: 98
-
-    - name: "validate_tax_id"
-      description: "US Employer Identification Number (EIN) format and range validation (80% false positive reduction)"
-      research_foundation: "IRS Publication 1565 (EIN format), EIN Range Orders (IRS)"
-      algorithm_pseudocode: |
-        FUNCTION validate_tax_id(ein_string):
-          // Step 1: Format parsing (NN-NNNNNNN)
-          IF ein_string does NOT match pattern /^\d{2}-\d{7}$/:
-            RETURN false
-
-          first_part, second_part = PARSE_FORMAT(ein_string)
-
-          // Step 2: First part validation (10-99)
-          first_value = parse_integer(first_part)
-          IF first_value < 10 OR first_value > 99:
-            RETURN false
-
-          // Step 3: Second part validation (0000001-9999999)
-          second_value = parse_integer(second_part)
-          IF second_value < 1 OR second_value > 9999999:
-            RETURN false
-
-          // Step 4: Check against IRS blacklist (optional)
-          IF is_in_irs_blacklist(ein_string):
-            RETURN false
-
-          RETURN true
-
-      implementation_guidance: |
-        **Rust Implementation:**
-        pub fn validate_ein(ein: &str) -> bool {
-            let parts: Vec<&str> = ein.split('-').collect();
-            if parts.len() != 2 { return false; }
-
-            let (first, second) = match (
-                parts[0].parse::<u32>(),
-                parts[1].parse::<u32>()
-            ) {
-                (Ok(f), Ok(s)) => (f, s),
-                _ => return false,
-            };
-
-            // Validation checks
-            if first < 10 || first > 99 { return false; }
-            if second < 1 || second > 9999999 { return false; }
-
-            true
-        }
-
-        **Python Implementation:**
-        def validate_ein(ein: str) -> bool:
-            import re
-            if not re.match(r'^\d{2}-\d{7}$', ein):
-                return False
-
-            first, second = map(int, ein.split('-'))
-
-            # Validation
-            if not (10 <= first <= 99):
-                return False
-            if not (1 <= second <= 9999999):
-                return False
-
-            return True
-
-      performance_characteristics: |
-        - Algorithm complexity: O(1) - constant format check
-        - Typical latency: 0.02ms per EIN validation
-        - Batch processing: 500 EINs in 9ms
-        - Memory overhead: 8KB (blacklist cache)
-        - Cache efficiency: 100% (deterministic)
-
-      accuracy_metrics: |
-        - Format compliance: 99.9%
-        - Range validation: 100%
-        - False positive rate: <0.1%
-        - False negative rate: 0%
-
-      ein_ranges: |
-        FIRST PART (10-99): Identifies business type
-        - 10-12: Banks, Trust Companies
-        - 13-16: Government
-        - 17-19: Corporations
-        - 20-29: Individuals/Sole Proprietors
-        - 30-39: Individuals/Sole Proprietors
-        - 40-49: Individuals/Sole Proprietors
-        - 50-99: Private Charities, Foundations, Trusts
-
-        SECOND PART (0000001-9999999): Sequential assignment
-        - Not checked against blacklist in basic validation
-        - IRS maintains list of never-issued sequences
-
-      test_vectors: |
-        VALID EINs:
-        - 12-3456789 → true (standard format, valid ranges)
-        - 50-0000001 → true (minimum second part)
-        - 99-9999999 → true (maximum values)
-        - 34-1234567 → true (typical EIN)
-        - 45-9876543 → true (valid ranges)
-
-        INVALID EINs:
-        - 09-1234567 → false (first part < 10)
-        - 100-1234567 → false (first part > 99)
-        - 12-0000000 → false (second part < 1)
-        - 12-10000000 → false (second part > 9999999)
-        - 12345-6789 → false (format mismatch)
-        - 12-123456 → false (second part too short)
-        - "12-1234567 " → false (trailing space)
-        - 12/1234567 → false (wrong separator)
-
-      irs_blacklist: |
-        IRS maintains confidential list of never-issued EIN sequences
-        Common never-issued patterns:
-        - 12-3456789 (commonly used as example in documentation)
-        - XX-0000000 (all zeros in second part)
-        - XX-1111111 (highly sequential patterns)
-
-      production_evidence: |
-        - K1 Platform: Processing 2,000+ EIN validations per day
-        - Accuracy: 99.7% (caught 6 invalid EINs in 1,000 test set)
-        - Deployment: 6 months, false positive rate 0.3%
-        - SLA: P99 latency <0.05ms, P99.9 latency <0.08ms
-
-      security_considerations: |
-        - Never log full EIN (log as 12-**56789)
-        - Validate server-side always
-        - Use AES-256-GCM encryption for storage
-        - Implement rate limiting (max 500 validations/sec per IP)
-        - Monitor for systematic probing (sequential EIN checks)
-
-      compliance_mapping: |
-        IRS Publication 1565: EIN format requirements
-        26 USC § 6109: EIN identification requirement
-        GDPR Article 32: Encryption of tax identification data
-        CCPA: Tax ID subject to consumer rights
-
-      performance_overhead_ms: 0.02
-      false_positive_reduction_pct: 80
-
-  # Performance Characteristics
-  performance:
-    total_validation_overhead_ms: 0.15
-    worst_case_ms: 0.25
-    typical_case_ms: 0.08
-    batch_validation_overhead_ms: 0.01
-
-  # Quality Metrics
-  quality_metrics:
-    false_positive_reduction_total_pct: 86
-    validation_accuracy_pct: 99.5
-    false_negative_rate_pct: 0.5
-
-  # Dependencies
-  dependencies:
-    requires:
-      - "Regex Pattern Registry (C_PRIVACY_REGEX_REGISTRY_001)"
-    optional:
-      - "Country-specific validation data (ISO 3166, E.164 mappings)"
-
-  # Testing Requirements
-  testing:
-    unit_tests_per_validator: 20
-    total_test_vectors: 140
-    edge_cases:
-      - "Boundary values (0, 999, 65535)"
-      - "Invalid formats (missing hyphens, extra spaces)"
-      - "Format confusion (phone vs SSN prefix)"
-      - "Checksum manipulation (off-by-one errors)"
-    test_data_sets:
-      - "BIN database for credit cards"
-      - "SSA blacklist (known invalid SSNs)"
-      - "IBAN sample data (ISO 13616 test set)"
-
-  # Integration
-  integration:
-    called_by: "RegexDetector.detect_all()"
-    error_handling: "Skip detection if validation fails, emit warning metric"
-    fallback_strategy: "If validator unavailable, use regex-only (85% recall)"
-
-  # Notes
-  notes: |
-    - Validators reduce false positives from 1% (regex-only) to ~0.1% (regex + validation)
-    - Luhn algorithm detects ~80% of typos (single digit or adjacent transposition)
-    - IBAN checksum validation: 100% accuracy (mathematically guaranteed)
-    - Performance: typical validation takes <1ms, batch processing <10ms
-    - All validators are deterministic (no external dependencies)
+  name: pattern_validation_logic
+  version: "1.0.0"
+  source_adr: "0035a-regex-pattern-library.md"
+  epic: "2.9"
+  issue: "2.9.1"
+
+validators:
+  luhn_validator:
+    name: "Luhn Algorithm for Credit Cards"
+    description: "Validates credit card numbers using Luhn checksum algorithm (ISO/IEC 7812-1)"
+    applies_to: ["CREDIT_CARD"]
+    algorithm:
+      - "Reverse the credit card number digits"
+      - "Starting from the second digit, double every other digit"
+      - "If doubled digit > 9, subtract 9"
+      - "Sum all digits"
+      - "If sum % 10 == 0, valid"
+    performance: "<0.1ms"
+    accuracy: "100% precision (no false positives)"
+    examples:
+      valid:
+        - "4532123456789010"  # Visa
+        - "5425233430109903"  # MasterCard
+        - "378282246310005"   # Amex
+      invalid:
+        - "4532123456789011"  # Checksum fail
+        - "1234567890123456"  # Checksum fail
+
+  ssn_validator:
+    name: "SSN Format Validator"
+    description: "Validates US Social Security Number format rules"
+    applies_to: ["SSN"]
+    rules:
+      - rule: "First 3 digits (area number) cannot be 000, 666, or 900-999"
+        pattern: "^(?!000|666|9\\d{2})\\d{3}-\\d{2}-\\d{4}$"
+      - rule: "Middle 2 digits (group number) cannot be 00"
+        pattern: "^\\d{3}-(?!00)\\d{2}-\\d{4}$"
+      - rule: "Last 4 digits (serial number) cannot be 0000"
+        pattern: "^\\d{3}-\\d{2}-(?!0000)\\d{4}$"
+    performance: "<0.1ms"
+    accuracy: "100% precision (blocks invalid SSN formats)"
+    examples:
+      valid:
+        - "123-45-6789"
+        - "987-65-4321"
+        - "456-78-9012"
+      invalid:
+        - "000-45-6789"  # Area 000
+        - "666-45-6789"  # Area 666
+        - "900-45-6789"  # Area 900-999
+        - "123-00-6789"  # Group 00
+        - "123-45-0000"  # Serial 0000
+
+  email_validator:
+    name: "RFC 5322 Email Validator"
+    description: "Validates email addresses per RFC 5322 specification"
+    applies_to: ["EMAIL"]
+    rules:
+      - "Local part (before @): alphanumeric, dots, hyphens, underscores, plus"
+      - "Domain part (after @): alphanumeric, dots, hyphens"
+      - "TLD (top-level domain): 2+ letters"
+      - "No consecutive dots, no leading/trailing dots"
+    regex: '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}$'
+    performance: "<0.1ms"
+    accuracy: "98% precision (blocks most invalid emails)"
+    examples:
+      valid:
+        - "user@example.com"
+        - "john.doe+tag@company.co.uk"
+        - "admin_123@test-domain.org"
+      invalid:
+        - "user@example"       # No TLD
+        - "@example.com"       # No local part
+        - "user..name@test.com" # Consecutive dots
+
+  phone_validator:
+    name: "E.164 International Phone Validator"
+    description: "Validates phone numbers per E.164 international format"
+    applies_to: ["PHONE"]
+    rules:
+      - "Optional country code prefix (+1 for US)"
+      - "10 digits for US numbers (area code + subscriber)"
+      - "Area code cannot start with 0 or 1"
+      - "Subscriber number cannot be all same digit"
+    performance: "<0.1ms"
+    accuracy: "95% precision (blocks most invalid phones)"
+    examples:
+      valid:
+        - "+1-555-123-4567"
+        - "(555) 123-4567"
+        - "555-123-4567"
+      invalid:
+        - "+1-155-123-4567"  # Area code starts with 1
+        - "+1-055-123-4567"  # Area code starts with 0
+        - "555-111-1111"     # All same digit (suspicious)
+
+  iban_validator:
+    name: "IBAN Checksum Validator"
+    description: "Validates IBAN (International Bank Account Number) using mod-97 checksum"
+    applies_to: ["IBAN"]
+    algorithm:
+      - "Move first 4 characters to end"
+      - "Replace letters with numbers (A=10, B=11, ..., Z=35)"
+      - "Compute mod 97 of the resulting number"
+      - "If result == 1, valid"
+    performance: "<0.2ms"
+    accuracy: "100% precision (checksum verification)"
+    examples:
+      valid:
+        - "GB82WEST12345698765432"
+        - "DE89370400440532013000"
+      invalid:
+        - "GB83WEST12345698765432"  # Checksum fail
+        - "XX12345678901234567890"  # Invalid country code
+
+implementation:
+  validation_pipeline:
+    - step: "regex_match"
+      description: "Pattern matches via regex"
+      latency: "<1ms"
+    - step: "validation_check"
+      description: "Apply validator if requires_validation=true"
+      latency: "<0.2ms"
+    - step: "confidence_adjustment"
+      description: "Increase confidence if validation passes"
+      confidence_boost: "+0.05"
+
+  validation_strategy:
+    on_regex_match:
+      if_requires_validation: "Run validator algorithm"
+      if_validation_passes: "Return PII detection with boosted confidence"
+      if_validation_fails: "Discard match (false positive)"
+    on_regex_no_match:
+      action: "Return no detection"
+
+performance_targets:
+  validation_latency_per_pii: "<0.2ms"
+  validation_overhead: "<10% of total detection time"
+  false_positive_reduction: "100% (validation eliminates all false positives)"
+
+observability:
+  metrics:
+    - name: "pii_validation_checks_total"
+      type: "counter"
+      labels: ["validator", "result"]
+    - name: "pii_validation_latency_ms"
+      type: "histogram"
+      labels: ["validator"]
+    - name: "pii_false_positives_blocked_total"
+      type: "counter"
+      labels: ["pii_type"]
+
+testing:
+  unit_tests:
+    - test_luhn_algorithm_valid_cards
+    - test_luhn_algorithm_invalid_cards
+    - test_ssn_validator_blocks_invalid_formats
+    - test_email_validator_rfc5322_compliance
+    - test_phone_validator_e164_compliance
+    - test_iban_validator_checksum
+
+  integration_tests:
+    - test_validation_pipeline_end_to_end
+    - test_validation_reduces_false_positives_to_zero
+    - test_validation_latency_under_0_2ms

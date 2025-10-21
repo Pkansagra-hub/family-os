@@ -1,0 +1,373 @@
+---
+# ADR-0037: Blacklist Check Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Blacklist Check Contract
+# Defines JWT token revocation checking with Redis-based blacklist
+
+contract:
+  name: blacklist_check
+  version: "1.0.0"
+  description: "Check JWT tokens against revocation blacklist"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "1.5 days"
+
+# Token Blacklist System
+blacklist_system:
+  description: "Redis-based token revocation system"
+  purpose: "Enable immediate token invalidation"
+  storage: "Redis with TTL-based expiration"
+
+  blacklist_types:
+    individual_tokens:
+      description: "Revoke specific JWT tokens"
+      key_pattern: "jwt:blacklist:token:{jti}"
+      ttl: "Token remaining lifetime"
+      use_case: "User logout, security incident"
+
+    token_families:
+      description: "Revoke all tokens from a session"
+      key_pattern: "jwt:blacklist:family:{session_id}"
+      ttl: "Maximum token lifetime"
+      use_case: "Session termination, suspicious activity"
+
+    user_tokens:
+      description: "Revoke all tokens for a user"
+      key_pattern: "jwt:blacklist:user:{sub}"
+      ttl: "Security incident window"
+      use_case: "Account compromise, policy violation"
+
+  redis_operations:
+    check_operation:
+      command: "EXISTS key"
+      latency: "<1ms (local Redis)"
+      error_handling: "Redis unavailable"
+
+    add_operation:
+      command: "SETEX key ttl value"
+      value: "revocation_reason"
+      ttl: "Calculated from token expiry"
+      error_handling: "Redis write failure"
+
+# Blacklist Check Process
+check_process:
+  extract_identifiers:
+    description: "Extract identifiers for blacklist checking"
+    operations:
+      - "Get JTI from claims"
+      - "Get session_id from claims"
+      - "Get subject from claims"
+    required: "JTI always required"
+
+  check_individual_token:
+    description: "Check if specific token is blacklisted"
+    operations:
+      - "Query jwt:blacklist:token:{jti}"
+      - "Return true if exists"
+      - "Log access attempt"
+    performance: "<1ms"
+
+  check_token_family:
+    description: "Check if token family is blacklisted"
+    operations:
+      - "Query jwt:blacklist:family:{session_id}"
+      - "Return true if exists"
+      - "Family revocation takes precedence"
+    performance: "<1ms"
+
+  check_user_tokens:
+    description: "Check if user tokens are blacklisted"
+    operations:
+      - "Query jwt:blacklist:user:{sub}"
+      - "Return true if exists"
+      - "User-level revocation"
+    performance: "<1ms"
+
+  aggregate_results:
+    description: "Combine blacklist check results"
+    logic: "OR operation - any match = revoked"
+    precedence: "Family > Individual > User"
+    decision: "Revoked if any check passes"
+
+# Blacklist Management
+blacklist_management:
+  add_to_blacklist:
+    description: "Add token to blacklist"
+    operations:
+      - "Calculate TTL from token expiry"
+      - "Set Redis key with reason"
+      - "Log revocation event"
+    ttl_calculation: "exp - now + buffer"
+
+  remove_from_blacklist:
+    description: "Remove token from blacklist (rare)"
+    operations:
+      - "DEL Redis key"
+      - "Log removal event"
+      - "Audit trail requirement"
+    use_case: "Administrative override"
+
+  cleanup_expired:
+    description: "Automatic cleanup of expired entries"
+    mechanism: "Redis TTL expiration"
+    monitoring: "Track cleanup effectiveness"
+    alerting: "High blacklist size"
+
+# Performance Optimization
+performance_optimization:
+  caching_strategy:
+    local_cache: "In-memory LRU cache"
+    cache_size: "10,000 entries"
+    cache_ttl: "5 minutes"
+    hit_ratio: ">95%"
+
+  redis_connection:
+    connection_pool: "Pooled connections"
+    timeout: "100ms"
+    retry_policy: "3 attempts with backoff"
+    circuit_breaker: "Open after 5 failures"
+
+  batch_operations:
+    description: "Batch multiple blacklist checks"
+    use_case: "High-throughput validation"
+    optimization: "Pipeline Redis commands"
+
+# Error Handling
+error_handling:
+  redis_unavailable:
+    error: "RedisUnavailable"
+    handling: "Fail open (allow token) or strict mode"
+    logging: "Error level, alert on"
+    fallback: "Local cache only"
+
+  redis_timeout:
+    error: "RedisTimeout"
+    handling: "Fail open with warning"
+    logging: "Warning level"
+    monitoring: "Timeout rate tracking"
+
+  invalid_blacklist_key:
+    error: "InvalidBlacklistKey"
+    handling: "Log and continue"
+    logging: "Warning level"
+    recovery: "Key format validation"
+
+  blacklist_check_failed:
+    error: "BlacklistCheckFailed"
+    handling: "Fail open (security vs availability)"
+    logging: "Error level"
+    alerting: "Immediate alert"
+
+# Security Considerations
+security_considerations:
+  fail_open_policy:
+    description: "Allow tokens when Redis is down"
+    rationale: "Availability over strict security"
+    monitoring: "Track fail-open events"
+    alerting: "High fail-open rate"
+
+  audit_logging:
+    events:
+      - "Token blacklist check"
+      - "Blacklist addition"
+      - "Blacklist removal"
+      - "Redis failures"
+    retention: "90 days"
+    compliance: "GDPR, security auditing"
+
+  rate_limiting:
+    description: "Prevent blacklist abuse"
+    limits: "100 checks/second per IP"
+    enforcement: "Token bucket algorithm"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "redis = \"0.23\""
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "lru = \"0.10\""
+
+    code_example: |
+      use std::collections::HashMap;
+      use lru::LruCache;
+
+      pub struct BlacklistChecker {
+          redis_client: redis::Client,
+          local_cache: LruCache<String, bool>,
+      }
+
+      impl BlacklistChecker {
+          pub async fn check_blacklist(
+              &mut self,
+              jti: &str,
+              session_id: Option<&str>,
+              sub: &str,
+          ) -> Result<bool, BlacklistError> {
+              // Check local cache first
+              let cache_key = format!("{}:{}:{}", jti, session_id.unwrap_or(""), sub);
+              if let Some(cached) = self.local_cache.get(&cache_key) {
+                  return Ok(*cached);
+              }
+
+              // Check Redis
+              let mut conn = self.redis_client.get_async_connection().await?;
+
+              // Check individual token
+              let token_key = format!("jwt:blacklist:token:{}", jti);
+              let token_revoked: bool = redis::cmd("EXISTS")
+                  .arg(&token_key)
+                  .query_async(&mut conn)
+                  .await?;
+
+              if token_revoked {
+                  self.local_cache.put(cache_key, true);
+                  return Ok(true);
+              }
+
+              // Check token family
+              if let Some(session) = session_id {
+                  let family_key = format!("jwt:blacklist:family:{}", session);
+                  let family_revoked: bool = redis::cmd("EXISTS")
+                      .arg(&family_key)
+                      .query_async(&mut conn)
+                      .await?;
+
+                  if family_revoked {
+                      self.local_cache.put(cache_key, true);
+                      return Ok(true);
+                  }
+              }
+
+              // Check user tokens
+              let user_key = format!("jwt:blacklist:user:{}", sub);
+              let user_revoked: bool = redis::cmd("EXISTS")
+                  .arg(&user_key)
+                  .query_async(&mut conn)
+                  .await?;
+
+              // Cache result
+              self.local_cache.put(cache_key, user_revoked);
+
+              Ok(user_revoked)
+          }
+      }
+
+  python:
+    dependencies:
+      - "redis==4.5.0"
+      - "asyncio"
+
+    code_example: |
+      import redis.asyncio as redis
+      from cachetools import TTLCache
+
+      class BlacklistChecker:
+          def __init__(self, redis_url: str):
+              self.redis = redis.from_url(redis_url)
+              self.local_cache = TTLCache(maxsize=10000, ttl=300)  # 5 min TTL
+
+          async def check_blacklist(
+              self,
+              jti: str,
+              session_id: Optional[str],
+              sub: str
+          ) -> bool:
+              """Check if token is blacklisted"""
+              # Check local cache
+              cache_key = f"{jti}:{session_id or ''}:{sub}"
+              if cache_key in self.local_cache:
+                  return self.local_cache[cache_key]
+
+              try:
+                  # Check individual token
+                  token_key = f"jwt:blacklist:token:{jti}"
+                  token_revoked = await self.redis.exists(token_key)
+
+                  if token_revoked:
+                      self.local_cache[cache_key] = True
+                      return True
+
+                  # Check token family
+                  if session_id:
+                      family_key = f"jwt:blacklist:family:{session_id}"
+                      family_revoked = await self.redis.exists(family_key)
+
+                      if family_revoked:
+                          self.local_cache[cache_key] = True
+                          return True
+
+                  # Check user tokens
+                  user_key = f"jwt:blacklist:user:{sub}"
+                  user_revoked = await self.redis.exists(user_key)
+
+                  # Cache result
+                  self.local_cache[cache_key] = user_revoked
+                  return user_revoked
+
+              except redis.RedisError:
+                  # Fail open on Redis errors
+                  logger.warning("Redis unavailable, allowing token")
+                  return False
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Blacklist check logic"
+    - "Cache hit/miss scenarios"
+    - "Redis error handling"
+    - "TTL calculations"
+
+  integration_tests:
+    - "Full blacklist workflow"
+    - "Redis integration"
+    - "Cache consistency"
+    - "Concurrent access"
+
+  security_tests:
+    - "Blacklist bypass attempts"
+    - "Cache poisoning"
+    - "Redis injection"
+    - "Fail-open security"
+
+  performance_tests:
+    - "Blacklist check latency"
+    - "Cache performance"
+    - "Redis throughput"
+    - "Memory usage"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "claims_extraction.yml: Provides JTI and session_id"
+    - "refresh_token_store.yml: Manages blacklist entries"
+  downstream:
+    - "jwt_validator.yml: Uses blacklist check"
+    - "logout_flow.yml: Adds to blacklist"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Blacklisted tokens are rejected"
+    - "Valid tokens are accepted"
+    - "Redis failures handled gracefully"
+    - "Caching works correctly"
+
+  performance:
+    - "Blacklist check <1ms"
+    - "High cache hit rate"
+    - "Efficient Redis operations"
+
+  security:
+    - "No blacklist bypass possible"
+    - "Proper fail-open handling"
+    - "Audit logging maintained"
+
+  reliability:
+    - "Consistent check results"
+    - "Redis connection resilience"
+    - "Cache consistency"

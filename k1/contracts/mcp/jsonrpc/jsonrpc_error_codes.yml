@@ -1,0 +1,571 @@
+# JSON-RPC 2.0 Standard Error Codes Contract
+# ADR: 0034a-mcp-jsonrpc-protocol.md (lines 501-750)
+# Purpose: Define standard JSON-RPC 2.0 error codes and K1-specific application error codes
+# Research: JSON-RPC 2.0 Specification (2010) - https://www.jsonrpc.org/specification
+
+contract_metadata:
+  name: "jsonrpc_error_codes"
+  version: "1.0.0"
+  parent_adr: "ADR-0034a"
+  related_adrs:
+    - "ADR-0034: MCP Protocol Adoption"
+    - "ADR-0034d: MCP Error Handling"
+  status: "approved"
+  created: "2025-10-21"
+  priority: "CRITICAL"
+
+# =============================================================================
+# STANDARD JSON-RPC 2.0 ERROR CODES
+# =============================================================================
+
+standard_error_codes:
+  description: |
+    Standard error codes defined by JSON-RPC 2.0 specification.
+
+    **Reserved Range:** -32768 to -32000 (server errors)
+    **Pre-Defined Errors:** -32700 to -32600 (protocol errors)
+
+    **All K1 implementations MUST use these codes for protocol-level errors.**
+
+  PARSE_ERROR:
+    code: -32700
+    message: "Parse error"
+    description: |
+      Invalid JSON was received by the server.
+
+      **Trigger:** JSON syntax error in request
+      **Example:** Expecting ',' delimiter at line 3
+      **Response id:** null (cannot extract id from invalid JSON)
+      **K1 Action:** Log error, close connection if repeated
+    examples:
+      - trigger: "Missing closing brace"
+        request_json: '{"jsonrpc": "2.0", "method": "initialize", "params": {, "id": "req-1"}'
+        error_data: "Expecting property name enclosed in double quotes: line 1 column 60 (char 59)"
+
+      - trigger: "Invalid UTF-8 encoding"
+        request_json: "\xff\xfe invalid bytes"
+        error_data: "'utf-8' codec can't decode byte 0xff in position 0"
+
+  INVALID_REQUEST:
+    code: -32600
+    message: "Invalid Request"
+    description: |
+      The JSON sent is not a valid Request object.
+
+      **Triggers:**
+      - Missing required field (jsonrpc, method, or id)
+      - Wrong jsonrpc version (not "2.0")
+      - Invalid field type (e.g., params as string instead of object)
+
+      **K1 Action:** Reject request, log validation failure
+    examples:
+      - trigger: "Missing 'method' field"
+        request_json: '{"jsonrpc": "2.0", "params": {}, "id": "req-1"}'
+        error_data: "Missing 'method' field"
+
+      - trigger: "Wrong JSON-RPC version"
+        request_json: '{"jsonrpc": "1.0", "method": "initialize", "params": {}, "id": "req-1"}'
+        error_data: "Invalid JSON-RPC version: 1.0. Expected '2.0'"
+
+      - trigger: "params as Array (not Object)"
+        request_json: '{"jsonrpc": "2.0", "method": "tools/call", "params": ["arg1", "arg2"], "id": "req-1"}'
+        error_data: "Invalid params: expected Object, got Array"
+
+  METHOD_NOT_FOUND:
+    code: -32601
+    message: "Method not found"
+    description: |
+      The method does not exist / is not available.
+
+      **Triggers:**
+      - Unknown method name
+      - Reserved method (starts with "rpc.")
+      - Method disabled in current server state
+
+      **K1 Action:** Log warning, suggest valid methods
+    examples:
+      - trigger: "Unknown method"
+        request_method: "tools/delete"
+        error_data: "Method 'tools/delete' does not exist. Valid methods: initialize, tools/list, tools/call, shutdown"
+
+      - trigger: "Reserved method"
+        request_method: "rpc.internal.debug"
+        error_data: "Method 'rpc.internal.debug' is reserved"
+
+      - trigger: "Method called before initialization"
+        request_method: "tools/call"
+        error_data: "Method 'tools/call' unavailable: server not initialized. Call 'initialize' first"
+
+  INVALID_PARAMS:
+    code: -32602
+    message: "Invalid params"
+    description: |
+      Invalid method parameter(s).
+
+      **Triggers:**
+      - Missing required parameter
+      - Wrong parameter type (string instead of integer)
+      - Parameter fails JSON Schema validation
+      - Parameter out of range
+
+      **K1 Action:** Log validation error, include schema path in error.data
+    examples:
+      - trigger: "Missing required parameter"
+        request_method: "tools/call"
+        request_params: {"arguments": {"city": "Seattle"}}  # Missing 'name'
+        error_data:
+          path: ["name"]
+          message: "Missing required field 'name'"
+          schema: {"type": "object", "required": ["name", "arguments"]}
+
+      - trigger: "Wrong parameter type"
+        request_method: "tools/call"
+        request_params: {"name": 123, "arguments": {}}  # 'name' should be string
+        error_data:
+          path: ["name"]
+          message: "Expected string, got integer"
+          value: 123
+
+      - trigger: "Parameter out of range"
+        request_method: "get_weather"
+        request_params: {"city": "Seattle", "units": "kelvin"}  # Invalid enum value
+        error_data:
+          path: ["units"]
+          message: "Value 'kelvin' not in enum"
+          allowed: ["metric", "imperial"]
+
+  INTERNAL_ERROR:
+    code: -32603
+    message: "Internal error"
+    description: |
+      Internal JSON-RPC error (server-side failure).
+
+      **Triggers:**
+      - Unhandled exception in method handler
+      - Database connection failure
+      - External API timeout
+      - Resource exhaustion (memory, disk)
+
+      **K1 Action:** Log stack trace, emit metric, retry if transient
+    examples:
+      - trigger: "Unhandled exception"
+        request_method: "tools/call"
+        error_data:
+          exception: "AttributeError: 'NoneType' object has no attribute 'temperature'"
+          stack_trace: "Traceback (most recent call last):\n  File 'weather_api.py', line 42, in get_weather\n    temp = response.data.temperature\nAttributeError: ..."
+
+      - trigger: "External API timeout"
+        request_method: "get_weather"
+        error_data:
+          exception: "ConnectionError: Unable to reach api.openweathermap.org"
+          timeout_ms: 5000
+          retry_after_ms: 10000
+
+      - trigger: "Resource exhaustion"
+        request_method: "tools/call"
+        error_data:
+          exception: "MemoryError: Cannot allocate 2GB for tool execution"
+          tool_memory_budget_mb: 512
+          tool_requested_mb: 2048
+
+# =============================================================================
+# K1 APPLICATION ERROR CODES
+# =============================================================================
+
+application_error_codes:
+  description: |
+    K1-specific error codes for tool execution failures.
+
+    **Range:** -32099 to -32000 (application-defined, per JSON-RPC spec)
+    **Purpose:** Distinguish tool execution errors from protocol errors
+
+    **K1 Convention:**
+    - -32099: Tool execution errors
+    - -32098: Tool timeout errors
+    - -32097: Tool validation errors
+    - -32096: Tool capability errors
+    - -32095: Tool sandbox errors
+
+  TOOL_EXECUTION_ERROR:
+    code: -32099
+    message: "Tool execution failed"
+    description: |
+      Tool executed but returned error result.
+
+      **Triggers:**
+      - Tool-specific error (e.g., API key invalid)
+      - Business logic error (e.g., weather service unavailable)
+      - Tool crashed but was caught by sandbox
+
+      **K1 Action:** Return error to user, apply circuit breaker logic
+    examples:
+      - trigger: "Weather API key invalid"
+        tool_name: "get_weather"
+        error_data:
+          tool_error_code: "INVALID_API_KEY"
+          tool_error_message: "API key is invalid or expired"
+          tool_name: "get_weather"
+          retry_recommended: false
+
+      - trigger: "Weather service unavailable"
+        tool_name: "get_weather"
+        error_data:
+          tool_error_code: "SERVICE_UNAVAILABLE"
+          tool_error_message: "Weather service returned 503"
+          tool_name: "get_weather"
+          retry_recommended: true
+          retry_after_ms: 60000
+
+  TOOL_TIMEOUT:
+    code: -32098
+    message: "Tool execution timeout"
+    description: |
+      Tool did not complete within timeout budget.
+
+      **Triggers:**
+      - Tool execution exceeds timeout_ms (per-tool config)
+      - External API call hangs
+      - Tool enters infinite loop
+
+      **K1 Action:** Kill tool process, increment circuit breaker failure count
+    examples:
+      - trigger: "Tool timeout"
+        tool_name: "video_transcoder"
+        error_data:
+          tool_name: "video_transcoder"
+          timeout_ms: 300000  # 5 minutes
+          elapsed_ms: 300001
+          action_taken: "SIGKILL sent to tool process"
+          retry_recommended: false
+
+  TOOL_VALIDATION_ERROR:
+    code: -32097
+    message: "Tool validation failed"
+    description: |
+      Tool arguments failed validation before execution.
+
+      **Triggers:**
+      - Arguments don't match tool's inputSchema
+      - Required argument missing
+      - Argument type mismatch
+
+      **K1 Action:** Reject request before tool execution (fail-fast)
+    examples:
+      - trigger: "Missing required argument"
+        tool_name: "get_weather"
+        error_data:
+          validation_error: "Missing required argument 'city'"
+          tool_name: "get_weather"
+          input_schema:
+            type: "object"
+            required: ["city"]
+            properties:
+              city: {type: "string"}
+              units: {type: "string", enum: ["metric", "imperial"]}
+
+  TOOL_CAPABILITY_ERROR:
+    code: -32096
+    message: "Tool capability denied"
+    description: |
+      Tool lacks required capability for requested operation.
+
+      **Triggers:**
+      - Capability token missing
+      - Capability token signature invalid
+      - Capability token expired
+      - Capability constraints violated (e.g., max_cost_usd exceeded)
+
+      **K1 Action:** Reject request, log security event (from ADR-0010)
+    examples:
+      - trigger: "Missing capability"
+        tool_name: "send_email"
+        error_data:
+          capability_error: "Tool lacks 'network_smtp' capability"
+          tool_name: "send_email"
+          required_capability: "network_smtp"
+          tool_capabilities: ["network_http"]
+
+      - trigger: "Capability cost limit exceeded"
+        tool_name: "image_generation"
+        error_data:
+          capability_error: "Cost limit exceeded"
+          max_cost_usd: 1.0
+          requested_cost_usd: 2.5
+          tool_name: "image_generation"
+
+  TOOL_SANDBOX_ERROR:
+    code: -32095
+    message: "Tool sandbox violation"
+    description: |
+      Tool violated sandbox constraints (from ADR-0032, ADR-0033).
+
+      **Triggers:**
+      - Network egress violation (attempted connection to non-whitelisted domain)
+      - Filesystem egress violation (attempted write outside /tmp/output)
+      - Resource egress violation (exceeded memory/CPU limits)
+      - Seccomp violation (attempted forbidden syscall)
+
+      **K1 Action:** Kill tool, log violation, blacklist tool (3 strikes)
+    examples:
+      - trigger: "Network egress violation"
+        tool_name: "user_plugin"
+        error_data:
+          sandbox_violation: "Attempted connection to non-whitelisted domain"
+          tool_name: "user_plugin"
+          privacy_band: "GREEN"
+          attempted_domain: "malicious.example.com"
+          whitelisted_domains: ["api.openweathermap.org"]
+          action_taken: "iptables DROP, SIGKILL sent to tool process"
+
+      - trigger: "Memory limit exceeded"
+        tool_name: "video_transcoder"
+        error_data:
+          sandbox_violation: "Memory limit exceeded"
+          tool_name: "video_transcoder"
+          memory_limit_mb: 2048
+          memory_used_mb: 2100
+          action_taken: "OOM killer terminated tool process"
+
+# =============================================================================
+# ERROR CODE SELECTION FLOWCHART
+# =============================================================================
+
+error_code_selection:
+  description: "Decision tree for selecting appropriate error code"
+
+  flowchart:
+    step_1:
+      question: "Is JSON invalid?"
+      yes:
+        error_code: -32700  # Parse Error
+        example: "Missing closing brace"
+      no: "Go to step 2"
+
+    step_2:
+      question: "Is request missing required field (jsonrpc, method, id)?"
+      yes:
+        error_code: -32600  # Invalid Request
+        example: "Missing 'method' field"
+      no: "Go to step 3"
+
+    step_3:
+      question: "Does method exist?"
+      yes: "Go to step 4"
+      no:
+        error_code: -32601  # Method Not Found
+        example: "Method 'tools/delete' does not exist"
+
+    step_4:
+      question: "Are parameters valid?"
+      yes: "Go to step 5"
+      no:
+        error_code: -32602  # Invalid Params
+        example: "Missing required parameter 'city'"
+
+    step_5:
+      question: "Is this a tool execution error?"
+      yes:
+        error_code: -32099  # Tool Execution Error
+        example: "Weather API key invalid"
+      no: "Go to step 6"
+
+    step_6:
+      question: "Did tool timeout?"
+      yes:
+        error_code: -32098  # Tool Timeout
+        example: "Tool exceeded 300s timeout"
+      no: "Go to step 7"
+
+    step_7:
+      question: "Is this a capability violation?"
+      yes:
+        error_code: -32096  # Tool Capability Error
+        example: "Tool lacks 'network_smtp' capability"
+      no: "Go to step 8"
+
+    step_8:
+      question: "Is this a sandbox violation?"
+      yes:
+        error_code: -32095  # Tool Sandbox Error
+        example: "Attempted connection to non-whitelisted domain"
+      no: "Go to step 9"
+
+    step_9:
+      default:
+        error_code: -32603  # Internal Error
+        example: "Unhandled exception in method handler"
+
+# =============================================================================
+# ERROR RESPONSE CONSTRUCTION
+# =============================================================================
+
+error_response_construction:
+  description: "How to construct JSON-RPC error responses"
+
+  template: |
+    {
+      "jsonrpc": "2.0",
+      "error": {
+        "code": <error_code>,
+        "message": <error_message>,
+        "data": <optional_error_data>
+      },
+      "id": <request_id_or_null>
+    }
+
+  guidelines:
+    error_message:
+      - "Use standard message from error code definition"
+      - "Keep concise (1 sentence)"
+      - "Avoid technical jargon in message (put details in 'data')"
+
+    error_data:
+      - "Optional field for additional context"
+      - "MUST be JSON-serializable"
+      - "K1 convention: Use Object with structured fields"
+      - "Include: exception text, stack trace, retry recommendations"
+
+    request_id:
+      - "MUST match request id if request was parsed"
+      - "MAY be null for Parse Error (-32700)"
+      - "MUST be same type as request id (string UUID v4)"
+
+# =============================================================================
+# ERROR HANDLING STRATEGIES
+# =============================================================================
+
+error_handling_strategies:
+  description: "How K1 should handle different error codes (from ADR-0034d)"
+
+  transient_errors:
+    description: "Errors that may succeed on retry"
+    error_codes:
+      - -32603  # Internal Error
+      - -32099  # Tool Execution Error (if retry_recommended: true)
+      - -32098  # Tool Timeout (if retry_recommended: true)
+    strategy:
+      retry_policy:
+        max_retries: 3
+        backoff: "exponential"  # 1s, 2s, 4s
+        jitter: 500  # Random 0-500ms
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 5
+      time_window_ms: 600000  # 10 minutes
+      cooldown_ms: 60000  # 60 seconds
+
+  permanent_errors:
+    description: "Errors that will not succeed on retry"
+    error_codes:
+      - -32700  # Parse Error
+      - -32600  # Invalid Request
+      - -32601  # Method Not Found
+      - -32602  # Invalid Params
+      - -32097  # Tool Validation Error
+      - -32096  # Tool Capability Error
+      - -32095  # Tool Sandbox Error
+    strategy:
+      retry_policy:
+        max_retries: 0  # Do not retry
+      action: "Return error to user immediately"
+      logging: "Log error with full context"
+
+  security_errors:
+    description: "Errors indicating security violations"
+    error_codes:
+      - -32096  # Tool Capability Error
+      - -32095  # Tool Sandbox Error
+    strategy:
+      alert: "Emit CRITICAL alert to PagerDuty"
+      audit: "Log to K0 audit trail with trace_id"
+      blacklist: "Increment tool failure count (3 strikes → blacklist 1 hour)"
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+metrics:
+  jsonrpc_errors_total:
+    type: "counter"
+    labels: ["error_code", "method", "tool_name"]
+    description: "Total JSON-RPC errors by code"
+
+  jsonrpc_tool_execution_errors_total:
+    type: "counter"
+    labels: ["tool_name", "tool_error_code"]
+    description: "Total tool execution errors (code -32099)"
+
+  jsonrpc_tool_timeouts_total:
+    type: "counter"
+    labels: ["tool_name"]
+    description: "Total tool timeouts (code -32098)"
+
+  jsonrpc_sandbox_violations_total:
+    type: "counter"
+    labels: ["tool_name", "violation_type"]
+    description: "Total sandbox violations (code -32095)"
+
+logging:
+  error_logged:
+    level: "ERROR"
+    message: "JSON-RPC error occurred"
+    fields:
+      - "error_code"
+      - "error_message"
+      - "request_id"
+      - "method"
+      - "tool_name"
+      - "error_data"
+
+  security_violation_logged:
+    level: "CRITICAL"
+    message: "Security violation detected"
+    fields:
+      - "error_code"
+      - "tool_name"
+      - "violation_type"
+      - "action_taken"
+      - "trace_id"
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+references:
+  standards:
+    - name: "JSON-RPC 2.0 Specification"
+      url: "https://www.jsonrpc.org/specification"
+      section: "Error object"
+      year: 2010
+
+    - name: "Model Context Protocol (MCP)"
+      url: "https://github.com/anthropics/model-context-protocol"
+      year: 2024
+
+  related_adrs:
+    - "ADR-0034d: MCP Error Handling"
+    - "ADR-0034c: MCP Circuit Breaker"
+    - "ADR-0032: Band-Based Egress Rules"
+    - "ADR-0033: Three-Tier Sandbox Strategy"
+    - "ADR-0010: Capability-Based Security"
+
+  related_contracts:
+    - "jsonrpc_request_format.yml"
+    - "jsonrpc_response_format.yml"
+    - "method_routing.yml"
+
+# =============================================================================
+# CONTRACT VERSION & APPROVAL
+# =============================================================================
+
+contract_status:
+  version: "1.0.0"
+  status: "approved"
+  approved_by: "K1 Architecture Team"
+  approved_date: "2025-10-21"
+  next_review: "2026-04-21"
+  change_history:
+    - version: "1.0.0"
+      date: "2025-10-21"
+      author: "K1 Architecture Team"
+      changes: "Initial contract based on ADR-0034a"

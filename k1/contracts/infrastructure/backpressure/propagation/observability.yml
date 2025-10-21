@@ -1,0 +1,399 @@
+classes:
+  - name: PropagationObservability
+    description: Prometheus metrics and alerting for backpressure signal propagation with latency tracking and component response monitoring
+    research: ADR-0039b (backpressure propagation & signal flow), observability patterns, Prometheus metrics design
+    performance_budget: <1ms metrics recording, <10MB memory overhead, <100ms metrics export latency
+    reliability_properties:
+      - comprehensive_coverage: All propagation events and component responses metered
+      - latency_tracking: Propagation latency histogram with P95 alerting
+      - component_monitoring: Individual component response times and failure rates
+      - alert_driven: Metrics designed for alerting on propagation issues
+    methods:
+      - name: record_propagation_latency
+        description: Record end-to-end propagation latency for backpressure signals
+        parameters:
+          - name: latency_ms
+            type: f64
+            description: Total propagation latency in milliseconds
+          - name: component_count
+            type: usize
+            description: Number of components that received the signal
+          - name: failed_components
+            type: Vec<String>
+            description: List of components that failed to respond
+        returns:
+          type: ()
+          description: Records propagation latency metrics
+        implementation:
+          rust: |
+            use prometheus::{register_histogram_vec, register_counter_vec, register_gauge_vec};
+
+            lazy_static::lazy_static! {
+                static ref PROPAGATION_LATENCY_MS: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_propagation_latency_ms",
+                    "Latency of backpressure signal propagation to all components",
+                    &[],
+                    prometheus::exponential_buckets(1.0, 2.0, 10).unwrap() // 1ms to 1024ms
+                ).unwrap();
+
+                static ref COMPONENT_RESPONSE_LATENCY_MS: prometheus::HistogramVec = register_histogram_vec!(
+                    "backpressure_component_response_latency_ms",
+                    "Latency of individual component responses to backpressure signals",
+                    &["component"],
+                    prometheus::exponential_buckets(0.1, 2.0, 8).unwrap() // 0.1ms to 25.6ms
+                ).unwrap();
+
+                static ref COMPONENT_RESPONSE_FAILURES_TOTAL: prometheus::CounterVec = register_counter_vec!(
+                    "backpressure_component_response_failures_total",
+                    "Total number of component response failures",
+                    &["component", "failure_type"]
+                ).unwrap();
+
+                static ref SIGNALS_BROADCAST_TOTAL: prometheus::CounterVec = register_counter_vec!(
+                    "backpressure_signals_broadcast_total",
+                    "Total number of backpressure signals broadcast",
+                    &["tier"]
+                ).unwrap();
+
+                static ref REGISTERED_COMPONENTS: prometheus::GaugeVec = register_gauge_vec!(
+                    "backpressure_registered_components",
+                    "Number of components registered for backpressure signals",
+                    &[]
+                ).unwrap();
+
+                static ref COMPONENT_CALLBACK_TIMEOUTS_TOTAL: prometheus::CounterVec = register_counter_vec!(
+                    "backpressure_component_callback_timeouts_total",
+                    "Total number of component callback timeouts",
+                    &["component"]
+                ).unwrap();
+            }
+
+            pub struct PropagationObservability;
+
+            impl PropagationObservability {
+                pub fn record_propagation_latency(latency_ms: f64, component_count: usize, failed_components: Vec<String>) {
+                    PROPAGATION_LATENCY_MS
+                        .with_label_values(&[])
+                        .observe(latency_ms);
+
+                    SIGNALS_BROADCAST_TOTAL
+                        .with_label_values(&["total"])
+                        .inc();
+
+                    if latency_ms > 50.0 {
+                        tracing::warn!(
+                            latency_ms = latency_ms,
+                            component_count = component_count,
+                            failed_count = failed_components.len(),
+                            "Backpressure propagation latency exceeded 50ms target"
+                        );
+                    } else {
+                        tracing::debug!(
+                            latency_ms = latency_ms,
+                            component_count = component_count,
+                            "Backpressure propagation completed within target"
+                        );
+                    }
+
+                    // Record failures
+                    for component in failed_components {
+                        COMPONENT_RESPONSE_FAILURES_TOTAL
+                            .with_label_values(&[&component, "propagation_failure"])
+                            .inc();
+                    }
+                }
+
+                pub fn record_component_response_latency(component: &str, latency_ms: f64) {
+                    COMPONENT_RESPONSE_LATENCY_MS
+                        .with_label_values(&[component])
+                        .observe(latency_ms);
+
+                    if latency_ms > 45.0 {
+                        tracing::warn!(
+                            component = %component,
+                            latency_ms = latency_ms,
+                            "Component response latency exceeded 45ms target"
+                        );
+                    }
+                }
+
+                pub fn record_component_response_failure(component: &str, failure_type: &str) {
+                    COMPONENT_RESPONSE_FAILURES_TOTAL
+                        .with_label_values(&[component, failure_type])
+                        .inc();
+
+                    tracing::error!(
+                        component = %component,
+                        failure_type = %failure_type,
+                        "Component response failure"
+                    );
+                }
+
+                pub fn record_signal_broadcast(tier: &super::super::watermark_thresholds::BackpressureTier) {
+                    SIGNALS_BROADCAST_TOTAL
+                        .with_label_values(&[&tier.as_str()])
+                        .inc();
+                }
+
+                pub fn set_registered_components(count: usize) {
+                    REGISTERED_COMPONENTS
+                        .with_label_values(&[])
+                        .set(count as f64);
+                }
+
+                pub fn record_callback_timeout(component: &str) {
+                    COMPONENT_CALLBACK_TIMEOUTS_TOTAL
+                        .with_label_values(&[component])
+                        .inc();
+
+                    tracing::warn!(
+                        component = %component,
+                        "Component callback timeout"
+                    );
+                }
+
+                pub fn export_metrics() -> Result<String, Box<dyn std::error::Error>> {
+                    let encoder = prometheus::TextEncoder::new();
+                    let metric_families = prometheus::gather();
+                    let mut buffer = Vec::new();
+                    encoder.encode(&metric_families, &mut buffer)?;
+                    Ok(String::from_utf8(buffer)?)
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import Dict, List, Optional, Any
+            import time
+            import logging
+
+            class PropagationObservability:
+                """
+                Observability for backpressure signal propagation.
+
+                Tracks propagation latency, component responses, and failures
+                with Prometheus-style metrics and alerting.
+                """
+
+                def __init__(self):
+                    self.logger = logging.getLogger(__name__)
+                    self._propagation_latencies: List[float] = []
+                    self._component_latencies: Dict[str, List[float]] = {}
+                    self._failure_counts: Dict[str, int] = {}
+                    self._signal_counts: Dict[str, int] = {}
+                    self._timeout_counts: Dict[str, int] = {}
+
+                def record_propagation_latency(
+                    self,
+                    latency_ms: float,
+                    component_count: int,
+                    failed_components: List[str]
+                ) -> None:
+                    """Record end-to-end propagation latency"""
+                    self._propagation_latencies.append(latency_ms)
+
+                    # Keep only last 1000 measurements
+                    if len(self._propagation_latencies) > 1000:
+                        self._propagation_latencies = self._propagation_latencies[-1000:]
+
+                    # Record failures
+                    for component in failed_components:
+                        self._failure_counts[component] = self._failure_counts.get(component, 0) + 1
+
+                    if latency_ms > 50.0:
+                        self.logger.warning(
+                            f"Backpressure propagation latency exceeded target: {latency_ms:.1f}ms",
+                            extra={
+                                'latency_ms': latency_ms,
+                                'component_count': component_count,
+                                'failed_count': len(failed_components),
+                                'target_ms': 50.0
+                            }
+                        )
+                    else:
+                        self.logger.debug(
+                            f"Backpressure propagation completed: {latency_ms:.1f}ms",
+                            extra={
+                                'latency_ms': latency_ms,
+                                'component_count': component_count
+                            }
+                        )
+
+                def record_component_response_latency(self, component: str, latency_ms: float) -> None:
+                    """Record individual component response latency"""
+                    if component not in self._component_latencies:
+                        self._component_latencies[component] = []
+
+                    self._component_latencies[component].append(latency_ms)
+
+                    # Keep only last 100 measurements per component
+                    if len(self._component_latencies[component]) > 100:
+                        self._component_latencies[component] = self._component_latencies[component][-100:]
+
+                    if latency_ms > 45.0:
+                        self.logger.warning(
+                            f"Component {component} response latency exceeded target: {latency_ms:.1f}ms",
+                            extra={
+                                'component': component,
+                                'latency_ms': latency_ms,
+                                'target_ms': 45.0
+                            }
+                        )
+
+                def record_component_response_failure(self, component: str, failure_type: str) -> None:
+                    """Record component response failure"""
+                    key = f"{component}:{failure_type}"
+                    self._failure_counts[key] = self._failure_counts.get(key, 0) + 1
+
+                    self.logger.error(
+                        f"Component {component} response failure: {failure_type}",
+                        extra={
+                            'component': component,
+                            'failure_type': failure_type
+                        }
+                    )
+
+                def record_signal_broadcast(self, tier: Any) -> None:  # tier: BackpressureTier
+                    """Record signal broadcast by tier"""
+                    tier_name = tier.name
+                    self._signal_counts[tier_name] = self._signal_counts.get(tier_name, 0) + 1
+
+                def set_registered_components(self, count: int) -> None:
+                    """Set number of registered components"""
+                    self._registered_components = count
+
+                def record_callback_timeout(self, component: str) -> None:
+                    """Record component callback timeout"""
+                    self._timeout_counts[component] = self._timeout_counts.get(component, 0) + 1
+
+                    self.logger.warning(
+                        f"Component {component} callback timeout",
+                        extra={'component': component}
+                    )
+
+                def get_propagation_stats(self) -> Dict[str, float]:
+                    """Get propagation latency statistics"""
+                    if not self._propagation_latencies:
+                        return {'count': 0, 'avg': 0, 'p95': 0, 'p99': 0}
+
+                    latencies = sorted(self._propagation_latencies)
+                    count = len(latencies)
+                    avg = sum(latencies) / count
+                    p95 = latencies[int(count * 0.95)]
+                    p99 = latencies[int(count * 0.99)]
+
+                    return {
+                        'count': count,
+                        'avg': avg,
+                        'p95': p95,
+                        'p99': p99
+                    }
+
+                def get_component_stats(self, component: str) -> Dict[str, float]:
+                    """Get component response statistics"""
+                    if component not in self._component_latencies:
+                        return {'count': 0, 'avg': 0, 'p95': 0}
+
+                    latencies = sorted(self._component_latencies[component])
+                    count = len(latencies)
+                    avg = sum(latencies) / count
+                    p95 = latencies[int(count * 0.95)]
+
+                    return {
+                        'count': count,
+                        'avg': avg,
+                        'p95': p95
+                    }
+
+                def get_failure_counts(self) -> Dict[str, int]:
+                    """Get failure counts by component/failure_type"""
+                    return self._failure_counts.copy()
+
+                def export_metrics(self) -> str:
+                    """Export metrics in Prometheus format"""
+                    lines = []
+
+                    # Propagation latency histogram
+                    stats = self.get_propagation_stats()
+                    lines.append("# HELP backpressure_propagation_latency_ms Latency of backpressure signal propagation")
+                    lines.append("# TYPE backpressure_propagation_latency_ms histogram")
+                    lines.append(f"backpressure_propagation_latency_ms_count {stats['count']}")
+                    lines.append(f"backpressure_propagation_latency_ms_sum {stats['avg'] * stats['count']}")
+                    # Simplified histogram buckets
+                    lines.append("backpressure_propagation_latency_ms_bucket{le=\"50\"} 0"  # Would need proper bucket calculation
+                    lines.append("backpressure_propagation_latency_ms_bucket{le=\"+Inf\"} 0"
+
+                    # Component response latencies
+                    for component, latencies in self._component_latencies.items():
+                        if latencies:
+                            avg = sum(latencies) / len(latencies)
+                            lines.append(f"# HELP backpressure_component_response_latency_ms Component response latency for {component}")
+                            lines.append(f"# TYPE backpressure_component_response_latency_ms gauge")
+                            lines.append(f"backpressure_component_response_latency_ms{{component=\"{component}\"}} {avg}")
+
+                    # Failure counters
+                    for failure_key, count in self._failure_counts.items():
+                        lines.append("# HELP backpressure_component_response_failures_total Component response failures")
+                        lines.append("# TYPE backpressure_component_response_failures_total counter")
+                        lines.append(f"backpressure_component_response_failures_total{{failure=\"{failure_key}\"}} {count}")
+
+                    # Signal broadcast counters
+                    for tier, count in self._signal_counts.items():
+                        lines.append("# HELP backpressure_signals_broadcast_total Signals broadcast by tier")
+                        lines.append("# TYPE backpressure_signals_broadcast_total counter")
+                        lines.append(f"backpressure_signals_broadcast_total{{tier=\"{tier}\"}} {count}")
+
+                    return "\n".join(lines)
+
+propagation_metrics:
+  - propagation_latency_ms: Histogram of end-to-end signal propagation latency (<50ms target)
+  - component_response_latency_ms: Individual component response times (<45ms target)
+  - component_response_failures_total: Counter of component response failures by type
+  - signals_broadcast_total: Counter of signals broadcast by backpressure tier
+  - registered_components: Gauge of currently registered components
+  - component_callback_timeouts_total: Counter of component callback timeouts
+
+alerting_rules:
+  - name: BackpressurePropagationLatencyHigh
+    condition: histogram_quantile(0.95, rate(backpressure_propagation_latency_ms_bucket[5m])) > 50
+    severity: warning
+    description: Backpressure propagation latency above 50ms P95
+    annotations:
+      summary: "Backpressure propagation latency: {{ $value }}ms P95 > 50ms target"
+      description: "Signal propagation is slower than target, may indicate component issues"
+
+  - name: BackpressureComponentResponseFailures
+    condition: increase(backpressure_component_response_failures_total[5m]) > 5
+    severity: warning
+    description: High rate of component response failures
+    annotations:
+      summary: "Component response failures: {{ $value }} in 5m"
+      description: "Components are failing to respond to backpressure signals"
+
+  - name: BackpressureComponentTimeout
+    condition: increase(backpressure_component_callback_timeouts_total[5m]) > 0
+    severity: error
+    description: Component callback timeouts detected
+    annotations:
+      summary: "CRITICAL: Component callback timeouts detected"
+      description: "Components are not responding within timeout, may be unresponsive"
+
+  - name: BackpressureNoRegisteredComponents
+    condition: backpressure_registered_components == 0
+    severity: critical
+    description: No components registered for backpressure signals
+    annotations:
+      summary: "CRITICAL: No backpressure components registered"
+      description: "System cannot respond to backpressure without registered components"
+
+observability_requirements:
+  - latency_tracking: All propagation and response latencies measured
+  - failure_monitoring: Component failures and timeouts tracked
+  - tier_distribution: Signal broadcasts tracked by backpressure tier
+  - component_coverage: All registered components monitored individually
+  - alerting_integration: Metrics designed for Prometheus alerting rules
+
+performance_overhead:
+  - memory_usage: <10MB for metrics storage and histograms
+  - cpu_usage: <1ms per metrics recording operation
+  - export_latency: <100ms for full metrics export
+  - retention: Last 1000 propagation measurements, 100 per component

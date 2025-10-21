@@ -1,946 +1,206 @@
-# Contract: Pattern Configuration YAML for Hot-Reload
-# Purpose: Define YAML configuration schema for regex patterns with hot-reload support
-# Source: ADR-0035a - Regex Pattern Library
-# Status: Production-Ready
-# Last Updated: 2025-10-14
+# Pattern Configuration YAML Contract
+# Source ADR: 0035a-regex-pattern-library.md
+# Epic 2.9, Issue 2.9.1
+# Purpose: Define YAML configuration format for PII patterns with hot-reload support
 
 contract:
-  id: "C_PRIVACY_REGEX_CONFIG_003"
-  name: "Pattern Configuration YAML for Hot-Reload"
+  name: pattern_configuration_yaml
   version: "1.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
-  description: |
-    ================================================================================================
-    YAML CONFIGURATION SCHEMA FOR HOT-RELOAD PII PATTERN MANAGEMENT
-    ================================================================================================
+  source_adr: "0035a-regex-pattern-library.md"
+  epic: "2.9"
+  issue: "2.9.1"
 
-    Core Purpose:
-    - Define YAML-based configuration schema for regex pattern definitions
-    - Enable runtime hot-reload without code changes or service restart
-    - Support dynamic pattern enable/disable, threshold tuning, validator registration
-    - Maintain atomic pattern swaps with zero detection downtime
-    - Provide rollback capability for invalid configurations
+configuration_format:
+  file_path: "k1/config/pii_patterns.yml"
+  format: "YAML"
+  schema_version: "1.0.0"
+  hot_reload: true
+  reload_signal: "SIGHUP or file watcher"
+  reload_latency: "<100ms"
 
-    System Context:
-    - Integrates with ConfigManager (ADR-0011) for hot-reload service
-    - Works with Pattern Registry (pattern_registry.rs) for pattern storage
-    - Uses file watchers (inotify/FSEvents/ReadDirectoryChangesW) for change detection
-    - Supports cluster-wide synchronization via Git + ConfigManager
-    - Enables A/B testing, gradual rollouts, performance tuning
-
-    Key Capabilities:
-    1. **Hot-Reload:** Modify patterns without redeploying K1
-    2. **Atomic Swap:** Pattern updates atomic (all-or-nothing)
-    3. **Rollback:** Automatic rollback on invalid configurations
-    4. **Versioning:** YAML schema versioning with migration path
-    5. **Validation:** Pre-reload validation with detailed error reporting
-    6. **Monitoring:** Metrics and alerting for reload operations
-    7. **Audit Trail:** Git version control + ConfigManager tracking
-
-    Research Foundation:
-    - Configuration as Code (CAC) pattern (Humble & Farley)
-    - Atomic operations (database transaction semantics applied to config)
-    - File watcher patterns (inotify Linux, FSEvents macOS, ReadDirectoryChangesW Windows)
-    - Schema versioning (semantic versioning for config changes)
-    - Production Evidence: 12,000+ pattern reloads, 100% success rate
-
-    ADR Compliance:
-    - ADR-0011: ConfigManager hot-reload service
-    - ADR-0035a: Regex Pattern Library specification
-    - ADR-0032: Configuration management standards
-
-  # Architecture References
-  architecture:
-    adr_references: ["ADR-0035a: Regex Pattern Library"]
-    k1_module: "privacy.pattern_registry"
-    config_location: "k1/config/pii_patterns.yml"
-    hot_reload_service: "ConfigManager (ADR-0011)"
-
-  # Configuration Schema (COMPREHENSIVE)
-  config_schema:
-    version: "1.0"
-    last_updated: "2025-10-14T10:00:00Z"
-
-    global_settings:
-      enable_regex_detection: true
-      enable_validation: true
-      default_confidence_threshold: 0.70
-      batch_processing_enabled: true
-      performance_budget_ms: 5.0
-      early_exit_on_match: true
-      deduplication_enabled: true
-      max_concurrent_detections: 1000
-      cache_size_mb: 50
-      cache_ttl_seconds: 3600
-
-    pattern_template: |
-      patterns:
-        - name: "<pattern_id>"
-          enabled: true
-          regex: "<compiled_regex>"
-          placeholder: "<replacement_text>"
-          confidence: <float_0_to_1>
-          validator: "<validator_function_name | null>"
-          description: "<human_readable_description>"
-          examples:
-            valid: [list of valid examples]
-            invalid: [list of invalid examples]
-          pii_type_classification: "<primary_pii_type>"
-          gdpr_category: "<personal_data_category>"
-          hipaa_category: "<phi_category_if_applicable>"
-          metadata:
-            created_by: "<author>"
-            created_date: "<ISO_8601>"
-            last_modified: "<ISO_8601>"
-            review_status: "production | staging | experimental"
-            tags: [list of tags]
-
-    global_settings_detailed:
-      enable_regex_detection:
-        description: "Global flag to enable/disable all regex-based pattern matching"
-        type: "boolean"
-        default: true
-        impact: "Setting to false disables all regex detection (fallback to NER only)"
-        use_case: "Emergency disable if regex performance degrades"
-
-      enable_validation:
-        description: "Global flag to enable/disable validator functions (Luhn, RFC5322, etc)"
-        type: "boolean"
-        default: true
-        impact: "Reduces precision from 100% to 90% if disabled (skips checksum validation)"
-        use_case: "Performance optimization on constrained systems"
-
-      default_confidence_threshold:
-        description: "Minimum confidence score to flag PII (0.0-1.0)"
-        type: "float"
-        default: 0.70
-        valid_range: [0.0, 1.0]
-        impact: "Lower threshold = more detections, more false positives; Higher = fewer false positives, more missed detections"
-        use_cases:
-          - "0.70: Production default (balanced)"
-          - "0.85: High precision (reduce false positives)"
-          - "0.50: High recall (catch all PII)"
-        recommendation: "Keep at 0.70 for optimal F1-score (recall 85%, precision 99%)"
-
-      batch_processing_enabled:
-        description: "Enable batch processing of patterns (group matches, optimize latency)"
-        type: "boolean"
-        default: true
-        performance_impact: "Reduces latency 20-30% on large documents (>10KB)"
-
-      performance_budget_ms:
-        description: "Maximum allowed latency for PII detection per detection call"
-        type: "float"
-        default: 5.0
-        unit: "milliseconds"
-        sla_target: "P99 < 5ms, P99.9 < 10ms"
-        fallback_trigger: "If detection exceeds 10ms, fall back to regex-only"
-
-      early_exit_on_match:
-        description: "Stop checking patterns after first match found"
-        type: "boolean"
-        default: true
-        trade_off: "Reduces latency but may miss multiple PII types in same text"
-        recommendation: "Keep true for latency (rarely multiple PII types detected)"
-
-      deduplication_enabled:
-        description: "Remove duplicate PII detections (same value detected by multiple patterns)"
-        type: "boolean"
-        default: true
-        example: "Email detected as both email pattern AND contact pattern (keep 1)"
-        impact: "Reduces duplicates 10-15% in typical documents"
-
-      max_concurrent_detections:
-        description: "Maximum parallel detection threads"
-        type: "integer"
-        default: 1000
-        valid_range: [1, 10000]
-        performance_tuning: "Increase on beefy machines, decrease on constrained"
-        backpressure_trigger: "If exceeds, queue additional requests"
-
-      cache_size_mb:
-        description: "Cache size for compiled regex patterns"
-        type: "integer"
-        default: 50
-        unit: "megabytes"
-        performance_impact: "50MB cache = 100% hit rate typical"
-
-      cache_ttl_seconds:
-        description: "Time to live for cached patterns"
-        type: "integer"
-        default: 3600
-        unit: "seconds"
-        rationale: "Expire after 1 hour to catch pattern updates"
-
-    pattern_fields_detailed:
-      name:
-        description: "Unique pattern identifier (snake_case, lowercase)"
-        type: "string"
-        required: true
-        format: "[a-z_]+"
-        examples: ["ssn", "credit_card", "email_address", "phone_number"]
-
-      enabled:
-        description: "Enable/disable individual pattern without removing from config"
-        type: "boolean"
-        required: true
-        use_case: "Disable patterns for A/B testing or performance tuning"
-
-      regex:
-        description: "PCRE2 regex pattern for PII detection"
-        type: "string (regex)"
-        required: true
-        syntax: "PCRE2 (Perl-Compatible Regular Expressions v2)"
-        validation: "Must compile without errors, must not timeout (100ms limit)"
-        examples:
-          - "ssn: '\\b\\d{3}-\\d{2}-\\d{4}\\b'"
-          - "email: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}'"
-          - "credit_card: '\\b(?:\\d{4}[-\\s]?){3}\\d{4}\\b'"
-
-      placeholder:
-        description: "Replacement text for redacted PII"
-        type: "string"
-        required: true
-        format: "[PATTERN_TYPE]"
-        examples: ["[SSN]", "[EMAIL]", "[CREDIT_CARD]", "[PHONE]"]
-        rules: "Must start with '[', end with ']', 3-20 characters"
-
-      confidence:
-        description: "Confidence score for this pattern (0.0-1.0)"
-        type: "float"
-        required: true
-        valid_range: [0.0, 1.0]
-        examples:
-          - "0.85: Regex patterns with validation"
-          - "0.90: High-precision patterns (very specific)"
-          - "0.70: More general patterns (higher false positive risk)"
-
-      validator:
-        description: "Optional validator function to reduce false positives"
-        type: "string | null"
-        required: false
-        examples: ["validate_luhn", "validate_ssn", "validate_email", "validate_iban_checksum"]
-        impact: "With validator: 100% precision; Without: 85-95% precision"
-
-      description:
-        description: "Human-readable description for audit trail"
-        type: "string"
-        required: true
-        examples: ["US Social Security Number (XXX-XX-XXXX)", "International Bank Account Number"]
-
-      pii_type_classification:
-        description: "Primary PII category (ADR-0035 classification)"
-        type: "enum"
-        required: true
-        valid_values:
-          - "identifier: National ID, SSN, passport, driver license"
-          - "contact: Email, phone, address"
-          - "financial: Credit card, bank account, IBAN"
-          - "biometric: Fingerprint, iris scan, DNA"
-          - "health: Medical record number, health insurance ID"
-          - "location: GPS coordinates, home address"
-          - "network: IP address, MAC address, device ID"
-          - "device: IMEI, SIM card number"
-
-      gdpr_category:
-        description: "GDPR Article 4(1) data category (for compliance mapping)"
-        type: "string"
-        required: true
-        examples:
-          - "personal_identifier: SSN, passport"
-          - "contact_information: Email, phone"
-          - "financial_data: Credit card, bank account"
-          - "special_category: Health data (Article 9)"
-
-      hipaa_category:
-        description: "HIPAA Protected Health Information (PHI) category if applicable"
-        type: "string | null"
-        required: false
-        examples:
-          - "health_insurance_id: HIPAA 164.312"
-          - "patient_identifier: Medical record number"
-          - "null: Not HIPAA-regulated"
-
-      metadata:
-        description: "Audit trail and operational metadata"
-        type: "object"
-        required: true
-        fields:
-          created_by: "Author who created this pattern"
-          created_date: "ISO 8601 timestamp (YYYY-MM-DDTHH:MM:SSZ)"
-          last_modified: "ISO 8601 timestamp of last change"
-          review_status: "production | staging | experimental"
-          tags: "Array of tags for filtering/organization"
-
-  # Configuration Example
-  configuration_example: |
-    version: "1.0"
-    last_updated: "2025-10-14T10:00:00Z"
-
-    global_settings:
-      enable_regex_detection: true
-      default_confidence_threshold: 0.70
-
+yaml_schema:
+  root:
     patterns:
-      - name: ssn
-        enabled: true
-        regex: '\b\d{3}-\d{2}-\d{4}\b'
-        placeholder: "[SSN]"
-        confidence: 0.95
-        validator: validate_ssn
-        description: "US Social Security Number"
-        examples:
-          valid: ["123-45-6789", "987-65-4321"]
-          invalid: ["000-12-3456", "123-00-4567"]
-        pii_type_classification: "identifier"
-        gdpr_category: "personal_identifier"
-        metadata:
-          created_by: "k1-privacy-team"
-          created_date: "2025-06-18"
-          review_status: "production"
-          tags: ["ssn", "us", "identifier"]
-
-      - name: email
-        enabled: true
-        regex: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        placeholder: "[EMAIL]"
-        confidence: 0.90
-        validator: validate_email
-        description: "Email address (RFC 5322 basic)"
-        examples:
-          valid: ["john@example.com"]
-          invalid: ["@example.com"]
-        pii_type_classification: "contact"
-        gdpr_category: "contact_information"
-        metadata:
-          created_by: "k1-privacy-team"
-          review_status: "production"
-          tags: ["email", "contact"]
-
-  # Hot-Reload Mechanism (COMPREHENSIVE IMPLEMENTATION)
-  hot_reload:
-    overview: |
-      The hot-reload mechanism enables runtime pattern updates without service restart
-      or code deployment. Uses atomic pattern swaps to ensure zero-downtime updates.
-
-    trigger_detection:
-      method: "File watcher (OS-specific implementation)"
-      linux_implementation: "inotify (IN_MODIFY event on pii_patterns.yml)"
-      macos_implementation: "FSEvents (kFSEventStreamEventFlagItemModified)"
-      windows_implementation: "ReadDirectoryChangesW (FILE_NOTIFY_CHANGE_LAST_WRITE)"
-      latency_detection_ms: 10
-      example_trigger: "Git push → K1 ConfigManager pulls changes → Detects file modification → Triggers reload"
-
-    reload_process:
-      step_1_detection:
-        description: "File watcher detects pii_patterns.yml modification"
-        latency_ms: 10
-        action: "Emit reload_triggered event to ConfigManager"
-
-      step_2_validation:
-        description: "Pre-reload validation (before applying new patterns)"
-        validations:
-          - "YAML syntax check (must parse without errors)"
-          - "Regex validation (all patterns must compile, no timeout)"
-          - "Field validation (required fields present, correct types)"
-          - "Validator reference check (all validators must exist)"
-          - "Confidence range check (0.0-1.0)"
-          - "Pattern naming uniqueness (no duplicate names)"
-        error_handling: "If any validation fails, reject reload, keep previous patterns"
-        latency_ms: 15
-
-      step_3_compilation:
-        description: "Compile regex patterns and prepare new pattern set"
-        actions:
-          - "Compile all PCRE2 regexes with lazy_static"
-          - "Load validator function references"
-          - "Build pattern index by confidence score"
-          - "Precompute pattern metadata cache"
-        latency_ms: 5
-
-      step_4_atomic_swap:
-        description: "Atomically replace old pattern set with new set"
-        mechanism: "Arc<Mutex<PatternRegistry>> pointer swap"
-        old_patterns: "Kept in memory for 10 seconds before disposal (safety window)"
-        new_patterns: "Immediately available for new detections"
-        active_requests: "Continue using old patterns during swap (<1ms swap time)"
-        consistency: "Guaranteed consistent state (no half-loaded patterns)"
-        latency_ms: 1
-
-      step_5_monitoring:
-        description: "Emit metrics and monitor for errors during reload"
-        metrics:
-          - "pii_pattern_reload_total (counter, +1)"
-          - "pii_pattern_reload_latency_ms (histogram, record latency)"
-          - "active_patterns (gauge, update count)"
-        alerts:
-          - "If reload_latency > 100ms, emit warning metric"
-          - "If validation fails, emit error metric (alert to ops)"
-        latency_ms: 5
-
-    reload_latency: 50
-    reload_strategy: "Atomic swap (new patterns loaded, old patterns disposed)"
-    validation_before_reload: true
-    rollback_on_error: true
-
-    rollback_mechanism:
-      description: "Automatic rollback to previous patterns if new set is invalid"
-      trigger: "Validation failure, regex compilation timeout, critical error during swap"
-      process:
-        1: "Detect error during reload process"
-        2: "Immediately revert Arc pointer to previous pattern set"
-        3: "Dispose of invalid new pattern set"
-        4: "Emit alert to operations team"
-        5: "Continue serving with previous patterns"
-      latency_ms: 5
-      success_rate: "99.99% (only failures: out-of-memory, filesystem errors)"
-
-    zero_downtime_guarantee:
-      description: "Detection requests never blocked during reload"
-      mechanism:
-        - "Active requests use existing patterns during swap"
-        - "Swap completes in <1ms (faster than request latency)"
-        - "New requests immediately use new patterns post-swap"
-      test_evidence: "K1 deployment: 12,000+ reloads with 100% success, 0 detection gaps"
-
-    concurrent_reload_protection:
-      description: "Prevent race conditions if multiple reload requests arrive"
-      mechanism: "ConfigManager serializes reload requests with mutex"
-      behavior: "Second reload waits for first to complete before starting"
-      latency_impact: "Negligible (<1ms per reload)"
-
-    git_integration:
-      workflow: |
-        1. Developer: git push updated k1/config/pii_patterns.yml
-        2. Git hooks: Run validation script (lints YAML, validates regexes)
-        3. Git webhook: Notifies ConfigManager of change
-        4. ConfigManager: Pulls latest version from Git
-        5. File watcher: Detects local file change
-        6. ConfigManager: Validates and reloads patterns
-        7. Result: All K1 instances update within 5 seconds
-
-      benefits:
-        - "Complete audit trail (git log)"
-        - "Easy rollback (git revert)"
-        - "Peer review process (pull requests)"
-        - "Cluster synchronization (ConfigManager broadcasts)"
-
-    production_tuning:
-      tuning_parameter: "default_confidence_threshold"
-      example_workflow: |
-        1. Set threshold to 0.85 (high precision mode)
-        2. Monitor metrics (false positive rate drops)
-        3. If precision too high, gradually lower to 0.75
-        4. Each change reloads within 50ms (no restart)
-        5. Metrics update in real-time
-
-      a_b_testing: |
-        1. Create k1/config/pii_patterns_v2.yml with new patterns
-        2. Set 50% traffic to use old patterns, 50% to new
-        3. ConfigManager routes based on correlation_id hash
-        4. Monitor metrics (latency, accuracy, false positives)
-        5. If metrics good, swap 100% to new patterns
-        6. All without restarting K1
-
-      gradual_rollout: |
-        1. Deploy experimental pattern to 1% of users
-        2. Monitor metrics for 1 hour
-        3. If good, rollout to 10% of users
-        4. Monitor for 1 hour
-        5. If good, rollout to 100%
-        6. All via ConfigManager hot-reload (zero downtime)
-
-  # Versioning & Compatibility
-  versioning:
-    schema_version: "1.0"
-    breaking_changes:
-      - "Removing required field from pattern definition"
-      - "Changing regex syntax (PCRE2 vs PCRE)"
-    compatible_upgrades:
-      - "Adding new patterns"
-      - "Updating regex patterns for existing types"
-      - "Changing validator functions"
-      - "Adjusting confidence thresholds"
-    migration_path: "Version bumped in schema header, old configs supported for 6 months"
-
-  # Performance Characteristics (COMPREHENSIVE ANALYSIS)
-  performance:
-    config_parse_overhead_ms: 10
-    pattern_compilation_overhead_ms: 5
-    hot_reload_downtime_ms: 0
-    pattern_switch_latency_ms: 1
-
-    detailed_analysis:
-      yaml_parsing:
-        latency_ms: 10
-        implementation: "serde_yaml or pyyaml"
-        optimization: "Streaming parse (don't load entire file into memory)"
-        scalability: "O(n) where n = file size, linear up to 1MB"
-
-      regex_compilation:
-        latency_per_pattern_ms: 0.4
-        patterns_in_typical_config: 12
-        total_latency_ms: 5
-        optimization: "lazy_static crate (compile once, reuse)"
-        memory_overhead_per_pattern_kb: 2
-        total_memory_overhead_kb: 24
-
-      validation:
-        syntax_check_ms: 2
-        type_check_ms: 1
-        reference_check_ms: 1
-        uniqueness_check_ms: 0.5
-        total_validation_ms: 4.5
-
-      atomic_swap:
-        latency_ms: 1
-        mechanism: "Arc<Mutex<PatternRegistry>> pointer update"
-        guaranteed_atomicity: "Yes (CPU-level atomic operation)"
-
-      total_reload_latency_ms: 50
-      breakdown:
-        yaml_parsing: 10
-        validation: 5
-        regex_compilation: 5
-        atomic_swap: 1
-        buffer: 29
-
-      concurrent_detection_latency:
-        before_reload_ms: 2
-        during_reload_ms: 2
-        after_reload_ms: 2
-        conclusion: "Detection latency unaffected by hot-reload"
-
-      production_evidence:
-        k1_deployment_reloads: 12000
-        average_reload_latency_ms: 48
-        p99_reload_latency_ms: 65
-        p99_9_reload_latency_ms: 85
-        zero_reload_failures: true
-        zero_detection_gaps: true
-
-    performance_sla:
-      target_reload_latency_ms: 100
-      actual_p99_reload_latency_ms: 65
-      reload_latency_status: "✅ SLA exceeded"
-
-      target_zero_downtime: true
-      actual_detection_uptime_pct: "99.99%"
-      zero_downtime_status: "✅ SLA exceeded"
-
-      target_pattern_compilation_ms: 10
-      actual_compilation_ms: 5
-      compilation_status: "✅ SLA exceeded"
-
-  # Validation Rules (COMPREHENSIVE)
-  validation_rules:
-    yaml_syntax:
-      rule: "YAML must be valid (parse without errors)"
-      implementation: "serde_yaml::from_str() or yaml.safe_load()"
-      error_handling: "Reject entire reload if syntax invalid"
-      test_case: "Invalid YAML (unclosed quote) → Rejected ✓"
-
-    regex_validation:
-      rule: "All regex patterns must be valid PCRE2"
-      validation_checks:
-        - "Regex compiles without syntax error"
-        - "No ReDoS vulnerability (regex timeout <100ms)"
-        - "Pattern is not empty string"
-      implementation: |
-        let regex = Regex::new(&pattern)?;  // Rust
-        yaml.safe_load(pattern)  # Python
-      error_handling: "Skip invalid pattern, log error, continue with others"
-      test_cases:
-        - "Valid: '\\d{3}-\\d{2}-\\d{4}' → Accepted ✓"
-        - "Invalid: '[' → Syntax error → Rejected ✓"
-        - "ReDoS: '(a+)+b' → Timeout → Rejected ✓"
-
-    confidence_validation:
-      rule: "Confidence must be float between 0.0 and 1.0"
-      validation_checks:
-        - "Value is numeric (float or int)"
-        - "Value >= 0.0"
-        - "Value <= 1.0"
-      error_handling: "Use default 0.70 if invalid (log warning)"
-      test_cases:
-        - "0.85 → Valid ✓"
-        - "1.0 → Valid ✓"
-        - "0.0 → Valid ✓"
-        - "1.5 → Invalid → Default to 0.70 ✓"
-        - "-0.1 → Invalid → Default to 0.70 ✓"
-
-    placeholder_validation:
-      rule: "Placeholder must be '[PATTERN_NAME]' format"
-      validation_checks:
-        - "Starts with '[', ends with ']'"
-        - "Length 3-20 characters"
-        - "Only alphanumeric and underscores inside brackets"
-      error_handling: "Reject pattern if placeholder invalid (log error)"
-      test_cases:
-        - "[SSN] → Valid ✓"
-        - "[EMAIL] → Valid ✓"
-        - "SSN → Invalid (no brackets) → Rejected ✓"
-        - "[a] → Valid (too short but allowed) ✓"
-        - "[VERY_LONG_PLACEHOLDER_NAME_OVER_20_CHARS] → Invalid → Rejected ✓"
-
-    validator_validation:
-      rule: "Validator (if provided) must reference registered function"
-      validation_checks:
-        - "Validator name matches existing function"
-        - "Validator is callable (Rust: fn exists, Python: function exists)"
-        - "Or validator is null (validation optional)"
-      error_handling: "Log warning, disable validation for pattern (still detect with regex)"
-      registered_validators: ["validate_luhn", "validate_ssn", "validate_email", "validate_phone", "validate_ip", "validate_iban_checksum", "validate_tax_id"]
-      test_cases:
-        - "validate_luhn → Valid ✓"
-        - "validate_fake_function → Invalid → Warning logged ✓"
-        - "null → Valid (validation optional) ✓"
-
-    pii_type_validation:
-      rule: "PII type must be in enum: [identifier, contact, financial, biometric, health, location, network, device]"
-      validation_checks:
-        - "Value matches enum value (exact string)"
-      error_handling: "Reject pattern if pii_type invalid (log error)"
-      test_cases:
-        - "identifier → Valid ✓"
-        - "contact → Valid ✓"
-        - "financial → Valid ✓"
-        - "invalid_type → Invalid → Rejected ✓"
-
-    gdpr_category_validation:
-      rule: "GDPR category must comply with GDPR Article 4(1) definitions"
-      valid_categories: ["personal_identifier", "contact_information", "financial_data", "special_category_data", "biometric_data", "location_data", "device_identifier"]
-      error_handling: "Log warning if category missing (pattern still functions)"
-
-    pattern_uniqueness:
-      rule: "All pattern names must be unique (no duplicates)"
-      implementation: "HashSet<String> for pattern names"
-      error_handling: "Reject reload if duplicate names detected (log error)"
-      test_case: "Two patterns with name 'ssn' → Rejected ✓"
-
-    required_fields:
-      rules:
-        - "name: Required (no default)"
-        - "enabled: Required (no default)"
-        - "regex: Required (no default)"
-        - "placeholder: Required (no default)"
-        - "confidence: Required (no default)"
-        - "description: Required (no default)"
-        - "pii_type_classification: Required (no default)"
-        - "gdpr_category: Required (no default)"
-        - "metadata: Required (no default)"
-        - "validator: Optional (can be null)"
-        - "hipaa_category: Optional (can be null)"
-      error_handling: "Reject pattern if required field missing (log error)"
-
-  # Error Handling
-  error_handling:
-    invalid_yaml_syntax: "Log error, reject reload, keep previous patterns"
-    invalid_regex_pattern: "Log error, skip pattern, emit metric"
-    invalid_confidence_value: "Log warning, use default 0.70"
-    missing_required_field: "Log error, reject pattern, continue with others"
-    validator_not_found: "Log warning, disable validation for pattern"
-
-  # Monitoring & Alerting
-  monitoring:
-    metrics:
-      - "pii_pattern_reload_total (counter)"
-      - "pii_pattern_reload_errors_total (counter)"
-      - "pii_pattern_reload_latency_ms (histogram)"
-      - "active_patterns (gauge)"
-    alerts:
-      - "pattern_reload_failed: Alert on reload failure"
-      - "invalid_patterns: Alert if >1% patterns invalid"
-      - "performance_degradation: Alert if detection overhead > 5ms"
-
-  # Dependencies
-  dependencies:
-    requires:
-      - "ConfigManager (hot-reload service)"
-      - "Pattern Registry (pattern_registry.rs)"
-      - "YAML parser (serde_yaml or pyyaml)"
-    optional:
-      - "Git integration (track pattern changes)"
-      - "Notification service (alert on reload failures)"
-
-  # Testing Requirements
-  testing:
-    unit_tests:
-      - "Parse valid YAML configuration"
-      - "Reject invalid YAML syntax"
-      - "Validate regex patterns"
-      - "Validate validator references"
-      - "Check confidence value ranges"
-    integration_tests:
-      - "Hot-reload with new patterns"
-      - "Hot-reload with pattern updates"
-      - "Hot-reload with pattern removal"
-      - "Rollback on invalid patterns"
-      - "Concurrent detection during reload"
-    performance_tests:
-      - "Reload latency < 50ms"
-      - "Pattern detection before/after reload"
-      - "No detection downtime during reload"
-
-  # Implementation Examples
-  implementation_examples:
-    rust_config_loader: |
-      use serde::{Deserialize, Serialize};
-      use regex::Regex;
-      use std::sync::{Arc, Mutex};
-
-      #[derive(Debug, Serialize, Deserialize)]
-      pub struct PatternConfig {
-          pub version: String,
-          pub global_settings: GlobalSettings,
-          pub patterns: Vec<Pattern>,
-      }
-
-      #[derive(Debug, Serialize, Deserialize)]
-      pub struct GlobalSettings {
-          pub enable_regex_detection: bool,
-          pub default_confidence_threshold: f32,
-      }
-
-      #[derive(Debug, Serialize, Deserialize)]
-      pub struct Pattern {
-          pub name: String,
-          pub enabled: bool,
-          pub regex: String,
-          pub placeholder: String,
-          pub confidence: f32,
-          pub validator: Option<String>,
-      }
-
-      pub fn load_patterns(yaml_path: &str) -> Result<Arc<Mutex<Vec<Pattern>>>, Box<dyn std::error::Error>> {
-          let content = std::fs::read_to_string(yaml_path)?;
-          let config: PatternConfig = serde_yaml::from_str(&content)?;
-
-          // Validate and compile patterns
-          for pattern in &config.patterns {
-              Regex::new(&pattern.regex)?;  // Compile and validate
-              validate_pattern(pattern)?;
-          }
-
-          Ok(Arc::new(Mutex::new(config.patterns)))
-      }
-
-      fn validate_pattern(pattern: &Pattern) -> Result<(), String> {
-          if pattern.confidence < 0.0 || pattern.confidence > 1.0 {
-              return Err("Invalid confidence".to_string());
-          }
-          if !pattern.placeholder.starts_with('[') || !pattern.placeholder.ends_with(']') {
-              return Err("Invalid placeholder format".to_string());
-          }
-          Ok(())
-      }
-
-    python_hot_reload: |
-      import yaml
-      import re
-      import time
-      from pathlib import Path
-      from watchdog.observers import Observer
-      from watchdog.events import FileSystemEventHandler
-
-      class PatternReloadHandler(FileSystemEventHandler):
-          def __init__(self, config_manager):
-              self.config_manager = config_manager
-
-          def on_modified(self, event):
-              if event.src_path.endswith('pii_patterns.yml'):
-                  time.sleep(0.1)  # Wait for file write to complete
-                  self.config_manager.reload_patterns()
-
-      class ConfigManager:
-          def __init__(self, config_path):
-              self.config_path = config_path
-              self.patterns = []
-              self.startup_load()
-
-              # Setup file watcher
-              event_handler = PatternReloadHandler(self)
-              observer = Observer()
-              observer.schedule(event_handler, str(Path(config_path).parent))
-              observer.start()
-
-          def startup_load(self):
-              with open(self.config_path) as f:
-                  config = yaml.safe_load(f)
-              self.validate_config(config)
-              self.patterns = config['patterns']
-
-          def reload_patterns(self):
-              try:
-                  old_patterns = self.patterns
-                  with open(self.config_path) as f:
-                      config = yaml.safe_load(f)
-                  self.validate_config(config)
-                  self.patterns = config['patterns']
-                  print(f"✓ Reloaded {len(self.patterns)} patterns")
-              except Exception as e:
-                  print(f"✗ Reload failed: {e}, keeping old patterns")
-                  self.patterns = old_patterns
-
-          def validate_config(self, config):
-              for pattern in config['patterns']:
-                  # Validate regex
-                  re.compile(pattern['regex'])
-                  # Validate confidence
-                  assert 0.0 <= pattern['confidence'] <= 1.0
-                  # Validate placeholder
-                  assert pattern['placeholder'].startswith('[')
-                  assert pattern['placeholder'].endswith(']')
-
-    yaml_example_prod: |
-      version: "1.0"
-      last_updated: "2025-10-16T14:30:00Z"
-
-      global_settings:
-        enable_regex_detection: true
-        enable_validation: true
-        default_confidence_threshold: 0.70
-        batch_processing_enabled: true
-        performance_budget_ms: 5.0
-        max_concurrent_detections: 1000
-
-      patterns:
-        - name: ssn
-          enabled: true
-          regex: '\b\d{3}-\d{2}-\d{4}\b'
-          placeholder: "[SSN]"
-          confidence: 0.95
-          validator: validate_ssn
-          description: "US Social Security Number (XXX-XX-XXXX format)"
-          pii_type_classification: "identifier"
-          gdpr_category: "personal_identifier"
-          hipaa_category: "patient_identifier"
-          metadata:
-            created_by: "privacy-team"
-            created_date: "2025-06-01"
-            last_modified: "2025-10-16"
-            review_status: "production"
-            tags: ["ssn", "us", "identifier", "mandatory-encrypt"]
-
-        - name: credit_card
-          enabled: true
-          regex: '\b(?:\d{4}[-\s]?){3}\d{4}\b'
-          placeholder: "[CREDIT_CARD]"
-          confidence: 0.90
-          validator: validate_luhn
-          description: "Credit Card number with Luhn checksum validation"
-          pii_type_classification: "financial"
-          gdpr_category: "financial_data"
-          metadata:
-            created_by: "privacy-team"
-            created_date: "2025-06-01"
-            review_status: "production"
-            tags: ["credit-card", "pci-dss", "high-priority"]
-
-        - name: email
-          enabled: true
-          regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}'
-          placeholder: "[EMAIL]"
-          confidence: 0.85
-          validator: validate_email
-          description: "Email address (RFC 5322 compliant)"
-          pii_type_classification: "contact"
-          gdpr_category: "contact_information"
-          metadata:
-            created_by: "privacy-team"
-            created_date: "2025-06-01"
-            review_status: "production"
-            tags: ["email", "contact", "gdpr"]
-
-  # Deployment & Operations
-  deployment:
-    config_location: "k1/config/pii_patterns.yml"
-    backup_location: "k1/config/pii_patterns.yml.backup"
-    version_control: "Git (tracked in repository)"
-
-    change_process:
-      step_1: "Edit k1/config/pii_patterns.yml locally"
-      step_2: "Run validation script: './scripts/validate_patterns.sh'"
-      step_3: "Commit: 'git commit -m \"Update: Add UK NI number pattern\"'"
-      step_4: "Push: 'git push origin feature/uk-patterns'"
-      step_5: "Create Pull Request for peer review"
-      step_6: "After approval, merge to main"
-      step_7: "Git webhook notifies ConfigManager"
-      step_8: "ConfigManager pulls changes, validates, reloads patterns"
-      step_9: "File watcher detects change, completes hot-reload (50ms)"
-      step_10: "All K1 instances updated within 5 seconds"
-      step_11: "Metrics updated in real-time (Prometheus)"
-
-    validation_script: |
-      #!/bin/bash
-      # scripts/validate_patterns.sh
-
-      CONFIG_FILE="k1/config/pii_patterns.yml"
-
-      # Check YAML syntax
-      python3 -c "import yaml; yaml.safe_load(open('$CONFIG_FILE'))" || exit 1
-
-      # Validate all regex patterns
-      python3 <<EOF
-      import yaml
-      import re
-      with open('$CONFIG_FILE') as f:
-          config = yaml.safe_load(f)
-      for pattern in config['patterns']:
-          try:
-              re.compile(pattern['regex'])
-          except:
-              print(f"Invalid regex: {pattern['name']}")
-              exit(1)
-      print("✓ All patterns valid")
-      EOF
-
-    rollback_procedure:
-      step_1: "If patterns cause issues: 'git log --oneline k1/config/pii_patterns.yml'"
-      step_2: "Identify last good commit: 'git show <commit-hash>:k1/config/pii_patterns.yml'"
-      step_3: "Revert: 'git revert <bad-commit-hash>'"
-      step_4: "Push: 'git push origin main'"
-      step_5: "Git webhook triggers ConfigManager"
-      step_6: "Patterns automatically revert (hot-reload)"
-      step_7: "No K1 restart required"
-      latency: "50ms for patterns to revert"
-
-    monitoring:
-      metrics_collected:
-        - "pii_pattern_reload_total (count of reloads)"
-        - "pii_pattern_reload_latency_ms (histogram)"
-        - "active_patterns (gauge, current count)"
-        - "pattern_validation_errors (count of errors)"
-
-      alerts:
-        - "pattern_reload_failed: Alert if reload validation fails"
-        - "reload_latency_high: Alert if latency > 100ms"
-        - "pattern_detection_degradation: Alert if latency increases >50%"
-
-      dashboards:
-        - "Pattern reload status (success/failure rate)"
-        - "Reload latency trends"
-        - "Active patterns by type"
-        - "Validation error rate"
-
-    production_checklist:
-      - "✓ All patterns validated in staging environment"
-      - "✓ Regex patterns tested against 1000+ samples"
-      - "✓ Validators tested and passing"
-      - "✓ Performance SLAs verified (<5ms detection)"
-      - "✓ Peer review completed"
-      - "✓ GDPR/HIPAA compliance verified"
-      - "✓ Metrics and alerting configured"
-      - "✓ Rollback procedure tested"
-      - "✓ Git history clean and annotated"
-      - "✓ Ready for production deployment"
-
-  # Notes
-  notes: |
-    - YAML provides human-readable configuration (no code recompilation needed)
-    - Hot-reload enables runtime pattern updates (A/B testing, A/C/D testing)
-    - Atomic swap ensures zero downtime during reload
-    - Rollback mechanism protects against invalid configurations
-    - Git integration enables version control and audit trail
-    - ConfigManager integration enables cluster-wide pattern synchronization
+      type: "object"
+      description: "Map of pattern_id to pattern configuration"
+      required: true
+    metadata:
+      type: "object"
+      description: "Configuration metadata (version, updated_at, author)"
+      required: false
+
+  pattern_object:
+    name:
+      type: "string"
+      description: "Human-readable pattern name"
+      required: true
+    regex:
+      type: "string"
+      description: "Perl-compatible regex pattern"
+      required: true
+    placeholder:
+      type: "string"
+      description: "Replacement placeholder (e.g., [SSN], [EMAIL])"
+      required: true
+    pii_type:
+      type: "string"
+      description: "PII type identifier (SSN, EMAIL, CREDIT_CARD, etc.)"
+      required: true
+    confidence:
+      type: "float"
+      description: "Detection confidence score (0.0-1.0)"
+      required: true
+      range: [0.0, 1.0]
+    requires_validation:
+      type: "boolean"
+      description: "Whether to apply validator after regex match"
+      required: true
+    validator:
+      type: "string"
+      description: "Validator function name (if requires_validation=true)"
+      required: false
+    enabled:
+      type: "boolean"
+      description: "Enable/disable pattern without removing it"
+      required: false
+      default: true
+    priority:
+      type: "integer"
+      description: "Pattern matching priority (higher = earlier)"
+      required: false
+      default: 50
+
+example_configuration:
+  patterns:
+    ssn:
+      name: "Social Security Number"
+      regex: '\b\d{3}-\d{2}-\d{4}\b'
+      placeholder: "[SSN]"
+      pii_type: "SSN"
+      confidence: 0.95
+      requires_validation: true
+      validator: "ssn_validator"
+      enabled: true
+      priority: 100
+
+    email:
+      name: "Email Address"
+      regex: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+      placeholder: "[EMAIL]"
+      pii_type: "EMAIL"
+      confidence: 0.98
+      requires_validation: true
+      validator: "email_validator"
+      enabled: true
+      priority: 90
+
+    custom_pattern:
+      name: "Custom Internal ID"
+      regex: '\bINT-\d{8}\b'
+      placeholder: "[INTERNAL_ID]"
+      pii_type: "INTERNAL_ID"
+      confidence: 1.0
+      requires_validation: false
+      enabled: true
+      priority: 50
+
+  metadata:
+    version: "1.0.0"
+    updated_at: "2025-10-21T10:00:00Z"
+    author: "privacy_team"
+    description: "PII detection patterns for FamilyOS K1"
+
+hot_reload_mechanism:
+  trigger:
+    - "File modification detected (inotify/fswatch)"
+    - "SIGHUP signal received"
+    - "Manual reload API call (POST /admin/pii-patterns/reload)"
+
+  reload_process:
+    - step: "Detect configuration change"
+      latency: "<10ms"
+    - step: "Parse YAML file"
+      latency: "<20ms"
+      error_handling: "Log error, keep old config"
+    - step: "Validate schema"
+      latency: "<10ms"
+      error_handling: "Log error, keep old config"
+    - step: "Precompile regex patterns"
+      latency: "<50ms"
+      error_handling: "Log error, keep old config"
+    - step: "Atomic swap configuration"
+      latency: "<10ms"
+      description: "Replace old config with new config atomically"
+    - step: "Emit reload success event"
+      latency: "<10ms"
+
+  total_reload_latency: "<100ms"
+
+  rollback_strategy:
+    on_error: "Keep previous valid configuration"
+    log_level: "ERROR"
+    metric: "pii_config_reload_failures_total"
+
+configuration_validation:
+  schema_validation:
+    - "All required fields present"
+    - "Confidence in range [0.0, 1.0]"
+    - "Priority >= 0"
+    - "Validator exists if requires_validation=true"
+
+  regex_compilation:
+    - "Regex compiles without errors"
+    - "Regex does not cause catastrophic backtracking (test on long strings)"
+    - "Regex performance <10ms on 10KB text"
+
+  placeholder_validation:
+    - "Placeholder format: [UPPERCASE_WITH_UNDERSCORES]"
+    - "Placeholder unique per pii_type"
+
+implementation:
+  config_loader:
+    class: "PIIPatternConfigLoader"
+    methods:
+      - "load_from_file(path: str) -> PIIPatternRegistry"
+      - "reload() -> Result<PIIPatternRegistry, ConfigError>"
+      - "validate_config(config: Dict) -> Result<(), ConfigError>"
+
+  file_watcher:
+    library: "notify (Rust) or watchdog (Python)"
+    events: ["CREATE", "MODIFY"]
+    debounce: "500ms"
+
+  atomic_swap:
+    mechanism: "Arc<RwLock<PIIPatternRegistry>>"
+    description: "Reader-writer lock for atomic config updates"
+
+performance_targets:
+  config_load_latency: "<50ms"
+  hot_reload_latency: "<100ms"
+  config_validation_latency: "<30ms"
+  zero_downtime: "Atomic swap ensures zero detection downtime during reload"
+
+observability:
+  metrics:
+    - name: "pii_config_reloads_total"
+      type: "counter"
+      labels: ["status"]  # success, validation_error, compilation_error
+    - name: "pii_config_reload_latency_ms"
+      type: "histogram"
+    - name: "pii_active_patterns_count"
+      type: "gauge"
+    - name: "pii_config_validation_failures_total"
+      type: "counter"
+      labels: ["reason"]
+
+testing:
+  unit_tests:
+    - test_yaml_schema_validation
+    - test_pattern_precompilation
+    - test_hot_reload_atomic_swap
+    - test_invalid_config_rollback
+
+  integration_tests:
+    - test_hot_reload_end_to_end
+    - test_hot_reload_zero_downtime
+    - test_hot_reload_under_100ms

@@ -1,0 +1,461 @@
+---
+# ADR-0037: Validation Errors Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Validation Errors Contract
+# Defines comprehensive JWT validation error types and handling
+
+contract:
+  name: validation_errors
+  version: "1.0.0"
+  description: "JWT validation error types and handling strategies"
+  parent_adr: "ADR-0037"
+  priority: "HIGH"
+  effort: "1 day"
+
+# JWT Validation Error Hierarchy
+error_hierarchy:
+  base_error: "JwtValidationError"
+  description: "Root error type for all JWT validation failures"
+
+  error_categories:
+    format_errors:
+      description: "Token format and structure issues"
+      severity: "HIGH"
+      handling: "Immediate rejection"
+
+    signature_errors:
+      description: "Cryptographic signature verification failures"
+      severity: "CRITICAL"
+      handling: "Immediate rejection, security logging"
+
+    expiry_errors:
+      description: "Token expiry and timing issues"
+      severity: "MEDIUM"
+      handling: "Rejection with appropriate response"
+
+    claims_errors:
+      description: "Claims validation and extraction failures"
+      severity: "HIGH"
+      handling: "Rejection with detailed error"
+
+    blacklist_errors:
+      description: "Token revocation and blacklist issues"
+      severity: "HIGH"
+      handling: "Rejection, potential security event"
+
+# Detailed Error Types
+error_types:
+  # Format Errors
+  invalid_token_format:
+    error_code: "JWT_001"
+    message: "Invalid JWT token format"
+    category: "format_errors"
+    http_status: 400
+    user_message: "Invalid token format"
+    internal_details: "Token does not have exactly 3 parts separated by dots"
+
+  invalid_base64_encoding:
+    error_code: "JWT_002"
+    message: "Invalid base64 encoding in token"
+    category: "format_errors"
+    http_status: 400
+    user_message: "Invalid token encoding"
+    internal_details: "Header or payload segment is not valid base64url"
+
+  invalid_json_payload:
+    error_code: "JWT_003"
+    message: "Invalid JSON in token payload"
+    category: "format_errors"
+    http_status: 400
+    user_message: "Invalid token payload"
+    internal_details: "Payload cannot be parsed as valid JSON"
+
+  # Signature Errors
+  signature_verification_failed:
+    error_code: "JWT_100"
+    message: "JWT signature verification failed"
+    category: "signature_errors"
+    http_status: 401
+    user_message: "Invalid token signature"
+    internal_details: "RS256 signature verification failed"
+    security_event: true
+
+  public_key_unavailable:
+    error_code: "JWT_101"
+    message: "Public key unavailable for verification"
+    category: "signature_errors"
+    http_status: 500
+    user_message: "Authentication service temporarily unavailable"
+    internal_details: "Cannot retrieve public key from keystore"
+    security_event: false
+
+  invalid_signature_format:
+    error_code: "JWT_102"
+    message: "Invalid signature format"
+    category: "signature_errors"
+    http_status: 400
+    user_message: "Invalid token signature format"
+    internal_details: "Signature is not 256 bytes (RSA-2048)"
+    security_event: true
+
+  # Expiry Errors
+  token_expired:
+    error_code: "JWT_200"
+    message: "JWT token has expired"
+    category: "expiry_errors"
+    http_status: 401
+    user_message: "Token has expired"
+    internal_details: "exp claim is in the past (with clock skew tolerance)"
+    suggest_refresh: true
+
+  token_not_yet_valid:
+    error_code: "JWT_201"
+    message: "JWT token not yet valid"
+    category: "expiry_errors"
+    http_status: 401
+    user_message: "Token not yet valid"
+    internal_details: "nbf claim is in the future"
+
+  missing_expiry_claim:
+    error_code: "JWT_202"
+    message: "Missing expiry claim in token"
+    category: "expiry_errors"
+    http_status: 400
+    user_message: "Invalid token: missing expiry"
+    internal_details: "exp claim is missing from payload"
+
+  # Claims Errors
+  missing_required_claim:
+    error_code: "JWT_300"
+    message: "Missing required claim in token"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid token: missing required information"
+    internal_details: "Required claim {claim_name} is missing"
+
+  invalid_claim_type:
+    error_code: "JWT_301"
+    message: "Invalid claim type in token"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid token: incorrect data type"
+    internal_details: "Claim {claim_name} has wrong type, expected {expected_type}"
+
+  invalid_issuer:
+    error_code: "JWT_302"
+    message: "Invalid token issuer"
+    category: "claims_errors"
+    http_status: 401
+    user_message: "Invalid token issuer"
+    internal_details: "iss claim does not match expected issuer"
+
+  invalid_audience:
+    error_code: "JWT_303"
+    message: "Invalid token audience"
+    category: "claims_errors"
+    http_status: 401
+    user_message: "Invalid token audience"
+    internal_details: "aud claim does not match expected audience"
+
+  invalid_subject_format:
+    error_code: "JWT_304"
+    message: "Invalid subject format"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid token subject"
+    internal_details: "sub claim is not a valid UUID"
+
+  # Custom Claims Errors
+  invalid_space_id:
+    error_code: "JWT_400"
+    message: "Invalid space identifier"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid space identifier"
+    internal_details: "space_id claim is not a valid UUID"
+
+  invalid_roles:
+    error_code: "JWT_401"
+    message: "Invalid roles in token"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid user roles"
+    internal_details: "roles claim contains invalid role names"
+
+  invalid_privacy_band:
+    error_code: "JWT_402"
+    message: "Invalid privacy band"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid privacy classification"
+    internal_details: "privacy_band must be GREEN, AMBER, or RED"
+
+  invalid_capabilities:
+    error_code: "JWT_403"
+    message: "Invalid capabilities in token"
+    category: "claims_errors"
+    http_status: 400
+    user_message: "Invalid user capabilities"
+    internal_details: "capabilities claim contains invalid capability names"
+
+  # Blacklist Errors
+  token_blacklisted:
+    error_code: "JWT_500"
+    message: "Token has been revoked"
+    category: "blacklist_errors"
+    http_status: 401
+    user_message: "Token has been revoked"
+    internal_details: "Token found in revocation blacklist"
+    security_event: true
+
+  blacklist_check_failed:
+    error_code: "JWT_501"
+    message: "Blacklist check failed"
+    category: "blacklist_errors"
+    http_status: 500
+    user_message: "Authentication service temporarily unavailable"
+    internal_details: "Cannot check token revocation status"
+    fail_open: true
+
+# Error Response Format
+error_response_format:
+  json_structure:
+    error:
+      code: "JWT_XXX"
+      message: "Human-readable error message"
+      details: "Optional internal details (dev mode only)"
+    timestamp: "ISO 8601 timestamp"
+    request_id: "Request correlation ID"
+
+  http_headers:
+    content_type: "application/json"
+    x_request_id: "Correlation ID"
+    retry_after: "Optional for 429/500 responses"
+
+# Error Handling Strategies
+error_handling_strategies:
+  security_events:
+    log_level: "WARNING"
+    alerting: "Immediate alert for signature/blacklist errors"
+    audit_trail: "Full context logging"
+    monitoring: "Error rate tracking"
+
+  user_facing_errors:
+    log_level: "INFO"
+    user_message: "Safe, non-technical message"
+    no_internal_details: "Never expose internal error details"
+    rate_limiting: "Apply rate limiting on auth failures"
+
+  system_errors:
+    log_level: "ERROR"
+    alerting: "Alert on high error rates"
+    monitoring: "Track error patterns"
+    fallback: "Graceful degradation where possible"
+
+# Logging and Monitoring
+logging_monitoring:
+  error_metrics:
+    counter: "jwt_validation_errors_total"
+    labels: ["error_code", "category", "endpoint"]
+    alerting: "Rate > threshold"
+
+  security_events:
+    counter: "jwt_security_events_total"
+    labels: ["event_type", "severity"]
+    alerting: "Any security event"
+
+  performance_metrics:
+    histogram: "jwt_validation_error_duration"
+    buckets: [0.001, 0.005, 0.01, 0.05, 0.1]
+    monitoring: "Error handling performance"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "thiserror = \"1.0\""
+
+    code_example: |
+      use thiserror::Error;
+
+      #[derive(Error, Debug)]
+      pub enum JwtValidationError {
+          #[error("Invalid JWT token format")]
+          InvalidTokenFormat,
+
+          #[error("JWT signature verification failed")]
+          SignatureVerificationFailed,
+
+          #[error("JWT token has expired")]
+          TokenExpired,
+
+          #[error("Missing required claim: {claim}")]
+          MissingRequiredClaim { claim: String },
+
+          #[error("Invalid claim type for {claim}: expected {expected}")]
+          InvalidClaimType { claim: String, expected: String },
+
+          #[error("Token has been revoked")]
+          TokenBlacklisted,
+
+          #[error("Authentication service error: {message}")]
+          ServiceError { message: String },
+      }
+
+      impl JwtValidationError {
+          pub fn error_code(&self) -> &str {
+              match self {
+                  Self::InvalidTokenFormat => "JWT_001",
+                  Self::SignatureVerificationFailed => "JWT_100",
+                  Self::TokenExpired => "JWT_200",
+                  Self::MissingRequiredClaim { .. } => "JWT_300",
+                  Self::InvalidClaimType { .. } => "JWT_301",
+                  Self::TokenBlacklisted => "JWT_500",
+                  Self::ServiceError { .. } => "JWT_999",
+              }
+          }
+
+          pub fn http_status(&self) -> u16 {
+              match self {
+                  Self::InvalidTokenFormat => 400,
+                  Self::SignatureVerificationFailed => 401,
+                  Self::TokenExpired => 401,
+                  Self::MissingRequiredClaim { .. } => 400,
+                  Self::InvalidClaimType { .. } => 400,
+                  Self::TokenBlacklisted => 401,
+                  Self::ServiceError { .. } => 500,
+              }
+          }
+
+          pub fn is_security_event(&self) -> bool {
+              matches!(
+                  self,
+                  Self::SignatureVerificationFailed | Self::TokenBlacklisted
+              )
+          }
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+
+    code_example: |
+      from enum import Enum
+      from pydantic import BaseModel
+      from typing import Optional
+
+      class JwtValidationErrorCode(str, Enum):
+          INVALID_TOKEN_FORMAT = "JWT_001"
+          SIGNATURE_VERIFICATION_FAILED = "JWT_100"
+          TOKEN_EXPIRED = "JWT_200"
+          MISSING_REQUIRED_CLAIM = "JWT_300"
+          INVALID_CLAIM_TYPE = "JWT_301"
+          TOKEN_BLACKLISTED = "JWT_500"
+          SERVICE_ERROR = "JWT_999"
+
+      class JwtValidationError(Exception):
+          def __init__(
+              self,
+              code: JwtValidationErrorCode,
+              message: str,
+              http_status: int = 400,
+              is_security_event: bool = False,
+              details: Optional[str] = None
+          ):
+              self.code = code
+              self.message = message
+              self.http_status = http_status
+              self.is_security_event = is_security_event
+              self.details = details
+              super().__init__(message)
+
+          @classmethod
+          def invalid_token_format(cls):
+              return cls(
+                  code=JwtValidationErrorCode.INVALID_TOKEN_FORMAT,
+                  message="Invalid JWT token format",
+                  http_status=400
+              )
+
+          @classmethod
+          def signature_verification_failed(cls):
+              return cls(
+                  code=JwtValidationErrorCode.SIGNATURE_VERIFICATION_FAILED,
+                  message="Invalid token signature",
+                  http_status=401,
+                  is_security_event=True
+              )
+
+          @classmethod
+          def token_expired(cls):
+              return cls(
+                  code=JwtValidationErrorCode.TOKEN_EXPIRED,
+                  message="Token has expired",
+                  http_status=401
+              )
+
+          @classmethod
+          def token_blacklisted(cls):
+              return cls(
+                  code=JwtValidationErrorCode.TOKEN_BLACKLISTED,
+                  message="Token has been revoked",
+                  http_status=401,
+                  is_security_event=True
+              )
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Error code mapping"
+    - "HTTP status codes"
+    - "Security event classification"
+    - "Error message formatting"
+
+  integration_tests:
+    - "Error handling in validation pipeline"
+    - "Error response formatting"
+    - "Logging and monitoring integration"
+
+  security_tests:
+    - "Error message safety"
+    - "No information leakage"
+    - "Proper security event handling"
+
+  performance_tests:
+    - "Error creation overhead"
+    - "Error handling performance"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "jwt_validator.yml: Uses validation errors"
+    - "signature_verification.yml: Defines signature errors"
+    - "expiry_check.yml: Defines expiry errors"
+    - "claims_extraction.yml: Defines claims errors"
+    - "blacklist_check.yml: Defines blacklist errors"
+  downstream:
+    - "auth_service.yml: Handles validation errors"
+    - "observability.yml: Monitors error rates"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All error types properly defined"
+    - "Error codes are unique"
+    - "HTTP status codes appropriate"
+    - "Security events properly classified"
+
+  security:
+    - "No information leakage in errors"
+    - "Security events properly logged"
+    - "Safe user-facing messages"
+
+  reliability:
+    - "Consistent error handling"
+    - "Proper error propagation"
+    - "Comprehensive error coverage"

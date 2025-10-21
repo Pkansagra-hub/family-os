@@ -1,0 +1,260 @@
+---
+# ADR-0037: Token Pair Response Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Token Pair Response Contract
+# Defines the TokenPair struct returned by authentication endpoints
+
+contract:
+  name: token_pair_response
+  version: "1.0.0"
+  description: "TokenPair response structure for authentication endpoints"
+  parent_adr: "ADR-0037"
+  priority: "CRITICAL"
+  effort: "2 days"
+
+# TokenPair Structure
+token_pair:
+  struct_name: "TokenPair"
+  description: "Response structure containing access and refresh tokens"
+
+  fields:
+    access_token:
+      name: "access_token"
+      type: "String"
+      description: "JWT access token for API authentication"
+      format: "header.payload.signature"
+      expiry: "1 hour from issuance"
+      required: true
+      example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrMS5mYW1pbHlvcy5jb20iLCJzdWIiOiJ1c2VyXzEyMzQ1IiwiYXVkIjoia2wxLWFwaSIsImV4cCI6MTYzODM2MDAwMCwiaWF0IjoxNjM4MzUwMDAwLCJqdGkiOiJqd3RfMTIzZTQ1NjctZTg5Yi0xMmQzLWE0NTYtNDI2NjE0MTc0MDAwIiwic3BhY2VfaWQiOiJzcGFjZV9hYmMxMjMiLCJyb2xlcyI6WyJ1c2VyIiwib3BlcmF0b3IiXSwicHJpdmFjeV9iYW5kIjoiQU1CRVIiLCJjYXBhYmlsaXRpZXMiOlsiVE9PTF9DQUxMIiwiU0VTU0lPTl9SRUFEIl0sInRva2VuX3R5cGUiOiJhY2Nlc3MifQ.signature"
+
+    refresh_token:
+      name: "refresh_token"
+      type: "String"
+      description: "JWT refresh token for obtaining new access tokens"
+      format: "header.payload.signature"
+      expiry: "7 days from issuance"
+      required: true
+      example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJrMS5mYW1pbHlvcy5jb20iLCJzdWIiOiJ1c2VyXzEyMzQ1IiwiYXVkIjoia2wxLWFwaSIsImV4cCI6MTY0Mzk1MDAwMCwiaWF0IjoxNjM4MzUwMDAwLCJqdGkiOiJqd3RfMTIzZTQ1NjctZTg5Yi0xMmQzLWE0NTYtNDI2NjE0MTc0MDAwIiwidG9rZW5fdHlwZSI6InJlZnJlc2gifQ.signature"
+
+    expires_in:
+      name: "expires_in"
+      type: "u64"
+      description: "Number of seconds until access token expires"
+      value: 3600
+      required: true
+      unit: "seconds"
+      example: 3600
+
+    token_type:
+      name: "token_type"
+      type: "String"
+      description: "Type of token (always 'Bearer')"
+      value: "Bearer"
+      required: true
+      example: "Bearer"
+
+# JSON Response Format
+json_response:
+  content_type: "application/json"
+  charset: "UTF-8"
+
+  structure:
+    access_token: "string"
+    refresh_token: "string"
+    expires_in: "number"
+    token_type: "string"
+
+  example: |
+    {
+      "access_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "refresh_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "expires_in": 3600,
+      "token_type": "Bearer"
+    }
+
+# HTTP Response
+http_response:
+  status_code: 200
+  content_type: "application/json"
+  cache_control: "no-store"
+  pragma: "no-cache"
+
+  security_headers:
+    - "X-Content-Type-Options: nosniff"
+    - "X-Frame-Options: DENY"
+    - "X-XSS-Protection: 1; mode=block"
+    - "Strict-Transport-Security: max-age=31536000; includeSubDomains"
+
+# Token Usage
+token_usage:
+  access_token:
+    usage: "Include in Authorization header: 'Authorization: Bearer {access_token}'"
+    validity: "1 hour"
+    refresh: "Use refresh token when expired"
+
+  refresh_token:
+    usage: "Send to /auth/refresh endpoint to get new token pair"
+    validity: "7 days"
+    security: "Store securely, never in localStorage"
+    rotation: "New refresh token issued on each use"
+
+# Client Storage Guidelines
+client_storage:
+  access_token:
+    storage: "Memory or secure HTTP-only cookie"
+    lifetime: "Until expiry (1 hour)"
+    transmission: "Every API request"
+
+  refresh_token:
+    storage: "Secure HTTP-only cookie or secure storage"
+    lifetime: "Until expiry (7 days) or revocation"
+    transmission: "Only to refresh endpoint"
+    security: "Same-site, secure, HTTP-only flags"
+
+# Error Responses
+error_responses:
+  invalid_credentials:
+    status_code: 401
+    body: '{"error": "invalid_credentials", "message": "Invalid username or password"}'
+
+  account_locked:
+    status_code: 401
+    body: '{"error": "account_locked", "message": "Account is temporarily locked"}'
+
+  rate_limited:
+    status_code: 429
+    body: '{"error": "rate_limited", "message": "Too many authentication attempts"}'
+
+  server_error:
+    status_code: 500
+    body: '{"error": "server_error", "message": "Internal server error"}'
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "axum = \"0.6\""
+
+    code_example: |
+      #[derive(Debug, Serialize)]
+      pub struct TokenPair {
+          pub access_token: String,
+          pub refresh_token: String,
+          pub expires_in: u64,
+          pub token_type: String,
+      }
+
+      impl TokenPair {
+          pub fn new(access_token: String, refresh_token: String) -> Self {
+              Self {
+                  access_token,
+                  refresh_token,
+                  expires_in: 3600,
+                  token_type: "Bearer".to_string(),
+              }
+          }
+      }
+
+      // Axum response
+      pub async fn login_handler() -> Json<TokenPair> {
+          // Issue tokens...
+          let token_pair = TokenPair::new(access_token, refresh_token);
+          Json(token_pair)
+      }
+
+  python:
+    dependencies:
+      - "pydantic==2.0.0"
+      - "fastapi==0.100.0"
+
+    code_example: |
+      from pydantic import BaseModel
+      from fastapi import FastAPI
+      from fastapi.responses import JSONResponse
+
+      class TokenPair(BaseModel):
+          access_token: str
+          refresh_token: str
+          expires_in: int = 3600
+          token_type: str = "Bearer"
+
+          @classmethod
+          def create(cls, access_token: str, refresh_token: str) -> 'TokenPair':
+              return cls(
+                  access_token=access_token,
+                  refresh_token=refresh_token
+              )
+
+      # FastAPI response
+      @app.post("/auth/login")
+      async def login() -> TokenPair:
+          # Issue tokens...
+          return TokenPair.create(access_token, refresh_token)
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "TokenPair creation with valid tokens"
+    - "JSON serialization format"
+    - "Field validation"
+    - "Expiry time calculation"
+
+  integration_tests:
+    - "Full authentication flow response"
+    - "Token validation after response"
+    - "Client token storage and usage"
+    - "Refresh token flow"
+
+  api_tests:
+    - "HTTP response format"
+    - "Content-Type header"
+    - "Security headers presence"
+    - "Cache control headers"
+
+  security_tests:
+    - "Token format validation"
+    - "No sensitive data leakage"
+    - "Proper token expiry"
+    - "Secure header configuration"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "auth_service.yml: Provides TokenPair creation"
+    - "access_token_issuance.yml: Provides access token"
+    - "refresh_token_issuance.yml: Provides refresh token"
+  downstream:
+    - "refresh_endpoint.yml: Returns TokenPair on refresh"
+    - "client_applications: Consume TokenPair response"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "TokenPair contains all required fields"
+    - "JSON serialization works correctly"
+    - "HTTP response format is valid"
+    - "Security headers are present"
+    - "Client can parse and use tokens"
+
+  security:
+    - "No sensitive data in response"
+    - "Proper cache control headers"
+    - "Security headers prevent common attacks"
+    - "Tokens have appropriate lifetimes"
+
+  compliance:
+    - "OAuth 2.0 token response format"
+    - "JWT best practices followed"
+    - "No PII exposure in tokens"
+    - "Secure token storage guidelines"
+
+  usability:
+    - "Clear field names and types"
+    - "Standard OAuth2 format"
+    - "Comprehensive usage documentation"
+    - "Error responses are informative"

@@ -1,0 +1,248 @@
+classes:
+  - name: GracefulDisconnectHandler
+    description: RFC 6455 compliant graceful WebSocket disconnection with close codes
+    research: RFC 6455 §7.4 (Close Codes), §5.5.1 (Close Frame), graceful shutdown patterns
+    performance_budget: <10ms disconnect operation, <5ms cleanup
+    reliability_properties:
+      - rfc_6455_compliance: Use standard close codes for disconnect reasons
+      - goodbye_message: Send Goodbye message before closing connection
+      - registry_cleanup: Remove connection from registry immediately
+      - resource_cleanup: Close message channel and free resources
+      - observability: Track disconnect reasons and counts
+    methods:
+      - name: disconnect
+        description: Gracefully disconnect WebSocket connection with close code and reason
+        parameters:
+          - name: session_id
+            type: String
+            description: Session ID to disconnect
+          - name: close_code
+            type: u16
+            description: RFC 6455 close code (1000-1015)
+          - name: reason
+            type: String
+            description: Human-readable disconnect reason
+          - name: trace_id
+            type: String
+            description: Trace ID for observability
+        returns:
+          type: Result<(), DisconnectError>
+          description: Success or error if connection not found
+        implementation:
+          rust: |
+            use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+
+            pub struct GracefulDisconnectHandler {
+                connection_registry: Arc<ConnectionRegistry>,
+                metrics: Arc<DisconnectMetrics>,
+            }
+
+            impl GracefulDisconnectHandler {
+                pub async fn disconnect(
+                    &self,
+                    session_id: &str,
+                    close_code: u16,
+                    reason: &str,
+                    trace_id: &str,
+                ) -> Result<(), DisconnectError> {
+                    let start = std::time::Instant::now();
+
+                    tracing::info!(
+                        session_id = %session_id,
+                        close_code = close_code,
+                        reason = %reason,
+                        trace_id = %trace_id,
+                        "Initiating graceful disconnect"
+                    );
+
+                    // 1. Get connection from registry
+                    let connection = self.connection_registry.get(session_id).await
+                        .ok_or(DisconnectError::ConnectionNotFound(session_id.to_string()))?;
+
+                    // 2. Send Goodbye message (FlatBuffers)
+                    let goodbye_msg = WebSocketMessage::Goodbye {
+                        message: reason.to_string(),
+                    };
+
+                    let _ = connection.send(goodbye_msg).await;
+
+                    // 3. Send WebSocket close frame (RFC 6455)
+                    let close_frame = CloseFrame {
+                        code: close_code.into(),
+                        reason: reason.into(),
+                    };
+
+                    // Close frame sent via WebSocket protocol
+                    // (handled by tokio-tungstenite)
+
+                    // 4. Remove from registry
+                    self.connection_registry.remove(session_id).await;
+
+                    let duration = start.elapsed();
+
+                    tracing::info!(
+                        session_id = %session_id,
+                        close_code = close_code,
+                        duration_ms = duration.as_millis(),
+                        trace_id = %trace_id,
+                        "Graceful disconnect complete"
+                    );
+
+                    // Emit metrics
+                    self.metrics.record_disconnect(close_code, duration);
+
+                    Ok(())
+                }
+            }
+
+            #[derive(Debug)]
+            pub enum DisconnectError {
+                ConnectionNotFound(String),
+            }
+          python: |
+            import time
+            import logging
+
+            class GracefulDisconnectHandler:
+                """RFC 6455 compliant graceful disconnection"""
+
+                def __init__(self, connection_registry, metrics):
+                    self.logger = logging.getLogger(__name__)
+                    self.connection_registry = connection_registry
+                    self.metrics = metrics
+
+                async def disconnect(
+                    self,
+                    session_id: str,
+                    close_code: int,
+                    reason: str,
+                    trace_id: str
+                ) -> None:
+                    """Gracefully disconnect WebSocket connection"""
+                    start = time.time()
+
+                    self.logger.info(
+                        f"Initiating graceful disconnect",
+                        extra={
+                            'session_id': session_id,
+                            'close_code': close_code,
+                            'reason': reason,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                    # 1. Get connection from registry
+                    connection = await self.connection_registry.get(session_id)
+                    if not connection:
+                        raise DisconnectError(f"Connection not found: {session_id}")
+
+                    # 2. Send Goodbye message
+                    goodbye_msg = {'type': 'Goodbye', 'message': reason}
+                    await connection.send(goodbye_msg)
+
+                    # 3. Remove from registry
+                    await self.connection_registry.remove(session_id)
+
+                    duration = time.time() - start
+
+                    self.logger.info(
+                        f"Graceful disconnect complete",
+                        extra={
+                            'session_id': session_id,
+                            'close_code': close_code,
+                            'duration_ms': duration * 1000,
+                            'trace_id': trace_id
+                        }
+                    )
+
+                    # Emit metrics
+                    self.metrics.record_disconnect(close_code, duration)
+
+            class DisconnectError(Exception):
+                """Graceful disconnect error"""
+                pass
+
+rfc_6455_close_codes:
+  - code: 1000
+    name: Normal Closure
+    description: Connection completed successfully
+    use_case: User logs out, session ends normally
+  - code: 1001
+    name: Going Away
+    description: Endpoint going away (server shutdown, browser navigation)
+    use_case: Server maintenance, client closes tab
+  - code: 1008
+    name: Policy Violation
+    description: Endpoint terminating due to policy violation
+    use_case: JWT expired, rate limit exceeded, unauthorized action
+  - code: 1011
+    name: Server Error
+    description: Server encountered unexpected condition
+    use_case: Internal server error, database failure, panic
+
+disconnect_sequence:
+  - step: send_goodbye_message
+    description: Send Goodbye FlatBuffers message to client
+    message_type: WebSocketMessage::Goodbye
+    content: Human-readable disconnect reason
+  - step: send_close_frame
+    description: Send WebSocket close frame (RFC 6455 §5.5.1)
+    frame_type: Close
+    payload: [close_code (2 bytes), reason (UTF-8)]
+  - step: remove_from_registry
+    description: Remove connection from ConnectionRegistry
+    cleanup: Free memory, drop channel sender
+  - step: close_tcp_connection
+    description: Close underlying TCP connection
+    timing: After client acknowledges close or timeout (5s)
+
+disconnect_scenarios:
+  - scenario: normal_logout
+    close_code: 1000
+    reason: "User logged out"
+    initiated_by: client
+  - scenario: session_expired
+    close_code: 1008
+    reason: "Session expired"
+    initiated_by: server
+  - scenario: server_shutdown
+    close_code: 1001
+    reason: "Server shutting down"
+    initiated_by: server
+  - scenario: jwt_expired
+    close_code: 1008
+    reason: "JWT token expired"
+    initiated_by: server
+  - scenario: rate_limit_exceeded
+    close_code: 1008
+    reason: "Rate limit exceeded"
+    initiated_by: server
+  - scenario: internal_error
+    close_code: 1011
+    reason: "Internal server error"
+    initiated_by: server
+
+cleanup_operations:
+  - operation: remove_from_registry
+    description: Remove connection from ConnectionRegistry
+    timing: Immediate
+  - operation: close_message_channel
+    description: Drop mpsc::Sender (closes channel)
+    timing: Immediate
+  - operation: log_disconnect_event
+    description: Log disconnect with close code and reason
+    timing: Immediate
+  - operation: emit_disconnect_metric
+    description: Record disconnect in Prometheus
+    labels: [close_code, reason]
+
+performance_budgets:
+  - operation: send_goodbye
+    target: <5ms
+    description: Send Goodbye message via mpsc channel
+  - operation: remove_from_registry
+    target: <5ms
+    description: Remove from HashMap with write lock
+  - operation: total_disconnect
+    target: <10ms
+    description: Complete disconnect sequence

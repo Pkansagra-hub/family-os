@@ -1,0 +1,309 @@
+classes:
+  - name: WebSocketConnection
+    description: WebSocket connection metadata and state management
+    research: WebSocket connection lifecycle, mpsc channel pattern, heartbeat tracking
+    performance_budget: <1ms send operation, <0.1ms metadata access
+    reliability_properties:
+      - connection_metadata: Track session_id, user_id, space_id for routing
+      - message_channel: mpsc::Sender for non-blocking message delivery
+      - heartbeat_tracking: last_heartbeat timestamp for stale connection detection
+      - connection_timing: connected_at timestamp for lifetime metrics
+      - graceful_shutdown: Close channel and cleanup resources
+    methods:
+      - name: new
+        description: Create new WebSocket connection metadata
+        parameters:
+          - name: session_id
+            type: String
+            description: Unique K1 session ID
+          - name: user_id
+            type: String
+            description: User ID from JWT claims
+          - name: space_id
+            type: String
+            description: Family space ID from JWT claims
+          - name: tx
+            type: mpsc::Sender<WebSocketMessage>
+            description: Channel sender for outbound messages
+        returns:
+          type: WebSocketConnection
+          description: Initialized connection instance
+        implementation:
+          rust: |
+            use tokio::sync::mpsc;
+            use std::time::Instant;
+
+            #[derive(Debug, Clone)]
+            pub struct WebSocketConnection {
+                pub session_id: String,
+                pub user_id: String,
+                pub space_id: String,
+                pub tx: mpsc::Sender<WebSocketMessage>,
+                pub last_heartbeat: Instant,
+                pub connected_at: Instant,
+            }
+
+            impl WebSocketConnection {
+                pub fn new(
+                    session_id: String,
+                    user_id: String,
+                    space_id: String,
+                    tx: mpsc::Sender<WebSocketMessage>,
+                ) -> Self {
+                    let now = Instant::now();
+
+                    Self {
+                        session_id,
+                        user_id,
+                        space_id,
+                        tx,
+                        last_heartbeat: now,
+                        connected_at: now,
+                    }
+                }
+
+                /// Send message to client (non-blocking)
+                pub async fn send(&self, message: WebSocketMessage) -> Result<(), SendError> {
+                    self.tx.send(message).await
+                        .map_err(|e| SendError::ChannelClosed(e.to_string()))
+                }
+
+                /// Try to send message without waiting (non-blocking)
+                pub fn try_send(&self, message: WebSocketMessage) -> Result<(), SendError> {
+                    self.tx.try_send(message)
+                        .map_err(|e| match e {
+                            mpsc::error::TrySendError::Full(_) => SendError::ChannelFull,
+                            mpsc::error::TrySendError::Closed(_) => SendError::ChannelClosed("Channel closed".to_string()),
+                        })
+                }
+
+                /// Check if connection is stale (no heartbeat for threshold)
+                pub fn is_stale(&self, threshold_seconds: u64) -> bool {
+                    self.last_heartbeat.elapsed().as_secs() > threshold_seconds
+                }
+
+                /// Get connection age in seconds
+                pub fn age_seconds(&self) -> u64 {
+                    self.connected_at.elapsed().as_secs()
+                }
+
+                /// Update last heartbeat timestamp
+                pub fn update_heartbeat(&mut self) {
+                    self.last_heartbeat = Instant::now();
+                }
+
+                /// Close connection (close channel)
+                pub fn close(&self) {
+                    // Drop sender (closes channel)
+                    // Receiver will get None and exit message loop
+                }
+            }
+
+            #[derive(Debug)]
+            pub enum SendError {
+                ChannelFull,
+                ChannelClosed(String),
+            }
+          python: |
+            import asyncio
+            import time
+            from dataclasses import dataclass
+            from typing import Any
+            import logging
+
+            @dataclass
+            class WebSocketConnection:
+                """
+                WebSocket connection metadata and state management.
+
+                Tracks connection identity, message channel, and heartbeat status.
+                """
+                session_id: str
+                user_id: str
+                space_id: str
+                tx: asyncio.Queue  # Message queue for outbound messages
+                last_heartbeat: float  # Unix timestamp
+                connected_at: float  # Unix timestamp
+
+                def __init__(
+                    self,
+                    session_id: str,
+                    user_id: str,
+                    space_id: str,
+                    tx: asyncio.Queue
+                ):
+                    self.logger = logging.getLogger(__name__)
+                    self.session_id = session_id
+                    self.user_id = user_id
+                    self.space_id = space_id
+                    self.tx = tx
+                    self.last_heartbeat = time.time()
+                    self.connected_at = time.time()
+
+                async def send(self, message: Any) -> None:
+                    """Send message to client (non-blocking)"""
+                    try:
+                        await self.tx.put(message)
+                    except Exception as e:
+                        raise SendError(f"Channel closed: {e}")
+
+                def try_send(self, message: Any) -> None:
+                    """Try to send message without waiting (non-blocking)"""
+                    try:
+                        self.tx.put_nowait(message)
+                    except asyncio.QueueFull:
+                        raise SendError("Channel full")
+                    except Exception as e:
+                        raise SendError(f"Channel closed: {e}")
+
+                def is_stale(self, threshold_seconds: int = 90) -> bool:
+                    """Check if connection is stale (no heartbeat for threshold)"""
+                    return (time.time() - self.last_heartbeat) > threshold_seconds
+
+                def age_seconds(self) -> int:
+                    """Get connection age in seconds"""
+                    return int(time.time() - self.connected_at)
+
+                def update_heartbeat(self) -> None:
+                    """Update last heartbeat timestamp"""
+                    self.last_heartbeat = time.time()
+
+                def close(self) -> None:
+                    """Close connection (signal channel close)"""
+                    # In Python, we'd signal the receiver to stop
+                    # This is handled by the message loop
+                    pass
+
+            class SendError(Exception):
+                """WebSocket send error"""
+                pass
+
+connection_metadata:
+  - field: session_id
+    type: String
+    description: Unique K1 session ID for message routing
+    example: "session-abc123"
+    required: true
+  - field: user_id
+    type: String
+    description: User ID from JWT claims for authorization
+    example: "user-12345"
+    required: true
+  - field: space_id
+    type: String
+    description: Family space ID from JWT claims for multi-tenancy
+    example: "space-family1"
+    required: true
+  - field: tx
+    type: mpsc::Sender<WebSocketMessage>
+    description: Channel sender for non-blocking message delivery to client
+    capacity: 100
+    required: true
+  - field: last_heartbeat
+    type: Instant (Rust) / float (Python)
+    description: Timestamp of last received heartbeat (for stale detection)
+    updated_on: heartbeat_received
+    required: true
+  - field: connected_at
+    type: Instant (Rust) / float (Python)
+    description: Timestamp when connection was established (for lifetime metrics)
+    set_once: true
+    required: true
+
+message_channel_design:
+  - pattern: mpsc_channel
+    description: Multi-producer single-consumer channel (Tokio mpsc)
+    capacity: 100
+    benefits: [non_blocking_send, backpressure_handling, async_friendly]
+  - pattern: bounded_channel
+    description: Fixed capacity (100 messages) prevents unbounded memory growth
+    backpressure: When full, sender blocks until space available
+  - pattern: channel_lifecycle
+    description: Channel closed when sender dropped (graceful shutdown signal)
+    receiver_behavior: Returns None when all senders dropped
+
+connection_lifecycle:
+  - phase: creation
+    description: WebSocketConnection created after JWT authentication
+    timestamp: connected_at set
+    channel: mpsc channel created (capacity 100)
+  - phase: active
+    description: Connection actively sending/receiving messages
+    heartbeat: Updated every 30 seconds
+    monitoring: last_heartbeat tracked
+  - phase: idle
+    description: Connection inactive but not stale (<90s since last heartbeat)
+    action: Continue monitoring
+  - phase: stale
+    description: No heartbeat for >90s (connection likely dead)
+    action: Remove from registry, close channel
+  - phase: closing
+    description: Graceful shutdown initiated
+    action: Send Goodbye message, close channel
+  - phase: closed
+    description: Connection fully closed and cleaned up
+    action: Remove from registry, drop channel
+
+heartbeat_tracking:
+  - check: is_stale
+    description: Check if last_heartbeat exceeds threshold (default 90s)
+    threshold: 90 seconds (3× heartbeat interval of 30s)
+    action: If stale, remove connection from registry
+  - check: update_heartbeat
+    description: Update last_heartbeat timestamp when heartbeat received
+    frequency: Every 30 seconds (heartbeat interval)
+    purpose: Prevent connection from being marked stale
+
+connection_metrics:
+  - metric: connection_age_seconds
+    description: Time since connection established (connected_at → now)
+    calculation: now - connected_at
+    usage: Connection lifetime histograms
+  - metric: heartbeat_age_seconds
+    description: Time since last heartbeat (last_heartbeat → now)
+    calculation: now - last_heartbeat
+    usage: Stale connection detection
+  - metric: channel_utilization
+    description: Percentage of channel capacity used
+    calculation: (queued_messages / 100) × 100
+    usage: Backpressure monitoring
+
+send_operations:
+  - operation: send
+    description: Async send (waits for space in channel)
+    blocking: true (waits if channel full)
+    use_case: Normal message delivery
+    error_handling: Return SendError if channel closed
+  - operation: try_send
+    description: Non-blocking send (fails immediately if channel full)
+    blocking: false
+    use_case: Best-effort delivery (e.g., heartbeat acks)
+    error_handling: Return SendError::ChannelFull or SendError::ChannelClosed
+
+error_scenarios:
+  - error: ChannelFull
+    description: Message channel at capacity (100 messages queued)
+    cause: Slow client (can't consume messages fast enough)
+    action: Block sender (backpressure) or drop oldest messages
+  - error: ChannelClosed
+    description: Message channel closed (receiver dropped)
+    cause: Connection closed or crashed
+    action: Remove connection from registry, return error
+  - error: StaleConnection
+    description: No heartbeat for >90s
+    cause: Network failure or client crash
+    action: Remove connection from registry, close channel
+
+performance_budgets:
+  - operation: send
+    target: <1ms
+    description: Async send to mpsc channel
+  - operation: try_send
+    target: <0.1ms
+    description: Non-blocking send attempt
+  - operation: is_stale
+    target: <0.01ms
+    description: Timestamp comparison
+  - operation: update_heartbeat
+    target: <0.01ms
+    description: Timestamp update

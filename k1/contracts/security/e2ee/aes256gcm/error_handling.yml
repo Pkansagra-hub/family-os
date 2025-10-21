@@ -1,0 +1,221 @@
+---
+# ADR-0036a: Error Handling Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Error Handling Contract
+# Defines error types and handling for AES-256-GCM operations
+
+contract:
+  name: error_handling
+  version: "1.0.0"
+  description: "Error handling and recovery for AES-256-GCM E2EE operations"
+  parent_adr: "ADR-0036a"
+  priority: "CRITICAL"
+  effort: "1 week"
+
+# Error Categories
+error_categories:
+  input_validation:
+    description: "Invalid input parameters"
+    severity: "LOW"
+    recovery: "Fix input, retry operation"
+
+  cryptographic_failure:
+    description: "Cryptographic operation failed"
+    severity: "HIGH"
+    recovery: "Check key/nonce, possibly rotate key"
+
+  authentication_failure:
+    description: "Authentication tag verification failed"
+    severity: "CRITICAL"
+    recovery: "Security incident, abort operation"
+
+  hardware_failure:
+    description: "Hardware acceleration failed"
+    severity: "MEDIUM"
+    recovery: "Fallback to software implementation"
+
+  resource_exhaustion:
+    description: "Memory/CPU resource limits exceeded"
+    severity: "HIGH"
+    recovery: "Reduce load, increase resources"
+
+# Error Types
+error_types:
+  rust:
+    enum: "CryptoError"
+    variants:
+      - "InvalidKeyLength"
+      - "InvalidNonceLength"
+      - "InvalidTagLength"
+      - "AuthenticationFailed"
+      - "EncryptionFailed"
+      - "DecryptionFailed"
+      - "HardwareUnavailable"
+      - "ResourceExhausted"
+
+  python:
+    exception_hierarchy: "CryptoError -> SpecificError"
+    classes:
+      - "InvalidInputError"
+      - "AuthenticationError"
+      - "HardwareError"
+      - "ResourceError"
+
+# Error Handling Strategy
+error_handling_strategy:
+  fail_fast:
+    description: "Fail immediately on cryptographic errors"
+    rationale: "Security violations should not be masked"
+    exceptions: "Authentication failures, invalid keys"
+
+  graceful_degradation:
+    description: "Fallback to software when hardware fails"
+    rationale: "Maintain functionality on older hardware"
+    examples: "AES-NI unavailable, ARM crypto failure"
+
+  retry_logic:
+    description: "Retry on transient failures"
+    conditions: "Hardware initialization, resource exhaustion"
+    backoff: "Exponential backoff with jitter"
+
+  logging:
+    description: "Comprehensive error logging"
+    security_events: "Authentication failures logged as security incidents"
+    performance_issues: "Performance violations logged with metrics"
+
+# Security Incident Response
+security_incident_response:
+  authentication_failure:
+    severity: "CRITICAL"
+    actions:
+      - "Log security incident with full context"
+      - "Increment security violation counter"
+      - "Alert monitoring system"
+      - "Do not return decrypted data"
+      - "Consider key revocation"
+
+  key_validation_failure:
+    severity: "HIGH"
+    actions:
+      - "Log key validation error"
+      - "Check key integrity"
+      - "Possibly rotate key"
+
+  tampering_detected:
+    severity: "CRITICAL"
+    actions:
+      - "Immediate security alert"
+      - "Preserve evidence for forensics"
+      - "Block user access if pattern detected"
+
+# Recovery Strategies
+recovery_strategies:
+  key_rotation:
+    trigger: "Persistent cryptographic failures"
+    action: "Automatically rotate encryption key"
+    notification: "User notified of key rotation"
+
+  software_fallback:
+    trigger: "Hardware acceleration failure"
+    action: "Use software AES implementation"
+    performance: "Accept slower performance"
+
+  resource_scaling:
+    trigger: "Resource exhaustion"
+    action: "Increase memory limits, reduce concurrency"
+    monitoring: "Alert on resource pressure"
+
+# Error Propagation
+error_propagation:
+  encryption_errors:
+    handling: "Propagate to E2EEManager"
+    logging: "Log with trace_id"
+    user_visible: "Generic 'encryption failed' message"
+
+  decryption_errors:
+    handling: "Propagate to SessionStateManager"
+    logging: "Log security incident"
+    user_visible: "Generic 'decryption failed' message"
+
+  key_errors:
+    handling: "Propagate to KMSManager"
+    logging: "Log key management issues"
+    user_visible: "Key rotation required message"
+
+# Monitoring and Alerting
+monitoring_alerting:
+  error_rates:
+    metric: "crypto_operation_errors_total"
+    labels: ["error_type", "severity"]
+    alerting: "Error rate > 1% triggers alert"
+
+  security_incidents:
+    metric: "security_incidents_total"
+    labels: ["incident_type"]
+    alerting: "Any authentication failure triggers alert"
+
+  performance_impacts:
+    metric: "error_recovery_latency_ms"
+    alerting: "Recovery > 100ms triggers alert"
+
+# Testing Requirements
+testing:
+  error_injection_tests:
+    - "Invalid key lengths"
+    - "Corrupted authentication tags"
+    - "Hardware acceleration failures"
+    - "Resource exhaustion scenarios"
+
+  security_tests:
+    - "Authentication failure handling"
+    - "Error message leakage prevention"
+    - "Security incident logging"
+
+  recovery_tests:
+    - "Software fallback functionality"
+    - "Key rotation on failures"
+    - "Resource scaling under load"
+
+  fuzzing_tests:
+    - "Random input corruption"
+    - "Malformed cryptographic data"
+    - "Edge case error conditions"
+
+# Implementation Interface
+implementation:
+  rust:
+    error_handling: "Result<T, CryptoError>"
+    error_conversion: "From trait implementations"
+    logging: "tracing crate with error! macro"
+
+  python:
+    error_handling: "try/except with specific exceptions"
+    error_conversion: "Exception chaining"
+    logging: "logging module with error level"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "All error types properly defined"
+    - "Error handling prevents security violations"
+    - "Graceful degradation works"
+    - "Recovery strategies effective"
+
+  security:
+    - "Authentication failures don't leak data"
+    - "Security incidents properly logged"
+    - "Error messages don't reveal sensitive information"
+
+  reliability:
+    - "No crashes on error conditions"
+    - "Resource exhaustion handled gracefully"
+    - "Hardware failures don't break functionality"
+
+  observability:
+    - "All errors logged with appropriate severity"
+    - "Metrics exported for monitoring"
+    - "Alerts configured for critical errors"

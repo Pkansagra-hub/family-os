@@ -1,0 +1,369 @@
+---
+# ADR-0036b: Encrypted File Contract
+# Parent: ADR-0036 (E2EE for RED Band)
+# Status: Active
+# Date: 2025-10-13
+# Authors: K1 Architecture Team
+
+# Encrypted File Contract
+# Defines password-protected encrypted file storage for keys
+
+contract:
+  name: encrypted_file
+  version: "1.0.0"
+  description: "Password-protected encrypted file storage for AES-256 keys"
+  parent_adr: "ADR-0036b"
+  priority: "HIGH"
+  effort: "2 weeks"
+
+# File Format
+file_format:
+  extension: ".k1keys"
+  format_version: "1.0"
+  encryption: "AES-256-GCM"
+  key_derivation: "PBKDF2 with HMAC-SHA256"
+  pbkdf2_iterations: 100000
+  salt_length: 32
+  iv_length: 12
+  tag_length: 16
+
+# File Structure
+file_structure:
+  header:
+    magic_bytes: "K1KEYS"
+    version: "1.0"
+    pbkdf2_salt: "32 bytes random"
+    pbkdf2_iterations: 100000
+    encryption_iv: "12 bytes random"
+    key_count: "Number of keys stored"
+
+  key_entries:
+    - key_id: "UUID as string"
+      key_material: "32 bytes AES key"
+      metadata: "JSON serialized metadata"
+      created_at: "ISO 8601 timestamp"
+      checksum: "SHA256 of key_material + metadata"
+
+  footer:
+    hmac: "HMAC-SHA256 of entire file"
+    checksum: "SHA256 of header + entries"
+
+# Password Requirements
+password_requirements:
+  minimum_length: 12
+  complexity: "Upper, lower, number, special character"
+  dictionary_check: "No common passwords"
+  entropy_minimum: "60 bits"
+  change_frequency: "Every 90 days"
+  history_check: "No reuse of last 5 passwords"
+
+# Key Derivation
+key_derivation:
+  algorithm: "PBKDF2-HMAC-SHA256"
+  iterations: 100000
+  salt: "32 bytes cryptographically secure random"
+  output_length: 32
+  purpose: "Derive encryption key from password"
+
+  security_properties:
+    resistance_to_brute_force: "High iteration count"
+    resistance_to_dictionary: "Salt + complexity requirements"
+    memory_hard: "PBKDF2 is memory-efficient"
+    future_proof: "Can increase iterations for stronger security"
+
+# Encryption Process
+encryption_process:
+  1:
+    name: "Password validation"
+    description: "Check password meets requirements"
+    validation: "Length, complexity, entropy"
+
+  2:
+    name: "Key derivation"
+    description: "Derive encryption key from password"
+    algorithm: "PBKDF2-HMAC-SHA256"
+    parameters: "100k iterations, 32 byte salt"
+
+  3:
+    name: "File encryption"
+    description: "Encrypt key data with AES-256-GCM"
+    key: "Derived from password"
+    iv: "12 bytes random per file"
+    aad: "File header for authentication"
+
+  4:
+    name: "HMAC computation"
+    description: "Compute HMAC of encrypted data"
+    algorithm: "HMAC-SHA256"
+    key: "Separate key derived from password"
+    purpose: "Detect tampering"
+
+  5:
+    name: "File write"
+    description: "Write encrypted file to disk"
+    atomic: "Write to temp file, then rename"
+
+# Decryption Process
+decryption_process:
+  1:
+    name: "File read"
+    description: "Read encrypted file from disk"
+    validation: "File exists, correct format"
+
+  2:
+    name: "Password validation"
+    description: "Check password format"
+    validation: "Basic format check"
+
+  3:
+    name: "Key derivation"
+    description: "Derive decryption key from password"
+    algorithm: "PBKDF2-HMAC-SHA256"
+    parameters: "Same as encryption"
+
+  4:
+    name: "HMAC verification"
+    description: "Verify file integrity"
+    algorithm: "HMAC-SHA256"
+    failure: "Reject file if HMAC doesn't match"
+
+  5:
+    name: "File decryption"
+    description: "Decrypt file with AES-256-GCM"
+    key: "Derived from password"
+    iv: "From file header"
+    aad: "File header for authentication"
+
+  6:
+    name: "Key validation"
+    description: "Validate decrypted key data"
+    checks: "Checksums, metadata format"
+
+# File Operations
+file_operations:
+  create_file:
+    function: "create_key_file(password: str, file_path: str)"
+    description: "Create new encrypted key file"
+    parameters:
+      password: "User-provided password"
+      file_path: "Path to create file"
+    security: "Password requirements enforced"
+    error_handling: "FileExists, PermissionDenied, InvalidPassword"
+
+  open_file:
+    function: "open_key_file(password: str, file_path: str)"
+    description: "Open existing encrypted key file"
+    parameters:
+      password: "User-provided password"
+      file_path: "Path to existing file"
+    returns: "KeyFile handle"
+    security: "Password verified against file"
+    error_handling: "FileNotFound, InvalidPassword, CorruptedFile"
+
+  store_key:
+    function: "store_key(key_file: KeyFile, key_id: str, key_material: bytes, metadata: dict)"
+    description: "Store key in encrypted file"
+    parameters:
+      key_file: "Open KeyFile handle"
+      key_id: "Unique key identifier"
+      key_material: "32 bytes AES key"
+      metadata: "Key metadata"
+    atomic: "File rewritten atomically"
+    error_handling: "KeyExists, StorageFull, DiskError"
+
+  retrieve_key:
+    function: "retrieve_key(key_file: KeyFile, key_id: str) -> (bytes, dict)"
+    description: "Retrieve key from encrypted file"
+    parameters:
+      key_file: "Open KeyFile handle"
+      key_id: "Unique key identifier"
+    returns:
+      key_material: "32 bytes AES key"
+      metadata: "Key metadata dictionary"
+    error_handling: "KeyNotFound, CorruptedData"
+
+  delete_key:
+    function: "delete_key(key_file: KeyFile, key_id: str)"
+    description: "Delete key from encrypted file"
+    parameters:
+      key_file: "Open KeyFile handle"
+      key_id: "Unique key identifier"
+    atomic: "File rewritten without key"
+    error_handling: "KeyNotFound, DiskError"
+
+  list_keys:
+    function: "list_keys(key_file: KeyFile) -> list[str]"
+    description: "List all key IDs in file"
+    parameters:
+      key_file: "Open KeyFile handle"
+    returns: "List of key ID strings"
+    performance: "In-memory operation"
+
+  close_file:
+    function: "close_file(key_file: KeyFile)"
+    description: "Close encrypted key file"
+    parameters:
+      key_file: "Open KeyFile handle"
+    cleanup: "Clear sensitive data from memory"
+
+# Security Considerations
+security_considerations:
+  password_security:
+    offline_brute_force: "PBKDF2 provides resistance"
+    online_brute_force: "Account lockout after 5 attempts"
+    shoulder_surfing: "Password not displayed"
+    keyloggers: "Virtual keyboard option"
+
+  file_security:
+    encryption_at_rest: "AES-256-GCM encryption"
+    integrity_protection: "HMAC-SHA256 verification"
+    tampering_detection: "Authentication tag verification"
+    secure_deletion: "Overwrite file before deletion"
+
+  access_control:
+    file_permissions: "0600 (owner read/write only)"
+    directory_permissions: "0700 (owner access only)"
+    backup_security: "Encrypted backups required"
+
+  audit_logging:
+    all_operations: "Open, store, retrieve, delete operations logged"
+    sensitive_data: "Never log passwords or key material"
+    compliance: "GDPR/HIPAA audit requirements"
+
+# Performance Requirements
+performance_requirements:
+  key_derivation: "< 500ms (PBKDF2 100k iterations)"
+  file_encryption: "< 100ms per MB"
+  file_decryption: "< 100ms per MB"
+  store_key: "< 200ms"
+  retrieve_key: "< 100ms"
+  delete_key: "< 150ms"
+
+  memory_usage: "< 50MB during operations"
+  file_size_limit: "100MB maximum"
+  key_count_limit: "10,000 keys per file"
+
+# Error Handling
+error_handling:
+  invalid_password:
+    error_code: "INVALID_PASSWORD"
+    description: "Password does not match file"
+    recovery: "Prompt user to re-enter password"
+    security: "Increment failed attempt counter"
+
+  corrupted_file:
+    error_code: "CORRUPTED_FILE"
+    description: "File integrity check failed"
+    recovery: "Attempt recovery from backup"
+    security: "Alert user of potential compromise"
+
+  disk_full:
+    error_code: "DISK_FULL"
+    description: "No space to write file"
+    recovery: "Clean up space or use different location"
+    fallback: "Use OS keychain backend"
+
+  permission_denied:
+    error_code: "PERMISSION_DENIED"
+    description: "Cannot read/write file"
+    recovery: "Check file permissions"
+    fallback: "Use OS keychain backend"
+
+# Backup and Recovery
+backup_recovery:
+  automatic_backup:
+    frequency: "After each key operation"
+    location: "Separate directory from main file"
+    retention: "Last 5 backups kept"
+
+  manual_backup:
+    function: "backup_key_file(file_path: str, backup_path: str)"
+    description: "Create backup of key file"
+    encryption: "Backup encrypted with same password"
+
+  recovery_process:
+    function: "recover_from_backup(backup_path: str, target_path: str)"
+    description: "Restore from backup"
+    validation: "Verify backup integrity before restore"
+
+# Implementation Interface
+implementation:
+  rust:
+    struct: "EncryptedKeyFile"
+    functions:
+      - "create(password: &str, path: &Path) -> Result<Self, FileError>"
+      - "open(password: &str, path: &Path) -> Result<Self, FileError>"
+      - "store_key(&mut self, key_id: &str, key_material: &[u8], metadata: &Value) -> Result<(), FileError>"
+      - "retrieve_key(&self, key_id: &str) -> Result<(Vec<u8>, Value), FileError>"
+      - "delete_key(&mut self, key_id: &str) -> Result<(), FileError>"
+      - "list_keys(&self) -> Result<Vec<String>, FileError>"
+      - "close(self) -> Result<(), FileError>"
+
+  python:
+    class: "EncryptedKeyFile"
+    methods:
+      - "__init__(self, password: str, file_path: str)"
+      - "store_key(self, key_id: str, key_material: bytes, metadata: dict)"
+      - "retrieve_key(self, key_id: str) -> tuple[bytes, dict]"
+      - "delete_key(self, key_id: str)"
+      - "list_keys(self) -> list[str]"
+      - "close(self)"
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "File creation and opening"
+    - "Key storage and retrieval"
+    - "Password validation"
+    - "Error conditions handling"
+
+  security_tests:
+    - "Encryption strength verification"
+    - "Password brute force resistance"
+    - "File tampering detection"
+    - "Secure deletion verification"
+
+  integration_tests:
+    - "Full key lifecycle in file"
+    - "Backup and recovery process"
+    - "Concurrent access handling"
+    - "File corruption recovery"
+
+  performance_tests:
+    - "Key derivation timing"
+    - "File operation performance"
+    - "Memory usage during operations"
+    - "Large file handling"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "key_storage.yml: Uses encrypted file as secondary backend"
+  downstream:
+    - "os_keychain.yml: Primary backend"
+    - "local_hsm.yml: Tertiary backend"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Keys stored/retrieved securely"
+    - "Password protection works"
+    - "File integrity maintained"
+    - "Backup/recovery functions"
+
+  security:
+    - "Strong encryption (AES-256-GCM)"
+    - "Password-based key derivation"
+    - "Tampering detection"
+    - "Secure file permissions"
+
+  performance:
+    - "Operations within time budgets"
+    - "Memory usage acceptable"
+    - "Scalable to 10K keys"
+
+  reliability:
+    - "Error handling robust"
+    - "File corruption recoverable"
+    - "Concurrent access safe"
+    - "Backup process reliable"

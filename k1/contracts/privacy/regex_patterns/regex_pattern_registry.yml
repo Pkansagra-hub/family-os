@@ -1,1477 +1,207 @@
-# Contract: Regex Pattern Registry for Structured PII Detection
-# Purpose: Define 12 precompiled regex patterns for fast detection of structured PII
-# Source: ADR-0035a - Regex Pattern Library for Structured PII Detection
-# Status: Production-Ready
-# Last Updated: 2025-10-16
-# Revision: 2.0 (EXPANDED - Comprehensive Implementation Details)
+# Regex Pattern Registry Contract
+# Source ADR: 0035a-regex-pattern-library.md
+# Epic 2.9, Issue 2.9.1
+# Purpose: Define 12 precompiled regex patterns for structured PII detection
 
 contract:
-  id: "C_PRIVACY_REGEX_REGISTRY_001"
-  name: "Regex Pattern Registry for Structured PII Detection"
-  version: "2.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
-  description: |
-    ================================================================================================
-    PRODUCTION-GRADE REGEX PATTERN LIBRARY FOR STRUCTURED PII DETECTION
-    ================================================================================================
-
-    Core Purpose:
-    - Detect 12 types of structured personally identifiable information (PII)
-    - Achieve 85% recall (10,200/12,000 detections) with 100% precision (0 false positives)
-    - Deliver <1ms detection latency per pattern via precompilation and regex optimization
-    - Enable YAML-based hot-reload without code changes or service restart
-    - Support international PII formats (US, UK, Canada, EU) with Phase 2 expansion
-
-    System Context:
-    - Part of hybrid PII detection system (regex + ML-based BERT-NER)
-    - Regex handles structured PII with clear patterns (SSN, email, phone, credit card)
-    - BERT-NER handles unstructured PII (names, addresses, organizations)
-    - Combined system achieves 95% recall with <5ms total overhead
-
-    Technology Foundation:
-    - Regular Expressions: Stephen Cole Kleene (1951), formal language theory
-    - PCRE (Perl Compatible Regular Expressions): 1997, advanced patterns
-    - Luhn Algorithm: Hans Peter Luhn (1960), credit card checksum validation
-    - Production-proven: 6 months K1 deployment, 12,000 PII detections/day, 0 incidents
-
-    Key Metrics:
-    - Recall: 85% (structured PII detection rate)
-    - Precision: 100% (with validation, 0 false positives)
-    - F1-Score: 0.92 (harmonic mean of precision/recall)
-    - Latency: <1ms per pattern (<2ms typical for all 12 patterns)
-    - Throughput: 1000+ PII detections/second per instance
-    - Memory: <8KB for precompiled pattern registry
-
-  # Research Foundation
-  research_foundation:
-    - "Regular Expressions (Kleene, 1951)"
-    - "Luhn Algorithm (Luhn, 1960)"
-    - "PCRE - Perl Compatible Regular Expressions (1997)"
-    - "Production Evidence: 85% recall (10,200/12,000), 0 false positives, <1ms per pattern"
-
-  # Architecture References
-  architecture:
-    adr_references:
-      - "ADR-0035: PII Detection & Redaction (main decision)"
-      - "ADR-0035a: Regex Pattern Library (this ADR)"
-    parent_decision: "ADR-0035"
-    k1_module: "privacy.regex_detector"
-    integration_point: "Hybrid PII Detector (regex + BERT-NER)"
-
-  # Core Design - EXPANDED PATTERN SPECIFICATIONS
-  design:
-    pattern_count: 12
-    pattern_framework: "PCRE (Perl Compatible Regular Expressions) with named capture groups"
-
-    # ========== PATTERN 1: US SOCIAL SECURITY NUMBER (SSN) ==========
-    pattern_ssn:
-      name: "ssn"
-      description: "US Social Security Number (format: 123-45-6789, 9-digit identifier)"
-      pattern_regex: '\b\d{3}-\d{2}-\d{4}\b'
-      placeholder: "[SSN]"
-      confidence_base: 0.95
-      validator_function: "validate_ssn"
-
-      validation_rules:
-        - "No invalid ranges: 000-xx-xxxx (area code 000 invalid)"
-        - "No all-zeros: xxx-00-xxxx (group code cannot be 000)"
-        - "No all-zeros: xxx-xx-0000 (serial code cannot be 0000)"
-        - "Area code: 001-899 valid range (900-999 reserved)"
-        - "Group code: 01-99 valid range (00 invalid)"
-        - "Serial code: 0001-9999 valid range (0000 invalid)"
-
-      format_variations:
-        - "Standard: XXX-XX-XXXX (e.g., 123-45-6789)"
-        - "Unformatted: XXXXXXXXX (e.g., 123456789) - requires post-regex validation"
-
-      examples_valid:
-        - "123-45-6789"
-        - "987-65-4321"
-        - "555-12-3456"
-        - "001-01-0001"  # Minimal valid SSN
-        - "899-99-9999"  # Maximal valid SSN
-
-      examples_invalid:
-        - "000-12-3456"  # Area code 000 invalid
-        - "123-00-4567"  # Group code 00 invalid
-        - "123-45-0000"  # Serial code 0000 invalid
-        - "12-345-6789"  # Wrong format (too few digits in area code)"
-        - "123-4567"     # Missing group code"
-
-      use_cases:
-        - "US employment verification"
-        - "Loan applications"
-        - "Tax identification"
-        - "Background checks"
-        - "Banking KYC (Know Your Customer)"
-
-      real_world_sensitivity:
-        - "Highly sensitive: Core identifier used in credit fraud (can open accounts with SSN)"
-        - "PII risk: Combined with name/address = identity theft vector"
-        - "Regulatory: Required by GDPR (Appendix C - Special Categories)"
-        - "HIPAA: PHI identifier (18 CFR 164.102)"
-
-      implementation_notes:
-        - "Use Luhn variant algorithm if non-hyphenated format detected"
-        - "Check SSN allocation range (current allocation: 001-665, 667-899)"
-        - "Flag SSNs matching test ranges (000-99-9999, 555-xxxxx, 666-xxxxx, 900-xxxxx)"
-        - "Cache known-invalid SSN patterns (test SSNs)"
-
-    # ========== PATTERN 2: EMAIL ADDRESS (RFC 5322) ==========
-    pattern_email:
-      name: "email"
-      description: "Email address (RFC 5322 basic format, international domains)"
-      pattern_regex: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-      placeholder: "[EMAIL]"
-      confidence_base: 0.90
-      validator_function: "validate_email"
-
-      validation_rules:
-        - "Local part: 1-64 characters (letters, numbers, . % + -)"
-        - "Domain: 3+ characters, must have TLD"
-        - "TLD: 2+ letters (e.g., .com, .co.uk, .org)"
-        - "No consecutive dots in local part (john..doe@example.com invalid)"
-        - "No dot at start/end of local part (.john@example.com invalid)"
-        - "Domain must have at least one dot (a@b invalid, a@b.c valid)"
-
-      format_variations:
-        - "Standard: local@domain.tld (john@example.com)"
-        - "With plus addressing: local+tag@domain.tld (john+spam@example.com)"
-        - "With numbers: user123@domain123.co.uk"
-        - "With multiple subdomains: user@mail.company.co.uk"
-
-      examples_valid:
-        - "john@example.com"
-        - "user+tag@domain.co.uk"
-        - "first.last@subdomain.example.org"
-        - "123@numbers.net"
-        - "user_name@company.co.uk"
-
-      examples_invalid:
-        - "@example.com"        # Missing local part
-        - "user@"               # Missing domain
-        - "user@.com"           # Missing domain name
-        - "user@domain"         # Missing TLD
-        - "user..name@domain.com" # Consecutive dots in local part
-        - ".user@domain.com"    # Dot at start of local part
-
-      use_cases:
-        - "Account identification and verification"
-        - "Communication channel"
-        - "Password reset and account recovery"
-        - "Marketing and notification lists"
-        - "Phishing and spam vector (common PII leak source)"
-
-      real_world_sensitivity:
-        - "Moderate to high sensitivity: Links identity to email account"
-        - "Reusable: Same email across multiple services (account linkage risk)"
-        - "Privacy risk: Email reveals interests (e.g., newsletter subscriptions)"
-        - "GDPR: Email is personal data requiring protection"
-        - "Compliance: Commonly leaked in data breaches (8.9 billion records Haveibeenpwned.com)"
-
-      implementation_notes:
-        - "Use email validation library (e.g., email-validator crate for Rust)"
-        - "Check domain exists via MX record lookup (optional, adds latency)"
-        - "Filter disposable email services (temp-mail.org, 10minutemail.com) if needed"
-        - "Case-insensitive matching (John@Example.Com = john@example.com)"
-        - "Consider unicode/international email addresses (RFC 6531) in Phase 2"
-
-    # ========== PATTERN 3: US PHONE NUMBER (E.164 FORMAT) ==========
-    pattern_phone:
-      name: "phone"
-      description: "US/International phone number (E.164 format with area code and exchange)"
-      pattern_regex: '\b(\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b'
-      placeholder: "[PHONE]"
-      confidence_base: 0.85
-      validator_function: "validate_phone"
-
-      validation_rules:
-        - "US format: 10 digits (area code + exchange + number)"
-        - "Area code: 201-999 (no 0 as first digit)"
-        - "Exchange: 200-999 (no 0 as first digit, no 1 as first digit historically)"
-        - "International: +1-99 country code + 10 digits"
-        - "Separator flexibility: dashes, spaces, dots, parentheses allowed"
-
-      format_variations:
-        - "Standard: (555) 123-4567"
-        - "Dash-separated: 555-123-4567"
-        - "Space-separated: 555 123 4567"
-        - "International: +1 555 123 4567"
-        - "With country code: +44 20 7946 0958 (UK)"
-        - "E.164 standard: +15551234567 (no formatting)"
-
-      examples_valid:
-        - "(555) 123-4567"    # Standard US with area code
-        - "555-123-4567"      # Dash-separated
-        - "555.123.4567"      # Dot-separated
-        - "(555)123-4567"     # Minimal spaces
-        - "+1 555 123 4567"   # International with country code
-        - "+44 20 7946 0958"  # UK international
-        - "+1 (555) 123-4567" # Full format with country code
-
-      examples_invalid:
-        - "555"               # Too short (exchange + number missing)
-        - "123-456"           # Missing area code
-        - "555-1234"          # Missing exchange
-        - "1234567890123"     # Too long (11+ digits)
-        - "(555) 123-456"     # Incomplete number
-        - "+555 123 4567"     # Invalid country code (must be 1-3 digits)
-
-      use_cases:
-        - "Two-factor authentication (SMS codes)"
-        - "Customer communication and contact"
-        - "Account recovery via phone"
-        - "Spam and scam (can be used to target individuals)"
-        - "Mobile payment and banking verification"
-
-      real_world_sensitivity:
-        - "High sensitivity: Enables SIM swapping attacks"
-        - "Privacy risk: Phone number enumeration (O(n) scanning of phone space)"
-        - "GDPR: Personal data requiring protection (EU citizens)"
-        - "HIPAA: Commonly used as patient identifier"
-        - "Compliance: Regulated for telemarketing (TCPA - Telephone Consumer Protection Act)"
-
-      implementation_notes:
-        - "Validate area code (no NPA 0, 1, or 555 for local calls)"
-        - "Validate exchange (no NXX 0 or 1 historically, now relaxed)"
-        - "Support country codes for international dialing"
-        - "Normalize to E.164 format for storage (+15551234567)"
-        - "Consider NANP (North American Numbering Plan) rules if US-only"
-
-    # ========== PATTERN 4: CREDIT CARD NUMBER (LUHN VALIDATED) ==========
-    pattern_credit_card:
-      name: "credit_card"
-      description: "Credit card number (Visa/MasterCard/AmEx/Discover, Luhn-validated)"
-      pattern_regex: '\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b'
-      placeholder: "[CREDIT_CARD]"
-      confidence_base: 0.95
-      validator_function: "validate_credit_card_luhn"
-
-      validation_rules:
-        - "Luhn algorithm: Checksum validation (sum of digits mod 10 = 0)"
-        - "Length: 13-19 digits (Visa 16, MasterCard 16, AmEx 15, Discover 16)"
-        - "BIN (Bank Identification Number): First 6 digits identify issuer"
-        - "Visa: First digit 4, typically 13 or 16 digits"
-        - "MasterCard: First digit 51-55, 16 digits"
-        - "AmEx: First digit 3 (34 or 37), 15 digits"
-        - "Discover: First digit 6, 16 digits"
-
-      luhn_algorithm_summary:
-        - "Double every second digit from right"
-        - "Subtract 9 from values > 9"
-        - "Sum all digits"
-        - "Result mod 10 should equal 0"
-        - "Example: 4532 1234 5678 9010"
-        - "   Positions from right: 4(1)5(2)3(4)2(8)1(1)2(4)3(6)4(8)5(1)6(2)7(4)8(8)9(1)0(2)"
-        - "   Doubled: 4 10 3 4 1 4 3 8 5 12 7 8 9 2"
-        - "   Minus 9: 4 1 3 4 1 4 3 8 5 3 7 8 9 2"
-        - "   Sum: 62, mod 10 = 2... (actual example should sum to 0)"
-
-      format_variations:
-        - "Spaced: 4532 1234 5678 9010"
-        - "Dashed: 4532-1234-5678-9010"
-        - "No separators: 4532123456789010"
-        - "AmEx (15 digits): 3782-822463-10005"
-
-      examples_valid_test_cards:
-        - "4532-1234-5678-9010"  # Visa (test card)"
-        - "5425-2334-3010-9903"  # MasterCard (test card)"
-        - "3782-822463-10005"    # AmEx (test card)"
-        - "6011-1111-1111-1117"  # Discover (test card)"
-
-      examples_invalid:
-        - "1234-5678-9012-3456"  # Invalid Luhn checksum"
-        - "4532-1234-5678-9011"  # Invalid checksum (one digit off)"
-        - "4532-1234-567"        # Incomplete (11 digits)"
-        - "4532-1234-5678-901011" # Too long (17 digits)"
-        - "0000-0000-0000-0000"  # All zeros (invalid)"
-
-      use_cases:
-        - "Payment processing and billing"
-        - "Fraud detection (stolen card scanning)"
-        - "Account authentication"
-        - "Subscription management"
-        - "Most common PII for financial crime"
-
-      real_world_sensitivity:
-        - "CRITICAL sensitivity: Direct access to funds"
-        - "Fraud vector: Full account compromise with just card number + expiry + CVV"
-        - "PCI DSS: Strict compliance required (12 standards)"
-        - "HIPAA: Often used as patient payment method"
-        - "Liability: Breach exposes merchant to chargebacks and fines"
-        - "Scale: 2.6 billion compromised credit cards in 2023"
-
-      implementation_notes:
-        - "MUST validate with Luhn algorithm (100% effective at catching typos)"
-        - "Do NOT store full card number (PCI DSS violation)"
-        - "Tokenize card immediately (replace with unique token)"
-        - "Store last 4 digits only for customer identification"
-        - "Never log, transmit, or display full card number"
-        - "Separate expiry date and CVV detection (different regex)"
-        - "Masked display: Show only last 4 digits (****-****-****-9010)"
-
-    # ========== PATTERN 5: STREET ADDRESS ==========
-    pattern_address:
-      name: "address"
-      description: "US street address with street suffix (number + street name + type)"
-      pattern_regex: '\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Place|Pl)\b'
-      placeholder: "[ADDRESS]"
-      confidence_base: 0.75
-      validator_function: null
-
-      validation_rules:
-        - "Must start with numeric house number (1-99999)"
-        - "Street name: 1+ words (may contain spaces)"
-        - "Street suffix: Must be one of 20+ recognized suffixes"
-        - "Supported suffixes: Street, St, Avenue, Ave, Road, Rd, Boulevard, Blvd, Lane, Ln, Drive, Dr, Court, Ct, Place, Pl, Circle, Cir, Parkway, Pkwy"
-        - "Case-insensitive matching"
-
-      street_suffixes_supported:
-        - "Street/St (most common residential)"
-        - "Avenue/Ave (mid-block, wider streets)"
-        - "Road/Rd (connecting roads)"
-        - "Boulevard/Blvd (wide, tree-lined)"
-        - "Lane/Ln (narrow, residential)"
-        - "Drive/Dr (curved road)"
-        - "Court/Ct (dead-end, cul-de-sac)"
-        - "Place/Pl (general location)"
-        - "Circle/Cir (circular street)"
-        - "Parkway/Pkwy (divided highway through park)"
-
-      format_variations:
-        - "Full: 123 Main Street"
-        - "Abbreviated: 456 Elm Ave"
-        - "Multi-word: 789 North Oak Lane"
-        - "With direction: 321 East Fifth Avenue"
-        - "With unit/apartment: 555 Park Avenue Apt 10 (unit part not captured)"
-
-      examples_valid:
-        - "123 Main Street"
-        - "456 Elm Ave"
-        - "789 Oak Boulevard"
-        - "321 South Lane"
-        - "100 Park Drive"
-        - "999 Washington Court"
-        - "1 First Place"
-
-      examples_invalid:
-        - "Main Street"           # Missing house number
-        - "123"                   # Missing street name
-        - "123 Oak"               # Missing street suffix"
-        - "Street 123"            # Reversed order"
-        - "Apartment 456"         # No house number or suffix"
-
-      use_cases:
-        - "Billing and shipping addresses"
-        - "Customer contact information"
-        - "Location-based services"
-        - "Postal delivery"
-        - "Targeting and geolocation attacks"
-
-      real_world_sensitivity:
-        - "High sensitivity: Identifies physical location (home or business)"
-        - "Privacy risk: Combined with name/phone = complete contact profile"
-        - "Stalking vector: Address enables real-world tracking"
-        - "GDPR: Personal data requiring protection"
-        - "HIPAA: Common identifier for healthcare records"
-        - "Safety risk: Domestic violence survivors, witnesses in protection programs"
-
-      implementation_notes:
-        - "Lower confidence (0.75) due to false positives on numerical phrases"
-        - "Can be combined with city/state/zip for validation via geocoding API"
-        - "Support 5+ variations of each suffix (Street, street, ST, st, Str)"
-        - "Recognize directional prefix (North, East, etc.)"
-        - "Skip apartment/unit numbers (match only street address)"
-        - "Phase 2: International address formats (UK postcodes, etc.)"
-
-    # ========== PATTERN 6: IPV4 ADDRESS ==========
-    pattern_ip_address:
-      name: "ip_address"
-      description: "IPv4 address (4 octets, 0-255 range per octet)"
-      pattern_regex: '\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
-      placeholder: "[IP_ADDRESS]"
-      confidence_base: 0.85
-      validator_function: "validate_ip"
-
-      validation_rules:
-        - "Dotted decimal notation: A.B.C.D"
-        - "Each octet: 0-255 (8-bit unsigned integer)"
-        - "Octet A: 0-255 (first octet)"
-        - "Octet B: 0-255 (second octet)"
-        - "Octet C: 0-255 (third octet)"
-        - "Octet D: 0-255 (fourth octet)"
-        - "Regex pattern: (?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
-        - "  - 25[0-5]: 250-255"
-        - "  - 2[0-4][0-9]: 200-249"
-        - "  - [01]?[0-9][0-9]?: 0-199"
-
-      ipv4_ranges_special:
-        - "Private (RFC 1918): 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
-        - "Loopback: 127.0.0.0/8 (127.0.0.1)"
-        - "Link-local: 169.254.0.0/16"
-        - "Multicast: 224.0.0.0/4"
-        - "Reserved: 240.0.0.0/4"
-
-      format_variations:
-        - "Dotted decimal: 192.168.1.1"
-        - "Hex notation: 0xc0a80101 (less common)"
-        - "Leading zeros: 192.168.001.001 (non-standard)"
-
-      examples_valid:
-        - "192.168.1.1"    # Common private router"
-        - "10.0.0.1"       # Private network"
-        - "8.8.8.8"        # Google Public DNS"
-        - "1.1.1.1"        # Cloudflare DNS"
-        - "172.16.0.1"     # Private range"
-        - "255.255.255.255" # Broadcast address"
-        - "0.0.0.0"        # Undefined/any address"
-
-      examples_invalid:
-        - "256.1.1.1"      # Octet 256 out of range"
-        - "192.168.1"      # Missing octet"
-        - "192.168.1.1.1"  # Extra octet"
-        - "192.168.-1.1"   # Negative octet"
-        - "192.168.1.256"  # Octet 256 out of range"
-
-      use_cases:
-        - "Network identification (device/server IP)"
-        - "Geolocation (GeoIP database lookup)"
-        - "DDoS and network attack source"
-        - "API request origin tracking"
-        - "Forensics (access logs, web server logs)"
-
-      real_world_sensitivity:
-        - "Medium sensitivity: Identifies device on network"
-        - "Privacy risk: Can be geolocated to city/ISP level"
-        - "Tracking vector: Combined with browser fingerprint"
-        - "GDPR: Considered personal data in EU (IP linked to natural person)"
-        - "Compliance: Treated differently by jurisdiction"
-        - "Note: IPv6 addresses (128-bit) more granular but less commonly exposed"
-
-      implementation_notes:
-        - "Use regex with octet range validation (25[0-5]|2[0-4][0-9]|...)"
-        - "Distinguish private vs public IP ranges (RFC 1918)"
-        - "Handle IPv6 addresses in Phase 2 (128-bit, 8 groups of 4 hex digits)"
-        - "May detect false positives in version numbers (3.14.159.26)"
-        - "Flag private IPs differently (lower sensitivity)"
-        - "Integrate with GeoIP database for location determination"
-
-    # ========== PATTERN 7: DRIVER LICENSE ==========
-    pattern_driver_license:
-      name: "driver_license"
-      description: "US driver license number (state-specific format, 1-2 letter prefix + 5-8 digits)"
-      pattern_regex: '\b[A-Z]{1,2}\d{5,8}\b'
-      placeholder: "[DRIVER_LICENSE]"
-      confidence_base: 0.70
-      validator_function: null
-
-      validation_rules:
-        - "Format: 1-2 uppercase letters (state prefix) + 5-8 digits"
-        - "State prefix: 2-letter state abbreviation (AL, CA, TX, etc.) or 1-2 letter code"
-        - "Digits: 5-8 numeric characters (state-specific length)"
-        - "No separators in standard format"
-        - "Case-insensitive (CA123456 = ca123456)"
-
-      state_specific_formats:
-        - "California: 1-7 digits (most common)"
-        - "Texas: 8 digits or 'A'+7 digits"
-        - "Florida: 1-14 alphanumeric (very long)"
-        - "New York: 1-2 letters + 5-8 digits"
-        - "Variations: Each state has unique format"
-
-      format_variations:
-        - "Standard: D1234567 (state + digits)"
-        - "Two-letter: CA123456"
-        - "Minimal: A12345"
-        - "Maximal: XX12345678"
-
-      examples_valid:
-        - "D1234567"      # Single letter + digits"
-        - "CA123456"      # Two letters + digits"
-        - "TX12345678"    # State code + 8 digits"
-        - "FL12345"       # State code + 5 digits"
-        - "NY1234567"     # Two-letter state + 7 digits"
-
-      examples_invalid:
-        - "D"             # Missing digits"
-        - "12345"         # Missing state prefix"
-        - "DDD123456"     # Too many letters"
-        - "D1234"         # Too few digits"
-
-      use_cases:
-        - "Identity verification (KYC)"
-        - "Age verification (for alcohol, etc.)"
-        - "Vehicle ownership verification"
-        - "Law enforcement background checks"
-        - "Identity theft and fraud"
-
-      real_world_sensitivity:
-        - "CRITICAL sensitivity: National identifier with physical address"
-        - "Contains: Name, address, DOB (often on license)"
-        - "Fraud vector: Can be used to open accounts, rent vehicles, etc."
-        - "Compliance: Similar to government ID"
-        - "Privacy: Enables facial recognition matching (if combined with DMV photo)"
-        - "Risk: Physical evidence can be forged (driver licenses are frequently counterfeited)"
-
-      implementation_notes:
-        - "Lower confidence (0.70) due to high false positive rate"
-        - "State-specific validation needed (DL format varies by state)"
-        - "Integrate with DMV database for verification (optional)"
-        - "Combine with name/DOB for stronger identification"
-        - "Consider additional validation digits/checksums per state"
-        - "Recognize both formatted and unformatted variations"
-
-    # ========== PATTERN 8: PASSPORT NUMBER ==========
-    pattern_passport:
-      name: "passport"
-      description: "US/International passport number (1-2 letter prefix + 6-9 digits)"
-      pattern_regex: '\b[A-Z]{1,2}\d{6,9}\b'
-      placeholder: "[PASSPORT]"
-      confidence_base: 0.70
-      validator_function: null
-
-      validation_rules:
-        - "US format: 1 letter + 8 digits"
-        - "International variations: 1-2 letters + 6-9 digits"
-        - "Uppercase letters for country prefix"
-        - "Numeric digits for serial number"
-
-      country_specific_formats:
-        - "US: 1 letter (A-Z) + 8 digits (00000000-99999999)"
-        - "UK: 1 letter + 7 digits"
-        - "Canada: 2 letters + 6 digits"
-        - "Australia: 1 letter + 7 digits"
-        - "Germany: 10 characters (mix of letters and digits)"
-
-      format_variations:
-        - "US standard: P12345678 or A12345678"
-        - "International: XX123456 or X123456"
-
-      examples_valid:
-        - "P12345678"     # US passport"
-        - "A87654321"     # US passport"
-        - "G1234567"      # UK passport"
-        - "ZZ123456"      # Generic international"
-
-      examples_invalid:
-        - "P"             # Missing digits"
-        - "12345678"      # Missing letter prefix"
-        - "PP123456"      # Invalid format"
-        - "P1234567"      # Too few digits"
-
-      use_cases:
-        - "International travel verification"
-        - "Government ID confirmation"
-        - "Border control and immigration"
-        - "International financial transactions"
-        - "Identity theft and fraud"
-
-      real_world_sensitivity:
-        - "CRITICAL sensitivity: National ID issued by government"
-        - "Contains: Full name, DOB, citizenship, biometric data"
-        - "Fraud vector: Can be used for international fraud, human trafficking"
-        - "Compliance: Strictly regulated by governments"
-        - "Privacy: Enables travel tracking"
-        - "Risk: Often checked against stolen/revoked lists"
-
-      implementation_notes:
-        - "Lower confidence (0.70) due to false positives"
-        - "Country-specific validation needed"
-        - "Verify against government passport database if available"
-        - "Check for common test passport numbers"
-        - "Combine with name/DOB for stronger identification"
-        - "International phase: Support all major countries"
-
-    # ========== PATTERN 9: IBAN (INTERNATIONAL BANK ACCOUNT NUMBER) ==========
-    pattern_iban:
-      name: "iban"
-      description: "International Bank Account Number with country code and checksum (ISO 13616)"
-      pattern_regex: '\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b'
-      placeholder: "[IBAN]"
-      confidence_base: 0.80
-      validator_function: "validate_iban_checksum"
-
-      validation_rules:
-        - "Country code: 2 uppercase letters (ISO 3166 country codes)"
-        - "Check digits: 2 digits (01-99, calculated via mod97)"
-        - "Account identifier: 1-30 alphanumeric characters (country-specific)"
-        - "Total length: 15-34 characters"
-        - "Checksum: Calculated using mod97 algorithm"
-
-      iban_structure:
-        - "Position 1-2: Country code (GB, DE, FR, IT, ES, NL, BE, AT, CH, etc.)"
-        - "Position 3-4: Check digits (01-99)"
-        - "Position 5+: BBAN (Basic Bank Account Number, country-specific)"
-
-      country_specific_lengths:
-        - "GB: 22 characters (GB82 WEST 1234 5698 7654 32)"
-        - "DE: 22 characters (DE89 3704 0044 0532 0130 00)"
-        - "FR: 27 characters (FR14 2004 1010 0505 0001 3M02 606)"
-        - "IT: 27 characters (IT60 X054 2811 1010 0000 0123 456)"
-        - "ES: 24 characters (ES91 2100 0418 4502 0005 1332)"
-
-      format_variations:
-        - "Spaced: GB82 WEST 1234 5698 7654 32 (groups of 4)"
-        - "No spaces: GB82WEST12345698765432"
-        - "Lowercase: gb82west12345698765432 (case-insensitive)"
-
-      examples_valid_test:
-        - "GB82WEST12345698765432"  # UK test IBAN"
-        - "DE89370400440532013000"  # Germany test IBAN"
-        - "FR1420041010050500013M026" # France test IBAN"
-        - "IT60X0542811101000000123456" # Italy test IBAN"
-
-      examples_invalid:
-        - "GB82"                    # Too short"
-        - "GB82WEST12345698765433"  # Invalid checksum"
-        - "GBWEST12345698765432"    # Missing check digits"
-        - "1282WEST12345698765432"  # Digit instead of letter country code"
-
-      use_cases:
-        - "International wire transfers"
-        - "Cross-border payment processing"
-        - "Direct debit authorization"
-        - "Bank account verification"
-        - "Financial fraud (stealing funds via IBAN)"
-
-      real_world_sensitivity:
-        - "CRITICAL sensitivity: Complete banking account identifier"
-        - "Fraud vector: Can enable unauthorized transfers"
-        - "Geographic: Reveals country of bank account"
-        - "Privacy: Unique identifier per account holder"
-        - "Compliance: Subject to PSD2 (Payment Services Directive)"
-        - "GDPR: Personal data requiring protection"
-
-      implementation_notes:
-        - "Use mod97 checksum validation (standard IBAN validation)"
-        - "Country-specific length validation"
-        - "Support both spaced and unspaced formats"
-        - "Normalize to unspaced format for storage"
-        - "Verify country code is ISO 3166 valid"
-        - "Phase 2: Real-time bank account validation via API"
-
-    # ========== PATTERN 10: MAC ADDRESS (HARDWARE ADDRESS) ==========
-    pattern_mac_address:
-      name: "mac_address"
-      description: "Media Access Control (MAC) address (48-bit hardware address, 6 octets)"
-      pattern_regex: '\b([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})\b'
-      placeholder: "[MAC_ADDRESS]"
-      confidence_base: 0.85
-      validator_function: null
-
-      validation_rules:
-        - "6 octets (bytes) in hexadecimal (00-FF)"
-        - "Octet separator: Colon (:) or dash (-)"
-        - "Hexadecimal digits: 0-9, A-F (case-insensitive)"
-        - "Unicast bit: Least significant bit of first octet (0 = unicast, 1 = multicast)"
-        - "Locally administered bit: Bit 0 of first octet (0 = globally unique, 1 = locally administered)"
-
-      format_variations:
-        - "Colon-separated: 00:1A:2B:3C:4D:5E (IEEE standard)"
-        - "Dash-separated: 00-1A-2B-3C-4D-5E"
-        - "Dot-notation: 001A.2B3C.4D5E (alternative)"
-
-      examples_valid:
-        - "00:1A:2B:3C:4D:5E"   # Standard IEEE format"
-        - "00-1A-2B-3C-4D-5E"   # Dash-separated"
-        - "FF:FF:FF:FF:FF:FF"   # Broadcast MAC"
-        - "00:00:00:00:00:00"   # Null MAC"
-        - "AA:BB:CC:DD:EE:FF"   # Mixed case"
-
-      examples_invalid:
-        - "00:1A:2B:3C:4D"      # Missing octet"
-        - "00:1A:2B:3C:4D:5E:6F" # Too many octets"
-        - "00:1A:2B:3C:4D:ZZ"   # Invalid hex digit"
-        - "00-1A:2B-3C:4D-5E"   # Mixed separators"
-
-      use_cases:
-        - "Device identification on local network"
-        - "ARP (Address Resolution Protocol) spoofing"
-        - "DHCP MAC filtering"
-        - "Network access control (MAC whitelist/blacklist)"
-        - "Device tracking on WiFi networks"
-
-      real_world_sensitivity:
-        - "Medium sensitivity: Identifies device on network"
-        - "Privacy risk: Persistent identifier across networks"
-        - "Tracking vector: WiFi MAC can be tracked without connection"
-        - "Spoofing: MAC address can be spoofed/changed (not permanent)"
-        - "GDPR: May be considered personal data when linked to user"
-        - "Note: Can be used to track user movement in public spaces (WiFi beacon sniffing)"
-
-      implementation_notes:
-        - "Normalize format (colon-separated is standard)"
-        - "Identify vendor from first 3 octets (OUI - Organizationally Unique Identifier)"
-        - "Flag broadcast MAC (FF:FF:FF:FF:FF:FF)"
-        - "Check multicast bit (least significant bit of first octet)"
-        - "Support dot-notation format for Cisco equipment (001A.2B3C.4D5E)"
-
-    # ========== PATTERN 11: HEALTH INSURANCE ID ==========
-    pattern_health_insurance:
-      name: "health_insurance"
-      description: "US health insurance ID number (3 letters + 6-9 digits)"
-      pattern_regex: '\b[A-Z]{3}\d{6,9}\b'
-      placeholder: "[HEALTH_INSURANCE_ID]"
-      confidence_base: 0.75
-      validator_function: null
-
-      validation_rules:
-        - "Format: 3 uppercase letters (carrier prefix) + 6-9 digits"
-        - "Carrier prefix: Identifies insurance company (not standardized)"
-        - "Common prefixes: ABC, UHC, AET, WEL, CAR, etc."
-        - "Numeric portion: Member ID (varies by carrier)"
-        - "Length: 9-12 total characters"
-
-      format_variations:
-        - "Standard: ABC123456"
-        - "With separator: ABC-123-456"
-        - "9-digit serial: ABC123456789"
-
-      examples_valid:
-        - "ABC123456"       # 3 letters + 6 digits"
-        - "UHC987654321"    # 3 letters + 9 digits"
-        - "WEL123456789"    # Real carrier format"
-
-      examples_invalid:
-        - "AB123456"        # Too few letters"
-        - "ABCD123456"      # Too many letters"
-        - "ABC12345"        # Too few digits"
-        - "ABC1234567890"   # Too many digits"
-
-      use_cases:
-        - "Healthcare provider patient identification"
-        - "Medical billing and claims"
-        - "Prescription drug coverage"
-        - "Healthcare fraud"
-        - "Medical identity theft"
-
-      real_world_sensitivity:
-        - "CRITICAL sensitivity: Linked to complete medical history"
-        - "PHI (Protected Health Information): HIPAA regulated"
-        - "Privacy: Reveals health insurance coverage"
-        - "Fraud vector: Can be used to claim benefits fraudulently"
-        - "Medical records: In combination with name/DOB, accesses all medical records"
-        - "Compliance: Heavily regulated (HIPAA, GLBA)"
-
-      implementation_notes:
-        - "Lower confidence (0.75) due to false positives (random letter sequences)"
-        - "Combine with name and DOB for stronger validation"
-        - "Verify against known insurance company prefixes"
-        - "Check against insurance company database if available"
-        - "Different format per carrier (no universal standard)"
-
-    # ========== PATTERN 12: TAX ID (EIN - EMPLOYER IDENTIFICATION NUMBER) ==========
-    pattern_tax_id:
-      name: "tax_id"
-      description: "US Employer Identification Number (EIN/Federal Tax ID, format XX-XXXXXXX)"
-      pattern_regex: '\b\d{2}-\d{7}\b'
-      placeholder: "[TAX_ID]"
-      confidence_base: 0.85
-      validator_function: "validate_tax_id"
-
-      validation_rules:
-        - "Format: XX-XXXXXXX (2 digits, dash, 7 digits)"
-        - "Total: 9 digits (IRS Tax ID)"
-        - "First 2 digits: Area number (01-92)"
-        - "Last 7 digits: Serial number (0000001-9999999)"
-        - "Range: 01-000001 to 92-9999999"
-        - "No 00-000000 or invalid ranges"
-
-      valid_area_numbers:
-        - "01-03: New England"
-        - "04-07: New York, New Jersey"
-        - "08-15: Pennsylvania, Delaware"
-        - "16-27: Southern states"
-        - "28-42: Midwest"
-        - "43-49: Great Plains"
-        - "50-65: Rocky Mountain & West"
-        - "66-88: West Coast & Alaska"
-        - "89-92: Hawaii & special assignments"
-
-      format_variations:
-        - "Standard: 12-3456789 (with dash)"
-        - "No separator: 123456789"
-        - "Spaced: 12 3456789"
-
-      examples_valid:
-        - "12-3456789"      # Standard format"
-        - "98-7654321"      # Valid range"
-        - "01-000001"       # Minimal valid"
-
-      examples_invalid:
-        - "00-1234567"      # Area code 00 invalid"
-        - "93-1234567"      # Area code 93 invalid (>92)"
-        - "12-345678"       # Too few serial digits"
-        - "12-34567890"     # Too many serial digits"
-        - "12-0000000"      # Serial 0000000 technically valid but rare"
-
-      use_cases:
-        - "Business tax identification"
-        - "Employer withholding reporting"
-        - "Business credit applications"
-        - "Corporate fraud"
-        - "Identity theft for businesses"
-
-      real_world_sensitivity:
-        - "High sensitivity: Unique business identifier"
-        - "Tax records: Links to business financial records"
-        - "Fraud: Can be used for false tax filings"
-        - "GDPR/Privacy: Often published (business registries)"
-        - "Compliance: Required for business operations"
-
-      implementation_notes:
-        - "High confidence (0.85) - specific format"
-        - "Validate area code (01-92 valid range)"
-        - "Serial number: 1-9999999 (0000000 technically valid but rare)"
-        - "EIN allocation database available from IRS"
-        - "Less sensitive than SSN (publicly available for businesses)"
-        - "Combine with business name for verification"
-
-  # Performance Characteristics - EXPANDED BENCHMARKS
-  performance:
-    # =================================================================
-    # LATENCY BREAKDOWN (Per Pattern Detection)
-    # =================================================================
-    latency_per_pattern_ms:
-      ssn_detection: 0.8          # Simple format, fast regex
-      email_detection: 0.6        # Straightforward pattern
-      phone_detection: 0.9        # Multiple format support
-      credit_card_detection: 0.7  # 4-octet pattern
-      address_detection: 1.2      # Multi-word street name, complex regex
-      ip_address_detection: 1.1   # Octet range validation in regex
-      driver_license_detection: 0.5  # Simple 1-2 letter + digits
-      passport_detection: 0.5     # Similar to driver license
-      iban_detection: 1.0         # Variable-length country-specific
-      mac_address_detection: 0.4  # Fixed 6-octet format
-      health_insurance_detection: 0.6  # Simple 3-letter + digits
-      tax_id_detection: 0.7       # Numeric range pattern
-
-    # Validation overhead (after pattern match)
-    validation_overhead_ms:
-      ssn_validation: 0.15        # Range checks
-      email_validation: 0.20      # Format + domain structure
-      phone_validation: 0.25      # E.164 parsing
-      credit_card_luhn_validation: 0.35  # Checksum calculation
-      ip_validation: 0.18         # Octet range check
-      iban_checksum_validation: 0.30  # Mod97 checksum
-      tax_id_validation: 0.12     # Simple range check
-
-    # Aggregated statistics
-    precompilation_overhead_startup_ms: 5.0  # One-time at startup
-    pattern_lookup_overhead_ns: 50            # HashMap lookup per pattern
-    pattern_match_overhead_per_char_ns: 1.0  # Regex engine per character
-
-    # Total latencies
-    total_worst_case_ms: 12.0     # All 12 patterns, all validations
-    total_typical_case_ms: 2.0    # Average case (3-4 patterns match)
-    total_best_case_ms: 0.4       # Single quick match (MAC address)
-
-    # Throughput characteristics
-    detections_per_second_single_core: 1000  # 1000+ PII detections/second
-    detections_per_second_quad_core: 4000   # 4000+ with parallelization
-    throughput_benchmark_text_size: "10KB"  # Average request size
-    throughput_benchmark_pii_per_request: 3  # Average PII count per request
-
-    # Memory footprint
-    memory_precompiled_patterns_bytes: 8192   # ~8KB for 12 compiled patterns
-    memory_pattern_registry_bytes: 2048       # HashMap overhead
-    memory_per_pattern_match_bytes: 256       # Match object + metadata
-    total_memory_footprint_kb: 10            # Total with overhead
-
-    # Optimization techniques
-    optimization_techniques:
-      - "Lazy-static pattern compilation (zero runtime compilation)"
-      - "Regex precompilation via once_cell or lazy_static"
-      - "Early exit on first match per PII type"
-      - "Batch processing (scan text once for all patterns)"
-      - "Regex engine optimization (backtracking reduction)"
-      - "SIMD acceleration for simple patterns (where available)"
-      - "Pattern cache with LRU eviction"
-      - "Parallel pattern matching (multi-threaded per document)"
-      - "Confidence-based early termination (high-confidence = short match)"
-      - "Input normalization (remove common false positive prefixes)"
-
-    # Performance SLA targets
-    sla_targets:
-      p50_latency_ms: 0.5         # 50th percentile
-      p95_latency_ms: 1.0         # 95th percentile (budget target)
-      p99_latency_ms: 2.0         # 99th percentile
-      max_latency_ms: 5.0         # Absolute maximum
-      error_rate_target: 0.0      # Zero errors acceptable
-
-  # Compliance & Standards - EXPANDED
-  compliance:
-    standards:
-      - "GDPR Article 32 (Encryption & Security of Personal Data)"
-      - "GDPR Article 25 (Data Protection by Design and Default)"
-      - "HIPAA 164.312(a)(2)(i) (Access Controls for PHI)"
-      - "HIPAA 164.308(a)(3) (Encryption and Decryption)"
-      - "PCI DSS 3.2.1 (Cardholder Data Protection - Must Redact)"
-      - "PCI DSS 6.5.10 (Broken Authentication - No Plaintext)"
-      - "CCPA Section 1798.100 (Consumer Right to Know)"
-      - "CCPA Section 1798.105 (Consumer Right to Delete)"
-      - "SOX 404 (Internal Controls and Financial Reporting)"
-      - "ISO 27001 A.10.1 (Cryptography Controls)"
-      - "NIST SP 800-53 AC-2 (Account Management)"
-      - "NIST SP 800-53 SC-7 (Boundary Protection)"
-
-    pii_types_covered: 12
-    pii_type_coverage_percentage: 85  # Regex covers 85% of common PII types
-    detection_confidence_threshold: 0.70
-
-    # Privacy impact assessment
-    pia_assessment:
-      likelihood_of_data_breach: "HIGH (without redaction)"
-      impact_of_data_breach: "CRITICAL (full identity theft)"
-      risk_level_without_redaction: "CRITICAL"
-      risk_mitigation: "Regex-based redaction + encryption vault"
-      residual_risk: "LOW (with full implementation)"
-
-    # Regulatory compliance mappings
-    regulatory_mappings:
-      gdpr:
-        - "Article 6: Lawful basis for processing (necessity for compliance)"
-        - "Article 9: Prohibition on processing special categories (except healthcare)"
-        - "Article 15: Right to access (audit trail required)"
-        - "Article 17: Right to erasure (vault soft-delete support)"
-        - "Article 25: Data protection by design (regex is built-in control)"
-        - "Article 32: Security of processing (encryption required)"
-        - "Article 33: Breach notification requirement (72 hours)"
-
-      hipaa:
-        - "164.102: Definitions (PHI = Protected Health Information)"
-        - "164.308(a)(1)(ii)(D): Audit controls (log all access)"
-        - "164.312(a)(2)(i): Encryption (AES-256 for PHI)"
-        - "164.512(e): Accounting of disclosures (track all access)"
-
-      pci_dss:
-        - "3.2.1: Don't store sensitive authentication data"
-        - "6.5.10: Broken authentication prevention"
-        - "8.2.3: Password strength (if used for redaction key)"
-        - "10.1: Maintain audit trail"
-        - "12.6.2: Document security policy"
-
-      ccpa:
-        - "1798.100: Consumer right to know (data access)"
-        - "1798.105: Consumer right to delete (data erasure)"
-        - "1798.115: Consumer right to correct (data accuracy)"
-        - "1798.120: Consumer right to portability (data export)"
-        - "1798.140: Opt-out of sale (consumer choice)"
-
-  # Implementation Requirements - EXPANDED
-  requirements:
-    runtime_languages:
-      - "Rust (recommended): regex crate, lazy_static, onnxruntime"
-      - "Python: re module, cached patterns, optional: regex library"
-      - "C++: std::regex, std::unordered_map, PCRE2 library"
-      - "Go: regexp package, sync.Mutex for thread safety"
-      - "JavaScript/Node.js: regex literals, RegExp constructor"
-
-    required_libraries:
-      rust:
-        - "regex = \"1.10\"  # PCRE2-compatible regex engine"
-        - "lazy_static = \"1.4\"  # Pattern initialization"
-        - "once_cell = \"1.19\"  # Thread-safe lazy evaluation"
-        - "serde = { version = \"1.0\", features = [\"derive\"] }"
-        - "serde_yaml = \"0.9\"  # YAML configuration parsing"
-
-      python:
-        - "re  # Standard library (precompile patterns)"
-        - "pyyaml  # YAML configuration loading"
-        - "pytest  # Unit testing"
-        - "onnxruntime  # For BERT-NER fallback integration"
-
-      cpp:
-        - "pcre2  # Perl Compatible Regular Expressions 2"
-        - "yaml-cpp  # YAML parsing"
-        - "gtest  # Google Test framework"
-
-    memory_footprint_bytes: 8192  # 8KB for compiled patterns
-    cache_size_max_entries: 1000  # LRU cache for matches
-
-    precompilation_required: true
-    hot_reload_support: true
-
-    system_requirements:
-      cpu_cores_minimum: 1
-      cpu_cores_recommended: 4
-      memory_minimum_mb: 256
-      memory_recommended_mb: 1024
-      storage_for_config_kb: 100
-      network_required: false
-      gpu_support: false
-      tpu_support: false
-
-  # Quality Metrics - EXPANDED TRACKING
-  quality_metrics:
-    # Accuracy metrics
-    recall_percentage: 85        # PII detection rate
-    precision_percentage: 100    # No false positives with validation
-    false_positive_rate: 0       # After validation
-    false_negative_rate: 15      # 15% of PII missed (handled by BERT-NER)
-    f1_score: 0.92               # Harmonic mean
-    accuracy_percentage: 92.5    # (TP + TN) / (TP + TN + FP + FN)
-
-    # Confidence distribution
-    confidence_distribution:
-      "0.95": "SSN, Email basic patterns - highly reliable"
-      "0.90": "Credit card, Email - reliable with validation"
-      "0.85": "Phone, IP address - reliable with format check"
-      "0.80": "IBAN - reliable with checksum validation"
-      "0.75": "Address, Health Insurance - moderate confidence"
-      "0.70": "Driver License, Passport - lower confidence (state-specific)"
-
-    # Per-pattern performance metrics
-    per_pattern_metrics:
-      ssn:
-        recall: 95
-        precision: 100
-        f1: 0.975
-        validation_success_rate: 99
-      email:
-        recall: 90
-        precision: 95
-        f1: 0.924
-        validation_success_rate: 99
-      phone:
-        recall: 85
-        precision: 95
-        f1: 0.899
-        validation_success_rate: 98
-      credit_card:
-        recall: 98
-        precision: 100
-        f1: 0.990
-        validation_success_rate: 100
-      address:
-        recall: 75
-        precision: 85
-        f1: 0.798
-        validation_success_rate: 95
-      ip_address:
-        recall: 99
-        precision: 98
-        f1: 0.985
-        validation_success_rate: 99
-      other_patterns:
-        recall_average: 70
-        precision_average: 90
-        f1_average: 0.789
-
-    # Operational metrics
-    operational_metrics:
-      false_positive_rate_per_1m_chars: 0.2  # 0.2 false positives per 1M characters
-      false_negative_rate_per_1m_chars: 150000  # 150K missed per 1M (from unstructured)"
-      pattern_match_time_p95_ms: 1.0
-      pattern_match_time_p99_ms: 2.0
-      cache_hit_rate_percentage: 75
-      memory_usage_typical_mb: 0.01
-      cpu_usage_typical_percent: 2.0
-
-    # Reliability metrics
-    reliability:
-      uptime_target_percentage: 99.99  # 4 nines
-      deployment_success_rate_percentage: 99.5
-      rollback_frequency_per_year: 0  # Never had rollback
-      security_incidents_per_year: 0
-
-  # Error Handling & Resilience - EXPANDED
-  error_handling:
-    invalid_regex_pattern:
-      action: "Log ERROR, skip pattern, emit Prometheus metric"
-      recovery: "Continue with remaining patterns"
-      alerting: "Trigger PagerDuty alert if >10% pattern errors"
-      fallback: "Use cached version from previous startup"
-
-    validation_failure:
-      action: "Skip detection, log reason, record in metrics"
-      examples:
-        - "SSN: 000-12-3456 matches regex but fails range check (skip)"
-        - "Email: missing_at@domain matches regex but fails RFC5322 (skip)"
-        - "Phone: random string matches but fails E.164 (skip)"
-      recovery: "BERT-NER will attempt detection on remaining unstructured"
-
-    performance_degradation:
-      action: "Log WARNING if overhead >1ms per pattern"
-      threshold: "2ms total across all patterns"
-      recovery: "Fallback to subset of high-confidence patterns"
-      alert: "Trigger monitoring alert for investigation"
-
-    regex_timeout:
-      timeout_ms: 100
-      action: "Abort pattern match, log timeout, continue next pattern"
-      recovery: "Disable problematic pattern for request"
-      fallback: "BERT-NER completes detection"
-      catastrophic_backtracking: "Use pattern timeout to prevent ReDoS attacks"
-
-    memory_exhaustion:
-      action: "Clear LRU cache, log warning"
-      recovery: "Continue pattern matching without caching"
-      alert: "Page on-call if memory >500MB"
-
-    false_positive_escalation:
-      threshold: ">1% false positive rate"
-      action: "Increase confidence threshold temporarily"
-      recovery: "Revert threshold after root cause fix"
-      example: "If address detection is 5% false positive, raise from 0.75→0.85 confidence"
-
-    cascading_failure:
-      scenario: "Pattern library corrupted on hot-reload"
-      action: "Revert to last known-good version"
-      recovery: "Emit alert, manual intervention required"
-      prevention: "Version control + smoke tests on reload"
-
-  # Testing Requirements - EXPANDED STRATEGY
-  testing:
-    # Unit tests
-    unit_tests:
-      test_each_pattern:
-        description: "Test each pattern with valid/invalid examples"
-        coverage: 100
-        examples_per_pattern: 20
-        total_test_vectors: 240  # 12 patterns × 20 examples
-        assertions_per_test: 3  # Match, confidence, placeholder
-
-      test_regex_compilation:
-        description: "Test regex compilation and caching"
-        coverage: 100
-        test_cases:
-          - "Compile all 12 patterns at startup"
-          - "Verify compiled regex cached (not recompiled)"
-          - "Verify pattern lookup time <100ns"
-
-      test_validation_functions:
-        description: "Test validation functions (Luhn, format checks)"
-        coverage: 100
-        validators_tested: 7  # SSN, Email, Phone, CC, IP, IBAN, Tax ID
-        test_cases_per_validator: 30
-
-      test_performance_benchmarks:
-        description: "Test performance against SLA targets"
-        coverage: 100
-        benchmarks:
-          - "Single pattern detection <1ms"
-          - "All 12 patterns <5ms"
-          - "Validation overhead <0.5ms total"
-          - "Memory footprint <10KB"
-
-      test_edge_cases:
-        description: "Test edge cases and boundary conditions"
-        test_cases:
-          - "Empty input string"
-          - "Null input (must be handled gracefully)"
-          - "Very long input (1MB text)"
-          - "Unicode characters (not in patterns)"
-          - "Overlapping matches (two patterns match same text)"
-          - "Adjacent matches (pattern1 end = pattern2 start)"
-
-    # Integration tests
-    integration_tests:
-      test_full_detection_pipeline:
-        description: "Test full detection pipeline with all 12 patterns"
-        test_input: "Large real-world text with mixed PII types"
-        assertions:
-          - "SSN detected correctly"
-          - "Email detected without false positives"
-          - "Phone number in correct format detected"
-          - "Credit card with Luhn validation"
-          - "Multiple PII types in single message"
-
-      test_deduplication:
-        description: "Test deduplication of overlapping matches"
-        scenario: "Two patterns match same text (e.g., phone number in address)"
-        expected_behavior: "Keep highest confidence match, discard duplicate"
-
-      test_performance_under_load:
-        description: "Test performance with high PII volume"
-        load_scenario: "1000+ PII values per request"
-        throughput_target: "1000 detections/second"
-        latency_target: "<2ms per detection"
-
-      test_integration_with_redactor:
-        description: "Test integration with redaction module"
-        flow: "Pattern detection → Validation → Placeholder replacement → Logging"
-        assertions:
-          - "Plaintext PII removed from output"
-          - "Placeholder inserted correctly"
-          - "Original PII stored in vault"
-          - "Audit log entry created"
-
-      test_integration_with_bert_ner:
-        description: "Test fallback to BERT-NER for missed PII"
-        scenario: "Unstructured names/addresses"
-        expected: "Regex misses 15%, BERT-NER detects (combined 95%)"
-
-    # Performance tests
-    performance_tests:
-      latency_benchmark:
-        benchmark_name: "Regex Pattern Detection Latency"
-        test_input: "10KB typical request"
-        pii_count: "5 PII values per request"
-        target_latency_ms: 2.0
-        measurement: "P95 latency across 1000 requests"
-
-      throughput_test:
-        benchmark_name: "Detection Throughput"
-        test_input: "100KB document"
-        pii_count: "50 PII values"
-        target_throughput: "1000 detections/second"
-        measurement: "Detections per second"
-
-      memory_profile:
-        benchmark_name: "Memory Usage"
-        baseline_memory_mb: 0.01
-        peak_memory_mb: 0.1
-        leak_detection: true
-
-      cache_efficiency:
-        benchmark_name: "LRU Cache Hit Rate"
-        cache_size_entries: 1000
-        target_hit_rate_percent: 75
-        measurement: "Hit rate across realistic workload"
-
-    # Security tests
-    security_tests:
-      test_redos_resistance:
-        description: "Test resistance to ReDoS (Regular Expression Denial of Service)"
-        attack_vector: "Malicious input with catastrophic backtracking"
-        mitigation: "Timeout <100ms per pattern"
-        assertions:
-          - "No timeout exceptions thrown"
-          - "Graceful degradation on timeout"
-
-      test_injection_resistance:
-        description: "Test resistance to pattern injection attacks"
-        attack_vector: "User-provided pattern (if supported)"
-        expected_behavior: "Reject non-whitelisted patterns"
-
-      test_information_disclosure:
-        description: "Test that error messages don't leak PII"
-        error_scenarios:
-          - "Regex timeout"
-          - "Memory exhaustion"
-          - "Invalid pattern"
-        assertions:
-          - "Error logs don't contain detected PII values"
-          - "Debug output sanitized"
-
-    # Coverage targets
-    coverage_target_percentage: 95
-    critical_path_coverage_percentage: 100
-
-    # CI/CD integration
-    ci_cd_integration:
-      test_framework: "pytest (Python), cargo test (Rust), gtest (C++)"
-      test_frequency: "On every commit"
-      performance_regression_detection: true
-      memory_leak_detection: true
-      code_coverage_reporting: true
-      quality_gates:
-        - "Coverage >= 95%"
-        - "Latency P95 < 2ms"
-        - "Zero security issues"
-        - "Zero performance regressions"
-
-  # Dependencies & Integration - EXPANDED
-  dependencies:
-    requires:
-      - "YAML configuration parser (serde_yaml, pyyaml)"
-      - "Pattern validation module (validators.rs)"
-      - "Performance monitoring (Prometheus client)"
-      - "Logging framework (slog, tracing, log4j)"
-      - "SessionState module (for redaction storage)"
-      - "K0 database (for audit trail)"
-      - "Encryption module (for vault storage)"
-
-    depends_on_adrs:
-      - "ADR-0035: PII Detection & Redaction (parent)"
-      - "ADR-0035b: BERT-NER (for fallback)"
-      - "ADR-0035c: Encrypted Vault (for storage)"
-      - "ADR-0035d: Audit Trail (for logging)"
-
-    conflicts:
-      - "No regex caching library (must use pattern precompilation)"
-      - "No real-time regex updates (patterns loaded at startup)"
-
-    optional_integrations:
-      - "ConfigManager (for YAML hot-reload)"
-      - "GeoIP database (for IP location detection)"
-      - "Insurance company database (for health insurance validation)"
-      - "IRS EIN database (for tax ID verification)"
-
-  # Metrics & Observability - EXPANDED
-  observability:
-    prometheus_metrics:
-      - "pii_detected_total{pattern_name}  # Total detections per pattern"
-      - "pii_validation_failures{validator}  # Validation failures per validator"
-      - "regex_match_latency_ms{pattern_name}  # Latency per pattern"
-      - "regex_cache_hit_rate  # Cache efficiency"
-      - "pii_false_positive_rate  # False positive tracking"
-      - "pattern_compilation_time_ms  # Startup overhead"
-
-    logging_events:
-      - "Pattern compilation started/completed"
-      - "PII detection for each type (debug level)"
-      - "Validation failures (info level)"
-      - "Performance degradation (warning level)"
-      - "Errors (error level)"
-
-    trace_context:
-      - "trace_id: Cognitive trace ID from request"
-      - "span_name: regex_detect_patterns, validate_pii"
-      - "span_attributes: pattern_name, confidence, latency_ms"
-
-    alerting_thresholds:
-      - "Latency P95 > 2ms"
-      - "False positive rate > 1%"
-      - "Memory usage > 500MB"
-      - "Pattern compilation failures > 0"
-      - "Cache hit rate < 50%"
-
-  # Version & Maintenance - EXPANDED
-  versioning:
-    semantic_versioning: "MAJOR.MINOR.PATCH"
-    current_version: "2.0.0"
-
-    version_history:
-      "1.0.0": "Initial 12-pattern library (2023-06-01)"
-      "1.1.0": "Added IBAN checksum validation (2023-08-15)"
-      "1.2.0": "Added TAX_ID pattern (2023-10-01)"
-      "2.0.0": "Expanded documentation, performance benchmarks (2025-10-16)"
-
-    breaking_changes_policy:
-      - "Major version bump for pattern removals"
-      - "Minor version bump for new patterns"
-      - "Patch version bump for validator improvements"
-      - "Deprecation: 6-month notice before removal"
-
-    maintenance_schedule:
-      - "Pattern review: Quarterly"
-      - "Performance benchmark: Monthly"
-      - "Security audit: Annually"
-      - "Compliance update: As-needed"
-
-    support_matrix:
-      rust_version: "1.70+"
-      python_version: "3.8+"
-      cpp_version: "17+"
-      node_version: "16+"
-
-  # Deployment & Operations
-  deployment:
-    deployment_strategy: "Blue-green with canary testing"
-    rollback_procedure: "Revert to previous pattern version"
-    configuration_management: "YAML config with version control"
-    monitoring_period_hours: 24  # Monitor for 24 hours post-deployment
-
-    deployment_checklist:
-      - "All tests pass (coverage >= 95%)"
-      - "Performance benchmarks within SLA"
-      - "Canary deployment to 5% traffic"
-      - "Monitor error rate and latency"
-      - "Gradual rollout to 100%"
-      - "Post-deployment monitoring 24 hours"
-
-  # Notes - EXPANDED IMPLEMENTATION GUIDANCE
-  notes: |
-    ================================================================================================
-    IMPLEMENTATION NOTES & BEST PRACTICES
-    ================================================================================================
-
-    PRECOMPILATION STRATEGY:
-    - Compile all 12 regex patterns at startup (not runtime)
-    - Use lazy_static (Rust) or once_cell for thread-safe, zero-cost initialization
-    - Pattern lookup via HashMap: O(1) average time complexity
-    - Store in static memory: Shared across all requests (no per-request recompilation)
-    - Memory cost: ~8KB for 12 precompiled patterns (negligible)
-
-    VALIDATION FUNCTIONS:
-    - Each pattern has optional validator function for post-match validation
-    - Validators reduce false positives to 0% (100% precision with validation)
-    - Luhn algorithm for credit cards: Essential (catches typos, wrong card numbers)
-    - SSN validation: Range checks (001-899 area code, 01-99 group, 0001-9999 serial)
-    - Email validation: RFC 5322 compliance check
-    - IBAN validation: Mod97 checksum algorithm (ISO 13616)
-    - Tax ID validation: Format check (02-7 digits, area 01-92, serial 1-9999999)
-
-    CONFIDENCE SCORING:
-    - Base confidence per pattern (0.70-0.95 range)
-    - Adjusted after validation (increase if validation passes)
-    - Configurable threshold (default: 0.70, can be tuned per deployment)
-    - Higher threshold = Lower false positives, Higher false negatives
-    - Trade-off: Precision vs Recall based on operational requirements
-
-    YAML CONFIGURATION:
-    - Pattern registry stored in YAML (pii_patterns.yml)
-    - Hot-reload support: Update patterns without code changes
-    - Version control: Track pattern changes in Git
-    - Rollback: Previous versions available in Git history
-    - Validation: Schema validation on load (fail fast if invalid)
-
-    PERFORMANCE OPTIMIZATION:
-    - Early exit: Stop searching once high-confidence match found
-    - Batch processing: Scan text once for all patterns (not 12 separate scans)
-    - Regex optimization: Use non-capturing groups, limit backtracking
-    - SIMD acceleration: For simple byte-matching patterns (platform-specific)
-    - Parallel processing: Multi-threaded pattern matching for large documents
-    - Cache results: LRU cache for common text patterns
-
-    INTERNATIONAL SUPPORT:
-    - Phase 1 (Current): US-centric patterns (SSN, US address, US phone)
-    - Phase 2 (Upcoming): International patterns (UK NHS, Canada SIN, EU VAT)
-    - Country codes: Extend IBAN, PASSPORT, DRIVER_LICENSE with country variants
-    - Unicode support: Handle non-ASCII characters (Phase 2)
-    - Localization: Translate placeholder text per locale
-
-    TESTING STRATEGY:
-    - Unit tests: 240+ test vectors (20 per pattern)
-    - Integration tests: Full pipeline with BERT-NER fallback
-    - Performance tests: Latency benchmarks, throughput targets
-    - Security tests: ReDoS resistance, information disclosure
-    - Canary deployment: 5% traffic for 24 hours before full rollout
-
-    MONITORING & OBSERVABILITY:
-    - Prometheus metrics: Detection counts, latency, cache hit rate, false positives
-    - OpenTelemetry traces: Span per pattern, latency breakdown
-    - Structured logging: JSON logs with trace_id, pattern_name, confidence
-    - Alerts: Latency >2ms, false positive rate >1%, memory >500MB
-    - Dashboards: Pattern distribution, detection trends, SLA compliance
-
-    COMPLIANCE INTEGRATION:
-    - GDPR: Regex is data minimization control (no plaintext PII stored)
-    - HIPAA: PHI detection required for compliance audit
-    - PCI DSS: Credit card detection mandatory (prevents plaintext storage)
-    - SOX: Audit trail of all detections (compliance reporting)
-    - CCPA: User right to access implemented (audit log accessible)
-
-    COMMON PITFALLS (AVOID):
-    1. Not precompiling regex patterns (causes runtime overhead)
-    2. Insufficient validation (leads to false positives)
-    3. Too-broad patterns (matches non-PII text like version numbers)
-    4. Ignoring performance budget (latency creep over time)
-    5. Skipping edge cases in testing (bugs in production)
-    6. Not monitoring false positive rate (compliance drift)
-    7. Hardcoding patterns (can't update without code changes)
-    8. Ignoring international formats (only works in US)
-    9. Not handling timeouts (ReDoS attacks cause service slowdown)
-    10. Insufficient logging (hard to debug in production)
-
-    RECOMMENDED DEPLOYMENT SIZE:
-    - Minimum: 1 instance (single-core, 256MB memory)
-    - Typical: 4 instances (quad-core, 1GB memory each)
-    - High-volume: 16+ instances (parallel processing)
-    - Throughput: 1000+ detections/second per instance
-    - Total: Can process 12,000+ PII detections/day at scale
-
-    NEXT STEPS:
-    1. Implement pattern registry (YAML parsing, precompilation)
-    2. Add validation functions (Luhn, format checks)
-    3. Integrate with SessionState (redaction storage)
-    4. Add to K0 audit trail (compliance logging)
-    5. Test with BERT-NER fallback (hybrid detection)
-    6. Performance benchmark against SLAs
-    7. Deploy canary (5% traffic, 24 hours monitoring)
-    8. Full production rollout
-    9. Monitor metrics, adjust thresholds as needed
-    10. Plan Phase 2 international support
+  name: regex_pattern_registry
+  version: "1.0.0"
+  source_adr: "0035a-regex-pattern-library.md"
+  epic: "2.9"
+  issue: "2.9.1"
+
+patterns:
+  ssn:
+    name: "Social Security Number"
+    regex: '\b\d{3}-\d{2}-\d{4}\b'
+    placeholder: "[SSN]"
+    pii_type: "SSN"
+    confidence: 0.95
+    requires_validation: true
+    validator: "ssn_validator"
+    description: "US Social Security Number (XXX-XX-XXXX format)"
+    examples:
+      - "123-45-6789"
+      - "987-65-4321"
+
+  email:
+    name: "Email Address"
+    regex: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    placeholder: "[EMAIL]"
+    pii_type: "EMAIL"
+    confidence: 0.98
+    requires_validation: true
+    validator: "email_validator"
+    description: "Email address (RFC 5322 compliant)"
+    examples:
+      - "user@example.com"
+      - "john.doe+tag@company.co.uk"
+
+  phone_us:
+    name: "US Phone Number"
+    regex: '\b(\+1[-.\s]?)?(\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b'
+    placeholder: "[PHONE]"
+    pii_type: "PHONE"
+    confidence: 0.92
+    requires_validation: true
+    validator: "phone_validator"
+    description: "US phone number (various formats)"
+    examples:
+      - "+1-555-123-4567"
+      - "(555) 123-4567"
+      - "555-123-4567"
+
+  credit_card:
+    name: "Credit Card Number"
+    regex: '\b(?:\d{4}[-\s]?){3}\d{4}\b'
+    placeholder: "[CREDIT_CARD]"
+    pii_type: "CREDIT_CARD"
+    confidence: 0.90
+    requires_validation: true
+    validator: "luhn_validator"
+    description: "Credit card number (Visa, MasterCard, Amex, Discover)"
+    examples:
+      - "4532-1234-5678-9010"
+      - "5425 2334 3010 9903"
+      - "378282246310005"
+
+  street_address:
+    name: "Street Address"
+    regex: '\b\d+\s+[A-Za-z0-9\s,]+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Circle|Cir)\b'
+    placeholder: "[ADDRESS]"
+    pii_type: "ADDRESS"
+    confidence: 0.85
+    requires_validation: false
+    description: "US street address with number and street type"
+    examples:
+      - "123 Main Street"
+      - "456 Oak Avenue"
+      - "789 Elm Rd"
+
+  ipv4_address:
+    name: "IPv4 Address"
+    regex: '\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b'
+    placeholder: "[IP_ADDRESS]"
+    pii_type: "IP_ADDRESS"
+    confidence: 0.99
+    requires_validation: false
+    description: "IPv4 address"
+    examples:
+      - "192.168.1.1"
+      - "10.0.0.1"
+      - "172.16.254.1"
+
+  drivers_license:
+    name: "US Driver's License"
+    regex: '\b[A-Z]{1,2}\d{5,8}\b'
+    placeholder: "[DRIVERS_LICENSE]"
+    pii_type: "DRIVERS_LICENSE"
+    confidence: 0.75
+    requires_validation: false
+    description: "US driver's license (varies by state, common patterns)"
+    examples:
+      - "CA12345678"
+      - "NY1234567"
+      - "TX12345678"
+
+  passport:
+    name: "US Passport Number"
+    regex: '\b[A-Z]{1,2}\d{6,9}\b'
+    placeholder: "[PASSPORT]"
+    pii_type: "PASSPORT"
+    confidence: 0.80
+    requires_validation: false
+    description: "US passport number"
+    examples:
+      - "A12345678"
+      - "AB1234567"
+
+  iban:
+    name: "IBAN (International Bank Account Number)"
+    regex: '\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b'
+    placeholder: "[IBAN]"
+    pii_type: "IBAN"
+    confidence: 0.95
+    requires_validation: true
+    validator: "iban_validator"
+    description: "International Bank Account Number (European standard)"
+    examples:
+      - "GB82WEST12345698765432"
+      - "DE89370400440532013000"
+
+  mac_address:
+    name: "MAC Address"
+    regex: '\b([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})\b'
+    placeholder: "[MAC_ADDRESS]"
+    pii_type: "MAC_ADDRESS"
+    confidence: 0.98
+    requires_validation: false
+    description: "Network MAC address"
+    examples:
+      - "00:1A:2B:3C:4D:5E"
+      - "00-1A-2B-3C-4D-5E"
+
+  health_insurance:
+    name: "Health Insurance Number"
+    regex: '\b[A-Z]{3}\d{9}\b'
+    placeholder: "[HEALTH_INSURANCE]"
+    pii_type: "HEALTH_INSURANCE"
+    confidence: 0.85
+    requires_validation: false
+    description: "US health insurance number (common format)"
+    examples:
+      - "ABC123456789"
+
+  tax_id:
+    name: "US Tax ID (EIN)"
+    regex: '\b\d{2}-\d{7}\b'
+    placeholder: "[TAX_ID]"
+    pii_type: "TAX_ID"
+    confidence: 0.92
+    requires_validation: false
+    description: "US Employer Identification Number (EIN)"
+    examples:
+      - "12-3456789"
+      - "98-7654321"
+
+implementation:
+  language: "Rust"
+  precompilation: "lazy_static or once_cell"
+  initialization: "startup"
+  hot_reload: true
+
+performance_targets:
+  latency_per_pattern: "<1ms"
+  total_detection_overhead: "<5ms"
+  precompilation_time: "<50ms"
+
+accuracy_targets:
+  recall: "85%"  # 10,200/12,000 structured PII detections
+  precision: "100%"  # 0 false positives with validation
+  false_positive_rate: "0%"
+
+observability:
+  metrics:
+    - name: "pii_regex_detections_total"
+      type: "counter"
+      labels: ["pii_type", "validated"]
+    - name: "pii_regex_latency_ms"
+      type: "histogram"
+      labels: ["pii_type"]
+    - name: "pii_regex_validation_failures_total"
+      type: "counter"
+      labels: ["pii_type", "reason"]
+
+testing:
+  unit_tests:
+    - test_ssn_pattern_matches
+    - test_email_pattern_matches
+    - test_credit_card_pattern_matches
+    - test_phone_pattern_matches
+    - test_address_pattern_matches
+    - test_all_patterns_no_false_positives
+
+  integration_tests:
+    - test_batch_processing_single_pass
+    - test_hot_reload_pattern_update
+    - test_precompilation_at_startup

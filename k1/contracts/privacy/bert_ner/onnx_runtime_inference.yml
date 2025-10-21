@@ -1,727 +1,458 @@
-# Contract: ONNX Runtime Inference & INT8 Quantization
-# Purpose: Define ONNX export, INT8 quantization, and <5ms inference for BERT-NER
-# Source: ADR-0035b - ML-based NER
-# Status: Production-Ready | Last Updated: 2025-10-14
+# ONNX Runtime Inference Contract
+# Source ADR: 0035b-ml-based-ner.md
+# Epic 2.9, Issue 2.9.2
+# Purpose: Define ONNX Runtime integration for BERT-NER inference with quantization support
 
 contract:
-  id: "C_PRIVACY_ONNX_INFERENCE_008"
-  name: "ONNX Runtime Inference & INT8 Quantization"
+  name: onnx_runtime_inference
   version: "1.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
-
-  design:
-    export_format: "ONNX (Open Neural Network Exchange) - Format 14"
-    inference_engine: "ONNX Runtime (Microsoft, v1.16+)"
-    quantization_method: "INT8 (per-channel, asymmetric linear)"
-    quantization_overhead: "<1% accuracy loss (F1-score 0.928 → 0.925)"
-    speedup_factor: 4.0
-
-    onnx_philosophy: |
-      ONNX enables inference across platforms without framework lock-in.
-      Supports PyTorch models exported to hardware-agnostic IR (Intermediate Representation).
-      INT8 quantization trades minimal accuracy for 4× speed and 4× smaller model.
-
-  performance_targets:
-    fp32_model_latency_ms: 20.0
-    int8_model_latency_ms: 5.0
-    latency_reduction_pct: 75
-    memory_reduction_pct: 75
-    model_size_mb_fp32: 440
-    model_size_mb_int8: 110
-
-    latency_breakdown_int8:
-      tokenization_ms: 0.2
-      onnx_inference_ms: 4.5
-      post_processing_ms: 0.3
-      total_ms: 5.0
-
-    latency_percentiles:
-      p50_ms: 4.8
-      p95_ms: 5.2
-      p99_ms: 5.4
-      max_ms: 6.0
-
-    accuracy_preservation:
-      f1_score_fp32: 0.928
-      f1_score_int8: 0.925
-      f1_loss_pct: 0.32
-      recall_fp32: 95.0
-      recall_int8: 94.8
-      precision_fp32: 99.0
-      precision_int8: 99.0
-
-  onnx_export_procedure:
-    step_1_preparation:
-      requirement: "Load fine-tuned BERT-NER model (from bert_base_model.yml)"
-      validation: "Verify F1-score ≥ 0.928 on test set"
-      input_model: "PyTorch checkpoint (bert-ner-model/pytorch_model.bin)"
-      framework: "Hugging Face Transformers library"
-
-    step_2_dynamic_shape_configuration:
-      concept: |
-        ONNX models can have fixed or dynamic shapes. Dynamic shapes allow single model
-        to process variable-length sequences (important for variable-length text).
-
-      input_ids_shape: "[batch_size, sequence_length]"
-      attention_mask_shape: "[batch_size, sequence_length]"
-      logits_output_shape: "[batch_size, sequence_length, 9_entity_classes]"
-
-      dynamic_axes_configuration:
-        batch_dimension: 0
-        sequence_dimension: 1
-
-      rationale: |
-        - Batch dimension dynamic: Process 1 or 32 samples in single inference
-        - Sequence length dynamic: Handle short (10 tokens) to long (512 tokens) sequences
-        - Output shape derived: Determined by input shapes
-
-    step_3_export_configuration:
-      opset_version: 14
-      opset_rationale: "Version 14 (2021) supports BERT operations with good performance"
-
-      export_parameters:
-        do_constant_folding: true
-        use_external_data_format: false
-        input_names: ["input_ids", "attention_mask", "token_type_ids"]
-        output_names: ["logits"]
-        verbose: false
-
-      op_type_mapping:
-        embedding: "Embedding (WordPiece lookup)"
-        attention: "MultiHeadAttention (fused for speed)"
-        linear: "Gemm (Matrix multiply)"
-        softmax: "Softmax (entity classification)"
-
-    step_4_export_code:
-      language: "Python"
-      code_example: |
-        import torch
-        from transformers import BertForTokenClassification, AutoTokenizer
-
-        # Load fine-tuned model
-        model = BertForTokenClassification.from_pretrained("./bert-ner-model")
-        model.eval()
-
-        # Create dummy inputs for shape inference
-        dummy_input_ids = torch.ones((1, 128), dtype=torch.int64)
-        dummy_attention_mask = torch.ones((1, 128), dtype=torch.int64)
-        dummy_token_type_ids = torch.zeros((1, 128), dtype=torch.int64)
-
-        # Export to ONNX
-        torch.onnx.export(
-            model,
-            (dummy_input_ids, dummy_attention_mask, dummy_token_type_ids),
-            "bert-ner-model.onnx",
-            input_names=["input_ids", "attention_mask", "token_type_ids"],
-            output_names=["logits"],
-            dynamic_axes={
-                "input_ids": {0: "batch_size", 1: "sequence_length"},
-                "attention_mask": {0: "batch_size", 1: "sequence_length"},
-                "token_type_ids": {0: "batch_size", 1: "sequence_length"},
-                "logits": {0: "batch_size", 1: "sequence_length"},
-            },
-            opset_version=14,
-            do_constant_folding=True,
-            verbose=False,
-        )
-
-        print("✓ Model exported to bert-ner-model.onnx (440 MB)")
-
-    step_5_onnx_validation:
-      procedure: "Check ONNX model is valid and runnable"
-      code_example: |
-        import onnx
-        import onnxruntime
-
-        # Load and check ONNX model syntax
-        onnx_model = onnx.load("bert-ner-model.onnx")
-        onnx.checker.check_model(onnx_model)
-        print("✓ ONNX model is valid")
-
-        # Load with ONNX Runtime
-        session = onnxruntime.InferenceSession("bert-ner-model.onnx")
-        print(f"✓ Model loaded: {len(session.get_inputs())} inputs, {len(session.get_outputs())} outputs")
-
-        # Test inference on small sample
-        test_input = {
-            "input_ids": np.ones((1, 50), dtype=np.int64),
-            "attention_mask": np.ones((1, 50), dtype=np.int64),
-            "token_type_ids": np.zeros((1, 50), dtype=np.int64),
-        }
-        outputs = session.run(None, test_input)
-        print(f"✓ Inference successful: output shape {outputs[0].shape}")
-
-      validation_checklist:
-        - "Model loads without errors"
-        - "Input/output shapes correct"
-        - "Inference runs end-to-end"
-        - "Output has correct number of classes (9)"
-
-  int8_quantization_procedure:
-    quantization_overview: |
-      INT8 quantization converts FP32 (32-bit floating point) weights to INT8 (8-bit integers).
-
-      Benefits:
-        - Model size: 440 MB → 110 MB (4× reduction)
-        - Inference speed: 20 ms → 5 ms (4× speedup)
-        - Memory bandwidth: 4× less data to load
-        - CPU cache efficiency: 4× more weights in L1/L2 cache
-
-      Accuracy trade-off:
-        - Range loss: FP32 covers [-3.4e38, 3.4e38], INT8 covers [-128, 127]
-        - Precision loss: FP32 has ~7 decimal digits, INT8 has ~2.1 digits
-        - Production impact: <1% F1-score loss (0.928 → 0.925)
-
-    step_1_calibration_dataset:
-      purpose: |
-        Quantization requires calibration - sampling representative data to determine
-        scaling factors for each weight tensor. Good calibration minimizes accuracy loss.
-
-      dataset_requirements:
-        size: "1000-2000 representative examples"
-        source_options:
-          option_1: "Validation set from CoNLL-2003 (3466 sentences)"
-          option_2: "Production PII corpus (500K tokens from K1 deployments)"
-          option_3: "Mix of both (800 + 200)"
-
-      dataset_characteristics:
-        entity_distribution: "Match production distribution (40% PERSON, 35% ORG, 20% LOCATION, 5% MISC)"
-        text_length: "Mix of short (10 tokens) and long (200 tokens) sequences"
-        language: "English text (calibration corpus)"
-        pii_concentration: "Match production (high PII density)"
-
-      calibration_procedure_code: |
-        import onnx
-        import numpy as np
-        from onnxruntime.quantization import quantize_static, QuantType
-
-        # Load calibration data
-        calibration_texts = load_calibration_corpus("production_pii_corpus.txt")
-
-        # Prepare calibration data in ONNX format
-        def calibration_data_generator():
-            tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-            for text_batch in batch_texts(calibration_texts, batch_size=16):
-                encoding = tokenizer(
-                    text_batch,
-                    max_length=512,
-                    padding="max_length",
-                    truncation=True,
-                    return_tensors="np"
-                )
-                yield {
-                    "input_ids": encoding["input_ids"].astype(np.int64),
-                    "attention_mask": encoding["attention_mask"].astype(np.int64),
-                    "token_type_ids": encoding["token_type_ids"].astype(np.int64),
-                }
-
-        print("✓ Calibration dataset prepared (1000 examples)")
-
-    step_2_quantization_technique:
-      approach: "Static INT8 quantization (post-training)"
-      granularity: "Per-channel quantization (vs per-tensor)"
-      symmetry: "Asymmetric quantization (vs symmetric)"
-
-      technique_details:
-        per_channel_advantage: |
-          Each weight tensor has independent min/max range. More accurate than per-tensor
-          because different channels may have different value distributions.
-          Example: Channel 1 weights [-0.5, 0.5], Channel 2 weights [-3.0, 3.0]
-          Per-channel: Scale each independently for better precision.
-
-        asymmetric_advantage: |
-          INT8 range is [-128, 127]. Asymmetric quantization can shift zero point.
-          Example: If weights range [-0.1, 0.8], asymmetric maps to [-20, 182]
-          Better utilization of INT8 range vs symmetric mapping to [-100, 100].
-
-      quantization_formula: |
-        int8_value = round((fp32_value - zero_point) / scale)
-        fp32_value = (int8_value * scale) + zero_point
-        where:
-          scale: Computed from FP32 min/max for each channel
-          zero_point: Offset to align zero values
-
-    step_3_quantization_execution:
-      code_example: |
-        from onnxruntime.quantization import quantize_static, QuantType, QuantFormat
-
-        # Static quantization (requires calibration)
-        quantize_static(
-            "bert-ner-model.onnx",                          # Input ONNX model
-            "bert-ner-model-int8.onnx",                     # Output quantized model
-            calibration_data_generator(),                   # Calibration data
-            quant_format=QuantFormat.QDQ,                   # Quantize-Dequantize format
-            per_channel=True,                               # Per-channel quantization
-            weight_type=QuantType.QInt8,                    # INT8 weights
-            optimize_model=True,                            # Fuse ops after quantization
-        )
-
-        print("✓ Model quantized: bert-ner-model-int8.onnx (110 MB)")
-
-    step_4_quantization_validation:
-      procedure: "Verify quantized model accuracy vs original"
-
-      validation_code: |
-        import onnxruntime as ort
-        from sklearn.metrics import f1_score
-
-        # Load original and quantized models
-        session_fp32 = ort.InferenceSession("bert-ner-model.onnx")
-        session_int8 = ort.InferenceSession("bert-ner-model-int8.onnx")
-
-        # Run inference on test set
-        test_set = load_test_set("conll2003_test.txt")
-        all_preds_fp32, all_preds_int8, all_labels = [], [], []
-
-        for text, true_labels in test_set:
-            encoding = tokenizer(text, ...)
-
-            # FP32 inference
-            logits_fp32 = session_fp32.run(None, encoding)[0]
-            preds_fp32 = np.argmax(logits_fp32, axis=-1)
-
-            # INT8 inference
-            logits_int8 = session_int8.run(None, encoding)[0]
-            preds_int8 = np.argmax(logits_int8, axis=-1)
-
-            all_preds_fp32.append(preds_fp32)
-            all_preds_int8.append(preds_int8)
-            all_labels.append(true_labels)
-
-        # Calculate F1 scores
-        f1_fp32 = f1_score(all_labels, all_preds_fp32, average="weighted")
-        f1_int8 = f1_score(all_labels, all_preds_int8, average="weighted")
-
-        print(f"FP32 F1-Score: {f1_fp32:.4f}")
-        print(f"INT8 F1-Score: {f1_int8:.4f}")
-        print(f"F1 Loss: {(1 - f1_int8/f1_fp32) * 100:.2f}%")
-
-        # Acceptance criteria
-        assert f1_int8 >= 0.925, "F1-score loss exceeds 0.5%"
-        print("✓ Quantization validation passed")
-
-      validation_metrics:
-        f1_score_fp32: 0.928
-        f1_score_int8_target: ">= 0.925 (0.5% loss acceptable)"
-        recall_fp32: 95.0
-        recall_int8_target: ">= 94.5 (0.5% loss acceptable)"
-        precision_fp32: 99.0
-        precision_int8_target: ">= 98.5 (0.5% loss acceptable)"
-
-  inference_engine_onnx_runtime:
-    overview: "ONNX Runtime - Open-source inference engine by Microsoft"
-
-    platform_support:
-      cpu:
-        os: ["Linux", "Windows", "macOS"]
-        cpu_types: ["x86_64", "ARM64", "ARM32"]
-        description: "CPU inference on any platform"
-
-      gpu:
-        cuda: "NVIDIA CUDA 11.x"
-        tensorrt: "NVIDIA TensorRT (optional GPU optimization)"
-        description: "GPU inference on NVIDIA hardware"
-
-      npu:
-        qnn: "Qualcomm Hexagon NPU (mobile)"
-        nnapi: "Android NNAPI"
-        description: "Neural processing unit on mobile"
-
-    supported_backends:
-      default_cpu: "ONNX Runtime CPU backend (ACL, OpenVINO)"
-      gpu_cuda: "NVIDIA CUDA backend with TensorRT"
-      mobile: "Qualcomm NPU or ARM CPU"
-      server: "Multi-core CPU with thread pooling"
-
-    onnx_runtime_benefits:
-      portability: "Single ONNX file runs on CPU, GPU, mobile without modification"
-      performance: "Optimized kernels for each platform (vendor-specific optimizations)"
-      framework_agnostic: "Train in PyTorch, export to ONNX, infer anywhere"
-      latency_optimization: "Graph-level optimizations (operator fusion)"
-      inference_optimization: "Inference-time optimizations (quantization, pruning)"
-
-    runtime_configuration:
-      session_creation: |
-        import onnxruntime as ort
-
-        # Create inference session with CPU provider
-        session_options = ort.SessionOptions()
-        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-        session = ort.InferenceSession(
-            "bert-ner-model-int8.onnx",
-            sess_options=session_options,
-            providers=["CPUExecutionProvider"]  # Specify CPU provider
-        )
-
-      multi_instance_deployment:
-        instances: 4
-        rationale: "4 parallel ONNX Runtime instances (1 per CPU core on typical server)"
-        threading_model: "Each instance has independent session (thread-safe)"
-        load_balancing: "Round-robin routing of inference requests"
-
-  inference_implementation_rust:
-    language: "Rust (production language for K1)"
-
-    rust_crates:
-      ort_crate: "ort (ONNX Runtime Rust bindings)"
-      version: "1.16.0+"
-      installation: "ort = { version = \"1.16\", features = [\"download-binaries\"] }"
-
-    inference_code_structure:
-      module_1_model_loading: |
-        use ort::{Session, inputs};
-        use std::path::Path;
-
-        pub struct BertNerModel {
-            session: Session<'static>,
-            vocab_size: usize,
-            num_classes: usize,
+  source_adr: "0035b-ml-based-ner.md"
+  epic: "2.9"
+  issue: "2.9.2"
+
+onnx_runtime:
+  version: ">=1.16.0"
+  installation:
+    rust_crate: "onnxruntime = \"1.16\""
+    features: ["default"]  # CPU support, optional: ["cuda", "tensorrt"] for GPU
+
+  providers:
+    cpu:
+      name: "CPUExecutionProvider"
+      enabled: true
+      default: true
+      optimization_level: "GraphOptimizationLevel::Level3"
+      description: "CPU inference with AVX2/AVX512 acceleration"
+
+    cuda:
+      name: "CUDAExecutionProvider"
+      enabled: false  # Optional for GPU acceleration
+      default: false
+      requirements: "CUDA 11.x or 12.x, cuDNN 8.x"
+      description: "NVIDIA GPU inference"
+
+    tensorrt:
+      name: "TensorRTExecutionProvider"
+      enabled: false  # Optional for maximum GPU performance
+      default: false
+      requirements: "TensorRT 8.x"
+      description: "NVIDIA TensorRT optimized inference"
+
+inference_session:
+  initialization:
+    environment:
+      class: "Environment"
+      logging_level: "Warning"
+      thread_pool_size: 4
+
+    session_options:
+      optimization_level: "GraphOptimizationLevel::Level3"
+      enable_profiling: false
+      enable_cpu_mem_arena: true
+      enable_mem_pattern: true
+      execution_mode: "ExecutionMode::Sequential"
+      inter_op_num_threads: 4
+      intra_op_num_threads: 4
+
+    model_loading:
+      method: "from_file"
+      path: "models/bert-ner-model-int8.onnx"
+      latency: "<500ms"
+      memory: "~110MB (INT8 model)"
+
+  configuration:
+    graph_optimization:
+      level: "Level3"
+      transformations:
+        - "Constant folding"
+        - "Redundant node elimination"
+        - "Common subexpression elimination"
+        - "Layout transformation"
+        - "Operator fusion"
+
+    memory_optimization:
+      enable_memory_pattern: true
+      enable_cpu_mem_arena: true
+      description: "Reuse memory allocations across inference calls"
+
+    execution_mode:
+      mode: "Sequential"
+      description: "Execute operators sequentially (vs parallel for multi-model)"
+
+input_preparation:
+  tokenization:
+    library: "tokenizers (Hugging Face)"
+    rust_crate: "tokenizers = \"0.19\""
+    tokenizer_file: "models/tokenizer.json"
+
+  input_tensors:
+    input_ids:
+      name: "input_ids"
+      dtype: "int64"
+      shape: "[batch_size, sequence_length]"
+      description: "Token IDs from BERT vocabulary"
+      example_shape: "[1, 128]"
+
+    attention_mask:
+      name: "attention_mask"
+      dtype: "int64"
+      shape: "[batch_size, sequence_length]"
+      description: "Mask indicating real tokens (1) vs padding (0)"
+      example_shape: "[1, 128]"
+
+  tensor_creation:
+    library: "ndarray"
+    rust_crate: "ndarray = \"0.15\""
+    method: "Array2::from_shape_vec"
+    conversion: "OrtOwnedTensor::from(array)"
+
+inference_execution:
+  run_inference:
+    method: "session.run(inputs)"
+    inputs: "Vec<OrtOwnedTensor>"
+    outputs: "Vec<OrtOwnedTensor>"
+    latency:
+      fp32_model: "~5ms"
+      int8_model: "~1.25ms (4× faster)"
+
+  output_extraction:
+    output_tensor:
+      name: "logits"
+      dtype: "float32"
+      shape: "[batch_size, sequence_length, num_labels]"
+      description: "Raw logits for each token and label"
+
+    extraction_method:
+      code: "outputs[0].try_extract::<f32, _>()"
+      returns: "OrtOwnedTensor<f32, IxDyn>"
+      view: "tensor.view()"
+
+post_processing:
+  label_prediction:
+    method: "Argmax over num_labels dimension"
+    description: "For each token, select label with highest logit"
+    algorithm: |
+      for token_logits in logits_view.axis_iter(Axis(1)):
+          (label_id, confidence) = token_logits
+              .iter()
+              .enumerate()
+              .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+
+  confidence_filtering:
+    threshold: 0.8
+    description: "Skip predictions below confidence threshold"
+    rationale: "Reduce false positives while maintaining high recall"
+
+  bio_tag_decoding:
+    labels:
+      - "O"           # Outside entity
+      - "B-PERSON"    # Begin person
+      - "I-PERSON"    # Inside person
+      - "B-LOCATION"  # Begin location
+      - "I-LOCATION"  # Inside location
+      - "B-ORG"       # Begin organization
+      - "I-ORG"       # Inside organization
+      - "B-MISC"      # Begin miscellaneous
+      - "I-MISC"      # Inside miscellaneous
+
+    decoding_logic:
+      b_tag: "Start new entity, store previous if exists"
+      i_tag: "Continue current entity, extend span"
+      o_tag: "Outside entity, store previous if exists"
+
+  entity_merging:
+    description: "Merge adjacent B-* and I-* tokens into single entity"
+    example:
+      tokens: ["John", "Do", "##e"]
+      labels: ["B-PERSON", "I-PERSON", "I-PERSON"]
+      merged_entity: "John Doe (PERSON)"
+
+  token_span_alignment:
+    method: "Use tokenizer offsets to map tokens to original text"
+    example:
+      original_text: "Contact John Doe"
+      token_offsets: [(0, 7), (8, 12), (13, 15), (15, 16)]
+      entity_span: (8, 16)  # "John Doe"
+
+int8_quantization:
+  purpose: "4× speedup and 4× model size reduction"
+
+  quantization_method:
+    tool: "ONNX Runtime quantization tool"
+    command: |
+      from onnxruntime.quantization import quantize_dynamic, QuantType
+
+      quantize_dynamic(
+          model_input="bert-ner-model.onnx",
+          model_output="bert-ner-model-int8.onnx",
+          weight_type=QuantType.QInt8,
+          per_channel=True,
+          reduce_range=False,
+      )
+
+  quantization_details:
+    weight_type: "QInt8 (8-bit signed integer)"
+    per_channel: true
+    description: "Quantize weights per channel for better accuracy"
+
+  accuracy_impact:
+    f1_score_drop: "<1%"
+    fp32_baseline: "92.8%"
+    int8_quantized: "92.1%"
+    acceptable: true
+
+  performance_improvement:
+    inference_speedup: "4×"
+    fp32_latency: "5ms"
+    int8_latency: "1.25ms"
+    model_size_reduction: "4×"
+    fp32_size: "438MB"
+    int8_size: "110MB"
+
+performance_targets:
+  latency:
+    tokenization: "<0.5ms"
+    inference_int8: "<1.25ms"
+    post_processing: "<0.3ms"
+    total_pipeline: "<2ms (INT8), <5ms (FP32)"
+
+  throughput:
+    single_request: "~500 requests/second (INT8 on CPU)"
+    batch_processing: "~2000 requests/second (batch_size=8)"
+
+  memory:
+    model_fp32: "438MB"
+    model_int8: "110MB"
+    runtime_overhead: "50MB"
+    tokenizer: "5MB"
+    total_int8: "<200MB"
+
+error_handling:
+  model_load_failure:
+    error: "Failed to load BERT-NER model"
+    action: "Log error, fall back to regex-only detection"
+    metric: "ner_model_load_failures_total"
+
+  inference_failure:
+    error: "ONNX Runtime inference failed"
+    action: "Log error, return empty results, use regex-only"
+    metric: "ner_inference_failures_total"
+
+  timeout:
+    threshold: "10ms"
+    action: "Cancel inference, fall back to regex-only"
+    metric: "ner_inference_timeouts_total"
+
+  out_of_memory:
+    error: "Insufficient memory for model"
+    action: "Log error, disable NER, use regex-only"
+    metric: "ner_oom_errors_total"
+
+implementation_example:
+  rust_code: |
+    use onnxruntime::{environment::Environment, session::Session};
+    use tokenizers::Tokenizer;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    pub struct BertNER {
+        session: Arc<Session<'static>>,
+        tokenizer: Tokenizer,
+        labels: Vec<String>,
+        confidence_threshold: f32,
+    }
+
+    impl BertNER {
+        pub fn load(model_path: &str, tokenizer_path: &str)
+            -> Result<Self, Box<dyn std::error::Error>>
+        {
+            // Initialize ONNX Runtime environment
+            let environment = Arc::new(
+                Environment::builder()
+                    .with_name("bert-ner")
+                    .build()?
+            );
+
+            // Load ONNX model
+            let session = Session::builder()?
+                .with_optimization_level(
+                    GraphOptimizationLevel::Level3
+                )?
+                .with_model_from_file(model_path)?;
+
+            // Load tokenizer
+            let tokenizer = Tokenizer::from_file(tokenizer_path)?;
+
+            // BIO labels
+            let labels = vec![
+                "O", "B-PERSON", "I-PERSON",
+                "B-LOCATION", "I-LOCATION",
+                "B-ORG", "I-ORG",
+                "B-MISC", "I-MISC",
+            ].into_iter().map(String::from).collect();
+
+            Ok(Self {
+                session: Arc::new(session),
+                tokenizer,
+                labels,
+                confidence_threshold: 0.8,
+            })
         }
 
-        impl BertNerModel {
-            pub async fn load<P: AsRef<Path>>(model_path: P) -> Result<Self> {
-                // Load ONNX model
-                let session = Session::builder()?
-                    .with_execution_providers(["cpu"])?  // CPU provider
-                    .commit_from_file(model_path)?;
+        pub fn detect(&self, text: &str, trace_id: &str)
+            -> Result<Vec<PIIDetection>, Box<dyn std::error::Error>>
+        {
+            let start = Instant::now();
 
-                Ok(BertNerModel {
-                    session,
-                    vocab_size: 30522,      // BERT vocab size
-                    num_classes: 9,         // Entity classes
-                })
-            }
+            // Tokenize
+            let encoding = self.tokenizer.encode(text, false)?;
+            let input_ids: Vec<i64> = encoding
+                .get_ids()
+                .iter()
+                .map(|&id| id as i64)
+                .collect();
+            let attention_mask: Vec<i64> = encoding
+                .get_attention_mask()
+                .iter()
+                .map(|&m| m as i64)
+                .collect();
+
+            // Prepare tensors
+            let input_ids_tensor = ndarray::Array2::from_shape_vec(
+                (1, input_ids.len()),
+                input_ids.clone(),
+            )?;
+            let attention_mask_tensor = ndarray::Array2::from_shape_vec(
+                (1, attention_mask.len()),
+                attention_mask.clone(),
+            )?;
+
+            // Run inference
+            let outputs = self.session.run(vec![
+                input_ids_tensor.into(),
+                attention_mask_tensor.into(),
+            ])?;
+
+            // Extract logits and decode
+            let logits: OrtOwnedTensor<f32, _> = outputs[0].try_extract()?;
+            let detections = self.decode_entities(
+                &logits.view(),
+                &encoding,
+                text,
+            );
+
+            let latency_ms = start.elapsed().as_micros() as f64 / 1000.0;
+
+            println!(
+                "[BertNER] {} entities in {:.2}ms (trace: {})",
+                detections.len(), latency_ms, trace_id
+            );
+
+            Ok(detections)
         }
+    }
 
-      module_2_tokenization: |
-        use tokenizers::tokenizer::Tokenizer;
+cross_platform_support:
+  operating_systems:
+    linux:
+      supported: true
+      optimization: "AVX2, AVX512"
 
-        pub struct TokenizerConfig {
-            tokenizer: Tokenizer,
-            max_length: usize,
-        }
+    macos:
+      supported: true
+      optimization: "Apple Silicon (Metal), Intel (AVX2)"
 
-        pub struct TokenizedInput {
-            input_ids: Vec<i64>,
-            attention_mask: Vec<i64>,
-            token_type_ids: Vec<i64>,
-        }
+    windows:
+      supported: true
+      optimization: "AVX2, AVX512"
 
-        impl TokenizerConfig {
-            pub fn tokenize(&self, text: &str) -> Result<TokenizedInput> {
-                let encoding = self.tokenizer
-                    .encode(text, true)?
-                    .pad(self.max_length);
+  architectures:
+    x86_64:
+      supported: true
+      optimizations: ["AVX2", "AVX512", "FMA"]
 
-                Ok(TokenizedInput {
-                    input_ids: encoding.get_ids()
-                        .iter()
-                        .map(|id| *id as i64)
-                        .collect(),
-                    attention_mask: encoding.get_attention_mask()
-                        .iter()
-                        .map(|mask| *mask as i64)
-                        .collect(),
-                    token_type_ids: encoding.get_type_ids()
-                        .iter()
-                        .map(|type_id| *type_id as i64)
-                        .collect(),
-                })
-            }
-        }
+    aarch64:
+      supported: true
+      optimizations: ["NEON", "Apple Neural Engine"]
 
-      module_3_inference: |
-        use ndarray::Array2;
+observability:
+  metrics:
+    - name: "onnx_runtime_init_time_ms"
+      type: "histogram"
+      description: "Time to initialize ONNX Runtime environment"
 
-        pub struct InferenceResult {
-            logits: Vec<Vec<f32>>,  // [seq_len, num_classes]
-            predictions: Vec<usize>, // [seq_len] - entity class per token
-        }
+    - name: "onnx_model_load_time_ms"
+      type: "histogram"
+      description: "Time to load ONNX model"
 
-        impl BertNerModel {
-            pub async fn infer(&self, input: &TokenizedInput) -> Result<InferenceResult> {
-                let seq_len = input.input_ids.len();
+    - name: "onnx_inference_latency_ms"
+      type: "histogram"
+      labels: ["model_type"]  # fp32, int8
 
-                // Convert to ONNX-compatible format
-                let input_ids_array = Array2::from_shape_vec(
-                    (1, seq_len),
-                    input.input_ids.clone()
-                )?;
-                let attention_mask_array = Array2::from_shape_vec(
-                    (1, seq_len),
-                    input.attention_mask.clone()
-                )?;
-                let token_type_ids_array = Array2::from_shape_vec(
-                    (1, seq_len),
-                    input.token_type_ids.clone()
-                )?;
+    - name: "onnx_inference_count_total"
+      type: "counter"
+      labels: ["status", "model_type"]  # success/error, fp32/int8
 
-                // Run inference
-                let outputs = self.session.run(inputs![
-                    "input_ids" => input_ids_array.view(),
-                    "attention_mask" => attention_mask_array.view(),
-                    "token_type_ids" => token_type_ids_array.view(),
-                ]?)?;
+    - name: "onnx_post_processing_latency_ms"
+      type: "histogram"
+      description: "Time for BIO tag decoding and entity merging"
 
-                // Parse logits
-                let logits: &Array3<f32> = outputs[0].try_extract()?;
-                let logits_2d = logits.slice(s![0, .., ..]);  // Remove batch dim
+    - name: "onnx_memory_usage_bytes"
+      type: "gauge"
+      labels: ["component"]  # model, runtime, tokenizer
 
-                // Get predictions
-                let predictions: Vec<usize> = logits_2d
-                    .iter()
-                    .map(|entity_scores| {
-                        entity_scores.iter()
-                            .enumerate()
-                            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(0)
-                    })
-                    .collect();
+testing:
+  unit_tests:
+    - test_onnx_runtime_initializes_successfully
+    - test_model_loads_from_file
+    - test_tokenizer_produces_correct_tensors
+    - test_inference_returns_logits_correct_shape
+    - test_int8_quantization_4x_speedup
+    - test_confidence_threshold_filtering
+    - test_bio_tag_decoding
+    - test_entity_merging
 
-                Ok(InferenceResult {
-                    logits: logits_2d.rows().into_iter()
-                        .map(|row| row.to_vec())
-                        .collect(),
-                    predictions,
-                })
-            }
-        }
+  integration_tests:
+    - test_end_to_end_inference_pipeline
+    - test_cross_platform_compatibility
+    - test_inference_latency_under_5ms
+    - test_int8_inference_latency_under_2ms
 
-      module_4_batching: |
-        pub struct BatchInferenceRequest {
-            texts: Vec<String>,
-            batch_size: usize,
-        }
+  performance_tests:
+    - test_throughput_500_requests_per_second
+    - test_p95_latency_under_3ms
+    - test_p99_latency_under_10ms
+    - test_memory_footprint_under_200mb
 
-        impl BertNerModel {
-            pub async fn infer_batch(&self, req: BatchInferenceRequest) -> Result<Vec<InferenceResult>> {
-                let mut results = Vec::new();
+dependencies:
+  rust_crates:
+    - "onnxruntime = \"1.16\""
+    - "tokenizers = \"0.19\""
+    - "ndarray = \"0.15\""
 
-                for batch in req.texts.chunks(req.batch_size) {
-                    for text in batch {
-                        // Tokenize
-                        let tokenized = tokenizer.tokenize(text)?;
+  system_libraries:
+    - "libonnxruntime.so (Linux)"
+    - "libonnxruntime.dylib (macOS)"
+    - "onnxruntime.dll (Windows)"
 
-                        // Infer
-                        let result = self.infer(&tokenized).await?;
-                        results.push(result);
-                    }
-                }
+  optional:
+    - "CUDA Runtime (for GPU acceleration)"
+    - "TensorRT (for NVIDIA GPU optimization)"
 
-                Ok(results)
-            }
-        }
+documentation:
+  user_guide:
+    path: "docs/inference/onnx-runtime-guide.md"
+    sections:
+      - "Installing ONNX Runtime"
+      - "Loading BERT-NER model"
+      - "Running inference"
+      - "INT8 quantization benefits"
+      - "Performance tuning"
 
-      module_5_full_pipeline: |
-        pub struct BertNerPipeline {
-            model: BertNerModel,
-            tokenizer_config: TokenizerConfig,
-            entity_labels: Vec<&'static str>,
-        }
-
-        pub struct EntityMention {
-            text: String,
-            entity_type: String,
-            confidence: f32,
-            token_indices: Vec<usize>,
-        }
-
-        impl BertNerPipeline {
-            pub async fn extract_entities(&self, text: &str) -> Result<Vec<EntityMention>> {
-                // Step 1: Tokenize
-                let tokenized = self.tokenizer_config.tokenize(text)?;
-
-                // Step 2: Infer
-                let inference_result = self.model.infer(&tokenized).await?;
-
-                // Step 3: Post-process (merge BIO tags, filter low confidence)
-                let entities = self.post_process_predictions(
-                    &inference_result,
-                    text,
-                    &tokenized
-                )?;
-
-                Ok(entities)
-            }
-
-            fn post_process_predictions(
-                &self,
-                result: &InferenceResult,
-                text: &str,
-                tokenized: &TokenizedInput,
-            ) -> Result<Vec<EntityMention>> {
-                let mut entities = Vec::new();
-                let mut current_entity: Option<EntityMention> = None;
-
-                for (idx, &prediction) in result.predictions.iter().enumerate() {
-                    let label = self.entity_labels[prediction];
-                    let confidence = result.logits[idx][prediction];
-
-                    if label == "O" {
-                        // Outside entity - save current entity if any
-                        if let Some(entity) = current_entity.take() {
-                            entities.push(entity);
-                        }
-                    } else if label.starts_with("B-") {
-                        // Begin new entity
-                        if let Some(entity) = current_entity.take() {
-                            entities.push(entity);
-                        }
-
-                        let entity_type = label.strip_prefix("B-").unwrap().to_string();
-                        current_entity = Some(EntityMention {
-                            text: format!("[token_{}]", idx),
-                            entity_type,
-                            confidence,
-                            token_indices: vec![idx],
-                        });
-                    } else if label.starts_with("I-") {
-                        // Inside entity - continue current
-                        if let Some(ref mut entity) = current_entity {
-                            entity.token_indices.push(idx);
-                            entity.confidence = (entity.confidence + confidence) / 2.0;
-                        }
-                    }
-                }
-
-                if let Some(entity) = current_entity {
-                    entities.push(entity);
-                }
-
-                Ok(entities)
-            }
-        }
-
-  cpu_optimization:
-    concept: "BERT inference on CPU requires optimizations due to high compute demand"
-
-    optimization_1_operator_fusion:
-      description: "Fuse multiple operations into single CPU kernel"
-      example_1:
-        separate: "Matmul + Add + ReLU = 3 memory accesses"
-        fused: "FusedMatmulAdd + ReLU = 1 memory access"
-        benefit: "L1/L2 cache hit rate increases (3× speedup for some ops)"
-
-      example_2:
-        separate: "Attention = Q·K^T + Softmax + Attention·V = 3 kernels"
-        fused: "FusedAttention = 1 kernel with optimized memory layout"
-        benefit: "Avoid materialization of large intermediate matrices"
-
-    optimization_2_quantization_aware_execution:
-      description: "Use INT8 math operations (faster on modern CPUs)"
-      benefit_avx512: "AVX-512 has fast INT8 operations (2× speedup vs FP32)"
-      benefit_memory: "INT8 weights fit better in CPU cache (4× more data)"
-      requirement: "CPU must support VNNI (Vector Neural Network Instructions)"
-      supported_cpus: ["Intel Ice Lake (3rd Gen Xeon)", "Intel Cascade Lake", "AMD EPYC 7003"]
-
-    optimization_3_multi_threading:
-      threads_per_instance: "8 (for 8-core CPU)"
-      parallelization: "Thread parallelism in matrix multiplication"
-      framework: "OpenMP + Intel MKL or BLAS backend"
-      benefit: "Linear scaling with core count (8 threads ≈ 8× speedup)"
-
-    optimization_4_memory_layout:
-      row_major_vs_column_major: "Transpose weights to match CPU cache lines"
-      cache_line_size: "64 bytes (typical)"
-      optimization: "Store weights in NHWC format (vs NCHW)"
-      benefit: "Sequential memory access (L1 cache hits)"
-
-    optimization_5_avx512_vectorization:
-      description: "Use AVX-512 instruction set (Intel CPUs)"
-      vector_width: "512 bits = 16 FP32 or 64 INT8 values"
-      benefit: "16-64 parallel operations per instruction"
-      automatic: "ONNX Runtime automatically uses when available"
-      requirement: "Modern Intel CPU (Skylake or newer)"
-
-  latency_analysis_int8:
-    scenario_description: "Processing single inference request (50 tokens)"
-
-    latency_breakdown:
-      tokenization_ms: 0.2
-      tokenization_breakdown:
-        - "0.05ms: Text preprocessing"
-        - "0.1ms: WordPiece tokenization (lookup table)"
-        - "0.05ms: Convert to token IDs"
-
-      model_loading_ms: 0.0
-      model_loading_note: "Model already loaded in memory (reuse across requests)"
-
-      onnx_inference_ms: 4.5
-      onnx_inference_breakdown:
-        - "0.3ms: CPU scheduling + kernel launch"
-        - "1.2ms: Embedding lookups (50 tokens × 768 dims)"
-        - "2.5ms: 12 transformer layers (attention + MLP)"
-        - "0.3ms: Classification head (softmax)"
-        - "0.2ms: Memory operations"
-
-      post_processing_ms: 0.3
-      post_processing_breakdown:
-        - "0.1ms: Argmax to get entity classes"
-        - "0.15ms: BIO tag merging"
-        - "0.05ms: Confidence filtering"
-
-      total_e2e_ms: 5.0
-
-    latency_vs_batch_size:
-      batch_size_1: "5.0ms (single request)"
-      batch_size_4: "6.5ms per request (26ms total, 4× parallelism)"
-      batch_size_8: "7.2ms per request (57.6ms total, diminishing returns)"
-      batch_size_16: "8.0ms per request (128ms total, cache saturation)"
-
-      observation: "Slight overhead per request as batch grows (memory bandwidth saturation)"
-
-  deployment_kubernetes:
-    container_specification:
-      image: "k1-privacy/bert-ner:v1-int8"
-      model_volume: "/models/bert-ner-model-int8.onnx (110 MB)"
-
-      resource_requests:
-        cpu: "1000m (1 core)"
-        memory: "256 Mi"
-        cpu_justification: "Single ONNX Runtime instance per pod (8 threads share 1 core reservation)"
-        memory_justification: "Model (110 MB) + tokenizer (20 MB) + buffers (126 MB) = 256 MB"
-
-      resource_limits:
-        cpu: "2000m (for burst)"
-        memory: "512 Mi (headroom)"
-
-      replica_configuration:
-        replicas: 3
-        rationale: "High availability for inference service"
-        load_balancing: "Round-robin across 3 pods"
-        expected_qps: "300 requests/sec per pod × 3 = 900 QPS total"
-
-  monitoring_and_metrics:
-    prometheus_metrics:
-      - "ner_inference_total (counter): Total number of inference requests"
-      - "ner_inference_latency_ms (histogram): Inference latency buckets"
-      - "ner_inference_accuracy_f1 (gauge): F1-score on recent requests"
-      - "ner_model_fallback_total (counter): Fallback to regex when NER unavailable"
-
-    sla_thresholds:
-      latency_p95_sla: "5ms max"
-      accuracy_f1_sla: "0.925 min (0.5% loss from 0.928)"
-      availability_sla: "99.9% uptime"
-      fallback_rate_sla: "1% max"
-
-  notes: |
-    ONNX Runtime enables cross-platform inference (CPU, GPU, mobile) from single
-    ONNX model file. INT8 quantization achieves 4× speedup (20ms → 5ms) with <1%
-    accuracy loss (F1 0.928 → 0.925).
-
-    Rust implementation with operator fusion and multi-threading optimizations.
-    Production deployment on K1 achieved 4.8ms P50, 5.2ms P95 latency on INT8 model.
-    Hybrid approach (regex 85% + BERT-NER 10%) achieves 95% recall target.
-
-  research_foundation:
-    - "ONNX Runtime (Microsoft, 2018)"
-    - "INT8 Quantization (Jacob et al., 2018)"
-    - "TensorFlow Lite Quantization (2019)"
-
-  architecture:
-    adr_references: ["ADR-0035b: ML-based NER"]
-    k1_module: "privacy.onnx_inference"
-    parent_contract: "C_PRIVACY_BERT_MODEL_007"
+  api_reference:
+    path: "docs/api/bert-ner-api.md"
+    sections:
+      - "BertNER::load()"
+      - "BertNER::detect()"
+      - "PIIDetection struct"
+      - "Error handling"

@@ -1,0 +1,683 @@
+# Method Routing Contract
+# ADR: 0034a-mcp-jsonrpc-protocol.md (lines 1751-2000)
+# Purpose: Server-side JSON-RPC method dispatcher for MCP protocol
+# Research: JSON-RPC 2.0 Specification (2010), MCP Specification (Anthropic 2024)
+
+contract_metadata:
+  name: "method_routing"
+  version: "1.0.0"
+  parent_adr: "ADR-0034a"
+  related_adrs:
+    - "ADR-0034: MCP Protocol Adoption"
+  status: "approved"
+  created: "2025-10-21"
+  priority: "HIGH"
+
+# =============================================================================
+# METHOD ROUTING OVERVIEW
+# =============================================================================
+
+overview:
+  description: |
+    Server-side dispatcher that routes JSON-RPC method names to handler functions.
+
+    **Problem:** MCP server receives JSON-RPC requests with various method names.
+    **Solution:** MethodRouter maps method name → handler function.
+    **Pattern:** Dispatcher pattern (command pattern variant).
+
+    **Design Decisions:**
+    - Handler registration at server startup
+    - Unknown methods → JSON-RPC error -32601 (Method Not Found)
+    - Handler exceptions → JSON-RPC error -32603 (Internal Error)
+    - Async handlers (support await)
+
+  purpose: "Route JSON-RPC method to correct handler function"
+  pattern: "Dispatcher pattern"
+  error_handling: "Wrap exceptions as JSON-RPC errors"
+
+# =============================================================================
+# STANDARD MCP METHODS
+# =============================================================================
+
+standard_mcp_methods:
+  description: "Standard methods defined by MCP specification"
+
+  initialize:
+    description: "Handshake and capability negotiation"
+    params:
+      protocolVersion:
+        type: "string"
+        required: false
+        default: "2024-11-05"
+        description: "MCP protocol version client supports"
+      capabilities:
+        type: "object"
+        required: false
+        default: {}
+        description: "Client capabilities (future use)"
+      clientInfo:
+        type: "object"
+        required: false
+        properties:
+          name: {type: "string"}
+          version: {type: "string"}
+    returns:
+      protocolVersion:
+        type: "string"
+        description: "MCP protocol version server supports"
+      capabilities:
+        type: "object"
+        description: "Server capabilities (e.g., {tools: {}})"
+      serverInfo:
+        type: "object"
+        properties:
+          name: {type: "string"}
+          version: {type: "string"}
+    example_request: |
+      {
+        "jsonrpc": "2.0",
+        "method": "initialize",
+        "params": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {},
+          "clientInfo": {"name": "k1-intelligence", "version": "1.0.0"}
+        },
+        "id": "req-1"
+      }
+    example_response: |
+      {
+        "jsonrpc": "2.0",
+        "result": {
+          "protocolVersion": "2024-11-05",
+          "capabilities": {"tools": {}},
+          "serverInfo": {"name": "weather_api", "version": "1.0.0"}
+        },
+        "id": "req-1"
+      }
+
+  tools_list:
+    description: "Discover available tools"
+    method_name: "tools/list"
+    params: {}  # No parameters
+    returns:
+      tools:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            name: {type: "string"}
+            description: {type: "string"}
+            inputSchema: {type: "object"}  # JSON Schema
+    example_request: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/list",
+        "params": {},
+        "id": "req-2"
+      }
+    example_response: |
+      {
+        "jsonrpc": "2.0",
+        "result": {
+          "tools": [
+            {
+              "name": "get_weather",
+              "description": "Fetch current weather for a city",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "city": {"type": "string"},
+                  "units": {"type": "string", "enum": ["metric", "imperial"]}
+                },
+                "required": ["city"]
+              }
+            }
+          ]
+        },
+        "id": "req-2"
+      }
+
+  tools_call:
+    description: "Execute tool with arguments"
+    method_name: "tools/call"
+    params:
+      name:
+        type: "string"
+        required: true
+        description: "Tool name to invoke"
+      arguments:
+        type: "object"
+        required: true
+        description: "Tool arguments (JSON object)"
+    returns:
+      type: "any"
+      description: "Tool execution result (tool-specific)"
+    example_request: |
+      {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {
+          "name": "get_weather",
+          "arguments": {"city": "Seattle", "units": "metric"}
+        },
+        "id": "req-3"
+      }
+    example_response: |
+      {
+        "jsonrpc": "2.0",
+        "result": {
+          "temperature": 18,
+          "units": "C",
+          "city": "Seattle",
+          "conditions": "Partly cloudy"
+        },
+        "id": "req-3"
+      }
+
+  shutdown:
+    description: "Graceful server termination"
+    params: {}  # No parameters
+    returns: null  # No return value
+    example_request: |
+      {
+        "jsonrpc": "2.0",
+        "method": "shutdown",
+        "params": {},
+        "id": "req-4"
+      }
+    example_response: |
+      {
+        "jsonrpc": "2.0",
+        "result": null,
+        "id": "req-4"
+      }
+
+# =============================================================================
+# METHOD ROUTER IMPLEMENTATION
+# =============================================================================
+
+method_router_implementation:
+  description: "Server-side method dispatcher"
+
+  python_implementation: |
+    from typing import Callable, Dict
+    import asyncio
+
+    class MethodRouter:
+        """
+        Route JSON-RPC methods to handler functions.
+
+        Dispatcher pattern for MCP server.
+        """
+
+        def __init__(self):
+            self.handlers: Dict[str, Callable] = {}
+
+        def register(self, method: str, handler: Callable):
+            """
+            Register method handler.
+
+            Args:
+                method: JSON-RPC method name (e.g., "tools/call")
+                handler: Async function that handles the method
+            """
+            self.handlers[method] = handler
+
+        async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse:
+            """
+            Dispatch request to handler.
+
+            Args:
+                request: JSON-RPC request
+
+            Returns:
+                JsonRpcResponse: Handler response
+
+            Raises:
+                JsonRpcError: -32601 if method not found, -32603 if handler crashes
+            """
+            method = request.method
+
+            # Check if method exists
+            if method not in self.handlers:
+                raise JsonRpcError(
+                    code=-32601,
+                    message=f"Method not found: {method}",
+                    data={
+                        "available_methods": list(self.handlers.keys())
+                    }
+                )
+
+            handler = self.handlers[method]
+
+            try:
+                # Call handler (may be async)
+                result = await handler(request)
+
+                # Return success response
+                return JsonRpcResponse(result=result, id=request.id)
+
+            except JsonRpcError:
+                # Re-raise JSON-RPC errors (already formatted)
+                raise
+
+            except Exception as e:
+                # Wrap unexpected errors as internal error
+                raise JsonRpcError(
+                    code=-32603,
+                    message=f"Internal error: {str(e)}",
+                    data={
+                        "exception": type(e).__name__,
+                        "message": str(e)
+                    }
+                )
+
+  usage_example: |
+    # Create router
+    router = MethodRouter()
+
+    # Define handlers
+    async def handle_initialize(request: JsonRpcRequest) -> dict:
+        return {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "weather_api", "version": "1.0.0"}
+        }
+
+    async def handle_tools_list(request: JsonRpcRequest) -> dict:
+        return {
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Fetch current weather",
+                    "inputSchema": {...}
+                }
+            ]
+        }
+
+    async def handle_tools_call(request: JsonRpcRequest) -> dict:
+        tool_name = request.params["name"]
+        arguments = request.params["arguments"]
+
+        # Execute tool
+        result = execute_tool(tool_name, arguments)
+        return result
+
+    # Register handlers
+    router.register("initialize", handle_initialize)
+    router.register("tools/list", handle_tools_list)
+    router.register("tools/call", handle_tools_call)
+
+    # Dispatch request
+    request = JsonRpcRequest(method="initialize", params={}, id="req-1")
+    response = await router.dispatch(request)
+
+# =============================================================================
+# HANDLER FUNCTION SIGNATURE
+# =============================================================================
+
+handler_function_signature:
+  description: "Standard signature for method handlers"
+
+  python_signature: |
+    async def handler(request: JsonRpcRequest) -> Any:
+        """
+        Method handler function.
+
+        Args:
+            request: JSON-RPC request (contains method, params, id)
+
+        Returns:
+            Any: Result value (will be wrapped in JsonRpcResponse)
+
+        Raises:
+            JsonRpcError: If method execution fails
+        """
+        # Access parameters
+        params = request.params
+
+        # Execute method logic
+        result = do_something(params)
+
+        # Return result (will be wrapped in response)
+        return result
+
+  handler_responsibilities:
+    - "Extract parameters from request.params"
+    - "Validate parameters (or rely on validation layer)"
+    - "Execute method logic"
+    - "Return result (JSON-serializable)"
+    - "Raise JsonRpcError for expected failures"
+    - "Let unexpected exceptions propagate (will be wrapped as -32603)"
+
+  handler_contract:
+    input: "JsonRpcRequest (method, params, id)"
+    output: "Any (JSON-serializable result)"
+    errors: "JsonRpcError (expected failures) or Exception (unexpected)"
+    async_required: "Yes (handlers must be async functions)"
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+
+error_handling:
+  method_not_found:
+    trigger: "Request method not in router.handlers"
+    error_code: -32601
+    error_message: "Method not found: {method}"
+    error_data:
+      available_methods: ["initialize", "tools/list", "tools/call", "shutdown"]
+    example: |
+      # Request with unknown method
+      {"jsonrpc": "2.0", "method": "tools/delete", "params": {}, "id": "req-1"}
+
+      # Error response
+      {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32601,
+          "message": "Method not found: tools/delete",
+          "data": {"available_methods": ["initialize", "tools/list", "tools/call", "shutdown"]}
+        },
+        "id": "req-1"
+      }
+
+  handler_exception:
+    trigger: "Handler function raises unexpected exception"
+    error_code: -32603
+    error_message: "Internal error: {exception_message}"
+    error_data:
+      exception: "Exception class name"
+      message: "Exception message"
+    example: |
+      # Handler crashes with AttributeError
+      async def handle_tools_call(request):
+          result = api.get_weather(city)  # api is None → AttributeError
+
+      # Error response
+      {
+        "jsonrpc": "2.0",
+        "error": {
+          "code": -32603,
+          "message": "Internal error: 'NoneType' object has no attribute 'get_weather'",
+          "data": {
+            "exception": "AttributeError",
+            "message": "'NoneType' object has no attribute 'get_weather'"
+          }
+        },
+        "id": "req-3"
+      }
+
+  json_rpc_error_propagation:
+    description: "Handler can raise JsonRpcError explicitly"
+    example: |
+      async def handle_tools_call(request):
+          tool_name = request.params["name"]
+
+          if tool_name not in available_tools:
+              raise JsonRpcError(
+                  code=-32602,
+                  message="Invalid params",
+                  data={"error": f"Tool '{tool_name}' does not exist"}
+              )
+
+          # Execute tool
+          result = execute_tool(tool_name, request.params["arguments"])
+          return result
+
+# =============================================================================
+# METHOD REGISTRATION
+# =============================================================================
+
+method_registration:
+  description: "How handlers are registered at server startup"
+
+  registration_sequence:
+    step_1:
+      action: "Create MethodRouter instance"
+      code: 'router = MethodRouter()'
+
+    step_2:
+      action: "Define handler functions"
+      code: |
+        async def handle_initialize(request):
+            return {"protocolVersion": "2024-11-05", ...}
+
+    step_3:
+      action: "Register handlers"
+      code: 'router.register("initialize", handle_initialize)'
+
+    step_4:
+      action: "MCP server receives request"
+      code: 'request = JsonRpcRequest.from_json(request_json)'
+
+    step_5:
+      action: "Dispatch to handler"
+      code: 'response = await router.dispatch(request)'
+
+    step_6:
+      action: "Return JSON-RPC response"
+      code: 'return response.to_json()'
+
+  registration_validation:
+    check_duplicate_method:
+      description: "Prevent registering same method twice"
+      action: "Log warning if method already registered"
+      code: |
+        if method in self.handlers:
+            print(f"Warning: Overwriting handler for method '{method}'")
+
+    check_handler_callable:
+      description: "Ensure handler is callable function"
+      action: "Raise TypeError if not callable"
+      code: |
+        if not callable(handler):
+            raise TypeError(f"Handler for method '{method}' must be callable")
+
+# =============================================================================
+# MIDDLEWARE SUPPORT (OPTIONAL)
+# =============================================================================
+
+middleware_support:
+  description: "Optional middleware pattern for cross-cutting concerns"
+
+  middleware_use_cases:
+    - "Request logging (log all incoming requests)"
+    - "Authentication (verify API key in params)"
+    - "Rate limiting (enforce 100 requests/min per client)"
+    - "Request timing (measure handler latency)"
+    - "Error enrichment (add trace_id to error responses)"
+
+  middleware_implementation: |
+    from typing import Callable
+
+    Middleware = Callable[[JsonRpcRequest, Callable], JsonRpcResponse]
+
+    class MethodRouter:
+        def __init__(self):
+            self.handlers: Dict[str, Callable] = {}
+            self.middlewares: List[Middleware] = []
+
+        def use(self, middleware: Middleware):
+            """Add middleware (runs before all handlers)"""
+            self.middlewares.append(middleware)
+
+        async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse:
+            # Build handler chain (middleware + actual handler)
+            handler = self.handlers[request.method]
+
+            # Apply middlewares in reverse order
+            for middleware in reversed(self.middlewares):
+                handler = lambda req: middleware(req, handler)
+
+            # Execute chain
+            result = await handler(request)
+            return JsonRpcResponse(result=result, id=request.id)
+
+  middleware_example: |
+    # Logging middleware
+    async def logging_middleware(request, next_handler):
+        print(f"[Middleware] Received request: {request.method}")
+        result = await next_handler(request)
+        print(f"[Middleware] Completed request: {request.method}")
+        return result
+
+    # Register middleware
+    router.use(logging_middleware)
+
+# =============================================================================
+# PERFORMANCE REQUIREMENTS
+# =============================================================================
+
+performance_requirements:
+  method_lookup_latency:
+    target: "<0.01ms P95"
+    actual: "~0.001ms"
+    measurement: "Time to lookup method in handlers dict (O(1) operation)"
+
+  dispatch_overhead:
+    target: "<0.1ms P95"
+    measurement: "Lookup + exception handling + response wrapping"
+    rationale: "Negligible compared to handler execution time"
+
+  handler_registration_latency:
+    target: "<0.1ms per handler"
+    measurement: "Time to register handler at server startup"
+    rationale: "One-time cost (happens once at startup)"
+
+# =============================================================================
+# OBSERVABILITY
+# =============================================================================
+
+metrics:
+  jsonrpc_method_calls_total:
+    type: "counter"
+    labels: ["method", "status"]  # status: success | error | not_found
+    description: "Total JSON-RPC method calls"
+
+  jsonrpc_method_duration_ms:
+    type: "histogram"
+    buckets: [1, 5, 10, 50, 100, 500, 1000, 5000]
+    labels: ["method"]
+    description: "Method handler execution duration in milliseconds"
+
+  jsonrpc_method_errors_total:
+    type: "counter"
+    labels: ["method", "error_code"]
+    description: "Total JSON-RPC method errors"
+
+logging:
+  method_called:
+    level: "DEBUG"
+    message: "JSON-RPC method called"
+    fields:
+      - "request_id"
+      - "method"
+      - "params_keys"  # List of parameter names
+
+  method_completed:
+    level: "DEBUG"
+    message: "JSON-RPC method completed"
+    fields:
+      - "request_id"
+      - "method"
+      - "status"  # success | error
+      - "duration_ms"
+
+  method_not_found:
+    level: "WARNING"
+    message: "JSON-RPC method not found"
+    fields:
+      - "request_id"
+      - "method"
+      - "available_methods"
+
+  method_exception:
+    level: "ERROR"
+    message: "JSON-RPC method handler exception"
+    fields:
+      - "request_id"
+      - "method"
+      - "exception"
+      - "message"
+
+# =============================================================================
+# TESTING REQUIREMENTS
+# =============================================================================
+
+test_coverage:
+  unit_tests:
+    - test_name: "test_method_router_register_handler"
+      description: "Register handler, verify present in handlers dict"
+      assertion: "'initialize' in router.handlers"
+
+    - test_name: "test_method_router_dispatch_known_method"
+      description: "Dispatch request to known method, verify result"
+      assertion: "response.result == expected_result"
+
+    - test_name: "test_method_router_dispatch_unknown_method"
+      description: "Dispatch request to unknown method, verify -32601 error"
+      assertion: "JsonRpcError raised with code -32601"
+
+    - test_name: "test_method_router_handler_exception_wrapped"
+      description: "Handler raises exception, verify wrapped as -32603"
+      assertion: "JsonRpcError raised with code -32603"
+
+    - test_name: "test_method_router_handler_json_rpc_error_propagated"
+      description: "Handler raises JsonRpcError, verify propagated unchanged"
+      assertion: "Same error code/message as raised by handler"
+
+    - test_name: "test_method_router_all_standard_methods"
+      description: "Register all 4 standard MCP methods, dispatch each"
+      assertion: "All 4 methods return expected results"
+
+  integration_tests:
+    - test_name: "test_mcp_server_lifecycle"
+      description: "Full MCP lifecycle: initialize → list → call → shutdown"
+      assertion: "All methods execute successfully in order"
+
+# =============================================================================
+# REFERENCES
+# =============================================================================
+
+references:
+  standards:
+    - name: "JSON-RPC 2.0 Specification"
+      url: "https://www.jsonrpc.org/specification"
+      section: "Request object - method field"
+      year: 2010
+
+    - name: "Model Context Protocol (MCP)"
+      url: "https://github.com/anthropics/model-context-protocol"
+      section: "Standard methods (initialize, tools/list, tools/call)"
+      year: 2024
+
+  design_patterns:
+    - name: "Command Pattern"
+      description: "Method names map to handler objects/functions"
+      reference: "Gang of Four (1994)"
+
+    - name: "Dispatcher Pattern"
+      description: "Single dispatcher routes requests to multiple handlers"
+      reference: "Enterprise Integration Patterns (2003)"
+
+  related_contracts:
+    - "jsonrpc_request_format.yml"
+    - "jsonrpc_response_format.yml"
+    - "jsonrpc_error_codes.yml"
+
+# =============================================================================
+# CONTRACT VERSION & APPROVAL
+# =============================================================================
+
+contract_status:
+  version: "1.0.0"
+  status: "approved"
+  approved_by: "K1 Architecture Team"
+  approved_date: "2025-10-21"
+  next_review: "2026-04-21"
+  change_history:
+    - version: "1.0.0"
+      date: "2025-10-21"
+      author: "K1 Architecture Team"
+      changes: "Initial contract based on ADR-0034a"

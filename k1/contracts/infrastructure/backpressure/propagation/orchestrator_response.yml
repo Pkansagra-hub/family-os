@@ -1,0 +1,421 @@
+classes:
+  - name: OrchestratorResponse
+    description: Orchestrator backpressure handler managing task scheduling and background job cancellation based on tier
+    research: ADR-0039b (backpressure propagation & signal flow), task scheduling, job cancellation patterns
+    performance_budget: <5ms task cancellation, <10ms scheduling adjustment, <50ms background job cleanup
+    reliability_properties:
+      - tier_based_scheduling: Different scheduling behaviors per backpressure tier
+      - background_task_management: Cancel non-interactive tasks in high tiers
+      - graceful_task_termination: Allow running tasks to complete before cancellation
+      - scheduling_throttling: Reduce new task acceptance in high load
+    methods:
+      - name: on_backpressure_signal
+        description: Handle backpressure signal and adjust task scheduling behavior
+        parameters:
+          - name: signal
+            type: BackpressureSignal
+            description: Backpressure signal with tier and reason
+        returns:
+          type: Result<(), BackpressureError>
+          description: Success or error if signal handling fails
+        implementation:
+          rust: |
+            use std::sync::Arc;
+            use tokio::sync::Mutex;
+            use std::collections::HashMap;
+            use serde::{Serialize, Deserialize};
+
+            #[derive(Serialize, Deserialize, Debug, Clone)]
+            pub enum SchedulingDecision {
+                Accept,
+                Reject { reason: String },
+                Throttle { delay_ms: u64 },
+            }
+
+            #[derive(Debug)]
+            pub enum BackpressureError {
+                TaskCancellationFailure,
+                SchedulingUpdateFailure,
+            }
+
+            pub struct OrchestratorResponse {
+                current_tier: Arc<Mutex<super::super::watermark_thresholds::BackpressureTier>>,
+                active_tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+                background_tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+                scheduling_throttle: Arc<Mutex<f64>>, // 0.0 to 1.0 (1.0 = no throttling)
+            }
+
+            impl OrchestratorResponse {
+                pub fn new() -> Self {
+                    Self {
+                        current_tier: Arc::new(Mutex::new(super::super::watermark_thresholds::BackpressureTier::NORMAL)),
+                        active_tasks: Arc::new(Mutex::new(HashMap::new())),
+                        background_tasks: Arc::new(Mutex::new(HashMap::new())),
+                        scheduling_throttle: Arc::new(Mutex::new(1.0)), // No throttling in normal state
+                    }
+                }
+
+                pub async fn on_backpressure_signal(
+                    &self,
+                    signal: super::backpressure_signal::BackpressureSignal,
+                ) -> Result<(), BackpressureError> {
+                    tracing::info!(
+                        tier = ?signal.tier,
+                        reason = %signal.reason,
+                        trace_id = %signal.trace_id,
+                        "Orchestrator received backpressure signal"
+                    );
+
+                    // Update current tier
+                    {
+                        let mut tier = self.current_tier.lock().await;
+                        *tier = signal.tier;
+                    }
+
+                    // Adjust behavior based on tier
+                    match signal.tier {
+                        super::super::watermark_thresholds::BackpressureTier::NORMAL => {
+                            // Normal operation - no restrictions
+                            {
+                                let mut throttle = self.scheduling_throttle.lock().await;
+                                *throttle = 1.0;
+                            }
+                            tracing::info!("Orchestrator: Normal operation resumed");
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::REJECT_NEW => {
+                            // Continue active tasks, reject new background tasks
+                            {
+                                let mut throttle = self.scheduling_throttle.lock().await;
+                                *throttle = 0.7; // 70% of normal scheduling
+                            }
+                            tracing::warn!("Orchestrator: Rejecting new background tasks");
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::CANCEL_BG => {
+                            // Cancel background tasks, throttle new tasks heavily
+                            {
+                                let mut throttle = self.scheduling_throttle.lock().await;
+                                *throttle = 0.3; // 30% of normal scheduling
+                            }
+
+                            // Cancel background tasks
+                            let cancelled_count = self.cancel_background_tasks().await;
+                            tracing::warn!(
+                                cancelled_count = cancelled_count,
+                                "Orchestrator: Cancelled background tasks"
+                            );
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::EMERGENCY => {
+                            // Cancel all schedulable tasks, throttle to minimum
+                            {
+                                let mut throttle = self.scheduling_throttle.lock().await;
+                                *throttle = 0.0; // No new scheduling
+                            }
+
+                            // Cancel all background tasks and throttle active ones
+                            let cancelled_count = self.cancel_background_tasks().await;
+                            tracing::error!(
+                                cancelled_count = cancelled_count,
+                                "Orchestrator: Emergency - cancelled all background tasks"
+                            );
+                        }
+                    }
+
+                    // Emit metrics
+                    let throttle_rate = *self.scheduling_throttle.lock().await;
+                    metrics::gauge!("orchestrator_scheduling_throttle")
+                        .with_label_values(&[])
+                        .set(throttle_rate);
+
+                    metrics::counter!("orchestrator_backpressure_signals_received_total")
+                        .with_label_values(&[&signal.tier.as_str()])
+                        .inc();
+
+                    Ok(())
+                }
+
+                pub async fn make_scheduling_decision(&self, is_background_task: bool) -> SchedulingDecision {
+                    let tier = *self.current_tier.lock().await;
+                    let throttle = *self.scheduling_throttle.lock().await;
+
+                    match tier {
+                        super::super::watermark_thresholds::BackpressureTier::NORMAL => {
+                            SchedulingDecision::Accept
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::REJECT_NEW => {
+                            if is_background_task {
+                                SchedulingDecision::Reject {
+                                    reason: "Background tasks rejected in Tier 1".to_string(),
+                                }
+                            } else {
+                                SchedulingDecision::Accept
+                            }
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::CANCEL_BG => {
+                            if is_background_task {
+                                SchedulingDecision::Reject {
+                                    reason: "Background tasks rejected in Tier 2".to_string(),
+                                }
+                            } else {
+                                // Throttle interactive tasks
+                                SchedulingDecision::Throttle { delay_ms: 100 }
+                            }
+                        }
+                        super::super::watermark_thresholds::BackpressureTier::EMERGENCY => {
+                            SchedulingDecision::Reject {
+                                reason: "All scheduling suspended in emergency tier".to_string(),
+                            }
+                        }
+                    }
+                }
+
+                async fn cancel_background_tasks(&self) -> usize {
+                    let mut background_tasks = self.background_tasks.lock().await;
+                    let task_count = background_tasks.len();
+
+                    for (task_id, handle) in background_tasks.drain() {
+                        handle.abort();
+                        tracing::debug!(task_id = %task_id, "Cancelled background task");
+                    }
+
+                    metrics::counter!("orchestrator_background_tasks_cancelled_total")
+                        .with_label_values(&[])
+                        .inc_by(task_count as u64);
+
+                    task_count
+                }
+
+                pub async fn register_task(&self, task_id: String, handle: tokio::task::JoinHandle<()>, is_background: bool) {
+                    if is_background {
+                        let mut background_tasks = self.background_tasks.lock().await;
+                        background_tasks.insert(task_id, handle);
+                    } else {
+                        let mut active_tasks = self.active_tasks.lock().await;
+                        active_tasks.insert(task_id, handle);
+                    }
+                }
+
+                pub async fn unregister_task(&self, task_id: &str, is_background: bool) -> bool {
+                    if is_background {
+                        let mut background_tasks = self.background_tasks.lock().await;
+                        background_tasks.remove(task_id).is_some()
+                    } else {
+                        let mut active_tasks = self.active_tasks.lock().await;
+                        active_tasks.remove(task_id).is_some()
+                    }
+                }
+
+                pub async fn get_current_tier(&self) -> super::super::watermark_thresholds::BackpressureTier {
+                    *self.current_tier.lock().await
+                }
+
+                pub async fn get_active_task_count(&self) -> usize {
+                    let active_tasks = self.active_tasks.lock().await;
+                    active_tasks.len()
+                }
+
+                pub async fn get_background_task_count(&self) -> usize {
+                    let background_tasks = self.background_tasks.lock().await;
+                    background_tasks.len()
+                }
+            }
+          python: |
+            from dataclasses import dataclass
+            from typing import Dict, Optional, Any, List
+            from enum import Enum
+            import asyncio
+            import logging
+
+            class SchedulingDecision(Enum):
+                """Decision on whether to schedule a task"""
+                ACCEPT = "accept"
+                REJECT = "reject"
+                THROTTLE = "throttle"
+
+            @dataclass
+            class RejectionReason:
+                """Reason for rejecting a task"""
+                reason: str
+
+            @dataclass
+            class ThrottleDelay:
+                """Delay for throttling a task"""
+                delay_ms: int
+
+            class BackpressureError(Exception):
+                """Error in backpressure handling"""
+                pass
+
+            class OrchestratorResponse:
+                """Orchestrator backpressure handler managing task scheduling"""
+
+                def __init__(self):
+                    self.current_tier = None  # BackpressureTier.NORMAL initially
+                    self.active_tasks: Dict[str, asyncio.Task] = {}
+                    self.background_tasks: Dict[str, asyncio.Task] = {}
+                    self.scheduling_throttle = 1.0  # No throttling in normal state
+                    self.logger = logging.getLogger(__name__)
+
+                async def on_backpressure_signal(self, signal: Any) -> None:  # signal: BackpressureSignal
+                    """Handle backpressure signal and adjust scheduling behavior"""
+                    self.logger.info(
+                        f"Orchestrator received backpressure signal: {signal.tier.name}",
+                        extra={
+                            'tier': signal.tier.name,
+                            'reason': signal.reason,
+                            'trace_id': signal.trace_id
+                        }
+                    )
+
+                    # Update current tier
+                    self.current_tier = signal.tier
+                    tier_name = signal.tier.name
+
+                    # Adjust behavior based on tier
+                    if tier_name == "NORMAL":
+                        # Normal operation - no restrictions
+                        self.scheduling_throttle = 1.0
+                        self.logger.info("Orchestrator: Normal operation resumed")
+
+                    elif tier_name == "REJECT_NEW":
+                        # Continue active tasks, reject new background tasks
+                        self.scheduling_throttle = 0.7  # 70% of normal scheduling
+                        self.logger.warning("Orchestrator: Rejecting new background tasks")
+
+                    elif tier_name == "CANCEL_BG":
+                        # Cancel background tasks, throttle new tasks heavily
+                        self.scheduling_throttle = 0.3  # 30% of normal scheduling
+
+                        # Cancel background tasks
+                        cancelled_count = await self._cancel_background_tasks()
+                        self.logger.warning(
+                            f"Orchestrator: Cancelled {cancelled_count} background tasks"
+                        )
+
+                    elif tier_name == "EMERGENCY":
+                        # Cancel all schedulable tasks, throttle to minimum
+                        self.scheduling_throttle = 0.0  # No new scheduling
+
+                        # Cancel all background tasks
+                        cancelled_count = await self._cancel_background_tasks()
+                        self.logger.error(
+                            f"Orchestrator: Emergency - cancelled {cancelled_count} background tasks"
+                        )
+                    else:
+                        raise BackpressureError(f"Unknown backpressure tier: {tier_name}")
+
+                    # Emit metrics (placeholder)
+                    self._emit_scheduling_metrics(tier_name, self.scheduling_throttle)
+
+                def make_scheduling_decision(self, is_background_task: bool) -> SchedulingDecision | RejectionReason | ThrottleDelay:
+                    """Decide whether to schedule a task based on current backpressure state"""
+                    if not self.current_tier:
+                        return SchedulingDecision.ACCEPT
+
+                    tier_name = self.current_tier.name
+
+                    if tier_name == "NORMAL":
+                        return SchedulingDecision.ACCEPT
+                    elif tier_name == "REJECT_NEW":
+                        if is_background_task:
+                            return RejectionReason(reason="Background tasks rejected in Tier 1")
+                        else:
+                            return SchedulingDecision.ACCEPT
+                    elif tier_name == "CANCEL_BG":
+                        if is_background_task:
+                            return RejectionReason(reason="Background tasks rejected in Tier 2")
+                        else:
+                            return ThrottleDelay(delay_ms=100)
+                    elif tier_name == "EMERGENCY":
+                        return RejectionReason(reason="All scheduling suspended in emergency tier")
+                    else:
+                        # Fallback to accept for unknown tiers
+                        return SchedulingDecision.ACCEPT
+
+                async def _cancel_background_tasks(self) -> int:
+                    """Cancel all background tasks"""
+                    cancelled_count = 0
+                    tasks_to_cancel = list(self.background_tasks.items())
+
+                    for task_id, task in tasks_to_cancel:
+                        if not task.done():
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                            cancelled_count += 1
+                            self.logger.debug(f"Cancelled background task: {task_id}")
+
+                        del self.background_tasks[task_id]
+
+                    # Emit metrics (placeholder)
+                    self._emit_cancellation_metrics(cancelled_count)
+
+                    return cancelled_count
+
+                def register_task(self, task_id: str, task: asyncio.Task, is_background: bool):
+                    """Register a task for tracking"""
+                    if is_background:
+                        self.background_tasks[task_id] = task
+                    else:
+                        self.active_tasks[task_id] = task
+
+                def unregister_task(self, task_id: str, is_background: bool) -> bool:
+                    """Unregister a completed task"""
+                    if is_background:
+                        return self.background_tasks.pop(task_id, None) is not None
+                    else:
+                        return self.active_tasks.pop(task_id, None) is not None
+
+                def get_current_tier(self) -> Any:  # Returns BackpressureTier
+                    """Get current backpressure tier"""
+                    return self.current_tier
+
+                def get_active_task_count(self) -> int:
+                    """Get count of active tasks"""
+                    return len(self.active_tasks)
+
+                def get_background_task_count(self) -> int:
+                    """Get count of background tasks"""
+                    return len(self.background_tasks)
+
+                def _emit_scheduling_metrics(self, tier_name: str, throttle_rate: float):
+                    """Emit scheduling metrics (placeholder implementation)"""
+                    # In real implementation, would integrate with Prometheus/metrics system
+                    pass
+
+                def _emit_cancellation_metrics(self, cancelled_count: int):
+                    """Emit task cancellation metrics (placeholder implementation)"""
+                    # In real implementation, would integrate with Prometheus/metrics system
+                    pass
+
+                # BackpressureComponent interface implementation
+                def name(self) -> str:
+                    return "orchestrator"
+
+                def component_type(self) -> Any:  # Returns ComponentType
+                    return None  # Would be ComponentType.ORCHESTRATOR
+
+                def priority(self) -> int:
+                    return 90  # High priority - orchestrator is critical
+
+                def capabilities(self) -> list[str]:
+                    return ["task_scheduling", "background_task_management", "job_cancellation"]
+
+task_management_logic:
+  - normal_tier: Full scheduling, all tasks accepted
+  - reject_new_tier: Reject background tasks, continue active tasks
+  - cancel_bg_tier: Cancel background tasks, throttle interactive tasks
+  - emergency_tier: Suspend all new scheduling, cancel background tasks
+
+scheduling_throttling:
+  - throttle_rate: 0.0 to 1.0 (1.0 = normal scheduling)
+  - background_rejection: Background tasks rejected in Tier 1+
+  - interactive_throttling: Interactive tasks delayed in Tier 2+
+  - emergency_suspension: All scheduling suspended in emergency
+
+task_cancellation:
+  - graceful_termination: Allow running tasks to complete
+  - background_priority: Background tasks cancelled first
+  - metrics_tracking: Cancellation counts and reasons tracked
+  - cleanup_registration: Tasks unregistered after completion

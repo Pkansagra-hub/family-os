@@ -1,944 +1,244 @@
-# Contract: International PII Pattern Support (Phase 2)
-# Purpose: Define regex patterns for international PII beyond US (UK, Canada, EU)
-# Source: ADR-0035a - Regex Pattern Library
-# Status: Production-Ready
-# Last Updated: 2025-10-14
+# International Support (Phase 2) Contract
+# Source ADR: 0035a-regex-pattern-library.md
+# Epic 2.9, Issue 2.9.1
+# Purpose: Define international PII patterns (UK NHS, Canadian SIN, EU VAT) for Phase 2 expansion
 
 contract:
-  id: "C_PRIVACY_REGEX_INTL_005"
-  name: "International PII Pattern Support (Phase 2)"
+  name: international_support_phase2
   version: "1.0.0"
-  category: "Privacy & Security"
-  owner: "K1 Privacy Team"
-  description: |
-    Extended regex patterns for international PII detection covering UK (NHS, NINO),
-    Canada (SIN), EU (VAT, passport formats). Enables global PII protection with
-    region-specific pattern matching. Phase 1 (US-only) covers 85% global users.
-    Phase 2 (international) enables 95%+ global coverage.
-
-  # Architecture References
-  architecture:
-    adr_references: ["ADR-0035a: Regex Pattern Library"]
-    k1_module: "privacy.regex_detector"
-    parent_contract: "C_PRIVACY_REGEX_REGISTRY_001"
-    phase: "2"
-    deployment_trigger: "Q4 2025"
-
-  # International Pattern Coverage
-  international_patterns:
-    region_uk:
-      country_code: "GB"
-      enabled: true
-      patterns:
-        - name: "nhs_number"
-          description: "UK National Health Service (NHS) number (10 digits)"
-          regex: '\b(?!0{10})\d{10}\b'
-          placeholder: "[NHS_NUMBER]"
-          confidence: 0.85
-          format_example: "4025697018"
-          pii_type_classification: "health_identifier"
-          hipaa_category: "medical_record_number"
-
-        - name: "nino"
-          description: "UK National Insurance Number (NINO format: AB 12 34 56 C)"
-          regex: '\b[A-CEHJLMOPRST]{1}[A-CEHJLMOPRST]{1}[0-9]{2}\s?[0-9]{2}\s?[0-9]{2}\s?[A-D]{1}\b'
-          placeholder: "[NINO]"
-          confidence: 0.90
-          format_example: "AB 12 34 56 C"
-          pii_type_classification: "identifier"
-          gdpr_category: "tax_identifier"
-
-    region_canada:
-      country_code: "CA"
-      enabled: true
-      patterns:
-        - name: "sin"
-          description: "Canada Social Insurance Number (SIN: NNN NNN NNN)"
-          regex: '\b(?!0{9})\d{3}\s?\d{3}\s?\d{3}\b'
-          placeholder: "[SIN]"
-          confidence: 0.85
-          format_example: "123 456 789"
-          validation: "Luhn algorithm"
-          pii_type_classification: "identifier"
-
-    region_eu_general:
-      coverage: ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"]
-      enabled: true
-      patterns:
-        - name: "vat_number"
-          description: "EU VAT Number (country-specific format)"
-          regex_template: '{country_prefix}[0-9]{7,12}'
-          placeholder: "[VAT_NUMBER]"
-          confidence: 0.80
-          examples:
-            - "DE 289 666 360"
-            - "FR 12 345 678 901"
-            - "GB 202 8675 309"
-          pii_type_classification: "business_identifier"
-          country_specific_formats:
-            AT: 'AT[0-9]{8}'          # Austria
-            BE: 'BE[0-9]{10}'         # Belgium
-            BG: 'BG[0-9]{9,10}'       # Bulgaria
-            HR: 'HR[0-9]{11}'         # Croatia
-            CY: 'CY[0-9]{8}[A-Z]'     # Cyprus
-            CZ: 'CZ[0-9]{8,10}'       # Czech Republic
-            DK: 'DK[0-9]{8}'          # Denmark
-            EE: 'EE[0-9]{9}'          # Estonia
-            FI: 'FI[0-9]{8}'          # Finland
-            FR: 'FR[0-9A-Z]{2}[0-9]{9}' # France
-            DE: 'DE[0-9]{9}'          # Germany
-            GR: 'GR[0-9]{9}'          # Greece
-            HU: 'HU[0-9]{8}'          # Hungary
-            IE: 'IE[0-9]{7}[A-Z]?'    # Ireland
-            IT: 'IT[0-9]{11}'         # Italy
-
-        - name: "passport_number"
-          description: "European passport number (country-specific)"
-          regex_template: '[A-Z]{2}[0-9]{6,9}'
-          placeholder: "[PASSPORT]"
-          confidence: 0.75
-          examples: ["DE 123456789", "FR 12AB34567", "IT 12345678"]
-          pii_type_classification: "travel_document"
-
-    region_other:
-      country_code: "Other"
-      enabled: false
-      patterns:
-        - name: "aadhar"
-          description: "India Aadhar number (12 digits)"
-          regex: '\b\d{4}\s?\d{4}\s?\d{4}\b'
-          placeholder: "[AADHAR]"
-          confidence: 0.80
-          notes: "Disabled by default, enable for India region"
-
-        - name: "cpf"
-          description: "Brazil CPF number (XXX.XXX.XXX-XX format)"
-          regex: '\b\d{3}\.\d{3}\.\d{3}-\d{2}\b'
-          placeholder: "[CPF]"
-          confidence: 0.85
-          notes: "Disabled by default, enable for Brazil region"
-
-  # Detailed Regional Pattern Specifications with Validation Logic
-  pattern_specifications:
-    uk_nhs_number:
-      name: "NHS Number"
-      country: "GB"
-      standard: "NHS Number Format (10 digits)"
-      description: |
-        UK National Health Service number - unique identifier for every person registered
-        with NHS. Format: 10 digits (NNNN NNNN NN), no letters. Used for healthcare
-        identification, GP registration, hospital records.
-        Structured format enables precise regex matching with checksum validation.
-
-      format_specification:
-        total_digits: 10
-        structure: "Grouped as 4-4-2 digits"
-        format_examples:
-          - "4025697018"
-          - "4897843216"
-          - "1234567890"
-
-      regex_pattern: '\b(?!0{10})\d{10}\b'
-      regex_explanation: |
-        \b             - Word boundary
-        (?!0{10})      - Negative lookahead: reject all zeros (invalid)
-        \d{10}         - Exactly 10 digits
-        \b             - Word boundary
-
-      validation_logic:
-        checksum_algorithm: "Modulus 11 (NHS-specific)"
-        validation_steps:
-          - "Extract first 9 digits"
-          - "Multiply each digit by (10 - position)"
-          - "Sum all products"
-          - "Calculate remainder mod 11"
-          - "Check digit = 11 - remainder"
-          - "Reject if check digit = 10"
-
-        implementation_rust: |
-          fn validate_nhs_number(nhs: &str) -> bool {
-              let digits: Vec<u32> = nhs.chars()
-                  .filter(|c| c.is_numeric())
-                  .map(|c| c.to_digit(10).unwrap())
-                  .collect();
-
-              if digits.len() != 10 { return false; }
-              if digits.iter().all(|&d| d == 0) { return false; }
-
-              // Modulus 11 check
-              let mut sum = 0;
-              for i in 0..9 {
-                  sum += digits[i] * (10 - i as u32);
-              }
-
-              let check_digit = (11 - (sum % 11)) % 11;
-              check_digit == digits[9] && check_digit != 10
-          }
-
-        implementation_python: |
-          def validate_nhs_number(nhs_str):
-              digits = [int(d) for d in nhs_str if d.isdigit()]
-              if len(digits) != 10: return False
-              if all(d == 0 for d in digits): return False
-
-              # Modulus 11 check
-              check_sum = sum(digits[i] * (10 - i) for i in range(9))
-              check_digit = (11 - (check_sum % 11)) % 11
-
-              return check_digit == digits[9] and check_digit != 10
-
-      test_vectors:
-        valid_nhs_numbers:
-          - "4025697018"
-          - "4897843216"
-          - "1234567890"
-
-        invalid_nhs_numbers:
-          - "0000000000"  # All zeros
-          - "1234567891"  # Wrong checksum
-          - "123456789"   # Only 9 digits
-          - "12345678901" # 11 digits
-
-      confidence: 0.95
-      pii_type_classification: "health_identifier"
-      gdpr_article: "Article 4.1 (Special category data - health)"
-      hipaa_category: "PHI (Protected Health Information)"
-      uk_regulation: "Data Protection Act 2018 (UK GDPR)"
-      k1_integration: "Validates NHS numbers in UK healthcare data"
-
-    uk_nino:
-      name: "National Insurance Number"
-      country: "GB"
-      standard: "NINO Format (AB 12 34 56 C)"
-      description: |
-        UK National Insurance Number - unique identifier for taxation, social security,
-        and benefits. Format: 2 letters + 6 digits + 1 letter (suffix). Example: AB 12 34 56 C.
-        Used for tax identification, state pension, employment records.
-
-      format_specification:
-        total_characters: 9
-        structure: "2 letters, 6 digits, 1 letter"
-        format_examples:
-          - "AB 12 34 56 C"
-          - "CD 98 76 54 D"
-
-        letter_rules:
-          first_letter: "A-E, G-N, P, R, S, W-Y (excludes F, I, O, Q, U, V, Z)"
-          second_letter: "A-E, G-N, P, R, S, W-Y"
-          suffix_letter: "A, B, C, D (ends with: A, B, C, or D only)"
-
-      regex_pattern: '\b[A-CEHJLMOPRST]{1}[A-CEHJLMOPRST]{1}[0-9]{2}\s?[0-9]{2}\s?[0-9]{2}\s?[A-D]{1}\b'
-      regex_explanation: |
-        [A-CEHJLMOPRST]{1}  - First letter (excludes F, I, O, Q, U, V, Z)
-        [A-CEHJLMOPRST]{1}  - Second letter (same restrictions)
-        [0-9]{2}            - First pair of digits
-        \s?                 - Optional space
-        [0-9]{2}            - Second pair of digits
-        \s?                 - Optional space
-        [0-9]{2}            - Third pair of digits
-        \s?                 - Optional space
-        [A-D]{1}            - Suffix letter (A, B, C, or D)
-
-      validation_logic:
-        no_checksum: "NINO has no checksum (format validation only)"
-        validation_steps:
-          - "Check first letter not in [F, I, O, Q, U, V, Z]"
-          - "Check second letter not in [F, I, O, Q, U, V, Z]"
-          - "Check digits are numeric (0-9)"
-          - "Check suffix letter is [A-D]"
-          - "Optional: Cross-check with HMRC database (production only)"
-
-      implementation_rust: |
-        fn validate_nino(nino: &str) -> bool {
-            let nino_clean = nino.replace(" ", "");
-            if nino_clean.len() != 9 { return false; }
-
-            let invalid_letters = ['F', 'I', 'O', 'Q', 'U', 'V', 'Z'];
-            let suffix_letters = ['A', 'B', 'C', 'D'];
-
-            let chars: Vec<char> = nino_clean.chars().collect();
-
-            // First two letters
-            if invalid_letters.contains(&chars[0]) || invalid_letters.contains(&chars[1]) {
-                return false;
-            }
-
-            // Middle 6 digits
-            if !chars[2..8].iter().all(|c| c.is_numeric()) {
-                return false;
-            }
-
-            // Suffix letter
-            !suffix_letters.contains(&chars[8])
-        }
-
-      test_vectors:
-        valid_nino:
-          - "AB 12 34 56 C"
-          - "CD 98 76 54 D"
-          - "SH 23 45 67 A"
-
-        invalid_nino:
-          - "FZ 12 34 56 A"  # F not allowed
-          - "AB 12 34 56 X"  # X not allowed as suffix
-          - "AB 12 34 56"    # Missing suffix
-          - "AB1234 56 A"    # Wrong spacing
-
-      confidence: 0.90
-      pii_type_classification: "tax_identifier"
-      gdpr_article: "Article 4.1 (Personal identifier)"
-      uk_regulation: "Data Protection Act 2018"
-      hmrc_reference: "HMRC - HM Revenue and Customs"
-      k1_integration: "Validates NINO for UK employment/tax data"
-
-    canada_sin:
-      name: "Social Insurance Number"
-      country: "CA"
-      standard: "SIN Format (NNN NNN NNN)"
-      description: |
-        Canadian Social Insurance Number - unique identifier for tax purposes, employment,
-        social benefits. Format: 9 digits (NNN NNN NNN). Used for CRA (Canada Revenue Agency)
-        tax identification, employment records, CPP/EI benefits.
-
-      format_specification:
-        total_digits: 9
-        structure: "Grouped as 3-3-3 digits"
-        format_examples:
-          - "123 456 789"
-          - "987 654 321"
-
-        first_digit_rules:
-          "1-2": "Individual (most common)"
-          "3": "Business/Corporation"
-          "5": "Temporary resident"
-          "6": "Non-resident"
-          "7": "Indian band member"
-          "8": "Pension/Benefits"
-          "9": "Temporary resident (older format)"
-
-      regex_pattern: '\b(?!0{9})\d{3}\s?\d{3}\s?\d{3}\b'
-      regex_explanation: |
-        \b             - Word boundary
-        (?!0{9})       - Negative lookahead: reject all zeros
-        \d{3}          - First 3 digits
-        \s?            - Optional space or dash
-        \d{3}          - Second 3 digits
-        \s?            - Optional space or dash
-        \d{3}          - Third 3 digits
-        \b             - Word boundary
-
-      validation_logic:
-        checksum_algorithm: "Modulus 10 (Luhn variant)"
-        validation_steps:
-          - "Extract 9 digits"
-          - "Validate using SIN Luhn algorithm"
-          - "Check digit position 9"
-          - "Modulus 10 checksum"
-
-        implementation_rust: |
-          fn validate_sin(sin: &str) -> bool {
-              let digits: Vec<u32> = sin.chars()
-                  .filter(|c| c.is_numeric())
-                  .map(|c| c.to_digit(10).unwrap())
-                  .collect();
-
-              if digits.len() != 9 { return false; }
-              if digits.iter().all(|&d| d == 0) { return false; }
-
-              // Luhn algorithm
-              let mut sum = 0;
-              for (i, &digit) in digits[0..8].iter().enumerate() {
-                  let mut d = digit;
-                  if i % 2 == 0 {
-                      d *= 2;
-                      if d > 9 { d -= 9; }
-                  }
-                  sum += d;
-              }
-
-              let check_digit = (10 - (sum % 10)) % 10;
-              check_digit == digits[8]
-          }
-
-        implementation_python: |
-          def validate_sin(sin_str):
-              digits = [int(d) for d in sin_str if d.isdigit()]
-              if len(digits) != 9: return False
-              if all(d == 0 for d in digits): return False
-
-              # Luhn variant for SIN
-              sum_val = 0
-              for i, d in enumerate(digits[0:8]):
-                  if i % 2 == 0:
-                      d *= 2
-                      if d > 9: d -= 9
-                  sum_val += d
-
-              check_digit = (10 - (sum_val % 10)) % 10
-              return check_digit == digits[8]
-
-      test_vectors:
-        valid_sin:
-          - "123 456 789"  # Valid SIN (example)
-          - "987 654 321"  # Valid SIN (example)
-
-        invalid_sin:
-          - "000 000 000"  # All zeros
-          - "123 456 780"  # Wrong checksum
-          - "12345678"     # Only 8 digits
-
-      confidence: 0.85
-      pii_type_classification: "identifier"
-      gdpr_article: "Article 4.1 (Personal identifier)"
-      canadian_regulation: "PIPEDA (Personal Information Protection and Electronic Documents Act)"
-      cra_reference: "Canada Revenue Agency - SIN validation"
-      k1_integration: "Validates SIN for Canadian employment/tax data"
-
-  # Regional Deployment Strategy
-  deployment:
-    phase_1_us_only:
-      release_date: "2025-06-18"
-      coverage_pct: 85
-      patterns: 12
-      regions: ["US"]
-
-    phase_2_international:
-      planned_release_date: "2025-12-31"
-      coverage_pct: 95
-      patterns: 20
-      regions: ["UK", "Canada", "EU-27"]
-      deployment_sequence:
-        - "Q4 2025: UK (NHS, NINO) - 2 patterns"
-        - "Q4 2025: Canada (SIN) - 1 pattern"
-        - "Q4 2025: EU VAT - 27 country-specific patterns"
-        - "Q1 2026: Other regions (Asia, LATAM, Middle East)"
-
-    feature_flag: "enable_international_pii_detection"
-    rollout_strategy: "Gradual (10% → 25% → 50% → 100%)"
-
-  # Performance Characteristics
-  performance:
-    base_patterns_ms: 1.0
-    international_patterns_ms: 0.8
-    total_patterns: 20
-    pattern_count_increase: 8
-    latency_increase_pct: 8
-    total_latency_target_ms: 1.8
-
-  # Configuration & Control
-  configuration:
-    pattern_enable_by_region:
-      US: ["ssn", "email", "phone", "credit_card", "address", "ip_address", "driver_license", "passport", "health_insurance", "tax_id"]
-      GB: ["email", "phone", "nhs_number", "nino", "passport", "driver_license"]
-      CA: ["email", "phone", "sin", "health_insurance", "passport", "driver_license"]
-      EU: ["email", "phone", "vat_number", "passport", "driver_license", "iban", "health_insurance"]
-      Global: ["email", "phone", "passport", "address"]
-
-    user_region_detection:
-      - "User profile region setting"
-      - "Geolocation from IP address"
-      - "Language preference"
-      - "Timezone"
-      - "Default to user's region + US fallback"
-
-  # Compliance & Standards
-  compliance:
-    standards:
-      - "UK: UK Data Protection Act 2018 (GDPR equivalent)"
-      - "Canada: PIPEDA (Personal Information Protection and Electronic Documents Act)"
-      - "EU: GDPR (General Data Protection Regulation)"
-      - "ISO 3166-1 (Country codes)"
-    pii_classifications:
-      - "Personal identifiers (SSN, NINO, SIN, NHS)"
-      - "Tax identifiers (VAT, EIN)"
-      - "Health identifiers (NHS, health insurance)"
-      - "Travel documents (passport, driver license)"
-
-  # Compliance & Regulatory Framework
-  compliance_framework:
-    uk_compliance:
-      regulation: "UK Data Protection Act 2018 (UK GDPR equivalent)"
-      articles:
-        article_5: "Data protection principles (lawfulness, fairness, transparency)"
-        article_13: "Information to be provided to data subject"
-        article_15: "Right of access by data subject"
-        article_17: "Right to erasure (right to be forgotten)"
-        article_4_11: "Explicit consent for special category data (health)"
-
-      special_category_data: "NHS number is health data (Article 9)"
-      legal_basis: "Explicit consent required for processing health data"
-
-      implementation:
-        - "Consent collection: Explicit opt-in before NHS number detection"
-        - "Data retention: 90 days max (GDPR standard)"
-        - "Data portability: Export NHS data in JSON format"
-        - "Erasure: Delete NHS data within 30 days of request"
-        - "Privacy by design: Minimize NHS number collection"
-
-      compliance_checklist:
-        - "GDPR Article 5 - Principles (lawful, fair, transparent)"
-        - "GDPR Article 13 - Transparency information provided"
-        - "GDPR Article 15 - Access requests processed within 30 days"
-        - "GDPR Article 17 - Erasure requests processed within 30 days"
-        - "Privacy impact assessment (PIA) completed"
-        - "Data processing agreement (DPA) signed"
-
-      production_evidence:
-        k1_deployment: "12,000+ NHS numbers processed in UK region"
-        compliance_violations: "0 (GDPR compliant)"
-        data_export_time: "<5s average (Article 15)"
-        erasure_time: "<3s average (Article 17)"
-
-    canadian_compliance:
-      regulation: "PIPEDA (Personal Information Protection and Electronic Documents Act)"
-      principles:
-        principle_1: "Accountability (organizations responsible for personal information)"
-        principle_2: "Identifying purposes (collect only for stated purposes)"
-        principle_3: "Consent (collect only with knowledge and consent)"
-        principle_4: "Limiting collection (collect only necessary data)"
-        principle_5: "Limiting use (use only for stated purpose)"
-        principle_6: "Accuracy (keep data accurate and up-to-date)"
-        principle_7: "Safeguarding (protect data with appropriate security)"
-        principle_8: "Openness (explain privacy practices clearly)"
-        principle_9: "Individual access (provide individuals access to data)"
-        principle_10: "Complaint mechanisms (establish complaint process)"
-
-      cra_requirements: "SIN used only for tax purposes (CRA oversight)"
-      cpo_reference: "Canadian Privacy Commissioner oversight"
-
-      implementation:
-        - "Consent collection: Explain SIN use for employment/tax"
-        - "Purpose limitation: SIN used only for CRA purposes"
-        - "Data retention: 7 years (CRA requirement)"
-        - "Individual access: Provide SIN access within 30 days"
-        - "Complaint process: Established and published"
-
-      compliance_checklist:
-        - "PIPEDA Principle 1 - Accountability (CRO assigned)"
-        - "PIPEDA Principle 3 - Consent (explicit opt-in)"
-        - "PIPEDA Principle 7 - Safeguarding (encryption: AES-256)"
-        - "PIPEDA Principle 9 - Individual access (<30 days)"
-        - "Privacy assessment completed"
-        - "CPP/EI integration compliance verified"
-
-    eu_gdpr_compliance:
-      regulation: "GDPR (General Data Protection Regulation) - Article 4.1"
-      scope: "Applies to all 27 EU member states + EEA countries"
-
-      vat_number_classification: "Business identifier (not personal data per GDPR)"
-      passport_classification: "Travel document (personal identifier)"
-
-      articles:
-        article_4_1: "Definition of personal data (identifiable person)"
-        article_5: "Data protection principles"
-        article_6: "Legal basis for processing"
-        article_12: "Transparent information communication"
-        article_15: "Right to access"
-        article_17: "Right to erasure"
-        article_20: "Data portability"
-        article_33: "Breach notification (72 hours)"
-
-      fines_for_non_compliance:
-        tier_1: "Up to €10M or 2% annual revenue"
-        tier_2: "Up to €20M or 4% annual revenue"
-        examples:
-          - "Inadequate consent: Tier 2"
-          - "No audit trail: Tier 2"
-          - "Breach notification >72h: Tier 2"
-          - "Incomplete access/erasure: Tier 2"
-
-      implementation:
-        - "Consent management: Explicit opt-in per GDPR Article 7"
-        - "Data retention: 90 days max"
-        - "Breach notification: <72 hours"
-        - "Right to erasure: <30 days"
-        - "Privacy by design: Encryption, anonymization"
-
-      country_specific_regulations:
-        DE_germany: "Bundesdatenschutzgesetz (BDSG) - Stricter than GDPR"
-        FR_france: "CNIL - French data protection authority"
-        IT_italy: "Garante Privacy - Italian regulator"
-        ES_spain: "AEPD - Spanish Authority"
-
-      production_evidence:
-        k1_eu_deployments: "8 countries (DE, FR, IT, ES, NL, BE, AT, PL)"
-        gdpr_requests: "127 total (120 access, 7 erasure)"
-        compliance_rate: "100% (all requests processed within 30 days)"
-        fines_paid: "€0 (100% compliant)"
-
-  # Implementation Roadmap with Timelines
-  implementation_roadmap:
-    phase_2a_uk_deployment:
-      timeline: "October-November 2025"
-      duration_weeks: 4
-      deliverables:
-        - "NHS number pattern & validator"
-        - "NINO pattern & validator"
-        - "UK regional config"
-        - "UK compliance audit trail"
-        - "GDPR Article 15/17 handlers for UK data"
-
-      testing_requirements:
-        unit_tests: 150
-        integration_tests: 45
-        compliance_tests: 30
-        security_tests: 20
-        total_test_vectors: 245
-
-      performance_targets:
-        nhs_validation_ms: 0.2
-        nino_validation_ms: 0.2
-        uk_regional_overhead_ms: 0.1
-        total_latency_increase_pct: 3
-
-      production_rollout:
-        - "Week 1: Deploy to staging (internal testing)"
-        - "Week 2: Deploy to 10% production (canary)"
-        - "Week 3: Deploy to 50% production (gradual)"
-        - "Week 4: Deploy to 100% production"
-
-      success_criteria:
-        - "All 245 test vectors passing"
-        - "Zero false positives in production"
-        - "Latency within budget (1.8ms target maintained)"
-        - "100% compliance audits passing"
-
-    phase_2b_canada_deployment:
-      timeline: "November-December 2025"
-      duration_weeks: 3
-      deliverables:
-        - "SIN pattern & validator (Luhn algorithm)"
-        - "Canada regional config"
-        - "PIPEDA compliance audit trail"
-        - "CRA reporting integration"
-
-      testing_requirements:
-        unit_tests: 120
-        integration_tests: 35
-        compliance_tests: 25
-        security_tests: 15
-        total_test_vectors: 195
-
-      performance_targets:
-        sin_validation_ms: 0.2
-        canada_regional_overhead_ms: 0.1
-        total_latency_increase_pct: 2
-
-      production_rollout:
-        - "Week 1: Deploy to staging"
-        - "Week 2: Deploy to 25% production"
-        - "Week 3: Deploy to 100% production"
-
-    phase_2c_eu_deployment:
-      timeline: "December 2025-January 2026"
-      duration_weeks: 6
-      deliverables:
-        - "27 country-specific VAT patterns"
-        - "European passport patterns"
-        - "EU regional configs (per country)"
-        - "GDPR compliance audit trail"
-        - "Multi-language support (27 languages)"
-
-      testing_requirements:
-        unit_tests: 450  # 27 countries × pattern count
-        integration_tests: 120
-        compliance_tests: 80
-        security_tests: 45
-        total_test_vectors: 695
-
-      performance_targets:
-        vat_validation_ms: 0.3
-        passport_validation_ms: 0.15
-        eu_regional_overhead_ms: 0.25
-        total_latency_increase_pct: 5
-
-      complexity_note: |
-        Most complex phase due to:
-        - 27 country-specific VAT patterns (varying checksum rules)
-        - Multiple language support (GDPR right to communicate in native language)
-        - Country-specific compliance frameworks (BDSG, CNIL, etc.)
-        - Highest test vector count (695 total)
-
-  # Regional Configuration Management
-  configuration_management:
-    pattern_enablement_by_region:
-      united_states_us:
-        enabled: true
-        patterns: ["ssn", "email", "phone", "credit_card", "address", "ip_address", "driver_license", "passport", "health_insurance", "tax_id"]
-        confidence_threshold: 0.70
-        audit_retention_days: 90
-
-      united_kingdom_gb:
-        enabled: true
-        patterns: ["nhs_number", "nino", "email", "phone", "passport", "driver_license", "iban"]
-        confidence_threshold: 0.80
-        audit_retention_days: 90
-        gdpr_compliance: enabled
-        data_privacy_act: "UK Data Protection Act 2018"
-
-      canada_ca:
-        enabled: true
-        patterns: ["sin", "email", "phone", "health_insurance", "passport", "driver_license"]
-        confidence_threshold: 0.75
-        audit_retention_days: 2555  # 7 years (CRA requirement)
-        pipeda_compliance: enabled
-        cra_integration: enabled
-
-      european_union_eu:
-        enabled: true
-        patterns: ["vat_number", "passport", "email", "phone", "driver_license", "iban", "health_insurance"]
-        confidence_threshold: 0.85
-        audit_retention_days: 90
-        gdpr_compliance: enabled
-        country_specific_configs:
-          DE: {authority: "BfDI", language: "German", vat_format: "DE[0-9]{9}"}
-          FR: {authority: "CNIL", language: "French", vat_format: "FR[0-9A-Z]{2}[0-9]{9}"}
-          IT: {authority: "Garante Privacy", language: "Italian", vat_format: "IT[0-9]{11}"}
-          ES: {authority: "AEPD", language: "Spanish", vat_format: "ES[0-9A-Z]{9}"}
-          NL: {authority: "AP", language: "Dutch", vat_format: "NL[0-9]{12}B[0-9]{2}"}
-          BE: {authority: "APD", language: "Dutch/French", vat_format: "BE[0-9]{10}"}
-          AT: {authority: "DSB", language: "German", vat_format: "AT[0-9]{8}"}
-          PL: {authority: "UODO", language: "Polish", vat_format: "PL[0-9]{10}"}
-
-    user_region_detection_hierarchy:
-      priority_1: "User profile region setting (most authoritative)"
-      priority_2: "User geolocation from IP address"
-      priority_3: "User language preference"
-      priority_4: "User timezone"
-      priority_5: "Default fallback to US + UK + EU"
-
-      implementation_logic: |
-        1. Check user.region (explicitly set in profile)
-        2. If null, use IP geolocation (MaxMind GeoIP2)
-        3. If null, use user.language (map to region)
-        4. If null, use user.timezone (map to region)
-        5. Default to "GLOBAL" (all patterns enabled)
-
-        GLOBAL region enables: email, phone, passport (no region-specific patterns)
-
-  # Testing Strategy (WARD Framework)
-  comprehensive_testing:
-    test_organization:
-      unit_tests:
-        nhs_pattern_tests: 60
-        nino_pattern_tests: 50
-        sin_pattern_tests: 45
-        vat_pattern_tests: 150
-        passport_pattern_tests: 40
-        total_unit_tests: 345
-
-      integration_tests:
-        regional_pattern_matching: 60
-        multi_region_coordination: 30
-        feature_flag_behavior: 20
-        config_reload: 15
-        total_integration_tests: 125
-
-      compliance_tests:
-        gdpr_article_15_access: 25
-        gdpr_article_17_erasure: 25
-        gdpr_article_20_portability: 20
-        pipeda_principle_9: 15
-        uk_dpa_compliance: 15
-        total_compliance_tests: 100
-
-      security_tests:
-        injection_protection: 10
-        regex_redos_prevention: 20
-        encryption_validation: 15
-        audit_trail_integrity: 10
-        total_security_tests: 55
-
-      total_test_vectors: 625
-      test_coverage_target: "95%"
-
-    test_examples:
-      nhs_number_tests: |
-        @test("NHS pattern matches valid NHS numbers")
-        def _():
-            pattern = get_pattern("nhs_number")
-            assert pattern.matches("4025697018")
-            assert pattern.matches("4897843216")
-
-        @test("NHS checksum validates correctly")
-        def _():
-            assert validate_nhs("4025697018") == True
-            assert validate_nhs("4025697019") == False  # Wrong checksum
-
-        @test("NHS pattern rejects all zeros")
-        def _():
-            assert pattern.matches("0000000000") == False
-
-      sin_luhn_tests: |
-        @test("SIN Luhn algorithm validates")
-        def _():
-            assert validate_sin("123 456 789") == True  # Valid SIN
-            assert validate_sin("000 000 000") == False  # All zeros
-            assert validate_sin("123 456 780") == False  # Wrong checksum
-
-      multi_region_tests: |
-        @test("Correct patterns enabled per region")
-        def _():
-            gb_patterns = get_patterns_for_region("GB")
-            assert "nhs_number" in gb_patterns
-            assert "nino" in gb_patterns
-            assert "ssn" not in gb_patterns
-
-            ca_patterns = get_patterns_for_region("CA")
-            assert "sin" in ca_patterns
-            assert "nhs_number" not in ca_patterns
-
-      compliance_tests: |
-        @test("GDPR Article 15 returns all PII for user")
-        async def _():
-            result = await gdpr_article_15_request(user_id="user_123")
-            assert "nhs_numbers" in result
-            assert "nino" in result
-            assert all(v == "[REDACTED]" for v in result.values())
-
-        @test("GDPR Article 17 deletes all PII for user")
-        async def _():
-            await gdpr_article_17_request(user_id="user_123")
-            result = await get_user_pii(user_id="user_123")
-            assert len(result.detections) == 0
-
-  # Performance & Scaling Analysis
-  performance_analysis:
-    latency_breakdown:
-      base_us_patterns: "1.8ms per 1KB"
-      uk_regional_overhead: "+0.2ms (NHS + NINO validation)"
-      ca_regional_overhead: "+0.15ms (SIN validation)"
-      eu_regional_overhead: "+0.3ms (27 VAT patterns + passport)"
-
-      predicted_latencies:
-        us_region: "1.8ms"
-        uk_region: "2.0ms"
-        ca_region: "1.95ms"
-        eu_region: "2.1ms"
-        global_region: "2.2ms"
-
-      performance_budget: "<2.5ms target maintained ✅"
-
-    throughput_analysis:
-      baseline_us: "556 docs/sec (1.8ms per 1KB doc)"
-      uk_region: "500 docs/sec (2.0ms with NHS/NINO)"
-      ca_region: "513 docs/sec (1.95ms with SIN)"
-      eu_region: "476 docs/sec (2.1ms with VAT/passport)"
-
-      k1_target: "100+ docs/sec (achieved ✅)"
-
-    scaling_with_pattern_count:
-      base_12_patterns: "1.8ms"
-      add_uk_2_patterns: "2.0ms (1.11× increase)"
-      add_ca_1_pattern: "1.95ms (1.08× increase)"
-      add_eu_27_patterns: "2.5ms (1.39× increase)"
-
-      total_pattern_count: "12 + 2 + 1 + 27 = 42 patterns"
-      scaling_efficiency: "Linear O(n) as expected"
-
-    memory_footprint:
-      base_patterns_cache: "48 KB"
-      uk_patterns_cache: "8 KB"
-      ca_patterns_cache: "4 KB"
-      eu_patterns_cache: "64 KB (27 country-specific VAT formats)"
-      total_cache: "124 KB"
-
-      impact: "Negligible (124 KB << 1 GB typical process)"
-
-  # Risk Mitigation & Contingency Planning
-  risk_mitigation:
-    risk_1_regulatory_changes:
-      description: "UK/EU regulations change post-Brexit or new GDPR updates"
-      probability: "Medium"
-      impact: "Patterns need updates, compliance frameworks may change"
-      mitigation:
-        - "Establish regulatory monitoring (subscribe to ICO, CNIL alerts)"
-        - "Quarterly compliance review (every 3 months)"
-        - "Legal team consultation on pattern changes"
-        - "Version control patterns (easy rollback)"
-
-    risk_2_false_positive_increase:
-      description: "International patterns cause more false positives than US patterns"
-      probability: "Low"
-      impact: "More redactions, potential user frustration"
-      mitigation:
-        - "Conservative confidence thresholds (0.80+)"
-        - "Aggressive validation (checksum for all patterns)"
-        - "A/B testing before production (10% deployment first)"
-        - "Metrics dashboard for false positive rate"
-
-    risk_3_performance_degradation:
-      description: "27 EU patterns + international validators exceed 2.5ms budget"
-      probability: "Low"
-      impact: "Latency violations, user experience impact"
-      mitigation:
-        - "Early exit optimization (skip non-matching patterns)"
-        - "Pattern prioritization (high-confidence first)"
-        - "Batch processing for large documents"
-        - "Fallback to US patterns if latency exceeds budget"
-
-    risk_4_compliance_violations:
-      description: "GDPR/PIPEDA non-compliance discovered post-deployment"
-      probability: "Very low"
-      impact: "Regulatory fines (€20M or 4% revenue for GDPR)"
-      mitigation:
-        - "Pre-deployment compliance audit"
-        - "External legal review (law firm specializing in GDPR)"
-        - "Security & compliance team approval"
-        - "Monthly compliance reporting"
-
-    risk_5_validator_algorithm_bugs:
-      description: "Checksum validation algorithms (Modulus 11, Luhn) have bugs"
-      probability: "Low"
-      impact: "Invalid PII accepted, security risk"
-      mitigation:
-        - "Comprehensive test vectors (200+ per country)"
-        - "Cross-validation (compare against official sources)"
-        - "Code review by domain experts"
-        - "Production monitoring (false acceptance metrics)"
-    feature_flag_service: "FeatureFlagService (ADR-0011)"
-    config_location: "k1/config/pii_patterns_intl.yml"
-    monitoring_dashboard: "Privacy Metrics (regional breakdown)"
-    alerting:
-      - "Pattern detection rate by region"
-      - "False positive rate by region"
-      - "Performance degradation warnings"
-
-  # Risk & Mitigation
-  risks:
-    risk_increased_false_positives:
-      description: "More patterns = higher false positive risk"
-      mitigation: "Stringent validation, region-specific confidence thresholds"
-    risk_performance_degradation:
-      description: "20 patterns may exceed 5ms budget"
-      mitigation: "Optimization, early exit, pattern prioritization"
-    risk_compliance_changes:
-      description: "Regulations change (GDPR updates, new laws)"
-      mitigation: "Regular pattern review, legal team engagement"
-
-  # Future Roadmap
-  future:
-    phase_3_asia_pacific:
-      planned: "Q1 2026"
-      coverage: "India, China, Singapore, Australia"
-      patterns: ["Aadhar", "PAN", "ID numbers", "tax IDs"]
-
-    phase_4_latam:
-      planned: "Q2 2026"
-      coverage: "Brazil, Mexico, Argentina"
-      patterns: ["CPF", "RFC", "CUIT/CUIL"]
-
-    phase_5_mea:
-      planned: "Q3 2026"
-      coverage: "Middle East, Africa"
-      patterns: ["Emirates ID", "Saudi ID", "Aadhaar (for MENA)", "Various tax IDs"]
-
-  # Notes
-  notes: |
-    - Phase 1 (US-only) covers 85% of global users (English-speaking countries)
-    - Phase 2 (International) adds 10% coverage (UK, Canada, EU)
-    - Regional pattern selection reduces false positives (UK-specific patterns for UK users)
-    - Feature flag enables safe rollout (test in staging, gradual production rollout)
-    - VAT pattern highly complex (27 country-specific formats)
-    - Validation for international patterns more challenging (country-specific checksum rules)
-    - Future phases expand to 99%+ global coverage
+  source_adr: "0035a-regex-pattern-library.md"
+  epic: "2.9"
+  issue: "2.9.1"
+  phase: "2"  # Phase 1 = US patterns only, Phase 2 = International
+
+international_patterns:
+  uk_nhs:
+    name: "UK NHS Number"
+    regex: '\b\d{3}-\d{3}-\d{4}\b'
+    placeholder: "[UK_NHS]"
+    pii_type: "UK_NHS"
+    confidence: 0.90
+    requires_validation: true
+    validator: "nhs_checksum_validator"
+    description: "UK National Health Service number (XXX-XXX-XXXX format)"
+    format: "10 digits with check digit"
+    region: "United Kingdom"
+    examples:
+      - "943-476-5919"
+      - "123-456-7890"
+
+  canadian_sin:
+    name: "Canadian SIN"
+    regex: '\b\d{3}-\d{3}-\d{3}\b'
+    placeholder: "[CA_SIN]"
+    pii_type: "CANADIAN_SIN"
+    confidence: 0.92
+    requires_validation: true
+    validator: "sin_checksum_validator"
+    description: "Canadian Social Insurance Number (XXX-XXX-XXX format)"
+    format: "9 digits with Luhn checksum"
+    region: "Canada"
+    examples:
+      - "123-456-789"
+      - "987-654-321"
+
+  eu_vat_germany:
+    name: "German VAT Number"
+    regex: '\bDE\d{9}\b'
+    placeholder: "[DE_VAT]"
+    pii_type: "EU_VAT"
+    confidence: 0.95
+    requires_validation: false
+    description: "German VAT identification number"
+    format: "DE + 9 digits"
+    region: "Germany"
+    examples:
+      - "DE123456789"
+      - "DE987654321"
+
+  eu_vat_france:
+    name: "French VAT Number"
+    regex: '\bFR[A-Z0-9]{2}\d{9}\b'
+    placeholder: "[FR_VAT]"
+    pii_type: "EU_VAT"
+    confidence: 0.95
+    requires_validation: false
+    description: "French VAT identification number"
+    format: "FR + 2 alphanumeric + 9 digits"
+    region: "France"
+    examples:
+      - "FRXX123456789"
+      - "FR12345678901"
+
+  eu_vat_uk:
+    name: "UK VAT Number"
+    regex: '\bGB\d{9}(?:\d{3})?\b'
+    placeholder: "[GB_VAT]"
+    pii_type: "EU_VAT"
+    confidence: 0.95
+    requires_validation: false
+    description: "UK VAT registration number"
+    format: "GB + 9 or 12 digits"
+    region: "United Kingdom"
+    examples:
+      - "GB123456789"
+      - "GB123456789012"
+
+  eu_vat_italy:
+    name: "Italian VAT Number"
+    regex: '\bIT\d{11}\b'
+    placeholder: "[IT_VAT]"
+    pii_type: "EU_VAT"
+    confidence: 0.95
+    requires_validation: false
+    description: "Italian VAT identification number"
+    format: "IT + 11 digits"
+    region: "Italy"
+    examples:
+      - "IT12345678901"
+
+  eu_vat_spain:
+    name: "Spanish VAT Number"
+    regex: '\bES[A-Z0-9]\d{7}[A-Z0-9]\b'
+    placeholder: "[ES_VAT]"
+    pii_type: "EU_VAT"
+    confidence: 0.95
+    requires_validation: false
+    description: "Spanish VAT identification number (NIF)"
+    format: "ES + alphanumeric + 7 digits + alphanumeric"
+    region: "Spain"
+    examples:
+      - "ESX1234567X"
+      - "ESA1234567B"
+
+  au_tfn:
+    name: "Australian TFN"
+    regex: '\b\d{3}\s?\d{3}\s?\d{3}\b'
+    placeholder: "[AU_TFN]"
+    pii_type: "AUSTRALIAN_TFN"
+    confidence: 0.88
+    requires_validation: true
+    validator: "tfn_checksum_validator"
+    description: "Australian Tax File Number"
+    format: "9 digits (optionally with spaces)"
+    region: "Australia"
+    examples:
+      - "123 456 789"
+      - "987654321"
+
+international_validators:
+  nhs_checksum_validator:
+    name: "NHS Number Check Digit Validator"
+    description: "Validates UK NHS number using Modulus 11 algorithm"
+    algorithm:
+      - "Multiply each of first 9 digits by (11 - position)"
+      - "Sum all products"
+      - "Calculate 11 - (sum % 11)"
+      - "If result == 11, check digit = 0"
+      - "If result == 10, invalid NHS number"
+      - "Compare result with 10th digit (check digit)"
+    performance: "<0.1ms"
+    examples:
+      valid: ["943-476-5919"]
+      invalid: ["943-476-5910"]  # Wrong check digit
+
+  sin_checksum_validator:
+    name: "Canadian SIN Luhn Validator"
+    description: "Validates Canadian SIN using Luhn algorithm"
+    algorithm: "Same as credit card Luhn validation (ISO/IEC 7812-1)"
+    performance: "<0.1ms"
+    examples:
+      valid: ["046-454-286"]
+      invalid: ["046-454-287"]  # Wrong check digit
+
+  tfn_checksum_validator:
+    name: "Australian TFN Check Digit Validator"
+    description: "Validates Australian TFN using weighted algorithm"
+    algorithm:
+      - "Multiply digits by weights [1,4,3,7,5,8,6,9,10]"
+      - "Sum all products"
+      - "If sum % 11 == 0, valid"
+    performance: "<0.1ms"
+    examples:
+      valid: ["123456782"]
+      invalid: ["123456789"]  # Wrong check digit
+
+phase2_rollout_plan:
+  regions:
+    - region: "United Kingdom"
+      patterns: ["UK_NHS", "GB_VAT"]
+      priority: "High"
+      justification: "Large English-speaking market"
+
+    - region: "Canada"
+      patterns: ["CANADIAN_SIN"]
+      priority: "High"
+      justification: "English/French bilingual, close to US"
+
+    - region: "European Union"
+      patterns: ["DE_VAT", "FR_VAT", "IT_VAT", "ES_VAT"]
+      priority: "Medium"
+      justification: "GDPR compliance requirement"
+
+    - region: "Australia"
+      patterns: ["AU_TFN"]
+      priority: "Medium"
+      justification: "English-speaking, Asia-Pacific expansion"
+
+  timeline:
+    phase1_complete: "2025-Q4"
+    phase2_start: "2026-Q1"
+    phase2_complete: "2026-Q2"
+
+configuration_management:
+  locale_detection:
+    method: "User profile locale setting (ISO 3166-1 country code)"
+    fallback: "IP geolocation (GeoIP2)"
+    example: "user.locale = 'en-GB' → Enable UK patterns"
+
+  pattern_sets:
+    us_patterns:
+      enabled: ["SSN", "CREDIT_CARD", "EMAIL", "PHONE", "DRIVERS_LICENSE", "TAX_ID"]
+    uk_patterns:
+      enabled: ["UK_NHS", "GB_VAT", "EMAIL", "IBAN"]
+    ca_patterns:
+      enabled: ["CANADIAN_SIN", "EMAIL", "PHONE"]
+    eu_patterns:
+      enabled: ["IBAN", "EU_VAT", "EMAIL"]
+
+  multi_region_support:
+    description: "Enable multiple pattern sets simultaneously for multi-national users"
+    example: "US company with EU subsidiaries → Enable US + EU patterns"
+
+performance_impact:
+  additional_patterns: 7
+  total_patterns_phase2: 19  # 12 from Phase 1 + 7 from Phase 2
+  latency_increase: "+2ms (total <7ms for all 19 patterns)"
+  memory_increase: "+70KB (total ~190KB)"
+
+accuracy_targets:
+  recall: "85%"  # Consistent with Phase 1
+  precision: "100%"  # With validation
+  false_positive_rate: "0%"
+
+observability:
+  metrics:
+    - name: "pii_regex_international_detections_total"
+      type: "counter"
+      labels: ["pii_type", "region"]
+    - name: "pii_regex_locale_distribution"
+      type: "gauge"
+      labels: ["locale"]
+
+testing:
+  unit_tests:
+    - test_uk_nhs_pattern_matches
+    - test_canadian_sin_pattern_matches
+    - test_eu_vat_patterns_all_countries
+    - test_nhs_checksum_validator
+    - test_sin_checksum_validator
+
+  integration_tests:
+    - test_multi_region_pattern_sets
+    - test_locale_based_pattern_selection
+    - test_phase2_latency_under_7ms

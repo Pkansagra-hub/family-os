@@ -1,0 +1,751 @@
+---
+# ADR-0037: Authorization Cache Contract
+# Parent: ADR-0037 (JWT Authentication)
+# Status: Active
+# Date: 2025-10-21
+# Authors: K1 Architecture Team
+
+# Authorization Cache Contract
+# Defines caching for authorization decisions
+
+contract:
+  name: authorization_cache
+  version: "1.0.0"
+  description: "Caching for authorization decisions"
+  parent_adr: "ADR-0037"
+  priority: "HIGH"
+  effort: "1 day"
+
+# Authorization Caching Concept
+authorization_caching_concept:
+  description: "Caching authorization decisions for performance"
+  objectives:
+    - "Cache authorization decisions"
+    - "Reduce repeated evaluations"
+    - "Maintain cache consistency"
+    - "Support cache invalidation"
+
+  caching_benefits:
+    performance_improvement: "Reduce authorization latency"
+    reduced_load: "Lower authorization system load"
+    scalability: "Support higher request rates"
+    consistency: "Ensure decision consistency"
+
+# Cache Architecture
+cache_architecture:
+  cache_layers:
+    l1_cache:
+      description: "In-memory local cache"
+      scope: "Per-instance caching"
+      invalidation: "Event-driven invalidation"
+      persistence: "Non-persistent, instance-local"
+
+    l2_cache:
+      description: "Distributed shared cache"
+      scope: "Cluster-wide caching"
+      invalidation: "Centralized invalidation"
+      persistence: "Persistent with TTL"
+
+    l3_cache:
+      description: "Database-backed cache"
+      scope: "Persistent long-term cache"
+      invalidation: "Explicit invalidation"
+      persistence: "Database persistence"
+
+  cache_strategies:
+    write_through:
+      description: "Update cache on decision changes"
+      consistency: "Strong consistency"
+      performance: "Higher write latency"
+
+    write_behind:
+      description: "Async cache updates"
+      consistency: "Eventual consistency"
+      performance: "Lower write latency"
+
+    cache_aside:
+      description: "Lazy cache population"
+      consistency: "Cache misses on changes"
+      performance: "Optimal read performance"
+
+# Cache Key Design
+cache_key_design:
+  key_components:
+    user_context: "user_id, roles, capabilities"
+    resource_context: "resource_id, resource_type, space_id"
+    operation_context: "operation, parameters"
+    temporal_context: "timestamp, validity_window"
+
+  key_patterns:
+    role_based_key: "auth:rbac:{user_id}:{resource_type}:{resource_id}:{operation}"
+    capability_key: "auth:cap:{user_id}:{capability_id}:{resource_id}"
+    privacy_key: "auth:privacy:{user_id}:{data_band}:{operation}"
+    space_key: "auth:space:{user_id}:{space_id}:{operation}"
+
+  key_hashing:
+    collision_resistance: "SHA-256 for key hashing"
+    length_optimization: "Fixed-length keys"
+    namespace_separation: "Prefix-based namespacing"
+
+# Cache Invalidation
+cache_invalidation:
+  invalidation_strategies:
+    explicit_invalidation:
+      description: "Direct cache entry removal"
+      triggers: ["permission_changes", "role_assignments", "capability_revocation"]
+      scope: "Targeted invalidation"
+
+    time_based_expiration:
+      description: "TTL-based cache expiration"
+      default_ttl: "15 minutes for authorization decisions"
+      sliding_expiration: "Reset TTL on cache hits"
+      absolute_expiration: "Fixed expiration time"
+
+    event_driven_invalidation:
+      description: "Event-based cache invalidation"
+      events: ["user_role_changed", "space_membership_updated", "capability_modified"]
+      propagation: "Event bus distribution"
+      consistency: "Eventual consistency"
+
+  invalidation_scopes:
+    user_scope: "Invalidate all user-related decisions"
+    resource_scope: "Invalidate resource-specific decisions"
+    space_scope: "Invalidate space-related decisions"
+    global_scope: "Invalidate all cached decisions"
+
+# Cache Consistency
+cache_consistency:
+  consistency_models:
+    strong_consistency:
+      description: "Immediate cache invalidation"
+      implementation: "Synchronous invalidation"
+      performance_impact: "Higher latency"
+      use_cases: ["critical_security_decisions"]
+
+    eventual_consistency:
+      description: "Delayed cache consistency"
+      implementation: "Asynchronous invalidation"
+      performance_impact: "Lower latency"
+      use_cases: ["general_authorization_decisions"]
+
+  consistency_guarantees:
+    monotonic_reads: "Never return stale data after updates"
+    read_your_writes: "User sees their own changes immediately"
+    causal_consistency: "Causally related operations consistent"
+
+# Cache Performance
+cache_performance:
+  performance_targets:
+    cache_hit_ratio: ">95% for authorization decisions"
+    cache_miss_latency: "<5ms for cache population"
+    invalidation_latency: "<10ms for cache invalidation"
+    memory_usage: "<500MB per cache instance"
+
+  performance_monitoring:
+    hit_miss_ratios: "Track cache effectiveness"
+    latency_percentiles: "P50, P95, P99 latencies"
+    memory_utilization: "Cache memory usage tracking"
+    invalidation_frequency: "Cache invalidation rates"
+
+# Cache Storage
+cache_storage:
+  storage_backends:
+    redis_backend:
+      description: "Redis-based distributed cache"
+      features: ["TTL_support", "pubsub_invalidation", "clustering"]
+      scalability: "Horizontal scaling support"
+      persistence: "Configurable persistence"
+
+    memory_backend:
+      description: "In-memory cache for single instances"
+      features: ["fast_access", "simple_invalidation"]
+      scalability: "Single instance only"
+      persistence: "No persistence"
+
+    database_backend:
+      description: "Database-backed persistent cache"
+      features: ["durability", "complex_queries", "backup"]
+      scalability: "Database scaling limits"
+      persistence: "Full persistence"
+
+  storage_selection:
+    l1_cache: "In-memory (local instance)"
+    l2_cache: "Redis (distributed cluster)"
+    l3_cache: "Database (persistent backup)"
+
+# Security Considerations
+security_considerations:
+  cache_poisoning_prevention:
+    description: "Prevent malicious cache entries"
+    measures:
+      - "Cryptographic cache key signing"
+      - "Cache entry validation"
+      - "Secure cache storage"
+      - "Access control on cache operations"
+
+  information_leakage:
+    description: "Prevent cache-based information leakage"
+    measures:
+      - "Cache key encryption"
+      - "Sensitive data exclusion"
+      - "Access pattern obfuscation"
+      - "Cache timing attack prevention"
+
+  cache_invalidation_attacks:
+    description: "Prevent cache invalidation attacks"
+    measures:
+      - "Rate limiting on invalidation"
+      - "Authentication for invalidation"
+      - "Invalidation audit logging"
+      - "Throttling mechanisms"
+
+  compliance_requirements:
+    description: "Cache compliance with regulations"
+    measures:
+      - "Audit trail for cache operations"
+      - "Data retention policies"
+      - "Encryption at rest"
+      - "Access logging"
+
+# Implementation Interface
+implementation:
+  rust:
+    dependencies:
+      - "redis = \"0.23\""
+      - "serde = { version = \"1.0\", features = [\"derive\"] }"
+      - "tokio = { version = \"1.0\", features = [\"full\"] }"
+      - "sha2 = \"0.10\""
+
+    code_example: |
+      use serde::{Deserialize, Serialize};
+      use std::collections::HashMap;
+      use std::time::{Duration, Instant};
+      use sha2::{Sha256, Digest};
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct CacheEntry {
+          pub key: String,
+          pub value: AuthorizationDecision,
+          pub created_at: i64,
+          pub expires_at: i64,
+          pub hits: u64,
+      }
+
+      #[derive(Debug, Clone, Serialize, Deserialize)]
+      pub struct AuthorizationDecision {
+          pub user_id: String,
+          pub resource_id: String,
+          pub operation: String,
+          pub granted: bool,
+          pub reason: String,
+          pub context: HashMap<String, String>,
+      }
+
+      #[derive(Debug)]
+      pub enum CacheResult<T> {
+          Hit(T),
+          Miss,
+          Expired,
+      }
+
+      pub struct AuthorizationCache {
+          redis_client: redis::Client,
+          local_cache: HashMap<String, CacheEntry>,
+          default_ttl: Duration,
+      }
+
+      impl AuthorizationCache {
+          pub fn new(redis_url: &str, default_ttl_secs: u64) -> Self {
+              Self {
+                  redis_client: redis::Client::open(redis_url).unwrap(),
+                  local_cache: HashMap::new(),
+                  default_ttl: Duration::from_secs(default_ttl_secs),
+              }
+          }
+
+          pub async fn get_decision(
+              &mut self,
+              user_id: &str,
+              resource_id: &str,
+              operation: &str,
+              context: &HashMap<String, String>,
+          ) -> CacheResult<AuthorizationDecision> {
+              let cache_key = self.generate_cache_key(user_id, resource_id, operation, context);
+
+              // Try local cache first
+              if let Some(entry) = self.local_cache.get(&cache_key) {
+                  if self.is_expired(entry) {
+                      self.local_cache.remove(&cache_key);
+                      return CacheResult::Expired;
+                  }
+
+                  // Update hit count
+                  let mut updated_entry = entry.clone();
+                  updated_entry.hits += 1;
+                  self.local_cache.insert(cache_key.clone(), updated_entry);
+
+                  return CacheResult::Hit(entry.value.clone());
+              }
+
+              // Try Redis cache
+              let mut conn = match self.redis_client.get_async_connection().await {
+                  Ok(conn) => conn,
+                  Err(_) => return CacheResult::Miss,
+              };
+
+              let redis_key = format!("auth:{}", cache_key);
+              let cached_json: Option<String> = redis::cmd("GET")
+                  .arg(&redis_key)
+                  .query_async(&mut conn)
+                  .await
+                  .ok()
+                  .flatten();
+
+              if let Some(json) = cached_json {
+                  if let Ok(entry) = serde_json::from_str::<CacheEntry>(&json) {
+                      if !self.is_expired(&entry) {
+                          // Store in local cache
+                          self.local_cache.insert(cache_key.clone(), entry.clone());
+
+                          // Update hit count in Redis
+                          let _: Result<(), _> = redis::cmd("HINCRBY")
+                              .arg(&redis_key)
+                              .arg("hits")
+                              .arg(1)
+                              .query_async(&mut conn)
+                              .await;
+
+                          return CacheResult::Hit(entry.value);
+                      } else {
+                          // Remove expired entry
+                          let _: Result<(), _> = redis::cmd("DEL")
+                              .arg(&redis_key)
+                              .query_async(&mut conn)
+                              .await;
+                      }
+                  }
+              }
+
+              CacheResult::Miss
+          }
+
+          pub async fn store_decision(
+              &mut self,
+              user_id: &str,
+              resource_id: &str,
+              operation: &str,
+              context: &HashMap<String, String>,
+              decision: AuthorizationDecision,
+          ) -> Result<(), CacheError> {
+              let cache_key = self.generate_cache_key(user_id, resource_id, operation, context);
+              let now = chrono::Utc::now().timestamp();
+              let expires_at = now + self.default_ttl.as_secs() as i64;
+
+              let entry = CacheEntry {
+                  key: cache_key.clone(),
+                  value: decision,
+                  created_at: now,
+                  expires_at,
+                  hits: 0,
+              };
+
+              // Store in local cache
+              self.local_cache.insert(cache_key.clone(), entry.clone());
+
+              // Store in Redis
+              let mut conn = self.redis_client.get_async_connection().await?;
+              let redis_key = format!("auth:{}", cache_key);
+              let json_value = serde_json::to_string(&entry)?;
+
+              redis::cmd("SETEX")
+                  .arg(&redis_key)
+                  .arg(self.default_ttl.as_secs())
+                  .arg(json_value)
+                  .query_async(&mut conn)
+                  .await?;
+
+              Ok(())
+          }
+
+          pub async fn invalidate_user(&mut self, user_id: &str) -> Result<(), CacheError> {
+              // Remove from local cache
+              self.local_cache.retain(|_, entry| entry.value.user_id != user_id);
+
+              // Remove from Redis (pattern delete)
+              let mut conn = self.redis_client.get_async_connection().await?;
+              let pattern = format!("auth:*:{}:*", user_id);
+
+              // Get all matching keys
+              let keys: Vec<String> = redis::cmd("KEYS")
+                  .arg(&pattern)
+                  .query_async(&mut conn)
+                  .await?;
+
+              if !keys.is_empty() {
+                  redis::cmd("DEL")
+                      .arg(keys)
+                      .query_async(&mut conn)
+                      .await?;
+              }
+
+              Ok(())
+          }
+
+          pub async fn invalidate_resource(&mut self, resource_id: &str) -> Result<(), CacheError> {
+              // Remove from local cache
+              self.local_cache.retain(|_, entry| entry.value.resource_id != resource_id);
+
+              // Remove from Redis
+              let mut conn = self.redis_client.get_async_connection().await?;
+              let pattern = format!("auth:*:{}:*", resource_id);
+
+              let keys: Vec<String> = redis::cmd("KEYS")
+                  .arg(&pattern)
+                  .query_async(&mut conn)
+                  .await?;
+
+              if !keys.is_empty() {
+                  redis::cmd("DEL")
+                      .arg(keys)
+                      .query_async(&mut conn)
+                      .await?;
+              }
+
+              Ok(())
+          }
+
+          pub async fn invalidate_space(&mut self, space_id: &str) -> Result<(), CacheError> {
+              // For space invalidation, we need to check context
+              self.local_cache.retain(|_, entry| {
+                  !entry.value.context.get("space_id").map_or(false, |s| s == space_id)
+              });
+
+              // Redis pattern delete for space
+              let mut conn = self.redis_client.get_async_connection().await?;
+              let pattern = format!("auth:space:*{}*", space_id);
+
+              let keys: Vec<String> = redis::cmd("KEYS")
+                  .arg(&pattern)
+                  .query_async(&mut conn)
+                  .await?;
+
+              if !keys.is_empty() {
+                  redis::cmd("DEL")
+                      .arg(keys)
+                      .query_async(&mut conn)
+                      .await?;
+              }
+
+              Ok(())
+          }
+
+          pub async fn get_cache_stats(&self) -> HashMap<String, u64> {
+              let mut stats = HashMap::new();
+
+              stats.insert("local_entries".to_string(), self.local_cache.len() as u64);
+
+              // Get Redis stats
+              if let Ok(mut conn) = self.redis_client.get_async_connection().await {
+                  let redis_keys: i64 = redis::cmd("DBSIZE")
+                      .query_async(&mut conn)
+                      .await
+                      .unwrap_or(0);
+
+                  stats.insert("redis_entries".to_string(), redis_keys as u64);
+              }
+
+              stats
+          }
+
+          fn generate_cache_key(
+              &self,
+              user_id: &str,
+              resource_id: &str,
+              operation: &str,
+              context: &HashMap<String, String>,
+          ) -> String {
+              let mut hasher = Sha256::new();
+
+              // Include core components
+              hasher.update(user_id.as_bytes());
+              hasher.update(resource_id.as_bytes());
+              hasher.update(operation.as_bytes());
+
+              // Include sorted context for consistency
+              let mut context_pairs: Vec<_> = context.iter().collect();
+              context_pairs.sort_by_key(|(k, _)| *k);
+
+              for (key, value) in context_pairs {
+                  hasher.update(key.as_bytes());
+                  hasher.update(value.as_bytes());
+              }
+
+              format!("{:x}", hasher.finalize())
+          }
+
+          fn is_expired(&self, entry: &CacheEntry) -> bool {
+              let now = chrono::Utc::now().timestamp();
+              now > entry.expires_at
+          }
+      }
+
+  python:
+    dependencies:
+      - "redis==4.5.0"
+      - "pydantic==2.0.0"
+      - "hashlib"
+
+    code_example: |
+      from pydantic import BaseModel
+      from typing import Dict, Optional
+      import redis.asyncio as redis
+      import json
+      import time
+      import hashlib
+
+      class AuthorizationDecision(BaseModel):
+          user_id: str
+          resource_id: str
+          operation: str
+          granted: bool
+          reason: str
+          context: Dict[str, str]
+
+      class CacheEntry(BaseModel):
+          key: str
+          value: AuthorizationDecision
+          created_at: int
+          expires_at: int
+          hits: int = 0
+
+      class CacheResult:
+          def __init__(self, hit: bool, value: Optional[AuthorizationDecision] = None, expired: bool = False):
+              self.hit = hit
+              self.value = value
+              self.expired = expired
+
+      class AuthorizationCache:
+          def __init__(self, redis_url: str, default_ttl: int = 900):  # 15 minutes
+              self.redis = redis.from_url(redis_url)
+              self.local_cache: Dict[str, CacheEntry] = {}
+              self.default_ttl = default_ttl
+
+          async def get_decision(
+              self,
+              user_id: str,
+              resource_id: str,
+              operation: str,
+              context: Dict[str, str]
+          ) -> CacheResult:
+              """Get cached authorization decision"""
+              cache_key = self._generate_cache_key(user_id, resource_id, operation, context)
+
+              # Try local cache first
+              if cache_key in self.local_cache:
+                  entry = self.local_cache[cache_key]
+                  if self._is_expired(entry):
+                      del self.local_cache[cache_key]
+                      return CacheResult(hit=False, expired=True)
+
+                  # Update hit count
+                  entry.hits += 1
+                  self.local_cache[cache_key] = entry
+
+                  return CacheResult(hit=True, value=entry.value)
+
+              # Try Redis cache
+              redis_key = f"auth:{cache_key}"
+              try:
+                  cached_json = await self.redis.get(redis_key)
+                  if cached_json:
+                      entry = CacheEntry.parse_raw(cached_json)
+                      if not self._is_expired(entry):
+                          # Store in local cache
+                          self.local_cache[cache_key] = entry
+
+                          # Update hit count in Redis
+                          await self.redis.hincrby(redis_key, "hits", 1)
+
+                          return CacheResult(hit=True, value=entry.value)
+                      else:
+                          # Remove expired entry
+                          await self.redis.delete(redis_key)
+              except:
+                  pass  # Redis failure, continue to miss
+
+              return CacheResult(hit=False)
+
+          async def store_decision(
+              self,
+              user_id: str,
+              resource_id: str,
+              operation: str,
+              context: Dict[str, str],
+              decision: AuthorizationDecision
+          ) -> None:
+              """Store authorization decision in cache"""
+              cache_key = self._generate_cache_key(user_id, resource_id, operation, context)
+              now = int(time.time())
+              expires_at = now + self.default_ttl
+
+              entry = CacheEntry(
+                  key=cache_key,
+                  value=decision,
+                  created_at=now,
+                  expires_at=expires_at,
+                  hits=0
+              )
+
+              # Store in local cache
+              self.local_cache[cache_key] = entry
+
+              # Store in Redis
+              redis_key = f"auth:{cache_key}"
+              json_value = entry.json()
+              await self.redis.setex(redis_key, self.default_ttl, json_value)
+
+          async def invalidate_user(self, user_id: str) -> None:
+              """Invalidate all cache entries for a user"""
+              # Remove from local cache
+              keys_to_remove = [
+                  key for key, entry in self.local_cache.items()
+                  if entry.value.user_id == user_id
+              ]
+              for key in keys_to_remove:
+                  del self.local_cache[key]
+
+              # Remove from Redis
+              pattern = f"auth:*:{user_id}:*"
+              keys = await self.redis.keys(pattern)
+              if keys:
+                  await self.redis.delete(*keys)
+
+          async def invalidate_resource(self, resource_id: str) -> None:
+              """Invalidate all cache entries for a resource"""
+              # Remove from local cache
+              keys_to_remove = [
+                  key for key, entry in self.local_cache.items()
+                  if entry.value.resource_id == resource_id
+              ]
+              for key in keys_to_remove:
+                  del self.local_cache[key]
+
+              # Remove from Redis
+              pattern = f"auth:*:{resource_id}:*"
+              keys = await self.redis.keys(pattern)
+              if keys:
+                  await self.redis.delete(*keys)
+
+          async def invalidate_space(self, space_id: str) -> None:
+              """Invalidate cache entries for a space"""
+              # Remove from local cache
+              keys_to_remove = [
+                  key for key, entry in self.local_cache.items()
+                  if entry.value.context.get("space_id") == space_id
+              ]
+              for key in keys_to_remove:
+                  del self.local_cache[key]
+
+              # Remove from Redis
+              pattern = f"auth:space:*{space_id}*"
+              keys = await self.redis.keys(pattern)
+              if keys:
+                  await self.redis.delete(*keys)
+
+          async def get_cache_stats(self) -> Dict[str, int]:
+              """Get cache statistics"""
+              stats = {
+                  "local_entries": len(self.local_cache)
+              }
+
+              try:
+                  redis_dbsize = await self.redis.dbsize()
+                  stats["redis_entries"] = redis_dbsize
+              except:
+                  stats["redis_entries"] = 0
+
+              return stats
+
+          def _generate_cache_key(
+              self,
+              user_id: str,
+              resource_id: str,
+              operation: str,
+              context: Dict[str, str]
+          ) -> str:
+              """Generate consistent cache key"""
+              # Sort context for consistency
+              sorted_context = sorted(context.items())
+
+              # Create hash input
+              key_components = [user_id, resource_id, operation] + [
+                  f"{k}:{v}" for k, v in sorted_context
+              ]
+
+              key_string = "|".join(key_components)
+              return hashlib.sha256(key_string.encode()).hexdigest()
+
+          def _is_expired(self, entry: CacheEntry) -> bool:
+              """Check if cache entry is expired"""
+              return int(time.time()) > entry.expires_at
+
+# Testing Requirements
+testing:
+  unit_tests:
+    - "Cache key generation"
+    - "Cache hit/miss logic"
+    - "TTL expiration handling"
+    - "Invalidation operations"
+
+  integration_tests:
+    - "Redis cache operations"
+    - "Cache consistency"
+    - "Invalidation propagation"
+    - "Performance under load"
+
+  security_tests:
+    - "Cache key collision prevention"
+    - "Cache poisoning protection"
+    - "Information leakage prevention"
+    - "Invalidation attack protection"
+
+  performance_tests:
+    - "Cache hit latency"
+    - "Cache miss latency"
+    - "Invalidation performance"
+    - "Memory usage scaling"
+
+# Dependencies
+dependencies:
+  upstream:
+    - "role_based_access.yml: Provides RBAC decisions to cache"
+    - "capability_checking.yml: Provides capability decisions to cache"
+    - "privacy_band_enforcement.yml: Provides privacy decisions to cache"
+    - "space_isolation.yml: Provides space decisions to cache"
+  downstream:
+    - "authorization_audit.yml: Audits cache operations"
+
+# Success Criteria
+success_criteria:
+  functional:
+    - "Authorization decisions cached correctly"
+    - "Cache invalidation works properly"
+    - "Cache consistency maintained"
+    - "Performance targets met"
+
+  performance:
+    - "Cache hit ratio >95%"
+    - "Cache operations <1ms"
+    - "Invalidation <5ms"
+    - "Memory usage <500MB"
+
+  security:
+    - "No cache-based information leakage"
+    - "Cache poisoning prevented"
+    - "Secure invalidation"
+    - "Audit trail complete"
+
+  reliability:
+    - "Cache consistency under failure"
+    - "Graceful degradation"
+    - "Data integrity maintained"
