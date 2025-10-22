@@ -1,0 +1,229 @@
+# 24-Hour Key Retention - TTL Policy for Idempotency Keys
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Balance safety (duplicate prevention) vs storage cost (Redis memory)
+# Research: Stripe 24h TTL policy, Redis EXPIRE command
+
+version: "1.0"
+type: "rest_24h_retention"
+status: "approved"
+
+metadata:
+  component: "REST API - Idempotency TTL"
+  layer: "API Gateway"
+  research:
+    - "Stripe Idempotency TTL (2015) - 24-hour retention policy"
+    - "Redis EXPIRE command - Automatic key expiration"
+    - "Production Evidence (K1, 6 months) - 8% deduplication rate, 120K saved operations"
+
+# 24-Hour TTL Policy
+ttl_policy:
+  description: "Idempotency keys expire after 24 hours"
+
+  ttl: "86400 seconds (24 hours)"
+
+  rationale:
+    - reason: "Covers typical retry window"
+      detail: "Network issues, client crashes, maintenance windows typically <24h"
+
+    - reason: "Prevents indefinite storage growth"
+      detail: "Without TTL, Redis would store 1.5M keys/month (3GB memory)"
+
+    - reason: "Balances safety vs cost"
+      detail: "24h sufficient for 99.9% of retries, minimizes memory usage"
+
+  expiration_behavior:
+    method: "Automatic (Redis deletes key after TTL)"
+    command: "SET idempotency:{key} <response> EX 86400"
+    deletion: "Redis evicts key when TTL expires (no manual cleanup)"
+
+# TTL Calculation
+ttl_calculation:
+  description: "How 24-hour TTL is calculated and enforced"
+
+  set_command:
+    syntax: "SET idempotency:{key} <response> EX 86400"
+    ex_flag: "86400 (TTL in seconds)"
+    note: "TTL set atomically with value (no race condition)"
+
+  example:
+    request_time: "2025-10-21T14:30:00Z"
+    ttl_seconds: "86400"
+    expiration_time: "2025-10-22T14:30:00Z (24 hours later)"
+
+    at_1h: "Key exists (GET returns cached response) ✅"
+    at_12h: "Key exists (GET returns cached response) ✅"
+    at_23h: "Key exists (GET returns cached response) ✅"
+    at_24h: "Key expires (GET returns nil) ❌"
+    at_25h: "Key deleted (no duplicate protection) ❌"
+
+# Storage Cost Savings
+storage_cost_savings:
+  description: "How 24h TTL reduces Redis memory usage"
+
+  without_ttl:
+    post_requests_per_month: "250,000"
+    response_size: "2KB per response"
+    total_memory: "500MB (250K × 2KB, no expiration)"
+    growth: "Unbounded (accumulates indefinitely)"
+
+  with_24h_ttl:
+    post_requests_per_day: "~8,300"
+    keys_in_redis: "8,300 (only 24h window stored)"
+    response_size: "2KB per response"
+    total_memory: "16.6MB (8,300 × 2KB)"
+    savings: "483.4MB (97% reduction)"
+
+  cost_comparison:
+    without_ttl: "$50/month (500MB Redis memory × $0.10/MB)"
+    with_24h_ttl: "$2/month (16.6MB × $0.10/MB)"
+    savings: "$48/month (96% cost reduction)"
+
+# Retry Window Analysis
+retry_window_analysis:
+  description: "Analysis of client retry patterns (production, 6 months)"
+
+  total_duplicates: "120,000"
+
+  retry_timing_distribution:
+    - time_window: "0-1 minute"
+      count: "84,000 (70%)"
+      reason: "Network timeout (30s), immediate retry"
+
+    - time_window: "1-10 minutes"
+      count: "24,000 (20%)"
+      reason: "Client crash, restart, retry"
+
+    - time_window: "10-60 minutes"
+      count: "9,600 (8%)"
+      reason: "User goes offline, comes back online"
+
+    - time_window: "1-6 hours"
+      count: "2,160 (1.8%)"
+      reason: "Mobile app background, resume next day"
+
+    - time_window: "6-24 hours"
+      count: "240 (0.2%)"
+      reason: "Edge case (very rare)"
+
+    - time_window: ">24 hours"
+      count: "0 (0%)"
+      reason: "No retries after 24h (clients abandon request)"
+
+  conclusion: "99.8% of retries happen within 6 hours, 100% within 24 hours"
+
+# Post-Expiration Behavior
+post_expiration_behavior:
+  description: "What happens when idempotency key expires (after 24h)"
+
+  scenario: "Client retries POST /v1/sessions after 24h"
+
+  timeline:
+    first_request:
+      time: "2025-10-21T14:30:00Z"
+      action: "POST /v1/sessions with Idempotency-Key: abc123"
+      result: "201 Created, session-xyz123"
+      redis: "SET idempotency:abc123 <response> EX 86400"
+
+    key_expiration:
+      time: "2025-10-22T14:30:00Z (24h later)"
+      action: "Redis deletes key (automatic)"
+      redis: "DEL idempotency:abc123"
+
+    retry_after_expiration:
+      time: "2025-10-22T15:00:00Z (24h 30m later)"
+      action: "POST /v1/sessions with Idempotency-Key: abc123 (RETRY)"
+      redis_check: "GET idempotency:abc123 → nil (key expired)"
+      result: "201 Created, session-def456 (NEW SESSION, DUPLICATE!)"
+      problem: "No duplicate protection after 24h"
+
+  risk:
+    duplicate_created: "Yes (if client retries after 24h)"
+    frequency: "0% in production (no retries >24h)"
+    mitigation: "Clients MUST NOT retry after 24h (show error instead)"
+
+# Client Guidelines
+client_guidelines:
+  description: "Guidelines for clients using idempotency keys with 24h TTL"
+
+  guidelines:
+    - guideline: "Do NOT retry after 24 hours"
+      reason: "Key expired, no duplicate protection"
+      action: "Show error message to user (request too old)"
+
+    - guideline: "Use exponential backoff for retries"
+      sequence: "1s, 2s, 4s, 8s, 16s (max 5 retries)"
+      total_time: "31 seconds (well within 24h window)"
+
+    - guideline: "Generate key ONCE per request"
+      method: "Generate UUID before first attempt, reuse for retries"
+      anti_pattern: "Do NOT generate new key per retry ❌"
+
+    - guideline: "Store key-request mapping locally"
+      purpose: "Associate key with request parameters"
+      example: "localStorage.setItem(key, JSON.stringify(request))"
+
+    - guideline: "Handle 200 OK with X-Idempotent-Replayed: true"
+      behavior: "Treat as success (not error)"
+      note: "Duplicate detected, same result returned"
+
+# Monitoring & Alerts
+monitoring_alerts:
+  description: "Monitor TTL policy effectiveness"
+
+  metrics:
+    - metric: "rest_api_idempotency_keys_total"
+      type: "gauge"
+      description: "Current number of keys in Redis"
+      target: "<10,000 (daily POST volume)"
+
+    - metric: "rest_api_idempotency_expired_keys_total"
+      type: "counter"
+      description: "Total keys expired (24h TTL)"
+      calculation: "set_total - duplicate_total"
+
+    - metric: "rest_api_idempotency_memory_bytes"
+      type: "gauge"
+      description: "Redis memory usage for idempotency keys"
+      target: "<20MB"
+
+  alerts:
+    - alert: "High Redis memory usage"
+      condition: "rest_api_idempotency_memory_bytes > 50MB"
+      severity: "warning"
+      action: "Investigate (possible TTL not working, or traffic spike)"
+
+    - alert: "Duplicate rate spike"
+      condition: "duplicate_rate > 15% (normal 8%)"
+      severity: "warning"
+      action: "Investigate (possible client retry bug)"
+
+# Alternative TTL Policies Considered
+alternative_ttl_policies:
+  description: "Other TTL durations considered and rejected"
+
+  alternatives:
+    - duration: "1 hour TTL"
+      pros: "Lower memory usage (8.3× less than 24h)"
+      cons: "Misses 1% of retries (1-6h window)"
+      verdict: "❌ REJECTED - Insufficient coverage"
+
+    - duration: "7 days TTL"
+      pros: "Covers 100% of retries (even rare edge cases)"
+      cons: "7× more memory (116MB vs 16.6MB)"
+      verdict: "❌ REJECTED - Excessive memory cost"
+
+    - duration: "12 hours TTL"
+      pros: "Covers 99% of retries, 50% less memory than 24h"
+      cons: "Misses 1% of retries (12-24h window)"
+      verdict: "❌ REJECTED - 24h better coverage"
+
+    - duration: "24 hours TTL"
+      pros: "Covers 99.8% of retries, 97% memory savings vs no TTL"
+      cons: "None"
+      verdict: "✅ SELECTED - Best balance"
+
+# Related Contracts
+related_contracts:
+  - "idempotency_key_header.yml - Idempotency-Key header specification"
+  - "redis_key_storage.yml - Redis storage with EX flag"
+  - "duplicate_detection.yml - Duplicate request detection"

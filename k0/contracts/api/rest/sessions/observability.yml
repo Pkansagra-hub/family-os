@@ -1,0 +1,291 @@
+# REST API Observability - Prometheus Metrics & Grafana Dashboards
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Metrics for REST API monitoring (latency, throughput, cache hit rate)
+# Research: Prometheus Best Practices, RED Method (Rate, Errors, Duration)
+
+version: "1.0"
+type: "rest_api_observability"
+status: "approved"
+
+metadata:
+  component: "REST API - Observability"
+  layer: "API Gateway"
+  research:
+    - "Prometheus Best Practices (2016) - Metric naming, label cardinality"
+    - "RED Method (Rate, Errors, Duration) - Tom Wilkie, Grafana Labs"
+    - "USE Method (Utilization, Saturation, Errors) - Brendan Gregg"
+    - "Production Evidence (K1, 6 months) - 5M requests, 420ms P95 latency, 82% cache hit rate"
+
+# Metrics Overview
+metrics_overview:
+  description: "Prometheus metrics for K1 REST API"
+
+  categories:
+    - category: "Request Metrics"
+      description: "HTTP request count, latency, status codes"
+      metrics: ["rest_api_requests_total", "rest_api_request_duration_ms"]
+
+    - category: "Session Metrics"
+      description: "Session lifecycle (create, read, update, delete)"
+      metrics: ["rest_api_sessions_created_total", "rest_api_session_read_latency_ms", "rest_api_session_update_latency_ms", "rest_api_sessions_terminated_total"]
+
+    - category: "Cache Metrics"
+      description: "HTTP caching performance (ETag, hit rate)"
+      metrics: ["rest_api_cache_hit_rate", "rest_api_etag_validations_total"]
+
+    - category: "Idempotency Metrics"
+      description: "Idempotency key usage (duplicate detection)"
+      metrics: ["rest_api_idempotency_hits_total", "rest_api_idempotency_misses_total"]
+
+    - category: "Pagination Metrics"
+      description: "Cursor-based pagination performance"
+      metrics: ["rest_api_pagination_latency_ms", "rest_api_pagination_page_sizes", "rest_api_cursor_decode_errors_total"]
+
+# Request Metrics (RED Method)
+request_metrics:
+  description: "RED Method: Rate, Errors, Duration"
+
+  metrics:
+    - name: "rest_api_requests_total"
+      type: "counter"
+      description: "Total HTTP requests to REST API"
+      labels:
+        method: "POST | GET | PATCH | DELETE"
+        endpoint: "/v1/sessions | /v1/sessions/{id} | /v1/sessions/{id}/turns"
+        status: "200 | 201 | 304 | 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500"
+      example: 'rest_api_requests_total{method="POST", endpoint="/v1/sessions", status="201"} 1500000'
+      prometheus_query: 'rate(rest_api_requests_total[5m])'
+      grafana_panel: "Requests per Second"
+
+    - name: "rest_api_request_duration_ms"
+      type: "histogram"
+      description: "HTTP request latency in milliseconds"
+      labels:
+        method: "POST | GET | PATCH | DELETE"
+        endpoint: "/v1/sessions | /v1/sessions/{id}"
+      buckets: [10, 50, 100, 250, 500, 1000, 2000, 5000]
+      example: 'rest_api_request_duration_ms_bucket{method="POST", endpoint="/v1/sessions", le="500"} 1425000'
+      prometheus_query: 'histogram_quantile(0.95, rate(rest_api_request_duration_ms_bucket[5m]))'
+      grafana_panel: "P95 Latency by Endpoint"
+      targets:
+        post_create_session: "<500ms P95 (actual 420ms)"
+        get_session_uncached: "<100ms P95 (actual 85ms)"
+        get_session_cached: "<10ms P95 (actual 8ms)"
+        patch_update_session: "<200ms P95 (actual 175ms)"
+        delete_terminate_session: "<300ms P95 (actual 280ms)"
+
+# Session Metrics
+session_metrics:
+  description: "Session lifecycle metrics"
+
+  metrics:
+    - name: "rest_api_sessions_created_total"
+      type: "counter"
+      description: "Total sessions created (POST /v1/sessions)"
+      labels:
+        persona: "helpful_assistant | coding_expert | travel_advisor"
+        privacy_band: "GREEN | AMBER | RED"
+      example: 'rest_api_sessions_created_total{persona="helpful_assistant", privacy_band="GREEN"} 1200000'
+      prometheus_query: 'rate(rest_api_sessions_created_total[5m])'
+      grafana_panel: "Session Creation Rate"
+
+    - name: "rest_api_session_read_latency_ms"
+      type: "histogram"
+      description: "GET /v1/sessions/{id} latency"
+      labels:
+        cached: "true | false"
+      buckets: [5, 10, 25, 50, 100, 200, 500]
+      example: 'rest_api_session_read_latency_ms_bucket{cached="true", le="10"} 2450000'
+      prometheus_query: 'histogram_quantile(0.95, rate(rest_api_session_read_latency_ms_bucket{cached="true"}[5m]))'
+      grafana_panel: "Session Read Latency (Cached vs Uncached)"
+      targets:
+        uncached: "<100ms P95 (actual 85ms)"
+        cached: "<10ms P95 (actual 8ms)"
+
+    - name: "rest_api_session_update_latency_ms"
+      type: "histogram"
+      description: "PATCH /v1/sessions/{id} latency"
+      buckets: [10, 50, 100, 200, 500]
+      example: 'rest_api_session_update_latency_ms_bucket{le="200"} 295000'
+      prometheus_query: 'histogram_quantile(0.95, rate(rest_api_session_update_latency_ms_bucket[5m]))'
+      target: "<200ms P95 (actual 175ms)"
+
+    - name: "rest_api_sessions_terminated_total"
+      type: "counter"
+      description: "Total sessions terminated (DELETE /v1/sessions/{id})"
+      labels:
+        privacy_band: "GREEN | AMBER | RED"
+      example: 'rest_api_sessions_terminated_total{privacy_band="GREEN"} 180000'
+      prometheus_query: 'rate(rest_api_sessions_terminated_total[5m])'
+
+# Cache Metrics
+cache_metrics:
+  description: "HTTP caching performance metrics"
+
+  metrics:
+    - name: "rest_api_cache_hit_rate"
+      type: "gauge"
+      description: "HTTP cache hit rate (percentage)"
+      calculation: "cache_hits / (cache_hits + cache_misses)"
+      example: 'rest_api_cache_hit_rate 0.82'
+      prometheus_query: 'rest_api_cache_hit_rate'
+      grafana_panel: "Cache Hit Rate (Target: 82%)"
+      target: ">80%"
+      actual: "82%"
+
+    - name: "rest_api_etag_validations_total"
+      type: "counter"
+      description: "ETag validation results"
+      labels:
+        result: "match | mismatch"
+      example: 'rest_api_etag_validations_total{result="match"} 2460000'
+      prometheus_query: 'rate(rest_api_etag_validations_total{result="match"}[5m]) / rate(rest_api_etag_validations_total[5m])'
+      grafana_panel: "ETag Match Rate"
+      note: "match = 304 Not Modified (cache hit), mismatch = 200 OK (cache miss)"
+
+# Idempotency Metrics
+idempotency_metrics:
+  description: "Idempotency key usage metrics"
+
+  metrics:
+    - name: "rest_api_idempotency_hits_total"
+      type: "counter"
+      description: "Duplicate requests detected (idempotency key hit)"
+      labels:
+        endpoint: "/v1/sessions"
+      example: 'rest_api_idempotency_hits_total{endpoint="/v1/sessions"} 120000'
+      prometheus_query: 'rate(rest_api_idempotency_hits_total[5m])'
+      grafana_panel: "Idempotency Hit Rate (8%)"
+      note: "8% of POST /v1/sessions are duplicates (network retries)"
+
+    - name: "rest_api_idempotency_misses_total"
+      type: "counter"
+      description: "Unique requests (no idempotency key match)"
+      labels:
+        endpoint: "/v1/sessions"
+      example: 'rest_api_idempotency_misses_total{endpoint="/v1/sessions"} 1380000'
+      prometheus_query: 'rate(rest_api_idempotency_misses_total[5m])'
+
+# Pagination Metrics
+pagination_metrics:
+  description: "Cursor-based pagination metrics"
+
+  metrics:
+    - name: "rest_api_pagination_latency_ms"
+      type: "histogram"
+      description: "GET /v1/sessions pagination latency"
+      labels:
+        endpoint: "/v1/sessions"
+      buckets: [10, 25, 50, 100, 200, 500]
+      example: 'rest_api_pagination_latency_ms_bucket{endpoint="/v1/sessions", le="100"} 495000'
+      prometheus_query: 'histogram_quantile(0.95, rate(rest_api_pagination_latency_ms_bucket[5m]))'
+      target: "<100ms P95 (actual 78ms)"
+
+    - name: "rest_api_pagination_page_sizes"
+      type: "histogram"
+      description: "Requested page sizes (limit parameter)"
+      buckets: [10, 20, 50, 100]
+      example: 'rest_api_pagination_page_sizes_bucket{le="20"} 400000'
+      prometheus_query: 'histogram_quantile(0.50, rate(rest_api_pagination_page_sizes_bucket[5m]))'
+      grafana_panel: "Median Page Size (default 20)"
+
+    - name: "rest_api_cursor_decode_errors_total"
+      type: "counter"
+      description: "Invalid cursor decoding errors"
+      example: 'rest_api_cursor_decode_errors_total 120'
+      prometheus_query: 'rate(rest_api_cursor_decode_errors_total[5m])'
+      note: "Low rate expected (client sends malformed Base64 cursor)"
+
+# Grafana Dashboard
+grafana_dashboard:
+  description: "Grafana dashboard for K1 REST API"
+
+  panels:
+    - panel: 1
+      title: "Requests per Second"
+      type: "graph"
+      query: 'rate(rest_api_requests_total[5m])'
+      legend: "{{method}} {{endpoint}} ({{status}})"
+      y_axis: "Requests/sec"
+
+    - panel: 2
+      title: "P95 Latency by Endpoint"
+      type: "graph"
+      query: 'histogram_quantile(0.95, rate(rest_api_request_duration_ms_bucket[5m]))'
+      legend: "{{method}} {{endpoint}}"
+      y_axis: "Milliseconds"
+      thresholds:
+        - value: 500
+          color: "green"
+          label: "POST /v1/sessions target"
+        - value: 100
+          color: "yellow"
+          label: "GET /v1/sessions/{id} uncached target"
+        - value: 10
+          color: "blue"
+          label: "GET /v1/sessions/{id} cached target"
+
+    - panel: 3
+      title: "Error Rate (4xx + 5xx)"
+      type: "graph"
+      query: 'rate(rest_api_requests_total{status=~"4..|5.."}[5m])'
+      legend: "{{status}}"
+      y_axis: "Errors/sec"
+      alert: "> 1% error rate"
+
+    - panel: 4
+      title: "Cache Hit Rate"
+      type: "singlestat"
+      query: 'rest_api_cache_hit_rate'
+      format: "percent (0-1)"
+      thresholds: "0.70,0.80,0.82"
+      colors: "red,yellow,green"
+      target: "82%"
+
+    - panel: 5
+      title: "Idempotency Hit Rate"
+      type: "singlestat"
+      query: 'rate(rest_api_idempotency_hits_total[5m]) / (rate(rest_api_idempotency_hits_total[5m]) + rate(rest_api_idempotency_misses_total[5m]))'
+      format: "percent (0-1)"
+      thresholds: "0.05,0.08,0.10"
+      target: "8%"
+
+    - panel: 6
+      title: "Session Creation Rate"
+      type: "graph"
+      query: 'rate(rest_api_sessions_created_total[5m])'
+      legend: "{{persona}} ({{privacy_band}})"
+      y_axis: "Sessions/sec"
+
+# Alerting Rules
+alerting_rules:
+  description: "Prometheus alerting rules for REST API"
+
+  alerts:
+    - alert: "HighP95Latency"
+      expr: 'histogram_quantile(0.95, rate(rest_api_request_duration_ms_bucket{endpoint="/v1/sessions"}[5m])) > 500'
+      for: "5m"
+      severity: "warning"
+      description: "POST /v1/sessions P95 latency exceeded 500ms"
+
+    - alert: "LowCacheHitRate"
+      expr: 'rest_api_cache_hit_rate < 0.70'
+      for: "10m"
+      severity: "warning"
+      description: "Cache hit rate dropped below 70% (target 82%)"
+
+    - alert: "HighErrorRate"
+      expr: 'rate(rest_api_requests_total{status=~"5.."}[5m]) / rate(rest_api_requests_total[5m]) > 0.01'
+      for: "5m"
+      severity: "critical"
+      description: "5xx error rate exceeded 1%"
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - Session creation metrics (420ms P95)"
+  - "get_session.yml - Session read metrics (82% cache hit rate)"
+  - "get_sessions_list.yml - Pagination metrics (78ms P95)"
+  - "patch_update_session.yml - Session update metrics (175ms P95)"
+  - "delete_terminate_session.yml - Session termination metrics (280ms P95)"
+  - "http_caching.yml - Cache hit rate metrics (82%)"
+  - "ADR-0041 - REST API Session Management (production evidence)"

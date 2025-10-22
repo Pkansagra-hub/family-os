@@ -1,0 +1,415 @@
+# Async Queue Operations Contract
+# Part of: ADR-0040c (Backpressure & Flow Control)
+# Purpose: Non-blocking async operations for message queue (decouple generation from send)
+# Research: Actor Model (Hewitt 1973), SEDA (Welsh 2001), Reactive Streams (2015)
+
+version: "1.0"
+type: "websocket_async_queue_operations"
+status: "approved"
+
+metadata:
+  component: "WebSocket Backpressure"
+  layer: "API Gateway"
+  performance_budget:
+    non_blocking_send: "<1ms"
+    background_delivery: "<10ms per message"
+    queue_throughput: ">1000 msg/sec"
+  research:
+    - "Actor Model (Hewitt 1973) - Message-passing concurrency, decoupled sender/receiver"
+    - "SEDA (Welsh 2001) - Staged event-driven architecture with async queues"
+    - "Reactive Streams (2015) - Non-blocking backpressure protocol"
+
+# Async Queue Architecture
+async_queue_architecture:
+  description: "Decouple agent message generation from WebSocket send using async queues"
+
+  components:
+    producer:
+      name: "Agent Streaming"
+      description: "Generates tokens, sends to queue (non-blocking)"
+      performance: "<1ms per token"
+
+    queue:
+      name: "mpsc::channel"
+      description: "Bounded queue (100 capacity)"
+      type: "Multi-producer single-consumer"
+
+    consumer:
+      name: "Background Delivery Task"
+      description: "Reads from queue, sends to WebSocket (blocking on WebSocket)"
+      performance: "<10ms per message"
+
+  benefits:
+    - "Agent doesn't block on slow WebSocket send (fast response generation)"
+    - "Queue absorbs burst traffic (100 messages buffer)"
+    - "Backpressure handled asynchronously (drop oldest messages)"
+    - "WebSocket send failures don't block agent (error isolation)"
+
+# Non-Blocking Send Operation
+non_blocking_send:
+  description: "Agent sends message to queue without waiting for WebSocket send"
+
+  operation:
+    name: "try_send"
+    type: "non-blocking"
+    return_immediately: true
+
+  pseudocode: |
+    async fn non_blocking_send(message: WebSocketMessage) -> Result<(), QueueError> {
+        let start = Instant::now();
+
+        // Try send (non-blocking, returns immediately)
+        match self.tx.try_send(message) {
+            Ok(_) => {
+                let send_ms = start.elapsed().as_millis();
+
+                // Emit metric
+                WEBSOCKET_QUEUE_INSERT_LATENCY_MS.observe(send_ms as f64);
+
+                // Validate performance budget (<1ms)
+                assert!(send_ms < 1, "Queue insert exceeded 1ms budget");
+
+                Ok(())
+            }
+            Err(TrySendError::Full(_)) => {
+                // Queue full, trigger backpressure (handled elsewhere)
+                Err(QueueError::QueueFull)
+            }
+            Err(TrySendError::Closed(_)) => {
+                Err(QueueError::QueueClosed)
+            }
+        }
+    }
+
+  performance:
+    best_case: "0.5ms (queue has space)"
+    worst_case: "1.0ms (queue full, fast failure)"
+    average: "0.8ms"
+
+  error_handling:
+    queue_full:
+      strategy: "Fast failure"
+      action: "Return QueueFull error, caller triggers backpressure"
+      latency: "<1ms"
+
+    queue_closed:
+      strategy: "Fast failure"
+      action: "Return QueueClosed error, caller cleans up connection"
+      latency: "<1ms"
+
+# Background Delivery Task
+background_delivery_task:
+  description: "Background task reads from queue and sends to WebSocket (async loop)"
+
+  lifecycle:
+    - stage: "Start"
+      action: "Spawned when WebSocket connection established"
+
+    - stage: "Loop"
+      action: "Continuously read from queue, send to WebSocket"
+
+    - stage: "Error"
+      action: "WebSocket send fails → log error, break loop"
+
+    - stage: "Cleanup"
+      action: "Queue closed → exit loop, cleanup connection"
+
+  pseudocode: |
+    async fn background_delivery_task(
+        session_id: String,
+        mut rx: Receiver<WebSocketMessage>,
+        mut websocket: WebSocketStream,
+        flow_control: Arc<FlowControlManager>,
+    ) {
+        println!("[BackgroundDelivery] Started (session: {})", session_id);
+
+        while let Some(message) = rx.recv().await {
+            let start = Instant::now();
+
+            // Serialize to FlatBuffers
+            let binary_data = serialize_flatbuffers(message);
+
+            // Send to WebSocket (blocking, waits for network)
+            match websocket.send(Message::Binary(binary_data)).await {
+                Ok(_) => {
+                    let send_ms = start.elapsed().as_millis();
+
+                    // Emit metrics
+                    WEBSOCKET_MESSAGES_SENT_TOTAL.inc();
+                    WEBSOCKET_SEND_LATENCY_MS.observe(send_ms as f64);
+
+                    // Decrement queue depth
+                    flow_control.decrement_depth(&session_id).await;
+
+                    // Monitor RTT (slow client detection)
+                    if send_ms > 500 {
+                        eprintln!(
+                            "[BackgroundDelivery] High RTT detected (session: {}, RTT: {}ms)",
+                            session_id, send_ms
+                        );
+
+                        WEBSOCKET_SEND_RTT_MS.observe(send_ms as f64);
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[BackgroundDelivery] WebSocket send failed (session: {}): {}",
+                        session_id, e
+                    );
+
+                    WEBSOCKET_SEND_ERRORS_TOTAL.inc();
+                    break;
+                }
+            }
+        }
+
+        println!("[BackgroundDelivery] Stopped (session: {})", session_id);
+    }
+
+  performance:
+    queue_read: "<1ms"
+    flatbuffers_serialization: "<1ms"
+    websocket_send: "50-500ms (network dependent)"
+    total_per_message: "<10ms (excluding network)"
+
+  error_handling:
+    websocket_send_failed:
+      strategy: "Break loop, cleanup connection"
+      action: "Log error, emit metric, remove from registry"
+
+    queue_closed:
+      strategy: "Exit loop gracefully"
+      action: "Loop ends when rx.recv() returns None"
+
+# Async Queue Benefits
+async_queue_benefits:
+  - benefit: "Non-Blocking Agent"
+    description: "Agent generates tokens without waiting for WebSocket send"
+    impact: "5-25× faster agent response (doesn't block on slow clients)"
+    example: "Agent generates 100 tokens in 100ms (not 50 seconds blocking on slow WebSocket)"
+
+  - benefit: "Burst Traffic Handling"
+    description: "Queue absorbs burst traffic (100 messages buffer)"
+    impact: "Smooth out network spikes, prevent immediate backpressure"
+    example: "Agent sends 10 tokens in 10ms, queue buffers, background task sends at client pace"
+
+  - benefit: "Error Isolation"
+    description: "WebSocket send failures don't block agent"
+    impact: "Agent continues generating tokens even if one client fails"
+    example: "Client A fails → background task stops → Agent continues serving Client B"
+
+  - benefit: "Predictable Latency"
+    description: "Agent has predictable <1ms send latency (queue insert)"
+    impact: "Consistent TTFT performance, no variance from slow clients"
+    example: "TTFT always <200ms regardless of client network speed"
+
+# Queue Throughput
+queue_throughput:
+  description: "Maximum messages per second the queue can handle"
+
+  calculation:
+    queue_insert: "1ms per message"
+    theoretical_max: "1000 msg/sec"
+    practical_limit: "800 msg/sec (80% utilization)"
+
+  benchmarks:
+    single_session:
+      tokens_per_response: 100
+      responses_per_minute: 60
+      messages_per_minute: "6000 (100 tokens × 60 responses)"
+      messages_per_second: "100 msg/sec"
+      queue_utilization: "12.5%"
+
+    multiple_sessions:
+      concurrent_sessions: 10
+      messages_per_second: "1000 msg/sec (10 sessions × 100 msg/sec)"
+      queue_utilization: "125% (exceeds capacity)"
+      mitigation: "Backpressure triggered, drop oldest messages"
+
+# Operations
+operations:
+  - operation: "spawn_background_delivery_task"
+    description: "Spawn background task for queue → WebSocket delivery"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+      - name: "rx"
+        type: "Receiver<WebSocketMessage>"
+        required: true
+      - name: "websocket"
+        type: "WebSocketStream"
+        required: true
+      - name: "flow_control"
+        type: "Arc<FlowControlManager>"
+        required: true
+    returns: "JoinHandle<()>"
+
+    pseudocode: |
+      fn spawn_background_delivery_task(
+          session_id: String,
+          rx: Receiver<WebSocketMessage>,
+          websocket: WebSocketStream,
+          flow_control: Arc<FlowControlManager>,
+      ) -> JoinHandle<()> {
+          tokio::spawn(async move {
+              background_delivery_task(session_id, rx, websocket, flow_control).await;
+          })
+      }
+
+  - operation: "await_task_completion"
+    description: "Wait for background task to complete (graceful shutdown)"
+    parameters:
+      - name: "task_handle"
+        type: "JoinHandle<()>"
+        required: true
+    returns: "Result<(), JoinError>"
+
+    pseudocode: |
+      async fn await_task_completion(task_handle: JoinHandle<()>) -> Result<(), JoinError> {
+          task_handle.await
+      }
+
+# Prometheus Metrics
+metrics:
+  - name: "websocket_queue_insert_latency_ms"
+    type: "histogram"
+    description: "Non-blocking queue insert latency in milliseconds"
+    buckets: [0.1, 0.5, 1.0, 5.0]
+    labels:
+      - session_id
+
+  - name: "websocket_send_latency_ms"
+    type: "histogram"
+    description: "WebSocket send latency in milliseconds (background task)"
+    buckets: [10, 50, 100, 200, 500, 1000, 2000]
+    labels:
+      - session_id
+
+  - name: "websocket_messages_sent_total"
+    type: "counter"
+    description: "Total messages sent to WebSocket"
+    labels:
+      - session_id
+      - message_type
+
+  - name: "websocket_send_errors_total"
+    type: "counter"
+    description: "Total WebSocket send errors"
+    labels:
+      - session_id
+      - error_type
+
+  - name: "websocket_send_rtt_ms"
+    type: "histogram"
+    description: "WebSocket send RTT (slow client detection)"
+    buckets: [50, 100, 200, 500, 1000, 2000]
+    labels:
+      - session_id
+
+# Performance Analysis
+performance_scenarios:
+  - scenario: "Non-Blocking Send (Queue Has Space)"
+    input: "Agent sends 1 token to queue (queue depth = 50)"
+    performance:
+      try_send: "0.8ms"
+      total: "0.8ms ✅"
+    result: "Agent free immediately, token queued ✅"
+
+  - scenario: "Non-Blocking Send (Queue Full)"
+    input: "Agent sends 1 token to queue (queue depth = 100)"
+    performance:
+      try_send: "0.5ms"
+      error_returned: "QueueFull"
+      total: "0.5ms ✅"
+    result: "Fast failure, agent triggers backpressure ✅"
+
+  - scenario: "Background Delivery (Fast Client)"
+    input: "Send 1 message to fast client (50ms RTT)"
+    performance:
+      queue_read: "0.8ms"
+      flatbuffers_serialization: "0.8ms"
+      websocket_send: "50ms"
+      total: "51.6ms ✅"
+    result: "Fast delivery, no backpressure ✅"
+
+  - scenario: "Background Delivery (Slow Client)"
+    input: "Send 1 message to slow client (500ms RTT)"
+    performance:
+      queue_read: "0.8ms"
+      flatbuffers_serialization: "0.8ms"
+      websocket_send: "500ms"
+      total: "501.6ms"
+    result: "Slow delivery, queue fills up → backpressure triggered ✅"
+
+  - scenario: "Agent Streams 100 Tokens (Async)"
+    input: "Agent generates 100 tokens, sends to queue"
+    performance:
+      generate_100_tokens: "100ms"
+      queue_100_tokens: "80ms"  # 100 × 0.8ms
+      agent_total: "180ms ✅"
+      background_delivery: "Runs independently (50ms × 100 = 5s for fast client)"
+    result: "Agent free after 180ms, background task handles delivery ✅"
+
+# Testing Requirements (WARD Framework)
+testing:
+  unit_tests:
+    - test: "Non-blocking send completes in <1ms"
+      description: "Verify try_send latency"
+      setup: "Queue with 50 messages"
+      assertion: "latency < 1ms ✅"
+
+    - test: "Non-blocking send returns QueueFull when full"
+      description: "Verify fast failure on full queue"
+      setup: "Queue with 100 messages"
+      assertion: "result == QueueFull && latency < 1ms ✅"
+
+    - test: "Background task sends messages to WebSocket"
+      description: "Verify background delivery"
+      setup: "Queue with 10 messages, start background task"
+      assertion: "All 10 messages sent to WebSocket ✅"
+
+    - test: "Background task stops on WebSocket send failure"
+      description: "Verify error handling"
+      setup: "Simulate WebSocket send failure"
+      assertion: "Task exits loop && metric incremented ✅"
+
+  integration_tests:
+    - test: "Agent streams 100 tokens without blocking"
+      description: "Verify agent doesn't block on slow client"
+      setup: "Simulate slow client (500ms RTT), stream 100 tokens"
+      assertion: "Agent completes in <200ms, background task handles delivery ✅"
+
+    - test: "Background task handles slow client"
+      description: "Verify slow client detection and backpressure"
+      setup: "Simulate slow client (500ms RTT), stream 100 tokens"
+      assertion: "RTT metric > 500ms && backpressure triggered ✅"
+
+# Implementation Notes
+implementation:
+  language: "Rust"
+  dependencies:
+    - "tokio::sync::mpsc"
+    - "tokio::task::spawn"
+    - "std::time::Instant"
+    - "prometheus"
+
+  key_design_decisions:
+    - decision: "Non-blocking try_send (not blocking send)"
+      rationale: "Agent must not wait for queue space, fast failure triggers backpressure"
+
+    - decision: "Background task per connection (not global pool)"
+      rationale: "Isolate slow clients (one slow client doesn't block others), simpler error handling"
+
+    - decision: "Spawn task on connection (not pre-allocated pool)"
+      rationale: "Dynamic scaling (tasks created/destroyed with connections), avoid idle tasks"
+
+    - decision: "Monitor RTT in background task (not separate thread)"
+      rationale: "Already measuring WebSocket send latency, efficient reuse"
+
+# Related Contracts
+related_contracts:
+  - "message_queue.yml - mpsc::channel with try_send operation"
+  - "flow_control_manager.yml - Backpressure handling"
+  - "streaming_engine.yml - Uses non-blocking send for tokens"
+  - "slow_client_handling.yml - RTT monitoring in background task"

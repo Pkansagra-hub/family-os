@@ -1,0 +1,386 @@
+# Heartbeat Manager Contract
+# Part of: ADR-0040d (Heartbeat & Reconnection)
+# Purpose: Connection health monitoring with 30-second interval ping/pong (RFC 6455 §5.5.2)
+# Research: RFC 6455 (WebSocket 2011), TCP Keep-Alive (RFC 1122 1989), MQTT Keep-Alive (ISO/IEC 20922 2016)
+
+version: "1.0"
+type: "websocket_heartbeat_manager"
+status: "approved"
+
+metadata:
+  component: "WebSocket Connection Health"
+  layer: "API Gateway"
+  performance_budget:
+    heartbeat_send: "<10ms"
+    check_interval: "30s"
+    timeout_detection: "<90s"
+  research:
+    - "RFC 6455 (WebSocket 2011) §5.5.2 - Ping/Pong frames for keep-alive"
+    - "TCP Keep-Alive (RFC 1122 1989) - Detect dead connections"
+    - "MQTT Keep-Alive (ISO/IEC 20922 2016) - IoT connection health"
+    - "HTTP/2 PING (RFC 7540 2015) - Connection health check"
+
+# Heartbeat Manager Design
+heartbeat_manager:
+  description: "Monitor WebSocket connection health with periodic ping/pong heartbeats"
+
+  state:
+    connections:
+      type: "Arc<RwLock<HashMap<String, Instant>>>"
+      description: "Session ID → last heartbeat timestamp"
+      thread_safety: "RwLock for concurrent reads/writes"
+
+    heartbeat_interval:
+      value: "30 seconds"
+      description: "Interval between heartbeat pings"
+      rationale: "Balance between connection health check and network overhead"
+
+    timeout_threshold:
+      value: "90 seconds"
+      description: "3× heartbeat interval (30s × 3 = 90s)"
+      rationale: "Allow for transient network issues, detect true failures"
+
+    connection_registry:
+      type: "Arc<ConnectionRegistry>"
+      description: "Reference to connection registry for cleanup"
+
+# Heartbeat Protocol
+heartbeat_protocol:
+  description: "RFC 6455 §5.5.2 ping/pong mechanism for WebSocket keep-alive"
+
+  sequence:
+    - step: 1
+      action: "Server sends Heartbeat message"
+      message_type: "Heartbeat"
+      payload:
+        timestamp_ms: "u64 (Unix milliseconds)"
+      interval: "30 seconds"
+
+    - step: 2
+      action: "Client receives Heartbeat"
+      processing: "Client must respond with HeartbeatAck"
+      max_delay: "<100ms (client processing time)"
+
+    - step: 3
+      action: "Client sends HeartbeatAck"
+      message_type: "HeartbeatAck"
+      payload:
+        timestamp_ms: "u64 (Unix milliseconds)"
+
+    - step: 4
+      action: "Server receives HeartbeatAck"
+      processing: "Update last_heartbeat timestamp"
+      result: "Connection considered alive"
+
+  timeout_detection:
+    condition: "No HeartbeatAck received for 90 seconds"
+    action: "Close stale connection (RFC 6455 close code 1000)"
+    cleanup: "Remove from connection registry, free resources"
+
+# Operations
+operations:
+  - operation: "register"
+    description: "Register connection for heartbeat monitoring"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<1ms"
+      operation: "HashMap insert"
+
+    pseudocode: |
+      async fn register(session_id: &str) {
+          let mut connections = self.connections.write().await;
+          connections.insert(session_id.to_string(), Instant::now());
+
+          println!("[HeartbeatManager] Registered connection (session: {})", session_id);
+      }
+
+  - operation: "update_heartbeat"
+    description: "Update last heartbeat timestamp (on HeartbeatAck)"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<1ms"
+      operation: "HashMap update"
+
+    pseudocode: |
+      async fn update_heartbeat(session_id: &str) {
+          let mut connections = self.connections.write().await;
+
+          if let Some(last_heartbeat) = connections.get_mut(session_id) {
+              *last_heartbeat = Instant::now();
+
+              println!("[HeartbeatManager] Heartbeat acknowledged (session: {})", session_id);
+
+              // Emit metric
+              WEBSOCKET_HEARTBEATS_ACKNOWLEDGED_TOTAL.inc();
+          }
+      }
+
+  - operation: "unregister"
+    description: "Unregister connection (on disconnect)"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<1ms"
+      operation: "HashMap remove"
+
+    pseudocode: |
+      async fn unregister(session_id: &str) {
+          let mut connections = self.connections.write().await;
+          connections.remove(session_id);
+
+          println!("[HeartbeatManager] Unregistered connection (session: {})", session_id);
+      }
+
+  - operation: "run_heartbeat_loop"
+    description: "Background task for periodic heartbeat checks (30-second interval)"
+    parameters:
+      - name: "self"
+        type: "Arc<Self>"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<2s for 1000 connections"
+      operations:
+        - "Iterate connections: <5ms"
+        - "Send heartbeats: 1000 × 2ms = 2000ms"
+        - "Detect timeouts: <10ms"
+
+    pseudocode: |
+      async fn run_heartbeat_loop(self: Arc<Self>) {
+          let mut interval_timer = tokio::time::interval(self.heartbeat_interval);
+
+          println!("[HeartbeatManager] Starting heartbeat loop (interval: 30s)");
+
+          loop {
+              interval_timer.tick().await;
+
+              let start = Instant::now();
+              let mut connections = self.connections.write().await;
+              let mut stale_sessions = Vec::new();
+
+              // Check each connection
+              for (session_id, last_heartbeat) in connections.iter() {
+                  let elapsed = last_heartbeat.elapsed();
+
+                  if elapsed > self.timeout_threshold {
+                      // Connection timed out (no heartbeat for 90s)
+                      println!(
+                          "[HeartbeatManager] Connection timeout (session: {}, elapsed: {}s)",
+                          session_id, elapsed.as_secs()
+                      );
+
+                      stale_sessions.push(session_id.clone());
+                  } else {
+                      // Send Heartbeat message
+                      if let Some(conn) = self.connection_registry.get(session_id).await {
+                          let heartbeat_msg = WebSocketMessage::Heartbeat {
+                              timestamp_ms: Utc::now().timestamp_millis() as u64,
+                          };
+
+                          let _ = conn.tx.send(heartbeat_msg).await;
+
+                          // Emit metric
+                          WEBSOCKET_HEARTBEATS_SENT_TOTAL.inc();
+                      }
+                  }
+              }
+
+              // Remove stale connections
+              for session_id in stale_sessions {
+                  connections.remove(&session_id);
+
+                  // Close WebSocket connection
+                  let _ = self.connection_registry.disconnect(&session_id, 1000, "Heartbeat timeout").await;
+
+                  // Emit metric
+                  WEBSOCKET_TIMEOUTS_TOTAL.inc();
+              }
+
+              let check_ms = start.elapsed().as_millis();
+
+              println!(
+                  "[HeartbeatManager] Heartbeat check complete in {}ms ({} connections)",
+                  check_ms, connections.len()
+              );
+          }
+      }
+
+# Timeout Detection Strategy
+timeout_detection:
+  description: "Detect stale connections and cleanup resources"
+
+  detection_criteria:
+    threshold: "90 seconds"
+    calculation: "3 × heartbeat_interval (30s × 3 = 90s)"
+    rationale: "Allows for transient network issues (2 missed heartbeats), detects true failures"
+
+  cleanup_actions:
+    - action: "Remove from connections HashMap"
+      impact: "Stop monitoring connection"
+
+    - action: "Close WebSocket connection"
+      method: "connection_registry.disconnect()"
+      close_code: 1000  # Normal closure
+      reason: "Heartbeat timeout"
+
+    - action: "Emit timeout metric"
+      metric: "websocket_timeouts_total"
+
+    - action: "Free server resources"
+      resources: "Memory, file descriptors, CPU time"
+
+  false_positive_prevention:
+    strategy: "3× heartbeat interval (90s) prevents false positives"
+    transient_network_issues: "2 missed heartbeats (60s) don't trigger timeout"
+    true_failures: "3 missed heartbeats (90s) indicate dead connection"
+
+# Prometheus Metrics
+metrics:
+  - name: "websocket_heartbeats_sent_total"
+    type: "counter"
+    description: "Total heartbeats sent to clients"
+    labels:
+      - session_id
+
+    usage: "Track heartbeat send rate (should be ~1 per 30s per connection)"
+
+  - name: "websocket_heartbeats_acknowledged_total"
+    type: "counter"
+    description: "Total HeartbeatAck messages received"
+    labels:
+      - session_id
+
+    usage: "Track client responsiveness (compare with sent total)"
+
+  - name: "websocket_timeouts_total"
+    type: "counter"
+    description: "Total connection timeouts detected (no heartbeat for 90s)"
+    labels:
+      - session_id
+
+    usage: "Track stale connection rate (should be <5%)"
+
+    alerting:
+      - rule: "Timeout rate > 5% of active connections"
+        severity: "warning"
+        description: "High timeout rate (network issues or mobile clients)"
+        query: "(rate(websocket_timeouts_total[5m]) / websocket_active_connections) > 0.05"
+
+  - name: "websocket_heartbeat_check_latency_ms"
+    type: "histogram"
+    description: "Heartbeat check loop latency in milliseconds"
+    buckets: [100, 500, 1000, 2000, 5000]
+
+    usage: "Monitor heartbeat loop performance (<2s for 1000 connections)"
+
+# Performance Analysis
+performance_scenarios:
+  - scenario: "Heartbeat Send (1000 Connections)"
+    input: "Send heartbeat to 1000 active connections"
+    performance:
+      iterate_connections: "5ms"
+      send_1000_heartbeats: "2000ms"  # 1000 × 2ms
+      total: "2005ms ✅"
+    result: "All heartbeats sent within 2 seconds ✅"
+
+  - scenario: "Timeout Detection (10 Stale Connections)"
+    input: "Detect 10 connections with no heartbeat for 90s"
+    performance:
+      iterate_connections: "5ms"
+      detect_10_timeouts: "10ms"  # 10 × 1ms
+      close_10_connections: "50ms"  # 10 × 5ms
+      total: "65ms ✅"
+    result: "Fast timeout detection (<90s) ✅"
+
+  - scenario: "Register Connection"
+    input: "Register new connection for heartbeat monitoring"
+    performance:
+      hashmap_insert: "0.5ms"
+      total: "0.5ms ✅"
+    result: "Fast registration ✅"
+
+  - scenario: "Update Heartbeat (HeartbeatAck)"
+    input: "Update last_heartbeat on HeartbeatAck"
+    performance:
+      hashmap_update: "0.5ms"
+      total: "0.5ms ✅"
+    result: "Fast update ✅"
+
+# Testing Requirements (WARD Framework)
+testing:
+  unit_tests:
+    - test: "HeartbeatManager sends heartbeat to connections"
+      description: "Verify periodic heartbeat send"
+      setup: "Register 1 connection, wait 30s"
+      assertion: "heartbeats_sent_total > 0 ✅"
+
+    - test: "HeartbeatManager updates last_heartbeat on HeartbeatAck"
+      description: "Verify heartbeat acknowledgment updates timestamp"
+      setup: "Register connection, send HeartbeatAck"
+      assertion: "last_heartbeat timestamp updated ✅"
+
+    - test: "HeartbeatManager detects timeout after 90s"
+      description: "Verify stale connection detection"
+      setup: "Register connection, don't send HeartbeatAck, wait 90s"
+      assertion: "Connection removed && timeouts_total == 1 ✅"
+
+    - test: "HeartbeatManager unregisters connection on disconnect"
+      description: "Verify cleanup on disconnect"
+      setup: "Register connection, disconnect"
+      assertion: "Connection not in connections HashMap ✅"
+
+  integration_tests:
+    - test: "Full heartbeat flow: Send → Ack → Update"
+      description: "Verify complete heartbeat cycle"
+      setup: "Start WebSocket server, connect client"
+      assertion: "Heartbeat sent && HeartbeatAck received && timestamp updated ✅"
+
+    - test: "Timeout detection closes stale connection"
+      description: "Verify timeout cleanup"
+      setup: "Connect client, disable HeartbeatAck, wait 90s"
+      assertion: "Connection closed && resources freed ✅"
+
+# Implementation Notes
+implementation:
+  language: "Rust"
+  dependencies:
+    - "tokio::time::{interval, Duration, Instant}"
+    - "std::sync::Arc"
+    - "tokio::sync::RwLock"
+    - "std::collections::HashMap"
+    - "prometheus"
+
+  key_design_decisions:
+    - decision: "30-second heartbeat interval (not 10s or 60s)"
+      rationale: "Balance between connection health check frequency and network overhead"
+
+    - decision: "90-second timeout threshold (3× interval)"
+      rationale: "Allow for transient network issues, detect true failures without false positives"
+
+    - decision: "Background task per server (not per connection)"
+      rationale: "Efficient scalability (1 task monitors 1000+ connections)"
+
+    - decision: "RwLock for connections HashMap"
+      rationale: "Multiple readers (heartbeat loop), occasional writer (register/unregister), efficient concurrency"
+
+# Related Contracts
+related_contracts:
+  - "timeout_detection.yml - Timeout threshold and detection logic"
+  - "connection_handler.yml - Registers connections for heartbeat monitoring"
+  - "graceful_disconnect.yml - Cleanup on disconnect"
+  - "websocket_message_envelope.fbs - Heartbeat/HeartbeatAck message types"

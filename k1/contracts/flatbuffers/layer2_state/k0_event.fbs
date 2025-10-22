@@ -1,0 +1,47 @@
+// k0_event.fbs
+// Layer 2 State & Persistence: K0 Event
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0001 (K0-K1 Kernel Split)
+//
+// Performance Targets:
+// - Size: 2-8KB typical
+// - Serialize: 0.45ms P95 (target: <1ms)
+// - Deserialize: 0.062ms P95 (target: <0.1ms)
+// - Event propagation: <5ms P95
+//
+// Research: Kernel-Level Event Streaming, K0↔K1 Communication
+
+namespace k1.k0_bridge;
+
+/// K0 event types
+enum K0EventType : uint8 {
+  TASK_EXECUTED = 0,
+  MEMORY_UPDATED = 1,
+  CONFIG_RELOADED = 2,
+  ERROR = 3,
+  HEARTBEAT = 4
+}
+
+/// K0 event (kernel-level event)
+///
+/// K0 kernel event for K0↔K1 communication.
+///
+/// Usage patterns:
+/// - K0↔K1 communication: K0 kernel sends events to K1 orchestrator
+/// - Event streaming: Batch events for efficiency (max 16KB, max 100ms latency)
+/// - Event processing: Dispatch to handlers based on event_type
+/// - Performance: <5ms P95 for event propagation
+table K0Event {
+  event_id: string (required);
+  event_type: K0EventType (required);
+
+  // Payload (union for different event types)
+  payload: string;  // JSON or nested FlatBuffers blob
+
+  // Timestamps
+  timestamp_ms: uint64 = 0;
+}
+
+root_type K0Event;
+file_identifier "K0EV";

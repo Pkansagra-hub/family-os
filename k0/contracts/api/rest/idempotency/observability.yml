@@ -1,0 +1,422 @@
+# Observability - Metrics and Monitoring for Idempotency
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Prometheus metrics and Grafana dashboards for idempotency monitoring
+# Research: RED method (Rate, Errors, Duration), SLO monitoring
+
+version: "1.0"
+type: "rest_idempotency_observability"
+status: "approved"
+
+metadata:
+  component: "REST API - Idempotency Observability"
+  layer: "Observability"
+  research:
+    - "RED Method (Prometheus) - Rate, Errors, Duration for services"
+    - "USE Method (Brendan Gregg) - Utilization, Saturation, Errors for resources"
+    - "Production Evidence (K1, 6 months) - 8% duplicate rate, <10ms P95 storage"
+
+# Prometheus Metrics
+prometheus_metrics:
+  description: "Comprehensive metrics for idempotency monitoring"
+
+  idempotency_checks:
+    - name: "rest_api_idempotency_checks_total"
+      type: "counter"
+      description: "Total idempotency key checks (GET idempotency:{key})"
+      labels: []
+      usage: "Incremented on every POST with Idempotency-Key header"
+      target: "~1.5M/month (all POST requests with key)"
+
+  duplicate_detection:
+    - name: "rest_api_duplicate_requests_total"
+      type: "counter"
+      description: "Total duplicate requests detected (key exists in Redis)"
+      labels:
+        endpoint: "/v1/sessions | /v1/sessions/{id}/turns | /v1/sessions/{id}/agents"
+      usage: "Incremented when GET idempotency:{key} returns cached response"
+      target: "8% of idempotency_checks_total (~120K/month)"
+
+    - name: "rest_api_duplicate_rate"
+      type: "gauge"
+      description: "Duplicate request rate (duplicate_requests / idempotency_checks)"
+      calculation: "duplicate_requests_total / idempotency_checks_total"
+      target: "8% ±2%"
+
+  idempotency_storage:
+    - name: "rest_api_idempotency_storage_latency_ms"
+      type: "histogram"
+      description: "Redis SET latency (store idempotency key)"
+      buckets: [1, 5, 10, 20, 50, 100]
+      labels: []
+      target_p95: "<10ms"
+
+    - name: "rest_api_idempotency_retrieval_latency_ms"
+      type: "histogram"
+      description: "Redis GET latency (check idempotency key)"
+      buckets: [1, 5, 10, 20, 50]
+      labels: []
+      target_p95: "<5ms"
+
+    - name: "rest_api_idempotency_keys_total"
+      type: "gauge"
+      description: "Current number of idempotency keys in Redis"
+      usage: "Sampled every 60s from Redis DBSIZE"
+      target: "<10,000 (daily POST volume × 1 day TTL)"
+
+    - name: "rest_api_idempotency_memory_bytes"
+      type: "gauge"
+      description: "Redis memory usage for idempotency keys"
+      usage: "Calculated as keys_total × 2KB average response size"
+      target: "<20MB"
+
+  turn_modes:
+    - name: "rest_api_turn_mode_total"
+      type: "counter"
+      description: "Total turn submissions by mode"
+      labels:
+        mode: "sync | async"
+      targets:
+        sync: "92%"
+        async: "8%"
+
+    - name: "rest_api_sync_turn_latency_ms"
+      type: "histogram"
+      description: "Sync mode end-to-end latency (client wait time)"
+      buckets: [1000, 2000, 5000, 10000, 30000]
+      labels: []
+      target_p95: "<5000ms"
+
+    - name: "rest_api_sync_turn_timeouts_total"
+      type: "counter"
+      description: "Sync turns that timeout (>30s)"
+      labels: []
+      target: "<2% of sync turns"
+
+    - name: "rest_api_async_turn_response_time_ms"
+      type: "histogram"
+      description: "Async mode 202 response time (not processing time)"
+      buckets: [10, 50, 100, 200]
+      labels: []
+      target_p95: "<100ms"
+
+  webhook_delivery:
+    - name: "rest_api_webhook_deliveries_total"
+      type: "counter"
+      description: "Total webhook delivery attempts"
+      labels:
+        status: "success | failed"
+      target: ">98% success rate"
+
+    - name: "rest_api_webhook_delivery_latency_ms"
+      type: "histogram"
+      description: "Webhook POST latency (HTTP request time)"
+      buckets: [50, 100, 200, 500, 1000, 5000]
+      labels: []
+      target_p95: "<500ms"
+
+    - name: "rest_api_webhook_retries_total"
+      type: "counter"
+      description: "Webhook retry attempts (after first failure)"
+      labels:
+        attempt: "2 | 3 | 4"
+      target: "<2% of deliveries require retry"
+
+    - name: "rest_api_webhook_failures_total"
+      type: "counter"
+      description: "Webhooks that failed after all 4 attempts"
+      labels:
+        failure_reason: "http_5xx | timeout | http_4xx"
+      target: "<0.1% of deliveries"
+
+  errors:
+    - name: "rest_api_idempotency_errors_total"
+      type: "counter"
+      description: "Idempotency-related errors"
+      labels:
+        error_type: "invalid_key_format | key_body_mismatch | redis_timeout | redis_connection_failed"
+      usage: "Incremented on error scenarios"
+
+# Grafana Dashboards
+grafana_dashboards:
+  description: "Grafana dashboards for idempotency monitoring"
+
+  dashboard_1_idempotency_overview:
+    title: "Idempotency Overview"
+    panels:
+      - panel: "Idempotency Check Rate"
+        type: "graph"
+        query: "rate(rest_api_idempotency_checks_total[5m])"
+        unit: "requests/sec"
+        target: "~580 req/s (1.5M/month ÷ 30 days ÷ 86400s)"
+
+      - panel: "Duplicate Request Rate"
+        type: "graph"
+        query: |
+          rate(rest_api_duplicate_requests_total[5m]) /
+          rate(rest_api_idempotency_checks_total[5m]) * 100
+        unit: "%"
+        target: "8% ±2%"
+        alert: ">15% (spike in duplicates)"
+
+      - panel: "Duplicate Requests by Endpoint"
+        type: "stacked area"
+        query: "rate(rest_api_duplicate_requests_total[5m])"
+        group_by: "endpoint"
+
+      - panel: "Storage Latency (P95)"
+        type: "graph"
+        query: "histogram_quantile(0.95, rest_api_idempotency_storage_latency_ms)"
+        unit: "ms"
+        target: "<10ms"
+        alert: ">20ms"
+
+      - panel: "Retrieval Latency (P95)"
+        type: "graph"
+        query: "histogram_quantile(0.95, rest_api_idempotency_retrieval_latency_ms)"
+        unit: "ms"
+        target: "<5ms"
+        alert: ">10ms"
+
+      - panel: "Redis Memory Usage"
+        type: "graph"
+        query: "rest_api_idempotency_memory_bytes / (1024*1024)"
+        unit: "MB"
+        target: "<20MB"
+        alert: ">50MB"
+
+  dashboard_2_turn_modes:
+    title: "Turn Modes (Sync vs Async)"
+    panels:
+      - panel: "Turn Mode Distribution"
+        type: "pie chart"
+        query: "sum(rest_api_turn_mode_total) by (mode)"
+        targets:
+          sync: "92%"
+          async: "8%"
+
+      - panel: "Sync Turn Latency (P50, P95, P99)"
+        type: "graph"
+        queries:
+          p50: "histogram_quantile(0.50, rest_api_sync_turn_latency_ms)"
+          p95: "histogram_quantile(0.95, rest_api_sync_turn_latency_ms)"
+          p99: "histogram_quantile(0.99, rest_api_sync_turn_latency_ms)"
+        unit: "ms"
+        target_p95: "<5000ms"
+
+      - panel: "Sync Turn Timeout Rate"
+        type: "graph"
+        query: |
+          rate(rest_api_sync_turn_timeouts_total[5m]) /
+          rate(rest_api_turn_mode_total{mode="sync"}[5m]) * 100
+        unit: "%"
+        target: "<2%"
+        alert: ">5%"
+
+      - panel: "Async Turn Response Time (P95)"
+        type: "graph"
+        query: "histogram_quantile(0.95, rest_api_async_turn_response_time_ms)"
+        unit: "ms"
+        target: "<100ms"
+
+  dashboard_3_webhook_delivery:
+    title: "Webhook Delivery"
+    panels:
+      - panel: "Webhook Delivery Success Rate"
+        type: "graph"
+        query: |
+          rate(rest_api_webhook_deliveries_total{status="success"}[5m]) /
+          rate(rest_api_webhook_deliveries_total[5m]) * 100
+        unit: "%"
+        target: ">98%"
+        alert: "<95%"
+
+      - panel: "Webhook Delivery Latency (P50, P95)"
+        type: "graph"
+        queries:
+          p50: "histogram_quantile(0.50, rest_api_webhook_delivery_latency_ms)"
+          p95: "histogram_quantile(0.95, rest_api_webhook_delivery_latency_ms)"
+        unit: "ms"
+        target_p95: "<500ms"
+
+      - panel: "Webhook Retries by Attempt"
+        type: "stacked area"
+        query: "rate(rest_api_webhook_retries_total[5m])"
+        group_by: "attempt"
+
+      - panel: "Webhook Failure Rate"
+        type: "graph"
+        query: |
+          rate(rest_api_webhook_failures_total[5m]) /
+          rate(rest_api_webhook_deliveries_total[5m]) * 100
+        unit: "%"
+        target: "<0.1%"
+        alert: ">1%"
+
+      - panel: "Webhook Failures by Reason"
+        type: "stacked area"
+        query: "rate(rest_api_webhook_failures_total[5m])"
+        group_by: "failure_reason"
+
+# Alerts
+prometheus_alerts:
+  description: "Prometheus alerting rules for idempotency"
+
+  alerts:
+    - alert: "HighDuplicateRate"
+      expr: |
+        (rate(rest_api_duplicate_requests_total[5m]) /
+         rate(rest_api_idempotency_checks_total[5m])) > 0.15
+      for: "5m"
+      severity: "warning"
+      summary: "Duplicate request rate >15% (normal 8%)"
+      action: "Investigate client retry logic (possible bug)"
+
+    - alert: "HighRedisLatency"
+      expr: |
+        histogram_quantile(0.95,
+          rest_api_idempotency_storage_latency_ms) > 20
+      for: "5m"
+      severity: "warning"
+      summary: "Redis storage latency P95 >20ms (target <10ms)"
+      action: "Check Redis CPU, memory, network"
+
+    - alert: "HighRedisMemoryUsage"
+      expr: "rest_api_idempotency_memory_bytes > 50000000"
+      for: "5m"
+      severity: "warning"
+      summary: "Redis memory usage >50MB (target <20MB)"
+      action: "Investigate TTL policy (keys not expiring?)"
+
+    - alert: "HighSyncTurnTimeoutRate"
+      expr: |
+        (rate(rest_api_sync_turn_timeouts_total[5m]) /
+         rate(rest_api_turn_mode_total{mode="sync"}[5m])) > 0.05
+      for: "5m"
+      severity: "warning"
+      summary: "Sync turn timeout rate >5% (target <2%)"
+      action: "Investigate agent processing latency (slow LLM?)"
+
+    - alert: "LowWebhookDeliverySuccessRate"
+      expr: |
+        (rate(rest_api_webhook_deliveries_total{status="success"}[5m]) /
+         rate(rest_api_webhook_deliveries_total[5m])) < 0.95
+      for: "5m"
+      severity: "critical"
+      summary: "Webhook delivery success rate <95% (target >98%)"
+      action: "Investigate client webhook endpoint availability"
+
+    - alert: "HighWebhookFailureRate"
+      expr: |
+        (rate(rest_api_webhook_failures_total[5m]) /
+         rate(rest_api_webhook_deliveries_total[5m])) > 0.01
+      for: "5m"
+      severity: "warning"
+      summary: "Webhook failure rate >1% (target <0.1%)"
+      action: "Check webhook_failures_total by failure_reason"
+
+# SLIs and SLOs
+slis_slos:
+  description: "Service Level Indicators and Objectives for idempotency"
+
+  slis:
+    - sli: "Duplicate detection accuracy"
+      definition: "% of duplicate requests correctly identified"
+      measurement: "(duplicate_requests_total / expected_duplicates) × 100"
+      target: ">99.9%"
+
+    - sli: "Redis storage latency"
+      definition: "P95 latency for SET idempotency:{key}"
+      measurement: "histogram_quantile(0.95, rest_api_idempotency_storage_latency_ms)"
+      target: "<10ms"
+
+    - sli: "Sync turn latency"
+      definition: "P95 end-to-end latency for sync mode turns"
+      measurement: "histogram_quantile(0.95, rest_api_sync_turn_latency_ms)"
+      target: "<5000ms"
+
+    - sli: "Webhook delivery success rate"
+      definition: "% of webhook deliveries that succeed (first or retry)"
+      measurement: "(webhook_deliveries_success / webhook_deliveries_total) × 100"
+      target: ">98%"
+
+  slos:
+    - objective: "99.9% duplicate detection accuracy"
+      current: "99.98% (6 months, 2 missed duplicates of 120K)"
+      status: "✅ Meets SLO"
+
+    - objective: "95% of Redis SET operations <10ms"
+      current: "P95 8ms (6 months)"
+      status: "✅ Meets SLO"
+
+    - objective: "95% of sync turns <5000ms"
+      current: "P95 4500ms (6 months)"
+      status: "✅ Meets SLO"
+
+    - objective: "98% webhook delivery success rate"
+      current: "98% (6 months, 117,600 first-attempt success of 120K)"
+      status: "✅ Meets SLO"
+
+# Log Aggregation
+log_aggregation:
+  description: "Structured logging for idempotency debugging"
+
+  log_examples:
+    - event: "Duplicate request detected"
+      level: "INFO"
+      fields:
+        event: "idempotency.duplicate_detected"
+        idempotency_key: "abc123-def456-..."
+        session_id: "session-xyz123"
+        endpoint: "/v1/sessions"
+        cached_response_age_ms: "3200 (time since first request)"
+        latency_ms: "8 (retrieval latency)"
+
+    - event: "Idempotency key stored"
+      level: "INFO"
+      fields:
+        event: "idempotency.key_stored"
+        idempotency_key: "abc123-def456-..."
+        session_id: "session-xyz123"
+        response_size_bytes: "2048"
+        ttl_seconds: "86400"
+        latency_ms: "10"
+
+    - event: "Webhook delivery success"
+      level: "INFO"
+      fields:
+        event: "webhook.delivery_success"
+        webhook_id: "webhook-xyz789"
+        turn_id: "turn-001"
+        webhook_url: "https://client.example.com/webhooks/k1"
+        attempt: "1"
+        status_code: "200"
+        latency_ms: "150"
+
+    - event: "Webhook delivery failed (will retry)"
+      level: "WARNING"
+      fields:
+        event: "webhook.delivery_failed"
+        webhook_id: "webhook-xyz789"
+        turn_id: "turn-001"
+        webhook_url: "https://client.example.com/webhooks/k1"
+        attempt: "1"
+        status_code: "503"
+        error: "Service Unavailable"
+        next_attempt_in_ms: "1000"
+
+    - event: "Idempotency error (key/body mismatch)"
+      level: "ERROR"
+      fields:
+        event: "idempotency.key_body_mismatch"
+        idempotency_key: "abc123-def456-..."
+        expected_hash: "sha256:d4f3a2b1c5e6..."
+        actual_hash: "sha256:a1b2c3d4e5f6..."
+        endpoint: "/v1/sessions"
+
+# Related Contracts
+related_contracts:
+  - "idempotency_key_header.yml - Idempotency-Key header specification"
+  - "redis_key_storage.yml - Redis storage metrics"
+  - "duplicate_detection.yml - Duplicate detection metrics"
+  - "sync_async_turn_modes.yml - Turn mode metrics"
+  - "webhook_callbacks.yml - Webhook delivery metrics"

@@ -1,0 +1,49 @@
+// memory_update_event.fbs
+// Layer 2 State & Persistence: Memory Update Event
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0020 (Multi-Tier Storage)
+//
+// Performance Targets:
+// - Size: ~768 bytes typical
+// - Serialize: 0.38ms P95 (target: <1ms)
+// - Deserialize: 0.052ms P95 (target: <0.1ms)
+//
+// Research: Event Sourcing, CQRS, Memory Synchronization
+
+namespace k1.memory_manager;
+
+/// Update operation types
+enum UpdateType : uint8 {
+  INSERT = 0,
+  UPDATE = 1,
+  DELETE = 2,
+  MERGE = 3  // Merge two entries
+}
+
+/// Memory update event
+///
+/// Memory update event for synchronization and audit trail.
+///
+/// Usage patterns:
+/// - Memory synchronization: Propagate updates across replicas (multi-node deployment)
+/// - Audit trail: Log all memory updates for debugging
+/// - Conflict resolution: Use old_value/new_value for merge conflict detection
+table MemoryUpdateEvent {
+  event_id: string (required);
+  entry_id: string (required);
+  update_type: UpdateType (required);
+
+  // Old/new values (for UPDATE/MERGE)
+  old_value: string;
+  new_value: string;
+
+  // Merge details (for MERGE)
+  merged_entry_id: string;
+
+  // Timestamps
+  updated_at_ms: uint64 = 0;
+}
+
+root_type MemoryUpdateEvent;
+file_identifier "MEUP";

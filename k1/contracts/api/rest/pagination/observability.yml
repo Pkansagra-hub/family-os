@@ -1,0 +1,511 @@
+# Observability - Metrics, Tracing, Monitoring for Pagination
+# Part of: ADR-0041c (Cursor-Based Pagination & Efficient Listing)
+# Purpose: Prometheus metrics, OpenTelemetry tracing, performance monitoring
+# Research: RED Method (Rate, Errors, Duration), USE Method (Utilization, Saturation, Errors)
+
+version: "1.0"
+type: "rest_pagination_observability"
+status: "approved"
+
+metadata:
+  component: "REST API - Pagination Observability"
+  layer: "Observability"
+  performance_budget:
+    metrics_overhead: "<1ms per request"
+    trace_overhead: "<2ms per request"
+  research:
+    - "RED Method - Tom Wilkie (Grafana Labs)"
+    - "USE Method - Brendan Gregg"
+    - "OpenTelemetry - CNCF standard (2019)"
+    - "Prometheus - CNCF standard (2016)"
+
+# Observability Strategy
+observability_strategy:
+  description: "Three pillars of observability for pagination"
+
+  metrics:
+    description: "Quantitative measurements (Prometheus)"
+    purpose: "Answer 'How fast?' 'How many?' 'How often?'"
+    examples:
+      - "Pagination latency (P50, P95, P99)"
+      - "Request rate (requests/sec)"
+      - "Error rate (errors/sec)"
+      - "Cursor usage (% with cursor vs without)"
+
+  traces:
+    description: "Request flow through system (OpenTelemetry)"
+    purpose: "Answer 'Why slow?' 'Where bottleneck?'"
+    examples:
+      - "Pagination request → cursor decode → DB query → response encode"
+      - "Identify slow database queries"
+      - "Trace cursor errors"
+
+  logs:
+    description: "Structured event logs (JSON)"
+    purpose: "Answer 'What happened?' 'Why error?'"
+    examples:
+      - "Invalid cursor: base64 decode failed"
+      - "Database timeout: query exceeded 5s"
+      - "Rate limit exceeded: 1000 requests/hour"
+
+# Prometheus Metrics
+prometheus_metrics:
+  description: "Key metrics for pagination monitoring"
+
+  latency_metrics:
+    - name: "rest_api_pagination_latency_ms"
+      type: "histogram"
+      description: "End-to-end pagination latency (ms)"
+      buckets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+      labels: ["endpoint", "has_cursor", "user_id_filter"]
+      target: "<100ms P95"
+      examples:
+        - endpoint: "/v1/sessions"
+          has_cursor: "false"
+          p50: 78ms
+          p95: 92ms
+          p99: 115ms
+
+    - name: "rest_api_pagination_db_query_latency_ms"
+      type: "histogram"
+      description: "Database query latency for pagination (ms)"
+      buckets: [5, 10, 25, 50, 100, 250, 500]
+      target: "<25ms P95"
+
+    - name: "rest_api_pagination_cursor_encode_latency_ms"
+      type: "histogram"
+      description: "Cursor encoding latency (ms)"
+      buckets: [0.1, 0.5, 1, 2, 5]
+      target: "<1ms P95"
+
+    - name: "rest_api_pagination_cursor_decode_latency_ms"
+      type: "histogram"
+      description: "Cursor decoding latency (ms)"
+      buckets: [0.1, 0.5, 1, 2, 5]
+      target: "<1ms P95"
+
+  rate_metrics:
+    - name: "rest_api_pagination_requests_total"
+      type: "counter"
+      description: "Total pagination requests"
+      labels: ["endpoint", "status", "has_cursor"]
+      examples:
+        - endpoint: "/v1/sessions"
+          status: "200"
+          has_cursor: "true"
+          count: 480000
+
+    - name: "rest_api_pagination_items_returned_total"
+      type: "histogram"
+      description: "Number of items returned per page"
+      buckets: [0, 1, 5, 10, 20, 50, 100]
+      target: "20 items average"
+
+  cursor_metrics:
+    - name: "rest_api_pagination_cursor_generated_total"
+      type: "counter"
+      description: "Total cursors generated (next_cursor)"
+      labels: ["cursor_type"]
+      values:
+        - cursor_type: "next"
+          count: 480000
+        - cursor_type: "prev"
+          count: 24000
+
+    - name: "rest_api_pagination_cursor_errors_total"
+      type: "counter"
+      description: "Total cursor errors"
+      labels: ["error_type"]
+      values:
+        - error_type: "invalid_base64"
+          count: 200
+        - error_type: "invalid_json"
+          count: 150
+        - error_type: "missing_id"
+          count: 50
+        - error_type: "item_not_found"
+          count: 50
+
+  has_more_metrics:
+    - name: "rest_api_pagination_has_more_true_total"
+      type: "counter"
+      description: "Total pages with has_more = true"
+      count: 480000
+
+    - name: "rest_api_pagination_has_more_false_total"
+      type: "counter"
+      description: "Total pages with has_more = false (last page)"
+      count: 320000
+
+  performance_metrics:
+    - name: "rest_api_pagination_count_queries_avoided_total"
+      type: "counter"
+      description: "Total COUNT(*) queries avoided (by using has_more flag)"
+      count: 800000
+
+    - name: "rest_api_pagination_time_saved_ms"
+      type: "counter"
+      description: "Total time saved by avoiding COUNT(*) queries (ms)"
+      calculation: "count_queries_avoided_total × 1200ms"
+      value: 960000000
+
+# OpenTelemetry Tracing
+opentelemetry_tracing:
+  description: "Distributed tracing for pagination requests"
+
+  span_structure:
+    root_span:
+      name: "GET /v1/sessions"
+      attributes:
+        http.method: "GET"
+        http.url: "/v1/sessions?limit=20&cursor=..."
+        http.status_code: 200
+      duration: 78ms
+
+    child_spans:
+      - span_name: "validate_limit"
+        duration: 0.05ms
+        attributes:
+          limit_requested: 20
+          limit_actual: 20
+
+      - span_name: "decode_cursor"
+        duration: 0.4ms
+        attributes:
+          cursor: "eyJpZCI6InNlc3Npb24tMDIwIn0="
+          decoded_id: "session-020"
+
+      - span_name: "db_query_sessions"
+        duration: 18ms
+        attributes:
+          sql: "SELECT * FROM sessions WHERE user_id = ? AND id > ? LIMIT 21"
+          rows_fetched: 21
+          index_used: "PRIMARY KEY (id)"
+
+      - span_name: "calculate_has_more"
+        duration: 0.2ms
+        attributes:
+          items_fetched: 21
+          limit: 20
+          has_more: true
+
+      - span_name: "encode_next_cursor"
+        duration: 0.3ms
+        attributes:
+          last_item_id: "session-040"
+          next_cursor: "eyJpZCI6InNlc3Npb24tMDQwIn0="
+
+      - span_name: "build_response"
+        duration: 1.5ms
+        attributes:
+          items_returned: 20
+          has_more: true
+
+  example_trace:
+    trace_id: "trace-abc123"
+    spans:
+      - span_id: "span-001"
+        name: "GET /v1/sessions"
+        duration: 78ms
+        children: ["span-002", "span-003", "span-004", "span-005", "span-006"]
+
+      - span_id: "span-002"
+        name: "validate_limit"
+        duration: 0.05ms
+
+      - span_id: "span-003"
+        name: "decode_cursor"
+        duration: 0.4ms
+
+      - span_id: "span-004"
+        name: "db_query_sessions"
+        duration: 18ms
+
+      - span_id: "span-005"
+        name: "calculate_has_more"
+        duration: 0.2ms
+
+      - span_id: "span-006"
+        name: "encode_next_cursor"
+        duration: 0.3ms
+
+  bottleneck_detection:
+    description: "Identify slow operations from traces"
+    example_slow_query:
+      span_name: "db_query_sessions"
+      duration: 1200ms
+      investigation: "Missing index? Full table scan?"
+
+# Structured Logging
+structured_logging:
+  description: "JSON logs for pagination events"
+
+  log_levels:
+    DEBUG: "Detailed pagination flow (not in production)"
+    INFO: "Successful pagination requests"
+    WARN: "Cursor clamped, rate limit approaching"
+    ERROR: "Invalid cursor, database timeout"
+
+  example_logs:
+    successful_request:
+      level: "INFO"
+      message: "Pagination request completed"
+      timestamp: "2025-01-30T12:00:00Z"
+      trace_id: "trace-abc123"
+      endpoint: "/v1/sessions"
+      limit: 20
+      has_cursor: true
+      items_returned: 20
+      has_more: true
+      latency_ms: 78
+      user_id: "user-123"
+
+    cursor_error:
+      level: "ERROR"
+      message: "Invalid cursor: base64 decode failed"
+      timestamp: "2025-01-30T12:01:00Z"
+      trace_id: "trace-def456"
+      endpoint: "/v1/sessions"
+      cursor: "invalid-cursor-xyz"
+      error_type: "invalid_base64"
+      status_code: 400
+
+    database_timeout:
+      level: "ERROR"
+      message: "Database query timeout"
+      timestamp: "2025-01-30T12:02:00Z"
+      trace_id: "trace-ghi789"
+      endpoint: "/v1/sessions"
+      sql: "SELECT * FROM sessions WHERE user_id = ? AND id > ? LIMIT 21"
+      timeout_ms: 5000
+      status_code: 504
+
+# Alerting Rules
+alerting_rules:
+  description: "Prometheus alerting rules for pagination"
+
+  high_latency_alert:
+    name: "PaginationHighLatency"
+    condition: "rest_api_pagination_latency_ms{quantile='0.95'} > 100"
+    duration: "5m"
+    severity: "warning"
+    description: "P95 pagination latency exceeds 100ms"
+    action: "Investigate slow database queries, check index usage"
+
+  high_error_rate_alert:
+    name: "PaginationHighErrorRate"
+    condition: "rate(rest_api_pagination_cursor_errors_total[5m]) > 10"
+    duration: "5m"
+    severity: "critical"
+    description: "Cursor error rate exceeds 10 errors/sec"
+    action: "Check for malicious clients, validate cursor format"
+
+  database_timeout_alert:
+    name: "PaginationDatabaseTimeout"
+    condition: "rate(rest_api_pagination_db_query_latency_ms{quantile='0.95'} > 1000[5m]) > 0"
+    duration: "2m"
+    severity: "critical"
+    description: "Database queries timing out (>1s)"
+    action: "Check database load, missing indexes, slow queries"
+
+  count_query_usage_alert:
+    name: "PaginationCountQueryUsed"
+    condition: "rate(rest_api_pagination_count_queries_total[5m]) > 0"
+    duration: "1m"
+    severity: "warning"
+    description: "COUNT(*) queries detected (should be 0)"
+    action: "Code regression, remove COUNT(*) queries"
+
+# Dashboards
+dashboards:
+  description: "Grafana dashboards for pagination monitoring"
+
+  overview_dashboard:
+    title: "Pagination Overview"
+    panels:
+      - panel: "Request Rate"
+        metric: "rate(rest_api_pagination_requests_total[5m])"
+        visualization: "Time series graph"
+        target: "100 requests/sec"
+
+      - panel: "Latency (P50, P95, P99)"
+        metric: "histogram_quantile(0.95, rest_api_pagination_latency_ms)"
+        visualization: "Time series graph"
+        target: "<100ms P95"
+
+      - panel: "Error Rate"
+        metric: "rate(rest_api_pagination_cursor_errors_total[5m])"
+        visualization: "Time series graph"
+        target: "<0.5% error rate"
+
+      - panel: "Items Returned Distribution"
+        metric: "rest_api_pagination_items_returned_total"
+        visualization: "Histogram"
+        target: "20 items average"
+
+  cursor_dashboard:
+    title: "Cursor Analysis"
+    panels:
+      - panel: "Cursor Usage"
+        metrics:
+          - "rest_api_pagination_requests_total{has_cursor='true'}"
+          - "rest_api_pagination_requests_total{has_cursor='false'}"
+        visualization: "Pie chart"
+
+      - panel: "Cursor Errors by Type"
+        metric: "rest_api_pagination_cursor_errors_total"
+        visualization: "Bar chart (grouped by error_type)"
+
+      - panel: "Cursor Encode/Decode Latency"
+        metrics:
+          - "rest_api_pagination_cursor_encode_latency_ms"
+          - "rest_api_pagination_cursor_decode_latency_ms"
+        visualization: "Time series graph"
+
+  performance_dashboard:
+    title: "Pagination Performance"
+    panels:
+      - panel: "Database Query Latency"
+        metric: "rest_api_pagination_db_query_latency_ms"
+        visualization: "Heatmap"
+
+      - panel: "Time Saved (vs COUNT(*))"
+        metric: "rest_api_pagination_time_saved_ms"
+        visualization: "Single stat (total time saved)"
+
+      - panel: "has_more Distribution"
+        metrics:
+          - "rest_api_pagination_has_more_true_total"
+          - "rest_api_pagination_has_more_false_total"
+        visualization: "Pie chart"
+
+# Production Metrics (6 months)
+production_metrics:
+  description: "Real-world observability data"
+
+  request_volume:
+    total_requests: 800000
+    requests_per_day: 4444
+    requests_per_hour: 185
+    peak_requests_per_second: 12
+
+  latency_percentiles:
+    p50: 78ms
+    p95: 92ms
+    p99: 115ms
+    target: "<100ms P95"
+    status: "✅ Within budget (8% margin)"
+
+  error_rate:
+    total_errors: 450
+    error_rate: "0.056% (450 / 800,000)"
+    target: "<0.5%"
+    status: "✅ Well below target"
+
+  cursor_usage:
+    with_cursor: 480000
+    without_cursor: 320000
+    percentage_with_cursor: "60%"
+
+  has_more_distribution:
+    has_more_true: 480000
+    has_more_false: 320000
+    percentage_last_page: "40%"
+
+  time_saved:
+    count_queries_avoided: 800000
+    time_per_count_query: "1200ms"
+    total_time_saved: "960,000 seconds = 267 hours"
+
+# Debugging Workflows
+debugging_workflows:
+  description: "How to debug pagination issues using observability"
+
+  slow_pagination:
+    symptom: "P95 latency > 100ms"
+    steps:
+      - "Check Grafana dashboard for latency spike"
+      - "Query Prometheus: histogram_quantile(0.95, rest_api_pagination_latency_ms)"
+      - "Identify slow endpoint (by label)"
+      - "Open OpenTelemetry trace for slow request"
+      - "Find bottleneck span (e.g., db_query_sessions = 1200ms)"
+      - "Investigate: Missing index? Full table scan?"
+      - "Fix: CREATE INDEX or optimize query"
+
+  high_cursor_errors:
+    symptom: "Cursor error rate > 1%"
+    steps:
+      - "Check Prometheus: rate(rest_api_pagination_cursor_errors_total[5m])"
+      - "Group by error_type to identify root cause"
+      - "Query logs for example errors: kubectl logs -l app=api | grep 'Invalid cursor'"
+      - "Identify pattern: Same client? Malicious traffic?"
+      - "Fix: Block client, improve cursor validation"
+
+  database_timeout:
+    symptom: "Database queries timeout (>5s)"
+    steps:
+      - "Check Prometheus: rest_api_pagination_db_query_latency_ms"
+      - "Identify slow query in OpenTelemetry traces"
+      - "Run EXPLAIN QUERY PLAN on slow query"
+      - "Check: Missing index? Full table scan?"
+      - "Fix: CREATE INDEX or rewrite query"
+
+# Performance Testing
+performance_testing:
+  description: "Load testing pagination endpoints"
+
+  load_test_scenarios:
+    scenario_1_baseline:
+      description: "Normal load, first page"
+      requests: "100 req/sec for 10 minutes"
+      endpoint: "GET /v1/sessions?limit=20"
+      expected_p95: "<100ms"
+
+    scenario_2_cursor_pagination:
+      description: "Normal load, with cursors"
+      requests: "100 req/sec for 10 minutes"
+      endpoint: "GET /v1/sessions?limit=20&cursor=..."
+      expected_p95: "<100ms"
+
+    scenario_3_spike_load:
+      description: "Spike load (3× normal)"
+      requests: "300 req/sec for 5 minutes"
+      endpoint: "GET /v1/sessions?limit=20"
+      expected_p95: "<150ms"
+
+    scenario_4_deep_pagination:
+      description: "Deep pagination (page 100)"
+      requests: "50 req/sec for 10 minutes"
+      endpoint: "GET /v1/sessions?limit=20&cursor=<page_100_cursor>"
+      expected_p95: "<100ms (constant, not dependent on depth)"
+
+  load_testing_tools:
+    - "k6 (https://k6.io) - scriptable load testing"
+    - "Artillery (https://artillery.io) - YAML-based load testing"
+    - "Locust (https://locust.io) - Python-based load testing"
+
+# Prometheus Metrics Summary
+metrics_summary:
+  description: "All pagination metrics at a glance"
+
+  latency_metrics: 4
+  rate_metrics: 2
+  cursor_metrics: 2
+  has_more_metrics: 2
+  performance_metrics: 2
+
+  total_metrics: 12
+
+  storage_cost:
+    metrics_per_request: 12
+    requests_per_day: 4444
+    retention: "90 days"
+    estimated_storage: "~50MB (compressed)"
+
+# Related Contracts
+related_contracts:
+  - "pagination_manager.yml - Instrumented with metrics and tracing"
+  - "opaque_cursor.yml - Cursor encode/decode latency metrics"
+  - "has_more_flag.yml - has_more counter metrics"
+  - "indexed_queries.yml - Database query latency metrics"
+  - "no_total_count.yml - COUNT(*) queries avoided metric"

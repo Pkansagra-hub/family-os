@@ -1,0 +1,366 @@
+# Resource-Oriented Design - REST URL Patterns & HTTP Verb Mapping
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Resource-oriented URLs (not RPC-style) following REST principles
+# Research: Roy Fielding's REST Dissertation (2000), REST API Design Rulebook
+
+version: "1.0"
+type: "rest_resource_oriented_design"
+status: "approved"
+
+metadata:
+  component: "REST API - Resource Design"
+  layer: "API Gateway"
+  research:
+    - "REST Dissertation (Fielding 2000) - Resource identification via URIs"
+    - "REST API Design Rulebook (Masse 2011) - URL design patterns"
+    - "RESTful Web Services (Richardson 2007) - Resource-oriented architecture"
+    - "Production Evidence (K1, 6 months) - 21 endpoints following resource-oriented design"
+
+# Resource-Oriented vs RPC-Style
+
+comparison:
+  description: "Resource-oriented (REST) vs RPC-style (SOAP, JSON-RPC)"
+
+  resource_oriented:
+    pattern: "Nouns (resources) + HTTP verbs (actions)"
+    example: "POST /v1/sessions (create), GET /v1/sessions/{id} (retrieve)"
+    benefits:
+      - "Uniform interface (standard HTTP verbs)"
+      - "Cacheable (HTTP caching works)"
+      - "Stateless (no server-side session state)"
+      - "Self-descriptive (URL = resource identifier)"
+
+  rpc_style:
+    pattern: "Verbs in URLs (method calls)"
+    example: "POST /createSession, POST /getSession?id=123"
+    drawbacks:
+      - "Non-uniform (custom verbs for each action)"
+      - "Not cacheable (POST not cached by default)"
+      - "Stateful (often requires session state)"
+      - "Coupled (URL = function name)"
+
+  k1_choice: "Resource-oriented (REST) for caching, scalability, evolvability"
+
+# Resource Hierarchy
+resource_hierarchy:
+  description: "Resource hierarchy for K1 REST API"
+
+  levels:
+    - level: 1
+      type: "Collection"
+      pattern: "/v1/{resource}"
+      example: "/v1/sessions"
+      http_methods: "GET (list), POST (create)"
+      description: "Plural noun representing resource collection"
+
+    - level: 2
+      type: "Resource"
+      pattern: "/v1/{resource}/{id}"
+      example: "/v1/sessions/session-a1b2c3d4"
+      http_methods: "GET (retrieve), PATCH (update), DELETE (delete)"
+      description: "Singular resource identified by ID"
+
+    - level: 3
+      type: "Sub-collection"
+      pattern: "/v1/{resource}/{id}/{sub-resource}"
+      example: "/v1/sessions/session-a1b2c3d4/turns"
+      http_methods: "GET (list sub-resources), POST (create sub-resource)"
+      description: "Nested collection under parent resource"
+
+    - level: 4
+      type: "Sub-resource"
+      pattern: "/v1/{resource}/{id}/{sub-resource}/{sub-id}"
+      example: "/v1/sessions/session-a1b2c3d4/turns/turn-xyz123"
+      http_methods: "GET (retrieve), PATCH (update), DELETE (delete)"
+      description: "Singular sub-resource identified by ID"
+
+# URL Design Rules
+url_design_rules:
+  description: "URL design conventions for K1 REST API"
+
+  rules:
+    - rule: "Use nouns, not verbs"
+      good: "/v1/sessions (noun)"
+      bad: "/v1/createSession (verb)"
+      rationale: "HTTP verb (POST) expresses action"
+
+    - rule: "Use plural for collections"
+      good: "/v1/sessions (plural)"
+      bad: "/v1/session (singular)"
+      rationale: "Collection contains multiple sessions"
+
+    - rule: "Use hyphens for multi-word resources"
+      good: "/v1/agent-templates (hyphen)"
+      bad: "/v1/agentTemplates (camelCase), /v1/agent_templates (underscore)"
+      rationale: "RFC 3986 (URLs case-sensitive, hyphens readable)"
+
+    - rule: "Use lowercase"
+      good: "/v1/sessions (lowercase)"
+      bad: "/v1/Sessions (uppercase)"
+      rationale: "URLs case-sensitive, lowercase convention"
+
+    - rule: "No trailing slashes"
+      good: "/v1/sessions"
+      bad: "/v1/sessions/"
+      rationale: "Avoid 301 redirects"
+
+    - rule: "Use query params for filtering/pagination"
+      good: "/v1/sessions?status=active&limit=20"
+      bad: "/v1/sessions/active (resource path)"
+      rationale: "Query params = optional filters, not resource identity"
+
+    - rule: "Use path params for resource IDs"
+      good: "/v1/sessions/session-a1b2c3d4"
+      bad: "/v1/sessions?id=session-a1b2c3d4"
+      rationale: "ID = resource identity (not filter)"
+
+# HTTP Verb Mapping
+http_verb_mapping:
+  description: "HTTP verbs mapped to CRUD operations"
+
+  verbs:
+    - verb: "POST"
+      crud: "Create"
+      collection: "Create new resource in collection"
+      collection_example: "POST /v1/sessions → 201 Created"
+      resource: "Not used (use PATCH for updates)"
+      idempotent: false
+      safe: false
+      cacheable: false
+
+    - verb: "GET"
+      crud: "Read"
+      collection: "List resources in collection"
+      collection_example: "GET /v1/sessions → 200 OK"
+      resource: "Retrieve single resource"
+      resource_example: "GET /v1/sessions/{id} → 200 OK"
+      idempotent: true
+      safe: true
+      cacheable: true
+
+    - verb: "PATCH"
+      crud: "Update"
+      collection: "Not used (can't update entire collection)"
+      resource: "Partial update of single resource"
+      resource_example: "PATCH /v1/sessions/{id} → 200 OK"
+      idempotent: true
+      safe: false
+      cacheable: false
+
+    - verb: "PUT"
+      crud: "Update (full replacement)"
+      collection: "Not used in K1 API"
+      resource: "Not used in K1 API (prefer PATCH)"
+      note: "K1 uses PATCH for partial updates (not PUT for full replacement)"
+      rationale: "PATCH more flexible (update 1 field without sending entire object)"
+
+    - verb: "DELETE"
+      crud: "Delete"
+      collection: "Not used (can't delete entire collection)"
+      resource: "Delete single resource"
+      resource_example: "DELETE /v1/sessions/{id} → 200 OK"
+      idempotent: true
+      safe: false
+      cacheable: false
+
+# Session Resource Examples
+session_resource_examples:
+  description: "URL examples for session resources"
+
+  endpoints:
+    - method: "POST"
+      url: "/v1/sessions"
+      description: "Create new session"
+      request_body: "{persona, privacy_band, capabilities, ...}"
+      response: "201 Created with Location: /v1/sessions/{id}"
+      adr_contract: "post_create_session.yml"
+
+    - method: "GET"
+      url: "/v1/sessions"
+      description: "List sessions (with pagination)"
+      query_params: "?limit=20&cursor={cursor}&status=active"
+      response: "200 OK with {data: [...], pagination: {...}}"
+      adr_contract: "get_sessions_list.yml"
+
+    - method: "GET"
+      url: "/v1/sessions/{id}"
+      description: "Retrieve session details"
+      path_params: "session_id"
+      response: "200 OK or 304 Not Modified (cached)"
+      adr_contract: "get_session.yml"
+
+    - method: "PATCH"
+      url: "/v1/sessions/{id}"
+      description: "Update session (metadata, capabilities, TTL)"
+      request_body: "{metadata: {...}, ttl_seconds: 7200}"
+      response: "200 OK with updated session"
+      adr_contract: "patch_update_session.yml"
+
+    - method: "DELETE"
+      url: "/v1/sessions/{id}"
+      description: "Terminate session (graceful shutdown)"
+      request_body: "None"
+      response: "200 OK with termination details"
+      adr_contract: "delete_terminate_session.yml"
+
+# Turn Sub-Resource Examples
+turn_sub_resource_examples:
+  description: "URL examples for turn sub-resources"
+
+  endpoints:
+    - method: "POST"
+      url: "/v1/sessions/{session_id}/turns"
+      description: "Submit new turn in session"
+      request_body: "{user_message, attachments, ...}"
+      response: "201 Created with Location: /v1/sessions/{session_id}/turns/{turn_id}"
+
+    - method: "GET"
+      url: "/v1/sessions/{session_id}/turns"
+      description: "List turns in session (with pagination)"
+      query_params: "?limit=20&cursor={cursor}"
+      response: "200 OK with {data: [...], pagination: {...}}"
+
+    - method: "GET"
+      url: "/v1/sessions/{session_id}/turns/{turn_id}"
+      description: "Retrieve specific turn details"
+      path_params: "session_id, turn_id"
+      response: "200 OK with turn details"
+
+    - method: "PATCH"
+      url: "/v1/sessions/{session_id}/turns/{turn_id}"
+      description: "Update turn metadata"
+      request_body: "{metadata: {...}}"
+      response: "200 OK with updated turn"
+
+    - method: "DELETE"
+      url: "/v1/sessions/{session_id}/turns/{turn_id}"
+      description: "Delete turn (soft delete)"
+      request_body: "None"
+      response: "200 OK"
+
+# Agent Sub-Resource Examples
+agent_sub_resource_examples:
+  description: "URL examples for agent sub-resources"
+
+  endpoints:
+    - method: "POST"
+      url: "/v1/sessions/{session_id}/agents"
+      description: "Hire new agent in session"
+      request_body: "{agent_type, capabilities, config}"
+      response: "201 Created with Location: /v1/sessions/{session_id}/agents/{agent_id}"
+
+    - method: "GET"
+      url: "/v1/sessions/{session_id}/agents"
+      description: "List agents in session"
+      query_params: "?status=ACTIVE"
+      response: "200 OK with agent list"
+
+    - method: "GET"
+      url: "/v1/sessions/{session_id}/agents/{agent_id}"
+      description: "Retrieve specific agent details"
+      path_params: "session_id, agent_id"
+      response: "200 OK with agent details"
+
+    - method: "DELETE"
+      url: "/v1/sessions/{session_id}/agents/{agent_id}"
+      description: "Terminate agent (graceful shutdown)"
+      request_body: "None"
+      response: "200 OK with termination details"
+
+# Query Parameter Conventions
+query_parameter_conventions:
+  description: "Query parameter naming conventions"
+
+  conventions:
+    - parameter: "limit"
+      type: "integer"
+      purpose: "Pagination page size"
+      default: 20
+      range: "1-100"
+      example: "?limit=50"
+
+    - parameter: "cursor"
+      type: "string (opaque)"
+      purpose: "Pagination cursor"
+      format: "Base64(last_item_id)"
+      example: "?cursor=c2Vzc2lvbi1hMWIyYzNkNA=="
+
+    - parameter: "status"
+      type: "enum"
+      purpose: "Filter by status"
+      values: ["active", "idle", "draining", "terminated"]
+      example: "?status=active"
+
+    - parameter: "privacy_band"
+      type: "enum"
+      purpose: "Filter by privacy band"
+      values: ["GREEN", "AMBER", "RED"]
+      example: "?privacy_band=GREEN"
+
+    - parameter: "created_after"
+      type: "string (ISO 8601)"
+      purpose: "Filter by creation timestamp"
+      example: "?created_after=2025-10-20T00:00:00Z"
+
+    - parameter: "created_before"
+      type: "string (ISO 8601)"
+      purpose: "Filter by creation timestamp"
+      example: "?created_before=2025-10-21T23:59:59Z"
+
+# Path Parameter Conventions
+path_parameter_conventions:
+  description: "Path parameter naming conventions"
+
+  conventions:
+    - parameter: "session_id"
+      format: "session-{uuid}"
+      example: "session-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      note: "Prefix 'session-' for type safety"
+
+    - parameter: "turn_id"
+      format: "turn-{uuid}"
+      example: "turn-xyz123-4567-89ab-cdef-012345678901"
+      note: "Prefix 'turn-' for type safety"
+
+    - parameter: "agent_id"
+      format: "agent-{uuid}"
+      example: "agent-lmn456-7890-abcd-ef12-345678901234"
+      note: "Prefix 'agent-' for type safety"
+
+# Anti-Patterns (Avoid)
+anti_patterns:
+  description: "RPC-style anti-patterns to avoid"
+
+  patterns:
+    - anti_pattern: "Verbs in URLs"
+      bad: "POST /createSession, POST /getSession"
+      good: "POST /v1/sessions, GET /v1/sessions/{id}"
+      rationale: "HTTP verb expresses action (not URL)"
+
+    - anti_pattern: "Query params for resource IDs"
+      bad: "GET /v1/sessions?id=session-a1b2c3d4"
+      good: "GET /v1/sessions/session-a1b2c3d4"
+      rationale: "ID = resource identity (use path param)"
+
+    - anti_pattern: "Actions as sub-resources"
+      bad: "POST /v1/sessions/{id}/terminate"
+      good: "DELETE /v1/sessions/{id}"
+      rationale: "HTTP verb expresses action (DELETE = terminate)"
+
+    - anti_pattern: "CamelCase in URLs"
+      bad: "/v1/userSessions, /v1/agentTemplates"
+      good: "/v1/user-sessions, /v1/agent-templates"
+      rationale: "URLs case-sensitive, hyphens more readable"
+
+    - anti_pattern: "Trailing slashes"
+      bad: "/v1/sessions/"
+      good: "/v1/sessions"
+      rationale: "Avoid 301 redirects (inconsistent URLs)"
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - POST /v1/sessions (collection endpoint)"
+  - "get_session.yml - GET /v1/sessions/{id} (resource endpoint)"
+  - "get_sessions_list.yml - GET /v1/sessions (collection endpoint with query params)"
+  - "hateoas_links.yml - HATEOAS links follow resource-oriented URL patterns"
+  - "ADR-0041 - REST API Session Management (21 endpoints following resource-oriented design)"

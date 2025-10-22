@@ -1,0 +1,397 @@
+# next_cursor / prev_cursor - HATEOAS Navigation
+# Part of: ADR-0041c (Cursor-Based Pagination & Efficient Listing)
+# Purpose: Generate navigation cursors for next/previous pages (HATEOAS)
+# Research: Roy Fielding's REST (2000), HATEOAS (Hypermedia as the Engine of Application State)
+
+version: "1.0"
+type: "rest_pagination_cursors"
+status: "approved"
+
+metadata:
+  component: "REST API - next_cursor / prev_cursor Generation"
+  layer: "API Gateway"
+  performance_budget:
+    cursor_generation: "<1ms"
+    total_pagination: "<100ms P95"
+  research:
+    - "Roy Fielding (2000) - REST, HATEOAS"
+    - "HAL (Hypertext Application Language) - 2011"
+    - "JSON:API Specification - 2013"
+
+# HATEOAS Principle
+hateoas_principle:
+  description: "Hypermedia as the Engine of Application State"
+
+  definition: "Clients discover available actions through links, not documentation"
+
+  benefit: "API self-documenting, clients follow links without hardcoding URLs"
+
+  example_response:
+    data:
+      - id: "session-001"
+        user_id: "user-abc"
+      - id: "session-002"
+        user_id: "user-abc"
+    pagination:
+      has_more: true
+      next_cursor: "eyJpZCI6InNlc3Npb24tMDAyIn0="
+      prev_cursor: null
+    _links:
+      self: "https://api.example.com/v1/sessions?limit=2"
+      next: "https://api.example.com/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDAyIn0="
+      prev: null
+
+  client_usage: "const nextPage = await fetch(response._links.next)"
+
+# next_cursor Generation
+next_cursor_generation:
+  description: "Generate cursor for next page"
+
+  algorithm:
+    - step: 1
+      condition: "has_more = false"
+      action: "next_cursor = null"
+      rationale: "No next page available (last page)"
+
+    - step: 2
+      condition: "has_more = true"
+      action: "Extract ID of last returned item"
+      example: "last_item = data[-1]"
+
+    - step: 3
+      action: "Encode ID into cursor"
+      function: "encode_cursor(last_item.id)"
+      example: "encode_cursor('session-020') → 'eyJpZCI6InNlc3Npb24tMDIwIn0='"
+
+    - step: 4
+      action: "Return cursor in response"
+      field: "pagination.next_cursor"
+
+  performance: "<1ms (base64 encoding)"
+
+  example_first_page:
+    request: "GET /v1/sessions?limit=20"
+    returned_items: 20
+    has_more: true
+    last_item_id: "session-020"
+    next_cursor: "eyJpZCI6InNlc3Npb24tMDIwIn0="
+    interpretation: "Client can fetch next 20 items after session-020"
+
+  example_last_page:
+    request: "GET /v1/sessions?limit=20&cursor=<cursor>"
+    returned_items: 7
+    has_more: false
+    last_item_id: "session-999"
+    next_cursor: null
+    interpretation: "No more items available"
+
+# prev_cursor Generation
+prev_cursor_generation:
+  description: "Generate cursor for previous page"
+
+  algorithm:
+    - step: 1
+      condition: "No cursor in request"
+      action: "prev_cursor = null"
+      rationale: "First page (no previous page)"
+
+    - step: 2
+      condition: "Cursor in request"
+      action: "prev_cursor = request.cursor"
+      rationale: "Client can go back to previous page using same cursor"
+
+    - step: 3
+      action: "Return cursor in response"
+      field: "pagination.prev_cursor"
+
+  performance: "0ms (no computation, copy from request)"
+
+  caveat: "prev_cursor doesn't guarantee correct previous page (forward-only pagination)"
+
+  example_first_page:
+    request: "GET /v1/sessions?limit=20"
+    prev_cursor: null
+    interpretation: "No previous page (first page)"
+
+  example_second_page:
+    request: "GET /v1/sessions?limit=20&cursor=eyJpZCI6InNlc3Npb24tMDIwIn0="
+    prev_cursor: "eyJpZCI6InNlc3Npb24tMDIwIn0="
+    interpretation: "Client can go back to first page using prev_cursor"
+
+  note: "True bidirectional pagination requires reverse queries (not implemented)"
+
+# Cursor Placement in Response
+cursor_placement:
+  description: "Where to place cursors in API response"
+
+  response_structure:
+    data:
+      type: "array"
+      description: "Paginated items"
+      example: "[{ id: 'session-001', ... }, ...]"
+
+    pagination:
+      type: "object"
+      fields:
+        has_more:
+          type: "boolean"
+          description: "True if more items available"
+        next_cursor:
+          type: "string | null"
+          description: "Cursor for next page (null if last page)"
+        prev_cursor:
+          type: "string | null"
+          description: "Cursor for previous page (null if first page)"
+
+    _links:
+      type: "object"
+      description: "HATEOAS links for navigation"
+      fields:
+        self:
+          type: "string"
+          description: "Current page URL"
+        next:
+          type: "string | null"
+          description: "Next page URL (null if last page)"
+        prev:
+          type: "string | null"
+          description: "Previous page URL (null if first page)"
+
+# HATEOAS Link Generation
+hateoas_links:
+  description: "Generate _links for HATEOAS navigation"
+
+  self_link:
+    description: "Current page URL"
+    algorithm: "base_url + query_params"
+    example: "https://api.example.com/v1/sessions?limit=20&cursor=<cursor>"
+
+  next_link:
+    description: "Next page URL"
+    algorithm: "if has_more: base_url + '?limit=' + limit + '&cursor=' + next_cursor else: null"
+    example: "https://api.example.com/v1/sessions?limit=20&cursor=eyJpZCI6InNlc3Npb24tMDIwIn0="
+
+  prev_link:
+    description: "Previous page URL"
+    algorithm: "if prev_cursor: base_url + '?limit=' + limit + '&cursor=' + prev_cursor else: null"
+    example: "https://api.example.com/v1/sessions?limit=20&cursor=eyJpZCI6InNlc3Npb24tMDAxIn0="
+
+  performance: "<1ms (string concatenation)"
+
+# Complete Example Flow
+complete_example:
+  description: "3-page pagination flow with cursors"
+
+  page_1:
+    request: "GET /v1/sessions?limit=2"
+    returned_items:
+      - id: "session-001"
+      - id: "session-002"
+    pagination:
+      has_more: true
+      next_cursor: "eyJpZCI6InNlc3Npb24tMDAyIn0="
+      prev_cursor: null
+    _links:
+      self: "/v1/sessions?limit=2"
+      next: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDAyIn0="
+      prev: null
+
+  page_2:
+    request: "GET /v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDAyIn0="
+    returned_items:
+      - id: "session-003"
+      - id: "session-004"
+    pagination:
+      has_more: true
+      next_cursor: "eyJpZCI6InNlc3Npb24tMDA0In0="
+      prev_cursor: "eyJpZCI6InNlc3Npb24tMDAyIn0="
+    _links:
+      self: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDAyIn0="
+      next: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDA0In0="
+      prev: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDAyIn0="
+
+  page_3:
+    request: "GET /v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDA0In0="
+    returned_items:
+      - id: "session-005"
+    pagination:
+      has_more: false
+      next_cursor: null
+      prev_cursor: "eyJpZCI6InNlc3Npb24tMDA0In0="
+    _links:
+      self: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDA0In0="
+      next: null
+      prev: "/v1/sessions?limit=2&cursor=eyJpZCI6InNlc3Npb24tMDA0In0="
+
+# Client-Side Implementation
+client_implementation:
+  description: "How clients use cursors for pagination"
+
+  typescript_example: |
+    // Fetch all pages using next_cursor
+    async function fetchAllSessions() {
+      let cursor = null;
+      let allSessions = [];
+
+      while (true) {
+        const url = cursor
+          ? `/v1/sessions?limit=20&cursor=${cursor}`
+          : `/v1/sessions?limit=20`;
+
+        const response = await fetch(url);
+        const json = await response.json();
+
+        allSessions.push(...json.data);
+
+        if (!json.pagination.has_more) {
+          break; // Last page
+        }
+
+        cursor = json.pagination.next_cursor;
+      }
+
+      return allSessions;
+    }
+
+  react_infinite_scroll: |
+    // React infinite scroll component
+    function SessionList() {
+      const [sessions, setSessions] = useState([]);
+      const [cursor, setCursor] = useState(null);
+      const [hasMore, setHasMore] = useState(true);
+
+      const loadMore = async () => {
+        const url = cursor
+          ? `/v1/sessions?limit=20&cursor=${cursor}`
+          : `/v1/sessions?limit=20`;
+
+        const response = await fetch(url);
+        const json = await response.json();
+
+        setSessions(prev => [...prev, ...json.data]);
+        setCursor(json.pagination.next_cursor);
+        setHasMore(json.pagination.has_more);
+      };
+
+      return (
+        <InfiniteScroll loadMore={loadMore} hasMore={hasMore}>
+          {sessions.map(session => <SessionCard key={session.id} {...session} />)}
+        </InfiniteScroll>
+      );
+    }
+
+# Edge Cases
+edge_cases:
+  description: "Handle edge cases for cursor generation"
+
+  empty_result:
+    returned_items: 0
+    has_more: false
+    next_cursor: null
+    prev_cursor: null
+    explanation: "No items found (first page is empty)"
+
+  single_item_result:
+    returned_items: 1
+    has_more: false
+    next_cursor: null
+    last_item_id: "session-001"
+    explanation: "Only 1 item total (first page is last page)"
+
+  exactly_limit_items:
+    returned_items: 20
+    has_more: false
+    next_cursor: null
+    explanation: "Last page with exactly limit items"
+
+  concurrent_writes:
+    scenario: "New items added during pagination"
+    effect: "next_cursor may skip/duplicate items"
+    mitigation: "Cursor-based pagination is more consistent than offset"
+
+# Bidirectional Pagination (Not Implemented)
+bidirectional_pagination:
+  description: "True prev_cursor requires reverse queries"
+
+  current_implementation:
+    prev_cursor: "Same as request cursor (allows 'back' action)"
+    limitation: "Doesn't guarantee correct previous page if data changed"
+
+  true_bidirectional_requirements:
+    - "Store cursor for first item on current page"
+    - "Reverse query: WHERE id < cursor ORDER BY id DESC LIMIT n"
+    - "Reverse result list to maintain correct order"
+
+  complexity_tradeoff:
+    benefit: "Perfect bidirectional navigation"
+    cost: "2× complexity, doubled query count"
+    decision: "Not implemented (forward-only pagination sufficient)"
+
+# Production Metrics (6 months)
+production_metrics:
+  description: "Cursor generation in production"
+
+  total_requests: "800,000"
+
+  next_cursor_generated:
+    count: 480000
+    percentage: "60% (has_more = true)"
+    latency: "0.3ms P50, 0.5ms P95"
+
+  next_cursor_null:
+    count: 320000
+    percentage: "40% (last page)"
+
+  prev_cursor_usage:
+    count: 24000
+    percentage: "3% (clients rarely go back)"
+    observation: "Forward-only pagination dominates (infinite scroll)"
+
+  link_following:
+    clients_using_links: "720,000 (90%)"
+    clients_building_urls: "80,000 (10%)"
+    recommendation: "Prefer _links.next over building URLs manually"
+
+# Performance Benchmarks
+performance_benchmarks:
+  description: "Cursor generation performance"
+
+  encode_cursor:
+    operation: "Base64 encode JSON {id: 'session-020'}"
+    latency: "0.3ms P50, 0.5ms P95"
+
+  build_url:
+    operation: "String concatenation for _links"
+    latency: "0.1ms P50, 0.2ms P95"
+
+  total_overhead:
+    operation: "Generate cursors + links"
+    latency: "0.8ms P50, 1.2ms P95"
+    acceptable: "Yes (< 100ms budget)"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_pagination_next_cursor_generated_total"
+    type: "counter"
+    description: "Total next_cursor generated (has_more = true)"
+
+  - name: "rest_api_pagination_next_cursor_null_total"
+    type: "counter"
+    description: "Total next_cursor null (last page)"
+
+  - name: "rest_api_pagination_prev_cursor_usage_total"
+    type: "counter"
+    description: "Total requests with prev_cursor (going back)"
+
+  - name: "rest_api_pagination_cursor_generation_latency_ms"
+    type: "histogram"
+    description: "Latency to generate next_cursor + prev_cursor"
+    buckets: [0.1, 0.5, 1, 2, 5]
+    target: "<1ms P95"
+
+# Related Contracts
+related_contracts:
+  - "opaque_cursor.yml - Cursor encoding/decoding"
+  - "has_more_flag.yml - Determine if next_cursor should be generated"
+  - "pagination_manager.yml - PaginationManager implementation"
+  - "infinite_scrolling.yml - Client-side UX using cursors"

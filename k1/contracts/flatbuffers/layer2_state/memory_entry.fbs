@@ -1,0 +1,70 @@
+// memory_entry.fbs
+// Layer 2 State & Persistence: Memory Entry
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0020 (Multi-Tier Storage)
+//
+// Performance Targets:
+// - Size: 512B-4KB typical
+// - Serialize: 0.35ms P95 (target: <1ms)
+// - Deserialize: 0.048ms P95 (target: <0.1ms)
+//
+// Research: Long-Term Memory, Semantic Search, FAISS
+
+namespace k1.memory_manager;
+
+/// Memory entry types
+enum MemoryType : uint8 {
+  FACT = 0,       // Factual knowledge (e.g., "Paris is the capital of France")
+  PROCEDURE = 1,  // Procedural knowledge (e.g., "How to book a flight")
+  EPISODE = 2,    // Episodic memory (e.g., "User's last vacation to Tokyo")
+  CONCEPT = 3     // Conceptual knowledge (e.g., "Definition of 'agentic orchestration'")
+}
+
+/// Key-value pair for metadata
+table KeyValue {
+  key: string (required);
+  value: string (required);
+}
+
+/// Memory entry (persistent storage)
+///
+/// Long-term memory entry with embedding for semantic search.
+///
+/// Usage patterns:
+/// - Long-term memory: Store user facts, procedures, episodes beyond SessionState capacity
+/// - Semantic search: Use embedding for similarity search (cosine similarity, FAISS index)
+/// - Memory retrieval: Query by entry_type, access_count, confidence score
+/// - Eviction: Evict entries with low access_count, old last_accessed_ms
+///
+/// Example Memory Entries:
+/// - FACT: "Paris is the capital of France" (confidence=1.0)
+/// - PROCEDURE: "To book a flight: 1) Search flights, 2) Select flight, 3) Enter details, 4) Pay" (confidence=0.9)
+/// - EPISODE: "User's last vacation to Tokyo (2023-10-15 to 2023-10-22)" (confidence=0.85)
+table MemoryEntry {
+  entry_id: string (required);
+  entry_type: MemoryType (required);
+
+  // Content
+  content: string (required);  // Text content
+  embedding: [float32];  // Embedding vector (e.g., 768-dim for sentence-transformers)
+
+  // Metadata
+  metadata: [KeyValue];
+
+  // Provenance
+  source_turn_id: string;
+  source_agent_id: string;
+  confidence: float32 = 1.0;  // 0.0-1.0
+
+  // Access tracking
+  access_count: uint32 = 0;
+  last_accessed_ms: uint64 = 0;
+
+  // Timestamps
+  created_at_ms: uint64 = 0;
+  updated_at_ms: uint64 = 0;
+}
+
+root_type MemoryEntry;
+file_identifier "MEME";

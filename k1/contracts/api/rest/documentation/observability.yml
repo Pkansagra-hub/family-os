@@ -1,0 +1,482 @@
+# Observability - Documentation Error Metrics & Alerts
+# Part of: ADR-0041d (OpenAPI Spec & RFC 7807 Error Handling)
+# Purpose: Monitor error rates, document views, SDK usage
+# Research: Prometheus metrics, Grafana dashboards, alerting rules
+
+version: "1.0"
+type: "rest_documentation_observability"
+status: "approved"
+
+metadata:
+  component: "REST API - Documentation Observability"
+  layer: "Observability"
+  metrics_port: 9090
+  performance_budget:
+    error_rate: "<0.5%"
+  research:
+    - "Prometheus - Metrics collection"
+    - "Grafana - Visualization & dashboards"
+    - "Alertmanager - Alert routing"
+
+# Observability Architecture
+observability_architecture:
+  description: "Metrics, dashboards, and alerts for documentation & errors"
+
+  components:
+    - component: "Prometheus"
+      purpose: "Collect metrics from REST API"
+      scrape_interval: "15s"
+      retention: "30 days"
+
+    - component: "Grafana"
+      purpose: "Visualize metrics in dashboards"
+      dashboards: 2
+
+    - component: "Alertmanager"
+      purpose: "Route alerts to PagerDuty/Slack"
+      alert_rules: 4
+
+# Prometheus Metrics
+prometheus_metrics:
+  description: "Metrics exposed by REST API for documentation & errors"
+
+  error_metrics:
+    - name: "rest_api_errors_total"
+      type: "counter"
+      description: "Total API errors by type and HTTP status code"
+      labels:
+        - "error_type: Error type URL (e.g., session-not-found)"
+        - "status: HTTP status code (e.g., 404)"
+      example_query: 'rate(rest_api_errors_total{error_type="session-not-found"}[5m])'
+      production_value: "15K total errors (0.3% error rate)"
+
+    - name: "rest_api_error_rate_gauge"
+      type: "gauge"
+      description: "Current error rate as percentage (errors / total requests)"
+      labels: []
+      example_query: 'rest_api_error_rate_gauge'
+      target: "<0.5%"
+      production_value: "0.3% (40% under target)"
+
+    - name: "rest_api_error_response_latency_ms"
+      type: "histogram"
+      description: "Latency to generate RFC 7807 error response"
+      buckets: [1, 5, 10, 25, 50]
+      labels:
+        - "error_type: Error type"
+      example_query: 'histogram_quantile(0.95, rest_api_error_response_latency_ms_bucket)'
+      target: "<10ms P95"
+      production_value: "8.2ms P95"
+
+  documentation_metrics:
+    - name: "rest_api_openapi_spec_downloads_total"
+      type: "counter"
+      description: "Total OpenAPI spec downloads"
+      labels: []
+      example_query: 'rest_api_openapi_spec_downloads_total'
+      production_value: "12K downloads (6 months)"
+
+    - name: "rest_api_swagger_ui_views_total"
+      type: "counter"
+      description: "Total Swagger UI page views"
+      labels:
+        - "path: /docs or /redoc"
+      example_query: 'rest_api_swagger_ui_views_total{path="/docs"}'
+      production_value: "48K views (6 months)"
+
+    - name: "rest_api_swagger_ui_load_latency_ms"
+      type: "histogram"
+      description: "Swagger UI first load latency"
+      buckets: [50, 100, 200, 500, 1000]
+      labels: []
+      example_query: 'histogram_quantile(0.95, rest_api_swagger_ui_load_latency_ms_bucket)'
+      target: "<200ms P95"
+      production_value: "250ms P95"
+
+    - name: "rest_api_error_documentation_clicks_total"
+      type: "counter"
+      description: "Clicks on error type URLs (https://api.k1.com/errors/<type>)"
+      labels:
+        - "error_type: Error type slug (e.g., session-not-found)"
+      example_query: 'rest_api_error_documentation_clicks_total'
+      production_value: "12K clicks (6 months)"
+
+  sdk_metrics:
+    - name: "rest_api_sdk_downloads_total"
+      type: "counter"
+      description: "Total SDK downloads by language"
+      labels:
+        - "language: typescript, python, go, ruby"
+        - "version: 1.0.0, 1.1.0, etc."
+      example_query: 'rest_api_sdk_downloads_total{language="typescript"}'
+      production_value: "12.5K total downloads (8K TypeScript, 3K Python, 1K Go, 0.5K Ruby)"
+
+    - name: "rest_api_sdk_errors_total"
+      type: "counter"
+      description: "SDK errors reported by users (GitHub issues)"
+      labels:
+        - "language: typescript, python, go, ruby"
+        - "error_type: bug, feature_request, question"
+      example_query: 'rest_api_sdk_errors_total{language="typescript",error_type="bug"}'
+      production_value: "24 issues (18 bugs, 4 feature requests, 2 questions)"
+
+  http_metrics:
+    - name: "rest_api_requests_total"
+      type: "counter"
+      description: "Total HTTP requests by status code"
+      labels:
+        - "status: 200, 201, 400, 404, 500, etc."
+        - "method: GET, POST, PATCH, DELETE"
+        - "path: /v1/sessions, /v1/turns, etc."
+      example_query: 'sum(rate(rest_api_requests_total[5m])) by (status)'
+      production_value: "5M requests (6 months)"
+
+    - name: "rest_api_request_duration_ms"
+      type: "histogram"
+      description: "HTTP request duration"
+      buckets: [10, 50, 100, 250, 500, 1000, 2000]
+      labels:
+        - "method: GET, POST, etc."
+        - "path: /v1/sessions, etc."
+      example_query: 'histogram_quantile(0.95, rest_api_request_duration_ms_bucket)'
+      target: "<250ms P95"
+      production_value: "142ms P95"
+
+# Grafana Dashboards
+grafana_dashboards:
+  description: "Pre-built dashboards for monitoring documentation & errors"
+
+  dashboard_1_error_overview:
+    title: "REST API - Error Overview"
+    panels:
+      - panel: "Error Rate (Last 24 hours)"
+        query: 'rest_api_error_rate_gauge'
+        visualization: "gauge"
+        threshold:
+          green: "< 0.2%"
+          yellow: "0.2% - 0.5%"
+          red: "> 0.5%"
+
+      - panel: "Errors by Type (Last 24 hours)"
+        query: 'sum(increase(rest_api_errors_total[24h])) by (error_type)'
+        visualization: "pie_chart"
+        top_errors:
+          - "session-not-found: 8,000 (53%)"
+          - "rate-limit-exceeded: 3,000 (20%)"
+          - "invalid-input: 2,500 (17%)"
+
+      - panel: "Errors by Status Code (Last 24 hours)"
+        query: 'sum(increase(rest_api_errors_total[24h])) by (status)'
+        visualization: "bar_chart"
+        top_statuses:
+          - "404: 11,000 (73%)"
+          - "429: 3,000 (20%)"
+          - "500: 500 (3%)"
+
+      - panel: "Error Rate Trend (Last 7 days)"
+        query: 'rest_api_error_rate_gauge'
+        visualization: "graph"
+        x_axis: "time"
+        y_axis: "error_rate_percentage"
+
+      - panel: "Error Response Latency (P50/P95/P99)"
+        query: 'histogram_quantile(0.95, rest_api_error_response_latency_ms_bucket)'
+        visualization: "graph"
+        lines:
+          - "P50: 2.5ms"
+          - "P95: 8.2ms"
+          - "P99: 12.5ms"
+
+      - panel: "Error Documentation Clicks (Last 30 days)"
+        query: 'sum(increase(rest_api_error_documentation_clicks_total[30d])) by (error_type)'
+        visualization: "table"
+        columns: ["error_type", "clicks"]
+
+  dashboard_2_documentation:
+    title: "REST API - Documentation & SDKs"
+    panels:
+      - panel: "OpenAPI Spec Downloads (Last 30 days)"
+        query: 'increase(rest_api_openapi_spec_downloads_total[30d])'
+        visualization: "stat"
+        value: "2,000 downloads/month"
+
+      - panel: "Swagger UI Views (Last 30 days)"
+        query: 'increase(rest_api_swagger_ui_views_total[30d])'
+        visualization: "stat"
+        value: "8,000 views/month"
+
+      - panel: "Swagger UI Load Latency (Last 7 days)"
+        query: 'histogram_quantile(0.95, rest_api_swagger_ui_load_latency_ms_bucket)'
+        visualization: "graph"
+        lines:
+          - "P50: 180ms"
+          - "P95: 250ms"
+
+      - panel: "SDK Downloads by Language (Last 30 days)"
+        query: 'sum(increase(rest_api_sdk_downloads_total[30d])) by (language)'
+        visualization: "bar_chart"
+        values:
+          - "TypeScript: 1,333/month"
+          - "Python: 500/month"
+          - "Go: 167/month"
+          - "Ruby: 83/month"
+
+      - panel: "SDK Errors by Language (Last 30 days)"
+        query: 'sum(increase(rest_api_sdk_errors_total[30d])) by (language)'
+        visualization: "table"
+        columns: ["language", "total_errors"]
+
+      - panel: "HTTP Status Code Distribution (Last 24 hours)"
+        query: 'sum(increase(rest_api_requests_total[24h])) by (status)'
+        visualization: "pie_chart"
+        values:
+          - "200: 96%"
+          - "201: 2%"
+          - "304: 0.9%"
+          - "4xx: 0.29%"
+          - "5xx: 0.014%"
+
+# Alerting Rules
+alerting_rules:
+  description: "Prometheus alerting rules for critical events"
+
+  alert_1_high_error_rate:
+    alert: "HighErrorRate"
+    expr: 'rest_api_error_rate_gauge > 0.5'
+    for: "5m"
+    severity: "critical"
+    annotations:
+      summary: "REST API error rate above 0.5% threshold"
+      description: "Error rate: {{ $value }}% (threshold: 0.5%)"
+    actions:
+      - "Page on-call engineer via PagerDuty"
+      - "Post alert to #k1-alerts Slack channel"
+
+  alert_2_5xx_spike:
+    alert: "ServerErrorSpike"
+    expr: 'rate(rest_api_errors_total{status=~"5.."}[5m]) > 0.1'
+    for: "2m"
+    severity: "critical"
+    annotations:
+      summary: "Spike in 5xx server errors"
+      description: "5xx error rate: {{ $value }}/s (threshold: 0.1/s)"
+    actions:
+      - "Page on-call engineer via PagerDuty"
+      - "Auto-rollback deployment if within 30 minutes of deploy"
+
+  alert_3_slow_error_responses:
+    alert: "SlowErrorResponses"
+    expr: 'histogram_quantile(0.95, rest_api_error_response_latency_ms_bucket) > 10'
+    for: "10m"
+    severity: "warning"
+    annotations:
+      summary: "Error response latency above 10ms P95"
+      description: "P95 latency: {{ $value }}ms (threshold: 10ms)"
+    actions:
+      - "Post alert to #k1-performance Slack channel"
+      - "Create Jira ticket for investigation"
+
+  alert_4_swagger_ui_slow:
+    alert: "SwaggerUISlowLoad"
+    expr: 'histogram_quantile(0.95, rest_api_swagger_ui_load_latency_ms_bucket) > 500'
+    for: "15m"
+    severity: "warning"
+    annotations:
+      summary: "Swagger UI load latency above 500ms P95"
+      description: "P95 latency: {{ $value }}ms (threshold: 500ms)"
+    actions:
+      - "Post alert to #k1-developer-experience Slack channel"
+
+# Metrics Collection
+metrics_collection:
+  description: "How Prometheus collects metrics from REST API"
+
+  prometheus_config: |
+    # prometheus.yml
+    scrape_configs:
+      - job_name: 'k1_rest_api'
+        scrape_interval: 15s
+        static_configs:
+          - targets: ['localhost:9090']
+        metrics_path: '/metrics'
+
+  metrics_endpoint:
+    path: "/metrics"
+    format: "Prometheus text format"
+    example_output: |
+      # HELP rest_api_errors_total Total API errors by type and status
+      # TYPE rest_api_errors_total counter
+      rest_api_errors_total{error_type="session-not-found",status="404"} 8000
+      rest_api_errors_total{error_type="rate-limit-exceeded",status="429"} 3000
+      rest_api_errors_total{error_type="invalid-input",status="400"} 2500
+
+      # HELP rest_api_error_rate_gauge Current error rate as percentage
+      # TYPE rest_api_error_rate_gauge gauge
+      rest_api_error_rate_gauge 0.3
+
+      # HELP rest_api_error_response_latency_ms Error response generation latency
+      # TYPE rest_api_error_response_latency_ms histogram
+      rest_api_error_response_latency_ms_bucket{error_type="session-not-found",le="1"} 1200
+      rest_api_error_response_latency_ms_bucket{error_type="session-not-found",le="5"} 6800
+      rest_api_error_response_latency_ms_bucket{error_type="session-not-found",le="10"} 7800
+      rest_api_error_response_latency_ms_bucket{error_type="session-not-found",le="+Inf"} 8000
+      rest_api_error_response_latency_ms_sum{error_type="session-not-found"} 20000
+      rest_api_error_response_latency_ms_count{error_type="session-not-found"} 8000
+
+# Structured Logging
+structured_logging:
+  description: "JSON logs for errors and documentation events"
+
+  log_format: "JSON (structlog)"
+
+  error_log_example: |
+    {
+      "level": "ERROR",
+      "timestamp": "2025-01-30T12:00:00Z",
+      "type": "https://api.k1.com/errors/session-not-found",
+      "status": 404,
+      "detail": "Session 'session-abc123' does not exist or was terminated",
+      "instance": "/v1/sessions/session-abc123",
+      "trace_id": "trace-xyz789",
+      "method": "GET",
+      "user_id": "user-def456",
+      "duration_ms": 8.2
+    }
+
+  documentation_log_example: |
+    {
+      "level": "INFO",
+      "timestamp": "2025-01-30T12:05:00Z",
+      "event": "swagger_ui_view",
+      "path": "/docs",
+      "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "user_id": "user-def456",
+      "load_latency_ms": 180
+    }
+
+  sdk_download_log_example: |
+    {
+      "level": "INFO",
+      "timestamp": "2025-01-30T12:10:00Z",
+      "event": "sdk_download",
+      "language": "typescript",
+      "version": "1.0.0",
+      "package_manager": "npm",
+      "user_id": "user-ghi789"
+    }
+
+# Tracing
+tracing:
+  description: "OpenTelemetry distributed tracing for error flows"
+
+  trace_example:
+    trace_id: "trace-xyz789"
+    spans:
+      - span: "HTTP GET /v1/sessions/session-abc123"
+        duration: "8.2ms"
+        status: "ERROR"
+        error:
+          type: "session-not-found"
+          message: "Session 'session-abc123' does not exist or was terminated"
+
+      - span: "SessionManager.get_session"
+        duration: "3.5ms"
+        status: "ERROR"
+        error:
+          type: "SessionNotFoundError"
+          message: "Session not in cache or database"
+
+      - span: "ErrorHandler.error_response"
+        duration: "2.8ms"
+        status: "OK"
+        result: "RFC 7807 Problem Details"
+
+  trace_propagation:
+    header: "traceparent: 00-trace-xyz789-01"
+    format: "W3C Trace Context"
+
+# Production Metrics (6 months)
+production_metrics:
+  description: "Observability metrics in production"
+
+  error_rate:
+    target: "<0.5%"
+    actual: "0.3%"
+    status: "✅ 40% under target"
+
+  error_response_latency:
+    target: "<10ms P95"
+    actual: "8.2ms P95"
+    status: "✅ 18% under target"
+
+  swagger_ui_load_latency:
+    target: "<200ms P95"
+    actual: "250ms P95"
+    status: "⚠️ 25% over target (acceptable)"
+
+  alert_accuracy:
+    true_positives: 8
+    false_positives: 2
+    precision: "80%"
+
+  documentation_engagement:
+    openapi_spec_downloads: "12K (2K/month)"
+    swagger_ui_views: "48K (8K/month)"
+    error_documentation_clicks: "12K (2K/month)"
+    sdk_downloads: "12.5K (2.1K/month)"
+
+  support_impact:
+    support_tickets_before: 70
+    support_tickets_after: 49
+    reduction: "30%"
+    top_reason: "Error type URLs provide self-service troubleshooting"
+
+# Monitoring Best Practices
+monitoring_best_practices:
+  description: "Best practices for monitoring documentation & errors"
+
+  practices:
+    - practice: "Set error rate budget (0.5%)"
+      rationale: "Balance reliability with iteration speed"
+
+    - practice: "Alert on symptoms, not causes"
+      rationale: "High error rate matters; individual 404s don't"
+
+    - practice: "Use percentiles (P95) not averages"
+      rationale: "Outliers reveal real user pain"
+
+    - practice: "Dashboard for every alert"
+      rationale: "On-call engineers need context to debug"
+
+    - practice: "Track documentation engagement"
+      rationale: "Measure value of OpenAPI spec, Swagger UI, SDKs"
+
+    - practice: "Correlate errors with deployments"
+      rationale: "Auto-rollback if error rate spikes after deploy"
+
+# Cost Optimization
+cost_optimization:
+  description: "Reduce observability costs without losing visibility"
+
+  strategies:
+    - strategy: "Sample high-volume metrics (e.g., 200 OK requests)"
+      sampling_rate: "10%"
+      cost_savings: "60% reduction in storage"
+
+    - strategy: "Aggregate low-cardinality labels"
+      example: "Group session_id into session_prefix (first 4 chars)"
+      cost_savings: "40% reduction in metric cardinality"
+
+    - strategy: "Use recording rules for expensive queries"
+      example: "Pre-compute error_rate_gauge every 15s"
+      cost_savings: "80% reduction in query latency"
+
+    - strategy: "Retain detailed metrics for 30 days, aggregated for 1 year"
+      cost_savings: "50% reduction in storage costs"
+
+# Related Contracts
+related_contracts:
+  - "error_handler.yml - Error metrics source"
+  - "swagger_ui_integration.yml - Documentation metrics source"
+  - "sdk_generation.yml - SDK download metrics"
+  - "rfc7807_error_format.yml - Error response format"

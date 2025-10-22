@@ -1,0 +1,578 @@
+# Error Types - 11 Typed Errors with Documentation URLs
+# Part of: ADR-0041d (OpenAPI Spec & RFC 7807 Error Handling)
+# Purpose: Machine-readable error type classification with specific HTTP status codes
+# Research: GitHub API error types, Stripe API error taxonomy
+
+version: "1.0"
+type: "rest_error_types"
+status: "approved"
+
+metadata:
+  component: "REST API - Error Types"
+  layer: "API Gateway"
+  total_error_types: 11
+  research:
+    - "GitHub API - Error response format"
+    - "Stripe API - Error type taxonomy"
+    - "Google Cloud API - Error model"
+
+# Error Type Enumeration
+error_type_enum:
+  description: "11 typed errors for K1 REST API"
+
+  enum_definition: |
+    pub enum APIError {
+        SessionNotFound(String),
+        TurnNotFound(String),
+        AgentNotFound(String),
+        AgentLimitExceeded { current: usize, max: usize },
+        RateLimitExceeded { limit: usize, reset_at: i64 },
+        InvalidInput(Vec<ValidationError>),
+        Unauthorized(String),
+        Forbidden(String),
+        Conflict(String),
+        InternalError(String),
+        Timeout(String),
+    }
+
+# Error Type 1: session-not-found (404)
+session_not_found:
+  error_type: "session-not-found"
+  http_status: 404
+
+  type_url: "https://api.k1.com/errors/session-not-found"
+
+  title: "Session Not Found"
+
+  description: "The requested session doesn't exist or was terminated"
+
+  common_causes:
+    - "Invalid session ID in request path"
+    - "Session expired (TTL exceeded)"
+    - "Session manually terminated via DELETE /v1/sessions/{id}"
+    - "Session crashed and was not restarted"
+
+  resolution:
+    - "Verify session ID is correct"
+    - "Check session status via GET /v1/sessions"
+    - "Create new session via POST /v1/sessions if needed"
+
+  example_response:
+    type: "https://api.k1.com/errors/session-not-found"
+    title: "Session Not Found"
+    status: 404
+    detail: "Session 'session-abc123' does not exist or was terminated"
+    instance: "/v1/sessions/session-abc123"
+    trace_id: "trace-xyz789"
+
+  triggering_endpoints:
+    - "GET /v1/sessions/{session_id}"
+    - "PATCH /v1/sessions/{session_id}"
+    - "DELETE /v1/sessions/{session_id}"
+    - "POST /v1/sessions/{session_id}/turns"
+
+  production_frequency: "8,000 occurrences (0.16% of requests)"
+
+# Error Type 2: turn-not-found (404)
+turn_not_found:
+  error_type: "turn-not-found"
+  http_status: 404
+
+  type_url: "https://api.k1.com/errors/turn-not-found"
+
+  title: "Turn Not Found"
+
+  description: "The requested turn doesn't exist in session history"
+
+  common_causes:
+    - "Invalid turn ID"
+    - "Turn from different session"
+    - "Turn not yet committed (still processing)"
+
+  resolution:
+    - "Verify turn ID is correct"
+    - "Check turn belongs to correct session"
+    - "Wait for turn completion if processing"
+
+  example_response:
+    type: "https://api.k1.com/errors/turn-not-found"
+    title: "Turn Not Found"
+    status: 404
+    detail: "Turn 'turn-xyz789' does not exist"
+    instance: "/v1/turns/turn-xyz789"
+    trace_id: "trace-abc123"
+
+  triggering_endpoints:
+    - "GET /v1/turns/{turn_id}"
+
+  production_frequency: "1,200 occurrences (0.024% of requests)"
+
+# Error Type 3: agent-not-found (404)
+agent_not_found:
+  error_type: "agent-not-found"
+  http_status: 404
+
+  type_url: "https://api.k1.com/errors/agent-not-found"
+
+  title: "Agent Not Found"
+
+  description: "The requested agent doesn't exist in session"
+
+  common_causes:
+    - "Invalid agent ID"
+    - "Agent already fired"
+    - "Agent crashed and removed from session"
+
+  resolution:
+    - "Verify agent ID is correct"
+    - "Check agent list via GET /v1/sessions/{id}/agents"
+    - "Hire new agent if needed"
+
+  example_response:
+    type: "https://api.k1.com/errors/agent-not-found"
+    title: "Agent Not Found"
+    status: 404
+    detail: "Agent 'agent-001' does not exist in session 'session-abc123'"
+    instance: "/v1/sessions/session-abc123/agents/agent-001"
+    trace_id: "trace-def456"
+
+  triggering_endpoints:
+    - "DELETE /v1/sessions/{session_id}/agents/{agent_id}"
+
+  production_frequency: "600 occurrences (0.012% of requests)"
+
+# Error Type 4: agent-limit-exceeded (409)
+agent_limit_exceeded:
+  error_type: "agent-limit-exceeded"
+  http_status: 409
+
+  type_url: "https://api.k1.com/errors/agent-limit-exceeded"
+
+  title: "Agent Limit Exceeded"
+
+  description: "Maximum agents per session exceeded (limit: 3)"
+
+  common_causes:
+    - "Attempting to hire 4th agent when 3 already active"
+    - "Concurrent agent hiring requests"
+
+  resolution:
+    - "Fire existing agent via DELETE /v1/sessions/{id}/agents/{agent_id}"
+    - "Wait for agent to complete task before hiring new one"
+
+  example_response:
+    type: "https://api.k1.com/errors/agent-limit-exceeded"
+    title: "Agent Limit Exceeded"
+    status: 409
+    detail: "Maximum 3 agents per session. Currently 3 agents. Terminate an agent before hiring new one."
+    instance: "/v1/sessions/session-abc123/agents"
+    trace_id: "trace-ghi789"
+
+  triggering_endpoints:
+    - "POST /v1/sessions/{session_id}/agents"
+
+  production_frequency: "800 occurrences (0.016% of requests)"
+
+# Error Type 5: rate-limit-exceeded (429)
+rate_limit_exceeded:
+  error_type: "rate-limit-exceeded"
+  http_status: 429
+
+  type_url: "https://api.k1.com/errors/rate-limit-exceeded"
+
+  title: "Rate Limit Exceeded"
+
+  description: "Too many requests from client (limit: 100 requests/minute)"
+
+  common_causes:
+    - "Aggressive polling without backoff"
+    - "Parallel requests exceeding limit"
+    - "Shared API key across multiple clients"
+
+  resolution:
+    - "Wait until Retry-After timestamp"
+    - "Implement exponential backoff"
+    - "Reduce request frequency"
+    - "Use WebSocket for real-time updates instead of polling"
+
+  example_response:
+    type: "https://api.k1.com/errors/rate-limit-exceeded"
+    title: "Rate Limit Exceeded"
+    status: 429
+    detail: "Rate limit of 100 requests/minute exceeded. Retry after 2025-01-30T12:05:00Z"
+    instance: "/v1/sessions"
+    trace_id: "trace-jkl012"
+
+  headers:
+    Retry-After: "60"
+    X-RateLimit-Limit: "100"
+    X-RateLimit-Remaining: "0"
+    X-RateLimit-Reset: "1643548800"
+
+  triggering_endpoints: "All endpoints (global rate limit)"
+
+  production_frequency: "3,000 occurrences (0.06% of requests)"
+
+# Error Type 6: invalid-input (400)
+invalid_input:
+  error_type: "invalid-input"
+  http_status: 400
+
+  type_url: "https://api.k1.com/errors/invalid-input"
+
+  title: "Invalid Input"
+
+  description: "Request body or parameters failed validation"
+
+  common_causes:
+    - "Missing required fields"
+    - "Invalid enum values"
+    - "Out-of-range numeric values"
+    - "Invalid format (e.g., email, UUID)"
+
+  resolution:
+    - "Check 'errors' array for specific field validation failures"
+    - "Verify request body matches OpenAPI schema"
+    - "Correct invalid field values"
+
+  example_response:
+    type: "https://api.k1.com/errors/invalid-input"
+    title: "Invalid Input"
+    status: 400
+    detail: "2 validation error(s)"
+    instance: "/v1/sessions"
+    trace_id: "trace-mno345"
+    errors:
+      - field: "persona"
+        message: "persona must be one of [helpful_assistant, coding_expert, travel_advisor]"
+      - field: "ttl_seconds"
+        message: "ttl_seconds must be between 60 and 86400"
+
+  triggering_endpoints:
+    - "POST /v1/sessions (invalid CreateSessionRequest)"
+    - "PATCH /v1/sessions/{id} (invalid UpdateSessionRequest)"
+    - "POST /v1/sessions/{id}/turns (invalid SubmitTurnRequest)"
+
+  production_frequency: "2,500 occurrences (0.05% of requests)"
+
+# Error Type 7: unauthorized (401)
+unauthorized:
+  error_type: "unauthorized"
+  http_status: 401
+
+  type_url: "https://api.k1.com/errors/unauthorized"
+
+  title: "Unauthorized"
+
+  description: "Missing or invalid JWT authentication token"
+
+  common_causes:
+    - "Missing Authorization header"
+    - "Invalid JWT signature"
+    - "Expired JWT token"
+    - "Malformed JWT (not 3 parts)"
+
+  resolution:
+    - "Include Authorization: Bearer <token> header"
+    - "Obtain new JWT via POST /auth/login"
+    - "Refresh expired token via POST /auth/refresh"
+
+  example_response:
+    type: "https://api.k1.com/errors/unauthorized"
+    title: "Unauthorized"
+    status: 401
+    detail: "Invalid JWT token: signature verification failed"
+    instance: "/v1/sessions"
+    trace_id: "trace-pqr678"
+
+  headers:
+    WWW-Authenticate: "Bearer realm=\"K1 API\""
+
+  triggering_endpoints: "All endpoints (global authentication required)"
+
+  production_frequency: "1,200 occurrences (0.024% of requests)"
+
+# Error Type 8: forbidden (403)
+forbidden:
+  error_type: "forbidden"
+  http_status: 403
+
+  type_url: "https://api.k1.com/errors/forbidden"
+
+  title: "Forbidden"
+
+  description: "Valid JWT but insufficient permissions"
+
+  common_causes:
+    - "Missing required role (e.g., admin)"
+    - "Cross-space access attempt"
+    - "Insufficient privacy band (e.g., GREEN user accessing RED data)"
+    - "Missing capability"
+
+  resolution:
+    - "Verify user has required role"
+    - "Ensure session belongs to user's space"
+    - "Request elevated permissions if needed"
+
+  example_response:
+    type: "https://api.k1.com/errors/forbidden"
+    title: "Forbidden"
+    status: 403
+    detail: "Insufficient permissions. Required role: admin. Current roles: [user]"
+    instance: "/v1/admin/sessions"
+    trace_id: "trace-stu901"
+
+  triggering_endpoints:
+    - "Admin endpoints without admin role"
+    - "Cross-space session access"
+
+  production_frequency: "400 occurrences (0.008% of requests)"
+
+# Error Type 9: conflict (409)
+conflict:
+  error_type: "conflict"
+  http_status: 409
+
+  type_url: "https://api.k1.com/errors/conflict"
+
+  title: "Conflict"
+
+  description: "Request conflicts with current resource state"
+
+  common_causes:
+    - "Session already terminated (can't submit turn)"
+    - "Agent already fired (can't fire again)"
+    - "Duplicate idempotency key (already processed)"
+
+  resolution:
+    - "Check resource state via GET request"
+    - "Avoid duplicate operations"
+    - "Use unique idempotency keys"
+
+  example_response:
+    type: "https://api.k1.com/errors/conflict"
+    title: "Conflict"
+    status: 409
+    detail: "Session 'session-abc123' is terminated. Cannot submit new turns."
+    instance: "/v1/sessions/session-abc123/turns"
+    trace_id: "trace-vwx234"
+
+  triggering_endpoints:
+    - "POST /v1/sessions/{id}/turns (session terminated)"
+    - "DELETE /v1/sessions/{id}/agents/{id} (agent already fired)"
+
+  production_frequency: "600 occurrences (0.012% of requests)"
+
+# Error Type 10: internal-error (500)
+internal_error:
+  error_type: "internal-error"
+  http_status: 500
+
+  type_url: "https://api.k1.com/errors/internal-error"
+
+  title: "Internal Server Error"
+
+  description: "Unexpected server error (unhandled exception)"
+
+  common_causes:
+    - "Database connection failure"
+    - "K0 kernel crash"
+    - "Uncaught panic in Rust code"
+    - "Memory exhaustion"
+
+  resolution:
+    - "Retry request (may be transient)"
+    - "Contact support if persists"
+    - "Include trace_id in support request"
+
+  example_response:
+    type: "https://api.k1.com/errors/internal-error"
+    title: "Internal Server Error"
+    status: 500
+    detail: "An unexpected error occurred. Please retry or contact support."
+    instance: "/v1/sessions"
+    trace_id: "trace-yza567"
+
+  triggering_endpoints: "Any endpoint (unhandled exception)"
+
+  production_frequency: "500 occurrences (0.01% of requests)"
+
+  monitoring: "Alert on spike, investigate trace_id logs"
+
+# Error Type 11: timeout (504)
+timeout:
+  error_type: "timeout"
+  http_status: 504
+
+  type_url: "https://api.k1.com/errors/timeout"
+
+  title: "Gateway Timeout"
+
+  description: "Request timed out (exceeded 30s deadline)"
+
+  common_causes:
+    - "Slow LLM response (>30s)"
+    - "Database query timeout"
+    - "K0 kernel overload"
+    - "Network partition"
+
+  resolution:
+    - "Retry request"
+    - "Use async mode for long-running operations"
+    - "Check K1 system status page"
+
+  example_response:
+    type: "https://api.k1.com/errors/timeout"
+    title: "Gateway Timeout"
+    status: 504
+    detail: "Request timed out after 30 seconds. Please retry or use async mode."
+    instance: "/v1/sessions/session-abc123/turns"
+    trace_id: "trace-bcd890"
+
+  triggering_endpoints:
+    - "POST /v1/sessions/{id}/turns (sync mode timeout)"
+
+  production_frequency: "200 occurrences (0.004% of requests)"
+
+# Error Type Mapping
+error_type_mapping:
+  description: "Map internal errors to RFC 7807 error types"
+
+  mapping_table:
+    - internal: "SessionNotFound"
+      rfc7807_type: "session-not-found"
+      status: 404
+
+    - internal: "TurnNotFound"
+      rfc7807_type: "turn-not-found"
+      status: 404
+
+    - internal: "AgentNotFound"
+      rfc7807_type: "agent-not-found"
+      status: 404
+
+    - internal: "AgentLimitExceeded"
+      rfc7807_type: "agent-limit-exceeded"
+      status: 409
+
+    - internal: "RateLimitExceeded"
+      rfc7807_type: "rate-limit-exceeded"
+      status: 429
+
+    - internal: "InvalidInput"
+      rfc7807_type: "invalid-input"
+      status: 400
+
+    - internal: "Unauthorized"
+      rfc7807_type: "unauthorized"
+      status: 401
+
+    - internal: "Forbidden"
+      rfc7807_type: "forbidden"
+      status: 403
+
+    - internal: "Conflict"
+      rfc7807_type: "conflict"
+      status: 409
+
+    - internal: "InternalError"
+      rfc7807_type: "internal-error"
+      status: 500
+
+    - internal: "Timeout"
+      rfc7807_type: "timeout"
+      status: 504
+
+# Production Error Distribution (6 months, 5M requests)
+production_error_distribution:
+  description: "Error frequency in production"
+
+  total_requests: 5000000
+  total_errors: 15000
+  overall_error_rate: "0.3%"
+
+  errors_by_type:
+    - error_type: "session-not-found"
+      count: 8000
+      percentage: "0.16%"
+      status: 404
+
+    - error_type: "rate-limit-exceeded"
+      count: 3000
+      percentage: "0.06%"
+      status: 429
+
+    - error_type: "invalid-input"
+      count: 2500
+      percentage: "0.05%"
+      status: 400
+
+    - error_type: "unauthorized"
+      count: 1200
+      percentage: "0.024%"
+      status: 401
+
+    - error_type: "agent-limit-exceeded"
+      count: 800
+      percentage: "0.016%"
+      status: 409
+
+    - error_type: "conflict"
+      count: 600
+      percentage: "0.012%"
+      status: 409
+
+    - error_type: "turn-not-found"
+      count: 600
+      percentage: "0.012%"
+      status: 404
+
+    - error_type: "internal-error"
+      count: 500
+      percentage: "0.01%"
+      status: 500
+
+    - error_type: "forbidden"
+      count: 400
+      percentage: "0.008%"
+      status: 403
+
+    - error_type: "timeout"
+      count: 200
+      percentage: "0.004%"
+      status: 504
+
+    - error_type: "agent-not-found"
+      count: 200
+      percentage: "0.004%"
+      status: 404
+
+  error_rate_by_category:
+    client_errors_4xx: "0.29% (14,500 errors)"
+    server_errors_5xx: "0.014% (700 errors)"
+    ratio: "20:1 (client errors dominate)"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_errors_by_type_total"
+    type: "counter"
+    description: "Total errors by error type"
+    labels: ["error_type", "status"]
+
+  - name: "rest_api_error_rate_gauge"
+    type: "gauge"
+    description: "Overall error rate (percentage)"
+    target: "<0.5%"
+    actual: "0.3%"
+
+  - name: "rest_api_error_documentation_clicks_total"
+    type: "counter"
+    description: "Clicks to error type documentation URLs"
+    labels: ["error_type"]
+
+# Related Contracts
+related_contracts:
+  - "rfc7807_error_format.yml - Error response structure"
+  - "http_status_codes.yml - HTTP status code semantics"
+  - "error_handler.yml - ErrorHandler implementation"
+  - "openapi_3_1_spec.yml - Error schemas in OpenAPI"

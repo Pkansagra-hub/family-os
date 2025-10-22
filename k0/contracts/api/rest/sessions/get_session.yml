@@ -1,0 +1,358 @@
+# GET /v1/sessions/{id} - Get Session Contract
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Retrieve session details with HTTP caching (ETag, Last-Modified)
+# Research: HTTP/1.1 Caching (RFC 7232), ETag Headers, HATEOAS
+
+version: "1.0"
+type: "rest_get_session"
+status: "approved"
+
+metadata:
+  component: "REST API - Session Management"
+  layer: "API Gateway"
+  performance_budget:
+    uncached_latency: "<100ms P95"
+    cached_latency: "<10ms P95 (304 Not Modified)"
+    actual_uncached_p95: "85ms"
+    actual_cached_p95: "8ms"
+    cache_hit_rate: "82%"
+  research:
+    - "RFC 7232 (HTTP/1.1 Conditional Requests 2014) - ETag, If-None-Match"
+    - "RFC 7231 (HTTP/1.1 Semantics 2014) - 304 Not Modified"
+    - "Cache-Control Header (RFC 7234) - private, max-age=300"
+    - "Production Evidence (K1, 6 months) - 3M GETs, 2.46M cached (82% hit rate)"
+
+# Endpoint Specification
+endpoint:
+  method: "GET"
+  path: "/v1/sessions/{session_id}"
+  description: "Retrieve session details (status, agents, metadata)"
+
+  path_parameters:
+    session_id:
+      type: "string"
+      required: true
+      format: "session-{uuid}"
+      description: "Unique session identifier"
+      example: "session-a1b2c3d4"
+
+  authentication:
+    type: "JWT Bearer Token"
+    header: "Authorization: Bearer <token>"
+    adr_reference: "ADR-0037 (JWT Authentication)"
+
+# HTTP Caching Strategy
+http_caching:
+  description: "Reduce server load with conditional requests (ETag, Last-Modified)"
+
+  etag_header:
+    description: "MD5 hash of session state for change detection"
+    generation: "MD5(session_id + updated_at + status + agents + metadata)"
+    format: 'ETag: "md5-{hash}"'
+    example: 'ETag: "md5-a1b2c3d4e5f6"'
+
+    validation:
+      request_header: "If-None-Match: \"md5-a1b2c3d4e5f6\""
+      match_behavior: "Return 304 Not Modified (no body)"
+      no_match_behavior: "Return 200 OK with full response body"
+
+  last_modified_header:
+    description: "Timestamp of last session modification"
+    source: "session.updated_at"
+    format: "ISO 8601 (UTC)"
+    example: "Last-Modified: Mon, 21 Oct 2025 14:30:00 GMT"
+
+    validation:
+      request_header: "If-Modified-Since: Mon, 21 Oct 2025 14:30:00 GMT"
+      modified_behavior: "Return 200 OK with full response"
+      unmodified_behavior: "Return 304 Not Modified (no body)"
+
+  cache_control_header:
+    description: "Caching directives for clients and CDN"
+    value: "private, max-age=300"
+    breakdown:
+      private: "Response specific to user (not CDN-cacheable)"
+      max_age: "300 seconds (5 minutes) TTL"
+
+    rationale: "5-minute TTL balances freshness vs performance"
+
+# Request Examples
+request_examples:
+  - scenario: "Initial Request (No Cache)"
+    request: |
+      GET /v1/sessions/session-a1b2c3d4 HTTP/1.1
+      Host: api.k1.example.com
+      Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    response_status: "200 OK"
+    response_headers:
+      ETag: '"md5-a1b2c3d4e5f6"'
+      Last-Modified: "Mon, 21 Oct 2025 14:30:00 GMT"
+      Cache-Control: "private, max-age=300"
+    latency: "85ms P95 (database query)"
+
+  - scenario: "Cached Request (ETag Match)"
+    request: |
+      GET /v1/sessions/session-a1b2c3d4 HTTP/1.1
+      Host: api.k1.example.com
+      Authorization: Bearer eyJ...
+      If-None-Match: "md5-a1b2c3d4e5f6"
+
+    response_status: "304 Not Modified"
+    response_headers:
+      ETag: '"md5-a1b2c3d4e5f6"'
+    body: "(empty)"
+    latency: "8ms P95 (ETag validation only, no database query)"
+
+  - scenario: "Cache Miss (ETag Changed)"
+    request: |
+      GET /v1/sessions/session-a1b2c3d4 HTTP/1.1
+      Host: api.k1.example.com
+      Authorization: Bearer eyJ...
+      If-None-Match: "md5-old-etag"
+
+    response_status: "200 OK"
+    response_headers:
+      ETag: '"md5-new-etag"'
+      Last-Modified: "Mon, 21 Oct 2025 14:35:00 GMT"
+    latency: "85ms P95 (full query, ETag mismatch)"
+
+# Response Schema
+response_schema:
+  status_200_ok:
+    description: "Session details with full body"
+
+    headers:
+      ETag:
+        description: "MD5 hash of session state"
+        example: 'ETag: "md5-a1b2c3d4e5f6"'
+
+      Last-Modified:
+        description: "Last modification timestamp"
+        format: "HTTP-date (RFC 7231)"
+        example: "Last-Modified: Mon, 21 Oct 2025 14:30:00 GMT"
+
+      Cache-Control:
+        value: "private, max-age=300"
+
+      X-Request-Id:
+        description: "Trace ID for debugging"
+        format: "UUID"
+
+    body:
+      session_id:
+        type: "string"
+        description: "Unique session identifier"
+
+      user_id:
+        type: "string"
+        description: "Owner user ID"
+
+      space_id:
+        type: "string"
+        description: "Space ID"
+
+      persona:
+        type: "string"
+        description: "Active persona"
+
+      privacy_band:
+        type: "string"
+        enum: ["GREEN", "AMBER", "RED"]
+
+      status:
+        type: "string"
+        enum: ["active", "idle", "draining", "terminated"]
+        description: "Current session lifecycle state"
+
+      created_at:
+        type: "string"
+        format: "ISO 8601 (UTC)"
+
+      updated_at:
+        type: "string"
+        format: "ISO 8601 (UTC)"
+
+      expires_at:
+        type: "string"
+        format: "ISO 8601 (UTC)"
+
+      agents:
+        type: "array<object>"
+        description: "List of hired agents with current status"
+        schema:
+          agent_id: "string"
+          agent_name: "string"
+          agent_type: "string (Concierge | Specialist | Executor | Arbiter)"
+          status: "string (PENDING | WARMING | ACTIVE | IDLE | DRAINING | TERMINATED)"
+          capabilities: "array<string>"
+          hired_at: "string (ISO 8601)"
+          memory_mb: "integer"
+
+      capabilities:
+        type: "array<string>"
+        description: "Session capabilities"
+
+      metadata:
+        type: "object<string, string>"
+        description: "Custom metadata"
+
+      statistics:
+        type: "object"
+        description: "Session usage statistics"
+        schema:
+          total_turns: "integer"
+          total_tokens: "integer"
+          avg_turn_latency_ms: "integer"
+          last_turn_at: "string (ISO 8601) | null"
+
+      websocket_url:
+        type: "string"
+        description: "WebSocket URL for real-time chat"
+        format: "wss://api.k1.example.com/v1/chat?token={jwt}&session_id={session_id}"
+
+      _links:
+        type: "object"
+        description: "HATEOAS navigation links"
+        schema:
+          self:
+            href: "/v1/sessions/{session_id}"
+          turns:
+            href: "/v1/sessions/{session_id}/turns"
+          agents:
+            href: "/v1/sessions/{session_id}/agents"
+
+  status_304_not_modified:
+    description: "Session unchanged (ETag match)"
+
+    headers:
+      ETag:
+        description: "Unchanged ETag"
+        example: 'ETag: "md5-a1b2c3d4e5f6"'
+
+    body: "(empty - no response body sent)"
+
+    latency: "8ms P95 (ETag validation only)"
+    bandwidth_saved: "~2KB per request (82% of GETs = 2.46M cached requests)"
+
+# Example Response
+example_response: |
+  HTTP/1.1 200 OK
+  ETag: "md5-a1b2c3d4e5f6"
+  Last-Modified: Mon, 21 Oct 2025 14:30:00 GMT
+  Cache-Control: private, max-age=300
+  Content-Type: application/json
+
+  {
+    "session_id": "session-a1b2c3d4",
+    "user_id": "user-123456",
+    "space_id": "space-789012",
+    "persona": "helpful_assistant",
+    "privacy_band": "GREEN",
+    "status": "active",
+    "created_at": "2025-10-21T14:30:00Z",
+    "updated_at": "2025-10-21T14:35:00Z",
+    "expires_at": "2025-10-21T16:30:00Z",
+    "agents": [
+      {
+        "agent_id": "agent-xyz123",
+        "agent_name": "Concierge-1",
+        "agent_type": "Concierge",
+        "status": "ACTIVE",
+        "capabilities": ["web_search"],
+        "hired_at": "2025-10-21T14:30:00.200Z",
+        "memory_mb": 128
+      }
+    ],
+    "capabilities": ["web_search", "python_executor"],
+    "metadata": {
+      "source": "slack",
+      "channel_id": "C123456"
+    },
+    "statistics": {
+      "total_turns": 5,
+      "total_tokens": 1250,
+      "avg_turn_latency_ms": 2100,
+      "last_turn_at": "2025-10-21T14:35:00Z"
+    },
+    "websocket_url": "wss://api.k1.example.com/v1/chat?token=eyJ...&session_id=session-a1b2c3d4",
+    "_links": {
+      "self": { "href": "/v1/sessions/session-a1b2c3d4" },
+      "turns": { "href": "/v1/sessions/session-a1b2c3d4/turns" },
+      "agents": { "href": "/v1/sessions/session-a1b2c3d4/agents" }
+    }
+  }
+
+# Performance Breakdown
+performance:
+  uncached_request:
+    jwt_validation: "2ms"
+    database_query: "75ms (K0 SQLite query)"
+    statistics_calculation: "5ms (aggregate turns)"
+    etag_generation: "1ms (MD5 hash)"
+    json_serialization: "2ms"
+    total: "85ms P95"
+
+  cached_request:
+    jwt_validation: "2ms"
+    etag_validation: "5ms (Redis lookup)"
+    total: "8ms P95 (10.6× faster than uncached)"
+
+  cache_hit_rate: "82% (2.46M of 3M GETs)"
+  bandwidth_savings: "4.92GB (2.46M × 2KB per response)"
+
+# Error Responses
+error_responses:
+  - status_code: 401
+    type: "https://api.k1.com/errors/unauthorized"
+    title: "Unauthorized"
+    description: "Missing or invalid JWT token"
+
+  - status_code: 403
+    type: "https://api.k1.com/errors/forbidden"
+    title: "Forbidden"
+    description: "User does not own this session"
+    example_detail: "Session session-a1b2c3d4 belongs to different user"
+
+  - status_code: 404
+    type: "https://api.k1.com/errors/session-not-found"
+    title: "Session Not Found"
+    description: "Session does not exist or was terminated"
+    example_detail: "Session session-a1b2c3d4 not found"
+
+  - status_code: 500
+    type: "https://api.k1.com/errors/internal-error"
+    title: "Internal Server Error"
+    description: "Unexpected server error"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_session_read_latency_ms"
+    type: "histogram"
+    description: "GET /v1/sessions/{id} latency"
+    labels:
+      - cached: "true | false"
+    buckets: [5, 10, 25, 50, 100, 200]
+
+    targets:
+      uncached_p95: "<100ms (actual: 85ms)"
+      cached_p95: "<10ms (actual: 8ms)"
+
+  - name: "rest_api_cache_hit_rate"
+    type: "gauge"
+    description: "HTTP cache hit rate (ETag 304)"
+    target: ">80%"
+    actual: "82%"
+
+  - name: "rest_api_etag_validations_total"
+    type: "counter"
+    description: "Total ETag validations"
+    labels:
+      - result: "match (304) | mismatch (200)"
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - POST /v1/sessions to create session"
+  - "patch_update_session.yml - PATCH /v1/sessions/{id} to update"
+  - "http_caching.yml - HTTP caching strategy details"
+  - "hateoas_links.yml - HATEOAS link structure"

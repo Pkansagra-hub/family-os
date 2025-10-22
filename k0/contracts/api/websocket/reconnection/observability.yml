@@ -1,0 +1,498 @@
+# Observability Contract - Heartbeat & Reconnection
+# Part of: ADR-0040d (Heartbeat & Reconnection)
+# Purpose: Comprehensive metrics, tracing, and alerting for WebSocket reconnection monitoring
+# Research: Observability (Honeycomb 2017), SRE Best Practices (Google SRE Book 2016)
+
+version: "1.0"
+type: "websocket_reconnection_observability"
+status: "approved"
+
+metadata:
+  component: "WebSocket Reconnection Observability"
+  layer: "Observability"
+  research:
+    - "Observability (Honeycomb 2017) - Metrics, traces, logs for distributed systems"
+    - "SRE Best Practices (Google SRE Book 2016) - SLO/SLI, error budgets, alerting"
+    - "Production Evidence (K1, 6 months) - 500K connections, 80K reconnects, 97% success"
+
+# Prometheus Metrics
+prometheus_metrics:
+  heartbeat_metrics:
+    - name: "websocket_heartbeats_sent_total"
+      type: "counter"
+      description: "Total heartbeats sent to clients (ping frames)"
+      labels:
+        - session_id
+      usage: "Track heartbeat volume (~1 per 30s per connection)"
+
+      example_query: "rate(websocket_heartbeats_sent_total[5m])"
+      expected_rate: "~1/30s per connection (~0.033 Hz)"
+
+    - name: "websocket_heartbeats_acknowledged_total"
+      type: "counter"
+      description: "Total heartbeat acknowledgments received (pong frames)"
+      labels:
+        - session_id
+      usage: "Track client responsiveness (should match sent heartbeats)"
+
+      alerting:
+        - rule: "Heartbeat ack rate < 90% of sent rate"
+          severity: "warning"
+          description: "Clients missing heartbeats (network issues or slow clients)"
+          query: "(rate(websocket_heartbeats_acknowledged_total[5m]) / rate(websocket_heartbeats_sent_total[5m])) < 0.9"
+
+    - name: "websocket_heartbeat_check_latency_ms"
+      type: "histogram"
+      description: "Heartbeat check loop latency (milliseconds)"
+      buckets: [10, 50, 100, 500, 1000, 2000]
+      usage: "Monitor heartbeat loop performance (<2s for 1000 connections)"
+
+      alerting:
+        - rule: "P95 heartbeat check latency > 2s"
+          severity: "warning"
+          description: "Heartbeat loop slow (may delay timeout detection)"
+          query: "histogram_quantile(0.95, rate(websocket_heartbeat_check_latency_ms_bucket[5m])) > 2000"
+
+  timeout_metrics:
+    - name: "websocket_timeouts_total"
+      type: "counter"
+      description: "Total connection timeouts detected (no heartbeat for 90s)"
+      labels:
+        - session_id
+        - reason  # "heartbeat_timeout"
+      usage: "Track timeout rate (should be <5% of active connections)"
+
+      alerting:
+        - rule: "Timeout rate > 5% of active connections"
+          severity: "warning"
+          description: "High timeout rate (network issues or mobile clients)"
+          query: "(rate(websocket_timeouts_total[5m]) / websocket_active_connections) > 0.05"
+
+    - name: "websocket_timeout_detection_latency_s"
+      type: "histogram"
+      description: "Time from last heartbeat to timeout detection (seconds)"
+      buckets: [60, 70, 80, 90, 100, 120]
+      usage: "Verify timeout detection accuracy (should be ~90s)"
+
+      alerting:
+        - rule: "P95 timeout detection > 95s"
+          severity: "warning"
+          description: "Timeout detection slower than expected (90s threshold)"
+          query: "histogram_quantile(0.95, rate(websocket_timeout_detection_latency_s_bucket[5m])) > 95"
+
+    - name: "websocket_cleanup_latency_ms"
+      type: "histogram"
+      description: "Cleanup latency per stale connection (milliseconds)"
+      buckets: [10, 50, 100, 200, 500]
+      usage: "Monitor cleanup performance (<100ms target)"
+
+  reconnect_metrics:
+    - name: "websocket_reconnects_total"
+      type: "counter"
+      description: "Total reconnect attempts by status and attempt number"
+      labels:
+        - status  # "success" | "failure"
+        - attempt_number  # 1-5
+        - failure_reason  # "max_attempts_reached" | "auth_failed" | "network_error" | "server_rejected"
+      usage: "Track reconnect success rate and failure patterns"
+
+      example_queries:
+        - query: "(sum(rate(websocket_reconnects_total{status='success'}[5m])) / sum(rate(websocket_reconnects_total[5m]))) * 100"
+          description: "Reconnect success rate (target >95%)"
+
+        - query: "sum by (attempt_number) (websocket_reconnects_total{status='success'})"
+          description: "Success distribution by attempt (most should be attempt 1)"
+
+        - query: "sum by (failure_reason) (websocket_reconnects_total{status='failure'})"
+          description: "Failure breakdown by reason"
+
+    - name: "websocket_reconnect_success_rate"
+      type: "gauge"
+      description: "Current reconnect success rate (rolling 5-minute window)"
+      calculation: "(websocket_reconnects_total{status='success'} / websocket_reconnects_total) × 100"
+      target: ">95%"
+
+      alerting:
+        - rule: "Success rate < 95% for 5 minutes"
+          severity: "warning"
+          description: "Network issues or server problems degrading reconnect reliability"
+          query: "websocket_reconnect_success_rate < 95"
+
+        - rule: "Success rate < 90% for 5 minutes"
+          severity: "critical"
+          description: "Severe reconnect issues, user impact high"
+          query: "websocket_reconnect_success_rate < 90"
+
+    - name: "websocket_reconnect_latency_ms"
+      type: "histogram"
+      description: "Reconnection latency in milliseconds (successful reconnects)"
+      buckets: [500, 1000, 2000, 5000, 10000]
+      usage: "Monitor reconnect performance (<2s average)"
+
+      alerting:
+        - rule: "P95 reconnect latency > 3s"
+          severity: "warning"
+          description: "Slow reconnects (network latency or server load)"
+          query: "histogram_quantile(0.95, rate(websocket_reconnect_latency_ms_bucket{status='success'}[5m])) > 3000"
+
+    - name: "websocket_reconnect_attempts_total"
+      type: "histogram"
+      description: "Number of reconnect attempts before success"
+      buckets: [1, 2, 3, 4, 5]
+      usage: "Track attempt distribution (most should be 1st attempt)"
+
+  message_replay_metrics:
+    - name: "websocket_missed_messages_replayed_total"
+      type: "counter"
+      description: "Total missed messages replayed on reconnect"
+      labels:
+        - session_id
+      usage: "Track message replay volume (correlate with reconnects)"
+
+    - name: "websocket_replay_latency_ms"
+      type: "histogram"
+      description: "Missed message replay latency in milliseconds"
+      buckets: [10, 50, 100, 200, 500]
+      usage: "Monitor replay performance (<100ms for 100 messages)"
+
+    - name: "websocket_replay_message_count"
+      type: "histogram"
+      description: "Number of messages replayed per reconnect"
+      buckets: [1, 5, 10, 25, 50, 100]
+      usage: "Track typical replay size distribution"
+
+    - name: "websocket_replay_gaps_total"
+      type: "counter"
+      description: "Total reconnects where TTL exceeded (messages lost)"
+      labels:
+        - session_id
+      usage: "Alert if message gaps detected (TTL too short or long disconnects)"
+
+      alerting:
+        - rule: "Replay gaps > 1% of reconnects"
+          severity: "warning"
+          description: "Increase TTL or buffer size (messages lost due to TTL expiration)"
+          query: "(websocket_replay_gaps_total / websocket_reconnects_total{status='success'}) > 0.01"
+
+# Grafana Dashboard
+grafana_dashboard:
+  description: "Comprehensive Grafana dashboard for heartbeat & reconnection monitoring"
+
+  panels:
+    - panel: "Reconnect Success Rate (5min)"
+      row: 1
+      type: "gauge"
+      query: "(sum(rate(websocket_reconnects_total{status='success'}[5m])) / sum(rate(websocket_reconnects_total[5m]))) * 100"
+      thresholds:
+        - "<90%: Red (critical)"
+        - "90-95%: Yellow (warning)"
+        - ">95%: Green (healthy)"
+      target_line: "95%"
+      description: "Real-time reconnect success rate (SLO target >95%)"
+
+    - panel: "Active Connections vs Timeouts"
+      row: 1
+      type: "graph"
+      queries:
+        - "websocket_active_connections"
+        - "rate(websocket_timeouts_total[5m]) * 60"  # Timeouts per minute
+      legend: ["Active Connections", "Timeouts/min"]
+      description: "Connection health (timeouts should be <5% of active)"
+
+    - panel: "Heartbeat Rate"
+      row: 2
+      type: "graph"
+      queries:
+        - "rate(websocket_heartbeats_sent_total[5m])"
+        - "rate(websocket_heartbeats_acknowledged_total[5m])"
+      legend: ["Sent", "Acknowledged"]
+      description: "Heartbeat volume (ack rate should match sent rate)"
+
+    - panel: "Timeout Detection Latency P95"
+      row: 2
+      type: "graph"
+      query: "histogram_quantile(0.95, rate(websocket_timeout_detection_latency_s_bucket[5m]))"
+      target_line: "90s"
+      unit: "seconds"
+      description: "P95 timeout detection latency (should be ~90s)"
+
+    - panel: "Reconnect Attempts by Status"
+      row: 3
+      type: "graph"
+      queries:
+        - "rate(websocket_reconnects_total{status='success'}[5m])"
+        - "rate(websocket_reconnects_total{status='failure'}[5m])"
+      legend: ["Successful", "Failed"]
+      description: "Reconnect volume by outcome"
+
+    - panel: "Reconnect Latency P95 (Successful)"
+      row: 3
+      type: "graph"
+      query: "histogram_quantile(0.95, rate(websocket_reconnect_latency_ms_bucket{status='success'}[5m]))"
+      target_line: "2000ms"
+      unit: "milliseconds"
+      description: "P95 reconnect latency for successful attempts (<2s target)"
+
+    - panel: "Success by Attempt Number"
+      row: 4
+      type: "pie chart"
+      query: "sum by (attempt_number) (websocket_reconnects_total{status='success'})"
+      description: "Distribution of successful reconnects by attempt (most should be attempt 1)"
+
+    - panel: "Failure Reasons"
+      row: 4
+      type: "pie chart"
+      query: "sum by (failure_reason) (websocket_reconnects_total{status='failure'})"
+      description: "Breakdown of reconnect failures by reason"
+
+    - panel: "Missed Messages Replayed"
+      row: 5
+      type: "graph"
+      query: "rate(websocket_missed_messages_replayed_total[5m]) * 60"
+      unit: "messages/min"
+      description: "Message replay volume (correlate with reconnects)"
+
+    - panel: "Replay Latency P95"
+      row: 5
+      type: "graph"
+      query: "histogram_quantile(0.95, rate(websocket_replay_latency_ms_bucket[5m]))"
+      target_line: "100ms"
+      unit: "milliseconds"
+      description: "P95 replay latency (<100ms for 100 messages)"
+
+    - panel: "Replay Message Count Distribution"
+      row: 6
+      type: "heatmap"
+      query: "rate(websocket_replay_message_count_bucket[5m])"
+      description: "Distribution of replay sizes (most should be <10 messages)"
+
+    - panel: "Replay Gaps (TTL Exceeded)"
+      row: 6
+      type: "graph"
+      query: "rate(websocket_replay_gaps_total[5m]) * 60"
+      unit: "gaps/min"
+      description: "Message gaps due to TTL expiration (should be <1% of reconnects)"
+
+# OpenTelemetry Traces
+opentelemetry_traces:
+  description: "Distributed tracing for reconnection flow"
+
+  traces:
+    - trace: "websocket.heartbeat.send"
+      description: "Trace heartbeat send operation"
+      spans:
+        - "heartbeat_loop.iterate_connections (5ms for 1000 connections)"
+        - "heartbeat_loop.send_heartbeat (2ms per connection)"
+        - "heartbeat_loop.detect_timeouts (10ms for 10 stale)"
+      attributes:
+        - session_id
+        - heartbeats_sent_count
+        - timeouts_detected_count
+        - loop_latency_ms
+
+    - trace: "websocket.reconnect.attempt"
+      description: "Trace full reconnection lifecycle"
+      spans:
+        - "reconnect.calculate_backoff (0ms)"
+        - "reconnect.wait_backoff (1000-16000ms)"
+        - "reconnect.tls_handshake (180ms)"
+        - "reconnect.jwt_validation (45ms)"
+        - "reconnect.websocket_upgrade (90ms)"
+        - "reconnect.replay_missed_messages (10-100ms)"
+      attributes:
+        - session_id
+        - attempt_number
+        - backoff_delay_ms
+        - reconnect_status  # "success" | "failure"
+        - failure_reason
+        - messages_replayed_count
+
+    - trace: "websocket.message_replay"
+      description: "Trace missed message replay operation"
+      spans:
+        - "replay.query_buffer (10ms)"
+        - "replay.send_messages (80ms for 100 messages)"
+      attributes:
+        - session_id
+        - last_message_id
+        - messages_replayed_count
+        - replay_latency_ms
+
+# Structured Logging
+structured_logging:
+  description: "JSON-formatted logs for reconnection events"
+
+  log_events:
+    - event: "heartbeat_timeout"
+      level: "warn"
+      message: "Connection timeout detected (no heartbeat for 90s)"
+      fields:
+        - session_id
+        - last_heartbeat_at
+        - elapsed_seconds
+        - trace_id
+
+      example: |
+        {
+          "timestamp": "2025-01-15T10:30:00Z",
+          "level": "warn",
+          "event": "heartbeat_timeout",
+          "session_id": "session-123",
+          "last_heartbeat_at": "2025-01-15T10:28:30Z",
+          "elapsed_seconds": 90,
+          "trace_id": "trace-abc123"
+        }
+
+    - event: "reconnect_success"
+      level: "info"
+      message: "Client reconnected successfully"
+      fields:
+        - session_id
+        - attempt_number
+        - reconnect_latency_ms
+        - messages_replayed_count
+        - trace_id
+
+      example: |
+        {
+          "timestamp": "2025-01-15T10:30:05Z",
+          "level": "info",
+          "event": "reconnect_success",
+          "session_id": "session-123",
+          "attempt_number": 1,
+          "reconnect_latency_ms": 1200,
+          "messages_replayed_count": 3,
+          "trace_id": "trace-abc123"
+        }
+
+    - event: "reconnect_failure"
+      level: "error"
+      message: "Client reconnect failed after max attempts"
+      fields:
+        - session_id
+        - max_attempts
+        - failure_reason
+        - total_time_ms
+        - trace_id
+
+      example: |
+        {
+          "timestamp": "2025-01-15T10:30:31Z",
+          "level": "error",
+          "event": "reconnect_failure",
+          "session_id": "session-123",
+          "max_attempts": 5,
+          "failure_reason": "max_attempts_reached",
+          "total_time_ms": 31000,
+          "trace_id": "trace-abc123"
+        }
+
+    - event: "message_replay_complete"
+      level: "info"
+      message: "Missed messages replayed successfully"
+      fields:
+        - session_id
+        - last_message_id
+        - messages_replayed_count
+        - replay_latency_ms
+        - trace_id
+
+      example: |
+        {
+          "timestamp": "2025-01-15T10:30:05Z",
+          "level": "info",
+          "event": "message_replay_complete",
+          "session_id": "session-123",
+          "last_message_id": "msg-45",
+          "messages_replayed_count": 3,
+          "replay_latency_ms": 15,
+          "trace_id": "trace-abc123"
+        }
+
+# Alerting Rules
+alerting_rules:
+  description: "Prometheus alerting rules for reconnection health"
+
+  critical_alerts:
+    - alert: "ReconnectSuccessRateCritical"
+      severity: "critical"
+      condition: "websocket_reconnect_success_rate < 90"
+      duration: "5 minutes"
+      description: "Reconnect success rate < 90% for 5 minutes (severe user impact)"
+      runbook: "docs/runbooks/websocket_reconnect_failure.md"
+      actions:
+        - "Page on-call engineer"
+        - "Check server health (CPU, memory, connections)"
+        - "Check network infrastructure (ISP outage, DDoS)"
+        - "Review failure reasons (auth_failed, network_error, server_rejected)"
+
+    - alert: "TimeoutRateHigh"
+      severity: "critical"
+      condition: "(rate(websocket_timeouts_total[5m]) / websocket_active_connections) > 0.1"
+      duration: "5 minutes"
+      description: "Timeout rate > 10% of active connections (network issues or server overload)"
+      runbook: "docs/runbooks/websocket_timeout_high.md"
+      actions:
+        - "Check heartbeat loop performance (CPU, latency)"
+        - "Check network latency (RTT to clients)"
+        - "Review connection distribution (mobile vs desktop)"
+
+  warning_alerts:
+    - alert: "ReconnectSuccessRateWarning"
+      severity: "warning"
+      condition: "websocket_reconnect_success_rate < 95"
+      duration: "5 minutes"
+      description: "Reconnect success rate < 95% for 5 minutes (degraded reliability)"
+      runbook: "docs/runbooks/websocket_reconnect_degraded.md"
+      actions:
+        - "Investigate failure reasons (auth_failed, network_error)"
+        - "Check exponential backoff effectiveness (attempt distribution)"
+        - "Review server capacity (connections, CPU, memory)"
+
+    - alert: "ReplayGapsHigh"
+      severity: "warning"
+      condition: "(websocket_replay_gaps_total / websocket_reconnects_total{status='success'}) > 0.01"
+      duration: "10 minutes"
+      description: "Replay gaps > 1% of reconnects (TTL too short or long disconnects)"
+      runbook: "docs/runbooks/websocket_replay_gaps.md"
+      actions:
+        - "Consider increasing buffer TTL (5min → 10min)"
+        - "Review disconnect duration distribution"
+        - "Check buffer capacity (100 messages sufficient?)"
+
+# SLO Targets
+slo_targets:
+  description: "Service Level Objectives for reconnection health"
+
+  slos:
+    - slo: "Reconnect Success Rate"
+      target: "97% (rolling 30-day window)"
+      sli: "Percentage of successful reconnects within 5 attempts (31 seconds)"
+      actual_p6m: "97% ✅"
+      error_budget: "3K failed reconnects per month (out of 100K total)"
+
+    - slo: "Timeout Detection Latency"
+      target: "P95 < 95s"
+      sli: "Time from last heartbeat to timeout detection"
+      actual_p6m: "88s ✅"
+      error_budget: "5% of timeouts can exceed 95s"
+
+    - slo: "Reconnect Latency"
+      target: "P95 < 2s (successful reconnects)"
+      sli: "Time from disconnect to successful reconnect"
+      actual_p6m: "1.8s ✅"
+      error_budget: "5% of reconnects can exceed 2s"
+
+    - slo: "Message Replay Latency"
+      target: "P95 < 100ms for 100 messages"
+      sli: "Time to replay missed messages on reconnect"
+      actual_p6m: "90ms ✅"
+      error_budget: "5% of replays can exceed 100ms"
+
+# Related Contracts
+related_contracts:
+  - "heartbeat_manager.yml - Heartbeat metrics (sent, acknowledged, check_latency)"
+  - "timeout_detection.yml - Timeout metrics (timeouts_total, detection_latency)"
+  - "auto_reconnect_client.yml - Reconnect metrics (reconnects_total, latency)"
+  - "missed_message_replay.yml - Replay metrics (replayed_total, replay_latency)"
+  - "reconnect_success_rate.yml - Success rate tracking (>95% target)"

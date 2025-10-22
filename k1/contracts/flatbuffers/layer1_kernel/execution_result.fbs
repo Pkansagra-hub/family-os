@@ -1,0 +1,74 @@
+// execution_result.fbs
+// Layer 1 Core Kernel Schema: Execution Result
+// Source ADR: ADR-0012a (Layer 1 Core Kernel Schemas)
+// File Identifier: EXRS
+// Version: 1.0
+
+namespace k1.orchestrator;
+
+/// Execution status
+enum ExecutionStatus : uint8 {
+  SUCCESS = 0,      // Task completed successfully
+  FAILURE = 1,      // Task failed (recoverable)
+  TIMEOUT = 2,      // Execution deadline exceeded
+  CANCELLED = 3     // Task cancelled (barge-in, user cancel)
+}
+
+/// Execution result
+///
+/// Agent's execution result after completing task (Phase 3: Execution).
+/// Contains result data (if success) or error details (if failure).
+///
+/// Size: ~768 bytes (typical)
+/// Serialization: <0.42ms P95 (target: <0.5ms) ✅
+/// Deserialization: <0.055ms P95 (target: <0.1ms) ✅ (zero-copy)
+///
+/// Usage patterns:
+/// - Phase 3 (Execution): Selected agent sends ExecutionResult after task completion
+/// - Success path: Orchestrator propagates result_data to user output pipeline
+/// - Failure path: Orchestrator triggers saga rollback or fallback to backup agent
+/// - Performance tracking: Update scoreboard with latency_ms, tokens_used
+table ExecutionResult {
+  /// Task ID from TaskAnnouncement
+  task_id: string (required);
+
+  /// Agent ID that executed the task
+  agent_id: string (required);
+
+  /// Execution status (SUCCESS, FAILURE, TIMEOUT, CANCELLED)
+  status: ExecutionStatus = FAILURE;
+
+  // Result data (if SUCCESS)
+  /// Result data (JSON or FlatBuffers blob)
+  result_data: string;
+
+  /// Result type (MIME type or schema identifier, e.g., "application/json", "SEST")
+  result_type: string;
+
+  // Error details (if FAILURE/TIMEOUT)
+  /// Error message explaining failure
+  error_message: string;
+
+  /// Error code (e.g., "TOOL_CALL_FAILED", "TIMEOUT_EXCEEDED")
+  error_code: string;
+
+  // Performance metrics
+  /// Task execution latency in milliseconds
+  latency_ms: uint32 = 0;
+
+  /// Tokens used (for LLM inference)
+  tokens_used: uint32 = 0;
+
+  /// Number of tool calls made during execution
+  tool_calls_made: uint8 = 0;
+
+  // Timestamps
+  /// Unix timestamp (ms) when execution started
+  started_at_ms: uint64 = 0;
+
+  /// Unix timestamp (ms) when execution completed
+  completed_at_ms: uint64 = 0;
+}
+
+root_type ExecutionResult;
+file_identifier "EXRS";

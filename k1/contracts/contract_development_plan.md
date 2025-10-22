@@ -2909,15 +2909,17 @@ k1_module_manifest:
 
 ---
 
-### Epic 2.15: REST API Session Management Contracts
+## Epic 2.15: REST API Session Management Contracts
 
 **Source ADR:** ADR-0041 (REST API) + sub-ADRs (0041a-d)
 **Priority:** CRITICAL (Communication & Integration)
-**Contract Count:** 34 files
+**Contract Count:** 33 files (reduced from 34: removed Redis-specific contracts for K1-only focus)
 
-**Context:** ADR-0041 requires RESTful API following Roy Fielding's constraints (2000) with 21 endpoints for session lifecycle (POST, GET, PATCH, DELETE /v1/sessions), turn submission (sync <5000ms or async with webhook), stateless JWT authentication (ADR-0037), cursor-based pagination (opaque cursor, no offset), idempotency keys (24h deduplication, 8% duplicate rate), ETag/Last-Modified caching (82% hit rate = 8ms cached responses), RFC 7807 error format, and OpenAPI 3.1 specification with auto-generated SDKs.
+**Context:** ADR-0041 requires RESTful API following Roy Fielding's constraints (2000) with 21 endpoints for session lifecycle (POST, GET, PATCH, DELETE /v1/sessions), turn submission (sync <5000ms or async with webhook), stateless JWT authentication (ADR-0037), cursor-based pagination (opaque cursor, no offset), idempotency keys (24h deduplication via K0 SQLite, 8% duplicate rate), ETag/Last-Modified caching (82% hit rate = 8ms cached responses), RFC 7807 error format, and OpenAPI 3.1 specification with auto-generated SDKs.
 
-#### Issue 2.15.1: Session CRUD & Resource Design Contracts
+**Dual-Kernel Architecture Note:** These are **K1 API Gateway** contracts. K0 Memory Kernel handles actual storage (SQLite-based idempotency ledger, WAL, receipts). K1 focuses on REST API semantics and K0 integration.
+
+### Issue 2.15.1: Session CRUD & Resource Design Contracts
 
 **Expected Output:** `contracts/api/rest/sessions/` (9 files)
 
@@ -2937,26 +2939,30 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.15.2: Idempotency & State Synchronization Contracts
+### Issue 2.15.2: Idempotency & State Synchronization Contracts (K1 API Layer)
 
-**Expected Output:** `contracts/api/rest/idempotency/` (8 files)
+**Expected Output:** `contracts/api/rest/idempotency/` (7 files)
+
+**Architecture Note:** This issue focuses on **K1 REST API layer** contracts. K0 handles actual idempotency storage (SQLite `idem_ledger` table documented in `k0/README.md` Section 9). K1's role is to accept idempotency keys and delegate to K0.
 
 ```
-├── idempotency_key_header.yml              # Idempotency-Key header (Stripe pattern): Optional header for POST requests, client-generated unique key (UUID), server stores key → response mapping for 24h, duplicate requests return 200 OK with cached response
-├── redis_key_storage.yml                   # Redis storage: SET idempotency:{key} <response> EX 86400 (24h TTL), GET idempotency:{key} on duplicate, atomic check-and-set (prevents race conditions), <10ms P95 storage latency
-├── duplicate_detection.yml                 # Duplicate detection logic: Query Redis for idempotency key, if exists → return cached response (200 OK with X-Idempotent-Replayed: true header), if not exists → process request
-├── 24h_retention.yml                       # 24-hour key retention: Keys expire after 24h (Redis TTL), clients must not retry after 24h (risk of duplicate if key expired), balances safety vs storage cost (8% deduplication = 120K saved operations)
-├── state_synchronization.yml               # State sync between REST and WebSocket: Shared SessionState (ADR-0012) in K1 kernel memory, both channels read/write same state, no dual-write problem, changes visible immediately
-├── sync_async_turn_modes.yml               # Turn modes: Sync (wait for response, <5000ms, 30s timeout), Async (return 202 Accepted with turn_id, webhook callback when complete), client chooses via mode parameter
-├── webhook_callbacks.yml                   # Webhook callbacks (async mode): Client registers webhook URL in session metadata, server POSTs turn result when complete, retry policy (3 attempts, exponential backoff 1s/2s/4s)
-└── observability.yml                       # Prometheus metrics: idempotency_checks_total (counter), duplicate_requests_total (counter, 8% rate), idempotency_storage_latency_ms (histogram <10ms), webhook_deliveries_total (counter), webhook_failures_total
+├── idempotency_key_header.yml              # Idempotency-Key header (Stripe pattern): K1 accepts optional header for POST requests, client-generated UUID, K1 includes in K0 envelope, forwards to K0 command port
+├── k0_integration.yml                      # K1 → K0 integration: Call POST /k0/command.submit with idem_key in envelope, K0 performs SQLite ledger check (k0/idem/ledger.py), K0 returns 409 IDEMPOTENT_DUPLICATE or 200 OK, K1 translates to REST response
+├── duplicate_detection.yml                 # K1 duplicate handling: Receive 409 from K0 → return 200 OK with cached response + X-Idempotent-Replayed: true header, receive 200 from K0 → return 201 Created with new response, <5ms K1 overhead
+├── k0_storage_reference.yml                # Reference to K0 implementation: K0 uses SQLite idem_ledger table (not Redis), BLAKE3 hash derivation, 24h TTL via expiry_ts column, <25ms P50 / <150ms P95 (K0 SLO), see k0/README.md Section 9 for details
+├── state_synchronization.yml               # State sync between REST and WebSocket: Shared SessionState (ADR-0012) in K1 kernel memory, both channels read/write same state, no dual-write problem, changes visible immediately, <1ms sync latency
+├── sync_async_turn_modes.yml               # Turn modes: Sync (wait for response, <5000ms, 30s timeout), Async (return 202 Accepted with turn_id, webhook callback when complete), client chooses via mode parameter, 92% sync / 8% async usage
+├── webhook_callbacks.yml                   # Webhook callbacks (async mode): Client registers webhook URL in session metadata, K1 POSTs turn result when complete, retry policy (3 attempts, exponential backoff 1s/2s/4s), 98% first-attempt delivery success
+└── observability.yml                       # K1 API metrics: idempotency_checks_total (counter), k0_integration_latency_ms (histogram <5ms K1 overhead), duplicate_requests_total (counter, 8% rate), webhook_deliveries_total (counter), webhook_failures_total
 ```
 
-**ADR References:** ADR-0041b lines 1-251 (idempotency), 252-500 (Redis storage), 501-750 (state sync), 751-1000 (sync/async modes), 1001-1277 (webhooks, observability)
+**ADR References:** ADR-0041b lines 1-251 (idempotency), 252-500 (K1-K0 integration), 501-750 (state sync), 751-1000 (sync/async modes), 1001-1277 (webhooks, observability)
+
+**K0 Implementation Reference:** See `k0/README.md` Section 9 for actual idempotency ledger implementation (SQLite-based, BLAKE3 hashing, 24h expiry_ts, <25ms P50 latency)
 
 ---
 
-#### Issue 2.15.3: Cursor-Based Pagination Contracts
+### Issue 2.15.3: Cursor-Based Pagination Contracts
 
 **Expected Output:** `contracts/api/rest/pagination/` (9 files)
 
@@ -2976,7 +2982,7 @@ k1_module_manifest:
 
 ---
 
-#### Issue 2.15.4: OpenAPI Spec & RFC 7807 Error Handling Contracts
+### Issue 2.15.4: OpenAPI Spec & RFC 7807 Error Handling Contracts
 
 **Expected Output:** `contracts/api/rest/documentation/` (8 files)
 
@@ -2993,7 +2999,21 @@ k1_module_manifest:
 
 **ADR References:** ADR-0041d lines 1-251 (OpenAPI), 252-500 (RFC 7807), 501-750 (error types), 751-881 (SDK generation, observability)
 
-**Total Contracts: 34 files** (9 session CRUD + 8 idempotency + 9 pagination + 8 documentation)
+**Total Contracts: 33 files** (9 session CRUD + 7 idempotency [K1-only] + 9 pagination + 8 documentation)
+
+**Key Contracts:**
+
+- **`idempotency_key_header.yml`** — K1 accepts Idempotency-Key header, forwards to K0
+- **`k0_integration.yml`** — K1 → K0 command port integration contract (how K1 calls K0)
+- **`k0_storage_reference.yml`** — Reference to K0's SQLite implementation (see k0/README.md Section 9)
+- **`duplicate_detection.yml`** — K1 handles 409 responses from K0, translates to REST semantics
+
+**Architecture Notes:**
+
+- **K1 Responsibility:** REST API layer, accept idempotency keys, forward to K0, translate K0 responses (409 → 200 OK with X-Idempotent-Replayed)
+- **K0 Responsibility:** Actual idempotency storage (SQLite `idem_ledger` table), BLAKE3 hash derivation, 24h TTL via `expiry_ts` column, <25ms P50 latency
+- **Performance:** <5ms K1 overhead + <25ms P50 K0 latency = <30ms total idempotency check (hypersonic local-first)
+- **Local-First:** Zero external dependencies (no Redis), 100% offline capability, SQLite-based storage in K0
 
 ---
 

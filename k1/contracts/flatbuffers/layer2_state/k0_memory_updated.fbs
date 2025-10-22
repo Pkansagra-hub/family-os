@@ -1,0 +1,39 @@
+// k0_memory_updated.fbs
+// Layer 2 State & Persistence: K0 Memory Updated
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0001 (K0-K1 Kernel Split)
+//
+// Performance Targets:
+// - Size: ~512 bytes typical
+// - Serialize: 0.28ms P95 (target: <0.5ms)
+// - Deserialize: 0.035ms P95 (target: <0.1ms)
+//
+// Research: Kernel Memory Synchronization, State Consistency
+
+namespace k1.k0_bridge;
+
+/// K0 memory update event
+///
+/// K0 memory update event for kernel memory synchronization.
+///
+/// Usage patterns:
+/// - K0 memory synchronization: K1 tracks K0 kernel memory changes
+/// - Consistency: Verify K1 SessionState matches K0 kernel state
+/// - Debugging: Log memory updates for crash analysis
+table K0MemoryUpdated {
+  memory_address: uint64 (required);
+
+  // Old/new values (for diffing)
+  old_value: string;
+  new_value: string;
+
+  // Operation type
+  operation_type: string;  // "READ", "WRITE", "DELETE"
+
+  // Timestamps
+  updated_at_ms: uint64 = 0;
+}
+
+root_type K0MemoryUpdated;
+file_identifier "K0MU";

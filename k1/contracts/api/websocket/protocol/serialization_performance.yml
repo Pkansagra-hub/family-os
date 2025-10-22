@@ -279,31 +279,33 @@ performance_comparison:
     total_json: 210 bytes
 
     # Delta-based streaming (FlatBuffers)
-    chunk1: 'text_delta: "Hello world this is a test message"'  # 40 bytes
-    chunk2: 'text_delta: " with more tokens"'  # 20 bytes
-    chunk3: 'text_delta: " and even more"'  # 17 bytes
+    flatbuffers_chunk1: 'text_delta: "Hello world this is a test message"'  # 40 bytes
+    flatbuffers_chunk2: 'text_delta: " with more tokens"'  # 20 bytes
+    flatbuffers_chunk3: 'text_delta: " and even more"'  # 17 bytes
     total_flatbuffers: 77 bytes (63% reduction)
 
 zero_copy_deserialization:
   traditional_parsing:
-    - Read bytes from network
-    - Allocate string buffer
-    - Copy bytes to buffer
-    - Parse JSON string
-    - Allocate objects for each field
-    - Copy data to objects
+    steps:
+      - Read bytes from network
+      - Allocate string buffer
+      - Copy bytes to buffer
+      - Parse JSON string
+      - Allocate objects for each field
+      - Copy data to objects
     total_allocations: 6 allocations per message
     total_copies: 3 copies per message
     latency: 1.8ms (P95)
 
   flatbuffers_zero_copy:
-    - Read bytes from network
-    - Validate FlatBuffers schema (vtable check)
-    - Return pointer to message in buffer (no copy)
-    - Access fields via pointer arithmetic
-    total_allocations: 0 allocations
-    total_copies: 0 copies
-    latency: 0.3ms (P95)
+    steps:
+      - Read bytes from network
+      - Validate FlatBuffers schema (vtable check)
+      - Return pointer to message in buffer (no copy)
+      - Access fields via pointer arithmetic
+    zero_copy_allocations: 0 allocations
+    zero_copy_copies: 0 copies
+    zero_copy_latency: 0.3ms (P95)
 
 memory_alignment:
   - flatbuffers_alignment: 8-byte alignment for optimal CPU access

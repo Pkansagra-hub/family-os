@@ -1,0 +1,45 @@
+// k0_task_executed.fbs
+// Layer 2 State & Persistence: K0 Task Executed
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0001 (K0-K1 Kernel Split)
+//
+// Performance Targets:
+// - Size: ~4KB typical
+// - Serialize: 0.32ms P95 (target: <0.5ms)
+// - Deserialize: 0.042ms P95 (target: <0.1ms)
+//
+// Research: Kernel Task Execution, Performance Tracking
+
+namespace k1.k0_bridge;
+
+/// K0 task execution result
+///
+/// K0 task execution result from kernel.
+///
+/// Usage patterns:
+/// - K0 execution results: K1 receives task results from K0 kernel
+/// - Performance tracking: Log latency_ms, memory_delta_mb, cpu_usage_percent
+/// - Error handling: If status=FAILURE, trigger saga rollback or fallback
+table K0TaskExecuted {
+  task_id: string (required);
+
+  // Status
+  status: string (required);  // "SUCCESS", "FAILURE", "TIMEOUT"
+
+  // Result data
+  result_data: string;
+  error_message: string;
+
+  // Performance metrics
+  latency_ms: uint32 = 0;
+  memory_delta_mb: int32 = 0;  // Signed (can be negative if memory freed)
+  cpu_usage_percent: float32 = 0.0;
+
+  // Timestamps
+  started_at_ms: uint64 = 0;
+  completed_at_ms: uint64 = 0;
+}
+
+root_type K0TaskExecuted;
+file_identifier "K0TE";

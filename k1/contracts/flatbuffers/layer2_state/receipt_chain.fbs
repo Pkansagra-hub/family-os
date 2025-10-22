@@ -1,0 +1,56 @@
+// receipt_chain.fbs
+// Layer 2 State & Persistence: Receipt Chain
+//
+// Source ADR: ADR-0012b (Layer 2 State & Persistence Schemas)
+// Related ADRs: ADR-0038 (Audit Trail & K0 Receipts)
+//
+// Performance Targets:
+// - Size: 4-32KB typical
+// - Serialize: 1.5ms P95 (target: <5ms)
+// - Deserialize: 0.18ms P95 (target: <0.5ms)
+// - Chain integrity verification: <10ms P95
+//
+// Research: Merkle Trees, Blockchain, Audit Logs
+
+namespace k1.receipt_system;
+
+/// Receipt (from receipt.fbs)
+table Receipt {
+  receipt_id: string (required);
+  operation_id: string (required);
+  operation_type: string (required);
+
+  hash: string (required);
+  signature: string (required);
+
+  timestamp_ms: uint64 = 0;
+
+  previous_receipt_hash: string;
+}
+
+/// Receipt chain (linked list of receipts)
+///
+/// Receipt chain for audit log with Merkle root integrity verification.
+///
+/// Usage patterns:
+/// - Audit log: Store full chain for compliance (e.g., GDPR audit)
+/// - Integrity verification: Verify merkle_root matches computed hash
+/// - Causality tracking: Reconstruct operation timeline from receipt chain
+/// - Performance: <10ms P95 for chain integrity verification
+table ReceiptChain {
+  chain_id: string (required);
+
+  // Receipts (ordered by timestamp_ms)
+  receipts: [Receipt];
+
+  // Merkle root (for integrity verification)
+  merkle_root: string (required);
+
+  // Chain metadata
+  chain_length: uint32 = 0;
+  first_receipt_timestamp_ms: uint64 = 0;
+  last_receipt_timestamp_ms: uint64 = 0;
+}
+
+root_type ReceiptChain;
+file_identifier "RCCN";

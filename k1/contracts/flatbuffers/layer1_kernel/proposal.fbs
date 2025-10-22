@@ -1,0 +1,57 @@
+// proposal.fbs
+// Layer 1 Core Kernel Schema: Agent Proposal
+// Source ADR: ADR-0012a (Layer 1 Core Kernel Schemas)
+// File Identifier: PROP
+// Version: 1.0
+
+namespace k1.orchestrator;
+
+/// Proposal (agent's bid for a task)
+///
+/// Agent proposal in response to TaskAnnouncement (Phase 1: Negotiation).
+/// Contains bid details (cost, latency, confidence) for orchestrator selection.
+///
+/// Size: ~256 bytes (typical)
+/// Serialization: <0.18ms P95 (target: <0.5ms) ✅
+/// Deserialization: <0.022ms P95 (target: <0.1ms) ✅ (zero-copy)
+///
+/// Usage patterns:
+/// - Phase 1 (Negotiation): Agents send Proposal in response to TaskAnnouncement
+/// - Bid collection: Orchestrator collects proposals from multiple agents
+/// - Selection criteria: Choose proposal with best (confidence_score, estimated_latency_ms, estimated_cost)
+/// - Timeout handling: Ignore proposals arriving after negotiation_deadline_ms
+///
+/// Selection Logic:
+/// score = confidence * (1 / latency) * (1 / cost)
+/// Best proposal = highest score
+table Proposal {
+  /// Unique proposal identifier (ULID format)
+  proposal_id: string (required);
+
+  /// Task ID from TaskAnnouncement
+  task_id: string (required);
+
+  /// Agent ID submitting this proposal
+  agent_id: string (required);
+
+  // Bid details
+  /// Estimated cost (arbitrary units: tokens, compute, etc.)
+  estimated_cost: float32 = 0.0;
+
+  /// Estimated latency in milliseconds
+  estimated_latency_ms: uint32 = 0;
+
+  /// Confidence score (0.0-1.0)
+  confidence_score: float32 = 0.0;
+
+  // Rationale (optional)
+  /// Rationale for this proposal (why agent is suitable)
+  rationale: string;
+
+  // Timestamps
+  /// Unix timestamp (ms) when proposal was created
+  proposed_at_ms: uint64 = 0;
+}
+
+root_type Proposal;
+file_identifier "PROP";

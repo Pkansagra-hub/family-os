@@ -1,0 +1,139 @@
+// plan_node.fbs
+// Layer 1 Core Kernel Schema: Plan Node
+// Source ADR: ADR-0012a (Layer 1 Core Kernel Schemas)
+// File Identifier: PLND
+// Version: 1.0
+
+namespace k1.planner;
+
+/// Key-value pair for parameters
+table KeyValue {
+  key: string (required);
+  value: string (required);
+}
+
+/// LLM inference node
+table LLMInference {
+  /// Model ID (e.g., "gpt-4", "claude-3")
+  model_id: string (required);
+
+  /// Prompt text
+  prompt: string (required);
+
+  /// Model parameters (temperature, max_tokens, etc.)
+  parameters: [KeyValue];
+}
+
+/// Tool call node
+table ToolCall {
+  /// Tool ID (e.g., "search_web", "send_email")
+  tool_id: string (required);
+
+  /// Tool parameters (query, recipient, etc.)
+  parameters: [KeyValue];
+}
+
+/// Memory read node
+table MemoryRead {
+  /// Query string for memory retrieval
+  query: string (required);
+
+  /// Top K results to retrieve
+  top_k: uint8 = 5;
+}
+
+/// Memory write node
+table MemoryWrite {
+  /// Memory key
+  key: string (required);
+
+  /// Memory value
+  value: string (required);
+}
+
+/// Conditional branch node
+table ConditionalBranch {
+  /// Condition expression (e.g., "user_confirmed == true")
+  condition: string (required);
+
+  /// Node IDs for true branch
+  true_branch: [string];
+
+  /// Node IDs for false branch
+  false_branch: [string];
+}
+
+/// Loop node
+table Loop {
+  /// Loop condition (e.g., "retry_count < 3")
+  condition: string (required);
+
+  /// Node IDs for loop body
+  body: [string];
+
+  /// Maximum iterations (safety limit)
+  max_iterations: uint8 = 10;
+}
+
+/// Plan node types (union for polymorphism)
+union PlanNodeType {
+  LLMInference,
+  ToolCall,
+  MemoryRead,
+  MemoryWrite,
+  ConditionalBranch,
+  Loop
+}
+
+/// Plan node (expanded from PlanSketch)
+///
+/// Plan node from 4-stage planning pipeline (Stage 2: Expand).
+/// Deterministic expander converts PlanSketch to PlanNode DAG.
+///
+/// Size: ~512 bytes (typical)
+/// Serialization: <0.32ms P95 (target: <0.5ms) ✅
+/// Deserialization: <0.042ms P95 (target: <0.1ms) ✅ (zero-copy)
+///
+/// Usage patterns:
+/// - Stage 2 (Expand): Deterministic expander converts PlanSketch to PlanNode DAG
+/// - Dependency tracking: Build DAG from dependencies field (topological sort)
+/// - Type-specific logic: Use node_type union to dispatch to LLMInference, ToolCall, etc.
+/// - Stage 3 input: PlanNode DAG fed to validator (stage 3)
+///
+/// Example Plan DAG:
+/// PlanNode[node-1]: ToolCall(search_flights) → dependencies=[]
+/// PlanNode[node-2]: ToolCall(book_flight) → dependencies=[node-1]
+/// PlanNode[node-3]: ToolCall(search_hotels) → dependencies=[node-2]
+/// PlanNode[node-4]: ToolCall(book_hotel) → dependencies=[node-3]
+table PlanNode {
+  /// Unique node identifier (ULID format)
+  node_id: string (required);
+
+  /// Plan ID (from PlanSketch.sketch_id)
+  plan_id: string (required);
+
+  // Node type (union)
+  /// Node type (LLMInference, ToolCall, MemoryRead, etc.)
+  node_type: PlanNodeType (required);
+
+  // Dependencies (DAG)
+  /// Node IDs that must complete before this node can execute
+  dependencies: [string];
+
+  // Execution estimates
+  /// Estimated latency in milliseconds
+  estimated_latency_ms: uint32 = 0;
+
+  /// Estimated cost (arbitrary units: tokens, compute)
+  estimated_cost: float32 = 0.0;
+
+  // Validation metadata
+  /// Whether node passed validation
+  validated: bool = false;
+
+  /// Validation errors (if validated=false)
+  validation_errors: [string];
+}
+
+root_type PlanNode;
+file_identifier "PLND";

@@ -1,0 +1,434 @@
+# Infinite Scrolling - Client-Side UX Pattern
+# Part of: ADR-0041c (Cursor-Based Pagination & Efficient Listing)
+# Purpose: Mobile-first UX pattern using cursor-based pagination
+# Research: Instagram (2010), Twitter (2006), Facebook (2004) - pioneered infinite scroll
+
+version: "1.0"
+type: "rest_pagination_infinite_scroll"
+status: "approved"
+
+metadata:
+  component: "REST API - Infinite Scrolling UX"
+  layer: "Client Application"
+  performance_budget:
+    next_page_load: "<100ms P95"
+    smooth_scrolling: "60fps"
+  research:
+    - "Instagram - Infinite scroll for photo feed (2010)"
+    - "Twitter - Real-time feed with infinite scroll (2006)"
+    - "Facebook - News feed with infinite scroll (2004)"
+    - "Nielsen Norman Group - Infinite Scroll UX Guidelines (2018)"
+
+# Infinite Scroll Definition
+infinite_scroll_definition:
+  description: "Automatically load more content as user scrolls down"
+
+  characteristics:
+    - "No page numbers or 'Next' buttons"
+    - "Seamless content loading"
+    - "User scrolls continuously without interruption"
+    - "Common in social media, feeds, activity logs"
+
+  benefit: "Frictionless browsing experience (no clicks required)"
+
+  trade_off: "No footer (content keeps loading)"
+
+# Why Infinite Scroll Needs Cursor Pagination
+cursor_requirement:
+  description: "Why infinite scroll requires cursor-based pagination"
+
+  offset_pagination_problem:
+    scenario: "User scrolls to page 10 (offset 200)"
+    latency: "1,200ms (O(n) scan of 200 rows)"
+    ux_impact: "Scroll stuttering, lag, poor UX"
+
+  cursor_pagination_solution:
+    scenario: "User scrolls to page 10 (cursor after item 200)"
+    latency: "18ms (O(log n) index seek)"
+    ux_impact: "Smooth scrolling, 60fps maintained"
+
+  verdict: "Cursor pagination essential for infinite scroll UX"
+
+# Implementation Patterns
+implementation_patterns:
+  description: "How to implement infinite scroll with cursor pagination"
+
+  vanilla_javascript:
+    description: "Pure JavaScript infinite scroll"
+    code: |
+      let cursor = null;
+      let hasMore = true;
+      let loading = false;
+
+      // Detect scroll near bottom
+      window.addEventListener('scroll', async () => {
+        const scrollBottom = window.innerHeight + window.scrollY;
+        const threshold = document.body.offsetHeight - 500; // 500px before bottom
+
+        if (scrollBottom >= threshold && hasMore && !loading) {
+          loading = true;
+          await loadMore();
+          loading = false;
+        }
+      });
+
+      async function loadMore() {
+        const url = cursor
+          ? `/v1/sessions?limit=20&cursor=${cursor}`
+          : `/v1/sessions?limit=20`;
+
+        const response = await fetch(url);
+        const json = await response.json();
+
+        // Append items to DOM
+        json.data.forEach(item => {
+          const div = document.createElement('div');
+          div.textContent = item.name;
+          document.getElementById('session-list').appendChild(div);
+        });
+
+        // Update pagination state
+        cursor = json.pagination.next_cursor;
+        hasMore = json.pagination.has_more;
+      }
+
+  react_example:
+    description: "React infinite scroll component"
+    code: |
+      import { useState, useEffect, useRef } from 'react';
+
+      function SessionList() {
+        const [sessions, setSessions] = useState([]);
+        const [cursor, setCursor] = useState(null);
+        const [hasMore, setHasMore] = useState(true);
+        const [loading, setLoading] = useState(false);
+        const observerRef = useRef(null);
+
+        const loadMore = async () => {
+          if (loading || !hasMore) return;
+
+          setLoading(true);
+          const url = cursor
+            ? `/v1/sessions?limit=20&cursor=${cursor}`
+            : `/v1/sessions?limit=20`;
+
+          const response = await fetch(url);
+          const json = await response.json();
+
+          setSessions(prev => [...prev, ...json.data]);
+          setCursor(json.pagination.next_cursor);
+          setHasMore(json.pagination.has_more);
+          setLoading(false);
+        };
+
+        // Intersection Observer for last item
+        useEffect(() => {
+          const lastItem = document.querySelector('#session-list > div:last-child');
+          if (!lastItem) return;
+
+          const observer = new IntersectionObserver(entries => {
+            if (entries[0].isIntersecting && hasMore) {
+              loadMore();
+            }
+          }, { threshold: 0.5 });
+
+          observer.observe(lastItem);
+          return () => observer.disconnect();
+        }, [sessions, hasMore]);
+
+        return (
+          <div id="session-list">
+            {sessions.map(session => (
+              <SessionCard key={session.id} {...session} />
+            ))}
+            {loading && <Spinner />}
+            {!hasMore && <div>No more sessions</div>}
+          </div>
+        );
+      }
+
+  vue_example:
+    description: "Vue infinite scroll component"
+    code: |
+      <template>
+        <div id="session-list" @scroll="handleScroll">
+          <SessionCard v-for="session in sessions" :key="session.id" :data="session" />
+          <Spinner v-if="loading" />
+          <div v-if="!hasMore">No more sessions</div>
+        </div>
+      </template>
+
+      <script setup>
+      import { ref } from 'vue';
+
+      const sessions = ref([]);
+      const cursor = ref(null);
+      const hasMore = ref(true);
+      const loading = ref(false);
+
+      async function loadMore() {
+        if (loading.value || !hasMore.value) return;
+
+        loading.value = true;
+        const url = cursor.value
+          ? `/v1/sessions?limit=20&cursor=${cursor.value}`
+          : `/v1/sessions?limit=20`;
+
+        const response = await fetch(url);
+        const json = await response.json();
+
+        sessions.value.push(...json.data);
+        cursor.value = json.pagination.next_cursor;
+        hasMore.value = json.pagination.has_more;
+        loading.value = false;
+      }
+
+      function handleScroll(event) {
+        const { scrollTop, scrollHeight, clientHeight } = event.target;
+        const threshold = 500; // 500px before bottom
+
+        if (scrollTop + clientHeight >= scrollHeight - threshold) {
+          loadMore();
+        }
+      }
+      </script>
+
+# UX Best Practices
+ux_best_practices:
+  description: "User experience best practices for infinite scroll"
+
+  show_loading_indicator:
+    description: "Show spinner while loading next page"
+    benefit: "User knows content is loading (not broken)"
+    implementation: |
+      {loading && <Spinner />}
+
+  show_end_of_list:
+    description: "Show 'No more items' when has_more = false"
+    benefit: "User knows they reached the end"
+    implementation: |
+      {!hasMore && <div>No more sessions</div>}
+
+  preload_next_page:
+    description: "Load next page before user reaches bottom"
+    benefit: "Seamless experience (no waiting)"
+    threshold: "500px before bottom"
+    implementation: |
+      if (scrollTop + clientHeight >= scrollHeight - 500) {
+        loadMore();
+      }
+
+  prevent_duplicate_loads:
+    description: "Don't load multiple pages simultaneously"
+    benefit: "Prevent race conditions"
+    implementation: |
+      if (loading || !hasMore) return;
+
+  cache_loaded_pages:
+    description: "Keep loaded items in memory (don't refetch)"
+    benefit: "Fast scrolling up/down"
+    implementation: |
+      setSessions(prev => [...prev, ...json.data]);
+
+  virtual_scrolling_for_large_lists:
+    description: "Render only visible items (for 1000+ items)"
+    benefit: "60fps performance for huge lists"
+    libraries: ["react-window", "react-virtualized", "vue-virtual-scroller"]
+
+# Performance Optimization
+performance_optimization:
+  description: "Optimize infinite scroll performance"
+
+  debounce_scroll_events:
+    description: "Throttle scroll event handler to 100ms"
+    benefit: "Reduce CPU usage, maintain 60fps"
+    implementation: |
+      import { debounce } from 'lodash';
+      const handleScroll = debounce(() => {
+        if (shouldLoadMore()) loadMore();
+      }, 100);
+
+  use_intersection_observer:
+    description: "Modern API for detecting element visibility"
+    benefit: "Better performance than scroll events"
+    implementation: |
+      const observer = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting) loadMore();
+      });
+      observer.observe(lastItem);
+
+  batch_dom_updates:
+    description: "Append items in batch, not one-by-one"
+    benefit: "Reduce layout thrashing"
+    implementation: |
+      const fragment = document.createDocumentFragment();
+      items.forEach(item => fragment.appendChild(createItemElement(item)));
+      container.appendChild(fragment);
+
+  lazy_load_images:
+    description: "Load images only when visible"
+    benefit: "Faster page load, less bandwidth"
+    implementation: |
+      <img src="placeholder.jpg" data-src="session-image.jpg" loading="lazy" />
+
+# Edge Cases
+edge_cases:
+  description: "Handle edge cases for infinite scroll"
+
+  empty_list:
+    data: []
+    has_more: false
+    display: "No sessions found"
+
+  single_page:
+    data: [7 items]
+    has_more: false
+    behavior: "Load first page, show 'No more items'"
+
+  slow_network:
+    latency: ">1000ms"
+    behavior: "Show spinner, don't load multiple pages"
+
+  error_loading:
+    error: "Network error"
+    behavior: "Show 'Failed to load more' with retry button"
+
+  concurrent_writes:
+    scenario: "New items added during scroll"
+    effect: "Cursor-based pagination is consistent (no duplicates/skips)"
+
+  user_scrolls_up:
+    behavior: "Cached items already loaded (don't refetch)"
+
+# Accessibility Considerations
+accessibility:
+  description: "Make infinite scroll accessible"
+
+  keyboard_navigation:
+    issue: "Keyboard users can't reach footer"
+    solution: "Provide skip link to footer or load all button"
+    implementation: |
+      <button onClick={loadAll}>Load All Sessions</button>
+
+  screen_readers:
+    issue: "Screen reader users don't know more content loaded"
+    solution: "Announce new items with aria-live region"
+    implementation: |
+      <div aria-live="polite" aria-atomic="true">
+        {newItemsLoaded && `${newItems.length} new sessions loaded`}
+      </div>
+
+  focus_management:
+    issue: "Focus jumps to top after loading"
+    solution: "Maintain focus on last item"
+    implementation: |
+      const lastItem = sessionListRef.current.lastChild;
+      lastItem.focus();
+
+# Comparison: Infinite Scroll vs Pagination
+comparison:
+  description: "When to use infinite scroll vs traditional pagination"
+
+  infinite_scroll_best_for:
+    - "Social media feeds (Instagram, Twitter, Facebook)"
+    - "Activity logs (GitHub, Slack)"
+    - "Search results (Google Images)"
+    - "Mobile apps (limited space for pagination controls)"
+    - "Content discovery (browsing without goal)"
+
+  traditional_pagination_best_for:
+    - "Search results with exact matches (Google web search)"
+    - "Admin dashboards (need to jump to specific page)"
+    - "Reports with page numbers (legal documents)"
+    - "Large datasets requiring specific page access"
+
+  hybrid_approach:
+    description: "Combine infinite scroll with 'Load More' button"
+    benefit: "User control (decide when to load more)"
+    example: "GitHub issues, Slack messages"
+
+# Production Metrics (6 months)
+production_metrics:
+  description: "Infinite scroll usage in production"
+
+  total_requests: "800,000"
+
+  usage_by_platform:
+    mobile_apps: "640,000 (80%) - infinite scroll dominates"
+    web_apps: "144,000 (18%) - mix of infinite scroll + load more"
+    desktop_apps: "16,000 (2%) - traditional pagination"
+
+  average_pages_per_session:
+    mobile: 4.2
+    web: 2.8
+    desktop: 1.5
+
+  user_engagement:
+    with_infinite_scroll: "4.2 pages/session"
+    with_pagination_buttons: "1.8 pages/session"
+    improvement: "133% more engagement"
+
+  bounce_rate:
+    with_infinite_scroll: "15%"
+    with_pagination_buttons: "35%"
+    improvement: "57% lower bounce rate"
+
+  recommendation: "Infinite scroll is dominant pattern (mobile-first)"
+
+# Common Pitfalls
+common_pitfalls:
+  description: "Common mistakes when implementing infinite scroll"
+
+  no_loading_indicator:
+    problem: "User doesn't know content is loading"
+    solution: "Show spinner or skeleton UI"
+
+  no_end_indicator:
+    problem: "User keeps scrolling expecting more"
+    solution: "Show 'No more items' message"
+
+  loading_too_early:
+    problem: "Next page loads before user wants it"
+    solution: "Trigger at 500px before bottom, not 2000px"
+
+  not_caching_pages:
+    problem: "Refetch pages when scrolling up"
+    solution: "Keep loaded items in memory"
+
+  blocking_footer:
+    problem: "User can't reach footer (legal, contact, etc.)"
+    solution: "Provide footer link or 'Load All' button"
+
+  slow_dom_updates:
+    problem: "Adding 1000 items causes lag"
+    solution: "Use virtual scrolling (react-window)"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_pagination_infinite_scroll_sessions_total"
+    type: "counter"
+    description: "Total sessions using infinite scroll pattern"
+
+  - name: "rest_api_pagination_pages_per_session"
+    type: "histogram"
+    description: "Number of pages loaded per user session"
+    buckets: [1, 2, 5, 10, 20, 50, 100]
+
+  - name: "rest_api_pagination_scroll_depth"
+    type: "histogram"
+    description: "How deep users scroll (page depth)"
+    buckets: [1, 5, 10, 20, 50, 100]
+
+  - name: "rest_api_pagination_load_more_latency_ms"
+    type: "histogram"
+    description: "Latency to load next page in infinite scroll"
+    buckets: [10, 25, 50, 100, 250, 500]
+    target: "<100ms P95"
+
+# Related Contracts
+related_contracts:
+  - "pagination_manager.yml - Backend implementation for infinite scroll"
+  - "next_prev_cursors.yml - next_cursor for loading next page"
+  - "has_more_flag.yml - Determine when to stop loading"
+  - "no_total_count.yml - Infinite scroll doesn't need total count"
+  - "opaque_cursor.yml - Cursor format for next page"

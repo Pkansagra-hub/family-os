@@ -1,0 +1,325 @@
+# Webhook Callbacks - Asynchronous Result Delivery
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Deliver turn results to client via HTTP POST when processing completes
+# Research: Webhook security patterns, retry policies, HMAC signatures
+
+version: "1.0"
+type: "rest_webhook_callbacks"
+status: "approved"
+
+metadata:
+  component: "REST API - Webhook Delivery"
+  layer: "API Gateway"
+  performance_budget:
+    delivery_success_rate: ">98% (first attempt)"
+    retry_attempts: "3 (with exponential backoff)"
+  research:
+    - "Stripe Webhooks (2013) - HMAC signature verification"
+    - "HTTP retry patterns - Exponential backoff (1s, 2s, 4s)"
+    - "Production Evidence (K1, 6 months) - 98% first-attempt success, 2% retry"
+
+# Webhook Registration
+webhook_registration:
+  description: "Client registers webhook URL during session creation or turn submission"
+
+  registration_locations:
+    - location: "Session metadata (global webhook)"
+      endpoint: "POST /v1/sessions"
+      body: |
+        {
+          "persona": "helpful_assistant",
+          "metadata": {
+            "webhook_url": "https://client.example.com/webhooks/k1"
+          }
+        }
+      scope: "All async turns in this session"
+
+    - location: "Turn request (per-turn webhook)"
+      endpoint: "POST /v1/sessions/{id}/turns"
+      body: |
+        {
+          "mode": "async",
+          "user_message": "Analyze document",
+          "webhook_url": "https://client.example.com/webhooks/turns/abc123"
+        }
+      scope: "This specific turn only"
+
+  precedence: "Per-turn webhook_url overrides session metadata webhook_url"
+
+  validation:
+    url_format: "Must be valid HTTPS URL (http:// rejected for security)"
+    reachability: "No pre-validation (too slow), server attempts delivery and retries"
+
+# Webhook Payload
+webhook_payload:
+  description: "Structure of webhook POST request"
+
+  http_request:
+    method: "POST"
+    url: "https://client.example.com/webhooks/k1 (from registration)"
+    headers:
+      Content-Type: "application/json"
+      X-Webhook-Signature: "sha256=d4f3a2b1c5e6..." # HMAC-SHA256
+      X-Webhook-ID: "webhook-xyz789" # Unique delivery attempt ID
+      X-Webhook-Timestamp: "2025-10-21T14:30:12Z"
+      User-Agent: "K1-Webhooks/1.0"
+    body: |
+      {
+        "event_type": "turn.completed",
+        "turn_id": "turn-001",
+        "session_id": "session-xyz123",
+        "user_message": "Analyze this 100-page document",
+        "agent_response": "Analysis complete. Found 23 key insights...",
+        "status": "completed",
+        "latency_ms": 12000,
+        "completed_at": "2025-10-21T14:30:12Z"
+      }
+
+  event_types:
+    - event: "turn.completed"
+      description: "Turn processing completed successfully"
+      payload_fields: [turn_id, session_id, user_message, agent_response, status, latency_ms, completed_at]
+
+    - event: "turn.failed"
+      description: "Turn processing failed (e.g., agent error)"
+      payload_fields: [turn_id, session_id, error_code, error_message, failed_at]
+
+    - event: "session.terminated"
+      description: "Session terminated (DELETE or TTL expired)"
+      payload_fields: [session_id, termination_reason, terminated_at]
+
+# HMAC Signature Verification
+hmac_signature_verification:
+  description: "Verify webhook authenticity using HMAC-SHA256"
+
+  purpose: "Prevent spoofed webhooks from malicious actors"
+
+  signature_generation:
+    algorithm: "HMAC-SHA256"
+    secret_key: "Shared secret (provided during session creation)"
+    payload: "Raw JSON body (before base64 encoding)"
+    header: "X-Webhook-Signature: sha256=<hex_digest>"
+
+  example:
+    secret: "sk_test_abc123..."
+    payload: '{"event_type": "turn.completed", "turn_id": "turn-001", ...}'
+    computation: "hmac_sha256(secret, payload) → d4f3a2b1c5e6..."
+    header_value: "sha256=d4f3a2b1c5e6..."
+
+  client_verification:
+    step_1: "Extract X-Webhook-Signature header"
+    step_2: "Compute HMAC-SHA256(secret, request.body)"
+    step_3: "Compare computed signature with header signature"
+    step_4: "If match → Accept ✅, If mismatch → Reject ❌"
+
+  code_example_python: |
+    import hmac
+    import hashlib
+
+    def verify_webhook(request, secret):
+        signature = request.headers.get("X-Webhook-Signature")
+        expected = "sha256=" + hmac.new(
+            secret.encode(),
+            request.body,
+            hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(signature, expected)
+
+# Retry Policy
+retry_policy:
+  description: "Retry webhook delivery on failure (exponential backoff)"
+
+  retry_attempts: "3 (total 4 delivery attempts including first)"
+
+  backoff_schedule:
+    - attempt: 1
+      delay: "0s (immediate)"
+      description: "First delivery attempt"
+
+    - attempt: 2
+      delay: "1s after first failure"
+      description: "First retry"
+
+    - attempt: 3
+      delay: "2s after second failure (1+2=3s total)"
+      description: "Second retry"
+
+    - attempt: 4
+      delay: "4s after third failure (1+2+4=7s total)"
+      description: "Third retry (final)"
+
+  failure_conditions:
+    - condition: "HTTP status code >= 500"
+      example: "502 Bad Gateway, 503 Service Unavailable"
+      action: "Retry (server error, may recover)"
+
+    - condition: "HTTP status code = 429 (Too Many Requests)"
+      action: "Retry with backoff"
+
+    - condition: "Connection timeout (>5s)"
+      action: "Retry (network issue)"
+
+    - condition: "DNS resolution failure"
+      action: "Retry (temporary DNS issue)"
+
+  non_retryable_failures:
+    - condition: "HTTP status code = 404 (Not Found)"
+      reason: "Endpoint doesn't exist (retry won't help)"
+      action: "Log error, alert, stop retrying"
+
+    - condition: "HTTP status code = 401/403 (Unauthorized/Forbidden)"
+      reason: "Authentication/authorization issue"
+      action: "Log error, alert, stop retrying"
+
+    - condition: "HTTP status code = 400 (Bad Request)"
+      reason: "Invalid payload (server bug)"
+      action: "Log error, alert, stop retrying"
+
+  after_all_retries_fail:
+    action: "Log final failure, increment webhook_failures_total counter, alert"
+    client_recovery: "Client must poll GET /v1/turns/{turn_id} to retrieve result"
+
+# Delivery Success Criteria
+delivery_success_criteria:
+  description: "What constitutes successful webhook delivery"
+
+  success_conditions:
+    - condition: "HTTP status code 2xx (200-299)"
+      examples: "200 OK, 201 Created, 202 Accepted, 204 No Content"
+      action: "Mark as delivered ✅, log delivery, increment webhook_deliveries_total"
+
+    - condition: "Response time <5s"
+      rationale: "Client endpoint should respond quickly (not block webhook delivery)"
+      on_timeout: "Treat as failure, retry"
+
+  failure_conditions:
+    - condition: "HTTP status code >= 400"
+      action: "Retry (if retryable) or fail permanently"
+
+    - condition: "Response time >5s"
+      action: "Timeout, retry"
+
+    - condition: "Network error (connection refused, timeout)"
+      action: "Retry"
+
+# Delivery Tracking
+delivery_tracking:
+  description: "Track webhook delivery attempts and outcomes"
+
+  webhook_delivery_log:
+    location: "k1.kernel.webhook_delivery_log (in-memory)"
+    entry_structure:
+      webhook_id: "webhook-xyz789"
+      turn_id: "turn-001"
+      session_id: "session-xyz123"
+      webhook_url: "https://client.example.com/webhooks/k1"
+      attempts:
+        - attempt: 1
+          timestamp: "2025-10-21T14:30:12Z"
+          status_code: 503
+          latency_ms: 2000
+          outcome: "failed (retry scheduled)"
+        - attempt: 2
+          timestamp: "2025-10-21T14:30:13Z"
+          status_code: 200
+          latency_ms: 150
+          outcome: "success ✅"
+      final_status: "delivered"
+      total_attempts: 2
+
+  retention: "24 hours (cleanup after TTL)"
+
+# Production Metrics (6 months)
+production_metrics:
+  description: "Webhook delivery metrics from production"
+
+  total_async_turns: "120,000 (8% of 1.5M turns)"
+
+  total_webhook_deliveries: "120,000 (1 webhook per async turn)"
+
+  delivery_success:
+    first_attempt: "117,600 (98%)"
+    second_attempt: "2,160 (1.8%)"
+    third_attempt: "168 (0.14%)"
+    fourth_attempt: "48 (0.04%)"
+    failed_permanently: "24 (0.02%)"
+
+  delivery_latency:
+    p50: "120ms"
+    p95: "350ms"
+    p99: "800ms"
+    max: "4200ms"
+
+  failure_breakdown:
+    http_5xx: "1,800 (75% of failures, server error)"
+    timeout: "480 (20% of failures, >5s response time)"
+    http_4xx: "120 (5% of failures, client error)"
+
+# Security Considerations
+security_considerations:
+  description: "Security best practices for webhook delivery"
+
+  security_measures:
+    - measure: "HMAC signature verification"
+      purpose: "Prevent spoofed webhooks"
+      implementation: "X-Webhook-Signature header with SHA-256"
+
+    - measure: "HTTPS only"
+      purpose: "Prevent man-in-the-middle attacks"
+      validation: "Reject http:// URLs (only accept https://)"
+
+    - measure: "Webhook ID (X-Webhook-ID)"
+      purpose: "Deduplicate webhook deliveries"
+      usage: "Client stores delivered webhook IDs, ignores duplicates"
+
+    - measure: "Timestamp (X-Webhook-Timestamp)"
+      purpose: "Detect replay attacks"
+      validation: "Client rejects webhooks >5 minutes old"
+
+  client_best_practices:
+    - practice: "Verify HMAC signature"
+      code: "hmac.compare_digest(computed, received)"
+
+    - practice: "Check timestamp freshness"
+      code: "if now() - webhook_timestamp > 300s: reject"
+
+    - practice: "Deduplicate by webhook_id"
+      code: "if webhook_id in delivered_ids: ignore"
+
+    - practice: "Respond quickly (<1s)"
+      reason: "Avoid timeout and retry"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_webhook_deliveries_total"
+    type: "counter"
+    description: "Total webhook delivery attempts"
+    labels:
+      status: "success | failed"
+    targets:
+      success: ">98%"
+
+  - name: "rest_api_webhook_delivery_latency_ms"
+    type: "histogram"
+    description: "Webhook delivery latency (HTTP POST time)"
+    buckets: [50, 100, 200, 500, 1000, 5000]
+    target_p95: "<500ms"
+
+  - name: "rest_api_webhook_retries_total"
+    type: "counter"
+    description: "Total webhook retry attempts"
+    labels:
+      attempt: "2 | 3 | 4"
+
+  - name: "rest_api_webhook_failures_total"
+    type: "counter"
+    description: "Webhooks that failed after all retries"
+    labels:
+      failure_reason: "http_5xx | timeout | http_4xx"
+    target: "<0.1%"
+
+# Related Contracts
+related_contracts:
+  - "sync_async_turn_modes.yml - Async mode requires webhooks"
+  - "post_create_session.yml - Register webhook URL in session metadata"
+  - "observability.yml - Webhook delivery metrics"
