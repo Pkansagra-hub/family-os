@@ -1,0 +1,517 @@
+# ========================================
+# CONTRACT: Misunderstanding Detection - Learning Loop Integration
+# ========================================
+# PURPOSE: Send misunderstanding patterns to Learning Loop for adaptive confidence tuning
+# OWNER: K1 Dialogue Repair System
+# ADR: ADR-0054d lines 290-310 (Learning Loop Integration), ADR-0059 (Learning Loop)
+# DEPENDENCIES: correction_detection.yml, repeated_query_tracking.yml, ADR-0059
+# VERSION: 2.0.0 (PRODUCTION)
+# LAST UPDATED: 2025-10-22
+
+metadata:
+  contract_id: dialogue.misunderstanding.learning_loop_integration
+  version: 2.0.0
+  status: PRODUCTION
+  owner: k1_dialogue_repair
+  dependencies:
+    - dialogue.misunderstanding.correction_detection (v2.0.0)
+    - dialogue.misunderstanding.repeated_query_tracking (v2.0.0)
+    - learning_loop.feedback_signals (ADR-0059)
+    - l5_infrastructure.learning_loop.feedback_aggregator
+
+# ========================================
+# 1. LEARNING LOOP INTEGRATION OVERVIEW
+# ========================================
+
+learning_loop_integration:
+  purpose: |
+    Send misunderstanding patterns (corrections, repeats) to Learning Loop (ADR-0059)
+    to adjust confidence thresholds and improve clarification strategies.
+
+  feedback_types:
+    - CORRECTION: User corrects LLM misinterpretation (signal_strength 1.0)
+    - REPEATED_QUERY: User repeats similar query (signal_strength 0.8)
+    - POST_CLARIFICATION_ERROR: User corrects after clarification (signal_strength 0.9)
+
+  learning_actions:
+    - action: "Adjust confidence thresholds ±0.05"
+      trigger: "If correction_rate >10% for intent X"
+      example: "book_dinner corrections 15% → lower EXECUTE threshold 0.6 → 0.65"
+    - action: "Improve clarification templates"
+      trigger: "If post_clarification_error_rate >5%"
+      example: "Clarification question unclear → rephrase template"
+    - action: "Flag ambiguous entity patterns"
+      trigger: "If entity_correction_rate >20% for entity type Y"
+      example: "Restaurant corrections 25% → add fuzzy matching"
+
+# ========================================
+# 2. MISUNDERSTANDING PATTERN SCHEMA
+# ========================================
+
+misunderstanding_pattern:
+  description: "Schema for logging misunderstanding events to Learning Loop"
+
+  schema:
+    pattern_id: str  # UUID for this pattern instance
+    session_id: str
+    user_id: str
+    trace_id: str
+    timestamp: datetime  # ISO 8601
+
+    # Original interpretation
+    original_input: str  # User's original message
+    llm_interpretation:
+      intent: str  # What LLM thought user meant
+      confidence: float  # Original confidence score (0.0-1.0)
+      extracted_entities: dict  # {"restaurant": "Olive Garden", "time": "7pm"}
+      privacy_band: str  # GREEN | AMBER | RED | BLACK
+
+    # User correction/feedback
+    user_correction:
+      correction_type: str  # ENTITY_CORRECTION | INTENT_CORRECTION | CLARIFICATION_FOLLOWUP
+      corrected_input: str  # User's correction message
+      corrected_entities: dict  # {"restaurant": "Luigi's"} (what user actually meant)
+      correction_confidence: float  # Detection confidence (0.0-1.0)
+
+    # Context
+    context:
+      turn_number: int
+      clarification_count: int  # How many clarifications preceded this error
+      repeat_count: int  # How many times user repeated similar query
+      repeat_pattern: str  # LINEAR | CYCLICAL | ESCALATING | null
+      last_3_turns: list[dict]  # Recent conversation context
+
+    # Learning signals
+    feedback_type: str  # CORRECTION | REPEATED_QUERY | POST_CLARIFICATION_ERROR
+    signal_strength: float  # 0.0-1.0 (how confident we are in this feedback)
+    suggested_threshold_adjustment: float  # ±0.05 adjustment to confidence threshold
+
+  example_payload:
+    pattern_id: "pattern-abc123"
+    session_id: "session-xyz"
+    user_id: "user-dad"
+    trace_id: "trace-def456"
+    timestamp: "2025-10-22T10:35:00Z"
+
+    original_input: "book dinner at Luigi's tomorrow"
+    llm_interpretation:
+      intent: "book_dinner"
+      confidence: 0.85
+      extracted_entities:
+        restaurant: "Olive Garden"  # ❌ WRONG (ASR misheard)
+        date: "tomorrow"
+        time: null
+      privacy_band: "GREEN"
+
+    user_correction:
+      correction_type: "ENTITY_CORRECTION"
+      corrected_input: "no, i meant Luigi's"
+      corrected_entities:
+        restaurant: "Luigi's"  # ✅ CORRECT
+      correction_confidence: 0.9
+
+    context:
+      turn_number: 11
+      clarification_count: 0  # No clarification asked before error
+      repeat_count: 0
+      repeat_pattern: null
+      last_3_turns:
+        - turn: 10
+          user: "book dinner at Luigi's tomorrow"
+          agent: "Booking dinner at Olive Garden for tomorrow"
+        - turn: 11
+          user: "no, i meant Luigi's"
+          agent: null
+
+    feedback_type: "CORRECTION"
+    signal_strength: 1.0  # High confidence (explicit correction phrase)
+    suggested_threshold_adjustment: 0.0  # No threshold change (confidence was high)
+
+# ========================================
+# 3. FEEDBACK TYPES & SIGNAL STRENGTH
+# ========================================
+
+feedback_types:
+  correction:
+    description: "User explicitly corrects LLM misinterpretation"
+    signal_strength: 1.0  # Highest confidence (user said 'no, i meant X')
+    examples:
+      - user_input: "no, i meant Luigi's"
+        correction_type: "ENTITY_CORRECTION"
+      - user_input: "actually, I want to cancel, not book"
+        correction_type: "INTENT_CORRECTION"
+    learning_action: |
+      If correction_rate >10% for intent:
+        - Lower EXECUTE threshold by 0.05 (be more cautious)
+      If entity_correction_rate >20% for entity type:
+        - Add fuzzy matching or disambiguation
+
+  repeated_query:
+    description: "User repeats similar query (clarification failing)"
+    signal_strength: 0.8  # High confidence (objective metric)
+    examples:
+      - queries: ["book dinner tomorrow", "reserve table tomorrow", "book dinner tomorrow"]
+        repeat_count: 3
+        repeat_pattern: "LINEAR"
+    learning_action: |
+      If repeat_pattern=LINEAR and repeat_count ≥3:
+        - Escalate to REJECT mode (force full rephrase)
+      If repeat_pattern=CYCLICAL:
+        - Improve clarification question phrasing
+
+  post_clarification_error:
+    description: "User corrects after clarification was asked (clarification unhelpful)"
+    signal_strength: 0.9  # Very high confidence (clarification failed to help)
+    examples:
+      - turn_10_agent: "What time would you like dinner?"
+        turn_11_user: "7pm"
+        turn_12_agent: "Booking for 8pm"  # ❌ Still wrong
+        turn_13_user: "no, i said 7pm"  # Correction after clarification
+    learning_action: |
+      If post_clarification_error_rate >5%:
+        - Rephrase clarification question (unclear)
+      If post_clarification_error_rate >10%:
+        - Switch clarification strategy (Simplify → Offer Options)
+
+# ========================================
+# 4. MISUNDERSTANDING LOGGER CLASS
+# ========================================
+
+misunderstanding_logger:
+  class_name: MisunderstandingLogger
+  location: k1/l2_orchestration/dialogue_repair/misunderstanding_logger.py
+
+  methods:
+    log_misunderstanding:
+      signature: |
+        async def log_misunderstanding(
+            self,
+            pattern: MisunderstandingPattern,
+            trace_id: str
+        ) -> None
+
+      description: |
+        Send misunderstanding pattern to Learning Loop via Event Bus.
+        Non-blocking fire-and-forget (doesn't block conversation flow).
+
+      implementation: |
+        async def log_misunderstanding(self, pattern, trace_id):
+            # Serialize pattern
+            event = LearningLoopEvent(
+                event_type=EventType.FEEDBACK_SIGNAL,
+                payload=pattern.to_dict(),
+                trace_id=trace_id,
+                timestamp=datetime.utcnow()
+            )
+
+            # Publish to Event Bus (non-blocking)
+            await self.event_bus.publish(
+                topic="learning_loop.feedback",
+                event=event,
+                fire_and_forget=True  # Don't wait for ACK
+            )
+
+            # Emit metric
+            self.metrics.misunderstanding_patterns_logged_total.labels(
+                feedback_type=pattern.feedback_type
+            ).inc()
+
+      performance:
+        latency: <5ms P95  # Fire-and-forget to Event Bus
+        cost: $0
+        blocking: false  # Doesn't block conversation flow
+
+      example_usage: |
+        logger = MisunderstandingLogger()
+
+        # User corrected LLM interpretation
+        pattern = MisunderstandingPattern(
+            original_input="book dinner at Luigi's",
+            llm_interpretation={"intent": "book_dinner", "restaurant": "Olive Garden"},
+            user_correction={"restaurant": "Luigi's"},
+            feedback_type=FeedbackType.CORRECTION,
+            signal_strength=1.0
+        )
+
+        await logger.log_misunderstanding(pattern, trace_id="trace-abc123")
+        # Event published to Learning Loop (non-blocking <5ms)
+
+# ========================================
+# 5. THRESHOLD ADJUSTMENT ALGORITHM
+# ========================================
+
+threshold_adjustment:
+  description: "Learning Loop adjusts confidence thresholds based on correction rate"
+
+  algorithm:
+    step_1_measure_correction_rate:
+      description: "Calculate correction rate per intent over last 100 turns"
+      formula: "correction_rate = corrections / total_executions"
+      example: "book_dinner: 15 corrections / 100 executions = 15% correction rate"
+
+    step_2_compare_to_threshold:
+      description: "If correction_rate >10%, threshold too low (executing too confidently)"
+      action: "Increase threshold by +0.05 (be more cautious)"
+      example: "book_dinner correction_rate 15% → EXECUTE threshold 0.6 → 0.65"
+
+    step_3_apply_adjustment:
+      description: "Update confidence threshold in confidence_thresholds.yml"
+      persistence: "New threshold persisted to config (survives restarts)"
+      rollback: "If correction_rate still >10% after 100 turns, add another +0.05"
+
+    step_4_monitor_impact:
+      description: "Track if adjustment improves correction_rate"
+      target: "Correction_rate drops to <5% within 200 turns"
+      alert: "If correction_rate >15% after adjustment → escalate to manual review"
+
+  adjustment_limits:
+    min_threshold: 0.4  # Never lower than 0.4 (too aggressive)
+    max_threshold: 0.8  # Never higher than 0.8 (too conservative)
+    max_adjustment_per_iteration: 0.05  # Small increments only
+    min_sample_size: 100  # Need 100 turns before adjusting
+
+  example_adjustment:
+    intent: "book_dinner"
+    initial_threshold: 0.6
+    correction_rate_measured: 15%  # Too high (target <10%)
+    adjustment: +0.05
+    new_threshold: 0.65
+    result_after_100_turns: "correction_rate drops to 8% (success)"
+
+# ========================================
+# 6. OBSERVABILITY & METRICS
+# ========================================
+
+observability:
+  prometheus_metrics:
+    dialogue_misunderstanding_patterns_logged_total:
+      type: counter
+      labels: [feedback_type, intent, correction_type]
+      description: "Total misunderstanding patterns sent to Learning Loop"
+      example_query: |
+        rate(dialogue_misunderstanding_patterns_logged_total{feedback_type="CORRECTION"}[5m])
+
+    dialogue_correction_rate_by_intent:
+      type: gauge
+      labels: [intent]
+      description: "Correction rate per intent (corrections / executions)"
+      target: <10% per intent
+      alert: correction_rate >15% for any intent
+      example_query: |
+        dialogue_correction_rate_by_intent{intent="book_dinner"}
+
+    dialogue_post_clarification_error_rate:
+      type: gauge
+      description: "Error rate after clarification (target <5%)"
+      target: <5%
+      alert: error_rate >10%
+      formula: "post_clarification_errors / total_clarifications"
+
+    dialogue_threshold_adjustments_total:
+      type: counter
+      labels: [intent, direction]  # direction: INCREASE | DECREASE
+      description: "Total confidence threshold adjustments by Learning Loop"
+      example_query: |
+        dialogue_threshold_adjustments_total{intent="book_dinner", direction="INCREASE"}
+
+    dialogue_learning_loop_latency_ms:
+      type: histogram
+      buckets: [1, 2, 5, 10, 20]
+      description: "Latency to publish event to Learning Loop"
+      target: <5ms P95 (fire-and-forget)
+
+  structured_logging:
+    misunderstanding_logged_event:
+      level: INFO
+      message: "Misunderstanding pattern logged to Learning Loop"
+      fields:
+        trace_id: str
+        session_id: str
+        pattern_id: str
+        feedback_type: str
+        signal_strength: float
+        intent: str
+        correction_type: str  # Optional
+        correction_rate: float  # Current rate for this intent
+        suggested_threshold_adjustment: float
+        latency_ms: int
+      example: |
+        {
+          "level": "INFO",
+          "message": "Misunderstanding pattern logged to Learning Loop",
+          "trace_id": "trace-abc123",
+          "session_id": "session-xyz",
+          "pattern_id": "pattern-def456",
+          "feedback_type": "CORRECTION",
+          "signal_strength": 1.0,
+          "intent": "book_dinner",
+          "correction_type": "ENTITY_CORRECTION",
+          "correction_rate": 0.15,
+          "suggested_threshold_adjustment": 0.05,
+          "latency_ms": 3
+        }
+
+# ========================================
+# 7. INTEGRATION WITH CONFIDENCE THRESHOLDS
+# ========================================
+
+confidence_threshold_integration:
+  description: "Learning Loop updates confidence_thresholds.yml based on feedback"
+  contract_reference: "dialogue.clarification.confidence_thresholds (v2.0.0)"
+
+  current_thresholds:
+    execute: 0.6  # Confidence ≥0.6 → execute action
+    clarify: 0.4-0.6  # 0.4 ≤ confidence <0.6 → ask clarification
+    reject: <0.4  # Confidence <0.4 → full rephrase
+
+  learned_adjustments:
+    example_1:
+      intent: "book_dinner"
+      original_threshold: 0.6
+      correction_rate: 15%  # Too high
+      adjustment: +0.05
+      new_threshold: 0.65
+      result: "correction_rate drops to 8%"
+
+    example_2:
+      intent: "get_weather"
+      original_threshold: 0.6
+      correction_rate: 3%  # Very low (overcautious?)
+      adjustment: -0.05
+      new_threshold: 0.55
+      result: "correction_rate increases to 6% (acceptable)"
+
+  hot_reload:
+    description: "Threshold adjustments applied without K1 restart"
+    mechanism: "Learning Loop publishes ConfigUpdate event → K1 hot-reloads confidence_thresholds.yml"
+    latency: <1s from adjustment decision to active threshold change
+
+# ========================================
+# 8. PERFORMANCE BUDGETS
+# ========================================
+
+performance:
+  latency:
+    log_misunderstanding: <5ms P95  # Fire-and-forget to Event Bus
+    threshold_adjustment: <100ms  # Learning Loop processing
+    hot_reload: <1s  # Apply new thresholds
+
+  cost:
+    per_pattern_logged: $0  # Event Bus local, no external API
+    per_threshold_adjustment: $0
+    monthly_household: $0
+
+  throughput:
+    max_patterns_per_second: 1000  # Event Bus capacity
+    typical_patterns_per_household_per_day: 2  # 2 corrections/day typical
+    learning_loop_batch_size: 100  # Process 100 patterns before adjusting threshold
+
+# ========================================
+# 9. TESTING REQUIREMENTS
+# ========================================
+
+testing:
+  unit_tests:
+    - test: "test_log_correction_to_learning_loop"
+      description: "Correction event published to Event Bus"
+      assertions:
+        - 'log_misunderstanding(correction_pattern) publishes FeedbackType.CORRECTION event'
+        - 'Event payload includes original_input, llm_interpretation, user_correction'
+
+    - test: "test_log_repeated_query_to_learning_loop"
+      description: "Repeated query event published to Event Bus"
+      assertions:
+        - 'log_misunderstanding(repeat_pattern) publishes FeedbackType.REPEATED_QUERY event'
+        - 'Event payload includes repeat_count, repeat_pattern'
+
+    - test: "test_threshold_adjustment_on_high_correction_rate"
+      description: "Learning Loop increases threshold if correction_rate >10%"
+      setup: Simulate 15% correction rate for book_dinner
+      assertions:
+        - 'Learning Loop adjusts EXECUTE threshold 0.6 → 0.65'
+        - 'New threshold persisted to confidence_thresholds.yml'
+
+    - test: "test_threshold_adjustment_limits"
+      description: "Threshold adjustments bounded by min/max limits"
+      setup: Simulate 50% correction rate (extreme)
+      assertions:
+        - 'Threshold capped at max_threshold=0.8 (never exceeds)'
+        - 'Alert emitted if correction_rate >15% after adjustment'
+
+  integration_tests:
+    - test: "test_end_to_end_correction_to_threshold_adjustment"
+      description: "User correction triggers threshold adjustment"
+      flow:
+        - User corrects 15× out of 100 book_dinner executions
+        - MisunderstandingLogger sends 15 CORRECTION events to Learning Loop
+        - Learning Loop calculates correction_rate=15%
+        - Learning Loop adjusts EXECUTE threshold 0.6 → 0.65
+        - K1 hot-reloads confidence_thresholds.yml
+        - Next book_dinner execution uses new threshold 0.65
+      assertions:
+        - 'Correction rate drops to <10% within 200 turns'
+
+    - test: "test_hot_reload_threshold_without_restart"
+      description: "Threshold adjustment applied without K1 restart"
+      setup: Learning Loop publishes ConfigUpdate event
+      assertions:
+        - 'K1 hot-reloads confidence_thresholds.yml within 1s'
+        - 'Next turn uses new threshold (no restart required)'
+
+  performance_tests:
+    - test: "test_log_latency_p95_under_5ms"
+      description: "10,000 log_misunderstanding calls complete in <5ms P95"
+      setup: Fire-and-forget 10K events to Event Bus
+      assertions:
+        - 'P95 latency <5ms'
+
+    - test: "test_learning_loop_batch_processing"
+      description: "Learning Loop processes 100 patterns in <100ms"
+      setup: Send 100 correction events to Learning Loop
+      assertions:
+        - 'Batch processed in <100ms, threshold adjusted'
+
+# ========================================
+# 10. SECURITY & PRIVACY
+# ========================================
+
+security:
+  pii_handling:
+    redaction: "User inputs with PII redacted before logging to Learning Loop"
+    privacy_bands: "RED/BLACK privacy band patterns logged without user_input text"
+    example: |
+      User (RED band): "book dinner with card ending 1234"
+      → Pattern logged with redacted input: "[REDACTED:RED]"
+      → Learning Loop sees intent/confidence only (no PII)
+
+  event_bus_security:
+    encryption: "Learning Loop events encrypted in transit (TLS 1.3)"
+    authentication: "Event Bus topics require authentication (no public access)"
+    authorization: "Only K1 Dialogue Repair module can publish to learning_loop.feedback topic"
+
+# ========================================
+# 11. MIGRATION NOTES
+# ========================================
+
+migration:
+  from_version: 1.0.0 (manual threshold tuning)
+  to_version: 2.0.0 (automatic Learning Loop integration)
+
+  changes:
+    - "Add MisunderstandingLogger class for automatic pattern logging"
+    - "Add threshold adjustment algorithm in Learning Loop"
+    - "Add hot-reload mechanism for confidence_thresholds.yml"
+    - "Add Prometheus metrics for correction rate tracking"
+
+  backward_compatibility:
+    breaking: false
+    reason: "Learning Loop integration is additive (no breaking changes to existing contracts)"
+    migration_guide: |
+      # No code changes required for existing dialogue repair logic
+      # Learning Loop integration activates automatically on first correction
+
+      # Optional: Tune adjustment parameters in Learning Loop config
+      learning_loop:
+        threshold_adjustment:
+          min_sample_size: 100  # Increase if too aggressive
+          max_adjustment: 0.05  # Decrease if oscillating

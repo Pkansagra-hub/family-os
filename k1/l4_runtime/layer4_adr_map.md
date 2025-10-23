@@ -1,4 +1,4 @@
-# Layer 4 (Runtime Core) — ADR Family Map
+# Layer 4 (Runtime) — ADR Family Map
 
 **Complete end-to-end ADR references for K1 Layer 4 modules**
 
@@ -6,651 +6,657 @@
 
 ## 📋 Overview
 
-**Layer 4 Purpose:** Runtime Core (SessionState, Actor Fabric, Learning Loop, Attention)
-**Performance Budget:** <1ms SessionState ops, <1ms mailbox enqueue, <100ms learning cycle
-**Modules:** 8 modules across 4 categories
-**Primary Function:** Runtime state management + actor infrastructure + cognitive loops + attention gating
+**Layer 4 Purpose:** Runtime (SessionState, Actor Fabric, API Gateway, Voice Pipeline, Learning, Ingress)
+**Performance Budget:** <1ms SessionState ops, <1ms mailbox, <100ms learning, <500ms E2E voice turn
+**Total Relevant ADRs:** 154 ADRs
+**Coverage:** Runtime infrastructure, state management, ingress pipelines, voice/WebSocket, learning loops, API gateway
+**Primary Function:** Runtime state + actor infrastructure + API ingress + voice pipeline + cognitive loops
 
 ---
 
-## 🗺️ Layer 4 Architecture
+## 📚 Complete ADR Reference List (154 ADRs)
 
-### Core ADRs
+### **K0 Core (6 ADRs)**
+- ADR-0001 — Memory Kernel (K0 P01-P20 pipelines)
+- ADR-0001f — State Management (multi-store: episodic, semantic, procedural)
+- ADR-0081 — Knowledge Graph (3-table schema, temporal edges)
+- ADR-0081a — Knowledge Graph Schema (nodes, edges, temporal_edges)
+- ADR-0081b — Knowledge Graph Queries (BFS, DFS, Dijkstra, <50ms P95)
+- ADR-0081c — Knowledge Graph Episodic Integration (NER, entity resolution)
+- ADR-0081d — Knowledge Graph Visualization (Mermaid, GraphML, JSON export)
 
-| ADR | Title | Status | Priority | Coverage |
-|-----|-------|--------|----------|----------|
-| **ADR-0004** | 52-Module 5-Layer Architecture | ✅ Complete | 🔴 CRITICAL | Layer 4 definition, 8-module runtime core |
-| **ADR-0017** | SessionState 6-Section Design | ✅ Complete | 🔴 CRITICAL | Beliefs, scoreboard, control, persona, multimodal, meta sections |
-| **ADR-0002** | Actor Model | ✅ Complete | 🔴 CRITICAL | Actor fabric infrastructure (mailbox, router, supervisor) |
-| **ADR-0018** | Learning Loop | ✅ Complete | 🟡 HIGH | Feedback integration, self-model updates, <100ms cycle |
-| **ADR-0020** | Attention Mechanism | ✅ Complete | 🟡 HIGH | Salience, focus, distraction filtering |
-| **ADR-0004d** | Layer 4 Integration Tests | ✅ Complete | 🟡 HIGH | SessionState serialization, learning loop, <1ms serialize |
+### **K0 Memory Consolidation (5 ADRs)**
+- ADR-0084 — Core Architecture (3-layer pipeline, 90-min sleep cycles)
+- ADR-0084a — Hippocampal Replay (CA3 recurrent, synaptic strengthening)
+- ADR-0084b — Sleep State Machine (NREM1/NREM2/REM phases)
+- ADR-0084c — Knowledge Graph Consolidation (entity extraction, relationship inference)
+- ADR-0084d — Dream Exploration (random walks, counterfactual thinking)
+
+### **Actor Model & Fabric (7 ADRs)**
+- ADR-0002 — Actor Model (isolated actors, message passing, supervision trees)
+- ADR-0002a — Mailbox (MPSC queue, 4-tier priority, WFQ scheduler, DLQ)
+- ADR-0002b — Supervisor (heartbeat 1Hz, crash detection <100ms, blacklist)
+- ADR-0002c — Router (location transparency, 5-check admission pipeline)
+
+### **Agent Lifecycle (5 ADRs)**
+- ADR-0005 — Lifecycle FSM (6-state: PENDING/WARMING/ACTIVE/IDLE/DRAINING/TERMINATED)
+- ADR-0005b — IDLE Pooling (TTL tracking, reactivation <50ms, >80% hit rate)
+- ADR-0005c — DRAINING State (3-phase drain, 5s timeout)
+- ADR-0005d — Supervisor (heartbeat monitoring, blacklist manager)
+- ADR-0005e — Personalities (4 AI agents + 54 pure actors)
+
+### **K1 Core Architecture (6 ADRs)**
+- ADR-0004 — 52-Module 5-Layer Architecture (Layer 4 definition)
+- ADR-0004b — Import Linting (L4→L5 only, no L4→L1/L2/L3)
+- ADR-0004c — Documentation (module READMEs, auto-generation)
+- ADR-0004d — Testing (Layer 4 integration tests)
+
+### **Protocol Validation (8 ADRs)**
+- ADR-0003 — PDL Language (YAML protocol parser, FSM compilation)
+- ADR-0003a — PDL Language (compiler pipeline, <100ms compilation)
+- ADR-0003b — Protocol Definitions (6 protocols: hire, task, clarification, barge-in, tool, saga)
+- ADR-0003c — Protocol Monitor (FSM registry, validator, timeout enforcer)
+- ADR-0003d — Security (role verifier, agent lease, message signer)
+
+### **4-Stage Planning (1 ADR)**
+- ADR-0007d — Stage 4 Commit (SessionState locking, flow_id, <0.1ms)
+
+### **Saga Error Recovery (1 ADR)**
+- ADR-0008d — Deadlock Handling (resource ordering, 5s timeout detection)
+
+### **Capability Security (2 ADRs)**
+- ADR-0010b — Assignment Policy (policy engine, agent capability mapper)
+- ADR-0010c — Runtime Enforcement (validation <0.5ms, validation cache)
+
+### **FlatBuffers Serialization (8 ADRs)**
+- ADR-0011a — Schema Design (validator, naming conventions, deprecation)
+- ADR-0011b — Code Generation (flatc v23.5.26, Python/C++/Rust bindings)
+- ADR-0011c — Performance (SessionState 11× faster than JSON)
+- ADR-0011d — Schema Evolution (version registry, migration scripts)
+
+### **FlatBuffers Schemas (2 ADRs)**
+- ADR-0012 — Schema Taxonomy (76 schemas, 9 categories)
+- ADR-0012d — Layer 4 Schemas (HTTPRequest, WebSocketMessage, SSEEvent, AudioFrame)
+
+### **Schema Versioning (5 ADRs)**
+- ADR-0013 — SemVer Policy (MAJOR/MINOR/PATCH, 90-day deprecation)
+- ADR-0013a — Version Registry (228+ entries, compatibility matrix)
+- ADR-0013b — CI/CD Automation (schema diff, version bump validation)
+- ADR-0013c — Deprecation Workflow (annotations, email/Slack notifications)
+- ADR-0013d — Contract Testing (Pact-style, forward/backward compatibility)
+
+### **REST API (9 ADRs)**
+- ADR-0014 — Content Negotiation (Accept/Content-Type, JSON default)
+- ADR-0014a — Content Negotiation (Accept header parsing, 406/415 errors)
+- ADR-0014b — OpenAPI Generation (auto-derive from .fbs, 8,450 lines spec)
+- ADR-0014c — Serialization Pipeline (JSON↔FlatBuffers, <5ms overhead)
+- ADR-0014d — Client SDKs (Python, TypeScript, curl examples)
+
+### **REST API Session Management (4 ADRs)**
+- ADR-0041 — RESTful Principles (stateless, HTTP caching, HATEOAS)
+- ADR-0041a — Session Lifecycle CRUD (POST/GET/PATCH/DELETE)
+- ADR-0041b — Idempotency (Idempotency-Key header, 24h retention)
+- ADR-0041c — Pagination (cursor-based, <100ms, infinite scroll)
+- ADR-0041d — Documentation (OpenAPI 3.1, RFC 7807 problem details)
+
+### **WebSocket Binary Protocol (6 ADRs)**
+- ADR-0015 — Protocol Design (binary FlatBuffers, 17 message types)
+- ADR-0015a — Message Routing (bidirectional, flow control)
+- ADR-0015b — Flow Control (ACK protocol, batch 5 messages)
+- ADR-0015c — Reconnection (resume protocol, exponential backoff)
+- ADR-0015d — Streaming (model inference, TTFT <150ms, barge-in)
+- ADR-0015e — Client SDK (TypeScript SDK, React hooks)
+
+### **WebSocket Realtime Chat (5 ADRs)**
+- ADR-0040 — Protocol Foundation (stateless, <20ms latency)
+- ADR-0040a — Connection Management (lifecycle, heartbeat)
+- ADR-0040b — Binary Serialization (FlatBuffers, <5ms)
+- ADR-0040c — Backpressure Flow Control (bounded queue, slow client detection)
+- ADR-0040d — Heartbeat Reconnection (30s heartbeat, resume protocol)
+
+### **SSE Event Schemas (5 ADRs)**
+- ADR-0016 — Event Taxonomy (17 event types, 5 categories)
+- ADR-0016a — Event Taxonomy (agent lifecycle, turn, tool, session, system)
+- ADR-0016b — Serialization (FlatBuffers→JSON, <2ms P95)
+- ADR-0016c — Filtering (topic-based, 60-70% bandwidth savings)
+- ADR-0016d — Browser Integration (native EventSource, React hook)
+
+### **K0 SSE Event Streaming (2 ADRs)**
+- ADR-0042a — Event Production (WALReader, FanoutManager, <10ms delivery)
+- ADR-0042d — Backpressure (detect slow consumers, graceful disconnect)
+
+### **SSE Topic Taxonomy (1 ADR)**
+- ADR-0043c — Topic Routing (K0TopicRouter, at-least-once delivery, DLQ)
+
+### **SSE-WebSocket Bridge (1 ADR)**
+- ADR-0046 — Bridge Architecture (10 event mappings, <20ms latency)
+
+### **SessionState 6-Section Design (7 ADRs)**
+- ADR-0017 — Overall Architecture (6 sections, 64KB soft limit, voice continuity amendment)
+- ADR-0017a — Beliefs Section (fact storage, confidence, LRU eviction)
+- ADR-0017b — Scoreboard Section (QUD stack, entity tracking, salience decay)
+- ADR-0017c — Control Section (agent leases, flow state, turn lock)
+- ADR-0017d — Persona Section (personality traits, LLM prompt injection)
+- ADR-0017e — Multimodal Section (audio/vision context, streaming state)
+- ADR-0017f — Meta Section (telemetry, performance metrics, Prometheus export)
+
+### **3-Tier Eviction Strategy (4 ADRs)**
+- ADR-0018 — Eviction Architecture (soft 64KB, hard 128KB, OOM 256KB)
+- ADR-0018a — Tier 1 Soft Eviction (LRU, priority eviction, <5ms)
+- ADR-0018b — Tier 2 Hard Eviction (beliefs/scoreboard/multimodal, <3ms compression)
+- ADR-0018c — Tier 3 OOM Prevention (critical state save, <10ms, session termination)
+
+### **SessionState Serialization (5 ADRs)**
+- ADR-0019 — Serialization Core (full <1ms, delta <0.5ms, zero-copy)
+- ADR-0019a — Schema Definition (6 sections + delta schema)
+- ADR-0019b — Serialization Core (dirty flag tracking, delta pipeline)
+- ADR-0019c — K0 WAL Integration (5min checkpoint, sequence numbers)
+- ADR-0019d — Serialization Core (zero-copy optimization, lazy proxies)
+
+### **Multi-Tier Storage (4 ADRs)**
+- ADR-0020 — Lifecycle Management (Hot→Warm→Cold migration)
+- ADR-0020a — Hot Tier (L1 RAM: 56MB, <1ms access, LRU tracking)
+- ADR-0020b — Warm Tier (L2 SSD: 100MB, <50ms, 30-day retention)
+- ADR-0020c — Cold Tier (L3 Object: S3, <500ms, unlimited capacity)
+
+### **Turn History Retention (2 ADRs)**
+- ADR-0021 — Retention Policies (user deletion rights, GDPR Article 17)
+- ADR-0021c — Compliance (GDPR Article 5(e), 365-day baseline)
+
+### **K0 Bridge Batching (1 ADR)**
+- ADR-0022d — FlatBuffers Schema (ReceiptBatch, zero-copy batch)
+
+### **Cursor-Based Pagination (4 ADRs)**
+- ADR-0023 — Pagination Core (opaque cursor, O(1) seek, <50ms)
+- ADR-0023a — Cursor Encoding (HMAC SHA-256, Base64, versioning)
+- ADR-0023b — REST API (pagination metadata, total count, rate limiting)
+- ADR-0023c — K0 WAL Query (query optimization, cold tier fallback)
+
+### **Performance Budgets (5 ADRs)**
+- ADR-0024 — Component-Level Budgets (grounding act <30ms)
+- ADR-0024b — Component-Level Budgets (detailed breakdown)
+- ADR-0024c — Memory Budgets (64KB soft, 128KB hard, 256KB OOM)
+- ADR-0024d — Graceful Degradation (backpressure, user transparency)
+
+### **Thermal Management (2 ADRs)**
+- ADR-0026 — User Notifications (emergency notifications, recovery)
+- ADR-0026d — User Notifications (WebSocket/SSE events)
+
+### **Prometheus Metrics (2 ADRs)**
+- ADR-0029 — Turn-Level (TTFT, E2E latency, barge-in metrics)
+- ADR-0029b — Turn-Level (detailed metric definitions)
+
+### **JWT Authentication (5 ADRs)**
+- ADR-0037 — Horizontal Scaling (stateless validation, public key distribution)
+- ADR-0037a — Token Generation (RS256, 1h access + 7d refresh tokens)
+- ADR-0037b — Token Validation (<2ms, signature + expiry + blacklist)
+- ADR-0037c — Refresh Token Flow (single-use, rotation, <100ms)
+- ADR-0037d — Session Binding (space isolation, RBAC, privacy band enforcement)
+
+### **OpenAPI 3.1 Specs (1 ADR)**
+- ADR-0047 — Auto-Generation (FastAPI annotations, Swagger UI, ReDoc)
+
+### **K1 Internal Event Bus (1 ADR)**
+- ADR-0048 — Bus Architecture (actor model integration, ephemeral events)
+
+### **Fast/Smart Lane Router (1 ADR)**
+- ADR-0049 — Configuration (configurable weights, hot-reload)
+
+### **Multi-Device Family Sync (2 ADRs)**
+- ADR-0050 — Sync Strategy (hybrid LAN + Internet, device-first privacy)
+- ADR-0050a — SessionState Coherence (per-device guarantees, delta journal)
+
+### **Enhanced HITL Protocols (5 ADRs)**
+- ADR-0052 — Performance (step-by-step <10ms, 7-year audit, WARD tests)
+- ADR-0052a — Step-by-Step Approval (K0 WAL checkpoint, WorkflowState FSM)
+- ADR-0052b — RED Band Approval (audit trail, forcing functions)
+- ADR-0052c — Nested Clarifications (clarification stack, max depth 3)
+- ADR-0052d — Proactive Confirmation (confidence-based, feedback signals)
+- ADR-0052e — Layer 4 Communication (clarification/step-by-step/RED band schemas)
+
+### **Message Queue & Coalescing (4 ADRs)**
+- ADR-0053 — Main (FIFO queue, 2s coalesce window, 5 msg/sec rate limit)
+- ADR-0053a — Coalesce Window (2s timer, 5-message limit, bypass conditions)
+- ADR-0053b — Rate Limits (token bucket, 5 msg/sec + 3 burst)
+- ADR-0053c — Cancel Path (4-stage cascade <120ms, cancellation token)
+
+### **Turn Boundary Management (4 ADRs)**
+- ADR-0054 — Main (dual-signal: implicit pause ≥2s OR explicit submit)
+- ADR-0054a — Implicit Pause (2s threshold, text + voice VAD)
+- ADR-0054b — Explicit Submit (Enter/Send button, keyboard shortcuts)
+- ADR-0054c — MPST Transitions (IDLE→USER_SPEAKING→AGENT_TURN→IDLE)
+
+### **Context-Switch Detection (4 ADRs)**
+- ADR-0055 — Main Detection (3-stage: intent drift + discourse markers + confirmation)
+- ADR-0055a — Intent Drift Rules (3-level taxonomy, drift score 0.0-2.0)
+- ADR-0055b — Switch Prompt (3 confidence templates, voice variants)
+- ADR-0055c — History Management (new/continue/go_back, session stack)
+
+### **Voice Pipeline Implementation (6 ADRs)**
+- ADR-0056 — Pipeline Architecture (5-stage: Audio→ASR→Intent→Tools→TTS→Audio)
+- ADR-0056a — ASR Ingress (20ms frames, VAD, partial results)
+- ADR-0056b — Intent Bridge (K1 orchestrator integration)
+- ADR-0056c — Tool Interleaving (tool execution during voice)
+- ADR-0056d — TTS Synthesis (prosody controls, SSML, streaming)
+- ADR-0056e — Audio Output (jitter buffer 80ms, packet loss recovery)
+
+### **Voice Backpressure (3 ADRs)**
+- ADR-0057a — Frame Drop Policy (2-tier: 80-90% drop, 90%+ downsample)
+- ADR-0057b — TTS Degradation (5-level ladder: Full→Emergency, MOS 4.3→2.7)
+- ADR-0057c — Barge-in Preemption (fast stop <120ms, context preservation)
+
+### **Adaptive KV Cache (3 ADRs)**
+- ADR-0060 — Management Core (dynamic placement, eviction policies)
+- ADR-0060a — Dynamic Placement (region assignment, thermal-aware)
+- ADR-0060b — Eviction & Recovery (hot/cold eviction, rollback)
+
+### **Voice Quality (1 ADR)**
+- ADR-0068 — Voice Quality (WER calculation, MOS estimation)
+
+### **KV Cache Optimization (1 ADR)**
+- ADR-0076 — Compression Tier (ZSTD 25-35%, priority-aware LRU)
+
+### **Thermal Placement V2 (1 ADR)**
+- ADR-0077 — Thermal Profiling (per-device metrics, placement engine)
+
+### **Multi-Party Dialogue (1 ADR)**
+- ADR-0082 — Core Architecture (SessionState extension, multi-speaker turn state)
+
+### **Embodied Awareness (1 ADR)**
+- ADR-0085 — Core Architecture (multi-device presence, SessionState extension)
 
 ---
 
-## 📁 Module-by-Module ADR Map
+## 🗺️ Layer 4 Component Map
 
-## Category 1: session_state/ (3 modules)
+### **Component 1: SessionState Management**
+**Location:** `k1/l4_runtime/session_state/`
+**ADRs:** 22 ADRs (0017-0017f, 0018-0018c, 0019-0019d, 0020-0020c, 0024c)
 
-### **Module 1.1: session_state/model/**
-**Purpose:** SessionState 6-section data model
-**Location:** `k1/l4_runtime/session_state/model.py`
-**Performance:** <1ms serialize/deserialize (FlatBuffers)
+**Sub-Components:**
+- **model/** — 6-section design (ADR-0017)
+- **control/** — Locking, flow control (ADR-0017c, 0007d)
+- **memory_manager/** — 3-tier eviction (ADR-0018, 0018a-c)
+- **serialization/** — FlatBuffers (ADR-0019, 0019a-d)
+- **storage/** — Multi-tier (ADR-0020, 0020a-c)
 
-#### Primary ADRs
-
-- **ADR-0017** — SessionState 6-Section Design (beliefs, scoreboard, control, persona, multimodal, meta)
-- **ADR-0017a** — Beliefs Section (fact storage, confidence, temporal decay)
-- **ADR-0017b** — Scoreboard Section (QUD stack, entity tracking, salience)
-- **ADR-0017c** — Control Section (current_flow, agent_roster, execution_state)
-- **ADR-0017d** — Persona Section (personality traits, LLM system prompt)
-- **ADR-0017e** — Multimodal Section (audio waveforms, image embeddings)
-- **ADR-0017f** — Meta Section (session metadata, creation_time, total_turns)
-
-#### Related ADRs
-
-- **ADR-0011** — FlatBuffers Serialization (SessionState serialization format)
-- **ADR-0012b** — SessionState Root Schema (SEST FlatBuffers schema)
-- **ADR-0019** — SessionState Serialization (64KB soft limit, 128KB hard limit, 3-tier eviction)
-- **ADR-0024** — Performance Budgets (SessionState <1ms serialize/deserialize)
-
-#### Key Responsibilities
-
-1. **6-Section Architecture:**
-   - **Beliefs:** User beliefs, intent history, confidence scores, temporal decay
-   - **Scoreboard:** QUD stack, entity tracking, salience (0.0-1.0), pronoun mapping
-   - **Control:** current_flow, agent_roster, execution_state, saga_log
-   - **Persona:** Personality traits, LLM system prompt injection
-   - **Multimodal:** Audio waveforms, image embeddings, video frames
-   - **Meta:** Session metadata (session_id, creation_time, total_turns, last_updated)
-
-2. **Size Management:**
-   - Soft limit: 64KB (typical)
-   - Hard limit: 128KB (enforcement)
-   - 3-tier eviction: beliefs (P3), multimodal (P2), scoreboard (P1)
-
-3. **Serialization:**
-   - FlatBuffers format (11× faster than JSON)
-   - Zero-copy deserialization
-   - <1ms P95 serialize/deserialize
-
-**Performance Metrics:**
-- Serialize: <1ms P95 (64KB typical)
+**Performance:**
+- Serialize: <1ms P95 (64KB)
 - Deserialize: <0.1ms P95
-- Size: 64KB soft, 128KB hard
-- Eviction overhead: <5ms P95
-
----
-
-### **Module 1.2: session_state/control/**
-**Purpose:** SessionState control plane (locking, updates, sync)
-**Location:** `k1/l4_runtime/session_state/control.py`
-**Performance:** <0.1ms locking, <2ms delta batching
-
-#### Primary ADRs
-
-- **ADR-0017c** — Control Section (current_flow, agent_roster, execution_state)
-- **ADR-0007d** — SessionState Locking (current_flow field, flow_id, concurrent plan prevention)
-- **ADR-0001f** — SessionState Delta Batching (250ms batching, P02 MemoryWrite)
-
-#### Related ADRs
-
-- **ADR-0019** — SessionState Serialization (delta computation)
-- **ADR-0024** — Performance Budgets (locking <0.1ms)
-
-#### Key Responsibilities
-
-1. **Locking Mechanism:**
-   - current_flow field lock (prevent concurrent plan execution)
-   - flow_id tracking
-   - <0.1ms lock/unlock overhead
-
-2. **Delta Batching:**
-   - Batch SessionState updates every 250ms
-   - Compute field-level deltas (field_path, old_value, new_value)
-   - Send to K0 via STATE_DELTA messages
-
-3. **Execution State Tracking:**
-   - Track agent_roster (active agents)
-   - Monitor execution_state (IDLE/EXECUTING/DRAINING/HALTED)
-   - Saga log maintenance
-
-**Performance Metrics:**
-- Lock operation: <0.1ms P95
-- Delta computation: <1ms P95
-- Batch interval: 250ms
-- Batch size: 10-50 deltas typical
-
----
-
-### **Module 1.3: session_state/memory_manager/**
-**Purpose:** In-memory SessionState management
-**Location:** `k1/l4_runtime/session_state/memory_manager.py`
-**Performance:** <5ms eviction, >90% hit rate
-
-#### Primary ADRs
-
-- **ADR-0019** — SessionState Serialization (3-tier eviction, 64KB/128KB limits)
-- **ADR-0012b** — Memory Manager Schema (MemorySnapshot, EvictionCandidate, MemoryUsage)
-
-#### Related ADRs
-
-- **ADR-0017** — SessionState 6-Section Design (eviction priorities)
-- **ADR-0024** — Performance Budgets (eviction <5ms)
-- **ADR-0029** — Prometheus Metrics (memory usage, eviction rate)
-
-#### Key Responsibilities
-
-1. **3-Tier Eviction:**
-   - **Priority 1 (beliefs):** Least important, evict first
-   - **Priority 2 (multimodal):** Medium importance
-   - **Priority 3 (scoreboard):** Most important, never evict current QUD
-
-2. **Size Enforcement:**
-   - Soft limit: 64KB (trigger warning)
-   - Hard limit: 128KB (forced eviction)
-   - Eviction algorithm: Hybrid LRU + priority-based
-
-3. **Memory Tracking:**
-   - Per-section size tracking
-   - Eviction candidate identification
-   - Persistence checkpoints (every 1000 deltas)
-
-**Performance Metrics:**
 - Eviction: <5ms P95
-- Hit rate: >90% (cached sessions)
-- Miss penalty: 50-100ms (K0 reload)
-- Memory overhead: <10MB per session
+- Size: 64KB soft, 128KB hard, 256KB OOM
 
 ---
 
-## Category 2: actor_fabric/ (3 modules)
+### **Component 2: Actor Fabric**
+**Location:** `k1/l4_runtime/actor_fabric/`
+**ADRs:** 7 ADRs (0002, 0002a-c, 0005, 0005b-e)
 
-### **Module 2.1: actor_fabric/mailbox/**
-**Purpose:** MPSC message queues (4-tier priority)
-**Location:** `k1/l4_runtime/actor_fabric/mailbox/`
-**Performance:** <1ms enqueue/dequeue
+**Sub-Components:**
+- **mailbox/** — MPSC queue, 4-tier priority (ADR-0002a)
+- **router/** — Admission control, 5-check pipeline (ADR-0002c)
+- **supervisor/** — Heartbeat, crash detection, blacklist (ADR-0002b)
 
-#### Primary ADRs
-
-- **ADR-0002a** — Actor Fabric Mailbox (MPSC queue, 4-tier priority, WFQ scheduler)
-- **ADR-0028** — WFQ Scheduler (weight-based fairness, URGENT 10×, BACKGROUND 1×)
-
-#### Related ADRs
-
-- **ADR-0024** — Performance Budgets (mailbox <1ms)
-- **ADR-0029** — Prometheus Metrics (mailbox depth, message rate, DLQ)
-
-#### Key Responsibilities
-
-**Sub-Module 2.1.1: mailbox/mpsc_queue.py**
-- Ring buffer implementation
-- 4-tier priority: URGENT, REALTIME, INTERACTIVE, BACKGROUND
-- Backpressure: High watermark (50), low watermark (25)
-- Dead Letter Queue: 100 messages, 5 min retention
-
-**Sub-Module 2.1.2: mailbox/scheduler.py**
-- WFQ scheduling (Weighted Fair Queuing)
-- Priority weights: URGENT 10.0, REALTIME 5.0, INTERACTIVE 2.0, BACKGROUND 1.0
-- Starvation prevention: Virtual time aging
-- Anti-starvation threshold: 5s max wait
-
-**Sub-Module 2.1.3: mailbox/backpressure.py**
-- High watermark (50 messages): Slow down producer
-- Low watermark (25 messages): Resume normal rate
-- Overflow policies: DROP_OLDEST, DROP_NEWEST, REJECT
-- Metrics: Backpressure events, dropped messages
-
-**Sub-Module 2.1.4: mailbox/dlq.py**
-- Dead Letter Queue: 100 messages max
-- Retention: 5 min
-- Dropped reasons: TIMEOUT, OVERFLOW, VALIDATION_ERROR, DESTINATION_UNREACHABLE
-- Debugging: Inspect failed messages
-
-**Performance Metrics:**
-- Enqueue: <1ms P95
-- Dequeue: <0.5ms P95
-- Mailbox depth: <10 typical, <50 high watermark
-- Message throughput: 1000+ msgs/sec
-- DLQ size: <5 typical, <100 max
-
----
-
-### **Module 2.2: actor_fabric/router/**
-**Purpose:** Message routing & admission control
-**Location:** `k1/l4_runtime/actor_fabric/router/`
-**Performance:** <1ms routing, <2ms admission
-
-#### Primary ADRs
-
-- **ADR-0002c** — Actor Router (location transparency, 5-check pipeline)
-- **ADR-0010c** — Capability Enforcement (admission control integration)
-
-#### Related ADRs
-
-- **ADR-0024** — Performance Budgets (routing <1ms)
-- **ADR-0029** — Prometheus Metrics (routing latency, admission rejections)
-
-#### Key Responsibilities
-
-**Sub-Module 2.2.1: router/router.py**
-- Location transparency: Hash table by actor_id
-- Routing table: O(1) lookup
-- 5-check pipeline: Admission → Capability → Rate Limit → Quota → Destination
-
-**Sub-Module 2.2.2: router/admission.py**
-- 5-check admission control:
-  1. **Capability verification:** HMAC-SHA256 signature validation
-  2. **Role attestation:** Sender/receiver role match
-  3. **Token bucket:** 100 msg/s sustained, 150 burst
-  4. **In-flight limits:** Max 100 concurrent messages per sender
-  5. **Session quotas:** Max 1000 messages per session
-
-**Sub-Module 2.2.3: router/token_bucket.py**
-- Token bucket algorithm (100 msg/s sustained)
-- Burst allowance: 150 messages
-- Refill rate: 100 tokens/sec
-- Per-sender tracking
-
-**Sub-Module 2.2.4: router/capability_verifier.py**
-- HMAC-SHA256 signature verification
-- Lease expiration check
-- Sender/receiver role match
-- Resource type validation (TOOL_CALL, MEMORY_READ, MEMORY_WRITE, MODEL_CALL, NETWORK_ACCESS)
-
-**Performance Metrics:**
-- Routing: <1ms P95
-- Admission: <2ms P95 (5 checks)
-- Capability verification: <0.5ms P95
-- Token bucket overhead: <0.1ms P95
-- Rejection rate: <5% (normal operation)
-
----
-
-### **Module 2.3: actor_fabric/supervisor/**
-**Purpose:** Health monitoring & crash recovery
-**Location:** `k1/l4_runtime/actor_fabric/supervisor/`
-**Performance:** <100ms crash detection, <2s restart
-
-#### Primary ADRs
-
-- **ADR-0002b** — Actor Fabric Supervisor (heartbeat, crash detection, blacklist)
-- **ADR-0005d** — Agent Supervisor (agent-specific supervision)
-
-#### Related ADRs
-
-- **ADR-0024** — Performance Budgets (crash detection <100ms)
-- **ADR-0029** — Prometheus Metrics (crash rate, blacklist, restart attempts)
-
-#### Key Responsibilities
-
-**Sub-Module 2.3.1: supervisor/health_check.py**
-- Heartbeat monitoring: 1 Hz ping, 1.5s timeout
-- Event-loop heartbeat: 200ms interval (detect event-loop stalls)
-- Health status: HEALTHY, DEGRADED, UNHEALTHY
-
-**Sub-Module 2.3.2: supervisor/crash_detection.py**
-- Crash detection: <100ms detection latency
-- Detection methods: Process termination, ping timeout, event-loop stall
-- Crash logging: Stack traces, last 100 messages, state dump
-
-**Sub-Module 2.3.3: supervisor/blacklist.py**
-- Blacklist policy: 3 crashes in 10 min → 1 hour ban
-- Per-version blacklist (buggy agent versions)
-- Effectiveness: 88% reduction in repeated crashes
-
-**Sub-Module 2.3.4: supervisor/restart.py**
-- Exponential backoff: 200ms → 400ms → 800ms → 1.6s → 3.2s → 30s max
-- Max attempts: 5 retries
-- Reset interval: 10 min (success → reset retry count)
-
-**Performance Metrics:**
-- Heartbeat overhead: <1% CPU
+**Performance:**
+- Mailbox enqueue: <1ms P95
+- Mailbox dequeue: <0.5ms P95
+- Router admission: <2ms P95 (5 checks)
 - Crash detection: <100ms P95
-- Restart latency: 200ms-30s (exponential backoff)
-- Blacklist enforcement: <1ms lookup
-- Supervisor overhead: <5ms per actor per second
 
 ---
 
-## Category 3: learning/ (1 module)
+### **Component 3: API Gateway (REST)**
+**Location:** `k1/l4_ingress/api_gateway/`
+**ADRs:** 13 ADRs (0014-0014d, 0041-0041d)
 
-### **Module 3.1: learning/loop/**
-**Purpose:** Online learning & self-model updates
-**Location:** `k1/l4_runtime/learning/loop.py`
-**Performance:** <100ms learning cycle
+**Sub-Components:**
+- **content_negotiation/** — JSON/FlatBuffers (ADR-0014, 0014a)
+- **openapi/** — Spec generation (ADR-0014b, 0047)
+- **serialization/** — JSON↔FlatBuffers (ADR-0014c)
+- **sessions/** — CRUD operations (ADR-0041, 0041a)
+- **pagination/** — Cursor-based (ADR-0023, 0023a-c, 0041c)
+- **auth/** — JWT validation (ADR-0037, 0037a-d)
 
-#### Primary ADRs
+**Performance:**
+- Content negotiation: <1ms
+- Serialization: <5ms overhead
+- Pagination: <100ms P95
+- JWT validation: <2ms P95
 
-- **ADR-0018** — Learning Loop (feedback integration, self-model updates)
-- **ADR-0018a** — Feedback Signal (FeedbackSignal FlatBuffers schema)
-- **ADR-0018b** — Self-Model Update (belief revision, confidence adjustment)
-- **ADR-0018c** — Regret Minimization (counterfactual reasoning)
+---
 
-#### Related ADRs
+### **Component 4: WebSocket Server**
+**Location:** `k1/l4_ingress/websocket/`
+**ADRs:** 11 ADRs (0015-0015e, 0040-0040d)
 
-- **ADR-0001** — K0 Integration (P20 Self-Model Update pipeline)
-- **ADR-0024** — Performance Budgets (learning <100ms)
-- **ADR-0029** — Prometheus Metrics (learning cycle latency, update rate)
+**Sub-Components:**
+- **protocol/** — Binary FlatBuffers (ADR-0015, 0015a)
+- **flow_control/** — ACK, backpressure (ADR-0015b, 0040c)
+- **reconnection/** — Resume protocol (ADR-0015c, 0040d)
+- **streaming/** — Model inference (ADR-0015d)
 
-#### Key Responsibilities
+**Performance:**
+- Message latency: <20ms P95
+- Serialization: <5ms
+- Reconnection: <500ms
 
-1. **Feedback Integration:**
-   - Receive FeedbackSignal events (explicit/implicit feedback)
-   - Feedback types: THUMBS_UP, THUMBS_DOWN, CORRECTION, CANCELLATION
-   - Feedback source: User, system, agent
+---
 
-2. **Self-Model Update:**
-   - Belief revision: Update SessionState beliefs section
-   - Confidence adjustment: Decay incorrect beliefs, boost correct ones
-   - Learning rate: 0.1 (gradual updates)
+### **Component 5: SSE Gateway**
+**Location:** `k1/l4_ingress/sse_gateway/`
+**ADRs:** 9 ADRs (0016-0016d, 0042a, 0042d, 0043c, 0046)
 
-3. **Regret Minimization:**
-   - Counterfactual reasoning: "What if we did X instead?"
-   - Alternative action scoring: Compare actual vs hypothetical outcomes
-   - Policy update: Adjust agent selection weights
+**Sub-Components:**
+- **event_taxonomy/** — 17 event types (ADR-0016, 0016a)
+- **serialization/** — FlatBuffers→JSON (ADR-0016b)
+- **filtering/** — Topic-based (ADR-0016c)
+- **browser/** — EventSource integration (ADR-0016d)
+- **bridge/** — SSE→WebSocket (ADR-0046)
 
-4. **K0 Integration:**
-   - Send self-model updates to K0 P20 Self-Model Update pipeline
-   - Track learning events in episodic memory
-   - Long-term learning: Aggregate feedback over sessions
+**Performance:**
+- Serialization: <2ms P95
+- Event delivery: <10ms
+- Bandwidth savings: 60-70% (filtering)
 
-**Performance Metrics:**
+---
+
+### **Component 6: Voice Pipeline**
+**Location:** `k1/l4_ingress/voice_pipeline/`
+**ADRs:** 10 ADRs (0056-0056e, 0057a-c, 0068)
+
+**Sub-Components:**
+- **asr_ingress/** — ASR integration (ADR-0056a)
+- **intent_bridge/** — Intent classification (ADR-0056b)
+- **tool_interleaving/** — Tool execution (ADR-0056c)
+- **tts_synthesis/** — TTS streaming (ADR-0056d)
+- **audio_output/** — Jitter buffer (ADR-0056e)
+- **backpressure/** — Frame drop, TTS degradation (ADR-0057a-b)
+- **barge_in/** — Fast stop <120ms (ADR-0057c)
+
+**Performance:**
+- E2E voice turn: <500ms P95
+- ASR latency: <100ms
+- TTS latency: <200ms
+- Barge-in stop: <120ms P95
+
+---
+
+### **Component 7: Message Queue**
+**Location:** `k1/l4_ingress/websocket/message_queue/`
+**ADRs:** 4 ADRs (0053-0053c)
+
+**Sub-Components:**
+- **queue/** — FIFO per-session (ADR-0053)
+- **coalescing/** — 2s window, 5-message limit (ADR-0053a)
+- **rate_limiter/** — Token bucket 5 msg/sec (ADR-0053b)
+- **cancellation/** — 4-stage cascade <120ms (ADR-0053c)
+
+**Performance:**
+- Coalesce window: 2s
+- Rate limit: 5 msg/sec + 3 burst
+- Cancellation: <120ms P95
+
+---
+
+### **Component 8: Turn Boundary**
+**Location:** `k1/l4_ingress/websocket/turn_boundary/`
+**ADRs:** 4 ADRs (0054-0054c)
+
+**Sub-Components:**
+- **detector/** — Dual-signal detection (ADR-0054)
+- **implicit_pause/** — 2s threshold (ADR-0054a)
+- **explicit_submit/** — Enter/Send button (ADR-0054b)
+- **protocol_monitor/** — MPST transitions (ADR-0054c)
+
+**Performance:**
+- Detection latency: <50ms
+- MPST validation: <5ms
+- Timeout: 30s USER_SPEAKING, 60s AGENT_TURN
+
+---
+
+### **Component 9: Context Switch**
+**Location:** `k1/l4_runtime/intent_switch/`
+**ADRs:** 4 ADRs (0055-0055c)
+
+**Sub-Components:**
+- **detector/** — 3-stage detection (ADR-0055)
+- **drift_calculator/** — Intent drift 0.0-2.0 (ADR-0055a)
+- **prompt_generator/** — Confidence templates (ADR-0055b)
+- **session_manager/** — History management (ADR-0055c)
+
+**Performance:**
+- Drift calculation: <10ms
+- Prompt generation: <50ms
+- Session archiving: <100ms
+
+---
+
+### **Component 10: Learning Loop**
+**Location:** `k1/l4_runtime/learning/`
+**ADRs:** 3 ADRs (0018, 0018a-b)
+
+**Sub-Components:**
+- **feedback/** — Signal integration (ADR-0018a)
+- **self_model/** — Belief revision (ADR-0018b)
+- **regret/** — Counterfactual reasoning (ADR-0018c)
+
+**Performance:**
 - Learning cycle: <100ms P95
-- Feedback latency: <50ms (ingestion)
+- Feedback latency: <50ms
 - Belief update: <10ms P95
-- K0 write latency: <20ms P95
-- Update rate: 0.1-1 updates/turn (typical)
 
 ---
 
-## Category 4: attention/ (1 module)
+### **Component 11: Protocol Monitor**
+**Location:** `k1/l4_runtime/protocol_monitor/`
+**ADRs:** 8 ADRs (0003-0003d)
 
-### **Module 4.1: attention/gate/**
-**Purpose:** Attention mechanism & salience-based filtering
-**Location:** `k1/l4_runtime/attention/gate.py`
-**Performance:** <5ms attention computation
+**Sub-Components:**
+- **pdl_parser/** — YAML protocol parser (ADR-0003, 0003a)
+- **fsm_registry/** — Compiled FSM storage (ADR-0003c)
+- **validator/** — Message validation <5ms (ADR-0003c)
+- **timeout_enforcer/** — Per-protocol timeout (ADR-0003c)
+- **role_verifier/** — Security validation (ADR-0003d)
 
-#### Primary ADRs
-
-- **ADR-0020** — Attention Mechanism (salience, focus, distraction filtering)
-- **ADR-0020a** — Salience Computation (recency + frequency + importance weights)
-- **ADR-0020b** — Focus Gating (threshold-based filtering, top-k selection)
-- **ADR-0020c** — Distraction Filtering (context pruning, irrelevant entity removal)
-
-#### Related ADRs
-
-- **ADR-0017b** — Scoreboard Section (entity salience tracking)
-- **ADR-0024** — Performance Budgets (attention <5ms)
-
-#### Key Responsibilities
-
-1. **Salience Computation:**
-   - Recency weight: Exponential decay (0.9 per turn)
-   - Frequency weight: Access count normalization
-   - Importance weight: User-explicit mentions (2× boost)
-   - Combined score: 0.4 × recency + 0.3 × frequency + 0.3 × importance
-
-2. **Focus Gating:**
-   - Salience threshold: 0.3 (filter low-salience entities)
-   - Top-k selection: Keep top 10 entities in focus
-   - Focus transition: <5ms computation
-
-3. **Distraction Filtering:**
-   - Context pruning: Remove entities below threshold
-   - Irrelevant entity removal: Drop entities not mentioned in last 5 turns
-   - Attention budget: Limit total entities in SessionState scoreboard
-
-4. **Integration:**
-   - Read from SessionState scoreboard section
-   - Update entity salience scores
-   - Prune low-salience entities before LLM invocation
-
-**Performance Metrics:**
-- Salience computation: <5ms P95
-- Focus transition: <5ms P95
-- Distraction filtering: <2ms P95
-- Entity count: 5-20 typical, 50 max
-- Attention overhead: <10ms per turn
+**Performance:**
+- Parse: <5ms P95
+- Validation: <5ms P95
+- Compilation: <100ms
 
 ---
 
-## 🔗 Cross-Cutting ADRs (Affect All Layer 4 Modules)
+### **Component 12: HITL Protocols**
+**Location:** `k1/l4_runtime/hitl/`
+**ADRs:** 5 ADRs (0052-0052e)
 
-### **Architecture & Design**
-- **ADR-0002** — Actor Model (all Layer 4 actor infrastructure)
-- **ADR-0004** — 52-Module 5-Layer Architecture (Layer 4 definition)
-- **ADR-0004b** — Import Linting (L4→L5 only, no L4→L1/L2/L3 imports)
-- **ADR-0004d** — Layer 4 Integration Tests
+**Sub-Components:**
+- **step_by_step/** — Workflow checkpoints (ADR-0052a)
+- **red_band/** — Audit trail 7 years (ADR-0052b)
+- **clarification/** — Stack max depth 3 (ADR-0052c)
+- **proactive/** — Confidence-based (ADR-0052d)
 
-### **Serialization & Data**
-- **ADR-0011** — FlatBuffers Serialization (SessionState, FeedbackSignal)
-- **ADR-0012b** — SessionState Root Schema (SEST FlatBuffers schema)
-- **ADR-0013** — Schema Versioning
+**Performance:**
+- Checkpoint: <10ms P95
+- Audit write: <20ms
+- Clarification: <50ms
 
-### **Observability**
-- **ADR-0029** — Prometheus Metrics (SessionState size, mailbox depth, crash rate, learning rate)
-- **ADR-0030** — Trace Sampling (cognitive_trace_id propagation)
+---
 
-### **Performance & Reliability**
-- **ADR-0024** — Performance Budgets (Layer 4: SessionState <1ms, mailbox <1ms, learning <100ms)
-- **ADR-0028** — WFQ Scheduler (mailbox priority scheduling)
-- **ADR-0009** — Circuit Breaker (actor fabric resilience)
+### **Component 13: Knowledge Graph**
+**Location:** `k0/kg/` (K0 integration)
+**ADRs:** 4 ADRs (0081-0081d)
 
-### **Security & Privacy**
-- **ADR-0010** — Capability Security (actor fabric admission control)
-- **ADR-0010c** — Capability Enforcement (router integration)
+**Sub-Components:**
+- **schema/** — 3-table design (ADR-0081a)
+- **queries/** — BFS/DFS/Dijkstra (ADR-0081b)
+- **integration/** — Episodic NER (ADR-0081c)
+- **visualization/** — Mermaid/GraphML (ADR-0081d)
+
+**Performance:**
+- Entity lookup: <10ms P95
+- Relationship traversal: <50ms P95
+- NER accuracy: 96%
+
+---
+
+### **Component 14: Memory Consolidation**
+**Location:** `k0/consolidation/` (K0 integration)
+**ADRs:** 5 ADRs (0084-0084d)
+
+**Sub-Components:**
+- **scheduler/** — Sleep coordination (ADR-0084b)
+- **hippocampal/** — CA3 replay (ADR-0084a)
+- **kg_consolidation/** — Entity extraction (ADR-0084c)
+- **dream/** — Random walks (ADR-0084d)
+
+**Performance:**
+- Sleep cycle: 90 minutes
+- Memories replayed: 100-150 per NREM1
+- Patterns extracted: 50-100 per NREM2
+
+---
+
+### **Component 15: Adaptive KV Cache**
+**Location:** `k1/l4_runtime/kv_cache/`
+**ADRs:** 3 ADRs (0060-0060b, 0076)
+
+**Sub-Components:**
+- **placement/** — Thermal-aware (ADR-0060a)
+- **eviction/** — Hot/cold policies (ADR-0060b)
+- **compression/** — ZSTD level 3 (ADR-0076)
+
+**Performance:**
+- Placement: <50ms P95
+- Eviction: <20ms
+- Compression: <1ms P95
+
+---
+
+### **Component 16: Multi-Device Sync**
+**Location:** `k1/l4_runtime/sync/`
+**ADRs:** 2 ADRs (0050, 0050a)
+
+**Sub-Components:**
+- **strategy/** — Hybrid LAN + Internet (ADR-0050)
+- **coherence/** — Delta journal (ADR-0050a)
+
+**Performance:**
+- LAN sync: <1ms
+- Internet sync: <500ms
+- Crash recovery: <2s
 
 ---
 
 ## 🎯 Layer 4 Performance Budget Breakdown
 
-### **Total Layer 4 Budget: <1ms typical operations**
-
 | Component | Budget | Typical | P95 | ADR |
 |-----------|--------|---------|-----|-----|
-| SessionState serialize | 1ms | 0.5ms | 1ms | ADR-0019 |
-| SessionState deserialize | 0.1ms | 0.05ms | 0.1ms | ADR-0019 |
-| SessionState lock | 0.1ms | 0.05ms | 0.1ms | ADR-0007d |
-| SessionState delta batch | 2ms | 1ms | 2ms | ADR-0001f |
-| SessionState eviction | 5ms | 3ms | 5ms | ADR-0019 |
+| **SessionState** |
+| Serialize | 1ms | 0.5ms | 1ms | ADR-0019 |
+| Deserialize | 0.1ms | 0.05ms | 0.1ms | ADR-0019 |
+| Eviction | 5ms | 3ms | 5ms | ADR-0018 |
+| **Actor Fabric** |
 | Mailbox enqueue | 1ms | 0.5ms | 1ms | ADR-0002a |
 | Mailbox dequeue | 0.5ms | 0.3ms | 0.5ms | ADR-0002a |
-| Router admission (5 checks) | 2ms | 1ms | 2ms | ADR-0002c |
-| Capability verification | 0.5ms | 0.3ms | 0.5ms | ADR-0010c |
-| Supervisor heartbeat | 5ms | 3ms | 5ms | ADR-0002b |
+| Router admission | 2ms | 1ms | 2ms | ADR-0002c |
 | Crash detection | 100ms | 50ms | 100ms | ADR-0002b |
+| **API Gateway** |
+| REST endpoint | 100ms | 50ms | 100ms | ADR-0041 |
+| JWT validation | 2ms | 1.5ms | 2ms | ADR-0037b |
+| Pagination | 100ms | 78ms | 100ms | ADR-0023 |
+| **WebSocket** |
+| Message latency | 20ms | 10ms | 20ms | ADR-0040 |
+| Serialization | 5ms | 3ms | 5ms | ADR-0040b |
+| **SSE** |
+| Event delivery | 10ms | 5ms | 10ms | ADR-0042a |
+| Serialization | 2ms | 1ms | 2ms | ADR-0016b |
+| **Voice Pipeline** |
+| E2E voice turn | 500ms | 300ms | 500ms | ADR-0056 |
+| Barge-in stop | 120ms | 80ms | 120ms | ADR-0057c |
+| **Learning** |
 | Learning cycle | 100ms | 50ms | 100ms | ADR-0018 |
-| Attention computation | 5ms | 3ms | 5ms | ADR-0020 |
+| **Protocol** |
+| Validation | 5ms | 2ms | 5ms | ADR-0003c |
 
 ---
 
-## 🔄 Layer 4 Integration Points
+## 🔗 Cross-Cutting ADRs
 
-### **Layer 4 ← Layer 2/3 (State Updates)**
+### **Serialization & Data (15 ADRs)**
+- ADR-0011 — FlatBuffers (all Layer 4 components)
+- ADR-0011a-d — Schema design, code generation, performance
+- ADR-0012, 0012d — Schema taxonomy, Layer 4 schemas
+- ADR-0013, 0013a-d — Schema versioning, SemVer policy
+- ADR-0019, 0019a-d — SessionState serialization
 
-```
-Layer 2/3 writes:               Layer 4 manages:
-────────────────                ────────────────
-AgentState               →      session_state/control (agent_roster)
-Plan commit              →      session_state/control (current_flow)
-Dialogue update          →      session_state/scoreboard (QUD, entities)
-Belief update            →      session_state/beliefs (facts, confidence)
-```
+### **Observability (2 ADRs)**
+- ADR-0029, 0029b — Prometheus metrics (turn-level)
+- ADR-0030 — Trace sampling (cognitive_trace_id)
 
-### **Layer 4 → Layer 5 (Infrastructure)**
+### **Performance & Reliability (8 ADRs)**
+- ADR-0024, 0024b-d — Performance budgets, graceful degradation
+- ADR-0026, 0026d — Thermal management, user notifications
+- ADR-0060, 0060a-b — Adaptive KV cache
+- ADR-0076 — KV cache compression
+- ADR-0077 — Thermal profiling
 
-```
-Layer 4 calls:                  Layer 5 provides:
-──────────────                  ────────────────
-SessionState deltas      →      bridge_k0/batch_client (250ms batching)
-Actor messages           →      event_bus/event_bus (pub/sub)
-Circuit breaker          →      resilience/circuit_breaker
-Metrics                  →      observability/metrics
-```
+### **Security & Privacy (7 ADRs)**
+- ADR-0010b-c — Capability security
+- ADR-0037, 0037a-d — JWT authentication
+- ADR-0003d — Protocol security
 
-### **Layer 4 ↔ Actor Fabric (Internal)**
+### **API & Communication (25 ADRs)**
+- ADR-0014-0014d — REST API dual format
+- ADR-0015-0015e — WebSocket binary protocol
+- ADR-0016-0016d — SSE event schemas
+- ADR-0040-0040d — WebSocket realtime chat
+- ADR-0041-0041d — REST API session management
+- ADR-0046 — SSE-WebSocket bridge
+- ADR-0047 — OpenAPI generation
 
-```
-All Layer 4 modules use:
-────────────────────────
-mailbox/ (MPSC queues)          - Message passing between actors
-router/ (admission control)     - 5-check pipeline for all messages
-supervisor/ (health monitoring) - Heartbeat + crash detection
-```
-
-**Key Constraints:**
-1. **Allowed imports:** L4→L5 only (no L4→L1/L2/L3)
-2. **SessionState synchronization:** Batched deltas every 250ms to K0
-3. **Actor messaging:** All Layer 4 modules are actors (58 total: 4 AI + 54 pure)
-
----
-
-## 🧪 Layer 4 Testing Strategy (ADR-0004d)
-
-### **Integration Tests**
-
-**Location:** `tests/integration/layer4/`
-
-1. **SessionState Tests:**
-   - 6-section serialization (<1ms)
-   - Eviction (3-tier priority, <5ms)
-   - Locking (current_flow, <0.1ms)
-   - Delta batching (250ms interval, 10-50 deltas)
-   - Memory management (64KB soft, 128KB hard)
-
-2. **Actor Fabric Tests:**
-   - Mailbox MPSC queue (4-tier priority, <1ms enqueue)
-   - Router admission (5-check pipeline, <2ms)
-   - Supervisor health check (1 Hz heartbeat, <100ms crash detection)
-   - Token bucket rate limiting (100 msg/s, 150 burst)
-
-3. **Learning Loop Tests:**
-   - Feedback integration (FeedbackSignal ingestion)
-   - Self-model update (belief revision, confidence adjustment)
-   - Regret minimization (counterfactual reasoning)
-   - K0 integration (P20 Self-Model Update pipeline)
-   - Performance: <100ms learning cycle
-
-4. **Attention Tests:**
-   - Salience computation (recency + frequency + importance)
-   - Focus gating (threshold 0.3, top-10 selection)
-   - Distraction filtering (context pruning)
-   - Performance: <5ms attention computation
-
-5. **End-to-End Tests:**
-   - SessionState → Actor Fabric → Learning → Attention full cycle
-   - Multi-actor coordination (mailbox + router)
-   - Crash recovery (supervisor restart)
-   - Performance: <10ms total Layer 4 overhead per turn
+### **Testing & Quality (3 ADRs)**
+- ADR-0004d — Layer 4 integration tests
+- ADR-0013d — Contract testing
+- ADR-0052 — HITL WARD tests
 
 ---
 
-## 📊 Layer 4 Observability (ADR-0029)
+## 📊 Layer 4 Statistics
 
-### **Prometheus Metrics**
+**Total ADRs:** 154
+**By Category:**
+- SessionState & Storage: 22 ADRs
+- Actor Fabric: 7 ADRs
+- API Gateway (REST): 13 ADRs
+- WebSocket: 11 ADRs
+- SSE: 9 ADRs
+- Voice Pipeline: 10 ADRs
+- Message Queue & Turn Boundary: 8 ADRs
+- Context Switching: 4 ADRs
+- Learning & HITL: 8 ADRs
+- Protocol Validation: 8 ADRs
+- Knowledge Graph: 4 ADRs
+- Memory Consolidation: 5 ADRs
+- Serialization & Schemas: 15 ADRs
+- Authentication & Security: 12 ADRs
+- Performance & Thermal: 8 ADRs
+- Multi-Device & Embodied: 4 ADRs
+- Cross-Cutting: 6 ADRs
 
-| Metric | Type | Labels | Description | ADR |
-|--------|------|--------|-------------|-----|
-| `layer4_session_state_size_bytes` | Histogram | section (beliefs/scoreboard/control/persona/multimodal/meta) | SessionState size per section | ADR-0029 |
-| `layer4_session_state_serialize_ms` | Histogram | - | Serialization latency | ADR-0029 |
-| `layer4_session_state_eviction_count` | Counter | priority (P1/P2/P3) | Eviction events | ADR-0029 |
-| `layer4_mailbox_depth` | Gauge | actor_id, priority (URGENT/REALTIME/INTERACTIVE/BACKGROUND) | Mailbox depth | ADR-0029 |
-| `layer4_mailbox_enqueue_ms` | Histogram | priority | Enqueue latency | ADR-0029 |
-| `layer4_router_admission_rejections` | Counter | reason (CAPABILITY/RATE_LIMIT/QUOTA/DESTINATION) | Admission rejections | ADR-0029 |
-| `layer4_supervisor_crash_rate` | Counter | actor_id | Crash events | ADR-0029 |
-| `layer4_supervisor_blacklist_size` | Gauge | - | Blacklisted agent versions | ADR-0029 |
-| `layer4_learning_cycle_ms` | Histogram | - | Learning cycle latency | ADR-0029 |
-| `layer4_attention_entity_count` | Gauge | - | Entities in focus | ADR-0029 |
+**By Status:**
+- ✅ Complete: 154 ADRs (100%)
 
-### **Grafana Dashboards**
-
-**Layer 4 Overview Dashboard:**
-- SessionState size evolution (per section)
-- Mailbox health (depth, enqueue/dequeue latency)
-- Actor fabric (admission rejections, crash rate, blacklist)
-- Learning loop (cycle latency, update rate)
-- Attention mechanism (entity count, salience distribution)
-
----
-
-## 🚀 Layer 4 Implementation Roadmap
-
-### **Phase 1: Core Infrastructure (Weeks 1-3)**
-- SessionState model (6 sections)
-- Actor fabric (mailbox, router, supervisor)
-- FlatBuffers serialization
-- Integration tests
-
-### **Phase 2: State Management (Weeks 4-6)**
-- SessionState control plane (locking, deltas)
-- Memory manager (3-tier eviction)
-- K0 integration (batch client)
-
-### **Phase 3: Cognitive Loops (Weeks 7-9)**
-- Learning loop (feedback integration)
-- Attention mechanism (salience, focus gating)
-- Self-model updates
-
-### **Phase 4: Observability & Hardening (Weeks 10-12)**
-- Prometheus metrics (10+ metrics)
-- Grafana dashboards
-- Performance tuning (<1ms SessionState ops)
-- Load testing (1000 actors, 1000 msg/s)
-
----
-
-## 📚 Complete ADR Reference List
-
-### **Primary Layer 4 ADRs**
-- ADR-0004 — 52-Module 5-Layer Architecture
-- ADR-0017 — SessionState 6-Section Design
-- ADR-0002 — Actor Model
-- ADR-0018 — Learning Loop
-- ADR-0020 — Attention Mechanism
-
-### **SessionState ADRs (Category 1)**
-- ADR-0017a — Beliefs Section
-- ADR-0017b — Scoreboard Section
-- ADR-0017c — Control Section
-- ADR-0017d — Persona Section
-- ADR-0017e — Multimodal Section
-- ADR-0017f — Meta Section
-- ADR-0019 — SessionState Serialization (3-tier eviction, 64KB/128KB limits)
-- ADR-0007d — SessionState Locking
-- ADR-0001f — SessionState Delta Batching
-
-### **Actor Fabric ADRs (Category 2)**
-- ADR-0002a — Actor Fabric Mailbox (MPSC queue, 4-tier priority)
-- ADR-0002b — Actor Fabric Supervisor (heartbeat, crash detection, blacklist)
-- ADR-0002c — Actor Router (location transparency, 5-check pipeline)
-- ADR-0028 — WFQ Scheduler (weight-based fairness)
-- ADR-0010c — Capability Enforcement (admission control)
-
-### **Learning Loop ADRs (Category 3)**
-- ADR-0018a — Feedback Signal
-- ADR-0018b — Self-Model Update
-- ADR-0018c — Regret Minimization
-
-### **Attention ADRs (Category 4)**
-- ADR-0020a — Salience Computation
-- ADR-0020b — Focus Gating
-- ADR-0020c — Distraction Filtering
-
-### **Cross-Cutting ADRs**
-- ADR-0004b — Import Linting
-- ADR-0004d — Layer 4 Integration Tests
-- ADR-0009 — Circuit Breaker
-- ADR-0011 — FlatBuffers Serialization
-- ADR-0012b — SessionState Root Schema
-- ADR-0013 — Schema Versioning
-- ADR-0024 — Performance Budgets
-- ADR-0029 — Prometheus Metrics
-- ADR-0030 — Trace Sampling
+**By Priority:**
+- 🔴 CRITICAL: 10 ADRs (core architecture)
+- 🟡 HIGH: 60 ADRs (essential features)
+- 🟢 MEDIUM: 70 ADRs (supporting features)
+- ⚪ LOW: 14 ADRs (optimization)
 
 ---
 
 **Status:** ✅ **COMPLETE** — All Layer 4 ADRs mapped end-to-end
-**Last Updated:** January 2025
-**Total ADRs:** 35+ ADRs covering Layer 4 (5 primary + 30 supporting)
-**Coverage:** 100% of Layer 4 modules (8/8 modules mapped across 4 categories)
+**Last Updated:** October 2025
+**Total ADRs:** 154 ADRs covering Layer 4 runtime infrastructure
+**Coverage:** 100% of Layer 4 components (SessionState, Actor Fabric, API Gateway, Voice Pipeline, WebSocket, SSE, Learning, Protocol Monitor, KV Cache, Knowledge Graph, Multi-Device)
+**Source:** Auto-generated from ADR_REFERENCE.md comprehensive analysis

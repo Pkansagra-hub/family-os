@@ -1,0 +1,469 @@
+hitl_confirmation:
+  name: "Human-in-the-Loop Confirmation Contract"
+  purpose: "UI integration for user confirmation workflows"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/hitl_confirmation.py"
+  capability: "Proactive Confirmations"
+
+  description: |
+    HITL (Human-in-the-Loop) Confirmation provides UI integration for presenting
+    confirmation requests to users across multiple modalities (audio, visual, app).
+    Handles user responses, timeouts, and accessibility requirements.
+
+    Key features:
+    - Multi-modal presentation (audio, visual, notification)
+    - Timeout handling
+    - Accessibility support
+    - Response collection
+    - UI state management
+
+  ui_modalities:
+    audio_confirmation:
+      description: "Voice-based confirmation"
+
+      presentation:
+        attention_sound: "chime.wav"
+        tts_voice: "family_assistant_voice"
+        tts_speed: 1.0
+        volume_adjustment: "+10dB"
+
+        prompt_template: |
+          [Attention sound]
+          {action_description}
+          {risk_explanation}
+          To confirm, say "Yes" or "Confirm".
+          To cancel, say "No" or "Cancel".
+          To defer, say "Ask me later".
+
+      response_collection:
+        wake_word_override: false
+        always_listen: true
+        timeout_seconds: 30
+
+        accepted_responses:
+          confirm:
+            - "yes"
+            - "confirm"
+            - "proceed"
+            - "go ahead"
+            - "do it"
+
+          deny:
+            - "no"
+            - "cancel"
+            - "deny"
+            - "stop"
+            - "don't"
+
+          defer:
+            - "later"
+            - "ask me later"
+            - "defer"
+            - "not now"
+
+      timeout_handling:
+        reminder_at_seconds: 10
+        reminder_message: "Still waiting for confirmation. {timeout_remaining} seconds remaining."
+
+        final_warning_at_seconds: 5
+        final_warning_message: "Confirmation required in {timeout_remaining} seconds, or action will be cancelled."
+
+        on_timeout: "execute_default_action"
+
+    visual_confirmation:
+      description: "Screen-based confirmation"
+
+      presentation:
+        display_type: "modal_dialog"
+        overlay: true
+        blur_background: true
+
+        layout:
+          header:
+            icon: "warning"
+            title: "{action_type} Confirmation"
+            close_button: false
+
+          body:
+            action_description:
+              font_size: "large"
+              font_weight: "bold"
+              color: "#333333"
+
+            risk_explanation:
+              font_size: "medium"
+              font_weight: "normal"
+              color: "#666666"
+              margin_top: "10px"
+
+            consequences:
+              type: "bulleted_list"
+              font_size: "medium"
+              color: "#666666"
+              margin_top: "10px"
+
+            additional_context:
+              type: "expandable_section"
+              label: "More details"
+              collapsed_by_default: true
+
+          footer:
+            timeout_indicator:
+              type: "progress_bar"
+              color: "#FF9800"
+              position: "bottom"
+
+            buttons:
+              primary:
+                label: "Confirm"
+                color: "#4CAF50"
+                action: "approve"
+                keyboard_shortcut: "Enter"
+
+              secondary:
+                label: "Cancel"
+                color: "#F44336"
+                action: "deny"
+                keyboard_shortcut: "Escape"
+
+              tertiary:
+                label: "Ask Me Later"
+                color: "#9E9E9E"
+                action: "defer"
+                keyboard_shortcut: "None"
+
+      accessibility:
+        screen_reader: true
+        high_contrast_mode: true
+        keyboard_navigation: true
+        focus_trap: true
+        aria_labels:
+          modal: "Confirmation dialog"
+          confirm_button: "Confirm action"
+          cancel_button: "Cancel action"
+          defer_button: "Defer decision"
+
+      responsive_design:
+        mobile:
+          full_screen: true
+          button_size: "large"
+
+        tablet:
+          centered_dialog: true
+          max_width: "600px"
+
+        desktop:
+          centered_dialog: true
+          max_width: "500px"
+
+    notification_confirmation:
+      description: "App notification-based confirmation"
+
+      presentation:
+        notification_type: "actionable"
+        priority: "high"
+        sound: "default"
+        vibration: "pattern_urgent"
+
+        content:
+          title: "Confirmation Required"
+          body: "{action_description}"
+          icon: "app_icon"
+
+        actions:
+          - id: "confirm"
+            title: "Confirm"
+            icon: "checkmark"
+
+          - id: "deny"
+            title: "Cancel"
+            icon: "cancel"
+
+          - id: "defer"
+            title: "Later"
+            icon: "clock"
+
+      delivery:
+        channels:
+          - "system_notification"
+          - "app_notification"
+          - "smartwatch_notification"
+
+        fallback:
+          if_not_delivered_seconds: 10
+          fallback_to: "audio_confirmation"
+
+  double_confirmation:
+    description: "Two-step confirmation for high-risk actions"
+
+    step_1:
+      presentation:
+        type: "text_input_required"
+
+        prompt: |
+          This action is irreversible and cannot be undone.
+          Type "{required_phrase}" to proceed.
+
+        required_phrase: "I understand"
+        case_sensitive: false
+
+      validation:
+        exact_match_required: true
+        retry_allowed: true
+        max_attempts: 3
+
+    step_2:
+      presentation:
+        type: "final_confirmation"
+
+        prompt: |
+          Final confirmation required.
+          {action_description}
+          Are you absolutely sure?
+
+        buttons:
+          confirm: "Yes, I'm sure"
+          deny: "No, cancel"
+
+      additional_delay_seconds: 5
+      reason: "Force user to pause and reconsider"
+
+  confirmation_state_machine:
+    states:
+      PENDING:
+        description: "Confirmation request created, not yet presented"
+        next_states: ["PRESENTED", "CANCELLED"]
+
+      PRESENTED:
+        description: "Confirmation UI displayed to user"
+        next_states: ["AWAITING_RESPONSE", "TIMEOUT"]
+
+      AWAITING_RESPONSE:
+        description: "Waiting for user response"
+        timeout_seconds: 30
+        next_states: ["CONFIRMED", "DENIED", "DEFERRED", "TIMEOUT"]
+
+      CONFIRMED:
+        description: "User confirmed action"
+        next_states: ["COMPLETED"]
+
+      DENIED:
+        description: "User denied action"
+        next_states: ["COMPLETED"]
+
+      DEFERRED:
+        description: "User deferred decision"
+        next_states: ["PENDING"]
+        defer_duration_seconds: 300
+
+      TIMEOUT:
+        description: "User did not respond in time"
+        next_states: ["COMPLETED"]
+        default_action: "deny"
+
+      COMPLETED:
+        description: "Confirmation workflow completed"
+        final_state: true
+
+    transitions:
+      create_confirmation:
+        from: null
+        to: "PENDING"
+
+      present_to_user:
+        from: "PENDING"
+        to: "PRESENTED"
+
+      start_waiting:
+        from: "PRESENTED"
+        to: "AWAITING_RESPONSE"
+
+      user_confirms:
+        from: "AWAITING_RESPONSE"
+        to: "CONFIRMED"
+
+      user_denies:
+        from: "AWAITING_RESPONSE"
+        to: "DENIED"
+
+      user_defers:
+        from: "AWAITING_RESPONSE"
+        to: "DEFERRED"
+
+      timeout_expired:
+        from: "AWAITING_RESPONSE"
+        to: "TIMEOUT"
+
+      complete:
+        from: ["CONFIRMED", "DENIED", "TIMEOUT"]
+        to: "COMPLETED"
+
+  response_handling:
+    confirm:
+      action: "Allow action to proceed"
+      log_outcome: true
+
+      follow_up:
+        type: "acknowledgment"
+        message: "Confirmed. Proceeding with {action_description}."
+
+    deny:
+      action: "Block action"
+      log_outcome: true
+
+      follow_up:
+        type: "acknowledgment"
+        message: "Cancelled. {action_description} will not be performed."
+
+    defer:
+      action: "Pause action, schedule reminder"
+      log_outcome: true
+
+      reminder:
+        delay_seconds: 300
+        message: "Earlier you asked to be reminded: {action_description}. Ready to decide?"
+
+      max_deferrals: 3
+      after_max_deferrals: "default_to_deny"
+
+    timeout:
+      action: "Execute default_action (usually deny)"
+      log_outcome: true
+
+      notification:
+        type: "info"
+        message: "No response received. {action_description} was cancelled."
+
+  accessibility:
+    screen_reader_support:
+      enabled: true
+
+      announcements:
+        on_present: "Confirmation required: {action_description}"
+        on_timeout_warning: "{timeout_remaining} seconds remaining"
+        on_confirmed: "Action confirmed"
+        on_denied: "Action cancelled"
+
+    keyboard_navigation:
+      enabled: true
+
+      shortcuts:
+        confirm: "Enter"
+        deny: "Escape"
+        defer: "D"
+        expand_details: "Space"
+
+    high_contrast_mode:
+      enabled: true
+
+      colors:
+        confirm_button: "#00FF00"
+        deny_button: "#FF0000"
+        defer_button: "#FFFF00"
+        text: "#FFFFFF"
+        background: "#000000"
+
+    voice_control:
+      enabled: true
+
+      commands:
+        - "Confirm"
+        - "Cancel"
+        - "Read details"
+        - "Defer"
+
+  performance:
+    ui_presentation_latency_ms:
+      p50: 50
+      p95: 100
+      p99: 200
+      target: "<100ms for UI display"
+
+    response_processing_latency_ms:
+      p50: 10
+      p95: 20
+      p99: 50
+      target: "<20ms for response handling"
+
+  observability:
+    metrics:
+      - name: "hitl_confirmations_presented_total"
+        type: "counter"
+        labels: ["modality"]
+        description: "Total confirmations presented"
+
+      - name: "hitl_confirmations_response_time_ms"
+        type: "histogram"
+        labels: ["modality", "outcome"]
+        buckets: [1000, 5000, 10000, 30000, 60000]
+        description: "Time for user to respond"
+
+      - name: "hitl_confirmations_timeout_total"
+        type: "counter"
+        labels: ["modality"]
+        description: "Confirmations that timed out"
+
+    logging:
+      events:
+        - event: "confirmation_presented"
+          level: "info"
+          fields:
+            - "confirmation_id"
+            - "modality"
+            - "action_description"
+
+        - event: "confirmation_responded"
+          level: "info"
+          fields:
+            - "confirmation_id"
+            - "outcome"
+            - "response_time_ms"
+
+        - event: "confirmation_timeout"
+          level: "warning"
+          fields:
+            - "confirmation_id"
+            - "default_action"
+
+  storage:
+    database: "SQLite"
+
+    schema:
+      hitl_confirmations:
+        columns:
+          confirmation_id: "TEXT PRIMARY KEY"
+          action_description: "TEXT"
+          modality: "TEXT"
+          state: "TEXT"
+          user_response: "TEXT"
+          response_time_ms: "INTEGER"
+          timestamp_ms: "INTEGER"
+
+        indexes:
+          - "CREATE INDEX idx_hitl_confirmations_state ON hitl_confirmations(state, timestamp_ms)"
+
+  integration:
+    input_sources:
+      - name: "Proactive Confirmation"
+        source: "k1/l1_input/meta_policy/proactive_confirmation.py"
+        event: "CONFIRMATION_REQUESTED"
+
+    output_consumers:
+      - name: "Proactive Confirmation"
+        destination: "k1/l1_input/meta_policy/proactive_confirmation.py"
+        event: "CONFIRMATION_RESULT"
+
+      - name: "UI Dashboard"
+        destination: "apps/family_dashboard/"
+        event: "DISPLAY_CONFIRMATION"
+
+  related_contracts:
+    - "proactive_confirmation.yml"
+    - "confirmation_triggers.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

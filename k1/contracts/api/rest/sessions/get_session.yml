@@ -1,0 +1,498 @@
+get_session:
+  name: "GET /v1/sessions/{id} - Get Session Contract"
+  purpose: "Retrieve session details with HTTP caching via ETag and Last-Modified headers"
+  version: "1.0"
+  adr_source: "ADR-0041a (Session CRUD) lines 252-500"
+  endpoint: "GET /v1/sessions/{session_id}"
+  module: "k1/l5_infrastructure/api_gateway/rest/session_api.py"
+  capability: "Session Lifecycle Management"
+
+  description: |
+    GET /v1/sessions/{id} retrieves session details including status, agents, metadata,
+    and statistics. Implements HTTP caching with ETag/Last-Modified headers for 82%
+    cache hit rate (2.46M of 3M monthly requests return 304 Not Modified).
+
+    Key features:
+    - ETag cache validation (MD5 hash)
+    - Last-Modified timestamp caching
+    - 304 Not Modified for unchanged resources
+    - <100ms P95 uncached, <10ms P95 cached
+    - HATEOAS links for navigation
+
+  http_request:
+    method: "GET"
+    path: "/v1/sessions/{session_id}"
+
+    path_parameters:
+      session_id:
+        type: "string"
+        format: "session-{uuid}"
+        description: "Session identifier"
+        example: "session-abc123"
+
+    headers:
+      required:
+        Authorization:
+          type: "string"
+          format: "Bearer <jwt_token>"
+          description: "JWT access token from ADR-0037"
+
+      optional:
+        If-None-Match:
+          type: "string"
+          format: '"etag-{hash}"'
+          description: "ETag from previous GET request"
+          purpose: "Conditional GET for cache validation"
+          example: '"etag-abc123"'
+
+        If-Modified-Since:
+          type: "string"
+          format: "HTTP-date"
+          description: "Last-Modified from previous GET request"
+          example: "Wed, 11 Oct 2025 14:30:00 GMT"
+
+  http_response:
+    success_uncached:
+      status_code: 200
+      description: "OK (cache miss or no ETag provided)"
+
+      headers:
+        ETag:
+          type: "string"
+          format: '"etag-{md5_hash}"'
+          description: "MD5 hash of session state"
+          example: '"etag-xyz789"'
+
+        Last-Modified:
+          type: "string"
+          format: "HTTP-date"
+          description: "Timestamp of last session update"
+          example: "Wed, 11 Oct 2025 14:35:00 GMT"
+
+        Cache-Control:
+          type: "string"
+          value: "private, max-age=300"
+          description: "Cache for 5 minutes (300 seconds)"
+
+        Content-Type:
+          type: "string"
+          value: "application/json"
+
+      body_schema:
+        session_id:
+          type: "string"
+
+        user_id:
+          type: "string"
+
+        space_id:
+          type: "string"
+
+        persona:
+          type: "string"
+
+        privacy_band:
+          type: "string"
+
+        status:
+          type: "string"
+          values: ["active", "idle", "draining", "terminated"]
+
+        created_at:
+          type: "string"
+          format: "ISO 8601"
+
+        updated_at:
+          type: "string"
+          format: "ISO 8601"
+
+        expires_at:
+          type: "string"
+          format: "ISO 8601"
+
+        agents:
+          type: "array<object>"
+          description: "Active agents in session"
+
+          item_schema:
+            agent_id:
+              type: "string"
+
+            agent_name:
+              type: "string"
+
+            agent_type:
+              type: "string"
+
+            status:
+              type: "string"
+              values: ["PENDING", "WARMING", "ACTIVE", "IDLE", "DRAINING", "TERMINATED"]
+
+            capabilities:
+              type: "array<string>"
+
+            hired_at:
+              type: "string"
+              format: "ISO 8601"
+
+        statistics:
+          type: "object"
+          description: "Session performance statistics"
+
+          schema:
+            total_turns:
+              type: "integer"
+              description: "Total turns executed"
+
+            total_messages:
+              type: "integer"
+              description: "Total messages (user + agent)"
+
+            total_tool_calls:
+              type: "integer"
+              description: "Total tool invocations"
+
+            kv_cache_hit_rate:
+              type: "float"
+              range: [0.0, 1.0]
+              description: "KV cache hit rate (ADR-0027)"
+
+            memory_bytes:
+              type: "integer"
+              description: "Current memory usage in bytes"
+
+        capabilities:
+          type: "array<string>"
+          description: "Session capabilities"
+
+        metadata:
+          type: "object"
+          description: "Custom metadata"
+
+        _links:
+          type: "object"
+          description: "HATEOAS links"
+
+          schema:
+            self:
+              type: "object"
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/sessions/{session_id}"
+
+            turns:
+              type: "object"
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/sessions/{session_id}/turns"
+
+            agents:
+              type: "object"
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/sessions/{session_id}/agents"
+
+    success_cached:
+      status_code: 304
+      description: "Not Modified (ETag matches, cache hit)"
+
+      headers:
+        ETag:
+          type: "string"
+          description: "Same ETag as If-None-Match"
+
+        Cache-Control:
+          type: "string"
+          value: "private, max-age=300"
+
+      body:
+        description: "Empty body (client uses cached response)"
+        content: null
+
+    errors:
+      401:
+        error_type: "unauthorized"
+        description: "Missing or invalid JWT"
+
+      403:
+        error_type: "forbidden"
+        description: "User lacks access to session"
+        example: "Session belongs to different user"
+
+      404:
+        error_type: "session_not_found"
+        description: "Session ID does not exist"
+        example: "Session session-abc123 not found"
+
+      500:
+        error_type: "internal_error"
+        description: "Server error during retrieval"
+
+  implementation:
+    workflow_uncached:
+      - step: 1
+        name: "Extract JWT"
+        description: "Extract and validate JWT token"
+        latency: "<2ms"
+
+      - step: 2
+        name: "Check ETag"
+        description: "Check If-None-Match header against cached ETag"
+        cache_lookup: "GET etag:session:{session_id}"
+
+        if_match:
+          action: "Return 304 Not Modified"
+          latency: "<1ms"
+          skip_to_step: 8
+
+        if_no_match:
+          action: "Continue to step 3 (fetch session)"
+
+      - step: 3
+        name: "Fetch Session"
+        description: "Retrieve session from K1 kernel"
+        data_source: "SessionState in-memory store"
+        latency: "<80ms"
+
+      - step: 4
+        name: "Validate Ownership"
+        description: "Verify session.user_id matches JWT claims.sub"
+
+        if_mismatch:
+          action: "Return 403 Forbidden"
+
+        if_match:
+          action: "Continue to step 5"
+
+      - step: 5
+        name: "Generate ETag"
+        description: "Compute MD5 hash of session state"
+        algorithm: "MD5(JSON.stringify(session))"
+        format: '"etag-{md5_hash}"'
+        latency: "<1ms"
+
+      - step: 6
+        name: "Cache Session"
+        description: "Store session in cache with 5-minute TTL"
+        cache_key: "session:{session_id}"
+        ttl_seconds: 300
+        latency: "<2ms"
+
+      - step: 7
+        name: "Build Response"
+        description: "Construct 200 OK response with statistics"
+        include:
+          - "Session details (id, user_id, persona, status)"
+          - "Agent list with statuses"
+          - "Statistics (turns, messages, tool_calls, cache hit rate)"
+          - "HATEOAS links"
+
+      - step: 8
+        name: "Return Response"
+        description: "Return 200 OK or 304 Not Modified"
+        headers:
+          - "ETag"
+          - "Last-Modified"
+          - "Cache-Control: private, max-age=300"
+
+    workflow_cached:
+      - step: 1
+        name: "Extract JWT"
+        latency: "<2ms"
+
+      - step: 2
+        name: "Check ETag"
+        description: "Compare If-None-Match with cached ETag"
+        cache_lookup: "GET etag:session:{session_id}"
+        latency: "<1ms"
+
+      - step: 3
+        name: "Return 304"
+        description: "Return 304 Not Modified (empty body)"
+        headers:
+          - "ETag: {cached_etag}"
+          - "Cache-Control: private, max-age=300"
+        latency: "<1ms"
+
+  caching_strategy:
+    etag_generation:
+      algorithm: "MD5"
+      input: "JSON-serialized session state"
+      format: '"etag-{hex_hash}"'
+      example: '"etag-5d41402abc4b2a76b9719d911017c592"'
+
+      fields_included:
+        - "session_id"
+        - "status"
+        - "agents"
+        - "metadata"
+        - "updated_at"
+
+      fields_excluded:
+        - "statistics (dynamic)"
+        - "capabilities (static)"
+
+    cache_control:
+      directive: "private, max-age=300"
+      explanation:
+        private: "Response is user-specific (not shared across users)"
+        max_age: "Cache for 5 minutes (300 seconds)"
+
+      rationale: "Balance freshness (5min) vs cache hit rate (82%)"
+
+    cache_invalidation:
+      triggers:
+        - "PATCH /v1/sessions/{id} (metadata update)"
+        - "Agent hire/fire (status change)"
+        - "Session termination"
+
+      method: "DELETE cache key session:{session_id}"
+
+  performance:
+    budgets:
+      uncached:
+        p50_latency_ms: 50
+        p95_latency_ms: 100
+        p99_latency_ms: 150
+        target: "<100ms P95"
+
+      cached:
+        p50_latency_ms: 5
+        p95_latency_ms: 10
+        p99_latency_ms: 20
+        target: "<10ms P95"
+
+    breakdown_uncached:
+      jwt_validation_ms: 2
+      cache_lookup_ms: 1
+      fetch_session_ms: 80
+      generate_etag_ms: 1
+      cache_store_ms: 2
+      json_serialization_ms: 5
+      total_ms: 91
+
+    breakdown_cached:
+      jwt_validation_ms: 2
+      cache_lookup_ms: 1
+      etag_comparison_ms: 0.1
+      total_ms: 3.1
+
+    cache_performance:
+      total_requests_monthly: 3000000
+      cache_hits: 2460000
+      cache_misses: 540000
+      hit_rate_percent: 82
+
+      time_saved:
+        uncached_total_ms: 255000000  # 3M × 85ms
+        cached_total_ms: 65610000     # 540K × 85ms + 2.46M × 8ms
+        savings_percent: 74
+
+  observability:
+    metrics:
+      - name: "session_read_latency_ms"
+        type: "histogram"
+        labels: ["cache_status"]
+        buckets: [5, 10, 50, 100, 200]
+        description: "Session read latency (cached vs uncached)"
+
+      - name: "cache_hit_rate"
+        type: "gauge"
+        description: "HTTP cache hit rate (target 82%)"
+
+      - name: "sessions_read_total"
+        type: "counter"
+        labels: ["cache_status"]
+        description: "Total session reads (hit vs miss)"
+
+      - name: "etag_generation_latency_ms"
+        type: "histogram"
+        buckets: [0.5, 1, 2, 5]
+        description: "ETag computation latency"
+
+  integration:
+    dependencies:
+      - name: "JWT Validator"
+        contract: "ADR-0037"
+        provides: "validate_token(token) → Claims"
+
+      - name: "SessionState"
+        contract: "ADR-0012"
+        provides: "get_session(session_id) → SessionState"
+
+      - name: "Cache Manager"
+        provides: "get(key), set(key, value, ttl), generate_etag(session)"
+
+  examples:
+    uncached_request:
+      request:
+        method: "GET"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+
+      response:
+        status: 200
+        headers:
+          ETag: '"etag-xyz789"'
+          Last-Modified: "Wed, 11 Oct 2025 14:35:00 GMT"
+          Cache-Control: "private, max-age=300"
+        body:
+          session_id: "session-abc123"
+          user_id: "user-xyz789"
+          space_id: "space-001"
+          persona: "helpful_assistant"
+          privacy_band: "GREEN"
+          status: "active"
+          created_at: "2025-10-11T14:30:00Z"
+          updated_at: "2025-10-11T14:35:00Z"
+          expires_at: "2025-10-11T15:30:00Z"
+          agents:
+            - agent_id: "agent-001"
+              agent_name: "Concierge"
+              agent_type: "Concierge"
+              status: "ACTIVE"
+              capabilities: ["web_search"]
+              hired_at: "2025-10-11T14:30:00Z"
+          statistics:
+            total_turns: 5
+            total_messages: 10
+            total_tool_calls: 3
+            kv_cache_hit_rate: 0.75
+            memory_bytes: 48000
+          _links:
+            self:
+              href: "/v1/sessions/session-abc123"
+            turns:
+              href: "/v1/sessions/session-abc123/turns"
+            agents:
+              href: "/v1/sessions/session-abc123/agents"
+
+    cached_request:
+      request:
+        method: "GET"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          If-None-Match: '"etag-xyz789"'
+
+      response:
+        status: 304
+        headers:
+          ETag: '"etag-xyz789"'
+          Cache-Control: "private, max-age=300"
+        body: null
+
+  related_contracts:
+    - "post_create_session.yml"
+    - "http_caching.yml"
+    - "hateoas_links.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0041a"
+      author: "Contract Development Team"

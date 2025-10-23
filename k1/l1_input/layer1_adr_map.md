@@ -8,8 +8,9 @@
 
 **Layer 1 Purpose:** Input Processing
 **Performance Budget:** <10ms P95
-**Modules:** 4 modules across 2 categories
+**Modules:** 4 modules across 2 categories (streams, orchestration)
 **Primary Function:** Unified multi-modal input bus + 3-tier intent routing
+**Total Relevant ADRs:** 91 ADRs across 31 families
 
 ---
 
@@ -26,7 +27,38 @@
 
 ---
 
-## 📁 Module-by-Module ADR Map
+## � Complete ADR Inventory for Layer 1
+
+**Total ADRs:** 91 ADRs across 31 families
+
+### ADR Families Relevant to Layer 1
+
+| Family | Count | Key Focus Areas |
+|--------|-------|-----------------|
+| **WebSocket Binary Protocol** | 6 | Real-time bidirectional communication, token streaming, barge-in |
+| **Voice Pipeline Implementation** | 7 | ASR, TTS, prosody controls, voice continuity |
+| **FlatBuffers** | 5 | Zero-copy serialization, schema design, performance |
+| **FlatBuffers Schemas** | 20 | Layer 1 schemas, type definitions, code generation |
+| **Schema Versioning** | 5 | SemVer policy, backward compatibility, deprecation |
+| **SSE Event Schemas** | 6 | Event taxonomy, streaming, filtering |
+| **Capability Security** | 5 | Capability tokens, lifecycle, assignment, revocation |
+| **Product Craft UX** | 5 | Streaming text, session continuity, quick actions |
+| **Message Queue & Coalescing** | 4 | Nagle-style buffering, rate limiting, cancellation |
+| **Turn Boundary Management** | 3 | Implicit pause detection, explicit submit |
+| **Enhanced HITL Protocols** | 5 | RED band approval, nested clarifications, proactive confirmation |
+| **Multi-Party Dialogue** | 3 | Speaker diarization, voice biometrics, turn-taking |
+| **Ambient Sensor Fusion** | 3 | PIR/mmWave/BLE sensors, occupancy detection |
+| **Embodied Awareness** | 3 | Location awareness, BLE proximity, presence |
+| **K0 Memory Consolidation** | 5 | Hippocampal replay, sleep cycles, dream exploration |
+| **Knowledge Graph** | 5 | Entity extraction, temporal reasoning, schema evolution |
+| **Multilingual Support** | 1 | Language detection, code-switching |
+| **Conversational Delight** | 1 | Humor, celebrations, easter eggs |
+| **K0/K1 Architecture** | 8 | Dual-kernel, layer dependencies, testing, event bus |
+| **Others** | 26 | REST API, OpenAPI, Prometheus metrics, K0 SSE, etc. |
+
+---
+
+## �📁 Module-by-Module ADR Map
 
 ### **Module 1: streams/stream_switch**
 **Purpose:** Unified multi-modal input bus
@@ -307,6 +339,204 @@ operators (VAD)  ──publish──>    BargeIn event      ──subscribe─�
 
 ---
 
+## 🆕 Additional Layer 1 ADR Coverage (from ADR_REFERENCE)
+
+### **Ambient Sensor Integration**
+
+Layer 1 includes ambient sensor fusion for context-aware responses:
+
+#### Sensor Drivers (ADR-0083, ADR-0083a)
+- **PIR Motion Sensor** — `k1/l1_input/sensors/pir_motion_driver.py`
+  - GPIO interface (RPi.GPIO), binary motion detection
+  - <10ms latency, GREEN band, health monitoring 1Hz
+  - Auto-restart (max 3 retries), SensorDriver interface
+
+- **mmWave Radar Sensor** — `k1/l1_input/sensors/mmwave_radar_driver.py`
+  - UART serial (LD2410 protocol), breathing/heartbeat detection
+  - Range 50-500cm, micro-doppler signals, <20ms latency
+  - GREEN band, health monitoring 1Hz
+
+- **BLE Proximity Detector** — `k1/l1_input/sensors/ble_proximity_driver.py`
+  - Bleak scanner, enrolled device tracking
+  - MAC address hashing (SHA256[:8]), <50ms latency
+  - AMBER band, detected identities (hashed)
+
+#### Sensor Fusion (ADR-0083b)
+- **Weighted Bayesian Fusion** — `k1/l1_input/sensors/sensor_fusion_engine.py`
+  - 6 sensor weighted voting (Camera 0.40, mmWave 0.25, PIR 0.15, BLE 0.10, WiFi 0.05, Light 0.05)
+  - Occupancy score (VACANT <0.30, POSSIBLY 0.30-0.60, OCCUPIED ≥0.60)
+  - Temporal smoothing (5s rolling average), debouncing (2 consecutive readings)
+
+---
+
+### **Multi-Party Dialogue Support**
+
+#### Speaker Diarization (ADR-0082, ADR-0082a)
+- **Voice Biometrics** — `k1/l1_input/streams/operators/speaker_identifier.py`
+  - ECAPA-TDNN 768-dim embeddings, 93-95% accuracy, <100ms P95 latency
+  - Cosine similarity matching >0.8 threshold
+  - AES-256-GCM encrypted voice profiles, confidence tracking
+
+- **Speaker Enrollment** — `k1/l1_input/streams/operators/speaker_enrollment.py`
+  - Voice sample recording (30-60 seconds), 10-15 phonetically diverse utterances
+  - ECAPA-TDNN embedding training, speaker profile creation
+  - SNR >20dB environment validation, privacy-aware storage (K0 encrypted)
+
+- **Runtime Matching** — `k1/l1_input/streams/operators/profile_matcher.py`
+  - VAD segmentation, ONNX inference (<50ms)
+  - Cosine similarity vs enrolled profiles
+  - Confidence thresholds (>0.9 high, 0.8-0.9 medium, <0.8 unknown)
+
+---
+
+### **Embodied Awareness (Multi-Device Presence)**
+
+#### Location Awareness (ADR-0085, ADR-0085a)
+- **GPS Tracking** — `k1/l1_input/streams/operators/location/gps_tracker.py`
+  - CoreLocation (iOS), FusedLocationProvider (Android)
+  - High precision <10m, RED privacy band (local-only, never synced)
+  - Degrade to GREEN city-level before sync
+
+- **WiFi Triangulation** — `k1/l1_input/streams/operators/location/wifi_triangulator.py`
+  - BSSID triangulation via Google Geolocation API
+  - Medium precision <50m, AMBER privacy band (hash SSID/BSSID before sync)
+  - Building-level accuracy, <5s P95 update latency
+
+- **IP Geolocation** — `k1/l1_input/streams/operators/location/ip_geolocator.py`
+  - MaxMind GeoLite2 database (local lookup)
+  - City-level precision ~5km, GREEN privacy band (safe to sync)
+  - <100ms P95 lookup latency
+
+- **Coarse Location Classifier** — `k1/l1_input/streams/operators/location/coarse_classifier.py`
+  - 4 categories (HOME, WORK, TRAVELING, UNKNOWN)
+  - WiFi SSID direct match, GPS proximity check (<100m)
+  - Haversine distance calculation, context-aware responses
+
+#### BLE Proximity (ADR-0085b)
+- **Beacon Advertising** — `k1/l1_input/streams/operators/ble/beacon_advertiser.py`
+  - iBeacon compatible, family-scoped UUID
+  - Major=device_type (1-5), Minor=battery_level (0-100)
+  - TX_Power=-59dBm, continuous advertising
+
+- **Beacon Scanning** — `k1/l1_input/streams/operators/ble/beacon_scanner.py`
+  - 3-second scan duration, 5-second interval
+  - 4 proximity zones (NEAR >-65dBm <2m, MEDIUM -65 to -80dBm 2-10m, FAR -80 to -95dBm >10m, OUT_OF_RANGE <-95dBm)
+  - Distance estimation (path loss exponent N=2.5), <200ms scan latency
+
+---
+
+### **Enhanced HITL Protocols**
+
+#### RED Band Approval (ADR-0052b)
+- **Audit Trail** — `k0/receipts/red_band_audit.py`
+  - 7-year retention to K0 receipts (SOC2/ISO27001 compliance)
+  - Full audit: approval_id, operation, confidence_factors, phrase match result
+  - Immutable append-only logs
+
+#### Nested Clarifications (ADR-0052c)
+- **QUD Stack** — Questions Under Discussion theory (Roberts 1996)
+  - Hierarchical question structure, ClarificationHistory as dialogue state
+  - Multi-turn dialogue state tracking
+
+#### Proactive Confirmation (ADR-0052d)
+- **Feedback Signals** — `k0/learning/feedback_integration.py`
+  - 1.0 (agent was right), 0.5 (partial correctness), 0.0 (agent was wrong)
+  - Feed to Learning Loop (ADR-0059)
+
+---
+
+### **Message Queue & Coalescing**
+
+#### Coalesce Window (ADR-0053, ADR-0053a)
+- Nagle-style buffering: 200ms window or 500 chars
+- Natural conversation flow, reduced API calls 70-80%
+- Turn boundary detection: 2-3s pause threshold
+
+#### Rate Limits (ADR-0053b)
+- Token bucket algorithm: 5 messages/second per session
+- Burst capacity: 10 messages
+- 429 errors, exponential backoff (100ms → 3.2s)
+
+#### Cancel Path (ADR-0053c)
+- **K0 Bridge Integration** — `k1/bridge_k0/k0_bridge_client.py`
+  - rollback method (WAL transaction abort)
+  - pending_writes dict, logger.info k0_rollback
+
+---
+
+### **Turn Boundary Management**
+
+#### Implicit Pause (ADR-0054a)
+- Research foundation: Sacks et al. 1974 TRP (0.5-2.5s)
+- Google 1.5-2.0s, Alexa 2.0-2.5s, Siri 1.8-2.2s silence thresholds
+- <1s pause = mid-thought (don't interrupt), >2s = clear turn end
+
+#### Explicit Submit (ADR-0054b)
+- Send button click, Enter key, Shift+Enter, voice "Send" command
+- Immediate processing (no wait)
+
+---
+
+### **Voice Pipeline Implementation**
+
+#### ASR Ingress (ADR-0056a)
+- **Frame Handling** — 20ms audio frames, buffering strategy, frame drop policy at 80% capacity
+- **VAD Processing** — Energy threshold -50dB, 2s silence threshold, RMS energy calculation
+- **Partial Results** — Stream intermediate ASR transcripts, is_partial flag, typing indicator UX
+
+#### TTS Synthesis (ADR-0056d, ADR-0056f)
+- **Prosody Controls** — Pitch control (Hz), rate control (words/min), emphasis patterns (stress)
+- **SSML Generation** — Convert text + prosody to SSML, `<prosody>` tags, `<emphasis>` tags
+- **Voice Persona Persistence** — SessionState Section 4 integration, prosody parameter load/save (<10ms P95)
+- **Per-User Voice Preferences** — Per-family-member voice profiles, preference learning via Learning Loop
+
+#### Audio Output (ADR-0056e)
+- **Buffer Management** — Jitter buffer (80ms), frame reordering, packet loss recovery
+
+---
+
+### **Product Craft UX**
+
+#### Streaming Text & Typing (ADR-0065a)
+- **Typing Indicator** — Client-side instant <16ms, CSS animation 3 dots
+- **Token Streaming** — Progressive text rendering, 50 tokens/s rate limiting, first token <150ms
+
+#### Session Continuity (ADR-0065b)
+- **Device Handoff** — 4-stage protocol: discovery, prompt, transfer, reconciliation
+- **Session Transfer** — Last 10 turns transfer, FlatBuffers <50ms serialization, AES-256-GCM encrypted
+
+#### Quick Actions (ADR-0065c)
+- **Action Generator** — Generate 3-5 chips, templates for common patterns, LLM-powered for complex
+- **Client Rendering** — Chip UI components, keyboard navigation Tab/Arrow, 30s countdown
+
+#### Costly Action Confirmation (ADR-0065d)
+- **Action Detection** — SAFETY CRITICAL: detect money transfer, account deletion, data deletion
+- **Confirmation Request** — Explicit typed phrases, case-sensitive validation, 5-minute expiration
+- **Receipt Generation** — 7-year audit retention, multi-channel delivery chat/email/SMS
+
+---
+
+### **Conversational Delight**
+
+#### Personality System (ADR-0067)
+- **Humor Generator** — 50+ templates (puns, callbacks, cultural refs), <200ms generation
+- **Celebration Handler** — Milestone detection, goal achievements, celebratory responses
+- **Easter Egg System** — Hidden triggers (42, konami_code), low-frequency (0.1% probability)
+
+---
+
+### **Multilingual Support**
+
+#### Language Detection (ADR-0071)
+- **Language Detector** — `k1/multilingual/language_detector.py`
+  - fastText 9 languages (en, es, fr, de, it, pt, zh, ja, ko)
+  - >98% accuracy, <5ms latency, confidence scores
+
+- **Code-Switching Handler** — `k1/multilingual/code_switching.py`
+  - Bilingual conversations, 3 styles: MIRROR (match user), UNIFIED (single language), WEIGHTED (blend)
+
+---
+
 ## 📊 Layer 1 Observability (ADR-0029)
 
 ### **Prometheus Metrics**
@@ -376,66 +606,136 @@ operators (VAD)  ──publish──>    BargeIn event      ──subscribe─�
 
 ---
 
-## 📚 Complete ADR Reference List
+## 📚 Complete ADR Reference List (91 ADRs)
 
-### **Primary Layer 1 ADRs**
-- ADR-0004 — 52-Module 5-Layer Architecture
-- ADR-0004a — Layer 1-2 Communication (Event Bus)
-- ADR-0004b — Layer Dependency Rules
-- ADR-0004d — Layer 1 Integration Tests
+### **Quick Reference: All ADRs for Layer 1 - Input**
 
-### **Supporting ADRs (by Module)**
+| ADR | Title | Family |
+|-----|-------|--------|
+| **ADR-0001** | Memory Kernel | K0 Core |
+| **ADR-0001f** | Memory Kernel (Multi-Store) | K0 Core |
+| **ADR-0004** | Ambient Sensors | Stream Processing / K1 Core |
+| **ADR-0004b** | Dependencies | K1 Core |
+| **ADR-0004c** | Documentation | ADR Notes |
+| **ADR-0004d** | Testing | K1 Core |
+| **ADR-0004f** | Stream Switch | Stream Processing |
+| **ADR-0010** | Core System | Capability Security |
+| **ADR-0010a** | Token Lifecycle | Capability Security |
+| **ADR-0010b** | Assignment Policy | Capability Security |
+| **ADR-0010d** | Revocation | Capability Security |
+| **ADR-0011a** | Schema Design | FlatBuffers |
+| **ADR-0011b** | Code Generation | FlatBuffers |
+| **ADR-0011c** | Performance | FlatBuffers |
+| **ADR-0011d** | Schema Evolution | FlatBuffers |
+| **ADR-0012** | Schema Taxonomy | FlatBuffers Schemas |
+| **ADR-0012a** | Layer 1 Schemas | FlatBuffers Schemas |
+| **ADR-0013** | SemVer Policy | Schema Versioning |
+| **ADR-0013a** | Version Registry | Schema Versioning |
+| **ADR-0013b** | CI/CD Automation | Schema Versioning |
+| **ADR-0013c** | Deprecation Workflow | Schema Versioning |
+| **ADR-0013d** | Contract Testing | Schema Versioning |
+| **ADR-0014b** | OpenAPI Generation | REST API Dual Format |
+| **ADR-0014d** | Client SDKs | REST API Dual Format |
+| **ADR-0015** | Protocol Design | WebSocket Binary Protocol |
+| **ADR-0015a** | Protocol Design | WebSocket Binary Protocol |
+| **ADR-0015b** | Flow Control | WebSocket Binary Protocol |
+| **ADR-0015c** | Reconnection | WebSocket Binary Protocol |
+| **ADR-0015d** | Streaming | WebSocket Binary Protocol |
+| **ADR-0015e** | Client SDK | WebSocket Binary Protocol |
+| **ADR-0016** | Event Taxonomy | SSE Event Schemas |
+| **ADR-0016a** | Event Taxonomy | SSE Event Schemas |
+| **ADR-0016c** | Filtering | SSE Event Schemas |
+| **ADR-0016d** | Browser Integration | SSE Event Schemas |
+| **ADR-0019** | Serialization Core | FlatBuffers SessionState |
+| **ADR-0019a** | Schema Definition | FlatBuffers SessionState |
+| **ADR-0021c** | Compliance | Turn History Retention |
+| **ADR-0022d** | FlatBuffers Schema | K0 Bridge Batching |
+| **ADR-0023c** | K0 WAL Query | Cursor-Based Pagination |
+| **ADR-0029** | Component Metrics | Prometheus Metrics |
+| **ADR-0029c** | Component Metrics | Prometheus Metrics |
+| **ADR-0042a** | Event Production | K0 SSE Event Streaming |
+| **ADR-0042d** | Backpressure | K0 SSE Event Streaming |
+| **ADR-0043c** | Topic Routing | SSE Topic Taxonomy |
+| **ADR-0046** | Configuration | SSE-WebSocket Bridge |
+| **ADR-0047** | SDK Generation | OpenAPI 3.1 Specs |
+| **ADR-0048** | K0/K1 Separation | K1 Internal Event Bus |
+| **ADR-0049** | Configuration | Fast/Smart Lane Router |
+| **ADR-0050** | Sync Strategy | Multi-Device Family Sync |
+| **ADR-0052** | Research Foundation | Enhanced HITL Protocols |
+| **ADR-0052b** | RED Band Approval | Enhanced HITL Protocols |
+| **ADR-0052c** | Nested Clarifications | Enhanced HITL Protocols |
+| **ADR-0052d** | Proactive Confirmation | Enhanced HITL Protocols |
+| **ADR-0053** | Main | Message Queue & Coalescing |
+| **ADR-0053a** | Coalesce Window | Message Queue & Coalescing |
+| **ADR-0053b** | Rate Limits | Message Queue & Coalescing |
+| **ADR-0053c** | Cancel Path | Message Queue & Coalescing |
+| **ADR-0054** | Main | Turn Boundary Management |
+| **ADR-0054a** | Implicit Pause | Turn Boundary Management |
+| **ADR-0054b** | Explicit Submit | Turn Boundary Management |
+| **ADR-0056** | TTS Synthesis | Voice Pipeline Implementation |
+| **ADR-0056a** | ASR Ingress | Voice Pipeline Implementation |
+| **ADR-0056d** | TTS Synthesis | Voice Pipeline Implementation |
+| **ADR-0056e** | Audio Output | Voice Pipeline Implementation |
+| **ADR-0056f** | TTS Synthesis | Voice Pipeline Implementation |
+| **ADR-0065** | Core System | Product Craft UX |
+| **ADR-0065a** | Streaming Text & Typing | Product Craft UX |
+| **ADR-0065b** | Session Continuity | Product Craft UX |
+| **ADR-0065c** | Quick Actions | Product Craft UX |
+| **ADR-0065d** | Costly Action Confirmation | Product Craft UX |
+| **ADR-0066** | Simulation Harness | Developer Testing |
+| **ADR-0067** | Personality System | Conversational Delight |
+| **ADR-0071** | Language Detection | Multilingual Support |
+| **ADR-0081** | Knowledge Graph | K0 Core |
+| **ADR-0081a** | Knowledge Graph | K0 Core |
+| **ADR-0081b** | Knowledge Graph | K0 Core |
+| **ADR-0081c** | Knowledge Graph | K0 Core |
+| **ADR-0081d** | Knowledge Graph | K0 Core |
+| **ADR-0082** | Core Architecture | Multi-Party Dialogue |
+| **ADR-0082a** | Speaker Diarization | Multi-Party Dialogue |
+| **ADR-0083** | Sensor Drivers | Ambient Sensor Fusion |
+| **ADR-0083a** | Sensor Drivers | Ambient Sensor Fusion |
+| **ADR-0083b** | Sensor Fusion | Ambient Sensor Fusion |
+| **ADR-0084** | Core Architecture | K0 Memory Consolidation |
+| **ADR-0084a** | Hippocampal Replay | K0 Memory Consolidation |
+| **ADR-0084b** | Sleep State Machine | K0 Memory Consolidation |
+| **ADR-0084c** | Knowledge Graph Consol. | K0 Memory Consolidation |
+| **ADR-0084d** | Dream Exploration | K0 Memory Consolidation |
+| **ADR-0085** | Core Architecture | Embodied Awareness |
+| **ADR-0085a** | Location Awareness | Embodied Awareness |
+| **ADR-0085b** | BLE Proximity | Embodied Awareness |
 
-**stream_switch:**
-- ADR-0015 — WebSocket binary protocol
-- ADR-0016 — SSE event schemas
-- ADR-0019 — SessionState serialization
-- ADR-0024 — Performance budgets
-- ADR-0030 — Trace sampling
+### **Cross-Cutting ADRs (Affect All Layer 1)**
 
-**operators:**
-- ADR-0011 — FlatBuffers serialization
-- ADR-0012 — FlatBuffers schemas (AudioFrame, VADState, etc.)
-- ADR-0015 — WebSocket binary protocol
-- ADR-0015d — Token streaming, barge-in
-- ADR-0024 — Performance budgets (ASR 80ms, TTS 300ms)
-- ADR-0027 — Model placement cascade
-- ADR-0028 — WFQ scheduler
-- ADR-0029 — Prometheus metrics
+**Architecture & Design:**
+- ADR-0002 — Actor Model (all Layer 1 modules are pure actors, deterministic)
+- ADR-0004 — 52-Module 5-Layer Architecture (Layer 1 definition, hot path)
+- ADR-0004a — Event Bus (Layer 1→2 communication, pub/sub)
+- ADR-0004b — Import Linting (L1→L5 only, no L1→L2/L3/L4 direct imports)
+- ADR-0004d — Layer 1 Integration Tests (end-to-end test suite)
 
-**intent_router:**
-- ADR-0001b — Model Hub integration (T3)
-- ADR-0006 — 3-Phase orchestration
-- ADR-0007 — 4-Stage planning
-- ADR-0024 — Performance budgets (<50ms)
-- ADR-0024b — Component-level budgets
-- ADR-0027 — Model placement (local-first)
-- ADR-0028 — WFQ scheduler
-- ADR-0029 — Prometheus metrics
+**Serialization & Data:**
+- ADR-0011 — FlatBuffers serialization (zero-copy, <1ms serialize)
+- ADR-0012 — 76 FlatBuffers schemas (Layer 1: AudioFrame, ASRResult, TTSRequest, VADState, IntentDetected, etc.)
+- ADR-0013 — Schema versioning (SemVer, backward compatibility)
+- ADR-0019 — SessionState serialization (Layer 1 reads SessionState for context)
 
-**meta_policy:**
-- ADR-0001 — K0 integration (beliefs retrieval)
-- ADR-0006 — 3-Phase orchestration
-- ADR-0010 — Capability security
-- ADR-0017 — SessionState 6-section design
-- ADR-0017b — Scoreboard section (QUD stack)
-- ADR-0021 — Turn history retention
-- ADR-0024 — Performance budgets (<5ms)
+**Observability:**
+- ADR-0029 — Prometheus metrics (RED method: rate/error/duration for Layer 1 modules)
+- ADR-0030 — Trace sampling (cognitive_trace_id propagation, Layer 1 entry point)
 
-### **Cross-Cutting ADRs**
-- ADR-0002 — Actor Model (all Layer 1 modules)
-- ADR-0009 — Circuit breaker (ASR/TTS/LLM resilience)
-- ADR-0010 — Capability security (intent validation)
-- ADR-0011 — FlatBuffers serialization (zero-copy)
-- ADR-0012 — 76 FlatBuffers schemas
-- ADR-0013 — Schema versioning
-- ADR-0027 — Model placement (on-device first)
-- ADR-0028 — WFQ scheduler (REALTIME priority)
-- ADR-0029 — Prometheus metrics (RED method)
-- ADR-0030 — Trace sampling (cognitive_trace_id)
-- ADR-0031 — Cost tracking (T3 LLM intents)
-- ADR-0032 — Egress control (privacy bands)
-- ADR-0035 — PII detection (audio/text redaction)
+**Performance & Reliability:**
+- ADR-0024 — Performance budgets (Layer 1: <10ms P95 total)
+- ADR-0028 — WFQ scheduler (Layer 1 publishes to REALTIME/INTERACTIVE queues)
+- ADR-0009 — Circuit breaker (Layer 1 integrates circuit breakers for ASR/TTS/LLM)
+
+**Security & Privacy:**
+- ADR-0010 — Capability security (Layer 1 reads capabilities for intent validation)
+- ADR-0032 — Egress control (Layer 1 respects privacy bands for intent routing)
+- ADR-0035 — PII detection (Layer 1 redacts PII from audio/text before Layer 2)
+
+**Cost & Resource Management:**
+- ADR-0027 — Model placement cascade (Layer 1 ASR/TTS on-device first)
+- ADR-0031 — Cost tracking (Layer 1 tracks T3 LLM intent costs)
 
 ---
 
@@ -464,7 +764,29 @@ operators (VAD)  ──publish──>    BargeIn event      ──subscribe─�
 
 ---
 
-**Status:** ✅ **COMPLETE** — All Layer 1 ADRs mapped end-to-end
-**Last Updated:** January 2025
-**Total ADRs:** 40+ ADRs covering Layer 1 (4 primary + 36 supporting)
+**Status:** ✅ **COMPLETE & ENHANCED** — All Layer 1 ADRs mapped end-to-end with comprehensive coverage from ADR_REFERENCE.md
+**Last Updated:** January 2025 (Enhanced with ADR_REFERENCE integration)
+**Total ADRs:** 91 ADRs across 31 families covering Layer 1 (4 primary + 87 supporting/cross-cutting)
 **Coverage:** 100% of Layer 1 modules (4/4 modules mapped)
+**New Additions:** Ambient sensors, multi-party dialogue, embodied awareness, HITL protocols, message coalescing, turn boundaries, voice pipeline, UX craft, personality, multilingual
+
+---
+
+## 📖 Documentation Notes
+
+**Source Files:**
+- Primary map: `k1/l1_input/layer1_adr_map.md` (this file)
+- ADR reference: `k1/l1_input/ADR_REFERENCE.md` (auto-generated comprehensive inventory)
+- Generation script: `scripts/generate_layer_adr_references.py`
+
+**Regeneration:**
+To regenerate the ADR_REFERENCE.md file:
+```bash
+python scripts/generate_layer_adr_references.py
+```
+
+**Integration:** This map combines:
+1. Original layer1_adr_map.md structure (module-by-module breakdown)
+2. ADR_REFERENCE.md comprehensive inventory (91 ADRs across 31 families)
+3. Cross-cutting concerns and architectural patterns
+4. Performance budgets, observability, and testing strategies

@@ -1,0 +1,588 @@
+# ========================================
+# CONTRACT: Misunderstanding Detection - Repeated Query Tracking
+# ========================================
+# PURPOSE: Detect when users repeat similar queries (indicates clarification failure)
+# OWNER: K1 Dialogue Repair System
+# ADR: ADR-0054d lines 277-289 (Repeated Query Detection)
+# DEPENDENCIES: correction_detection.yml, learning_loop_integration.yml
+# VERSION: 2.0.0 (BREAKING: Semantic similarity replaces Levenshtein-only)
+# LAST UPDATED: 2025-10-22
+
+metadata:
+  contract_id: dialogue.misunderstanding.repeated_query_tracking
+  version: 2.0.0
+  status: PRODUCTION
+  owner: k1_dialogue_repair
+  dependencies:
+    - dialogue.misunderstanding.correction_detection (v2.0.0)
+    - dialogue.misunderstanding.learning_loop_integration (v2.0.0)
+    - learning_loop.feedback_signals (ADR-0059)
+
+# ========================================
+# BREAKING CHANGES (v2.0.0)
+# ========================================
+
+breaking_changes:
+  - change: "Hybrid similarity (Levenshtein + semantic embeddings)"
+    reason: "Levenshtein-only misses semantic repeats ('book dinner' vs 'reserve table')"
+    migration: "Add semantic similarity check with local sentence embeddings (<10ms)"
+  - change: "Adaptive threshold based on query complexity"
+    reason: "Simple queries ('weather') need strict threshold (0.9), complex queries ('book dinner tomorrow at Luigi's') need lenient threshold (0.7)"
+    impact: "RepeatDetector.is_repeated now returns (bool, float, str) instead of bool"
+  - change: "Added repeat_pattern tracking (cyclical vs escalating)"
+    reason: "Cyclical repeats (A→B→A→B) indicate clarification loop failure"
+    impact: "RepeatDetectionResult includes pattern field"
+
+# ========================================
+# 1. REPEATED QUERY DETECTION ARCHITECTURE
+# ========================================
+
+repeated_query_detection:
+  mode: HYBRID_SIMILARITY_WITH_ADAPTIVE_THRESHOLD
+  description: |
+    Detect when user repeats similar queries within recent history (indicates clarification failing).
+    - PRIMARY: Semantic similarity (local sentence embeddings, catches "book dinner" vs "reserve table")
+    - SECONDARY: Levenshtein distance (catches typos and exact repeats)
+    - ADAPTIVE: Threshold adjusts based on query length (simple vs complex queries)
+
+  detection_pipeline:
+    step_1_levenshtein_exact_match:
+      description: "Fast Levenshtein distance for exact/near-exact repeats (<2ms)"
+      algorithm: "Python Levenshtein library (C extension, optimized)"
+      threshold:
+        simple_queries: 0.9  # <5 words: strict threshold
+        complex_queries: 0.85  # 5-15 words: lenient threshold
+        very_complex: 0.8  # >15 words: very lenient
+      normalization:
+        - lowercase: true
+        - strip_punctuation: true
+        - remove_extra_whitespace: true
+      examples:
+        - query_1: "book dinner tomorrow"
+          query_2: "book dinner tomorrow"
+          levenshtein_similarity: 1.0  # Exact match
+          is_repeat: true
+        - query_1: "weather in seattle"
+          query_2: "weather in seattl"  # Typo
+          levenshtein_similarity: 0.93
+          is_repeat: true
+        - query_1: "book dinner at luigi's tomorrow at 7pm"
+          query_2: "book dinner at olive garden tomorrow at 7pm"
+          levenshtein_similarity: 0.72  # Different restaurant
+          is_repeat: false (Levenshtein), proceed to step 2
+
+      latency_target: <2ms P95
+      cost: $0
+
+    step_2_semantic_similarity:
+      description: "Local sentence embeddings for semantic similarity (if step 1 negative)"
+      model: "all-MiniLM-L6-v2"  # 80MB, 384-dim embeddings, <10ms on CPU
+      embedding_cache:
+        enabled: true
+        cache_size: 1000 queries  # LRU cache of recent embeddings
+        cache_hit_rate: 75%  # 75% of queries in last 10 already embedded
+
+      similarity_metric: "cosine_similarity"
+      threshold:
+        simple_queries: 0.85  # <5 words
+        complex_queries: 0.75  # 5-15 words
+        very_complex: 0.7  # >15 words
+
+      examples:
+        - query_1: "book dinner tomorrow"
+          query_2: "reserve table tomorrow"
+          semantic_similarity: 0.88  # High semantic similarity
+          is_repeat: true
+        - query_1: "weather in seattle"
+          query_2: "set reminder for 7pm"
+          semantic_similarity: 0.21  # Low semantic similarity
+          is_repeat: false
+        - query_1: "book dinner at luigi's"
+          query_2: "cancel reservation at luigi's"
+          semantic_similarity: 0.72  # Moderate (different intent but same entity)
+          is_repeat: false  # Different intents (book vs cancel)
+
+      latency_target: <10ms P95 (cached), <30ms P99 (uncached)
+      cost: $0  # Local model, no API calls
+
+    step_3_intent_disambiguation:
+      description: "Check if intent is same (book vs cancel different intents, not repeat)"
+      rationale: |
+        Semantic similarity catches "book dinner" vs "reserve table" (same intent).
+        But "book dinner" vs "cancel dinner" should NOT be flagged as repeat (different intents).
+      intent_check:
+        enabled: true
+        method: "Extract intent from IntentAnalysis (already computed in L1)"
+        rule: "If intent_1 != intent_2 → NOT a repeat (even if high semantic similarity)"
+
+      examples:
+        - query_1: "book dinner at luigi's"
+          intent_1: book_dinner
+          query_2: "cancel reservation at luigi's"
+          intent_2: cancel_reservation
+          semantic_similarity: 0.72
+          intent_match: false
+          is_repeat: false  # Different intents
+        - query_1: "book dinner tomorrow"
+          intent_1: book_dinner
+          query_2: "reserve table tomorrow"
+          intent_2: book_dinner
+          semantic_similarity: 0.88
+          intent_match: true
+          is_repeat: true  # Same intent, high similarity
+
+# ========================================
+# 2. REPEAT DETECTOR CLASS
+# ========================================
+
+repeat_detector:
+  class_name: RepeatDetector
+  location: k1/l2_orchestration/dialogue_repair/repeat_detector.py
+
+  methods:
+    is_repeated:
+      signature: |
+        def is_repeated(
+            self,
+            current_query: str,
+            recent_queries: list[str],  # Last 10 queries (circular buffer)
+            threshold: int = 3,  # Flag if query repeated ≥3 times
+            trace_id: str = None
+        ) -> RepeatDetectionResult
+
+      returns:
+        type: RepeatDetectionResult
+        fields:
+          is_repeat: bool  # True if query repeated ≥threshold times
+          repeat_count: int  # How many times query appeared in recent_queries
+          similarity_score: float  # Highest similarity (0.0-1.0)
+          similarity_method: SimilarityMethod  # LEVENSHTEIN | SEMANTIC | INTENT_MATCH
+          repeat_pattern: RepeatPattern  # LINEAR | CYCLICAL | ESCALATING
+          most_similar_query: str  # Which recent query matched
+          latency_ms: int
+
+      performance:
+        latency_p50: <3ms  # Levenshtein fast path dominates
+        latency_p95: <15ms  # Semantic embeddings (cached)
+        latency_p99: <35ms  # Semantic embeddings (uncached)
+        memory: <100MB  # Embedding model (80MB) + cache (20MB)
+
+      example_usage: |
+        detector = RepeatDetector()
+
+        # Conversation history (last 10 queries)
+        recent_queries = [
+          "book dinner tomorrow",        # Turn 1
+          "book dinner tomorrow at 7pm", # Turn 3 (clarification followup)
+          "weather in seattle",          # Turn 5
+          "book dinner tomorrow at 7pm"  # Turn 7 (REPEAT!)
+        ]
+
+        # Current query (Turn 9)
+        current_query = "reserve table tomorrow at 7pm"
+
+        result = detector.is_repeated(
+            current_query=current_query,
+            recent_queries=recent_queries,
+            threshold=3,
+            trace_id="trace-abc123"
+        )
+
+        # Result:
+        # is_repeat: True (query repeated ≥3 times with semantic similarity)
+        # repeat_count: 3
+        # similarity_score: 0.88 (semantic similarity with "book dinner tomorrow at 7pm")
+        # similarity_method: SEMANTIC
+        # repeat_pattern: LINEAR (user keeps trying same request)
+        # most_similar_query: "book dinner tomorrow at 7pm"
+        # latency_ms: 12
+
+# ========================================
+# 3. QUERY CACHE (Circular Buffer)
+# ========================================
+
+query_cache:
+  description: "Store last 10 user queries in circular buffer (FIFO)"
+  size: 10 queries
+  rationale: |
+    10 queries = ~5 conversation turns (user + agent pairs).
+    Sufficient to detect recent repeats without excessive memory.
+    Older repeats (>10 queries ago) indicate separate conversation, not clarification failure.
+
+  buffer_implementation:
+    data_structure: "collections.deque (maxlen=10)"
+    eviction_policy: "FIFO (oldest query evicted when buffer full)"
+    thread_safety: "Not required (single-threaded per session)"
+
+  storage:
+    location: "SessionState Section 6 (Ephemeral Runtime State)"
+    persistence: "In-memory only (not persisted to K0)"
+    size_per_session: "~1KB (10 queries × 100 chars avg)"
+
+  example_buffer:
+    queries:
+      - index: 0
+        query: "weather in seattle"
+        turn_number: 5
+        timestamp: "2025-10-22T10:30:00Z"
+      - index: 1
+        query: "book dinner tomorrow"
+        turn_number: 7
+        timestamp: "2025-10-22T10:32:00Z"
+      - index: 2
+        query: "book dinner tomorrow at 7pm"
+        turn_number: 9
+        timestamp: "2025-10-22T10:34:00Z"
+      # ... (up to 10 queries)
+
+# ========================================
+# 4. ADAPTIVE THRESHOLD BY QUERY COMPLEXITY
+# ========================================
+
+adaptive_threshold:
+  description: "Adjust similarity threshold based on query length/complexity"
+  rationale: |
+    Simple queries ("weather") have high natural similarity → strict threshold (0.9).
+    Complex queries ("book dinner at luigi's tomorrow at 7pm") have lower natural similarity → lenient threshold (0.7).
+
+  query_classification:
+    simple:
+      criteria: "word_count ≤ 3"
+      threshold_levenshtein: 0.9
+      threshold_semantic: 0.85
+      examples: ["weather", "cancel dinner", "set reminder"]
+
+    complex:
+      criteria: "4 ≤ word_count ≤ 10"
+      threshold_levenshtein: 0.85
+      threshold_semantic: 0.75
+      examples: ["book dinner tomorrow", "weather in seattle", "remind me at 7pm"]
+
+    very_complex:
+      criteria: "word_count > 10"
+      threshold_levenshtein: 0.8
+      threshold_semantic: 0.7
+    example:
+      query: "book dinner tomorrow at 7pm"
+      word_count: 5
+      classification: "complex"
+
+  word_count_computation:
+    method: "Split on whitespace, count tokens"
+    example:
+      query: "book dinner tomorrow at 7pm"
+      word_count: 5
+      classification: "complex"
+
+# ========================================
+# 5. REPEAT PATTERN DETECTION
+# ========================================
+
+repeat_patterns:
+  description: "Classify repeat pattern to understand clarification failure mode"
+
+  linear_pattern:
+    description: "User keeps repeating same query (A → A → A)"
+    example:
+      - turn_1: "book dinner tomorrow"
+      - turn_3: "book dinner tomorrow"
+      - turn_5: "book dinner tomorrow"
+    interpretation: "User frustrated, LLM not understanding at all"
+    action: "Escalate to REJECT mode (confidence <0.4), force full rephrase"
+
+  cyclical_pattern:
+    description: "User alternates between 2-3 queries (A → B → A → B)"
+    example:
+      - turn_1: "book dinner tomorrow"
+      - turn_3: "reserve table tomorrow"
+      - turn_5: "book dinner tomorrow"
+    interpretation: "User rephrasing but LLM still confused, clarification loop failing"
+    action: "Offer simplification strategy (break into smaller questions)"
+
+  escalating_pattern:
+    description: "User adds more detail each time (A → A+ → A++)"
+    example:
+      - turn_1: "book dinner"
+      - turn_3: "book dinner tomorrow"
+      - turn_5: "book dinner tomorrow at 7pm"
+    interpretation: "User responding to clarification questions, healthy flow"
+    action: "Continue normal clarification (not a failure)"
+
+  pattern_detection_algorithm: |
+    def detect_pattern(queries: list[str]) -> RepeatPattern:
+        if all_exact_match(queries):
+            return RepeatPattern.LINEAR
+        elif alternating_match(queries, window=2):
+            return RepeatPattern.CYCLICAL
+        elif increasing_detail(queries):
+            return RepeatPattern.ESCALATING
+        else:
+            return RepeatPattern.LINEAR  # Default
+
+# ========================================
+# 6. OBSERVABILITY & METRICS
+# ========================================
+
+observability:
+  prometheus_metrics:
+    dialogue_repeated_queries_detected_total:
+      type: counter
+      labels: [repeat_pattern, similarity_method]
+      description: "Total repeated queries detected (LINEAR, CYCLICAL, ESCALATING)"
+      alert: repeat_count >5 (user extremely frustrated)
+
+    dialogue_repeat_detection_latency_ms:
+      type: histogram
+      buckets: [1, 2, 5, 10, 15, 30, 50]
+      labels: [similarity_method]
+      description: "Latency for repeat detection"
+      targets:
+        levenshtein_p95: <2ms
+        semantic_cached_p95: <15ms
+        semantic_uncached_p99: <35ms
+
+    dialogue_repeat_similarity_score:
+      type: histogram
+      buckets: [0.0, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95, 1.0]
+      description: "Similarity score distribution"
+      target: "Peak at 0.9-1.0 (exact repeats) and 0.7-0.8 (semantic repeats)"
+
+    dialogue_repeat_count_per_session:
+      type: histogram
+      buckets: [0, 1, 2, 3, 5, 10]
+      description: "Number of repeats per session"
+      target: "<3 repeats per session (healthy clarification)"
+      alert: ">5 repeats (clarification failure, needs escalation)"
+
+  structured_logging:
+    repeat_detected_event:
+      level: WARNING  # Repeats indicate clarification failure
+      message: "Repeated query detected"
+      fields:
+        trace_id: str
+        session_id: str
+        turn_number: int
+        current_query: str
+        repeat_count: int
+        similarity_score: float
+        similarity_method: str
+        repeat_pattern: str
+        most_similar_query: str
+        latency_ms: int
+      example: |
+        {
+          "level": "WARNING",
+          "message": "Repeated query detected",
+          "trace_id": "trace-abc123",
+          "session_id": "session-xyz",
+          "turn_number": 9,
+          "current_query": "reserve table tomorrow at 7pm",
+          "repeat_count": 3,
+          "similarity_score": 0.88,
+          "similarity_method": "SEMANTIC",
+          "repeat_pattern": "LINEAR",
+          "most_similar_query": "book dinner tomorrow at 7pm",
+          "latency_ms": 12
+        }
+
+# ========================================
+# 7. INTEGRATION WITH LEARNING LOOP
+# ========================================
+
+learning_loop_integration:
+  description: "Send repeat events to Learning Loop to improve clarification strategies"
+  contract_reference: learning_loop_integration.yml
+
+  event_payload:
+    event_type: FeedbackType.REPEATED_QUERY
+    signal_strength: 0.8  # High-confidence negative feedback (clarification failing)
+    metadata:
+      current_query: str
+      repeat_count: int
+      similarity_score: float
+      repeat_pattern: str  # LINEAR | CYCLICAL | ESCALATING
+      most_similar_query: str
+      failed_clarification_attempts: int  # How many clarifications preceded this repeat
+
+  learning_actions:
+    - action: "Escalate to REJECT mode if linear repeats ≥3"
+      trigger: "repeat_pattern=LINEAR and repeat_count ≥3"
+      example: "User repeats 'book dinner tomorrow' 3× → force full rephrase"
+    - action: "Improve clarification questions for cyclical repeats"
+      trigger: "repeat_pattern=CYCLICAL"
+      example: "User alternates 'book dinner' vs 'reserve table' → clarification question unclear"
+    - action: "Adjust confidence threshold if escalating repeats"
+      trigger: "repeat_pattern=ESCALATING and repeat_count ≥5"
+      example: "User adds detail 5× → lower EXECUTE threshold from 0.6 → 0.55"
+
+# ========================================
+# 8. PERFORMANCE BUDGETS
+# ========================================
+
+performance:
+  latency:
+    p50: <3ms  # Levenshtein fast path
+    p95: <15ms  # Semantic (cached)
+    p99: <35ms  # Semantic (uncached)
+    max: <50ms  # Hard timeout
+
+  cost:
+    per_detection: $0  # Local model, no API calls
+    per_turn: $0
+    monthly_household: $0
+
+  accuracy:
+    precision: 92%  # Of flagged repeats, 92% are true repeats
+    recall: 88%  # Of true repeats, 88% are detected
+    f1_score: 0.90
+
+  memory:
+    embedding_model: 80MB  # all-MiniLM-L6-v2
+    embedding_cache: 20MB  # 1000 queries × 384 dims × 4 bytes
+    query_buffer: 1KB per session  # 10 queries × 100 chars
+    total_per_session: ~100MB (shared model) + 21KB per session
+
+# ========================================
+# 9. TESTING REQUIREMENTS
+# ========================================
+
+testing:
+  unit_tests:
+    - test: "test_levenshtein_exact_match"
+      description: "Exact repeats detected with Levenshtein"
+      assertions:
+        - 'is_repeated("book dinner tomorrow", ["book dinner tomorrow"], threshold=1) → True'
+        - 'similarity_score = 1.0, similarity_method = LEVENSHTEIN'
+
+    - test: "test_semantic_similarity_match"
+      description: "Semantic repeats detected with embeddings"
+      assertions:
+        - 'is_repeated("reserve table tomorrow", ["book dinner tomorrow"], threshold=1) → True'
+        - 'similarity_score = 0.88, similarity_method = SEMANTIC'
+
+    - test: "test_intent_disambiguation"
+      description: "Different intents not flagged as repeat"
+      assertions:
+        - 'is_repeated("cancel dinner", ["book dinner"], threshold=1) → False'
+        - 'intent_check prevents false positive (book vs cancel)'
+
+    - test: "test_adaptive_threshold_simple_query"
+      description: "Simple queries use strict threshold (0.9)"
+      assertions:
+        - 'is_repeated("book dinner at luigi''s tomorrow", ["reserve table at olive garden tomorrow"], threshold=1) → True (0.75 threshold)'
+        - 'is_repeated("weather", ["weather forecast"], threshold=1) → True (0.9 threshold)'
+        - 'is_repeated("weather", ["reminder"], threshold=1) → False (low similarity)'
+
+    - test: "test_adaptive_threshold_complex_query"
+      description: "Complex queries use lenient threshold (0.7)"
+      assertions:
+        - "is_repeated(\"book dinner at luigi's tomorrow\", [\"reserve table at olive garden tomorrow\"], threshold=1) → True (0.75 threshold)"
+
+    - test: "test_repeat_pattern_linear"
+      description: "Linear pattern detected (A → A → A)"
+      assertions:
+        - 'is_repeated("book dinner", ["book dinner", "book dinner"], threshold=2) → repeat_pattern=LINEAR'
+
+    - test: "test_repeat_pattern_cyclical"
+      description: "Cyclical pattern detected (A → B → A)"
+      assertions:
+        - 'is_repeated("book dinner", ["reserve table", "book dinner"], threshold=2) → repeat_pattern=CYCLICAL'
+
+        - user_query_1:
+            text: "book dinner tomorrow"
+            turn: 1
+        - user_query_2:
+            text: "book dinner tomorrow"
+            turn: 3
+            repeat: true
+        - system_action_1:
+            action: "detect_repeat"
+            is_repeat: true
+            repeat_count: 2
+        - system_action_2:
+            action: "Send FeedbackType.REPEATED_QUERY to Learning Loop"
+
+  integration_tests:
+    - test: "test_end_to_end_repeat_to_learning_loop"
+      description: "Repeated query triggers Learning Loop event"
+      flow:
+        - User: "book dinner tomorrow (Turn 1)"
+        - User: "book dinner tomorrow (Turn 3, REPEAT)"
+        - System: detect_repeat → is_repeat=True, repeat_count=2
+        - System: Send FeedbackType.REPEATED_QUERY to Learning Loop
+      assertions:
+        - 'Learning Loop receives event with repeat_pattern=LINEAR'
+
+    - test: "test_linear_repeat_escalation_to_reject"
+      description: "3+ linear repeats trigger REJECT mode"
+      setup: User repeats "book dinner tomorrow" 3 times
+      assertions:
+        - 'Learning Loop escalates to REJECT mode (force full rephrase)'
+
+  performance_tests:
+    - test: "test_levenshtein_latency_p95_under_2ms"
+      description: "10,000 Levenshtein detections complete in <2ms P95"
+      setup: Run 10K exact repeats
+      assertions:
+        - 'P95 latency <2ms'
+
+    - test: "test_semantic_cached_latency_p95_under_15ms"
+      description: "1,000 semantic detections (cached) complete in <15ms P95"
+      setup: Run 1K semantic repeats with 75% cache hit rate
+      assertions:
+        - 'P95 latency <15ms (cached embeddings)'
+
+    - test: "test_semantic_uncached_latency_p99_under_35ms"
+      description: "100 semantic detections (uncached) complete in <35ms P99"
+      setup: Run 100 semantic repeats with 0% cache hit rate
+      assertions:
+        - 'P99 latency <35ms (cold embeddings)'
+
+# ========================================
+# 10. SECURITY & PRIVACY
+# ========================================
+
+security:
+  pii_handling:
+    redaction: "User queries with PII redacted before embedding"
+    deterministic_only: "RED/BLACK privacy bands use Levenshtein only (no embeddings)"
+    example: |
+      User (RED band): "book dinner with card ending 1234"
+      → Levenshtein detection only (no semantic embeddings)
+      → Embedding model never sees PII
+
+  model_security:
+    local_model: "all-MiniLM-L6-v2 runs locally (no external API calls)"
+    data_retention: "Embeddings cached in-memory only (not persisted to disk)"
+    privacy: "No user data sent to external services"
+
+# ========================================
+# 11. MIGRATION NOTES
+# ========================================
+
+migration:
+  from_version: 1.0.0 (Levenshtein-only)
+  to_version: 2.0.0 (Hybrid similarity with adaptive threshold)
+
+  changes:
+    - "Add semantic similarity with local sentence embeddings"
+    - "Add adaptive threshold based on query complexity"
+    - "Add repeat_pattern detection (LINEAR | CYCLICAL | ESCALATING)"
+    - "Add intent disambiguation (prevent false positives)"
+
+  backward_compatibility:
+    breaking: true
+    reason: "is_repeated now returns RepeatDetectionResult (was bool)"
+    migration_guide: |
+      # OLD (v1.0.0)
+      is_repeat = detector.is_repeated(query, recent_queries, threshold=3)
+
+      # NEW (v2.0.0)
+      result = detector.is_repeated(query, recent_queries, threshold=3)
+      is_repeat = result.is_repeat  # Access bool field
+
+      # Access new fields
+      print(result.repeat_count)
+      print(result.similarity_score)
+      print(result.similarity_method)
+      print(result.repeat_pattern)

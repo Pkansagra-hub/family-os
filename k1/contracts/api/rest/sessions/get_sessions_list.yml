@@ -1,0 +1,412 @@
+get_sessions_list:
+  name: "GET /v1/sessions - List Sessions Contract"
+  purpose: "List sessions with cursor-based pagination (no offset)"
+  version: "1.0"
+  adr_source: "ADR-0041a (Session CRUD) + ADR-0041c (Cursor Pagination)"
+  endpoint: "GET /v1/sessions"
+  module: "k1/l5_infrastructure/api_gateway/rest/session_api.py"
+  capability: "Session Lifecycle Management"
+
+  description: |
+    GET /v1/sessions lists all sessions for authenticated user with cursor-based
+    pagination (opaque cursor, no offset). Returns pagination metadata with has_more
+    flag and next_cursor for infinite scrolling.
+
+    Key features:
+    - Cursor-based pagination (base64-encoded last item ID)
+    - has_more flag (no expensive COUNT(*) query)
+    - Default limit 20, max limit 100
+    - Filter by status/privacy_band
+    - <200ms P95 performance
+
+  http_request:
+    method: "GET"
+    path: "/v1/sessions"
+
+    headers:
+      required:
+        Authorization:
+          type: "string"
+          format: "Bearer <jwt_token>"
+          description: "JWT access token"
+
+    query_parameters:
+      limit:
+        type: "integer"
+        required: false
+        default: 20
+        min: 1
+        max: 100
+        description: "Number of sessions per page"
+
+      cursor:
+        type: "string"
+        required: false
+        format: "base64-encoded last item ID"
+        description: "Opaque cursor for pagination"
+        example: "c2Vzc2lvbi1hYmMxMjM="
+
+      status:
+        type: "string"
+        required: false
+        values: ["active", "idle", "draining", "terminated"]
+        description: "Filter by session status"
+
+      privacy_band:
+        type: "string"
+        required: false
+        values: ["GREEN", "AMBER", "RED", "BLACK"]
+        description: "Filter by privacy band"
+
+  http_response:
+    success:
+      status_code: 200
+      description: "OK"
+
+      headers:
+        Content-Type:
+          type: "string"
+          value: "application/json"
+
+      body_schema:
+        data:
+          type: "array<object>"
+          description: "Array of session summaries"
+
+          item_schema:
+            session_id:
+              type: "string"
+
+            persona:
+              type: "string"
+
+            status:
+              type: "string"
+
+            created_at:
+              type: "string"
+              format: "ISO 8601"
+
+            total_turns:
+              type: "integer"
+              description: "Quick summary statistic"
+
+            _links:
+              type: "object"
+              schema:
+                self:
+                  type: "object"
+                  properties:
+                    href:
+                      type: "string"
+                      format: "/v1/sessions/{session_id}"
+
+        pagination:
+          type: "object"
+          description: "Pagination metadata"
+
+          schema:
+            total:
+              type: "null"
+              description: "Not provided (no COUNT(*) query)"
+
+            limit:
+              type: "integer"
+              description: "Requested limit"
+
+            has_more:
+              type: "boolean"
+              description: "True if more sessions exist"
+
+            next_cursor:
+              type: "string"
+              nullable: true
+              description: "Cursor for next page (null if no more pages)"
+
+            prev_cursor:
+              type: "string"
+              nullable: true
+              description: "Cursor from request (for back navigation)"
+
+        _links:
+          type: "object"
+          description: "HATEOAS navigation links"
+
+          schema:
+            self:
+              type: "object"
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/sessions?limit={limit}"
+
+            next:
+              type: "object"
+              nullable: true
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/sessions?limit={limit}&cursor={next_cursor}"
+
+    errors:
+      400:
+        error_type: "invalid_input"
+        description: "Invalid query parameters"
+        examples:
+          - "limit exceeds maximum 100"
+          - "invalid cursor format"
+
+      401:
+        error_type: "unauthorized"
+        description: "Missing or invalid JWT"
+
+  implementation:
+    workflow:
+      - step: 1
+        name: "Extract JWT"
+        description: "Validate JWT and extract user_id from claims"
+        latency: "<2ms"
+
+      - step: 2
+        name: "Parse Query Parameters"
+        description: "Extract limit, cursor, filters"
+        validation:
+          - "limit between 1-100"
+          - "cursor is valid base64 (if provided)"
+          - "status/privacy_band are valid values"
+
+      - step: 3
+        name: "Decode Cursor"
+        description: "Decode base64 cursor to get last session_id"
+
+        if_cursor_provided:
+          action: "last_id = base64.decode(cursor)"
+
+        if_no_cursor:
+          action: "last_id = null (start from beginning)"
+
+      - step: 4
+        name: "Query Sessions"
+        description: "Fetch sessions from K1 kernel"
+
+        sql_pattern: |
+          SELECT * FROM sessions
+          WHERE user_id = ? AND session_id > ?
+          ORDER BY session_id ASC
+          LIMIT ?
+
+        parameters:
+          - user_id: "from JWT claims"
+          - last_id: "from decoded cursor (or null)"
+          - limit: "limit + 1 (to check has_more)"
+
+        filters:
+          if_status_provided:
+            add: "AND status = ?"
+          if_privacy_band_provided:
+            add: "AND privacy_band = ?"
+
+        latency: "<15ms (indexed query)"
+
+      - step: 5
+        name: "Check has_more"
+        description: "Determine if more pages exist"
+
+        logic: |
+          if results.length > limit:
+            has_more = true
+            results.pop()  # Remove extra item
+          else:
+            has_more = false
+
+      - step: 6
+        name: "Generate next_cursor"
+        description: "Encode last session_id as cursor"
+
+        if_has_more:
+          action: "next_cursor = base64.encode(results.last().session_id)"
+
+        if_no_more:
+          action: "next_cursor = null"
+
+      - step: 7
+        name: "Build Response"
+        description: "Construct response with pagination metadata"
+        include:
+          - "data array (session summaries)"
+          - "pagination object (limit, has_more, next_cursor, prev_cursor)"
+          - "HATEOAS links (self, next)"
+
+      - step: 8
+        name: "Return Response"
+        description: "Return 200 OK with JSON body"
+
+  cursor_encoding:
+    format: "base64-encoded session ID"
+
+    encoding:
+      input: "session-abc123"
+      output: "c2Vzc2lvbi1hYmMxMjM="
+      algorithm: "base64.encode(session_id)"
+
+    decoding:
+      input: "c2Vzc2lvbi1hYmMxMjM="
+      output: "session-abc123"
+      algorithm: "base64.decode(cursor)"
+
+    properties:
+      opaque: true
+      description: "Client cannot manipulate cursor (prevents page jumping)"
+      validation: "Server validates decoded ID exists"
+
+  pagination_strategy:
+    no_offset:
+      reason: "Offset pagination is O(n) (slow for large datasets)"
+      problem: "SELECT * FROM sessions OFFSET 500000 LIMIT 20 scans 500K rows"
+
+    cursor_based:
+      reason: "Cursor pagination is O(log n) (fast with indexes)"
+      solution: "SELECT * FROM sessions WHERE id > cursor ORDER BY id LIMIT 20"
+      benefit: "B-tree index lookup (logarithmic time)"
+
+    no_count:
+      reason: "COUNT(*) query is expensive (>1s for 1M rows)"
+      trade_off: "Cannot show 'Page X of Y', but has_more is sufficient"
+      benefit: "No blocking COUNT query, faster pagination"
+
+    fetch_limit_plus_one:
+      strategy: "Fetch limit + 1 items to check has_more"
+
+      example:
+        limit: 20
+        fetch: 21
+
+        if_results_21:
+          has_more: true
+          return: "first 20 items"
+
+        if_results_20_or_less:
+          has_more: false
+          return: "all items"
+
+  performance:
+    budgets:
+      p50_latency_ms: 50
+      p95_latency_ms: 200
+      p99_latency_ms: 500
+      target: "<200ms P95"
+
+    breakdown:
+      jwt_validation_ms: 2
+      query_parameter_parsing_ms: 1
+      cursor_decoding_ms: 0.5
+      database_query_ms: 15
+      cursor_encoding_ms: 0.5
+      json_serialization_ms: 8
+      total_ms: 27
+
+    optimization:
+      indexed_queries:
+        enabled: true
+        index: "CREATE INDEX idx_sessions_user_id_session_id ON sessions(user_id, session_id)"
+        benefit: "O(log n) lookup vs O(n) scan"
+
+      minimal_fields:
+        enabled: true
+        description: "Return summary (id, persona, status, created_at, total_turns)"
+        benefit: "Smaller JSON payload, faster serialization"
+
+  observability:
+    metrics:
+      - name: "sessions_list_latency_ms"
+        type: "histogram"
+        buckets: [10, 50, 100, 200, 500]
+        description: "Session list query latency"
+
+      - name: "pagination_requests_total"
+        type: "counter"
+        labels: ["has_cursor"]
+        description: "Total pagination requests (first page vs subsequent)"
+
+      - name: "page_sizes"
+        type: "histogram"
+        buckets: [1, 10, 20, 50, 100]
+        description: "Distribution of requested page sizes"
+
+  examples:
+    first_page:
+      request:
+        method: "GET"
+        path: "/v1/sessions?limit=20"
+        headers:
+          Authorization: "Bearer <jwt>"
+
+      response:
+        status: 200
+        body:
+          data:
+            - session_id: "session-001"
+              persona: "helpful_assistant"
+              status: "active"
+              created_at: "2025-10-11T14:00:00Z"
+              total_turns: 5
+              _links:
+                self:
+                  href: "/v1/sessions/session-001"
+            - session_id: "session-002"
+              persona: "family_concierge"
+              status: "active"
+              created_at: "2025-10-11T14:05:00Z"
+              total_turns: 3
+              _links:
+                self:
+                  href: "/v1/sessions/session-002"
+          pagination:
+            total: null
+            limit: 20
+            has_more: true
+            next_cursor: "c2Vzc2lvbi0wMjA="
+            prev_cursor: null
+          _links:
+            self:
+              href: "/v1/sessions?limit=20"
+            next:
+              href: "/v1/sessions?limit=20&cursor=c2Vzc2lvbi0wMjA="
+
+    subsequent_page:
+      request:
+        method: "GET"
+        path: "/v1/sessions?limit=20&cursor=c2Vzc2lvbi0wMjA="
+        headers:
+          Authorization: "Bearer <jwt>"
+
+      response:
+        status: 200
+        body:
+          data:
+            - session_id: "session-021"
+              persona: "helpful_assistant"
+              status: "active"
+              created_at: "2025-10-11T16:00:00Z"
+              total_turns: 12
+          pagination:
+            total: null
+            limit: 20
+            has_more: false
+            next_cursor: null
+            prev_cursor: "c2Vzc2lvbi0wMjA="
+          _links:
+            self:
+              href: "/v1/sessions?limit=20&cursor=c2Vzc2lvbi0wMjA="
+            next: null
+
+  related_contracts:
+    - "post_create_session.yml"
+    - "get_session.yml"
+    - "hateoas_links.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0041a + ADR-0041c"
+      author: "Contract Development Team"

@@ -1,0 +1,401 @@
+time_based_rules:
+  name: "Time-Based Behavior Rules Contract"
+  purpose: "Define time-sensitive behavioral constraints for family activities"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/time_based_rules.py"
+  capability: "Social Norm Modeling"
+
+  description: |
+    Time-based rules define when specific behaviors are appropriate or inappropriate
+    based on time of day, day of week, and special occasions. Rules cover quiet hours,
+    meal times, work hours, and family activities.
+
+    Key features:
+    - Schedule-based rule activation
+    - Day-of-week variations
+    - Holiday/special occasion handling
+    - Automatic rule expiration
+    - Timezone awareness
+
+  rule_categories:
+    quiet_hours:
+      description: "Nighttime quiet hours (22:00-07:00)"
+
+      weekday_schedule:
+        days: ["monday", "tuesday", "wednesday", "thursday"]
+        start_time: "22:00"
+        end_time: "07:00"
+        timezone: "local"
+
+      weekend_schedule:
+        days: ["friday", "saturday"]
+        start_time: "23:00"
+        end_time: "08:00"
+        timezone: "local"
+
+      sunday_schedule:
+        days: ["sunday"]
+        start_time: "22:00"
+        end_time: "07:00"
+        timezone: "local"
+
+      constraints:
+        audio_volume:
+          max_percentage: 50
+          applies_to: ["tts", "media_playback", "notifications"]
+
+        phone_calls:
+          block_outgoing: true
+          block_time: "22:30"
+          exceptions: ["emergency_contacts", "favorites"]
+
+        notifications:
+          defer_non_urgent: true
+          urgent_threshold: "high"
+
+        music_suggestions:
+          block_loud_music: true
+          alternative: "quiet_ambient"
+
+    meal_times:
+      description: "Family meal times"
+
+      breakfast:
+        schedule:
+          weekday:
+            days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+            start_time: "07:00"
+            end_time: "08:00"
+          weekend:
+            days: ["saturday", "sunday"]
+            start_time: "08:00"
+            end_time: "09:30"
+
+        constraints:
+          minimize_interruptions:
+            priority: "low"
+            defer_work: true
+            defer_entertainment: true
+
+          family_conversation:
+            priority: "high"
+            reduce_agent_interjections: true
+
+      lunch:
+        schedule:
+          all_days:
+            days: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            start_time: "12:00"
+            end_time: "13:00"
+
+        constraints:
+          minimize_interruptions:
+            priority: "low"
+            defer_non_urgent: true
+
+      dinner:
+        schedule:
+          all_days:
+            days: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            start_time: "18:00"
+            end_time: "19:00"
+
+        constraints:
+          maximize_family_time:
+            priority: "high"
+            no_work_notifications: true
+            no_entertainment_suggestions: true
+            defer_all_non_urgent: true
+
+    work_hours:
+      description: "Work hours (09:00-17:00, Monday-Friday)"
+
+      schedule:
+        days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        start_time: "09:00"
+        end_time: "17:00"
+        timezone: "local"
+
+      break_times:
+        morning_break:
+          start_time: "10:30"
+          end_time: "10:45"
+
+        lunch_break:
+          start_time: "12:00"
+          end_time: "13:00"
+
+        afternoon_break:
+          start_time: "15:00"
+          end_time: "15:15"
+
+      constraints:
+        during_work:
+          block_entertainment: true
+          prioritize_productivity: true
+          defer_social_media: true
+          filter_intents: ["entertainment", "social", "shopping"]
+
+        during_breaks:
+          allow_entertainment: true
+          allow_social: true
+          relax_filters: true
+
+    naptime:
+      description: "Naptime detection and constraints"
+
+      detection:
+        method: "ambient_sensors"
+        criteria:
+          room_dark: true
+          no_motion_minutes: 10
+          low_audio_level: true
+
+        confirmation_window_minutes: 5
+
+      typical_schedule:
+        weekday:
+          days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+          start_time: "14:00"
+          end_time: "15:30"
+
+        weekend:
+          days: ["saturday", "sunday"]
+          start_time: "13:00"
+          end_time: "15:00"
+
+      constraints:
+        audio:
+          block_all_audio: true
+          exceptions: ["emergency_alerts", "smoke_alarm"]
+
+        responses:
+          modality: "visual_only"
+          defer_non_urgent: true
+
+        notifications:
+          hold_all: true
+          batch_after_wake: true
+
+    bedtime:
+      description: "Bedtime routine"
+
+      detection:
+        method: "ambient_sensors + user_signal"
+        user_signal: "Goodnight FamilyOS"
+        ambient_criteria:
+          lights_off: true
+          no_motion_minutes: 15
+
+      schedule:
+        children:
+          age_group: "0-12"
+          start_time: "20:00"
+          end_time: "21:00"
+
+        adults:
+          start_time: "22:00"
+          end_time: "23:00"
+
+      constraints:
+        pre_bedtime_routine:
+          start_time: "-30min"
+          actions:
+            - "Dim lights"
+            - "Lower speaker volume"
+            - "Suggest calming activities"
+
+        during_bedtime:
+          block_all_audio: true
+          block_all_visual: true
+          defer_everything: true
+          exceptions: ["emergency_alerts"]
+
+  special_occasions:
+    holidays:
+      description: "Holiday-specific rules"
+
+      major_holidays:
+        list:
+          - "New Year's Day"
+          - "Christmas"
+          - "Thanksgiving"
+          - "Easter"
+          - "Independence Day"
+
+        rule_overrides:
+          relax_quiet_hours: true
+          extend_meal_times: true
+          allow_late_night_activities: true
+
+      family_birthdays:
+        detection: "calendar_integration"
+        rule_overrides:
+          prioritize_celebration: true
+          allow_special_requests: true
+
+    weekends:
+      description: "Weekend rule variations"
+
+      days: ["saturday", "sunday"]
+
+      rule_overrides:
+        quiet_hours:
+          start_time: "23:00"
+          end_time: "08:00"
+
+        meal_times:
+          relaxed_schedule: true
+          extended_duration: "+30min"
+
+        work_constraints:
+          disabled: true
+
+    vacation_mode:
+      description: "Vacation mode overrides"
+
+      activation:
+        method: "user_explicit"
+        command: "FamilyOS, activate vacation mode"
+
+      duration:
+        default_days: 7
+        max_days: 30
+
+      rule_overrides:
+        disable_work_constraints: true
+        relax_all_schedules: true
+        maintain_safety_rules: true
+
+  rule_evaluation:
+    priority_order:
+      1: "special_occasions"
+      2: "naptime"
+      3: "bedtime"
+      4: "meal_times"
+      5: "quiet_hours"
+      6: "work_hours"
+
+    conflict_resolution:
+      method: "highest_priority_wins"
+      example: "naptime (priority 2) overrides work_hours (priority 6)"
+
+    evaluation_workflow:
+      step_1:
+        name: "Get Current Time Context"
+        action: "Retrieve current time, day, timezone"
+        output: "time_context"
+
+      step_2:
+        name: "Check Active Rules"
+        action: "Query rules matching current time context"
+        filters: ["time_of_day", "day_of_week", "special_occasion"]
+        output: "active_rules"
+
+      step_3:
+        name: "Resolve Conflicts"
+        action: "Apply priority-based conflict resolution"
+        output: "resolved_rule"
+
+      step_4:
+        name: "Apply Constraints"
+        action: "Return constraints from highest-priority rule"
+        output: "active_constraints"
+
+  performance:
+    rule_evaluation_latency_ms:
+      p50: 0.5
+      p95: 1
+      p99: 2
+      target: "<1ms for rule evaluation"
+
+    schedule_check_frequency_ms: 1000
+
+    database_size_kb:
+      base_rules: 20
+      user_customizations: 5
+      total: 25
+
+  observability:
+    metrics:
+      - name: "time_based_rules_active_total"
+        type: "gauge"
+        labels: ["rule_category"]
+        description: "Number of active time-based rules"
+
+      - name: "time_based_rules_evaluations_total"
+        type: "counter"
+        labels: ["rule_category", "outcome"]
+        description: "Total rule evaluations"
+
+      - name: "time_based_rules_constraint_applied_total"
+        type: "counter"
+        labels: ["constraint_type"]
+        description: "Total constraints applied"
+
+    logging:
+      events:
+        - event: "rule_activated"
+          level: "info"
+          fields:
+            - "rule_name"
+            - "start_time"
+            - "end_time"
+
+        - event: "rule_deactivated"
+          level: "info"
+          fields:
+            - "rule_name"
+            - "duration_ms"
+
+        - event: "constraint_applied"
+          level: "debug"
+          fields:
+            - "constraint_type"
+            - "intent"
+
+  storage:
+    database: "SQLite"
+
+    schema:
+      time_rules:
+        columns:
+          rule_id: "TEXT PRIMARY KEY"
+          rule_category: "TEXT"
+          schedule: "JSON"
+          constraints: "JSON"
+          priority: "INTEGER"
+          enabled: "BOOLEAN"
+
+        indexes:
+          - "CREATE INDEX idx_time_rules_priority ON time_rules(priority, enabled)"
+
+  integration:
+    input_sources:
+      - name: "System Clock"
+        source: "system"
+        frequency: "1Hz"
+
+      - name: "Calendar"
+        source: "k0/calendar_service"
+        event: "SPECIAL_OCCASION"
+
+      - name: "Ambient Sensors"
+        source: "k1/l1_input/ambient_sensors.py"
+        event: "NAPTIME_DETECTED"
+
+    output_consumers:
+      - name: "Social Norms"
+        destination: "k1/l1_input/meta_policy/social_norms.py"
+        event: "TIME_RULE_ACTIVE"
+
+  related_contracts:
+    - "social_norms.yml"
+    - "context_specific_behaviors.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -1,0 +1,258 @@
+http_caching:
+  name: "HTTP Caching Strategy Contract"
+  purpose: "ETag and Last-Modified caching for 82% cache hit rate"
+  version: "1.0"
+  adr_source: "ADR-0041a (Session CRUD) lines 501-750 (HTTP Caching)"
+  module: "k1/l5_infrastructure/api_gateway/rest/cache_manager.py"
+  capability: "RESTful API Design"
+
+  description: |
+    HTTP caching strategy using ETag (MD5 hash) and Last-Modified headers
+    for conditional requests. Achieves 82% cache hit rate (2.46M of 3M monthly
+    GETs return 304 Not Modified in 8ms vs 85ms uncached).
+
+    Key features:
+    - ETag: MD5 hash of resource state
+    - Last-Modified: ISO 8601 timestamp
+    - Cache-Control: private, max-age=300
+    - 304 Not Modified for unchanged resources
+
+  cache_headers:
+    etag:
+      description: "Entity tag for cache validation"
+      format: '"etag-{md5_hash}"'
+      generation:
+        algorithm: "MD5"
+        input: "JSON-serialized resource state"
+        example: '"etag-5d41402abc4b2a76b9719d911017c592"'
+
+      usage:
+        server_sends: "ETag header in 200 OK response"
+        client_sends: "If-None-Match header in subsequent GET"
+        server_validates: "Compare If-None-Match with current ETag"
+
+        if_match:
+          response: "304 Not Modified (empty body)"
+          latency: "<10ms"
+
+        if_no_match:
+          response: "200 OK (full body)"
+          latency: "<100ms"
+
+    last_modified:
+      description: "Timestamp of last resource modification"
+      format: "HTTP-date (RFC 7231)"
+      example: "Wed, 11 Oct 2025 14:35:00 GMT"
+
+      usage:
+        server_sends: "Last-Modified header in 200 OK response"
+        client_sends: "If-Modified-Since header in subsequent GET"
+        server_validates: "Compare If-Modified-Since with current Last-Modified"
+
+        if_not_modified:
+          response: "304 Not Modified"
+
+        if_modified:
+          response: "200 OK"
+
+    cache_control:
+      directive: "private, max-age=300"
+
+      components:
+        private:
+          description: "Response is user-specific (not shared across users)"
+          reason: "Session data is per-user"
+
+        max_age:
+          value: 300
+          unit: "seconds"
+          description: "Cache for 5 minutes"
+          reason: "Balance freshness vs cache hit rate"
+
+  etag_generation:
+    algorithm: "MD5"
+
+    input_fields:
+      included:
+        - "session_id"
+        - "status"
+        - "agents (array)"
+        - "metadata"
+        - "updated_at"
+
+      excluded:
+        - "statistics (dynamic, changes frequently)"
+        - "capabilities (static, never changes)"
+
+    implementation:
+      pseudocode: |
+        def generate_etag(session):
+          # Serialize session to JSON
+          json_str = json.dumps({
+            "session_id": session.id,
+            "status": session.status,
+            "agents": session.agents,
+            "metadata": session.metadata,
+            "updated_at": session.updated_at
+          }, sort_keys=True)
+
+          # Compute MD5 hash
+          hash_hex = hashlib.md5(json_str.encode()).hexdigest()
+
+          # Format as ETag
+          return f'"{hash_hex}"'
+
+    performance:
+      md5_computation_latency_ms: 1
+      json_serialization_latency_ms: 2
+      total_latency_ms: 3
+
+  conditional_requests:
+    if_none_match:
+      header: "If-None-Match"
+      format: '"etag-{hash}"'
+      description: "Client sends previous ETag"
+
+      server_logic: |
+        if request.headers["If-None-Match"] == current_etag:
+          return 304 Not Modified (empty body)
+        else:
+          return 200 OK (full body + new ETag)
+
+    if_modified_since:
+      header: "If-Modified-Since"
+      format: "HTTP-date"
+      description: "Client sends previous Last-Modified"
+
+      server_logic: |
+        if request.headers["If-Modified-Since"] >= resource.updated_at:
+          return 304 Not Modified
+        else:
+          return 200 OK (full body + Last-Modified)
+
+  cache_invalidation:
+    triggers:
+      - event: "Session metadata updated (PATCH)"
+        action: "DELETE cache key session:{session_id}"
+
+      - event: "Agent hired/fired"
+        action: "DELETE cache key session:{session_id}"
+
+      - event: "Session terminated (DELETE)"
+        action: "DELETE cache key session:{session_id}"
+
+    method: "Explicit cache deletion (not expiration-based)"
+
+    implementation:
+      redis_command: "DEL session:{session_id}, etag:session:{session_id}"
+
+  performance_impact:
+    traffic_distribution:
+      total_requests_monthly: 3000000
+      get_requests: 3000000
+      percentage: "100% of GETs"
+
+    cache_hit_rate:
+      cache_hits: 2460000
+      cache_misses: 540000
+      hit_rate_percent: 82
+
+    latency_comparison:
+      uncached_p95_ms: 85
+      cached_p95_ms: 8
+      speedup_factor: 10.6
+
+    server_load_reduction:
+      uncached_total_time_seconds: 255000  # 3M × 85ms
+      cached_total_time_seconds: 65610     # 540K × 85ms + 2.46M × 8ms
+      reduction_percent: 74
+
+    bandwidth_savings:
+      uncached_response_bytes: 2048
+      cached_response_bytes: 0
+
+      uncached_total_mb: 5859  # 3M × 2KB
+      cached_total_mb: 1055    # 540K × 2KB
+      savings_percent: 82
+
+  observability:
+    metrics:
+      - name: "cache_hit_rate"
+        type: "gauge"
+        calculation: "cache_hits / total_requests"
+        target: 0.82
+        description: "HTTP cache hit rate"
+
+      - name: "cache_hits_total"
+        type: "counter"
+        description: "Total 304 Not Modified responses"
+
+      - name: "cache_misses_total"
+        type: "counter"
+        description: "Total 200 OK responses (uncached)"
+
+      - name: "etag_generation_latency_ms"
+        type: "histogram"
+        buckets: [0.5, 1, 2, 5]
+        description: "ETag computation latency"
+
+  examples:
+    first_request:
+      request:
+        method: "GET"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer <jwt>"
+
+      response:
+        status: 200
+        headers:
+          ETag: '"etag-xyz789"'
+          Last-Modified: "Wed, 11 Oct 2025 14:35:00 GMT"
+          Cache-Control: "private, max-age=300"
+        body:
+          session_id: "session-abc123"
+          status: "active"
+
+    second_request_cached:
+      request:
+        method: "GET"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer <jwt>"
+          If-None-Match: '"etag-xyz789"'
+
+      response:
+        status: 304
+        headers:
+          ETag: '"etag-xyz789"'
+          Cache-Control: "private, max-age=300"
+        body: null
+
+    second_request_modified:
+      request:
+        method: "GET"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer <jwt>"
+          If-None-Match: '"etag-old123"'
+
+      response:
+        status: 200
+        headers:
+          ETag: '"etag-new456"'
+          Last-Modified: "Wed, 11 Oct 2025 14:40:00 GMT"
+          Cache-Control: "private, max-age=300"
+        body:
+          session_id: "session-abc123"
+          status: "active"
+
+  related_contracts:
+    - "get_session.yml"
+    - "patch_update_session.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0041a"
+      author: "Contract Development Team"

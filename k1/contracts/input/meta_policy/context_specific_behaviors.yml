@@ -1,0 +1,462 @@
+context_specific_behaviors:
+  name: "Context-Specific Behavior Rules Contract"
+  purpose: "Define behavioral constraints based on situational context"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/context_specific_behaviors.py"
+  capability: "Social Norm Modeling, Contextual Privacy"
+
+  description: |
+    Context-specific behaviors adapt agent responses based on situational context
+    such as room occupancy (visitors, children), activity type (meeting, relaxation),
+    and emergency situations.
+
+    Key features:
+    - Ambient sensor-triggered contexts
+    - Multi-speaker context awareness
+    - Emergency response protocols
+    - Privacy-aware adaptations
+    - Activity-based constraints
+
+  context_categories:
+    occupancy_contexts:
+      description: "Contexts based on who is present"
+
+      visitors_present:
+        detection:
+          method: "ambient_sensors + speaker_diarization"
+          criteria:
+            unknown_voices: true
+            unknown_faces: true
+            confidence_threshold: 0.8
+
+        privacy_adjustments:
+          upgrade_band: "GREEN → AMBER"
+          block_personal_info: true
+          no_calendar_reading: true
+          no_email_reading: true
+          no_message_reading: true
+
+        response_adaptations:
+          formality: "increased"
+          avoid_family_nicknames: true
+          avoid_personal_references: true
+
+        duration_tracking:
+          start_detection_ms: "timestamp"
+          auto_revert_after_minutes: 30
+
+      children_present:
+        detection:
+          method: "speaker_diarization"
+          criteria:
+            speaker_age_group: "child"
+            speaker_identified: true
+
+        content_filtering:
+          safety_level: "strict"
+          blocked_categories:
+            - "violence"
+            - "sexual_content"
+            - "profanity"
+            - "gambling"
+            - "drugs_alcohol"
+
+        response_adaptations:
+          language_level: "simplified"
+          tone: "child_friendly"
+          avoid_scary_content: true
+          educational_priority: true
+
+      family_gathering:
+        detection:
+          method: "speaker_diarization + room_occupancy"
+          criteria:
+            speaker_count: ">= 3"
+            all_family_members: true
+
+        behavior_adjustments:
+          reduce_interruptions: true
+          prioritize_group_requests: true
+          collaborative_responses: true
+
+        activity_suggestions:
+          prioritize: ["games", "music", "movies", "trivia"]
+
+      alone_time:
+        detection:
+          method: "room_occupancy + speaker_diarization"
+          criteria:
+            speaker_count: 1
+            duration_minutes: ">= 5"
+
+        behavior_adjustments:
+          proactive_suggestions: true
+          personalized_content: true
+          privacy_band: "GREEN"
+
+        activity_suggestions:
+          based_on_preferences: true
+          consider_time_of_day: true
+
+    activity_contexts:
+      description: "Contexts based on current activity"
+
+      meeting_in_progress:
+        detection:
+          method: "calendar_integration + audio_analysis"
+          criteria:
+            calendar_event: "meeting"
+            multiple_speakers: true
+            formal_speech_pattern: true
+
+        constraints:
+          block_interruptions: true
+          defer_notifications: true
+          mute_audio_outputs: true
+
+        exceptions:
+          emergency_alerts: true
+          vip_contacts: false
+
+        auto_end_detection:
+          method: "audio_analysis"
+          silence_duration_minutes: 5
+
+      focused_work:
+        detection:
+          method: "calendar_integration + user_signal"
+          criteria:
+            calendar_event: "focus_time"
+            user_command: "FamilyOS, focus mode"
+
+        constraints:
+          block_non_work: true
+          prioritize_productivity: true
+          defer_entertainment: true
+
+        duration:
+          default_minutes: 90
+          max_minutes: 240
+
+        break_reminders:
+          frequency_minutes: 90
+          message: "You've been focused for 90 minutes. Consider a break."
+
+      relaxation_time:
+        detection:
+          method: "user_signal + time_of_day"
+          criteria:
+            user_command: "FamilyOS, relax mode"
+            time_range: "evening"
+
+        response_adaptations:
+          tone: "casual"
+          suggestions: ["entertainment", "music", "meditation"]
+          reduce_formality: true
+
+        constraints:
+          defer_work: true
+          defer_productivity: true
+
+      exercise_session:
+        detection:
+          method: "user_signal + ambient_sensors"
+          criteria:
+            user_command: "FamilyOS, workout mode"
+            motion_detected: true
+
+        response_adaptations:
+          audio_only: true
+          energetic_tone: true
+          motivational_messages: true
+
+        activity_support:
+          timer_management: true
+          music_suggestions: "upbeat"
+          hydration_reminders: true
+
+      cooking:
+        detection:
+          method: "user_signal + time_of_day"
+          criteria:
+            user_command: "FamilyOS, cooking mode"
+            time_range: "meal_prep"
+
+        response_adaptations:
+          hands_free_priority: true
+          audio_responses: true
+          step_by_step_guidance: true
+
+        activity_support:
+          timer_management: true
+          recipe_reading: true
+          measurement_conversions: true
+
+    emergency_contexts:
+      description: "Emergency situation handling"
+
+      fire_alarm:
+        detection:
+          method: "sensor_integration"
+          sensor: "smoke_detector"
+          trigger: "alarm_active"
+
+        override:
+          all_norms: true
+          priority: 1
+
+        actions:
+          alert_emergency_services: true
+          guide_evacuation: true
+          unlock_all_doors: true
+          turn_on_lights: true
+          disable_music: true
+
+        audio_guidance:
+          volume: "maximum"
+          message: "Fire alarm activated. Please evacuate immediately."
+          repeat_interval_seconds: 30
+
+      medical_emergency:
+        detection:
+          method: "user_signal + vitals_monitoring"
+          triggers:
+            user_command: "FamilyOS, medical emergency"
+            fall_detected: true
+            irregular_vitals: true
+
+        override:
+          all_norms: true
+          priority: 1
+
+        actions:
+          call_911: true
+          locate_emergency_contacts: true
+          provide_first_aid: true
+          unlock_door_for_paramedics: true
+
+        information_gathering:
+          location: true
+          medical_history: true
+          current_symptoms: true
+
+      security_breach:
+        detection:
+          method: "sensor_integration"
+          triggers:
+            door_forced_open: true
+            window_break_detected: true
+            unauthorized_entry: true
+
+        override:
+          all_norms: true
+          priority: 1
+
+        actions:
+          alert_security: true
+          lock_interior_doors: true
+          activate_cameras: true
+          turn_on_lights: true
+          silent_alarm: true
+
+        safety_protocol:
+          guide_to_safe_room: true
+          contact_authorities: true
+
+    privacy_contexts:
+      description: "Privacy-sensitive contexts"
+
+      private_conversation:
+        detection:
+          method: "user_signal"
+          signal: "FamilyOS, private mode"
+
+        privacy_enforcement:
+          no_recording: true
+          no_transcription: true
+          visual_feedback_only: true
+
+        duration:
+          default_minutes: 15
+          max_minutes: 60
+
+        auto_end:
+          user_command: "FamilyOS, end private mode"
+          timeout_minutes: 60
+
+      sensitive_discussion:
+        detection:
+          method: "content_analysis"
+          keywords: ["confidential", "private", "sensitive"]
+
+        privacy_enforcement:
+          upgrade_band: "AMBER → RED"
+          no_cloud_processing: true
+          local_only: true
+
+        audit_logging:
+          reduced: true
+          pii_redaction: true
+
+      financial_transaction:
+        detection:
+          method: "intent_classification"
+          intent_types: ["purchase", "payment", "banking"]
+
+        privacy_enforcement:
+          upgrade_band: "GREEN → AMBER"
+          no_reading_aloud: true
+          visual_confirmation: true
+
+        security_checks:
+          authentication_required: true
+          fraud_detection: true
+
+  context_evaluation:
+    priority_order:
+      1: "emergency_contexts"
+      2: "privacy_contexts"
+      3: "occupancy_contexts"
+      4: "activity_contexts"
+
+    conflict_resolution:
+      method: "highest_priority_wins"
+      example: "medical_emergency (priority 1) overrides private_conversation (priority 2)"
+
+    evaluation_workflow:
+      step_1:
+        name: "Detect Active Contexts"
+        action: "Query all context detection sources"
+        sources:
+          - "ambient_sensors"
+          - "speaker_diarization"
+          - "calendar_integration"
+          - "user_signals"
+        output: "detected_contexts"
+
+      step_2:
+        name: "Resolve Conflicts"
+        action: "Apply priority-based conflict resolution"
+        output: "active_context"
+
+      step_3:
+        name: "Apply Constraints"
+        action: "Return constraints from highest-priority context"
+        output: "active_constraints"
+
+  performance:
+    context_detection_latency_ms:
+      p50: 10
+      p95: 20
+      p99: 50
+      target: "<20ms for context detection"
+
+    context_evaluation_latency_ms:
+      p50: 1
+      p95: 2
+      p99: 5
+      target: "<2ms for evaluation"
+
+  observability:
+    metrics:
+      - name: "context_specific_behaviors_active_total"
+        type: "gauge"
+        labels: ["context_category", "context_name"]
+        description: "Number of active contexts"
+
+      - name: "context_specific_behaviors_detections_total"
+        type: "counter"
+        labels: ["context_name", "detection_method"]
+        description: "Total context detections"
+
+      - name: "context_specific_behaviors_constraint_applied_total"
+        type: "counter"
+        labels: ["context_name", "constraint_type"]
+        description: "Total constraints applied"
+
+    logging:
+      events:
+        - event: "context_activated"
+          level: "info"
+          fields:
+            - "context_name"
+            - "detection_method"
+            - "confidence"
+
+        - event: "context_deactivated"
+          level: "info"
+          fields:
+            - "context_name"
+            - "duration_ms"
+
+        - event: "emergency_context_triggered"
+          level: "critical"
+          fields:
+            - "emergency_type"
+            - "actions_taken"
+
+  storage:
+    database: "SQLite"
+
+    schema:
+      contexts:
+        columns:
+          context_id: "TEXT PRIMARY KEY"
+          context_category: "TEXT"
+          context_name: "TEXT"
+          detection_config: "JSON"
+          constraints: "JSON"
+          priority: "INTEGER"
+          enabled: "BOOLEAN"
+
+        indexes:
+          - "CREATE INDEX idx_contexts_priority ON contexts(priority, enabled)"
+
+      active_contexts:
+        columns:
+          session_id: "TEXT"
+          context_id: "TEXT FOREIGN KEY"
+          activated_at_ms: "INTEGER"
+          deactivated_at_ms: "INTEGER"
+
+        indexes:
+          - "CREATE INDEX idx_active_contexts_session ON active_contexts(session_id, activated_at_ms)"
+
+  integration:
+    input_sources:
+      - name: "Ambient Sensors"
+        source: "k1/l1_input/ambient_sensors.py"
+        event: "CONTEXT_DETECTED"
+
+      - name: "Speaker Diarization"
+        source: "k1/l1_input/speaker_diarization.py"
+        event: "SPEAKER_IDENTIFIED"
+
+      - name: "Calendar"
+        source: "k0/calendar_service"
+        event: "EVENT_STARTED"
+
+      - name: "User Commands"
+        source: "k1/l1_input/intent_router.py"
+        event: "MODE_COMMAND"
+
+    output_consumers:
+      - name: "Social Norms"
+        destination: "k1/l1_input/meta_policy/social_norms.py"
+        event: "CONTEXT_ACTIVE"
+
+      - name: "Dynamic Privacy Adjuster"
+        destination: "k1/l1_input/meta_policy/dynamic_privacy_adjuster.py"
+        event: "PRIVACY_CONTEXT_CHANGE"
+
+  related_contracts:
+    - "social_norms.yml"
+    - "dynamic_privacy_adjuster.yml"
+    - "privacy_adjustment_rules.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

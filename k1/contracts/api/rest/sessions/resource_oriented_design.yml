@@ -1,0 +1,314 @@
+resource_oriented_design:
+  name: "Resource-Oriented Design Contract"
+  purpose: "REST principles for resource-based URL structure"
+  version: "1.0"
+  adr_source: "ADR-0041a (Session CRUD) lines 751-1000 (Resource Design)"
+  module: "k1/l5_infrastructure/api_gateway/rest/"
+  capability: "RESTful API Design"
+
+  description: |
+    Resource-oriented design contract defines URL structure following REST
+    principles (Fielding 2000) and Google Cloud API Design Guide. Resources
+    are nouns (not verbs), URLs represent hierarchies, standard HTTP methods
+    map to CRUD operations.
+
+    Key principles:
+    - Resources = nouns (/sessions, not /createSession)
+    - Collections = plural (/v1/sessions)
+    - Singleton = path parameter (/v1/sessions/{id})
+    - Sub-resources = nested (/v1/sessions/{id}/turns)
+    - No RPC-style URLs
+
+  rest_principles:
+    roy_fielding_2000:
+      constraint_1:
+        name: "Resource-based"
+        description: "URLs identify resources (nouns), not actions (verbs)"
+        examples:
+          correct: "/v1/sessions/{id}"
+          incorrect: "/v1/getSession?id=123"
+
+      constraint_2:
+        name: "Standard HTTP methods"
+        description: "HTTP verbs map to operations"
+        mapping:
+          GET: "Retrieve resource (safe, idempotent)"
+          POST: "Create new resource"
+          PATCH: "Partial update"
+          DELETE: "Remove resource"
+
+      constraint_3:
+        name: "Stateless"
+        description: "No server-side session state"
+        implementation: "JWT in Authorization header"
+
+      constraint_4:
+        name: "Hierarchical"
+        description: "URLs represent resource hierarchies"
+        example: "/v1/sessions/{id}/turns/{turn_id}"
+
+  url_structure:
+    api_version:
+      pattern: "/v1/{resource}"
+      description: "API version in URL path"
+      examples:
+        - "/v1/sessions"
+        - "/v1/conversations"
+
+      rationale: "Enables API evolution (v1 → v2) without breaking clients"
+
+    collection:
+      pattern: "/v1/{resource}"
+      description: "Collection of resources (plural noun)"
+      examples:
+        - "/v1/sessions" # List sessions
+        - "/v1/conversations" # List conversations
+
+      http_methods:
+        GET: "List resources in collection"
+        POST: "Create new resource in collection"
+
+    singleton:
+      pattern: "/v1/{resource}/{id}"
+      description: "Single resource instance"
+      examples:
+        - "/v1/sessions/session-abc123"
+        - "/v1/conversations/conv-xyz789"
+
+      http_methods:
+        GET: "Retrieve resource"
+        PATCH: "Update resource"
+        DELETE: "Remove resource"
+
+    sub_resource:
+      pattern: "/v1/{resource}/{id}/{sub-resource}"
+      description: "Nested resource hierarchy"
+      examples:
+        - "/v1/sessions/session-abc123/turns"
+        - "/v1/sessions/session-abc123/agents"
+
+      http_methods:
+        GET: "List sub-resources"
+        POST: "Create sub-resource"
+
+  anti_patterns:
+    rpc_style_urls:
+      incorrect:
+        - "/v1/createSession"
+        - "/v1/getSession?id=123"
+        - "/v1/updateSession"
+        - "/v1/deleteSession"
+
+      correct:
+        - "POST /v1/sessions"
+        - "GET /v1/sessions/{id}"
+        - "PATCH /v1/sessions/{id}"
+        - "DELETE /v1/sessions/{id}"
+
+      reason: "HTTP methods provide verbs, URLs are nouns"
+
+    query_params_for_ids:
+      incorrect: "/v1/sessions?id=session-abc123"
+      correct: "/v1/sessions/session-abc123"
+      reason: "IDs belong in path, not query string"
+
+    verbs_in_urls:
+      incorrect:
+        - "/v1/sessions/create"
+        - "/v1/sessions/get"
+        - "/v1/sessions/update"
+        - "/v1/sessions/delete"
+
+      correct:
+        - "POST /v1/sessions"
+        - "GET /v1/sessions/{id}"
+        - "PATCH /v1/sessions/{id}"
+        - "DELETE /v1/sessions/{id}"
+
+      reason: "HTTP methods are verbs"
+
+    singular_collections:
+      incorrect: "/v1/session" # Singular
+      correct: "/v1/sessions" # Plural
+      reason: "Collections are plural nouns"
+
+  http_method_semantics:
+    GET:
+      properties:
+        safe: true
+        idempotent: true
+        cacheable: true
+
+      usage: "Retrieve resource or list collection"
+
+      examples:
+        - "GET /v1/sessions/{id} → 200 OK with session details"
+        - "GET /v1/sessions → 200 OK with session list"
+
+      side_effects: "None (safe operation)"
+
+    POST:
+      properties:
+        safe: false
+        idempotent: false
+        cacheable: false
+
+      usage: "Create new resource in collection"
+
+      examples:
+        - "POST /v1/sessions → 201 Created with Location header"
+
+      response_codes:
+        - "201 Created (success)"
+        - "400 Bad Request (invalid input)"
+        - "409 Conflict (duplicate with Idempotency-Key)"
+
+    PATCH:
+      properties:
+        safe: false
+        idempotent: true
+        cacheable: false
+
+      usage: "Partial update of resource"
+
+      examples:
+        - "PATCH /v1/sessions/{id} → 200 OK with updated resource"
+
+      rationale: "PATCH vs PUT: PATCH modifies subset of fields, PUT replaces entire resource"
+
+    DELETE:
+      properties:
+        safe: false
+        idempotent: true
+        cacheable: false
+
+      usage: "Remove resource"
+
+      examples:
+        - "DELETE /v1/sessions/{id} → 200 OK with final statistics"
+
+      response_codes:
+        - "200 OK (returns resource details)"
+        - "204 No Content (no response body)"
+        - "404 Not Found (resource doesn't exist)"
+
+  resource_hierarchy:
+    sessions:
+      collection: "/v1/sessions"
+      singleton: "/v1/sessions/{session_id}"
+
+      sub_resources:
+        turns:
+          collection: "/v1/sessions/{session_id}/turns"
+          singleton: "/v1/sessions/{session_id}/turns/{turn_id}"
+
+        agents:
+          collection: "/v1/sessions/{session_id}/agents"
+          singleton: "/v1/sessions/{session_id}/agents/{agent_id}"
+
+    conversations:
+      collection: "/v1/conversations"
+      singleton: "/v1/conversations/{conversation_id}"
+      description: "Archived sessions (read-only)"
+
+  google_cloud_api_guide:
+    design_patterns:
+      - name: "List method"
+        pattern: "GET /v1/{resource}"
+        returns: "Collection of resources"
+
+      - name: "Get method"
+        pattern: "GET /v1/{resource}/{id}"
+        returns: "Single resource"
+
+      - name: "Create method"
+        pattern: "POST /v1/{resource}"
+        returns: "Created resource + 201 status"
+
+      - name: "Update method"
+        pattern: "PATCH /v1/{resource}/{id}"
+        returns: "Updated resource"
+
+      - name: "Delete method"
+        pattern: "DELETE /v1/{resource}/{id}"
+        returns: "Empty or final state"
+
+    standard_fields:
+      - name: "name"
+        description: "Resource full name"
+        example: "/v1/sessions/session-abc123"
+
+      - name: "uid"
+        description: "Unique identifier"
+        example: "session-abc123"
+
+      - name: "create_time"
+        description: "Creation timestamp (ISO 8601)"
+        example: "2025-10-11T14:30:00Z"
+
+      - name: "update_time"
+        description: "Last update timestamp"
+        example: "2025-10-11T14:35:00Z"
+
+  examples:
+    correct_design:
+      list_sessions: "GET /v1/sessions"
+      get_session: "GET /v1/sessions/session-abc123"
+      create_session: "POST /v1/sessions"
+      update_session: "PATCH /v1/sessions/session-abc123"
+      delete_session: "DELETE /v1/sessions/session-abc123"
+
+      list_turns: "GET /v1/sessions/session-abc123/turns"
+      get_turn: "GET /v1/sessions/session-abc123/turns/turn-001"
+
+    incorrect_design:
+      list_sessions: "GET /v1/getSessions"
+      get_session: "GET /v1/getSession?id=session-abc123"
+      create_session: "POST /v1/createSession"
+      update_session: "POST /v1/updateSession"
+      delete_session: "POST /v1/deleteSession"
+
+  benefits:
+    intuitive:
+      description: "Developers understand REST patterns immediately"
+      example: "GET /v1/sessions → Obviously lists sessions"
+
+    consistent:
+      description: "Same patterns across all endpoints"
+      benefit: "Learn once, use everywhere"
+
+    cacheable:
+      description: "GET requests are cacheable by default"
+      benefit: "HTTP caching infrastructure (CDNs, browsers) works automatically"
+
+    scalable:
+      description: "Stateless design scales horizontally"
+      benefit: "Add more API Gateway instances without shared state"
+
+  related_contracts:
+    - "post_create_session.yml"
+    - "get_session.yml"
+    - "get_sessions_list.yml"
+    - "patch_update_session.yml"
+    - "delete_terminate_session.yml"
+    - "hateoas_links.yml"
+
+  references:
+    - name: "Fielding, Roy Thomas (2000)"
+      title: "Architectural Styles and the Design of Network-based Software Architectures"
+      type: "PhD dissertation"
+      institution: "University of California, Irvine"
+
+    - name: "RFC 7231: HTTP/1.1 Semantics (2014)"
+      url: "https://tools.ietf.org/html/rfc7231"
+      description: "HTTP methods and status codes"
+
+    - name: "Google Cloud API Design Guide (2024)"
+      url: "https://cloud.google.com/apis/design"
+      description: "Resource-oriented design patterns"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0041a"
+      author: "Contract Development Team"

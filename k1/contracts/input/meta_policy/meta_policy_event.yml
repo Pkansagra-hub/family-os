@@ -1,0 +1,535 @@
+meta_policy_event:
+  name: "Meta Policy Event Schema Contract"
+  purpose: "SSE event schema for meta policy updates and violations"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/meta_policy_event.py"
+  capability: "Social Norm Modeling, Contextual Privacy, Proactive Confirmations"
+
+  description: |
+    Meta Policy Event defines SSE (Server-Sent Events) schema for streaming
+    meta policy updates to consumers (orchestrator, UI dashboard, analytics).
+    Events include norm violations, privacy adjustments, confirmations, and overrides.
+
+    Key features:
+    - 8 event subtypes
+    - Real-time streaming
+    - Event filtering
+    - Backpressure handling
+    - Consumer integration
+
+  event_schema:
+    base_event:
+      description: "Base MetaPolicyEvent structure"
+
+      fields:
+        event_id:
+          type: "string (UUID)"
+          description: "Unique event identifier"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+        event_type:
+          type: "string"
+          values: ["META_POLICY_EVENT"]
+          description: "Event type discriminator"
+
+        event_subtype:
+          type: "string"
+          values:
+            - "NORM_VIOLATION"
+            - "NORM_UPDATED"
+            - "PRIVACY_BAND_CHANGED"
+            - "CONFIRMATION_REQUESTED"
+            - "CONFIRMATION_RESPONDED"
+            - "ACTION_BLOCKED"
+            - "OVERRIDE_APPLIED"
+            - "THRESHOLD_ADJUSTED"
+          description: "Specific meta policy event type"
+
+        timestamp_ms:
+          type: "int64"
+          description: "Event timestamp (milliseconds since epoch)"
+
+        source_module:
+          type: "string"
+          description: "Module that generated event"
+          examples:
+            - "social_norms"
+            - "dynamic_privacy_adjuster"
+            - "proactive_confirmation"
+            - "inappropriate_action_detection"
+
+        payload:
+          type: "object"
+          description: "Event-specific data (varies by event_subtype)"
+
+        cognitive_trace_id:
+          type: "string (UUID)"
+          description: "Distributed tracing ID"
+          optional: true
+
+  event_subtypes:
+    NORM_VIOLATION:
+      description: "Social norm violation detected"
+
+      payload_schema:
+        norm_id:
+          type: "string"
+          description: "Violated norm identifier"
+          example: "quiet_hours"
+
+        norm_category:
+          type: "string"
+          values: ["time_based", "cost_based", "privacy_based", "safety_based"]
+
+        violation_type:
+          type: "string"
+          description: "Specific violation"
+          example: "loud_music_during_quiet_hours"
+
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+          description: "Detection confidence"
+
+        enforcement_action:
+          type: "string"
+          values: ["BLOCK", "MODIFY", "DEFER", "CONFIRM", "NOTIFY", "ALERT"]
+
+        blocked_intent:
+          type: "object"
+          fields:
+            intent_type: "string"
+            parameters: "object"
+
+        alternatives:
+          type: "array<string>"
+          description: "Suggested alternative actions"
+
+      example:
+        event_id: "550e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "NORM_VIOLATION"
+        timestamp_ms: 1698345600000
+        source_module: "social_norms"
+        payload:
+          norm_id: "quiet_hours"
+          norm_category: "time_based"
+          violation_type: "loud_music_during_quiet_hours"
+          confidence: 1.0
+          enforcement_action: "BLOCK"
+          blocked_intent:
+            intent_type: "play_music"
+            parameters:
+              volume: 80
+          alternatives:
+            - "Play at 50% volume"
+            - "Use headphones"
+            - "Defer until 07:00"
+
+    NORM_UPDATED:
+      description: "Social norm definition updated (learning)"
+
+      payload_schema:
+        norm_id:
+          type: "string"
+          description: "Updated norm identifier"
+
+        update_type:
+          type: "string"
+          values: ["threshold_adjusted", "schedule_adjusted", "exception_created", "norm_created"]
+
+        old_value:
+          type: "object"
+          description: "Previous norm configuration"
+
+        new_value:
+          type: "object"
+          description: "Updated norm configuration"
+
+        reason:
+          type: "string"
+          description: "Reason for update"
+          examples:
+            - "User confirmed 5 times, increased threshold"
+            - "User overrode 5 times, created exception"
+
+      example:
+        event_id: "660e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "NORM_UPDATED"
+        timestamp_ms: 1698345700000
+        source_module: "norm_modeler"
+        payload:
+          norm_id: "high_cost_threshold"
+          update_type: "threshold_adjusted"
+          old_value:
+            threshold_usd: 100
+          new_value:
+            threshold_usd: 125
+          reason: "User confirmed 5 times, increased threshold by 25%"
+
+    PRIVACY_BAND_CHANGED:
+      description: "Privacy band transitioned"
+
+      payload_schema:
+        from_band:
+          type: "string"
+          values: ["GREEN", "AMBER", "RED"]
+
+        to_band:
+          type: "string"
+          values: ["GREEN", "AMBER", "RED"]
+
+        trigger:
+          type: "string"
+          description: "Trigger that caused transition"
+          examples:
+            - "visitors_detected"
+            - "private_mode_command"
+            - "financial_transaction"
+
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+
+        auto_revert:
+          type: "boolean"
+          description: "Will automatically revert after timeout"
+
+        revert_at_ms:
+          type: "int64"
+          description: "Timestamp when auto-revert will occur"
+          optional: true
+
+      example:
+        event_id: "770e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "PRIVACY_BAND_CHANGED"
+        timestamp_ms: 1698345800000
+        source_module: "dynamic_privacy_adjuster"
+        payload:
+          from_band: "GREEN"
+          to_band: "AMBER"
+          trigger: "visitors_detected"
+          confidence: 0.9
+          auto_revert: true
+          revert_at_ms: 1698347600000
+
+    CONFIRMATION_REQUESTED:
+      description: "Proactive confirmation requested"
+
+      payload_schema:
+        confirmation_id:
+          type: "string (UUID)"
+          description: "Confirmation request identifier"
+
+        trigger_type:
+          type: "string"
+          values: ["cost_based", "privacy_based", "safety_based", "irreversibility_based"]
+
+        action_description:
+          type: "string"
+          description: "Human-readable action description"
+
+        risk_explanation:
+          type: "string"
+          description: "Why confirmation is required"
+
+        timeout_seconds:
+          type: "int"
+          description: "Time until automatic deny"
+
+        default_action:
+          type: "string"
+          values: ["deny", "allow"]
+
+      example:
+        event_id: "880e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "CONFIRMATION_REQUESTED"
+        timestamp_ms: 1698345900000
+        source_module: "proactive_confirmation"
+        payload:
+          confirmation_id: "conf-123"
+          trigger_type: "cost_based"
+          action_description: "Purchase laptop for $1,200"
+          risk_explanation: "High-cost purchase requires confirmation"
+          timeout_seconds: 30
+          default_action: "deny"
+
+    CONFIRMATION_RESPONDED:
+      description: "User responded to confirmation"
+
+      payload_schema:
+        confirmation_id:
+          type: "string (UUID)"
+
+        user_response:
+          type: "string"
+          values: ["confirm", "deny", "defer", "timeout"]
+
+        response_time_ms:
+          type: "int"
+          description: "Time taken to respond (milliseconds)"
+
+      example:
+        event_id: "990e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "CONFIRMATION_RESPONDED"
+        timestamp_ms: 1698346000000
+        source_module: "hitl_confirmation"
+        payload:
+          confirmation_id: "conf-123"
+          user_response: "confirm"
+          response_time_ms: 5400
+
+    ACTION_BLOCKED:
+      description: "Action blocked due to inappropriate detection"
+
+      payload_schema:
+        block_reason:
+          type: "string"
+          description: "Why action was blocked"
+
+        violation_category:
+          type: "string"
+          values: ["norm_violation", "safety_violation", "preference_violation"]
+
+        blocked_intent:
+          type: "object"
+          fields:
+            intent_type: "string"
+            parameters: "object"
+
+        alternatives:
+          type: "array<string>"
+          description: "Suggested alternatives"
+
+      example:
+        event_id: "aa0e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "ACTION_BLOCKED"
+        timestamp_ms: 1698346100000
+        source_module: "inappropriate_action_detection"
+        payload:
+          block_reason: "Loud music blocked during quiet hours"
+          violation_category: "norm_violation"
+          blocked_intent:
+            intent_type: "play_music"
+            parameters:
+              volume: 80
+          alternatives:
+            - "Play at 50% volume"
+            - "Use headphones"
+
+    OVERRIDE_APPLIED:
+      description: "User overrode a meta policy rule"
+
+      payload_schema:
+        override_type:
+          type: "string"
+          values: ["norm_override", "privacy_downgrade", "confirmation_bypass"]
+
+        overridden_rule:
+          type: "string"
+          description: "Rule that was overridden"
+
+        override_reason:
+          type: "string"
+          description: "User-provided reason (if any)"
+
+        temporary:
+          type: "boolean"
+          description: "Whether override is temporary"
+
+        expires_at_ms:
+          type: "int64"
+          description: "When override expires"
+          optional: true
+
+      example:
+        event_id: "bb0e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "OVERRIDE_APPLIED"
+        timestamp_ms: 1698346200000
+        source_module: "policy_override"
+        payload:
+          override_type: "norm_override"
+          overridden_rule: "quiet_hours"
+          override_reason: "Party tonight"
+          temporary: true
+          expires_at_ms: 1698357000000
+
+    THRESHOLD_ADJUSTED:
+      description: "Adaptive threshold adjusted via learning"
+
+      payload_schema:
+        rule_id:
+          type: "string"
+          description: "Rule whose threshold was adjusted"
+
+        threshold_type:
+          type: "string"
+          values: ["cost", "time", "confidence"]
+
+        old_threshold:
+          type: "float"
+
+        new_threshold:
+          type: "float"
+
+        adjustment_reason:
+          type: "string"
+          description: "Why threshold was adjusted"
+
+      example:
+        event_id: "cc0e8400-e29b-41d4-a716-446655440000"
+        event_type: "META_POLICY_EVENT"
+        event_subtype: "THRESHOLD_ADJUSTED"
+        timestamp_ms: 1698346300000
+        source_module: "norm_modeler"
+        payload:
+          rule_id: "high_cost_threshold"
+          threshold_type: "cost"
+          old_threshold: 100.0
+          new_threshold: 125.0
+          adjustment_reason: "User confirmed 5 times in 7 days"
+
+  sse_streaming:
+    endpoint: "/api/v1/meta-policy/stream"
+
+    connection:
+      protocol: "HTTP/1.1"
+      headers:
+        Content-Type: "text/event-stream"
+        Cache-Control: "no-cache"
+        Connection: "keep-alive"
+
+    event_format:
+      encoding: "UTF-8"
+
+      structure: |
+        event: MetaPolicyEvent
+        id: {event_id}
+        data: {json_payload}
+
+        (blank line)
+
+    heartbeat:
+      interval_seconds: 30
+      message: ":heartbeat\n\n"
+
+    reconnection:
+      retry_delay_ms: 3000
+      max_retries: 10
+
+  event_filtering:
+    by_event_subtype:
+      parameter: "event_subtype"
+      example: "/api/v1/meta-policy/stream?event_subtype=NORM_VIOLATION,PRIVACY_BAND_CHANGED"
+
+    by_source_module:
+      parameter: "source_module"
+      example: "/api/v1/meta-policy/stream?source_module=social_norms"
+
+    by_norm_category:
+      parameter: "norm_category"
+      example: "/api/v1/meta-policy/stream?norm_category=time_based"
+
+  backpressure_handling:
+    buffer_size: 100
+
+    overflow_strategy: "drop_oldest"
+
+    consumer_slow_detection:
+      threshold_events: 50
+      action: "Log warning, continue dropping oldest"
+
+  performance:
+    event_emission_latency_ms:
+      p50: 10
+      p95: 20
+      p99: 50
+      target: "<20ms from detection to SSE emission"
+
+    throughput:
+      max_events_per_second: 100
+
+  observability:
+    metrics:
+      - name: "meta_policy_events_emitted_total"
+        type: "counter"
+        labels: ["event_subtype"]
+        description: "Total events emitted"
+
+      - name: "meta_policy_events_emission_latency_ms"
+        type: "histogram"
+        labels: ["event_subtype"]
+        buckets: [10, 20, 50, 100]
+        description: "Event emission latency"
+
+      - name: "meta_policy_sse_connections_active"
+        type: "gauge"
+        description: "Active SSE connections"
+
+      - name: "meta_policy_events_dropped_total"
+        type: "counter"
+        labels: ["reason"]
+        description: "Events dropped due to backpressure"
+
+  integration:
+    event_producers:
+      - name: "Social Norms"
+        module: "k1/l1_input/meta_policy/social_norms.py"
+        emits: ["NORM_VIOLATION"]
+
+      - name: "Norm Modeler"
+        module: "k1/l1_input/meta_policy/norm_modeler.py"
+        emits: ["NORM_UPDATED", "THRESHOLD_ADJUSTED"]
+
+      - name: "Dynamic Privacy Adjuster"
+        module: "k1/l1_input/meta_policy/dynamic_privacy_adjuster.py"
+        emits: ["PRIVACY_BAND_CHANGED"]
+
+      - name: "Proactive Confirmation"
+        module: "k1/l1_input/meta_policy/proactive_confirmation.py"
+        emits: ["CONFIRMATION_REQUESTED"]
+
+      - name: "HITL Confirmation"
+        module: "k1/l1_input/meta_policy/hitl_confirmation.py"
+        emits: ["CONFIRMATION_RESPONDED"]
+
+      - name: "Inappropriate Action Detection"
+        module: "k1/l1_input/meta_policy/inappropriate_action_detection.py"
+        emits: ["ACTION_BLOCKED"]
+
+      - name: "Policy Override"
+        module: "k1/l1_input/meta_policy/policy_override.py"
+        emits: ["OVERRIDE_APPLIED"]
+
+    event_consumers:
+      - name: "Orchestrator"
+        destination: "k1/l2_orchestration/orchestrator_core.py"
+        subscribes_to: ["NORM_VIOLATION", "ACTION_BLOCKED", "CONFIRMATION_REQUESTED"]
+
+      - name: "UI Dashboard"
+        destination: "apps/family_dashboard/"
+        subscribes_to: ["all"]
+
+      - name: "Analytics Service"
+        destination: "k0/analytics_service"
+        subscribes_to: ["NORM_UPDATED", "THRESHOLD_ADJUSTED", "OVERRIDE_APPLIED"]
+
+  related_contracts:
+    - "social_norms.yml"
+    - "dynamic_privacy_adjuster.yml"
+    - "proactive_confirmation.yml"
+    - "inappropriate_action_detection.yml"
+    - "policy_override.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

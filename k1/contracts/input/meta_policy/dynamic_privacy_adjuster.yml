@@ -1,0 +1,441 @@
+dynamic_privacy_adjuster:
+  name: "Dynamic Privacy Adjuster Contract"
+  purpose: "Adjust privacy bands dynamically based on context and occupancy"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/dynamic_privacy_adjuster.py"
+  capability: "Contextual Privacy"
+
+  description: |
+    Dynamic Privacy Adjuster monitors context and automatically adjusts privacy bands
+    (GREEN → AMBER → RED) to protect family privacy. Integrates with ambient sensors,
+    speaker diarization, and user signals to detect privacy-sensitive situations.
+
+    Key features:
+    - Automatic privacy band transitions
+    - Context-triggered upgrades
+    - Manual override support
+    - Response adaptation per band
+    - Audit logging for compliance
+
+  privacy_bands:
+    GREEN:
+      description: "Normal family interaction"
+      data_sensitivity: "Low"
+
+      allowed_operations:
+        - "Cloud LLM processing"
+        - "Voice recording"
+        - "Calendar access"
+        - "Email reading"
+        - "Message reading"
+        - "Personalized responses"
+
+      storage:
+        location: "Cloud + Local"
+        encryption: "AES-256"
+        retention_days: 90
+
+      typical_contexts:
+        - "Family members only"
+        - "Normal conversation"
+        - "No sensitive topics"
+
+    AMBER:
+      description: "Visitors present or semi-private"
+      data_sensitivity: "Medium"
+
+      blocked_operations:
+        - "Calendar reading aloud"
+        - "Email reading aloud"
+        - "Message reading aloud"
+        - "Personal information in responses"
+        - "Family-specific references"
+
+      allowed_operations:
+        - "Cloud LLM processing (anonymized)"
+        - "Voice recording (visitors excluded)"
+        - "General knowledge queries"
+        - "Public information"
+
+      storage:
+        location: "Cloud + Local (PII redacted)"
+        encryption: "AES-256"
+        retention_days: 30
+
+      typical_contexts:
+        - "Visitors present"
+        - "Children present (different rules)"
+        - "Semi-public conversation"
+
+    RED:
+      description: "Highly sensitive or private"
+      data_sensitivity: "High"
+
+      blocked_operations:
+        - "Cloud LLM processing"
+        - "Voice recording"
+        - "Any PII in responses"
+        - "Long-term storage"
+
+      allowed_operations:
+        - "Local-only processing"
+        - "Ephemeral responses"
+        - "Emergency functions"
+
+      storage:
+        location: "Local only (RAM, no disk)"
+        encryption: "AES-256 + secure enclave"
+        retention_days: 0
+
+      typical_contexts:
+        - "Private mode activated"
+        - "Financial transactions"
+        - "Medical discussions"
+        - "Legal conversations"
+
+  transition_triggers:
+    GREEN_to_AMBER:
+      description: "Upgrade to AMBER when privacy risk detected"
+
+      triggers:
+        visitors_detected:
+          source: "ambient_sensors + speaker_diarization"
+          condition: "unknown_voices OR unknown_faces"
+          confidence_threshold: 0.8
+          auto_revert: true
+          revert_delay_minutes: 30
+
+        children_present:
+          source: "speaker_diarization"
+          condition: "speaker_age_group = child"
+          confidence_threshold: 0.9
+          auto_revert: true
+          revert_delay_minutes: 0
+
+        semi_public_location:
+          source: "location_services"
+          condition: "location_type = semi_public"
+          examples: ["backyard", "porch", "shared_spaces"]
+          auto_revert: true
+          revert_delay_minutes: 15
+
+    AMBER_to_RED:
+      description: "Upgrade to RED for highly sensitive contexts"
+
+      triggers:
+        private_mode_command:
+          source: "user_signal"
+          command: "FamilyOS, private mode"
+          auto_revert: false
+          manual_revert_required: true
+
+        financial_transaction:
+          source: "intent_classification"
+          intent_types: ["purchase", "payment", "banking", "investment"]
+          auto_revert: true
+          revert_delay_minutes: 5
+
+        medical_discussion:
+          source: "content_analysis"
+          keywords: ["medical", "health", "doctor", "symptoms", "medication"]
+          confidence_threshold: 0.85
+          auto_revert: true
+          revert_delay_minutes: 10
+
+        sensitive_keywords:
+          source: "content_analysis"
+          keywords: ["confidential", "secret", "private", "sensitive", "classified"]
+          confidence_threshold: 0.9
+          auto_revert: true
+          revert_delay_minutes: 10
+
+    RED_to_AMBER:
+      description: "Downgrade to AMBER when high sensitivity ends"
+
+      triggers:
+        timeout:
+          condition: "RED band active > timeout_minutes"
+          timeout_minutes: 30
+          requires_confirmation: true
+
+        user_command:
+          source: "user_signal"
+          command: "FamilyOS, end private mode"
+          immediate: true
+
+        context_ended:
+          source: "context_analysis"
+          condition: "sensitive_context no longer detected"
+          delay_minutes: 5
+
+    AMBER_to_GREEN:
+      description: "Downgrade to GREEN when visitors leave"
+
+      triggers:
+        visitors_departed:
+          source: "ambient_sensors + speaker_diarization"
+          condition: "only_family_members_detected"
+          confirmation_window_minutes: 5
+          requires_stability: true
+
+        timeout:
+          condition: "AMBER band active > timeout_minutes"
+          timeout_minutes: 60
+          auto_downgrade: true
+
+  transition_workflow:
+    upgrade_workflow:
+      step_1:
+        name: "Detect Trigger"
+        action: "Monitor all trigger sources"
+        sources:
+          - "ambient_sensors"
+          - "speaker_diarization"
+          - "user_commands"
+          - "intent_classification"
+          - "content_analysis"
+
+      step_2:
+        name: "Evaluate Confidence"
+        action: "Check if trigger meets confidence threshold"
+        threshold: 0.8
+
+      step_3:
+        name: "Determine Target Band"
+        action: "Select appropriate privacy band"
+        rules:
+          - "GREEN → AMBER for visitors/children"
+          - "AMBER → RED for sensitive content"
+          - "GREEN → RED for explicit private mode"
+
+      step_4:
+        name: "Apply Transition"
+        action: "Update active privacy band"
+        notification: "Privacy band upgraded to [target_band]: [reason]"
+
+      step_5:
+        name: "Adapt Responses"
+        action: "Apply new privacy constraints"
+        effects:
+          - "Block restricted operations"
+          - "Modify response content"
+          - "Update storage policy"
+
+      step_6:
+        name: "Schedule Auto-Revert"
+        action: "Set timer for automatic downgrade (if applicable)"
+        condition: "auto_revert = true"
+
+    downgrade_workflow:
+      step_1:
+        name: "Detect Downgrade Trigger"
+        action: "Monitor downgrade conditions"
+        conditions:
+          - "Timeout expired"
+          - "User command"
+          - "Context ended"
+
+      step_2:
+        name: "Confirm Stability"
+        action: "Wait for confirmation window"
+        duration_minutes: 5
+        reason: "Ensure context truly ended"
+
+      step_3:
+        name: "Apply Downgrade"
+        action: "Update active privacy band"
+        notification: "Privacy band downgraded to [target_band]"
+
+      step_4:
+        name: "Restore Operations"
+        action: "Re-enable previously blocked operations"
+
+  response_adaptations:
+    per_band_modifications:
+      GREEN:
+        content_filtering: "Minimal"
+        personalization: "Full"
+        pii_handling: "Normal"
+        storage: "Full retention"
+
+      AMBER:
+        content_filtering: "Moderate"
+        personalization: "Reduced"
+        pii_handling: "Redact in outputs"
+        storage: "PII redacted"
+        modifications:
+          - "Remove family member names"
+          - "Replace with pronouns or 'someone'"
+          - "No calendar/email/message reading aloud"
+          - "Generic responses for personal queries"
+
+      RED:
+        content_filtering: "Strict"
+        personalization: "None"
+        pii_handling: "Block all PII"
+        storage: "None (ephemeral only)"
+        modifications:
+          - "No personal information whatsoever"
+          - "Local processing only"
+          - "No cloud services"
+          - "Visual-only confirmations"
+
+  manual_overrides:
+    user_downgrade:
+      command: "FamilyOS, lower privacy to [target_band]"
+      requires_confirmation: true
+      confirmation_message: "Lowering privacy to [target_band]. Confirm?"
+      audit_log: true
+
+    user_upgrade:
+      command: "FamilyOS, raise privacy to [target_band]"
+      immediate: true
+      no_confirmation_required: true
+      audit_log: true
+
+    admin_override:
+      command: "FamilyOS admin, override privacy to [target_band]"
+      requires_authentication: true
+      auth_method: "voice_biometrics + PIN"
+      audit_log: true
+
+  performance:
+    transition_latency_ms:
+      p50: 10
+      p95: 20
+      p99: 50
+      target: "<20ms for privacy band transition"
+
+    trigger_evaluation_latency_ms:
+      p50: 5
+      p95: 10
+      p99: 20
+      target: "<10ms for trigger evaluation"
+
+  observability:
+    metrics:
+      - name: "privacy_band_active"
+        type: "gauge"
+        labels: ["band"]
+        description: "Current active privacy band (0=GREEN, 1=AMBER, 2=RED)"
+
+      - name: "privacy_band_transitions_total"
+        type: "counter"
+        labels: ["from_band", "to_band", "trigger"]
+        description: "Total privacy band transitions"
+
+      - name: "privacy_band_duration_seconds"
+        type: "histogram"
+        labels: ["band"]
+        buckets: [60, 300, 600, 1800, 3600]
+        description: "Duration in each privacy band"
+
+      - name: "privacy_violations_blocked_total"
+        type: "counter"
+        labels: ["band", "operation"]
+        description: "Operations blocked due to privacy band"
+
+    tracing:
+      span_name: "privacy_band_transition"
+
+      attributes:
+        - "from_band"
+        - "to_band"
+        - "trigger"
+        - "confidence"
+        - "auto_revert"
+
+    logging:
+      events:
+        - event: "privacy_band_upgraded"
+          level: "info"
+          fields:
+            - "from_band"
+            - "to_band"
+            - "trigger"
+            - "confidence"
+
+        - event: "privacy_band_downgraded"
+          level: "info"
+          fields:
+            - "from_band"
+            - "to_band"
+            - "reason"
+
+        - event: "privacy_operation_blocked"
+          level: "warning"
+          fields:
+            - "band"
+            - "operation"
+            - "reason"
+
+  storage:
+    database: "SQLite"
+
+    schema:
+      privacy_transitions:
+        columns:
+          transition_id: "TEXT PRIMARY KEY"
+          from_band: "TEXT"
+          to_band: "TEXT"
+          trigger: "TEXT"
+          confidence: "REAL"
+          timestamp_ms: "INTEGER"
+          auto_revert: "BOOLEAN"
+          revert_at_ms: "INTEGER"
+
+        indexes:
+          - "CREATE INDEX idx_transitions_timestamp ON privacy_transitions(timestamp_ms)"
+
+      active_band:
+        columns:
+          session_id: "TEXT PRIMARY KEY"
+          current_band: "TEXT"
+          activated_at_ms: "INTEGER"
+          reason: "TEXT"
+
+        indexes:
+          - "CREATE INDEX idx_active_band_session ON active_band(session_id)"
+
+  integration:
+    input_sources:
+      - name: "Ambient Sensors"
+        source: "k1/l1_input/ambient_sensors.py"
+        event: "CONTEXT_DETECTED"
+
+      - name: "Speaker Diarization"
+        source: "k1/l1_input/speaker_diarization.py"
+        event: "SPEAKER_IDENTIFIED"
+
+      - name: "Intent Router"
+        source: "k1/l1_input/intent_router.py"
+        event: "INTENT_CLASSIFIED"
+
+      - name: "User Commands"
+        source: "k1/l1_input/intent_router.py"
+        event: "PRIVACY_COMMAND"
+
+    output_consumers:
+      - name: "Orchestrator"
+        destination: "k1/l2_orchestration/orchestrator_core.py"
+        event: "PRIVACY_BAND_CHANGED"
+
+      - name: "Social Norms"
+        destination: "k1/l1_input/meta_policy/social_norms.py"
+        event: "PRIVACY_ADJUSTMENT"
+
+      - name: "Meta Policy Event Stream"
+        destination: "SSE /api/v1/meta-policy/stream"
+        event: "PRIVACY_BAND_CHANGED"
+
+  related_contracts:
+    - "social_norms.yml"
+    - "context_specific_behaviors.yml"
+    - "privacy_adjustment_rules.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

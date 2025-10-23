@@ -1,0 +1,159 @@
+%% K1 Layer 1 (Input/Output Processing) Architecture
+%% Purpose: Unified bidirectional I/O layer with multi-modal streams and API surface
+%% Research: Actor Model (Hewitt 1973), SEDA (Welsh 2001), FlatBuffers (Google 2014)
+%% ADRs: 0004 (5-layer), 0004a (Event Bus), 0015 (WebSocket), 0019 (FlatBuffers)
+%% Performance: <10ms P95 total latency, TTFT <150ms, ASR <80ms, TTS <300ms
+
+graph TB
+    %% External Systems (Above Layer 1)
+    subgraph External["🌐 External Systems"]
+        User["👤 User<br/>(Audio/Text/Touch)"]
+        Device["📱 Device Sensors<br/>(Location/Motion/BLE)"]
+        WebSocket["🔌 WebSocket Client<br/>(Binary Protocol)"]
+        REST["🌍 REST Client<br/>(HTTP/JSON)"]
+    end
+
+    %% Layer 1 Input Surface (Top Boundary)
+    subgraph InputAPI["📥 INPUT API SURFACE (Inbound)"]
+        WSEndpoint["WebSocket /ws/audio<br/>• Audio frames (PCM 16kHz)<br/>• VAD state<br/>• Barge-in signals<br/>ADR-0015, 0015d"]
+        RESTEndpoint["REST POST /input/text<br/>• Text messages<br/>• Quick actions<br/>ADR-0017"]
+        StreamEndpoint["POST /input/stream<br/>• Multi-modal streams<br/>• Session management<br/>ADR-0015"]
+        SensorAPI["Sensor Drivers<br/>• PIR/mmWave/BLE<br/>• GPS/WiFi/IP geo<br/>ADR-0083a, 0085"]
+    end
+
+    %% Layer 1 Core Components
+    subgraph Layer1["🧠 LAYER 1: Input/Output Processing (K1)"]
+
+        %% Stream Switch (Input Router)
+        subgraph StreamSwitch["📡 Stream Switch (Input Router)"]
+            Dispatcher["Input Dispatcher<br/>• Route by modality<br/>• FlatBuffers zero-copy<br/>ADR-0004, 0019"]
+            SessionMgr["Session Manager<br/>• Track active sessions<br/>• Context preservation<br/>ADR-0015"]
+            TransitionMgr["Transition Manager<br/>• Stream mode changes<br/>• State transitions<br/>ADR-0015d"]
+        end
+
+        %% Stream Operators (Processing Pipeline)
+        subgraph Operators["⚙️ Stream Operators (Pipeline)"]
+            VAD["VAD Detector<br/>• Voice activity<br/>• <20ms P95<br/>ADR-0056a"]
+            ASR["ASR Operator<br/>• Speech-to-text<br/>• <80ms P95<br/>ADR-0056d"]
+            Speaker["Speaker ID<br/>• Voice biometrics<br/>• ECAPA-TDNN<br/>ADR-0073"]
+            Location["Location Engine<br/>• GPS/WiFi/IP<br/>• Privacy bands<br/>ADR-0085, 0044"]
+            Motion["Motion Detector<br/>• Context/periodicity<br/>• 7 contexts<br/>ADR-0085"]
+            BLE["BLE Proximity<br/>• Beacon scan/advertise<br/>• MAC hashing<br/>ADR-0083a, 0085b"]
+        end
+
+        %% Orchestration (Intent & Policy)
+        subgraph Orchestration["🎯 Orchestration (Intent & Policy)"]
+            IntentRouter["Intent Router<br/>• 3-tier classification<br/>• spaCy NER<br/>ADR-0024"]
+            MetaPolicy["Meta Policy<br/>• Privacy enforcement<br/>• RED/AMBER/GREEN<br/>ADR-0044"]
+            ContextEnricher["Context Enricher<br/>• Sensor fusion<br/>• Ambient awareness<br/>ADR-0083a"]
+        end
+
+        %% Output Operators (TTS & Rendering)
+        subgraph OutputOps["🔊 Output Operators (Response)"]
+            TTS["TTS Operator<br/>• Text-to-speech<br/>• <300ms P95<br/>ADR-0056f"]
+            Prosody["Prosody Controller<br/>• Emotion, rate, pitch<br/>• Voice continuity<br/>ADR-0056e"]
+            TokenStream["Token Streamer<br/>• Real-time streaming<br/>• Barge-in aware<br/>ADR-0015d"]
+        end
+
+        %% Event Bus (L1→L2 Communication)
+        EventBus["🚌 Event Bus (L1↔L2)<br/>• Publish/Subscribe<br/>• Async delivery<br/>• FlatBuffers zero-copy<br/>ADR-0004a"]
+    end
+
+    %% Layer 1 Output Surface (Bottom Boundary)
+    subgraph OutputAPI["📤 OUTPUT API SURFACE (Outbound)"]
+        WSOutput["WebSocket Stream<br/>• Audio chunks (TTS)<br/>• Token streaming<br/>• Barge-in ACKs<br/>ADR-0015d"]
+        SSEOutput["SSE /events<br/>• State changes<br/>• Turn boundaries<br/>ADR-0016, 0058"]
+        EventOutput["Event Bus Topics<br/>• UserInputEvent<br/>• IntentClassifiedEvent<br/>• SensorStateEvent<br/>ADR-0004a"]
+    end
+
+    %% Layer 2 (Below Layer 1)
+    subgraph Layer2["⚡ LAYER 2: Orchestration (Downstream)"]
+        L2Orchestrator["Orchestrator Core<br/>• 3-phase coordination<br/>• Agent selection<br/>ADR-0004"]
+        L2Planner["Planner Agent<br/>• 4-stage pipeline<br/>• Task planning<br/>ADR-0004"]
+    end
+
+    %% K0 Storage (Horizontal Integration)
+    subgraph K0["💾 K0 Storage (Kernel 0)"]
+        K0Query["Query Interface<br/>• Sensor state<br/>• User preferences<br/>ADR-0014"]
+        K0Events["Event Stream<br/>• K0→K1 events<br/>• State updates<br/>ADR-0001a"]
+    end
+
+    %% ===== DATA FLOW: INPUT PATH =====
+    User -->|Audio/Text| WebSocket
+    User -->|Text| REST
+    Device -->|Sensor Data| SensorAPI
+
+    WebSocket --> WSEndpoint
+    REST --> RESTEndpoint
+    WebSocket --> StreamEndpoint
+    SensorAPI --> Dispatcher
+
+    WSEndpoint --> Dispatcher
+    RESTEndpoint --> Dispatcher
+    StreamEndpoint --> SessionMgr
+
+    Dispatcher -->|Audio Stream| VAD
+    Dispatcher -->|Text| IntentRouter
+    Dispatcher -->|Sensor Data| Location
+    Dispatcher -->|Sensor Data| Motion
+    Dispatcher -->|Sensor Data| BLE
+
+    VAD -->|Voice Activity| ASR
+    ASR -->|Transcript| Speaker
+    Speaker -->|Speaker ID + Text| IntentRouter
+
+    Location --> ContextEnricher
+    Motion --> ContextEnricher
+    BLE --> ContextEnricher
+
+    ContextEnricher --> MetaPolicy
+    IntentRouter --> MetaPolicy
+
+    MetaPolicy -->|Validated Intent| EventBus
+
+    %% ===== DATA FLOW: OUTPUT PATH =====
+    EventBus -->|ResponseEvent| TTS
+    EventBus -->|TokenStreamEvent| TokenStream
+    TTS --> Prosody
+    Prosody -->|Audio Chunks| WSOutput
+    TokenStream -->|Text Tokens| WSOutput
+
+    SessionMgr --> TransitionMgr
+    TransitionMgr -->|State Changes| SSEOutput
+
+    %% ===== EVENT BUS (L1↔L2) =====
+    EventBus -.->|UserInputEvent| L2Orchestrator
+    EventBus -.->|IntentClassifiedEvent| L2Planner
+    L2Orchestrator -.->|ResponseEvent| EventBus
+    L2Planner -.->|TaskPlanEvent| EventBus
+
+    %% ===== K0 INTEGRATION =====
+    K0Query -.->|State Queries| MetaPolicy
+    K0Query -.->|User Prefs| IntentRouter
+    EventBus -.->|SensorStateEvent| K0Events
+    K0Events -.->|StateUpdateEvent| ContextEnricher
+
+    %% ===== OUTPUT DELIVERY =====
+    WSOutput --> WebSocket
+    SSEOutput --> REST
+    EventOutput --> EventBus
+
+    WebSocket -->|Audio/Tokens| User
+    REST -->|Events/State| User
+
+    %% Styling
+    classDef inputAPI fill:#e1f5ff,stroke:#0288d1,stroke-width:3px
+    classDef outputAPI fill:#fff9c4,stroke:#f57c00,stroke-width:3px
+    classDef core fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef external fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef layer2 fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef k0 fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef eventBus fill:#ffebee,stroke:#d32f2f,stroke-width:3px
+
+    class WSEndpoint,RESTEndpoint,StreamEndpoint,SensorAPI inputAPI
+    class WSOutput,SSEOutput,EventOutput outputAPI
+    class Dispatcher,SessionMgr,TransitionMgr,VAD,ASR,Speaker,Location,Motion,BLE,IntentRouter,MetaPolicy,ContextEnricher,TTS,Prosody,TokenStream core
+    class User,Device,WebSocket,REST external
+    class L2Orchestrator,L2Planner layer2
+    class K0Query,K0Events k0
+    class EventBus eventBus

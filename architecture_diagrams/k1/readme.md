@@ -70,9 +70,13 @@ I'll organize these by architectural concern and layer:
 
 **Layer 1: Input Processing**
 
-9. **`k1_layer1_input_processing_flow.mmd`**
-   - **Covers:** Stream switch → Operators (VAD, ASR, TTS) → Intent router (3-tier classification)
-   - **Purpose:** Show multi-modal input processing pipeline
+9. **`k1_layer1_architecture.mmd`** ✅ **IMPLEMENTED**
+   - **Covers:** Complete bidirectional I/O architecture - input APIs (WebSocket/REST/Sensors), stream operators (VAD/ASR/TTS/Speaker ID/Location/Motion/BLE), orchestration (Intent Router + Meta Policy), output APIs (WebSocket TTS/tokens, SSE events, Event Bus), K0 integration, Layer 2 communication
+   - **Purpose:** Show Layer 1 as BOTH input AND output layer with full API surface, data flow paths (input path: User→Dispatcher→Operators→EventBus, output path: EventBus→TTS→WebSocket), privacy enforcement (RED/AMBER/GREEN bands), and performance critical paths (<10ms P95)
+   - **ADRs Referenced:** 0004 (5-layer), 0004a (Event Bus), 0015 (WebSocket), 0019 (FlatBuffers), 0024 (Performance), 0044 (Privacy Bands), 0056a-f (Voice Pipeline), 0073 (Speaker ID), 0083a (BLE Proximity), 0085 (Motion Awareness)
+   - **Diagram ID:** `f81e301d-1cab-4fc8-90ae-c2c5e5390942`
+   - **Companion Docs:** `LAYER1_API_SPECIFICATION.md` (detailed API schemas, SLOs), `k1_layer1_diagram_guide.md` (usage guide)
+   - **Status:** ✅ Validated (31 nodes, 44 edges, 10 subgraphs, no issues)
 
 10. **`k1_layer1_intent_classification_tiers.mmd`**
     - **Covers:** Tier 1 (regex <1ms) → Tier 2 (SLM 2-3ms) → Tier 3 (LLM <50ms) fallback cascade

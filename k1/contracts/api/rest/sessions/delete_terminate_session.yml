@@ -1,0 +1,313 @@
+delete_terminate_session:
+  name: "DELETE /v1/sessions/{id} - Terminate Session Contract"
+  purpose: "Gracefully terminate session and release resources"
+  version: "1.0"
+  adr_source: "ADR-0041a (Session CRUD) lines 751-1000"
+  endpoint: "DELETE /v1/sessions/{session_id}"
+  module: "k1/l5_infrastructure/api_gateway/rest/session_api.py"
+  capability: "Session Lifecycle Management"
+
+  description: |
+    DELETE /v1/sessions/{id} terminates session with graceful agent drainage,
+    SessionState archival to K0, and final statistics collection. Returns
+    200 OK (not 204) with termination details.
+
+    Key features:
+    - Graceful agent drainage (DRAINING → TERMINATED)
+    - SessionState archival to K0
+    - Final statistics collection
+    - Cache invalidation
+    - <300ms P95 performance
+
+  http_request:
+    method: "DELETE"
+    path: "/v1/sessions/{session_id}"
+
+    path_parameters:
+      session_id:
+        type: "string"
+        format: "session-{uuid}"
+        description: "Session identifier"
+
+    headers:
+      required:
+        Authorization:
+          type: "string"
+          format: "Bearer <jwt_token>"
+
+  http_response:
+    success:
+      status_code: 200
+      description: "OK (returns termination details)"
+
+      headers:
+        Content-Type:
+          type: "string"
+          value: "application/json"
+
+      body_schema:
+        session_id:
+          type: "string"
+
+        status:
+          type: "string"
+          value: "terminated"
+
+        terminated_at:
+          type: "string"
+          format: "ISO 8601"
+          description: "Termination timestamp"
+
+        final_statistics:
+          type: "object"
+          description: "Final session statistics"
+
+          schema:
+            total_turns:
+              type: "integer"
+              description: "Total turns executed"
+
+            total_messages:
+              type: "integer"
+              description: "Total messages (user + agent)"
+
+            total_tool_calls:
+              type: "integer"
+              description: "Total tool invocations"
+
+            session_duration_seconds:
+              type: "integer"
+              description: "Time from creation to termination"
+
+        _links:
+          type: "object"
+          description: "HATEOAS links to archived conversation"
+
+          schema:
+            conversation:
+              type: "object"
+              properties:
+                href:
+                  type: "string"
+                  format: "/v1/conversations/{session_id}"
+                  description: "Archived conversation (read-only)"
+
+    errors:
+      401:
+        error_type: "unauthorized"
+        description: "Missing or invalid JWT"
+
+      403:
+        error_type: "forbidden"
+        description: "User lacks access to session"
+
+      404:
+        error_type: "session_not_found"
+        description: "Session ID does not exist"
+
+      409:
+        error_type: "conflict"
+        description: "Session already terminated"
+
+  implementation:
+    workflow:
+      - step: 1
+        name: "Extract JWT"
+        description: "Validate JWT and extract user_id"
+        latency: "<2ms"
+
+      - step: 2
+        name: "Fetch Session"
+        description: "Retrieve session and validate ownership"
+        validation: "session.user_id == JWT.claims.sub"
+        latency: "<80ms"
+
+      - step: 3
+        name: "Check Status"
+        description: "Prevent double termination"
+
+        if_already_terminated:
+          action: "Return 409 Conflict"
+
+        if_active:
+          action: "Continue to step 4"
+
+      - step: 4
+        name: "Drain Agents"
+        description: "Gracefully transition agents to TERMINATED state"
+        contract: "ADR-0004 Agent Fabric"
+
+        process:
+          - "Set agent state to DRAINING"
+          - "Allow in-flight operations to complete"
+          - "Transition to TERMINATED"
+          - "Release resources (KV cache, memory)"
+
+        latency: "<150ms (3 agents × 50ms each)"
+
+      - step: 5
+        name: "Archive SessionState"
+        description: "Save SessionState to K0 for long-term storage"
+        contract: "K0 Memory Kernel"
+
+        destination: "K0 SQLite database"
+        fields:
+          - "beliefs"
+          - "scoreboard"
+          - "control"
+          - "persona"
+          - "metadata"
+
+        latency: "<30ms"
+
+      - step: 6
+        name: "Collect Final Statistics"
+        description: "Compute session duration and aggregates"
+
+        calculations:
+          session_duration_seconds: "terminated_at - created_at"
+          total_turns: "SUM(turns)"
+          total_messages: "SUM(user_messages + agent_messages)"
+          total_tool_calls: "SUM(tool_calls)"
+
+      - step: 7
+        name: "Update Session Status"
+        description: "Mark session as terminated"
+        fields:
+          - "status = TERMINATED"
+          - "terminated_at = now()"
+
+        latency: "<10ms"
+
+      - step: 8
+        name: "Invalidate Cache"
+        description: "Delete cached session data"
+        cache_keys:
+          - "session:{session_id}"
+          - "etag:session:{session_id}"
+        latency: "<1ms"
+
+      - step: 9
+        name: "Build Response"
+        description: "Construct 200 OK with final statistics"
+        include:
+          - "session_id"
+          - "status: terminated"
+          - "terminated_at"
+          - "final_statistics"
+          - "_links.conversation (archived)"
+
+      - step: 10
+        name: "Return Response"
+        description: "Return 200 OK (not 204 No Content)"
+        rationale: "Return final statistics for client analytics"
+
+  termination_process:
+    agent_drainage:
+      states: ["ACTIVE → DRAINING → TERMINATED"]
+
+      draining_phase:
+        duration: "5 seconds max"
+        actions:
+          - "Finish in-flight operations"
+          - "Flush KV cache to K0"
+          - "Release GPU memory"
+          - "Close tool connections"
+
+      force_termination:
+        trigger: "Draining timeout (5 seconds)"
+        action: "Force TERMINATED (kill tasks)"
+
+    sessionstate_archival:
+      destination: "K0 SQLite database"
+      table: "archived_sessions"
+
+      retention:
+        GREEN_AMBER: "365 days (warm 30d + cold 335d)"
+        RED_BLACK: "97 days (warm 7d + cold 90d)"
+
+      fields_saved:
+        - "session_id"
+        - "user_id"
+        - "space_id"
+        - "beliefs (JSON)"
+        - "scoreboard (JSON)"
+        - "control (JSON)"
+        - "persona"
+        - "metadata"
+        - "created_at"
+        - "terminated_at"
+
+  performance:
+    budgets:
+      p50_latency_ms: 150
+      p95_latency_ms: 300
+      p99_latency_ms: 500
+      target: "<300ms P95"
+
+    breakdown:
+      jwt_validation_ms: 2
+      fetch_session_ms: 80
+      agent_drainage_ms: 150
+      archive_sessionstate_ms: 30
+      compute_statistics_ms: 5
+      update_status_ms: 10
+      cache_invalidation_ms: 1
+      json_serialization_ms: 3
+      total_ms: 281
+
+  observability:
+    metrics:
+      - name: "sessions_terminated_total"
+        type: "counter"
+        labels: ["reason"]
+        description: "Total session terminations"
+
+      - name: "session_termination_latency_ms"
+        type: "histogram"
+        buckets: [100, 200, 300, 500, 1000]
+        description: "Session termination latency"
+
+      - name: "agent_drainage_latency_ms"
+        type: "histogram"
+        buckets: [50, 100, 150, 200, 300]
+        description: "Agent drainage latency"
+
+      - name: "session_duration_seconds"
+        type: "histogram"
+        buckets: [60, 300, 900, 1800, 3600, 7200, 86400]
+        description: "Session duration from creation to termination"
+
+  examples:
+    terminate_session:
+      request:
+        method: "DELETE"
+        path: "/v1/sessions/session-abc123"
+        headers:
+          Authorization: "Bearer <jwt>"
+
+      response:
+        status: 200
+        body:
+          session_id: "session-abc123"
+          status: "terminated"
+          terminated_at: "2025-10-11T14:45:00Z"
+          final_statistics:
+            total_turns: 5
+            total_messages: 10
+            total_tool_calls: 3
+            session_duration_seconds: 900
+          _links:
+            conversation:
+              href: "/v1/conversations/session-abc123"
+
+  related_contracts:
+    - "post_create_session.yml"
+    - "get_session.yml"
+    - "agent_fabric.yml" # ADR-0004
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0041a"
+      author: "Contract Development Team"
