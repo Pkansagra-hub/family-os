@@ -24,6 +24,7 @@
 | **ADR-0001b** | Model Hub Architecture | ✅ Complete | 🔴 CRITICAL | 7 modules, 4 AI agents, local-first LLM |
 | **ADR-0033** | Tool Execution (2D Selection) | ✅ Complete | 🔴 CRITICAL | MCP + WASM + Process sandboxing |
 | **ADR-0034** | MCP Protocol | ✅ Complete | 🟡 HIGH | JSON-RPC 2.0, 608 MCP-compatible tools |
+| **ADR-0086** | Dynamic Agent Creation Subsystem | ✅ Complete | 🟡 HIGH | On-demand agent spawning, 58+ agent types, composition pattern |
 | **ADR-0004d** | Layer 3 Integration Tests | ✅ Complete | 🟡 HIGH | Agent lifecycle, tool execution, Model Hub, <600ms hire, <3000ms tool |
 
 ---
@@ -285,6 +286,167 @@
 - Knowledge retrieval: <3000ms P95
 - Synthesis quality: >85% (human evaluation)
 - Model: GPT-4o-mini or Claude-3-Haiku (local/remote)
+
+---
+
+### **Module 1.9: agents/factory/** (🔧 Dynamic Agent Creation)
+**Purpose:** Agent factory pattern (on-demand spawning)
+**Location:** `k1/l3_execution/agents/factory.py`
+**Performance:** <100ms P95 creation
+
+#### Primary ADRs
+
+- **ADR-0086** — Dynamic Agent Creation Subsystem (58+ agent types, composition pattern)
+- **ADR-0086a** — Agent Factory Pattern (singleton, ID generation, O(1) lookup)
+
+#### Related ADRs
+
+- **ADR-0005** — Agent Lifecycle (FSM integration)
+- **ADR-0027** — Model Placement (thermal-aware placement)
+
+#### Key Responsibilities
+
+1. **Agent Creation:**
+   - Create agents dynamically based on user requests
+   - ID generation: `agent-{session_id}-{timestamp_ms}-{counter:06d}`
+   - Factory singleton pattern (thread-safe)
+
+2. **Agent Lookup:**
+   - O(1) hash table lookup by agent_id
+   - Registry integration (58+ agent types)
+
+3. **Resource Integration:**
+   - Thermal-aware accelerator placement
+   - Resource reservation before spawn
+
+**Performance Metrics:**
+- Agent creation: <100ms P95
+- Agent lookup: <1ms P95
+- Factory overhead: <5ms
+
+---
+
+### **Module 1.10: agents/templates/** (🔧 Dynamic Agent Creation)
+**Purpose:** Agent template system
+**Location:** `k1/config/agent_templates/*.agent.yml`
+**Performance:** <10ms P95 (cached)
+
+#### Primary ADRs
+
+- **ADR-0086b** — Template System (JSON Schema validation, LRU cache, inheritance)
+
+#### Related ADRs
+
+- **ADR-0086a** — Agent Factory (template consumer)
+
+#### Key Responsibilities
+
+1. **Template Management:**
+   - JSON Schema v7 validation
+   - LRU cache (128 templates, >80% hit rate)
+   - 3-level inheritance: base_agent → base_ai_agent → specialist
+
+2. **Template Loading:**
+   - TemplateLoader class
+   - Cached rendering <10ms P95, uncached <50ms
+
+**Performance Metrics:**
+- Template loading (cached): <10ms P95
+- Template loading (uncached): <50ms P95
+- Cache hit rate: >80%
+
+---
+
+### **Module 1.11: agents/resource_reserver/** (🔧 Dynamic Agent Creation)
+**Purpose:** Resource reservation system
+**Location:** `k1/l3_execution/agents/resource_reserver.py`
+**Performance:** <50ms P95 reservation
+
+#### Primary ADRs
+
+- **ADR-0086c** — Resource Reservation (512MB budget, thermal placement, atomic allocation)
+
+#### Related ADRs
+
+- **ADR-0027** — Model Placement (accelerator allocation)
+- **ADR-0026** — Thermal Management (thermal-aware placement)
+
+#### Key Responsibilities
+
+1. **Resource Allocation:**
+   - Memory budget: 512MB global, 256MB per-agent max
+   - Accelerator slots: NPU (2), GPU (1), CPU (4), Remote (∞)
+   - Atomic allocation (RAII pattern)
+
+2. **Thermal-Aware Placement:**
+   - NPU → GPU → CPU → Remote fallback cascade
+   - Thermal zone integration
+
+**Performance Metrics:**
+- Reservation: <50ms P95
+- Release: <20ms P95
+- Allocation success rate: >95%
+
+---
+
+### **Module 1.12: agents/composition/** (🔧 Dynamic Agent Creation)
+**Purpose:** Agent composition pattern
+**Location:** `k1/l3_execution/agents/composition.py`
+**Performance:** <5ms P95 (cached)
+
+#### Primary ADRs
+
+- **ADR-0086d** — Agent Composition Pattern (prompt + tools + persona)
+
+#### Related ADRs
+
+- **ADR-0086e** — Prompt Directory (prompt source)
+- **ADR-0010** — Capability Security (tool filtering)
+
+#### Key Responsibilities
+
+1. **Composition:**
+   - Prompt (from prompt library) + Tools (capability-filtered) + Persona (traits)
+   - Security: 10+ prompt injection patterns, token validation
+
+2. **Tool Filtering:**
+   - Capability-based tool selection (758 tools total)
+   - Per-agent tool whitelist
+
+**Performance Metrics:**
+- Composition (cached): <5ms P95
+- Composition (uncached): <30ms P95
+- Tool filtering: <10ms
+
+---
+
+### **Module 1.13: model_hub/prompt_library/agent_prompts/** (🔧 Dynamic Agent Creation)
+**Purpose:** Agent prompt directory
+**Location:** `k1/l3_execution/model_hub/prompt_library/agent_prompts/`
+**Performance:** <5ms P95 rendering
+
+#### Primary ADRs
+
+- **ADR-0086e** — Prompt Directory & Template Management (Jinja2 rendering, metadata)
+
+#### Related ADRs
+
+- **ADR-0086d** — Agent Composition (prompt consumer)
+
+#### Key Responsibilities
+
+1. **Prompt Library:**
+   - Jinja2 template rendering
+   - Metadata extraction (version, max_tokens, author, changelog)
+   - Token validation (1 token ≈ 4 chars)
+
+2. **Example Templates:**
+   - `health_specialist.prompt.j2` (320 tokens)
+   - `code_assistant.prompt.j2` (280 tokens)
+
+**Performance Metrics:**
+- Rendering: <5ms P95
+- Template count: 58+ prompts
 
 ---
 
@@ -923,6 +1085,12 @@ Circuit breaker          →      resilience/circuit_breaker
 - **ADR-0010** — Capability Security (agent capability declarations)
 - **ADR-0017d** — SessionState Persona Section (personality integration)
 - **ADR-0028** — WFQ Scheduler (priority-based scheduling)
+- **ADR-0086** — Dynamic Agent Creation Subsystem (on-demand agent spawning, 58+ types)
+- **ADR-0086a** — Agent Factory Pattern (singleton factory, <100ms creation, O(1) lookup)
+- **ADR-0086b** — Template System (JSON Schema, LRU cache, template inheritance)
+- **ADR-0086c** — Resource Reservation (512MB budget, thermal placement, atomic allocation)
+- **ADR-0086d** — Agent Composition Pattern (prompt + tools + persona, injection protection)
+- **ADR-0086e** — Prompt Directory (Jinja2 rendering, token validation, <5ms P95)
 
 ### **Model Hub ADRs (Category 2: model_hub/)**
 
@@ -1033,11 +1201,11 @@ Circuit breaker          →      resilience/circuit_breaker
 
 ## 📊 ADR Statistics
 
-**Total ADRs:** 115 (covering Layer 3 execution components)
+**Total ADRs:** 121 (covering Layer 3 execution components)
 
 **By Category:**
 
-- Agent Lifecycle: 12 ADRs
+- Agent Lifecycle: 18 ADRs (includes ADR-0086, 0086a-e for dynamic agent creation)
 - Model Hub: 18 ADRs
 - Tool Execution: 13 ADRs
 - Dialogue: 12 ADRs
@@ -1063,6 +1231,6 @@ Circuit breaker          →      resilience/circuit_breaker
 
 **Status:** ✅ **COMPLETE** — All Layer 3 ADRs mapped end-to-end
 **Last Updated:** October 2025
-**Total ADRs:** 115 ADRs covering Layer 3 execution (agents, model_hub, tools, dialogue, supporting infrastructure)
-**Coverage:** 100% of Layer 3 modules (22/22 modules mapped across 4 categories)
+**Total ADRs:** 121 ADRs covering Layer 3 execution (agents, model_hub, tools, dialogue, supporting infrastructure)
+**Coverage:** 100% of Layer 3 modules (27/27 modules mapped across 4 categories, including 5 dynamic agent creation modules)
 **Source:** Auto-generated from adr_reference.md component-level mappings

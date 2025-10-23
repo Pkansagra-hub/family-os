@@ -1,7 +1,7 @@
 # K1 Intelligence Module - ADR Master Reference
 
-**Last Updated:** 2025-10-17
-**Total ADRs:** 80+ (0001-0080, organized in 11 major categories)
+**Last Updated:** 2025-10-23
+**Total ADRs:** 0001-0086 + sub-ADRs across ADR-001 to ADR-0086
 **Status:** Complete catalog of all architectural decisions with Layer 5 extensibility
 
 ---
@@ -416,7 +416,7 @@ This document serves as the **master index** for all Architecture Decision Recor
 | ADR | Title | Status | Key Decision |
 |-----|-------|--------|--------------|
 | **0071** | Multilingual Code-Switching | ✅ Accepted | Real-time language detection and handling |
-| **0072** | Dynamic Agent Creation Subsystem | ✅ Accepted | Runtime agent provisioning with capability assignment |
+| **0072** | ~~Dynamic Agent Creation Subsystem~~ | ❌ DELETED | Duplicate of ADR-0001 (renamed to ADR-0086) |
 | **0073** | Agent Lifecycle FSM Enhancements | ✅ Accepted | Extended states for advanced agent management |
 | **0074** | Pluggable Module System | ✅ Accepted | Hot-loadable modules with version management |
 | **0075** | Layer 5 Extensibility Framework | ✅ Accepted | Plugin architecture for infrastructure customization |
@@ -425,6 +425,36 @@ This document serves as the **master index** for all Architecture Decision Recor
 | **0078** | Tool Call Batching Pipeline | ✅ Accepted | Parallel tool execution with dependency resolution |
 | **0079** | Learning Loop - Drift Detection v2 | ✅ Accepted | Enhanced anomaly detection with multi-signal fusion |
 | **0080** | Continuous Config Hot-Reload | ✅ Accepted | Zero-downtime configuration updates |
+| **0081** | K0 Knowledge Graph Architecture | 🔄 Proposed | **Structured family relationships** - Temporal graph, relationship queries, event-based queries |
+| **0081a** | Temporal Graph Schema Design | 🔄 Proposed | Graph schema with temporal properties for family relationships |
+| **0081b** | Graph Query API & Traversal Algorithms | 🔄 Proposed | Query interface and graph traversal for relationship discovery |
+| **0081c** | Episodic Memory KG Integration | 🔄 Proposed | Integration with K0 episodic memory system |
+| **0081d** | KG Visualization & Debugging Tools | 🔄 Proposed | Developer tools for graph inspection and debugging |
+| **0082** | Multi-Party Dialogue Coordination | 🔄 Proposed | **Multi-speaker conversations** - Speaker attribution, overlapping turns, conflict resolution |
+| **0082a** | Speaker Diarization & Voice Biometrics | 🔄 Proposed | Audio-based speaker identification and tracking |
+| **0082b** | Multi-Party Turn-Taking Coordination | 🔄 Proposed | Turn management for simultaneous speech and speaker switching |
+| **0082c** | Conflict Resolution Strategies | 🔄 Proposed | Mediation for opposing requests from multiple speakers |
+| **0083** | Ambient Sensor Fusion Architecture | 🔄 Proposed | **Room occupancy detection** - Privacy-aware responses, contextual awareness |
+| **0083a** | Multi-Modal Sensor Integration | 🔄 Proposed | Integration of motion, light, camera, and environmental sensors |
+| **0083b** | Sensor Fusion Algorithms | 🔄 Proposed | Probabilistic fusion for occupancy and context detection |
+| **0084** | K0 Memory Consolidation Pipeline (P03) | 🔄 Proposed | **Dream-like reflection** - Offline learning, episodic→semantic conversion |
+| **0084a** | Sleep Cycle Memory Replay Algorithms | 🔄 Proposed | Hippocampal replay patterns for memory consolidation |
+| **0084b** | Offline Consolidation Scheduler | 🔄 Proposed | Nightly consolidation triggers during system idle time |
+| **0084c** | Knowledge Graph Consolidation | 🔄 Proposed | KG integration for pattern extraction and relationship discovery |
+| **0084d** | Dream-Like Exploration & Reflection | 🔄 Proposed | Creative problem-solving and counterfactual thinking |
+| **0085** | Embodied Awareness & Device Presence | 🔄 Proposed | **Cross-device presence sensing** - Device handoff, location awareness, BLE proximity |
+| **0085a** | Device Presence Detection & Location Awareness | 🔄 Proposed | Online/offline tracking, GPS, WiFi triangulation |
+| **0085b** | BLE Proximity & Active Session Tracking | 🔄 Proposed | Proximity zones and active device detection |
+| **0085c** | Cross-Device Context Sharing | 🔄 Proposed | Notification coordination and device preference management |
+| **0086** | Dynamic Agent Creation Subsystem (Parent) | ✅ Accepted | **58+ dynamic agent types** - Runtime spawning with composition (Prompt + Tools + Persona) |
+| **0086a** | Agent Factory Pattern | ✅ Approved | AgentFactory singleton, ID generation, O(1) lookup, <100ms creation |
+| **0086b** | Agent Template System | ✅ Approved | JSON Schema validation, LRU cache (128), 3-level inheritance, <10ms P95 |
+| **0086c** | Resource Reservation System | ✅ Approved | Atomic allocation, 512MB budget, thermal placement (NPU→GPU→CPU→Remote) |
+| **0086d** | Agent Composition Pattern | ✅ Approved | CompositionEngine: Prompt + Tools + Persona, injection protection, <5ms P95 |
+| **0086e** | Prompt Directory & Template Management | ✅ Approved | Jinja2 rendering, token validation, <5ms P95 |
+| **0086f** | Dynamic Agent Lifecycle Integration | ✅ Approved | Factory↔hire_fire, IDLE pooling, <10ms reactivation, >60% hit rate |
+| **0086g** | Agent Registry Extension | ✅ Approved | Multi-index registry, 58+ agent specs, O(1) lookups, <2ms P95 |
+| **0086h** | Agent Metrics & Observability | ✅ Approved | 25+ Prometheus metrics, OpenTelemetry tracing, 3 Grafana dashboards |
 
 ---
 
@@ -456,7 +486,7 @@ This document serves as the **master index** for all Architecture Decision Recor
 
 ## ADR Statistics
 
-- **Total ADRs:** 80+ (and growing)
+- **Total ADRs:** 110 (including 24 sub-ADRs)
 - **Foundational (0001-0004):** 20 ADRs
 - **Agent Lifecycle (0005-0006):** 12 ADRs
 - **Planning Pipeline (0007):** 5 ADRs
@@ -473,7 +503,7 @@ This document serves as the **master index** for all Architecture Decision Recor
 - **Learning Loop & Adaptive Intelligence (0059-0060):** 11 ADRs
 - **Backpressure Cascade (0061):** 5 ADRs
 - **Product Craft & UX (0065-0070):** 6 ADRs
-- **Advanced Features & Extensibility (0071-0080):** 10 ADRs
+- **Advanced Features & Extensibility (0071-0086):** 40 ADRs (including 21 sub-ADRs across 0081-0086)
 
 ---
 
@@ -513,14 +543,28 @@ This document serves as the **master index** for all Architecture Decision Recor
 - Major ADR revisions → Update key decision description with latest details
 - Quarterly review → Verify all links, add new category sections, update statistics
 
-**Last reviewed:** 2025-10-17
-**Last major update:** 2025-10-16 (ADR-0050 family complete revision)
-**Next review:** 2026-01-17 (Quarterly)
+**Last reviewed:** 2025-10-23
+**Last major update:** 2025-10-23 (ADR-0086 Dynamic Agent Creation with 8 comprehensive sub-ADRs)
+**Next review:** 2026-01-23 (Quarterly)
 **Maintenance owner:** Architecture Team
 
 **Recent Changes:**
 
-- ADR-0050 family (0050, 0050a, 0050b, 0050c, 0050d) completely revised with comprehensive hybrid architecture (LAN Phase 1 + Internet E2EE Phase 2)
+- **2025-10-23:** ADR-0081 through ADR-0085 documented with sub-ADRs:
+  - ADR-0081 (K0 Knowledge Graph): 4 sub-ADRs (0081a-d) for structured family relationships
+  - ADR-0082 (Multi-Party Dialogue): 3 sub-ADRs (0082a-c) for multi-speaker coordination
+  - ADR-0083 (Ambient Sensor Fusion): 2 sub-ADRs (0083a-b) for room occupancy detection
+  - ADR-0084 (K0 Memory Consolidation): 4 sub-ADRs (0084a-d) for dream-like reflection
+  - ADR-0085 (Embodied Awareness): 3 sub-ADRs (0085a-c) for cross-device presence sensing
+  - Total: 16 new sub-ADRs documented (0081-0085 families)
+- **2025-10-23:** ADR-0086 Dynamic Agent Creation Subsystem finalized with 8 sub-ADRs:
+  - ADR-0001 renamed to ADR-0086 (consolidated numbering)
+  - ADR-0072 deleted (duplicate)
+  - 5 M1 Required sub-ADRs: 0086a (Factory), 0086b (Templates), 0086c (Resources), 0086d (Composition), 0086e (Prompts)
+  - 3 M2 Optional sub-ADRs: 0086f (Lifecycle), 0086g (Registry), 0086h (Metrics)
+  - Total: 7,254 lines of implementation specifications, 43 WARD test cases, 31 days implementation timeline
+  - 58+ dynamic agent types documented with complete composition pattern (Prompt + Tools + Persona)
+- **2025-10-16:** ADR-0050 family (0050, 0050a, 0050b, 0050c, 0050d) completely revised with comprehensive hybrid architecture (LAN Phase 1 + Internet E2EE Phase 2)
 - Implementation timeline and latency targets updated
 - SessionState coherence (0050a) enhanced with sequence numbers, delta journal, group commit
 - CRDT merge (0050b) documented with vector clocks for causality
@@ -529,10 +573,20 @@ This document serves as the **master index** for all Architecture Decision Recor
 
 **Notes:**
 
-- ADRs 0042-0080 represent Phase 4 features and extensibility layer
-- Some ADRs have duplicate files (e.g., 0001f appears twice) - consolidation pending
+- ADRs 0042-0086 represent Phase 4 features and extensibility layer
+- ADR-0001 has been **renamed to ADR-0086** (Dynamic Agent Creation Subsystem)
+- ADR-0072 **deleted** as duplicate of ADR-0086
+- **ADR-0081 through ADR-0086 include 24 comprehensive sub-ADRs:**
+  - ADR-0081: 4 sub-ADRs (Knowledge Graph Architecture)
+  - ADR-0082: 3 sub-ADRs (Multi-Party Dialogue Coordination)
+  - ADR-0083: 2 sub-ADRs (Ambient Sensor Fusion)
+  - ADR-0084: 4 sub-ADRs (K0 Memory Consolidation Pipeline)
+  - ADR-0085: 3 sub-ADRs (Embodied Awareness & Device Presence)
+  - ADR-0086: 8 sub-ADRs (Dynamic Agent Creation - with full implementation specs)
 - See LAYER5-ADRS-COMPREHENSIVE-REFERENCE.md for detailed Layer 5 architecture
 - ADR-0050 family is **production-ready** for Phase 1 MVP (M2-M3)
+- ADR-0086 family ready for **M1 implementation** (5 required sub-ADRs, 17 days) and **M2 implementation** (3 optional sub-ADRs, 14 days)
+- ADR-0081 through ADR-0085 are **Proposed** status - Post-MVP v1.1 features
 
 ---
 

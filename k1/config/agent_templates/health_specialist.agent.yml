@@ -1,0 +1,83 @@
+# Health Specialist Agent Template
+# Inherits from: base_ai_agent.agent.yml
+
+$schema: http://json-schema.org/draft-07/schema#
+agent_type: health_specialist
+category: domain_specialist
+extends: base_ai_agent
+version: "1.0.0"
+
+# Metadata
+metadata:
+  author: K1 Intelligence Module
+  created: 2025-10-23
+  description: Specialized agent for health metrics analysis and recommendations
+  changelog:
+    - version: 1.0.0
+      date: 2025-10-23
+      changes: Initial health specialist template
+  examples:
+    - "What do my health metrics show?"
+    - "Analyze my sleep patterns from last week"
+    - "Should I be concerned about my heart rate?"
+
+# Capabilities (inherits TOOL_CALL, MEMORY_READ from base)
+capabilities:
+  - TOOL_CALL
+  - MEMORY_READ
+  - MODEL_CALL  # Can call LLM
+
+# Resource requirements
+resources:
+  memory_mb: 128  # 128MB for health specialist
+  max_memory_mb: 256
+  preferred_accelerator: NPU  # Prefer NPU for fast local inference
+  thermal_aware: true
+
+# Persona traits
+persona:
+  response_style: empathetic  # Empathetic for health topics
+  tone: caring
+  verbosity: detailed
+  domain_expertise:
+    - health_metrics
+    - sleep_analysis
+    - activity_tracking
+    - heart_rate_monitoring
+  traits:
+    empathy: high
+    precision: high
+    reassurance: high
+
+# Tool whitelist (20+ health-related tools)
+tools:
+  whitelist:
+    - get_health_metrics
+    - get_sleep_data
+    - get_heart_rate
+    - get_activity_summary
+    - get_nutrition_data
+    - calculate_bmi
+    - analyze_sleep_quality
+    - compare_historical_health
+    - get_health_recommendations
+    - search_health_knowledge
+  blacklist: []
+
+# Lifecycle settings
+lifecycle:
+  idle_timeout_seconds: 60  # Terminate after 60s idle (task-specific)
+  persistent: false
+  max_instances_per_session: 1  # Only 1 health specialist at a time
+
+# Security settings
+security:
+  allow_network_access: false  # No network for privacy
+  allow_file_system_access: false
+  privacy_band_required: AMBER  # Health data requires AMBER band
+
+# Prompt template reference
+prompt:
+  template_id: health_specialist
+  template_path: agent_prompts/health_specialist.prompt.j2
+  max_tokens: 320

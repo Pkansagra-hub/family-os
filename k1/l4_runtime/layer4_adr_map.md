@@ -44,6 +44,8 @@
 - ADR-0005c — DRAINING State (3-phase drain, 5s timeout)
 - ADR-0005d — Supervisor (heartbeat monitoring, blacklist manager)
 - ADR-0005e — Personalities (4 AI agents + 54 pure actors)
+- ADR-0086f — Dynamic Agent Lifecycle Integration (IDLE pool, create_or_reuse, <10ms reactivation)
+- ADR-0086g — Agent Registry Extension (multi-index registry, 58+ types, O(1) lookups)
 
 ### **K1 Core Architecture (6 ADRs)**
 - ADR-0004 — 52-Module 5-Layer Architecture (Layer 4 definition)
@@ -302,6 +304,36 @@
 - Mailbox dequeue: <0.5ms P95
 - Router admission: <2ms P95 (5 checks)
 - Crash detection: <100ms P95
+
+---
+
+### **Component 2.5: Dynamic Agent Lifecycle Integration**
+**Location:** `k1/l4_runtime/agent_lifecycle/idle_pool_manager.py`
+**ADRs:** 1 ADR (0086f)
+
+**Sub-Components:**
+- **idle_pool/** — IDLE pool manager, create_or_reuse (ADR-0086f)
+- **termination_policies/** — 5 termination policies (ADR-0086f)
+
+**Performance:**
+- Reactivation: <10ms P95 (vs 100ms creation)
+- Pool hit rate: >60%
+- IDLE timeout: 60s (task-specific agents)
+
+---
+
+### **Component 2.6: Agent Registry Extension**
+**Location:** `k1/l4_runtime/agent_fabric/registry.py`
+**ADRs:** 1 ADR (0086g)
+
+**Sub-Components:**
+- **multi_index_registry/** — 5 indexes (type, session, state, capability, primary) (ADR-0086g)
+- **agent_specs/** — 58+ agent type specifications YAML (ADR-0086g)
+
+**Performance:**
+- Lookup (single index): <1ms P95 (O(1))
+- Lookup (combined query): <2ms P95 (3 filters)
+- Registry size: 58+ agent types
 
 ---
 
@@ -624,10 +656,10 @@
 
 ## 📊 Layer 4 Statistics
 
-**Total ADRs:** 154
+**Total ADRs:** 156
 **By Category:**
 - SessionState & Storage: 22 ADRs
-- Actor Fabric: 7 ADRs
+- Actor Fabric: 9 ADRs (includes ADR-0086f, 0086g for dynamic agent integration)
 - API Gateway (REST): 13 ADRs
 - WebSocket: 11 ADRs
 - SSE: 9 ADRs
@@ -645,11 +677,11 @@
 - Cross-Cutting: 6 ADRs
 
 **By Status:**
-- ✅ Complete: 154 ADRs (100%)
+- ✅ Complete: 156 ADRs (100%)
 
 **By Priority:**
 - 🔴 CRITICAL: 10 ADRs (core architecture)
-- 🟡 HIGH: 60 ADRs (essential features)
+- 🟡 HIGH: 62 ADRs (essential features, includes dynamic agent ADRs)
 - 🟢 MEDIUM: 70 ADRs (supporting features)
 - ⚪ LOW: 14 ADRs (optimization)
 
@@ -657,6 +689,6 @@
 
 **Status:** ✅ **COMPLETE** — All Layer 4 ADRs mapped end-to-end
 **Last Updated:** October 2025
-**Total ADRs:** 154 ADRs covering Layer 4 runtime infrastructure
-**Coverage:** 100% of Layer 4 components (SessionState, Actor Fabric, API Gateway, Voice Pipeline, WebSocket, SSE, Learning, Protocol Monitor, KV Cache, Knowledge Graph, Multi-Device)
+**Total ADRs:** 156 ADRs covering Layer 4 runtime infrastructure
+**Coverage:** 100% of Layer 4 components (SessionState, Actor Fabric + Dynamic Agent Integration, API Gateway, Voice Pipeline, WebSocket, SSE, Learning, Protocol Monitor, KV Cache, Knowledge Graph, Multi-Device)
 **Source:** Auto-generated from ADR_REFERENCE.md comprehensive analysis

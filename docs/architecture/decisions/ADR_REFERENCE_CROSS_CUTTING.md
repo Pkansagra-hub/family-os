@@ -1,6 +1,6 @@
 # ADR Reference Guide: Cross-Cutting Concerns
 
-**Generated:** Auto-generated from ADR family map  
+**Generated:** Auto-generated from ADR family map
 **Purpose:** Quick reference for ADRs relevant to Cross-Cutting Concerns development
 
 ## Overview
@@ -15,72 +15,72 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 | ADR | Title | Family |
 |-----|-------|--------|
-| [ADR-0001](../../docs/architecture/decisions/0001-*.md) | 0001 Memory Kernel | K0 Core |
-| [ADR-0001f](../../docs/architecture/decisions/0001f-*.md) | 0001F Memory Kernel | K0 Core |
-| [ADR-0004](../../docs/architecture/decisions/0004-*.md) | 0004 Architecture | K1 Core |
-| [ADR-0004b](../../docs/architecture/decisions/0004b-*.md) | 0004B Dependencies | K1 Core |
-| [ADR-0004c](../../docs/architecture/decisions/0004c-*.md) | 0004C Documentation | ADR Notes |
-| [ADR-0004d](../../docs/architecture/decisions/0004d-*.md) | 0004D Testing | K1 Core |
-| [ADR-0011a](../../docs/architecture/decisions/0011a-*.md) | 0011A Schema Design | FlatBuffers |
-| [ADR-0011b](../../docs/architecture/decisions/0011b-*.md) | 0011B Code Generation | FlatBuffers |
-| [ADR-0011c](../../docs/architecture/decisions/0011c-*.md) | 0011C Performance | FlatBuffers |
-| [ADR-0011d](../../docs/architecture/decisions/0011d-*.md) | 0011D Schema Evolution | FlatBuffers |
-| [ADR-0012](../../docs/architecture/decisions/0012-*.md) | 0012 Schema Taxonomy | FlatBuffers Schemas |
-| [ADR-0013](../../docs/architecture/decisions/0013-*.md) | 0013 SemVer Policy | Schema Versioning |
-| [ADR-0013a](../../docs/architecture/decisions/0013a-*.md) | 0013A Version Registry | Schema Versioning |
-| [ADR-0013b](../../docs/architecture/decisions/0013b-*.md) | 0013B CI/CD Automation | Schema Versioning |
-| [ADR-0013c](../../docs/architecture/decisions/0013c-*.md) | 0013C Deprecation Workflow | Schema Versioning |
-| [ADR-0013d](../../docs/architecture/decisions/0013d-*.md) | 0013D Contract Testing | Schema Versioning |
-| [ADR-0014b](../../docs/architecture/decisions/0014b-*.md) | 0014B OpenAPI Generation | REST API Dual Format |
-| [ADR-0014d](../../docs/architecture/decisions/0014d-*.md) | 0014D Client SDKs | REST API Dual Format |
-| [ADR-0015](../../docs/architecture/decisions/0015-*.md) | 0015 Protocol Design | WebSocket Binary Protocol |
-| [ADR-0015a](../../docs/architecture/decisions/0015a-*.md) | 0015A Protocol Design | WebSocket Binary Protocol |
-| [ADR-0015b](../../docs/architecture/decisions/0015b-*.md) | 0015B Flow Control | WebSocket Binary Protocol |
-| [ADR-0015c](../../docs/architecture/decisions/0015c-*.md) | 0015C Reconnection | WebSocket Binary Protocol |
-| [ADR-0015d](../../docs/architecture/decisions/0015d-*.md) | 0015D Streaming | WebSocket Binary Protocol |
-| [ADR-0015e](../../docs/architecture/decisions/0015e-*.md) | 0015E Client SDK | WebSocket Binary Protocol |
-| [ADR-0016](../../docs/architecture/decisions/0016-*.md) | 0016 Event Taxonomy | SSE Event Schemas |
-| [ADR-0016a](../../docs/architecture/decisions/0016a-*.md) | 0016A Event Taxonomy | SSE Event Schemas |
-| [ADR-0016c](../../docs/architecture/decisions/0016c-*.md) | 0016C Filtering | SSE Event Schemas |
-| [ADR-0016d](../../docs/architecture/decisions/0016d-*.md) | 0016D Browser Integration | SSE Event Schemas |
-| [ADR-0019](../../docs/architecture/decisions/0019-*.md) | 0019 Serialization Core | FlatBuffers SessionState Serialization |
-| [ADR-0019a](../../docs/architecture/decisions/0019a-*.md) | 0019A Schema Definition | FlatBuffers SessionState Serialization |
-| [ADR-0021c](../../docs/architecture/decisions/0021c-*.md) | 0021C Compliance | Turn History Retention |
-| [ADR-0022d](../../docs/architecture/decisions/0022d-*.md) | 0022D FlatBuffers Schema | K0 Bridge Batching |
-| [ADR-0023c](../../docs/architecture/decisions/0023c-*.md) | 0023C K0 WAL Query | Cursor-Based Pagination |
-| [ADR-0042a](../../docs/architecture/decisions/0042a-*.md) | 0042A Event Production | K0 SSE Event Streaming |
-| [ADR-0042d](../../docs/architecture/decisions/0042d-*.md) | 0042D Backpressure | K0 SSE Event Streaming |
-| [ADR-0043c](../../docs/architecture/decisions/0043c-*.md) | 0043C Topic Routing | SSE Topic Taxonomy |
-| [ADR-0046](../../docs/architecture/decisions/0046-*.md) | 0046 Configuration | SSE-WebSocket Bridge |
-| [ADR-0047](../../docs/architecture/decisions/0047-*.md) | 0047 SDK Generation | OpenAPI 3.1 Specs |
-| [ADR-0048](../../docs/architecture/decisions/0048-*.md) | 0048 K0/K1 Separation | K1 Internal Event Bus |
-| [ADR-0049](../../docs/architecture/decisions/0049-*.md) | 0049 Configuration | Fast/Smart Lane Router |
-| [ADR-0050](../../docs/architecture/decisions/0050-*.md) | 0050 Sync Strategy | Multi-Device Family Sync |
-| [ADR-0052](../../docs/architecture/decisions/0052-*.md) | 0052 Research Foundation | Enhanced HITL Protocols |
-| [ADR-0052b](../../docs/architecture/decisions/0052b-*.md) | 0052B RED Band Approval | Enhanced HITL Protocols |
-| [ADR-0052c](../../docs/architecture/decisions/0052c-*.md) | 0052C Nested Clarifications | Enhanced HITL Protocols |
-| [ADR-0052d](../../docs/architecture/decisions/0052d-*.md) | 0052D Proactive Confirmation | Enhanced HITL Protocols |
-| [ADR-0053](../../docs/architecture/decisions/0053-*.md) | 0053 Main | Message Queue & Coalescing |
-| [ADR-0053a](../../docs/architecture/decisions/0053a-*.md) | 0053A Coalesce Window | Message Queue & Coalescing |
-| [ADR-0053b](../../docs/architecture/decisions/0053b-*.md) | 0053B Rate Limits | Message Queue & Coalescing |
-| [ADR-0053c](../../docs/architecture/decisions/0053c-*.md) | 0053C Cancel Path | Message Queue & Coalescing |
-| [ADR-0054](../../docs/architecture/decisions/0054-*.md) | 0054 Main | Turn Boundary Management |
-| [ADR-0054a](../../docs/architecture/decisions/0054a-*.md) | 0054A Implicit Pause | Turn Boundary Management |
-| [ADR-0054b](../../docs/architecture/decisions/0054b-*.md) | 0054B Explicit Submit | Turn Boundary Management |
-| [ADR-0056](../../docs/architecture/decisions/0056-*.md) | 0056 Pipeline Architecture | Voice Pipeline Implementation |
-| [ADR-0056a](../../docs/architecture/decisions/0056a-*.md) | 0056A ASR Ingress | Voice Pipeline Implementation |
-| [ADR-0056d](../../docs/architecture/decisions/0056d-*.md) | 0056D TTS Synthesis | Voice Pipeline Implementation |
-| [ADR-0056e](../../docs/architecture/decisions/0056e-*.md) | 0056E Audio Output | Voice Pipeline Implementation |
-| [ADR-0081](../../docs/architecture/decisions/0081-*.md) | 0081 Knowledge Graph | K0 Core |
-| [ADR-0081a](../../docs/architecture/decisions/0081a-*.md) | 0081A Knowledge Graph | K0 Core |
-| [ADR-0081b](../../docs/architecture/decisions/0081b-*.md) | 0081B Knowledge Graph | K0 Core |
-| [ADR-0081c](../../docs/architecture/decisions/0081c-*.md) | 0081C Knowledge Graph | K0 Core |
-| [ADR-0081d](../../docs/architecture/decisions/0081d-*.md) | 0081D Knowledge Graph | K0 Core |
-| [ADR-0084](../../docs/architecture/decisions/0084-*.md) | 0084 Core Architecture | K0 Memory Consolidation |
-| [ADR-0084a](../../docs/architecture/decisions/0084a-*.md) | 0084A Hippocampal Replay | K0 Memory Consolidation |
-| [ADR-0084b](../../docs/architecture/decisions/0084b-*.md) | 0084B Sleep State Machine | K0 Memory Consolidation |
-| [ADR-0084c](../../docs/architecture/decisions/0084c-*.md) | 0084C Knowledge Graph Consol. | K0 Memory Consolidation |
-| [ADR-0084d](../../docs/architecture/decisions/0084d-*.md) | 0084D Dream Exploration | K0 Memory Consolidation |
+| [ADR-0001](./0001-*.md) | 0001 Memory Kernel | K0 Core |
+| [ADR-0001f](./0001f-*.md) | 0001F Memory Kernel | K0 Core |
+| [ADR-0004](./0004-*.md) | 0004 Architecture | K1 Core |
+| [ADR-0004b](./0004b-*.md) | 0004B Dependencies | K1 Core |
+| [ADR-0004c](./0004c-*.md) | 0004C Documentation | ADR Notes |
+| [ADR-0004d](./0004d-*.md) | 0004D Testing | K1 Core |
+| [ADR-0011a](./0011a-*.md) | 0011A Schema Design | FlatBuffers |
+| [ADR-0011b](./0011b-*.md) | 0011B Code Generation | FlatBuffers |
+| [ADR-0011c](./0011c-*.md) | 0011C Performance | FlatBuffers |
+| [ADR-0011d](./0011d-*.md) | 0011D Schema Evolution | FlatBuffers |
+| [ADR-0012](./0012-*.md) | 0012 Schema Taxonomy | FlatBuffers Schemas |
+| [ADR-0013](./0013-*.md) | 0013 SemVer Policy | Schema Versioning |
+| [ADR-0013a](./0013a-*.md) | 0013A Version Registry | Schema Versioning |
+| [ADR-0013b](./0013b-*.md) | 0013B CI/CD Automation | Schema Versioning |
+| [ADR-0013c](./0013c-*.md) | 0013C Deprecation Workflow | Schema Versioning |
+| [ADR-0013d](./0013d-*.md) | 0013D Contract Testing | Schema Versioning |
+| [ADR-0014b](./0014b-*.md) | 0014B OpenAPI Generation | REST API Dual Format |
+| [ADR-0014d](./0014d-*.md) | 0014D Client SDKs | REST API Dual Format |
+| [ADR-0015](./0015-*.md) | 0015 Protocol Design | WebSocket Binary Protocol |
+| [ADR-0015a](./0015a-*.md) | 0015A Protocol Design | WebSocket Binary Protocol |
+| [ADR-0015b](./0015b-*.md) | 0015B Flow Control | WebSocket Binary Protocol |
+| [ADR-0015c](./0015c-*.md) | 0015C Reconnection | WebSocket Binary Protocol |
+| [ADR-0015d](./0015d-*.md) | 0015D Streaming | WebSocket Binary Protocol |
+| [ADR-0015e](./0015e-*.md) | 0015E Client SDK | WebSocket Binary Protocol |
+| [ADR-0016](./0016-*.md) | 0016 Event Taxonomy | SSE Event Schemas |
+| [ADR-0016a](./0016a-*.md) | 0016A Event Taxonomy | SSE Event Schemas |
+| [ADR-0016c](./0016c-*.md) | 0016C Filtering | SSE Event Schemas |
+| [ADR-0016d](./0016d-*.md) | 0016D Browser Integration | SSE Event Schemas |
+| [ADR-0019](./0019-*.md) | 0019 Serialization Core | FlatBuffers SessionState Serialization |
+| [ADR-0019a](./0019a-*.md) | 0019A Schema Definition | FlatBuffers SessionState Serialization |
+| [ADR-0021c](./0021c-*.md) | 0021C Compliance | Turn History Retention |
+| [ADR-0022d](./0022d-*.md) | 0022D FlatBuffers Schema | K0 Bridge Batching |
+| [ADR-0023c](./0023c-*.md) | 0023C K0 WAL Query | Cursor-Based Pagination |
+| [ADR-0042a](./0042a-*.md) | 0042A Event Production | K0 SSE Event Streaming |
+| [ADR-0042d](./0042d-*.md) | 0042D Backpressure | K0 SSE Event Streaming |
+| [ADR-0043c](./0043c-*.md) | 0043C Topic Routing | SSE Topic Taxonomy |
+| [ADR-0046](./0046-*.md) | 0046 Configuration | SSE-WebSocket Bridge |
+| [ADR-0047](./0047-*.md) | 0047 SDK Generation | OpenAPI 3.1 Specs |
+| [ADR-0048](./0048-*.md) | 0048 K0/K1 Separation | K1 Internal Event Bus |
+| [ADR-0049](./0049-*.md) | 0049 Configuration | Fast/Smart Lane Router |
+| [ADR-0050](./0050-*.md) | 0050 Sync Strategy | Multi-Device Family Sync |
+| [ADR-0052](./0052-*.md) | 0052 Research Foundation | Enhanced HITL Protocols |
+| [ADR-0052b](./0052b-*.md) | 0052B RED Band Approval | Enhanced HITL Protocols |
+| [ADR-0052c](./0052c-*.md) | 0052C Nested Clarifications | Enhanced HITL Protocols |
+| [ADR-0052d](./0052d-*.md) | 0052D Proactive Confirmation | Enhanced HITL Protocols |
+| [ADR-0053](./0053-*.md) | 0053 Main | Message Queue & Coalescing |
+| [ADR-0053a](./0053a-*.md) | 0053A Coalesce Window | Message Queue & Coalescing |
+| [ADR-0053b](./0053b-*.md) | 0053B Rate Limits | Message Queue & Coalescing |
+| [ADR-0053c](./0053c-*.md) | 0053C Cancel Path | Message Queue & Coalescing |
+| [ADR-0054](./0054-*.md) | 0054 Main | Turn Boundary Management |
+| [ADR-0054a](./0054a-*.md) | 0054A Implicit Pause | Turn Boundary Management |
+| [ADR-0054b](./0054b-*.md) | 0054B Explicit Submit | Turn Boundary Management |
+| [ADR-0056](./0056-*.md) | 0056 Pipeline Architecture | Voice Pipeline Implementation |
+| [ADR-0056a](./0056a-*.md) | 0056A ASR Ingress | Voice Pipeline Implementation |
+| [ADR-0056d](./0056d-*.md) | 0056D TTS Synthesis | Voice Pipeline Implementation |
+| [ADR-0056e](./0056e-*.md) | 0056E Audio Output | Voice Pipeline Implementation |
+| [ADR-0081](./0081-*.md) | 0081 Knowledge Graph | K0 Core |
+| [ADR-0081a](./0081a-*.md) | 0081A Knowledge Graph | K0 Core |
+| [ADR-0081b](./0081b-*.md) | 0081B Knowledge Graph | K0 Core |
+| [ADR-0081c](./0081c-*.md) | 0081C Knowledge Graph | K0 Core |
+| [ADR-0081d](./0081d-*.md) | 0081D Knowledge Graph | K0 Core |
+| [ADR-0084](./0084-*.md) | 0084 Core Architecture | K0 Memory Consolidation |
+| [ADR-0084a](./0084a-*.md) | 0084A Hippocampal Replay | K0 Memory Consolidation |
+| [ADR-0084b](./0084b-*.md) | 0084B Sleep State Machine | K0 Memory Consolidation |
+| [ADR-0084c](./0084c-*.md) | 0084C Knowledge Graph Consol. | K0 Memory Consolidation |
+| [ADR-0084d](./0084d-*.md) | 0084D Dream Exploration | K0 Memory Consolidation |
 
 ---
 
@@ -88,7 +88,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### ADR Notes
 
-#### [ADR-0004c](../../docs/architecture/decisions/0004c-*.md): 0004C Documentation
+#### [ADR-0004c](./0004c-*.md): 0004C Documentation
 
 **Components:**
 
@@ -99,7 +99,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Cursor-Based Pagination
 
-#### [ADR-0023c](../../docs/architecture/decisions/0023c-*.md): 0023C K0 WAL Query
+#### [ADR-0023c](./0023c-*.md): 0023C K0 WAL Query
 
 **Components:**
 
@@ -110,7 +110,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Enhanced HITL Protocols
 
-#### [ADR-0052](../../docs/architecture/decisions/0052-*.md): 0052 Research Foundation
+#### [ADR-0052](./0052-*.md): 0052 Research Foundation
 
 **Components:**
 
@@ -142,7 +142,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `tests/integration/test_hitl_extensions.py`
   - Comprehensive HITL tests: step-by-step rollback, RED band phrases, nested go-back, proactive confidence
 
-#### [ADR-0052b](../../docs/architecture/decisions/0052b-*.md): 0052B RED Band Approval
+#### [ADR-0052b](./0052b-*.md): 0052B RED Band Approval
 
 **Components:**
 
@@ -162,7 +162,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/research/reason_1990_swiss_cheese.md`
   - Defense-in-depth (Reason 1990), RED band approval is one safety layer among many
 
-#### [ADR-0052c](../../docs/architecture/decisions/0052c-*.md): 0052C Nested Clarifications
+#### [ADR-0052c](./0052c-*.md): 0052C Nested Clarifications
 
 **Components:**
 
@@ -178,7 +178,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/research/jurafsky_martin_2020_dialogue.md`
   - Dialogue state tracking (Jurafsky & Martin 2020), ClarificationHistory is dialogue state for HITL chains
 
-#### [ADR-0052d](../../docs/architecture/decisions/0052d-*.md): 0052D Proactive Confirmation
+#### [ADR-0052d](./0052d-*.md): 0052D Proactive Confirmation
 
 **Components:**
 
@@ -193,7 +193,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Fast/Smart Lane Router
 
-#### [ADR-0049](../../docs/architecture/decisions/0049-*.md): 0049 Configuration
+#### [ADR-0049](./0049-*.md): 0049 Configuration
 
 **Components:**
 
@@ -204,7 +204,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### FlatBuffers
 
-#### [ADR-0011a](../../docs/architecture/decisions/0011a-*.md): 0011A Schema Design
+#### [ADR-0011a](./0011a-*.md): 0011A Schema Design
 
 **Components:**
 
@@ -232,7 +232,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/SCHEMA_VERSIONS.md`
   - 76 schemas, file ID→version mapping, introduced/deprecated/removed tracking
 
-#### [ADR-0011b](../../docs/architecture/decisions/0011b-*.md): 0011B Code Generation
+#### [ADR-0011b](./0011b-*.md): 0011B Code Generation
 
 **Components:**
 
@@ -264,7 +264,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `ci/validate_schemas.sh`
   - Schema compilation checks, breaking change detection, pre-commit hooks
 
-#### [ADR-0011c](../../docs/architecture/decisions/0011c-*.md): 0011C Performance
+#### [ADR-0011c](./0011c-*.md): 0011C Performance
 
 **Components:**
 
@@ -272,7 +272,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `tests/performance/flatbuffers_bench.py`
   - SessionState 64KB <1ms serialize, <0.1ms deserialize, 11× throughput vs JSON
 
-#### [ADR-0011d](../../docs/architecture/decisions/0011d-*.md): 0011D Schema Evolution
+#### [ADR-0011d](./0011d-*.md): 0011D Schema Evolution
 
 **Components:**
 
@@ -299,7 +299,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### FlatBuffers Schemas
 
-#### [ADR-0012](../../docs/architecture/decisions/0012-*.md): 0012 Schema Taxonomy
+#### [ADR-0012](./0012-*.md): 0012 Schema Taxonomy
 
 **Components:**
 
@@ -394,7 +394,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### FlatBuffers SessionState Serialization
 
-#### [ADR-0019](../../docs/architecture/decisions/0019-*.md): 0019 Serialization Core
+#### [ADR-0019](./0019-*.md): 0019 Serialization Core
 
 **Components:**
 
@@ -402,7 +402,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/session_state/validator.py`
   - Compile-time type safety, FlatBuffers compiler, 18 bugs caught
 
-#### [ADR-0019a](../../docs/architecture/decisions/0019a-*.md): 0019A Schema Definition
+#### [ADR-0019a](./0019a-*.md): 0019A Schema Definition
 
 **Components:**
 
@@ -449,7 +449,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K0 Bridge Batching
 
-#### [ADR-0022d](../../docs/architecture/decisions/0022d-*.md): 0022D FlatBuffers Schema
+#### [ADR-0022d](./0022d-*.md): 0022D FlatBuffers Schema
 
 **Components:**
 
@@ -468,7 +468,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K0 Core
 
-#### [ADR-0001](../../docs/architecture/decisions/0001-*.md): 0001 Memory Kernel
+#### [ADR-0001](./0001-*.md): 0001 Memory Kernel
 
 **Components:**
 
@@ -480,7 +480,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/storage/`
   - WAL, receipts, SQLite (hot), Parquet (cold), ACID guarantees
 
-#### [ADR-0001f](../../docs/architecture/decisions/0001f-*.md): 0001F Memory Kernel
+#### [ADR-0001f](./0001f-*.md): 0001F Memory Kernel
 
 **Components:**
 
@@ -488,7 +488,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/stores/`
   - Episodic, semantic, procedural, snapshots, affect, self-model, social
 
-#### [ADR-0081](../../docs/architecture/decisions/0081-*.md): 0081 Knowledge Graph
+#### [ADR-0081](./0081-*.md): 0081 Knowledge Graph
 
 **Components:**
 
@@ -524,7 +524,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/kg/metrics.py`
   - Real-time metrics (node count, edge count, query latency P50/P95/P99, entity resolution accuracy), historical trends (graph growth over time, query performance degradation), alerts (query latency >...
 
-#### [ADR-0081a](../../docs/architecture/decisions/0081a-*.md): 0081A Knowledge Graph
+#### [ADR-0081a](./0081a-*.md): 0081A Knowledge Graph
 
 **Components:**
 
@@ -536,7 +536,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/kg/temporal_edges.py`
   - Relationship evolution tracking, bitemporal support (valid_from/valid_to for relationship evolution, created_at for insertion time), historical relationship queries, timeline queries ("Who was Alic...
 
-#### [ADR-0081b](../../docs/architecture/decisions/0081b-*.md): 0081B Knowledge Graph
+#### [ADR-0081b](./0081b-*.md): 0081B Knowledge Graph
 
 **Components:**
 
@@ -548,7 +548,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/kg/traversal.py`
   - BFS (Breadth-First Search) for shortest path in unweighted graphs O(V+E), DFS (Depth-First Search) for cycle detection and reachability O(V+E), Dijkstra for shortest path in weighted graphs O((V+E)...
 
-#### [ADR-0081c](../../docs/architecture/decisions/0081c-*.md): 0081C Knowledge Graph
+#### [ADR-0081c](./0081c-*.md): 0081C Knowledge Graph
 
 **Components:**
 
@@ -560,7 +560,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/kg/entity_extractor.py`
   - spaCy NER integration for Named Entity Recognition (PERSON, GPE, DATE, ORG), dependency parsing for relationship identification (nsubj, dobj, prep), pattern matching for relationship extraction, en...
 
-#### [ADR-0081d](../../docs/architecture/decisions/0081d-*.md): 0081D Knowledge Graph
+#### [ADR-0081d](./0081d-*.md): 0081D Knowledge Graph
 
 **Components:**
 
@@ -575,7 +575,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K0 Memory Consolidation
 
-#### [ADR-0084](../../docs/architecture/decisions/0084-*.md): 0084 Core Architecture
+#### [ADR-0084](./0084-*.md): 0084 Core Architecture
 
 **Components:**
 
@@ -607,7 +607,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/storage/archived_memories.py`
   - K0::st_sqlite[archived_memories] table, archive criteria (>90 days, access_count=0, low salience), LZ4 compression, rollups/summaries (P15 integration), SQLite VACUUM every 30 days, ≥30% storage re...
 
-#### [ADR-0084a](../../docs/architecture/decisions/0084a-*.md): 0084A Hippocampal Replay
+#### [ADR-0084a](./0084a-*.md): 0084A Hippocampal Replay
 
 **Components:**
 
@@ -627,7 +627,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/ca1/theta_rhythm.py`
   - CA1_THETA oscillation generator (4-8 Hz), NREM theta 4-6 Hz (slow, consolidation), REM theta 6-8 Hz (fast, exploration), theta phase precession (encoding phase π-2π, retrieval phase 0-π), theta-gat...
 
-#### [ADR-0084b](../../docs/architecture/decisions/0084b-*.md): 0084B Sleep State Machine
+#### [ADR-0084b](./0084b-*.md): 0084B Sleep State Machine
 
 **Components:**
 
@@ -663,7 +663,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/consolidation/resource_limits.py`
   - Memory cap 256 MB (resource.setrlimit), batch size 1000 events (prevents memory spikes), disk I/O <5 MB/s, ionice idle class, async writes, fsync every 5min, pause if battery <30%, reduce frequency...
 
-#### [ADR-0084c](../../docs/architecture/decisions/0084c-*.md): 0084C Knowledge Graph Consol.
+#### [ADR-0084c](./0084c-*.md): 0084C Knowledge Graph Consol.
 
 **Components:**
 
@@ -683,7 +683,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/kg/temporal.py`
   - KG_TEMPORAL_ENGINE, time-stamped snapshots (node_id, timestamp, properties), 365-day retention, historical state queries ("What were Alice's interests last month?"), temporal range queries (track c...
 
-#### [ADR-0084d](../../docs/architecture/decisions/0084d-*.md): 0084D Dream Exploration
+#### [ADR-0084d](./0084d-*.md): 0084D Dream Exploration
 
 **Components:**
 
@@ -706,7 +706,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K0 SSE Event Streaming
 
-#### [ADR-0042a](../../docs/architecture/decisions/0042a-*.md): 0042A Event Production
+#### [ADR-0042a](./0042a-*.md): 0042A Event Production
 
 **Components:**
 
@@ -726,7 +726,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/sse/event_batcher.py`
   - Compression + batching for event delivery, zstd compression level 3, reduces bandwidth 40-60%
 
-#### [ADR-0042d](../../docs/architecture/decisions/0042d-*.md): 0042D Backpressure
+#### [ADR-0042d](./0042d-*.md): 0042D Backpressure
 
 **Components:**
 
@@ -749,7 +749,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K1 Core
 
-#### [ADR-0001](../../docs/architecture/decisions/0001-*.md): 0001 Memory Kernel
+#### [ADR-0001](./0001-*.md): 0001 Memory Kernel
 
 **Components:**
 
@@ -757,7 +757,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `contracts/architecture/k0_k1_split.yml`
   - K0 (memory, P01-P20), K1 (intelligence, 52 modules), hybrid architecture, pure actors vs AI agents
 
-#### [ADR-0004](../../docs/architecture/decisions/0004-*.md): 0004 Architecture
+#### [ADR-0004](./0004-*.md): 0004 Architecture
 
 **Components:**
 
@@ -773,7 +773,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `contracts/architecture/layer_dependencies.yml`
   - L1→L5 only, L2→all, L3→L4+L5, L4→L5, L5→none, dependency direction
 
-#### [ADR-0004b](../../docs/architecture/decisions/0004b-*.md): 0004B Dependencies
+#### [ADR-0004b](./0004b-*.md): 0004B Dependencies
 
 **Components:**
 
@@ -785,7 +785,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `contracts/architecture/layer_dependencies.yml`
   - L1→L5 only, L2→all, L3→L4+L5, L4→L5, L5→none, dependency direction
 
-#### [ADR-0004d](../../docs/architecture/decisions/0004d-*.md): 0004D Testing
+#### [ADR-0004d](./0004d-*.md): 0004D Testing
 
 **Components:**
 
@@ -820,7 +820,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### K1 Internal Event Bus
 
-#### [ADR-0048](../../docs/architecture/decisions/0048-*.md): 0048 K0/K1 Separation
+#### [ADR-0048](./0048-*.md): 0048 K0/K1 Separation
 
 **Components:**
 
@@ -831,7 +831,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Message Queue & Coalescing
 
-#### [ADR-0053](../../docs/architecture/decisions/0053-*.md): 0053 Main
+#### [ADR-0053](./0053-*.md): 0053 Main
 
 **Components:**
 
@@ -839,7 +839,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/research/message_queue_research.md`
   - Nagle's Algorithm (TCP 1984), SEDA (2001), Token Bucket, Cooperative Cancellation (Go/Rust), Turn-taking pauses (2-3s)
 
-#### [ADR-0053a](../../docs/architecture/decisions/0053a-*.md): 0053A Coalesce Window
+#### [ADR-0053a](./0053a-*.md): 0053A Coalesce Window
 
 **Components:**
 
@@ -851,7 +851,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/roadmap/coalescing_enhancements.md`
   - Adaptive windows per user typing speed, context-aware coalescing (longer for complex), predictive flush (ML model)
 
-#### [ADR-0053b](../../docs/architecture/decisions/0053b-*.md): 0053B Rate Limits
+#### [ADR-0053b](./0053b-*.md): 0053B Rate Limits
 
 **Components:**
 
@@ -859,7 +859,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/roadmap/rate_limiting_enhancements.md`
   - Distributed rate limiting (Redis cross-instance), adaptive per-user limits (fast typers 7 msg/sec), per-tier system (premium/free), smart retry SDK
 
-#### [ADR-0053c](../../docs/architecture/decisions/0053c-*.md): 0053C Cancel Path
+#### [ADR-0053c](./0053c-*.md): 0053C Cancel Path
 
 **Components:**
 
@@ -874,7 +874,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Multi-Device Family Sync
 
-#### [ADR-0050](../../docs/architecture/decisions/0050-*.md): 0050 Sync Strategy
+#### [ADR-0050](./0050-*.md): 0050 Sync Strategy
 
 **Components:**
 
@@ -889,7 +889,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### OpenAPI 3.1 Specs
 
-#### [ADR-0047](../../docs/architecture/decisions/0047-*.md): 0047 SDK Generation
+#### [ADR-0047](./0047-*.md): 0047 SDK Generation
 
 **Components:**
 
@@ -924,7 +924,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### REST API Dual Format
 
-#### [ADR-0014b](../../docs/architecture/decisions/0014b-*.md): 0014B OpenAPI Generation
+#### [ADR-0014b](./0014b-*.md): 0014B OpenAPI Generation
 
 **Components:**
 
@@ -944,7 +944,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `scripts/validate_openapi_spec.py`
   - Fail build if spec out of sync with schemas, <30s generation, 100% accuracy
 
-#### [ADR-0014d](../../docs/architecture/decisions/0014d-*.md): 0014D Client SDKs
+#### [ADR-0014d](./0014d-*.md): 0014D Client SDKs
 
 **Components:**
 
@@ -983,7 +983,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### SSE Event Schemas
 
-#### [ADR-0016](../../docs/architecture/decisions/0016-*.md): 0016 Event Taxonomy
+#### [ADR-0016](./0016-*.md): 0016 Event Taxonomy
 
 **Components:**
 
@@ -1011,7 +1011,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/sse/system_events.fbs`
   - Heartbeat, Error (2 events, keepalive + notifications)
 
-#### [ADR-0016a](../../docs/architecture/decisions/0016a-*.md): 0016A Event Taxonomy
+#### [ADR-0016a](./0016a-*.md): 0016A Event Taxonomy
 
 **Components:**
 
@@ -1039,7 +1039,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/sse/system_events.fbs`
   - Heartbeat, Error (2 events, keepalive + notifications)
 
-#### [ADR-0016c](../../docs/architecture/decisions/0016c-*.md): 0016C Filtering
+#### [ADR-0016c](./0016c-*.md): 0016C Filtering
 
 **Components:**
 
@@ -1051,7 +1051,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/architecture/sse_bandwidth_analysis.md`
   - 60-70% savings with topic filtering, all topics 6.5KB → filtered 2.2KB
 
-#### [ADR-0016d](../../docs/architecture/decisions/0016d-*.md): 0016D Browser Integration
+#### [ADR-0016d](./0016d-*.md): 0016D Browser Integration
 
 **Components:**
 
@@ -1074,7 +1074,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### SSE Topic Taxonomy
 
-#### [ADR-0043c](../../docs/architecture/decisions/0043c-*.md): 0043C Topic Routing
+#### [ADR-0043c](./0043c-*.md): 0043C Topic Routing
 
 **Components:**
 
@@ -1097,7 +1097,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### SSE-WebSocket Bridge
 
-#### [ADR-0046](../../docs/architecture/decisions/0046-*.md): 0046 Configuration
+#### [ADR-0046](./0046-*.md): 0046 Configuration
 
 **Components:**
 
@@ -1108,7 +1108,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Schema Versioning
 
-#### [ADR-0013](../../docs/architecture/decisions/0013-*.md): 0013 SemVer Policy
+#### [ADR-0013](./0013-*.md): 0013 SemVer Policy
 
 **Components:**
 
@@ -1128,7 +1128,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/architecture/COMPATIBILITY.md`
   - MINOR/PATCH versions backward-compatible, old clients ignore new optional fields
 
-#### [ADR-0013a](../../docs/architecture/decisions/0013a-*.md): 0013A Version Registry
+#### [ADR-0013a](./0013a-*.md): 0013A Version Registry
 
 **Components:**
 
@@ -1148,7 +1148,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `tools/k1_schema_version.py`
   - k1-schema-version check/deprecations/validate, <100ms latency, cached registry
 
-#### [ADR-0013b](../../docs/architecture/decisions/0013b-*.md): 0013B CI/CD Automation
+#### [ADR-0013b](./0013b-*.md): 0013B CI/CD Automation
 
 **Components:**
 
@@ -1168,7 +1168,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `.github/workflows/schema-version-validation.yml`
   - Run on PR, validate version bumps, fail if incorrect, clear error messages
 
-#### [ADR-0013c](../../docs/architecture/decisions/0013c-*.md): 0013C Deprecation Workflow
+#### [ADR-0013c](./0013c-*.md): 0013C Deprecation Workflow
 
 **Components:**
 
@@ -1192,7 +1192,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `observability/dashboards/schema_deprecations.json`
   - Deprecation timeline, usage metrics %, 30-day alerts, top deprecated fields
 
-#### [ADR-0013d](../../docs/architecture/decisions/0013d-*.md): 0013D Contract Testing
+#### [ADR-0013d](./0013d-*.md): 0013D Contract Testing
 
 **Components:**
 
@@ -1223,7 +1223,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Turn Boundary Management
 
-#### [ADR-0054](../../docs/architecture/decisions/0054-*.md): 0054 Main
+#### [ADR-0054](./0054-*.md): 0054 Main
 
 **Components:**
 
@@ -1231,7 +1231,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/research/turn_taking_research.md`
   - Sacks et al. 1974 turn-taking, TRP pauses 0.5-2.5s, Google/Alexa 1.5-2.5s thresholds, natural conversation flow
 
-#### [ADR-0054a](../../docs/architecture/decisions/0054a-*.md): 0054A Implicit Pause
+#### [ADR-0054a](./0054a-*.md): 0054A Implicit Pause
 
 **Components:**
 
@@ -1247,7 +1247,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `docs/roadmap/turn_boundary_enhancements.md`
   - Adaptive pause threshold per user typing speed (fast 1.5s, slow 2.5s), linguistic completeness detection (LLM check)
 
-#### [ADR-0054b](../../docs/architecture/decisions/0054b-*.md): 0054B Explicit Submit
+#### [ADR-0054b](./0054b-*.md): 0054B Explicit Submit
 
 **Components:**
 
@@ -1262,7 +1262,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Turn History Retention
 
-#### [ADR-0021c](../../docs/architecture/decisions/0021c-*.md): 0021C Compliance
+#### [ADR-0021c](./0021c-*.md): 0021C Compliance
 
 **Components:**
 
@@ -1281,7 +1281,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### Voice Pipeline Implementation
 
-#### [ADR-0056](../../docs/architecture/decisions/0056-*.md): 0056 Pipeline Architecture
+#### [ADR-0056](./0056-*.md): 0056 Pipeline Architecture
 
 **Components:**
 
@@ -1357,7 +1357,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/pipelines/p12_tts/audio_buffer_manager.py`
   - ADR-0056e: Jitter buffer (80ms), frame reordering, packet loss recovery, adaptive buffering
 
-#### [ADR-0056a](../../docs/architecture/decisions/0056a-*.md): 0056A ASR Ingress
+#### [ADR-0056a](./0056a-*.md): 0056A ASR Ingress
 
 **Components:**
 
@@ -1373,7 +1373,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/pipelines/p11_asr/partial_result_emitter.py`
   - ADR-0056a: Stream intermediate ASR transcripts, is_partial flag, typing indicator UX, final transcript on turn boundary
 
-#### [ADR-0056d](../../docs/architecture/decisions/0056d-*.md): 0056D TTS Synthesis
+#### [ADR-0056d](./0056d-*.md): 0056D TTS Synthesis
 
 **Components:**
 
@@ -1389,7 +1389,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k0/pipelines/p12_tts/streaming_synthesizer.py`
   - ADR-0056d: Chunk-based TTS synthesis, 40ms audio chunks, async iterator, VITS model
 
-#### [ADR-0056e](../../docs/architecture/decisions/0056e-*.md): 0056E Audio Output
+#### [ADR-0056e](./0056e-*.md): 0056E Audio Output
 
 **Components:**
 
@@ -1400,7 +1400,7 @@ These ADRs apply across all layers and affect system-wide architecture.
 
 ### WebSocket Binary Protocol
 
-#### [ADR-0015](../../docs/architecture/decisions/0015-*.md): 0015 Protocol Design
+#### [ADR-0015](./0015-*.md): 0015 Protocol Design
 
 **Components:**
 
@@ -1420,7 +1420,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/websocket/server_messages.fbs`
   - TokenChunk, ToolCall, ToolResult, StateDelta, GroundingCommit (7 types)
 
-#### [ADR-0015a](../../docs/architecture/decisions/0015a-*.md): 0015A Protocol Design
+#### [ADR-0015a](./0015a-*.md): 0015A Protocol Design
 
 **Components:**
 
@@ -1432,7 +1432,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/websocket/message_types.fbs`
   - TURN_START, TOKEN_CHUNK, TOOL_CALL, BARGE_IN, PING/PONG (17 types)
 
-#### [ADR-0015b](../../docs/architecture/decisions/0015b-*.md): 0015B Flow Control
+#### [ADR-0015b](./0015b-*.md): 0015B Flow Control
 
 **Components:**
 
@@ -1444,7 +1444,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `sdk/typescript/ack_manager.ts`
   - AckManager, batched ACKs, unackedCount, lastAckTime tracking
 
-#### [ADR-0015c](../../docs/architecture/decisions/0015c-*.md): 0015C Reconnection
+#### [ADR-0015c](./0015c-*.md): 0015C Reconnection
 
 **Components:**
 
@@ -1460,7 +1460,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `sdk/typescript/dedup_manager.ts`
   - DeduplicationManager, 2000 seqno cache, skip replayed messages
 
-#### [ADR-0015d](../../docs/architecture/decisions/0015d-*.md): 0015D Streaming
+#### [ADR-0015d](./0015d-*.md): 0015D Streaming
 
 **Components:**
 
@@ -1468,7 +1468,7 @@ These ADRs apply across all layers and affect system-wide architecture.
   - File: `k1/schemas/websocket/token_chunk.fbs`
   - TOKEN_CHUNK, chunk_index, logprob, finish_reason, model_id, tokens_generated
 
-#### [ADR-0015e](../../docs/architecture/decisions/0015e-*.md): 0015E Client SDK
+#### [ADR-0015e](./0015e-*.md): 0015E Client SDK
 
 **Components:**
 

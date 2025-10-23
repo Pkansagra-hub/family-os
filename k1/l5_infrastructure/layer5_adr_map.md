@@ -32,7 +32,7 @@
 
 ## 📊 ADR Statistics
 
-**Total Layer 5 ADRs:** 165 (100% coverage)
+**Total Layer 5 ADRs:** 166 (100% coverage)
 
 ### By Category
 
@@ -40,7 +40,7 @@
 - **Resilience (resilience/):** 21 ADRs across 3 modules
 - **Thermal (thermal/):** 18 ADRs across 2 modules
 - **Event Bus (event_bus/):** 12 ADRs across 2 modules
-- **Observability (observability/):** 32 ADRs across 4 modules
+- **Observability (observability/):** 33 ADRs across 4 modules (includes ADR-0086h for agent metrics)
 - **Config & Connectors:** 24 ADRs across 3 modules
 
 ### By Family
@@ -48,7 +48,7 @@
 - **K0 Bridge:** 31 ADRs (K0 communication)
 - **Circuit Breaker:** 13 ADRs (Resilience)
 - **Thermal Management:** 18 ADRs (Device placement)
-- **Prometheus Metrics:** 15 ADRs (Observability)
+- **Prometheus Metrics:** 16 ADRs (Observability, includes ADR-0086h)
 - **Backpressure:** 16 ADRs (Flow control)
 - **Other Families:** 72 ADRs (Various infrastructure)
 
@@ -737,6 +737,59 @@
 - Scrape interval: 10s
 - Metric overhead: <1% CPU
 - Total metrics: 50+
+
+---
+
+### **Module 5.1b: observability/agent_metrics/**
+
+**Purpose:** Dynamic agent metrics & observability
+**Location:** `k1/l5_infrastructure/observability/agent_metrics.py`
+**Performance:** <1ms metric emission
+
+#### Primary ADRs
+
+- **ADR-0086h**  Agent Metrics & Observability (25+ Prometheus metrics, OpenTelemetry tracing, 3 Grafana dashboards)
+
+#### Related ADRs
+
+- **ADR-0029**  Prometheus Metrics (base metrics framework)
+- **ADR-0030**  Trace Sampling (tracing integration)
+
+#### Key Responsibilities
+
+1. **Agent Creation Metrics (25+ metrics):**
+   - **Creation:** agent_created_total (counter), creation_latency_ms (5 phases: validation, reservation, template, spawn, register)
+   - **Termination:** agent_terminated_total, termination_latency_ms
+   - **Reuse:** agent_reused_total (IDLE pool hits)
+   - **Performance:** reactivation_latency_ms (<10ms target), creation_latency_ms (<100ms target)
+   - **Resources:** agent_memory_mb, agent_accelerator_slots (NPU/GPU/CPU/Remote)
+   - **Agent Count:** agent_count_by_type (58+ types), agent_count_by_state (PENDING/WARMING/ACTIVE/IDLE/DRAINING/TERMINATED)
+   - **IDLE Pool:** idle_pool_size, idle_pool_hit_total, idle_pool_miss_total, idle_duration_seconds
+   - **State Transitions:** state_transitions_total (6 states × 6 states = 36 transitions), state_transition_latency_ms
+   - **Errors:** errors_total (6 categories: resource_exhausted, template_invalid, creation_failed, reactivation_failed, composition_failed, termination_failed)
+   - **Registry:** registry_size (58+ agent types), registry_query_latency_ms
+
+2. **OpenTelemetry Tracing:**
+   - 4-level span hierarchy: agent.create → agent.reserve → agent.compose → agent.spawn
+   - Span attributes: agent_id, agent_type, session_id, resource_type, template_version
+   - <1ms span creation overhead
+
+3. **Grafana Dashboards (3 dashboards):**
+   - **Agent Performance:** Creation/reactivation latency, IDLE pool hit rate, state transitions
+   - **Resource Utilization:** Memory usage, accelerator allocation, resource exhaustion events
+   - **Lifecycle Health:** Active agent count by type, termination reasons, error rates
+
+4. **Cardinality Management:**
+   - <10K active time series (agent_id cardinality bounded by 100 concurrent agents)
+   - agent_type dimension: 58+ types (bounded set)
+   - state dimension: 6 states (fixed)
+
+**Performance Metrics:**
+
+- Metric emission: <1ms P95 (minimal overhead)
+- Span creation: <1ms P95
+- Total agent metrics: 25+
+- Cardinality: <10K time series
 
 ---
 
@@ -1478,6 +1531,7 @@ Observability push             K0 Observability Port (:5203)
 - ADR-0030c  Adaptive Sampling
 - ADR-0030d  Jaeger Integration
 - ADR-0002d  Actor Fabric Observability
+- ADR-0086h  Agent Metrics & Observability (25+ Prometheus metrics, OpenTelemetry tracing, 3 Grafana dashboards)
 
 ### **Backpressure ADRs (16 ADRs)**
 
@@ -1632,9 +1686,9 @@ Observability push             K0 Observability Port (:5203)
 
 **Status:**  **COMPLETE**  All Layer 5 ADRs mapped end-to-end
 **Last Updated:** January 2025
-**Total ADRs:** 165 ADRs covering Layer 5
+**Total ADRs:** 166 ADRs covering Layer 5
 **Coverage:** 100% of Layer 5 modules (19/19 modules mapped across 6 categories)
 
 ---
 
-**This file was generated based on ADR_REFERENCE.md (4406 lines, 165 ADRs)**
+**This file was generated based on ADR_REFERENCE.md (4406 lines, 166 ADRs including ADR-0086h for agent metrics)**

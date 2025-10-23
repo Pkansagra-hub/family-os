@@ -1,0 +1,52 @@
+# Base Agent Template
+# All agents inherit from this root template
+
+$schema: http://json-schema.org/draft-07/schema#
+agent_type: base_agent
+category: base
+version: "1.0.0"
+
+# Metadata
+metadata:
+  author: K1 Intelligence Module
+  created: 2025-10-23
+  description: Root template for all agents
+  changelog:
+    - version: 1.0.0
+      date: 2025-10-23
+      changes: Initial base template
+
+# Capabilities (all agents have these)
+capabilities:
+  - TOOL_CALL  # Can call tools
+  - MEMORY_READ  # Can read from memory
+
+# Resource requirements (baseline)
+resources:
+  memory_mb: 64  # Minimum 64MB
+  max_memory_mb: 256  # Maximum 256MB per agent
+  preferred_accelerator: null  # No preference
+  thermal_aware: true  # Enable thermal-aware placement
+
+# Persona traits (default)
+persona:
+  response_style: concise
+  tone: professional
+  verbosity: medium
+
+# Tool access (empty - inherit from specific templates)
+tools:
+  whitelist: []
+  blacklist: []
+
+# Lifecycle settings
+lifecycle:
+  idle_timeout_seconds: 60  # Terminate after 60s idle
+  persistent: false  # Not persistent (can be terminated)
+  max_instances_per_session: 3  # Max 3 agents per session
+
+# Security settings
+security:
+  allow_network_access: false
+  allow_file_system_access: false
+  privacy_band_required: GREEN  # Minimum privacy band
