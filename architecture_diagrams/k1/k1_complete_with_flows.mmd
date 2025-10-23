@@ -1,0 +1,785 @@
+---
+title: "K1 Intelligence Module — Complete Architecture with Event & Message Flows"
+description: |
+  K1 production-ready agentic orchestrator kernel with full event flows, message passing, and K0 integration.
+
+  Architecture: 5-layer microkernel | 70+ modules | 652 ADRs
+
+  LAYER 1 (INPUT): 5 modules | 91 ADRs | <10ms P95
+  - stream_switch: Audio/Text/Vision routing, 3 concurrent streams
+  - operators: VAD <20ms, ASR <80ms, TTS <300ms
+  - intent_router: 3-tier (rules 10ms, SLM 30ms, LLM 40ms)
+  - meta_policy: Proactive suggestions, context-aware routing
+  - sensors: BLE proximity, PIR motion, mmWave radar (ambient awareness)
+
+  LAYER 2 (ORCHESTRATION): 3 modules | 127 ADRs | <100ms P95
+  - planner: 4-stage (Sketch→Expand→Validate→Commit) <50ms
+  - orchestrator: 3-phase (Negotiation→Selection→Execution) <250ms
+  - protocol_monitor: 6 MPST protocols, FSM validation
+
+  LAYER 3 (EXECUTION): 24 modules | 115 ADRs | Varies
+  - agents: 8 agents (Concierge, Planner, Researcher, Tool Specialist, Safety Watch, etc.)
+  - model_hub: 7 modules (registry, router, thermal, cache, provider, session, guard)
+  - tools: 5 modules (registry, executor, sandbox, schema, feedback)
+  - dialogue: 4 modules (manager, context, clarification, history)
+
+  LAYER 4 (RUNTIME): 11 modules | 154 ADRs | <1ms P95
+  - session_state: 6 sections (beliefs, scoreboard, control, persona, multimodal, meta)
+  - actor_fabric: MPSC mailbox, 4-tier priority, supervisor trees
+  - api_gateway: REST/GraphQL/gRPC, rate limiting, auth
+  - voice_pipeline: Multi-device, echo cancellation, barge-in
+  - learning: Feedback signals, drift detection, hot-reload
+  - hitl: Human-in-the-Loop (5 protocols: step-by-step, RED band, nested, proactive)
+  - intent_switch: Context-switch detection, 3-level intent drift taxonomy
+  - kv_cache: Adaptive cache management, dynamic placement, hot/cold eviction, ZSTD compression
+  - sync: Multi-device CRDT synchronization, hybrid LAN/Internet routing
+  - protocol_monitor: Runtime FSM validation instance (6 protocols)
+  - learning: Expanded with feedback signals, drift detection, hot-reload
+
+  LAYER 5 (INFRASTRUCTURE): 8 modules | 165 ADRs | <5ms P95
+  - bridge_k0: 6 ports (Command:5200, Query:5201, SSE:5202, Observability:5203, Health:5204, Arbitration:5205)
+  - event_bus: Pub/sub <5ms, 17+ event types, backpressure
+  - resilience: Circuit breaker, retry, timeout, bulkhead
+  - thermal: 4-tier placement (Arctic→Cold→Warm→Hot)
+  - observability: Metrics, tracing, logging (Prometheus, OTLP, structlog)
+  - config: YAML configuration + environment variables
+  - extensions: Plugin system (load/unload, isolation, manifest validation)
+  - connectors: External system integration (API, DB, Message queue)
+
+  EVENT FLOWS:
+  - L1→L2: EventBus (INTENT_DETECTED, USER_INPUT, VOICE_COMMAND, BARGE_IN, SENSOR_EVENT)
+  - L2→L3: Actor Mailbox (TaskAnnouncement→Proposal→Selection→TaskAssignment)
+  - L3→L4: State Updates (BeliefUpdate, ScoreUpdate, ToolResult, CacheUpdate)
+  - L2/L3/L4→K0: Bridge (Commands, Queries, SSE events, Metrics, Arbitration)
+  - L4→L5: HITL Approvals, Intent Switches, Multi-device Sync, Protocol Violations
+
+  PERFORMANCE: Hot path 135ms P95 | TTFT 150ms | E2E 2000ms | Memory 500MB
+
+  PATTERNS: Actor Model (Hewitt 1973), MPST (Honda 2008), Capabilities (Dennis 1966),
+           SEDA (Welsh 2001), Saga (Garcia-Molina 1987), Contract Net (Smith 1980),
+           CRDT (Shapiro 2011), HITL (Amershi 2014)
+
+author: "K1 Architecture Team"
+version: "3.0.0"
+---
+date: "2025-01-23"
+---
+
+graph TB
+    %% ========================================================================
+    %% LEGEND: Component Types, Flow Types, Performance Budgets
+    %% ========================================================================
+    subgraph LEGEND["📊 LEGEND"]
+        direction LR
+
+        subgraph LEG_COMPONENTS["Component Types"]
+            LEG_AGENT["🤖 AI Agent"]:::aiAgent
+            LEG_ACTOR["⚙️ Actor"]:::actor
+            LEG_INFRA["🏗️ Infrastructure"]:::infra
+            LEG_DATA["💾 Data Store"]:::data
+        end
+
+        subgraph LEG_FLOWS["Flow Types"]
+            LEG_EVENT["—→ Event Flow (L1→L2)"]
+            LEG_MSG["—→ Message Flow (L2↔L3)"]
+            LEG_STATE["—→ State Update (L3→L4)"]
+            LEG_K0["—→ K0 Bridge"]
+        end
+
+        subgraph LEG_PERF["Performance Budgets"]
+            LEG_P1["L1: <10ms P95"]
+            LEG_P2["L2: <100ms P95"]
+            LEG_P3["L3: Varies"]
+            LEG_P4["L4: <1ms P95"]
+            LEG_P5["L5: <5ms P95"]
+        end
+    end
+
+    %% ========================================================================
+    %% LAYER 1: INPUT — Multi-modal stream processing & intent routing
+    %% ========================================================================
+    subgraph L1["🎤 LAYER 1: INPUT | <10ms P95 | 91 ADRs"]
+        direction TB
+        L1_DESC["Multi-modal streams • 3-tier intent routing • Proactive suggestions"]:::description
+
+        subgraph L1_STREAM["1.1 stream_switch"]
+            L1_STREAM_MAIN["StreamSwitch⚙️<br/>3 concurrent streams<br/>Audio/Text/Vision<br/><5ms routing"]:::actor
+            L1_STREAM_AUDIO["Audio Stream<br/>48kHz, 16-bit"]:::component
+            L1_STREAM_TEXT["Text Stream<br/>UTF-8, streaming"]:::component
+            L1_STREAM_VISION["Vision Stream<br/>720p, 30fps"]:::component
+        end
+
+        subgraph L1_OPS["1.2 operators"]
+            L1_OPS_MAIN["Operators⚙️<br/>Transform pipeline"]:::actor
+            L1_OPS_VAD["VAD<br/><20ms<br/>Silero v4"]:::component
+            L1_OPS_ASR["ASR<br/><80ms<br/>Whisper tiny"]:::component
+            L1_OPS_TTS["TTS<br/><300ms<br/>Piper fast"]:::component
+        end
+
+        subgraph L1_INTENT["1.3 intent_router"]
+            L1_INTENT_MAIN["IntentRouter⚙️<br/>3-tier cascade<br/><50ms total"]:::actor
+            L1_INTENT_T1["Tier1: Rules<br/><10ms<br/>80% coverage"]:::component
+            L1_INTENT_T2["Tier2: SLM<br/><30ms<br/>Llama-3B"]:::component
+            L1_INTENT_T3["Tier3: LLM<br/><40ms<br/>GPT-4o mini"]:::component
+        end
+
+        subgraph L1_META["1.4 meta_policy"]
+            L1_META_MAIN["MetaPolicy⚙️<br/>Context routing<br/><5ms"]:::actor
+            L1_META_PROACTIVE["Proactive<br/>Suggestions"]:::component
+            L1_META_CONTEXT["Context Rules"]:::component
+        end
+
+        subgraph L1_SENSORS["1.5 sensors (Ambient)"]
+            L1_SENSORS_MAIN["SensorFusion⚙️<br/>Embodied awareness"]:::actor
+            L1_SENSORS_BLE["BLE Proximity<br/>RSSI distance"]:::component
+            L1_SENSORS_PIR["PIR Motion<br/>Occupancy detect"]:::component
+            L1_SENSORS_MMWAVE["mmWave Radar<br/>Presence detect"]:::component
+        end
+
+        %% L1 Internal connections
+        L1_STREAM_MAIN --> L1_STREAM_AUDIO
+        L1_STREAM_MAIN --> L1_STREAM_TEXT
+        L1_STREAM_MAIN --> L1_STREAM_VISION
+
+        L1_STREAM_AUDIO --> L1_OPS_VAD
+        L1_OPS_VAD --> L1_OPS_ASR
+        L1_OPS_ASR --> L1_INTENT_MAIN
+
+        L1_STREAM_TEXT --> L1_INTENT_MAIN
+        L1_STREAM_VISION --> L1_INTENT_MAIN
+
+        L1_INTENT_MAIN --> L1_INTENT_T1
+        L1_INTENT_T1 -.fallback.-> L1_INTENT_T2
+        L1_INTENT_T2 -.fallback.-> L1_INTENT_T3
+
+        L1_META_MAIN --> L1_META_PROACTIVE
+        L1_META_MAIN --> L1_META_CONTEXT
+        L1_META_CONTEXT --> L1_INTENT_MAIN
+
+        L1_SENSORS_MAIN --> L1_SENSORS_BLE
+        L1_SENSORS_MAIN --> L1_SENSORS_PIR
+        L1_SENSORS_MAIN --> L1_SENSORS_MMWAVE
+        L1_SENSORS_MAIN --> L1_META_MAIN
+    end
+
+    %% ========================================================================
+    %% LAYER 5: INFRASTRUCTURE — Event Bus, K0 Bridge, Observability
+    %% ========================================================================
+    subgraph L5["🏗️ LAYER 5: INFRASTRUCTURE | <5ms P95 | 165 ADRs"]
+        direction TB
+        L5_DESC["Event Bus • K0 Bridge (6 ports) • Resilience • Thermal • Observability"]:::description
+
+        subgraph L5_EVENTBUS["5.1 event_bus"]
+            L5_EB_MAIN["EventBus⚙️<br/>Pub/Sub <5ms<br/>Backpressure"]:::infra
+            L5_EB_TOPICS["Topics:<br/>INTENT_DETECTED<br/>USER_INPUT<br/>VOICE_COMMAND<br/>BARGE_IN<br/>CLARIFICATION_NEEDED<br/>TASK_STARTED<br/>TASK_COMPLETED<br/>AGENT_HIRED<br/>AGENT_IDLE<br/>TOOL_CALLED<br/>MODEL_INFERENCE<br/>+6 more"]:::component
+        end
+
+        subgraph L5_BRIDGE["5.2 bridge_k0"]
+            L5_BRIDGE_MAIN["K0 Bridge⚙️<br/>6 ports<br/><3ms"]:::infra
+            L5_BRIDGE_CMD["Command Port<br/>:5200<br/>POST /execute"]:::component
+            L5_BRIDGE_QRY["Query Port<br/>:5201<br/>GET /query"]:::component
+            L5_BRIDGE_SSE["SSE Port<br/>:5202<br/>GET /stream"]:::component
+            L5_BRIDGE_OBS["Observability<br/>:5203<br/>POST /metrics"]:::component
+            L5_BRIDGE_HEALTH["Health Port<br/>:5204<br/>GET /health"]:::component
+            L5_BRIDGE_ARB["Arbitration<br/>:5205<br/>POST /approve"]:::component
+        end
+
+        subgraph L5_RESILIENCE["5.3 resilience"]
+            L5_RES_MAIN["Resilience⚙️<br/>Circuit Breaker"]:::infra
+            L5_RES_CB["Circuit Breaker<br/>Closed→Open→Half"]:::component
+            L5_RES_RETRY["Retry<br/>Exp backoff"]:::component
+            L5_RES_TIMEOUT["Timeout<br/>Hierarchical"]:::component
+            L5_RES_BULK["Bulkhead<br/>Isolation"]:::component
+        end
+
+        subgraph L5_THERMAL["5.4 thermal"]
+            L5_THERMAL_MAIN["Thermal⚙️<br/>4-tier placement"]:::infra
+            L5_THERMAL_ARCTIC["Arctic: <1ms<br/>Hot cache"]:::component
+            L5_THERMAL_COLD["Cold: <10ms<br/>Warm cache"]:::component
+            L5_THERMAL_WARM["Warm: <100ms<br/>SLM inference"]:::component
+            L5_THERMAL_HOT["Hot: <1000ms<br/>LLM inference"]:::component
+        end
+
+        subgraph L5_OBS["5.5 observability"]
+            L5_OBS_MAIN["Observability⚙️"]:::infra
+            L5_OBS_METRICS["Metrics<br/>Prometheus<br/>:9090"]:::component
+            L5_OBS_TRACING["Tracing<br/>OTLP<br/>trace_id"]:::component
+            L5_OBS_LOGGING["Logging<br/>structlog<br/>JSON"]:::component
+        end
+
+        subgraph L5_CONFIG["5.6 config"]
+            L5_CFG_MAIN["Config⚙️<br/>YAML + Env"]:::infra
+            L5_CFG_KERNEL["kernel.yaml"]:::component
+            L5_CFG_LOGGING["logging.yaml"]:::component
+        end
+
+        subgraph L5_EXTENSIONS["5.7 extensions"]
+            L5_EXT_MAIN["ExtensionMgr⚙️<br/>Plugin system"]:::infra
+            L5_EXT_LOADER["Plugin Loader<br/>Isolation"]:::component
+            L5_EXT_LIFECYCLE["Lifecycle<br/>Load/Unload"]:::component
+            L5_EXT_REGISTRY["Registry<br/>Manifest validation"]:::component
+        end
+
+        subgraph L5_CONNECTORS["5.8 connectors"]
+            L5_CONN_MAIN["ConnectorMgr⚙️<br/>External systems"]:::infra
+            L5_CONN_API["API Connector<br/>REST/GraphQL"]:::component
+            L5_CONN_DB["DB Connector<br/>SQL/NoSQL"]:::component
+            L5_CONN_MSG["Message Connector<br/>Kafka/RabbitMQ"]:::component
+        end
+
+        %% L5 Internal connections
+        L5_EB_MAIN --> L5_EB_TOPICS
+        L5_BRIDGE_MAIN --> L5_BRIDGE_CMD
+        L5_BRIDGE_MAIN --> L5_BRIDGE_QRY
+        L5_BRIDGE_MAIN --> L5_BRIDGE_SSE
+        L5_BRIDGE_MAIN --> L5_BRIDGE_OBS
+        L5_BRIDGE_MAIN --> L5_BRIDGE_HEALTH
+        L5_BRIDGE_MAIN --> L5_BRIDGE_ARB
+
+        L5_RES_MAIN --> L5_RES_CB
+        L5_RES_MAIN --> L5_RES_RETRY
+        L5_RES_MAIN --> L5_RES_TIMEOUT
+        L5_RES_MAIN --> L5_RES_BULK
+
+        L5_THERMAL_MAIN --> L5_THERMAL_ARCTIC
+        L5_THERMAL_MAIN --> L5_THERMAL_COLD
+        L5_THERMAL_MAIN --> L5_THERMAL_WARM
+        L5_THERMAL_MAIN --> L5_THERMAL_HOT
+
+        L5_OBS_MAIN --> L5_OBS_METRICS
+        L5_OBS_MAIN --> L5_OBS_TRACING
+        L5_OBS_MAIN --> L5_OBS_LOGGING
+
+        L5_CFG_MAIN --> L5_CFG_KERNEL
+        L5_CFG_MAIN --> L5_CFG_LOGGING
+
+        L5_EXT_MAIN --> L5_EXT_LOADER
+        L5_EXT_MAIN --> L5_EXT_LIFECYCLE
+        L5_EXT_MAIN --> L5_EXT_REGISTRY
+
+        L5_CONN_MAIN --> L5_CONN_API
+        L5_CONN_MAIN --> L5_CONN_DB
+        L5_CONN_MAIN --> L5_CONN_MSG
+    end
+
+    %% ========================================================================
+    %% LAYER 2: ORCHESTRATION — Planning, coordination, protocol validation
+    %% ========================================================================
+    subgraph L2["🎯 LAYER 2: ORCHESTRATION | <100ms P95 | 127 ADRs"]
+        direction TB
+        L2_DESC["4-stage Planner • 3-phase Orchestrator • 6 MPST Protocols"]:::description
+
+        subgraph L2_PLANNER["2.1 planner"]
+            L2_PLAN_MAIN["Planner🤖<br/>4-stage pipeline<br/><50ms"]:::aiAgent
+            L2_PLAN_SKETCH["Stage 1: Sketch<br/><10ms<br/>SLM outline"]:::component
+            L2_PLAN_EXPAND["Stage 2: Expand<br/><20ms<br/>LLM details"]:::component
+            L2_PLAN_VALIDATE["Stage 3: Validate<br/><10ms<br/>Schema check"]:::component
+            L2_PLAN_COMMIT["Stage 4: Commit<br/><10ms<br/>Publish plan"]:::component
+        end
+
+        subgraph L2_ORCH["2.2 orchestrator"]
+            L2_ORCH_MAIN["Orchestrator⚙️<br/>3-phase coordination<br/><250ms"]:::actor
+            L2_ORCH_NEG["Phase 1: Negotiation<br/><100ms<br/>Broadcast task"]:::component
+            L2_ORCH_SEL["Phase 2: Selection<br/><50ms<br/>Pick best bid"]:::component
+            L2_ORCH_EXEC["Phase 3: Execution<br/><100ms<br/>Assign & monitor"]:::component
+        end
+
+        subgraph L2_PROTO["2.3 protocol_monitor"]
+            L2_PROTO_MAIN["ProtocolMonitor⚙️<br/>MPST validation<br/><5ms"]:::actor
+            L2_PROTO_FSM["6 FSMs:<br/>hire, task, clarify,<br/>barge_in, tool_call, saga"]:::component
+            L2_PROTO_TIMEOUT["Timeout Enforcement<br/>Hierarchical"]:::component
+        end
+
+        %% L2 Internal connections
+        L2_PLAN_MAIN --> L2_PLAN_SKETCH
+        L2_PLAN_SKETCH --> L2_PLAN_EXPAND
+        L2_PLAN_EXPAND --> L2_PLAN_VALIDATE
+        L2_PLAN_VALIDATE --> L2_PLAN_COMMIT
+        L2_PLAN_COMMIT --> L2_ORCH_MAIN
+
+        L2_ORCH_MAIN --> L2_ORCH_NEG
+        L2_ORCH_NEG --> L2_ORCH_SEL
+        L2_ORCH_SEL --> L2_ORCH_EXEC
+
+        L2_PROTO_MAIN --> L2_PROTO_FSM
+        L2_PROTO_MAIN --> L2_PROTO_TIMEOUT
+        L2_ORCH_MAIN -.validate.-> L2_PROTO_MAIN
+    end
+
+    %% ========================================================================
+    %% LAYER 3: EXECUTION — Agents, Model Hub, Tools, Dialogue
+    %% ========================================================================
+    subgraph L3["🤖 LAYER 3: EXECUTION | Varies | 115 ADRs"]
+        direction TB
+        L3_DESC["8 AI Agents • Model Hub (7 modules) • Tools (5 modules) • Dialogue (4 modules)"]:::description
+
+        subgraph L3_AGENTS["3.1 agents"]
+            L3_AG_MAIN["Agent Pool🤖<br/>Max 3 per session"]:::aiAgent
+            L3_AG_CONCIERGE["Concierge Agent<br/>Session mgmt"]:::aiAgent
+            L3_AG_PLANNER["Planner Agent<br/>Task planning"]:::aiAgent
+            L3_AG_RESEARCHER["Researcher Agent<br/>Info gathering"]:::aiAgent
+            L3_AG_TOOL["Tool Specialist<br/>Tool execution"]:::aiAgent
+            L3_AG_SAFETY["Safety Watch<br/>Content guard"]:::aiAgent
+            L3_AG_PERSONA["Persona Agent<br/>Personality"]:::aiAgent
+            L3_AG_CODE["Code Agent<br/>Code gen"]:::aiAgent
+            L3_AG_VOICE["Voice Agent<br/>Voice UX"]:::aiAgent
+        end
+
+        subgraph L3_MODEL["3.2 model_hub"]
+            L3_MODEL_MAIN["ModelHub⚙️<br/>7 modules"]:::infra
+            L3_MODEL_REG["Registry<br/>Model catalog"]:::component
+            L3_MODEL_ROUTER["Router<br/>Provider select"]:::component
+            L3_MODEL_THERMAL["Thermal Router<br/>4-tier placement"]:::component
+            L3_MODEL_CACHE["KV Cache<br/>75% hit rate"]:::component
+            L3_MODEL_PROVIDER["Provider<br/>OpenAI/Anthropic"]:::component
+            L3_MODEL_SESSION["Session Mgmt<br/>Warming/Draining"]:::component
+            L3_MODEL_GUARD["Guard<br/>Content filter"]:::component
+        end
+
+        subgraph L3_TOOLS["3.3 tools"]
+            L3_TOOLS_MAIN["ToolEngine⚙️<br/>5 modules"]:::infra
+            L3_TOOLS_REG["Registry<br/>Tool catalog"]:::component
+            L3_TOOLS_EXEC["Executor<br/>Sandbox exec"]:::component
+            L3_TOOLS_SANDBOX["Sandbox<br/>MCP/WASM/Process"]:::component
+            L3_TOOLS_SCHEMA["Schema<br/>JSON validation"]:::component
+            L3_TOOLS_FEEDBACK["Feedback<br/>Result quality"]:::component
+        end
+
+        subgraph L3_DIALOGUE["3.4 dialogue"]
+            L3_DIAL_MAIN["DialogueManager⚙️<br/>4 modules"]:::actor
+            L3_DIAL_CONTEXT["Context<br/>Multi-turn state"]:::component
+            L3_DIAL_CLARIFY["Clarification<br/>Ambiguity resolution"]:::component
+            L3_DIAL_HISTORY["History<br/>Conversation log"]:::component
+        end
+
+        %% L3 Internal connections
+        L3_AG_MAIN --> L3_AG_CONCIERGE
+        L3_AG_MAIN --> L3_AG_PLANNER
+        L3_AG_MAIN --> L3_AG_RESEARCHER
+        L3_AG_MAIN --> L3_AG_TOOL
+        L3_AG_MAIN --> L3_AG_SAFETY
+        L3_AG_MAIN --> L3_AG_PERSONA
+        L3_AG_MAIN --> L3_AG_CODE
+        L3_AG_MAIN --> L3_AG_VOICE
+
+        L3_AG_CONCIERGE --> L3_MODEL_MAIN
+        L3_AG_PLANNER --> L3_MODEL_MAIN
+        L3_AG_RESEARCHER --> L3_MODEL_MAIN
+        L3_AG_TOOL --> L3_TOOLS_MAIN
+        L3_AG_SAFETY --> L3_MODEL_GUARD
+
+        L3_MODEL_MAIN --> L3_MODEL_REG
+        L3_MODEL_MAIN --> L3_MODEL_ROUTER
+        L3_MODEL_ROUTER --> L3_MODEL_THERMAL
+        L3_MODEL_ROUTER --> L3_MODEL_CACHE
+        L3_MODEL_ROUTER --> L3_MODEL_PROVIDER
+        L3_MODEL_ROUTER --> L3_MODEL_SESSION
+        L3_MODEL_ROUTER --> L3_MODEL_GUARD
+
+        L3_TOOLS_MAIN --> L3_TOOLS_REG
+        L3_TOOLS_MAIN --> L3_TOOLS_EXEC
+        L3_TOOLS_EXEC --> L3_TOOLS_SANDBOX
+        L3_TOOLS_EXEC --> L3_TOOLS_SCHEMA
+        L3_TOOLS_EXEC --> L3_TOOLS_FEEDBACK
+
+        L3_DIAL_MAIN --> L3_DIAL_CONTEXT
+        L3_DIAL_MAIN --> L3_DIAL_CLARIFY
+        L3_DIAL_MAIN --> L3_DIAL_HISTORY
+
+        L3_AG_CONCIERGE --> L3_DIAL_MAIN
+        L3_AG_PLANNER --> L3_DIAL_MAIN
+    end
+
+    %% ========================================================================
+    %% LAYER 4: RUNTIME — Session State, Actor Fabric, Voice, Learning
+    %% ========================================================================
+    subgraph L4["⚡ LAYER 4: RUNTIME | <1ms P95 | 154 ADRs"]
+        direction TB
+        L4_DESC["Session State (6 sections) • Actor Fabric • API Gateway • Voice Pipeline • Learning Loop"]:::description
+
+        subgraph L4_SESSION["4.1 session_state"]
+            L4_SS_MAIN["SessionState💾<br/>FlatBuffers<br/><1ms ser/deser"]:::data
+            L4_SS_BELIEFS["Beliefs<br/>Facts/Prefs"]:::component
+            L4_SS_SCORE["Scoreboard<br/>Plan tracking"]:::component
+            L4_SS_CONTROL["Control<br/>Mode/Flags"]:::component
+            L4_SS_PERSONA["Persona<br/>Style/Tone"]:::component
+            L4_SS_MM["Multimodal<br/>Audio/Vision"]:::component
+            L4_SS_META["Meta<br/>Session info"]:::component
+        end
+
+        subgraph L4_ACTOR["4.2 actor_fabric"]
+            L4_AF_MAIN["ActorFabric⚙️<br/>MPSC mailbox<br/><1ms enqueue"]:::actor
+            L4_AF_MAILBOX["Mailbox<br/>4-tier priority:<br/>URGENT/REALTIME<br/>INTERACTIVE/BG"]:::component
+            L4_AF_SUPERVISOR["Supervisor Tree<br/>Restart strategy"]:::component
+            L4_AF_LIFECYCLE["Agent Lifecycle<br/>6 states FSM"]:::component
+        end
+
+        subgraph L4_API["4.3 api_gateway"]
+            L4_API_MAIN["APIGateway⚙️<br/>REST/GraphQL/gRPC"]:::infra
+            L4_API_AUTH["Auth<br/>JWT/OAuth"]:::component
+            L4_API_RATE["Rate Limit<br/>Token bucket"]:::component
+            L4_API_ROUTE["Router<br/>Path matching"]:::component
+        end
+
+        subgraph L4_VOICE["4.4 voice_pipeline"]
+            L4_VOICE_MAIN["VoicePipeline⚙️<br/>Multi-device"]:::actor
+            L4_VOICE_ECHO["Echo Cancel<br/>AEC filter"]:::component
+            L4_VOICE_BARGE["Barge-in<br/><200ms detect"]:::component
+            L4_VOICE_SYNC["Multi-device<br/>CRDT sync"]:::component
+        end
+
+        subgraph L4_LEARNING["4.5 learning"]
+            L4_LEARN_MAIN["LearningLoop⚙️<br/>Adaptive"]:::actor
+            L4_LEARN_SIGNALS["Feedback Signals:<br/>Explicit (thumbs)<br/>Implicit (time)<br/>Behavioral (clicks)"]:::component
+            L4_LEARN_DRIFT["Drift Detection<br/>Concept drift"]:::component
+            L4_LEARN_RELOAD["Hot Reload<br/>Zero downtime"]:::component
+        end
+
+        subgraph L4_HITL["4.6 hitl (Human-in-the-Loop)"]
+            L4_HITL_MAIN["HITL⚙️<br/>5 protocols"]:::actor
+            L4_HITL_STEPWISE["Step-by-Step<br/>Approval"]:::component
+            L4_HITL_RED["RED Band<br/>Approval"]:::component
+            L4_HITL_NESTED["Nested<br/>Clarifications"]:::component
+            L4_HITL_PROACTIVE["Proactive<br/>Confirmation"]:::component
+        end
+
+        subgraph L4_INTENT_SWITCH["4.7 intent_switch"]
+            L4_IS_MAIN["IntentSwitch⚙️<br/>Context detection"]:::actor
+            L4_IS_DRIFT["Intent Drift<br/>3-level taxonomy"]:::component
+            L4_IS_CONFIRM["Switch Prompt<br/>3 confidence levels"]:::component
+            L4_IS_HISTORY["History Mgmt<br/>Session stack"]:::component
+        end
+
+        subgraph L4_KV_CACHE["4.8 kv_cache"]
+            L4_KV_MAIN["KVCacheManager⚙️<br/>Adaptive"]:::infra
+            L4_KV_PLACEMENT["Dynamic Placement<br/>Thermal-aware"]:::component
+            L4_KV_EVICTION["Eviction<br/>Hot/Cold LRU"]:::component
+            L4_KV_COMPRESSION["Compression<br/>ZSTD 25-35%"]:::component
+        end
+
+        subgraph L4_SYNC["4.9 sync (Multi-Device)"]
+            L4_SYNC_MAIN["DeviceSync⚙️<br/>CRDT"]:::actor
+            L4_SYNC_DISCOVERY["Device Discovery<br/>mDNS/BLE"]:::component
+            L4_SYNC_MERGE["State Merge<br/>Conflict-free"]:::component
+            L4_SYNC_HYBRID["Hybrid Routing<br/>LAN/Internet"]:::component
+        end
+
+        subgraph L4_PROTO_MON["4.10 protocol_monitor"]
+            L4_PM_MAIN["ProtocolMonitor⚙️<br/>Runtime validation"]:::actor
+            L4_PM_FSM["FSM Executor<br/>6 protocols"]:::component
+            L4_PM_VIOLATION["Violation Handler<br/>Block/Warn/DLQ"]:::component
+        end
+
+        %% L4 Internal connections
+        L4_SS_MAIN --> L4_SS_BELIEFS
+        L4_SS_MAIN --> L4_SS_SCORE
+        L4_SS_MAIN --> L4_SS_CONTROL
+        L4_SS_MAIN --> L4_SS_PERSONA
+        L4_SS_MAIN --> L4_SS_MM
+        L4_SS_MAIN --> L4_SS_META
+
+        L4_AF_MAIN --> L4_AF_MAILBOX
+        L4_AF_MAIN --> L4_AF_SUPERVISOR
+        L4_AF_MAIN --> L4_AF_LIFECYCLE
+
+        L4_API_MAIN --> L4_API_AUTH
+        L4_API_MAIN --> L4_API_RATE
+        L4_API_MAIN --> L4_API_ROUTE
+
+        L4_VOICE_MAIN --> L4_VOICE_ECHO
+        L4_VOICE_MAIN --> L4_VOICE_BARGE
+        L4_VOICE_MAIN --> L4_VOICE_SYNC
+
+        L4_LEARN_MAIN --> L4_LEARN_SIGNALS
+        L4_LEARN_MAIN --> L4_LEARN_DRIFT
+        L4_LEARN_MAIN --> L4_LEARN_RELOAD
+
+        L4_HITL_MAIN --> L4_HITL_STEPWISE
+        L4_HITL_MAIN --> L4_HITL_RED
+        L4_HITL_MAIN --> L4_HITL_NESTED
+        L4_HITL_MAIN --> L4_HITL_PROACTIVE
+
+        L4_IS_MAIN --> L4_IS_DRIFT
+        L4_IS_MAIN --> L4_IS_CONFIRM
+        L4_IS_MAIN --> L4_IS_HISTORY
+
+        L4_KV_MAIN --> L4_KV_PLACEMENT
+        L4_KV_MAIN --> L4_KV_EVICTION
+        L4_KV_MAIN --> L4_KV_COMPRESSION
+
+        L4_SYNC_MAIN --> L4_SYNC_DISCOVERY
+        L4_SYNC_MAIN --> L4_SYNC_MERGE
+        L4_SYNC_MAIN --> L4_SYNC_HYBRID
+
+        L4_PM_MAIN --> L4_PM_FSM
+        L4_PM_MAIN --> L4_PM_VIOLATION
+    end
+
+    %% ========================================================================
+    %% EVENT FLOWS: L1 → L2 (via EventBus)
+    %% ========================================================================
+    L1_INTENT_T3 -->|"INTENT_DETECTED<br/>(intent, confidence)"| L5_EB_MAIN
+    L1_STREAM_TEXT -->|"USER_INPUT<br/>(text, timestamp)"| L5_EB_MAIN
+    L1_OPS_ASR -->|"VOICE_COMMAND<br/>(text, audio_id)"| L5_EB_MAIN
+    L4_VOICE_BARGE -->|"BARGE_IN<br/>(device_id, timestamp)"| L5_EB_MAIN
+
+    L5_EB_MAIN -->|"Subscribe: Events"| L2_PLAN_MAIN
+    L5_EB_MAIN -->|"Subscribe: Events"| L2_ORCH_MAIN
+
+    %% ========================================================================
+    %% MESSAGE FLOWS: L2 → L3 (via Actor Mailbox)
+    %% ========================================================================
+    L2_ORCH_NEG -->|"TaskAnnouncement<br/>(task_id, requirements)"| L4_AF_MAILBOX
+    L4_AF_MAILBOX -->|"Deliver to Agents"| L3_AG_MAIN
+
+    L3_AG_PLANNER -->|"Proposal<br/>(bid, cost, time)"| L4_AF_MAILBOX
+    L3_AG_TOOL -->|"Proposal<br/>(bid, cost, time)"| L4_AF_MAILBOX
+    L3_AG_RESEARCHER -->|"Proposal<br/>(bid, cost, time)"| L4_AF_MAILBOX
+    L4_AF_MAILBOX -->|"Deliver to Orch"| L2_ORCH_SEL
+
+    L2_ORCH_EXEC -->|"TaskAssignment<br/>(task_id, agent_id)"| L4_AF_MAILBOX
+    L4_AF_MAILBOX -->|"Deliver to Agent"| L3_AG_TOOL
+
+    %% ========================================================================
+    %% STATE UPDATE FLOWS: L3 → L4 (SessionState updates)
+    %% ========================================================================
+    L3_AG_CONCIERGE -->|"BeliefUpdate<br/>(fact, value)"| L4_SS_BELIEFS
+    L3_AG_PLANNER -->|"ScoreUpdate<br/>(step, status)"| L4_SS_SCORE
+    L3_AG_PERSONA -->|"PersonaUpdate<br/>(style, tone)"| L4_SS_PERSONA
+    L3_TOOLS_FEEDBACK -->|"ToolResult<br/>(success, output)"| L4_SS_SCORE
+
+    %% ========================================================================
+    %% K0 BRIDGE FLOWS: L2/L3/L4 → K0
+    %% ========================================================================
+    L2_ORCH_EXEC -->|"Execute Command<br/>POST /execute"| L5_BRIDGE_CMD
+    L3_AG_RESEARCHER -->|"Query K0<br/>GET /query"| L5_BRIDGE_QRY
+    L3_TOOLS_EXEC -->|"Execute Tool<br/>POST /execute"| L5_BRIDGE_CMD
+
+    L4_SS_MAIN -->|"Stream Events<br/>SSE"| L5_BRIDGE_SSE
+    L5_OBS_METRICS -->|"Send Metrics<br/>POST /metrics"| L5_BRIDGE_OBS
+    L5_OBS_TRACING -->|"Send Spans<br/>POST /metrics"| L5_BRIDGE_OBS
+
+    L2_ORCH_MAIN -->|"Health Check<br/>GET /health"| L5_BRIDGE_HEALTH
+    L3_AG_SAFETY -->|"Request Approval<br/>POST /approve"| L5_BRIDGE_ARB
+
+    %% ========================================================================
+    %% FEEDBACK LOOPS: Learning & Adaptation
+    %% ========================================================================
+    L3_TOOLS_FEEDBACK -->|"Tool Performance"| L4_LEARN_SIGNALS
+    L3_DIAL_HISTORY -->|"Conversation Quality"| L4_LEARN_SIGNALS
+    L4_LEARN_DRIFT -->|"Model Drift Detected"| L3_MODEL_ROUTER
+    L4_LEARN_RELOAD -->|"Hot Reload Config"| L5_CFG_MAIN
+
+    %% ========================================================================
+    %% THERMAL ROUTING: L5 → L3
+    %% ========================================================================
+    L5_THERMAL_ARCTIC -->|"Route to Cache"| L3_MODEL_CACHE
+    L5_THERMAL_COLD -->|"Route to Warm"| L3_MODEL_SESSION
+    L5_THERMAL_WARM -->|"Route to SLM"| L3_MODEL_PROVIDER
+    L5_THERMAL_HOT -->|"Route to LLM"| L3_MODEL_PROVIDER
+
+    %% ========================================================================
+    %% RESILIENCE: Circuit Breaker wraps external calls
+    %% ========================================================================
+    L5_RES_CB -->|"Protect"| L3_MODEL_PROVIDER
+    L5_RES_CB -->|"Protect"| L3_TOOLS_EXEC
+    L5_RES_CB -->|"Protect"| L5_BRIDGE_CMD
+    L5_RES_RETRY -->|"Retry Logic"| L3_MODEL_PROVIDER
+
+    %% ========================================================================
+    %% AGENT LIFECYCLE FSM: 6-state transitions (ADR-0005)
+    %% ========================================================================
+    L4_AF_LIFECYCLE -->|"PENDING→WARMING<br/>(150-250ms AI, 20ms pure)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"WARMING→ACTIVE<br/>(model loaded, ready)"| L4_AF_LIFECYCLE
+    L4_AF_LIFECYCLE -->|"ACTIVE→IDLE<br/>(no tasks, 60s timeout)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"IDLE→DRAINING<br/>(graceful shutdown)"| L4_AF_LIFECYCLE
+    L4_AF_LIFECYCLE -->|"DRAINING→TERMINATED<br/>(5s timeout)"| L3_AG_MAIN
+
+    %% ========================================================================
+    %% HITL (Human-in-the-Loop) FLOWS: Approval & Arbitration
+    %% ========================================================================
+    L2_PLAN_MAIN -->|"Request Approval<br/>(RED band tasks)"| L4_HITL_MAIN
+    L3_AG_SAFETY -->|"Escalate Risk<br/>(safety violations)"| L4_HITL_MAIN
+    L4_HITL_RED -->|"Request K0 Approval<br/>POST /arbitration/approve"| L5_BRIDGE_ARB
+    L5_BRIDGE_ARB -->|"Approval Response<br/>(approved/rejected)"| L4_HITL_MAIN
+    L4_HITL_MAIN -->|"Approval Result<br/>(<10ms latency)"| L2_PLAN_MAIN
+    L4_HITL_NESTED -->|"Clarification Request<br/>(nested questions)"| L3_DIAL_CLARIFY
+    L4_HITL_PROACTIVE -->|"Confirmation Prompt<br/>(high-stakes actions)"| L3_DIAL_MAIN
+    L4_HITL_MAIN -->|"Log Approval Events"| L5_OBS_LOGGING
+
+    %% ========================================================================
+    %% INTENT SWITCH FLOWS: Context Switch Detection
+    %% ========================================================================
+    L1_INTENT_T3 -->|"Intent Classification<br/>(intent, confidence)"| L4_IS_MAIN
+    L4_IS_DRIFT -->|"Context Switch Detected<br/>(3-level taxonomy)"| L2_ORCH_MAIN
+    L4_IS_CONFIRM -->|"Switch Confirmation<br/>(prompt user)"| L3_DIAL_MAIN
+    L2_ORCH_MAIN -->|"Context Switch Approved<br/>(new task context)"| L4_IS_HISTORY
+    L4_IS_HISTORY -->|"Session Stack Update<br/>(push/pop context)"| L4_SS_CONTROL
+    L4_IS_MAIN -->|"Switch Latency<br/>(<50ms P95)"| L5_OBS_METRICS
+
+    %% ========================================================================
+    %% KV CACHE FLOWS: Adaptive Cache Management
+    %% ========================================================================
+    L3_MODEL_ROUTER -->|"Cache Placement Query<br/>(request_id, tokens)"| L4_KV_MAIN
+    L4_KV_PLACEMENT -->|"Dynamic Placement<br/>(GPU/CPU/SSD)"| L3_MODEL_CACHE
+    L3_MODEL_CACHE -->|"Cache Hit<br/>(75% hit rate)"| L3_MODEL_PROVIDER
+    L3_MODEL_CACHE -->|"Cache Miss<br/>(25% miss rate)"| L4_KV_EVICTION
+    L4_KV_EVICTION -->|"Hot/Cold Eviction<br/>(LRU policy)"| L5_THERMAL_MAIN
+    L4_KV_COMPRESSION -->|"ZSTD Compress<br/>(25-35% ratio)"| L4_SS_MAIN
+    L4_KV_MAIN -->|"Cache Metrics<br/>(<5ms latency)"| L5_OBS_METRICS
+    L5_THERMAL_ARCTIC -->|"Arctic Tier<br/>(deep cold storage)"| L4_KV_COMPRESSION
+
+    %% ========================================================================
+    %% SYNC FLOWS: Multi-Device CRDT Synchronization
+    %% ========================================================================
+    L4_SYNC_DISCOVERY -->|"Device Discovery<br/>(mDNS/BLE)"| L5_CONN_MAIN
+    L5_EB_MAIN -->|"Device Event<br/>(device_joined/left)"| L4_SYNC_MAIN
+    L4_SYNC_MERGE -->|"CRDT Merge<br/>(Yjs CRDT)"| L4_SS_MAIN
+    L4_SS_MAIN -->|"State Delta<br/>(FlatBuffers)"| L4_SYNC_HYBRID
+    L4_SYNC_HYBRID -->|"LAN Sync<br/>(WebRTC P2P)"| L5_CONN_MAIN
+    L4_SYNC_HYBRID -->|"Internet Sync<br/>(WebSocket)"| L5_BRIDGE_SSE
+    L4_SYNC_MAIN -->|"Sync Metrics<br/>(latency, conflicts)"| L5_OBS_METRICS
+    L4_VOICE_SYNC -->|"Voice State Sync<br/>(multi-device)"| L4_SYNC_MAIN
+
+    %% ========================================================================
+    %% PROTOCOL MONITOR RUNTIME FLOWS: FSM Validation
+    %% ========================================================================
+    L2_PROTO_MAIN -->|"Protocol FSM<br/>(6 protocols)"| L4_PM_MAIN
+    L4_PM_FSM -->|"Validate Transition<br/>(<5ms)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"Protocol Event<br/>(hire/task/clarify)"| L4_PM_FSM
+    L4_PM_VIOLATION -->|"Violation Detected<br/>(timeout/invalid)"| L4_HITL_MAIN
+    L4_PM_VIOLATION -->|"Log Violation"| L5_OBS_LOGGING
+    L4_PM_MAIN -->|"Protocol Metrics"| L5_OBS_METRICS
+
+    %% ========================================================================
+    %% SENSORS FLOWS: Ambient Awareness (Layer 1)
+    %% ========================================================================
+    L1_SENS_BLE -->|"Proximity Event<br/>(BLE RSSI)"| L1_SENSORS_MAIN
+    L1_SENS_PIR -->|"Motion Detected<br/>(PIR trigger)"| L1_SENSORS_MAIN
+    L1_SENS_MMWAVE -->|"Presence/Gesture<br/>(mmWave radar)"| L1_SENSORS_MAIN
+    L1_SENSORS_MAIN -->|"Ambient Context<br/>(presence, motion)"| L1_META_MAIN
+    L1_META_MAIN -->|"Meta Policy Update<br/>(<5ms)"| L2_ORCH_MAIN
+    L1_SENSORS_MAIN -->|"Sensor Telemetry"| L5_OBS_METRICS
+
+    %% ========================================================================
+    %% EXTENSIONS FLOWS: Plugin System Integration
+    %% ========================================================================
+    L5_EXT_LOADER -->|"Load Plugin<br/>(Python/WASM)"| L5_CFG_MAIN
+    L5_EXT_LIFECYCLE -->|"Initialize Extension<br/>(load/unload)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"Use Extension<br/>(custom capability)"| L5_EXT_REGISTRY
+    L5_EXT_REGISTRY -->|"Validate Manifest<br/>(JSON schema)"| L5_CFG_MAIN
+    L5_EXT_MAIN -->|"Extend Tools<br/>(custom tools)"| L3_TOOLS_REG
+    L5_EXT_MAIN -->|"Extension Metrics"| L5_OBS_METRICS
+    L5_OBS_LOGGING -->|"Extension Logs"| L5_EXT_MAIN
+
+    %% ========================================================================
+    %% CONNECTORS FLOWS: External System Integration
+    %% ========================================================================
+    L5_CONN_API -->|"REST/GraphQL Call<br/>(external API)"| L5_BRIDGE_MAIN
+    L5_CONN_DB -->|"SQL/NoSQL Query<br/>(external DB)"| L5_RES_CB
+    L5_CONN_MSG -->|"Kafka/RabbitMQ<br/>(external queue)"| L5_EB_MAIN
+    L3_TOOLS_EXEC -->|"External Tool Call<br/>(via connector)"| L5_CONN_MAIN
+    L5_CONN_MAIN -->|"Circuit Breaker<br/>(protect external)"| L5_RES_CB
+    L5_CONN_MAIN -->|"Connector Metrics"| L5_OBS_METRICS
+    L5_CONN_MAIN -->|"Retry Failed Calls"| L5_RES_RETRY
+    L4_AF_LIFECYCLE -->|"ACTIVE→IDLE<br/>(60s timeout, quiescence)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"IDLE→ACTIVE<br/>(<50ms reactivation)"| L4_AF_LIFECYCLE
+    L4_AF_LIFECYCLE -->|"ACTIVE/IDLE→DRAINING<br/>(graceful shutdown)"| L3_AG_MAIN
+    L3_AG_MAIN -->|"DRAINING→TERMINATED<br/>(state flushed)"| L4_AF_LIFECYCLE
+
+    %% ========================================================================
+    %% SECURITY & CAPABILITIES: Least privilege enforcement (ADR-0010)
+    %% ========================================================================
+    L4_AF_MAIN -->|"Grant Capabilities<br/>(TOOL_CALL, MODEL_ACCESS)"| L3_AG_MAIN
+    L3_AG_TOOL -->|"Verify Capability<br/>before tool exec"| L4_AF_MAIN
+    L4_AF_LIFECYCLE -->|"Revoke Capabilities<br/>on TERMINATED"| L3_AG_MAIN
+
+    L3_AG_SAFETY -->|"PII Detection<br/>(GREEN/AMBER/RED)"| L5_BRIDGE_ARB
+    L3_AG_SAFETY -->|"Content Filter<br/>Approval Request"| L5_BRIDGE_ARB
+
+    %% ========================================================================
+    %% SESSIONSTATE SERIALIZATION: FlatBuffers delta sync (ADR-0017)
+    %% ========================================================================
+    L4_SS_MAIN -->|"Delta Batch<br/>(250ms cadence)"| L5_BRIDGE_CMD
+    L4_SS_MAIN -->|"FlatBuffers<br/><1ms ser/deser"| L3_AG_MAIN
+    L3_AG_CONCIERGE -->|"Beliefs Update<br/>(facts, prefs)"| L4_SS_BELIEFS
+    L3_AG_PLANNER -->|"Scoreboard Update<br/>(plan tracking)"| L4_SS_SCORE
+    L4_SS_MAIN -->|"K0 WAL Persist<br/>(durable state)"| L5_BRIDGE_CMD
+
+    %% ========================================================================
+    %% MULTI-DEVICE SYNC: CRDT coordination (ADR-0018)
+    %% ========================================================================
+    L4_VOICE_SYNC -->|"CRDT Delta<br/>(LAN/Internet hybrid)"| L5_BRIDGE_SSE
+    L4_VOICE_SYNC -->|"Device Discovery<br/>(mDNS/BLE)"| L1_STREAM_MAIN
+    L4_VOICE_SYNC -->|"State Merge<br/>(conflict-free)"| L4_SS_MAIN
+
+    %% ========================================================================
+    %% TOOL EXECUTION SANDBOX: MCP/WASM/Process isolation (ADR-0034)
+    %% ========================================================================
+    L3_TOOLS_SANDBOX -->|"MCP Protocol<br/>(stdio/HTTP)"| L3_TOOLS_EXEC
+    L3_TOOLS_SANDBOX -->|"WASM Runtime<br/>(Wasmtime)"| L3_TOOLS_EXEC
+    L3_TOOLS_SANDBOX -->|"Process Isolation<br/>(seccomp)"| L3_TOOLS_EXEC
+    L3_TOOLS_EXEC -->|"Tool Result<br/>+ Execution Time"| L3_TOOLS_FEEDBACK
+
+    %% ========================================================================
+    %% MPST PROTOCOL VALIDATION: 6 protocols (ADR-0003)
+    %% ========================================================================
+    L2_PROTO_FSM -->|"Validate:<br/>hire, task, clarify,<br/>barge_in, tool, saga"| L2_ORCH_MAIN
+    L2_PROTO_FSM -->|"Block Invalid<br/>Message Sequences"| L4_AF_MAILBOX
+    L2_PROTO_TIMEOUT -->|"Auto-Transition<br/>on Timeout"| L2_PROTO_FSM
+    L2_PROTO_MAIN -->|"DLQ on<br/>Protocol Violation"| L5_EB_MAIN
+
+    %% ========================================================================
+    %% 17+ SSE EVENT TYPES: Detailed event flows (ADR-0016)
+    %% ========================================================================
+    L5_EB_TOPICS -->|"17+ Events:<br/>IntentDetected,<br/>UserInput,<br/>VoiceCommand,<br/>BargeIn,<br/>ClarificationNeeded,<br/>TaskStarted,<br/>TaskCompleted,<br/>AgentHired,<br/>AgentIdle,<br/>ToolCalled,<br/>ModelInference,<br/>+6 more"| L2_PLAN_MAIN
+
+    %% ========================================================================
+    %% MODEL HUB ROUTING: Thermal-aware placement (ADR-0030)
+    %% ========================================================================
+    L3_MODEL_THERMAL -->|"Arctic: KV Cache<br/><1ms"| L3_MODEL_CACHE
+    L3_MODEL_THERMAL -->|"Cold: Warm Cache<br/><10ms"| L3_MODEL_SESSION
+    L3_MODEL_THERMAL -->|"Warm: SLM<br/><100ms"| L3_MODEL_PROVIDER
+    L3_MODEL_THERMAL -->|"Hot: LLM<br/><1000ms"| L3_MODEL_PROVIDER
+    L5_THERMAL_MAIN -->|"Placement<br/>Decision"| L3_MODEL_THERMAL
+
+    %% ========================================================================
+    %% PLANNER 4-STAGE PIPELINE: Sketch→Expand→Validate→Commit (ADR-0007)
+    %% ========================================================================
+    L2_PLAN_SKETCH -->|"SLM Outline<br/><10ms"| L2_PLAN_EXPAND
+    L2_PLAN_EXPAND -->|"LLM Details<br/><20ms"| L2_PLAN_VALIDATE
+    L2_PLAN_VALIDATE -->|"Schema Check<br/><10ms"| L2_PLAN_COMMIT
+    L2_PLAN_COMMIT -->|"Publish Plan<br/>to Orchestrator"| L2_ORCH_NEG
+
+    %% ========================================================================
+    %% OBSERVABILITY: All layers emit telemetry
+    %% ========================================================================
+    L1_INTENT_MAIN -.metrics.-> L5_OBS_METRICS
+    L2_ORCH_MAIN -.metrics.-> L5_OBS_METRICS
+    L3_AG_MAIN -.metrics.-> L5_OBS_METRICS
+    L4_AF_MAIN -.metrics.-> L5_OBS_METRICS
+
+    L1_INTENT_MAIN -.traces.-> L5_OBS_TRACING
+    L2_ORCH_MAIN -.traces.-> L5_OBS_TRACING
+    L3_AG_MAIN -.traces.-> L5_OBS_TRACING
+    L4_AF_MAIN -.traces.-> L5_OBS_TRACING
+
+    %% ========================================================================
+    %% STYLES: Color-coded components
+    %% ========================================================================
+    classDef aiAgent fill:#e1f5ff,stroke:#0078d4,stroke-width:3px,color:#000
+    classDef actor fill:#fff4e1,stroke:#ff8c00,stroke-width:2px,color:#000
+    classDef infra fill:#e8f5e9,stroke:#4caf50,stroke-width:2px,color:#000
+    classDef data fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,color:#000
+    classDef component fill:#f5f5f5,stroke:#666,stroke-width:1px,color:#000
+    classDef description fill:#fffacd,stroke:#ffa500,stroke-width:1px,color:#000,font-style:italic
+    classDef root fill:#ffcccb,stroke:#d32f2f,stroke-width:4px,color:#000,font-weight:bold
+
+    class L1_STREAM_MAIN,L1_OPS_MAIN,L1_INTENT_MAIN,L1_META_MAIN actor
+    class L2_ORCH_MAIN,L2_PROTO_MAIN,L3_DIAL_MAIN,L4_AF_MAIN,L4_VOICE_MAIN,L4_LEARN_MAIN actor
+    class L2_PLAN_MAIN aiAgent
+    class L3_AG_MAIN,L3_AG_CONCIERGE,L3_AG_PLANNER,L3_AG_RESEARCHER,L3_AG_TOOL,L3_AG_SAFETY,L3_AG_PERSONA,L3_AG_CODE, L3_AG_VOICE aiAgent
+    class L3_MODEL_MAIN,L3_TOOLS_MAIN,L4_API_MAIN infra
+    class L5_EB_MAIN,L5_BRIDGE_MAIN,L5_RES_MAIN,L5_THERMAL_MAIN,L5_OBS_MAIN,L5_CFG_MAIN infra
+    class L4_SS_MAIN data
+    class L1_DESC,L2_DESC,L3_DESC,L4_DESC,L5_DESC description
