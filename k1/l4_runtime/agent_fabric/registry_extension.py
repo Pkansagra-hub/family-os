@@ -38,15 +38,16 @@ Research Foundation:
 Implementation Status: STUB (M2 - 4 days planned)
 """
 
-from typing import Dict, Set, List, Optional, Any
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from threading import RLock
-from datetime import datetime
+from typing import Any, Dict, List, Optional, Set
 
 
 class AgentState(Enum):
     """Agent lifecycle states."""
+
     PENDING = "PENDING"
     WARMING = "WARMING"
     ACTIVE = "ACTIVE"
@@ -57,6 +58,7 @@ class AgentState(Enum):
 
 class Capability(Enum):
     """Agent capabilities for composition."""
+
     TOOL_CALL = "TOOL_CALL"
     MEMORY_READ = "MEMORY_READ"
     MEMORY_WRITE = "MEMORY_WRITE"
@@ -69,7 +71,7 @@ class Capability(Enum):
 @dataclass
 class AgentRecord:
     """Agent registry record.
-    
+
     Attributes:
         agent_id: Unique identifier (agent-{session}-{ts}-{counter})
         agent_type: Type name (health_specialist, code_assistant, etc.)
@@ -80,6 +82,7 @@ class AgentRecord:
         memory_mb: Allocated memory
         accelerator: Assigned accelerator (NPU/GPU/CPU/REMOTE)
     """
+
     agent_id: str
     agent_type: str
     session_id: str
@@ -93,7 +96,7 @@ class AgentRecord:
 @dataclass
 class AgentTypeSpec:
     """Agent type specification from YAML.
-    
+
     Attributes:
         type_name: Type identifier
         display_name: Human-readable name
@@ -104,6 +107,7 @@ class AgentTypeSpec:
         preferred_accelerator: Preferred accelerator type
         persistent: Whether agent persists beyond session
     """
+
     type_name: str
     display_name: str
     description: str
@@ -116,19 +120,19 @@ class AgentTypeSpec:
 
 class DynamicAgentRegistry:
     """Multi-index registry for dynamic agents.
-    
+
     Responsibilities:
         - Register/unregister agents
         - O(1) lookups by agent_id, type, session, state, capability
         - Combined queries (type + session + state)
         - Thread-safe operations with RLock
         - Type specification loading from YAML
-    
+
     Performance: <1ms single index, <2ms combined queries
-    
+
     Example:
         registry = DynamicAgentRegistry()
-        
+
         # Register agent
         record = AgentRecord(
             agent_id="agent-abc-1234567890-000001",
@@ -141,13 +145,13 @@ class DynamicAgentRegistry:
             accelerator="NPU"
         )
         registry.register(record)
-        
+
         # Lookup by ID (O(1))
         agent = registry.get_by_id("agent-abc-1234567890-000001")
-        
+
         # Lookup by type (O(1))
         health_agents = registry.get_by_type("health_specialist")
-        
+
         # Combined query (<2ms)
         active_health_agents = registry.query(
             agent_type="health_specialist",
@@ -155,30 +159,32 @@ class DynamicAgentRegistry:
             state=AgentState.ACTIVE
         )
     """
-    
+
     def __init__(self):
         """Initialize multi-index registry."""
         # Primary index: agent_id → AgentRecord
         self._agents: Dict[str, AgentRecord] = {}
-        
+
         # Secondary indexes
-        self._by_type: Dict[str, Set[str]] = {}      # agent_type → set[agent_id]
-        self._by_session: Dict[str, Set[str]] = {}   # session_id → set[agent_id]
+        self._by_type: Dict[str, Set[str]] = {}  # agent_type → set[agent_id]
+        self._by_session: Dict[str, Set[str]] = {}  # session_id → set[agent_id]
         self._by_state: Dict[AgentState, Set[str]] = {}  # state → set[agent_id]
-        self._by_capability: Dict[Capability, Set[str]] = {}  # capability → set[agent_id]
-        
+        self._by_capability: Dict[Capability, Set[str]] = (
+            {}
+        )  # capability → set[agent_id]
+
         # Type specifications (loaded from YAML)
         self._type_specs: Dict[str, AgentTypeSpec] = {}
-        
+
         # Thread safety
         self._lock = RLock()
-    
+
     def register(self, record: AgentRecord) -> None:
         """Register agent in all indexes.
-        
+
         Args:
             record: Agent record to register
-        
+
         Raises:
             ValueError: If agent_id already exists
         """
@@ -189,13 +195,13 @@ class DynamicAgentRegistry:
             # 3. Add to all secondary indexes
             # 4. Update metrics
             raise NotImplementedError("register not yet implemented (M2)")
-    
+
     def unregister(self, agent_id: str) -> Optional[AgentRecord]:
         """Unregister agent from all indexes.
-        
+
         Args:
             agent_id: Agent to unregister
-        
+
         Returns:
             Unregistered record or None if not found
         """
@@ -205,30 +211,30 @@ class DynamicAgentRegistry:
             # 2. Remove from all secondary indexes
             # 3. Update metrics
             raise NotImplementedError("unregister not yet implemented (M2)")
-    
+
     def get_by_id(self, agent_id: str) -> Optional[AgentRecord]:
         """Get agent by ID (O(1)).
-        
+
         Args:
             agent_id: Agent identifier
-        
+
         Returns:
             Agent record or None
-        
+
         Performance: <1ms P95
         """
         with self._lock:
             return self._agents.get(agent_id)
-    
+
     def get_by_type(self, agent_type: str) -> List[AgentRecord]:
         """Get all agents of a specific type (O(1)).
-        
+
         Args:
             agent_type: Type name
-        
+
         Returns:
             List of agent records
-        
+
         Performance: <1ms P95
         """
         with self._lock:
@@ -236,72 +242,72 @@ class DynamicAgentRegistry:
             # 1. Get agent_ids from _by_type
             # 2. Fetch records from primary index
             raise NotImplementedError("get_by_type not yet implemented (M2)")
-    
+
     def get_by_session(self, session_id: str) -> List[AgentRecord]:
         """Get all agents in a session (O(1)).
-        
+
         Args:
             session_id: Session identifier
-        
+
         Returns:
             List of agent records
-        
+
         Performance: <1ms P95
         """
         with self._lock:
             # TODO: Implement session lookup
             raise NotImplementedError("get_by_session not yet implemented (M2)")
-    
+
     def get_by_state(self, state: AgentState) -> List[AgentRecord]:
         """Get all agents in a specific state (O(1)).
-        
+
         Args:
             state: Agent state
-        
+
         Returns:
             List of agent records
-        
+
         Performance: <1ms P95
         """
         with self._lock:
             # TODO: Implement state lookup
             raise NotImplementedError("get_by_state not yet implemented (M2)")
-    
+
     def get_by_capability(self, capability: Capability) -> List[AgentRecord]:
         """Get all agents with a specific capability (O(1)).
-        
+
         Args:
             capability: Required capability
-        
+
         Returns:
             List of agent records
-        
+
         Performance: <1ms P95
         """
         with self._lock:
             # TODO: Implement capability lookup
             raise NotImplementedError("get_by_capability not yet implemented (M2)")
-    
+
     def query(
         self,
         agent_type: Optional[str] = None,
         session_id: Optional[str] = None,
         state: Optional[AgentState] = None,
-        capability: Optional[Capability] = None
+        capability: Optional[Capability] = None,
     ) -> List[AgentRecord]:
         """Combined multi-index query.
-        
+
         Args:
             agent_type: Filter by type
             session_id: Filter by session
             state: Filter by state
             capability: Filter by capability
-        
+
         Returns:
             List of matching agent records
-        
+
         Performance: <2ms P95 for combined queries
-        
+
         Example:
             # Find all ACTIVE health specialists in session
             agents = registry.query(
@@ -316,14 +322,14 @@ class DynamicAgentRegistry:
             # 2. Compute intersection
             # 3. Fetch records
             raise NotImplementedError("query not yet implemented (M2)")
-    
+
     def update_state(self, agent_id: str, new_state: AgentState) -> bool:
         """Update agent state (must update state index).
-        
+
         Args:
             agent_id: Agent to update
             new_state: New state
-        
+
         Returns:
             True if updated, False if not found
         """
@@ -334,16 +340,16 @@ class DynamicAgentRegistry:
             # 3. Update record
             # 4. Add to new state index
             raise NotImplementedError("update_state not yet implemented (M2)")
-    
+
     def load_type_specs(self, spec_file: str) -> int:
         """Load agent type specifications from YAML.
-        
+
         Args:
             spec_file: Path to YAML file with 58+ type specs
-        
+
         Returns:
             Number of specs loaded
-        
+
         Format:
             agent_types:
               - type_name: health_specialist
@@ -360,21 +366,21 @@ class DynamicAgentRegistry:
         # 2. Parse type specs
         # 3. Store in _type_specs
         raise NotImplementedError("load_type_specs not yet implemented (M2)")
-    
+
     def get_type_spec(self, agent_type: str) -> Optional[AgentTypeSpec]:
         """Get type specification.
-        
+
         Args:
             agent_type: Type name
-        
+
         Returns:
             Type specification or None
         """
         return self._type_specs.get(agent_type)
-    
+
     def get_registry_stats(self) -> Dict[str, Any]:
         """Get registry statistics for monitoring.
-        
+
         Returns:
             Dict with counts by type/session/state/capability
         """

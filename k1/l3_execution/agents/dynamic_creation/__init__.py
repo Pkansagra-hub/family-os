@@ -16,23 +16,21 @@ Related ADRs:
     - ADR-0086d: Agent Composition
 """
 
+from k1.l3_execution.agents.dynamic_creation.composition import (
+    Capability,
+    ComposedAgent,
+    CompositionEngine,
+)
 from k1.l3_execution.agents.dynamic_creation.factory import (
-    AgentFactory,
     AgentCreationRequest,
     AgentCreationResult,
+    AgentFactory,
 )
-
 from k1.l3_execution.agents.dynamic_creation.resource_reserver import (
-    ResourceReserver,
-    ResourceReservation,
-    ResourceRequest,
     AcceleratorType,
-)
-
-from k1.l3_execution.agents.dynamic_creation.composition import (
-    CompositionEngine,
-    ComposedAgent,
-    Capability,
+    ResourceRequest,
+    ResourceReservation,
+    ResourceReserver,
 )
 
 __all__ = [

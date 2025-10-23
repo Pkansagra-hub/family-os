@@ -39,16 +39,18 @@ Research Foundation:
 Implementation Status: STUB (M2 - 4 days planned)
 """
 
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
-from prometheus_client import Counter, Histogram, Gauge, CollectorRegistry
+from typing import Any, Dict, List, Optional
+
 from opentelemetry import trace
-from opentelemetry.trace import Tracer, Span  # type: ignore
+from opentelemetry.trace import Span, Tracer  # type: ignore
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 
 class AcceleratorType(Enum):
     """Accelerator types for resource tracking."""
+
     NPU = "NPU"
     GPU = "GPU"
     CPU = "CPU"
@@ -57,6 +59,7 @@ class AcceleratorType(Enum):
 
 class TerminationPolicy(Enum):
     """Termination policies for metric labels."""
+
     IDLE_TIMEOUT = "IDLE_TIMEOUT"
     SESSION_END = "SESSION_END"
     RESOURCE_PRESSURE = "RESOURCE_PRESSURE"
@@ -67,66 +70,65 @@ class TerminationPolicy(Enum):
 @dataclass
 class MetricsConfig:
     """Configuration for agent metrics.
-    
+
     Attributes:
         enable_traces: Enable OpenTelemetry tracing
         trace_sample_rate: Trace sampling rate (0.0-1.0)
         cardinality_limit: Max active time series
         histogram_buckets: Latency histogram buckets (ms)
     """
+
     enable_traces: bool = True
     trace_sample_rate: float = 0.1
     cardinality_limit: int = 10_000
     histogram_buckets: Optional[List[float]] = None
-    
+
     def __post_init__(self):
         if self.histogram_buckets is None:
             # Standard latency buckets (ms)
-            self.histogram_buckets = [
-                1, 5, 10, 25, 50, 100, 250, 500, 1000, 2000
-            ]
+            self.histogram_buckets = [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2000]
 
 
 class AgentMetrics:
     """Prometheus metrics and OpenTelemetry traces for agents.
-    
+
     Responsibilities:
         - Export 25+ Prometheus metrics
         - Create 4-level OpenTelemetry spans
         - Manage cardinality (<10K time series)
         - Support 3 Grafana dashboards
-    
+
     Performance: <1ms emission, <5% CPU overhead
-    
+
     Metrics Exported:
         Creation:
         - agent_creation_total (counter, labels: agent_type, session_id)
         - agent_creation_latency_ms (histogram, labels: agent_type)
         - agent_creation_errors_total (counter, labels: agent_type, error_type)
-        
+
         Termination:
         - agent_termination_total (counter, labels: agent_type, policy)
         - agent_lifetime_seconds (histogram, labels: agent_type)
-        
+
         Reuse:
         - agent_reuse_total (counter, labels: agent_type)
         - agent_reuse_latency_ms (histogram, labels: agent_type)
         - agent_pool_hit_rate (gauge, labels: agent_type)
-        
+
         Performance:
         - agent_execution_latency_ms (histogram, labels: agent_type)
         - agent_ttft_ms (histogram, labels: agent_type)
         - agent_tokens_generated_total (counter, labels: agent_type)
-        
+
         Resources:
         - agent_memory_allocated_mb (gauge, labels: agent_type, session_id)
         - agent_accelerator_usage (gauge, labels: accelerator_type, slot)
         - agent_resource_reservation_latency_ms (histogram)
-        
+
         Registry:
         - agent_registry_size (gauge, labels: state)
         - agent_registry_lookup_latency_ms (histogram, labels: index_type)
-    
+
     Trace Hierarchy:
         1. agent.lifecycle (root span)
            ├─ 2. agent.creation
@@ -140,10 +142,10 @@ class AgentMetrics:
            └─ 2. agent.termination
                 ├─ 3. resource.release
                 └─ 3. pool.eviction
-    
+
     Example:
         metrics = AgentMetrics(config)
-        
+
         # Track creation
         with metrics.trace_creation("health_specialist", "session_abc") as span:
             agent = factory.create_agent(...)
@@ -154,7 +156,7 @@ class AgentMetrics:
                 memory_mb=128,
                 accelerator="NPU"
             )
-        
+
         # Track reuse
         metrics.record_reuse(
             agent_type="health_specialist",
@@ -162,166 +164,166 @@ class AgentMetrics:
             from_pool=True
         )
     """
-    
+
     def __init__(
         self,
         config: Optional[MetricsConfig] = None,
-        registry: Optional[CollectorRegistry] = None
+        registry: Optional[CollectorRegistry] = None,
     ):
         """Initialize agent metrics.
-        
+
         Args:
             config: Metrics configuration (defaults if None)
             registry: Prometheus registry (default registry if None)
         """
         self.config = config or MetricsConfig()
         self.registry = registry
-        
+
         # Initialize Prometheus metrics
         self._init_prometheus_metrics()
-        
+
         # Initialize OpenTelemetry tracer
         if self.config.enable_traces:
             self._tracer: Optional[Tracer] = trace.get_tracer("k1.agent_metrics")
         else:
             self._tracer: Optional[Tracer] = None
-    
+
     def _init_prometheus_metrics(self) -> None:
         """Initialize all Prometheus metrics."""
         # Creation metrics
         self.creation_total = Counter(
-            'agent_creation_total',
-            'Total agent creations',
-            labelnames=['agent_type', 'session_id'],
-            registry=self.registry
+            "agent_creation_total",
+            "Total agent creations",
+            labelnames=["agent_type", "session_id"],
+            registry=self.registry,
         )
-        
+
         self.creation_latency_ms = Histogram(
-            'agent_creation_latency_ms',
-            'Agent creation latency in milliseconds',
-            labelnames=['agent_type'],
+            "agent_creation_latency_ms",
+            "Agent creation latency in milliseconds",
+            labelnames=["agent_type"],
             buckets=self.config.histogram_buckets,
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         self.creation_errors_total = Counter(
-            'agent_creation_errors_total',
-            'Total agent creation errors',
-            labelnames=['agent_type', 'error_type'],
-            registry=self.registry
+            "agent_creation_errors_total",
+            "Total agent creation errors",
+            labelnames=["agent_type", "error_type"],
+            registry=self.registry,
         )
-        
+
         # Termination metrics
         self.termination_total = Counter(
-            'agent_termination_total',
-            'Total agent terminations',
-            labelnames=['agent_type', 'policy'],
-            registry=self.registry
+            "agent_termination_total",
+            "Total agent terminations",
+            labelnames=["agent_type", "policy"],
+            registry=self.registry,
         )
-        
+
         self.lifetime_seconds = Histogram(
-            'agent_lifetime_seconds',
-            'Agent lifetime in seconds',
-            labelnames=['agent_type'],
+            "agent_lifetime_seconds",
+            "Agent lifetime in seconds",
+            labelnames=["agent_type"],
             buckets=[1, 5, 10, 30, 60, 300, 600, 1800, 3600],
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         # Reuse metrics
         self.reuse_total = Counter(
-            'agent_reuse_total',
-            'Total agent reuses from pool',
-            labelnames=['agent_type'],
-            registry=self.registry
+            "agent_reuse_total",
+            "Total agent reuses from pool",
+            labelnames=["agent_type"],
+            registry=self.registry,
         )
-        
+
         self.reuse_latency_ms = Histogram(
-            'agent_reuse_latency_ms',
-            'Agent reuse latency in milliseconds',
-            labelnames=['agent_type'],
+            "agent_reuse_latency_ms",
+            "Agent reuse latency in milliseconds",
+            labelnames=["agent_type"],
             buckets=[1, 5, 10, 25, 50],
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         self.pool_hit_rate = Gauge(
-            'agent_pool_hit_rate',
-            'Agent pool hit rate (0.0-1.0)',
-            labelnames=['agent_type'],
-            registry=self.registry
+            "agent_pool_hit_rate",
+            "Agent pool hit rate (0.0-1.0)",
+            labelnames=["agent_type"],
+            registry=self.registry,
         )
-        
+
         # Performance metrics
         self.execution_latency_ms = Histogram(
-            'agent_execution_latency_ms',
-            'Agent execution latency in milliseconds',
-            labelnames=['agent_type'],
+            "agent_execution_latency_ms",
+            "Agent execution latency in milliseconds",
+            labelnames=["agent_type"],
             buckets=self.config.histogram_buckets,
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         self.ttft_ms = Histogram(
-            'agent_ttft_ms',
-            'Agent time-to-first-token in milliseconds',
-            labelnames=['agent_type'],
+            "agent_ttft_ms",
+            "Agent time-to-first-token in milliseconds",
+            labelnames=["agent_type"],
             buckets=[10, 25, 50, 100, 150, 200, 300, 500],
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         self.tokens_generated_total = Counter(
-            'agent_tokens_generated_total',
-            'Total tokens generated by agents',
-            labelnames=['agent_type'],
-            registry=self.registry
+            "agent_tokens_generated_total",
+            "Total tokens generated by agents",
+            labelnames=["agent_type"],
+            registry=self.registry,
         )
-        
+
         # Resource metrics
         self.memory_allocated_mb = Gauge(
-            'agent_memory_allocated_mb',
-            'Memory allocated to agents in MB',
-            labelnames=['agent_type', 'session_id'],
-            registry=self.registry
+            "agent_memory_allocated_mb",
+            "Memory allocated to agents in MB",
+            labelnames=["agent_type", "session_id"],
+            registry=self.registry,
         )
-        
+
         self.accelerator_usage = Gauge(
-            'agent_accelerator_usage',
-            'Accelerator usage by agents',
-            labelnames=['accelerator_type', 'slot'],
-            registry=self.registry
+            "agent_accelerator_usage",
+            "Accelerator usage by agents",
+            labelnames=["accelerator_type", "slot"],
+            registry=self.registry,
         )
-        
+
         self.resource_reservation_latency_ms = Histogram(
-            'agent_resource_reservation_latency_ms',
-            'Resource reservation latency in milliseconds',
+            "agent_resource_reservation_latency_ms",
+            "Resource reservation latency in milliseconds",
             buckets=[1, 5, 10, 25, 50, 100],
-            registry=self.registry
+            registry=self.registry,
         )
-        
+
         # Registry metrics
         self.registry_size = Gauge(
-            'agent_registry_size',
-            'Number of agents in registry',
-            labelnames=['state'],
-            registry=self.registry
+            "agent_registry_size",
+            "Number of agents in registry",
+            labelnames=["state"],
+            registry=self.registry,
         )
-        
+
         self.registry_lookup_latency_ms = Histogram(
-            'agent_registry_lookup_latency_ms',
-            'Registry lookup latency in milliseconds',
-            labelnames=['index_type'],
+            "agent_registry_lookup_latency_ms",
+            "Registry lookup latency in milliseconds",
+            labelnames=["index_type"],
             buckets=[0.1, 0.5, 1, 2, 5, 10],
-            registry=self.registry
+            registry=self.registry,
         )
-    
+
     def record_creation(
         self,
         agent_type: str,
         session_id: str,
         latency_ms: float,
         memory_mb: int,
-        accelerator: str
+        accelerator: str,
     ) -> None:
         """Record agent creation metrics.
-        
+
         Args:
             agent_type: Type of agent created
             session_id: Session ID
@@ -335,15 +337,12 @@ class AgentMetrics:
         # 3. Set memory_allocated_mb
         # 4. Update accelerator_usage
         raise NotImplementedError("record_creation not yet implemented (M2)")
-    
+
     def record_termination(
-        self,
-        agent_type: str,
-        policy: TerminationPolicy,
-        lifetime_seconds: float
+        self, agent_type: str, policy: TerminationPolicy, lifetime_seconds: float
     ) -> None:
         """Record agent termination metrics.
-        
+
         Args:
             agent_type: Type of agent terminated
             policy: Termination policy
@@ -351,15 +350,10 @@ class AgentMetrics:
         """
         # TODO: Implement termination recording
         raise NotImplementedError("record_termination not yet implemented (M2)")
-    
-    def record_reuse(
-        self,
-        agent_type: str,
-        latency_ms: float,
-        from_pool: bool
-    ) -> None:
+
+    def record_reuse(self, agent_type: str, latency_ms: float, from_pool: bool) -> None:
         """Record agent reuse metrics.
-        
+
         Args:
             agent_type: Type of agent reused
             latency_ms: Reuse latency
@@ -367,17 +361,17 @@ class AgentMetrics:
         """
         # TODO: Implement reuse recording
         raise NotImplementedError("record_reuse not yet implemented (M2)")
-    
+
     def trace_creation(self, agent_type: str, session_id: str) -> Span:
         """Create trace span for agent creation.
-        
+
         Args:
             agent_type: Agent type
             session_id: Session ID
-        
+
         Returns:
             OpenTelemetry span (4-level hierarchy)
-        
+
         Example:
             with metrics.trace_creation("health_specialist", "session_abc") as span:
                 # Creation logic here
@@ -386,16 +380,16 @@ class AgentMetrics:
         if not self._tracer:
             # TODO: Return no-op span
             raise NotImplementedError("trace_creation not yet implemented (M2)")
-        
+
         # TODO: Create span hierarchy
         # 1. agent.lifecycle (root)
         # 2. agent.creation (child)
         # 3. factory.create, resource.reserve, composition.compose (grandchildren)
         raise NotImplementedError("trace_creation not yet implemented (M2)")
-    
+
     def get_metrics_summary(self) -> Dict[str, Any]:
         """Get metrics summary for health checks.
-        
+
         Returns:
             Dict with metric counts and rates
         """
@@ -429,4 +423,6 @@ class AgentMetrics:
 # - Emit metrics from ResourceReserver (ADR-0086c)
 # - Emit metrics from IDLEPoolManager (ADR-0086f)
 # - Emit metrics from DynamicAgentRegistry (ADR-0086g)
+# - WARD test cases (3 test cases planned)
+# - WARD test cases (3 test cases planned)
 # - WARD test cases (3 test cases planned)
