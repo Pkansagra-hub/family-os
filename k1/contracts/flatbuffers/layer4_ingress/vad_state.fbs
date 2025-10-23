@@ -1,0 +1,22 @@
+/// VAD State Schema (VADS)
+/// Layer 4: Barge-In / VAD state machine
+
+namespace k1.barge_in;
+
+enum VADStateType : uint8 {
+  SILENCE = 0,
+  SPEECH = 1,
+  NOISE = 2
+}
+
+table VADState {
+  state: VADStateType (required);
+  confidence_score: float32 = 0.0;
+  duration_ms: uint32 = 0;
+
+  // Timestamps
+  state_changed_at_ms: uint64 = 0;
+}
+
+root_type VADState;
+file_identifier "VADS";

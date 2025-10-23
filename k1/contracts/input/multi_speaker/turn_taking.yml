@@ -1,0 +1,401 @@
+turn_taking:
+  name: "Turn-Taking Detection"
+  purpose: "Detect and manage turn-taking in multi-party conversations"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/speaker_diarization.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Turn-taking detection identifies when speakers alternate in conversations,
+    enabling proper interaction management in multi-person settings.
+
+    Key features:
+    - Detect turn transitions (who starts/stops speaking)
+    - Identify interruptions, overlaps, and barge-ins
+    - Priority-based turn allocation
+    - Integration with spatial audio (proximity priority)
+    - Floor control (who has the conversation "floor")
+
+    Use cases:
+    - "Dad asks question → wait for response → Mom answers"
+    - Interruption handling: "Child interrupts Dad → defer or allow?"
+    - Group conversations: Track who said what
+    - Barge-in detection: User interrupts agent mid-response
+
+  schema:
+    type: "object"
+    required: ["turn_id", "speaker_id", "turn_type", "timestamp_ms"]
+    properties:
+      turn_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique turn identifier"
+        examples: ["750e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Speaker who took turn"
+        examples: ["550e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_name:
+        type: "string"
+        description: "Speaker name"
+        examples: ["Dad", "Mom", "Emma"]
+
+      turn_type:
+        type: "string"
+        enum: ["TURN_START", "TURN_END", "TURN_HOLD", "INTERRUPTION", "OVERLAP", "BARGE_IN"]
+        description: "Type of turn event"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Turn event timestamp"
+
+      previous_speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Speaker who held turn before this transition"
+        optional: true
+
+      turn_duration_ms:
+        type: "integer"
+        description: "Duration of turn (for TURN_END events)"
+        optional: true
+
+      floor_status:
+        type: "string"
+        enum: ["HELD", "RELEASED", "CONTESTED"]
+        description: "Conversation floor status"
+
+      priority_score:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Priority score for this speaker (spatial + engagement)"
+
+  turn_types:
+    TURN_START:
+      description: "Speaker begins speaking (floor transition)"
+
+      detection:
+        trigger: "Voice activity detected from new speaker"
+        conditions:
+          - "Previous speaker finished (silence >500ms)"
+          - "OR previous speaker interrupted"
+
+        latency_ms: 50
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440000"
+        speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        speaker_name: "Dad"
+        turn_type: "TURN_START"
+        timestamp_ms: 1698364800000
+        previous_speaker_id: null
+        floor_status: "HELD"
+        priority_score: 0.85
+
+    TURN_END:
+      description: "Speaker finishes speaking (releases floor)"
+
+      detection:
+        trigger: "Voice activity ends (silence >500ms)"
+        latency_ms: 550
+        note: "Requires 500ms silence confirmation"
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440001"
+        speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        speaker_name: "Dad"
+        turn_type: "TURN_END"
+        timestamp_ms: 1698364805000
+        turn_duration_ms: 5000
+        floor_status: "RELEASED"
+
+    TURN_HOLD:
+      description: "Speaker continues holding floor (no transition)"
+
+      detection:
+        trigger: "Voice activity continues from same speaker"
+        update_frequency_hz: 1
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440002"
+        speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        speaker_name: "Dad"
+        turn_type: "TURN_HOLD"
+        timestamp_ms: 1698364803000
+        floor_status: "HELD"
+
+    INTERRUPTION:
+      description: "Speaker interrupts another speaker (hostile takeover)"
+
+      detection:
+        trigger: "New speaker starts while current speaker still active"
+        gap_threshold_ms: 200
+        note: "Gap <200ms = interruption, >200ms = normal transition"
+
+      handling:
+        priority_check: "Compare priority scores"
+        action_high_priority: "Allow interruption (new speaker priority >0.8)"
+        action_low_priority: "Defer interruption (add to queue)"
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440003"
+        speaker_id: "550e8400-e29b-41d4-a716-446655440002"
+        speaker_name: "Emma"
+        turn_type: "INTERRUPTION"
+        timestamp_ms: 1698364807000
+        previous_speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        floor_status: "CONTESTED"
+        priority_score: 0.6
+        note: "Child interrupts Dad (lower priority)"
+
+    OVERLAP:
+      description: "Multiple speakers talking simultaneously (brief)"
+
+      detection:
+        trigger: "2+ speakers active simultaneously for <2s"
+        resolution: "Wait for natural resolution (one speaker stops)"
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440004"
+        speaker_id: "MULTIPLE"
+        turn_type: "OVERLAP"
+        timestamp_ms: 1698364810000
+        floor_status: "CONTESTED"
+        note: "Dad and Mom talking at same time (brief)"
+
+    BARGE_IN:
+      description: "User interrupts agent mid-response"
+
+      detection:
+        trigger: "Human speaker starts while agent speaking"
+        action: "Immediately stop agent response"
+
+      priority: "HIGHEST"
+      note: "Human barge-in always takes priority over agent"
+
+      example:
+        turn_id: "750e8400-e29b-41d4-a716-446655440005"
+        speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        speaker_name: "Dad"
+        turn_type: "BARGE_IN"
+        timestamp_ms: 1698364815000
+        previous_speaker_id: "AGENT"
+        floor_status: "HELD"
+        priority_score: 1.0
+
+  turn_allocation_policy:
+    description: "Rules for determining who gets the conversation floor"
+
+    priority_factors:
+      spatial_proximity:
+        weight: 0.4
+        description: "Closer speakers have higher priority"
+        formula: "spatial_score = 1.0 - (distance_m / 10.0)"
+
+      engagement_history:
+        weight: 0.3
+        description: "Recently engaged speakers have higher priority"
+        formula: "engagement_score = exp(-time_since_last_turn_ms / 30000)"
+
+      speaker_role:
+        weight: 0.2
+        description: "Parent > Child > Guest"
+        scores:
+          Parent: 1.0
+          Child: 0.7
+          Guest: 0.5
+
+      interruption_penalty:
+        weight: 0.1
+        description: "Penalty for interrupting"
+        penalty: -0.3
+
+    combined_priority:
+      formula: |
+        priority = 0.4 * spatial_score
+                 + 0.3 * engagement_score
+                 + 0.2 * role_score
+                 + 0.1 * interruption_penalty
+
+      range: [0.0, 1.0]
+
+  turn_transition_rules:
+    natural_turn:
+      description: "Normal turn transition (speaker finishes, another starts)"
+      gap_ms: [500, 2000]
+      action: "Grant floor to new speaker"
+
+    quick_response:
+      description: "Quick back-and-forth (minimal gap)"
+      gap_ms: [200, 500]
+      action: "Allow rapid turn-taking (conversation flow)"
+      example: "Question → Answer → Follow-up"
+
+    interruption:
+      description: "Speaker starts before previous speaker finishes"
+      gap_ms: [0, 200]
+      action: "Check priority → Allow or defer"
+
+    long_pause:
+      description: "Extended silence (conversation lapse)"
+      gap_ms: ">5000"
+      action: "Release floor (anyone can take turn)"
+
+  floor_control:
+    description: "Manage who currently holds the conversation floor"
+
+    floor_states:
+      HELD:
+        description: "Single speaker holds floor"
+        action: "Buffer other speakers until floor released"
+
+      RELEASED:
+        description: "Floor is open (no active speaker)"
+        action: "Grant floor to next speaker (highest priority)"
+
+      CONTESTED:
+        description: "Multiple speakers competing for floor"
+        action: "Use priority scores to resolve"
+
+    floor_assignment:
+      step_1:
+        name: "Detect Turn Request"
+        trigger: "Speaker starts talking"
+
+      step_2:
+        name: "Check Floor Status"
+        condition: "Is floor currently HELD or RELEASED?"
+
+      step_3:
+        name: "Priority Evaluation"
+        action: "Compute priority scores for all active speakers"
+
+      step_4:
+        name: "Floor Decision"
+        logic:
+          - "IF floor RELEASED → Grant to highest priority speaker"
+          - "IF floor HELD → Compare new speaker priority to current holder"
+          - "IF new_priority > current_priority + 0.2 → Allow interruption"
+          - "ELSE → Defer new speaker (add to queue)"
+
+  turn_queue:
+    description: "Queue of pending turn requests"
+
+    queue_policy: "Priority queue (highest priority first)"
+    max_queue_size: 5
+
+    queue_entry:
+      speaker_id: "UUID"
+      priority_score: "float [0.0, 1.0]"
+      timestamp_ms: "int64"
+      request_type: "enum [NORMAL, INTERRUPTION, BARGE_IN]"
+
+  performance:
+    turn_detection_latency_ms:
+      TURN_START: 50
+      TURN_END: 550
+      INTERRUPTION: 50
+      BARGE_IN: 30
+
+    floor_decision_latency_ms: 10
+    update_frequency_hz: 10
+
+  observability:
+    metrics:
+      - name: "turns_detected_total"
+        type: "counter"
+        labels: ["speaker_id", "turn_type"]
+        description: "Total turns detected"
+
+      - name: "turn_duration_seconds"
+        type: "histogram"
+        labels: ["speaker_id"]
+        buckets: [1, 3, 5, 10, 30, 60]
+        description: "Turn duration distribution"
+
+      - name: "interruptions_total"
+        type: "counter"
+        labels: ["interrupter_id", "interrupted_id"]
+        description: "Total interruptions"
+
+      - name: "floor_status_current"
+        type: "gauge"
+        labels: ["status"]
+        description: "Current floor status"
+
+      - name: "turn_queue_size"
+        type: "gauge"
+        description: "Current turn queue size"
+
+    events:
+      - name: "TurnTaken"
+        trigger: "Speaker takes turn"
+        payload: "turn_id, speaker_id, speaker_name, turn_type"
+
+      - name: "InterruptionDetected"
+        trigger: "Speaker interrupts another"
+        payload: "interrupter_id, interrupted_id, priority_scores"
+
+      - name: "BargeInDetected"
+        trigger: "User interrupts agent"
+        payload: "speaker_id, timestamp_ms"
+
+  example_conversation:
+    turn_1:
+      turn_id: "750e8400-e29b-41d4-a716-446655440000"
+      speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+      speaker_name: "Dad"
+      turn_type: "TURN_START"
+      timestamp_ms: 1698364800000
+      floor_status: "HELD"
+      priority_score: 0.85
+      utterance: "What's the weather today?"
+
+    turn_2:
+      turn_id: "750e8400-e29b-41d4-a716-446655440001"
+      speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+      speaker_name: "Dad"
+      turn_type: "TURN_END"
+      timestamp_ms: 1698364802000
+      turn_duration_ms: 2000
+      floor_status: "RELEASED"
+
+    turn_3:
+      turn_id: "750e8400-e29b-41d4-a716-446655440002"
+      speaker_id: "AGENT"
+      speaker_name: "Agent"
+      turn_type: "TURN_START"
+      timestamp_ms: 1698364803000
+      floor_status: "HELD"
+      priority_score: 0.5
+      utterance: "It's 72 degrees and sunny in Seattle today."
+
+    turn_4:
+      turn_id: "750e8400-e29b-41d4-a716-446655440003"
+      speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+      speaker_name: "Mom"
+      turn_type: "INTERRUPTION"
+      timestamp_ms: 1698364804500
+      previous_speaker_id: "AGENT"
+      floor_status: "CONTESTED"
+      priority_score: 0.9
+      utterance: "Actually, can you add milk to the shopping list?"
+      note: "Mom interrupts agent (high priority, spatial proximity)"
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "spatial_audio.yml"
+    - "diarization_event.yml"
+    - "per_person_context.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -1,0 +1,422 @@
+face_tracking:
+  name: "Face Tracking Integration"
+  purpose: "Face detection and tracking for multi-modal speaker identification"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/speaker_diarization.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Face tracking integrates computer vision with speaker diarization to provide
+    multi-modal speaker identification using both voice and facial recognition.
+
+    Key features:
+    - Real-time face detection (<30ms)
+    - 512-dimensional face embeddings (FaceNet-512)
+    - Multi-face tracking (up to 8 faces)
+    - Fusion with voice biometrics
+    - Privacy-aware (RED_BAND, requires consent)
+
+    Use cases:
+    - Identify speaker visually in noisy environments
+    - Cross-modal verification (voice + face)
+    - Silent user identification (no audio required)
+    - Lip-sync verification (speaker localization)
+
+  schema:
+    type: "object"
+    required: ["face_id", "bounding_box", "confidence", "timestamp_ms"]
+    properties:
+      face_id:
+        type: "integer"
+        description: "Tracking ID for this face (session-scoped)"
+        examples: [1, 2, 3]
+
+      bounding_box:
+        type: "object"
+        description: "Face bounding box in image coordinates"
+        properties:
+          x:
+            type: "integer"
+            description: "Top-left X coordinate (pixels)"
+          y:
+            type: "integer"
+            description: "Top-left Y coordinate (pixels)"
+          width:
+            type: "integer"
+            description: "Bounding box width (pixels)"
+          height:
+            type: "integer"
+            description: "Bounding box height (pixels)"
+
+      face_embedding:
+        type: "array"
+        items:
+          type: "number"
+          format: "float32"
+        minItems: 512
+        maxItems: 512
+        description: "Face embedding vector (512-dim FaceNet)"
+        optional: true
+        note: "Computed only for identified speakers"
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Face detection confidence"
+        thresholds:
+          low: 0.7
+          medium: 0.85
+          high: 0.95
+
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Associated speaker ID (if identified)"
+        optional: true
+
+      landmarks:
+        type: "object"
+        description: "Facial landmarks (68 points)"
+        optional: true
+        properties:
+          left_eye:
+            type: "array"
+            items:
+              type: "integer"
+            minItems: 2
+            maxItems: 2
+            description: "[x, y] coordinates"
+
+          right_eye:
+            type: "array"
+            items:
+              type: "integer"
+            minItems: 2
+            maxItems: 2
+
+          nose:
+            type: "array"
+            items:
+              type: "integer"
+            minItems: 2
+            maxItems: 2
+
+          mouth:
+            type: "array"
+            items:
+              type: "integer"
+            minItems: 2
+            maxItems: 2
+
+      head_pose:
+        type: "object"
+        description: "3D head pose estimation"
+        optional: true
+        properties:
+          yaw_deg:
+            type: "number"
+            minimum: -90
+            maximum: 90
+            description: "Yaw angle (left/right rotation)"
+
+          pitch_deg:
+            type: "number"
+            minimum: -90
+            maximum: 90
+            description: "Pitch angle (up/down rotation)"
+
+          roll_deg:
+            type: "number"
+            minimum: -180
+            maximum: 180
+            description: "Roll angle (tilt)"
+
+      distance_m:
+        type: "number"
+        minimum: 0
+        maximum: 10
+        description: "Estimated distance from camera (meters)"
+        optional: true
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Detection timestamp"
+
+  face_detection:
+    description: "Detect faces in camera frames"
+
+    models:
+      mtcnn:
+        name: "Multi-task Cascaded Convolutional Networks"
+        stages: 3
+        stage_1: "P-Net (Proposal Network)"
+        stage_2: "R-Net (Refine Network)"
+        stage_3: "O-Net (Output Network)"
+
+        performance:
+          accuracy: 0.95
+          latency_ms: 30
+          throughput_fps: 30
+
+        outputs:
+          - "Face bounding boxes"
+          - "5 facial landmarks (eyes, nose, mouth corners)"
+          - "Detection confidence"
+
+      retinaface:
+        name: "RetinaFace"
+        architecture: "Single-stage detector with multi-task branches"
+
+        performance:
+          accuracy: 0.97
+          latency_ms: 25
+          throughput_fps: 40
+
+        outputs:
+          - "Face bounding boxes"
+          - "5 facial landmarks"
+          - "Detection confidence"
+          - "3D head pose"
+
+        advantages:
+          - "Higher accuracy than MTCNN"
+          - "Faster inference"
+          - "Better small face detection"
+
+    preprocessing:
+      step_1:
+        name: "Image Resize"
+        action: "Resize frame to 640x480 (maintain aspect ratio)"
+
+      step_2:
+        name: "Normalization"
+        action: "Normalize pixel values [0, 255] → [-1, 1]"
+
+      step_3:
+        name: "Face Detection"
+        action: "Run RetinaFace detector"
+        output: "Face bounding boxes + landmarks + confidence"
+
+  face_embedding_extraction:
+    description: "Extract face embeddings for recognition"
+
+    model:
+      name: "FaceNet-512"
+      architecture: "Inception-ResNet-v1"
+      embedding_dimension: 512
+      training_data: "VGGFace2 (3.3M images, 9k identities)"
+
+    preprocessing:
+      step_1:
+        name: "Face Alignment"
+        action: "Align face using landmarks (eyes, nose)"
+        output: "Aligned face image (160x160)"
+
+      step_2:
+        name: "Normalization"
+        action: "Normalize pixel values [0, 255] → [-1, 1]"
+
+    embedding_extraction:
+      step_1:
+        name: "Model Forward Pass"
+        action: "Pass aligned face through Inception-ResNet-v1"
+        latency_ms: 45
+
+      step_2:
+        name: "L2 Normalization"
+        action: "Normalize embedding to unit sphere"
+        formula: "embedding_norm = embedding / ||embedding||_2"
+        latency_ms: 1
+
+    total_latency_ms: 50
+
+  face_tracking:
+    description: "Track multiple faces across video frames"
+
+    tracking_algorithm:
+      method: "DeepSORT (Deep Simple Online Realtime Tracking)"
+
+      components:
+        detection:
+          model: "RetinaFace"
+          frequency_hz: 30
+
+        tracking:
+          method: "Kalman Filter + Hungarian Algorithm"
+          state: "[x, y, width, height, vx, vy]"
+          update_frequency_hz: 30
+
+        re_identification:
+          model: "FaceNet-512 embeddings"
+          distance_metric: "cosine_similarity"
+          threshold: 0.8
+
+      max_tracked_faces: 8
+      tracking_latency_ms: 10
+
+  multi_modal_fusion:
+    description: "Fuse face and voice for speaker identification"
+
+    fusion_strategies:
+      early_fusion:
+        description: "Concatenate face and voice embeddings"
+        embedding: "[voice_embedding (192-dim) || face_embedding (512-dim)]"
+        total_dimension: 704
+        note: "Not used (dimensionality mismatch)"
+
+      late_fusion:
+        description: "Fuse similarity scores from face and voice"
+        formula: "final_score = 0.6 * voice_similarity + 0.4 * face_similarity"
+        weights:
+          voice: 0.6
+          face: 0.4
+        note: "Voice weighted higher (more reliable in varied lighting)"
+
+      score_fusion:
+        description: "Weighted score fusion with confidence gating"
+
+        logic:
+          - condition: "Both voice and face available"
+            action: "Use late fusion (0.6 * voice + 0.4 * face)"
+
+          - condition: "Only voice available"
+            action: "Use voice_similarity only"
+
+          - condition: "Only face available"
+            action: "Use face_similarity only"
+
+          - condition: "Voice and face disagree (|voice_sim - face_sim| > 0.3)"
+            action: "Flag for manual review, use higher-confidence modality"
+
+  privacy_considerations:
+    data_classification: "RED_BAND"
+
+    consent_requirements:
+      face_detection: "Not required (no identification)"
+      face_recognition: "Required (biometric identification)"
+      face_embedding_storage: "Required (biometric data storage)"
+
+    data_handling:
+      raw_images: "Not stored (discarded after embedding extraction)"
+      face_embeddings: "Encrypted at rest (AES-256)"
+      retention: "Indefinite (user-controlled deletion)"
+
+    user_controls:
+      - "User can disable face tracking entirely"
+      - "User can delete face enrollments"
+      - "User can view face recognition logs"
+      - "User can opt-out per-session"
+
+    privacy_bands:
+      GREEN_BAND:
+        face_detection: "Allowed (anonymous face count)"
+        face_recognition: "Prohibited"
+
+      AMBER_BAND:
+        face_detection: "Allowed"
+        face_recognition: "Prohibited"
+
+      RED_BAND:
+        face_detection: "Allowed"
+        face_recognition: "Allowed (with consent)"
+
+  performance:
+    face_detection_latency_ms:
+      p50: 20
+      p95: 30
+      p99: 40
+
+    face_embedding_extraction_latency_ms:
+      p50: 45
+      p95: 50
+      p99: 60
+
+    face_tracking_latency_ms:
+      p50: 8
+      p95: 10
+      p99: 15
+
+    throughput_fps: 30
+    memory_per_face_kb: 4
+
+  observability:
+    metrics:
+      - name: "faces_detected_total"
+        type: "counter"
+        description: "Total faces detected"
+
+      - name: "face_detection_confidence"
+        type: "gauge"
+        description: "Current face detection confidence"
+
+      - name: "face_detection_latency_ms"
+        type: "histogram"
+        buckets: [20, 30, 50, 100]
+        description: "Face detection latency"
+
+      - name: "faces_tracked_current"
+        type: "gauge"
+        description: "Number of faces currently tracked"
+
+      - name: "face_embeddings_extracted_total"
+        type: "counter"
+        description: "Total face embeddings extracted"
+
+  example_detections:
+    dad_face:
+      face_id: 1
+      bounding_box:
+        x: 120
+        y: 80
+        width: 200
+        height: 250
+      face_embedding: [0.23, -0.11, 0.67, "..."] # 512-dim
+      confidence: 0.96
+      speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+      landmarks:
+        left_eye: [180, 150]
+        right_eye: [260, 150]
+        nose: [220, 200]
+        mouth: [220, 260]
+      head_pose:
+        yaw_deg: 5
+        pitch_deg: -10
+        roll_deg: 2
+      distance_m: 1.8
+      timestamp_ms: 1698364800000
+
+    mom_face:
+      face_id: 2
+      bounding_box:
+        x: 400
+        y: 100
+        width: 180
+        height: 220
+      face_embedding: [0.19, -0.28, 0.51, "..."] # 512-dim
+      confidence: 0.94
+      speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+      landmarks:
+        left_eye: [460, 170]
+        right_eye: [530, 170]
+        nose: [495, 210]
+        mouth: [495, 270]
+      head_pose:
+        yaw_deg: -15
+        pitch_deg: 5
+        roll_deg: -3
+      distance_m: 2.5
+      timestamp_ms: 1698364805000
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "voice_biometrics.yml"
+    - "diarization_event.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

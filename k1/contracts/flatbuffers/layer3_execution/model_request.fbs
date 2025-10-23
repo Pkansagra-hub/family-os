@@ -1,0 +1,71 @@
+/// Model Request Schema (MREQ)
+///
+/// Purpose: LLM inference request with prompt, model parameters, and streaming
+///          configuration for Model Hub.
+///
+/// Usage Pattern:
+///   1. Agent/Planner creates ModelRequest with prompt and parameters
+///   2. Model Hub routes to appropriate LLM backend
+///   3. If stream = true: Emit ModelStreamChunk incrementally
+///   4. If stream = false: Return ModelResponse on completion
+///
+/// Performance Specs:
+///   - Typical Size: 1-8KB (depends on prompt length)
+///   - Serialize: 0.65ms (P95)
+///   - Deserialize: 0.088ms (P95, zero-copy)
+///   - Memory: ~8KB per request
+///
+/// Related Schemas:
+///   - ModelResponse (MRSP): Non-streaming response
+///   - ModelStreamChunk (MSCH): Streaming response chunks
+///   - ModelCacheEntry (MCHE): KV cache for prompt prefix
+///
+/// Research Foundation:
+///   - Transformer architecture (Vaswani et al. 2017)
+///   - KV cache optimization (Pope et al. 2022)
+///   - Speculative decoding (Leviathan et al. 2023)
+///
+/// Version: 1.0
+/// Layer: 3 (Execution & Tools)
+/// Module: k1.model_hub
+
+namespace k1.model_hub;
+
+/// Model generation parameters
+table ModelParameters {
+  /// Sampling temperature (0.0 = deterministic, 2.0 = very random, default: 0.7)
+  temperature: float32 = 0.7;
+
+  /// Nucleus sampling probability mass (0.0-1.0, default: 0.9)
+  top_p: float32 = 0.9;
+
+  /// Maximum tokens to generate (default: 2048)
+  max_tokens: uint32 = 2048;
+
+  /// Stop sequences to halt generation
+  stop_sequences: [string];
+}
+
+/// LLM inference request
+table ModelRequest {
+  /// Unique request identifier (UUID recommended)
+  request_id: string (required);
+
+  /// Model identifier (e.g., "gpt-4", "claude-3-sonnet")
+  model_id: string (required);
+
+  /// Input prompt for generation
+  prompt: string (required);
+
+  /// Generation parameters (temperature, top_p, max_tokens, etc.)
+  parameters: ModelParameters;
+
+  /// Enable streaming response (default: false)
+  stream: bool = false;
+
+  /// Request timestamp (Unix epoch milliseconds, default: 0)
+  requested_at_ms: uint64 = 0;
+}
+
+root_type ModelRequest;
+file_identifier "MREQ";

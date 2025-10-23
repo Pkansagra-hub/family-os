@@ -1,0 +1,20 @@
+/// HTTP Response Schema (HRSP)
+/// Layer 4: API Gateway - REST
+
+namespace k1.api_gateway;
+
+table HTTPResponse {
+  request_id: string (required);
+  status_code: uint16 = 200;
+  headers: [k1.agent_fabric.KeyValue];
+  body: string;
+
+  // Performance metrics
+  latency_ms: uint32 = 0;
+
+  // Timestamps
+  sent_at_ms: uint64 = 0;
+}
+
+root_type HTTPResponse;
+file_identifier "HRSP";

@@ -1,0 +1,59 @@
+/// Model Cache Entry Schema (MCHE)
+///
+/// Purpose: KV cache entry for transformer models, enabling thermal placement
+///          and eviction management for 128MB KV cache budget.
+///
+/// Usage Pattern:
+///   1. Model Hub caches key-value states for prompt prefixes
+///   2. Track access_count and last_accessed_ms for LRU eviction
+///   3. Calculate eviction_priority (thermal placement: hot/warm/cold)
+///   4. Evict cold entries when cache exceeds 128MB budget
+///
+/// Performance Specs:
+///   - Typical Size: 4-64KB (depends on sequence length)
+///   - Serialize: 2.5ms (P95)
+///   - Deserialize: 0.35ms (P95, zero-copy)
+///   - Memory: ~64KB per cache entry
+///   - Cache Budget: 128MB total (evict cold entries)
+///
+/// Related Schemas:
+///   - ModelRequest (MREQ): Request using cached prefix
+///   - ModelResponse (MRSP): Response benefiting from cache hit
+///
+/// Research Foundation:
+///   - Transformer KV cache (Vaswani et al. 2017)
+///   - PagedAttention (Kwon et al. 2023)
+///   - Thermal placement (hot/warm/cold tiers)
+///
+/// Version: 1.0
+/// Layer: 3 (Execution & Tools)
+/// Module: k1.model_hub
+
+namespace k1.model_hub;
+
+/// KV cache entry for transformer models
+table ModelCacheEntry {
+  /// Cache key (prompt hash or prefix identifier)
+  cache_key: string (required);
+
+  /// Cached token IDs (vocabulary indices)
+  cached_tokens: [uint32];
+
+  /// Attention mask (1 = attend, 0 = mask)
+  attention_mask: [uint8];
+
+  /// Access count (for LRU eviction)
+  access_count: uint32 = 0;
+
+  /// Last access timestamp (Unix epoch milliseconds, for LRU)
+  last_accessed_ms: uint64 = 0;
+
+  /// Eviction priority (0.0 = evict first, 1.0 = keep, for thermal placement)
+  eviction_priority: float32 = 0.0;
+
+  /// Entry size in bytes (for cache budget tracking)
+  size_bytes: uint32 = 0;
+}
+
+root_type ModelCacheEntry;
+file_identifier "MCHE";

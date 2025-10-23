@@ -1,0 +1,432 @@
+per_person_context:
+  name: "Per-Person Context Preservation"
+  purpose: "Maintain individual conversation context for each family member"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l2_orchestration/context/per_person_context_manager.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Per-person context preservation maintains separate conversation histories,
+    preferences, and state for each identified family member.
+
+    Key features:
+    - Individual conversation history (last 10 turns per person)
+    - Per-person preferences (music, news sources, calendar)
+    - Entity tracking (per-person referents)
+    - Privacy isolation (context not shared between users)
+    - Context handoff during speaker transitions
+
+    Use cases:
+    - "Dad asks about calendar → Load Dad's calendar"
+    - "Mom asks for music → Load Mom's playlist"
+    - "Child asks follow-up → Reference child's previous turn"
+    - Multi-person conversation: Track who said what
+
+  schema:
+    type: "object"
+    required: ["speaker_id", "conversation_history", "preferences", "timestamp_ms"]
+    properties:
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique speaker identifier"
+        examples: ["550e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_name:
+        type: "string"
+        description: "Speaker name"
+        examples: ["Dad", "Mom", "Emma"]
+
+      conversation_history:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            turn_id:
+              type: "string"
+              format: "uuid"
+
+            utterance:
+              type: "string"
+              description: "What the speaker said"
+
+            agent_response:
+              type: "string"
+              description: "Agent's response (if any)"
+
+            timestamp_ms:
+              type: "integer"
+              format: "int64"
+
+            entities:
+              type: "array"
+              items:
+                type: "object"
+              description: "Entities mentioned in turn"
+        maxItems: 10
+        description: "Last 10 conversation turns (circular buffer)"
+
+      preferences:
+        type: "object"
+        description: "Per-person preferences"
+        properties:
+          music_service:
+            type: "string"
+            examples: ["Spotify", "Apple Music"]
+
+          news_sources:
+            type: "array"
+            items:
+              type: "string"
+            examples: [["NYT", "WSJ", "TechCrunch"]]
+
+          calendar_provider:
+            type: "string"
+            examples: ["Google Calendar", "Outlook"]
+
+          preferred_language:
+            type: "string"
+            examples: ["en-US", "es-ES"]
+
+          content_filter:
+            type: "string"
+            enum: ["CHILD", "TEEN", "ADULT"]
+
+      entities:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            entity_id:
+              type: "string"
+              format: "uuid"
+
+            entity_type:
+              type: "string"
+              examples: ["PERSON", "LOCATION", "EVENT", "OBJECT"]
+
+            entity_value:
+              type: "string"
+              examples: ["John", "Seattle", "dentist appointment"]
+
+            first_mention_turn_id:
+              type: "string"
+              format: "uuid"
+
+            last_mention_turn_id:
+              type: "string"
+              format: "uuid"
+
+            reference_count:
+              type: "integer"
+              description: "Number of times entity referenced"
+        maxItems: 50
+        description: "Entity tracking for this speaker"
+
+      active_session:
+        type: "boolean"
+        description: "Is this speaker currently active?"
+        default: false
+
+      last_interaction_ms:
+        type: "integer"
+        format: "int64"
+        description: "Timestamp of last interaction"
+
+      session_duration_ms:
+        type: "integer"
+        description: "Total duration of current session"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Context update timestamp"
+
+  context_management:
+    context_initialization:
+      description: "Initialize context when speaker first identified"
+
+      workflow:
+        step_1:
+          name: "Create Speaker Context"
+          action: "Allocate context structure for speaker_id"
+          initial_state:
+            conversation_history: []
+            entities: []
+            active_session: true
+            last_interaction_ms: current_time
+
+        step_2:
+          name: "Load Preferences"
+          action: "Fetch speaker preferences from database"
+          source: "speaker_preferences table"
+
+        step_3:
+          name: "Restore Previous Session"
+          action: "Optionally restore last session context"
+          policy: "Restore if last_interaction < 1 hour ago"
+
+    context_update:
+      description: "Update context when speaker takes turn"
+
+      workflow:
+        step_1:
+          name: "Append Turn to History"
+          action: "Add new turn to conversation_history (circular buffer)"
+          max_size: 10
+
+        step_2:
+          name: "Extract Entities"
+          action: "Run NER (Named Entity Recognition) on utterance"
+          model: "spaCy en_core_web_sm"
+
+        step_3:
+          name: "Update Entity Tracking"
+          action: "Update entity references and counts"
+
+        step_4:
+          name: "Update Timestamps"
+          action: "Set last_interaction_ms = current_time"
+
+    context_handoff:
+      description: "Switch context when speaker changes"
+
+      workflow:
+        step_1:
+          name: "Deactivate Previous Speaker Context"
+          action: "Set active_session = false for previous speaker"
+
+        step_2:
+          name: "Activate New Speaker Context"
+          action: "Set active_session = true for new speaker"
+
+        step_3:
+          name: "Load New Speaker Preferences"
+          action: "Apply new speaker's preferences to system"
+
+        step_4:
+          name: "Context Isolation Check"
+          action: "Ensure previous speaker's private data not leaked"
+
+    context_expiration:
+      description: "Expire context after inactivity"
+
+      expiration_policy:
+        short_term: "10 minutes (conversation turns)"
+        medium_term: "1 hour (session context)"
+        long_term: "24 hours (entity tracking)"
+
+      action: "Archive expired context to database"
+
+  conversation_history:
+    description: "Circular buffer of last 10 turns per speaker"
+
+    turn_structure:
+      turn_id: "UUID"
+      utterance: "User's spoken text"
+      agent_response: "Agent's response (if any)"
+      timestamp_ms: "Turn timestamp"
+      entities: "Entities mentioned in turn"
+      intent: "Detected intent (question, command, statement)"
+      sentiment: "Sentiment score [-1.0, 1.0]"
+
+    buffer_policy:
+      max_turns: 10
+      overflow: "Discard oldest turn (FIFO)"
+      persistence: "Archive to database after session end"
+
+  entity_tracking:
+    description: "Track entities mentioned by each speaker"
+
+    entity_types:
+      PERSON:
+        examples: ["John", "my wife", "the dentist"]
+        tracking: "Coreference resolution"
+
+      LOCATION:
+        examples: ["Seattle", "the office", "home"]
+        tracking: "Spatial context"
+
+      EVENT:
+        examples: ["dentist appointment", "meeting", "party"]
+        tracking: "Temporal context"
+
+      OBJECT:
+        examples: ["car", "phone", "coffee"]
+        tracking: "Object references"
+
+    coreference_resolution:
+      description: "Resolve pronouns to entities"
+      examples:
+        - "John called. He said... (He = John)"
+        - "I'm going to the office. It's... (It = the office)"
+
+      model: "spaCy neuralcoref"
+
+  preference_management:
+    description: "Store and apply per-person preferences"
+
+    preference_categories:
+      media:
+        music_service: "Spotify, Apple Music, YouTube Music"
+        podcast_app: "Pocket Casts, Overcast"
+        video_service: "Netflix, Hulu, YouTube"
+
+      information:
+        news_sources: "NYT, WSJ, BBC, TechCrunch"
+        weather_location: "Seattle, WA"
+        sports_teams: "Seahawks, Mariners"
+
+      productivity:
+        calendar_provider: "Google Calendar, Outlook, Apple Calendar"
+        email_provider: "Gmail, Outlook"
+        task_manager: "Todoist, Things, Reminders"
+
+      personalization:
+        preferred_language: "en-US, es-ES, fr-FR"
+        voice_speed: "0.8-1.2x"
+        content_filter: "CHILD, TEEN, ADULT"
+        privacy_level: "HIGH, MEDIUM, LOW"
+
+  privacy_isolation:
+    description: "Ensure per-person context privacy"
+
+    isolation_rules:
+      rule_1:
+        name: "No Cross-Speaker Data Leakage"
+        enforcement: "Dad's calendar NOT visible to Mom or Child"
+
+      rule_2:
+        name: "Shared Context Only with Consent"
+        enforcement: "Family calendar visible to all if shared explicitly"
+
+      rule_3:
+        name: "Guest Mode"
+        enforcement: "Guest speaker has NO persistent context"
+
+      rule_4:
+        name: "Context Encryption"
+        enforcement: "Per-person context encrypted at rest (AES-256)"
+
+  performance:
+    context_load_latency_ms: 10
+    context_update_latency_ms: 5
+    entity_extraction_latency_ms: 50
+    context_handoff_latency_ms: 15
+    memory_per_speaker_kb: 32
+
+  observability:
+    metrics:
+      - name: "active_speaker_contexts"
+        type: "gauge"
+        description: "Number of active speaker contexts"
+
+      - name: "context_updates_total"
+        type: "counter"
+        labels: ["speaker_id"]
+        description: "Total context updates per speaker"
+
+      - name: "context_handoffs_total"
+        type: "counter"
+        labels: ["from_speaker_id", "to_speaker_id"]
+        description: "Total context handoffs"
+
+      - name: "entities_tracked_total"
+        type: "gauge"
+        labels: ["speaker_id", "entity_type"]
+        description: "Total entities tracked per speaker"
+
+    events:
+      - name: "ContextInitialized"
+        trigger: "New speaker context created"
+        payload: "speaker_id, speaker_name"
+
+      - name: "ContextHandoff"
+        trigger: "Speaker changes, context switched"
+        payload: "from_speaker_id, to_speaker_id"
+
+      - name: "ContextExpired"
+        trigger: "Speaker context expired (inactivity)"
+        payload: "speaker_id, duration_inactive_ms"
+
+  example_contexts:
+    dad_context:
+      speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+      speaker_name: "Dad"
+      conversation_history:
+        - turn_id: "750e8400-e29b-41d4-a716-446655440000"
+          utterance: "What's the weather today?"
+          agent_response: "It's 72°F and sunny in Seattle."
+          timestamp_ms: 1698364800000
+          entities: []
+          intent: "QUERY"
+
+        - turn_id: "750e8400-e29b-41d4-a716-446655440001"
+          utterance: "Add milk to my shopping list"
+          agent_response: "Added milk to your shopping list."
+          timestamp_ms: 1698364820000
+          entities: [{"type": "OBJECT", "value": "milk"}]
+          intent: "COMMAND"
+
+      preferences:
+        music_service: "Spotify"
+        news_sources: ["NYT", "WSJ", "TechCrunch"]
+        calendar_provider: "Google Calendar"
+        preferred_language: "en-US"
+        content_filter: "ADULT"
+
+      entities:
+        - entity_id: "e1"
+          entity_type: "OBJECT"
+          entity_value: "milk"
+          first_mention_turn_id: "750e8400-e29b-41d4-a716-446655440001"
+          last_mention_turn_id: "750e8400-e29b-41d4-a716-446655440001"
+          reference_count: 1
+
+      active_session: true
+      last_interaction_ms: 1698364820000
+      session_duration_ms: 20000
+      timestamp_ms: 1698364820000
+
+    mom_context:
+      speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+      speaker_name: "Mom"
+      conversation_history:
+        - turn_id: "750e8400-e29b-41d4-a716-446655440002"
+          utterance: "Play some jazz music"
+          agent_response: "Playing jazz playlist."
+          timestamp_ms: 1698364850000
+          entities: [{"type": "OBJECT", "value": "jazz music"}]
+          intent: "COMMAND"
+
+      preferences:
+        music_service: "Apple Music"
+        news_sources: ["BBC", "NPR"]
+        calendar_provider: "Outlook"
+        preferred_language: "en-US"
+        content_filter: "ADULT"
+
+      entities:
+        - entity_id: "e2"
+          entity_type: "OBJECT"
+          entity_value: "jazz music"
+          first_mention_turn_id: "750e8400-e29b-41d4-a716-446655440002"
+          last_mention_turn_id: "750e8400-e29b-41d4-a716-446655440002"
+          reference_count: 1
+
+      active_session: false
+      last_interaction_ms: 1698364850000
+      session_duration_ms: 5000
+      timestamp_ms: 1698364850000
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "turn_taking.yml"
+    - "diarization_event.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

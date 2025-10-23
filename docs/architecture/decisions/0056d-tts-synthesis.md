@@ -6,6 +6,7 @@
 **Parent ADR:** ADR-0056 (Voice Pipeline Implementation)
 
 **Related ADRs:**
+
 - ADR-0056: Voice Pipeline (parent)
 - ADR-0001b: Model Hub
 - ADR-0064a: Style Vector (prosody mapping)
@@ -18,6 +19,7 @@
 Text-to-Speech (TTS) must stream audio with prosody controls (pitch, rate, emphasis) for natural, expressive voice output.
 
 **Requirements:**
+
 1. **Low Latency**: TTFA (Time to First Audio) <200ms
 2. **Prosody Control**: Pitch, rate, volume, emphasis
 3. **Streaming**: Progressive audio generation
@@ -30,6 +32,7 @@ Text-to-Speech (TTS) must stream audio with prosody controls (pitch, rate, empha
 ### 1. TTS Architecture
 
 **Model: VITS (Variational Inference TTS)**
+
 ```python
 class TTSPipeline:
     def __init__(self):
@@ -63,6 +66,7 @@ class TTSPipeline:
 ### 2. Prosody Controls
 
 **ProsodyControls Schema:**
+
 ```python
 @dataclass
 class ProsodyControls:
@@ -73,6 +77,7 @@ class ProsodyControls:
 ```
 
 **SSML Generation:**
+
 ```python
 class SSMLGenerator:
     def generate(self, text: str, prosody: ProsodyControls) -> str:
@@ -94,6 +99,7 @@ class SSMLGenerator:
 ### 3. Streaming Strategy
 
 **Chunk-Based Synthesis:**
+
 ```python
 async def generate_mel_streaming(self, ssml: str) -> AsyncIterator[np.ndarray]:
     """Generate mel spectrogram in chunks"""
@@ -124,6 +130,7 @@ async def generate_mel_streaming(self, ssml: str) -> AsyncIterator[np.ndarray]:
 ### 4. Prosody Mapping
 
 **From Style Vector (ADR-0064a):**
+
 ```python
 def map_style_to_prosody(style_vector: StyleVector) -> ProsodyControls:
     """Map user style preferences to TTS prosody"""
@@ -136,6 +143,7 @@ def map_style_to_prosody(style_vector: StyleVector) -> ProsodyControls:
 ```
 
 **Emotional Prosody (ADR-0069):**
+
 ```python
 def apply_affect_to_prosody(base_prosody: ProsodyControls,
                            affect: AffectState) -> ProsodyControls:
@@ -159,6 +167,7 @@ def apply_affect_to_prosody(base_prosody: ProsodyControls,
 ### 5. Audio Buffering
 
 **Jitter Buffer:**
+
 ```python
 class AudioBuffer:
     def __init__(self, buffer_size_ms=80):
@@ -181,6 +190,7 @@ class AudioBuffer:
 ### 6. Quality Metrics
 
 **MOS (Mean Opinion Score) Target: ≥4.2**
+
 ```python
 def measure_mos(audio: np.ndarray, reference: np.ndarray) -> float:
     """Measure perceptual quality (1-5 scale)"""
@@ -221,26 +231,31 @@ def measure_mos(audio: np.ndarray, reference: np.ndarray) -> float:
 ## Implementation Guidance
 
 ### Phase 1: SSML Generation (Day 1)
+
 - Prosody tag generation
 - SSML validation
 - Text normalization
 
 ### Phase 2: Model Integration (Day 2-3)
+
 - VITS model loading
 - HiFiGAN vocoder
 - Streaming mel generation
 
 ### Phase 3: Prosody Mapping (Day 4)
+
 - Style vector integration
 - Affect modulation
 - Parameter tuning
 
 ### Phase 4: Audio Buffering (Day 5)
+
 - Jitter buffer implementation
 - Underrun handling
 - Latency optimization
 
 ### Phase 5: Quality Testing (Day 6-7)
+
 - MOS measurement
 - A/B testing
 - Parameter optimization
@@ -295,6 +310,48 @@ tts_prosody_controls = Counter(
     ['control']  # pitch, rate, volume, emphasis
 )
 ```
+
+---
+
+## Amendment #1 (2025-10-22): Voice Persona Persistence
+
+**Extension:** ADR-0056f adds cross-session voice continuity by persisting prosody parameters in SessionState Section 4.
+
+**Problem Solved:**
+
+- Prosody controls (pitch, rate, volume, emphasis) reset to defaults each session → jarring inconsistency
+- User adjustments ("speak slower") lost after session ends → frustrating UX
+- No per-family-member voice profiles → everyone gets same voice
+
+**Changes:**
+
+- **Prosody parameters** stored in SessionState Section 4 (Persona) → persist across sessions
+- **Session start:** Load historical prosody from SessionState → consistent voice personality
+- **Session updates:** Track user adjustments ("speak slower" → rate=0.9) → persist in real-time
+- **Per-family-member preferences:** Dad prefers pitch -5, Mom prefers pitch +5 → separate profiles
+- **Learning Loop integration:** Repeated adjustments → update default prosody (ADR-0059)
+- **Emotional continuity:** Last session's emotional tone (empathetic, cheerful) → persists to next session
+
+**Performance:**
+
+- <10ms P95 prosody load from SessionState (hash table lookup)
+- <15ms P95 prosody persist (SessionState Section 4 update)
+- <5ms P95 Learning Loop send (async fire-and-forget)
+
+**SessionState Impact:**
+
+- Section 4 (Persona) grows: 4KB → 6KB (+2KB for voice_prosody, voice_history, emotional_state)
+- Total SessionState: 64KB → 72KB (still under 128KB hard limit)
+
+**Integration:**
+
+- `voice_persona_manager.py` ↔ SessionState Section 4
+- `voice_preference_manager.py` ↔ Learning Loop (ADR-0059)
+- Affect Modulation (ADR-0069) → emotional tone mapping
+
+**Related:** ADR-0056f (Voice Persona Persistence), ADR-0017 (SessionState Section 4), ADR-0059 (Learning Loop), ADR-0069 (Affect Modulation)
+
+**Capability Unlocked:** #19 (Voice Continuity - MVP CRITICAL)
 
 ---
 

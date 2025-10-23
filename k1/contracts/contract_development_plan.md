@@ -13,12 +13,12 @@
 
 **Total Scope:**
 
-- **206 ADRs analyzed** (0001-0050 including sub-ADRs, ADRs 0001-0041 fully detailed)
+- **211 ADRs analyzed** (0001-0050 including sub-ADRs, ADRs 0001-0085 fully detailed)
 - **22 contract categories** identified
-- **~741 contract files** to create (expanded from 649 after ADR 0039-0041 review, +92 files)
+- **~815 contract files** to create (expanded from 795 after ADR-0085 embodied awareness review, +20 files)
 - **4 major milestones** over 12 weeks
-- **33 epics** across contract domains
-- **~129 implementation issues** (detailed below, comprehensive coverage)
+- **36 epics** across contract domains (NEW: Epic 3.AB - Embodied Awareness & Device Presence Contracts)
+- **~138 implementation issues** (detailed below, comprehensive coverage)
 
 **Major Expansions After ADR 0001-0035 Review:**
 
@@ -105,8 +105,9 @@
 - **ADR-0039 (Backpressure Cascade 3-Tier):** Epic 2.13 (backpressure contracts) = 28 contract files (Watermarks: 8 + Propagation: 7 + Recovery: 7 + Retention Overrides: 6) = **COMPLETE**
 - **ADR-0040 (WebSocket Real-Time Chat):** Epic 2.14 (WebSocket contracts) = 30 contract files (Connection: 8 + Protocol: 8 + Flow Control: 7 + Reconnection: 7) = **COMPLETE**
 - **ADR-0041 (REST API Session Management):** Epic 2.15 (REST API contracts) = 34 contract files (Session CRUD: 9 + Idempotency: 8 + Pagination: 9 + Documentation: 8) = **COMPLETE**
+- **ADR-0081 (K0 Knowledge Graph):** Epic 3.X (KG contracts) = 30 contract files (Schema: 10 + Query API: 12 + Integration: 8) = **COMPLETE** (NEW - added 2025-10-22)
 
-**Total Contract Files:** ~741 files across 33 epics, 4 milestones, 12 weeks
+**Total Contract Files:** ~771 files across 34 epics, 4 milestones, 12 weeks
 
 **Recent Expansion History:**
 
@@ -115,14 +116,17 @@
 3. **After ADR 0016-0017 Detailed Review:** 266 files (+46 files), 24 epics (expanded Epic 3.2.3, 4.1.1)
 4. **After ADR 0018-0020 Infrastructure Review:** 308 files (+42 files), 24 epics (expanded Epic 4.1.2 +11, 4.1.3 +20, 4.2.1 +12)
 5. **After ADR 0021-0023 Storage & API Review:** 338 files (+30 files), 24 epics (expanded Epic 4.2.2 +15, 4.2.3 +6)
-6. **After ADR 0024-0026 Performance Optimization Review:** 382 files (+44 files), 24 epics (expanded Epic 4.3.1 +10, 4.3.2 +10, 4.3.3 +5, Note: ADR-0027 deferred - will be handled with model placement contracts)
-7. **After ADR 0027-0029 Placement/Scheduler/Observability Review:** 432 files (+50 files), 24 epics (expanded Epic 4.3.3 +15 model placement, Epic 4.3.4 +6 WFQ scheduler, Epic 4.4.1 +19 Prometheus metrics, Epic 4.4.1 +10 alerting/dashboards)
+6. **After ADR 0024-0026 Performance Optimization Review:** 382 files (+44 files), 24 epics (expanded Epic 4.3.1 +10, 4.3.2 +10, 4.3.3 +5)
+7. **After ADR 0027-0029 Placement/Scheduler/Observability Review:** 432 files (+50 files), 24 epics (expanded Epic 4.3.3 +15 model placement, Epic 4.3.4 +6 WFQ scheduler, Epic 4.4.1 +19 Prometheus metrics)
 8. **After ADR 0030-0032 Tracing/Cost/Security Review:** 465 files (+33 files), 24 epics (Epic 4.4.2 added +13 intelligent trace sampling, Epic 4.3.5 added +16 cost tracking, Epic 2.5.5 added +17 band-based egress rules)
 9. **After ADR 0033-0035 Tool Execution/MCP/PII Review:** 557 files (+92 files), 27 epics (Epic 2.7 added +32 tool execution & sandbox, Epic 2.8 added +30 MCP protocol integration, Epic 2.9 added +30 PII detection & redaction)
 10. **After ADR 0036-0038 E2EE/JWT/Audit Review:** 649 files (+92 files), 30 epics (Epic 2.10 added +32 E2EE for RED band, Epic 2.11 added +30 JWT authentication, Epic 2.12 added +30 audit trail & K0 receipts)
 11. **After ADR 0039-0041 Backpressure/WebSocket/REST Review:** 741 files (+92 files), 33 epics (Epic 2.13 added +28 backpressure cascade, Epic 2.14 added +30 WebSocket real-time chat, Epic 2.15 added +34 REST API session management)
-8. **After ADR 0030-0032 Tracing/Cost/Egress Review:** 465 files (+33 files), 24 epics (expanded Epic 4.4.2 +8 trace sampling, Epic 4.3.5 +12 cost tracking, added Epic 2.5.5 +17 egress rules, Issue count +3)
-9. **After ADR 0033-0035 Tool Execution/MCP/PII Review:** 557 files (+92 files), 27 epics (added Epic 2.7 +32 tool execution, Epic 2.8 +30 MCP protocol, Epic 2.9 +30 PII detection, Issue count +12)
+12. **After ADR-0081 K0 Knowledge Graph Review:** 771 files (+30 files), 34 epics (Epic 3.X added +30 KG contracts: Schema 10, Query API 12, Integration 8)
+13. **After ADR-0082 Multi-Party Dialogue Review:** 796 files (+25 files), 35 epics (Epic 3.Y added +25 Multi-Party contracts: MPST 9, Agent Coordination 8, Awareness 8)
+14. **After ADR-0083 Ambient Sensor Fusion Review:** 817 files (+21 files), 36 epics (Epic 3.Z added +21 Ambient Sensor contracts: Sensor Drivers 8, Fusion Algorithms 7, Privacy/Enrichment 6)
+15. **After ADR-0084 K0 Memory Consolidation Review:** 841 files (+24 files), 37 epics (Epic 3.AA added +24 Consolidation contracts: Sleep Coordination 7, Consolidation Processes 9, KG/Reflection 8)
+16. **After ADR-0085 Embodied Awareness Review:** 861 files (+20 files), 38 epics (Epic 3.AB added +20 Embodied Awareness contracts: Device Presence & Location 7, BLE Proximity & Active Session 6, Cross-Device Context 7)
 
 ---
 
@@ -1588,6 +1592,517 @@ k1_module_manifest:
 
 ---
 
+## Epic 1.5: Stream Switch & Multi-Modal Contracts
+
+**ADR Source:** ADR-0004 Amendment #2, ADR-0004f
+**Timeline:** Week 3 (5 days)
+**Dependencies:** Epic 1.4 (52-Module Architecture)
+
+### **Issues for Epic 1.5:**
+
+#### **Issue 1.5.1: Stream Switch Multi-Modal Bus Contracts**
+
+**Effort:** 1 day
+**Assignee:** Layer 1 Developer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0004f-stream-switch-multi-modal-bus.md`
+- **Lines:** Full ADR (cross-modal continuity, modality transition, context preservation)
+- **Module:** `k1/l1_input/streams/stream_switch/` (Module #53)
+- **Capability Unlocked:** #1 (Cross-Modal Continuity)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/input/stream_switch/`
+- **Files:**
+
+  ```
+  k1/contracts/input/stream_switch/
+  ├── unified_input.yml          # UnifiedInput schema (modality, content, context_refs)
+  ├── modality_transition.yml    # ModalityTransition events (voice→text, text→voice)
+  ├── multi_modal_bus.yml        # Multi-Modal Bus contract (accept, forward, ring buffer)
+  ├── transition_manager.yml     # Transition Manager contract (detect, sync, <5ms P95)
+  └── context_preserver.yml      # Context Preserver contract (entity tracking, resolution)
+  ```
+
+**Contract Example (unified_input.yml):**
+
+```yaml
+unified_input_schema:
+  name: "UnifiedInput"
+  purpose: "Multi-modal input representation for cross-modal continuity"
+  version: "1.0"
+
+  schema:
+    input_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Unique input identifier"
+
+    session_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Session identifier for context grouping"
+
+    timestamp_ms:
+      type: "integer"
+      format: "int64"
+      required: true
+      description: "Unix timestamp in milliseconds"
+
+    modality:
+      type: "enum"
+      values: ["VOICE", "TEXT", "IMAGE", "TOUCH", "LOCATION"]
+      required: true
+      description: "Input modality type"
+
+    content:
+      type: "any"
+      required: true
+      description: "Modality-specific payload (string for text, bytes for audio/image)"
+
+    context_refs:
+      type: "array"
+      items: "string"
+      required: false
+      description: "References to previous inputs for cross-modal linking"
+
+    cognitive_trace_id:
+      type: "string"
+      required: true
+      description: "Tracing identifier for observability"
+
+  modalities:
+    VOICE:
+      content_type: "AudioPayload"
+      sample_rate_hz: 16000
+      encoding: "PCM_16LE"
+
+    TEXT:
+      content_type: "string"
+      max_length: 10000
+      encoding: "UTF-8"
+
+    IMAGE:
+      content_type: "ImagePayload"
+      formats: ["JPEG", "PNG", "WEBP"]
+      max_size_kb: 5000
+
+    TOUCH:
+      content_type: "TouchPayload"
+      coordinates: ["x", "y"]
+      gesture: ["tap", "swipe", "long_press"]
+
+    LOCATION:
+      content_type: "LocationPayload"
+      latitude: "float64"
+      longitude: "float64"
+      accuracy_meters: "float32"
+
+  performance:
+    acceptance_latency_ms: 1
+    ring_buffer_size: 1000
+    zero_copy: true
+
+  observability:
+    metrics:
+      - "stream_switch_inputs_total{modality}"
+      - "stream_switch_acceptance_latency_ms{modality}"
+
+    tracing:
+      span_name: "stream_switch.accept_input"
+      attributes: ["modality", "session_id", "input_id"]
+
+  related_contracts:
+    - "modality_transition.yml"
+    - "multi_modal_bus.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 5 contract files created
+- [ ] UnifiedInput schema supports 5 modalities
+- [ ] ModalityTransition events defined
+- [ ] Performance budgets specified (<5ms P95)
+- [ ] Observability contracts included
+
+---
+
+#### **Issue 1.5.2: Ambient Sensor Fusion Contracts**
+
+**Effort:** 1.5 days
+**Assignee:** Layer 1 Developer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0004-56-module-5-layer-architecture.md` (Amendment #2)
+- **Module:** `k1/l1_input/streams/operators/ambient_sensor_fusion.py` (Module #54)
+- **Capability Unlocked:** #3 (Ambient Context Awareness)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/input/ambient_sensors/`
+- **Files:**
+
+  ```
+  k1/contracts/input/ambient_sensors/
+  ├── sensor_types.yml             # 5 sensor types (PIR, mmWave, BLE, WiFi, camera)
+  ├── sensor_fusion_algorithm.yml  # Multi-sensor fusion logic
+  ├── room_occupancy.yml           # Occupancy detection (0-10+ people)
+  ├── presence_detection.yml       # Presence detection (boolean + confidence)
+  ├── context_detector.yml         # Context Detector contract (whisper/loud mode)
+  ├── privacy_aware_responses.yml  # Privacy-aware response adaptation
+  ├── sensor_calibration.yml       # Sensor calibration data
+  └── ambient_context_event.yml    # AmbientContextEvent schema
+  ```
+
+**Contract Example (sensor_types.yml):**
+
+```yaml
+ambient_sensor_types:
+  name: "Ambient Sensor Types"
+  purpose: "Define 5 sensor types for room context awareness"
+  version: "1.0"
+
+  sensors:
+    PIR:
+      type: "Passive Infrared"
+      purpose: "Motion detection"
+      range_meters: 7
+      detection_angle_degrees: 120
+      sample_rate_hz: 1
+      accuracy: "medium"
+
+    mmWave:
+      type: "Millimeter Wave Radar"
+      purpose: "Precise person tracking"
+      range_meters: 5
+      detection_angle_degrees: 110
+      sample_rate_hz: 10
+      accuracy: "high"
+      features: ["breathing_detection", "fall_detection"]
+
+    BLE:
+      type: "Bluetooth Low Energy"
+      purpose: "Device proximity"
+      range_meters: 10
+      sample_rate_hz: 0.1
+      accuracy: "low"
+      device_types: ["phone", "watch", "beacon"]
+
+    WiFi:
+      type: "WiFi Device Detection"
+      purpose: "Connected device tracking"
+      range_meters: 30
+      sample_rate_hz: 0.05
+      accuracy: "medium"
+      metrics: ["RSSI", "connected_devices"]
+
+    Camera:
+      type: "Computer Vision"
+      purpose: "Person detection via face/body"
+      range_meters: 8
+      sample_rate_fps: 1
+      accuracy: "high"
+      features: ["person_count", "face_detection", "body_tracking"]
+      privacy: "RED_BAND_ONLY"
+
+  fusion_algorithm:
+    strategy: "Weighted Average"
+    weights:
+      PIR: 0.15
+      mmWave: 0.35
+      BLE: 0.15
+      WiFi: 0.10
+      Camera: 0.25
+
+    confidence_threshold: 0.6
+    debounce_ms: 500
+
+  performance:
+    fusion_latency_ms: 10
+    update_frequency_hz: 1
+
+  privacy:
+    camera_usage: "RED_BAND_ONLY"
+    data_retention_seconds: 60
+    pii_redaction: true
+```
+
+**Acceptance Criteria:**
+
+- [ ] 8 contract files created
+- [ ] 5 sensor types defined (PIR, mmWave, BLE, WiFi, Camera)
+- [ ] Fusion algorithm specified
+- [ ] Privacy constraints documented (camera RED band only)
+- [ ] Room occupancy detection contract
+
+---
+
+#### **Issue 1.5.3: Speaker Diarization Contracts**
+
+**Effort:** 1.5 days
+**Assignee:** Layer 1 Developer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0004-56-module-5-layer-architecture.md` (Amendment #2)
+- **Module:** `k1/l1_input/streams/operators/speaker_diarization.py` (Module #55)
+- **Capability Unlocked:** #11 (Multi-Party Conversations)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/input/multi_speaker/`
+- **Files:**
+
+  ```
+  k1/contracts/input/multi_speaker/
+  ├── speaker_identification.yml     # Speaker ID schema (voice embeddings)
+  ├── speaker_enrollment.yml         # Speaker enrollment process
+  ├── voice_biometrics.yml           # Voice biometric features
+  ├── spatial_audio.yml              # Spatial audio positioning
+  ├── face_tracking.yml              # Face tracking integration
+  ├── turn_taking.yml                # Turn-taking detection
+  ├── per_person_context.yml         # Per-person preferences
+  ├── diarization_event.yml          # SpeakerDiarizationEvent schema
+  ├── speaker_database.yml           # Speaker database contract
+  └── speaker_recognition_pipeline.yml # Recognition pipeline
+  ```
+
+**Contract Example (speaker_identification.yml):**
+
+```yaml
+speaker_identification:
+  name: "Speaker Identification"
+  purpose: "Identify family members from voice/face for per-person context"
+  version: "1.0"
+
+  schema:
+    speaker_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Unique speaker identifier"
+
+    speaker_name:
+      type: "string"
+      required: true
+      description: "Family member name (Dad, Mom, Child1, etc.)"
+      examples: ["Dad", "Mom", "Emma", "Guest"]
+
+    identification_method:
+      type: "enum"
+      values: ["VOICE", "FACE", "MULTI_MODAL"]
+      required: true
+      description: "Method used for identification"
+
+    confidence:
+      type: "float"
+      range: [0.0, 1.0]
+      required: true
+      description: "Identification confidence score"
+
+    voice_embedding:
+      type: "array"
+      items: "float32"
+      length: 192
+      required: false
+      description: "Voice embedding vector (d-vector)"
+
+    timestamp_ms:
+      type: "integer"
+      format: "int64"
+      required: true
+      description: "Identification timestamp"
+
+  enrollment:
+    min_samples: 5
+    sample_duration_seconds: 3
+    quality_threshold: 0.8
+    process: "Active speaker verification during onboarding"
+
+  recognition_pipeline:
+    steps:
+      - name: "Voice Activity Detection"
+        latency_ms: 5
+
+      - name: "Voice Embedding Extraction"
+        latency_ms: 50
+        model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+
+      - name: "Embedding Comparison"
+        latency_ms: 10
+        distance_metric: "cosine_similarity"
+
+      - name: "Speaker Matching"
+        latency_ms: 5
+        threshold: 0.75
+
+    total_latency_ms: 70
+
+  performance:
+    identification_latency_ms: 70
+    accuracy_target: 0.95
+    false_acceptance_rate: 0.01
+
+  privacy:
+    voice_embeddings_encrypted: true
+    data_retention_policy: "Indefinite (user-controlled deletion)"
+    pii_classification: "RED_BAND"
+
+  observability:
+    metrics:
+      - "speaker_identifications_total{speaker_id, method}"
+      - "speaker_identification_confidence{speaker_id}"
+      - "speaker_identification_latency_ms{method}"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 10 contract files created
+- [ ] Speaker identification pipeline defined
+- [ ] Voice biometrics + face tracking integrated
+- [ ] Per-person context preservation
+- [ ] Privacy RED band classification
+
+---
+
+#### **Issue 1.5.4: Meta Policy Engine Contracts**
+
+**Effort:** 2 days
+**Assignee:** Layer 1 Developer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0004-52-module-5-layer-architecture.md` (Amendment #2)
+- **Module:** `k1/l1_input/meta_policy/` (Module #56)
+- **Capabilities Unlocked:** Social norm modeling, contextual privacy, proactive confirmations
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/input/meta_policy/`
+- **Files:**
+
+  ```
+  k1/contracts/input/meta_policy/
+  ├── social_norms.yml                # Social norm rules
+  ├── norm_modeler.yml                # Norm Modeler contract
+  ├── time_based_rules.yml            # Time-based behavior rules
+  ├── context_specific_behaviors.yml  # Context-specific rules
+  ├── dynamic_privacy_adjuster.yml    # Privacy band adjustment
+  ├── privacy_adjustment_rules.yml    # Privacy adjustment rules
+  ├── proactive_confirmation.yml      # Proactive confirmation contract
+  ├── confirmation_triggers.yml       # Confirmation trigger rules
+  ├── hitl_confirmation.yml           # Human-in-the-loop confirmation
+  ├── inappropriate_action_detection.yml # Inappropriate action detection
+  ├── meta_policy_event.yml           # MetaPolicyEvent schema
+  └── policy_override.yml             # Policy override mechanism
+  ```
+
+**Contract Example (social_norms.yml):**
+
+```yaml
+social_norms:
+  name: "Family Social Norms"
+  purpose: "Model family norms to constrain LLM behavior"
+  version: "1.0"
+
+  norm_categories:
+    time_based:
+      quiet_hours:
+        start_time: "22:00"
+        end_time: "07:00"
+        constraints:
+          - "No loud music suggestions"
+          - "No phone calls after 22:30"
+          - "TTS volume reduction (50%)"
+
+      naptime:
+        detection_method: "Ambient sensors (room dark, no motion)"
+        duration_minutes: 60
+        constraints:
+          - "No audio outputs"
+          - "Visual-only responses"
+          - "Defer non-urgent tasks"
+
+    cost_based:
+      high_cost_threshold:
+        amount_usd: 100
+        confirmation_required: true
+        message: "This costs $X. Confirm?"
+
+      daily_spend_limit:
+        amount_usd: 500
+        action: "Block transaction, notify user"
+
+    privacy_based:
+      visitors_present:
+        detection_method: "Ambient sensors (unknown voices/faces)"
+        constraints:
+          - "Upgrade privacy band GREEN → AMBER"
+          - "No personal information in responses"
+          - "No calendar/email reading aloud"
+
+    safety_based:
+      emergency_override:
+        scenarios: ["fire_alarm", "medical_emergency", "security_breach"]
+        action: "Bypass all norms, prioritize safety"
+
+  norm_learning:
+    enabled: true
+    learning_rate: 0.1
+    update_frequency: "weekly"
+    min_observations: 10
+
+  performance:
+    norm_check_latency_ms: 1
+    database_size_kb: 50
+
+  observability:
+    metrics:
+      - "meta_policy_norm_violations_total{norm_type}"
+      - "meta_policy_confirmations_required_total{trigger}"
+      - "meta_policy_overrides_total{reason}"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 12 contract files created
+- [ ] Social norm categories defined (time, cost, privacy, safety)
+- [ ] Dynamic privacy adjuster contract
+- [ ] Proactive confirmation triggers
+- [ ] HITL confirmation workflow
+
+---
+
+### **Epic 1.5 Summary**
+
+**Total Contract Files:** 35 files
+
+| Issue | Files | Effort | Contracts |
+|-------|-------|--------|-----------|
+| Issue 1.5.1: Stream Switch | 5 files | 1 day | UnifiedInput, ModalityTransition, Multi-Modal Bus, Transition Manager, Context Preserver |
+| Issue 1.5.2: Ambient Sensors | 8 files | 1.5 days | 5 sensor types, fusion algorithm, occupancy, presence, context detector |
+| Issue 1.5.3: Speaker Diarization | 10 files | 1.5 days | Speaker ID, enrollment, voice biometrics, spatial audio, face tracking, turn-taking |
+| Issue 1.5.4: Meta Policy | 12 files | 2 days | Social norms, privacy adjuster, proactive confirmation, HITL |
+| **Total** | **35 files** | **6 days** | **Multi-modal UX contracts complete** |
+
+**Related ADRs:**
+
+- ADR-0004 Amendment #2: 4 New Modules (Stream Switch, Ambient Sensors, Speaker Diarization, Meta Policy)
+- ADR-0004f: Stream Switch Multi-Modal Bus (detailed architecture)
+
+**Capabilities Unlocked:**
+
+- ✅ Capability #1: Cross-Modal Continuity
+- ✅ Capability #3: Ambient Context Awareness
+- ✅ Capability #11: Multi-Party Conversations
+
+---
+
 ## 📦 Milestone 2: Agent & Orchestration Contracts (Weeks 4-6)
 
 **Goal:** Define agent lifecycle, orchestration, planning, error recovery, and capability security contracts
@@ -2745,15 +3260,19 @@ k1_module_manifest:
 
 ## Epic 2.13: Backpressure Cascade 3-Tier Contracts
 
-**Source ADR:** ADR-0039 (Backpressure Cascade) + sub-ADRs (0039a-c)
+**Source ADR:** ADR-0039 (Backpressure Cascade) + sub-ADRs (0039a-c) [Note: Renumbered to ADR-0061 in production]
 **Priority:** CRITICAL (Reliability & Performance)
-**Contract Count:** 28 files
+**Contract Count:** 28 files planned, 18 files exist (64% complete)
+
+**✅ CONTRACT STATUS (2025-10-22):** 18 of 28 contract files exist (64% complete). Found in `k1/contracts/infrastructure/backpressure/`: 4 root files (watermark_thresholds.yml, signal_propagation.yml, recovery_logic.yml, observability.yml) + 7 propagation/*.yml + 7 recovery/*.yml. MISSING: watermarks/ subdirectory (8 detailed files planned), privacy_band_overrides/ subdirectory (6 files planned). Status: **CONTRACTS PARTIALLY EXIST** (10 files to create).
+
+**⚠️ IMPLEMENTATION STATUS (2025-10-22):** Architecture complete (ADR-0061 + 4 sub-ADRs fully documented), Implementation 0% complete (files do NOT exist in k1/l5_infrastructure/backpressure/). Directory inspection confirmed only 2 files in k1/l5_infrastructure/: layer5_adr_map.md and **init**.py. All backpressure/ directories MISSING. See ADR-0061 "Implementation Status Verification" section for details. Status: **NEEDS_IMPLEMENTATION** (P0 - PRODUCTION CRITICAL)
 
 **Context:** ADR-0039 requires 3-tier backpressure cascade for system overload protection with graduated responses (Tier 1: reject new turns at 50 queue depth, Tier 2: cancel background tasks at 100 queue depth, Tier 3: emergency throttle at 200 queue depth), watermark thresholds with 10% hysteresis (prevents oscillation), <50ms signal propagation to all components via Actor Model message passing, and gradual recovery with rate-limited admission (10% every 5s) to prevent thundering herd.
 
 ### Issue 2.13.1: Watermark Thresholds & Tier Triggers Contracts
 
-**Expected Output:** `contracts/infrastructure/backpressure/watermarks/` (8 files)
+**Expected Output:** `contracts/infrastructure/backpressure/watermarks/` (8 files) — **STATUS: MISSING** (use root watermark_thresholds.yml instead)
 
 ```
 ├── watermark_config.yml                    # Tier thresholds: Tier 1 (queue 50, latency 2500ms, active 80), Tier 2 (queue 100, memory 450MB, CPU 85%), Tier 3 (queue 200, memory 480MB, thermal CRITICAL), 10% hysteresis
@@ -3014,6 +3533,148 @@ k1_module_manifest:
 - **K0 Responsibility:** Actual idempotency storage (SQLite `idem_ledger` table), BLAKE3 hash derivation, 24h TTL via `expiry_ts` column, <25ms P50 latency
 - **Performance:** <5ms K1 overhead + <25ms P50 K0 latency = <30ms total idempotency check (hypersonic local-first)
 - **Local-First:** Zero external dependencies (no Redis), 100% offline capability, SQLite-based storage in K0
+
+---
+
+## Epic 2.16: Dialogue Repair & Clarification Contracts (ADR-0054d)
+
+**ADR Source:** ADR-0054d
+**Timeline:** Week 5 (5 days)
+**Dependencies:** Epic 2.3 (Planner), Epic 4.1 (SessionState)
+
+### **Issues for Epic 2.16:**
+
+#### **Issue 2.16.1: Clarification Manager Contracts**
+
+**Effort:** 1.5 days | **Source ADR:** `0054d-dialogue-repair-clarification-pipeline.md` lines 133-174
+
+**Expected Output:** `contracts/dialogue/clarification/` (3 files)
+
+```
+├── confidence_thresholds.yml               # Confidence threshold rules: EXECUTE ≥0.6 (proceed with action), CLARIFY 0.4-0.6 (ask question), REJECT <0.4 (full rephrase), thresholds learned via feedback (adjust ±0.05 based on correction rate)
+├── clarification_decision.yml              # ClarificationManager: should_clarify(IntentAnalysis) → bool, triggers on: confidence <0.6, missing_entities, ambiguous_entities, max 2 clarifications per turn, <1ms decision latency
+└── clarification_generation.yml            # Clarification generation: select repair strategy, render template (20+ templates), publish ClarificationRequested event, <100ms P95 end-to-end, fire-and-forget to Event Bus
+```
+
+**ADR References:** ADR-0054d lines 133-174 (ClarificationManager), lines 145-163 (confidence thresholds), lines 315-350 (performance budgets)
+
+#### **Issue 2.16.2: Repair Strategy Contracts**
+
+**Effort:** 2 days | **Source ADR:** `0054d-dialogue-repair-clarification-pipeline.md` lines 176-250
+
+**Expected Output:** `contracts/dialogue/repair_strategies/` (5 files)
+
+```
+├── strategy_selection.yml                  # RepairStrategies.select(IntentAnalysis) → Strategy: confidence <0.4 → Rephrase, 0.4-0.6 + complex → Simplify, 0.4-0.6 + multiple → Offer Options, multi-turn → Context Recovery, missing entity → Missing Entity
+├── rephrase_strategy.yml                   # Rephrase (confidence <0.4): 3 templates ("I didn't quite catch that", "Could you rephrase?", "Could you say that differently?"), confidence too low for partial understanding
+├── simplify_strategy.yml                   # Simplify (confidence 0.4-0.6): "I caught {understood_parts}, but I missed {missed_parts}. Could you clarify?", example: intent book_dinner, understood [date], missed [time, location]
+├── offer_options_strategy.yml              # Offer Options (multiple interpretations): "Did you mean {option_a} or {option_b}?", example: "book dinner at that Italian place" → memory returns [Luigi's, Olive Garden, Carrabba's], offer top 3
+├── context_recovery_strategy.yml           # Context Recovery (multi-turn loss): "Are we still talking about {last_topic}?", SessionState.beliefs integration, example: Turn 1 "weather in Seattle", Turn 2 "what about Tuesday?" → recover topic
+└── missing_entity_strategy.yml             # Missing Entity (high confidence, missing fields): "I can {action}, but I need {missing_entity}", example: book_dinner confidence 0.85, entities [date] → "I'd be happy to book dinner tomorrow. What time and where?"
+```
+
+**ADR References:** ADR-0054d lines 176-250 (5 repair strategies), lines 181-240 (strategy implementations with examples)
+
+#### **Issue 2.16.3: Misunderstanding Detection Contracts**
+
+**Effort:** 1.5 days | **Source ADR:** `0054d-dialogue-repair-clarification-pipeline.md` lines 251-310
+
+**Expected Output:** `contracts/dialogue/misunderstanding/` (3 files)
+
+```
+├── correction_detection.yml                # MisunderstandingDetector.detect_correction(user_input) → bool: 8 correction phrases ("no, i meant", "actually", "not that", "i said", "no, not", "i meant to say", "let me rephrase", "i'm trying to say"), fuzzy matching <5ms
+├── repeated_query_tracking.yml             # Repeated query detection: RepeatDetector.is_repeated(query, threshold=3) → bool, last 10 queries cached, Levenshtein similarity >0.8, indicates clarification failing
+└── learning_loop_integration.yml           # MisunderstandingPattern logging: original_input, llm_interpretation, user_correction, confidence_score, timestamp → Learning Loop (ADR-0059), FeedbackType.CORRECTION with signal_strength=1.0, adjust confidence thresholds ±0.05
+```
+
+**ADR References:** ADR-0054d lines 251-310 (Misunderstanding Detector), lines 258-275 (correction detection), lines 277-289 (repeated queries), lines 290-310 (Learning Loop)
+
+**Total Contracts: 11 files** (3 clarification + 5 repair strategies + 3 misunderstanding)
+
+**Key Contracts:**
+
+- **`confidence_thresholds.yml`** — Confidence threshold rules (EXECUTE ≥0.6, CLARIFY 0.4-0.6, REJECT <0.4)
+- **`clarification_decision.yml`** — ClarificationManager.should_clarify() logic (<1ms decision)
+- **`strategy_selection.yml`** — RepairStrategies.select() decision tree (<5ms selection)
+- **`correction_detection.yml`** — 8 correction phrases with fuzzy matching (<5ms P95)
+- **`learning_loop_integration.yml`** — MisunderstandingPattern → Learning Loop (adjust thresholds)
+
+**Architecture Notes:**
+
+- **Performance Budget:** <100ms P95 clarification generation (confidence check <1ms + strategy select <5ms + template render <10ms + Learning Loop send <5ms)
+- **LLM-Specific Challenge:** Probabilistic outputs require confidence thresholds; traditional "I don't understand" fails with hallucination risk
+- **Template-Based:** Fast clarification generation without LLM call (templates, not generative)
+- **Learning Integration:** Correction patterns fed to Learning Loop (ADR-0059) to adjust confidence thresholds dynamically
+- **Max Clarifications:** 2 per turn (prevent clarification fatigue)
+
+---
+
+## Epic 2.17: Voice Persona Persistence & Cross-Session Continuity Contracts (ADR-0056f)
+
+**ADR Source:** ADR-0056f (Voice Persona Persistence), ADR-0056d Amendment #1 (TTS Synthesis integration)
+**Timeline:** Week 5 (3 days)
+**Dependencies:** Epic 4.1 (SessionState Section 4), ADR-0059 (Learning Loop), ADR-0069 (Affect Modulation)
+
+### **Issues for Epic 2.17:**
+
+#### **Issue 2.17.1: Voice Persona Persistence Contracts**
+
+**Effort:** 1.5 days | **Source ADR:** `0056f-voice-persona-persistence-cross-session.md` lines 100-180
+
+**Expected Output:** `contracts/voice/persona/` (3 files)
+
+```
+├── prosody_parameter_schema.yml            # ProsodyControls schema: pitch (int -12 to +12 semitones), rate (float 0.5-2.0x speed), volume (int -20 to +20 dB), emphasis (EmphasisLevel enum: STRONG, MODERATE, REDUCED, NONE), emotional_tone (str: cheerful, empathetic, neutral, formal), last_updated (datetime)
+├── sessionstate_integration.yml            # SessionState Section 4 (Persona) NEW FIELDS: voice_prosody (ProsodyControls), voice_history (list[ProsodySnapshot], max 10 circular buffer), emotional_state (EmotionalState), section size growth: 4KB → 6KB (+2KB), load_prosody <10ms P95, persist_prosody <15ms P95
+└── session_load_save.yml                   # VoicePersonaManager: load_prosody(user_id) on session start → SessionState Section 4 lookup, persist_prosody(user_id, prosody) on session end → SessionState Section 4 update, voice_history snapshot with timestamp + session_id, time-based emotional decay (24hr empathetic → neutral)
+```
+
+**ADR References:** ADR-0056f lines 100-180 (VoicePersonaManager), lines 114-137 (ProsodyControls schema), lines 139-164 (SessionState Section 4 integration), lines 400-450 (performance budgets)
+
+#### **Issue 2.17.2: Per-User Voice Preference Contracts**
+
+**Effort:** 1 day | **Source ADR:** `0056f-voice-persona-persistence-cross-session.md` lines 182-270
+
+**Expected Output:** `contracts/voice/preferences/` (2 files)
+
+```
+├── per_user_preference.yml                 # VoiceProfile schema: default_prosody (ProsodyControls baseline per family member), time_of_day_adjustments (dict[str, ProsodyControls]: "morning" → cheerful pitch +3, "evening" → calm pitch -2), context_adjustments (dict[str, ProsodyControls]: "storytelling" → dramatic emphasis STRONG, "homework" → neutral), adjustment_history (list[ProsodyAdjustment], max 50 circular buffer), learning_stats (dict: correction_count, preference_confidence)
+└── preference_learning.yml                 # VoicePreferenceManager: track_adjustment(user_id, adjustment: "speak slower", delta: rate -0.1) → adjustment_history append, after 10 similar adjustments → update_default_prosody, Learning Loop integration (ADR-0059): VoiceAdjustmentEvent with FeedbackType.VOICE_PREFERENCE, signal_strength based on correction frequency, preference_confidence threshold 0.8 before auto-update
+```
+
+**ADR References:** ADR-0056f lines 182-270 (VoicePreferenceManager), lines 195-220 (VoiceProfile schema), lines 221-265 (preference learning algorithm), lines 266-290 (Learning Loop integration)
+
+#### **Issue 2.17.3: Voice Continuity Integration Contracts**
+
+**Effort:** 0.5 days | **Source ADR:** `0056f-voice-persona-persistence-cross-session.md` lines 291-380
+
+**Expected Output:** `contracts/voice/integration/` (1 file)
+
+```
+└── metrics.yml                             # Prometheus metrics: voice_prosody_loads_total (counter: session start, labels user_id), voice_adjustments_total (counter: explicit user adjustment "speak slower", labels adjustment_type), voice_persona_load_latency_ms (histogram: <10ms P95 load, buckets 1/5/10/20/50), voice_persona_persist_latency_ms (histogram: <15ms P95 persist, buckets 5/10/15/25/50), voice_preference_confidence (gauge: per-user preference confidence 0.0-1.0), emotional_state_staleness_seconds (histogram: time since last emotional_state update, staleness threshold 86400s = 24hr)
+```
+
+**ADR References:** ADR-0056f lines 400-450 (observability), lines 408-430 (Prometheus metrics), ADR-0056d Amendment #1 (TTS Synthesis integration)
+
+**Total Contracts: 6 files** (3 persona persistence + 2 per-user preferences + 1 metrics)
+
+**Key Contracts:**
+
+- **`prosody_parameter_schema.yml`** — ProsodyControls dataclass (pitch, rate, volume, emphasis, emotional_tone)
+- **`sessionstate_integration.yml`** — SessionState Section 4 NEW FIELDS (voice_prosody, voice_history, emotional_state), size growth 4KB → 6KB
+- **`per_user_preference.yml`** — VoiceProfile dataclass (default_prosody, time_of_day_adjustments, context_adjustments, learning_stats)
+- **`preference_learning.yml`** — Preference learning algorithm (10 adjustments → auto-update default), Learning Loop integration
+- **`metrics.yml`** — Observability (prosody load/persist latency, adjustment tracking, preference confidence, emotional staleness)
+
+**Architecture Notes:**
+
+- **Performance Budget:** <35ms total overhead (<10ms load + <15ms persist + <5ms learning send + <5ms affect modulation)
+- **SessionState Impact:** Section 4 growth 4KB → 6KB (+2KB), total SessionState 64KB → 72KB (still under 128KB hard limit)
+- **Per-Family-Member:** Dad prefers pitch -5 (deeper voice), Mom prefers pitch +5 (cheerful), stored in VoiceProfile per user_id
+- **Emotional Continuity:** Last session empathetic tone (user frustrated) → persist emotional_state → next session starts empathetic (24hr decay to neutral)
+- **Learning Loop:** User says "speak slower" 10x → VoicePreferenceManager updates default rate to 0.9, FeedbackType.VOICE_PREFERENCE signal_strength 1.0
+- **Affect Modulation Integration:** ADR-0069 emotional_tone (empathetic, cheerful, neutral, formal) → prosody mapping (empathetic: pitch -2, rate 0.95, volume -3, cheerful: pitch +3, rate 1.1)
+- **Time-Based Decay:** Emotional state staleness after 24hr → revert to neutral baseline (95% of sessions <24hr apart per usage patterns)
 
 ---
 
@@ -3519,6 +4180,19 @@ table Budget {
 **Timeline:** Week 10 (5 days)
 **Dependencies:** Epic 3.1 (FlatBuffers schemas)
 
+**📝 Amendment #1 (2025-10-22) - SessionState Field Extensions:**
+
+- **Reason:** Support 39 missing UX capabilities (Voice Continuity #19 MVP, Ambient Context #3, Multi-Party #11, Embodied #34, Self-Reference #36)
+- **Section 4 (Persona):** +9 new fields (voice_prosody, voice_history, emotional_state, self_model, personality_traits, response_patterns, consistency_validator, family_vocabulary, family_nicknames)
+- **Section 5 (Multimodal):** +6 new fields (ambient_context, occupancy_history, active_speakers, speaker_profiles, device_presence, cross_device_context)
+- **Size Budget Impact:** Total SessionState 30-56KB typical → 41-67KB typical (+11KB), 72KB new median
+  - Section 4: 2-4KB → 5-7KB (+3KB)
+  - Section 5: 4-8KB → 12-16KB (+8KB)
+- **Within Hard Limit:** 72KB median < 128KB hard limit (56KB headroom), ✅ acceptable
+- **Exceeds Soft Limit:** 72KB > 64KB soft limit (triggers LRU eviction per ADR-0018)
+- **Contract Updates:** Update `persona_section_schema.fbs` (+9 fields), `multimodal_section_schema.fbs` (+6 fields), add manager operations
+- **Related:** ADR-0056f (Voice Persona), ADR-0069 (Affect Modulation), ADR-0004 (4 New Modules), ADR-0050 (Multi-Device Sync)
+
 ### **Issues for Epic 4.1:**
 
 #### **Issue 4.1.1: 6-Section SessionState Structure**
@@ -3562,6 +4236,15 @@ table Budget {
 └── persona_llm_formatter.yml        # Format traits for LLM system prompt injection, <5ms P95
 ```
 
+**📝 Amendment #1 (2025-10-22) - Section 4 Contract Update:**
+
+- **New Fields (9 total):** voice_prosody, voice_history (10 snapshots), emotional_state, self_model, personality_traits, response_patterns, consistency_validator, family_vocabulary, family_nicknames
+- **Size Impact:** 2-4KB → 5-7KB (+3KB)
+- **FlatBuffers Schema Update:** Add 9 new fields to `persona_section_schema.fbs`
+- **Manager Operations:** Add voice_prosody_load/persist, emotional_state_update, self_model_query, vocabulary_lookup
+- **Related ADRs:** ADR-0056f (Voice Persona), ADR-0069 (Affect Modulation), ADR-0004 (4 New Modules)
+- **MVP Critical:** voice_prosody, voice_history, emotional_state (Capability #19 Voice Continuity)
+
 **Section 5: Multimodal Section (ADR-0017e) - 3 files:**
 
 ```
@@ -3569,6 +4252,15 @@ table Budget {
 ├── multimodal_manager.yml           # add_audio_buffer, add_vision_embedding operations
 └── multimodal_lru_eviction.yml      # Evict old buffers/embeddings, target 4-8KB
 ```
+
+**📝 Amendment #1 (2025-10-22) - Section 5 Contract Update:**
+
+- **New Fields (6 total):** ambient_context, occupancy_history (20 events), active_speakers, speaker_profiles (5 family members), device_presence, cross_device_context
+- **Size Impact:** 4-8KB → 12-16KB (+8KB)
+- **FlatBuffers Schema Update:** Add 6 new fields to `multimodal_section_schema.fbs`
+- **Manager Operations:** Add ambient_context_update, speaker_identification, device_presence_sync, occupancy_tracking
+- **Related ADRs:** ADR-0004 Module #54 (Ambient Sensors), Module #55 (Speaker Diarization), ADR-0050 (Multi-Device Sync)
+- **Post-MVP:** ambient_context, active_speakers, device_presence (Capabilities #3, #11, #34)
 
 **Section 6: Meta Section (ADR-0017f) - 3 files:**
 
@@ -3934,6 +4626,10 @@ k0_bridge_batching/
 **Effort:** 5 days | **Source ADR:** `0026-thermal-hysteresis-matrix.md` + `0027-model-placement-cascade.md` + sub-ADRs
 
 **Expected Output:** `contracts/performance/thermal_placement/` (28 files)
+
+**⚠️ CONTRACT STATUS (2025-10-22):** 0 of 28 contract files exist. Directory `k1/contracts/performance/thermal_placement/` does NOT exist. Only generic `k1/contracts/performance/readme.md` exists (mentions thermal_management.yaml but NOT the detailed 28 Epic 4.3.3 contracts). Status: **CONTRACTS MISSING** (28 files to create).
+
+**⚠️ IMPLEMENTATION STATUS (2025-10-22):** Architecture 88-90% complete (ADR documentation comprehensive), Implementation 0% complete (files do NOT exist in k1/l5_infrastructure/). Directory inspection confirmed only 2 files in k1/l5_infrastructure/: layer5_adr_map.md and **init**.py. All thermal/ and placement/ directories MISSING. See ADR-0026/0027 "Implementation Status Verification" sections for details. Status: **NEEDS_IMPLEMENTATION** (P0 - PRODUCTION CRITICAL)
 
 **Thermal Sensor Monitoring - ADR-0026a (2 files):**
 
@@ -4438,8 +5134,1582 @@ k0_bridge_batching/
 - ✅ ADR-0013 (Versioning): Epic 3.2 Issue 3.2.4 (schema registry) = **COMPLETE**
 - ✅ ADR-0014 (REST API): Epic 3.2 Issue 3.2.1 (dual format) = **COMPLETE**
 - ✅ ADR-0015 (WebSocket): Epic 3.2 Issue 3.2.2 (17 message types) = **COMPLETE**
+- ✅ ADR-0081 (K0 Knowledge Graph): Epic 3.X (KG architecture) = **COMPLETE** (NEW - added 2025-10-22)
 
-**All ADRs 0001-0015 now have comprehensive contract coverage!**
+**All ADRs 0001-0015 + ADR-0081 (K0 Knowledge Graph) now have comprehensive contract coverage!**
+
+---
+
+## Epic 3.X: K0 Knowledge Graph Contracts
+
+**ADR Source:** ADR-0081, ADR-0081a-d
+**Timeline:** Week 8-9 (10 days)
+**Dependencies:** Epic 3.3 (K0 Pipeline Contracts)
+**Priority:** HIGH (Addresses "BIGGEST ARCHITECTURAL GAP" blocking Capabilities #21 and #38)
+
+**Epic Goal:** Create comprehensive contract set for K0 temporal knowledge graph architecture (8th memory type)
+
+### **Epic Context:**
+
+- **Problem:** K0 lacks graph representation for entities (Person, Location, Event, Organization, Thing) and temporal relationships
+- **Solution:** Temporal knowledge graph with 3-table schema (nodes, edges, temporal_edges), spaCy NER integration, query API
+- **Impact:** Unlocks Capability #21 (Family Identity Graph), Capability #38 (Temporal KG Queries)
+
+### **Issues for Epic 3.X:**
+
+#### **Issue 3.X.1: Graph Schema Contracts (10 files)**
+
+**Effort:** 2 days
+**Assignee:** K0 Backend Developer + Database Engineer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0081-k0-knowledge-graph-architecture.md`
+- **Sub-ADR:** `docs/architecture/decisions/0081a-temporal-graph-schema-design.md`
+- **Lines:** ADR-0081 (lines 400-800), ADR-0081a (complete)
+
+**Expected Output:**
+
+- **Location:** `k0/contracts/kg/schema/`
+- **Files:**
+
+  ```
+  k0/contracts/kg/schema/
+  ├── node_schema.yml                # Node table schema (id, type, name, properties JSON BLOB)
+  ├── edge_schema.yml                # Edge table schema (source_id, target_id, relationship_type)
+  ├── temporal_edge_schema.yml       # Temporal edge table (valid_from, valid_to, properties)
+  ├── entity_types.yml               # 5 entity types (Person, Location, Event, Organization, Thing)
+  ├── relationship_types.yml         # 8 relationship types (parent, child, sibling, spouse, friend, employed_by, located_at, participated_in)
+  ├── property_versioning.yml        # Property schema evolution (JSON BLOB validation)
+  ├── sqlite_schema_ddl.yml          # SQLite CREATE TABLE statements
+  ├── migration_strategy.yml         # Schema versioning and migration plan
+  ├── indexing_strategy.yml          # Index definitions (source_id, valid_from/valid_to)
+  └── kg_metrics_schema.yml          # KG metrics contract (node count, edge count, query latency)
+  ```
+
+**Contract Example (temporal_edge_schema.yml):**
+
+```yaml
+temporal_edge_schema:
+  name: "Temporal Edge Schema"
+  purpose: "Track relationship evolution with bitemporal timestamps"
+  version: "1.0"
+  table_name: "kg_temporal_edges"
+
+  schema:
+    id:
+      type: "INTEGER PRIMARY KEY"
+      required: true
+      description: "Unique edge identifier"
+
+    source_id:
+      type: "INTEGER NOT NULL"
+      foreign_key: "kg_nodes(id)"
+      indexed: true
+      description: "Source entity ID"
+
+    target_id:
+      type: "INTEGER NOT NULL"
+      foreign_key: "kg_nodes(id)"
+      indexed: true
+      description: "Target entity ID"
+
+    relationship_type:
+      type: "TEXT NOT NULL"
+      values: ["parent", "child", "sibling", "spouse", "friend", "employed_by", "located_at", "participated_in"]
+      indexed: true
+      description: "Relationship type"
+
+    properties:
+      type: "TEXT"
+      format: "JSON BLOB"
+      nullable: true
+      description: "Relationship-specific properties (flexible schema)"
+
+    valid_from:
+      type: "INTEGER NOT NULL"
+      format: "Unix timestamp (microseconds)"
+      indexed: true
+      description: "Relationship start time"
+
+    valid_to:
+      type: "INTEGER"
+      format: "Unix timestamp (microseconds)"
+      nullable: true
+      default: null
+      indexed: true
+      description: "Relationship end time (NULL = current)"
+
+    created_at:
+      type: "INTEGER NOT NULL"
+      format: "Unix timestamp (microseconds)"
+      description: "Insertion timestamp (bitemporal tracking)"
+
+  indexes:
+    - name: "idx_temporal_edges_time"
+      columns: ["valid_from", "valid_to"]
+      type: "composite"
+      purpose: "Optimize temporal queries (timeline queries)"
+
+    - name: "idx_temporal_edges_source"
+      columns: ["source_id", "relationship_type"]
+      type: "composite"
+      purpose: "Optimize relationship traversal"
+
+  queries:
+    timeline_query_example: |
+      -- Who was Alice married to in 2020?
+      SELECT target.name
+      FROM kg_temporal_edges te
+      JOIN kg_nodes source ON te.source_id = source.id
+      JOIN kg_nodes target ON te.target_id = target.id
+      WHERE source.name = 'Alice'
+        AND te.relationship_type = 'spouse'
+        AND te.valid_from <= 1577836800000000  -- 2020-01-01
+        AND (te.valid_to >= 1609459199000000 OR te.valid_to IS NULL)  -- 2020-12-31
+
+  performance:
+    query_latency_target: "<50ms P95"
+    indexing_overhead: "~15% storage increase"
+
+  migration:
+    version_tracking: "schema_versions table"
+    backward_compatibility: "Additive changes only (new columns optional)"
+    migration_scripts: "k0/automation/migrate.py"
+
+  related_contracts:
+    - "node_schema.yml"
+    - "edge_schema.yml"
+    - "property_versioning.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 10 contract files created
+- [ ] 3-table schema (nodes, edges, temporal_edges) fully documented
+- [ ] 5 entity types + 8 relationship types defined
+- [ ] Temporal modeling with valid_from/valid_to specified
+- [ ] SQLite DDL + indexing strategy
+- [ ] Migration + versioning strategy
+- [ ] Performance targets (<50ms P95 graph query)
+
+---
+
+#### **Issue 3.X.2: Graph Query API Contracts (12 files)**
+
+**Effort:** 2.5 days
+**Assignee:** K0 Backend Developer + Query Specialist
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0081-k0-knowledge-graph-architecture.md`
+- **Sub-ADR:** `docs/architecture/decisions/0081b-graph-query-api-traversal-algorithms.md`
+- **Lines:** ADR-0081 (lines 1200-1800), ADR-0081b (complete)
+
+**Expected Output:**
+
+- **Location:** `k0/contracts/kg/query/`
+- **Files:**
+
+  ```
+  k0/contracts/kg/query/
+  ├── timeline_query.yml             # Timeline query API (WHO was Alice married to in 2020?)
+  ├── entity_lookup.yml              # Entity lookup API (<10ms P95)
+  ├── relationship_traversal.yml     # Relationship traversal API
+  ├── shortest_path.yml              # Shortest path query (BFS)
+  ├── temporal_reachability.yml      # Temporal reachability query
+  ├── query_performance_budgets.yml  # Performance budgets (<50ms P95 graph query)
+  ├── query_result_schema.yml        # Query result schema (JSON)
+  ├── pagination_support.yml         # Cursor-based pagination for large results
+  ├── error_handling.yml             # Query error handling (invalid entity ID, timeout)
+  ├── query_cache_integration.yml    # Query result caching (75% hit rate target)
+  ├── k0_bridge_integration.yml      # K0 Command/Query port integration (P01/P02)
+  └── kg_query_metrics.yml           # KG query metrics (query latency, cache hits)
+  ```
+
+**Contract Example (timeline_query.yml):**
+
+```yaml
+timeline_query_api:
+  name: "Timeline Query API"
+  purpose: "Query relationship evolution over time"
+  version: "1.0"
+
+  api:
+    method: "POST"
+    endpoint: "/k0/kg/timeline_query"
+    authentication: "Bearer token"
+    rate_limit: "100 requests/minute per session"
+
+  request_schema:
+    entity_id:
+      type: "integer"
+      required: true
+      description: "Entity ID to query"
+
+    relationship_type:
+      type: "string"
+      values: ["parent", "child", "sibling", "spouse", "friend", "employed_by", "located_at", "participated_in"]
+      required: false
+      description: "Filter by relationship type (null = all types)"
+
+    start_time:
+      type: "integer"
+      format: "Unix timestamp (microseconds)"
+      required: true
+      description: "Timeline start time"
+
+    end_time:
+      type: "integer"
+      format: "Unix timestamp (microseconds)"
+      required: true
+      description: "Timeline end time"
+
+    direction:
+      type: "enum"
+      values: ["outgoing", "incoming", "both"]
+      default: "both"
+      description: "Relationship direction"
+
+    limit:
+      type: "integer"
+      range: [1, 100]
+      default: 20
+      description: "Max results per page"
+
+    cursor:
+      type: "string"
+      required: false
+      description: "Pagination cursor (Base64 encoded)"
+
+  response_schema:
+    results:
+      type: "array"
+      items:
+        entity_id:
+          type: "integer"
+        entity_name:
+          type: "string"
+        relationship_type:
+          type: "string"
+        valid_from:
+          type: "integer"
+        valid_to:
+          type: "integer"
+          nullable: true
+        properties:
+          type: "object"
+
+    total_count:
+      type: "integer"
+
+    next_cursor:
+      type: "string"
+      nullable: true
+
+  performance:
+    query_latency_target: "<50ms P95"
+    cache_hit_rate_target: "75%"
+    indexing: "Composite index on (valid_from, valid_to)"
+
+  usage_example:
+    query: "Who was Alice married to in 2020?"
+    request: |
+      POST /k0/kg/timeline_query
+      {
+        "entity_id": 42,  # Alice's ID
+        "relationship_type": "spouse",
+        "start_time": 1577836800000000,  # 2020-01-01
+        "end_time": 1609459199000000,    # 2020-12-31
+        "direction": "both"
+      }
+
+    response: |
+      {
+        "results": [
+          {
+            "entity_id": 101,
+            "entity_name": "Bob",
+            "relationship_type": "spouse",
+            "valid_from": 1546300800000000,  # 2019-01-01 (married in 2019)
+            "valid_to": null,                 # Still married (current)
+            "properties": {
+              "marriage_date": "2019-01-15",
+              "location": "Seattle"
+            }
+          }
+        ],
+        "total_count": 1,
+        "next_cursor": null
+      }
+
+  related_contracts:
+    - "temporal_edge_schema.yml"
+    - "query_cache_integration.yml"
+    - "k0_bridge_integration.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 12 contract files created
+- [ ] 4 query categories documented (timeline, entity lookup, relationship traversal, shortest path)
+- [ ] Performance budgets specified (<50ms P95 graph query, <10ms P95 entity lookup)
+- [ ] Query result schema (JSON)
+- [ ] Pagination support (cursor-based)
+- [ ] K0 Bridge integration (P01 RecallQuery, P02 MemoryWrite)
+- [ ] Query caching strategy (75% hit rate target)
+
+---
+
+#### **Issue 3.X.3: Episodic Memory Integration Contracts (8 files)**
+
+**Effort:** 2 days
+**Assignee:** K0 Pipeline Developer + NLP Engineer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0081-k0-knowledge-graph-architecture.md`
+- **Sub-ADR:** `docs/architecture/decisions/0081c-episodic-memory-kg-integration.md`
+- **Lines:** ADR-0081 (lines 2400-3000), ADR-0081c (complete)
+
+**Expected Output:**
+
+- **Location:** `k0/contracts/kg/integration/`
+- **Files:**
+
+  ```
+  k0/contracts/kg/integration/
+  ├── entity_extraction.yml          # NER entity extraction (spaCy en_core_web_lg)
+  ├── relationship_extraction.yml    # Relationship extraction (dependency parsing)
+  ├── entity_resolution.yml          # Entity resolution (fuzzy matching + context)
+  ├── entity_disambiguation.yml      # Entity disambiguation (link mentions to canonical entities)
+  ├── conversation_to_kg_pipeline.yml # 4-stage pipeline (NER → relationship extraction → entity resolution → KG update)
+  ├── batch_processing.yml           # Batch processing for episodic memory consolidation
+  ├── integration_error_handling.yml # Error handling (validation errors, partial updates)
+  └── kg_integration_metrics.yml     # Integration metrics (entity resolution accuracy, extraction latency)
+  ```
+
+**Contract Example (conversation_to_kg_pipeline.yml):**
+
+```yaml
+conversation_to_kg_pipeline:
+  name: "Episodic Memory → KG Integration Pipeline"
+  purpose: "Extract entities and relationships from conversation transcripts"
+  version: "1.0"
+
+  pipeline_stages:
+    stage_1_ner:
+      name: "Named Entity Recognition"
+      model: "spaCy en_core_web_lg"
+      model_size: "685MB"
+      accuracy: "96%"
+      confidence_threshold: 0.75
+      entity_types: ["PERSON", "GPE", "DATE", "ORG"]
+      latency_ms: 50
+
+    stage_2_relationship_extraction:
+      name: "Relationship Extraction"
+      method: "Dependency parsing + pattern matching"
+      patterns:
+        - pattern: "nsubj → parent → dobj"
+          relationship: "parent_of"
+        - pattern: "nsubj → works → prep → pobj"
+          relationship: "employed_by"
+      latency_ms: 30
+
+    stage_3_entity_resolution:
+      name: "Entity Resolution"
+      method: "Fuzzy matching + context scoring"
+      fuzzy_matching:
+        algorithm: "Levenshtein distance"
+        threshold: 3
+      context_matching:
+        method: "Surrounding entity comparison"
+      latency_ms: 20
+
+    stage_4_kg_update:
+      name: "KG Update"
+      method: "Atomic updates to K0::st_kg via Command Port"
+      operations:
+        - "Create/update nodes (entities)"
+        - "Create/update edges (relationships)"
+      timestamps: "From episodic memory turn timestamps"
+      latency_ms: 10
+
+  total_latency: "110ms P95"
+
+  example_flow:
+    conversation: "Alice moved to Seattle in 2024. She works at Microsoft."
+    stage_1_output: |
+      Entities:
+      - Alice (PERSON, confidence=0.95)
+      - Seattle (GPE, confidence=0.98)
+      - 2024 (DATE, confidence=1.0)
+      - Microsoft (ORG, confidence=0.99)
+
+    stage_2_output: |
+      Relationships:
+      - Alice → located_at → Seattle (valid_from=2024-01-01)
+      - Alice → employed_by → Microsoft (valid_from=2024-01-01)
+
+    stage_3_output: |
+      Entity Resolution:
+      - Alice → Canonical entity ID 42 (existing)
+      - Seattle → Canonical entity ID 101 (existing)
+      - Microsoft → Canonical entity ID 202 (existing)
+
+    stage_4_output: |
+      KG Updates:
+      - Create edge: 42 → located_at → 101 (valid_from=2024-01-01, valid_to=NULL)
+      - Create edge: 42 → employed_by → 202 (valid_from=2024-01-01, valid_to=NULL)
+
+  p03_consolidation_integration:
+    trigger: "P03 Consolidation pipeline (episodic → semantic → KG)"
+    execution: "After semantic extraction, run 4-stage pipeline to update KG"
+    feedback_loop: "KG updates inform future semantic extraction (known entities prioritized)"
+
+  error_handling:
+    validation_errors: "Log validation errors, continue processing"
+    partial_updates: "Commit partial updates (1 edge succeeds, 1 fails → commit success)"
+    retry_logic: "Retry transient failures (1× retry, exponential backoff)"
+
+  observability:
+    metrics:
+      - "kg_entity_extractions_total{entity_type}"
+      - "kg_relationship_extractions_total{relationship_type}"
+      - "kg_entity_resolution_accuracy"
+      - "kg_pipeline_latency_ms"
+
+  related_contracts:
+    - "entity_extraction.yml"
+    - "relationship_extraction.yml"
+    - "entity_resolution.yml"
+    - "k0_bridge_integration.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 8 contract files created
+- [ ] 4-stage pipeline documented (NER → relationship extraction → entity resolution → KG update)
+- [ ] spaCy integration specified (en_core_web_lg, 96% accuracy)
+- [ ] Entity resolution strategy (fuzzy matching + context)
+- [ ] P03 Consolidation integration
+- [ ] Error handling (validation errors, partial updates)
+- [ ] Performance targets (110ms P95 pipeline latency)
+
+---
+
+**Epic 3.X Total Deliverables:** 30 contract files (10 schema + 12 query API + 8 integration)
+
+**Epic 3.X Success Criteria:**
+
+- [ ] K0 Knowledge Graph architecture fully specified
+- [ ] 3-table schema (nodes, edges, temporal_edges) validated
+- [ ] Query API contracts complete (4 categories)
+- [ ] Episodic integration pipeline documented
+- [ ] Performance targets met (<50ms P95 graph query, <10ms P95 entity lookup)
+- [ ] All contracts reference source ADRs (ADR-0081, ADR-0081a-d)
+
+---
+
+## Epic 3.Y: Multi-Party Dialogue Coordination Contracts (NEW - 2025-10-22)
+
+**ADR Source:** ADR-0082, ADR-0082a-c (Multi-Party Dialogue Coordination)
+**Timeline:** Week 9-10 (5 days total)
+**Dependencies:** Epic 1.5 (Speaker Diarization), Epic 2.1 (Agent Lifecycle), Epic 4.1 (SessionState)
+
+### **Issues for Epic 3.Y:**
+
+#### **Issue 3.Y.1: Speaker Diarization Contracts**
+
+**Effort:** 2 days
+**Assignee:** Multi-Modal Input Lead
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0082a-speaker-diarization-voice-biometrics.md`
+- **Lines:** Complete ADR (ECAPA-TDNN model, enrollment protocol, runtime speaker ID, privacy encryption)
+- **Capability Unlocked:** #11 (Multi-Party Conversations - Speaker Identification)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/dialogue/multi_party/speaker_diarization/`
+- **Files:**
+
+  ```
+  k1/contracts/dialogue/multi_party/speaker_diarization/
+  ├── speaker_enrollment.yml         # Enrollment protocol (10-15 sentences, 30-60s)
+  ├── ecapa_tdnn_model.yml          # ECAPA-TDNN 768-dim embedding model spec
+  ├── speaker_embedding.yml          # Voice embedding extraction (<50ms P95)
+  ├── speaker_matching.yml           # Cosine similarity matching (>0.8 threshold)
+  ├── speaker_profile_schema.yml     # K0 st_voice_profiles table schema
+  ├── profile_encryption.yml         # AES-256-GCM encryption for voice profiles
+  ├── profile_drift_detection.yml    # Adaptive re-enrollment (confidence <0.85)
+  └── onnx_model_integration.yml     # ONNX Runtime integration contract
+  ```
+
+**Contract Example (speaker_enrollment.yml):**
+
+```yaml
+speaker_enrollment:
+  name: "Speaker Enrollment Protocol"
+  purpose: "Capture voice samples and train speaker embeddings for family member identification"
+  version: "1.0"
+
+  enrollment_process:
+    min_utterances: 10
+    max_utterances: 15
+    utterance_duration_seconds: 2-4
+    total_duration_seconds: 30-60
+    environment_requirements:
+      min_snr_db: 20
+      background_noise_level: "Quiet (office/home)"
+
+    phonetically_diverse_sentences:
+      - "Please turn on the living room lights"
+      - "What's the weather forecast for tomorrow?"
+      - "Schedule a meeting with my team at 3 PM"
+      - "Order groceries from the supermarket"
+      - "How much time until dinner is ready?"
+      - "Read me the latest news headlines"
+      - "Set an alarm for 7 AM tomorrow"
+      - "What's the traffic like on my route to work?"
+      - "Play my favorite playlist"
+      - "Call Mom on her mobile phone"
+
+  embedding_extraction:
+    model: "ECAPA-TDNN"
+    embedding_dimension: 768
+    model_path: "models/ecapa_tdnn_voxceleb.onnx"
+    inference_latency_ms: 50
+    performance_budget_ms: 100
+
+  enrollment_validation:
+    min_quality_score: 0.75
+    quality_factors:
+      - "Signal-to-noise ratio (SNR > 20dB)"
+      - "Speech clarity (prosody features)"
+      - "Consistent speaker (no multiple voices)"
+      - "Sufficient phoneme coverage"
+
+  speaker_profile_creation:
+    profile_id_format: "uuid"
+    speaker_name: "User-provided (Dad, Mom, Emma, etc.)"
+    voice_embedding_storage: "K0::st_voice_profiles table"
+    encryption: "AES-256-GCM with per-profile key"
+    created_at_timestamp: "Unix microseconds"
+
+  performance:
+    enrollment_total_duration_seconds: 60-90
+    embedding_extraction_latency_ms: 50
+    profile_creation_latency_ms: 10
+    total_enrollment_time_seconds: 2-3
+
+  observability:
+    metrics:
+      - "speaker_enrollments_total{speaker_name}"
+      - "speaker_enrollment_quality{speaker_name}"
+      - "speaker_enrollment_duration_seconds{speaker_name}"
+
+  related_contracts:
+    - "ecapa_tdnn_model.yml"
+    - "speaker_embedding.yml"
+    - "profile_encryption.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 8 contract files created
+- [ ] Enrollment protocol specified (10-15 sentences, 30-60s)
+- [ ] ECAPA-TDNN model contract (768-dim embeddings, <50ms P95)
+- [ ] Voice profile encryption (AES-256-GCM)
+- [ ] Profile drift detection (adaptive re-enrollment)
+- [ ] ONNX Runtime integration
+- [ ] Performance budgets (<100ms speaker ID total)
+
+---
+
+#### **Issue 3.Y.2: Turn Coordination Contracts**
+
+**Effort:** 2 days
+**Assignee:** Dialogue Management Lead
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0082b-multi-party-turn-taking-coordination.md`
+- **Lines:** Complete ADR (3 allocation strategies, overlap detection, barge-in handling)
+- **Capability Unlocked:** #11 (Multi-Party Conversations - Turn Coordination)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/dialogue/multi_party/turn_coordination/`
+- **Files:**
+
+  ```
+  k1/contracts/dialogue/multi_party/turn_coordination/
+  ├── turn_allocation_strategies.yml    # 3 strategies (first-speaker, parallel, preemption)
+  ├── first_speaker_priority.yml        # First-Speaker Priority queue strategy
+  ├── parallel_processing.yml           # Parallel Processing 2× compute strategy
+  ├── priority_preemption.yml           # Priority Preemption urgency-based strategy
+  ├── overlapping_speech_detection.yml  # Overlap detection (timestamp + audio energy)
+  ├── speaker_context_retrieval.yml     # SessionState Section 2 per-speaker state
+  ├── barge_in_handling.yml             # Multi-party barge-in differentiation
+  ├── turn_manager_state_machine.yml    # Turn Manager FSM contract
+  └── turn_allocation_decision.yml      # Allocation decision logic (<50ms P95)
+  ```
+
+**Contract Example (turn_allocation_strategies.yml):**
+
+```yaml
+turn_allocation_strategies:
+  name: "Multi-Party Turn Allocation Strategies"
+  purpose: "Define 3 strategies for allocating turns when multiple speakers detected"
+  version: "1.0"
+
+  strategies:
+    first_speaker_priority:
+      name: "First-Speaker Priority Queue"
+      use_case: "Default for most families (sequential processing)"
+      latency_overhead_ms: 500
+      compute_cost: "1× (sequential processing)"
+      description: "Queue subsequent speakers, process first speaker's request first"
+      behavior: |
+        1. Speaker A starts talking (T=0ms)
+        2. Speaker B starts talking (T=100ms, overlap detected)
+        3. Process Speaker A's request fully (allocate agent, execute)
+        4. Queue Speaker B's request, process after A completes (+500ms)
+
+    parallel_processing:
+      name: "Parallel Processing (Dual Agents)"
+      use_case: "Urgent requests, power users with high compute availability"
+      latency_overhead_ms: 200
+      compute_cost: "2× (concurrent agent allocation)"
+      description: "Assign 2+ agents simultaneously, process both requests concurrently"
+      behavior: |
+        1. Speaker A starts talking (T=0ms)
+        2. Speaker B starts talking (T=100ms, overlap detected)
+        3. Allocate Agent 1 for Speaker A, Agent 2 for Speaker B
+        4. Process both requests concurrently (2× compute, <200ms latency for both)
+
+    priority_preemption:
+      name: "Priority Preemption (Urgency-Based)"
+      use_case: "Emergency requests, high-urgency interruptions"
+      latency_overhead_ms: 100
+      compute_cost: "Variable (interrupt low-urgency)"
+      description: "Interrupt low-urgency requests for high-urgency requests"
+      urgency_threshold: 0.7
+      behavior: |
+        1. Speaker A (low urgency <0.5) request in progress
+        2. Speaker B (high urgency >0.7) starts talking
+        3. Interrupt Speaker A's request, save partial progress
+        4. Process Speaker B's high-urgency request immediately
+        5. Resume Speaker A's request after B completes
+
+  strategy_selection:
+    default_strategy: "first_speaker_priority"
+    selection_criteria:
+      - "User preference (configured in SessionState Section 2)"
+      - "Urgency divergence (>0.3 delta → consider preemption)"
+      - "Compute availability (low → first-speaker, high → parallel)"
+      - "Request complexity (simple → first-speaker, complex → parallel)"
+
+  performance:
+    allocation_decision_latency_ms: 50
+    strategy_switching_latency_ms: 10
+
+  observability:
+    metrics:
+      - "turn_allocation_strategy_total{strategy}"
+      - "turn_allocation_latency_ms{strategy}"
+      - "turn_allocation_compute_cost{strategy}"
+
+  related_contracts:
+    - "first_speaker_priority.yml"
+    - "parallel_processing.yml"
+    - "priority_preemption.yml"
+    - "turn_allocation_decision.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 9 contract files created
+- [ ] 3 allocation strategies specified
+- [ ] Overlap detection contract (timestamp collision + audio energy)
+- [ ] Speaker context retrieval from SessionState Section 2
+- [ ] Barge-in handling differentiation (same-user vs multi-party)
+- [ ] Turn Manager state machine
+- [ ] Performance budgets (<50ms P95 turn allocation)
+
+---
+
+#### **Issue 3.Y.3: Conflict Resolution Contracts**
+
+**Effort:** 1 day
+**Assignee:** Dialogue Management Lead
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0082c-conflict-resolution-strategies.md`
+- **Lines:** Complete ADR (conflict taxonomy, 4 mediation strategies, meta policy integration)
+- **Capability Unlocked:** #35 (Conflict Resolution for Family)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/dialogue/multi_party/conflict_resolution/`
+- **Files:**
+
+  ```
+  k1/contracts/dialogue/multi_party/conflict_resolution/
+  ├── conflict_taxonomy.yml           # 3 conflict types (goal, timing, priority)
+  ├── mediation_strategies.yml        # 4 mediation strategies
+  ├── explicit_confirmation.yml       # Explicit Confirmation strategy
+  ├── sentiment_priority.yml          # Sentiment-Based Priority strategy
+  ├── meta_policy_norms.yml           # Meta Policy Learned Norms strategy
+  ├── time_based_deferral.yml         # Time-Based Deferral strategy
+  ├── mediation_loop.yml              # Mediation loop (max 3 attempts)
+  └── conflict_detector_fsm.yml       # Conflict Detector state machine
+  ```
+
+**Contract Example (mediation_strategies.yml):**
+
+```yaml
+mediation_strategies:
+  name: "Conflict Mediation Strategies"
+  purpose: "Define 4 mediation strategies for resolving multi-party conflicts"
+  version: "1.0"
+
+  strategies:
+    explicit_confirmation:
+      name: "Explicit Confirmation"
+      priority: 1
+      use_case: "Default, conservative approach (confidence <0.8)"
+      latency_overhead_ms: 2000-5000
+      description: "Ask users to negotiate explicitly, system facilitates"
+      behavior: |
+        System: "Dad wants to book a steakhouse, Mom prefers vegetarian. Please decide together."
+        Wait for user negotiation (2-5 seconds)
+        System: "Shall I book [resolved option]?"
+
+    sentiment_based_priority:
+      name: "Sentiment-Based Priority"
+      priority: 2
+      use_case: "Urgency divergence >0.3 (one speaker high urgency)"
+      latency_overhead_ms: 1000-2000
+      description: "Prioritize high-urgency speaker, confirm with low-urgency"
+      urgency_threshold: 0.7
+      urgency_divergence_threshold: 0.3
+      behavior: |
+        Speaker A urgency=0.8 (high), Speaker B urgency=0.4 (low)
+        System prioritizes Speaker A, quick confirmation: "Dad seems urgent, proceeding with steakhouse. Mom, is that okay?"
+
+    meta_policy_learned_norms:
+      name: "Meta Policy Learned Norms"
+      priority: 3
+      use_case: "Confidence >0.8, learned from 15+ interactions"
+      latency_overhead_ms: 500
+      description: "Apply learned family norms (quiet hours, dietary rules, cost thresholds)"
+      confidence_threshold: 0.8
+      min_interactions: 15
+      behavior: |
+        Learned norm: "Mom dietary preference (vegetarian) overrides restaurant choice"
+        System: "Mom prefers vegetarian, booking vegetarian restaurant. Dad, shall I find a steakhouse nearby for you?"
+
+    time_based_deferral:
+      name: "Time-Based Deferral"
+      priority: 4
+      use_case: "Contextual rules (quiet hours, baby sleeping, device state)"
+      latency_overhead_ms: 500
+      description: "Defer action based on time-based rules (naptime, quiet hours, device context)"
+      context_aware: true
+      behavior: |
+        Context: Baby sleeping (PIR sensor detected presence in nursery)
+        System: "Baby is sleeping. I'll defer loud music until naptime ends (1 hour)."
+
+  strategy_selection:
+    default_strategy: "explicit_confirmation"
+    selection_criteria:
+      - "Conflict confidence (<0.8 → explicit, >0.8 → meta policy)"
+      - "Urgency divergence (>0.3 → sentiment priority)"
+      - "Contextual rules (naptime/quiet hours → time deferral)"
+      - "Learned norms (15+ interactions → meta policy)"
+
+  mediation_loop:
+    max_attempts: 3
+    escalation_after_max: "decide offline"
+    escalation_message: "I'm unable to resolve this conflict. Please decide together offline."
+
+  performance:
+    conflict_detection_latency_ms: 50
+    mediation_strategy_selection_latency_ms: 100
+    total_conflict_resolution_overhead_ms: 2000-5000
+
+  observability:
+    metrics:
+      - "conflict_mediations_total{strategy}"
+      - "conflict_mediation_latency_ms{strategy}"
+      - "conflict_resolution_success_rate{strategy}"
+
+  related_contracts:
+    - "explicit_confirmation.yml"
+    - "sentiment_priority.yml"
+    - "meta_policy_norms.yml"
+    - "time_based_deferral.yml"
+    - "mediation_loop.yml"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 8 contract files created
+- [ ] Conflict taxonomy (goal, timing, priority conflicts)
+- [ ] 4 mediation strategies specified
+- [ ] Mediation loop (max 3 attempts → escalate)
+- [ ] Sentiment divergence integration (ADR-0069 Affect)
+- [ ] Meta policy norms (K0 Knowledge Graph integration)
+- [ ] Performance budgets (<100ms conflict detection)
+
+---
+
+**Epic 3.Y Total Deliverables:** 25 contract files (8 speaker diarization + 9 turn coordination + 8 conflict resolution)
+
+**Epic 3.Y Success Criteria:**
+
+- [ ] Multi-party dialogue coordination architecture fully specified
+- [ ] Speaker diarization contracts complete (ECAPA-TDNN, enrollment, encryption)
+- [ ] Turn coordination contracts complete (3 allocation strategies)
+- [ ] Conflict resolution contracts complete (4 mediation strategies)
+- [ ] Performance targets met (<200ms total multi-party overhead)
+- [ ] All contracts reference source ADRs (ADR-0082, ADR-0082a-c)
+
+---
+
+## Epic 3.Z: Ambient Sensor Fusion Contracts (NEW - 2025-01-22)
+
+**ADR Source:** ADR-0083, ADR-0083a-c (Ambient Sensor Fusion)
+**Timeline:** Week 10 (5 days total)
+**Dependencies:** Epic 4.1.1 (SessionState Section 5), Epic 2.5.5 (Privacy Bands), Epic 2.9 (PII Detection)
+**Priority:** MEDIUM (Post-MVP v1.1 - Nice-to-have for privacy-aware responses)
+
+**Epic Goal:** Create comprehensive contract set for ambient sensor fusion architecture (PIR, mmWave, BLE, WiFi, Camera, Light sensors)
+
+### **Epic Context:**
+
+- **Problem:** FamilyOS lacks ambient awareness for privacy-sensitive responses (whisper when others present, naptime detection)
+- **Solution:** Multi-modal sensor fusion with 6 sensor types, weighted Bayesian voting, SessionState Section 5 integration
+- **Impact:** Unlocks Capability #3 (Ambient Context Awareness - Room Occupancy Detection), enables privacy-aware voice modulation
+
+### **Issues for Epic 3.Z:**
+
+#### **Issue 3.Z.1: Sensor Driver Contracts (8 files)**
+
+**Effort:** 2 days
+**Assignee:** Sensor Integration Lead
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0083a-multi-modal-sensor-integration.md`
+- **Lines:** Complete ADR (6 sensor driver implementations, unified interface, data normalization, sensor registry)
+- **Capability Unlocked:** #3 (Ambient Context Awareness - Sensor Collection)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/sensors/drivers/`
+- **Files:**
+
+  ```
+  k1/contracts/sensors/drivers/
+  ├── sensor_driver_interface.yml    # Unified SensorDriver abstract base class
+  ├── pir_motion_driver.yml          # PIR Motion Sensor GPIO interface (<10ms, GREEN band)
+  ├── mmwave_radar_driver.yml        # mmWave Radar UART/serial interface (<20ms, LD2410 protocol)
+  ├── ble_proximity_driver.yml       # BLE Proximity Bleak scanner (<50ms, AMBER band, MAC hashing)
+  ├── wifi_proximity_driver.yml      # WiFi Proximity HTTP REST API (<100ms, device count)
+  ├── camera_person_driver.yml       # Camera Person Detection OpenCV + YOLOv5 (<200ms, RED band)
+  ├── ambient_light_driver.yml       # Ambient Light I2C/smbus interface (<5ms, lux 0-10000)
+  └── sensor_registry.yml            # Sensor Registry lifecycle management (1Hz health check)
+  ```
+
+**Contract Example (pir_motion_driver.yml):**
+
+```yaml
+pir_motion_driver:
+  name: "PIR Motion Sensor Driver"
+  purpose: "Binary motion detection via GPIO interface with <10ms latency"
+  version: "1.0"
+  privacy_band: "GREEN"
+
+  hardware_requirements:
+    sensor_model: "HC-SR501 PIR Motion Sensor"
+    gpio_pin: "Configurable GPIO pin (e.g., GPIO17 on Raspberry Pi)"
+    power_supply: "5V DC"
+    detection_range_meters: 7
+    detection_angle_degrees: 120
+
+  driver_interface:
+    start:
+      description: "Initialize GPIO pin, configure as input with pull-down resistor"
+      latency_ms: "<5"
+      error_handling: "Raise HardwareError if GPIO initialization fails"
+
+    stop:
+      description: "Release GPIO pin resources"
+      latency_ms: "<5"
+
+    read:
+      description: "Read binary motion state (HIGH = motion detected, LOW = no motion)"
+      latency_ms: "<10"
+      output_schema:
+        timestamp_ms: "int"
+        raw_data:
+          gpio_state: "bool (HIGH/LOW)"
+        normalized_data:
+          presence_signal: "float (0.0 = no motion, 1.0 = motion detected)"
+        confidence: "float (1.0 = binary sensor, always confident)"
+        privacy_band: "GREEN"
+        latency_ms: "int (<10ms P95)"
+
+    health_check:
+      description: "Verify GPIO pin readable, detect stuck-at faults"
+      latency_ms: "<5"
+      frequency_hz: 1
+
+  data_normalization:
+    presence_signal_mapping:
+      no_motion: 0.0
+      motion_detected: 1.0
+    confidence_score: 1.0 # Binary sensor always confident
+    privacy_band_enforcement: "GREEN (no PII, local-only processing)"
+
+  error_handling:
+    hardware_errors:
+      - "GPIO initialization failure → restart driver (max 3 retries)"
+      - "Stuck-at fault detection (no state change >60s) → health check failure"
+    timeout_errors:
+      - "GPIO read timeout (>10ms) → return null reading with confidence 0.0"
+
+  performance_targets:
+    latency_ms: "<10 P95"
+    health_check_interval_s: 1
+    max_restart_attempts: 3
+    restart_cooldown_s: 10
+```
+
+**Acceptance Criteria:**
+
+- [ ] 8 contract files created (1 interface + 6 drivers + 1 registry)
+- [ ] Unified SensorDriver interface specified (start, stop, read, health_check methods)
+- [ ] All 6 sensor drivers documented (PIR, mmWave, BLE, WiFi, Camera, Light)
+- [ ] Data normalization pipeline specified (timestamp sync, confidence validation, privacy band enforcement)
+- [ ] Sensor registry lifecycle management (1Hz health monitoring, auto-restart max 3 retries)
+- [ ] Performance targets defined (<10ms PIR, <20ms mmWave, <50ms BLE, <100ms WiFi, <200ms Camera, <5ms Light)
+- [ ] Privacy bands enforced (PIR/mmWave/WiFi/Light GREEN, BLE AMBER with MAC hashing, Camera RED local-only)
+
+---
+
+#### **Issue 3.Z.2: Sensor Fusion Algorithm Contracts (7 files)**
+
+**Effort:** 1.5 days
+**Assignee:** ML/Sensor Fusion Engineer
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0083b-sensor-fusion-algorithms.md`
+- **Lines:** Complete ADR (weighted Bayesian fusion, temporal smoothing, person count conflict resolution, confidence decay, privacy zone detection)
+- **Capability Unlocked:** #3 (Ambient Context Awareness - Occupancy Inference)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/sensors/fusion/`
+- **Files:**
+
+  ```
+  k1/contracts/sensors/fusion/
+  ├── weighted_bayesian_fusion.yml   # Weighted Bayesian sensor fusion algorithm
+  ├── temporal_smoothing.yml         # 5-second rolling average + hysteresis
+  ├── person_count_resolution.yml    # Conflict resolution Camera > BLE > mmWave priority
+  ├── confidence_decay.yml           # Age-based confidence decay (≥60s = 50% decay)
+  ├── occupancy_state_inference.yml  # VACANT (<0.30), POSSIBLY_OCCUPIED (0.30-0.60), OCCUPIED (≥0.60)
+  ├── privacy_zone_detection.yml     # PRIVATE/FAMILY/PUBLIC zone inference
+  └── fusion_metrics.yml             # Fusion engine metrics (occupancy accuracy, latency, confidence distribution)
+  ```
+
+**Contract Example (weighted_bayesian_fusion.yml):**
+
+```yaml
+weighted_bayesian_fusion:
+  name: "Weighted Bayesian Sensor Fusion Algorithm"
+  purpose: "Combine 6 sensor signals into unified occupancy score using weighted voting"
+  version: "1.0"
+
+  algorithm:
+    formula: "occupancy_score = Σ (weight_i × confidence_i × sensor_signal_i)"
+    sensor_weights:
+      camera: 0.40 # Highest accuracy (visual confirmation)
+      mmwave: 0.25 # Breathing/heartbeat detection
+      pir: 0.15 # Binary motion detection
+      ble: 0.10 # Device proximity (approximate person count)
+      wifi: 0.05 # Connected device count (rough estimate)
+      light: 0.05 # Ambient light (indirect occupancy signal)
+    normalization_constraint: "Σ weights = 1.0"
+
+  signal_extraction:
+    pir_signal:
+      mapping:
+        no_motion: 0.0
+        motion_detected: 1.0
+    mmwave_signal:
+      mapping:
+        no_presence: 0.0
+        breathing_detected: 1.0
+        range_cm: "(50-500cm) → normalized to distance factor"
+    ble_signal:
+      mapping: "len(detected_devices) / enrolled_device_count → 0.0-1.0"
+    wifi_signal:
+      mapping: "connected_device_count / family_device_count → 0.0-1.0"
+    camera_signal:
+      mapping: "person_count > 0 → 1.0, person_count == 0 → 0.0"
+    light_signal:
+      mapping: "lux > 200 → 1.0, lux < 50 → 0.0, linear interpolation 50-200"
+
+  confidence_weighting:
+    description: "Multiply sensor signal by confidence score before weighting"
+    confidence_sources:
+      - "Sensor self-reported confidence (SensorReading.confidence field)"
+      - "Age-based confidence decay (ADR-0083b Confidence Decay)"
+    combined_confidence: "weight_i × confidence_i × sensor_signal_i"
+
+  occupancy_score_output:
+    range: "0.0-1.0"
+    interpretation:
+      vacant: "<0.30"
+      possibly_occupied: "0.30-0.60"
+      occupied: "≥0.60"
+    latency_target_ms: "<100 P95 (fast path: PIR + mmWave + BLE, no camera)"
+
+  performance_targets:
+    latency_ms: "<100 P95 (fast path), <320ms (with camera)"
+    accuracy_target: ">90% occupancy detection accuracy"
+    false_positive_rate: "<5%"
+    false_negative_rate: "<5%"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 7 contract files created
+- [ ] Weighted Bayesian fusion formula documented (6 sensor weights sum to 1.0)
+- [ ] Signal extraction mapping specified for all 6 sensors
+- [ ] Temporal smoothing algorithm (5-second rolling average + 10% hysteresis)
+- [ ] Person count conflict resolution priority hierarchy (Camera > BLE > mmWave > Default(0))
+- [ ] Confidence decay policy (fresh <60s = full confidence, stale ≥60s = 50% decay)
+- [ ] Occupancy state inference thresholds (VACANT <0.30, POSSIBLY 0.30-0.60, OCCUPIED ≥0.60)
+- [ ] Privacy zone detection logic (VACANT→PRIVATE, person_count==1→PRIVATE, person_count==len(identities)→FAMILY, person_count>len(identities)→PUBLIC)
+- [ ] Performance targets met (<100ms P95 fast path, <320ms with camera)
+
+---
+
+#### **Issue 3.Z.3: Privacy-Aware Context Enrichment Contracts (6 files)**
+
+**Effort:** 1.5 days
+**Assignee:** Privacy Engineer + SessionState Lead
+
+**Context:**
+
+- **Source ADR:** `docs/architecture/decisions/0083c-privacy-aware-context-enrichment.md`
+- **Lines:** Complete ADR (SessionState Section 5 AmbientContext schema, privacy band enforcement, proactive triggers, TTS prosody modulation)
+- **Capability Unlocked:** #3 (Ambient Context Awareness - Privacy-Aware Responses)
+
+**Expected Output:**
+
+- **Location:** `k1/contracts/sensors/privacy/`
+- **Files:**
+
+  ```
+  k1/contracts/sensors/privacy/
+  ├── ambient_context_schema.yml     # SessionState Section 5 AmbientContext dataclass (8 fields)
+  ├── privacy_band_enforcement.yml   # Camera RED (block egress), BLE AMBER (hash), privacy escalation
+  ├── proactive_triggers.yml         # 5 trigger types (dark room, away mode, welcome home, meeting, nighttime)
+  ├── tts_prosody_modulation.yml     # Whisper mode PUBLIC zone, gentle tone nighttime
+  ├── sessionstate_integration.yml   # SessionState Section 5 update protocol
+  └── meta_policy_hooks.yml          # Meta Policy (ADR-0052) integration for Proactive Risk Confirmation
+  ```
+
+**Contract Example (ambient_context_schema.yml):**
+
+```yaml
+ambient_context_schema:
+  name: "SessionState Section 5 AmbientContext Schema"
+  purpose: "Store ambient sensor fusion results in SessionState for privacy-aware responses"
+  version: "1.0"
+  sessionstate_section: 5 # Multimodal Section
+
+  dataclass_schema:
+    current_room:
+      type: "str"
+      description: "Room identifier (e.g., 'living_room', 'bedroom', 'kitchen')"
+      source: "Sensor placement configuration"
+
+    occupancy_state:
+      type: "OccupancyState enum (VACANT, POSSIBLY_OCCUPIED, OCCUPIED)"
+      description: "Current occupancy state from weighted Bayesian fusion"
+      source: "ADR-0083b occupancy_state_inference.yml"
+
+    occupancy_history:
+      type: "List[OccupancyState]"
+      description: "Last 300 occupancy states (5-minute rolling window at 1Hz sampling)"
+      max_length: 300
+      eviction_policy: "FIFO circular buffer"
+      size_bytes: "+1.2KB (300 × 4 bytes per enum)"
+
+    last_motion_ts:
+      type: "int"
+      description: "Unix timestamp (ms) of last motion detection (away mode detection)"
+      source: "PIR/mmWave sensors"
+
+    ambient_light_lux:
+      type: "float"
+      description: "Current ambient light level (0-10000 lux, nighttime detection)"
+      source: "Ambient Light sensor"
+
+    privacy_zone:
+      type: "PrivacyZone enum (PRIVATE, FAMILY, PUBLIC)"
+      description: "Inferred privacy zone from occupancy and identity detection"
+      source: "ADR-0083b privacy_zone_detection.yml"
+
+    suggested_band:
+      type: "Optional[PrivacyBand]"
+      description: "Suggested privacy band escalation (PUBLIC→RED, FAMILY→AMBER, None otherwise)"
+      source: "ADR-0083c privacy_band_enforcement.yml"
+
+    last_updated_ts:
+      type: "int"
+      description: "Unix timestamp (ms) of last sensor fusion update (staleness detection)"
+      update_frequency_hz: 1
+
+  sessionstate_integration:
+    section_name: "multimodal"
+    field_path: "multimodal.ambient_context"
+    update_protocol:
+      frequency_hz: 1 # Update every second via sensor fusion engine
+      delta_batching: true # Use K0 Bridge batching (ADR-0022)
+      size_impact_kb: "+2.0KB to SessionState Section 5 (12-16KB total after update)"
+
+  performance_targets:
+    update_latency_ms: "<5 P95"
+    sessionstate_size_impact_kb: "+2.0"
+    total_section_5_size_kb: "12-16 (within 128KB hard limit)"
+
+  related_contracts:
+    - "ADR-0083 (Ambient Sensor Fusion parent)"
+    - "ADR-0083a (Multi-Modal Sensor Integration - sensor drivers)"
+    - "ADR-0083b (Sensor Fusion Algorithms - occupancy state)"
+    - "ADR-0083c (Privacy-Aware Context Enrichment - privacy zones + triggers)"
+    - "ADR-0017 (SessionState 6-Section Design - Section 5 Multimodal)"
+```
+
+**Acceptance Criteria:**
+
+- [ ] 6 contract files created
+- [ ] AmbientContext dataclass schema specified (8 fields: current_room, occupancy_state, occupancy_history, last_motion_ts, ambient_light_lux, privacy_zone, suggested_band, last_updated_ts)
+- [ ] SessionState Section 5 integration protocol documented (1Hz update frequency, K0 Bridge batching)
+- [ ] Privacy band enforcement specified:
+  - Camera RED: Block all egress, remove visual data (frames, bounding boxes, faces)
+  - BLE AMBER: Hash MAC addresses + detected identities (SHA256[:8])
+  - Privacy band escalation (PUBLIC zone → suggest RED, FAMILY zone → suggest AMBER)
+- [ ] Proactive trigger types documented (5 triggers):
+  1. Dark Room (occupancy + lux <50 → "Turn on lights?" confidence 0.80)
+  2. Away Mode (vacant >30min → "Activate away mode?" confidence 0.70)
+  3. Welcome Home (VACANT→OCCUPIED → "Welcome back!" confidence 0.90)
+  4. Meeting Detected (calendar + occupancy → defer notifications)
+  5. Nighttime Quiet (lux <10 → handled in TTS modulation)
+- [ ] TTS prosody modulation integrated (ADR-0056):
+  - PUBLIC zone: Whisper mode (volume -5dB, rate 0.9x)
+  - Nighttime (lux <10): Gentle tone (volume -3dB, pitch -2 semitones)
+  - FAMILY/PRIVATE: Normal volume
+- [ ] Meta Policy hooks specified (ADR-0052 Proactive Risk Confirmation for high-cost/inappropriate actions)
+- [ ] Performance targets met (<5ms P95 SessionState update latency)
+
+---
+
+**Epic 3.Z Total Deliverables:** 21 contract files (8 sensor drivers + 7 fusion algorithms + 6 privacy/enrichment)
+
+**Epic 3.Z Success Criteria:**
+
+- [ ] Ambient sensor fusion architecture fully specified
+- [ ] Sensor driver contracts complete (6 sensors: PIR, mmWave, BLE, WiFi, Camera, Light)
+- [ ] Sensor fusion algorithm contracts complete (weighted Bayesian voting, temporal smoothing, conflict resolution, confidence decay)
+- [ ] Privacy-aware context enrichment contracts complete (SessionState Section 5, privacy enforcement, proactive triggers, TTS modulation)
+- [ ] Performance targets met (<100ms P95 fast path, <320ms with camera)
+- [ ] Privacy bands enforced (Camera RED local-only, BLE AMBER hashed, others GREEN)
+- [ ] All contracts reference source ADRs (ADR-0083, ADR-0083a-c, ADR-0017, ADR-0052, ADR-0056)
+
+---
+
+## Epic 3.AA: K0 Memory Consolidation Pipeline Contracts (NEW - 2025-01-22)
+
+**Goal:** Define contracts for K0 P03 Consolidation Pipeline implementing sleep-cycle-inspired memory optimization (hippocampal replay, episodic-to-semantic transformation, synaptic homeostasis, knowledge graph enrichment, dream-like exploration).
+
+**Source ADRs:** ADR-0084 (K0 Memory Consolidation Pipeline), ADR-0084a (Sleep-Cycle Memory Replay Algorithms), ADR-0084b (Offline Consolidation Scheduler), ADR-0084c (Knowledge Graph Consolidation), ADR-0084d (Dream-Like Exploration & Reflection)
+
+**Contract Domains:** K0 Consolidation, Sleep State Machine, Hippocampus Integration, Knowledge Graph, Reflection
+
+**Total Contract Files:** 24 files (7 sleep coordination + 9 consolidation processes + 8 KG/reflection)
+
+---
+
+### **Issues for Epic 3.AA:**
+
+#### **Issue 3.AA.1: Sleep Coordination Contracts (7 files)**
+
+**Goal:** Define contracts for sleep scheduler, state machine, and NREM/REM cycle orchestration.
+
+**Files:**
+
+1. **`k0/contracts/consolidation/SLEEP_SCHEDULER.contract.py`**
+   - Idle detection algorithm (CPU threshold <5%, duration 15min, preferred hours 2AM-5AM)
+   - Trigger conditions (time-based, activity-based, event-based, manual)
+   - Battery management (pause if <30%)
+   - Integration with K0 P03 pipeline
+
+2. **`k0/contracts/consolidation/SLEEP_STATE_MACHINE.contract.py`**
+   - 5-state FSM: IDLE → NREM_PHASE_1 → NREM_PHASE_2 → REM_PHASE → WAKING → IDLE
+   - State durations (45min NREM1, 30min NREM2, 15min REM, 5min WAKING)
+   - State transition events (infra.consolidation.nrem_start/end, rem_start/end)
+   - Interruption handling (save progress via K0 Offsets, resume logic)
+
+3. **`k0/contracts/consolidation/SLEEP_TRIGGER.contract.py`**
+   - Trigger coordination from Hippocampus (CA3_CONSOLIDATION, hipp_consolidation)
+   - Entry threshold (>1000 unconsolidated episodic memories)
+   - Manual trigger API (k0ctl consolidate --now)
+   - Trigger event schema (infra.consolidation.trigger)
+
+4. **`k0/contracts/consolidation/NREM_PHASE_HANDLER.contract.py`**
+   - NREM Phase 1 handler (hippocampal replay, 100-150 memories/cycle)
+   - NREM Phase 2 handler (synaptic homeostasis, episodic-to-semantic, 50-100 patterns)
+   - Theta rhythm coordination (4-6 Hz NREM slow theta)
+   - Performance targets (<60s per job, <90min full cycle)
+
+5. **`k0/contracts/consolidation/REM_PHASE_HANDLER.contract.py`**
+   - REM phase handler (dream exploration, creative insights)
+   - Explorative dreaming (5-10 insights per cycle)
+   - Mental rehearsal (5-10 skills practiced)
+   - Reflection prompt generation (3-5 prompts per cycle)
+
+6. **`k0/contracts/consolidation/CONSOLIDATION_JOB_QUEUE.contract.py`**
+   - Priority queue (P0 Critical → P4 Background)
+   - Job types (Replay 10-20s, Transform 30-60s, Prune 5-10s, KG 15-30s, Dream 20-40s)
+   - Progress tracking via K0 Offsets (resumable operations)
+   - Resource limits (CPU nice +10, memory 256MB, ionice idle)
+
+7. **`k0/contracts/consolidation/CONSOLIDATION_EVENTS.contract.py`**
+   - Event schemas (8 event types)
+   - infra.consolidation.trigger, nrem_start/end, rem_start/end
+   - infra.consolidation.replay, transform, prune, insight, complete
+   - Event payloads (cognitive_trace_id, stats, memory counts)
+
+---
+
+#### **Issue 3.AA.2: Consolidation Process Contracts (9 files)**
+
+**Goal:** Define contracts for hippocampal replay, neocortical integration, synaptic homeostasis, and memory type handlers.
+
+**Files:**
+
+1. **`k0/contracts/consolidation/HIPPOCAMPAL_REPLAY.contract.py`**
+   - Pattern identification (top 30% memories by priority score)
+   - Replay execution (10x speedup, 50-100ms inter-node delay)
+   - CA3_RECURRENT association retrieval (5-10 associations per node)
+   - Importance weighting (emotional 2x, access frequency, recency, priority 5x)
+
+2. **`k0/contracts/consolidation/SYNAPTIC_STRENGTHENING.contract.py`**
+   - Hebbian weight update (Δw = η *activation_src* activation_dst)
+   - Learning rate (η=0.03, 3% weight increase per replay)
+   - LTP simulation (≥3 replays → +10% permanent boost)
+   - Weight saturation (asymptotic to 1.0)
+
+3. **`k0/contracts/consolidation/THETA_RHYTHM_COORDINATION.contract.py`**
+   - Theta oscillation generation (4-6 Hz NREM, 6-8 Hz REM)
+   - Phase tracking (0.0-2π, retrieval phase vs encoding phase)
+   - Theta-gated replay (wait for retrieval phase before replay)
+   - Integration with CA1_THETA (`ca1/theta_rhythm.py`)
+
+4. **`k0/contracts/consolidation/NEOCORTICAL_INTEGRATION.contract.py`**
+   - Episodic-to-semantic transformation (pattern extraction algorithm)
+   - Clustering by embedding similarity (threshold 0.85)
+   - Semantic pattern types (temporal patterns, location sequences, entity generalizations)
+   - Consolidation criteria (≥3 frequency, ≥0.70 confidence)
+
+5. **`k0/contracts/consolidation/SYNAPTIC_HOMEOSTASIS.contract.py`**
+   - Stale data detection (>90 days, access_count=0, emotional_salience<0.30)
+   - Connection pruning algorithm (weight threshold 0.10)
+   - Ebbinghaus forgetting policy (exponential decay, 30-day half-life)
+   - Storage optimization (compaction, rollups, compression LZ4, vacuum)
+
+6. **`k0/contracts/consolidation/EPISODIC_HANDLER.contract.py`**
+   - Episodic memory consolidation (replay priority scoring)
+   - Source: K0::st_sqlite[episodic_memories]
+   - Integration with CA3_CONSOLIDATION
+   - Archival policy (>90 days + stale → K0::st_sqlite[archived_memories])
+
+7. **`k0/contracts/consolidation/SEMANTIC_HANDLER.contract.py`**
+   - Semantic memory consolidation (pattern extraction from episodic clusters)
+   - Target: K0::st_sqlite[semantic_memories]
+   - Pattern types (habits, routines, preferences, generalizations)
+   - Schema evolution (concept updates, relationship inference)
+
+8. **`k0/contracts/consolidation/PROCEDURAL_HANDLER.contract.py`**
+   - Procedural memory consolidation (motor skill strengthening)
+   - Source: K0::st_sqlite[motor_programs], K0 P20 (Procedures/Habits)
+   - Mental rehearsal (offline skill practice)
+   - Skill improvement (5-10% execution speedup per rehearsal)
+
+9. **`k0/contracts/consolidation/AFFECT_MODULATION.contract.py`**
+   - Emotional memory prioritization (affect_memory_mod integration)
+   - Emotional salience calculation (valence extremity + arousal + novelty)
+   - 2x replay cycles for emotional memories (salience ≥0.70)
+   - Integration with ADR-0069 (K0 P08 Affect Modulation)
+
+---
+
+#### **Issue 3.AA.3: Knowledge Graph & Reflection Contracts (8 files)**
+
+**Goal:** Define contracts for KG consolidation, dream exploration, and reflection prompt generation.
+
+**Files:**
+
+1. **`k0/contracts/consolidation/KG_ENTITY_EXTRACTION.contract.py`**
+   - Entity types (PERSON, PLACE, ORGANIZATION, CONCEPT, EVENT, TEMPORAL, OBJECT)
+   - Extraction algorithm (NER + noun phrase extraction + clustering)
+   - Canonical entity creation (most frequent name, majority type vote, centroid embedding)
+   - Storage: K0::st_kg[nodes]
+
+2. **`k0/contracts/consolidation/KG_RELATIONSHIP_INFERENCE.contract.py`**
+   - Relationship types (CAUSAL, TEMPORAL, ASSOCIATIVE, HIERARCHICAL, POSSESSIVE, SOCIAL)
+   - Co-occurrence detection (≥3 co-occurrences, temporal proximity <5min)
+   - Causal classification (A precedes B in ≥70% contexts)
+   - Storage: K0::st_kg[edges]
+
+3. **`k0/contracts/consolidation/KG_SCHEMA_EVOLUTION.contract.py`**
+   - Schema change detection (new entity types ≥10 instances, new relations ≥5 instances)
+   - Version control (K0::st_kg[schema_versions])
+   - Concept merge/split heuristics (similarity ≥0.90 merge, high variance split)
+   - Migration support (rollback on inconsistencies)
+
+4. **`k0/contracts/consolidation/KG_TEMPORAL_REASONING.contract.py`**
+   - Temporal snapshot storage (K0::st_kg[temporal])
+   - Historical queries (query entity state at specific timestamp)
+   - Temporal range queries (track concept evolution over time)
+   - Retention policy (365 days)
+
+5. **`k0/contracts/consolidation/DREAM_EXPLORATION.contract.py`**
+   - Explorative dreaming (random walk through K0::st_vector, 50 steps)
+   - Temperature-based sampling (0.70 balanced exploration/exploitation)
+   - Novel association detection (no edge in KG, distance ≥0.50, not in same episode)
+   - Insight generation (5-10 insights per REM cycle)
+
+6. **`k0/contracts/consolidation/COUNTERFACTUAL_SIMULATION.contract.py`**
+   - Decision point identification (branching points in episodic sequences)
+   - Alternative sequence generation (mutate one decision, simulate outcome)
+   - Causal graph traversal (KG_CAUSAL_GRAPH for outcome prediction)
+   - Counterfactual learning (3-5 scenarios per REM cycle, update K1 Learning Loop)
+
+7. **`k0/contracts/consolidation/MENTAL_REHEARSAL.contract.py`**
+   - Skill selection (recency, frequency, error rate, importance)
+   - Motor program simulation (K0::st_sqlite[motor_programs])
+   - Procedural memory strengthening (rehearsal_count++, execution_speed -5%, error_rate -10%)
+   - Rehearsal session schema (skill, duration, error_count)
+
+8. **`k0/contracts/consolidation/REFLECTION_PROMPTS.contract.py`**
+   - Prompt types (MEMORY_GAP, UNRESOLVED_THREAD, GOAL_PROGRESS, EMOTIONAL_TREND, HABIT_INSIGHT)
+   - Memory gap detection (expected events not logged, time periods with no memories)
+   - Goal progress tracking (calculate progress %, generate encouragement prompts)
+   - Reflection delivery (K0 SSE event: infra.consolidation.reflection_prompt)
+
+---
+
+**Epic 3.AA Total Deliverables:** 24 contract files (7 sleep coordination + 9 consolidation processes + 8 KG/reflection)
+
+**Epic 3.AA Success Criteria:**
+
+- [ ] Sleep coordination contracts complete (scheduler, state machine, triggers, NREM/REM handlers, job queue, events)
+- [ ] Consolidation process contracts complete (hippocampal replay, synaptic strengthening, theta rhythm, neocortical integration, synaptic homeostasis, 3 memory type handlers, affect modulation)
+- [ ] Knowledge graph & reflection contracts complete (entity extraction, relationship inference, schema evolution, temporal reasoning, dream exploration, counterfactual simulation, mental rehearsal, reflection prompts)
+- [ ] Performance targets specified (<60s per job, <90min full cycle, ≥500 memories/hour)
+- [ ] Hippocampus integration specified (CA3_CONSOLIDATION, hipp_consolidation, CA1_BRIDGE, CA1_THETA, affect_memory_mod)
+- [ ] Storage integration specified (K0::st_sqlite episodic/semantic/procedural/archived, K0::st_kg nodes/edges/temporal, K0::st_vector insights)
+- [ ] Privacy bands enforced (RED memories never leave device during consolidation)
+- [ ] All contracts reference source ADRs (ADR-0084, ADR-0084a-d, ADR-0069, ADR-0032, ADR-0059)
+
+---
+
+## Epic 3.AB: Embodied Awareness & Device Presence Contracts (NEW - 2025-01-22)
+
+**Parent ADRs:**
+
+- ADR-0085: Embodied Awareness & Device Presence (main architecture)
+- ADR-0085a: Device Presence Detection & Location Awareness
+- ADR-0085b: BLE Proximity & Active Session Tracking
+- ADR-0085c: Cross-Device Context Sharing & Presence-Aware Features
+
+**Total Contract Files:** 20
+
+**Description:** Contract files for cross-device presence sensing, location tracking, BLE proximity, active session detection, motion sensor integration, power state monitoring, and presence-aware features (notification routing, smart handoff, preference learning).
+
+---
+
+### **Issues for Epic 3.AB:**
+
+#### **Issue 3.AB.1: Device Presence & Location Tracking Contracts (7 files)**
+
+**Contracts:**
+
+1. **Device Heartbeat Protocol Contract (`k1/contracts/presence/device_heartbeat_protocol.yaml`)**
+   - Protocol specification: 30-second heartbeat interval, mDNS + K0 P07 broadcast
+   - Metadata schema: device_id, device_type, device_name, platform, capabilities, ip, port, last_seen
+   - Offline detection: 90-second timeout threshold, offline event triggering
+   - Source: ADR-0085a Section "Device Heartbeat Protocol"
+
+2. **Device Registry Contract (`k1/contracts/presence/device_registry.yaml`)**
+   - Online/offline state management: device status tracking (ONLINE/OFFLINE)
+   - Device switch detection: confidence scoring (BLE proximity + time gap + location match)
+   - Device list API: get_online_devices(), get_all_devices(), get_device_by_id()
+   - Source: ADR-0085a Section "DeviceRegistry"
+
+3. **GPS Location Tracker Contract (`k1/contracts/presence/gps_location_tracker.yaml`)**
+   - CoreLocation (iOS) / FusedLocationProvider (Android) API integration
+   - Accuracy targets: <10m for GPS, RED privacy band classification
+   - Update frequency: Every 30 seconds (balance accuracy + battery)
+   - Source: ADR-0085a Section "LocationTracker"
+
+4. **WiFi Triangulation Contract (`k1/contracts/presence/wifi_triangulation.yaml`)**
+   - Google Geolocation API / Mozilla Location Service integration
+   - BSSID scanning and submission for location lookup
+   - Accuracy targets: <50m for WiFi, AMBER privacy band classification
+   - Source: ADR-0085a Section "LocationTracker"
+
+5. **IP Geolocation Fallback Contract (`k1/contracts/presence/ip_geolocation.yaml`)**
+   - MaxMind GeoIP2 / ipapi.co integration for city-level location
+   - Accuracy targets: ~5km for IP, GREEN privacy band classification
+   - Three-tier fallback: GPS → WiFi → IP
+   - Source: ADR-0085a Section "LocationTracker"
+
+6. **Coarse Location Classifier Contract (`k1/contracts/presence/coarse_location_classifier.yaml`)**
+   - HOME/WORK/TRAVELING/UNKNOWN categorization via SSID matching or GPS proximity
+   - Privacy-safe classification (no exact coordinates stored)
+   - Source: ADR-0085a Section "CoarseLocationClassifier"
+
+7. **Location Privacy Transformer Contract (`k1/contracts/presence/location_privacy_transformer.yaml`)**
+   - Privacy band enforcement: RED GPS → GREEN city-level degradation before sync
+   - AMBER WiFi SSID/BSSID hashing before sync
+   - GREEN IP geolocation syncs freely
+   - Source: ADR-0085a Section "apply_location_privacy()"
+
+---
+
+#### **Issue 3.AB.2: BLE Proximity & Active Session Contracts (6 files)**
+
+**Contracts:**
+
+1. **BLE Beacon Protocol Contract (`k1/contracts/presence/ble_beacon_protocol.yaml`)**
+   - Family-scoped UUID generation: `familyos-<family_hash>-<device_hash>`
+   - iBeacon compatibility: Major (device type 1-5), Minor (battery level 0-100), TX Power (-59 dBm)
+   - Advertising: Continuous broadcast, 5-second scan intervals (3-second duration)
+   - Source: ADR-0085b Section "BLE Beacon Protocol"
+
+2. **BLE Proximity Estimator Contract (`k1/contracts/presence/ble_proximity_estimator.yaml`)**
+   - RSSI-based distance estimation: distance = 10^((TX_POWER - RSSI) / (10 * N))
+   - Proximity zones: NEAR (RSSI > -65 dBm <2m), MEDIUM (-80 to -65 dBm 2-10m), FAR (-95 to -80 dBm >10m)
+   - Path loss exponent: N=3.0 for indoor environments
+   - Source: ADR-0085b Section "RSSI-Based Distance Estimation"
+
+3. **Active Session Monitor Contract (`k1/contracts/presence/active_session_monitor.yaml`)**
+   - Active criteria: Screen ON AND Recent input (<30s) AND Foreground app active
+   - Platform APIs: UIScreen (iOS), PowerManager (Android), IODisplay (macOS), xset (Linux)
+   - Monitoring frequency: 1 Hz (1-second interval)
+   - Source: ADR-0085b Section "Active Session Detection"
+
+4. **Motion Sensor Integrator Contract (`k1/contracts/presence/motion_sensor_integrator.yaml`)**
+   - Device context inference: STATIONARY, IN_POCKET, BEING_HELD, IN_BAG, IN_VEHICLE, WALKING, RUNNING
+   - Sensor sampling: 10 Hz (accelerometer + gyroscope), 10-second buffer (100 samples)
+   - Context algorithms: Variance calculation, sustained acceleration, FFT periodicity detection
+   - Source: ADR-0085b Section "Motion Sensor Integrator"
+
+5. **Power State Monitor Contract (`k1/contracts/presence/power_state_monitor.yaml`)**
+   - Battery tracking: Level (0-100), charging status (CHARGING/DISCHARGING/FULL)
+   - Power modes: LOW_POWER (<20% discharging), NORMAL (20-80%), HIGH_PERFORMANCE (>80% or charging)
+   - Monitoring frequency: 60-second interval
+   - Source: ADR-0085b Section "Power State Monitor"
+
+6. **Device Capability Detector Contract (`k1/contracts/presence/device_capability_detector.yaml`)**
+   - Hardware capabilities: GPS, CAMERA, BLE, MICROPHONE, SPEAKER, ACCELEROMETER, GYROSCOPE
+   - Bitmask representation for efficient storage and transmission
+   - Source: ADR-0085b Section "Device Capability Detection"
+
+---
+
+#### **Issue 3.AB.3: Cross-Device Context Sharing Contracts (7 files)**
+
+**Contracts:**
+
+1. **Presence Context Syncer Contract (`k1/contracts/presence/presence_context_syncer.yaml`)**
+   - CRDT-based metadata exchange via K0 P07 (ADR-0050 extensions)
+   - Sync interval: 30 seconds (heartbeat-aligned)
+   - Metadata fields: device_id, online_status, last_seen, coarse_location, proximity_devices, active_session, motion_context, battery_level, charging_status, power_mode
+   - Storage key format: `presence:<device_id>` in K0 KV store
+   - Source: ADR-0085c Section "Presence Context Syncer"
+
+2. **Notification Coordinator Contract (`k1/contracts/presence/notification_coordinator.yaml`)**
+   - Routing rules: Single active device → send to active only; Multiple active → most recent; No active → all online
+   - Filtering criteria: active_session, motion_context (skip IN_POCKET/IN_BAG), power_mode (skip LOW_POWER)
+   - Suppression protocol: Send suppression signal to inactive devices, mark notification as seen on all devices
+   - Source: ADR-0085c Section "Notification Coordinator"
+
+3. **Smart Handoff Suggester Contract (`k1/contracts/presence/smart_handoff_suggester.yaml`)**
+   - Device switch detection: Previous active → New active, proximity check (BLE NEAR/MEDIUM), time gap <5 minutes
+   - Suggestion types: RESUME_CONVERSATION, CONTINUE_TASK, HANDOFF_MEDIA
+   - Session context fetching: Query K0 KV `session:active:<device_id>` for active context
+   - Source: ADR-0085c Section "Smart Handoff Suggester"
+
+4. **Device Preference Learner Contract (`k1/contracts/presence/device_preference_learner.yaml`)**
+   - Usage pattern tracking: device_id, task_type, location, time_of_day, response_length
+   - Learning window: 30-day sliding window
+   - Preference scoring: device usage / total usage per context (0.0-1.0 score)
+   - Prediction threshold: Minimum 0.6 confidence to recommend device
+   - Source: ADR-0085c Section "Device Preference Learner"
+
+5. **Presence Metadata Schema Contract (`k1/contracts/presence/presence_metadata_schema.fbs`)**
+   - FlatBuffers schema for PresenceMetadata struct
+   - Fields: device_id, online_status, last_seen, location (LocationData nested struct), proximity_devices (array), active_session, motion_context, battery_level, charging_status, power_mode
+   - Nested structs: LocationData (lat, lon, accuracy, band, coarse_location)
+   - Source: ADR-0085c Section "Presence Context Syncer"
+
+6. **SessionState Device Context Extension Contract (`k1/contracts/session_state/device_context_extension.yaml`)**
+   - Extension to ADR-0017e (Multimodal Section) for device context storage
+   - DeviceContext fields: device_id, device_type, online_status, last_seen, active_session, motion_context, coarse_location, proximity_devices, battery_level, charging_status, power_mode
+   - Storage: `device_context:<device_id>` key in SessionState Multimodal Section
+   - Eviction policy: Never evicted (low priority, always keep)
+   - Source: ADR-0017e Extensions Section
+
+7. **K0 P07 Presence Extensions Contract (`k1/contracts/k0_bridge/p07_presence_extensions.yaml`)**
+   - Extension to ADR-0050 (K0 P07 CRDT sync) for presence metadata broadcasting
+   - Heartbeat interval: 30 seconds (aligned with device presence heartbeat)
+   - Privacy transforms: RED location → GREEN degradation, AMBER WiFi → hashing
+   - Sync protocol: Write `presence:<device_id>` key → K0 P07 detects → broadcast CRDT update → remote devices merge
+   - Source: ADR-0050 Extensions Section
+
+---
+
+**Epic 3.AB Total Deliverables:** 20 contract files (7 presence & location + 6 BLE & active session + 7 cross-device context)
+
+**Epic 3.AB Success Criteria:**
+
+- [ ] Device presence & location contracts complete (heartbeat protocol, device registry, GPS/WiFi/IP location, coarse classifier, privacy transformer)
+- [ ] BLE proximity & active session contracts complete (beacon protocol, proximity estimator, active session monitor, motion sensor integrator, power state monitor, capability detector)
+- [ ] Cross-device context contracts complete (presence syncer, notification coordinator, handoff suggester, preference learner, metadata schema, SessionState extension, K0 P07 extension)
+- [ ] Performance targets specified (30s heartbeat, 5s BLE scan, 1s active session check, 10 Hz motion sensors, 60s power monitoring)
+- [ ] Battery impact specified (~1.1% per hour total: BLE advertising 0.5%, scanning 0.3%, motion sensors 0.2%, active session 0.1%)
+- [ ] Privacy enforcement complete (RED GPS → GREEN city-level, AMBER WiFi → hashing, GREEN IP → as-is)
+- [ ] K0 P07 integration specified (presence metadata sync via CRDT, 30s broadcast interval)
+- [ ] ADR-0050 extensions documented (presence metadata fields, sync protocol, storage keys)
+- [ ] ADR-0017e extensions documented (device context fields in SessionState Multimodal Section)
+- [ ] All contracts reference source ADRs (ADR-0085, ADR-0085a-c, ADR-0050, ADR-0017e, ADR-0032)
 
 ---
 

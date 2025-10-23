@@ -1,0 +1,324 @@
+modality_transition_schema:
+  name: "ModalityTransition"
+  purpose: "Define transition events when users switch between input modalities"
+  version: "1.0"
+  adr_source: "ADR-0004f"
+  module: "k1/l1_input/streams/stream_switch/"
+  capability: "#1 Cross-Modal Continuity"
+
+  description: |
+    Modality transitions occur when a user switches input methods mid-conversation.
+    Examples:
+    - Voice → Text: User starts speaking, then switches to typing
+    - Text → Voice: User types, then activates voice input
+    - Voice → Image: User asks about something, then shares a photo
+
+    The system must preserve context across these transitions to maintain
+    conversation continuity.
+
+  transition_event_schema:
+    event_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Unique transition event identifier"
+
+    session_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Session identifier"
+
+    from_modality:
+      type: "enum"
+      values: ["VOICE", "TEXT", "IMAGE", "TOUCH", "LOCATION", "NONE"]
+      required: true
+      description: "Previous modality (NONE for first input)"
+
+    to_modality:
+      type: "enum"
+      values: ["VOICE", "TEXT", "IMAGE", "TOUCH", "LOCATION"]
+      required: true
+      description: "New modality"
+
+    from_input_id:
+      type: "string"
+      format: "uuid"
+      required: false
+      description: "Last input ID from previous modality"
+
+    to_input_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "First input ID in new modality"
+
+    transition_time_ms:
+      type: "integer"
+      format: "int64"
+      required: true
+      description: "Unix timestamp of transition"
+
+    gap_duration_ms:
+      type: "integer"
+      required: true
+      description: "Time between last input and new input"
+
+    transition_type:
+      type: "enum"
+      values: ["EXPLICIT", "IMPLICIT", "TIMEOUT"]
+      required: true
+      description: |
+        EXPLICIT: User explicitly switched (e.g., clicked voice button)
+        IMPLICIT: Detected from input pattern (e.g., user just started typing)
+        TIMEOUT: Previous modality timed out
+
+    context_preserved:
+      type: "boolean"
+      required: true
+      description: "Whether context was successfully preserved across transition"
+
+    context_summary:
+      type: "object"
+      required: false
+      description: "Summary of context carried forward"
+      fields:
+        - name: "entities_preserved"
+          type: "array"
+          items: "string"
+          description: "Entity references maintained"
+        - name: "intent_carried"
+          type: "boolean"
+          description: "Whether user intent was maintained"
+        - name: "conversation_continuity_score"
+          type: "float"
+          range: [0.0, 1.0]
+          description: "0.0 = context lost, 1.0 = perfect continuity"
+
+    cognitive_trace_id:
+      type: "string"
+      format: "uuid"
+      required: true
+      description: "Tracing identifier"
+
+  common_transitions:
+    voice_to_text:
+      name: "Voice → Text"
+      from: "VOICE"
+      to: "TEXT"
+      typical_gap_ms: 1000
+      max_gap_ms: 5000
+      use_cases:
+        - "User switches from speaking to typing in noisy environment"
+        - "User wants to provide detailed information (address, URL)"
+        - "Privacy concern (others nearby)"
+      context_preservation:
+        - "Last spoken entities preserved"
+        - "Current intent maintained"
+        - "VAD state cleared"
+
+    text_to_voice:
+      name: "Text → Voice"
+      from: "TEXT"
+      to: "VOICE"
+      typical_gap_ms: 500
+      max_gap_ms: 3000
+      use_cases:
+        - "User prefers voice for faster input"
+        - "User is hands-free (driving, cooking)"
+        - "Complex query easier to speak"
+      context_preservation:
+        - "Typed entities preserved"
+        - "Partial text preserved in working memory"
+        - "Keyboard dismissed"
+
+    voice_to_image:
+      name: "Voice → Image"
+      from: "VOICE"
+      to: "IMAGE"
+      typical_gap_ms: 2000
+      max_gap_ms: 10000
+      use_cases:
+        - "User describes something, then shares photo"
+        - "'Show you what I mean' → camera"
+        - "'Here's the receipt' → photo upload"
+      context_preservation:
+        - "Last spoken entities preserved"
+        - "Image linked to voice context"
+        - "Intent enriched with visual data"
+
+    text_to_image:
+      name: "Text → Image"
+      from: "TEXT"
+      to: "IMAGE"
+      typical_gap_ms: 3000
+      max_gap_ms: 15000
+      use_cases:
+        - "User types description, then attaches photo"
+        - "'Here's what it looks like' → camera"
+      context_preservation:
+        - "Typed text preserved"
+        - "Image annotated with text context"
+
+    image_to_voice:
+      name: "Image → Voice"
+      from: "IMAGE"
+      to: "VOICE"
+      typical_gap_ms: 1000
+      max_gap_ms: 5000
+      use_cases:
+        - "User shares photo, then explains via voice"
+        - "'What do you think about this?' (photo) → voice elaboration"
+      context_preservation:
+        - "Image reference maintained"
+        - "Voice linked to image entities"
+
+    image_to_text:
+      name: "Image → Text"
+      from: "IMAGE"
+      to: "TEXT"
+      typical_gap_ms: 2000
+      max_gap_ms: 10000
+      use_cases:
+        - "User shares photo, then types details"
+        - "Image + text caption"
+      context_preservation:
+        - "Image reference maintained"
+        - "Text annotates image"
+
+  transition_detection:
+    algorithm: "Gap-based with modality type change"
+    detection_latency_ms: 5
+    rules:
+      - name: "Modality change"
+        condition: "current_modality != previous_modality"
+        action: "Create transition event"
+
+      - name: "Gap threshold"
+        condition: "gap_duration_ms > modality_specific_threshold"
+        action: "Mark as explicit transition"
+
+      - name: "Rapid switch"
+        condition: "gap_duration_ms < 100ms"
+        action: "Mark as implicit transition"
+
+      - name: "Timeout"
+        condition: "gap_duration_ms > 30000ms"
+        action: "Mark as timeout transition, consider context reset"
+
+  context_preservation_rules:
+    entity_linking:
+      description: "Link entities across modalities"
+      rules:
+        - "Voice 'that' → last IMAGE/TEXT entity"
+        - "Text 'this' → last VOICE/IMAGE entity"
+        - "Image + voice 'here' → spatial reference"
+      max_lookback_inputs: 5
+      max_lookback_time_ms: 60000
+
+    intent_continuity:
+      description: "Maintain user intent across transitions"
+      rules:
+        - "Intent persists if gap < 5s"
+        - "Intent resets if gap > 30s"
+        - "Intent enriched if new modality adds detail"
+      intent_decay_function: "exponential"
+      half_life_ms: 10000
+
+    working_memory_sync:
+      description: "Sync working memory on transition"
+      rules:
+        - "Copy relevant entities to new modality context"
+        - "Preserve last 3 inputs regardless of modality"
+        - "Update SessionState beliefs section"
+
+  performance:
+    detection_latency_ms: 5
+    context_sync_latency_ms: 10
+    total_transition_overhead_ms: 15
+    p95_target: "<5ms detection + <10ms sync = <15ms total"
+
+  observability:
+    metrics:
+      - name: "modality_transitions_total"
+        type: "counter"
+        labels: ["from_modality", "to_modality", "transition_type"]
+        description: "Total modality transitions by type"
+
+      - name: "modality_transition_gap_ms"
+        type: "histogram"
+        labels: ["from_modality", "to_modality"]
+        buckets: [100, 500, 1000, 2000, 5000, 10000, 30000]
+        description: "Time gap between modality transitions"
+
+      - name: "context_preservation_success_rate"
+        type: "gauge"
+        labels: ["transition_type"]
+        description: "% of transitions with successful context preservation"
+
+      - name: "conversation_continuity_score"
+        type: "histogram"
+        labels: ["from_modality", "to_modality"]
+        buckets: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+        description: "Conversation continuity score distribution"
+
+    tracing:
+      span_name: "stream_switch.modality_transition"
+      attributes:
+        - "from_modality"
+        - "to_modality"
+        - "transition_type"
+        - "gap_duration_ms"
+        - "context_preserved"
+
+  usage_examples:
+    voice_to_text_transition: |
+      {
+        "event_id": "evt_trans_001",
+        "session_id": "sess_abc123",
+        "from_modality": "VOICE",
+        "to_modality": "TEXT",
+        "from_input_id": "inp_voice_001",
+        "to_input_id": "inp_text_002",
+        "transition_time_ms": 1729641603500,
+        "gap_duration_ms": 3500,
+        "transition_type": "IMPLICIT",
+        "context_preserved": true,
+        "context_summary": {
+          "entities_preserved": ["recipe", "dinner"],
+          "intent_carried": true,
+          "conversation_continuity_score": 0.92
+        },
+        "cognitive_trace_id": "trace_xyz789"
+      }
+
+    image_followup_transition: |
+      {
+        "event_id": "evt_trans_002",
+        "session_id": "sess_abc123",
+        "from_modality": "TEXT",
+        "to_modality": "IMAGE",
+        "from_input_id": "inp_text_002",
+        "to_input_id": "inp_image_003",
+        "transition_time_ms": 1729641610000,
+        "gap_duration_ms": 6500,
+        "transition_type": "EXPLICIT",
+        "context_preserved": true,
+        "context_summary": {
+          "entities_preserved": ["recipe", "show", "again"],
+          "intent_carried": true,
+          "conversation_continuity_score": 0.88
+        },
+        "cognitive_trace_id": "trace_xyz789"
+      }
+
+  related_contracts:
+    - "unified_input.yml"
+    - "context_preserver.yml"
+    - "transition_manager.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0004f"
+      author: "Contract Development Team"

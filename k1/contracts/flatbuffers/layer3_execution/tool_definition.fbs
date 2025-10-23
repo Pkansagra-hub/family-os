@@ -1,0 +1,66 @@
+/// Tool Definition Schema (TDEF)
+///
+/// Purpose: Tool definition for MCP tool registry with parameter schemas,
+///          execution constraints, and server metadata.
+///
+/// Usage Pattern:
+///   1. Tool registry stores ToolDefinition for each available tool
+///   2. Validate parameters_schema before tool execution
+///   3. Enforce timeout_ms and max_retries during execution
+///   4. Track cost_estimate for budget management
+///
+/// Performance Specs:
+///   - Typical Size: 1-4KB (depends on schema complexity)
+///   - Serialize: 0.45ms (P95)
+///   - Deserialize: 0.062ms (P95, zero-copy)
+///   - Memory: ~4KB per tool definition
+///
+/// Related Schemas:
+///   - ToolCallRequest (TCLR): References tool_id
+///   - MCPToolDiscovery (MCTD): Discovers available tools
+///
+/// Research Foundation:
+///   - Model Context Protocol (Anthropic 2024)
+///   - JSON Schema validation (IETF Draft)
+///
+/// Version: 1.0
+/// Layer: 3 (Execution & Tools)
+/// Module: k1.tool_runner
+
+namespace k1.tool_runner;
+
+/// Tool definition with MCP tool registry metadata
+table ToolDefinition {
+  /// Unique tool identifier (e.g., "web_search", "calculator")
+  tool_id: string (required);
+
+  /// Human-readable tool name
+  tool_name: string (required);
+
+  /// Tool description for LLM reasoning
+  description: string;
+
+  /// JSON Schema for tool parameters (validation)
+  parameters_schema: string (required);
+
+  /// JSON Schema for return values (type checking)
+  return_schema: string (required);
+
+  /// Execution timeout in milliseconds (default: 3000ms)
+  timeout_ms: uint32 = 3000;
+
+  /// Maximum retry attempts on transient failures (default: 2)
+  max_retries: uint8 = 2;
+
+  /// Cost estimate per invocation (arbitrary units, default: 0.0)
+  cost_estimate: float32 = 0.0;
+
+  /// MCP server identifier hosting this tool
+  server_id: string;
+
+  /// MCP server version string
+  server_version: string;
+}
+
+root_type ToolDefinition;
+file_identifier "TDEF";

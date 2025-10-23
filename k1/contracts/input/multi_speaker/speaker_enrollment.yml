@@ -1,0 +1,493 @@
+speaker_enrollment:
+  name: "Speaker Enrollment"
+  purpose: "Enrollment process for family members to enable speaker identification"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/speaker_diarization.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Speaker enrollment is the process of registering family members' voice and
+    face biometrics to enable personalized speaker identification.
+
+    Enrollment workflow:
+    1. User provides name (Dad, Mom, Child1, etc.)
+    2. System collects voice samples (5 samples × 3s each)
+    3. Optionally collects face images (5 angles)
+    4. Extracts and stores voice/face embeddings (encrypted)
+    5. Assigns unique speaker_id (UUID)
+
+    Privacy considerations:
+    - Biometric data encrypted at rest (AES-256)
+    - User consent required for face enrollment
+    - RED_BAND classification
+    - User can delete enrollment at any time
+
+  schema:
+    type: "object"
+    required: ["enrollment_id", "speaker_id", "speaker_name", "enrollment_status", "timestamp_ms"]
+    properties:
+      enrollment_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique enrollment session identifier"
+        examples: ["650e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique speaker identifier (persistent)"
+        examples: ["550e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_name:
+        type: "string"
+        pattern: "^[A-Za-z0-9_]+$"
+        description: "Family member name"
+        examples: ["Dad", "Mom", "Emma", "Guest"]
+        max_length: 50
+
+      enrollment_status:
+        type: "string"
+        enum: ["PENDING", "IN_PROGRESS", "COMPLETED", "FAILED", "CANCELLED"]
+        description: "Current enrollment status"
+
+      enrollment_type:
+        type: "string"
+        enum: ["VOICE_ONLY", "FACE_ONLY", "MULTI_MODAL"]
+        description: "Type of enrollment"
+        default: "VOICE_ONLY"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Enrollment timestamp (milliseconds)"
+
+      voice_samples:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            sample_id:
+              type: "integer"
+              minimum: 1
+              maximum: 5
+
+            audio_data:
+              type: "string"
+              format: "base64"
+              description: "Audio sample (3s, 16kHz PCM, base64 encoded)"
+
+            quality_score:
+              type: "number"
+              minimum: 0.0
+              maximum: 1.0
+              description: "Audio quality score"
+
+            snr_db:
+              type: "number"
+              description: "Signal-to-noise ratio (dB)"
+
+            duration_seconds:
+              type: "number"
+              description: "Actual sample duration"
+
+            timestamp_ms:
+              type: "integer"
+              format: "int64"
+        minItems: 5
+        maxItems: 5
+        description: "5 voice samples for enrollment"
+        optional: true
+
+      face_images:
+        type: "array"
+        items:
+          type: "object"
+          properties:
+            image_id:
+              type: "integer"
+              minimum: 1
+              maximum: 5
+
+            image_data:
+              type: "string"
+              format: "base64"
+              description: "Face image (JPEG, base64 encoded)"
+
+            angle:
+              type: "string"
+              enum: ["FRONT", "LEFT_15", "RIGHT_15", "SMILE", "NEUTRAL"]
+              description: "Face angle/expression"
+
+            quality_score:
+              type: "number"
+              minimum: 0.0
+              maximum: 1.0
+              description: "Image quality score"
+
+            lighting_lux:
+              type: "number"
+              description: "Lighting level (lux)"
+
+            timestamp_ms:
+              type: "integer"
+              format: "int64"
+        minItems: 5
+        maxItems: 5
+        description: "5 face images for enrollment"
+        optional: true
+
+      voice_embedding:
+        type: "array"
+        items:
+          type: "number"
+          format: "float32"
+        minItems: 192
+        maxItems: 192
+        description: "Mean voice embedding (192-dim d-vector)"
+        optional: true
+
+      face_embedding:
+        type: "array"
+        items:
+          type: "number"
+          format: "float32"
+        minItems: 512
+        maxItems: 512
+        description: "Mean face embedding (512-dim)"
+        optional: true
+
+      consent_provided:
+        type: "object"
+        properties:
+          voice_consent:
+            type: "boolean"
+            description: "User consented to voice enrollment"
+
+          face_consent:
+            type: "boolean"
+            description: "User consented to face enrollment"
+
+          data_storage_consent:
+            type: "boolean"
+            description: "User consented to biometric data storage"
+
+          consent_timestamp_ms:
+            type: "integer"
+            format: "int64"
+
+  enrollment_workflow:
+    step_1_registration:
+      name: "User Registration"
+      description: "Collect basic user information"
+
+      inputs:
+        speaker_name:
+          prompt: "What is your name? (e.g., Dad, Mom, Emma)"
+          validation: "^[A-Za-z0-9_]+$"
+          max_length: 50
+
+        relationship:
+          prompt: "What is your relationship? (e.g., Parent, Child, Guest)"
+          optional: true
+          values: ["Parent", "Child", "Grandparent", "Guest", "Other"]
+
+        age_range:
+          prompt: "Age range (for content filtering)"
+          optional: true
+          values: ["Child (0-12)", "Teen (13-17)", "Adult (18+)"]
+
+      outputs:
+        - "enrollment_id (UUID)"
+        - "speaker_id (UUID)"
+        - "speaker_name"
+
+      duration_seconds: 30
+
+    step_2_consent:
+      name: "Consent Collection"
+      description: "Obtain user consent for biometric data collection"
+
+      consent_prompts:
+        voice_consent:
+          text: "We will collect voice samples to recognize you. Do you consent?"
+          required: true
+
+        face_consent:
+          text: "We can also use face recognition for better accuracy. Do you consent?"
+          required: false
+          note: "Optional, only if user wants face enrollment"
+
+        data_storage_consent:
+          text: "Your biometric data will be encrypted and stored securely. You can delete it at any time. Do you consent?"
+          required: true
+
+      compliance:
+        - "GDPR Article 9 (biometric data consent)"
+        - "Illinois BIPA (informed consent + disclosure)"
+        - "CCPA (right to delete)"
+
+      duration_seconds: 60
+
+    step_3_voice_sampling:
+      name: "Voice Sample Collection"
+      description: "Collect 5 voice samples (3s each) for voice enrollment"
+
+      sample_prompts:
+        sample_1:
+          text: "Please say: 'Hello, my name is [name]'"
+          duration_seconds: 3
+          purpose: "Self-introduction"
+
+        sample_2:
+          text: "Please say: 'The quick brown fox jumps over the lazy dog'"
+          duration_seconds: 3
+          purpose: "Phonetic coverage"
+
+        sample_3:
+          text: "Please count from 1 to 10"
+          duration_seconds: 3
+          purpose: "Numeric pronunciation"
+
+        sample_4:
+          text: "Please say: 'Today is a beautiful day'"
+          duration_seconds: 3
+          purpose: "Natural speech"
+
+        sample_5:
+          text: "Please say: 'I love using this smart home assistant'"
+          duration_seconds: 3
+          purpose: "Domain-specific vocabulary"
+
+      quality_checks:
+        snr_threshold_db: 15
+        clarity_threshold: 0.8
+        duration_tolerance_seconds: 0.5
+
+        retry_policy:
+          max_retries_per_sample: 3
+          retry_reason: "Low quality (SNR <15dB or clarity <0.8)"
+
+      duration_seconds: 120
+
+    step_4_face_sampling:
+      name: "Face Image Collection"
+      description: "Collect 5 face images from different angles (optional)"
+
+      image_prompts:
+        image_1:
+          text: "Please look directly at the camera"
+          angle: "FRONT"
+          purpose: "Front-facing reference"
+
+        image_2:
+          text: "Please turn your head slightly to the left"
+          angle: "LEFT_15"
+          purpose: "Left profile"
+
+        image_3:
+          text: "Please turn your head slightly to the right"
+          angle: "RIGHT_15"
+          purpose: "Right profile"
+
+        image_4:
+          text: "Please smile naturally"
+          angle: "SMILE"
+          purpose: "Facial expression variation"
+
+        image_5:
+          text: "Please keep a neutral expression"
+          angle: "NEUTRAL"
+          purpose: "Baseline expression"
+
+      quality_checks:
+        lighting_threshold_lux: 50
+        face_detection_confidence: 0.9
+        image_resolution_min: "640x480"
+
+        retry_policy:
+          max_retries_per_image: 3
+          retry_reason: "Low quality (lighting <50 lux or face not detected)"
+
+      duration_seconds: 90
+      note: "Only if face_consent == true"
+
+    step_5_embedding_extraction:
+      name: "Embedding Extraction & Averaging"
+      description: "Extract embeddings from samples and compute mean"
+
+      voice_processing:
+        model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+
+        steps:
+          - "Extract 192-dim d-vector from each of 5 voice samples"
+          - "Verify embedding quality (consistency check)"
+          - "Compute mean embedding: mean = sum(embeddings) / 5"
+          - "L2-normalize to unit sphere"
+
+        duration_seconds: 10
+
+      face_processing:
+        model: "FaceNet-512"
+
+        steps:
+          - "Detect and align faces in each of 5 images"
+          - "Extract 512-dim face embedding from each image"
+          - "Verify embedding quality (consistency check)"
+          - "Compute mean embedding: mean = sum(embeddings) / 5"
+          - "L2-normalize to unit sphere"
+
+        duration_seconds: 15
+        note: "Only if face images collected"
+
+      quality_validation:
+        voice_embedding_variance_threshold: 0.2
+        face_embedding_variance_threshold: 0.15
+        action: "If variance too high, request re-enrollment"
+
+    step_6_storage:
+      name: "Enrollment Storage"
+      description: "Store speaker data in database (encrypted)"
+
+      database_schema:
+        table: "speaker_enrollments"
+        columns:
+          - "speaker_id (UUID, PRIMARY KEY)"
+          - "speaker_name (TEXT)"
+          - "voice_embedding (BLOB, AES-256 encrypted)"
+          - "face_embedding (BLOB, AES-256 encrypted, nullable)"
+          - "enrollment_timestamp_ms (INTEGER)"
+          - "consent_record (JSON)"
+
+      encryption:
+        algorithm: "AES-256-GCM"
+        key_derivation: "PBKDF2 (100k iterations)"
+        key_storage: "OS keychain (Windows Credential Manager, macOS Keychain)"
+
+      duration_seconds: 2
+
+    step_7_confirmation:
+      name: "Enrollment Confirmation"
+      description: "Confirm enrollment success to user"
+
+      output:
+        message: "Enrollment complete! We can now recognize you by voice (and face)."
+        speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+        speaker_name: "Dad"
+        enrollment_type: "MULTI_MODAL"
+
+      test_identification:
+        prompt: "Let's test it. Please say: 'Hello, this is [name]'"
+        action: "Run speaker identification and verify confidence >0.75"
+        success: "Great! Identification working correctly."
+        failure: "Let's try re-enrolling. There may have been an issue."
+
+      duration_seconds: 30
+
+  enrollment_requirements:
+    voice_enrollment:
+      min_samples: 5
+      sample_duration_seconds: 3
+      total_audio_seconds: 15
+      quality_threshold: 0.8
+      snr_threshold_db: 15
+
+    face_enrollment:
+      min_images: 5
+      image_angles: ["FRONT", "LEFT_15", "RIGHT_15", "SMILE", "NEUTRAL"]
+      quality_threshold: 0.9
+      lighting_threshold_lux: 50
+      consent_required: true
+
+  performance:
+    total_enrollment_duration_seconds:
+      voice_only: 180
+      voice_and_face: 270
+      note: "Includes user interaction time"
+
+    embedding_extraction_latency_ms:
+      voice_single_sample: 50
+      face_single_image: 100
+
+    storage_latency_ms: 50
+
+  observability:
+    metrics:
+      - name: "speaker_enrollments_total"
+        type: "counter"
+        labels: ["enrollment_type", "status"]
+        description: "Total speaker enrollments"
+
+      - name: "speaker_enrollment_duration_seconds"
+        type: "histogram"
+        labels: ["enrollment_type"]
+        buckets: [60, 120, 180, 240, 300]
+        description: "Enrollment duration"
+
+      - name: "speaker_enrollment_retries_total"
+        type: "counter"
+        labels: ["step", "reason"]
+        description: "Enrollment retries (low quality samples)"
+
+      - name: "enrolled_speakers_total"
+        type: "gauge"
+        description: "Total enrolled speakers"
+
+    events:
+      - name: "SpeakerEnrollmentStarted"
+        trigger: "User starts enrollment"
+        payload: "enrollment_id, speaker_name, enrollment_type"
+
+      - name: "SpeakerEnrollmentCompleted"
+        trigger: "Enrollment successful"
+        payload: "speaker_id, speaker_name, enrollment_type, duration_seconds"
+
+      - name: "SpeakerEnrollmentFailed"
+        trigger: "Enrollment failed"
+        payload: "enrollment_id, reason, step"
+
+  error_handling:
+    low_quality_audio:
+      detection: "SNR <15dB or clarity <0.8"
+      action: "Request sample retry (max 3 retries)"
+      fallback: "If 3 retries fail, offer to try later"
+
+    low_quality_face:
+      detection: "Lighting <50 lux or face not detected"
+      action: "Request image retry (max 3 retries)"
+      fallback: "If 3 retries fail, offer voice-only enrollment"
+
+    user_cancellation:
+      detection: "User says 'cancel' or closes UI"
+      action: "Delete partial enrollment data"
+      notification: "Enrollment cancelled. Your data has been deleted."
+
+  privacy_controls:
+    user_rights:
+      - name: "Right to Delete"
+        action: "User can delete enrollment via CLI or UI"
+        command: "k0ctl speaker delete --speaker-id <uuid>"
+
+      - name: "Right to View"
+        action: "User can view their enrollment data (not raw embeddings)"
+        command: "k0ctl speaker info --speaker-id <uuid>"
+
+      - name: "Right to Export"
+        action: "User can export enrollment metadata (GDPR data portability)"
+        command: "k0ctl speaker export --speaker-id <uuid>"
+
+      - name: "Consent Withdrawal"
+        action: "User can withdraw consent (triggers deletion)"
+        command: "k0ctl speaker withdraw-consent --speaker-id <uuid>"
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "voice_biometrics.yml"
+    - "face_tracking.yml"
+    - "speaker_database.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -1,0 +1,531 @@
+sensor_calibration:
+  name: "Sensor Calibration"
+  purpose: "Calibration data and procedures for ambient sensors"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_calibration.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Sensor calibration establishes baseline readings and correction factors for
+    ambient sensors to improve accuracy. Calibration addresses:
+
+    - Sensor drift over time
+    - Environmental factors (lighting, temperature, humidity)
+    - Inter-sensor variability (manufacturing tolerances)
+    - Installation-specific factors (placement, obstructions)
+
+    Two calibration phases:
+    1. Initial calibration: Learn empty room baselines (10 minutes)
+    2. Runtime calibration: Adapt to changing conditions (continuous)
+
+  schema:
+    type: "object"
+    required: ["sensor_type", "calibration_data", "timestamp_ms"]
+    properties:
+      sensor_type:
+        type: "string"
+        enum: ["PIR", "mmWave", "BLE", "WiFi", "Camera"]
+        description: "Type of sensor being calibrated"
+
+      calibration_data:
+        type: "object"
+        description: "Sensor-specific calibration parameters"
+        additionalProperties: true
+
+      calibration_status:
+        type: "string"
+        enum: ["UNCALIBRATED", "CALIBRATING", "CALIBRATED", "CALIBRATION_FAILED"]
+        description: "Current calibration state"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Unix timestamp when calibration was performed"
+
+      room_id:
+        type: "string"
+        pattern: "^[a-z0-9_]+$"
+        description: "Room where sensor is installed"
+
+      calibration_method:
+        type: "string"
+        enum: ["INITIAL", "RUNTIME", "MANUAL"]
+        description: "Calibration procedure used"
+
+      validity_duration_ms:
+        type: "integer"
+        description: "How long calibration remains valid (milliseconds)"
+        default: 86400000
+        note: "Default: 24 hours"
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Confidence in calibration quality"
+
+  sensor_calibration_schemas:
+    PIR:
+      description: "PIR motion sensor calibration"
+
+      calibration_data:
+        baseline_motion_level:
+          type: "number"
+          description: "Background motion level (empty room)"
+          unit: "arbitrary units (sensor-specific)"
+          typical_range: [0, 100]
+
+        detection_threshold:
+          type: "number"
+          description: "Motion detection threshold"
+          formula: "baseline_motion_level + margin"
+          margin: 50
+
+        false_positive_rate:
+          type: "number"
+          description: "Observed false positive rate during calibration"
+          unit: "detections per hour"
+          acceptable_range: [0, 2]
+
+        environmental_factors:
+          type: "object"
+          properties:
+            sunlight_interference:
+              type: "boolean"
+              description: "Direct sunlight causes false triggers"
+
+            hvac_interference:
+              type: "boolean"
+              description: "HVAC vents cause false triggers"
+
+            pet_activity:
+              type: "boolean"
+              description: "Pets detected during calibration"
+
+      calibration_procedure:
+        duration_ms: 600000
+        steps:
+          - "Ensure room is empty for 10 minutes"
+          - "Record baseline motion readings (sample every 100ms)"
+          - "Compute mean + std_dev of baseline"
+          - "Set detection threshold = mean + 3*std_dev"
+          - "Test threshold with known motion events"
+          - "Adjust threshold if false positive rate > 2/hour"
+
+    mmWave:
+      description: "mmWave radar sensor calibration"
+
+      calibration_data:
+        empty_room_signature:
+          type: "array"
+          items:
+            type: "number"
+          description: "Radar return signature for empty room"
+          length: 128
+          note: "Frequency-domain signature"
+
+        noise_floor:
+          type: "number"
+          description: "Radar noise floor (dBm)"
+          unit: "dBm"
+          typical_range: [-90, -70]
+
+        person_detection_threshold:
+          type: "number"
+          description: "Threshold for person detection (dBm)"
+          formula: "noise_floor + margin_db"
+          margin_db: 15
+
+        breathing_detection_sensitivity:
+          type: "number"
+          description: "Sensitivity for detecting breathing (stationary person)"
+          range: [0.0, 1.0]
+          default: 0.7
+
+        range_calibration:
+          type: "object"
+          properties:
+            max_range_m:
+              type: "number"
+              description: "Maximum detection range (meters)"
+              default: 5.0
+
+            range_bins:
+              type: "integer"
+              description: "Number of range bins"
+              default: 16
+
+      calibration_procedure:
+        duration_ms: 600000
+        steps:
+          - "Ensure room is empty for 10 minutes"
+          - "Record radar returns (sample every 100ms)"
+          - "Compute empty room signature (FFT average)"
+          - "Measure noise floor (minimum signal level)"
+          - "Place test subject at 1m, 2m, 3m, 4m, 5m distances"
+          - "Calibrate range bins and detection thresholds"
+          - "Test breathing detection with stationary person"
+
+    BLE:
+      description: "BLE beacon sensor calibration"
+
+      calibration_data:
+        known_devices:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              mac_address:
+                type: "string"
+                pattern: "^([0-9A-F]{2}:){5}[0-9A-F]{2}$"
+
+              device_type:
+                type: "string"
+                enum: ["phone", "watch", "tracker", "beacon"]
+
+              rssi_baseline:
+                type: "number"
+                description: "Baseline RSSI at 1 meter (dBm)"
+                unit: "dBm"
+
+        rssi_to_distance_model:
+          type: "object"
+          properties:
+            path_loss_exponent:
+              type: "number"
+              description: "Path loss exponent (free space = 2.0, indoor = 3.0-4.0)"
+              default: 3.5
+
+            reference_rssi:
+              type: "number"
+              description: "RSSI at 1 meter (dBm)"
+              default: -60
+
+        device_to_person_ratio:
+          type: "number"
+          description: "Estimated ratio of BLE devices to people"
+          default: 0.8
+          note: "Not all people carry BLE devices"
+
+      calibration_procedure:
+        duration_ms: 600000
+        steps:
+          - "Scan for BLE devices for 10 minutes"
+          - "Record MAC addresses and RSSI values"
+          - "Filter persistent devices (present >80% of time)"
+          - "Measure RSSI at known distances (1m, 2m, 5m)"
+          - "Fit path loss model (RSSI = ref_rssi - 10*n*log10(distance))"
+          - "Estimate device-to-person ratio from occupancy ground truth"
+
+    WiFi:
+      description: "WiFi client sensor calibration"
+
+      calibration_data:
+        known_devices:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              mac_address:
+                type: "string"
+                pattern: "^([0-9A-F]{2}:){5}[0-9A-F]{2}$"
+
+              device_type:
+                type: "string"
+                enum: ["phone", "laptop", "tablet", "iot_device"]
+
+              owner_confirmed:
+                type: "boolean"
+                description: "Device ownership confirmed by user"
+
+        device_to_person_ratio:
+          type: "number"
+          description: "Estimated ratio of WiFi devices to people"
+          default: 0.6
+          note: "Lower than BLE (fewer devices have WiFi enabled)"
+
+        guest_device_filter:
+          type: "object"
+          properties:
+            enabled:
+              type: "boolean"
+              description: "Filter out unknown guest devices"
+              default: false
+
+            whitelist:
+              type: "array"
+              items:
+                type: "string"
+              description: "Known device MAC addresses"
+
+      calibration_procedure:
+        duration_ms: 600000
+        steps:
+          - "Scan for connected WiFi clients for 10 minutes"
+          - "Record MAC addresses and connection times"
+          - "Build known device list (resident devices)"
+          - "Estimate device-to-person ratio from occupancy ground truth"
+          - "Optionally: enable guest device filtering"
+
+    Camera:
+      description: "Vision-based person detection calibration"
+
+      calibration_data:
+        field_of_view:
+          type: "object"
+          properties:
+            horizontal_fov_deg:
+              type: "number"
+              description: "Horizontal field of view (degrees)"
+              typical: 110
+
+            vertical_fov_deg:
+              type: "number"
+              description: "Vertical field of view (degrees)"
+              typical: 70
+
+            coverage_area_m2:
+              type: "number"
+              description: "Approximate coverage area (square meters)"
+
+        detection_model:
+          type: "string"
+          description: "Person detection model identifier"
+          examples: ["yolov8n", "yolov8s", "mobilenet_ssd"]
+
+        confidence_threshold:
+          type: "number"
+          description: "Detection confidence threshold"
+          range: [0.0, 1.0]
+          default: 0.5
+
+        background_model:
+          type: "array"
+          items:
+            type: "number"
+          description: "Empty room background image (compressed)"
+          note: "For background subtraction"
+
+        lighting_conditions:
+          type: "object"
+          properties:
+            min_lux:
+              type: "number"
+              description: "Minimum lighting level for reliable detection (lux)"
+              default: 50
+
+            ir_illumination:
+              type: "boolean"
+              description: "IR illumination available for low-light"
+
+      calibration_procedure:
+        duration_ms: 600000
+        steps:
+          - "Ensure room is empty for 10 minutes"
+          - "Capture background model (average of 100 frames)"
+          - "Test person detection with 1, 2, 3, 5 people"
+          - "Measure detection accuracy at various distances (1m-8m)"
+          - "Calibrate confidence threshold for target false positive rate <1%"
+          - "Test low-light performance, enable IR if needed"
+
+  calibration_procedures:
+    initial_calibration:
+      description: "First-time calibration after sensor installation"
+      duration_ms: 600000
+
+      requirements:
+        - "Room must be empty for entire 10-minute duration"
+        - "Normal lighting conditions"
+        - "HVAC operating normally"
+        - "No pets or moving objects"
+
+      workflow:
+        step_1:
+          name: "Verify Empty Room"
+          action: "Manual confirmation or Camera-based verification"
+          timeout_ms: 60000
+
+        step_2:
+          name: "Collect Baseline Data"
+          duration_ms: 600000
+          sensors: ["PIR", "mmWave", "BLE", "WiFi", "Camera"]
+
+        step_3:
+          name: "Compute Calibration Parameters"
+          processing:
+            - "Calculate statistical baselines (mean, std_dev, min, max)"
+            - "Identify environmental interference sources"
+            - "Set detection thresholds"
+
+        step_4:
+          name: "Validation Tests"
+          tests:
+            - "Inject known motion events (PIR, mmWave)"
+            - "Place test subject at known distances"
+            - "Verify detection accuracy >90%"
+
+        step_5:
+          name: "Persist Calibration Data"
+          storage: "SQLite sensor_calibration table"
+          expiry_ms: 86400000
+
+    runtime_calibration:
+      description: "Continuous adaptation to changing conditions"
+      enabled: true
+
+      triggers:
+        - "Confidence < 0.4 for >60s (suspected sensor drift)"
+        - "Calibration age > 24 hours"
+        - "Environmental change detected (lighting, temperature)"
+
+      workflow:
+        step_1:
+          name: "Detect Need for Recalibration"
+          monitoring:
+            - "Track fusion confidence over time"
+            - "Detect sudden confidence drops"
+            - "Monitor sensor error rates"
+
+        step_2:
+          name: "Schedule Calibration Window"
+          constraint: "Room must be empty for ≥5 minutes"
+          detection: "Wait for occupancy_class == EMPTY"
+
+        step_3:
+          name: "Incremental Calibration"
+          duration_ms: 300000
+          note: "Shorter than initial (5 min vs 10 min)"
+
+        step_4:
+          name: "Update Calibration Parameters"
+          method: "Exponential moving average"
+          formula: "new_cal = alpha * measured + (1-alpha) * old_cal"
+          alpha: 0.3
+
+    manual_calibration:
+      description: "User-initiated calibration"
+      trigger: "User requests calibration via CLI or UI"
+
+      workflow:
+        step_1:
+          name: "Prompt User"
+          message: "Please ensure room is empty for 10 minutes. Proceed?"
+
+        step_2:
+          name: "Run Initial Calibration Procedure"
+          duration_ms: 600000
+
+        step_3:
+          name: "Display Calibration Results"
+          output:
+            - "Sensor baselines"
+            - "Detection thresholds"
+            - "Estimated accuracy"
+
+  calibration_validation:
+    accuracy_test:
+      description: "Validate calibration with ground truth occupancy"
+
+      procedure:
+        - "Place 1 person in room → Verify person_count == 1"
+        - "Place 3 people in room → Verify person_count == 3"
+        - "Empty room → Verify person_count == 0"
+
+      acceptance_criteria:
+        accuracy: ">90%"
+        false_positive_rate: "<5%"
+        false_negative_rate: "<10%"
+
+    drift_detection:
+      description: "Detect sensor drift requiring recalibration"
+
+      indicators:
+        - "Fusion confidence drops below 0.4 for >60s"
+        - "False positive rate increases >2x baseline"
+        - "Sensor readings deviate >20% from baseline"
+
+      action: "Trigger runtime_calibration"
+
+  performance:
+    calibration_latency_ms:
+      initial: 600000
+      runtime: 300000
+      manual: 600000
+
+    storage_per_sensor_kb: 16
+    memory_kb: 32
+
+  observability:
+    metrics:
+      - name: "sensor_calibration_status"
+        type: "gauge"
+        labels: ["room_id", "sensor_type", "status"]
+        description: "Calibration status per sensor"
+
+      - name: "sensor_calibration_age_ms"
+        type: "gauge"
+        labels: ["room_id", "sensor_type"]
+        description: "Time since last calibration"
+
+      - name: "sensor_calibration_confidence"
+        type: "gauge"
+        labels: ["room_id", "sensor_type"]
+        description: "Calibration quality confidence"
+
+      - name: "sensor_calibrations_total"
+        type: "counter"
+        labels: ["room_id", "sensor_type", "method"]
+        description: "Total calibrations performed"
+
+    events:
+      - name: "SensorCalibrationCompleted"
+        trigger: "Calibration successful"
+        payload: "room_id, sensor_type, calibration_method, confidence"
+
+      - name: "SensorCalibrationFailed"
+        trigger: "Calibration failed (e.g., room not empty)"
+        payload: "room_id, sensor_type, reason"
+
+  example_calibrations:
+    PIR_calibrated:
+      sensor_type: "PIR"
+      calibration_data:
+        baseline_motion_level: 20
+        detection_threshold: 70
+        false_positive_rate: 1.2
+        environmental_factors:
+          sunlight_interference: false
+          hvac_interference: true
+          pet_activity: false
+      calibration_status: "CALIBRATED"
+      timestamp_ms: 1698364800000
+      room_id: "living_room"
+      calibration_method: "INITIAL"
+      confidence: 0.85
+
+    mmWave_calibrated:
+      sensor_type: "mmWave"
+      calibration_data:
+        empty_room_signature: [0.1, 0.2, 0.15, "..."]
+        noise_floor: -80
+        person_detection_threshold: -65
+        breathing_detection_sensitivity: 0.7
+        range_calibration:
+          max_range_m: 5.0
+          range_bins: 16
+      calibration_status: "CALIBRATED"
+      timestamp_ms: 1698364800000
+      room_id: "living_room"
+      calibration_method: "INITIAL"
+      confidence: 0.92
+
+  related_contracts:
+    - "sensor_types.yml"
+    - "sensor_fusion_algorithm.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

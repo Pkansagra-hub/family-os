@@ -15,27 +15,27 @@
 
 **Critical Insight:** Without hysteresis, model placement oscillates (NPU at 72°C → heats to 75°C → downgrade to GPU → cools to 73°C → upgrade to NPU → heats to 75°C again). This "flapping" causes latency spikes every 5-10 seconds (30ms → 50ms → 30ms), stuttering audio, poor UX. Asymmetric thresholds with cooldown periods stabilize placement (upgrade at +5°C, downgrade at -2°C, creating 7°C hysteresis band).
 
-| **Thermal Hysteresis Component** | **Purpose** | **Performance Budget** |
-|-----------------------------------|-------------|------------------------|
-| Asymmetric Thresholds | Upgrade at +5°C, downgrade at -2°C (7°C hysteresis band) | <0.5ms threshold check |
-| Cooldown Periods | Upgrade 10s, downgrade 30-60s (prevent rapid state changes) | <1ms cooldown check |
-| 4-Tier Placement | NPU (30ms, 10W) → GPU (50ms, 12W) → CPU (120ms, 15W) → Remote (500ms, 5W) | <5ms placement decision |
-| Emergency Jump | Critical temperature ≥85°C → immediate jump to Remote | <10ms emergency placement |
-| Combined Metrics | Temperature (°C) OR Power (W) trigger upgrade, AND condition for downgrade | <1ms metric check |
-| Thermal Zones | Cool <70°C, warm 70-74°C, hot 75-84°C, critical ≥85°C | <0.2ms zone classification |
+| **Thermal Hysteresis Component** | **Purpose**                                                                | **Performance Budget**     |
+| -------------------------------- | -------------------------------------------------------------------------- | -------------------------- |
+| Asymmetric Thresholds            | Upgrade at +5°C, downgrade at -2°C (7°C hysteresis band)                   | <0.5ms threshold check     |
+| Cooldown Periods                 | Upgrade 10s, downgrade 30-60s (prevent rapid state changes)                | <1ms cooldown check        |
+| 4-Tier Placement                 | NPU (30ms, 10W) → GPU (50ms, 12W) → CPU (120ms, 15W) → Remote (500ms, 5W)  | <5ms placement decision    |
+| Emergency Jump                   | Critical temperature ≥85°C → immediate jump to Remote                      | <10ms emergency placement  |
+| Combined Metrics                 | Temperature (°C) OR Power (W) trigger upgrade, AND condition for downgrade | <1ms metric check          |
+| Thermal Zones                    | Cool <70°C, warm 70-74°C, hot 75-84°C, critical ≥85°C                      | <0.2ms zone classification |
 
 **Key Decision:** Asymmetric hysteresis (upgrade +5°C, downgrade -2°C, 7°C band) selected over symmetric hysteresis (same threshold both directions). Asymmetric thresholds prevent flapping (observed 85% reduction in placement changes), allow rapid degradation under thermal stress (upgrade 10s cooldown), slow recovery to prevent re-heating (downgrade 30-60s cooldown).
 
 ### Decision Matrix
 
-| **Alternative** | **Score** | **Pros** | **Cons** | **Rejection Rationale** |
-|-----------------|-----------|----------|----------|-------------------------|
-| **No Hysteresis (Instant Switching)** | 2/10 | Simple, no state tracking, immediate response to temperature | Flapping (placement oscillates every 5-10s), latency spikes (30ms → 50ms → 30ms), stuttering audio, poor UX | **REJECTED:** Flapping causes latency spikes every 5-10s (observed 420 placement changes/hour, 1 change every 8.6 seconds). Stuttering audio, poor UX. |
-| **Symmetric Hysteresis (±3°C)** | 6/10 | Simple thresholds (same band both directions), reduces flapping vs no hysteresis | Upgrade/downgrade have same cooldown (too slow to degrade, too fast to recover), re-heating cycles common | **REJECTED:** Symmetric thresholds don't balance degradation vs recovery. Upgrade needs fast response (10s), downgrade needs slow recovery (30-60s) to prevent re-heating. |
-| **Time-Based Hysteresis Only** | 5/10 | Simple cooldown periods (no temperature thresholds), prevents rapid changes | Doesn't prevent flapping (time cooldown expires, temperature still oscillating), no thermal awareness | **REJECTED:** Time-based cooldown without temperature hysteresis still allows flapping (cooldown expires at 73°C, upgrades to NPU, heats to 75°C again). Need temperature-aware thresholds. |
-| **Temperature-Only Hysteresis** | 7/10 | Asymmetric temperature thresholds (upgrade +5°C, downgrade -2°C), prevents flapping | Ignores power consumption (high power at low temp can cause thermal stress), no power-based triggers | **REJECTED:** Temperature-only hysteresis misses power-based thermal stress (GPU at 72°C but 15W power draw → heats rapidly). Need combined temperature + power metrics. |
-| **Asymmetric Hysteresis + Cooldown** | 9/10 | Upgrade +5°C / downgrade -2°C (7°C band), cooldown periods (10s upgrade, 30-60s downgrade), prevents flapping | Fixed thresholds may not adapt to device capabilities (laptop vs phone) | **PARTIAL:** Asymmetric hysteresis + cooldown prevents flapping (85% reduction), but fixed thresholds don't adapt to device. Need adaptive thresholds. |
-| **Asymmetric Hysteresis + Cooldown + Adaptive Thresholds** | 10/10 | Upgrade +5°C / downgrade -2°C (7°C band), cooldown periods (10s upgrade, 30-60s downgrade), adaptive thresholds based on device capability (laptop 75°C baseline, phone 65°C baseline), combined temperature + power metrics | Complex implementation (device capability detection, adaptive threshold calculation) | **SELECTED:** Asymmetric hysteresis with adaptive thresholds prevents flapping (85% reduction in placement changes), allows rapid degradation (10s upgrade cooldown), slow recovery (30-60s downgrade cooldown), device-aware thresholds (laptop 75°C, phone 65°C). Combined temperature + power metrics catch thermal stress early. |
+| **Alternative**                                            | **Score** | **Pros**                                                                                                                                                                                                                     | **Cons**                                                                                                    | **Rejection Rationale**                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **No Hysteresis (Instant Switching)**                      | 2/10      | Simple, no state tracking, immediate response to temperature                                                                                                                                                                 | Flapping (placement oscillates every 5-10s), latency spikes (30ms → 50ms → 30ms), stuttering audio, poor UX | **REJECTED:** Flapping causes latency spikes every 5-10s (observed 420 placement changes/hour, 1 change every 8.6 seconds). Stuttering audio, poor UX.                                                                                                                                                                               |
+| **Symmetric Hysteresis (±3°C)**                            | 6/10      | Simple thresholds (same band both directions), reduces flapping vs no hysteresis                                                                                                                                             | Upgrade/downgrade have same cooldown (too slow to degrade, too fast to recover), re-heating cycles common   | **REJECTED:** Symmetric thresholds don't balance degradation vs recovery. Upgrade needs fast response (10s), downgrade needs slow recovery (30-60s) to prevent re-heating.                                                                                                                                                           |
+| **Time-Based Hysteresis Only**                             | 5/10      | Simple cooldown periods (no temperature thresholds), prevents rapid changes                                                                                                                                                  | Doesn't prevent flapping (time cooldown expires, temperature still oscillating), no thermal awareness       | **REJECTED:** Time-based cooldown without temperature hysteresis still allows flapping (cooldown expires at 73°C, upgrades to NPU, heats to 75°C again). Need temperature-aware thresholds.                                                                                                                                          |
+| **Temperature-Only Hysteresis**                            | 7/10      | Asymmetric temperature thresholds (upgrade +5°C, downgrade -2°C), prevents flapping                                                                                                                                          | Ignores power consumption (high power at low temp can cause thermal stress), no power-based triggers        | **REJECTED:** Temperature-only hysteresis misses power-based thermal stress (GPU at 72°C but 15W power draw → heats rapidly). Need combined temperature + power metrics.                                                                                                                                                             |
+| **Asymmetric Hysteresis + Cooldown**                       | 9/10      | Upgrade +5°C / downgrade -2°C (7°C band), cooldown periods (10s upgrade, 30-60s downgrade), prevents flapping                                                                                                                | Fixed thresholds may not adapt to device capabilities (laptop vs phone)                                     | **PARTIAL:** Asymmetric hysteresis + cooldown prevents flapping (85% reduction), but fixed thresholds don't adapt to device. Need adaptive thresholds.                                                                                                                                                                               |
+| **Asymmetric Hysteresis + Cooldown + Adaptive Thresholds** | 10/10     | Upgrade +5°C / downgrade -2°C (7°C band), cooldown periods (10s upgrade, 30-60s downgrade), adaptive thresholds based on device capability (laptop 75°C baseline, phone 65°C baseline), combined temperature + power metrics | Complex implementation (device capability detection, adaptive threshold calculation)                        | **SELECTED:** Asymmetric hysteresis with adaptive thresholds prevents flapping (85% reduction in placement changes), allows rapid degradation (10s upgrade cooldown), slow recovery (30-60s downgrade cooldown), device-aware thresholds (laptop 75°C, phone 65°C). Combined temperature + power metrics catch thermal stress early. |
 
 **Rejection Summary:**
 - **No Hysteresis:** Flapping causes 420 placement changes/hour (1 change every 8.6s), latency spikes, stuttering audio
@@ -156,17 +156,17 @@ T+15s: Flapping continues... User experiences stuttering
 
 ### State Transition Table
 
-| Current State | Temp (°C) | Power (W) | Target State | Condition | Cooldown | Latency Impact |
-|---------------|-----------|-----------|--------------|-----------|----------|----------------|
-| **NPU (fast)** | <70 | <10 | NPU | Normal operation | - | 30ms (baseline) |
-| **NPU → GPU** | ≥75 | ≥12 | GPU | **Upgrade** (+5°C above baseline) | 10s | +20ms (50ms total) |
-| **GPU (mid)** | 70-74 | 10-11 | GPU | Stay (hysteresis band) | - | 50ms (stable) |
-| **GPU → NPU** | ≤68 | ≤9 | NPU | **Downgrade** (-2°C below NPU baseline) | 30s | -20ms (back to 30ms) |
-| **GPU → CPU** | ≥80 | ≥15 | CPU | **Upgrade** (too hot) | 10s | +70ms (120ms total) |
-| **CPU (slow)** | 75-79 | 12-14 | CPU | Stay (hysteresis band) | - | 120ms (stable) |
-| **CPU → GPU** | ≤72 | ≤11 | GPU | **Downgrade** (cooling) | 30s | -70ms (back to 50ms) |
-| **CPU → Remote** | ≥85 | ≥18 | Remote | **Critical** (thermal emergency) | 60s | +380ms (500ms total) |
-| **Remote** | ≤75 | ≤12 | CPU | **Cool enough** | 60s | -380ms (back to 120ms) |
+| Current State    | Temp (°C) | Power (W) | Target State | Condition                               | Cooldown | Latency Impact         |
+| ---------------- | --------- | --------- | ------------ | --------------------------------------- | -------- | ---------------------- |
+| **NPU (fast)**   | <70       | <10       | NPU          | Normal operation                        | -        | 30ms (baseline)        |
+| **NPU → GPU**    | ≥75       | ≥12       | GPU          | **Upgrade** (+5°C above baseline)       | 10s      | +20ms (50ms total)     |
+| **GPU (mid)**    | 70-74     | 10-11     | GPU          | Stay (hysteresis band)                  | -        | 50ms (stable)          |
+| **GPU → NPU**    | ≤68       | ≤9        | NPU          | **Downgrade** (-2°C below NPU baseline) | 30s      | -20ms (back to 30ms)   |
+| **GPU → CPU**    | ≥80       | ≥15       | CPU          | **Upgrade** (too hot)                   | 10s      | +70ms (120ms total)    |
+| **CPU (slow)**   | 75-79     | 12-14     | CPU          | Stay (hysteresis band)                  | -        | 120ms (stable)         |
+| **CPU → GPU**    | ≤72       | ≤11       | GPU          | **Downgrade** (cooling)                 | 30s      | -70ms (back to 50ms)   |
+| **CPU → Remote** | ≥85       | ≥18       | Remote       | **Critical** (thermal emergency)        | 60s      | +380ms (500ms total)   |
+| **Remote**       | ≤75       | ≤12       | CPU          | **Cool enough**                         | 60s      | -380ms (back to 120ms) |
 
 ### Key Characteristics
 
@@ -1508,3 +1508,74 @@ thermal_placement:
 **Signed:** Architecture Analysis Council
 **Date:** 2025-06-15
 **Implementation Status:** 88% Complete (Production Ready)
+
+---
+
+## Implementation Status Verification (2025-10-22)
+
+**Verification Date:** 2025-10-22
+**Verification Method:** Directory inspection + grep searches across k1/l5_infrastructure/
+**Issue Reference:** ADR Development Plan Issue 1.1 (Verify Graceful Degradation Implementation)
+
+### Architecture vs Implementation Gap
+
+**Architecture Status: 88% Complete**
+- ADR documentation comprehensive (1,511 lines, detailed design, performance budgets)
+- Implementation signatures section lists 5 subsystems (~3,480 lines of claimed code)
+- Production metrics documented (6 months data, 1.2M user turns)
+- Performance validated (85% reduction in placement changes, 98% reduction in flapping)
+
+**Implementation Status: 0% Complete** ⚠️
+- **Directory inspection result:** `k1/l5_infrastructure/` contains ONLY 2 files:
+  - `layer5_adr_map.md` (documentation)
+  - `__init__.py` (minimal initialization)
+- **Missing directories:**
+  - `k1/infrastructure/thermal/` ❌ (does NOT exist)
+  - `k1/infrastructure/placement/` ❌ (does NOT exist)
+  - `k1/observability/thermal_metrics.py` ❌ (does NOT exist)
+- **Grep search results:** 20+ matches in documentation files (.md), ZERO matches in implementation files (.py)
+
+### Files Claimed vs Files Found
+
+| **Claimed Implementation**  | **File Path**                           | **Lines** | **Verification Status** |
+| --------------------------- | --------------------------------------- | --------- | ----------------------- |
+| ThermalPlacementManager     | k1/infrastructure/thermal_placement.py  | 1,480     | ❌ **DOES NOT EXIST**    |
+| Device Capability Detection | k1/infrastructure/device_capability.py  | 380       | ❌ **DOES NOT EXIST**    |
+| Thermal Sensor APIs         | k1/infrastructure/thermal_sensors.py    | 520       | ❌ **DOES NOT EXIST**    |
+| Placement Decision Logic    | k1/infrastructure/placement_decision.py | 680       | ❌ **DOES NOT EXIST**    |
+| Metrics & Monitoring        | k1/observability/thermal_metrics.py     | 420       | ❌ **DOES NOT EXIST**    |
+
+### Interpretation of "88% Complete"
+
+The "88% Complete (Production Ready)" status refers to **ADR documentation completeness**, NOT code implementation:
+- ✅ Architecture designed (asymmetric hysteresis, cooldown periods, adaptive thresholds)
+- ✅ Performance budgets defined (<10ms placement decision, <50ms signal propagation)
+- ✅ Production metrics documented (85% reduction in placement changes, 98% reduction in flapping)
+- ✅ Research foundations cited (Khalil 2002, Skadron et al. 2003, Android Thermal HAL)
+- ❌ Code implementation missing (0% of claimed 3,480 lines exist in codebase)
+
+### Required Implementation Effort
+
+**Status:** **NEEDS_IMPLEMENTATION** (P0 - PRODUCTION CRITICAL)
+
+**Epic Scope:** 6-8 weeks for 3-subsystem implementation (Thermal Management + Model Placement + Backpressure)
+- **Thermal Management Subsystem:** ~1,480 lines (ThermalPlacementManager + sensors + decision logic)
+- **Infrastructure:** ~900 lines (Device capability + placement decision + metrics)
+- **Testing:** ~800 lines WARD tests (integration tests, real thermal scenarios)
+- **Contract Validation:** 13 thermal contract files (Epic 4.3.3) from contract_development_plan.md
+- **Dependencies:** Model Placement Cascade (ADR-0027), Backpressure (ADR-0061) also missing
+
+**Acceptance Criteria (Per ADR Development Plan):**
+- [ ] `k1/l5_infrastructure/thermal/` directory created with 5+ modules
+- [ ] ThermalPlacementManager class with asymmetric hysteresis logic
+- [ ] Device capability detection (laptop/phone/desktop/server)
+- [ ] Thermal sensor APIs (Linux/macOS/Windows cross-platform)
+- [ ] Placement decision logic with cooldown enforcement
+- [ ] Prometheus metrics (temperature, placement changes, flapping events)
+- [ ] WARD integration tests (real thermal scenarios, no mock delays)
+- [ ] Epic 4.3.3 contracts validated (13 thermal contract files)
+- [ ] Performance validation (85% reduction in placement changes vs baseline)
+
+---
+
+**End of ADR-0026**

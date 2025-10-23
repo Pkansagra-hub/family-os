@@ -1,0 +1,514 @@
+speaker_recognition_pipeline:
+  name: "Speaker Recognition Pipeline Contract"
+  purpose: "End-to-end speaker recognition workflow from audio to identification"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l4_runtime/biometrics/speaker_recognition_pipeline.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Speaker recognition pipeline orchestrates the complete workflow for identifying
+    speakers from audio input. Combines VAD, embedding extraction, spatial audio,
+    face tracking (if available), and database matching.
+
+    Key features:
+    - Multi-stage pipeline (VAD → Embedding → Matching → Identification)
+    - Multi-modal fusion (voice + face + spatial)
+    - <70ms end-to-end latency
+    - Unknown speaker detection
+    - Confidence-based decision making
+
+  pipeline_stages:
+    stage_1_vad:
+      name: "Voice Activity Detection"
+      description: "Detect speech segments in audio stream"
+
+      input:
+        audio_chunk:
+          format: "PCM 16-bit mono 16kHz"
+          size_ms: 30
+          size_bytes: 960
+
+      algorithm: "Silero VAD"
+      model: "silero_vad_v4.onnx"
+
+      output:
+        speech_probability:
+          type: "float"
+          range: [0.0, 1.0]
+          threshold: 0.6
+
+        vad_decision:
+          type: "bool"
+          description: "True if speech detected"
+
+      performance:
+        latency_ms:
+          p50: 5
+          p95: 8
+          p99: 12
+
+    stage_2_embedding_extraction:
+      name: "Voice Embedding Extraction"
+      description: "Extract 192-dim d-vector from speech segment"
+
+      input:
+        audio_segment:
+          format: "PCM 16-bit mono 16kHz"
+          min_duration_ms: 1000
+          description: "Minimum 1 second of speech"
+
+      model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+      architecture: "ResNet-34"
+
+      preprocessing:
+        resampling: "16kHz (if needed)"
+        normalization: "[-1.0, 1.0] range"
+        vad_filtering: "Remove non-speech frames"
+
+      output:
+        voice_embedding:
+          dimension: 192
+          dtype: "float32"
+          normalization: "L2 normalized"
+
+      performance:
+        latency_ms:
+          p50: 30
+          p95: 45
+          p99: 60
+
+    stage_3_spatial_audio:
+      name: "Spatial Audio Analysis"
+      description: "Determine speaker's spatial location"
+
+      input:
+        multi_channel_audio:
+          format: "4-channel PCM 16-bit 16kHz"
+          description: "Microphone array input"
+
+      algorithm: "GCC-PHAT"
+
+      output:
+        spatial_location:
+          azimuth_deg:
+            type: "float"
+            range: [-180.0, 180.0]
+            description: "Horizontal angle"
+
+          elevation_deg:
+            type: "float"
+            range: [-90.0, 90.0]
+            description: "Vertical angle"
+
+          distance_meters:
+            type: "float"
+            range: [0.5, 5.0]
+            description: "Estimated distance"
+
+          confidence:
+            type: "float"
+            range: [0.0, 1.0]
+
+      performance:
+        latency_ms:
+          p50: 10
+          p95: 15
+          p99: 20
+
+    stage_4_face_tracking:
+      name: "Face Tracking (Optional)"
+      description: "Extract face embedding if camera available"
+
+      input:
+        video_frame:
+          format: "RGB 640x480"
+          fps: 30
+
+      detection:
+        algorithm: "RetinaFace"
+        confidence_threshold: 0.8
+
+      embedding:
+        model: "FaceNet-512"
+        dimension: 512
+        normalization: "L2 normalized"
+
+      output:
+        face_embedding:
+          dimension: 512
+          dtype: "float32"
+
+        face_bounding_box:
+          x: "int (pixels)"
+          y: "int (pixels)"
+          width: "int (pixels)"
+          height: "int (pixels)"
+
+      performance:
+        latency_ms:
+          p50: 15
+          p95: 25
+          p99: 35
+
+      optional: true
+
+    stage_5_database_matching:
+      name: "Database Matching"
+      description: "Match embeddings against enrolled speakers"
+
+      input:
+        voice_embedding:
+          dimension: 192
+          dtype: "float32"
+
+        face_embedding:
+          dimension: 512
+          dtype: "float32"
+          optional: true
+
+        spatial_location:
+          azimuth_deg: "float"
+          elevation_deg: "float"
+          distance_meters: "float"
+
+      matching_algorithm:
+        method: "cosine_similarity"
+        formula: "similarity = dot(query_embedding, enrolled_embedding)"
+
+        voice_threshold: 0.75
+        face_threshold: 0.80
+        multi_modal_threshold: 0.70
+
+      fusion_strategy:
+        method: "weighted_average"
+        weights:
+          voice_similarity: 0.6
+          face_similarity: 0.4
+
+        formula: "final_score = 0.6 * voice_sim + 0.4 * face_sim"
+
+      output:
+        matched_speaker:
+          speaker_id: "UUID or UNKNOWN"
+          speaker_name: "TEXT or UNKNOWN"
+          confidence:
+            type: "float"
+            range: [0.0, 1.0]
+
+          identification_method: "VOICE | FACE | MULTI_MODAL"
+
+      performance:
+        latency_ms:
+          p50: 10
+          p95: 15
+          p99: 20
+
+    stage_6_post_processing:
+      name: "Post-Processing"
+      description: "Smoothing and decision refinement"
+
+      temporal_smoothing:
+        description: "Smooth identification over time window"
+        window_size: 5
+        method: "majority_vote"
+
+        workflow: |
+          1. Maintain sliding window of last 5 identifications
+          2. Count speaker_id occurrences in window
+          3. Return most frequent speaker_id if count >= 3
+          4. Otherwise return UNKNOWN
+
+      confidence_adjustment:
+        description: "Adjust confidence based on history"
+
+        factors:
+          spatial_consistency:
+            weight: 0.3
+            formula: "1.0 - (delta_azimuth / 180.0)"
+
+          temporal_consistency:
+            weight: 0.3
+            formula: "consecutive_identifications / 5.0"
+
+          multi_modal_agreement:
+            weight: 0.4
+            formula: "1.0 if voice and face agree else 0.5"
+
+      output:
+        final_identification:
+          speaker_id: "UUID or UNKNOWN"
+          speaker_name: "TEXT or UNKNOWN"
+          confidence:
+            type: "float"
+            range: [0.0, 1.0]
+
+          spatial_location:
+            azimuth_deg: "float"
+            elevation_deg: "float"
+            distance_meters: "float"
+
+  pipeline_workflow:
+    description: "End-to-end pipeline execution"
+
+    input:
+      audio_chunk:
+        format: "PCM 16-bit mono 16kHz"
+        size_ms: 30
+
+      video_frame:
+        format: "RGB 640x480"
+        optional: true
+
+      multi_channel_audio:
+        format: "4-channel PCM 16-bit 16kHz"
+        optional: true
+
+    execution_flow:
+      step_1:
+        stage: "VAD"
+        action: "Detect speech in audio chunk"
+        decision: "If speech_probability < 0.6, return None"
+
+      step_2:
+        stage: "Embedding Extraction"
+        action: "Extract 192-dim voice embedding from speech segment"
+        prerequisite: "Minimum 1 second of speech accumulated"
+
+      step_3:
+        stage: "Spatial Audio"
+        action: "Determine spatial location from microphone array"
+        optional: true
+
+      step_4:
+        stage: "Face Tracking"
+        action: "Extract 512-dim face embedding from video frame"
+        optional: true
+
+      step_5:
+        stage: "Database Matching"
+        action: "Match embeddings against enrolled speakers"
+        output: "speaker_id, confidence, identification_method"
+
+      step_6:
+        stage: "Post-Processing"
+        action: "Apply temporal smoothing and confidence adjustment"
+        output: "final_identification"
+
+    output:
+      identification_result:
+        speaker_id: "UUID or UNKNOWN"
+        speaker_name: "TEXT or UNKNOWN"
+        confidence: "float [0.0, 1.0]"
+        identification_method: "VOICE | FACE | MULTI_MODAL"
+        spatial_location:
+          azimuth_deg: "float"
+          elevation_deg: "float"
+          distance_meters: "float"
+        timestamp_ms: "int64"
+
+  error_handling:
+    insufficient_speech:
+      condition: "Less than 1 second of speech"
+      action: "Return None, continue accumulating"
+
+    low_confidence:
+      condition: "confidence < 0.70"
+      action: "Return UNKNOWN speaker"
+
+    no_enrolled_speakers:
+      condition: "Database empty"
+      action: "Return UNKNOWN speaker"
+
+    face_detection_failed:
+      condition: "No face detected in frame"
+      action: "Fall back to voice-only identification"
+
+    spatial_audio_unavailable:
+      condition: "Multi-channel audio not available"
+      action: "Skip spatial audio stage, use voice/face only"
+
+  performance:
+    end_to_end_latency_ms:
+      voice_only:
+        p50: 55
+        p95: 68
+        p99: 80
+        target: "<70ms"
+
+      multi_modal:
+        p50: 65
+        p95: 82
+        p99: 95
+        target: "<100ms"
+
+    per_stage_budget_ms:
+      vad: 8
+      embedding_extraction: 45
+      spatial_audio: 15
+      face_tracking: 25
+      database_matching: 15
+      post_processing: 2
+      total: 110
+
+    throughput:
+      audio_chunks_per_second: 33
+      identifications_per_second: 10
+
+    resource_usage:
+      cpu_percent:
+        idle: 2
+        active: 15
+
+      memory_mb:
+        base: 150
+        per_enrollment: 1
+
+  observability:
+    metrics:
+      - name: "speaker_recognition_pipeline_latency_ms"
+        type: "histogram"
+        labels: ["stage"]
+        buckets: [10, 25, 50, 75, 100, 150]
+        description: "Per-stage pipeline latency"
+
+      - name: "speaker_identifications_total"
+        type: "counter"
+        labels: ["speaker_id", "identification_method", "status"]
+        description: "Total speaker identifications"
+
+      - name: "speaker_recognition_confidence"
+        type: "histogram"
+        labels: ["identification_method"]
+        buckets: [0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+        description: "Identification confidence distribution"
+
+      - name: "unknown_speaker_detections_total"
+        type: "counter"
+        description: "Total UNKNOWN speaker detections"
+
+      - name: "pipeline_errors_total"
+        type: "counter"
+        labels: ["stage", "error_type"]
+        description: "Pipeline errors by stage"
+
+    tracing:
+      span_name: "speaker_recognition_pipeline"
+
+      attributes:
+        - "speaker_id"
+        - "identification_method"
+        - "confidence"
+        - "vad_latency_ms"
+        - "embedding_latency_ms"
+        - "matching_latency_ms"
+
+    logging:
+      events:
+        - event: "speaker_identified"
+          level: "info"
+          fields:
+            - "speaker_id"
+            - "speaker_name"
+            - "confidence"
+            - "identification_method"
+            - "latency_ms"
+
+        - event: "unknown_speaker_detected"
+          level: "warning"
+          fields:
+            - "confidence"
+            - "reason"
+
+        - event: "pipeline_error"
+          level: "error"
+          fields:
+            - "stage"
+            - "error_type"
+            - "error_message"
+
+  privacy:
+    classification: "RED_BAND"
+
+    biometric_data:
+      voice_embeddings: "Encrypted at rest (AES-256)"
+      face_embeddings: "Encrypted at rest (AES-256)"
+      audio_samples: "Not persisted (processed in memory only)"
+      video_frames: "Not persisted (processed in memory only)"
+
+    consent_requirements:
+      voice_biometrics: "Required before enrollment"
+      face_recognition: "Required before enrollment"
+      spatial_tracking: "Opt-out available"
+
+    data_retention:
+      embeddings: "Retained indefinitely (user-controlled deletion)"
+      identification_history: "90 days"
+      audio_samples: "Not retained"
+      video_frames: "Not retained"
+
+  integration:
+    input_sources:
+      - name: "Microphone Array"
+        format: "PCM 16-bit 16kHz (mono or 4-channel)"
+        source: "k1/l4_runtime/audio/microphone_array.py"
+
+      - name: "Camera"
+        format: "RGB 640x480 30fps"
+        source: "k1/l4_runtime/video/camera_manager.py"
+        optional: true
+
+    output_consumers:
+      - name: "Orchestrator"
+        destination: "k1/l2_orchestration/orchestrator_core.py"
+        event: "SPEAKER_IDENTIFIED"
+
+      - name: "Per-Person Context Manager"
+        destination: "k1/l1_input/per_person_context.py"
+        event: "SPEAKER_CHANGED"
+
+      - name: "Turn-Taking Manager"
+        destination: "k1/l1_input/turn_taking.py"
+        event: "SPEAKER_IDENTIFIED"
+
+      - name: "Diarization Event Stream"
+        destination: "SSE /api/v1/speaker-diarization/stream"
+        event: "SPEAKER_IDENTIFIED"
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "speaker_enrollment.yml"
+    - "voice_biometrics.yml"
+    - "face_tracking.yml"
+    - "spatial_audio.yml"
+    - "speaker_database.yml"
+    - "per_person_context.yml"
+    - "turn_taking.yml"
+    - "diarization_event.yml"
+
+  testing:
+    unit_tests:
+      - test_vad_stage
+      - test_embedding_extraction_stage
+      - test_spatial_audio_stage
+      - test_face_tracking_stage
+      - test_database_matching_stage
+      - test_post_processing_stage
+
+    integration_tests:
+      - test_end_to_end_voice_only_identification
+      - test_end_to_end_multi_modal_identification
+      - test_unknown_speaker_detection
+      - test_temporal_smoothing
+      - test_confidence_adjustment
+
+    performance_tests:
+      - test_pipeline_latency_under_70ms
+      - test_throughput_10_identifications_per_second
+      - test_resource_usage_within_budget
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

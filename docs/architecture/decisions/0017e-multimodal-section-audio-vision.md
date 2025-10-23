@@ -6,6 +6,7 @@
 **Parent ADR:** [ADR-0017 (SessionState 6-Section Design)](0017-sessionstate-6-section-design.md)
 **Category:** State Management (Layer 2) - Multimodal
 **Related ADRs:**
+
 - [ADR-0011 (FlatBuffers Serialization)](0011-flatbuffers-serialization.md)
 - [ADR-0017a (Beliefs Section)](0017a-beliefs-section-user-facts-preferences.md)
 
@@ -507,6 +508,51 @@ def _(multimodal=multimodal):
     # Verify size under limit
     assert multimodal.get_size_kb() <= multimodal.max_size_kb
 ```
+
+---
+
+## Extensions: Device Context Fields (Added 2025-01-22)
+
+**Reference:** ADR-0085 (Embodied Awareness & Device Presence)
+
+### New Device Context Schema
+
+Added to Multimodal Section for cross-device presence awareness:
+
+```python
+DeviceContext:
+  device_id: str
+  device_type: str  # PHONE | TABLET | LAPTOP | WATCH | SPEAKER
+  online_status: str  # ONLINE | OFFLINE
+  last_seen: timestamp
+  active_session: bool  # Screen + input + foreground app
+  motion_context: str  # STATIONARY | IN_POCKET | BEING_HELD | IN_VEHICLE | WALKING | RUNNING
+  coarse_location: str  # City-level (privacy-safe GREEN band)
+  proximity_devices: List[str]  # Device IDs in BLE NEAR/MEDIUM range
+  battery_level: int  # 0-100
+  charging_status: str  # CHARGING | DISCHARGING | FULL
+  power_mode: str  # LOW_POWER | NORMAL | HIGH_PERFORMANCE
+```
+
+### Storage
+
+- **Key:** `device_context:<device_id>` in SessionState Multimodal Section
+- **Sync:** Via K0 P07 (ADR-0050 presence metadata extensions)
+- **Eviction:** Never evicted (low priority, always keep)
+- **Size:** ~200 bytes per device
+
+### Use Cases
+
+- **Notification routing:** Check `active_session` to determine target device
+- **Smart handoff:** Use `proximity_devices` to detect device switches
+- **Context adaptation:** Adjust output based on `motion_context` (in-pocket → audio-only)
+- **Power management:** Reduce background tasks when `power_mode=LOW_POWER`
+
+### Related Sub-ADRs
+
+- **ADR-0085a:** Device Presence Detection & Location Awareness
+- **ADR-0085b:** BLE Proximity & Active Session Tracking
+- **ADR-0085c:** Cross-Device Context Sharing & Presence-Aware Features
 
 ---
 

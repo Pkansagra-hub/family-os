@@ -6,6 +6,7 @@
 **Technical Story:** [HITL Extensions - Turn Boundary Definition]
 
 **Related ADRs:**
+
 - ADR-0052: HITL Extensions Overview (parent umbrella)
 - ADR-0053: Message Queue & Coalescing (coordination with coalescing)
 - ADR-0003: MPST Protocol Monitor (state transition validation)
@@ -14,6 +15,7 @@
 - ADR-0055: Context-Switch Detection (intent drift triggers)
 
 **Sub-ADRs:**
+
 - **ADR-0054a**: Implicit Pause ≥2s (silence-based turn end)
 - **ADR-0054b**: Explicit Submit & UX Contracts (user-triggered turn end)
 - **ADR-0054c**: MPST Turn Transitions (protocol state machine coordination)
@@ -35,12 +37,14 @@ Conversational AI systems need to define when a user's "turn" ends and the agent
 **Example Problems:**
 
 **Problem A: Too Early Response**
+
 ```
 User: "What's the weather"  [System responds: "I need more information"]
 User: "in Seattle?"         [Now user confused - already asked]
 ```
 
 **Problem B: Too Late Response**
+
 ```
 User: "Set a timer for 5 minutes"  [3s pause]
 User: [Waiting...]                 [5s pause]
@@ -48,6 +52,7 @@ System: "Setting timer..."          [User frustrated by lag]
 ```
 
 **Problem C: No Clear Protocol Transition**
+
 ```
 MPST State: USER_SPEAKING
 User: "Hello"
@@ -61,22 +66,26 @@ User: "Hello"
 ### Research Foundation
 
 **Conversation Analysis (Linguistics):**
+
 - **Turn-Taking**: Sacks, Schegloff, Jefferson (1974) - foundational turn-taking research
 - **Transition Relevance Place (TRP)**: Natural pause points in conversation (0.5-2.5 seconds)
 - **Floor Holding**: Speakers use "um", "uh" to hold turn without yielding
 - **Overlap**: Simultaneous speech occurs <5% of time in natural conversation
 
 **Voice User Interface Research:**
+
 - **Voice Assistants**: Google/Alexa use 1.5-2.5s silence threshold
 - **VAD (Voice Activity Detection)**: Acoustic silence detection with energy thresholds
 - **Endpoint Detection**: Combination of silence duration + linguistic completeness
 
 **Text Chat Research:**
+
 - **Typing Indicators**: Show "typing..." to signal user hasn't finished
 - **Explicit Submit**: Enter key or Send button signals turn completion
 - **Implicit Timeout**: 2-5 second pause treated as turn end in chat systems
 
 **Key Insights:**
+
 - **No Universal Threshold**: Turn boundaries vary by modality (voice vs text), context (formal vs casual), and user preference
 - **Hybrid Approach**: Best systems combine implicit (timing) + explicit (user signal) cues
 - **Context Matters**: Complex queries need longer windows; simple queries can be faster
@@ -84,6 +93,7 @@ User: "Hello"
 ### Current Situation
 
 **Existing Behavior (Pre-ADR):**
+
 - No formal turn boundary definition
 - WebSocket processes messages immediately on arrival
 - Coalescing uses 2s window (ADR-0053a) but not tied to turn semantics
@@ -91,6 +101,7 @@ User: "Hello"
 - SessionState commits conversation history ad-hoc
 
 **Gap:**
+
 - Turn boundary is implicit and inconsistent
 - No distinction between "user still typing" vs "user finished turn"
 - MPST transitions happen at wrong times (too early or too late)
@@ -99,21 +110,25 @@ User: "Hello"
 ### Constraints
 
 **UX Requirements:**
+
 - Implicit boundaries must feel natural (not too fast, not too slow)
 - Explicit boundaries must be obvious (clear UI affordances)
 - Voice and text modalities may need different thresholds
 
 **Performance Requirements:**
+
 - Turn detection latency <50ms (imperceptible)
 - No false positives (premature turn ends)
 - No false negatives (missed turn ends causing timeout)
 
 **Protocol Requirements:**
+
 - MPST state transitions must be deterministic
 - Turn boundaries must trigger state transitions reliably
 - Protocol validation must catch turn boundary violations
 
 **System Requirements:**
+
 - Turn boundary detection must coordinate with coalescing (ADR-0053a)
 - Turn end must trigger SessionState commit (ADR-0017)
 - Turn start must clear previous turn context (if context switch)
@@ -131,12 +146,14 @@ We implement a **dual-signal turn boundary system** with:
 **Two Signals (Both Valid):**
 
 **Signal A: Implicit Pause ≥2s**
+
 - **Definition**: User stops sending messages for ≥2 seconds
 - **Modality**: Text (typing pauses), Voice (silence detection via VAD)
 - **Use Case**: Natural conversation flow, user finishes thought
 - **Implementation**: Timer-based detection, aligns with coalescing window (ADR-0053a)
 
 **Signal B: Explicit Submit**
+
 - **Definition**: User presses Enter, clicks Send button, or sends explicit submit signal
 - **Modality**: Text (keyboard/button), Voice (not applicable)
 - **Use Case**: User signals completion explicitly, overrides pause detection
@@ -147,6 +164,7 @@ We implement a **dual-signal turn boundary system** with:
 ### 2. Turn Boundary State Machine
 
 **States:**
+
 ```
 TURN_START → USER_TURN_ACTIVE → TURN_BOUNDARY_DETECTED → AGENT_TURN_ACTIVE → TURN_COMPLETE
 ```
@@ -154,28 +172,33 @@ TURN_START → USER_TURN_ACTIVE → TURN_BOUNDARY_DETECTED → AGENT_TURN_ACTIVE
 **State Definitions:**
 
 **TURN_START**
+
 - **Entry**: Previous turn completed or new conversation started
 - **Characteristics**: No active user input, system idle
 - **Exit**: User sends first message → USER_TURN_ACTIVE
 
 **USER_TURN_ACTIVE**
+
 - **Entry**: User starts typing or speaking
 - **Characteristics**: Messages arriving, pause timer running
 - **Exit**: Implicit pause ≥2s OR explicit submit → TURN_BOUNDARY_DETECTED
 
 **TURN_BOUNDARY_DETECTED**
+
 - **Entry**: Pause timer expires OR explicit submit received
 - **Characteristics**: Turn boundary confirmed, ready for agent response
 - **Duration**: <50ms (transition state only)
 - **Exit**: Agent starts generation → AGENT_TURN_ACTIVE
 
 **AGENT_TURN_ACTIVE**
+
 - **Entry**: Agent begins generating response
 - **Characteristics**: LLM inference, tool execution, TTS streaming
 - **Exit**: Agent completes response → TURN_COMPLETE
 - **Interruption**: User barge-in (ADR-0053c) → USER_TURN_ACTIVE
 
 **TURN_COMPLETE**
+
 - **Entry**: Agent finishes response
 - **Characteristics**: Conversation history committed, turn metadata logged
 - **Duration**: <100ms (cleanup state)
@@ -184,6 +207,7 @@ TURN_START → USER_TURN_ACTIVE → TURN_BOUNDARY_DETECTED → AGENT_TURN_ACTIVE
 ### 3. Turn Boundary Detection Algorithm
 
 **Implicit Pause Detection (Text):**
+
 ```python
 class TurnBoundaryDetector:
     def __init__(self, pause_threshold_sec=2.0):
@@ -232,6 +256,7 @@ class TurnBoundaryDetector:
 ```
 
 **Implicit Pause Detection (Voice):**
+
 ```python
 class VoiceEndpointDetector:
     def __init__(self, silence_threshold_sec=2.0, energy_threshold_db=-50):
@@ -261,6 +286,7 @@ class VoiceEndpointDetector:
 ### 4. Turn Boundary Events
 
 **Event Emitted on Turn Boundary:**
+
 ```json
 {
   "event": "turn_boundary",
@@ -279,6 +305,7 @@ class VoiceEndpointDetector:
 ```
 
 **Consumers of Turn Boundary Event:**
+
 - **Message Coalescer (ADR-0053a)**: Flush coalesced messages
 - **Protocol Monitor (ADR-0003)**: Transition MPST state machine
 - **Orchestrator (ADR-0006)**: Trigger agent negotiation phase
@@ -288,12 +315,14 @@ class VoiceEndpointDetector:
 ### 5. Integration with Message Coalescing
 
 **Coordination with ADR-0053a:**
+
 - Turn boundary detection uses **same 2s timer** as coalescing window
 - When turn boundary detected → coalescing flushes immediately
 - Explicit submit → both turn boundary + coalescing flush happen together
 - Prevents duplicate timers and ensures consistency
 
 **Shared Timer Architecture:**
+
 ```python
 class TurnAndCoalesceManager:
     def __init__(self):
@@ -330,6 +359,7 @@ class TurnAndCoalesceManager:
 **Protocol State Transitions (ADR-0003):**
 
 **Before Turn Boundary:**
+
 ```
 State: IDLE
 Event: user_message_received
@@ -337,6 +367,7 @@ Transition: IDLE → USER_SPEAKING
 ```
 
 **At Turn Boundary:**
+
 ```
 State: USER_SPEAKING
 Event: turn_boundary_detected
@@ -344,6 +375,7 @@ Transition: USER_SPEAKING → AGENT_TURN
 ```
 
 **After Agent Response:**
+
 ```
 State: AGENT_TURN
 Event: response_complete
@@ -351,6 +383,7 @@ Transition: AGENT_TURN → IDLE
 ```
 
 **Validation:**
+
 - Protocol Monitor validates turn boundary transitions
 - Invalid transitions (e.g., turn_boundary while IDLE) rejected
 - Timeout enforcement: USER_SPEAKING must transition within 30s
@@ -362,26 +395,31 @@ Transition: AGENT_TURN → IDLE
 ### Positive Consequences
 
 ✅ **Clear Conversation Flow:**
+
 - Explicit definition of when user turn ends, agent turn begins
 - No ambiguity about turn ownership
 - Users understand system behavior (predictable)
 
 ✅ **Natural User Experience:**
+
 - 2s pause threshold aligns with human conversation patterns
 - Explicit submit gives users control (power users prefer this)
 - Voice silence detection feels responsive (<2s latency)
 
 ✅ **Protocol Correctness:**
+
 - MPST state machine transitions cleanly at turn boundaries
 - Protocol violations detected (e.g., premature turn end)
 - Deterministic state transitions
 
 ✅ **Efficient Resource Usage:**
+
 - Turn boundary triggers processing (no premature LLM calls)
 - Coalescing completes before processing (no partial utterances)
 - SessionState commits once per turn (not per message)
 
 ✅ **Coordination with Coalescing:**
+
 - Single shared timer (no duplicate timing logic)
 - Consistent behavior (turn boundary = coalesce flush)
 - Simplified implementation
@@ -389,21 +427,25 @@ Transition: AGENT_TURN → IDLE
 ### Negative Consequences
 
 ⚠️ **Perceived Latency:**
+
 - 2s pause threshold adds up to 2s delay before response
 - **Mitigation**: Show typing indicator during pause
 - **Alternative**: Users can use explicit submit to skip pause
 
 ⚠️ **False Positives (Premature Turn End):**
+
 - User pauses mid-thought >2s → system responds too early
 - **Mitigation**: Context-switch detection (ADR-0055) catches this
 - **Future Work**: Adaptive pause threshold per user
 
 ⚠️ **False Negatives (Missed Turn End):**
+
 - User expects response but pause <2s → system waits
 - **Mitigation**: Explicit submit always available
 - **Education**: UI hints ("Press Enter to send")
 
 ⚠️ **Modality Differences:**
+
 - Text users can easily use explicit submit
 - Voice users cannot (VAD must detect silence)
 - **Trade-off**: Voice requires reliable VAD tuning
@@ -411,21 +453,25 @@ Transition: AGENT_TURN → IDLE
 ### Risk Mitigation
 
 **Risk: 2s Threshold Too Long**
+
 - **Detection**: Monitor turn boundary latency distribution
 - **Alert**: If P95 turn boundary latency >2.5s, investigate
 - **Remediation**: A/B test 1.5s vs 2.0s vs 2.5s thresholds
 
 **Risk: False Positives (Premature Responses)**
+
 - **Detection**: Monitor context-switch rate (ADR-0055)
 - **Alert**: If context-switch rate >15%, threshold may be too short
 - **Remediation**: Increase pause threshold or improve intent detection
 
 **Risk: Timer Overhead**
+
 - **Detection**: Profile timer creation/cancellation cost
 - **Alert**: If timer overhead >5ms per message
 - **Remediation**: Use single event loop timer (not per-message threads)
 
 **Risk: MPST Transition Failures**
+
 - **Detection**: Protocol Monitor logs invalid transitions
 - **Alert**: If invalid transition rate >0.1%
 - **Remediation**: Fix transition logic, add missing states
@@ -437,11 +483,13 @@ Transition: AGENT_TURN → IDLE
 ### Phase 1: Turn Boundary Detector (Day 1-2)
 
 **Deliverables:**
+
 - `TurnBoundaryDetector` class
 - 2-second pause timer with reset
 - Explicit submit handling
 
 **Pseudocode:**
+
 ```python
 class TurnBoundaryDetector:
     def __init__(self, pause_threshold_sec=2.0):
@@ -472,6 +520,7 @@ class TurnBoundaryDetector:
 ```
 
 **Tests:**
+
 - Implicit pause detection (2s timer)
 - Explicit submit bypasses timer
 - Timer reset on new message
@@ -479,11 +528,13 @@ class TurnBoundaryDetector:
 ### Phase 2: Voice Endpoint Detection (Day 3-4)
 
 **Deliverables:**
+
 - `VoiceEndpointDetector` class
 - VAD silence detection
 - Energy threshold tuning
 
 **Pseudocode:**
+
 ```python
 class VoiceEndpointDetector:
     def __init__(self, silence_threshold_sec=2.0):
@@ -506,18 +557,44 @@ class VoiceEndpointDetector:
 ```
 
 **Tests:**
+
 - Silence detection after 2s
 - Voice activity resets silence timer
 - Energy threshold tuning
 
+---
+
+## Extension: Dialogue Repair & Clarification Pipeline (ADR-0054d)
+
+Turn Boundary Management provides the **foundation** for dialogue repair through dual-signal turn detection (implicit 2s pause + explicit submit). When a turn completes, the intent confidence may be low (<0.6), requiring clarification before executing actions.
+
+**ADR-0054d** defines the **Dialogue Repair & Clarification Pipeline** that handles:
+
+- Low-confidence intent detection (confidence <0.6 → trigger clarification)
+- Intelligent repair strategies (rephrase, simplify, offer options, context recovery)
+- Misunderstanding detection (user corrections, repeated queries)
+- Learning from repair patterns (adjust thresholds, improve strategies)
+
+See **ADR-0054d** for full specification of:
+
+- `ClarificationManager` component
+- 5 repair strategies with templates
+- `MisunderstandingDetector` integration with Learning Loop
+- Performance budgets (<100ms P95 clarification generation)
+- Capability #10 (Dialogue Repair) implementation
+
+**Integration:** Turn boundary events trigger intent classification → confidence check → clarification if needed → user response → corrected action execution.
+
 ### Phase 3: MPST Integration (Day 5-6)
 
 **Deliverables:**
+
 - Turn boundary event triggers MPST transition
 - Protocol validation for turn boundaries
 - Timeout enforcement
 
 **Pseudocode:**
+
 ```python
 def on_turn_boundary(self, session_id: str, signal_type: str):
     # Emit turn boundary event
@@ -533,6 +610,7 @@ def on_turn_boundary(self, session_id: str, signal_type: str):
 ```
 
 **Tests:**
+
 - MPST transition on turn boundary
 - Invalid transitions rejected
 - Timeout enforcement (30s)
@@ -540,11 +618,13 @@ def on_turn_boundary(self, session_id: str, signal_type: str):
 ### Phase 4: Coalescing Integration (Day 7)
 
 **Deliverables:**
+
 - Shared timer with coalescing
 - Coordinated flush on turn boundary
 - Consistency validation
 
 **Tests:**
+
 - Turn boundary + coalescing use same timer
 - Explicit submit flushes both
 - No duplicate timers
@@ -552,11 +632,13 @@ def on_turn_boundary(self, session_id: str, signal_type: str):
 ### Phase 5: Metrics & Monitoring (Day 8-9)
 
 **Deliverables:**
+
 - Prometheus metrics for turn boundaries
 - Grafana dashboard
 - Alerting rules
 
 **Metrics:**
+
 ```python
 turn_boundary_detected_total = Counter(
     'turn_boundary_detected_total',
@@ -584,16 +666,19 @@ turn_message_count = Histogram(
 ### Performance Targets
 
 **Turn Boundary Detection Latency:**
+
 - **Target**: <50ms (imperceptible)
 - **Measurement**: Time from signal to event emission
 - **Success**: If P95 <50ms, no user-visible delay
 
 **Turn Duration Distribution:**
+
 - **Target**: P50 ~2-3 seconds
 - **Measurement**: Time from first message to turn boundary
 - **Success**: Aligns with natural typing/speaking patterns
 
 **Signal Type Distribution:**
+
 - **Target**: 70% implicit pause, 30% explicit submit (text)
 - **Measurement**: Ratio of signal types
 - **Success**: Most users rely on implicit, power users use explicit
@@ -601,6 +686,7 @@ turn_message_count = Histogram(
 ### Functional Tests
 
 **Test 1: Implicit Pause Detection**
+
 ```python
 @test("detect turn boundary after 2s pause")
 async def test_implicit_pause():
@@ -619,6 +705,7 @@ async def test_implicit_pause():
 ```
 
 **Test 2: Explicit Submit**
+
 ```python
 @test("explicit submit triggers immediate turn boundary")
 async def test_explicit_submit():
@@ -636,6 +723,7 @@ async def test_explicit_submit():
 ```
 
 **Test 3: Timer Reset on New Message**
+
 ```python
 @test("new message resets pause timer")
 async def test_timer_reset():
@@ -702,16 +790,19 @@ turn_signal_ratio = Gauge(
 ### Grafana Dashboard
 
 **Panel 1: Turn Signal Type Distribution**
+
 - Metric: `rate(turn_boundary_detected_total[5m])`
 - Breakdown: By signal type (implicit_pause, explicit_submit, voice_silence)
 - Target: 70% implicit, 30% explicit
 
 **Panel 2: Turn Duration Distribution**
+
 - Metric: `histogram_quantile(0.5, turn_duration_ms)`
 - Target: P50 ~2-3 seconds
 - Alert: If P95 >10s (users typing very slowly or system lag)
 
 **Panel 3: Turn Message Count**
+
 - Metric: `histogram_quantile(0.5, turn_message_count)`
 - Target: P50 ~2-3 messages
 - Insight: Higher message counts indicate fragmented typing
@@ -721,16 +812,19 @@ turn_signal_ratio = Gauge(
 ## Rollout Strategy
 
 ### Week 1: Internal Testing
+
 - Deploy to dev environment
 - Manual testing with various typing patterns
 - Validate timer behavior
 
 ### Week 2: Canary (5%)
+
 - Monitor turn boundary metrics
 - Watch for false positives/negatives
 - Tune pause threshold if needed
 
 ### Week 3-4: Gradual Rollout
+
 - 25% → 50% → 100%
 - 72-hour soak at each stage
 
@@ -739,28 +833,98 @@ turn_signal_ratio = Gauge(
 ## Future Work
 
 ### Adaptive Pause Thresholds
+
 - Learn per-user typing speed
 - Fast typers: 1.5s threshold
 - Slow typers: 2.5s threshold
 
 ### Linguistic Completeness Detection
+
 - Use LLM to detect if utterance is complete
 - Combine with pause detection
 - Reduce false positives
 
 ---
 
+## Amendment #1 (2025-10-22): Multi-Party Turn-Taking Extension
+
+**Context:** ADR-0054 originally assumed **single-user conversations** with sequential turns (User speaks → System responds). Multi-party family conversations require handling **multiple concurrent speakers** with overlapping speech, distinct contexts, and conflicting requests.
+
+**Extension:** See **ADR-0082: Multi-Party Dialogue Coordination** for full multi-speaker architecture.
+
+**Key Changes:**
+
+1. **Turn State Extension**: Add `mode: "multi_party"` and `speakers: List[SpeakerSegment]` to turn boundary state
+2. **Overlap Detection**: Detect when 2+ speakers talk simultaneously (timestamp collision + audio energy validation)
+3. **Turn Allocation Strategies**:
+   - **First-Speaker Priority**: Queue subsequent speakers (sequential processing, +500ms latency)
+   - **Parallel Processing**: Assign multiple agents simultaneously (2× compute cost, minimal latency)
+   - **Priority Preemption**: Interrupt low-urgency speakers for high-urgency requests
+4. **Speaker Context**: Retrieve per-speaker preferences from SessionState Section 2 (Scoreboard)
+5. **Conflict Resolution**: Detect opposing requests (steakhouse vs vegetarian), apply mediation strategies
+
+**Example Multi-Party Turn State:**
+
+```python
+turn_state = {
+    "turn_id": "turn_00042",
+    "mode": "multi_party",  # NEW: single_user | multi_party
+    "speakers": [  # NEW: Multiple concurrent speakers
+        {
+            "speaker_id": "Dad",
+            "segment_start_ts": 1729620000000000,
+            "segment_end_ts": 1729620003000000,
+            "confidence": 0.92,
+            "utterance": "Book dinner reservation for tonight"
+        },
+        {
+            "speaker_id": "Mom",
+            "segment_start_ts": 1729620001000000,  # Overlaps with Dad (T1-T3)
+            "segment_end_ts": 1729620004000000,
+            "confidence": 0.89,
+            "utterance": "What's the weather tomorrow?"
+        }
+    ],
+    "overlap_detected": True,
+    "overlap_duration_ms": 2000,  # T1-T3 overlap
+    "allocation_strategy": "parallel_processing"
+}
+```
+
+**Barge-In Extension**: Multi-party barge-in differentiates between:
+- **Same-user barge-in** (ADR-0054c): User refining request → interrupt response
+- **Multi-party barge-in**: New speaker with new request → queue (don't interrupt)
+
+**Performance Impact**:
+- Overlap detection: <20ms P95 (timestamp comparison)
+- Turn allocation decision: <50ms P95 (strategy selection)
+- Total multi-party overhead: <200ms (acceptable for family conversations)
+
+**Related Sub-ADRs**:
+- **ADR-0082a**: Speaker Diarization & Voice Biometrics (speaker identification <100ms P95)
+- **ADR-0082b**: Multi-Party Turn-Taking Coordination (3 allocation strategies)
+- **ADR-0082c**: Conflict Resolution Strategies (mediation for opposing requests)
+
+**Status**: Proposed for v1.1 (Post-MVP - requires speaker diarization ML models + complex orchestration)
+
+---
+
 ## References
 
 ### Research Papers
+
 - Sacks, H., Schegloff, E. A., & Jefferson, G. (1974). "A Simplest Systematics for the Organization of Turn-Taking for Conversation". Language, 50(4), 696-735.
 - Duncan, S. (1972). "Some Signals and Rules for Taking Speaking Turns in Conversations". Journal of Personality and Social Psychology, 23(2), 283-292.
+- Bohus, D., & Horvitz, E. (2011). "Multiparty Turn Taking in Situated Dialog: Study, Lessons, and Directions". Microsoft Research.
+- Skantze, G. (2021). "Turn-taking in Conversational Systems and Human-Robot Interaction: A Review". KTH Royal Institute of Technology.
 
 ### Related ADRs
+
 - ADR-0052: HITL Extensions Overview (parent)
 - ADR-0053: Message Queue & Coalescing
 - ADR-0003: MPST Protocol Monitor
 - ADR-0017: SessionState Management
+- **ADR-0082: Multi-Party Dialogue Coordination (Amendment #1 extension)**
 
 ---
 
@@ -768,6 +932,7 @@ turn_signal_ratio = Gauge(
 **Estimated Lines:** 1,100 lines (target: 1,100 lines) ✅
 **Next Steps:** Create sub-ADRs 0054a, 0054b, 0054c
 **Review Checklist:**
+
 - [ ] Architecture team review
 - [ ] Turn boundary semantics clear
 - [ ] MPST integration validated

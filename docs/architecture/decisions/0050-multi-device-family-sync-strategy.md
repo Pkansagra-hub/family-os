@@ -11,12 +11,14 @@
 **Parent ADR:** None (root decision for device sync)
 
 **Child ADRs:**
+
 - 0050a (SessionState Coherence Guarantees - per-device)
 - 0050b (CRDT Device-to-Device Merge Protocol)
 - 0050c (LAN-First Sync Implementation - Phase 1)
 - 0050d (P2P E2EE Internet Sync - Phase 2)
 
 **Related Architecture:**
+
 - ADR-0001: K0/K1 Kernel Split
 - ADR-0001a: K0 Bridge Communication (enables P2P)
 - ADR-0001f: K0/K1 Pipeline Boundary
@@ -32,6 +34,7 @@
 FamilyOS is a privacy-first, device-centric system where every family member has personal devices (phone, tablet, laptop). **How should family memories and agent state sync across these devices?**
 
 Key constraints:
+
 1. **Privacy-first:** Family data MUST never leave family possession
 2. **Device-autonomous:** Each device runs full K0 (memory) + K1 (agents)
 3. **Network-aware:** Sync differently when home (LAN) vs. remote (internet)
@@ -122,12 +125,14 @@ When all devices are home on same WiFi:
 ### How It Works (Phase 1)
 
 **Initialization:**
+
 1. Each device runs K0 + K1 locally
 2. On startup, device announces via mDNS: `familyos-{device-id}._tcp.local`
 3. Other devices on same WiFi detect via mDNS listener
 4. Devices establish peer-to-peer connections (TCP over LAN)
 
 **Sync:**
+
 ```python
 # Device A (iPhone) writes memory
 k0.write(memory_item)  # Local write
@@ -141,6 +146,7 @@ k0_merge(memory_item)  # CRDT merge (LWW - Last Write Wins)
 ```
 
 **Multi-Write Conflict (CRDT):**
+
 ```
 Scenario: Mom writes "Birthday party 3pm" on iPhone at 14:00:00
           Dad writes "Birthday party 2pm" on Laptop at 14:00:00
@@ -159,12 +165,14 @@ Resolution (LWW):
 ```
 
 **When Devices Leave Home:**
+
 - Device loses WiFi connection
 - mDNS discovery stops
 - Local modifications continue (offline capability)
 - Sync pauses until Phase 2 (internet sync) is built
 
 **Future: Manual Sync Button (MVP)**
+
 - While Phase 2 is being built
 - User can manually trigger sync upload/download
 - Temporary workaround for remote devices
@@ -385,6 +393,7 @@ Automatic Fallback:
 ```
 
 **Hub is enhancement, not dependency:**
+
 - Devices work full K0+K1 without hub
 - Hub adds convenience, not gating
 - Can be added anytime (M6+)
@@ -433,6 +442,7 @@ Automatic Fallback:
 ### Consequences
 
 **Positive:**
+
 - ✅ Privacy: Zero cloud intermediary
 - ✅ Autonomy: Family owns infrastructure
 - ✅ Performance: <1ms LAN sync
@@ -442,6 +452,7 @@ Automatic Fallback:
 - ✅ Unblocks M2 start immediately
 
 **Trade-offs:**
+
 - ⚠️ Phase 1 no remote sync (manual button temporarily)
 - ⚠️ Phase 2 requires complex E2EE infrastructure
 - ⚠️ mDNS reliability depends on WiFi network
@@ -452,12 +463,14 @@ Automatic Fallback:
 ## Implementation Timeline
 
 ### PHASE 1 (M2-M3): LAN-First Sync
+
 - **Start:** 2025-10-23 (Week 1 of M2)
 - **Deliverable:** Multi-device LAN sync (Phase 1)
 - **Unblocks:** E2.8, E2.1
 - **Success:** 3-6 devices sync <50ms on LAN
 
 ### PHASE 2 (M4-M5): P2P E2EE Internet
+
 - **Start:** 2025-01-06 (M4, parallel planning)
 - **Build:** During M3 (don't block Phase 1)
 - **Deploy:** M5 (feature flag)
@@ -465,6 +478,7 @@ Automatic Fallback:
 - **Success:** Devices sync <500ms over internet
 
 ### Future: Home Hub (Post-M5)
+
 - Optional enhancement
 - Requires Phase 1 + 2 stable
 - Design: TBD (not Q1)
@@ -581,6 +595,7 @@ metrics:
 ### Decision Captured ✅
 
 **HYBRID STRATEGY (Device-First):**
+
 - **Phase 1 (M2-M3):** LAN-first sync
 - **Phase 2 (M4-M5):** P2P E2EE internet sync
 - **Zero cloud dependency** throughout
@@ -640,6 +655,57 @@ Milestones to update:
 
 ---
 
+---
+
+## Extensions: Device Presence Metadata (Added 2025-01-22)
+
+**Reference:** ADR-0085 (Embodied Awareness & Device Presence)
+
+### New Synced Metadata
+
+In addition to SessionState and memory consolidation data, K0 P07 now syncs **device presence metadata**:
+
+```python
+PresenceMetadata:
+  device_id: str
+  online_status: ONLINE | OFFLINE
+  last_seen: timestamp
+  coarse_location: str  # City-level (privacy-safe GREEN band)
+  proximity_devices: List[str]  # Device IDs in BLE NEAR/MEDIUM range
+  active_session: bool  # Screen + input + foreground app
+  motion_context: str  # STATIONARY | IN_POCKET | BEING_HELD | IN_VEHICLE | WALKING | RUNNING
+  battery_level: int  # 0-100
+  charging_status: str  # CHARGING | DISCHARGING | FULL
+  power_mode: str  # LOW_POWER | NORMAL | HIGH_PERFORMANCE
+```
+
+### Sync Protocol Extensions
+
+**Heartbeat Interval:** 30 seconds (broadcast presence updates)
+
+**Privacy Transforms:**
+
+- RED location (GPS) → Degrade to GREEN city-level before sync
+- AMBER location (WiFi SSID) → Hash before sync
+- GREEN location (IP geolocation) → Sync as-is
+
+**Storage Key:** `presence:<device_id>` in K0 KV store
+
+**Use Cases:**
+
+- **Notification routing:** Send to active device only (suppress inactive)
+- **Smart handoff:** Detect device switch, suggest resuming context
+- **Preference learning:** Track device usage patterns
+- **Barge-in coordination:** Detect user presence via multiple nearby devices
+
+### Related Sub-ADRs
+
+- **ADR-0085a:** Device Presence Detection & Location Awareness
+- **ADR-0085b:** BLE Proximity & Active Session Tracking
+- **ADR-0085c:** Cross-Device Context Sharing & Presence-Aware Features
+
+---
+
 ## References
 
 ### Research & Standards
@@ -657,7 +723,7 @@ Milestones to update:
 
 ---
 
-**Last Updated:** 2025-10-16
+**Last Updated:** 2025-01-22 (presence metadata extensions added)
 **Version:** 1.0 (Device-First, Hybrid)
 **Status:** Ready for Implementation
 **Approval:** ✅ Product Team

@@ -1,0 +1,316 @@
+multi_modal_bus_contract:
+  name: "Multi-Modal Bus"
+  purpose: "Unified message bus for accepting, buffering, and forwarding multi-modal inputs"
+  version: "1.0"
+  adr_source: "ADR-0004f"
+  module: "k1/l1_input/streams/stream_switch/"
+  capability: "#1 Cross-Modal Continuity"
+
+  description: |
+    The Multi-Modal Bus is the central component of the Stream Switch that:
+    1. Accepts inputs from all modalities (voice, text, image, touch, location)
+    2. Buffers inputs in a ring buffer for context preservation
+    3. Forwards inputs to downstream processors (Intent Router, orchestrator)
+    4. Maintains zero-copy semantics for performance
+    5. Supports backpressure and flow control
+
+  architecture:
+    pattern: "SEDA (Staged Event-Driven Architecture)"
+    concurrency: "Lock-free ring buffer (MPSC/SPMC)"
+    threading: "Single acceptor thread, multiple consumer threads"
+    memory_model: "Zero-copy for large payloads (VOICE, IMAGE)"
+
+  api_contract:
+    accept_input:
+      description: "Accept a new input from any modality"
+      signature: "async fn accept_input(input: UnifiedInput) -> Result<InputHandle, BusError>"
+      parameters:
+        input:
+          type: "UnifiedInput"
+          description: "Unified input schema from any modality"
+      returns:
+        success:
+          type: "InputHandle"
+          fields:
+            - input_id: "string (uuid)"
+            - sequence_number: "u64"
+            - timestamp_accepted_ms: "i64"
+        error:
+          type: "BusError"
+          codes:
+            - BUFFER_FULL: "Ring buffer is full (backpressure)"
+            - INVALID_INPUT: "Input validation failed"
+            - BUS_SHUTDOWN: "Bus is shutting down"
+      performance:
+        latency_p95_ms: 1
+        throughput: "10,000 inputs/sec"
+      side_effects:
+        - "Input added to ring buffer"
+        - "Metrics updated"
+        - "Transition detection triggered"
+
+    forward_to_downstream:
+      description: "Forward buffered input to downstream consumers"
+      signature: "async fn forward_to_downstream(input_id: Uuid) -> Result<(), BusError>"
+      parameters:
+        input_id:
+          type: "Uuid"
+          description: "Input identifier to forward"
+      returns:
+        success: "void"
+        error:
+          type: "BusError"
+          codes:
+            - INPUT_NOT_FOUND: "Input ID not in buffer"
+            - DOWNSTREAM_UNAVAILABLE: "Downstream consumer unavailable"
+      performance:
+        latency_p95_ms: 2
+      side_effects:
+        - "Input sent to Intent Router"
+        - "Input marked as forwarded"
+
+    get_recent_inputs:
+      description: "Retrieve recent inputs for context preservation"
+      signature: "fn get_recent_inputs(session_id: Uuid, count: usize) -> Vec<UnifiedInput>"
+      parameters:
+        session_id:
+          type: "Uuid"
+          description: "Session identifier"
+        count:
+          type: "usize"
+          description: "Number of recent inputs to retrieve"
+          default: 5
+          max: 100
+      returns:
+        type: "Vec<UnifiedInput>"
+        description: "Recent inputs in chronological order (oldest first)"
+      performance:
+        latency_p95_ms: 0.5
+      note: "Zero-copy for large payloads (returns references)"
+
+    get_context_for_input:
+      description: "Get context references for a specific input"
+      signature: "fn get_context_for_input(input_id: Uuid) -> Vec<Uuid>"
+      parameters:
+        input_id:
+          type: "Uuid"
+          description: "Input identifier"
+      returns:
+        type: "Vec<Uuid>"
+        description: "Context reference input IDs"
+      performance:
+        latency_p95_ms: 0.3
+
+  ring_buffer:
+    description: "Lock-free ring buffer for input storage"
+    implementation: "crossbeam::queue::ArrayQueue"
+    capacity: 1000
+    eviction_policy: "FIFO (oldest evicted first)"
+    zero_copy: true
+    memory_budget:
+      metadata: "64 bytes per entry"
+      small_payloads: "embedded (<1KB)"
+      large_payloads: "heap allocated, reference counted"
+      total_budget_mb: 16
+
+    buffer_management:
+      watermarks:
+        low: 250
+        medium: 500
+        high: 750
+        critical: 950
+      actions:
+        low: "Normal operation"
+        medium: "Log warning"
+        high: "Emit metric, consider backpressure"
+        critical: "Apply backpressure, reject LOW priority inputs"
+
+    retention_policy:
+      min_retention_time_ms: 60000
+      max_retention_time_ms: 300000
+      retention_by_modality:
+        VOICE: "30 seconds (VAD segments only)"
+        TEXT: "5 minutes (full text)"
+        IMAGE: "1 minute (metadata + thumbnail)"
+        TOUCH: "10 seconds (gesture sequences)"
+        LOCATION: "5 minutes (location history)"
+
+  backpressure:
+    strategy: "Token bucket + watermark"
+    token_bucket:
+      capacity: 100
+      refill_rate: "10 tokens/second"
+      cost_per_input: 1
+      cost_by_modality:
+        VOICE: 2
+        IMAGE: 3
+        TEXT: 1
+        TOUCH: 1
+        LOCATION: 1
+
+    actions:
+      bucket_empty:
+        - "Reject new inputs with BUFFER_FULL error"
+        - "Emit metric: stream_switch_backpressure_rejections_total"
+        - "Log warning with session_id"
+
+      high_watermark:
+        - "Apply selective rejection (LOW priority inputs)"
+        - "Notify upstream producers to slow down"
+
+  forwarding:
+    downstream_consumers:
+      - name: "Intent Router"
+        priority: "HIGH"
+        routing: "All inputs"
+        backpressure_aware: true
+
+      - name: "Session Context Manager"
+        priority: "MEDIUM"
+        routing: "Context-relevant inputs only"
+        backpressure_aware: true
+
+      - name: "Observability Collector"
+        priority: "LOW"
+        routing: "Sampling (10% of inputs)"
+        backpressure_aware: false
+
+    routing_rules:
+      - modality: "VOICE"
+        route_to: ["Intent Router", "Session Context Manager"]
+        priority: "HIGH"
+
+      - modality: "TEXT"
+        route_to: ["Intent Router", "Session Context Manager"]
+        priority: "HIGH"
+
+      - modality: "IMAGE"
+        route_to: ["Intent Router", "Session Context Manager", "Vision Processor"]
+        priority: "MEDIUM"
+
+      - modality: "TOUCH"
+        route_to: ["Intent Router"]
+        priority: "LOW"
+
+      - modality: "LOCATION"
+        route_to: ["Session Context Manager", "Location Service"]
+        priority: "LOW"
+
+    broadcast_semantics:
+      type: "Fan-out (publish-subscribe)"
+      guarantee: "At-least-once delivery"
+      ordering: "FIFO per consumer"
+      failure_handling: "Consumer failure does not block bus"
+
+  performance:
+    acceptance_latency_ms:
+      p50: 0.5
+      p95: 1
+      p99: 2
+      max: 5
+
+    forwarding_latency_ms:
+      p50: 1
+      p95: 2
+      p99: 5
+      max: 10
+
+    throughput:
+      max_inputs_per_sec: 10000
+      typical_load: 100
+      burst_capacity: 1000
+
+    memory:
+      ring_buffer_mb: 16
+      per_input_overhead_bytes: 64
+      large_payload_heap_budget_mb: 128
+
+  observability:
+    metrics:
+      - name: "stream_switch_bus_inputs_accepted_total"
+        type: "counter"
+        labels: ["modality", "session_id"]
+        description: "Total inputs accepted by bus"
+
+      - name: "stream_switch_bus_inputs_rejected_total"
+        type: "counter"
+        labels: ["modality", "reason"]
+        description: "Total inputs rejected (backpressure, validation)"
+
+      - name: "stream_switch_bus_buffer_size"
+        type: "gauge"
+        labels: ["session_id"]
+        description: "Current ring buffer size"
+
+      - name: "stream_switch_bus_buffer_watermark"
+        type: "gauge"
+        labels: []
+        description: "Current watermark level (0-3: low/medium/high/critical)"
+
+      - name: "stream_switch_bus_forwarding_latency_ms"
+        type: "histogram"
+        labels: ["consumer"]
+        buckets: [0.5, 1, 2, 5, 10, 50]
+        description: "Forwarding latency to downstream consumers"
+
+      - name: "stream_switch_bus_token_bucket_tokens"
+        type: "gauge"
+        labels: []
+        description: "Current token bucket tokens available"
+
+    tracing:
+      span_name: "stream_switch.bus.accept_input"
+      attributes:
+        - "modality"
+        - "session_id"
+        - "input_id"
+        - "buffer_size"
+        - "backpressure_active"
+
+    logging:
+      level: "INFO"
+      events:
+        - event: "input_accepted"
+          fields: ["input_id", "modality", "timestamp_ms"]
+
+        - event: "input_rejected"
+          fields: ["modality", "reason", "buffer_size"]
+          level: "WARN"
+
+        - event: "backpressure_activated"
+          fields: ["buffer_size", "watermark", "token_bucket_tokens"]
+          level: "WARN"
+
+        - event: "downstream_consumer_failure"
+          fields: ["consumer", "error"]
+          level: "ERROR"
+
+  error_handling:
+    validation_failure:
+      action: "Reject with INVALID_INPUT error"
+      log: true
+      metric: "stream_switch_bus_validation_failures_total"
+
+    buffer_full:
+      action: "Reject with BUFFER_FULL error"
+      log: true
+      metric: "stream_switch_bus_buffer_full_rejections_total"
+      retry: false
+
+    downstream_consumer_unavailable:
+      action: "Buffer input, retry with exponential backoff"
+      max_retries: 3
+      backoff_ms: [100, 500, 2000]
+      fallback: "Drop input after retries exhausted"
+
+  related_contracts:
+    - "unified_input.yml"
+    - "modality_transition.yml"
+    - "transition_manager.yml"
+    - "context_preserver.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0004f"
+      author: "Contract Development Team"

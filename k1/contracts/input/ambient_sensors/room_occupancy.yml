@@ -1,0 +1,388 @@
+room_occupancy:
+  name: "Room Occupancy State"
+  purpose: "Represent current room occupancy level with person count and confidence"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_fusion.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Room occupancy represents the current state of a room in terms of person
+    count, occupancy classification, and detection confidence. This is the
+    primary output of the ambient sensor fusion algorithm.
+
+    Occupancy state is used to:
+    - Determine appropriate response modes (whisper/normal/loud)
+    - Enable privacy-aware agent behaviors
+    - Trigger context-specific automations
+    - Provide presence awareness for multi-room coordination
+
+  schema:
+    type: "object"
+    required: ["person_count", "occupancy_class", "confidence", "timestamp_ms"]
+    properties:
+      person_count:
+        type: "integer"
+        minimum: 0
+        maximum: 10
+        description: "Estimated number of people in room (10+ capped at 10)"
+        examples: [0, 1, 3, 5, 10]
+
+      occupancy_class:
+        type: "string"
+        enum: ["EMPTY", "SINGLE_PERSON", "SMALL_GROUP", "LARGE_GROUP", "CROWD"]
+        description: "Classification of occupancy level"
+        mapping:
+          EMPTY: "person_count == 0"
+          SINGLE_PERSON: "person_count == 1"
+          SMALL_GROUP: "person_count in [2, 4]"
+          LARGE_GROUP: "person_count in [5, 10]"
+          CROWD: "person_count > 10"
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Fusion confidence (0.0 = no confidence, 1.0 = certain)"
+        thresholds:
+          low: 0.4
+          medium: 0.6
+          high: 0.8
+        decision_threshold: 0.6
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Unix timestamp (milliseconds) when occupancy was detected"
+        examples: [1698364800000]
+
+      room_id:
+        type: "string"
+        pattern: "^[a-z0-9_]+$"
+        description: "Unique room identifier"
+        examples: ["living_room", "kitchen", "bedroom_main"]
+
+      contributing_sensors:
+        type: "array"
+        items:
+          type: "string"
+          enum: ["PIR", "mmWave", "BLE", "WiFi", "Camera"]
+        description: "Sensors that contributed to this occupancy estimate"
+        minItems: 1
+        maxItems: 5
+        examples: [["PIR", "mmWave", "BLE"], ["Camera", "mmWave"]]
+
+      fusion_mode:
+        type: "string"
+        enum: ["high_accuracy", "privacy", "power_saver", "guest"]
+        description: "Fusion algorithm variant used"
+        default: "privacy"
+
+      previous_state:
+        type: "string"
+        enum: ["EMPTY", "SINGLE_PERSON", "SMALL_GROUP", "LARGE_GROUP", "CROWD"]
+        description: "Previous occupancy class (for transition detection)"
+        optional: true
+
+      state_duration_ms:
+        type: "integer"
+        minimum: 0
+        description: "Duration current state has persisted (milliseconds)"
+        examples: [5000, 30000, 600000]
+
+  occupancy_classes:
+    EMPTY:
+      person_count: 0
+      description: "No people detected in room"
+      response_mode: "standby"
+      privacy_implications: "No privacy concerns"
+      typical_uses:
+        - "Power down displays"
+        - "Reduce HVAC"
+        - "Enable motion-triggered wake"
+
+    SINGLE_PERSON:
+      person_count: 1
+      description: "One person detected"
+      response_mode: "normal"
+      privacy_implications: "Moderate privacy concern"
+      typical_uses:
+        - "Enable voice interaction"
+        - "Personalized recommendations"
+        - "Single-user optimizations"
+
+    SMALL_GROUP:
+      person_count_range: [2, 4]
+      description: "Small group (2-4 people)"
+      response_mode: "normal"
+      privacy_implications: "High privacy concern (conversations)"
+      typical_uses:
+        - "Enable speaker diarization"
+        - "Multi-user turn-taking"
+        - "Group activity detection"
+
+    LARGE_GROUP:
+      person_count_range: [5, 10]
+      description: "Large group (5-10 people)"
+      response_mode: "loud"
+      privacy_implications: "Very high privacy concern"
+      typical_uses:
+        - "Increase volume"
+        - "Simplified interactions"
+        - "Group-oriented content"
+
+    CROWD:
+      person_count_range: ">10"
+      description: "Crowd (10+ people)"
+      response_mode: "announcement"
+      privacy_implications: "Public setting assumptions"
+      typical_uses:
+        - "Broadcast mode"
+        - "Public announcements"
+        - "Disable personalization"
+
+  confidence_interpretation:
+    high_confidence:
+      range: [0.8, 1.0]
+      interpretation: "Very reliable estimate"
+      action: "Use occupancy state directly"
+      sensor_count: "≥3 sensors agreeing"
+
+    medium_confidence:
+      range: [0.6, 0.8]
+      interpretation: "Reasonably reliable estimate"
+      action: "Use occupancy state with caution"
+      sensor_count: "2-3 sensors, partial agreement"
+
+    low_confidence:
+      range: [0.4, 0.6]
+      interpretation: "Uncertain estimate"
+      action: "Use conservative fallback (assume occupied)"
+      sensor_count: "1-2 sensors or conflicting readings"
+
+    very_low_confidence:
+      range: [0.0, 0.4]
+      interpretation: "Unreliable estimate"
+      action: "Assume EMPTY or last known state"
+      sensor_count: "<2 sensors or sensor failures"
+
+  state_transitions:
+    EMPTY_to_SINGLE_PERSON:
+      trigger: "Person enters room"
+      debounce_ms: 500
+      confidence_required: 0.6
+      notification: "Emit presence_detected event"
+
+    SINGLE_PERSON_to_EMPTY:
+      trigger: "Person leaves room"
+      debounce_ms: 2000
+      confidence_required: 0.6
+      notification: "Emit presence_cleared event"
+      note: "Longer debounce to avoid false negatives"
+
+    SINGLE_PERSON_to_SMALL_GROUP:
+      trigger: "Additional person enters"
+      debounce_ms: 500
+      confidence_required: 0.5
+      notification: "Emit group_formed event"
+
+    SMALL_GROUP_to_LARGE_GROUP:
+      trigger: "Group grows to 5+ people"
+      debounce_ms: 1000
+      confidence_required: 0.5
+      notification: "Emit large_group_detected event"
+
+    LARGE_GROUP_to_CROWD:
+      trigger: "Group grows to 10+ people"
+      debounce_ms: 2000
+      confidence_required: 0.4
+      notification: "Emit crowd_detected event"
+      note: "Lower confidence due to sensor limitations at high counts"
+
+  use_cases:
+    voice_assistant_wake:
+      scenario: "User enters room, says wake word"
+      occupancy_requirement: "SINGLE_PERSON or SMALL_GROUP"
+      confidence_requirement: 0.6
+      action: "Enable voice recognition with speaker diarization"
+
+    privacy_protection:
+      scenario: "Multiple people present during sensitive operation"
+      occupancy_requirement: "SMALL_GROUP or LARGE_GROUP"
+      confidence_requirement: 0.5
+      action: "Restrict personalized responses, disable RED_BAND operations"
+
+    energy_optimization:
+      scenario: "Room empty for extended period"
+      occupancy_requirement: "EMPTY"
+      state_duration_requirement_ms: 300000
+      confidence_requirement: 0.7
+      action: "Power down ambient sensors except PIR"
+
+    adaptive_volume:
+      scenario: "Adjust response volume based on occupancy"
+      mapping:
+        EMPTY: "volume = 0%"
+        SINGLE_PERSON: "volume = 50%"
+        SMALL_GROUP: "volume = 70%"
+        LARGE_GROUP: "volume = 90%"
+        CROWD: "volume = 100%"
+
+    conversation_mode:
+      scenario: "Detect group conversation vs single user interaction"
+      occupancy_requirement: "SMALL_GROUP"
+      confidence_requirement: 0.6
+      additional_signals: "Audio activity from multiple speakers"
+      action: "Enable turn-taking protocol"
+
+  privacy_considerations:
+    person_counting_limit:
+      max_count: 10
+      rationale: "Avoid tracking large groups beyond functional need"
+      impact: "Crowds represented as 10+ (not exact count)"
+
+    no_identity_tracking:
+      policy: "Occupancy state does NOT identify individuals"
+      enforcement: "Fusion algorithm uses only aggregate counts"
+      exception: "Speaker diarization (separate capability)"
+
+    temporal_privacy:
+      retention_policy: "Occupancy state retained for 60s only"
+      aggregation: "Long-term analytics use hourly averages"
+      deletion: "Real-time state deleted after 60s"
+
+    privacy_band_integration:
+      GREEN_BAND:
+        allowed_sensors: ["PIR", "mmWave", "BLE", "WiFi"]
+        occupancy_tracking: "Enabled"
+
+      AMBER_BAND:
+        allowed_sensors: ["PIR", "mmWave", "BLE", "WiFi"]
+        occupancy_tracking: "Enabled with caution"
+
+      RED_BAND:
+        allowed_sensors: ["PIR", "mmWave", "BLE", "WiFi", "Camera"]
+        occupancy_tracking: "Enabled (user consented)"
+
+  data_validation:
+    person_count:
+      min: 0
+      max: 10
+      error: "Invalid person count (out of range)"
+
+    confidence:
+      min: 0.0
+      max: 1.0
+      error: "Invalid confidence (must be 0.0-1.0)"
+
+    timestamp_ms:
+      future_tolerance_ms: 1000
+      past_tolerance_ms: 60000
+      error: "Invalid timestamp (too far from current time)"
+
+    contributing_sensors:
+      min_sensors: 1
+      max_sensors: 5
+      error: "Invalid sensor count"
+
+  performance:
+    update_frequency_hz:
+      typical: 1
+      max: 10
+      note: "Occupancy updated every 1s typically"
+
+    state_computation_latency_ms:
+      p50: 5
+      p95: 10
+      p99: 15
+
+    memory_per_room_kb: 4
+
+  observability:
+    metrics:
+      - name: "room_occupancy_person_count"
+        type: "gauge"
+        labels: ["room_id", "occupancy_class"]
+        description: "Current person count per room"
+
+      - name: "room_occupancy_confidence"
+        type: "gauge"
+        labels: ["room_id"]
+        description: "Current occupancy confidence"
+
+      - name: "room_occupancy_state_transitions_total"
+        type: "counter"
+        labels: ["room_id", "from_state", "to_state"]
+        description: "Total occupancy state transitions"
+
+      - name: "room_occupancy_low_confidence_total"
+        type: "counter"
+        labels: ["room_id"]
+        description: "Occupancy estimates with confidence < 0.6"
+
+    events:
+      - name: "RoomOccupancyChanged"
+        trigger: "Occupancy class changes"
+        payload: "Full occupancy state"
+        delivery: "SSE stream"
+
+      - name: "LowConfidenceOccupancy"
+        trigger: "Confidence < 0.4"
+        payload: "Occupancy state + contributing sensors"
+        delivery: "SSE stream + alert"
+
+  example_states:
+    empty_room:
+      person_count: 0
+      occupancy_class: "EMPTY"
+      confidence: 0.85
+      timestamp_ms: 1698364800000
+      room_id: "living_room"
+      contributing_sensors: ["PIR", "mmWave"]
+      fusion_mode: "privacy"
+      state_duration_ms: 600000
+
+    single_person:
+      person_count: 1
+      occupancy_class: "SINGLE_PERSON"
+      confidence: 0.92
+      timestamp_ms: 1698364805000
+      room_id: "living_room"
+      contributing_sensors: ["PIR", "mmWave", "BLE"]
+      fusion_mode: "privacy"
+      previous_state: "EMPTY"
+      state_duration_ms: 5000
+
+    small_group:
+      person_count: 3
+      occupancy_class: "SMALL_GROUP"
+      confidence: 0.78
+      timestamp_ms: 1698364820000
+      room_id: "living_room"
+      contributing_sensors: ["mmWave", "BLE", "WiFi"]
+      fusion_mode: "privacy"
+      previous_state: "SINGLE_PERSON"
+      state_duration_ms: 15000
+
+    large_group:
+      person_count: 7
+      occupancy_class: "LARGE_GROUP"
+      confidence: 0.65
+      timestamp_ms: 1698364860000
+      room_id: "living_room"
+      contributing_sensors: ["Camera", "mmWave", "WiFi"]
+      fusion_mode: "high_accuracy"
+      previous_state: "SMALL_GROUP"
+      state_duration_ms: 40000
+
+  related_contracts:
+    - "sensor_types.yml"
+    - "sensor_fusion_algorithm.yml"
+    - "presence_detection.yml"
+    - "context_detector.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

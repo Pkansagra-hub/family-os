@@ -1,0 +1,467 @@
+presence_detection:
+  name: "Presence Detection"
+  purpose: "Binary presence detection with confidence scoring"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_fusion.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Presence detection provides a simpler, binary answer to "Is anyone in the room?"
+    This is distinct from room occupancy (which counts people) and is optimized for:
+
+    - Fast decision-making (<10ms)
+    - Lower confidence thresholds (presence is easier than counting)
+    - Power-efficient wake triggers (PIR-only mode)
+    - Privacy-preserving operation (no counting required)
+
+    Use cases:
+    - Wake-from-standby triggers
+    - Energy management (lights, HVAC)
+    - Privacy-aware device activation
+    - Quick presence checks without full fusion
+
+  schema:
+    type: "object"
+    required: ["present", "confidence", "timestamp_ms"]
+    properties:
+      present:
+        type: "boolean"
+        description: "True if ≥1 person detected, False if room empty"
+        examples: [true, false]
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Detection confidence (0.0 = no confidence, 1.0 = certain)"
+        thresholds:
+          low: 0.3
+          medium: 0.5
+          high: 0.7
+        decision_threshold: 0.5
+        note: "Lower threshold than occupancy counting (binary is easier)"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Unix timestamp (milliseconds) when presence was detected"
+        examples: [1698364800000]
+
+      room_id:
+        type: "string"
+        pattern: "^[a-z0-9_]+$"
+        description: "Unique room identifier"
+        examples: ["living_room", "kitchen", "bedroom_main"]
+
+      detection_method:
+        type: "string"
+        enum: ["PIR_only", "mmWave_only", "sensor_fusion", "camera_only"]
+        description: "Method used for presence detection"
+        default: "sensor_fusion"
+
+      contributing_sensors:
+        type: "array"
+        items:
+          type: "string"
+          enum: ["PIR", "mmWave", "BLE", "WiFi", "Camera"]
+        description: "Sensors that contributed to presence detection"
+        minItems: 1
+        maxItems: 5
+        examples: [["PIR"], ["PIR", "mmWave"], ["Camera", "mmWave"]]
+
+      last_motion_ms:
+        type: "integer"
+        description: "Milliseconds since last detected motion (PIR)"
+        examples: [0, 5000, 30000]
+        optional: true
+
+      estimated_person_count:
+        type: "integer"
+        minimum: 0
+        maximum: 10
+        description: "Optional: rough person count if available (from full fusion)"
+        optional: true
+        note: "Not required for presence detection, but useful if fusion ran"
+
+  detection_methods:
+    PIR_only:
+      description: "Fast, power-efficient presence detection using PIR sensor"
+      latency_ms: 5
+      power_consumption_mw: 10
+      confidence: "low-medium (0.3-0.6)"
+
+      algorithm:
+        input: "PIR motion_detected (boolean)"
+        logic: "present = motion_detected"
+        confidence: "0.6 if motion detected, 0.8 if no motion for 30s (assume empty)"
+
+      advantages:
+        - "Ultra-low power"
+        - "Fast response (<5ms)"
+        - "Privacy-preserving (no counting)"
+
+      limitations:
+        - "Cannot count people"
+        - "False negatives if people stationary >30s"
+        - "False positives from pets, curtains"
+
+      use_cases:
+        - "Wake-from-standby"
+        - "Battery-powered devices"
+        - "Privacy-first mode"
+
+    mmWave_only:
+      description: "High-accuracy presence detection using mmWave radar"
+      latency_ms: 8
+      power_consumption_mw: 150
+      confidence: "high (0.7-0.9)"
+
+      algorithm:
+        input: "mmWave person_count (integer)"
+        logic: "present = (person_count > 0)"
+        confidence: "mmWave confidence * 0.9"
+
+      advantages:
+        - "Detects stationary people (breathing)"
+        - "Counts people accurately"
+        - "Privacy-preserving (no imaging)"
+
+      limitations:
+        - "Higher power consumption"
+        - "More expensive hardware"
+
+      use_cases:
+        - "Always-on presence monitoring"
+        - "High-accuracy requirements"
+        - "Stationary person detection"
+
+    sensor_fusion:
+      description: "Robust presence detection using multi-sensor fusion"
+      latency_ms: 10
+      power_consumption_mw: "Variable (depends on active sensors)"
+      confidence: "high (0.8-0.95)"
+
+      algorithm:
+        input: "room_occupancy from sensor_fusion_algorithm"
+        logic: "present = (person_count > 0)"
+        confidence: "room_occupancy.confidence * 0.95"
+
+      advantages:
+        - "Highest accuracy"
+        - "Robust to sensor failures"
+        - "Provides person count as byproduct"
+
+      limitations:
+        - "Higher latency"
+        - "More power consumption"
+
+      use_cases:
+        - "Default mode for AC-powered devices"
+        - "When person count also needed"
+        - "Multi-room coordination"
+
+    camera_only:
+      description: "Vision-based presence detection (RED_BAND only)"
+      latency_ms: 50
+      power_consumption_mw: 500
+      confidence: "very_high (0.9-0.98)"
+
+      algorithm:
+        input: "Camera person_count (integer)"
+        logic: "present = (person_count > 0)"
+        confidence: "camera confidence * 0.98"
+
+      advantages:
+        - "Highest accuracy"
+        - "Provides person count + identity (if enabled)"
+        - "Detects gestures, postures"
+
+      limitations:
+        - "RED_BAND only (privacy concerns)"
+        - "High power consumption"
+        - "Requires user consent"
+
+      use_cases:
+        - "Security applications"
+        - "User consented to camera"
+        - "Identity-aware features"
+
+  detection_modes:
+    fast_wake_mode:
+      description: "Optimize for fast wake-from-standby"
+      method: "PIR_only"
+      confidence_threshold: 0.4
+      latency_ms: 5
+      power_budget_mw: 10
+
+      workflow:
+        step_1: "PIR detects motion → present=true, confidence=0.6"
+        step_2: "Wake device"
+        step_3: "If interaction expected, upgrade to sensor_fusion for accuracy"
+
+    balanced_mode:
+      description: "Balance accuracy and power"
+      method: "sensor_fusion"
+      confidence_threshold: 0.5
+      latency_ms: 10
+      power_budget_mw: 200
+
+      workflow:
+        step_1: "Run sensor_fusion every 1s"
+        step_2: "present = (person_count > 0)"
+        step_3: "Confidence = fusion_confidence * 0.95"
+
+    high_accuracy_mode:
+      description: "Maximize detection accuracy"
+      method: "sensor_fusion"
+      confidence_threshold: 0.7
+      latency_ms: 20
+      power_budget_mw: 500
+
+      workflow:
+        step_1: "Run full sensor_fusion with all sensors (including Camera if RED_BAND)"
+        step_2: "present = (person_count > 0)"
+        step_3: "Confidence = fusion_confidence"
+        step_4: "Cross-validate with PIR + mmWave"
+
+    privacy_mode:
+      description: "Maximum privacy (no camera, no counting)"
+      method: "PIR_only OR mmWave_only"
+      confidence_threshold: 0.5
+      latency_ms: 8
+      power_budget_mw: 150
+
+      workflow:
+        step_1: "Use PIR for fast detection"
+        step_2: "Use mmWave for stationary people"
+        step_3: "Do NOT count people or use Camera"
+        step_4: "Binary presence only"
+
+  confidence_scoring:
+    single_sensor:
+      PIR:
+        motion_detected: 0.6
+        no_motion_30s: 0.8
+        note: "High confidence for absence, medium for presence"
+
+      mmWave:
+        person_count_gt_0: 0.85
+        person_count_eq_0: 0.90
+        note: "Very reliable for both presence and absence"
+
+      BLE:
+        devices_gt_0: 0.5
+        devices_eq_0: 0.3
+        note: "Low confidence (not all people have devices)"
+
+      WiFi:
+        devices_gt_0: 0.4
+        devices_eq_0: 0.3
+        note: "Lower confidence than BLE"
+
+      Camera:
+        person_count_gt_0: 0.95
+        person_count_eq_0: 0.98
+        note: "Highest confidence (visual confirmation)"
+
+    multi_sensor_fusion:
+      all_agree_present: 0.95
+      majority_agree_present: 0.80
+      single_sensor_present: 0.60
+      all_agree_absent: 0.98
+      majority_agree_absent: 0.85
+      single_sensor_absent: 0.70
+
+  temporal_logic:
+    presence_persistence:
+      min_duration_ms: 500
+      description: "Presence must persist 500ms to trigger present=true"
+      rationale: "Reduce false positives from transient motion"
+
+    absence_persistence:
+      min_duration_ms: 2000
+      description: "Absence must persist 2s to trigger present=false"
+      rationale: "Reduce false negatives when people briefly still"
+
+    hysteresis:
+      present_threshold: 0.5
+      absent_threshold: 0.4
+      description: "Different thresholds for state transitions"
+      example: "Require confidence >0.5 to detect presence, <0.4 to declare absence"
+
+  state_machine:
+    states:
+      UNKNOWN:
+        description: "Initial state, no sensor data yet"
+        present: null
+        confidence: 0.0
+
+      PRESENT:
+        description: "≥1 person detected"
+        present: true
+        confidence: "0.5-1.0"
+
+      ABSENT:
+        description: "Room empty"
+        present: false
+        confidence: "0.5-1.0"
+
+      UNCERTAIN:
+        description: "Low confidence detection"
+        present: null
+        confidence: "0.0-0.5"
+
+    transitions:
+      UNKNOWN_to_PRESENT:
+        trigger: "Sensor data available AND confidence ≥ 0.5 AND present=true"
+
+      UNKNOWN_to_ABSENT:
+        trigger: "Sensor data available AND confidence ≥ 0.5 AND present=false"
+
+      PRESENT_to_ABSENT:
+        trigger: "confidence ≥ 0.5 AND present=false for ≥2s"
+
+      ABSENT_to_PRESENT:
+        trigger: "confidence ≥ 0.5 AND present=true for ≥500ms"
+
+      any_to_UNCERTAIN:
+        trigger: "confidence < 0.5"
+
+  use_cases:
+    wake_from_standby:
+      scenario: "Device in low-power mode, wake when person enters"
+      detection_method: "PIR_only"
+      confidence_threshold: 0.4
+      action: "Wake device → Enable full sensor fusion"
+      power_budget_mw: 10
+
+    smart_lighting:
+      scenario: "Turn on lights when room occupied"
+      detection_method: "PIR_only OR mmWave_only"
+      confidence_threshold: 0.5
+      action: "present=true → lights ON, present=false → lights OFF"
+      debounce: "500ms (ON), 60s (OFF)"
+
+    privacy_aware_activation:
+      scenario: "Enable voice assistant only when single person present"
+      detection_method: "sensor_fusion"
+      confidence_threshold: 0.6
+      additional_check: "person_count == 1 (from room_occupancy)"
+      action: "Enable voice recognition"
+
+    energy_management:
+      scenario: "Reduce HVAC when room empty for 15 min"
+      detection_method: "sensor_fusion"
+      confidence_threshold: 0.7
+      persistence_required_ms: 900000
+      action: "present=false for 15min → HVAC to eco mode"
+
+    security_monitoring:
+      scenario: "Alert if presence detected in restricted area"
+      detection_method: "camera_only OR sensor_fusion"
+      confidence_threshold: 0.8
+      action: "present=true → Security alert + log event"
+
+  performance:
+    detection_latency_ms:
+      PIR_only:
+        p50: 3
+        p95: 5
+        p99: 8
+
+      mmWave_only:
+        p50: 6
+        p95: 8
+        p99: 12
+
+      sensor_fusion:
+        p50: 8
+        p95: 10
+        p99: 15
+
+      camera_only:
+        p50: 30
+        p95: 50
+        p99: 80
+
+    power_consumption_mw:
+      PIR_only: 10
+      mmWave_only: 150
+      sensor_fusion: 200
+      camera_only: 500
+
+    memory_kb: 2
+
+  observability:
+    metrics:
+      - name: "presence_detections_total"
+        type: "counter"
+        labels: ["room_id", "present", "detection_method"]
+        description: "Total presence detections"
+
+      - name: "presence_detection_confidence"
+        type: "gauge"
+        labels: ["room_id"]
+        description: "Current presence detection confidence"
+
+      - name: "presence_detection_latency_ms"
+        type: "histogram"
+        labels: ["detection_method"]
+        buckets: [5, 10, 20, 50, 100]
+        description: "Presence detection latency"
+
+      - name: "presence_false_positives_total"
+        type: "counter"
+        labels: ["room_id", "detection_method"]
+        description: "Suspected false positive detections"
+
+    events:
+      - name: "PresenceDetected"
+        trigger: "present=false → present=true"
+        payload: "room_id, confidence, detection_method"
+
+      - name: "PresenceCleared"
+        trigger: "present=true → present=false"
+        payload: "room_id, confidence, last_motion_ms"
+
+  example_detections:
+    person_enters_room:
+      present: true
+      confidence: 0.85
+      timestamp_ms: 1698364800000
+      room_id: "living_room"
+      detection_method: "sensor_fusion"
+      contributing_sensors: ["PIR", "mmWave", "BLE"]
+      last_motion_ms: 0
+
+    room_empty:
+      present: false
+      confidence: 0.92
+      timestamp_ms: 1698364860000
+      room_id: "living_room"
+      detection_method: "sensor_fusion"
+      contributing_sensors: ["PIR", "mmWave"]
+      last_motion_ms: 60000
+
+    low_confidence_detection:
+      present: true
+      confidence: 0.45
+      timestamp_ms: 1698364900000
+      room_id: "bedroom_main"
+      detection_method: "PIR_only"
+      contributing_sensors: ["PIR"]
+      last_motion_ms: 1000
+      note: "Below decision threshold, state=UNCERTAIN"
+
+  related_contracts:
+    - "sensor_types.yml"
+    - "sensor_fusion_algorithm.yml"
+    - "room_occupancy.yml"
+    - "context_detector.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -57,6 +57,7 @@ We adopt a **dual-kernel microkernel architecture** splitting the system into tw
   - Policy Evaluation Point (PEP) at syscall boundary
   - Event bus for post-commit fanout (SSE)
   - Driver registry (episodic, semantic, vector, graph, FTS, CAS, MLS, CRDT)
+  - **Knowledge Graph Store** (8th memory type, added via ADR-0081): Temporal graph with nodes (entities: Person, Location, Event, Organization, Thing) and edges (relationships with valid_from/valid_to timestamps). Provides structured family relationship queries for LLM context enrichment. Integrated with K0 P03 Consolidation pipeline for episodic → KG transformation. See ADR-0081 for full architecture.
 - **Ports**: P01-P20 (20 well-defined ports for queries, writes, SSE, etc.)
 - **Performance**: Optimized for durability (slow path, <100ms P95)
 - **Stability**: Rock-solid, minimal changes after initial release

@@ -1,0 +1,455 @@
+ambient_sensor_types:
+  name: "Ambient Sensor Types"
+  purpose: "Define 5 sensor types for room context awareness"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_fusion.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Multi-sensor fusion for ambient room context awareness enables the system
+    to understand physical environment without explicit user input:
+    - Who is present in the room
+    - How many people are in the room
+    - Device proximity and connectivity
+    - Movement and activity patterns
+
+    This enables privacy-aware, context-sensitive responses (whisper mode when
+    others present, loud mode when alone).
+
+  sensors:
+    PIR:
+      type: "Passive Infrared"
+      full_name: "Passive Infrared Motion Sensor"
+      purpose: "Motion detection via infrared radiation changes"
+
+      specifications:
+        range_meters: 7
+        detection_angle_degrees: 120
+        sample_rate_hz: 1
+        accuracy: "medium"
+        response_time_ms: 100
+        false_positive_rate: 0.05
+
+      capabilities:
+        - "Motion detection (binary: motion/no motion)"
+        - "Occupancy estimation (presence/absence)"
+        - "Activity detection (movement patterns)"
+
+      limitations:
+        - "No person counting (can't distinguish 1 vs multiple people)"
+        - "No direction tracking"
+        - "Sensitive to temperature changes"
+        - "Can't detect stationary people after ~30s"
+
+      typical_placement:
+        - "Corner of room at 2.5m height"
+        - "45-degree downward angle"
+        - "Avoid direct sunlight, heaters, AC vents"
+
+      output_schema:
+        motion_detected:
+          type: "boolean"
+          description: "Motion detected in last sample period"
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+        last_motion_timestamp_ms:
+          type: "integer"
+          format: "int64"
+        sensor_id:
+          type: "string"
+
+      cost: "$15-30"
+      power: "Low (battery: 1-2 years)"
+
+    mmWave:
+      type: "Millimeter Wave Radar"
+      full_name: "60GHz mmWave Radar Sensor"
+      purpose: "Precise person tracking and vital signs detection"
+
+      specifications:
+        range_meters: 5
+        detection_angle_degrees: 110
+        sample_rate_hz: 10
+        accuracy: "high"
+        response_time_ms: 50
+        false_positive_rate: 0.01
+        resolution_cm: 10
+
+      capabilities:
+        - "Person counting (1-5 people accurately)"
+        - "Breathing detection (respiratory rate)"
+        - "Fall detection"
+        - "Presence detection (including stationary people)"
+        - "Movement tracking (position + velocity)"
+        - "Micro-motion detection"
+
+      features:
+        breathing_detection:
+          enabled: true
+          accuracy: "±2 breaths/min"
+          use_case: "Detect sleeping vs awake"
+
+        fall_detection:
+          enabled: true
+          sensitivity: "high"
+          alert_latency_ms: 500
+
+        person_tracking:
+          max_targets: 5
+          position_accuracy_cm: 10
+
+      limitations:
+        - "Limited range (5m)"
+        - "Performance degrades with >5 people"
+        - "Can be confused by pets, large objects"
+
+      typical_placement:
+        - "Center of room at 2.0m height"
+        - "Horizontal orientation"
+        - "Avoid metal surfaces, large obstructions"
+
+      output_schema:
+        targets:
+          type: "array"
+          items:
+            target_id: "integer"
+            distance_m: "float"
+            angle_degrees: "float"
+            velocity_mps: "float"
+            breathing_rate_bpm: "float (optional)"
+        person_count:
+          type: "integer"
+          range: [0, 5]
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+        sensor_id:
+          type: "string"
+
+      cost: "$30-60"
+      power: "Medium (USB powered)"
+
+    BLE:
+      type: "Bluetooth Low Energy"
+      full_name: "BLE Device Proximity Detection"
+      purpose: "Track user devices for presence inference"
+
+      specifications:
+        range_meters: 10
+        detection_angle_degrees: 360
+        sample_rate_hz: 0.1
+        accuracy: "low"
+        rssi_accuracy_db: 5
+        scan_interval_ms: 10000
+
+      capabilities:
+        - "Device proximity detection"
+        - "User identification (via paired devices)"
+        - "RSSI-based distance estimation"
+        - "Device type classification (phone, watch, beacon)"
+
+      device_types:
+        phone:
+          typical_rssi_1m: -60
+          presence_threshold_rssi: -80
+          user_identity: true
+
+        watch:
+          typical_rssi_1m: -65
+          presence_threshold_rssi: -85
+          user_identity: true
+
+        beacon:
+          typical_rssi_1m: -55
+          presence_threshold_rssi: -75
+          user_identity: false
+
+      limitations:
+        - "Coarse distance estimation (±2m)"
+        - "Signal interference from walls, furniture"
+        - "Requires device pairing/registration"
+        - "Privacy concerns (device tracking)"
+
+      typical_placement:
+        - "Central location in room"
+        - "Height: 1.5m"
+        - "Away from metal, electronic interference"
+
+      output_schema:
+        detected_devices:
+          type: "array"
+          items:
+            device_mac: "string (anonymized)"
+            device_type: "enum[phone, watch, beacon]"
+            rssi_db: "integer"
+            estimated_distance_m: "float"
+            user_id: "string (optional)"
+            last_seen_ms: "integer"
+        device_count:
+          type: "integer"
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+        sensor_id:
+          type: "string"
+
+      privacy:
+        mac_anonymization: "SHA256 hash of last 3 octets"
+        data_retention_seconds: 300
+        pii_protection: "AMBER_BAND"
+
+      cost: "$10-20"
+      power: "Low (USB or battery)"
+
+    WiFi:
+      type: "WiFi Device Detection"
+      full_name: "WiFi Connected Device Tracking"
+      purpose: "Track connected devices for occupancy estimation"
+
+      specifications:
+        range_meters: 30
+        detection_angle_degrees: 360
+        sample_rate_hz: 0.05
+        accuracy: "medium"
+        scan_interval_ms: 20000
+
+      capabilities:
+        - "Connected device tracking"
+        - "RSSI-based presence detection"
+        - "Device type classification"
+        - "Network activity monitoring"
+
+      metrics:
+        RSSI:
+          description: "Received Signal Strength Indicator"
+          range_db: [-90, -30]
+          presence_threshold_db: -75
+
+        connected_devices:
+          description: "Number of connected WiFi devices"
+          max: 255
+          typical: 10
+
+      limitations:
+        - "Only detects connected devices"
+        - "Can't detect guests without WiFi password"
+        - "Coarse location (entire coverage area)"
+        - "Privacy concerns (network monitoring)"
+
+      typical_placement:
+        - "WiFi router/access point location"
+        - "Central to coverage area"
+
+      output_schema:
+        connected_devices:
+          type: "array"
+          items:
+            device_mac: "string (anonymized)"
+            device_name: "string (optional)"
+            rssi_db: "integer"
+            device_type: "enum[phone, laptop, tablet, iot]"
+            user_id: "string (optional)"
+            connection_duration_s: "integer"
+        device_count:
+          type: "integer"
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+        sensor_id:
+          type: "string"
+
+      privacy:
+        mac_anonymization: "SHA256 hash"
+        device_name_redaction: true
+        data_retention_seconds: 300
+        pii_protection: "AMBER_BAND"
+
+      cost: "$0 (router integration)"
+      power: "N/A (router powered)"
+
+    Camera:
+      type: "Computer Vision"
+      full_name: "Vision-Based Person Detection"
+      purpose: "Accurate person detection, counting, and face recognition"
+
+      specifications:
+        range_meters: 8
+        detection_angle_degrees: 90
+        sample_rate_fps: 1
+        accuracy: "high"
+        resolution: "1920x1080"
+        processing_latency_ms: 100
+
+      capabilities:
+        - "Person counting (1-10+ people accurately)"
+        - "Face detection and recognition"
+        - "Body tracking and pose estimation"
+        - "Activity recognition"
+        - "Age/gender estimation (optional)"
+
+      features:
+        person_count:
+          accuracy: 0.95
+          max_count: 10
+          occlusion_handling: true
+
+        face_detection:
+          accuracy: 0.98
+          min_face_size_px: 64
+          recognition: true
+
+        body_tracking:
+          skeleton_points: 17
+          pose_estimation: true
+
+      limitations:
+        - "HIGH PRIVACY RISK - RED BAND ONLY"
+        - "Requires good lighting (>50 lux)"
+        - "Occlusion issues with furniture, walls"
+        - "Processing intensive (GPU recommended)"
+        - "Privacy regulations (GDPR, CCPA)"
+
+      typical_placement:
+        - "Corner of room at 2.5m height"
+        - "Wide-angle lens (90-120 degrees)"
+        - "Avoid backlight, direct sunlight"
+
+      output_schema:
+        detected_people:
+          type: "array"
+          items:
+            person_id: "integer"
+            bounding_box: "object {x, y, width, height}"
+            confidence: "float"
+            face_detected: "boolean"
+            face_id: "string (optional, RED_BAND)"
+            estimated_age: "integer (optional)"
+            estimated_gender: "enum[male, female, unknown] (optional)"
+        person_count:
+          type: "integer"
+        confidence:
+          type: "float"
+          range: [0.0, 1.0]
+        sensor_id:
+          type: "string"
+
+      privacy:
+        classification: "RED_BAND_ONLY"
+        user_consent_required: true
+        data_retention_seconds: 60
+        pii_redaction:
+          - "Face blurring (optional)"
+          - "Bounding boxes only (no images)"
+          - "Aggregate counts only"
+        compliance:
+          - "GDPR Article 9 (biometric data)"
+          - "CCPA (California Consumer Privacy Act)"
+          - "BIPA (Biometric Information Privacy Act - IL)"
+
+      cost: "$50-200"
+      power: "High (USB 3.0 or PoE)"
+
+  sensor_comparison:
+    by_accuracy:
+      ranking: ["Camera", "mmWave", "WiFi", "PIR", "BLE"]
+      note: "Camera and mmWave most accurate for person counting"
+
+    by_privacy:
+      least_intrusive: ["PIR", "mmWave"]
+      moderate: ["BLE", "WiFi"]
+      most_intrusive: ["Camera"]
+      note: "Camera requires RED_BAND privacy classification"
+
+    by_cost:
+      cheapest: ["WiFi", "BLE", "PIR"]
+      moderate: ["mmWave"]
+      expensive: ["Camera"]
+
+    by_power:
+      low_power: ["PIR", "BLE"]
+      medium_power: ["mmWave", "WiFi"]
+      high_power: ["Camera"]
+
+  fusion_algorithm:
+    strategy: "Weighted Average"
+    description: "Combine sensor readings with weighted confidence scores"
+
+    weights:
+      PIR: 0.15
+      mmWave: 0.35
+      BLE: 0.15
+      WiFi: 0.10
+      Camera: 0.25
+
+    weight_justification:
+      mmWave: "Highest weight - accurate person counting + stationary detection"
+      Camera: "Second highest - very accurate but privacy-limited"
+      PIR: "Medium weight - good motion but no counting"
+      BLE: "Medium weight - good for user ID but coarse distance"
+      WiFi: "Lowest weight - coarse location, connection-dependent"
+
+    confidence_threshold: 0.6
+    confidence_calculation: "weighted_sum(sensor_confidence * weight)"
+
+    debounce_ms: 500
+    debounce_reason: "Avoid flickering occupancy state from sensor noise"
+
+  performance:
+    fusion_latency_ms: 10
+    update_frequency_hz: 1
+    max_sensors_per_room: 5
+    total_processing_latency_ms: 150
+    breakdown:
+      - sensor_sampling: "10-100ms (varies by sensor)"
+      - fusion_algorithm: "10ms"
+      - occupancy_classification: "20ms"
+      - event_emission: "5ms"
+
+  privacy:
+    camera_usage: "RED_BAND_ONLY"
+    camera_consent:
+      required: true
+      explicit: true
+      revocable: true
+      granular: "Per-room camera enable/disable"
+
+    data_retention_seconds: 60
+    data_retention_policy: "All sensor data deleted after 60s"
+
+    pii_redaction: true
+    pii_redaction_rules:
+      - "BLE/WiFi MAC addresses anonymized (SHA256)"
+      - "Camera face IDs encrypted (AES-256)"
+      - "Device names redacted"
+      - "Only aggregate counts stored long-term"
+
+    compliance:
+      gdpr: "Article 9 (biometric), Article 25 (privacy by design)"
+      ccpa: "Consumer opt-out, data deletion"
+      coppa: "No child tracking without parental consent"
+
+  observability:
+    metrics:
+      - name: "ambient_sensor_readings_total"
+        type: "counter"
+        labels: ["sensor_type", "sensor_id"]
+        description: "Total sensor readings processed"
+
+      - name: "ambient_sensor_fusion_latency_ms"
+        type: "histogram"
+        labels: ["sensor_count"]
+        buckets: [5, 10, 20, 50, 100]
+        description: "Sensor fusion processing latency"
+
+      - name: "ambient_sensor_confidence"
+        type: "gauge"
+        labels: ["sensor_type"]
+        description: "Current sensor confidence score"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0004 Amendment #2"
+      author: "Contract Development Team"

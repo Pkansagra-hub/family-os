@@ -59,13 +59,13 @@ We adopt a **3-tier backpressure cascade** with per-stream watermarks, voice-spe
 
 **Five alternatives evaluated for backpressure management:**
 
-| Alternative | Graceful Degradation | Observability | Voice Support | Complexity | Overhead | K1 Fit |
-|-------------|---------------------|---------------|---------------|------------|----------|--------|
-| **1. No Backpressure** | ❌ None | ❌ None | ❌ No | ✅ Low | ✅ 0ms | ❌ 1/10 |
-| **2. Simple Rate Limiting** | ⚠️ Binary | ⚠️ Counter only | ❌ No | ✅ Low | ✅ <1ms | ⚠️ 4/10 |
-| **3. Circuit Breakers** | ⚠️ Binary | ✅ State machine | ❌ No | ⚠️ Medium | ⚠️ 2ms | ⚠️ 6/10 |
-| **4. Token Bucket** | ⚠️ Binary | ⚠️ Token count | ❌ No | ✅ Low | ✅ <1ms | ⚠️ 5/10 |
-| **5. 3-Tier Cascade** | ✅ Progressive | ✅ Multi-level | ✅ Yes | ⚠️ High | ✅ <5ms | ✅ **9/10** |
+| Alternative                 | Graceful Degradation | Observability   | Voice Support | Complexity | Overhead | K1 Fit     |
+| --------------------------- | -------------------- | --------------- | ------------- | ---------- | -------- | ---------- |
+| **1. No Backpressure**      | ❌ None               | ❌ None          | ❌ No          | ✅ Low      | ✅ 0ms    | ❌ 1/10     |
+| **2. Simple Rate Limiting** | ⚠️ Binary             | ⚠️ Counter only  | ❌ No          | ✅ Low      | ✅ <1ms   | ⚠️ 4/10     |
+| **3. Circuit Breakers**     | ⚠️ Binary             | ✅ State machine | ❌ No          | ⚠️ Medium   | ⚠️ 2ms    | ⚠️ 6/10     |
+| **4. Token Bucket**         | ⚠️ Binary             | ⚠️ Token count   | ❌ No          | ✅ Low      | ✅ <1ms   | ⚠️ 5/10     |
+| **5. 3-Tier Cascade**       | ✅ Progressive        | ✅ Multi-level   | ✅ Yes         | ⚠️ High     | ✅ <5ms   | ✅ **9/10** |
 
 **Decision: Alternative 5 (3-Tier Cascade) selected.**
 
@@ -1011,3 +1011,88 @@ class TokenBucket:
 - 0061d: Fairness & Anti-Starvation
 
 **Status:** Umbrella ADR complete, sub-ADRs pending
+
+---
+
+## Implementation Status Verification (2025-10-22)
+
+**Verification Date:** 2025-10-22
+**Verification Method:** Directory inspection + grep searches across k1/l5_infrastructure/
+**Issue Reference:** ADR Development Plan Issue 1.1 (Verify Graceful Degradation Implementation)
+
+### Architecture vs Implementation Gap
+
+**Architecture Status: Proposed (Fully Documented)**
+- ADR documentation comprehensive (1,014 lines main ADR + 4 sub-ADRs)
+- 3-tier cascade design complete (per-stream, voice pipeline, global limits)
+- Implementation timeline defined (4-week phased rollout)
+- Success metrics documented (backpressure <5ms, 99.9% uptime, zero OOM crashes)
+
+**Implementation Status: 0% Complete** ⚠️
+- **Directory inspection result:** `k1/l5_infrastructure/` contains ONLY 2 files:
+  - `layer5_adr_map.md` (documentation)
+  - `__init__.py` (minimal initialization)
+- **Missing directories:**
+  - `k1/infrastructure/backpressure/` ❌ (does NOT exist)
+  - `k1/infrastructure/watermark_checker.py` ❌ (does NOT exist)
+  - `k1/infrastructure/voice_pipeline_monitor.py` ❌ (does NOT exist)
+  - `k1/infrastructure/global_limits_enforcer.py` ❌ (does NOT exist)
+- **Grep search results:** 20+ matches in documentation files (.md), ZERO matches in implementation files (.py)
+
+### Files Planned vs Files Found
+
+Per ADR-0061 and contract_development_plan.md Epic 2.13, the following 18+ files are planned:
+
+| **Planned Component**          | **File Path**                                            | **Verification Status** |
+| ------------------------------ | -------------------------------------------------------- | ----------------------- |
+| Tier 1: Watermark Checker      | k1/infrastructure/backpressure/watermark_checker.py      | ❌ **DOES NOT EXIST**    |
+| Tier 1: Per-Stream Monitor     | k1/infrastructure/backpressure/per_stream_monitor.py     | ❌ **DOES NOT EXIST**    |
+| Tier 2: Voice Pipeline Monitor | k1/infrastructure/backpressure/voice_pipeline_monitor.py | ❌ **DOES NOT EXIST**    |
+| Tier 2: Stage Degradation      | k1/infrastructure/backpressure/stage_degradation.py      | ❌ **DOES NOT EXIST**    |
+| Tier 3: Global Limits Enforcer | k1/infrastructure/backpressure/global_limits_enforcer.py | ❌ **DOES NOT EXIST**    |
+| Tier 3: Memory Monitor         | k1/infrastructure/backpressure/memory_monitor.py         | ❌ **DOES NOT EXIST**    |
+| Backpressure Coordinator       | k1/infrastructure/backpressure/cascade_coordinator.py    | ❌ **DOES NOT EXIST**    |
+| Privacy Band Overrides         | k1/infrastructure/backpressure/privacy_overrides.py      | ❌ **DOES NOT EXIST**    |
+
+**Contract Files (Epic 2.13):** 28 backpressure contract files planned in contract_development_plan.md:
+- Watermarks: 8 files (backpressure_tier_enum.yml, watermark_manager.yml, etc.)
+- Propagation: 7 files (backpressure_signal.yml, coordinator.yml, etc.)
+- Recovery: 7 files (rate_limited_admission.yml, sustained_check.yml, etc.)
+- Retention Overrides: 6 files (privacy_band_overrides.yml, etc.)
+
+### Interpretation of "Proposed" Status
+
+The "Proposed" status indicates that ADR-0061 is architecturally complete but awaiting implementation approval:
+- ✅ Architecture designed (3-tier cascade with watermarks 80/90/95%)
+- ✅ Performance budgets defined (<5ms backpressure check, <512MB memory)
+- ✅ Implementation timeline planned (4 weeks, phased rollout)
+- ✅ Sub-ADRs completed (0061a-d for detailed specifications)
+- ❌ Code implementation missing (0% of planned ~340+ lines exist in codebase)
+
+### Required Implementation Effort
+
+**Status:** **NEEDS_IMPLEMENTATION** (P0 - PRODUCTION CRITICAL)
+
+**Epic Scope:** Part of 6-8 week 3-subsystem implementation (Thermal + Model Placement + Backpressure)
+- **Backpressure Infrastructure:** ~340 lines (cascade coordinator + tier monitors)
+- **Tier Components:** ~180 lines (watermark checker + voice monitor + global enforcer)
+- **Integration:** ~120 lines (privacy overrides + metrics + alerts)
+- **Testing:** ~400 lines WARD tests (integration tests, load testing, watermark scenarios)
+- **Contract Validation:** 28 backpressure contract files (Epic 2.13) from contract_development_plan.md
+- **Dependencies:** None (can be implemented independently of ADR-0026/0027)
+
+**Acceptance Criteria (Per ADR Development Plan):**
+- [ ] `k1/l5_infrastructure/backpressure/` directory created with 8+ modules
+- [ ] Tier 1: Per-stream watermark monitoring (80/90/95% thresholds)
+- [ ] Tier 2: Voice pipeline 5-stage degradation (ASR input, intent queue, tool executor, TTS queue, audio output)
+- [ ] Tier 3: Global resource monitoring (512MB memory limit, 5000 queue items max)
+- [ ] BackpressureCoordinator with <50ms signal propagation
+- [ ] Privacy band overrides (RED bypass, AMBER degradation, GREEN rejection)
+- [ ] Prometheus metrics (backpressure_tier_gauge, watermark_breaches_total, tier_transitions_total)
+- [ ] WARD integration tests (load scenarios, watermark transitions, recovery)
+- [ ] Epic 2.13 contracts validated (28 backpressure contract files)
+- [ ] Performance validation (<5ms overhead, 99.9% uptime, zero OOM crashes under load)
+
+---
+
+**End of ADR-0061**

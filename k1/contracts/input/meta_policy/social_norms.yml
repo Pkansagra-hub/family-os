@@ -1,0 +1,591 @@
+social_norms:
+  name: "Family Social Norms Contract"
+  purpose: "Model family norms to constrain LLM behavior and enable socially-aware responses"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2 (Module #56)"
+  module: "k1/l1_input/meta_policy/social_norms.py"
+  capability: "Social Norm Modeling, Contextual Privacy, Proactive Confirmations"
+
+  description: |
+    Social norms define family-specific rules and behavioral expectations that constrain
+    LLM responses to be contextually appropriate. Norms cover time-based, cost-based,
+    privacy-based, and safety-based constraints.
+    
+    Key features:
+    - 4 norm categories (time, cost, privacy, safety)
+    - Adaptive learning from family behavior
+    - Contextual norm activation (ambient sensor triggers)
+    - Norm violation detection
+    - Priority-based norm enforcement
+
+  norm_categories:
+    time_based:
+      description: "Time-sensitive behavioral constraints"
+      
+      quiet_hours:
+        description: "Nighttime constraints (22:00-07:00)"
+        
+        schedule:
+          start_time: "22:00"
+          end_time: "07:00"
+          days: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        
+        constraints:
+          no_loud_music:
+            action: "BLOCK"
+            reason: "No loud music suggestions during quiet hours"
+            alternatives: ["Suggest headphones", "Defer until morning"]
+          
+          no_phone_calls:
+            action: "BLOCK"
+            after_time: "22:30"
+            reason: "No outgoing calls after 22:30"
+            exceptions: ["emergency_contacts"]
+          
+          tts_volume_reduction:
+            action: "MODIFY"
+            volume_percentage: 50
+            reason: "Reduce TTS volume by 50% during quiet hours"
+          
+          defer_non_urgent:
+            action: "DEFER"
+            defer_until: "07:00"
+            reason: "Defer non-urgent notifications until morning"
+      
+      naptime:
+        description: "Naptime constraints (auto-detected)"
+        
+        detection_method: "ambient_sensors"
+        detection_criteria:
+          room_dark: true
+          no_motion: true
+          duration_minutes: 60
+        
+        constraints:
+          no_audio_outputs:
+            action: "BLOCK"
+            reason: "No audio outputs during naptime"
+            exceptions: ["emergency_alerts", "alarms"]
+          
+          visual_only_responses:
+            action: "MODIFY"
+            modality: "visual"
+            reason: "Visual-only responses during naptime"
+          
+          defer_non_urgent_tasks:
+            action: "DEFER"
+            defer_until: "naptime_end"
+            reason: "Defer non-urgent tasks until naptime ends"
+      
+      meal_times:
+        description: "Meal time constraints (07:00-08:00, 12:00-13:00, 18:00-19:00)"
+        
+        schedule:
+          breakfast:
+            start_time: "07:00"
+            end_time: "08:00"
+          lunch:
+            start_time: "12:00"
+            end_time: "13:00"
+          dinner:
+            start_time: "18:00"
+            end_time: "19:00"
+        
+        constraints:
+          no_work_interruptions:
+            action: "DEFER"
+            reason: "No work notifications during meal times"
+            exceptions: ["urgent_messages"]
+          
+          family_conversation_priority:
+            action: "MODIFY"
+            priority: "LOW"
+            reason: "Reduce agent interruptions, prioritize family conversation"
+      
+      work_hours:
+        description: "Work hours constraints (09:00-17:00, Monday-Friday)"
+        
+        schedule:
+          start_time: "09:00"
+          end_time: "17:00"
+          days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        
+        constraints:
+          no_entertainment_suggestions:
+            action: "BLOCK"
+            reason: "No entertainment suggestions during work hours"
+            exceptions: ["break_time", "user_initiated"]
+          
+          prioritize_productivity:
+            action: "MODIFY"
+            intent_filter: ["entertainment", "social_media"]
+            reason: "Prioritize productivity intents during work hours"
+
+    cost_based:
+      description: "Cost-sensitive behavioral constraints"
+      
+      high_cost_threshold:
+        description: "High-cost transaction confirmation"
+        
+        threshold:
+          amount_usd: 100
+          currency: "USD"
+        
+        action: "CONFIRM"
+        confirmation_required: true
+        confirmation_message: "This costs ${amount}. Confirm?"
+        
+        triggers:
+          - "e_commerce_purchase"
+          - "subscription_payment"
+          - "service_booking"
+      
+      daily_spend_limit:
+        description: "Daily spending limit enforcement"
+        
+        limit:
+          amount_usd: 500
+          reset_time: "00:00"
+        
+        action: "BLOCK"
+        block_message: "Daily spending limit of $500 reached. Transaction blocked."
+        notify_user: true
+        
+        exceptions:
+          - "emergency_purchases"
+          - "pre_approved_subscriptions"
+      
+      weekly_spend_budget:
+        description: "Weekly budget tracking"
+        
+        budget:
+          amount_usd: 2000
+          reset_day: "sunday"
+        
+        action: "NOTIFY"
+        thresholds:
+          warning_percentage: 75
+          warning_message: "75% of weekly budget used ($1500 of $2000)"
+          
+          critical_percentage: 90
+          critical_message: "90% of weekly budget used ($1800 of $2000)"
+
+    privacy_based:
+      description: "Privacy-sensitive behavioral constraints"
+      
+      visitors_present:
+        description: "Privacy constraints when visitors present"
+        
+        detection_method: "ambient_sensors"
+        detection_criteria:
+          unknown_voices: true
+          unknown_faces: true
+        
+        constraints:
+          upgrade_privacy_band:
+            action: "MODIFY"
+            from_band: "GREEN"
+            to_band: "AMBER"
+            reason: "Upgrade privacy band when visitors present"
+          
+          no_personal_information:
+            action: "BLOCK"
+            blocked_entities: ["calendar_events", "email_content", "contacts", "messages"]
+            reason: "No personal information in responses when visitors present"
+          
+          no_reading_aloud:
+            action: "BLOCK"
+            blocked_actions: ["read_calendar", "read_email", "read_messages"]
+            reason: "No reading aloud personal content when visitors present"
+      
+      private_conversation:
+        description: "Privacy constraints during private conversations"
+        
+        detection_method: "user_signal"
+        detection_criteria:
+          explicit_signal: "Hey FamilyOS, private mode"
+          implicit_signal: "low_volume_speech"
+        
+        constraints:
+          no_recording:
+            action: "BLOCK"
+            reason: "No audio recording during private mode"
+          
+          no_transcription:
+            action: "BLOCK"
+            reason: "No speech transcription during private mode"
+          
+          visual_feedback_only:
+            action: "MODIFY"
+            modality: "visual"
+            reason: "Visual feedback only (no audio) during private mode"
+      
+      children_present:
+        description: "Privacy and safety constraints when children present"
+        
+        detection_method: "speaker_identification"
+        detection_criteria:
+          speaker_age_group: "child"
+        
+        constraints:
+          content_filtering:
+            action: "MODIFY"
+            safety_filter: "strict"
+            reason: "Strict content filtering when children present"
+          
+          no_adult_content:
+            action: "BLOCK"
+            blocked_categories: ["violence", "sexual_content", "profanity", "gambling"]
+            reason: "Block adult content when children present"
+          
+          age_appropriate_responses:
+            action: "MODIFY"
+            tone: "child_friendly"
+            vocabulary: "simplified"
+            reason: "Age-appropriate language when children present"
+
+    safety_based:
+      description: "Safety-critical behavioral constraints"
+      
+      emergency_override:
+        description: "Override all norms during emergencies"
+        
+        scenarios:
+          fire_alarm:
+            action: "OVERRIDE_ALL_NORMS"
+            priority: 1
+            reason: "Fire alarm detected - prioritize safety"
+            actions:
+              - "alert_emergency_services"
+              - "guide_evacuation"
+              - "unlock_doors"
+          
+          medical_emergency:
+            action: "OVERRIDE_ALL_NORMS"
+            priority: 1
+            reason: "Medical emergency detected - prioritize safety"
+            actions:
+              - "call_911"
+              - "locate_medical_contacts"
+              - "provide_first_aid_guidance"
+          
+          security_breach:
+            action: "OVERRIDE_ALL_NORMS"
+            priority: 1
+            reason: "Security breach detected - prioritize safety"
+            actions:
+              - "alert_security"
+              - "lock_doors"
+              - "activate_cameras"
+      
+      health_monitoring:
+        description: "Health-related safety constraints"
+        
+        triggers:
+          fall_detection:
+            action: "ALERT"
+            alert_contacts: ["emergency_contact_1", "emergency_contact_2"]
+            alert_message: "Fall detected. Checking on family member."
+          
+          irregular_vitals:
+            action: "NOTIFY"
+            notify_contacts: ["primary_caregiver"]
+            notify_message: "Irregular vital signs detected."
+      
+      child_safety:
+        description: "Child safety constraints"
+        
+        constraints:
+          no_dangerous_advice:
+            action: "BLOCK"
+            blocked_topics: ["handling_chemicals", "using_sharp_objects", "operating_appliances"]
+            reason: "Block dangerous advice when children present"
+          
+          parental_supervision_required:
+            action: "CONFIRM"
+            confirmation_message: "This activity requires parental supervision. Is a parent present?"
+            required_for: ["cooking", "internet_access", "video_calls"]
+
+  norm_learning:
+    description: "Adaptive learning from family behavior"
+    
+    enabled: true
+    
+    learning_signals:
+      explicit_feedback:
+        weight: 1.0
+        examples:
+          - "User corrects norm violation"
+          - "User approves norm enforcement"
+          - "User disables norm temporarily"
+      
+      implicit_feedback:
+        weight: 0.5
+        examples:
+          - "User frequently overrides specific norm"
+          - "User adjusts norm parameters"
+          - "User creates exceptions"
+      
+      behavioral_patterns:
+        weight: 0.2
+        examples:
+          - "Family consistently violates norm at specific times"
+          - "Norm never triggered in 30 days"
+          - "Norm triggers but no user reaction"
+    
+    learning_algorithm:
+      method: "exponential_moving_average"
+      learning_rate: 0.1
+      update_frequency: "weekly"
+      min_observations: 10
+      
+      formula: "new_weight = (1 - learning_rate) * old_weight + learning_rate * feedback_signal"
+    
+    norm_adjustments:
+      threshold_adjustment:
+        description: "Adjust norm thresholds based on usage"
+        example: "If high_cost_threshold frequently triggers at $100, increase to $150"
+      
+      schedule_adjustment:
+        description: "Adjust time-based schedules"
+        example: "If family consistently sleeps until 08:00, adjust quiet_hours end_time"
+      
+      exception_creation:
+        description: "Create norm exceptions from repeated overrides"
+        example: "If user overrides no_phone_calls 5 times for same contact, add to exceptions"
+
+  norm_enforcement:
+    priority_order:
+      1: "safety_based"
+      2: "privacy_based"
+      3: "cost_based"
+      4: "time_based"
+    
+    conflict_resolution:
+      method: "highest_priority_wins"
+      example: "emergency_override (priority 1) overrides quiet_hours (priority 4)"
+    
+    enforcement_actions:
+      BLOCK:
+        description: "Block action entirely"
+        user_feedback: "Action blocked due to [norm_name]: [reason]"
+      
+      MODIFY:
+        description: "Modify action parameters"
+        user_feedback: "Action modified due to [norm_name]: [modification]"
+      
+      DEFER:
+        description: "Defer action to later time"
+        user_feedback: "Action deferred until [defer_until] due to [norm_name]"
+      
+      CONFIRM:
+        description: "Require user confirmation"
+        user_feedback: "Confirmation required: [confirmation_message]"
+      
+      NOTIFY:
+        description: "Notify user without blocking"
+        user_feedback: "Notification: [notify_message]"
+      
+      ALERT:
+        description: "Alert user and contacts"
+        user_feedback: "Alert sent to [contacts]: [alert_message]"
+      
+      OVERRIDE_ALL_NORMS:
+        description: "Override all norms (safety emergencies)"
+        user_feedback: "Emergency mode activated: [reason]"
+
+  norm_violation_detection:
+    detection_method: "intent_analysis"
+    
+    workflow:
+      step_1:
+        name: "Parse Intent"
+        action: "Extract intent from user request"
+        output: "intent_type, parameters, context"
+      
+      step_2:
+        name: "Check Active Norms"
+        action: "Query norm database for active norms"
+        filters: ["time_of_day", "room_occupancy", "speaker_identity"]
+        output: "List of active norms"
+      
+      step_3:
+        name: "Evaluate Violations"
+        action: "Check if intent violates any active norms"
+        algorithm: "For each active norm, check if intent matches norm trigger"
+        output: "List of violated norms"
+      
+      step_4:
+        name: "Select Enforcement Action"
+        action: "Select highest-priority enforcement action"
+        priority_order: "safety_based > privacy_based > cost_based > time_based"
+        output: "enforcement_action, reason, user_feedback"
+      
+      step_5:
+        name: "Apply Enforcement"
+        action: "Execute enforcement action"
+        actions:
+          - "Block intent (if BLOCK)"
+          - "Modify intent parameters (if MODIFY)"
+          - "Defer intent (if DEFER)"
+          - "Request confirmation (if CONFIRM)"
+          - "Send notification (if NOTIFY)"
+          - "Send alert (if ALERT)"
+          - "Override all norms (if OVERRIDE_ALL_NORMS)"
+
+  performance:
+    norm_check_latency_ms:
+      p50: 0.5
+      p95: 1
+      p99: 2
+      target: "<1ms for intent flow"
+    
+    database_size_kb:
+      base_norms: 50
+      learned_exceptions: 10
+      total: 60
+    
+    learning_update_latency_ms:
+      p50: 50
+      p95: 100
+      p99: 150
+      target: "<100ms (background)"
+
+  observability:
+    metrics:
+      - name: "meta_policy_norm_violations_total"
+        type: "counter"
+        labels: ["norm_category", "norm_name", "enforcement_action"]
+        description: "Total norm violations detected"
+
+      - name: "meta_policy_norm_check_latency_ms"
+        type: "histogram"
+        labels: ["norm_category"]
+        buckets: [0.5, 1, 2, 5, 10]
+        description: "Norm checking latency"
+
+      - name: "meta_policy_confirmations_required_total"
+        type: "counter"
+        labels: ["trigger_type"]
+        description: "Total confirmations required"
+
+      - name: "meta_policy_overrides_total"
+        type: "counter"
+        labels: ["norm_name", "reason"]
+        description: "Total norm overrides by user"
+
+      - name: "meta_policy_learning_updates_total"
+        type: "counter"
+        labels: ["norm_category", "update_type"]
+        description: "Total norm learning updates"
+
+    tracing:
+      span_name: "meta_policy_norm_check"
+      
+      attributes:
+        - "intent_type"
+        - "violated_norms"
+        - "enforcement_action"
+        - "norm_category"
+
+    logging:
+      events:
+        - event: "norm_violation_detected"
+          level: "info"
+          fields:
+            - "norm_name"
+            - "enforcement_action"
+            - "reason"
+        
+        - event: "norm_override_by_user"
+          level: "warning"
+          fields:
+            - "norm_name"
+            - "override_reason"
+        
+        - event: "norm_learning_update"
+          level: "info"
+          fields:
+            - "norm_name"
+            - "update_type"
+            - "old_value"
+            - "new_value"
+
+  storage:
+    database: "SQLite"
+    
+    schema:
+      norms:
+        columns:
+          norm_id: "TEXT PRIMARY KEY"
+          norm_category: "TEXT (time_based, cost_based, privacy_based, safety_based)"
+          norm_name: "TEXT"
+          norm_definition: "JSON"
+          enabled: "BOOLEAN"
+          created_at_ms: "INTEGER"
+          updated_at_ms: "INTEGER"
+        
+        indexes:
+          - "CREATE INDEX idx_norms_category ON norms(norm_category, enabled)"
+      
+      norm_violations:
+        columns:
+          violation_id: "TEXT PRIMARY KEY"
+          norm_id: "TEXT FOREIGN KEY"
+          intent: "TEXT"
+          enforcement_action: "TEXT"
+          timestamp_ms: "INTEGER"
+        
+        indexes:
+          - "CREATE INDEX idx_violations_timestamp ON norm_violations(timestamp_ms)"
+      
+      norm_overrides:
+        columns:
+          override_id: "TEXT PRIMARY KEY"
+          norm_id: "TEXT FOREIGN KEY"
+          override_reason: "TEXT"
+          timestamp_ms: "INTEGER"
+        
+        indexes:
+          - "CREATE INDEX idx_overrides_norm ON norm_overrides(norm_id, timestamp_ms)"
+
+  integration:
+    input_sources:
+      - name: "Intent Router"
+        source: "k1/l1_input/intent_router.py"
+        event: "INTENT_CLASSIFIED"
+      
+      - name: "Ambient Sensors"
+        source: "k1/l1_input/ambient_sensors.py"
+        event: "CONTEXT_DETECTED"
+      
+      - name: "Speaker Diarization"
+        source: "k1/l1_input/speaker_diarization.py"
+        event: "SPEAKER_IDENTIFIED"
+    
+    output_consumers:
+      - name: "Orchestrator"
+        destination: "k1/l2_orchestration/orchestrator_core.py"
+        event: "NORM_VIOLATION"
+      
+      - name: "Proactive Confirmation"
+        destination: "k1/l1_input/meta_policy/proactive_confirmation.py"
+        event: "CONFIRMATION_REQUIRED"
+      
+      - name: "Dynamic Privacy Adjuster"
+        destination: "k1/l1_input/meta_policy/dynamic_privacy_adjuster.py"
+        event: "PRIVACY_BAND_ADJUSTMENT"
+
+  related_contracts:
+    - "norm_modeler.yml"
+    - "time_based_rules.yml"
+    - "context_specific_behaviors.yml"
+    - "dynamic_privacy_adjuster.yml"
+    - "proactive_confirmation.yml"
+    - "inappropriate_action_detection.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -1,0 +1,24 @@
+/// Barge-In Response Schema (BGRS)
+/// Layer 4: Barge-In handling
+
+namespace k1.barge_in;
+
+enum BargeInAction : uint8 {
+  INTERRUPT_TTS = 0,
+  CANCEL_TASKS = 1,
+  CLEAR_QUEUE = 2
+}
+
+table BargeInResponse {
+  event_id: string (required);
+  action: BargeInAction (required);
+
+  // Performance metrics
+  latency_ms: uint32 = 0;
+
+  // Timestamps
+  responded_at_ms: uint64 = 0;
+}
+
+root_type BargeInResponse;
+file_identifier "BGRS";

@@ -1,0 +1,312 @@
+sensor_fusion_algorithm:
+  name: "Multi-Sensor Fusion Algorithm"
+  purpose: "Combine multiple sensor readings for robust presence and occupancy detection"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_fusion.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Multi-sensor fusion combines readings from 5 sensor types (PIR, mmWave, BLE,
+    WiFi, Camera) to produce a robust estimate of room occupancy and presence.
+
+    The algorithm handles:
+    - Sensor failures (graceful degradation)
+    - Conflicting readings (weighted voting)
+    - Sensor noise (temporal smoothing)
+    - Privacy constraints (Camera RED_BAND gating)
+
+  fusion_strategy:
+    primary_method: "Weighted Bayesian Fusion"
+    fallback_method: "Simple Weighted Average"
+
+    description: |
+      Primary: Bayesian fusion with sensor reliability models
+      Fallback: Weighted average when Bayesian confidence < 0.5
+
+  algorithm_steps:
+    step_1:
+      name: "Sensor Reading Collection"
+      description: "Collect latest readings from all available sensors"
+      timeout_ms: 100
+      handling:
+        missing_sensor: "Use last known reading (up to 30s old)"
+        sensor_error: "Exclude sensor from fusion"
+        stale_reading: "Apply age decay factor"
+
+    step_2:
+      name: "Privacy Gating"
+      description: "Apply privacy band filters"
+      rules:
+        - condition: "privacy_band != RED"
+          action: "Exclude Camera sensor"
+          fallback: "Use PIR + mmWave + BLE + WiFi only"
+
+        - condition: "privacy_band == GREEN"
+          action: "Use all sensors except Camera"
+
+        - condition: "privacy_band == RED && camera_consent == false"
+          action: "Exclude Camera sensor"
+
+    step_3:
+      name: "Sensor-Specific Processing"
+      description: "Extract relevant features from each sensor"
+      processing:
+        PIR:
+          extract: "motion_detected (boolean)"
+          transform: "binary_to_confidence(motion_detected)"
+          formula: "1.0 if motion else 0.0"
+
+        mmWave:
+          extract: "person_count, confidence"
+          transform: "direct_use"
+          validation: "person_count in [0, 5]"
+
+        BLE:
+          extract: "device_count"
+          transform: "device_count_to_person_count"
+          formula: "min(device_count * 0.8, 10)"
+          note: "Not all people have devices"
+
+        WiFi:
+          extract: "connected_devices"
+          transform: "device_count_to_person_count"
+          formula: "min(connected_devices * 0.6, 10)"
+          note: "Even more conservative than BLE"
+
+        Camera:
+          extract: "person_count, confidence"
+          transform: "direct_use"
+          validation: "person_count in [0, 10]"
+
+    step_4:
+      name: "Confidence Weighting"
+      description: "Apply sensor-specific confidence weights"
+      weights:
+        PIR: 0.15
+        mmWave: 0.35
+        BLE: 0.15
+        WiFi: 0.10
+        Camera: 0.25
+
+      dynamic_weight_adjustment:
+        enabled: true
+        rules:
+          - condition: "sensor_age_ms > 10000"
+            action: "weight *= 0.5"
+
+          - condition: "sensor_confidence < 0.5"
+            action: "weight *= sensor_confidence"
+
+          - condition: "sensor_error_count > 3"
+            action: "weight = 0.0 (exclude)"
+
+    step_5:
+      name: "Bayesian Fusion"
+      description: "Combine sensor readings using Bayesian inference"
+
+      likelihood_models:
+        PIR:
+          p_detect_given_occupied: 0.85
+          p_detect_given_empty: 0.05
+
+        mmWave:
+          p_detect_given_occupied: 0.95
+          p_detect_given_empty: 0.02
+
+        BLE:
+          p_detect_given_occupied: 0.70
+          p_detect_given_empty: 0.10
+
+        WiFi:
+          p_detect_given_occupied: 0.60
+          p_detect_given_empty: 0.15
+
+        Camera:
+          p_detect_given_occupied: 0.98
+          p_detect_given_empty: 0.01
+
+      prior_probability:
+        p_occupied: 0.3
+        p_empty: 0.7
+        note: "Default assumption: room more likely empty than occupied"
+
+      posterior_calculation:
+        formula: "P(occupied|sensors) = P(sensors|occupied) * P(occupied) / P(sensors)"
+        implementation: "Bayesian network with sensor independence assumption"
+
+      confidence_threshold: 0.6
+      decision: "occupied if P(occupied|sensors) > 0.6"
+
+    step_6:
+      name: "Temporal Smoothing"
+      description: "Apply temporal filter to reduce flickering"
+
+      smoothing_method: "Exponential Moving Average"
+      alpha: 0.3
+      formula: "smoothed = alpha * current + (1 - alpha) * previous"
+
+      debounce:
+        duration_ms: 500
+        rule: "Occupancy state must persist for 500ms before change"
+
+      hysteresis:
+        threshold_low: 0.4
+        threshold_high: 0.6
+        note: "Different thresholds for occupied→empty vs empty→occupied"
+
+    step_7:
+      name: "Occupancy Classification"
+      description: "Classify room occupancy level"
+
+      classes:
+        empty:
+          person_count: 0
+          confidence_threshold: 0.6
+
+        single_person:
+          person_count: 1
+          confidence_threshold: 0.6
+
+        small_group:
+          person_count: [2, 4]
+          confidence_threshold: 0.5
+
+        large_group:
+          person_count: [5, 10]
+          confidence_threshold: 0.5
+
+        crowd:
+          person_count: ">10"
+          confidence_threshold: 0.4
+
+    step_8:
+      name: "Output Generation"
+      description: "Generate fusion output with confidence"
+
+      output_fields:
+        - "person_count (integer)"
+        - "occupancy_class (enum)"
+        - "confidence (float)"
+        - "contributing_sensors (array)"
+        - "timestamp_ms (int64)"
+
+  sensor_fusion_variants:
+    high_accuracy_mode:
+      description: "Prioritize accuracy over speed"
+      sensors: ["Camera", "mmWave", "PIR"]
+      weights: { Camera: 0.5, mmWave: 0.4, PIR: 0.1 }
+      latency_ms: 200
+      use_case: "Critical presence detection"
+
+    privacy_mode:
+      description: "Maximum privacy (no Camera)"
+      sensors: ["PIR", "mmWave", "BLE"]
+      weights: { mmWave: 0.6, PIR: 0.2, BLE: 0.2 }
+      latency_ms: 50
+      use_case: "Default mode for GREEN/AMBER bands"
+
+    power_saver_mode:
+      description: "Minimize power consumption"
+      sensors: ["PIR", "BLE"]
+      weights: { PIR: 0.7, BLE: 0.3 }
+      latency_ms: 20
+      use_case: "Battery-powered deployment"
+
+    guest_mode:
+      description: "Detect guests without WiFi/BLE devices"
+      sensors: ["Camera", "mmWave", "PIR"]
+      weights: { Camera: 0.5, mmWave: 0.4, PIR: 0.1 }
+      latency_ms: 150
+      use_case: "Visitors without registered devices"
+
+  error_handling:
+    sensor_failure:
+      detection: "No reading for >5s or error flag set"
+      action: "Exclude sensor from fusion"
+      notification: "Emit metric: ambient_sensor_failures_total"
+      recovery: "Re-include after 3 successful consecutive readings"
+
+    conflicting_readings:
+      definition: "Sensors disagree by >2 people"
+      resolution: "Trust higher-weight sensor"
+      example: "mmWave: 3 people, BLE: 0 devices → Trust mmWave (weight 0.35 > 0.15)"
+
+    sensor_noise:
+      detection: "Reading variance > threshold"
+      mitigation: "Increase temporal smoothing alpha"
+      threshold: "std_dev > 1.5 people over 10s window"
+
+    degraded_mode:
+      trigger: "<2 sensors available"
+      behavior: "Single-sensor mode (no fusion)"
+      confidence_penalty: "Reduce confidence by 50%"
+
+  calibration:
+    initial_calibration:
+      duration_minutes: 10
+      procedure: "Learn baseline sensor readings for empty room"
+      outputs:
+        - "Empty room sensor baselines"
+        - "Sensor noise profiles"
+        - "Environmental factors (lighting, temp)"
+
+    runtime_calibration:
+      enabled: true
+      trigger: "Confidence < 0.4 for >60s"
+      action: "Adjust sensor weights based on recent accuracy"
+
+  performance:
+    fusion_latency_ms:
+      p50: 8
+      p95: 10
+      p99: 15
+      max: 20
+
+    throughput:
+      max_fusions_per_sec: 100
+      typical: 1
+
+    memory_budget_kb: 256
+
+  observability:
+    metrics:
+      - name: "sensor_fusion_executions_total"
+        type: "counter"
+        labels: ["fusion_mode", "sensor_count"]
+        description: "Total fusion executions"
+
+      - name: "sensor_fusion_latency_ms"
+        type: "histogram"
+        labels: ["sensor_count"]
+        buckets: [5, 10, 20, 50, 100]
+        description: "Fusion algorithm latency"
+
+      - name: "sensor_fusion_confidence"
+        type: "gauge"
+        labels: ["occupancy_class"]
+        description: "Current fusion confidence"
+
+      - name: "sensor_fusion_disagreements_total"
+        type: "counter"
+        labels: ["sensor_pair"]
+        description: "Conflicting sensor readings"
+
+    tracing:
+      span_name: "ambient_sensor_fusion.fuse"
+      attributes:
+        - "sensor_count"
+        - "fusion_mode"
+        - "person_count"
+        - "confidence"
+
+  related_contracts:
+    - "sensor_types.yml"
+    - "room_occupancy.yml"
+    - "presence_detection.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

@@ -1,0 +1,22 @@
+/// WebSocket Turn Message Schema (WSTM)
+/// Layer 4: Turn-based conversation over WebSocket
+
+namespace k1.websocket;
+
+enum WSTurnMessageType : uint8 {
+  USER_INPUT = 0,
+  AGENT_OUTPUT = 1,
+  SYSTEM_EVENT = 2
+}
+
+table WSTurnMessage {
+  turn_id: string (required);
+  message_type: WSTurnMessageType (required);
+  payload: string (required);
+
+  // Timestamps
+  timestamp_ms: uint64 = 0;
+}
+
+root_type WSTurnMessage;
+file_identifier "WSTM";

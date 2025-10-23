@@ -1133,4 +1133,166 @@ session_state_sections_total = Counter(
 
 ---
 
+## Amendment #1 (2025-10-22): SessionState Field Extensions
+
+**Reason:** Support 39 missing UX capabilities requiring new SessionState fields
+
+**Related ADRs:** ADR-0056f (Voice Persona Persistence), ADR-0050 (Multi-Device Sync), ADR-0069 (Affect Modulation), ADR-0004 (4 New Modules)
+
+### **Changes to Section 4 (Persona) - ADD 9 New Fields:**
+
+#### **Voice Continuity (#19 - MVP CRITICAL):**
+- **`voice_prosody: ProsodyControls`** - Current voice personality (pitch, rate, volume, emphasis)
+  - **Schema:** ProsodyControls dataclass (pitch: int -12 to +12 semitones, rate: float 0.5-2.0x, volume: int -20 to +20 dB, emphasis: EmphasisLevel enum, emotional_tone: str)
+  - **Purpose:** Maintain consistent voice tone across sessions (Dad prefers pitch -5 deeper, Mom prefers pitch +5 cheerful)
+  - **Integration:** ADR-0056f Voice Persona Manager loads/persists on session start/end
+  - **Size Impact:** +0.2KB (ProsodyControls struct)
+
+- **`voice_history: List[ProsodySnapshot]`** - Historical voice parameters (max 10 snapshots, circular buffer)
+  - **Schema:** ProsodySnapshot (prosody, timestamp, session_id)
+  - **Purpose:** Track voice adjustments over time (user says "speak slower" 10x → learn preference)
+  - **Size Impact:** +1.0KB (10 snapshots × 100 bytes)
+
+- **`emotional_state: AffectState`** - Last known affect from P08 Affect Modulation
+  - **Schema:** AffectState (last_emotional_tone: str, last_updated: datetime, decay_hours: int)
+  - **Purpose:** Empathy continuity across sessions (last session empathetic → persist for 24hr)
+  - **Integration:** ADR-0069 Affect Modulation → prosody mapping (empathetic: pitch -2, rate 0.95)
+  - **Size Impact:** +0.1KB (AffectState struct)
+
+#### **Self-Reference Consistency (#36 - Post-MVP v1.1):**
+- **`self_model: SelfModelMetadata`** - Agent's understanding of its own capabilities
+  - **Schema:** SelfModelMetadata (capabilities: List[str], limitations: List[str], version: str)
+  - **Purpose:** Consistent self-reference ("I can help with X but not Y"), track capability evolution
+  - **Integration:** ADR-0024 Supervisor tracks agent capabilities, updates self_model
+  - **Size Impact:** +0.3KB (capabilities list ~20 items)
+
+- **`personality_traits: Dict[str, float]`** - Personality dimensions (formal=0.7, proactive=0.5, concise=0.8)
+  - **Schema:** Dict[str, float] (trait_name → score 0.0-1.0)
+  - **Purpose:** Consistent tone across sessions (formal vs casual, proactive vs reactive)
+  - **Size Impact:** +0.2KB (~10 traits × 20 bytes)
+
+- **`response_patterns: ResponseStyleHistory`** - Historical style tracking
+  - **Schema:** ResponseStyleHistory (last_10_responses: List[StyleSnapshot], dominant_style: str)
+  - **Purpose:** Track response style evolution (verbose → concise over time)
+  - **Size Impact:** +0.4KB (10 snapshots × 40 bytes)
+
+- **`consistency_validator: PersonaValidator`** - Validate self-references
+  - **Schema:** PersonaValidator (validation_rules: List[Rule], last_validation: datetime)
+  - **Purpose:** Detect self-contradictions ("I can't do X" but then does X → flag inconsistency)
+  - **Size Impact:** +0.2KB (validation rules ~5 items)
+
+#### **Cultural Adaptation (#15 - Post-MVP v1.1):**
+- **`family_vocabulary: Dict[str, str]`** - Custom terminology mappings
+  - **Schema:** Dict[str, str] (family_term → standard_term), e.g., {"cottage": "vacation_home", "Nonna": "grandmother"}
+  - **Purpose:** Understand family-specific language (not in LLM training data)
+  - **Integration:** Learning Loop (ADR-0059) extracts repeated terms, adds to vocabulary
+  - **Size Impact:** +0.3KB (~15 terms × 20 bytes)
+
+- **`family_nicknames: Dict[str, List[str]]`** - Person → nicknames mapping
+  - **Schema:** Dict[str, List[str]] (person_id → List[nickname]), e.g., {"Dad": ["Daddy", "Papa", "Pops"]}
+  - **Purpose:** Recognize alternate names for family members
+  - **Integration:** Knowledge Graph (ADR-00XX when implemented) stores canonical names, SessionState stores nicknames
+  - **Size Impact:** +0.3KB (~5 people × 3 nicknames × 20 bytes)
+
+**Section 4 Size Impact:** 2-4KB → 5-7KB (+3KB for 9 new fields)
+
+---
+
+### **Changes to Section 5 (Multimodal) - ADD 6 New Fields:**
+
+#### **Ambient Context Awareness (#3 - Post-MVP v1.1):**
+- **`ambient_context: AmbientContext`** - Room occupancy state (3 people present → whisper mode)
+  - **Schema:** AmbientContext (per ADR-0083c) with fields:
+    - `current_room: str` - Room identifier ("living_room")
+    - `occupancy_state: OccupancyState` - Current occupancy (VACANT/POSSIBLY_OCCUPIED/OCCUPIED)
+    - `occupancy_history: List[OccupancyState]` - Last 300 states (5-minute rolling window at 1Hz)
+    - `last_motion_ts: int` - Timestamp of last motion detected (for away mode)
+    - `ambient_light_lux: float` - Current light level (0-10000 lux)
+    - `privacy_zone: PrivacyZone` - PUBLIC/FAMILY/PRIVATE (triggers privacy band escalation)
+    - `suggested_band: Optional[PrivacyBand]` - Suggested privacy band (RED if unknown person detected)
+    - `last_updated_ts: int` - Last sensor fusion update timestamp
+  - **Purpose:** Multi-modal sensor fusion (PIR, mmWave, BLE, WiFi, Camera, Light) for privacy-aware responses
+  - **Integration:** ADR-0083 (Ambient Sensor Fusion) - 6 sensor types fused via weighted Bayesian voting
+  - **Privacy:** Camera data RED band (local-only), BLE MAC addresses AMBER band (hashed)
+  - **Performance:** <100ms P95 sensor fusion latency (fast path: PIR+mmWave+BLE, no camera)
+  - **Proactive Triggers:** Dark room → lighting, away mode → security, welcome home → greeting
+  - **TTS Modulation:** Whisper mode when PUBLIC zone (others present), gentle tone at nighttime (lux <10)
+  - **Size Impact:** +2.0KB (AmbientContext with 300-state history buffer = 300 × 6 bytes + metadata)
+  - **Related ADRs:** ADR-0083 (parent), ADR-0083a (sensor drivers), ADR-0083b (fusion algorithms), ADR-0083c (privacy enforcement)
+
+#### **Multi-Party Conversations (#11 - Post-MVP v1.1):**
+- **`active_speakers: List[SpeakerState]`** - Current speakers in conversation
+  - **Schema:** SpeakerState (speaker_id: str, confidence: float, last_spoke: datetime, turn_count: int)
+  - **Purpose:** Track who is speaking (Dad vs Mom vs Child1 → different preferences)
+  - **Integration:** ADR-0004 Module #55 (Speaker Diarization) identifies speakers, updates active_speakers
+  - **Size Impact:** +0.4KB (~3 active speakers × 130 bytes)
+
+- **`speaker_profiles: Dict[str, SpeakerProfile]`** - Voice biometrics per family member
+  - **Schema:** SpeakerProfile (speaker_id: str, voice_embedding: np.ndarray (768-dim), enrollment_date: datetime, confidence_threshold: float)
+  - **Purpose:** Recognize family members by voice (not just names)
+  - **Integration:** Speaker Diarization compares voice embeddings to enrolled profiles
+  - **Size Impact:** +4.0KB (~5 family members × 800 bytes embedding)
+
+#### **Embodied Awareness (#34 - Post-MVP v1.1):**
+- **`device_presence: DevicePresenceState`** - GPS, BLE proximity, screen state
+  - **Schema:** DevicePresenceState (gps_location: LatLng, ble_devices: List[str], screen_on: bool, battery_level: float)
+  - **Purpose:** Cross-device context (phone knows laptop active → don't duplicate notifications)
+  - **Integration:** ADR-0050 Multi-Device Sync tracks device states, updates device_presence
+  - **Size Impact:** +0.3KB (DevicePresenceState struct)
+
+- **`cross_device_context: Dict[str, DeviceState]`** - State of all family devices
+  - **Schema:** DeviceState (device_id: str, device_type: str, active: bool, last_seen: datetime, current_activity: str)
+  - **Purpose:** Track family device ecosystem (5 devices total, 2 active → route notifications)
+  - **Size Impact:** +1.5KB (~5 devices × 300 bytes)
+
+**Section 5 Size Impact:** 4-8KB → 12-14KB (+6KB for 5 new fields: ambient_context 2KB, active_speakers 0.4KB, speaker_profiles 4KB, device_presence 0.3KB, cross_device_context 1.5KB)
+
+---
+
+### **Total Size Budget Impact:**
+
+**Before Amendment #1:**
+- Section 4 (Persona): 2-4KB typical
+- Section 5 (Multimodal): 4-8KB typical
+- **Total SessionState:** 30-56KB typical, 64KB soft limit
+
+**After Amendment #1:**
+- Section 4 (Persona): 5-7KB typical (+3KB)
+- Section 5 (Multimodal): 12-16KB typical (+8KB)
+- **Total SessionState:** 41-67KB typical (+11KB), **72KB new median**
+
+**Analysis:**
+- ✅ **Within Hard Limit:** 72KB median < 128KB hard limit (56KB headroom)
+- ⚠️ **Exceeds Soft Limit:** 72KB median > 64KB soft limit (triggers LRU eviction)
+- ✅ **Eviction-Friendly:** New fields in Section 4/5 are evictable (not critical like Section 3 control)
+- ✅ **Acceptable Trade-off:** MVP capability #19 (Voice Continuity) requires +3KB Section 4 (voice_prosody, voice_history, emotional_state), acceptable for MVP UX
+
+**Eviction Strategy (ADR-0018 Integration):**
+- **Soft Limit (64KB):** Evict Section 6 (meta) first, then oldest entries in voice_history, occupancy_history, speaker_profiles (LRU)
+- **Hard Limit (128KB):** Evict all non-critical fields (voice_history, occupancy_history, cross_device_context), keep voice_prosody (MVP critical)
+- **Priority:** voice_prosody (HIGH - MVP), voice_history (MEDIUM - learning), occupancy_history (LOW - analytics)
+
+---
+
+### **Integration Notes:**
+
+**MVP Dependencies (Issue 1.4 - Voice Continuity):**
+- ADR-0056f Voice Persona Manager: Loads voice_prosody from Section 4 on session start (<10ms P95)
+- ADR-0056f Voice Preference Manager: Updates voice_history on user adjustments ("speak slower")
+- ADR-0069 Affect Modulation: Updates emotional_state when empathetic tone applied
+
+**Post-MVP Dependencies (v1.1):**
+- ADR-0004 Module #54 (Ambient Sensor Fusion): Updates ambient_context from PIR/mmWave/BLE sensors
+- ADR-0004 Module #55 (Speaker Diarization): Updates active_speakers, speaker_profiles from voice biometrics
+- ADR-0050 Multi-Device Sync: Updates device_presence, cross_device_context from device ecosystem
+- ADR-00XX Knowledge Graph (when implemented): Queries family_vocabulary, family_nicknames for entity resolution
+
+**Contract Updates Required (Epic 4.1.1):**
+- Update `session_persona.fbs` FlatBuffers schema with 9 new fields
+- Update `session_multimodal.fbs` FlatBuffers schema with 6 new fields
+- Update SessionState 6-Section Contracts to document new field semantics
+- Add size budget validation tests (ensure 72KB median < 128KB hard limit)
+
+---
+
 **END OF ADR-0017**

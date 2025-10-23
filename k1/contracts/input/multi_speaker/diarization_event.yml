@@ -1,0 +1,491 @@
+diarization_event:
+  name: "SpeakerDiarizationEvent (SSE)"
+  purpose: "Server-Sent Event schema for speaker diarization updates"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/sse/speaker_diarization_stream.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    SpeakerDiarizationEvent is an SSE (Server-Sent Event) that streams real-time
+    speaker diarization updates to downstream consumers (orchestrator, agents, UI).
+
+    Events are emitted when:
+    - Speaker identified or changes
+    - Turn taken (speaker starts/stops speaking)
+    - Spatial location updated
+    - Per-person context switched
+    - Enrollment completed
+
+    SSE format enables efficient, real-time streaming with automatic reconnection.
+
+  sse_schema:
+    event_type: "SpeakerDiarizationEvent"
+    content_type: "application/json"
+    delivery: "Server-Sent Events (SSE)"
+
+    sse_fields:
+      event:
+        type: "string"
+        value: "SpeakerDiarizationEvent"
+        description: "SSE event type identifier"
+
+      id:
+        type: "string"
+        format: "uuid"
+        description: "Unique event ID for deduplication"
+        examples: ["850e8400-e29b-41d4-a716-446655440000"]
+
+      data:
+        type: "string"
+        format: "JSON-encoded SpeakerDiarizationEventPayload"
+        description: "Event payload (JSON string)"
+
+      retry:
+        type: "integer"
+        description: "Reconnection retry time (milliseconds)"
+        default: 3000
+
+  event_payload_schema:
+    type: "object"
+    required: ["event_subtype", "timestamp_ms"]
+    properties:
+      event_subtype:
+        type: "string"
+        enum: [
+          "SPEAKER_IDENTIFIED",
+          "SPEAKER_CHANGED",
+          "TURN_TAKEN",
+          "SPATIAL_LOCATION_UPDATED",
+          "CONTEXT_SWITCHED",
+          "SPEAKER_ENROLLED",
+          "UNKNOWN_SPEAKER"
+        ]
+        description: "Specific diarization event type"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Unix timestamp (milliseconds) when event occurred"
+
+      payload:
+        type: "object"
+        description: "Event-specific payload (varies by event_subtype)"
+        additionalProperties: true
+
+  event_subtypes:
+    SPEAKER_IDENTIFIED:
+      description: "Speaker successfully identified"
+
+      payload_schema:
+        type: "object"
+        required: ["speaker_id", "speaker_name", "confidence"]
+        properties:
+          speaker_id:
+            type: "string"
+            format: "uuid"
+
+          speaker_name:
+            type: "string"
+
+          identification_method:
+            type: "string"
+            enum: ["VOICE", "FACE", "MULTI_MODAL"]
+
+          confidence:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+
+          spatial_location:
+            type: "object"
+            properties:
+              azimuth_deg:
+                type: "number"
+              elevation_deg:
+                type: "number"
+              distance_m:
+                type: "number"
+
+      example:
+        event_subtype: "SPEAKER_IDENTIFIED"
+        timestamp_ms: 1698364800000
+        payload:
+          speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+          speaker_name: "Dad"
+          identification_method: "VOICE"
+          confidence: 0.92
+          spatial_location:
+            azimuth_deg: 15
+            elevation_deg: 0
+            distance_m: 2.5
+
+    SPEAKER_CHANGED:
+      description: "Active speaker changed (turn transition)"
+
+      payload_schema:
+        type: "object"
+        required: ["previous_speaker_id", "new_speaker_id"]
+        properties:
+          previous_speaker_id:
+            type: "string"
+            format: "uuid"
+
+          previous_speaker_name:
+            type: "string"
+
+          new_speaker_id:
+            type: "string"
+            format: "uuid"
+
+          new_speaker_name:
+            type: "string"
+
+          transition_type:
+            type: "string"
+            enum: ["NORMAL", "INTERRUPTION", "BARGE_IN"]
+
+      example:
+        event_subtype: "SPEAKER_CHANGED"
+        timestamp_ms: 1698364805000
+        payload:
+          previous_speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+          previous_speaker_name: "Dad"
+          new_speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+          new_speaker_name: "Mom"
+          transition_type: "NORMAL"
+
+    TURN_TAKEN:
+      description: "Speaker takes conversation turn"
+
+      payload_schema:
+        type: "object"
+        required: ["turn_id", "speaker_id", "turn_type"]
+        properties:
+          turn_id:
+            type: "string"
+            format: "uuid"
+
+          speaker_id:
+            type: "string"
+            format: "uuid"
+
+          speaker_name:
+            type: "string"
+
+          turn_type:
+            type: "string"
+            enum: ["TURN_START", "TURN_END", "TURN_HOLD", "INTERRUPTION", "OVERLAP", "BARGE_IN"]
+
+          floor_status:
+            type: "string"
+            enum: ["HELD", "RELEASED", "CONTESTED"]
+
+          priority_score:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+
+      example:
+        event_subtype: "TURN_TAKEN"
+        timestamp_ms: 1698364810000
+        payload:
+          turn_id: "750e8400-e29b-41d4-a716-446655440000"
+          speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+          speaker_name: "Dad"
+          turn_type: "TURN_START"
+          floor_status: "HELD"
+          priority_score: 0.85
+
+    SPATIAL_LOCATION_UPDATED:
+      description: "Speaker spatial location updated"
+
+      payload_schema:
+        type: "object"
+        required: ["speaker_id", "spatial_location"]
+        properties:
+          speaker_id:
+            type: "string"
+            format: "uuid"
+
+          speaker_name:
+            type: "string"
+
+          spatial_location:
+            type: "object"
+            properties:
+              azimuth_deg:
+                type: "number"
+                minimum: -180
+                maximum: 180
+
+              elevation_deg:
+                type: "number"
+                minimum: -90
+                maximum: 90
+
+              distance_m:
+                type: "number"
+                minimum: 0
+                maximum: 10
+
+          confidence:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+
+      example:
+        event_subtype: "SPATIAL_LOCATION_UPDATED"
+        timestamp_ms: 1698364815000
+        payload:
+          speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+          speaker_name: "Dad"
+          spatial_location:
+            azimuth_deg: 20
+            elevation_deg: 5
+            distance_m: 2.8
+          confidence: 0.88
+
+    CONTEXT_SWITCHED:
+      description: "Per-person context switched to new speaker"
+
+      payload_schema:
+        type: "object"
+        required: ["from_speaker_id", "to_speaker_id"]
+        properties:
+          from_speaker_id:
+            type: "string"
+            format: "uuid"
+
+          from_speaker_name:
+            type: "string"
+
+          to_speaker_id:
+            type: "string"
+            format: "uuid"
+
+          to_speaker_name:
+            type: "string"
+
+          context_summary:
+            type: "object"
+            properties:
+              conversation_history_size:
+                type: "integer"
+
+              entities_tracked:
+                type: "integer"
+
+              preferences_loaded:
+                type: "boolean"
+
+      example:
+        event_subtype: "CONTEXT_SWITCHED"
+        timestamp_ms: 1698364820000
+        payload:
+          from_speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+          from_speaker_name: "Dad"
+          to_speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+          to_speaker_name: "Mom"
+          context_summary:
+            conversation_history_size: 5
+            entities_tracked: 3
+            preferences_loaded: true
+
+    SPEAKER_ENROLLED:
+      description: "New speaker enrolled successfully"
+
+      payload_schema:
+        type: "object"
+        required: ["speaker_id", "speaker_name", "enrollment_type"]
+        properties:
+          speaker_id:
+            type: "string"
+            format: "uuid"
+
+          speaker_name:
+            type: "string"
+
+          enrollment_type:
+            type: "string"
+            enum: ["VOICE_ONLY", "FACE_ONLY", "MULTI_MODAL"]
+
+          confidence:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+
+      example:
+        event_subtype: "SPEAKER_ENROLLED"
+        timestamp_ms: 1698364825000
+        payload:
+          speaker_id: "550e8400-e29b-41d4-a716-446655440002"
+          speaker_name: "Emma"
+          enrollment_type: "MULTI_MODAL"
+          confidence: 0.95
+
+    UNKNOWN_SPEAKER:
+      description: "Speaker not recognized (guest or low confidence)"
+
+      payload_schema:
+        type: "object"
+        required: ["confidence"]
+        properties:
+          confidence:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+            description: "Identification confidence (below threshold)"
+
+          identification_method:
+            type: "string"
+            enum: ["VOICE", "FACE", "MULTI_MODAL"]
+
+          spatial_location:
+            type: "object"
+            optional: true
+            properties:
+              azimuth_deg:
+                type: "number"
+              elevation_deg:
+                type: "number"
+              distance_m:
+                type: "number"
+
+      example:
+        event_subtype: "UNKNOWN_SPEAKER"
+        timestamp_ms: 1698364830000
+        payload:
+          confidence: 0.45
+          identification_method: "VOICE"
+          spatial_location:
+            azimuth_deg: -30
+            elevation_deg: 0
+            distance_m: 3.5
+
+  sse_stream_configuration:
+    endpoint: "/api/v1/speaker-diarization/stream"
+    method: "GET"
+    content_type: "text/event-stream"
+
+    query_parameters:
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        required: false
+        description: "Filter events by speaker_id (default: all speakers)"
+
+      event_subtypes:
+        type: "array"
+        items:
+          type: "string"
+        required: false
+        description: "Filter by event subtypes (default: all)"
+        examples: ["SPEAKER_IDENTIFIED,TURN_TAKEN"]
+
+    headers:
+      Cache-Control: "no-cache"
+      Connection: "keep-alive"
+      X-Accel-Buffering: "no"
+
+    reconnection:
+      enabled: true
+      retry_ms: 3000
+      max_retries: 10
+      backoff: "exponential"
+
+  event_filtering:
+    by_speaker:
+      description: "Subscribe to events for specific speaker(s)"
+      example: "/api/v1/speaker-diarization/stream?speaker_id=550e8400-e29b-41d4-a716-446655440000"
+
+    by_event_subtype:
+      description: "Subscribe to specific event subtypes"
+      example: "/api/v1/speaker-diarization/stream?event_subtypes=SPEAKER_IDENTIFIED,TURN_TAKEN"
+
+  event_ordering:
+    guarantee: "Per-speaker ordering guaranteed"
+    cross_speaker: "No ordering guarantee across speakers"
+    deduplication: "Use event ID for client-side deduplication"
+
+  performance:
+    event_latency_ms:
+      p50: 20
+      p95: 30
+      p99: 50
+      note: "From speaker identification to SSE emission"
+
+    throughput:
+      max_events_per_sec: 100
+      typical: 10
+
+    backpressure:
+      strategy: "Drop oldest events if consumer slow"
+      buffer_size: 100
+
+  observability:
+    metrics:
+      - name: "speaker_diarization_events_emitted_total"
+        type: "counter"
+        labels: ["event_subtype"]
+        description: "Total diarization events emitted"
+
+      - name: "speaker_diarization_event_latency_ms"
+        type: "histogram"
+        labels: ["event_subtype"]
+        buckets: [10, 25, 50, 100, 250]
+        description: "Event emission latency"
+
+      - name: "speaker_diarization_stream_subscribers"
+        type: "gauge"
+        description: "Current number of SSE subscribers"
+
+      - name: "speaker_diarization_events_dropped_total"
+        type: "counter"
+        labels: ["reason"]
+        description: "Events dropped due to backpressure"
+
+  example_sse_stream:
+    description: "Example SSE stream output"
+
+    stream_data: |
+      event: SpeakerDiarizationEvent
+      id: 850e8400-e29b-41d4-a716-446655440000
+      data: {"event_subtype":"SPEAKER_IDENTIFIED","timestamp_ms":1698364800000,"payload":{"speaker_id":"550e8400-e29b-41d4-a716-446655440000","speaker_name":"Dad","identification_method":"VOICE","confidence":0.92,"spatial_location":{"azimuth_deg":15,"elevation_deg":0,"distance_m":2.5}}}
+
+      event: SpeakerDiarizationEvent
+      id: 850e8400-e29b-41d4-a716-446655440001
+      data: {"event_subtype":"TURN_TAKEN","timestamp_ms":1698364805000,"payload":{"turn_id":"750e8400-e29b-41d4-a716-446655440000","speaker_id":"550e8400-e29b-41d4-a716-446655440000","speaker_name":"Dad","turn_type":"TURN_START","floor_status":"HELD","priority_score":0.85}}
+
+      event: SpeakerDiarizationEvent
+      id: 850e8400-e29b-41d4-a716-446655440002
+      data: {"event_subtype":"SPEAKER_CHANGED","timestamp_ms":1698364810000,"payload":{"previous_speaker_id":"550e8400-e29b-41d4-a716-446655440000","previous_speaker_name":"Dad","new_speaker_id":"550e8400-e29b-41d4-a716-446655440001","new_speaker_name":"Mom","transition_type":"NORMAL"}}
+
+  consumer_integration:
+    orchestrator:
+      subscription: "All events"
+      usage: "Update per-person context, route requests to correct speaker"
+
+    agents:
+      subscription: "CONTEXT_SWITCHED, TURN_TAKEN"
+      usage: "Adapt responses to current speaker, load preferences"
+
+    ui_dashboard:
+      subscription: "All events"
+      usage: "Real-time visualization of active speakers"
+
+    analytics:
+      subscription: "All events"
+      usage: "Speaker engagement patterns, turn-taking analysis"
+
+  related_contracts:
+    - "speaker_identification.yml"
+    - "turn_taking.yml"
+    - "spatial_audio.yml"
+    - "per_person_context.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

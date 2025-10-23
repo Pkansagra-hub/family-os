@@ -1,0 +1,477 @@
+context_detector:
+  name: "Context Detector"
+  purpose: "Detect contextual modes (whisper/loud) based on room occupancy"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/ambient_sensor_fusion.py"
+  capability: "#3 Ambient Context Awareness"
+
+  description: |
+    Context detector analyzes room occupancy to determine appropriate interaction
+    modes for voice assistants and ambient devices. Primary function is to
+    distinguish between:
+
+    - **Whisper mode**: Single person, intimate setting
+    - **Normal mode**: Small groups, typical interaction
+    - **Loud mode**: Large groups or crowds, increase volume
+
+    This enables privacy-aware and socially-appropriate device behaviors:
+    - Volume adjustment
+    - Response verbosity
+    - Privacy controls (disable personalization in groups)
+    - Multi-user turn-taking
+
+  schema:
+    type: "object"
+    required: ["context_mode", "confidence", "timestamp_ms"]
+    properties:
+      context_mode:
+        type: "string"
+        enum: ["STANDBY", "WHISPER", "NORMAL", "LOUD", "ANNOUNCEMENT"]
+        description: "Detected interaction context mode"
+        default: "NORMAL"
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Detection confidence (0.0 = uncertain, 1.0 = certain)"
+        decision_threshold: 0.6
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Unix timestamp (milliseconds) when context was detected"
+
+      room_id:
+        type: "string"
+        pattern: "^[a-z0-9_]+$"
+        description: "Unique room identifier"
+        examples: ["living_room", "kitchen", "bedroom_main"]
+
+      occupancy_basis:
+        type: "object"
+        description: "Room occupancy state that determined context"
+        properties:
+          person_count:
+            type: "integer"
+            minimum: 0
+            maximum: 10
+          occupancy_class:
+            type: "string"
+            enum: ["EMPTY", "SINGLE_PERSON", "SMALL_GROUP", "LARGE_GROUP", "CROWD"]
+          confidence:
+            type: "number"
+            minimum: 0.0
+            maximum: 1.0
+
+      audio_context:
+        type: "object"
+        description: "Optional audio analysis for refinement"
+        optional: true
+        properties:
+          ambient_noise_db:
+            type: "number"
+            description: "Ambient noise level (dB SPL)"
+            examples: [30, 50, 70]
+
+          speech_detected:
+            type: "boolean"
+            description: "Multiple speakers detected"
+
+          conversation_detected:
+            type: "boolean"
+            description: "Active conversation among occupants"
+
+      time_of_day_factor:
+        type: "string"
+        enum: ["NIGHT", "MORNING", "DAY", "EVENING"]
+        description: "Time-based context adjustment"
+        optional: true
+        note: "NIGHT → bias toward WHISPER mode"
+
+  context_modes:
+    STANDBY:
+      description: "Room empty, device idle"
+      trigger: "occupancy_class == EMPTY"
+      person_count: 0
+      confidence_required: 0.6
+
+      device_behaviors:
+        volume: 0
+        display_brightness: "dim or off"
+        voice_recognition: "wake word only"
+        personalization: "disabled"
+        power_mode: "standby or eco"
+
+      use_cases:
+        - "Energy saving when unoccupied"
+        - "Privacy protection (no ambient listening)"
+        - "Await wake trigger (PIR motion)"
+
+    WHISPER:
+      description: "Single person, intimate/quiet setting"
+      trigger: "occupancy_class == SINGLE_PERSON AND (time_of_day == NIGHT OR ambient_noise_db < 40)"
+      person_count: 1
+      confidence_required: 0.6
+
+      device_behaviors:
+        volume: "30-50% (low)"
+        display_brightness: "medium"
+        voice_recognition: "enabled"
+        personalization: "enabled"
+        response_verbosity: "concise"
+        privacy_mode: "allow RED_BAND (single user)"
+
+      use_cases:
+        - "Late-night queries"
+        - "Bedroom interactions"
+        - "Private conversations"
+
+      audio_cues:
+        ambient_noise_threshold_db: 40
+        preferred_time: "NIGHT (22:00-06:00)"
+
+    NORMAL:
+      description: "Typical interaction (1-4 people, normal noise)"
+      trigger: "occupancy_class IN [SINGLE_PERSON, SMALL_GROUP]"
+      person_count_range: [1, 4]
+      confidence_required: 0.5
+
+      device_behaviors:
+        volume: "50-70% (moderate)"
+        display_brightness: "high"
+        voice_recognition: "enabled"
+        personalization: "enabled (single user) OR limited (small group)"
+        response_verbosity: "standard"
+        privacy_mode: "allow AMBER_BAND"
+
+      use_cases:
+        - "Daytime queries"
+        - "Family interactions"
+        - "Small group activities"
+
+      speaker_diarization:
+        enabled: true
+        note: "Distinguish speakers in small groups"
+
+    LOUD:
+      description: "Large group or high noise (5-10 people)"
+      trigger: "occupancy_class == LARGE_GROUP OR ambient_noise_db > 70"
+      person_count_range: [5, 10]
+      confidence_required: 0.5
+
+      device_behaviors:
+        volume: "70-90% (high)"
+        display_brightness: "high"
+        voice_recognition: "enabled (robust to noise)"
+        personalization: "disabled (group setting)"
+        response_verbosity: "brief"
+        privacy_mode: "GREEN_BAND only"
+
+      use_cases:
+        - "Parties or gatherings"
+        - "Noisy environments"
+        - "Group activities"
+
+      privacy_implications:
+        - "No personalized responses"
+        - "No RED_BAND operations"
+        - "Public mode assumptions"
+
+    ANNOUNCEMENT:
+      description: "Crowd or public setting (10+ people)"
+      trigger: "occupancy_class == CROWD"
+      person_count: ">10"
+      confidence_required: 0.4
+
+      device_behaviors:
+        volume: "90-100% (maximum)"
+        display_brightness: "maximum"
+        voice_recognition: "disabled or simple commands only"
+        personalization: "disabled"
+        response_verbosity: "minimal (broadcast style)"
+        privacy_mode: "GREEN_BAND only"
+
+      use_cases:
+        - "Public announcements"
+        - "Crowd notifications"
+        - "Emergency broadcasts"
+
+      privacy_implications:
+        - "Assume public setting"
+        - "No personalized data"
+        - "Broadcast-only mode"
+
+  detection_algorithm:
+    step_1_occupancy:
+      description: "Obtain room occupancy from sensor fusion"
+      input: "room_occupancy (from sensor_fusion_algorithm)"
+      output: "person_count, occupancy_class, confidence"
+
+    step_2_audio_refinement:
+      description: "Optionally refine with audio analysis"
+      optional: true
+      inputs:
+        - "ambient_noise_db (from microphone array)"
+        - "speech_detected (from VAD)"
+        - "conversation_detected (from speaker diarization)"
+
+      adjustments:
+        high_noise:
+          condition: "ambient_noise_db > 70"
+          action: "Upgrade NORMAL → LOUD"
+
+        quiet_environment:
+          condition: "ambient_noise_db < 40 AND time_of_day == NIGHT"
+          action: "Downgrade NORMAL → WHISPER"
+
+        active_conversation:
+          condition: "conversation_detected == true AND person_count == 1"
+          action: "Suspect phone call, maintain WHISPER for privacy"
+
+    step_3_time_of_day:
+      description: "Apply time-based context adjustments"
+      optional: true
+
+      time_bands:
+        NIGHT:
+          hours: [22, 23, 0, 1, 2, 3, 4, 5, 6]
+          bias: "Favor WHISPER mode"
+          adjustment: "Reduce volume by 20%"
+
+        MORNING:
+          hours: [7, 8, 9, 10, 11]
+          bias: "Normal mode"
+
+        DAY:
+          hours: [12, 13, 14, 15, 16, 17]
+          bias: "Normal mode"
+
+        EVENING:
+          hours: [18, 19, 20, 21]
+          bias: "Normal mode"
+
+    step_4_mode_selection:
+      description: "Select context mode based on occupancy + audio + time"
+
+      decision_tree:
+        - condition: "person_count == 0"
+          mode: "STANDBY"
+          confidence: "occupancy_confidence"
+
+        - condition: "person_count == 1 AND (time_of_day == NIGHT OR ambient_noise_db < 40)"
+          mode: "WHISPER"
+          confidence: "occupancy_confidence * 0.9"
+
+        - condition: "person_count IN [1, 4] AND ambient_noise_db < 70"
+          mode: "NORMAL"
+          confidence: "occupancy_confidence * 0.95"
+
+        - condition: "person_count IN [5, 10] OR ambient_noise_db > 70"
+          mode: "LOUD"
+          confidence: "occupancy_confidence * 0.85"
+
+        - condition: "person_count > 10"
+          mode: "ANNOUNCEMENT"
+          confidence: "occupancy_confidence * 0.7"
+
+    step_5_temporal_smoothing:
+      description: "Apply hysteresis to prevent mode flickering"
+
+      min_duration_ms:
+        STANDBY: 5000
+        WHISPER: 2000
+        NORMAL: 1000
+        LOUD: 2000
+        ANNOUNCEMENT: 5000
+
+      note: "Mode must persist for min_duration before transition"
+
+  mode_transitions:
+    STANDBY_to_WHISPER:
+      trigger: "Person enters room during NIGHT time"
+      confidence_required: 0.6
+      notification: "Emit ContextModeChanged event"
+
+    WHISPER_to_NORMAL:
+      trigger: "Additional person enters OR time_of_day changes to DAY"
+      confidence_required: 0.5
+      notification: "Emit ContextModeChanged event"
+
+    NORMAL_to_LOUD:
+      trigger: "Group grows to 5+ people OR ambient_noise > 70dB"
+      confidence_required: 0.5
+      notification: "Emit ContextModeChanged event"
+
+    LOUD_to_NORMAL:
+      trigger: "Group shrinks to <5 people AND ambient_noise < 70dB"
+      confidence_required: 0.5
+      debounce_ms: 5000
+      notification: "Emit ContextModeChanged event"
+
+    any_to_STANDBY:
+      trigger: "Room becomes empty"
+      confidence_required: 0.7
+      debounce_ms: 30000
+      notification: "Emit ContextModeChanged event"
+
+  privacy_implications:
+    WHISPER_mode:
+      privacy_band: "RED_BAND allowed"
+      rationale: "Single person, user expects personalized interaction"
+      enabled_features:
+        - "Personalized responses"
+        - "User history access"
+        - "Preference adaptation"
+
+    NORMAL_mode:
+      privacy_band: "AMBER_BAND (single user) OR GREEN_BAND (small group)"
+      rationale: "Small group, moderate privacy concerns"
+      enabled_features:
+        - "Personalized responses (single user only)"
+        - "Speaker diarization"
+        - "Limited history access"
+
+    LOUD_mode:
+      privacy_band: "GREEN_BAND only"
+      rationale: "Large group, assume semi-public setting"
+      disabled_features:
+        - "Personalized responses"
+        - "User history"
+        - "RED_BAND operations"
+
+    ANNOUNCEMENT_mode:
+      privacy_band: "GREEN_BAND only"
+      rationale: "Crowd, assume public setting"
+      disabled_features:
+        - "All personalization"
+        - "Voice recognition (beyond wake word)"
+        - "User-specific data"
+
+  use_cases:
+    adaptive_volume:
+      scenario: "Adjust response volume based on context"
+      implementation:
+        STANDBY: "volume = 0%"
+        WHISPER: "volume = 40%"
+        NORMAL: "volume = 60%"
+        LOUD: "volume = 80%"
+        ANNOUNCEMENT: "volume = 100%"
+
+    privacy_aware_responses:
+      scenario: "Disable personalization in group settings"
+      implementation:
+        WHISPER: "Enable full personalization"
+        NORMAL: "Limited personalization (speaker diarization)"
+        LOUD: "No personalization"
+        ANNOUNCEMENT: "Broadcast mode only"
+
+    late_night_interaction:
+      scenario: "User queries at 2am"
+      context: "time_of_day=NIGHT, person_count=1"
+      detected_mode: "WHISPER"
+      behaviors:
+        - "volume = 40%"
+        - "display_brightness = dim"
+        - "response_verbosity = concise"
+
+    party_mode:
+      scenario: "8 people in living room, music playing"
+      context: "person_count=8, ambient_noise_db=75"
+      detected_mode: "LOUD"
+      behaviors:
+        - "volume = 90%"
+        - "No personalization"
+        - "Brief responses"
+        - "GREEN_BAND only"
+
+  performance:
+    detection_latency_ms:
+      p50: 10
+      p95: 15
+      p99: 25
+      note: "Depends on room_occupancy latency"
+
+    update_frequency_hz: 1
+    memory_kb: 2
+
+  observability:
+    metrics:
+      - name: "context_mode_current"
+        type: "gauge"
+        labels: ["room_id", "mode"]
+        description: "Current context mode per room"
+
+      - name: "context_mode_transitions_total"
+        type: "counter"
+        labels: ["room_id", "from_mode", "to_mode"]
+        description: "Total context mode transitions"
+
+      - name: "context_detection_confidence"
+        type: "gauge"
+        labels: ["room_id"]
+        description: "Current context detection confidence"
+
+    events:
+      - name: "ContextModeChanged"
+        trigger: "Context mode changes"
+        payload: "room_id, old_mode, new_mode, confidence, occupancy_basis"
+        delivery: "SSE stream"
+
+  example_contexts:
+    whisper_mode_night:
+      context_mode: "WHISPER"
+      confidence: 0.88
+      timestamp_ms: 1698364800000
+      room_id: "bedroom_main"
+      occupancy_basis:
+        person_count: 1
+        occupancy_class: "SINGLE_PERSON"
+        confidence: 0.92
+      audio_context:
+        ambient_noise_db: 35
+        speech_detected: false
+      time_of_day_factor: "NIGHT"
+
+    normal_mode_daytime:
+      context_mode: "NORMAL"
+      confidence: 0.82
+      timestamp_ms: 1698378000000
+      room_id: "living_room"
+      occupancy_basis:
+        person_count: 2
+        occupancy_class: "SMALL_GROUP"
+        confidence: 0.85
+      audio_context:
+        ambient_noise_db: 50
+        speech_detected: true
+        conversation_detected: true
+      time_of_day_factor: "DAY"
+
+    loud_mode_party:
+      context_mode: "LOUD"
+      confidence: 0.75
+      timestamp_ms: 1698396000000
+      room_id: "living_room"
+      occupancy_basis:
+        person_count: 7
+        occupancy_class: "LARGE_GROUP"
+        confidence: 0.78
+      audio_context:
+        ambient_noise_db: 75
+        speech_detected: true
+        conversation_detected: true
+      time_of_day_factor: "EVENING"
+
+  related_contracts:
+    - "room_occupancy.yml"
+    - "presence_detection.yml"
+    - "privacy_aware_responses.yml"
+    - "sensor_fusion_algorithm.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

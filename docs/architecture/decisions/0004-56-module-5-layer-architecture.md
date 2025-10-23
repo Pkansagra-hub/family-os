@@ -1,7 +1,7 @@
-# ADR-0004: 52-Module 5-Layer Microkernel Architecture
+# ADR-0004: 56-Module 5-Layer Microkernel Architecture
 
 **Status:** Accepted
-**Date:** 2025-10-10
+**Date:** 2025-10-10 (Updated: 2025-10-22)
 **Deciders:** K1 Architecture Team
 **Technical Story:** K1 Kernel Architecture - Complete Module Structure
 
@@ -21,17 +21,17 @@ K1 Intelligence Module requires a scalable, maintainable architecture supporting
 
 K1 uses a **hybrid Actor Model + AI architecture** (established in ADR-0001, ADR-0002):
 
-- **ALL 52 modules use Actor Model** (message-passing, mailboxes, supervision)
+- **ALL 56 modules use Actor Model** (message-passing, mailboxes, supervision)
 - **4 AI agents use LLM reasoning** (Concierge, Planner, Researcher, Safety Watch) via Model Hub (Layer 3)
-- **48 pure actors use deterministic logic** (Orchestrator, Supervisor, Protocol Monitor, Router, etc.)
+- **52 pure actors use deterministic logic** (Orchestrator, Supervisor, Protocol Monitor, Router, etc.)
 
 **Key Distinction for Module Classification:**
 - **Actor Model** = foundation for ALL components (message-passing, fault isolation)
-- **AI agents** = subset (4/52 modules) that use LLM reasoning via Model Hub
-- **Pure actors** = majority (48/52 modules) with deterministic, rule-based logic
+- **AI agents** = subset (4/56 modules) that use LLM reasoning via Model Hub
+- **Pure actors** = majority (52/56 modules) with deterministic, rule-based logic
 - **Model Hub** (Layer 3) = AI integration infrastructure supporting ONLY 4 AI agents
 
-This ADR focuses on the **52-module structure**, NOT AI vs pure actor distinction (see ADR-0001, ADR-0002 for hybrid architecture details).
+This ADR focuses on the **56-module structure**, NOT AI vs pure actor distinction (see ADR-0001, ADR-0002 for hybrid architecture details).
 
 ---
 
@@ -53,7 +53,7 @@ These fail for multi-agent agentic systems:
 **Constraints:**
 
 - **Performance**: TTFT <150ms P95 (layered architecture must not add latency)
-- **Memory**: Total K1 footprint <500MB (52 modules must share efficiently)
+- **Memory**: Total K1 footprint <500MB (56 modules must share efficiently)
 - **Team Size**: 3-5 developers (architecture must be learnable)
 - **Evolution**: Weekly updates to agents/models (architecture must be flexible)
 - **Testing**: 91% coverage target (modules must be testable)
@@ -63,14 +63,14 @@ These fail for multi-agent agentic systems:
 - 📈 **Microkernel benefits**: Minimal kernel, user-space modules, clear boundaries (QNX, L4, seL4)
 - 📉 **Complexity**: More modules = more coordination overhead
 - 📈 **Layering**: Enforces dependency direction, prevents spaghetti
-- 📉 **Learning curve**: Team must understand 52 modules
+- 📉 **Learning curve**: Team must understand 56 modules
 - 📈 **Industry proven**: Linux kernel (50K files), PostgreSQL (1K+ modules), Chromium (100K+ files)
 
 ---
 
 ## Decision
 
-We adopt a **52-module, 5-layer microkernel architecture** organizing K1 Intelligence Module into clear responsibility layers with strict dependency direction.
+We adopt a **56-module, 5-layer microkernel architecture** organizing K1 Intelligence Module into clear responsibility layers with strict dependency direction.
 
 ### **Decision Matrix**
 
@@ -89,7 +89,7 @@ We adopt a **52-module, 5-layer microkernel architecture** organizing K1 Intelli
 **Key Decision Factors:**
 
 1. **Clear Hot Path**: Layers 1-3 (<150ms budget) separated from Layers 4-5 (async background)
-2. **Maintainability**: 52 modules = 52 folders, single responsibility per module
+2. **Maintainability**: 56 modules = 56 folders, single responsibility per module
 3. **Testability**: Module boundaries = test boundaries, 91% coverage achievable
 4. **Team Parallelism**: 3-5 developers work on different layers simultaneously
 5. **Industry Proven**: Microkernel design (QNX, L4, seL4), layered arch (Linux, PostgreSQL, Chromium)
@@ -101,20 +101,22 @@ We adopt a **52-module, 5-layer microkernel architecture** organizing K1 Intelli
 - **Alternative 3 (Microservices)**: 10-100ms per HTTP call = 500ms+ latency (violates TTFT <150ms)
 - **Alternative 4 (Graph)**: Not version-controllable, limited expressiveness, testing nightmare
 
+**Amendment Note:** Original decision specified 52 modules. Amendment #2 (2025-10-22) added 4 new modules for multi-modal UX capabilities, bringing total to 56 modules. Core architectural principles remain unchanged.
+
 ---
 
-### **Core Architecture: 52 Modules, 5 Layers**
+### **Core Architecture: 56 Modules, 5 Layers**
 
 **Layer Structure (Bottom-Up):**
 
-### **Layer 1: Input Processing** (4 modules, 12 files each avg)
+### **Layer 1: Input Processing** (8 modules, 12 files each avg)
 **Purpose**: Multi-modal input perception and intent routing
 
 **Modules:**
-1. **streams/stream_switch** — Unified multi-modal input bus (audio, video, text, sensors)
-2. **streams/operators** — Stream transformations (VAD, ASR, TTS, vision, sensor processing)
+1. **streams/stream_switch** — Unified multi-modal input bus (audio, video, text, sensors) - **NEW Module #53** ✨
+2. **streams/operators** — Stream transformations (VAD, ASR, TTS, vision, sensor processing, **ambient_sensor_fusion**, **speaker_diarization**) - **NEW Module #54 & #55** ✨
 3. **orchestration/intent_router** — 3-tier intent classification (T1: regex <1ms, T2: SLM 2-3ms, T3: LLM <50ms)
-4. **orchestration/meta_policy** — Proactivity engine + clarification engine
+4. **orchestration/meta_policy** — Proactivity engine + clarification engine + **social norm modeling** - **NEW Module #56** ✨
 
 **Responsibilities:**
 - Normalize user input (text/audio/video → text intents)
@@ -942,6 +944,49 @@ Industry experience: visual programming fails for complex systems (UML, BPEL, BP
 **Rationale:** Needed to align with K1 hybrid architecture (ADR-0001, ADR-0002) and clarify which modules use LLM reasoning vs deterministic logic.
 
 **Impact:** No implementation changes - clarification only. Validates existing 58-module design with clear AI integration layer.
+
+---
+
+### **Amendment 2: Add 4 New Modules for Multi-Modal UX (2025-10-22)**
+
+**Context:** ADR Development Plan identified 39 missing UX capabilities. Capabilities #1 (Cross-Modal), #3 (Ambient Context), #11 (Multi-Party) require 4 new Layer 1 modules not in original 52-module design.
+
+**Changes:**
+
+1. **Module count:** 52 → 56 modules (58 actual → 62 actual including sub-modules)
+2. **Layer 1 additions:**
+   - **Module #53:** `k1/l1_input/streams/stream_switch/` - Multi-Modal Input Bus (Cross-Modal Continuity)
+   - **Module #54:** `k1/l1_input/streams/operators/ambient_sensor_fusion.py` - Ambient Context Awareness (PIR, mmWave, BLE, WiFi, camera)
+   - **Module #55:** `k1/l1_input/streams/operators/speaker_diarization.py` - Multi-Party Conversations (voice biometrics, spatial audio, face tracking)
+   - **Module #56:** `k1/l1_input/meta_policy/` - Social Norm Modeling, Contextual Privacy, Proactive Confirmations
+
+**Rationale:**
+
+- **LLM Multi-Modal Intelligence:** LLMs can process text/voice/images, but need unified input bus to preserve conversation context across modality switches
+- **Ambient Awareness:** LLM responses should adapt to room occupancy (whisper when others present, avoid loud suggestions during naptime)
+- **Multi-Speaker Tracking:** Family conversations involve multiple speakers - LLM needs per-person context (Dad's preferences ≠ Mom's preferences)
+- **Social Norms:** LLMs can generate inappropriate responses - Meta Policy provides social context to constrain behavior
+
+**Related Sub-ADRs:**
+
+- **ADR-0004f:** Stream Switch Multi-Modal Bus (Module #53 detailed architecture)
+
+**Implementation Status:**
+
+- Module #53 (Stream Switch): NEEDS_IMPLEMENTATION (P0 - MVP CRITICAL)
+- Module #54 (Ambient Sensors): NEEDS_IMPLEMENTATION (P0 - MVP CRITICAL)
+- Module #55 (Speaker Diarization): NEEDS_IMPLEMENTATION (P0 - MVP CRITICAL)
+- Module #56 (Meta Policy): NEEDS_IMPLEMENTATION (P0 - MVP CRITICAL)
+
+**Contract Impact:**
+
+- +35 new contract files (Epic 1.5 in contract_development_plan.md)
+- Stream Switch contracts: 5 files
+- Ambient Sensor contracts: 8 files
+- Speaker Diarization contracts: 10 files
+- Meta Policy contracts: 12 files
+
+**Impact:** Extends architecture to support 3 critical MVP capabilities. Unlocks Cross-Modal Continuity, Ambient Context Awareness, Multi-Party Conversations.
 
 ---
 

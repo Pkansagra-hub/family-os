@@ -1,0 +1,13 @@
+/// WebSocket Heartbeat Schema (WSHB)
+/// Layer 4: Connection keep-alive and latency monitoring
+
+namespace k1.websocket;
+
+table WSHeartbeat {
+  timestamp_ms: uint64 = 0;
+  client_latency_ms: uint32 = 0;
+  server_latency_ms: uint32 = 0;
+}
+
+root_type WSHeartbeat;
+file_identifier "WSHB";

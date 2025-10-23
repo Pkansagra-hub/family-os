@@ -1,0 +1,412 @@
+context_preserver_contract:
+  name: "Context Preserver"
+  purpose: "Maintain conversation context across modality transitions through entity tracking and resolution"
+  version: "1.0"
+  adr_source: "ADR-0004f"
+  module: "k1/l1_input/streams/stream_switch/"
+  capability: "#1 Cross-Modal Continuity"
+
+  description: |
+    The Context Preserver ensures conversation continuity by:
+    1. Tracking entities across modalities (nouns, pronouns, spatial refs)
+    2. Resolving references like "that", "this", "here" to previous inputs
+    3. Maintaining working memory of recent context
+    4. Computing conversation continuity scores
+    5. Enriching new inputs with historical context
+
+  architecture:
+    pattern: "Sliding window with entity graph"
+    components:
+      - name: "Entity Tracker"
+        description: "Track entities across inputs"
+      - name: "Reference Resolver"
+        description: "Resolve pronouns and demonstratives"
+      - name: "Working Memory"
+        description: "Maintain recent context window"
+      - name: "Continuity Scorer"
+        description: "Score conversation continuity"
+
+  api_contract:
+    track_entities:
+      description: "Extract and track entities from input"
+      signature: "async fn track_entities(input: UnifiedInput) -> Result<Vec<Entity>, ContextError>"
+      parameters:
+        input:
+          type: "UnifiedInput"
+          description: "Input to extract entities from"
+      returns:
+        success:
+          type: "Vec<Entity>"
+          description: "Extracted entities with IDs and metadata"
+        error:
+          type: "ContextError"
+          codes:
+            - ENTITY_EXTRACTION_FAILED: "Failed to extract entities"
+      performance:
+        latency_p95_ms: 15
+      side_effects:
+        - "Entities added to entity graph"
+        - "Entity references updated"
+
+    resolve_references:
+      description: "Resolve pronouns/demonstratives to concrete entities"
+      signature: "async fn resolve_references(input: UnifiedInput, context: Vec<UnifiedInput>) -> Result<ResolvedInput, ContextError>"
+      parameters:
+        input:
+          type: "UnifiedInput"
+          description: "Input with potential references"
+        context:
+          type: "Vec<UnifiedInput>"
+          description: "Recent inputs for context"
+      returns:
+        success:
+          type: "ResolvedInput"
+          fields:
+            - original_input: "UnifiedInput"
+            - resolved_entities: "Vec<Entity>"
+            - reference_mappings: "HashMap<String, EntityRef>"
+        error:
+          type: "ContextError"
+          codes:
+            - RESOLUTION_FAILED: "Failed to resolve references"
+            - AMBIGUOUS_REFERENCE: "Reference ambiguous, multiple candidates"
+      performance:
+        latency_p95_ms: 20
+      algorithm: |
+        1. Extract reference words (that, this, here, it, etc.)
+        2. Score candidate entities from context by:
+           - Recency (exponential decay)
+           - Modality compatibility (same/different modality)
+           - Semantic similarity
+        3. Select top candidate (score > 0.5)
+        4. Create reference mapping
+
+    get_working_memory:
+      description: "Retrieve working memory context for session"
+      signature: "fn get_working_memory(session_id: Uuid) -> WorkingMemory"
+      parameters:
+        session_id:
+          type: "Uuid"
+          description: "Session identifier"
+      returns:
+        type: "WorkingMemory"
+        description: "Current working memory state"
+      performance:
+        latency_p95_ms: 5
+
+    compute_continuity_score:
+      description: "Compute conversation continuity score for transition"
+      signature: "fn compute_continuity_score(transition: ModalityTransition, context: WorkingMemory) -> f64"
+      parameters:
+        transition:
+          type: "ModalityTransition"
+          description: "Transition event"
+        context:
+          type: "WorkingMemory"
+          description: "Working memory context"
+      returns:
+        type: "f64"
+        range: [0.0, 1.0]
+        description: "Continuity score (0.0 = context lost, 1.0 = perfect continuity)"
+      performance:
+        latency_p95_ms: 3
+
+  entity_tracking:
+    entity_schema:
+      entity_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique entity identifier"
+
+      entity_type:
+        type: "enum"
+        values: ["NOUN", "PRONOUN", "DEMONSTRATIVE", "SPATIAL", "TEMPORAL", "IMAGE_REF", "LOCATION_REF"]
+        description: "Entity classification"
+
+      surface_form:
+        type: "string"
+        description: "Original text/reference"
+        examples: ["that", "this", "here", "recipe", "Emma's soccer practice"]
+
+      resolved_entity:
+        type: "string"
+        optional: true
+        description: "Resolved concrete entity (if pronoun/demonstrative)"
+
+      source_input_id:
+        type: "string"
+        format: "uuid"
+        description: "Input that introduced this entity"
+
+      first_seen_ms:
+        type: "integer"
+        format: "int64"
+        description: "First occurrence timestamp"
+
+      last_seen_ms:
+        type: "integer"
+        format: "int64"
+        description: "Most recent occurrence timestamp"
+
+      occurrence_count:
+        type: "integer"
+        description: "Number of times entity mentioned"
+
+      relevance_score:
+        type: "float"
+        range: [0.0, 1.0]
+        description: "Current relevance (decays over time)"
+
+      modality_sources:
+        type: "array"
+        items: "Modality"
+        description: "Modalities where entity appeared"
+
+    extraction_methods:
+      text:
+        method: "NER (Named Entity Recognition)"
+        model: "spaCy en_core_web_sm"
+        entities: ["PERSON", "ORG", "GPE", "DATE", "TIME", "PRODUCT"]
+        fallback: "Noun phrase extraction"
+
+      voice:
+        method: "Post-ASR NER"
+        note: "Extract entities after transcription"
+        same_as: "text"
+
+      image:
+        method: "Vision model object detection"
+        model: "CLIP or similar"
+        entities: ["Detected objects", "Scene categories"]
+
+      location:
+        method: "Geocoding + POI lookup"
+        entities: ["Address", "POI name", "City", "Country"]
+
+      touch:
+        method: "UI element tracking"
+        entities: ["Button name", "Screen section"]
+
+  reference_resolution:
+    resolution_rules:
+      demonstrative_pronouns:
+        - pattern: "that"
+          candidates:
+            - "Last IMAGE entity"
+            - "Last TEXT noun phrase"
+            - "Last VOICE noun phrase"
+          scoring: "Recency (0.5) + Modality match (0.3) + Semantic similarity (0.2)"
+
+        - pattern: "this"
+          candidates:
+            - "Current IMAGE entity"
+            - "Last TEXT/VOICE entity in same turn"
+          scoring: "Recency (0.5) + Proximity (0.5)"
+
+        - pattern: "it"
+          candidates:
+            - "Last singular noun entity"
+            - "Last VOICE/TEXT entity"
+          scoring: "Recency (0.6) + Gender/number agreement (0.4)"
+
+      spatial_references:
+        - pattern: "here"
+          candidates:
+            - "Current LOCATION entity"
+            - "Last LOCATION entity"
+          scoring: "Recency (0.7) + Spatial proximity (0.3)"
+
+        - pattern: "there"
+          candidates:
+            - "Referenced LOCATION entity"
+            - "IMAGE location tag"
+          scoring: "Recency (0.5) + Context cues (0.5)"
+
+      temporal_references:
+        - pattern: ["now", "currently"]
+          candidates:
+            - "Present time context"
+          scoring: "Temporal proximity (1.0)"
+
+        - pattern: ["earlier", "before"]
+          candidates:
+            - "Previous turn entities"
+            - "Historical entities (>10s ago)"
+          scoring: "Temporal distance (1.0)"
+
+    scoring_algorithm:
+      recency_score:
+        formula: "exp(-age_ms / half_life_ms)"
+        half_life_ms: 10000
+        note: "Recent entities score higher"
+
+      modality_match_score:
+        same_modality: 1.0
+        different_modality: 0.5
+        note: "Same-modality references preferred"
+
+      semantic_similarity_score:
+        method: "Cosine similarity of embeddings"
+        threshold: 0.5
+        note: "Semantic overlap boosts score"
+
+      final_score:
+        formula: "weighted_sum(recency, modality_match, semantic_similarity)"
+        weights: [0.5, 0.3, 0.2]
+        threshold: 0.5
+        note: "Candidates with score < 0.5 rejected"
+
+  working_memory:
+    structure:
+      recent_inputs:
+        description: "Sliding window of recent inputs"
+        capacity: 10
+        retention_time_ms: 60000
+        eviction_policy: "FIFO + time-based"
+
+      active_entities:
+        description: "Currently relevant entities"
+        capacity: 20
+        retention_time_ms: 60000
+        eviction_policy: "Relevance score"
+
+      entity_graph:
+        description: "Graph of entity relationships"
+        nodes: "Entities"
+        edges: "co-occurrence, reference, spatial/temporal relations"
+        max_nodes: 50
+
+      conversation_state:
+        description: "High-level conversation state"
+        fields:
+          - current_topic: "string"
+          - active_intent: "string"
+          - last_modality: "Modality"
+          - last_transition_ms: "i64"
+
+    synchronization:
+      with_sessionstate:
+        frequency: "On every transition"
+        fields_synced:
+          - "beliefs.active_entities → working_memory.active_entities"
+          - "beliefs.current_topic → working_memory.conversation_state.current_topic"
+        latency_target_ms: 10
+
+  continuity_scoring:
+    scoring_factors:
+      entity_overlap:
+        description: "% of entities preserved across transition"
+        weight: 0.4
+        formula: "preserved_entities / total_entities"
+
+      intent_continuity:
+        description: "Whether user intent is maintained"
+        weight: 0.3
+        values: [0.0, 1.0]
+
+      temporal_gap:
+        description: "Time gap between inputs"
+        weight: 0.2
+        formula: "exp(-gap_ms / half_life_ms)"
+        half_life_ms: 10000
+
+      reference_resolution_success:
+        description: "Whether references were successfully resolved"
+        weight: 0.1
+        values: [0.0, 1.0]
+
+    final_score:
+      formula: "weighted_sum(entity_overlap, intent_continuity, temporal_gap, reference_resolution)"
+      range: [0.0, 1.0]
+      thresholds:
+        excellent: 0.9
+        good: 0.7
+        fair: 0.5
+        poor: 0.3
+
+  performance:
+    entity_extraction_latency_ms:
+      p50: 10
+      p95: 15
+      p99: 25
+      max: 50
+
+    reference_resolution_latency_ms:
+      p50: 12
+      p95: 20
+      p99: 30
+      max: 50
+
+    working_memory_access_latency_ms:
+      p50: 2
+      p95: 5
+      p99: 10
+      max: 20
+
+    continuity_scoring_latency_ms:
+      p50: 1
+      p95: 3
+      p99: 5
+      max: 10
+
+  observability:
+    metrics:
+      - name: "context_preserver_entities_tracked_total"
+        type: "counter"
+        labels: ["entity_type", "modality"]
+        description: "Total entities tracked"
+
+      - name: "context_preserver_references_resolved_total"
+        type: "counter"
+        labels: ["reference_type", "success"]
+        description: "Total reference resolutions (successful/failed)"
+
+      - name: "context_preserver_resolution_latency_ms"
+        type: "histogram"
+        labels: ["reference_type"]
+        buckets: [5, 10, 20, 50, 100]
+        description: "Reference resolution latency"
+
+      - name: "context_preserver_continuity_score"
+        type: "histogram"
+        labels: ["from_modality", "to_modality"]
+        buckets: [0.0, 0.3, 0.5, 0.7, 0.9, 1.0]
+        description: "Conversation continuity score distribution"
+
+      - name: "context_preserver_working_memory_size"
+        type: "gauge"
+        labels: ["session_id"]
+        description: "Current working memory size (entities + inputs)"
+
+    tracing:
+      span_name: "context_preserver.resolve_references"
+      attributes:
+        - "input_id"
+        - "references_found"
+        - "references_resolved"
+        - "resolution_success_rate"
+
+    logging:
+      level: "INFO"
+      events:
+        - event: "entity_extracted"
+          fields: ["entity_id", "entity_type", "surface_form", "input_id"]
+
+        - event: "reference_resolved"
+          fields: ["reference", "resolved_entity_id", "score"]
+
+        - event: "reference_resolution_failed"
+          level: "WARN"
+          fields: ["reference", "candidates", "reason"]
+
+  related_contracts:
+    - "unified_input.yml"
+    - "modality_transition.yml"
+    - "transition_manager.yml"
+    - "multi_modal_bus.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition from ADR-0004f"
+      author: "Contract Development Team"

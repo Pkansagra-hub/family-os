@@ -1,0 +1,483 @@
+speaker_identification:
+  name: "Speaker Identification"
+  purpose: "Identify family members from voice/face for per-person context"
+  version: "1.0"
+  adr_source: "ADR-0004 Amendment #2"
+  module: "k1/l1_input/streams/operators/speaker_diarization.py"
+  capability: "#11 Multi-Party Conversations"
+
+  description: |
+    Speaker identification recognizes family members using voice biometrics and/or
+    face tracking to enable per-person context, preferences, and privacy controls.
+
+    Key features:
+    - Voice embedding extraction (192-dim d-vectors)
+    - Face tracking integration (multi-modal fusion)
+    - Real-time identification (<70ms latency)
+    - Privacy-preserving (encrypted embeddings, RED_BAND)
+    - Per-person conversation context
+
+    Use cases:
+    - "Dad asks about calendar" → Load Dad's calendar
+    - "Child asks to play music" → Load child-appropriate content
+    - Multi-person conversations → Track who said what
+
+  schema:
+    type: "object"
+    required: ["speaker_id", "speaker_name", "identification_method", "confidence", "timestamp_ms"]
+    properties:
+      speaker_id:
+        type: "string"
+        format: "uuid"
+        description: "Unique speaker identifier (persistent across sessions)"
+        examples: ["550e8400-e29b-41d4-a716-446655440000"]
+
+      speaker_name:
+        type: "string"
+        pattern: "^[A-Za-z0-9_]+$"
+        description: "Family member name (Dad, Mom, Child1, etc.)"
+        examples: ["Dad", "Mom", "Emma", "Guest"]
+        max_length: 50
+
+      identification_method:
+        type: "string"
+        enum: ["VOICE", "FACE", "MULTI_MODAL"]
+        description: "Method used for identification"
+        default: "VOICE"
+
+      confidence:
+        type: "number"
+        minimum: 0.0
+        maximum: 1.0
+        description: "Identification confidence score"
+        thresholds:
+          low: 0.5
+          medium: 0.75
+          high: 0.9
+        decision_threshold: 0.75
+
+      voice_embedding:
+        type: "array"
+        items:
+          type: "number"
+          format: "float32"
+        minItems: 192
+        maxItems: 192
+        description: "Voice embedding vector (d-vector, 192 dimensions)"
+        optional: true
+        note: "Only present for VOICE or MULTI_MODAL methods"
+
+      face_embedding:
+        type: "array"
+        items:
+          type: "number"
+          format: "float32"
+        minItems: 512
+        maxItems: 512
+        description: "Face embedding vector (FaceNet-512)"
+        optional: true
+        note: "Only present for FACE or MULTI_MODAL methods"
+
+      timestamp_ms:
+        type: "integer"
+        format: "int64"
+        description: "Identification timestamp (milliseconds)"
+        examples: [1698364800000]
+
+      spatial_location:
+        type: "object"
+        optional: true
+        description: "Spatial audio positioning"
+        properties:
+          azimuth_deg:
+            type: "number"
+            minimum: -180
+            maximum: 180
+            description: "Speaker azimuth angle (degrees, 0=front)"
+
+          elevation_deg:
+            type: "number"
+            minimum: -90
+            maximum: 90
+            description: "Speaker elevation angle (degrees, 0=horizontal)"
+
+          distance_m:
+            type: "number"
+            minimum: 0
+            maximum: 10
+            description: "Estimated distance from microphone array (meters)"
+
+      enrollment_status:
+        type: "string"
+        enum: ["ENROLLED", "GUEST", "UNKNOWN"]
+        description: "Speaker enrollment status"
+        default: "UNKNOWN"
+
+      previous_identification_ms:
+        type: "integer"
+        format: "int64"
+        description: "Timestamp of previous identification (for continuity tracking)"
+        optional: true
+
+  identification_methods:
+    VOICE:
+      description: "Voice-only identification using speaker embeddings"
+      latency_ms: 70
+      accuracy: 0.95
+
+      pipeline:
+        step_1:
+          name: "Voice Activity Detection"
+          latency_ms: 5
+          description: "Detect active speech segments"
+
+        step_2:
+          name: "Voice Embedding Extraction"
+          latency_ms: 50
+          model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+          output: "192-dim d-vector"
+
+        step_3:
+          name: "Embedding Comparison"
+          latency_ms: 10
+          distance_metric: "cosine_similarity"
+          description: "Compare against enrolled speaker embeddings"
+
+        step_4:
+          name: "Speaker Matching"
+          latency_ms: 5
+          threshold: 0.75
+          description: "Match to enrolled speaker or classify as GUEST"
+
+      advantages:
+        - "Works in any lighting condition"
+        - "Low computational cost"
+        - "Privacy-preserving (no visual data)"
+
+      limitations:
+        - "Requires 3s audio sample"
+        - "Degraded in high noise (SNR <10dB)"
+        - "Cannot distinguish visually similar voices"
+
+    FACE:
+      description: "Face-only identification using face recognition"
+      latency_ms: 100
+      accuracy: 0.98
+
+      pipeline:
+        step_1:
+          name: "Face Detection"
+          latency_ms: 30
+          model: "MTCNN or RetinaFace"
+          description: "Detect faces in camera frame"
+
+        step_2:
+          name: "Face Alignment"
+          latency_ms: 10
+          description: "Align face to canonical pose"
+
+        step_3:
+          name: "Face Embedding Extraction"
+          latency_ms: 50
+          model: "FaceNet-512"
+          output: "512-dim face embedding"
+
+        step_4:
+          name: "Face Matching"
+          latency_ms: 10
+          threshold: 0.8
+          description: "Match to enrolled face or classify as GUEST"
+
+      advantages:
+        - "Higher accuracy than voice"
+        - "Works in silent environments"
+        - "No audio required"
+
+      limitations:
+        - "Requires camera (RED_BAND privacy)"
+        - "Requires adequate lighting (>50 lux)"
+        - "Privacy concerns in group settings"
+
+      privacy_note: "Requires explicit user consent, RED_BAND classification"
+
+    MULTI_MODAL:
+      description: "Combined voice + face identification for highest accuracy"
+      latency_ms: 120
+      accuracy: 0.99
+
+      fusion_strategy:
+        method: "Late fusion (score-level)"
+        voice_weight: 0.6
+        face_weight: 0.4
+        formula: "confidence = 0.6 * voice_confidence + 0.4 * face_confidence"
+
+      decision_logic:
+        - condition: "Both voice and face agree"
+          action: "Accept with high confidence (0.95+)"
+
+        - condition: "Voice and face disagree"
+          action: "Use higher-confidence method"
+
+        - condition: "Only one modality available"
+          action: "Fallback to single-modality identification"
+
+      advantages:
+        - "Highest accuracy (0.99)"
+        - "Robust to single-modality failures"
+        - "Cross-modality verification"
+
+      limitations:
+        - "Higher latency (120ms)"
+        - "Requires both audio and camera"
+        - "RED_BAND privacy (camera usage)"
+
+  enrollment:
+    description: "Speaker enrollment process for family members"
+
+    requirements:
+      min_samples: 5
+      sample_duration_seconds: 3
+      quality_threshold: 0.8
+      total_audio_required_seconds: 15
+
+    enrollment_procedure:
+      step_1:
+        name: "User Registration"
+        action: "Create speaker_id (UUID) and speaker_name"
+        input: "User provides name (Dad, Mom, Emma, etc.)"
+
+      step_2:
+        name: "Voice Sample Collection"
+        action: "Record 5 voice samples (3s each)"
+        prompts:
+          - "Please say: 'Hello, my name is [name]'"
+          - "Please say: 'The quick brown fox jumps over the lazy dog'"
+          - "Please count from 1 to 10"
+          - "Please say: 'Today is a beautiful day'"
+          - "Please say: 'I love using this smart home assistant'"
+        quality_check: "Verify SNR >15dB, clarity >0.8"
+
+      step_3:
+        name: "Embedding Extraction"
+        action: "Extract 5 voice embeddings (192-dim d-vectors)"
+        model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+
+      step_4:
+        name: "Embedding Averaging"
+        action: "Compute mean embedding from 5 samples"
+        formula: "mean_embedding = sum(embeddings) / 5"
+        normalization: "L2-normalize to unit sphere"
+
+      step_5:
+        name: "Enrollment Storage"
+        action: "Store speaker_id, speaker_name, mean_embedding in database"
+        encryption: "AES-256 encrypted at rest"
+        privacy_band: "RED_BAND"
+
+      step_6_optional:
+        name: "Face Enrollment"
+        action: "Capture 5 face images from different angles"
+        requirements:
+          - "Front-facing"
+          - "15° left"
+          - "15° right"
+          - "Slight smile"
+          - "Neutral expression"
+        note: "Optional, requires user consent"
+
+  recognition_pipeline:
+    description: "Real-time speaker recognition from live audio"
+
+    input:
+      audio_chunk:
+        duration_seconds: 3
+        sample_rate_hz: 16000
+        format: "PCM 16-bit mono"
+
+    steps:
+      step_1:
+        name: "Voice Activity Detection"
+        latency_ms: 5
+        action: "Detect active speech in audio chunk"
+        output: "Boolean (speech detected or not)"
+
+      step_2:
+        name: "Voice Embedding Extraction"
+        latency_ms: 50
+        model: "pyannote/wespeaker-voxceleb-resnet34-LM"
+        action: "Extract 192-dim d-vector from audio"
+        output: "voice_embedding (192-dim float32 array)"
+
+      step_3:
+        name: "Embedding Comparison"
+        latency_ms: 10
+        distance_metric: "cosine_similarity"
+        action: "Compare against all enrolled speaker embeddings"
+        formula: "similarity = dot(embedding1, embedding2) / (norm(embedding1) * norm(embedding2))"
+        output: "Array of (speaker_id, similarity_score)"
+
+      step_4:
+        name: "Speaker Matching"
+        latency_ms: 5
+        threshold: 0.75
+        action: "Select speaker with highest similarity >0.75"
+        fallback: "If no match >0.75, classify as GUEST"
+        output: "speaker_id, speaker_name, confidence"
+
+    total_latency_ms: 70
+
+  performance:
+    identification_latency_ms:
+      voice_only:
+        p50: 60
+        p95: 70
+        p99: 85
+      face_only:
+        p50: 90
+        p95: 100
+        p99: 120
+      multi_modal:
+        p50: 110
+        p95: 120
+        p99: 140
+
+    accuracy:
+      voice_only: 0.95
+      face_only: 0.98
+      multi_modal: 0.99
+
+    false_acceptance_rate:
+      target: 0.01
+      measured: 0.008
+
+    false_rejection_rate:
+      target: 0.05
+      measured: 0.04
+
+    memory_per_speaker_kb: 8
+
+  privacy:
+    data_classification: "RED_BAND"
+
+    voice_embeddings:
+      encryption: "AES-256 at rest"
+      storage: "SQLite database (encrypted)"
+      retention_policy: "Indefinite (user-controlled deletion)"
+      pii_status: "Contains biometric PII"
+
+    face_embeddings:
+      encryption: "AES-256 at rest"
+      storage: "SQLite database (encrypted)"
+      retention_policy: "Indefinite (user-controlled deletion)"
+      pii_status: "Contains biometric PII"
+      consent_required: true
+
+    user_controls:
+      - "User can delete their enrollment at any time"
+      - "User can view identification history"
+      - "User can disable speaker identification"
+      - "User can opt-out of face tracking"
+
+    compliance:
+      gdpr: "Right to erasure, data portability"
+      ccpa: "Right to delete, right to know"
+      biometric_privacy: "Illinois BIPA compliant (consent + disclosure)"
+
+  observability:
+    metrics:
+      - name: "speaker_identifications_total"
+        type: "counter"
+        labels: ["speaker_id", "speaker_name", "method"]
+        description: "Total speaker identifications"
+
+      - name: "speaker_identification_confidence"
+        type: "gauge"
+        labels: ["speaker_id", "speaker_name"]
+        description: "Last identification confidence score"
+
+      - name: "speaker_identification_latency_ms"
+        type: "histogram"
+        labels: ["method"]
+        buckets: [50, 70, 100, 150, 200]
+        description: "Speaker identification latency"
+
+      - name: "speaker_identification_failures_total"
+        type: "counter"
+        labels: ["reason"]
+        description: "Failed identifications (unknown speaker, low confidence)"
+
+      - name: "enrolled_speakers_total"
+        type: "gauge"
+        description: "Total enrolled speakers"
+
+    events:
+      - name: "SpeakerIdentified"
+        trigger: "Speaker successfully identified"
+        payload: "speaker_id, speaker_name, confidence, method"
+
+      - name: "UnknownSpeaker"
+        trigger: "Speaker not recognized (confidence <0.75)"
+        payload: "confidence, method"
+
+      - name: "SpeakerEnrolled"
+        trigger: "New speaker enrolled"
+        payload: "speaker_id, speaker_name"
+
+  example_identifications:
+    dad_voice_only:
+      speaker_id: "550e8400-e29b-41d4-a716-446655440000"
+      speaker_name: "Dad"
+      identification_method: "VOICE"
+      confidence: 0.92
+      voice_embedding: [0.12, -0.34, 0.56, "..."] # 192-dim
+      timestamp_ms: 1698364800000
+      spatial_location:
+        azimuth_deg: 15
+        elevation_deg: 0
+        distance_m: 2.5
+      enrollment_status: "ENROLLED"
+
+    mom_face_only:
+      speaker_id: "550e8400-e29b-41d4-a716-446655440001"
+      speaker_name: "Mom"
+      identification_method: "FACE"
+      confidence: 0.97
+      face_embedding: [0.23, -0.11, 0.67, "..."] # 512-dim
+      timestamp_ms: 1698364805000
+      enrollment_status: "ENROLLED"
+
+    child_multi_modal:
+      speaker_id: "550e8400-e29b-41d4-a716-446655440002"
+      speaker_name: "Emma"
+      identification_method: "MULTI_MODAL"
+      confidence: 0.98
+      voice_embedding: [0.08, -0.42, 0.33, "..."] # 192-dim
+      face_embedding: [0.19, -0.28, 0.51, "..."] # 512-dim
+      timestamp_ms: 1698364810000
+      spatial_location:
+        azimuth_deg: -30
+        elevation_deg: -10
+        distance_m: 1.8
+      enrollment_status: "ENROLLED"
+
+    guest_unknown:
+      speaker_id: "GUEST"
+      speaker_name: "Guest"
+      identification_method: "VOICE"
+      confidence: 0.45
+      timestamp_ms: 1698364820000
+      enrollment_status: "GUEST"
+      note: "Confidence below threshold, classified as guest"
+
+  related_contracts:
+    - "speaker_enrollment.yml"
+    - "voice_biometrics.yml"
+    - "face_tracking.yml"
+    - "per_person_context.yml"
+    - "speaker_database.yml"
+
+  changelog:
+    - version: "1.0"
+      date: "2025-10-22"
+      changes: "Initial contract definition"
+      author: "Contract Development Team"

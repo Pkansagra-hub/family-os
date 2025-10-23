@@ -1,0 +1,19 @@
+/// HTTP Request Schema (HREQ)
+/// Layer 4: API Gateway - REST
+
+namespace k1.api_gateway;
+
+table HTTPRequest {
+  request_id: string (required);
+  method: string (required);  // GET, POST, PUT, DELETE
+  path: string (required);
+  headers: [k1.agent_fabric.KeyValue];
+  query_params: [k1.agent_fabric.KeyValue];
+  body: string;
+
+  // Timestamps
+  received_at_ms: uint64 = 0;
+}
+
+root_type HTTPRequest;
+file_identifier "HREQ";
