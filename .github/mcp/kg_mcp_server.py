@@ -807,7 +807,7 @@ STORE = KnowledgeGraphStore(KG_STORE_PATH)
 
 
 @mcp.tool(
-    name="kg.add_node",
+    name="kg_add_node",
     description="Create or update a knowledge graph node with optional semantic metadata (type, tags, file path, code snippet). Returns full node record after upsert.",
 )
 def kg_add_node(
@@ -868,7 +868,7 @@ def kg_add_node(
 
 
 @mcp.tool(
-    name="kg.remove_node",
+    name="kg_remove_node",
     description="Remove a node and all its incident edges from the knowledge graph.",
 )
 def kg_remove_node(diagram: str, node_id: str) -> Dict[str, Any]:
@@ -885,7 +885,7 @@ def kg_remove_node(diagram: str, node_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.add_edge",
+    name="kg_add_edge",
     description="Create or update an edge between two nodes with optional relation type and strength metadata.",
 )
 def kg_add_edge(
@@ -922,7 +922,7 @@ def kg_add_edge(
 
 
 @mcp.tool(
-    name="kg.remove_edge",
+    name="kg_remove_edge",
     description="Remove an edge between two nodes in the knowledge graph.",
 )
 def kg_remove_edge(
@@ -938,7 +938,7 @@ def kg_remove_edge(
 
 
 @mcp.tool(
-    name="kg.add_memory",
+    name="kg_add_memory",
     description="Attach a free-form memory note to a node in the knowledge graph.",
 )
 def kg_add_memory(
@@ -954,7 +954,7 @@ def kg_add_memory(
 
 
 @mcp.tool(
-    name="kg.update_annotations",
+    name="kg_update_annotations",
     description="Update node annotations with additional metadata.",
 )
 def kg_update_annotations(
@@ -965,7 +965,7 @@ def kg_update_annotations(
 
 
 @mcp.tool(
-    name="kg.search",
+    name="kg_search",
     description="Full-text search across nodes and edges in the knowledge graph.",
 )
 def kg_search(
@@ -976,7 +976,7 @@ def kg_search(
 
 
 @mcp.tool(
-    name="kg.neighbors",
+    name="kg_neighbors",
     description="Get adjacent nodes (outgoing/incoming/both) from a specific node.",
 )
 def kg_neighbors(diagram: str, node_id: str, direction: str = "both") -> Dict[str, Any]:
@@ -985,7 +985,7 @@ def kg_neighbors(diagram: str, node_id: str, direction: str = "both") -> Dict[st
 
 
 @mcp.tool(
-    name="kg.graph",
+    name="kg_graph",
     description="Retrieve complete graph structure (all nodes, edges, subgraphs) from a diagram.",
 )
 def kg_graph(diagram: str) -> Dict[str, Any]:
@@ -994,7 +994,7 @@ def kg_graph(diagram: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.summary",
+    name="kg_summary",
     description="Get high-level statistics and structure summary of a diagram.",
 )
 def kg_summary(diagram: str) -> Dict[str, Any]:
@@ -1003,7 +1003,7 @@ def kg_summary(diagram: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.paths", description="Find simple paths between two nodes (BFS traversal)."
+    name="kg_paths", description="Find simple paths between two nodes (BFS traversal)."
 )
 def kg_paths(
     diagram: str, src: str, dst: str, max_hops: int = 6, max_paths: int = 5
@@ -1013,7 +1013,7 @@ def kg_paths(
 
 
 @mcp.tool(
-    name="kg.find_by_type", description="Find all nodes of a specific semantic type."
+    name="kg_find_by_type", description="Find all nodes of a specific semantic type."
 )
 def kg_find_by_type(
     node_type: str, diagram: Optional[str] = None, limit: int = 50
@@ -1062,7 +1062,7 @@ def kg_find_by_type(
 
 
 @mcp.tool(
-    name="kg.find_by_tags",
+    name="kg_find_by_tags",
     description="Find knowledge graph nodes matching semantic tags (ALL or ANY match).",
 )
 def kg_find_by_tags(
@@ -1129,7 +1129,7 @@ def kg_find_by_tags(
 
 
 @mcp.tool(
-    name="kg.find_adr_by_status",
+    name="kg_find_adr_by_status",
     description="Find architecture decision records (ADRs) filtered by their decision status.",
 )
 def kg_find_adr_by_status(
@@ -1173,7 +1173,7 @@ def kg_find_adr_by_status(
 
 
 @mcp.tool(
-    name="kg.get_related_adr",
+    name="kg_get_related_adr",
     description="Find ADRs related to a given ADR via graph edges.",
 )
 def kg_get_related_adr(adr_id: str, diagram: Optional[str] = None) -> Dict[str, Any]:
@@ -1223,7 +1223,7 @@ def kg_get_related_adr(adr_id: str, diagram: Optional[str] = None) -> Dict[str, 
 
 
 @mcp.tool(
-    name="kg.find_edges_by_relation_type",
+    name="kg_find_edges_by_relation_type",
     description="Find all edges with a specific semantic relation type.",
 )
 def kg_find_edges_by_relation_type(
@@ -1245,7 +1245,7 @@ def kg_find_edges_by_relation_type(
 
 
 @mcp.tool(
-    name="kg.find_edges_by_strength",
+    name="kg_find_edges_by_strength",
     description="Find edges within a confidence strength range.",
 )
 def kg_find_edges_by_strength(
@@ -1270,7 +1270,7 @@ def kg_find_edges_by_strength(
 
 
 @mcp.tool(
-    name="kg.find_related_nodes",
+    name="kg_find_related_nodes",
     description="Find nodes related to a given node by semantic relations.",
 )
 def kg_find_related_nodes(
@@ -1293,7 +1293,7 @@ def kg_find_related_nodes(
 
 
 @mcp.tool(
-    name="kg.get_relation_type_stats",
+    name="kg_get_relation_type_stats",
     description="Get statistics about semantic relations in a diagram.",
 )
 def kg_get_relation_type_stats(diagram: str) -> Dict[str, Any]:
@@ -1338,7 +1338,7 @@ def _get_dependency_engine() -> DependencyGraphEngine:
 
 
 @mcp.tool(
-    name="kg.get_module_deps",
+    name="kg_get_module_deps",
     description="Get all dependencies of a module (transitive closure).",
 )
 def kg_get_module_deps(module_id: str, depth: Optional[int] = None) -> Dict[str, Any]:
@@ -1395,7 +1395,7 @@ def kg_get_module_deps(module_id: str, depth: Optional[int] = None) -> Dict[str,
 
 
 @mcp.tool(
-    name="kg.get_dependents",
+    name="kg_get_dependents",
     description="Get all modules that depend on this module (reverse transitive).",
 )
 def kg_get_dependents(module_id: str, depth: Optional[int] = None) -> Dict[str, Any]:
@@ -1458,7 +1458,7 @@ def kg_get_dependents(module_id: str, depth: Optional[int] = None) -> Dict[str, 
 
 
 @mcp.tool(
-    name="kg.find_circular_deps",
+    name="kg_find_circular_deps",
     description="Find all circular dependencies in the repository.",
 )
 def kg_find_circular_deps() -> Dict[str, Any]:
@@ -1538,7 +1538,7 @@ def kg_find_circular_deps() -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.trace_import_chain",
+    name="kg_trace_import_chain",
     description="Trace import dependency paths between two modules.",
 )
 def kg_trace_import_chain(
@@ -1626,7 +1626,7 @@ def kg_trace_import_chain(
 
 
 @mcp.tool(
-    name="kg.implementation_chain",
+    name="kg_implementation_chain",
     description="Get everything needed to implement an ADR (complete context).",
 )
 def kg_implementation_chain(
@@ -1796,7 +1796,7 @@ def kg_implementation_chain(
 
 
 @mcp.tool(
-    name="kg.dependency_impact",
+    name="kg_dependency_impact",
     description="Analyze impact of changing a module (what breaks).",
 )
 def kg_dependency_impact(module_id: str) -> Dict[str, Any]:
@@ -1905,7 +1905,7 @@ def kg_dependency_impact(module_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.get_feature_context",
+    name="kg_get_feature_context",
     description="Get complete context for implementing a feature.",
 )
 def kg_get_feature_context(
@@ -2340,7 +2340,7 @@ def _get_module_recommendation(dep_count: int, dependent_count: int, risk: str) 
 
 
 @mcp.tool(
-    name="kg.ask",
+    name="kg_ask",
     description="Natural language query router for AI agents (semantic question answering).",
 )
 def kg_ask(query: str, diagram: Optional[str] = None) -> Dict[str, Any]:
@@ -2510,7 +2510,7 @@ def kg_ask(query: str, diagram: Optional[str] = None) -> Dict[str, Any]:
 
 
 @mcp.tool(
-    name="kg.impact_analysis",
+    name="kg_impact_analysis",
     description="Analyze impact of changing an ADR (complete cascade).",
 )
 def kg_impact_analysis(adr_id: str, diagram: Optional[str] = None) -> Dict[str, Any]:
@@ -2640,7 +2640,7 @@ def kg_impact_analysis(adr_id: str, diagram: Optional[str] = None) -> Dict[str, 
 
 
 @mcp.tool(
-    name="kg.diagnostics",
+    name="kg_diagnostics",
     description="Architecture diagnostics to find issues and anti-patterns.",
 )
 def kg_diagnostics(
