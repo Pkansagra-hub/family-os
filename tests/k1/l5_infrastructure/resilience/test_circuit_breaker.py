@@ -75,17 +75,22 @@ async def _(breaker: Any = circuit_breaker_fixture) -> None:
 
 
 @test("open circuit rejects calls and raises CircuitBreakerOpenError without fallback")
-async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture) -> None:
+async def _(
+    breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture
+) -> None:
     circuit_breaker = cast(CircuitBreaker, breaker)
     fake_clock_inst = cast(_FakeClock, fake_clock)
     for _ in range(3):
         with raises(TimeoutError):
             await circuit_breaker.call(_failure_operation)
 
-    rejection_metric = REGISTRY.get_sample_value(
-        "k1_intelligence_circuit_breaker_calls_total",
-        {"service": "resilience_test", "result": "rejected"},
-    ) or 0.0
+    rejection_metric = (
+        REGISTRY.get_sample_value(
+            "k1_intelligence_circuit_breaker_calls_total",
+            {"service": "resilience_test", "result": "rejected"},
+        )
+        or 0.0
+    )
 
     with raises(CircuitBreakerOpenError) as exc_info:
         await circuit_breaker.call(lambda: None)
@@ -94,10 +99,13 @@ async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock
     assert err.retry_after_ms >= 0.0
     assert "Circuit breaker" in str(err)
 
-    updated = REGISTRY.get_sample_value(
-        "k1_intelligence_circuit_breaker_calls_total",
-        {"service": "resilience_test", "result": "rejected"},
-    ) or 0.0
+    updated = (
+        REGISTRY.get_sample_value(
+            "k1_intelligence_circuit_breaker_calls_total",
+            {"service": "resilience_test", "result": "rejected"},
+        )
+        or 0.0
+    )
     assert updated == rejection_metric + 1.0
 
     fake_clock_inst.advance(31.0)  # allow transition to HALF_OPEN
@@ -107,7 +115,9 @@ async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock
 
 
 @test("half-open state allows a single probe and rejects concurrent requests")
-async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture) -> None:
+async def _(
+    breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture
+) -> None:
     circuit_breaker = cast(CircuitBreaker, breaker)
     clock = cast(_FakeClock, fake_clock)
 
@@ -144,7 +154,9 @@ async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock
 
 
 @test("slow successful calls are classified as failures")
-async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture) -> None:
+async def _(
+    breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture
+) -> None:
     circuit_breaker = cast(CircuitBreaker, breaker)
     clock = cast(_FakeClock, fake_clock)
 
@@ -155,13 +167,18 @@ async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock
     await circuit_breaker.call(slow_success)
     failure_total = REGISTRY.get_sample_value(
         "k1_intelligence_circuit_breaker_failures_total",
-        {"service": "resilience_test", "failure_type": FailureClassification.SLOW_CALL.value},
+        {
+            "service": "resilience_test",
+            "failure_type": FailureClassification.SLOW_CALL.value,
+        },
     )
     assert failure_total and failure_total >= 1.0
 
 
 @test("cognitive trace IDs propagate through circuit breaker execution")
-async def _(breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture) -> None:
+async def _(
+    breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture
+) -> None:
     circuit_breaker = cast(CircuitBreaker, breaker)
     clock = cast(_FakeClock, fake_clock)
     tracer = get_tracer()

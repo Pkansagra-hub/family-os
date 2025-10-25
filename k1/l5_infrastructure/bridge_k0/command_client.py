@@ -74,6 +74,7 @@ ADR Reference: docs/architecture/decisions/0001a-k0-bridge-architecture.md
 """
 
 import hashlib
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional
 
@@ -84,6 +85,15 @@ from k0.idem import derive_idem_key
 
 # Import K1 observability (wraps K0's observability stack)
 from k1.l5_infrastructure.observability import get_metrics, get_tracer
+from k1.l5_infrastructure.resilience.retry_policy import (
+    FailureClassifier,
+    FailureType,
+    RetryAttemptInfo,
+    RetryAttemptsExceeded,
+    RetryBudgetExceeded,
+    RetryPolicy,
+    RetryPolicyConfig,
+)
 
 try:
     import structlog  # type: ignore
@@ -245,13 +255,15 @@ class K0CommandClient:
         base_url: str = "http://localhost:5200",
         timeout: float = 10.0,
         max_retries: int = 3,
+        retry_policy: Optional[RetryPolicy] = None,
     ):
         """Initialize K0 Command Client
 
         Args:
             base_url: K0 base URL (default: http://localhost:5200)
             timeout: Request timeout in seconds (default: 10.0)
-            max_retries: Maximum retry attempts (default: 3)
+            max_retries: Maximum total attempts (initial try + retries, default: 3)
+            retry_policy: Optional preconfigured retry policy (primarily for testing)
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -269,12 +281,45 @@ class K0CommandClient:
             ),
         )
 
+        # Retry policy used for idempotent command submission (ADR-0008b)
+        self._retry_policy = retry_policy or self._create_retry_policy()
+
         logger.info(
             "k0_command_client_initialized",
             base_url=self.base_url,
             timeout=timeout,
             max_retries=max_retries,
         )
+
+    def _create_retry_policy(self) -> RetryPolicy:
+        """Build the retry policy instance used for command submission."""
+
+        # ``RetryPolicyConfig.max_retries`` counts retry attempts after the first
+        # call, while ``self.max_retries`` is the total attempts requested by the
+        # caller (default 3). This conversion preserves backwards compatibility.
+        policy_max_retries = max(0, self.max_retries - 1)
+        config = RetryPolicyConfig(
+            name="k0_command_client",
+            max_retries=policy_max_retries,
+            base_delay_ms=100.0,
+            max_delay_ms=1600.0,
+            jitter_percent=0.20,
+            retry_budget_ms=self.timeout * 1000.0,
+        )
+
+        classifier = FailureClassifier(
+            config=config,
+            custom_rules={
+                K0Unavailable: FailureType.TRANSIENT,
+                httpx.RequestError: FailureType.TRANSIENT,
+                K0QoSExhausted: FailureType.PERMANENT,
+                K0CommandRejected: FailureType.PERMANENT,
+                K0PolicyDenied: FailureType.PERMANENT,
+                K0IdempotentDuplicate: FailureType.PERMANENT,
+            },
+        )
+
+        return RetryPolicy(config=config, classifier=classifier)
 
     async def submit_command(self, envelope: CommandEnvelope) -> CommandReceipt:
         """
@@ -305,13 +350,8 @@ class K0CommandClient:
 
         Performance: <50ms P95 (GREEN), <200ms P95 (AMBER/RED)
         """
-        # Start observability span for distributed tracing
-        # Attach cognitive_trace_id to baggage for K1→K0 correlation
         token = _tracer.attach_cognitive_trace(envelope.cognitive_trace_id)
-
-        import time as time_module
-
-        start_time = time_module.time()
+        start_time = time.time()
 
         try:
             with _tracer.span(
@@ -323,8 +363,6 @@ class K0CommandClient:
                     "space_id": envelope.space_id,
                 },
             ):
-                # Compute payload SHA256 if body provided and hash not set
-                # Must be done BEFORE deriving idem_key (which includes payload_sha256)
                 if envelope.body is not None and envelope.payload_sha256 is None:
                     import json
 
@@ -335,11 +373,7 @@ class K0CommandClient:
                         body_json.encode("utf-8")
                     ).hexdigest()
 
-                # Derive idempotency key if not provided
-                # ADR-0001a: K0 derives idem_key from canonical envelope fields using BLAKE3
-                # K1 must compute the same value to pass K0 Gate validation
                 if envelope.idem_key is None:
-                    # Build envelope dict for derive_idem_key
                     envelope_dict = {
                         "tenant_id": envelope.tenant_id,
                         "space_id": envelope.space_id,
@@ -348,13 +382,11 @@ class K0CommandClient:
                         "schema_uri": envelope.schema_uri,
                         "schema_version": envelope.schema_version,
                     }
-
-                    # derive_idem_key expects payload_hash parameter
                     envelope.idem_key = derive_idem_key(
-                        envelope_dict, payload_hash=envelope.payload_sha256
+                        envelope_dict,
+                        payload_hash=envelope.payload_sha256,
                     )
 
-                # Build JSON envelope (K0 native format - ADR-0001a PRIMARY)
                 payload: Dict[str, Any] = {
                     "cognitive_trace_id": envelope.cognitive_trace_id,
                     "tenant_id": envelope.tenant_id,
@@ -370,7 +402,6 @@ class K0CommandClient:
                     "sig": envelope.sig,
                 }
 
-                # Add optional fields if present
                 if envelope.idem_key:
                     payload["idem_key"] = envelope.idem_key
                 if envelope.payload_sha256:
@@ -380,88 +411,114 @@ class K0CommandClient:
                 if envelope.policy is not None:
                     payload["policy"] = envelope.policy
 
-                # Retry logic with exponential backoff
-                # ADR-0024: 3 attempts with 100ms→400ms→1600ms backoff
-                last_error = None
-                for attempt in range(self.max_retries):
-                    try:
-                        receipt = await self._post_command(
-                            payload, envelope.cognitive_trace_id, attempt
-                        )
+                attempt_counter = 0
 
-                        # Record success metrics
-                        latency_ms = (time_module.time() - start_time) * 1000
-                        command_requests_total.labels(
-                            band=envelope.band, status="success"
-                        ).inc()
-                        command_latency_ms.labels(band=envelope.band).observe(
-                            latency_ms
-                        )
+                async def attempt_call() -> CommandReceipt:
+                    nonlocal attempt_counter
+                    attempt_index = attempt_counter
+                    attempt_counter += 1
+                    return await self._post_command(
+                        payload,
+                        envelope.cognitive_trace_id,
+                        attempt_index,
+                    )
 
-                        return receipt
+                async def on_retry(info: RetryAttemptInfo) -> None:
+                    reason = self._resolve_retry_reason(info)
+                    command_retries_total.labels(
+                        band=envelope.band,
+                        reason=reason,
+                    ).inc()
+                    logger.warning(
+                        "k0_command_retry",
+                        cognitive_trace_id=envelope.cognitive_trace_id,
+                        attempt=info.attempt_number,
+                        classification=info.classification.value,
+                        delay_ms=round(info.delay_ms, 2),
+                        total_delay_ms=round(info.total_elapsed_ms, 2),
+                        error=str(info.exception),
+                    )
 
-                    except K0Unavailable as e:
-                        last_error = e
-                        if attempt < self.max_retries - 1:
-                            # Exponential backoff: 100ms, 400ms, 1600ms
-                            import asyncio
+                receipt = await self._retry_policy.execute(
+                    attempt_call,
+                    idempotent=True,
+                    cognitive_trace_id=envelope.cognitive_trace_id,
+                    description=f"k0_command:{envelope.topic}",
+                    on_retry=on_retry,
+                )
 
-                            backoff_ms = 100 * (4**attempt)
-
-                            # Record retry metric
-                            command_retries_total.labels(
-                                band=envelope.band, reason="unavailable"
-                            ).inc()
-
-                            logger.warning(
-                                "k0_command_retry",
-                                cognitive_trace_id=envelope.cognitive_trace_id,
-                                attempt=attempt + 1,
-                                max_retries=self.max_retries,
-                                backoff_ms=backoff_ms,
-                                error=str(e),
-                            )
-                            await asyncio.sleep(backoff_ms / 1000.0)
-                    except (
-                        K0CommandRejected,
-                        K0PolicyDenied,
-                        K0IdempotentDuplicate,
-                        K0QoSExhausted,
-                    ) as e:
-                        # These errors are not retryable - record metric and raise
-                        latency_ms = (time_module.time() - start_time) * 1000
-
-                        # Determine error status for metrics
-                        if isinstance(e, K0CommandRejected):
-                            status = "rejected"
-                        elif isinstance(e, K0PolicyDenied):
-                            status = "policy_denied"
-                        elif isinstance(e, K0IdempotentDuplicate):
-                            status = "duplicate"
-                        elif isinstance(e, K0QoSExhausted):
-                            status = "qos_exhausted"
-                        else:
-                            status = "error"
-
-                        command_requests_total.labels(
-                            band=envelope.band, status=status
-                        ).inc()
-                        command_latency_ms.labels(band=envelope.band).observe(
-                            latency_ms
-                        )
-                        raise
-
-                # All retries exhausted - record metric
-                latency_ms = (time_module.time() - start_time) * 1000
-                command_requests_total.labels(
-                    band=envelope.band, status="unavailable"
-                ).inc()
-                command_latency_ms.labels(band=envelope.band).observe(latency_ms)
-
-                raise last_error or K0Unavailable(503, "Max retries exceeded")
+            self._record_request_metrics(
+                band=envelope.band,
+                status="success",
+                start_time=start_time,
+            )
+            return receipt
+        except K0CommandRejected:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="rejected",
+                start_time=start_time,
+            )
+            raise
+        except K0PolicyDenied:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="policy_denied",
+                start_time=start_time,
+            )
+            raise
+        except K0IdempotentDuplicate:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="duplicate",
+                start_time=start_time,
+            )
+            raise
+        except K0QoSExhausted:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="qos_exhausted",
+                start_time=start_time,
+            )
+            raise
+        except RetryAttemptsExceeded as exc:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="unavailable",
+                start_time=start_time,
+            )
+            cause = exc.__cause__
+            if isinstance(cause, K0Unavailable):
+                raise cause
+            if isinstance(cause, httpx.RequestError):
+                raise K0Unavailable(503, str(cause)) from exc
+            raise K0Unavailable(503, str(exc)) from exc
+        except RetryBudgetExceeded as exc:
+            self._record_request_metrics(
+                band=envelope.band,
+                status="budget_exhausted",
+                start_time=start_time,
+            )
+            raise K0Unavailable(503, str(exc)) from exc
         finally:
-            # Detach cognitive trace context
             _tracer.detach(token)
+
+    @staticmethod
+    def _record_request_metrics(*, band: str, status: str, start_time: float) -> None:
+        latency_ms = (time.time() - start_time) * 1000.0
+        command_requests_total.labels(band=band, status=status).inc()
+        command_latency_ms.labels(band=band).observe(latency_ms)
+
+    @staticmethod
+    def _resolve_retry_reason(info: RetryAttemptInfo) -> str:
+        exc = info.exception
+        if isinstance(exc, K0Unavailable):
+            return "unavailable"
+        if isinstance(exc, httpx.RequestError):
+            return "network_error"
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        return info.classification.value
 
     async def _post_command(
         self,

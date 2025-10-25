@@ -1,6 +1,6 @@
 """Integration tests for K0CommandClient against live K0 kernel.
 
-REQUIRES: K0 kernel running on http://localhost:8080
+REQUIRES: K0 kernel running (default http://localhost:8080; override via K0_COMMAND_BASE_URL)
 Run bootstrap: python -m k0.scripts.bootstrap_local_kernel
 Run server: python -m k0.kernel.main
 
@@ -14,6 +14,7 @@ These tests verify end-to-end K1→K0 communication:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -52,6 +53,9 @@ KEY_VERSION = "1"
 SIGNING_KEY_SEED_HEX = (
     "9d0a9b8c7f6e5d4c3b2a1908f7e6d5c4b3a29180706050403020100ffeeddcc0"
 )
+
+# Allow tests to follow whichever port the live kernel exposes.
+K0_BASE_URL = os.environ.get("K0_COMMAND_BASE_URL", "http://localhost:8080")
 
 
 def _create_test_envelope(
@@ -157,7 +161,7 @@ def _query_wal_entry(idem_key: str) -> dict[str, Any] | None:
 async def _() -> None:
     """Test successful GREEN band command submission to live K0 kernel."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
     envelope = _create_test_envelope(
         body={"content": "Integration test memory", "test_id": str(uuid.uuid4())},
         band="GREEN",
@@ -194,7 +198,7 @@ async def _() -> None:
 async def _() -> None:
     """Test AMBER band command returns obligations from K0."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
     envelope = _create_test_envelope(
         body={"content": "AMBER band test", "test_id": str(uuid.uuid4())},
         band="AMBER",
@@ -218,7 +222,7 @@ async def _() -> None:
 async def _() -> None:
     """Test that invalid signature is rejected by K0 gate."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
     envelope = _create_test_envelope(
         body={"content": "Bad signature test"},
         band="GREEN",
@@ -243,7 +247,7 @@ async def _() -> None:
 async def _() -> None:
     """Test idempotent duplicate detection by K0."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
 
     # Create envelope with unique test_id (idem_key will be derived from canonical components)
     unique_test_id = str(uuid.uuid4())
@@ -296,7 +300,7 @@ async def _() -> None:
 async def _() -> None:
     """Test that envelope with missing required field is rejected during idem_key derivation."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
 
     # Create envelope with missing tenant_id (required field)
     envelope = CommandEnvelope(
@@ -333,7 +337,7 @@ async def _() -> None:
 async def _() -> None:
     """Test that client cleanup closes HTTP connections."""
     # Setup
-    client = K0CommandClient(base_url="http://localhost:8080")
+    client = K0CommandClient(base_url=K0_BASE_URL)
 
     # Act: Submit one command (unique test_id to avoid idempotency conflicts with previous test runs)
     envelope = _create_test_envelope(

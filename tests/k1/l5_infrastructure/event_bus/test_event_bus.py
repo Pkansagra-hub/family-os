@@ -15,8 +15,11 @@ from ward import fixture, test  # type: ignore[attr-defined]
 
 from k1.l5_infrastructure.event_bus import event_bus as event_bus_module
 from k1.l5_infrastructure.event_bus.event_bus import EventBus
-from k1.l5_infrastructure.event_bus.schemas import (EventBase, EventTopic,
-                                                    IntentDetectedEvent)
+from k1.l5_infrastructure.event_bus.schemas import (
+    EventBase,
+    EventTopic,
+    IntentDetectedEvent,
+)
 
 _TRACE_ID = "5f2d4c7a8b3e41e8a9d9c6f1b2a4d687"
 _SESSION_ID = "session_56789"
@@ -96,6 +99,7 @@ async def _(event_bus_fixture=event_bus) -> None:
 
     event_bus_module._Subscriber.start = start_without_task
     try:
+
         async def handler(event: EventBase) -> None:  # pragma: no cover - not invoked
             return None
 
@@ -121,12 +125,9 @@ async def _(event_bus_fixture=event_bus) -> None:
             assert latest is second
 
             updated = REGISTRY.get_sample_value(metric_name, labels) or 0.0
-            assert updated - baseline == 1.0, "Expected overflow counter to increment by one"
-        finally:
-            await handle.unsubscribe()
-    finally:
-        event_bus_module._Subscriber.start = original_start
-        event_bus_module._Subscriber.start = original_start
+            assert (
+                updated - baseline == 1.0
+            ), "Expected overflow counter to increment by one"
         finally:
             await handle.unsubscribe()
     finally:

@@ -328,9 +328,11 @@ class CircuitBreaker:
 
         if self._should_count_as_failure(result, latency_ms):
             await self._record_failure(
-                failure_type=FailureClassification.SLOW_CALL
-                if _is_slow_call(latency_ms, self._config.slow_call_threshold_ms)
-                else FailureClassification.CUSTOM,
+                failure_type=(
+                    FailureClassification.SLOW_CALL
+                    if _is_slow_call(latency_ms, self._config.slow_call_threshold_ms)
+                    else FailureClassification.CUSTOM
+                ),
                 trace_id=cognitive_trace_id,
                 latency_ms=latency_ms,
             )

@@ -969,9 +969,9 @@ class UserInputEvent:
 
 ---
 
-### Epic 2.3: Retry Policy & Hot Reload
+### Epic 2.3: Retry Policy & Hot Reload ✅ COMPLETED
 
-#### Issue 2.3.1: Retry Policy
+#### Issue 2.3.1: Retry Policy ✅ COMPLETED
 
 **Story:** As K1 developer, I need retry logic for transient failures
 
@@ -982,10 +982,13 @@ class UserInputEvent:
 - Exponential backoff: 100ms → 400ms → 1600ms
 - Max 3 retries
 - 20% jitter (prevent thundering herd)
+- Integration with circuit breaker pattern
+- Comprehensive failure classification (transient vs permanent)
+- Full observability with metrics and tracing
 
-**Time Estimate:** 1 day
+**Time Estimate:** 1 day ✅ COMPLETED
 
-#### Issue 2.3.2: Hot Reload
+#### Issue 2.3.2: Hot Reload ✅ COMPLETED
 
 **Story:** As DevOps, I need config hot reload without restart
 
@@ -996,8 +999,52 @@ class UserInputEvent:
 - Watch `circuit_breaker.yaml`, `retry_policy.yaml`
 - Async reload on file change
 - <100ms reload latency
+- Content-based validation (not filename-based)
+- Thread-safe file watching with asyncio.Queue
+- Comprehensive error handling and rollback
+- Change callbacks for both success and validation failures
 
-**Time Estimate:** 0.5 days
+**Time Estimate:** 0.5 days ✅ COMPLETED
+
+#### Issue 2.3.3: Circuit Breaker Manager ✅ COMPLETED
+
+**Story:** As K1, I need per-service circuit breaker management
+
+**Files:** `k1/l5_infrastructure/resilience/circuit_breaker_manager.py`
+
+**Implementation:**
+
+- Registry pattern for multiple circuit breakers
+- ConfigManager integration for per-service configuration
+- YAML configuration loading with environment overrides
+- Hot reload integration for runtime config updates
+- Default configurations for unknown services
+- Comprehensive error handling and validation
+
+**Time Estimate:** 1 day ✅ COMPLETED
+
+#### Issue 2.3.4: Integration Testing ✅ COMPLETED
+
+**Story:** As K1 developer, I need comprehensive integration tests validating all resilience components work together
+
+**Files:** `tests/k1/l5_infrastructure/resilience/test_resilience_integration.py`
+
+**Implementation:**
+
+- 7 comprehensive integration test scenarios
+- End-to-end validation of hot reload, circuit breaker, and retry policy integration
+- Fixed async timing issue in hot reload callback (added 200ms sleep for task completion)
+- All tests passing: resilience stack initialization, circuit breaker-retry integration, hot reload config propagation, config validation, retry policy hot reload, end-to-end workflow, circuit breaker state persistence
+
+**Test Results:**
+
+- ✅ 7/7 tests passing (100% success rate)
+- ✅ Performance budgets met (<100ms reload latency)
+- ✅ All resilience components integrate properly
+- ✅ Config propagation works correctly across hot reload
+- ✅ Circuit breaker state persists across config changes
+
+**Time Estimate:** 0.5 days ✅ COMPLETED
 
 ---
 

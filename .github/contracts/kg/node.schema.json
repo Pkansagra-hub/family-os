@@ -64,10 +64,11 @@
     },
     "content_preview": {
       "type": "string",
-      "description": "First 500 characters of content for quick context",
-      "maxLength": 500,
+      "description": "Enhanced content preview (up to 2000 chars) with critical context markers for AI model consumption (e.g., '[Methods: GET, POST]' for OpenAPI contracts)",
+      "maxLength": 2000,
       "examples": [
-        "ADR-0051: Agent Scheduling. This ADR describes the agent scheduling subsystem..."
+        "ADR-0051: Agent Scheduling. This ADR describes the agent scheduling subsystem...",
+        "[Methods: GET, POST | Status Codes: 200, 401 | AUTH REQUIRED]\n# OpenAPI Contract for Agent Scheduling..."
       ]
     },
     "code_snippet": {

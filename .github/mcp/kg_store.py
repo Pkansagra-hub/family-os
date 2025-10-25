@@ -35,38 +35,70 @@ def generate_embedding(
     text: str, model: str = "sentence-transformers/all-MiniLM-L6-v2"
 ) -> List[float]:
     """
-    Generate vector embedding for text using sentence-transformers
+    Generate vector embedding for text using sentence-transformers with graceful degradation.
 
     Args:
         text: Input text to embed
         model: Model name (default: all-MiniLM-L6-v2, 384 dimensions)
 
     Returns:
-        List of floats representing the embedding
+        List of floats representing the embedding (384-dim for consistency)
+        Falls back to empty embedding (all zeros) if model unavailable
 
     Note:
         Requires: pip install sentence-transformers
         First call will download the model (~80MB)
+        Gracefully degrades to empty embeddings on import/model/encoding errors
     """
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError:
-        raise ImportError(
+        import logging
+
+        logging.warning(
             "sentence-transformers not installed. "
-            "Install with: pip install sentence-transformers"
+            "Install with: pip install sentence-transformers. "
+            "Falling back to empty embeddings for all queries."
         )
+        # Return empty embedding (384-dimensional zeros for consistency)
+        return [0.0] * 384
 
     # Cache model instance (avoid reloading)
     if not hasattr(generate_embedding, "_model_cache"):
         generate_embedding._model_cache = {}
 
+    if not hasattr(generate_embedding, "_embed_degraded"):
+        generate_embedding._embed_degraded = False
+
     if model not in generate_embedding._model_cache:
-        generate_embedding._model_cache[model] = SentenceTransformer(model)
+        try:
+            generate_embedding._model_cache[model] = SentenceTransformer(model)
+        except Exception as e:
+            import logging
 
-    embedder = generate_embedding._model_cache[model]
-    embedding = embedder.encode(text, convert_to_numpy=True)
+            logging.error(
+                f"Failed to load embeddings model '{model}': {e}. "
+                f"Falling back to empty embeddings. "
+                f"Ensure sentence-transformers is installed and model is available."
+            )
+            generate_embedding._embed_degraded = True
+            # Return empty embedding for this request
+            return [0.0] * 384
 
-    return embedding.tolist()
+    try:
+        embedder = generate_embedding._model_cache[model]
+        embedding = embedder.encode(text, convert_to_numpy=True)
+        return embedding.tolist()
+    except Exception as e:
+        import logging
+
+        logging.error(
+            f"Failed to encode text with model '{model}': {e}. "
+            f"Falling back to empty embedding."
+        )
+        generate_embedding._embed_degraded = True
+        # Return empty embedding on encoding failure
+        return [0.0] * 384
 
 
 class KGStore:
@@ -331,6 +363,44 @@ class KGStore:
 
         return edge
 
+    def safe_add_edge(self, edge: Dict) -> Optional[Dict]:
+        """
+        Add an edge only if both source and destination nodes exist
+
+        Args:
+            edge: Edge data (must match edge.schema.json)
+
+        Returns:
+            Edge data with timestamp if successful, None if nodes don't exist
+
+        Note:
+            This is more resilient than add_edge() for scenarios where
+            destination nodes may not have been created yet (e.g., cross-project refs)
+        """
+        src_id = edge.get("src")
+        dst_id = edge.get("dst")
+
+        # Check if both nodes exist
+        with self.lock:
+            src_exists = (
+                self.conn.execute(
+                    "SELECT 1 FROM nodes WHERE node_id = ?", (src_id,)
+                ).fetchone()
+                is not None
+            )
+            dst_exists = (
+                self.conn.execute(
+                    "SELECT 1 FROM nodes WHERE node_id = ?", (dst_id,)
+                ).fetchone()
+                is not None
+            )
+
+        if not src_exists or not dst_exists:
+            return None
+
+        # Both nodes exist, add the edge
+        return self.add_edge(edge)
+
     def remove_edge(self, src: str, dst: str, relation: str) -> bool:
         """
         Remove an edge
@@ -463,6 +533,133 @@ class KGStore:
                 results.append(node)
 
             return results
+
+    def query_contracts_by_type(
+        self,
+        contract_type: Optional[str] = None,
+        layer: Optional[str] = None,
+        query_text: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict]:
+        """
+        Query contracts with optional type and layer filtering
+
+        Args:
+            contract_type: Filter by type: 'openapi', 'jsonschema', 'flatbuffers', or None (all)
+            layer: Filter by layer: 'k0_only', 'k1_only', 'bridge', or None (all)
+            query_text: Optional full-text search within contracts
+            limit: Max results
+
+        Returns:
+            List of matching contract nodes
+        """
+        with self.lock:
+            # Base query for contract nodes
+            where_clauses = ["node_type = 'contract'"]
+            params = []
+
+            # Add type filter if specified
+            if contract_type:
+                where_clauses.append("tags_json LIKE ?")
+                # Tags are stored as JSON array, search for the tag value
+                params.append(f"%{contract_type}%")
+
+            # Add layer filter if specified
+            if layer:
+                if layer == "k0_only":
+                    where_clauses.append("tags_json LIKE ? AND tags_json NOT LIKE ?")
+                    params.append('%"k0"%')
+                    params.append('%"k1"%')
+                elif layer == "k1_only":
+                    where_clauses.append("tags_json LIKE ? AND tags_json NOT LIKE ?")
+                    params.append('%"k1"%')
+                    params.append('%"k0"%')
+                elif layer == "bridge":
+                    where_clauses.append("tags_json LIKE ?")
+                    params.append("%bridge%")
+
+            # Build base query
+            where_sql = " AND ".join(where_clauses)
+
+            if query_text:
+                # Use FTS5 for text search within contracts
+                query = f"""
+                    SELECT DISTINCT n.* FROM nodes_fts fts
+                    JOIN nodes n ON n.node_id = fts.node_id
+                    WHERE {where_sql} AND nodes_fts MATCH ?
+                    ORDER BY fts.rank
+                    LIMIT ?
+                """
+                params.extend([query_text, limit])
+            else:
+                # No full-text search, just filtering
+                query = f"""
+                    SELECT * FROM nodes
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """
+                params.append(limit)
+
+            cursor = self.conn.execute(query, params)
+
+            results = []
+            for row in cursor.fetchall():
+                node = dict(row)
+                node["tags"] = json.loads(node.pop("tags_json", "[]"))
+                results.append(node)
+
+            return results
+
+    def search_contracts_hybrid(
+        self,
+        query: str,
+        contract_type: Optional[str] = None,
+        layer: Optional[str] = None,
+        alpha: float = 0.5,
+        limit: int = 20,
+    ) -> List[Dict]:
+        """
+        Hybrid search (FTS5 + vector) within contracts with filtering
+
+        Args:
+            query: Search query
+            contract_type: Optional type filter
+            layer: Optional layer filter
+            alpha: Blend factor (0.0=vector only, 1.0=FTS5 only)
+            limit: Max results
+
+        Returns:
+            List of matching contracts with scores
+        """
+        # First, use hybrid_search to get semantically relevant contracts
+        all_results = self.hybrid_search(query, alpha=alpha, limit=limit * 2)
+
+        # Filter results by type/layer if specified
+        filtered = []
+        for result in all_results:
+            tags = result.get("tags", [])
+
+            # Check type filter
+            if contract_type and contract_type not in tags:
+                continue
+
+            # Check layer filter
+            if layer == "k0_only" and "k0" not in tags:
+                continue
+            if layer == "k1_only" and "k1" not in tags:
+                continue
+            if layer == "bridge" and "bridge" not in tags:
+                continue
+
+            # Check if it's a contract
+            if result.get("node_type") == "contract":
+                filtered.append(result)
+
+            if len(filtered) >= limit:
+                break
+
+        return filtered
 
     def get_graph_summary(self) -> Dict:
         """
@@ -801,10 +998,15 @@ class KGStore:
         """
         # FTS5 search
         fts_results = self.search(query, limit=limit * 2)  # Get more for merging
-        fts_scores = {
-            r["node_id"]: 1.0 - (i / len(fts_results))
-            for i, r in enumerate(fts_results)
-        }
+
+        # ✅ FIX: Handle empty FTS results - avoid division by zero
+        if fts_results:
+            fts_scores = {
+                r["node_id"]: 1.0 - (i / len(fts_results))
+                for i, r in enumerate(fts_results)
+            }
+        else:
+            fts_scores = {}
 
         # Vector search (generate embedding if needed and not pure FTS5)
         vector_scores = {}
@@ -813,10 +1015,10 @@ class KGStore:
                 # Auto-generate embedding from query
                 try:
                     query_embedding = generate_embedding(query)
-                except ImportError:
-                    # Fall back to pure FTS5 if sentence-transformers not available
+                except (ImportError, Exception) as e:
+                    # Fall back to pure FTS5 if embedding fails
                     print(
-                        "Warning: sentence-transformers not installed, falling back to pure FTS5 search"
+                        f"Warning: Embedding generation failed ({type(e).__name__}), falling back to pure FTS5 search"
                     )
                     alpha = 1.0
 

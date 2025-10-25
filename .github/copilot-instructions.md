@@ -47,6 +47,7 @@ Whether you're:
 
 **🚦 GATE 2: Contract Discovery & Validation (KG-Enhanced)**
 - **KG Search:** `kg_v2_find_by_type("contract")` to find existing contracts
+- **Future:** `kg_v2_contract_search("envelope", contract_type="jsonschema")` (Phase 1)
 - **Patterns:** `kg_v2_neighbors("module_id", relation="uses_contract")` for similar usage
 - **Dependencies:** `kg_v2_get_module_deps("module_id")` to understand contract needs
 - **Fallback:** Check `k1/contracts/` manually for API specs, schemas, policies
@@ -179,74 +180,189 @@ Each gate is a **BLOCKER**:
 
 **PRIORITY: Use KG tools FIRST for all discovery tasks. They provide semantic understanding and are faster than manual file searches.**
 
-**Core Discovery (Use These Most):**
+**Current Status:** 1215 nodes (335 ADRs + 595 contracts + 285 modules), 1908 edges. All tools tested and working.
+
+#### Core Discovery Tools (Use These Most)
+
 ```python
-# Hybrid search - BEST for initial discovery (semantic + keyword)
+# 1. HYBRID SEARCH - BEST for initial discovery (semantic + keyword)
 kg_v2_hybrid_search(query="agent lifecycle architecture", alpha=0.5, limit=20)
 # alpha: 0.0=pure vector, 0.5=balanced, 1.0=pure keyword
+# Returns: Semantic + keyword blended results, scored by relevance
 
-# Find nodes by type - FAST type filtering
-kg_v2_find_by_type(node_type="adr", limit=50)  # Types: adr, module, contract
+# 2. TYPE FILTERING - FAST type-specific queries
+kg_v2_find_by_type(node_type="adr", limit=50)        # ADRs only
+kg_v2_find_by_type(node_type="module", limit=50)     # Modules only
+kg_v2_find_by_type(node_type="contract", limit=50)   # Contracts only
 
-# Full-text search - Good for keyword searches
+# 3. KEYWORD SEARCH - Simple text matching
 kg_v2_search(query="orchestrator coordination", limit=20)
+# Returns: FTS5 full-text search results with snippets
 ```
 
-**Graph Navigation:**
+#### Graph Navigation & Relationships
+
 ```python
-# Find adjacent nodes (relationships)
-kg_v2_neighbors(node_id="adr_0005", direction="both")
+# Find connected nodes (relationships)
+kg_v2_neighbors(node_id="adr_0086", direction="both")
 # direction: "outgoing", "incoming", "both"
-# relation: optional filter ("references", "depends_on", "uses_contract")
+# relation: optional filter ("implements", "depends_on", "references", "uses_contract")
 
 # Find paths between nodes (understand connections)
-kg_v2_paths(src="adr_0005", dst="module_name", max_hops=6, max_paths=5)
+kg_v2_paths(src="adr_0086", dst="module_k1.l3_execution.agents", max_hops=6, max_paths=5)
 
 # Get transitive dependencies (what module needs)
 kg_v2_get_module_deps(module_id="module_k1.l2_orchestration.orchestrator", depth=3)
 ```
 
-**AI Context Tools (Smart Queries):**
+#### AI Context Tools (Smart Implementation Queries)
+
 ```python
 # Get complete implementation context for ADR
-# Returns: modules, dependencies, related decisions
 kg_v2_implementation_chain(adr_id="adr_0086")
+# Returns: modules, dependencies, related decisions, context size
 
 # Get feature context (ADRs + modules + contracts)
-# Answers: "What exists related to this feature?"
 kg_v2_get_feature_context(feature_name="agent lifecycle")
+# Answers: "What exists related to this feature?"
 
 # Analyze impact of changing module
-# Returns: direct/transitive dependents with risk assessment
 kg_v2_dependency_impact(module_id="module_k1.l4_runtime.session_state")
+# Returns: direct/transitive dependents with risk assessment
 ```
 
-**Diagnostics & Health:**
+#### Architecture Health & Diagnostics
+
 ```python
 # Graph statistics (node/edge counts, type distribution)
 kg_v2_graph_summary()
+# Returns: {"total_nodes": 1215, "total_edges": 1908, "nodes_by_type": {...}}
 
 # Find circular dependencies (avoid import cycles)
 kg_v2_find_circular_deps()
 
 # Find orphaned nodes (documentation gaps)
 kg_v2_diagnostics(diagnostic_type="orphaned_nodes")
+# Types: "orphaned_nodes", "circular_deps", "high_coupling", "missing_contracts", "fts_integrity"
 ```
 
-**When to Use KG Tools:**
-- ✅ **GATE 1:** Find ADRs with `kg_v2_hybrid_search()` or `kg_v2_find_by_type("adr")`
-- ✅ **GATE 2:** Find contracts with `kg_v2_find_by_type("contract")` or `kg_v2_neighbors()`
-- ✅ **GATE 3:** Get implementation context with `kg_v2_implementation_chain()`
-- ✅ **GATE 3:** Check dependencies with `kg_v2_get_module_deps()` and `kg_v2_dependency_impact()`
-- ✅ **GATE 4:** Find test patterns with `kg_v2_search("test integration")`
-- ✅ **GATE 5:** Check health with `kg_v2_graph_summary()` and `kg_v2_diagnostics()`
+#### KG vs Manual Investigation: When to Use Each
 
-**Best Practices:**
-- Use `kg_v2_hybrid_search()` for initial exploration (best semantic + keyword blend)
+| Scenario | Use KG Tools | Use Manual Investigation |
+|----------|-------------|-------------------------|
+| **Quick Architecture Overview** | ✅ `kg_v2_graph_summary()` | ❌ Too slow |
+| **Find Related Components** | ✅ `kg_v2_neighbors()`, `kg_v2_paths()` | ❌ Misses semantic connections |
+| **ADR Discovery** | ✅ `kg_v2_find_by_type("adr")` | ✅ Full ADR content needed |
+| **Implementation Context** | ✅ `kg_v2_implementation_chain()` | ❌ Manual relationship tracing |
+| **Dependency Analysis** | ✅ `kg_v2_dependency_impact()` | ❌ Complex manual analysis |
+| **Contract Search** | ✅ `kg_v2_find_by_type("contract")` | ✅ Schema details needed |
+| **Health Checks** | ✅ `kg_v2_diagnostics()` | ❌ Manual auditing |
+| **Full Code/Content** | ❌ Lightweight only | ✅ `read_file()`, `grep_search()` |
+
+**Performance Expectations:**
+- `kg_v2_search()`: <2ms
+- `kg_v2_hybrid_search()`: <50ms
+- `kg_v2_find_by_type()`: <2ms
+- `kg_v2_neighbors()`: <5ms
+- `kg_v2_implementation_chain()`: <100ms
+- `kg_v2_graph_summary()`: <10ms
+
+**Note:** Watch mode bug fixed - now monitors all contract file types (*.yaml, *.yml, *.json, *.fbs) for automatic reindexing.
+
+**Planned Enhancements (Phase 1-5):**
+- `kg_v2_contract_search()`: Search contracts by type and layer (openapi, jsonschema, flatbuffers)
+- `kg_v2_tools_help()`: Get guidance on which tools to use for different tasks
+- K1 architecture routing: Specialized queries for K1 components
+- Relationship indexing: Enhanced edge types and metadata
+- Performance optimization: Sub-1ms queries for critical paths
+
+#### KG Tool Usage in 5-Step Workflow
+
+**🚦 GATE 1: ADR Discovery & Validation**
+```python
+# Find existing ADRs
+kg_v2_find_by_type("adr", limit=50)
+kg_v2_hybrid_search("thermal management", alpha=0.5)
+
+# Check ADR relationships
+kg_v2_neighbors("adr_0086", direction="both", relation="references")
+```
+
+**🚦 GATE 2: Contract Discovery & Validation**
+```python
+# Find relevant contracts
+kg_v2_find_by_type("contract", limit=100)
+kg_v2_search("envelope schema")
+
+# Check contract usage patterns
+kg_v2_neighbors("module_k1.api", relation="uses_contract")
+```
+
+**🚦 GATE 3: Implementation with Contract Compliance**
+```python
+# Get implementation context
+kg_v2_implementation_chain("adr_0086")
+
+# Check dependencies before importing
+kg_v2_get_module_deps("module_k1.orchestrator")
+
+# Analyze change impact
+kg_v2_dependency_impact("module_k1.session_state")
+
+# Verify no circular dependencies
+kg_v2_find_circular_deps()
+```
+
+**🚦 GATE 4: Test Implementation**
+```python
+# Find test patterns for similar components
+kg_v2_search("test integration orchestrator")
+kg_v2_neighbors("module_k1.orchestrator", relation="tested_by")
+```
+
+**🚦 GATE 5: Memory Documentation**
+```python
+# Architecture health check
+kg_v2_graph_summary()
+kg_v2_diagnostics("orphaned_nodes")
+kg_v2_find_circular_deps()
+```
+
+#### Best Practices & Patterns
+
+**Query Strategy:**
+- Start with `kg_v2_hybrid_search()` for broad discovery (best semantic + keyword blend)
 - Use `kg_v2_find_by_type()` when you know exact type needed
-- Use `kg_v2_implementation_chain()` before implementing ADRs
-- Use `kg_v2_dependency_impact()` before modifying existing modules
-- Use `kg_v2_find_circular_deps()` to avoid circular import bugs
+- Fall back to `kg_v2_search()` for simple keyword matching
+- Use `kg_v2_ask()` for natural language questions (may need enhancement)
+
+**Performance Optimization:**
+- Use `limit` parameter to control result size
+- Prefer type-filtered queries over broad searches
+- Cache results for repeated queries in sessions
+
+**When KG Fails:**
+- KG only contains indexed content (ADRs, modules, contracts)
+- For full file content, use manual investigation
+- For unindexed files, use `grep_search()` and `read_file()`
+- KG provides context faster but manual provides completeness
+
+**Integration with Manual Work:**
+1. **KG First**: Get overview and relationships quickly
+2. **Manual Second**: Dive deep into specific files when needed
+3. **KG Validation**: Use KG to verify manual findings are complete
+
+**Example: Dynamic Agent Creation Investigation**
+```python
+# KG Approach (fast overview)
+kg_v2_hybrid_search("dynamic agent creation", alpha=0.5)
+# → Found: ADR-0086, factory.py, lifecycle components
+
+# Manual Approach (deep dive)
+read_file("docs/architecture/decisions/0086-dynamic-agent-creation-subsystem.md")
+grep_search("dynamic.*agent|agent.*creation")
+# → Full ADR content, implementation details
+```
 
 ### Memory MCP (Optional)
 - **Write:** `mem_write(project="k1_intelligence", title, content, tags?)`

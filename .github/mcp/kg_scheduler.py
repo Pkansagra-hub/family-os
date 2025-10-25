@@ -36,7 +36,7 @@ class KGScheduler:
         if db_path is None:
             # Use repo-relative path, compatible with .vscode/mcp.json pattern
             repo_root = Path(__file__).resolve().parent.parent.parent
-            db_path = str(repo_root / ".github" / "copilot-memories" / "memories.sqlite3")
+            db_path = str(repo_root / ".github" / "copilot-memories" / "kg.sqlite3")
 
         # Ensure directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +144,9 @@ class KGScheduler:
                 path = Path(path_str)
                 if path.exists():
                     files.extend(path.rglob("*.yaml"))
+                    files.extend(path.rglob("*.yml"))
                     files.extend(path.rglob("*.json"))
+                    files.extend(path.rglob("*.fbs"))
             return files
 
         try:
@@ -180,10 +182,14 @@ class KGScheduler:
             )
 
     def daemon_mode(self, interval: int = 21600):
-        """Run as background daemon with periodic reindexing"""
+        """Run as background daemon with periodic reindexing and maintenance"""
         print(
             f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting daemon mode (interval: {interval}s = {interval/3600:.1f}h)..."
         )
+
+        maintenance_counter = 0  # Counter for maintenance tasks
+        checkpoint_interval = 300  # Checkpoint every 5 minutes
+        analyze_interval = 1800  # ANALYZE every 30 minutes
 
         try:
             while True:
@@ -191,10 +197,43 @@ class KGScheduler:
                 print(
                     f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Next reindex in {interval/3600:.1f} hours..."
                 )
+
+                # Run maintenance tasks
+                maintenance_counter += 1
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # WAL checkpoint every 5 minutes (after maintenance_counter increments)
+                if maintenance_counter % (checkpoint_interval // 60) == 0:
+                    try:
+                        self.store.conn.execute("PRAGMA wal_checkpoint(RESTART)")
+                        print(f"[{timestamp}] ✓ WAL checkpoint completed")
+                    except Exception as e:
+                        print(f"[{timestamp}] ✗ WAL checkpoint failed: {e}")
+
+                # ANALYZE every 30 minutes (to update query optimizer statistics)
+                if maintenance_counter % (analyze_interval // 60) == 0:
+                    try:
+                        self.store.conn.execute("PRAGMA ANALYZE")
+                        print(
+                            f"[{timestamp}] ✓ PRAGMA ANALYZE completed (query optimizer updated)"
+                        )
+                    except Exception as e:
+                        print(f"[{timestamp}] ✗ PRAGMA ANALYZE failed: {e}")
+
                 time.sleep(interval)
 
         except KeyboardInterrupt:
             print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Daemon stopped")
+            # Final checkpoint on shutdown
+            try:
+                self.store.conn.execute("PRAGMA wal_checkpoint(RESTART)")
+                print(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final WAL checkpoint on shutdown"
+                )
+            except Exception as e:
+                print(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Final checkpoint failed: {e}"
+                )
 
     def close(self):
         """Close store"""
