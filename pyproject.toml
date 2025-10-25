@@ -1,2 +1,10 @@
 [tool.ward]
-path = ["tests"]
+path = ["tests", "k1/tests"]
+
+[tool.pytest.ini_options]
+# Disable OpenTelemetry export during tests
+addopts = "--tb=short"
+env = [
+    "OTEL_TRACES_EXPORTER=none",
+    "OTEL_METRICS_EXPORTER=none",
+]

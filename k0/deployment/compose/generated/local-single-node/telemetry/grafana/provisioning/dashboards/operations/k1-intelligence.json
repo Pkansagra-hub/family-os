@@ -1,0 +1,163 @@
+{
+  "dashboard": {
+    "title": "K1 Intelligence Module",
+    "uid": "k1-intelligence",
+    "tags": ["k1", "intelligence", "observability"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "5s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Command Success Rate",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(k1_intelligence_command_requests_total{status=\"success\"}[5m])) / sum(rate(k1_intelligence_command_requests_total[5m])) * 100",
+            "refId": "A",
+            "legendFormat": "Success Rate"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "red"},
+                {"value": 80, "color": "yellow"},
+                {"value": 95, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "Command Request Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "sum(rate(k1_intelligence_command_requests_total[1m])) by (band, status)",
+            "refId": "A",
+            "legendFormat": "{{band}} - {{status}}"
+          }
+        ],
+        "yaxes": [
+          {"format": "reqps", "label": "Requests/sec"},
+          {"format": "short"}
+        ],
+        "legend": {"show": true, "alignAsTable": true, "rightSide": true}
+      },
+      {
+        "id": 3,
+        "title": "P95 Command Latency",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 6, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(k1_intelligence_command_latency_ms_bucket[5m])) by (le))",
+            "refId": "A",
+            "legendFormat": "P95 Latency"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "auto",
+          "reduceOptions": {
+            "values": false,
+            "calcs": ["lastNotNull"]
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"},
+                {"value": 100, "color": "yellow"},
+                {"value": 500, "color": "red"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Command Latency Distribution",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 18, "x": 6, "y": 8},
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.50, sum(rate(k1_intelligence_command_latency_ms_bucket[5m])) by (le, band))",
+            "refId": "A",
+            "legendFormat": "{{band}} - P50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(k1_intelligence_command_latency_ms_bucket[5m])) by (le, band))",
+            "refId": "B",
+            "legendFormat": "{{band}} - P95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(k1_intelligence_command_latency_ms_bucket[5m])) by (le, band))",
+            "refId": "C",
+            "legendFormat": "{{band}} - P99"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Latency"},
+          {"format": "short"}
+        ],
+        "legend": {"show": true, "alignAsTable": true, "rightSide": true}
+      },
+      {
+        "id": 5,
+        "title": "Retry Rate by Reason",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(rate(k1_intelligence_command_retries_total[1m])) by (reason, band)",
+            "refId": "A",
+            "legendFormat": "{{band}} - {{reason}}"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Retries/sec"},
+          {"format": "short"}
+        ],
+        "legend": {"show": true, "alignAsTable": true, "rightSide": false}
+      },
+      {
+        "id": 6,
+        "title": "Total Requests by Band",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "sum(k1_intelligence_command_requests_total) by (band)",
+            "refId": "A",
+            "legendFormat": "{{band}}"
+          }
+        ],
+        "options": {
+          "legend": {"displayMode": "table", "placement": "right"}
+        }
+      }
+    ]
+  }
+}

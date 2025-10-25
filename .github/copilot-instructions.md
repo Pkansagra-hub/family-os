@@ -36,30 +36,47 @@ Whether you're:
 
 ### Quick Reference: The 5 Gates
 
-**🚦 GATE 1: ADR Discovery & Validation**
-- Search `docs/architecture/decisions/` for relevant ADRs
+**🚦 GATE 1: ADR Discovery & Validation (KG-Enhanced)**
+- **KG Search:** `kg_v2_hybrid_search("component architecture")` for semantic discovery
+- **Find ADRs:** `kg_v2_find_by_type("adr")` for fast type filtering
+- **Navigate:** `kg_v2_neighbors("adr_id")` to find related ADRs
+- **Dependencies:** `kg_v2_paths("adr_src", "adr_dst")` to understand decision chains
+- **Fallback:** Search `docs/architecture/decisions/` manually if KG unavailable
 - If missing: HALT → Prompt user → Brainstorm blockers → Create ADR
 - Validate: ADR exists, status is ACCEPTED/IMPLEMENTED, aligns with task
 
-**🚦 GATE 2: Contract Discovery & Validation**
-- Check `k1/contracts/` for API specs, schemas, policies
+**🚦 GATE 2: Contract Discovery & Validation (KG-Enhanced)**
+- **KG Search:** `kg_v2_find_by_type("contract")` to find existing contracts
+- **Patterns:** `kg_v2_neighbors("module_id", relation="uses_contract")` for similar usage
+- **Dependencies:** `kg_v2_get_module_deps("module_id")` to understand contract needs
+- **Fallback:** Check `k1/contracts/` manually for API specs, schemas, policies
 - If missing: HALT → Create contracts (schemas → API → examples → policies)
 - Validate contracts: `python k0/automation/lint_schemas.py`
 - Update VERSION file
 
-**🚦 GATE 3: Implementation with Contract Compliance**
+**🚦 GATE 3: Implementation with Contract Compliance (KG-Enhanced)**
+- **Context:** `kg_v2_implementation_chain("adr_id")` for complete implementation needs
+- **Feature Context:** `kg_v2_get_feature_context("feature_name")` for related work
+- **Dependencies:** `kg_v2_get_module_deps("module_id")` before importing
+- **Impact Check:** `kg_v2_dependency_impact("module_id")` to avoid breaking changes
+- **Circular Deps:** `kg_v2_find_circular_deps()` to avoid import cycles
 - Write production code following architecture patterns
 - **NO simulation code** (no `asyncio.sleep()`, `time.sleep()`)
 - Add `cognitive_trace_id`, reference ADR numbers in comments
 - Check for contract deviations → Update contracts if needed
 
-**🚦 GATE 4: Test Implementation (WARD Framework)**
+**🚦 GATE 4: Test Implementation (WARD Framework, KG-Enhanced)**
+- **Test Patterns:** `kg_v2_search("test integration component")` for similar tests
+- **Existing Tests:** `kg_v2_neighbors("module_id", relation="tested_by")` to find patterns
 - Integration tests > unit tests, real components only
 - Test contract compliance and performance budgets
 - Run: `python -m ward test --path tests/`
 - All tests must pass before proceeding
 
-**🚦 GATE 5: Memory Documentation**
+**🚦 GATE 5: Memory Documentation (KG-Enhanced)**
+- **Health Check:** `kg_v2_graph_summary()` to understand architecture impact
+- **Doc Gaps:** `kg_v2_diagnostics("orphaned_nodes")` to find missing links
+- **Circular Deps:** `kg_v2_find_circular_deps()` to verify no cycles introduced
 - Create memory: `mem_write(project="k1_intelligence", title, content, tags)`
 - Include: Epic/Issue, ADRs, decisions, files touched, tests, performance
 - Link related memories: `mem_link(src_id, dest_id, relation)`
@@ -158,12 +175,78 @@ Each gate is a **BLOCKER**:
 - **Standards:** Naming `k1_<component>_<type>.mmd`, include purpose + research citations, pass validation before commit
 - **Log usage:** Record diagram IDs in `docs/development/mmd-diagram-usage.md`
 
-### Knowledge Graph (KG)
-- **Ingest:** `kg_ingest(path, alias?)` for diagrams
-- **Query:** `kg_summary(<diagram_id>)`, `kg_neighbors(<diagram_id>, <node_id>)`
-- **Search:** `kg_search(<term>, diagram?)`
-- **Enrich:** `kg_add_node`, `kg_add_edge`, `kg_add_memory`
-- **Maintenance:** Reuse aliases, record IDs in `docs/development/kg-mcp-usage.md`
+### Knowledge Graph (KG) - Semantic Repository Intelligence
+
+**PRIORITY: Use KG tools FIRST for all discovery tasks. They provide semantic understanding and are faster than manual file searches.**
+
+**Core Discovery (Use These Most):**
+```python
+# Hybrid search - BEST for initial discovery (semantic + keyword)
+kg_v2_hybrid_search(query="agent lifecycle architecture", alpha=0.5, limit=20)
+# alpha: 0.0=pure vector, 0.5=balanced, 1.0=pure keyword
+
+# Find nodes by type - FAST type filtering
+kg_v2_find_by_type(node_type="adr", limit=50)  # Types: adr, module, contract
+
+# Full-text search - Good for keyword searches
+kg_v2_search(query="orchestrator coordination", limit=20)
+```
+
+**Graph Navigation:**
+```python
+# Find adjacent nodes (relationships)
+kg_v2_neighbors(node_id="adr_0005", direction="both")
+# direction: "outgoing", "incoming", "both"
+# relation: optional filter ("references", "depends_on", "uses_contract")
+
+# Find paths between nodes (understand connections)
+kg_v2_paths(src="adr_0005", dst="module_name", max_hops=6, max_paths=5)
+
+# Get transitive dependencies (what module needs)
+kg_v2_get_module_deps(module_id="module_k1.l2_orchestration.orchestrator", depth=3)
+```
+
+**AI Context Tools (Smart Queries):**
+```python
+# Get complete implementation context for ADR
+# Returns: modules, dependencies, related decisions
+kg_v2_implementation_chain(adr_id="adr_0086")
+
+# Get feature context (ADRs + modules + contracts)
+# Answers: "What exists related to this feature?"
+kg_v2_get_feature_context(feature_name="agent lifecycle")
+
+# Analyze impact of changing module
+# Returns: direct/transitive dependents with risk assessment
+kg_v2_dependency_impact(module_id="module_k1.l4_runtime.session_state")
+```
+
+**Diagnostics & Health:**
+```python
+# Graph statistics (node/edge counts, type distribution)
+kg_v2_graph_summary()
+
+# Find circular dependencies (avoid import cycles)
+kg_v2_find_circular_deps()
+
+# Find orphaned nodes (documentation gaps)
+kg_v2_diagnostics(diagnostic_type="orphaned_nodes")
+```
+
+**When to Use KG Tools:**
+- ✅ **GATE 1:** Find ADRs with `kg_v2_hybrid_search()` or `kg_v2_find_by_type("adr")`
+- ✅ **GATE 2:** Find contracts with `kg_v2_find_by_type("contract")` or `kg_v2_neighbors()`
+- ✅ **GATE 3:** Get implementation context with `kg_v2_implementation_chain()`
+- ✅ **GATE 3:** Check dependencies with `kg_v2_get_module_deps()` and `kg_v2_dependency_impact()`
+- ✅ **GATE 4:** Find test patterns with `kg_v2_search("test integration")`
+- ✅ **GATE 5:** Check health with `kg_v2_graph_summary()` and `kg_v2_diagnostics()`
+
+**Best Practices:**
+- Use `kg_v2_hybrid_search()` for initial exploration (best semantic + keyword blend)
+- Use `kg_v2_find_by_type()` when you know exact type needed
+- Use `kg_v2_implementation_chain()` before implementing ADRs
+- Use `kg_v2_dependency_impact()` before modifying existing modules
+- Use `kg_v2_find_circular_deps()` to avoid circular import bugs
 
 ### Memory MCP (Optional)
 - **Write:** `mem_write(project="k1_intelligence", title, content, tags?)`

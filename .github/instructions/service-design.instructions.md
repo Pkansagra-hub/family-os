@@ -60,15 +60,21 @@ Provide a **mandatory 5-step gated workflow** for ALL code development in Family
 **Objective:** Ensure architectural foundation exists before any work.
 
 #### Actions:
-1. **Search for Relevant ADRs:**
-   ```bash
-   # Search by component name
+1. **Search for Relevant ADRs (KG-Enhanced):**
+   ```python
+   # RECOMMENDED: Use KG semantic search for faster, context-aware discovery
+   kg_v2_search(query="<component_name> architecture decision", limit=10)
+   kg_v2_find_by_type(node_type="adr", limit=50)
+
+   # For specific ADR relationships
+   kg_v2_neighbors(node_id="adr_<number>", direction="both")
+
+   # Understand ADR dependencies
+   kg_v2_paths(src="adr_<src>", dst="adr_<dst>", max_hops=6)
+
+   # FALLBACK: Traditional file search if KG unavailable
    grep_search(query="<component_name>", includePattern="docs/architecture/decisions/**/*.md")
-
-   # Check master reference
    read_file("docs/ADR_MASTER_REFERENCE.md")
-
-   # Check family map for relationships
    read_file("docs/adr_family_map.md")
    ```
 
@@ -76,6 +82,15 @@ Provide a **mandatory 5-step gated workflow** for ALL code development in Family
    - Does ADR exist for this component/feature?
    - Is ADR status ACCEPTED or IMPLEMENTED?
    - Are all related/parent ADRs reviewed?
+
+3. **Check Architecture Context (KG):**
+   ```python
+   # Get complete feature context (ADRs + modules + contracts)
+   kg_v2_get_feature_context(feature_name="<component_name>")
+
+   # Find what exists related to this feature
+   kg_v2_hybrid_search(query="<component_name>", alpha=0.5, limit=20)
+   ```
 
 #### Decision Point:
 - ✅ **ADR EXISTS** → Proceed to Step 2
@@ -123,7 +138,20 @@ Provide a **mandatory 5-step gated workflow** for ALL code development in Family
 **Objective:** Ensure API contracts exist before implementation.
 
 #### Actions:
-1. **Check Contract Locations:**
+1. **Check Contract Locations (KG-Enhanced):**
+   ```python
+   # RECOMMENDED: Use KG to find existing contracts
+   kg_v2_find_by_type(node_type="contract", limit=20)
+
+   # Find contracts used by similar modules
+   kg_v2_neighbors(node_id="module_<name>", relation="uses_contract")
+
+   # Understand contract dependencies
+   kg_v2_get_module_deps(module_id="module_<name>", depth=2)
+
+   # FALLBACK: Manual file check
+   ```
+   File structure:
    ```
    k1/contracts/
    ├── api/              # OpenAPI/AsyncAPI specs
@@ -226,10 +254,33 @@ Provide a **mandatory 5-step gated workflow** for ALL code development in Family
 
 #### Actions:
 
-**A. Pre-Implementation Review:**
-1. Read `docs/whiteboard.md` (21K spec)
-2. Read `docs/k1_module_analysis.md` (52 modules)
-3. Load architecture diagrams:
+**A. Pre-Implementation Review (KG-Enhanced):**
+1. **Get Complete Implementation Context:**
+   ```python
+   # RECOMMENDED: Use KG to understand what you need
+   # Get modules, dependencies, and related decisions for an ADR
+   kg_v2_implementation_chain(adr_id="adr_<number>")
+
+   # Get complete feature context (ADRs + modules + contracts)
+   kg_v2_get_feature_context(feature_name="<component_name>")
+
+   # Understand module dependencies before importing
+   kg_v2_get_module_deps(module_id="module_<name>", depth=3)
+
+   # Check impact of modifying existing module
+   kg_v2_dependency_impact(module_id="module_<name>")
+
+   # Find circular dependencies to avoid
+   kg_v2_find_circular_deps()
+   ```
+
+2. **Read Architecture Documentation:**
+   ```bash
+   read_file("docs/whiteboard.md")  # 21K spec
+   read_file("docs/k1_module_analysis.md")  # 52 modules
+   ```
+
+3. **Load Architecture Diagrams:**
    ```python
    mmd_ingest("<absolute_path_to_diagram>")
    mmd_validate("<diagram_id>")
@@ -315,7 +366,19 @@ read_file(".github/instructions/testing-requirements.instructions.md")
 read_file(".github/instructions/tests.instructions.md")
 ```
 
-**B. Write WARD Tests (Priority Order):**
+**B. Discover Existing Test Patterns (KG-Enhanced):**
+```python
+# RECOMMENDED: Find test patterns for similar modules
+kg_v2_neighbors(node_id="module_<name>", relation="tested_by")
+
+# Search for test approaches
+kg_v2_search(query="test contract validation <component>", limit=10)
+
+# Find integration test patterns
+kg_v2_hybrid_search(query="integration test <layer>", alpha=0.5)
+```
+
+**C. Write WARD Tests (Priority Order):**
 
 1. **Integration Tests** (highest priority):
    ```python
@@ -517,7 +580,19 @@ mem_link(
 ```
 
 **C. Update Documentation:**
-1. **Architecture Diagrams:**
+1. **Check Architecture Impact (KG-Enhanced):**
+   ```python
+   # Check overall architecture health
+   kg_v2_graph_summary()
+
+   # Find orphaned nodes (documentation gaps)
+   kg_v2_diagnostics(diagnostic_type="orphaned_nodes")
+
+   # Verify no circular dependencies introduced
+   kg_v2_find_circular_deps()
+   ```
+
+2. **Architecture Diagrams:**
    ```python
    # If structure changed
    mmd_ingest("<absolute_path_to_updated_diagram>")
@@ -527,12 +602,12 @@ mem_link(
    # Add to docs/development/mmd-diagram-usage.md
    ```
 
-2. **Component Documentation:**
+3. **Component Documentation:**
    - Update module README
    - Add API documentation
    - Update migration guides if needed
 
-3. **Contract Documentation:**
+4. **Contract Documentation:**
    ```bash
    # Regenerate API docs
    python k0/automation/generate_api_docs.py
@@ -599,6 +674,111 @@ mem_link(
 ❌ **Omitting cognitive_trace_id** → Breaks observability chain
 ❌ **Missing test coverage** → Production bugs
 ❌ **Skipping memory documentation** → Lost context for future work
+
+---
+
+## Knowledge Graph (KG) Tools Reference
+
+The KG MCP tools provide semantic repository understanding for intelligent workflow automation.
+
+### Core Discovery Tools
+
+**Search Operations:**
+```python
+# Full-text search across all nodes (BM25 ranking)
+kg_v2_search(query="orchestrator agent lifecycle", limit=20)
+
+# Hybrid semantic + keyword search (best for discovery)
+kg_v2_hybrid_search(query="multi-agent coordination", alpha=0.5, limit=20)
+# alpha: 0.0=pure vector, 1.0=pure FTS5, 0.5=balanced
+
+# Find nodes by type
+kg_v2_find_by_type(node_type="adr", limit=50)  # Types: adr, module, contract
+```
+
+**Graph Navigation:**
+```python
+# Get adjacent nodes (find relationships)
+kg_v2_neighbors(node_id="adr_0005", direction="both")
+# direction: "outgoing", "incoming", "both"
+# relation: optional filter like "references", "depends_on"
+
+# Find paths between nodes (understand connections)
+kg_v2_paths(src="adr_0005", dst="module_k1.l3_execution.agents", max_hops=6, max_paths=5)
+
+# Get transitive dependencies (what does this need?)
+kg_v2_get_module_deps(module_id="module_k1.l2_orchestration.orchestrator", depth=3)
+```
+
+### AI Context Tools (Smart Discovery)
+
+```python
+# Get complete implementation context for ADR
+# Returns: modules, dependencies, related decisions
+kg_v2_implementation_chain(adr_id="adr_0086")
+
+# Get feature context (ADRs + modules + contracts)
+# Answers: "What exists related to this feature?"
+kg_v2_get_feature_context(feature_name="agent lifecycle")
+
+# Analyze impact of changing a module
+# Returns: direct/transitive dependents with risk assessment
+kg_v2_dependency_impact(module_id="module_k1.l4_runtime.session_state")
+```
+
+### Diagnostics & Health
+
+```python
+# High-level graph statistics
+kg_v2_graph_summary()
+# Returns: node counts, edge counts, type distribution
+
+# Find circular dependencies (avoid bugs)
+kg_v2_find_circular_deps()
+
+# Find orphaned nodes (documentation gaps)
+kg_v2_diagnostics(diagnostic_type="orphaned_nodes")
+```
+
+### When to Use Which Tool
+
+| Task | Recommended Tool | Why |
+|------|------------------|-----|
+| Find ADRs for component | `kg_v2_hybrid_search("component architecture")` | Semantic + keyword best for discovery |
+| List all ADRs | `kg_v2_find_by_type("adr")` | Fast type filtering |
+| Find related ADRs | `kg_v2_neighbors("adr_0005", direction="both")` | Navigate relationships |
+| Understand ADR chain | `kg_v2_paths("adr_src", "adr_dst")` | See decision dependencies |
+| Find contracts for module | `kg_v2_neighbors("module_name", relation="uses_contract")` | Filter by relation type |
+| Get implementation needs | `kg_v2_implementation_chain("adr_0086")` | Complete context for ADR |
+| Check module impact | `kg_v2_dependency_impact("module_name")` | Risk assessment before changes |
+| Find test patterns | `kg_v2_search("test integration")` | Keyword search for tests |
+| Check architecture health | `kg_v2_graph_summary()` | Overall statistics |
+| Find doc gaps | `kg_v2_diagnostics("orphaned_nodes")` | Identify missing links |
+
+### KG-Enhanced Workflow Summary
+
+**GATE 1 (ADR Discovery):**
+1. `kg_v2_hybrid_search("component architecture")` — Find related ADRs
+2. `kg_v2_neighbors("adr_id")` — Find related decisions
+3. `kg_v2_paths("adr_src", "adr_dst")` — Understand dependencies
+
+**GATE 2 (Contract Discovery):**
+1. `kg_v2_find_by_type("contract")` — List all contracts
+2. `kg_v2_neighbors("module_id", relation="uses_contract")` — Find contract patterns
+
+**GATE 3 (Implementation):**
+1. `kg_v2_implementation_chain("adr_id")` — Get complete context
+2. `kg_v2_get_module_deps("module_id")` — Understand imports
+3. `kg_v2_dependency_impact("module_id")` — Check breaking changes
+4. `kg_v2_find_circular_deps()` — Avoid circular imports
+
+**GATE 4 (Testing):**
+1. `kg_v2_search("test integration")` — Find test patterns
+2. `kg_v2_neighbors("module_id", relation="tested_by")` — Find existing tests
+
+**GATE 5 (Documentation):**
+1. `kg_v2_graph_summary()` — Check overall impact
+2. `kg_v2_diagnostics("orphaned_nodes")` — Find doc gaps
 
 ---
 

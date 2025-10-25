@@ -25,7 +25,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY k0/ k0/
-COPY mcp/ mcp/
 
 # Create non-root user
 RUN groupadd -r k0user -g 1000 && \

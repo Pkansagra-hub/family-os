@@ -1,0 +1,302 @@
+---
+config:
+  flowchart:
+    htmlLabels: true
+    curve: linear
+  theme: neo
+  layout: elk
+---
+flowchart TB
+
+%% ====== K0-K1 BRIDGE END-TO-END ARCHITECTURE ======
+%% PURPOSE: Complete K0-K1 integration via bridge, showing observability reuse
+%% CONTEXT: ADR-0001 (K0/K1 Split), ADR-0001a (Bridge Protocol), ADR-0029 (Observability)
+%% LAYERS: K1 All Layers, K0 Kernel, Bridge Infrastructure
+%%
+%% Research Foundation:
+%% - HTTP/2 (RFC 7540): Binary framing, stream multiplexing
+%% - Actor Model (Hewitt 1973): Message-based isolation
+%% - Observability (RED Method - Tom Wilkie): Rate, Error, Duration
+%% - Circuit Breaker (Michael Nygard): Resilience pattern
+%%
+%% Key Design Decisions:
+%% 1. K0 Observability Stack Reuse: K1 pushes metrics/logs to K0 obs ports
+%% 2. Dual Protocol: JSON (K0 native) + FlatBuffers (K1 optimized)
+%% 3. 20-Port Architecture: Specialized ports for different operations
+%% 4. Batching Layer: 250ms flush, 64KB batches for efficiency
+%% 5. Circuit Breaker: 3-failure threshold protects both sides
+%%
+%% Performance Budgets (P95):
+%% - Bridge latency: <10ms
+%% - Command write: <50ms (GREEN), <200ms (AMBER/RED)
+%% - Query read: <100ms
+%% - SSE delivery: <5ms
+%% - Observability push: <20ms
+%%
+%% Last Updated: 2025-10-24
+%% Version: 1.0
+
+%% ====== STYLE DEFINITIONS ======
+classDef k1_layer1 fill:#eef7ff,stroke:#2a6ebb,stroke-width:2px,color:#000
+classDef k1_layer2 fill:#f8fff0,stroke:#6b8e23,stroke-width:2px,color:#000
+classDef k1_layer3 fill:#fff7e6,stroke:#d48806,stroke-width:2px,color:#000
+classDef k1_layer4 fill:#f3f8ff,stroke:#1f4aa1,stroke-width:2px,color:#000
+classDef k1_layer5 fill:#f0f0f0,stroke:#666,stroke-width:3px,color:#000
+classDef k0_kernel fill:#fffdf0,stroke:#b38b00,stroke-width:3px,color:#000
+classDef bridge fill:#ffe6f0,stroke:#c41d7f,stroke-width:3px,color:#000
+classDef observability fill:#f0fff4,stroke:#389e0d,stroke-width:2px,color:#000
+classDef ai_agent fill:#f9f0ff,stroke:#722ed1,stroke-width:2px,color:#000
+classDef pure_actor fill:#e6ffe6,stroke:#00cc00,stroke-width:2px,color:#000
+
+%% ====== K1 INTELLIGENCE MODULE (Layers 1-4) ======
+subgraph K1["🧠 K1 Intelligence Module (Agentic Orchestrator)"]
+    direction TB
+
+    %% Layer 1: Input Processing
+    subgraph L1["Layer 1: Input Processing"]
+        direction LR
+        L1_Voice["🎤 Voice Agent<br/>(STT + VAD)<br/>⚡ Pure Actor"]:::k1_layer1
+        L1_Text["💬 Text Agent<br/>(WebSocket)<br/>⚡ Pure Actor"]:::k1_layer1
+        L1_Router["🔀 Router<br/>(Intent)<br/>⚡ Pure Actor"]:::k1_layer1
+
+        L1_Voice --> L1_Router
+        L1_Text --> L1_Router
+    end
+
+    %% Layer 2: Orchestration
+    subgraph L2["Layer 2: Orchestration & Planning"]
+        direction LR
+        L2_Concierge["🤖 Concierge<br/>(Context Builder)<br/>🤖 AI Agent"]:::ai_agent
+        L2_Planner["🤖 Planner<br/>(4-Stage Pipeline)<br/>🤖 AI Agent"]:::ai_agent
+        L2_Orchestrator["🎭 Orchestrator<br/>(3-Phase Coord)<br/>⚡ Pure Actor"]:::k1_layer2
+
+        L2_Concierge --> L2_Planner
+        L2_Planner --> L2_Orchestrator
+    end
+
+    %% Layer 3: Execution
+    subgraph L3["Layer 3: Execution"]
+        direction LR
+        L3_AgentFabric["👥 Agent Fabric<br/>(Lifecycle FSM)<br/>⚡ Pure Actor"]:::k1_layer3
+        L3_ModelHub["🧠 Model Hub<br/>(LLM Router)<br/>⚡ Pure Actor"]:::k1_layer3
+        L3_ToolRunner["🔧 Tool Runner<br/>(MCP Protocol)<br/>⚡ Pure Actor"]:::k1_layer3
+        L3_Safety["🛡️ Safety Watch<br/>(PII Detection)<br/>🤖 AI Agent"]:::ai_agent
+
+        L2_Orchestrator --> L3_AgentFabric
+        L2_Orchestrator --> L3_ModelHub
+        L2_Orchestrator --> L3_ToolRunner
+        L3_ToolRunner -.PII Check.-> L3_Safety
+    end
+
+    %% Layer 4: Runtime
+    subgraph L4["Layer 4: Runtime State"]
+        direction LR
+        L4_SessionState["📊 SessionState<br/>(6 Sections)<br/>⚡ Pure Actor"]:::k1_layer4
+        L4_Supervisor["👁️ Supervisor<br/>(Health Monitor)<br/>⚡ Pure Actor"]:::k1_layer4
+        L4_LearningLoop["🔄 Learning Loop<br/>(Feedback)<br/>⚡ Pure Actor"]:::k1_layer4
+
+        L3_AgentFabric --> L4_SessionState
+        L3_ModelHub --> L4_SessionState
+        L3_ToolRunner --> L4_SessionState
+        L4_Supervisor -.Health Checks.-> L3_AgentFabric
+        L4_Supervisor -.Health Checks.-> L2_Orchestrator
+    end
+
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+end
+
+%% ====== K1 LAYER 5: INFRASTRUCTURE & BRIDGE ======
+subgraph L5["🏗️ Layer 5: Infrastructure & K0 Bridge"]
+    direction TB
+
+    %% K0 Bridge Clients
+    subgraph Bridge["K0 Bridge (HTTP/2 + FlatBuffers)"]
+        direction TB
+
+        Bridge_Command["📝 Command Client<br/>P01: Write Ops<br/><50ms GREEN<br/><200ms AMBER/RED"]:::bridge
+        Bridge_Query["🔍 Query Client<br/>P02: Read Ops<br/><100ms P95"]:::bridge
+        Bridge_SSE["📡 SSE Client<br/>P08: Config/Events<br/><5ms delivery"]:::bridge
+        Bridge_Batch["📦 Batch Client<br/>250ms flush<br/>64KB batches"]:::bridge
+        Bridge_Obs["📊 Observability Client<br/>Metrics/Logs Push<br/><20ms P95"]:::bridge
+
+        Bridge_HTTP2["🔌 HTTP/2 Pool<br/>100 concurrent streams<br/>Connection reuse"]:::bridge
+
+        Bridge_Command --> Bridge_HTTP2
+        Bridge_Query --> Bridge_HTTP2
+        Bridge_SSE --> Bridge_HTTP2
+        Bridge_Batch --> Bridge_HTTP2
+        Bridge_Obs --> Bridge_HTTP2
+    end
+
+    %% K1 Observability Layer (uses K0 obs stack)
+    subgraph K1_Obs["K1 Observability (Reuses K0 Stack)"]
+        direction LR
+        K1_Metrics["📈 Metrics Collector<br/>50+ Prometheus<br/>RED Method"]:::observability
+        K1_Traces["🔍 Trace Collector<br/>OpenTelemetry<br/>cognitive_trace_id"]:::observability
+        K1_Logs["📝 Log Collector<br/>Structured JSON<br/>PII Redaction"]:::observability
+
+        K1_Metrics --> Bridge_Obs
+        K1_Traces --> Bridge_Obs
+        K1_Logs --> Bridge_Obs
+    end
+
+    %% Other Infrastructure
+    K1_Config["⚙️ Config Manager<br/>Hot Reload<br/>SSE from K0"]:::k1_layer5
+    K1_Circuit["🔴 Circuit Breaker<br/>3-failure threshold<br/>CLOSED→OPEN→HALF_OPEN"]:::k1_layer5
+    K1_Scheduler["⏱️ Scheduler<br/>WFQ (3 lanes)<br/>Backpressure"]:::k1_layer5
+    K1_Thermal["🌡️ Thermal Manager<br/>5 states<br/>NPU/GPU/CPU"]:::k1_layer5
+
+    Bridge_SSE --> K1_Config
+    Bridge_HTTP2 -.Circuit Break.-> K1_Circuit
+    K1_Scheduler --> Bridge_Batch
+end
+
+%% ====== K0 KERNEL (Memory Microkernel) ======
+subgraph K0["💾 K0 Kernel (Memory Microkernel)"]
+    direction TB
+
+    %% K0 Gate & Router
+    K0_Gate["🚪 K0 Minimal Gate<br/>Envelope validation<br/>Signature check<br/>Privacy bands"]:::k0_kernel
+    K0_Router["🔀 Envelope Router<br/>Port → Pipeline<br/>20 ports (P01-P20)"]:::k0_kernel
+    K0_Scheduler["⚙️ K0 Scheduler<br/>QoS + Priority<br/>Backpressure"]:::k0_kernel
+
+    Bridge_HTTP2 --> K0_Gate
+    K0_Gate --> K0_Router
+    K0_Router --> K0_Scheduler
+
+    %% K0 Core Pipelines (20 Ports)
+    subgraph K0_Ports["K0 20 Ports (Internal Pipelines)"]
+        direction TB
+
+        %% Critical Path Ports
+        subgraph K0_Critical["Critical Path Ports"]
+            P01["P01: RecallQuery<br/>Context retrieval<br/><50ms P95"]:::k0_kernel
+            P02["P02: MemoryWrite<br/>Delta persistence<br/><100ms P95"]:::k0_kernel
+            P08["P08: ConfigSSE<br/>Hot config<br/><100ms delivery"]:::k0_kernel
+        end
+
+        %% Memory Operations
+        subgraph K0_Memory["Memory Operations"]
+            P04["P04: Arbitration<br/>Decision logging"]:::k0_kernel
+            P06["P06: LearningTick<br/>Feedback signals"]:::k0_kernel
+            P07["P07: Sync<br/>CRDT merge<br/>Multi-device"]:::k0_kernel
+        end
+
+        %% Security & Governance
+        subgraph K0_Security["Security & Governance"]
+            P10["P10: PII Detection<br/>Privacy bands<br/><10ms P95"]:::k0_kernel
+            P12["P12: PolicyEval<br/>Arbiter approval<br/><20ms P95"]:::k0_kernel
+            P17["P17: ResourceAlloc<br/>Budget tracking"]:::k0_kernel
+            P18["P18: Personalization<br/>User persona"]:::k0_kernel
+            P19["P19: QoS<br/>Rate limits"]:::k0_kernel
+            P20["P20: Procedures<br/>Habit execution"]:::k0_kernel
+        end
+    end
+
+    K0_Scheduler --> K0_Ports
+
+    %% K0 Storage Layer
+    subgraph K0_Storage["K0 Storage Infrastructure"]
+        direction LR
+        K0_WAL["📝 Write-Ahead Log<br/>SQLite WAL<br/>ACID guarantees"]:::k0_kernel
+        K0_Vector["🔍 Vector Store<br/>FAISS<br/>Semantic search"]:::k0_kernel
+        K0_KG["🕸️ Knowledge Graph<br/>NetworkX<br/>Reasoning"]:::k0_kernel
+        K0_FTS["📚 Full-Text Search<br/>FTS5<br/>BM25 ranking"]:::k0_kernel
+
+        K0_Ports --> K0_WAL
+        K0_Ports --> K0_Vector
+        K0_Ports --> K0_KG
+        K0_Ports --> K0_FTS
+    end
+
+    %% K0 Observability Stack (Reused by K1)
+    subgraph K0_Obs["K0 Observability Stack (Shared)"]
+        direction TB
+        K0_Prometheus["📊 Prometheus<br/>Metrics aggregation<br/>:9090/metrics"]:::observability
+        K0_OTLP["🔍 OTLP Collector<br/>Trace ingestion<br/>Jaeger export"]:::observability
+        K0_Logs["📝 Log Aggregator<br/>Structured logs<br/>PII redaction"]:::observability
+        K0_Grafana["📈 Grafana<br/>Dashboards<br/>Alerting"]:::observability
+
+        K0_Prometheus --> K0_Grafana
+        K0_OTLP --> K0_Grafana
+        K0_Logs --> K0_Grafana
+    end
+end
+
+%% ====== DATA FLOW CONNECTIONS ======
+
+%% K1 Layers → Bridge → K0 Flows
+L1_Router -->|"cognitive_trace_id"| L2_Concierge
+L2_Concierge -->|"P01: Context"| Bridge_Command
+L2_Planner -->|"P02: Plan"| Bridge_Command
+L2_Orchestrator -->|"P04: Decision"| Bridge_Command
+L3_AgentFabric -->|"P02: Agent State"| Bridge_Command
+L3_ModelHub -->|"P18: Persona"| Bridge_Query
+L3_ToolRunner -->|"P10: PII Check"| Bridge_Query
+L3_Safety -->|"P12: Policy"| Bridge_Query
+L4_SessionState -->|"P02: Deltas (batched)"| Bridge_Batch
+L4_LearningLoop -->|"P06: Feedback"| Bridge_Command
+L4_Supervisor -->|"P17: Resources"| Bridge_Query
+
+%% Bridge → K0 Port Routing
+Bridge_Command --> P01
+Bridge_Command --> P02
+Bridge_Command --> P04
+Bridge_Command --> P06
+Bridge_Query --> P10
+Bridge_Query --> P12
+Bridge_Query --> P17
+Bridge_Query --> P18
+Bridge_SSE --> P08
+
+%% K0 → K1 Reverse Flows (SSE, Sync)
+P08 -.SSE Stream.-> Bridge_SSE
+P07 -.CRDT Sync.-> Bridge_Command
+K0_WAL -.Recovery.-> Bridge_Query
+
+%% K1 Observability → K0 Observability
+K1_Metrics -->|"Batch every 10s"| Bridge_Obs
+K1_Traces -->|"OTLP spans"| Bridge_Obs
+K1_Logs -->|"JSON logs (5s)"| Bridge_Obs
+Bridge_Obs -->|"POST :5203"| K0_Prometheus
+Bridge_Obs -->|"POST :5203"| K0_OTLP
+Bridge_Obs -->|"POST :5203"| K0_Logs
+
+%% Circuit Breaker Protection
+K1_Circuit -.3 failures.-> Bridge_HTTP2
+K0_Scheduler -.Backpressure.-> K0_Router
+K0_Router -.429 Rate Limit.-> K0_Gate
+
+%% Thermal Management
+K1_Thermal -.Placement.-> L3_ModelHub
+K1_Thermal -->|"P17: Thermal State"| Bridge_Query
+
+%% ====== ANNOTATIONS ======
+
+%% Performance Budgets
+note1["📋 PERFORMANCE BUDGETS (P95)<br/>━━━━━━━━━━━━━━━━━━━━<br/>Bridge Latency: <10ms<br/>Command (GREEN): <50ms<br/>Command (AMBER/RED): <200ms<br/>Query: <100ms<br/>SSE Delivery: <5ms<br/>Obs Push: <20ms<br/>━━━━━━━━━━━━━━━━━━━━<br/>Bridge Overhead: <5% total"]:::observability
+
+%% Key Design Principles
+note2["🎯 KEY DESIGN PRINCIPLES<br/>━━━━━━━━━━━━━━━━━━━━<br/>1. K0 Obs Stack Reuse<br/>   - K1 pushes to K0<br/>   - Single source of truth<br/>   - Unified dashboards<br/>━━━━━━━━━━━━━━━━━━━━<br/>2. Dual Protocol<br/>   - JSON (K0 native)<br/>   - FlatBuffers (K1 opt)<br/>━━━━━━━━━━━━━━━━━━━━<br/>3. Actor Model<br/>   - Message isolation<br/>   - Supervision trees<br/>   - Backpressure cascade"]:::observability
+
+%% Research Citations
+note3["📚 RESEARCH FOUNDATION<br/>━━━━━━━━━━━━━━━━━━━━<br/>• HTTP/2 (RFC 7540)<br/>  Binary framing<br/>  Stream multiplexing<br/>━━━━━━━━━━━━━━━━━━━━<br/>• Actor Model (Hewitt 1973)<br/>  Message-passing concurrency<br/>━━━━━━━━━━━━━━━━━━━━<br/>• RED Method (Wilkie)<br/>  Rate, Error, Duration<br/>━━━━━━━━━━━━━━━━━━━━<br/>• Circuit Breaker (Nygard)<br/>  Resilience patterns"]:::observability
+
+%% Protocol Details
+note4["🔌 BRIDGE PROTOCOL<br/>━━━━━━━━━━━━━━━━━━━━<br/>Transport: HTTP/2<br/>Serialization: FlatBuffers<br/>Batching: 250ms flush<br/>Compression: zstd (64KB)<br/>━━━━━━━━━━━━━━━━━━━━<br/>20 Ports (P01-P20)<br/>━━━━━━━━━━━━━━━━━━━━<br/>Circuit Breaker:<br/>- Threshold: 3 failures<br/>- States: CLOSED→OPEN<br/>         →HALF_OPEN"]:::bridge
+
+%% Observability Details
+note5["📊 OBSERVABILITY STACK<br/>━━━━━━━━━━━━━━━━━━━━<br/>K0 Stack (Shared):<br/>• Prometheus (metrics)<br/>• OTLP (traces)<br/>• Structured logs (JSON)<br/>• Grafana (dashboards)<br/>━━━━━━━━━━━━━━━━━━━━<br/>K1 → K0 Push:<br/>• Metrics: 10s batch<br/>• Logs: 5s batch<br/>• Traces: real-time<br/>━━━━━━━━━━━━━━━━━━━━<br/>50+ Prometheus metrics<br/>cognitive_trace_id e2e"]:::observability
+
+%% ADR References
+note6["📖 ADR REFERENCES<br/>━━━━━━━━━━━━━━━━━━━━<br/>ADR-0001:<br/>  K0/K1 Kernel Split<br/>ADR-0001a:<br/>  K0 Bridge Protocol<br/>ADR-0001f:<br/>  State Boundary Mgmt<br/>ADR-0029:<br/>  Prometheus Metrics<br/>ADR-0030:<br/>  Trace Sampling<br/>ADR-0044:<br/>  HTTP/2 Multiplexing"]:::observability
+
+%% Position annotations
+note1 ~~~ K1
+note2 ~~~ L5
+note3 ~~~ K0
+note4 ~~~ Bridge
+note5 ~~~ K0_Obs
+note6 ~~~ K0_Storage

@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.dev/schemas/kg/edge.schema.json",
+  "title": "KG Edge Schema",
+  "description": "Semantic edge/relation between two nodes in the Knowledge Graph",
+  "type": "object",
+  "required": ["src", "dst", "relation"],
+  "properties": {
+    "src": {
+      "type": "string",
+      "description": "Source node ID",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": [
+        "k1.l2_orchestration.agent_scheduler",
+        "adr_0051",
+        "test_agent_scheduler"
+      ]
+    },
+    "dst": {
+      "type": "string",
+      "description": "Destination node ID",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": [
+        "adr_0051",
+        "k0.kernel",
+        "k1.l2_orchestration.agent_scheduler"
+      ]
+    },
+    "relation": {
+      "type": "string",
+      "description": "Type of relationship between nodes",
+      "enum": ["implements", "depends_on", "references", "tests"],
+      "examples": ["implements", "depends_on", "references", "tests"]
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Evidence for this relationship (file:line, docstring reference, etc.)",
+      "maxLength": 512,
+      "examples": [
+        "agent_scheduler.py:line 1 (docstring mentions ADR-0051)",
+        "agent_scheduler.py:line 5 (import k0.kernel)",
+        "test_agent_scheduler.py:line 10 (tests AgentScheduler class)",
+        "Referenced in docs/architecture/decisions/0051-agent-scheduling.md"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "src": "k1.l2_orchestration.agent_scheduler",
+      "dst": "adr_0051",
+      "relation": "implements",
+      "evidence": "agent_scheduler.py:line 1 (docstring: 'Implements ADR-0051')"
+    },
+    {
+      "src": "k1.l2_orchestration.agent_scheduler",
+      "dst": "k0.kernel",
+      "relation": "depends_on",
+      "evidence": "agent_scheduler.py:line 5 (from k0.kernel import Kernel)"
+    },
+    {
+      "src": "test_agent_scheduler",
+      "dst": "k1.l2_orchestration.agent_scheduler",
+      "relation": "tests",
+      "evidence": "test_agent_scheduler.py:line 10 (class TestAgentScheduler)"
+    },
+    {
+      "src": "adr_0051",
+      "dst": "adr_0050",
+      "relation": "references",
+      "evidence": "Mentioned in ADR-0051 content"
+    }
+  ],
+  "definitions": {
+    "RelationType": {
+      "type": "string",
+      "enum": ["implements", "depends_on", "references", "tests"],
+      "description": "Valid relation types:\n- implements: Code implements an ADR\n- depends_on: Module depends on another module\n- references: Cross-reference between ADRs or documentation\n- tests: Test file tests a module or component"
+    }
+  }
+}

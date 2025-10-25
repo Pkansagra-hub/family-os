@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.dev/schemas/kg/node.schema.json",
+  "title": "KG Node Schema",
+  "description": "Semantic node in the Knowledge Graph representing ADRs, modules, contracts, or files",
+  "type": "object",
+  "required": ["node_id", "node_type", "label"],
+  "properties": {
+    "node_id": {
+      "type": "string",
+      "description": "Unique identifier for the node (e.g., 'adr_0051', 'k0.kernel.core')",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": [
+        "adr_0051",
+        "k0.kernel.core",
+        "k1.l2_orchestration.agent_scheduler",
+        "agent_schedule.schema.json"
+      ]
+    },
+    "node_type": {
+      "type": "string",
+      "description": "Type of node in the graph",
+      "enum": ["adr", "module", "contract", "file"],
+      "examples": ["adr", "module", "contract", "file"]
+    },
+    "label": {
+      "type": "string",
+      "description": "Human-readable label for the node",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": [
+        "Agent Scheduling",
+        "Kernel Core",
+        "Agent Scheduler",
+        "Agent Schedule Schema"
+      ]
+    },
+    "file_path": {
+      "type": "string",
+      "description": "Relative path to the file in the repository",
+      "maxLength": 512,
+      "examples": [
+        "docs/architecture/decisions/0051-agent-scheduling.md",
+        "k0/kernel/core.py",
+        "k1/contracts/agent_schedule.schema.json"
+      ]
+    },
+    "tags": {
+      "type": "array",
+      "description": "Semantic tags for classification and search",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 50
+      },
+      "uniqueItems": true,
+      "maxItems": 20,
+      "examples": [
+        ["scheduling", "agents", "orchestration"],
+        ["kernel", "k0", "core"],
+        ["contract", "json_schema"]
+      ]
+    },
+    "content_preview": {
+      "type": "string",
+      "description": "First 500 characters of content for quick context",
+      "maxLength": 500,
+      "examples": [
+        "ADR-0051: Agent Scheduling. This ADR describes the agent scheduling subsystem..."
+      ]
+    },
+    "code_snippet": {
+      "type": "string",
+      "description": "Code snippet (first 1000 chars) for modules",
+      "maxLength": 1000,
+      "examples": [
+        "class AgentScheduler:\n    '''Manages agent lifecycle and scheduling'''\n    def __init__(self):\n        ..."
+      ]
+    },
+    "created_at": {
+      "type": "number",
+      "description": "Unix timestamp of node creation",
+      "minimum": 0,
+      "examples": [1729700000]
+    },
+    "indexed_at": {
+      "type": "number",
+      "description": "Unix timestamp of last indexing",
+      "minimum": 0,
+      "examples": [1729700000]
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "node_id": "adr_0051",
+      "node_type": "adr",
+      "label": "Agent Scheduling",
+      "file_path": "docs/architecture/decisions/0051-agent-scheduling.md",
+      "tags": ["scheduling", "agents", "orchestration"],
+      "content_preview": "ADR-0051: Agent Scheduling. This ADR describes how agents are scheduled...",
+      "created_at": 1729700000,
+      "indexed_at": 1729700000
+    },
+    {
+      "node_id": "k1.l2_orchestration.agent_scheduler",
+      "node_type": "module",
+      "label": "Agent Scheduler",
+      "file_path": "k1/l2_orchestration/agent_scheduler.py",
+      "tags": ["k1", "orchestration", "scheduling"],
+      "content_preview": "Agent scheduling implementation for K1 orchestration layer",
+      "code_snippet": "class AgentScheduler:\n    '''Implements ADR-0051'''\n    def schedule(self, agent):\n        ...",
+      "created_at": 1729700000,
+      "indexed_at": 1729700000
+    }
+  ]
+}

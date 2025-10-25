@@ -1,39 +1,41 @@
 """
 Layer 5 - Observability Module
 
-This module provides comprehensive observability infrastructure for K1:
-Prometheus metrics, OpenTelemetry tracing, structured logging, and Grafana dashboards.
+This module provides K1 observability by reusing K0's proven observability infrastructure.
+K1 imports and initializes K0's MetricsExporter and TracerFactory with the "k1_intelligence"
+namespace, ensuring consistent metrics, traces, and logs across the entire FamilyOS stack.
+
+Architecture:
+- K1 uses k0.obs.metrics.MetricsExporter (namespace="k1_intelligence")
+- K1 uses k0.obs.tracing.TracerFactory (service_name="k1_intelligence")
+- Both export to the same Prometheus (9090) and Tempo (4318) instances as K0
+- Grafana dashboards include both k0_kernel and k1_intelligence metrics
 
 Components:
-- metrics: Prometheus metrics exporter (50+ metrics, RED method)
-- tracing: OpenTelemetry distributed tracing (1% sampling, adaptive)
-- logging: Structured JSON logging (6 event types)
-- dashboards: Grafana dashboard definitions (7 dashboards)
+- metrics: K0's MetricsExporter with k1_intelligence namespace
+- tracing: K0's TracerFactory with k1_intelligence service name
+- logging: Structured logging (structlog) with cognitive_trace_id
 
 Observability Pillars:
 
-1. Metrics (Prometheus, ADR-0029):
-   - 50+ metrics across all layers
+1. Metrics (Prometheus via K0, ADR-0029):
+   - Reuse k0.obs.metrics.MetricsExporter
+   - K1 namespace: k1_intelligence_*
    - RED method: Rate, Error, Duration
    - <10ms emission overhead (<1% CPU)
-   - 10s scrape interval
+   - 10s scrape interval (shared with K0)
 
-2. Tracing (OpenTelemetry, ADR-0030):
-   - cognitive_trace_id propagation (128-bit unique ID)
-   - 1% baseline sampling, 100% error sampling
-   - Adaptive sampling (NORMAL 1%, DEGRADATION 10%, CRITICAL 50%)
+2. Tracing (OpenTelemetry via K0, ADR-0030):
+   - Reuse k0.obs.tracing.TracerFactory
+   - cognitive_trace_id propagation (end-to-end K1→K0)
+   - Same sampling as K0 (1% baseline, 100% errors)
    - <5ms span creation
+   - OTLP export to Tempo (http://localhost:4318/v1/traces)
 
 3. Logging (Structured JSON, ADR-0002d):
-   - 6 event types (ACTOR_STARTED, MESSAGE_SENT, CRASH_DETECTED, etc.)
-   - cognitive_trace_id in all logs
+   - structlog with cognitive_trace_id in context
+   - Compatible with K0 log parsers
    - <5ms log write
-   - Daily rotation, 7-day retention
-
-4. Dashboards (Grafana, ADR-0029e):
-   - 7 dashboards (K1 Overview, Layer 1-5, Actor Fabric)
-   - SLO alerts (TTFT >157ms, E2E >2100ms, Error >1%)
-   - Alert routing (CRITICAL→PagerDuty, WARNING→Slack)
 
 Performance (ADR-0024):
 - Metric emission: <10ms P95
@@ -51,11 +53,109 @@ Research Foundation:
 - RED method (Tom Wilkie, Grafana Labs)
 - OpenTelemetry (CNCF distributed tracing standard)
 - Structured logging (JSON logs, semantic context)
-- SLO-based alerting (Google SRE Book)
+
+Example Usage:
+```python
+from k1.l5_infrastructure.observability import get_metrics, get_tracer
+
+# Get K1 metrics exporter
+metrics = get_metrics()
+counter = metrics.counter("command_requests_total", "Total commands", labelnames=["band", "status"])
+counter.labels(band="GREEN", status="success").inc()
+
+# Get K1 tracer
+tracer = get_tracer()
+with tracer.span("k1.command_submit", attributes={"band": "GREEN"}):
+    # ... operation ...
+    pass
+```
 """
 
-# __all__ = [
-#     "MetricsExporter",
-#     "TracingManager",
-#     "StructuredLogger",
-# ]
+from prometheus_client import REGISTRY as PROMETHEUS_GLOBAL_REGISTRY
+from prometheus_client import CollectorRegistry
+
+from k0.obs.metrics import MetricsExporter
+from k0.obs.tracing import COGNITIVE_TRACE_BAGGAGE_KEY, TracerFactory
+
+__all__ = [
+    "get_metrics",
+    "get_tracer",
+    "COGNITIVE_TRACE_BAGGAGE_KEY",
+]
+
+# Global K1 metrics exporter (initialized lazily)
+_metrics_exporter: MetricsExporter | None = None
+
+# Global K1 tracer factory (initialized lazily)
+_tracer_factory: TracerFactory | None = None
+
+
+def get_metrics(registry: CollectorRegistry | None = None) -> MetricsExporter:
+    """
+    Get the K1 metrics exporter (k1_intelligence namespace).
+
+    This lazily initializes K0's MetricsExporter with the k1_intelligence namespace.
+    All K1 metrics will be prefixed with "k1_intelligence_" and registered with
+    the Prometheus global registry (shared with K0).
+
+    Args:
+        registry: Optional Prometheus registry to use. If None, uses the global registry
+                  which is shared with K0 kernel.
+
+    Returns:
+        MetricsExporter configured for K1
+    """
+    global _metrics_exporter
+    if _metrics_exporter is None:
+        # Use the global Prometheus registry (shared with K0) by default
+        # This ensures K1 metrics appear in K0's /metrics endpoint
+        _metrics_exporter = MetricsExporter(
+            namespace="k1_intelligence",
+            registry=registry or PROMETHEUS_GLOBAL_REGISTRY,
+            default_histogram_buckets=(
+                0.01,
+                0.025,
+                0.05,
+                0.1,
+                0.2,
+                0.5,
+                1.0,
+                2.0,
+                5.0,
+                10.0,
+            ),  # 10ms, 25ms, 50ms, 100ms, 200ms, 500ms, 1s, 2s, 5s, 10s
+        )
+    return _metrics_exporter
+
+
+def get_tracer() -> TracerFactory:
+    """
+    Get the K1 tracer factory (k1_intelligence service name).
+
+    This lazily initializes K0's TracerFactory with the k1_intelligence service name.
+    All K1 spans will be tagged with service.name="k1_intelligence" and exported
+    to the same Tempo instance as K0.
+
+    During testing (detected by sys.modules containing 'pytest' or 'ward'), OTLP
+    export is disabled to avoid connection errors to non-existent collectors.
+
+    Returns:
+        TracerFactory configured for K1
+    """
+    import sys
+
+    global _tracer_factory
+    if _tracer_factory is None:
+        # Disable OTLP export during testing to avoid connection errors
+        # Check if we're in a test environment
+        is_testing = "pytest" in sys.modules or "ward" in sys.modules
+        otlp_endpoint = None if is_testing else "http://localhost:4318/v1/traces"
+
+        _tracer_factory = TracerFactory(
+            service_name="k1_intelligence",
+            service_version="1.0.0",
+            environment="dev",
+            otlp_endpoint=otlp_endpoint,  # Tempo OTLP HTTP endpoint (None during tests)
+            sample_ratio=1.0,  # 100% sampling for development (adjust for production)
+        )
+    return _tracer_factory

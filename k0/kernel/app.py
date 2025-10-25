@@ -248,6 +248,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.tracer_factory = tracer_factory
     app.state.metrics_exporter = metrics_exporter
+    app.state.forwarded_metrics = observe.ForwardedMetricsBuffer()
     app.state.snapshot_watermark = snapshot_watermark
     app.state.active_connections = active_connections
     app.state.sse_active_subscriptions = sse_active_subscriptions
@@ -714,7 +715,19 @@ def _register_operational_probes(app: FastAPI) -> None:
         metrics_exporter = getattr(app.state, "metrics_exporter", None)
         if isinstance(metrics_exporter, MetricsExporter):
             latest = metrics_exporter.latest()
-            return Response(content=latest, media_type=CONTENT_TYPE_LATEST)
+            forwarded_buffer = getattr(app.state, "forwarded_metrics", None)
+            forwarded_snapshot = (
+                forwarded_buffer.render()
+                if isinstance(forwarded_buffer, observe.ForwardedMetricsBuffer)
+                else ""
+            )
+            content = latest
+            if forwarded_snapshot:
+                forwarded_bytes = forwarded_snapshot.encode("utf-8")
+                if not content.endswith(b"\n"):
+                    content += b"\n"
+                content += forwarded_bytes
+            return Response(content=content, media_type=CONTENT_TYPE_LATEST)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={

@@ -106,7 +106,7 @@ We adopt a **dual-protocol bridge** with **JSON envelopes as PRIMARY** (K0 nativ
 │  └────────────────────┬───────────────────────────────────────────┘  │
 └────────────────────────┼───────────────────────────────────────────────┘
                          │ HTTP/2 + TLS 1.3
-                         │ Headers: Content-Type, Protocol-Version, cognitive-trace-id
+                         │ Headers: Content-Type, Protocol-Version, X-Cognitive-Trace-Id
                          │ Body: JSON envelope OR FlatBuffers payload
                          ↓
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -406,7 +406,7 @@ Host: localhost:8080
 Content-Type: application/flatbuffers
 Accept: application/flatbuffers, application/json
 Protocol-Version: 1.2.0
-Cognitive-Trace-Id: trace_xyz789
+X-Cognitive-Trace-Id: trace_xyz789
 Session-Id: sess_456
 Device-Id: device_laptop_001
 Content-Length: 1024
@@ -418,7 +418,7 @@ Content-Encoding: zstd
 HTTP/2 200 OK
 Content-Type: application/flatbuffers
 Protocol-Version: 1.2.0
-Cognitive-Trace-Id: trace_xyz789
+X-Cognitive-Trace-Id: trace_xyz789
 Receipt-Id: rcpt_abc123
 Receipt-Signature: ed25519_signature_hex
 Content-Length: 512
