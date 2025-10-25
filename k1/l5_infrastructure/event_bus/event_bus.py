@@ -1,110 +1,402 @@
-"""
-K1 Internal Event Bus
+"""K1 Layer 1→2 event bus implementation."""
 
-Purpose: Layer 1→2 pub/sub event bus with zero-copy delivery
-Location: k1/l5_infrastructure/event_bus/event_bus.py
-Performance: <5ms event delivery
+from __future__ import annotations
 
-Primary ADRs:
-- ADR-0004a: Event Bus (Layer 1-2 communication, pub/sub, zero-copy)
-- ADR-0048: K1 Internal Event Bus (in-memory pub/sub, k1.* namespace)
+import asyncio
+import inspect
+import time
+from dataclasses import dataclass, field
+from fnmatch import fnmatch
+from typing import Awaitable, Callable, Dict, List, Optional
 
-Related ADRs:
-- ADR-0024: Performance Budgets (event bus <5ms)
-- ADR-0029: Prometheus Metrics (event rate, subscription count, delivery latency)
-- ADR-0061: Backpressure (subscriber queue depth, overflow policies)
+from k1.l5_infrastructure.event_bus.schemas import EventBase, EventTopic
+from k1.l5_infrastructure.observability import get_metrics, get_tracer
 
-Key Responsibilities:
+try:  # pragma: no cover - structlog optional at runtime
+    import structlog  # type: ignore
 
-1. Pub/Sub Pattern:
-   - Topic-based routing (k1.intent.detected, k1.user.input, k1.voice.command, k1.barge_in)
-   - Multiple subscribers per topic (1-to-N fanout broadcast)
-   - Async delivery (asyncio.Queue per subscriber)
-   - Topic namespace: k1.* (K1-internal only, no K0 crossing)
+    logger = structlog.get_logger(__name__)  # type: ignore
+except ImportError:  # pragma: no cover - fallback to stdlib logging
+    import logging
 
-2. Event Delivery:
-   - Zero-copy: Pass references, no serialization (in-memory only)
-   - <5ms delivery latency (<2ms typical, <1ms per event)
-   - Ordering: FIFO per topic (guaranteed message order)
-   - 1000+ events/sec throughput
-   - Non-blocking publish (fire-and-forget)
+    class _StructLogShim:
+        """Minimal shim to emulate structlog-style API on stdlib logging."""
 
-3. Backpressure Management:
-   - Subscriber queue depth: 50 max (1000 for K1 internal high-priority)
-   - Overflow policy: DROP_OLDEST (discard oldest event when queue full)
-   - Slow subscriber detection: >100ms processing time OR >90% full queue
-   - Graceful degradation: Notify slow subscribers, drop events if needed
-   - Backpressure metrics: <1% of deliveries should trigger overflow
+        def __init__(self, base_logger: logging.Logger) -> None:
+            self._base_logger = base_logger
 
-4. K0/K1 Separation:
-   - 100% K1-internal (no K0 boundary crossing)
-   - No K0 storage writes (ephemeral events only)
-   - No K0 SSE fanout (separate K0 SSE client for external events)
-   - No persistence (in-memory only, events discarded after delivery)
+        def _emit(self, level: int, event: str, **kwargs: object) -> None:
+            if kwargs:
+                self._base_logger.log(level, "%s %s", event, kwargs)
+            else:
+                self._base_logger.log(level, "%s", event)
 
-5. Topic Management:
-   - Dynamic topic creation (topics created on first publish)
-   - Topic lifecycle: Created on demand, no explicit cleanup
-   - Wildcard subscriptions: k1.intent.* (subscribe to all intent topics)
-   - Topic filtering: Subscribers can filter events by attributes
+        def debug(self, event: str, **kwargs: object) -> None:
+            self._emit(logging.DEBUG, event, **kwargs)
 
-Performance Metrics:
-- Event delivery: <5ms P95 (<2ms typical, <1ms per event)
-- Throughput: 1000+ events/sec (tested up to 5000 events/sec)
-- Subscriber queue depth: <10 typical, <50 max
-- Backpressure events: <1% of deliveries
-- Publish latency: <0.5ms (non-blocking)
-- Subscribe latency: <1ms (queue creation)
+        def info(self, event: str, **kwargs: object) -> None:
+            self._emit(logging.INFO, event, **kwargs)
 
-Implementation Notes:
-- Use asyncio.Queue for per-subscriber buffering
-- Use asyncio.create_task for non-blocking publish
-- Use weak references for subscribers (avoid memory leaks)
-- No serialization (in-memory references only)
-- DROP_OLDEST overflow policy (prefer new events over old)
-- Metrics emission: Push event_rate, subscription_count, delivery_latency to Prometheus
+        def warning(self, event: str, **kwargs: object) -> None:
+            self._emit(logging.WARNING, event, **kwargs)
 
-Example Usage:
-    bus = EventBus()
+        def exception(self, event: str, **kwargs: object) -> None:
+            self._base_logger.exception("%s %s", event, kwargs)
 
-    # Subscribe to intent events
-    async def handle_intent(event: IntentDetected):
-        print(f"Intent: {event.intent}, confidence: {event.confidence}")
+    logger = _StructLogShim(logging.getLogger(__name__))
 
-    bus.subscribe("k1.intent.detected", handle_intent)
 
-    # Publish intent event
-    event = IntentDetected(
-        tier="T1",
-        intent="search_photos",
-        confidence=0.95,
-        entities={"query": "beach photos"},
-        cognitive_trace_id="abc123"
+EventHandler = Callable[[EventBase], Awaitable[None] | None]
+
+
+@dataclass(slots=True)
+class SubscriptionHandle:
+    """Handle returned to callers for managing a subscription."""
+
+    topic_pattern: str
+    handler_repr: str
+    _bus: "EventBus" = field(repr=False)
+    _subscriber_id: int = field(repr=False)
+
+    async def unsubscribe(self) -> None:
+        """Remove the subscription and cancel the background delivery task."""
+
+        await self._bus.remove_subscription(self._subscriber_id)
+
+
+# noinspection PyProtectedMember - internal helper for EventBus operation
+class _Subscriber:
+    """Internal representation of a subscriber with its own delivery queue."""
+
+    __slots__ = (
+        "id",
+        "handler",
+        "pattern",
+        "queue",
+        "task",
+        "queue_depth",
+        "bus",
+        "name",
     )
-    await bus.publish("k1.intent.detected", event)
 
-    # Wildcard subscription
-    bus.subscribe("k1.intent.*", handle_all_intents)
+    def __init__(
+        self,
+        *,
+        subscriber_id: int,
+        handler: EventHandler,
+        pattern: str,
+        queue_depth: int,
+        bus: "EventBus",
+    ) -> None:
+        self.id = subscriber_id
+        self.handler = handler
+        self.pattern = pattern
+        self.queue_depth = queue_depth
+        self.queue: asyncio.Queue[EventBase] = asyncio.Queue(maxsize=queue_depth)
+        self.task: Optional[asyncio.Task[None]] = None
+        self.bus = bus
+        self.name = _derive_handler_name(handler)
 
-Research Foundation:
-- Pub/sub pattern (observer pattern, message broker, Redis Pub/Sub)
-- Zero-copy message passing (shared memory, reference passing, Linux io_uring)
-- Backpressure management (queue depth, overflow policies, reactive streams)
-- Asyncio event loop (non-blocking I/O, task scheduling)
+    def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        self.task = loop.create_task(
+            self._run(), name=f"event-bus-subscriber-{self.id}"
+        )
 
-TODO:
-- [ ] Implement EventBus class with asyncio.Queue per subscriber
-- [ ] Implement topic-based routing (k1.* namespace)
-- [ ] Implement zero-copy publish (reference passing, no serialization)
-- [ ] Implement backpressure (queue depth 50, DROP_OLDEST overflow)
-- [ ] Implement slow subscriber detection (>100ms processing, >90% queue full)
-- [ ] Implement wildcard subscriptions (k1.intent.*)
-- [ ] Add Prometheus metrics (event_rate, subscription_count, delivery_latency, backpressure_events)
-- [ ] Add weak references for subscribers (prevent memory leaks)
-- [ ] Implement FIFO ordering guarantee per topic
-- [ ] Add unit tests for pub/sub delivery and backpressure
-- [ ] Add integration tests with 1000+ events/sec load
-- [ ] Add benchmarking for <5ms P95 delivery latency
-"""
+    async def stop(self) -> None:
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:  # pragma: no cover - expected path
+                pass
 
-# TODO: Implement EventBus class with asyncio.Queue and pub/sub logic
+    def matches(self, topic: str) -> bool:
+        return fnmatch(topic, self.pattern)
+
+    async def enqueue(self, topic: str, event: EventBase) -> None:
+        queue = self.queue
+        if queue.full():
+            try:
+                queue.get_nowait()
+                _event_overflow_total.labels(topic=topic, subscriber=self.name).inc()
+            except asyncio.QueueEmpty:  # pragma: no cover - defensive guard
+                pass
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:  # pragma: no cover - double guard
+            _event_overflow_total.labels(topic=topic, subscriber=self.name).inc()
+            return
+        _event_queue_depth.labels(topic=topic, subscriber=self.name).set(queue.qsize())
+
+    async def _run(self) -> None:
+        while True:
+            event = await self.queue.get()
+            topic_value = event.topic.value
+            _event_queue_depth.labels(topic=topic_value, subscriber=self.name).set(
+                self.queue.qsize()
+            )
+
+            start = time.perf_counter()
+            try:
+                result = self.handler(event)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:  # pragma: no cover - handler failure path
+                logger.exception(
+                    "event_bus_handler_error",
+                    topic=topic_value,
+                    handler=self.name,
+                    trace_id=getattr(event, "cognitive_trace_id", None),
+                )
+            finally:
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                _event_delivery_latency_ms.labels(
+                    topic=topic_value,
+                    subscriber=self.name,
+                ).observe(elapsed_ms)
+
+                if elapsed_ms > _SLOW_SUBSCRIBER_THRESHOLD_MS:
+                    _event_slow_subscriber_total.labels(
+                        topic=topic_value,
+                        subscriber=self.name,
+                        reason="handler_latency",
+                    ).inc()
+                    logger.warning(
+                        "event_bus_slow_handler",
+                        topic=topic_value,
+                        handler=self.name,
+                        latency_ms=elapsed_ms,
+                        threshold_ms=_SLOW_SUBSCRIBER_THRESHOLD_MS,
+                    )
+
+                queue_pressure = (
+                    self.queue.qsize() / self.queue_depth if self.queue_depth else 0.0
+                )
+                if queue_pressure >= _QUEUE_PRESSURE_RATIO:
+                    _event_slow_subscriber_total.labels(
+                        topic=topic_value,
+                        subscriber=self.name,
+                        reason="queue_pressure",
+                    ).inc()
+                    logger.warning(
+                        "event_bus_queue_pressure",
+                        topic=topic_value,
+                        handler=self.name,
+                        queue_depth=self.queue.qsize(),
+                        capacity=self.queue_depth,
+                    )
+
+                self.queue.task_done()
+
+
+def _derive_handler_name(handler: EventHandler) -> str:
+    if hasattr(handler, "__qualname__"):
+        return handler.__qualname__  # pragma: no cover - attribute presence check
+    if hasattr(handler, "__name__"):
+        return handler.__name__
+    return repr(handler)
+
+
+def _normalise_topic_identifier(identifier: EventTopic | str) -> str:
+    if isinstance(identifier, EventTopic):
+        return identifier.value
+
+    topic = identifier
+    if topic.startswith("k1."):
+        topic = topic[3:]
+    return topic.replace(".", "_")
+
+
+_METRICS = get_metrics()
+_TRACER = get_tracer()
+
+_event_publish_total = _METRICS.counter(
+    "event_bus_publish_total",
+    "Total events published to the K1 event bus",
+    labelnames=["topic", "status"],
+)
+_event_publish_latency_ms = _METRICS.histogram(
+    "event_bus_publish_latency_ms",
+    "Event publish overhead (Layer 1 → Event Bus) in milliseconds",
+    labelnames=["topic"],
+    buckets=[0.05, 0.1, 0.2, 0.5, 1, 2, 5],
+)
+_event_delivery_latency_ms = _METRICS.histogram(
+    "event_bus_delivery_latency_ms",
+    "Event delivery latency (Event Bus → subscriber handler) in milliseconds",
+    labelnames=["topic", "subscriber"],
+    buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 25],
+)
+_event_overflow_total = _METRICS.counter(
+    "event_bus_overflow_total",
+    "Events dropped because a subscriber queue exceeded its capacity",
+    labelnames=["topic", "subscriber"],
+)
+_event_queue_depth = _METRICS.gauge(
+    "event_bus_queue_depth",
+    "Current queue depth per subscriber",
+    labelnames=["topic", "subscriber"],
+)
+_event_slow_subscriber_total = _METRICS.counter(
+    "event_bus_slow_subscriber_total",
+    "Occurrences of slow subscriber processing or sustained high queue depth",
+    labelnames=["topic", "subscriber", "reason"],
+)
+
+_DEFAULT_QUEUE_DEPTH = 50
+_SLOW_SUBSCRIBER_THRESHOLD_MS = 100.0
+_QUEUE_PRESSURE_RATIO = 0.9
+
+
+class EventBus:
+    """Async pub/sub event bus supporting wildcard subscriptions and backpressure."""
+
+    def __init__(self, *, default_queue_depth: int = _DEFAULT_QUEUE_DEPTH) -> None:
+        self._default_queue_depth = default_queue_depth
+        self._subscribers: Dict[int, _Subscriber] = {}
+        self._topic_index: Dict[str, List[int]] = {}
+        self._wildcard_subscribers: List[int] = []
+        self._next_subscriber_id = 1
+        self._shutdown = False
+        self._lock = asyncio.Lock()
+
+    async def publish(self, event: EventBase) -> None:
+        if self._shutdown:
+            raise RuntimeError("EventBus.publish() called after shutdown")
+
+        topic_value = event.topic.value
+        start = time.perf_counter()
+
+        async with self._lock:
+            subscriber_ids = list(self._topic_index.get(topic_value, ()))
+            if self._wildcard_subscribers:
+                for sub_id in self._wildcard_subscribers:
+                    subscriber = self._subscribers.get(sub_id)
+                    if subscriber and subscriber.matches(topic_value):
+                        subscriber_ids.append(sub_id)
+
+        if not subscriber_ids:
+            _event_publish_total.labels(
+                topic=topic_value, status="no_subscribers"
+            ).inc()
+            logger.debug(
+                "event_bus_no_subscribers",
+                topic=topic_value,
+                trace_id=getattr(event, "cognitive_trace_id", None),
+            )
+            return
+
+        for sub_id in subscriber_ids:
+            subscriber = self._subscribers.get(sub_id)
+            if subscriber is None:  # pragma: no cover - defensive guard
+                continue
+            await subscriber.enqueue(topic_value, event)
+
+        _event_publish_total.labels(topic=topic_value, status="accepted").inc()
+        _event_publish_latency_ms.labels(topic=topic_value).observe(
+            (time.perf_counter() - start) * 1000
+        )
+
+        trace_id = getattr(event, "cognitive_trace_id", None)
+        if trace_id:
+            with _TRACER.span(
+                "event_bus.publish",
+                attributes={
+                    "topic": topic_value,
+                    "subscriber_count": len(subscriber_ids),
+                    "cognitive_trace_id": trace_id,
+                },
+            ):
+                pass
+
+    def subscribe(
+        self,
+        topic: EventTopic | str,
+        handler: EventHandler,
+        *,
+        queue_depth: Optional[int] = None,
+    ) -> SubscriptionHandle:
+        if self._shutdown:
+            raise RuntimeError("EventBus.subscribe() called after shutdown")
+
+        pattern = _normalise_topic_identifier(topic)
+        subscriber_id = self._next_subscriber_id
+        self._next_subscriber_id += 1
+
+        subscriber = _Subscriber(
+            subscriber_id=subscriber_id,
+            handler=handler,
+            pattern=pattern,
+            queue_depth=queue_depth or self._default_queue_depth,
+            bus=self,
+        )
+
+        try:
+            subscriber.start()
+        except RuntimeError as exc:  # pragma: no cover - missing running loop
+            raise RuntimeError(
+                "EventBus.subscribe() must be called within a running event loop"
+            ) from exc
+
+        self._subscribers[subscriber_id] = subscriber
+        if "*" in pattern:
+            self._wildcard_subscribers.append(subscriber_id)
+        else:
+            self._topic_index.setdefault(pattern, []).append(subscriber_id)
+
+        logger.debug(
+            "event_bus_subscribed",
+            pattern=pattern,
+            handler=subscriber.name,
+            queue_depth=subscriber.queue_depth,
+        )
+
+        return SubscriptionHandle(
+            topic_pattern=pattern,
+            handler_repr=subscriber.name,
+            _bus=self,
+            _subscriber_id=subscriber_id,
+        )
+
+    async def remove_subscription(self, subscriber_id: int) -> None:
+        async with self._lock:
+            subscriber = self._subscribers.pop(subscriber_id, None)
+            if subscriber is None:
+                return
+
+            if "*" in subscriber.pattern:
+                if subscriber_id in self._wildcard_subscribers:
+                    self._wildcard_subscribers.remove(subscriber_id)
+            else:
+                subscriber_list = self._topic_index.get(subscriber.pattern)
+                if subscriber_list and subscriber_id in subscriber_list:
+                    subscriber_list.remove(subscriber_id)
+                    if not subscriber_list:
+                        self._topic_index.pop(subscriber.pattern, None)
+
+        await subscriber.stop()
+        logger.debug(
+            "event_bus_unsubscribed",
+            pattern=subscriber.pattern,
+            handler=subscriber.name,
+        )
+
+    async def shutdown(self) -> None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+
+        async with self._lock:
+            subscribers = list(self._subscribers.values())
+            self._subscribers.clear()
+            self._topic_index.clear()
+            self._wildcard_subscribers.clear()
+
+        await asyncio.gather(
+            *(subscriber.stop() for subscriber in subscribers), return_exceptions=True
+        )
+        logger.info("event_bus_shutdown", subscriber_count=len(subscribers))
+
+
+__all__ = ["EventBus", "EventHandler", "SubscriptionHandle"]

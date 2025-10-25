@@ -663,6 +663,7 @@ K1 should reuse K0's proven observability primitives rather than creating a para
 **Files:** `k1/l5_infrastructure/event_bus/event_bus.py`
 **Performance:** <5ms P95 event delivery
 very (non-blocking)
+
 - [ ] Backpressure handling (queue depth 50, DROP_OLDEST policy)
 
 **Context Files:**
@@ -772,6 +773,7 @@ very (non-blocking)
    ```
 
 **Time Estimate:** 2 days
+
 #### Issue 2.1.1: Event Bus Core
 
 **Story:** As Layer 1, I need to publish intent events to Layer 2

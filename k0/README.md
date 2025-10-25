@@ -136,6 +136,83 @@ CREATE INDEX IF NOT EXISTS idx_device_keys_state ON st_device_keys(device_id, ke
 
 `st_devices` backs the provisioning ledger consumed by Minimal Gate checks (see §15) and is populated exclusively through `k0ctl provision`. Additional tables (episodic, semantic, FTS, KG, blobs) are accessed through **driver aliases** and implemented in `drivers/*`.
 
+## Bootup Playbook (Docker Compose)
+
+The repository ships with a fully wired local stack that runs the kernel alongside the observability suite (Prometheus, Grafana, Tempo). Use this flow whenever you need the kernel plus telemetry for end-to-end testing or when coordinating with K1.
+
+### Directory Map
+
+```text
+k0/deployment/compose/generated/local-single-node/
+├── docker-compose.yml                 # Kernel service (pulls k0-kernel-local image)
+├── local-single-node-telemetry.yml    # Prometheus, Grafana, Alertmanager, Tempo
+├── env/
+│   └── k0.env                         # Environment overrides for the kernel
+├── data/                              # SQLite volume (mounted into /data)
+├── secrets/                           # Device keys and sensitive material
+├── telemetry/
+│   ├── prometheus.yml                 # Scrape targets + rules path
+│   ├── grafana/                       # Provisioning + dashboards
+│   └── tempo.yaml                     # Tempo configuration (OTLP ports 4317/4318)
+└── generated/
+  ├── dashboards/                    # Grafana JSON dashboards
+  └── rules/                         # Prometheus alerting rules
+```
+
+### Boot Sequence
+
+> Run commands from the repo root (`d:\familyos`). PowerShell examples shown; use `&&` instead of `;` in bash shells.
+
+1. **Build the local kernel image** (only required after code changes):
+
+  ```powershell
+  docker build -t k0-kernel-local:latest .
+  ```
+
+1. **Seed the SQLite database** (idempotent; safe to re-run after nuking `data/`):
+
+  ```powershell
+  python k0/scripts/bootstrap_local_kernel.py --database k0/deployment/compose/generated/local-single-node/data/k0_kernel.db
+  ```
+
+1. **Start the kernel and telemetry stack:**
+
+  ```powershell
+  Set-Location k0/deployment/compose/generated/local-single-node
+  docker compose -f docker-compose.yml -f local-single-node-telemetry.yml up -d
+  ```
+
+1. **Verify readiness:**
+
+  ```powershell
+  curl.exe http://localhost:8080/healthz     # kernel
+  curl.exe http://localhost:9090/-/ready     # Prometheus
+  curl.exe http://localhost:3200/status      # Tempo
+  ```
+
+1. **Grafana dashboard access:**
+
+  * Browse to `http://localhost:3000`
+  * Default credentials: `admin / ChangeMe!`
+
+1. **Shut down the stack:**
+
+  ```powershell
+  docker compose -f docker-compose.yml -f local-single-node-telemetry.yml down
+  ```
+
+### Coordination with K1
+
+* Keep the compose project running when developing multi-agent flows; point K1 observability exporters at `http://localhost:4317` (gRPC) or `http://localhost:4318` (HTTP) for shared traces.
+* `tempo.yaml` already exposes Prometheus remote write; K1 metrics can reuse the same Prometheus instance by adding scrape configs in `telemetry/prometheus.yml`.
+* For integrated bring-up, launch the K1 stack after step 3 and confirm both kernels register in shared dashboards (Grafana folder `Kernel / Local Single Node`).
+
+### Troubleshooting
+
+* `pull access denied for k0-kernel-local`: rebuild the image (step 1) and rerun compose.
+* `database locked`: stop the stack, remove `data/k0_kernel.db-journal`, rerun the bootstrap script, then restart compose.
+* Tempo status dumps the full config when queried; search for `ready=true` near the top to confirm collector health.
+
 ### 6.2 WAL Retention & Snapshots
 
 * **Retention horizon**: maintain WAL segments for the longer of **7 days** or **10 million events**. Segments older than the horizon are pruned only after a successful snapshot.
