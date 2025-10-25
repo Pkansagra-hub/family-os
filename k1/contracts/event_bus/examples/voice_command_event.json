@@ -1,0 +1,9 @@
+{
+  "transcript": "Turn on the living room lights",
+  "vad_confidence": 0.88,
+  "language": "en",
+  "partial": false,
+  "session_id": "session_12345",
+  "cognitive_trace_id": "5f2d4c7a8b3e41e8a9d9c6f1b2a4d687",
+  "timestamp": "2025-10-24T12:00:01Z"
+}

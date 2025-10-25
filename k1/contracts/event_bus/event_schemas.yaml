@@ -1,0 +1,149 @@
+# K1 Internal Event Bus Schema Contract
+# Source ADRs: ADR-0004a (Layer 1→2 Event Bus Communication), ADR-0048 (K1 Internal Event Bus)
+# Contract Version: 1.0.0
+
+event_bus_event_schemas:
+  version: "1.0.0"
+  description: "Canonical payload definitions for Layer 1→2 event bus topics"
+  schema_authority: "contract://k1/event_bus"
+  default_invariants:
+    session_id:
+      type: string
+      description: "Conversation session identifier"
+      validation: "Non-empty ASCII string; max 128 characters"
+    timestamp:
+      type: string
+      format: "RFC 3339 / ISO 8601"
+      description: "UTC event creation time"
+      validation: "Must include timezone offset; producer MUST emit UTC (\"Z\")"
+    cognitive_trace_id:
+      type: string
+      description: "End-to-end cognitive trace identifier"
+      format: "32 hexadecimal characters (case-insensitive), hyphenated UUIDs accepted"
+      validation: "^[0-9a-f]{32}$ or canonical UUIDv4"
+  events:
+    intent_detected:
+      topic: "intent_detected"
+      schema_uri: "contract://k1/event_bus/intent_detected/1.0.0"
+      description: "Intent classification result emitted by Layer 1 intent router"
+      fields:
+        intent:
+          type: string
+          description: "Resolved intent label (snake_case)"
+          validation: "Non-empty, lowercase snake_case"
+        confidence:
+          type: number
+          format: float
+          description: "Model confidence in detected intent"
+          validation: "0.0 ≤ confidence ≤ 1.0"
+        tier:
+          type: string
+          enum: ["T1_RULE", "T2_SLM", "T3_LLM"]
+          description: "Pipeline tier that produced the intent"
+        entities:
+          type: object
+          additionalProperties: true
+          description: "Extracted slot values keyed by entity name"
+        session_id:
+          $ref: "#/default_invariants/session_id"
+        cognitive_trace_id:
+          $ref: "#/default_invariants/cognitive_trace_id"
+        timestamp:
+          $ref: "#/default_invariants/timestamp"
+      invariants:
+        - name: "confidence_range"
+          rule: "0.0 ≤ confidence ≤ 1.0"
+        - name: "entities_key_type"
+          rule: "Entity map keys MUST be strings"
+      examples:
+        - file: "examples/intent_detected_event.json"
+          description: "Rule-tier weather query intent with entity payload"
+    user_input:
+      topic: "user_input"
+      schema_uri: "contract://k1/event_bus/user_input/1.0.0"
+      description: "Normalized user input emitted by Layer 1 input stream switch"
+      fields:
+        text:
+          type: string
+          description: "Normalized user utterance"
+          validation: "Non-empty UTF-8 string"
+        modality:
+          type: string
+          enum: ["text", "voice"]
+          description: "Input modality"
+        metadata:
+          type: object
+          description: "Optional modality-specific metadata (language, confidence, etc.)"
+          additionalProperties: true
+          nullable: true
+        session_id:
+          $ref: "#/default_invariants/session_id"
+        cognitive_trace_id:
+          $ref: "#/default_invariants/cognitive_trace_id"
+        timestamp:
+          $ref: "#/default_invariants/timestamp"
+      invariants:
+        - name: "modality_enum"
+          rule: "Modality MUST be \"text\" or \"voice\""
+      examples:
+        - file: "examples/user_input_event.json"
+          description: "Voice modality input with ASR confidence metadata"
+    voice_command:
+      topic: "voice_command"
+      schema_uri: "contract://k1/event_bus/voice_command/1.0.0"
+      description: "High-fidelity voice command transcript emitted after ASR pipeline"
+      fields:
+        transcript:
+          type: string
+          description: "Complete ASR transcript"
+          validation: "Non-empty UTF-8 string"
+        vad_confidence:
+          type: number
+          format: float
+          description: "Voice activity detection confidence"
+          validation: "0.0 ≤ vad_confidence ≤ 1.0"
+        language:
+          type: string
+          description: "BCP-47 / ISO 639-1 language code"
+          validation: "^[a-z]{2}(-[A-Z]{2})?$"
+        partial:
+          type: boolean
+          description: "True when transcript is partial/streaming"
+          default: false
+        session_id:
+          $ref: "#/default_invariants/session_id"
+        cognitive_trace_id:
+          $ref: "#/default_invariants/cognitive_trace_id"
+        timestamp:
+          $ref: "#/default_invariants/timestamp"
+      invariants:
+        - name: "vad_confidence_range"
+          rule: "0.0 ≤ vad_confidence ≤ 1.0"
+      examples:
+        - file: "examples/voice_command_event.json"
+          description: "Final English transcript with high VAD confidence"
+    barge_in:
+      topic: "barge_in"
+      schema_uri: "contract://k1/event_bus/barge_in/1.0.0"
+      description: "User interruption event emitted when active turn is cancelled"
+      fields:
+        interrupted_turn_id:
+          type: string
+          description: "Identifier of the turn that was interrupted"
+          validation: "Non-empty ASCII string"
+        reason:
+          type: string
+          enum: ["user_interrupt", "timeout", "error"]
+          description: "Barge-in classification"
+        session_id:
+          $ref: "#/default_invariants/session_id"
+        cognitive_trace_id:
+          $ref: "#/default_invariants/cognitive_trace_id"
+        timestamp:
+          $ref: "#/default_invariants/timestamp"
+      invariants:
+        - name: "reason_enum"
+          rule: "Reason MUST be user_interrupt, timeout, or error"
+      examples:
+        - file: "examples/barge_in_event.json"
+          description: "User interruption cancelling turn response"

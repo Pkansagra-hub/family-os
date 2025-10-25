@@ -1,0 +1,11 @@
+{
+  "text": "Show me the weather for San Francisco",
+  "modality": "voice",
+  "metadata": {
+    "language": "en",
+    "asr_confidence": 0.93
+  },
+  "session_id": "session_12345",
+  "cognitive_trace_id": "5f2d4c7a8b3e41e8a9d9c6f1b2a4d687",
+  "timestamp": "2025-10-24T12:00:00Z"
+}

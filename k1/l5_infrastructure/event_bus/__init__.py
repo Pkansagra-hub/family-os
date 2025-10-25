@@ -45,10 +45,24 @@ Research Foundation:
 - Backpressure management (queue depth, overflow policies)
 """
 
-# __all__ = [
-#     "EventBus",
-#     "IntentDetected",
-#     "UserInput",
-#     "VoiceCommand",
-#     "BargeIn",
-# ]
+from .schemas import (
+    EVENT_SCHEMA_VERSION,
+    BargeInEvent,
+    EventBase,
+    EventSchemaError,
+    EventTopic,
+    IntentDetectedEvent,
+    UserInputEvent,
+    VoiceCommandEvent,
+)
+
+__all__ = [
+    "EVENT_SCHEMA_VERSION",
+    "EventBase",
+    "EventSchemaError",
+    "EventTopic",
+    "IntentDetectedEvent",
+    "UserInputEvent",
+    "VoiceCommandEvent",
+    "BargeInEvent",
+]

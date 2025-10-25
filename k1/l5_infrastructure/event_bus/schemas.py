@@ -1,118 +1,234 @@
-"""
-Event Bus Schema Definitions
+"""K1 Event Bus Schema Definitions.
 
-Purpose: Event schemas for K1 internal event bus
-Location: k1/l5_infrastructure/event_bus/schemas.py
-Performance: N/A (static definitions)
-
-Primary ADRs:
-- ADR-0004a: Event Bus (event schema definitions)
-- ADR-0030: Trace Sampling (cognitive_trace_id propagation)
-
-Key Responsibilities:
-
-1. Event Schemas:
-   - IntentDetected: Intent classification results (tier, intent, confidence, entities)
-   - UserInput: User input events (input_type, raw_text, cognitive_trace_id)
-   - VoiceCommand: Voice command transcriptions (transcript, vad_confidence, language)
-   - BargeIn: User interruption events (interrupt_time, cancellation_reason)
-
-2. Cognitive Trace ID Propagation:
-   - All events include cognitive_trace_id field (128-bit unique ID)
-   - End-to-end tracing: L1→L2→L3→L4→L5→K0
-   - W3C Trace Context format (traceparent header)
-
-3. Schema Versioning:
-   - SemVer versioning (1.0.0, 1.1.0, 2.0.0)
-   - Backward compatibility: New fields are optional
-   - Forward compatibility: Unknown fields ignored
-   - 90-day deprecation window for breaking changes
-
-Event Schemas:
-
-1. IntentDetected:
-   - tier: str (T1/T2/T3)
-   - intent: str (intent name, e.g., "search_photos")
-   - confidence: float (0.0-1.0)
-   - entities: dict (extracted entities, e.g., {"query": "beach photos"})
-   - cognitive_trace_id: str (128-bit hex)
-   - timestamp: datetime (event creation time)
-
-2. UserInput:
-   - input_type: str (text/voice)
-   - raw_text: str (user input text)
-   - cognitive_trace_id: str (128-bit hex)
-   - timestamp: datetime
-   - metadata: dict (optional, e.g., voice_confidence, language)
-
-3. VoiceCommand:
-   - transcript: str (ASR transcription)
-   - vad_confidence: float (0.0-1.0)
-   - language: str (ISO 639-1, e.g., "en")
-   - cognitive_trace_id: str (128-bit hex)
-   - timestamp: datetime
-   - partial: bool (partial vs final transcript)
-
-4. BargeIn:
-   - interrupt_time: datetime (when user interrupted)
-   - cancellation_reason: str (user_interrupt, timeout, error)
-   - cognitive_trace_id: str (128-bit hex)
-   - interrupted_turn_id: str (turn that was interrupted)
-   - timestamp: datetime
-
-Implementation Notes:
-- Use dataclasses for schema definitions (Python 3.7+)
-- Use typing for type hints (strict type checking)
-- Use datetime for timestamps (UTC timezone)
-- Use UUID for cognitive_trace_id generation
-- All events are immutable (frozen dataclasses)
-- No serialization required (in-memory references only)
-
-Example Usage:
-    # Create IntentDetected event
-    event = IntentDetected(
-        tier="T1",
-        intent="search_photos",
-        confidence=0.95,
-        entities={"query": "beach photos"},
-        cognitive_trace_id="abc123",
-        timestamp=datetime.utcnow()
-    )
-
-    # Create UserInput event
-    event = UserInput(
-        input_type="voice",
-        raw_text="Show me beach photos",
-        cognitive_trace_id="abc123",
-        timestamp=datetime.utcnow(),
-        metadata={"voice_confidence": 0.98, "language": "en"}
-    )
-
-    # Create BargeIn event
-    event = BargeIn(
-        interrupt_time=datetime.utcnow(),
-        cancellation_reason="user_interrupt",
-        cognitive_trace_id="abc123",
-        interrupted_turn_id="turn_456",
-        timestamp=datetime.utcnow()
-    )
-
-Research Foundation:
-- Event schema design (JSON Schema, Avro, Protocol Buffers)
-- Cognitive trace ID propagation (W3C Trace Context, OpenTelemetry)
-- Immutable data structures (functional programming, dataclasses)
-
-TODO:
-- [ ] Implement IntentDetected dataclass (tier, intent, confidence, entities, cognitive_trace_id)
-- [ ] Implement UserInput dataclass (input_type, raw_text, cognitive_trace_id, metadata)
-- [ ] Implement VoiceCommand dataclass (transcript, vad_confidence, language, cognitive_trace_id)
-- [ ] Implement BargeIn dataclass (interrupt_time, cancellation_reason, cognitive_trace_id, interrupted_turn_id)
-- [ ] Add schema versioning (__version__ = "1.0.0")
-- [ ] Add cognitive_trace_id generation utility (UUID4 or custom 128-bit)
-- [ ] Add timestamp utilities (UTC timezone enforcement)
-- [ ] Add schema validation (type hints, runtime checks)
-- [ ] Add unit tests for schema instantiation and validation
-- [ ] Add JSON serialization support (for logging/debugging, optional)
+This module contains the runtime dataclass representations for the Layer 1→2
+event bus payloads described in :doc:`ADR-0004a` and enforced by the contract
+``k1/contracts/event_bus/event_schemas.yaml``. The dataclasses are immutable,
+perform lightweight validation, and normalise timestamps to UTC so that event
+publishers can safely share references across the in-memory bus without
+serialization overhead.
 """
 
-# TODO: Implement event schema dataclasses (IntentDetected, UserInput, VoiceCommand, BargeIn)
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field, fields
+from datetime import datetime, timezone
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, ClassVar, Mapping
+
+EVENT_SCHEMA_VERSION = "1.0.0"
+"""Semantic version applied to all event payloads."""
+
+
+class EventSchemaError(ValueError):
+    """Raised when an event payload violates the published contract."""
+
+
+class EventTopic(str, Enum):
+    """Contracted event topics for the internal event bus."""
+
+    INTENT_DETECTED = "intent_detected"
+    USER_INPUT = "user_input"
+    VOICE_COMMAND = "voice_command"
+    BARGE_IN = "barge_in"
+
+
+_TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+
+def _empty_str_dict() -> dict[str, Any]:
+    """Return an empty dict for mapping defaults."""
+
+    return {}
+
+
+def _validate_trace_id(value: str) -> None:
+    """Ensure the trace identifier matches contract expectations."""
+
+    if not value:
+        raise EventSchemaError("cognitive_trace_id must be non-empty")
+    normalized = value.replace("-", "")
+    if not _TRACE_ID_PATTERN.fullmatch(normalized):
+        raise EventSchemaError(
+            "cognitive_trace_id must be 32 hexadecimal characters (hyphenated UUIDs allowed)",
+        )
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Normalise timestamps to timezone-aware UTC datetimes."""
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _freeze_mapping(
+    data: Mapping[str, Any] | Mapping[Any, Any] | None,
+    *,
+    field_name: str,
+) -> Mapping[str, Any]:
+    """Return an immutable mapping after validating key types."""
+
+    if data is None:
+        return MappingProxyType({})
+
+    invalid_keys = [key for key in data.keys() if not isinstance(key, str)]
+    if invalid_keys:
+        raise EventSchemaError(
+            f"{field_name} keys must be strings (invalid: {invalid_keys!r})"
+        )
+
+    return MappingProxyType(dict(data))
+
+
+def _serialise_value(value: Any) -> Any:
+    """Convert runtime dataclass attribute values for payload emission."""
+
+    if isinstance(value, MappingProxyType):
+        value = dict(value)
+    if isinstance(value, Mapping):
+        return {str(key): _serialise_value(inner) for key, inner in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_serialise_value(item) for item in value)
+    if isinstance(value, list):
+        return [_serialise_value(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EventBase:
+    """Common envelope fields shared by all Layer 1→2 events."""
+
+    session_id: str
+    cognitive_trace_id: str
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    topic: ClassVar[EventTopic]
+    schema_version: ClassVar[str] = EVENT_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:  # noqa: D401 - dataclass hook
+        if not self.session_id:
+            raise EventSchemaError("session_id must be provided")
+        _validate_trace_id(self.cognitive_trace_id)
+        object.__setattr__(self, "timestamp", _ensure_utc(self.timestamp))
+
+    def to_payload(self) -> dict[str, Any]:
+        """Serialise the event to a contract-compliant dictionary."""
+
+        payload = {
+            field_info.name: _serialise_value(getattr(self, field_info.name))
+            for field_info in fields(self)
+        }
+        payload["timestamp"] = self.timestamp.isoformat()
+        payload["topic"] = self.topic.value
+        payload["schema_version"] = self.schema_version
+        return payload
+
+
+@dataclass(slots=True, kw_only=True, frozen=True)
+class IntentDetectedEvent(EventBase):
+    """Intent detection result emitted by the multi-tier intent router."""
+
+    topic: ClassVar[EventTopic] = EventTopic.INTENT_DETECTED
+
+    intent: str
+    confidence: float
+    tier: str
+    entities: Mapping[str, Any] = field(default_factory=_empty_str_dict)
+
+    VALID_TIERS: ClassVar[tuple[str, ...]] = ("T1_RULE", "T2_SLM", "T3_LLM")
+
+    def __post_init__(self) -> None:
+        EventBase.__post_init__(self)
+        if not self.intent:
+            raise EventSchemaError("intent must be non-empty")
+        if not (0.0 <= self.confidence <= 1.0):
+            raise EventSchemaError("confidence must be between 0.0 and 1.0 inclusive")
+        if self.tier not in self.VALID_TIERS:
+            raise EventSchemaError(f"tier must be one of {self.VALID_TIERS!r}")
+        object.__setattr__(
+            self, "entities", _freeze_mapping(self.entities, field_name="entities")
+        )
+
+
+@dataclass(slots=True, kw_only=True, frozen=True)
+class UserInputEvent(EventBase):
+    """Normalised user input forwarded to the orchestration layer."""
+
+    topic: ClassVar[EventTopic] = EventTopic.USER_INPUT
+
+    text: str
+    modality: str
+    metadata: Mapping[str, Any] | None = None
+
+    VALID_MODALITIES: ClassVar[tuple[str, ...]] = ("text", "voice")
+
+    def __post_init__(self) -> None:
+        EventBase.__post_init__(self)
+        if not self.text:
+            raise EventSchemaError("text must be non-empty")
+        if self.modality not in self.VALID_MODALITIES:
+            raise EventSchemaError(f"modality must be one of {self.VALID_MODALITIES!r}")
+        frozen_metadata = _freeze_mapping(self.metadata, field_name="metadata")
+        object.__setattr__(self, "metadata", frozen_metadata)
+
+
+@dataclass(slots=True, kw_only=True, frozen=True)
+class VoiceCommandEvent(EventBase):
+    """Voice command transcription emitted by the ASR pipeline."""
+
+    topic: ClassVar[EventTopic] = EventTopic.VOICE_COMMAND
+
+    transcript: str
+    vad_confidence: float
+    language: str
+    partial: bool = False
+
+    _LANGUAGE_PATTERN: ClassVar[re.Pattern[str]] = re.compile(
+        r"^[a-z]{2}(?:-[A-Z]{2})?$"
+    )
+
+    def __post_init__(self) -> None:
+        EventBase.__post_init__(self)
+        if not self.transcript:
+            raise EventSchemaError("transcript must be non-empty")
+        if not (0.0 <= self.vad_confidence <= 1.0):
+            raise EventSchemaError(
+                "vad_confidence must be between 0.0 and 1.0 inclusive"
+            )
+        if not self._LANGUAGE_PATTERN.fullmatch(self.language):
+            raise EventSchemaError(
+                "language must be a valid ISO 639-1 or BCP-47 code (e.g., 'en', 'en-US')"
+            )
+
+
+@dataclass(slots=True, kw_only=True, frozen=True)
+class BargeInEvent(EventBase):
+    """User interruption of an active conversational turn."""
+
+    topic: ClassVar[EventTopic] = EventTopic.BARGE_IN
+
+    interrupted_turn_id: str
+    reason: str
+
+    VALID_REASONS: ClassVar[tuple[str, ...]] = ("user_interrupt", "timeout", "error")
+
+    def __post_init__(self) -> None:
+        EventBase.__post_init__(self)
+        if not self.interrupted_turn_id:
+            raise EventSchemaError("interrupted_turn_id must be non-empty")
+        if self.reason not in self.VALID_REASONS:
+            raise EventSchemaError(f"reason must be one of {self.VALID_REASONS!r}")
+
+
+__all__ = [
+    "EVENT_SCHEMA_VERSION",
+    "EventBase",
+    "EventSchemaError",
+    "EventTopic",
+    "IntentDetectedEvent",
+    "UserInputEvent",
+    "VoiceCommandEvent",
+    "BargeInEvent",
+]
