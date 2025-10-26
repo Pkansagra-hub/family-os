@@ -12,15 +12,25 @@ Performance Budget: <1% CPU overhead, <1MB memory, <1000 unique time series
 
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 from k1.l5_infrastructure.observability import get_metrics
 
 if TYPE_CHECKING:
     from k0.obs import MetricsExporter
+
+
+# ==============================================================================
+# Test Mode Configuration & Registry Isolation
+# ==============================================================================
+
+# Detect test mode to isolate Prometheus registry (prevents duplicate registration)
+_TEST_MODE = os.getenv("K1_TEST_METRICS", "0") in ("1", "true", "True")
 
 
 # ==============================================================================
@@ -176,12 +186,18 @@ class K1SessionStateMetrics:
 
 class K1MetricsCollector:
     """
-    K1 Intelligence Metrics Collector
+    K1 Intelligence Metrics Collector (Thread-Safe Singleton)
 
     Centralizes all K1-specific Prometheus metrics following RED Method (Rate, Errors, Duration).
 
+    **Singleton Pattern (Critical for Ward Tests):**
+    - Ensures exactly ONE instance per process
+    - Prevents Prometheus duplicate metric registration errors
+    - Thread-safe initialization with double-checked locking
+    - Idempotent __init__ (safe to call multiple times)
+
     Usage:
-        metrics = K1MetricsCollector()
+        metrics = K1MetricsCollector()  # Always returns same instance
 
         # Instrument command ingress
         metrics.core.command_requests_total.labels(
@@ -244,13 +260,37 @@ class K1MetricsCollector:
         - ADR-0030: Intelligent Trace Sampling (cognitive_trace_id, exemplars)
     """
 
+    # Singleton instance and thread-safety
+    _instance = None
+    _init_lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        """
+        Singleton pattern: ensure only one instance exists.
+        
+        Thread-safe using double-checked locking pattern.
+        Critical for Ward test framework which imports modules eagerly.
+        """
+        if cls._instance is None:
+            with cls._init_lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self, metrics_exporter: MetricsExporter | None = None):
         """
-        Initialize K1 metrics collector
+        Initialize K1 metrics collector (idempotent).
+        
+        Safe to call multiple times - will only initialize once.
 
         Args:
             metrics_exporter: K0 MetricsExporter instance (default: get_metrics())
         """
+        # Idempotent: only initialize once
+        if getattr(self, "_initialized", False):
+            return
+
         if metrics_exporter is None:
             metrics_exporter = get_metrics()
 
@@ -268,6 +308,9 @@ class K1MetricsCollector:
         self.bridge = self._init_bridge_metrics()
         self.sse = self._init_sse_metrics()
         self.session_state = self._init_session_state_metrics()
+
+        # Mark as initialized (idempotent pattern)
+        self._initialized = True
 
     def _metric(
         self,
@@ -604,6 +647,17 @@ def get_k1_metrics() -> K1MetricsCollector:
     if _k1_metrics is None:
         _k1_metrics = K1MetricsCollector()
     return _k1_metrics
+
+
+def reset_k1_metrics():
+    """
+    Reset singleton for testing. Clears global instance.
+
+    **WARNING**: For testing only. Do NOT use in production code.
+    Prometheus registry cleanup must be handled separately.
+    """
+    global _k1_metrics
+    _k1_metrics = None
 
 
 # ==============================================================================

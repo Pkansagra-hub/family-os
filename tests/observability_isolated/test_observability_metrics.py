@@ -24,6 +24,11 @@ Test Strategy:
 Last Updated: January 2025
 """
 
+import os
+
+# Ward conftest fixtures must be imported explicitly
+import sys
+
 from ward import test
 
 from k1.l5_infrastructure.observability.metrics import (
@@ -37,15 +42,17 @@ from k1.l5_infrastructure.observability.metrics import (
     record_tool_call,
 )
 
+sys.path.insert(0, os.path.dirname(__file__))
+from conftest import k1_metrics_collector
+
 # ==============================================================================
 # Test Group 1: K1MetricsCollector Initialization
 # ==============================================================================
 
 
 @test("K1MetricsCollector initializes with 8 metric groups")
-def _():
+def _(collector=k1_metrics_collector):
     """Test K1MetricsCollector creates all 8 metric group dataclasses"""
-    collector = K1MetricsCollector()
 
     # Verify all 8 groups exist
     assert collector.core is not None, "CoreMetrics group missing"
@@ -59,9 +66,8 @@ def _():
 
 
 @test("K1MetricsCollector has core command metrics")
-def _():
+def _(collector=k1_metrics_collector):
     """Test CoreMetrics group has all required metrics"""
-    collector = K1MetricsCollector()
 
     # Verify metrics exist
     assert hasattr(collector.core, "command_requests_total")
@@ -70,9 +76,8 @@ def _():
 
 
 @test("K1MetricsCollector has orchestrator metrics")
-def _():
+def _(collector=k1_metrics_collector):
     """Test OrchestratorMetrics group has all required metrics"""
-    collector = K1MetricsCollector()
 
     # Verify metrics exist
     assert hasattr(collector.orchestrator, "orchestration_phase_latency_ms")
@@ -81,9 +86,8 @@ def _():
 
 
 @test("K1MetricsCollector has agent metrics")
-def _():
+def _(collector=k1_metrics_collector):
     """Test AgentMetrics group has all required metrics"""
-    collector = K1MetricsCollector()
 
     # Verify metrics exist
     assert hasattr(collector.agent, "agent_lifecycle_transitions_total")
@@ -93,9 +97,8 @@ def _():
 
 
 @test("K1MetricsCollector has bridge metrics for K0 integration")
-def _():
+def _(collector=k1_metrics_collector):
     """Test BridgeMetrics group has K0 command/query metrics"""
-    collector = K1MetricsCollector()
 
     # Verify K0 bridge metrics exist
     assert hasattr(collector.bridge, "k0_command_latency_ms")
@@ -104,9 +107,8 @@ def _():
 
 
 @test("K1MetricsCollector has SSE streaming metrics")
-def _():
+def _(collector=k1_metrics_collector):
     """Test SSEMetrics group has event streaming metrics"""
-    collector = K1MetricsCollector()
 
     # Verify SSE metrics exist
     assert hasattr(collector.sse, "sse_events_sent_total")
@@ -115,9 +117,8 @@ def _():
 
 
 @test("K1MetricsCollector has session_state metrics")
-def _():
+def _(collector=k1_metrics_collector):
     """Test SessionStateMetrics group has serialization/eviction metrics"""
-    collector = K1MetricsCollector()
 
     # Verify session_state metrics exist
     assert hasattr(collector.session_state, "session_state_size_bytes")
@@ -130,20 +131,23 @@ def _():
 
 
 @test("get_k1_metrics() returns singleton instance")
-def _():
+def _(collector=k1_metrics_collector):
     """Test get_k1_metrics() returns the same instance across calls"""
+    # Both calls should return the same global fixture instance
     metrics1 = get_k1_metrics()
     metrics2 = get_k1_metrics()
 
     # Verify same instance (singleton pattern)
     assert metrics1 is metrics2
+    assert metrics1 is collector  # Also verify it's the fixture instance
 
 
 @test("get_k1_metrics() returns K1MetricsCollector instance")
-def _():
+def _(collector=k1_metrics_collector):
     """Test get_k1_metrics() returns proper type"""
     metrics = get_k1_metrics()
     assert isinstance(metrics, K1MetricsCollector)
+    assert metrics is collector  # Verify it's the global fixture instance
 
 
 # ==============================================================================
@@ -244,9 +248,8 @@ def _():
 
 
 @test("All metrics use k1_intelligence namespace")
-def _():
+def _(collector=k1_metrics_collector):
     """Test all metrics use k1_intelligence namespace from integration layer"""
-    collector = K1MetricsCollector()
 
     # Sample metrics from each group
     assert collector.core.command_requests_total._name.startswith("k1_intelligence_")
@@ -269,9 +272,8 @@ def _():
 
 
 @test("K0 bridge metrics include band labels for privacy bands")
-def _():
+def _(collector=k1_metrics_collector):
     """Test K0 bridge metrics have 'band' label for GREEN/AMBER/RED classification"""
-    collector = K1MetricsCollector()
 
     # K0 command latency should have band + command_type + status labels
     metric = collector.bridge.k0_command_latency_ms
@@ -281,7 +283,7 @@ def _():
 
 
 @test("SSE metrics support 17 event types from ADR-0016d taxonomy")
-def _():
+def _(_=k1_metrics_collector):
     """Test SSE metrics can track all 17 event types"""
     # Record sample events from different categories
     event_types = [
@@ -303,9 +305,8 @@ def _():
 
 
 @test("Session state metrics track serialization size")
-def _():
+def _(collector=k1_metrics_collector):
     """Test session_state metrics can track size_bytes histogram"""
-    collector = K1MetricsCollector()
     metric = collector.session_state.session_state_size_bytes
 
     # Verify histogram exists and has section label
