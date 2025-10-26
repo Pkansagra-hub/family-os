@@ -129,8 +129,8 @@ async def _(fsm=fresh_fsm):
     new_zone = fsm.update_temperature(64)  # Below 65°C (WARM→COOL threshold)
     assert new_zone is None  # Blocked by min_state_duration
 
-    # Wait for downgrade cooldown (30s) + min_state_duration (10s)
-    await asyncio.sleep(31)  # Wait > 30s downgrade cooldown
+    # Wait for min_state_duration (10s) + downgrade cooldown (30s) = 40s total
+    await asyncio.sleep(41)  # Wait > 40s (10s min_state + 30s cooldown)
     new_zone = fsm.update_temperature(64)
     assert new_zone == ThermalZone.COOL
 

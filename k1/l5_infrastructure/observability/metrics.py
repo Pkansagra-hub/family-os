@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 from k1.l5_infrastructure.observability import get_metrics
 
@@ -267,7 +267,7 @@ class K1MetricsCollector:
     def __new__(cls, *args, **kwargs):
         """
         Singleton pattern: ensure only one instance exists.
-        
+
         Thread-safe using double-checked locking pattern.
         Critical for Ward test framework which imports modules eagerly.
         """
@@ -281,7 +281,7 @@ class K1MetricsCollector:
     def __init__(self, metrics_exporter: MetricsExporter | None = None):
         """
         Initialize K1 metrics collector (idempotent).
-        
+
         Safe to call multiple times - will only initialize once.
 
         Args:
