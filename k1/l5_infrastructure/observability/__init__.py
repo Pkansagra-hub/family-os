@@ -139,9 +139,26 @@ def get_tracer() -> TracerFactory:
     During testing (detected by sys.modules containing 'pytest' or 'ward'), OTLP
     export is disabled to avoid connection errors to non-existent collectors.
 
+    Environment Variables:
+        OTLP_HTTP_ENDPOINT: OTLP HTTP endpoint (default: http://localhost:4318/v1/traces)
+        OTEL_SERVICE_NAME: Service name (default: k1_intelligence)
+        ENVIRONMENT: Deployment environment (default: dev)
+        OTEL_SAMPLE_RATIO: Trace sampling ratio 0.0-1.0 (default: 1.0 for dev)
+
     Returns:
         TracerFactory configured for K1
+
+    Example:
+        # Development (defaults)
+        tracer = get_tracer()
+
+        # Production (via env vars)
+        export OTLP_HTTP_ENDPOINT=https://tempo.prod.internal:4318/v1/traces
+        export OTEL_SERVICE_NAME=k1_intelligence
+        export ENVIRONMENT=production
+        export OTEL_SAMPLE_RATIO=0.01  # 1% sampling
     """
+    import os
     import sys
 
     global _tracer_factory
@@ -149,13 +166,22 @@ def get_tracer() -> TracerFactory:
         # Disable OTLP export during testing to avoid connection errors
         # Check if we're in a test environment
         is_testing = "pytest" in sys.modules or "ward" in sys.modules
-        otlp_endpoint = None if is_testing else "http://localhost:4318/v1/traces"
+
+        # Environment-based configuration (ADR-0030)
+        otlp_endpoint = (
+            None
+            if is_testing
+            else os.getenv("OTLP_HTTP_ENDPOINT", "http://localhost:4318/v1/traces")
+        )
+        service_name = os.getenv("OTEL_SERVICE_NAME", "k1_intelligence")
+        environment = os.getenv("ENVIRONMENT", "dev")
+        sample_ratio = float(os.getenv("OTEL_SAMPLE_RATIO", "1.0"))
 
         _tracer_factory = TracerFactory(
-            service_name="k1_intelligence",
+            service_name=service_name,
             service_version="1.0.0",
-            environment="dev",
+            environment=environment,
             otlp_endpoint=otlp_endpoint,  # Tempo OTLP HTTP endpoint (None during tests)
-            sample_ratio=1.0,  # 100% sampling for development (adjust for production)
+            sample_ratio=sample_ratio,  # 100% sampling for development (adjust for production)
         )
     return _tracer_factory

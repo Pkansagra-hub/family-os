@@ -108,8 +108,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
-from k1.l5_infrastructure.config.schema_validator import (SchemaValidator,
-                                                          ValidationError)
+from k1.l5_infrastructure.config.schema_validator import (
+    SchemaValidator,
+    ValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +119,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ConfigLoadResult:
     """Result of config loading operation"""
+
     success: bool
     config_data: Optional[Dict[str, Any]] = None
     errors: List[ValidationError] = field(default_factory=list)
@@ -146,7 +149,7 @@ class ConfigLoader:
     def __init__(
         self,
         config_dir: Optional[str] = None,
-        schema_validator: Optional[SchemaValidator] = None
+        schema_validator: Optional[SchemaValidator] = None,
     ):
         """Initialize config loader
 
@@ -172,8 +175,7 @@ class ConfigLoader:
         self._callbacks: List[Callable[[str, Dict[str, Any]], None]] = []
 
         logger.info(
-            "[ConfigLoader] Initialized",
-            extra={'config_dir': str(self.config_dir)}
+            "[ConfigLoader] Initialized", extra={"config_dir": str(self.config_dir)}
         )
 
     def load_config(self, config_name: str) -> ConfigLoadResult:
@@ -188,6 +190,7 @@ class ConfigLoader:
         Performance: <50ms P95 (<30ms typical)
         """
         import time
+
         start_time = time.perf_counter()
 
         try:
@@ -196,12 +199,14 @@ class ConfigLoader:
             if config_file is None:
                 return ConfigLoadResult(
                     success=False,
-                    errors=[ValidationError(
-                        path="",
-                        message=f"Config file not found: {config_name}.yaml or {config_name}.yml",
-                        expected="YAML file in config directory",
-                        actual=f"{self.config_dir}/{config_name}.yaml"
-                    )]
+                    errors=[
+                        ValidationError(
+                            path="",
+                            message=f"Config file not found: {config_name}.yaml or {config_name}.yml",
+                            expected="YAML file in config directory",
+                            actual=f"{self.config_dir}/{config_name}.yaml",
+                        )
+                    ],
                 )
 
             # Read and parse YAML
@@ -209,12 +214,14 @@ class ConfigLoader:
             if raw_yaml is None:
                 return ConfigLoadResult(
                     success=False,
-                    errors=[ValidationError(
-                        path="",
-                        message=f"Failed to read YAML file: {config_file}",
-                        expected="Valid YAML file",
-                        actual=str(config_file)
-                    )]
+                    errors=[
+                        ValidationError(
+                            path="",
+                            message=f"Failed to read YAML file: {config_file}",
+                            expected="Valid YAML file",
+                            actual=str(config_file),
+                        )
+                    ],
                 )
 
             # Environment variable substitution
@@ -227,7 +234,7 @@ class ConfigLoader:
                     success=False,
                     config_data=config_data,  # Return data even on validation failure for debugging
                     errors=validation_errors,
-                    latency_ms=(time.perf_counter() - start_time) * 1000
+                    latency_ms=(time.perf_counter() - start_time) * 1000,
                 )
 
             # Cache config (thread-safe)
@@ -238,29 +245,29 @@ class ConfigLoader:
 
             logger.info(
                 "[ConfigLoader] Config loaded",
-                extra={'config_name': config_name, 'latency_ms': f"{latency_ms:.2f}"}
+                extra={"config_name": config_name, "latency_ms": f"{latency_ms:.2f}"},
             )
 
             return ConfigLoadResult(
-                success=True,
-                config_data=config_data,
-                latency_ms=latency_ms
+                success=True, config_data=config_data, latency_ms=latency_ms
             )
 
         except Exception as e:
             logger.error(
                 "[ConfigLoader] Config load failed",
-                extra={'config_name': config_name, 'error': str(e)}
+                extra={"config_name": config_name, "error": str(e)},
             )
             return ConfigLoadResult(
                 success=False,
-                errors=[ValidationError(
-                    path="",
-                    message=f"Unexpected error loading config: {str(e)}",
-                    expected="Valid config file",
-                    actual=str(e)
-                )],
-                latency_ms=(time.perf_counter() - start_time) * 1000
+                errors=[
+                    ValidationError(
+                        path="",
+                        message=f"Unexpected error loading config: {str(e)}",
+                        expected="Valid config file",
+                        actual=str(e),
+                    )
+                ],
+                latency_ms=(time.perf_counter() - start_time) * 1000,
             )
 
     def get_config(self, config_name: str) -> Optional[Dict[str, Any]]:
@@ -287,11 +294,11 @@ class ConfigLoader:
         Performance: <100ms P95 (<80ms typical)
         """
         import time
+
         start_time = time.perf_counter()
 
         logger.info(
-            "[ConfigLoader] Reloading config",
-            extra={'config_name': config_name}
+            "[ConfigLoader] Reloading config", extra={"config_name": config_name}
         )
 
         # Load new config
@@ -307,19 +314,22 @@ class ConfigLoader:
                     except Exception as e:
                         logger.error(
                             "[ConfigLoader] Callback failed",
-                            extra={'config_name': config_name, 'error': str(e)}
+                            extra={"config_name": config_name, "error": str(e)},
                         )
 
             result.latency_ms = (time.perf_counter() - start_time) * 1000
 
             logger.info(
                 "[ConfigLoader] Config reloaded",
-                extra={'config_name': config_name, 'latency_ms': f"{result.latency_ms:.2f}"}
+                extra={
+                    "config_name": config_name,
+                    "latency_ms": f"{result.latency_ms:.2f}",
+                },
             )
         else:
             logger.warning(
                 "[ConfigLoader] Config reload failed (rollback to cached)",
-                extra={'config_name': config_name, 'num_errors': len(result.errors)}
+                extra={"config_name": config_name, "num_errors": len(result.errors)},
             )
 
         return result
@@ -333,7 +343,7 @@ class ConfigLoader:
         self._callbacks.append(callback)
         logger.debug(
             "[ConfigLoader] Callback registered",
-            extra={'num_callbacks': len(self._callbacks)}
+            extra={"num_callbacks": len(self._callbacks)},
         )
 
     def _find_config_file(self, config_name: str) -> Optional[Path]:
@@ -351,13 +361,13 @@ class ConfigLoader:
     def _read_yaml_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """Read and parse YAML file"""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
             if not isinstance(data, dict):
                 logger.error(
                     "[ConfigLoader] YAML file must contain dictionary",
-                    extra={'file_path': str(file_path), 'type': type(data).__name__}
+                    extra={"file_path": str(file_path), "type": type(data).__name__},
                 )
                 return None
 
@@ -366,13 +376,13 @@ class ConfigLoader:
         except yaml.YAMLError as e:
             logger.error(
                 "[ConfigLoader] YAML parse error",
-                extra={'file_path': str(file_path), 'error': str(e)}
+                extra={"file_path": str(file_path), "error": str(e)},
             )
             return None
         except Exception as e:
             logger.error(
                 "[ConfigLoader] File read error",
-                extra={'file_path': str(file_path), 'error': str(e)}
+                extra={"file_path": str(file_path), "error": str(e)},
             )
             return None
 
@@ -396,7 +406,7 @@ class ConfigLoader:
             return [self._substitute_env_vars(item) for item in config_data]
         elif isinstance(config_data, str):
             # Pattern: ${ENV_VAR} or ${ENV_VAR:default}
-            pattern = r'\$\{([A-Z_][A-Z0-9_]*)(?::([^}]*))?\}'
+            pattern = r"\$\{([A-Z_][A-Z0-9_]*)(?::([^}]*))?\}"
 
             def replace_env_var(match):
                 env_var = match.group(1)
@@ -411,14 +421,10 @@ class ConfigLoader:
                 else:
                     logger.warning(
                         "[ConfigLoader] Environment variable not set (no default)",
-                        extra={'env_var': env_var}
+                        extra={"env_var": env_var},
                     )
                     return match.group(0)  # Keep original ${ENV_VAR}
 
-            return re.sub(pattern, replace_env_var, config_data)
-        else:
-            return config_data
-            return config_data
             return re.sub(pattern, replace_env_var, config_data)
         else:
             return config_data

@@ -87,7 +87,12 @@ async def _(
     rejection_metric = (
         REGISTRY.get_sample_value(
             "k1_intelligence_circuit_breaker_calls_total",
-            {"service": "resilience_test", "result": "rejected"},
+            {
+                "component": "k1.resilience",
+                "service": "resilience_test",
+                "alternate_service": "",
+                "result": "rejected",
+            },
         )
         or 0.0
     )
@@ -102,7 +107,12 @@ async def _(
     updated = (
         REGISTRY.get_sample_value(
             "k1_intelligence_circuit_breaker_calls_total",
-            {"service": "resilience_test", "result": "rejected"},
+            {
+                "component": "k1.resilience",
+                "service": "resilience_test",
+                "alternate_service": "",
+                "result": "rejected",
+            },
         )
         or 0.0
     )
@@ -175,7 +185,9 @@ async def _(
     failure_total = REGISTRY.get_sample_value(
         "k1_intelligence_circuit_breaker_failures_total",
         {
+            "component": "k1.resilience",
             "service": "resilience_test",
+            "alternate_service": "",
             "failure_type": FailureClassification.SLOW_CALL.value,
         },
     )

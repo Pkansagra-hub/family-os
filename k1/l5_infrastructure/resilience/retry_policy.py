@@ -23,6 +23,19 @@ contracts:
 ``jitter = ±20%``  → prevents thundering herd behaviour
 ``retry_budget = 10_000ms`` → total time spent retrying per operation
 
+Threading Model:
+    All retry policy APIs are async and require an event loop. The policy uses
+    asyncio.sleep() for delays and must be called from within an async context.
+    Do not use threading.Thread or multiprocessing; K1 follows the async/await
+    concurrency model exclusively.
+
+    Example:
+        >>> policy = RetryPolicy()
+        >>> result = await policy.execute(operation, idempotent=True)  # ✓ Correct
+        >>> # policy.execute(operation, idempotent=True)  # ✗ Wrong: missing await
+
+    For background tasks, use asyncio.create_task() instead of threads.
+
 Usage example:
 
 .. code-block:: python
@@ -288,26 +301,26 @@ _TRACER = get_tracer()
 _ATTEMPTS_COUNTER = _METRICS.counter(
     "retry_attempts_total",
     "Retry attempts executed",
-    labelnames=("policy", "classification", "result"),
+    labelnames=("component", "policy", "classification", "result"),
 )
 
 _OUTCOME_COUNTER = _METRICS.counter(
     "retry_outcomes_total",
     "Retry policy outcomes",
-    labelnames=("policy", "outcome"),
+    labelnames=("component", "policy", "outcome"),
 )
 
 _DELAY_HISTOGRAM = _METRICS.histogram(
     "retry_delay_ms",
     "Delay applied between retry attempts",
-    labelnames=("policy",),
+    labelnames=("component", "policy"),
     buckets=(10, 50, 100, 200, 400, 800, 1600, 3200, 6400),
 )
 
 _EXECUTION_HISTOGRAM = _METRICS.histogram(
     "retry_execution_ms",
     "Total execution time guarded by the retry policy",
-    labelnames=("policy", "outcome"),
+    labelnames=("component", "policy", "outcome"),
     buckets=(
         10,
         50,
@@ -421,6 +434,29 @@ class RetryPolicy:
                         description=description,
                         trace_id=cognitive_trace_id,
                     )
+
+                    # Fix 5: Invoke circuit breaker fallback if configured
+                    fallback = getattr(circuit_breaker, "fallback", None)
+                    if fallback is not None and callable(fallback):
+                        logger.info(
+                            "retry_invoking_circuit_breaker_fallback",
+                            policy=policy_name,
+                            description=description,
+                            trace_id=cognitive_trace_id,
+                        )
+                        try:
+                            fallback_result = await _maybe_await(fallback())
+                            return fallback_result  # type: ignore[return-value]
+                        except Exception as fallback_err:
+                            logger.error(
+                                "retry_circuit_breaker_fallback_failed",
+                                policy=policy_name,
+                                description=description,
+                                error=str(fallback_err),
+                                trace_id=cognitive_trace_id,
+                            )
+                            # Fall through to raise RetryAbortedError
+
                     raise RetryAbortedError(
                         description=description,
                         classification=FailureType.TRANSIENT,
@@ -441,6 +477,7 @@ class RetryPolicy:
 
                     # Record metrics for the failed attempt.
                     _ATTEMPTS_COUNTER.labels(
+                        component="k1.resilience",
                         policy=policy_name,
                         classification=classification.value,
                         result="failure",
@@ -465,7 +502,9 @@ class RetryPolicy:
                     delay_ms = outcome.delay_ms
                     total_delay_ms = outcome.total_elapsed_ms
 
-                    _DELAY_HISTOGRAM.labels(policy=policy_name).observe(delay_ms)
+                    _DELAY_HISTOGRAM.labels(
+                        component="k1.resilience", policy=policy_name
+                    ).observe(delay_ms)
 
                     await self._sleep(delay_ms / 1000.0)
                     attempt += 1
@@ -474,14 +513,16 @@ class RetryPolicy:
                 # Success path: record metrics and return.
                 elapsed_ms = (self._time_source() - start) * 1000.0
                 _ATTEMPTS_COUNTER.labels(
+                    component="k1.resilience",
                     policy=policy_name,
                     classification="none",
                     result="success",
                 ).inc()
-                _OUTCOME_COUNTER.labels(policy=policy_name, outcome="success").inc()
+                _OUTCOME_COUNTER.labels(
+                    component="k1.resilience", policy=policy_name, outcome="success"
+                ).inc()
                 _EXECUTION_HISTOGRAM.labels(
-                    policy=policy_name,
-                    outcome="success",
+                    component="k1.resilience", policy=policy_name, outcome="success"
                 ).observe(elapsed_ms)
 
                 logger.info(
@@ -616,10 +657,12 @@ class RetryPolicy:
         trace_id: Optional[str],
     ) -> None:
         elapsed_ms = (self._time_source() - start) * 1000.0
-        _OUTCOME_COUNTER.labels(policy=policy_name, outcome=outcome).inc()
-        _EXECUTION_HISTOGRAM.labels(policy=policy_name, outcome=outcome).observe(
-            elapsed_ms
-        )
+        _OUTCOME_COUNTER.labels(
+            component="k1.resilience", policy=policy_name, outcome=outcome
+        ).inc()
+        _EXECUTION_HISTOGRAM.labels(
+            component="k1.resilience", policy=policy_name, outcome=outcome
+        ).observe(elapsed_ms)
         logger.error(
             "retry_outcome",
             policy=policy_name,
@@ -627,6 +670,64 @@ class RetryPolicy:
             outcome=outcome,
             elapsed_ms=round(elapsed_ms, 2),
             trace_id=trace_id,
+        )
+
+    async def execute_idempotent(
+        self,
+        operation: Callable[[], Awaitable[T] | T],
+        *,
+        cognitive_trace_id: Optional[str] = None,
+        description: str = "operation",
+        on_retry: Optional[Callable[[RetryAttemptInfo], Awaitable[None] | None]] = None,
+        circuit_breaker: Optional[Any] = None,
+    ) -> T:
+        """Convenience wrapper for executing idempotent operations with retry protection.
+
+        This is a shorthand for ``execute(..., idempotent=True)`` to simplify
+        common read operations, queries, and other safe-to-retry work.
+
+        Parameters
+        ----------
+        operation:
+                Callable that performs the work. It may be synchronous or async.
+        cognitive_trace_id:
+                Trace identifier to propagate through observability stack.
+        description:
+                Human-readable description used in logs/metrics.
+        on_retry:
+                Optional callback invoked before each retry with attempt metadata.
+        circuit_breaker:
+                Optional circuit breaker instance. If provided and configured to be
+                respected, retries will stop when the breaker is OPEN.
+
+        Returns
+        -------
+        T
+                The result of the operation.
+
+        Raises
+        ------
+        RetryBudgetExceeded
+                When the retry budget is exhausted.
+        RetryAbortedError
+                When the circuit breaker is OPEN (if configured).
+
+        Examples
+        --------
+        >>> policy = RetryPolicy()
+        >>> result = await policy.execute_idempotent(
+        ...     lambda: fetch_user_data(user_id),
+        ...     description="fetch_user_data",
+        ...     cognitive_trace_id=trace_id,
+        ... )
+        """
+        return await self.execute(
+            operation,
+            idempotent=True,
+            cognitive_trace_id=cognitive_trace_id,
+            description=description,
+            on_retry=on_retry,
+            circuit_breaker=circuit_breaker,
         )
 
 

@@ -205,11 +205,43 @@ class K1MetricsCollector:
         - Memory overhead: ~1MB (Prometheus client)
         - CPU overhead: <1% (continuous profiling verified)
 
+    **CARDINALITY CONSTRAINTS (CRITICAL):**
+
+        **Budget: <1000 unique time series** (ADR-0029)
+
+        **HIGH RISK LABELS (avoid per-instance IDs):**
+        - ❌ agent_id, subscriber_id, session_id, task_id (can explode to 10K+ series)
+        - ✅ Use coarse types: agent_type, session_tier, task_phase
+
+        **Label Cardinality Guidelines:**
+        - band: 3 values (GREEN, AMBER, RED)
+        - status: 4-5 values (success, failure, timeout, cancelled)
+        - agent_type: 5 values (concierge, planner, researcher, safety_watch, tool_runner)
+        - phase/stage: 3-6 values (negotiation, selection, execution)
+        - tool_name: ~20 values (curated list, not dynamic)
+        - error_type: ~10 values (enum, not freeform strings)
+        - rule_violated: ~5 values (schema, budget, policy, rate_limit, security)
+
+        **Cardinality Math:**
+        - command_requests_total: 3 (band) × 4 (status) × 5 (type) = 60 series
+        - agent_lifecycle: 6 (from) × 6 (to) × 5 (type) = 180 series
+        - tool_calls: 20 (tool) × 4 (status) = 80 series
+        - **Total estimate: ~900 series** (90% of budget)
+
+        **For per-instance correlation:**
+        - Use **exemplars** (attach cognitive_trace_id to histogram samples)
+        - Use **structured logs** with cognitive_trace_id (query-time join)
+        - Do NOT use agent_id/subscriber_id as Prometheus labels
+
+        **Violation Detection:**
+        - Monitor: `count(k1_intelligence_command_requests_total)` < 1000
+        - Alert if exceeds 1000 series (cardinality explosion)
+
     ADR References:
-        - ADR-0029: Prometheus Metrics (RED Method)
+        - ADR-0029: Prometheus Metrics (RED Method, <1000 series budget)
         - ADR-0029c: Component Metrics (Agent, Orchestrator, Planner, Tool)
-        - ADR-0024: Performance Budgets
-        - ADR-0030: Intelligent Trace Sampling (cognitive_trace_id)
+        - ADR-0024: Performance Budgets (<1% CPU, <1MB memory)
+        - ADR-0030: Intelligent Trace Sampling (cognitive_trace_id, exemplars)
     """
 
     def __init__(self, metrics_exporter: MetricsExporter | None = None):
@@ -223,6 +255,9 @@ class K1MetricsCollector:
             metrics_exporter = get_metrics()
 
         self._exporter = metrics_exporter
+        self._registered: set[str] = (
+            set()
+        )  # Track registered metrics (hot-reload safety)
 
         # Initialize metric groups
         self.core = self._init_core_metrics()
@@ -234,6 +269,47 @@ class K1MetricsCollector:
         self.sse = self._init_sse_metrics()
         self.session_state = self._init_session_state_metrics()
 
+    def _metric(
+        self,
+        kind: str,
+        name: str,
+        description: str,
+        labelnames: list[str] | None = None,
+        **kwargs,
+    ):
+        """
+        Idempotent metric registration (prevents hot-reload duplicate errors)
+
+        Args:
+            kind: Metric type ('counter', 'gauge', 'histogram')
+            name: Metric name
+            description: Metric description
+            labelnames: Label names
+            **kwargs: Additional arguments (buckets, etc.)
+
+        Returns:
+            Metric instance (Counter, Gauge, or Histogram)
+        """
+        fq_name = f"{kind}:{name}"
+
+        # If already registered, return existing metric (no-op)
+        if fq_name in self._registered:
+            # Metric already exists, retrieve it from exporter's registry
+            # K0 MetricsExporter caches metrics internally
+            return getattr(self._exporter, kind)(
+                name=name,
+                description=description,
+                labelnames=labelnames or [],
+                **kwargs,
+            )
+
+        # First registration: create and track
+        metric = getattr(self._exporter, kind)(
+            name=name, description=description, labelnames=labelnames or [], **kwargs
+        )
+        self._registered.add(fq_name)
+        return metric
+
     # ==========================================================================
     # Core Metrics Initialization (RED Method)
     # ==========================================================================
@@ -242,21 +318,24 @@ class K1MetricsCollector:
         """Initialize core K1 request metrics (RED Method)"""
 
         # Rate: Command requests per second
-        command_requests_total = self._exporter.counter(
+        command_requests_total = self._metric(
+            kind="counter",
             name="command_requests_total",
             description="Total command requests received by K1 Intelligence module",
             labelnames=["band", "status", "command_type"],
         )
 
         # Errors: Command failures per second
-        command_errors_total = self._exporter.counter(
+        command_errors_total = self._metric(
+            kind="counter",
             name="command_errors_total",
             description="Total command errors in K1 Intelligence module",
             labelnames=["band", "error_type", "component"],
         )
 
         # Duration: Command latency distribution
-        command_latency_ms = self._exporter.histogram(
+        command_latency_ms = self._metric(
+            kind="histogram",
             name="command_latency_ms",
             description="K1 Intelligence command end-to-end latency distribution",
             labelnames=["band", "command_type"],

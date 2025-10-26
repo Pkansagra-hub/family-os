@@ -12,15 +12,15 @@ Event Bus Architecture (ADR-0004a, ADR-0048):
 - 100% K1-internal (no K0 boundary crossing)
 - In-memory pub/sub (asyncio.Queue per subscriber)
 - Zero-copy: Pass references, no serialization
-- Topic-based routing (INTENT_DETECTED, USER_INPUT, VOICE_COMMAND, BARGE_IN)
+- Topic-based routing using bare snake_case (intent_detected, user_input, voice_command, barge_in)
 - Multiple subscribers per topic (1-to-N fanout)
 - <5ms delivery latency (<2ms typical, <1ms per event)
 
-Key Topics:
-- k1.intent.detected: Intent classification results (T1/T2/T3)
-- k1.user.input: User input events (text/voice)
-- k1.voice.command: Voice command transcriptions
-- k1.barge_in: User interruption events
+Key Topics (bare snake_case from EventTopic enum):
+- intent_detected: Intent classification results (T1/T2/T3)
+- user_input: User input events (text/voice)
+- voice_command: Voice command transcriptions
+- barge_in: User interruption events
 
 Backpressure (ADR-0048):
 - Subscriber queue depth: 50 max (1000 for K1 internal)
@@ -36,7 +36,7 @@ Performance (ADR-0024):
 
 Primary ADRs:
 - ADR-0004a: Event Bus (Layer 1-2 communication, pub/sub, zero-copy)
-- ADR-0048: K1 Internal Event Bus (in-memory pub/sub, k1.* namespace)
+- ADR-0048: K1 Internal Event Bus (in-memory pub/sub, bare snake_case topics)
 - ADR-0024: Performance Budgets (event bus <5ms)
 
 Research Foundation:

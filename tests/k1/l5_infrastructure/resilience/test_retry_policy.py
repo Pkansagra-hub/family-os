@@ -110,6 +110,7 @@ async def _(
     before_failures = await _get_metric(
         "retry_attempts_total",
         {
+            "component": "k1.resilience",
             "policy": "component_test",
             "classification": FailureType.TRANSIENT.value,
             "result": "failure",
@@ -118,7 +119,11 @@ async def _(
 
     before_success = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "success"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "success",
+        },
     )
 
     result = await policy.execute(
@@ -135,6 +140,7 @@ async def _(
     after_failures = await _get_metric(
         "retry_attempts_total",
         {
+            "component": "k1.resilience",
             "policy": "component_test",
             "classification": FailureType.TRANSIENT.value,
             "result": "failure",
@@ -143,7 +149,11 @@ async def _(
 
     after_success = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "success"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "success",
+        },
     )
 
     assert after_failures == before_failures + 2.0
@@ -159,7 +169,11 @@ async def _(policy_dep: Any = retry_policy) -> None:
 
     before_aborted = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "aborted"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "aborted",
+        },
     )
 
     with raises(RetryAbortedError) as exc_info:
@@ -175,7 +189,11 @@ async def _(policy_dep: Any = retry_policy) -> None:
 
     after_aborted = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "aborted"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "aborted",
+        },
     )
 
     assert after_aborted == before_aborted + 1.0
@@ -215,7 +233,11 @@ async def _(policy_dep: Any = retry_policy) -> None:
 
     before_circuit = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "circuit_open"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "circuit_open",
+        },
     )
 
     with raises(RetryAbortedError) as exc_info:
@@ -233,10 +255,78 @@ async def _(policy_dep: Any = retry_policy) -> None:
 
     after_circuit = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "component_test", "outcome": "circuit_open"},
+        {
+            "component": "k1.resilience",
+            "policy": "component_test",
+            "outcome": "circuit_open",
+        },
     )
 
     assert after_circuit == before_circuit + 1.0
+
+
+@test("retry policy invokes circuit breaker fallback when open")
+async def _(policy_dep: Any = retry_policy) -> None:
+    """Test that retry policy invokes circuit breaker fallback when OPEN (Fix 5)."""
+    policy = cast(RetryPolicy, policy_dep)
+    executed = False
+    fallback_invoked = False
+
+    async def never_called() -> str:
+        nonlocal executed
+        executed = True
+        return "operation-result"
+
+    async def fallback_fn() -> str:
+        nonlocal fallback_invoked
+        fallback_invoked = True
+        return "fallback-result"
+
+    class _BreakerWithFallback:
+        __slots__ = ("is_open", "fallback")
+
+        def __init__(self) -> None:
+            self.is_open = True
+            self.fallback = fallback_fn
+
+    breaker = _BreakerWithFallback()
+
+    # Execute should invoke fallback and return its result
+    result = await policy.execute(
+        never_called,
+        idempotent=True,
+        description="circuit-open-with-fallback",
+        circuit_breaker=breaker,
+    )
+
+    # Verify fallback was invoked and operation was not
+    assert fallback_invoked is True, "Fallback should have been invoked"
+    assert executed is False, "Operation should not have been executed"
+    assert result == "fallback-result", "Should return fallback result"
+
+
+@test("execute_idempotent convenience wrapper works correctly")
+async def _(policy_dep: Any = retry_policy) -> None:
+    """Test that execute_idempotent() wrapper simplifies idempotent operations (Fix 4)."""
+    policy = cast(RetryPolicy, policy_dep)
+    attempts = 0
+
+    async def transient_then_success() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise TimeoutError("transient failure")
+        return "success"
+
+    # Use convenience wrapper (should retry automatically)
+    result = await policy.execute_idempotent(
+        transient_then_success,
+        description="idempotent-wrapper-test",
+    )
+
+    # Verify it retried and succeeded
+    assert result == "success", "Should return success result"
+    assert attempts == 3, "Should have attempted 3 times (2 retries)"
 
 
 @test("retry policy enforces retry budget and raises RetryBudgetExceeded")
@@ -297,6 +387,10 @@ async def _(
     # Verify budget_exhausted metric incremented
     after_budget = await _get_metric(
         "retry_outcomes_total",
-        {"policy": "budget_test", "outcome": "budget_exhausted"},
+        {
+            "component": "k1.resilience",
+            "policy": "budget_test",
+            "outcome": "budget_exhausted",
+        },
     )
     assert after_budget >= 1.0, "budget_exhausted metric should increment"

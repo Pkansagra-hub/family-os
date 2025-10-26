@@ -335,9 +335,7 @@ circuit_breakers:
     assert "failure_threshold" in last_change.error_message.lower()
 
     # Test Case 2: timeout_duration_ms too low (should be >= 1000)
-    # NOTE: This documents the gap from Fix 7. Current hot reload validates
-    # failure_threshold but NOT timeout_duration_ms range checks.
-    # TODO: Implement Fix 7 (validation parity) to add timeout validation
+    # Fix 7 implemented: Hot reload now validates timeout_duration_ms >= 1000
     invalid_config_2 = """
 circuit_breakers:
   test_service:
@@ -352,12 +350,14 @@ circuit_breakers:
     config_file.write_text(invalid_config_2)
     await asyncio.sleep(0.2)
 
-    # Verify validation (expected to pass currently, should fail with Fix 7)
-    # When Fix 7 is implemented, change this assertion to check validation_passed=False
+    # Verify validation failed (Fix 7)
     assert len(changes) > 1
     last_change = changes[-1]
-    # Current behavior: validation passes (no timeout range check yet)
-    # After Fix 7: should be validation_passed=False
+    assert (
+        not last_change.validation_passed
+    ), "timeout_duration_ms=500 should fail validation (must be >= 1000)"
+    assert last_change.error_message is not None
+    assert "timeout_duration_ms" in last_change.error_message.lower()
 
     # Restore valid config and verify system continues
     config_file.write_text(valid_config)

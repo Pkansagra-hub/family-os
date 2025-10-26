@@ -14,6 +14,20 @@ Related ADRs:
 
 Features: File watcher (watchdog), validation (JSON schema), rollback (<200ms), atomic updates
 
+Manual Reload:
+    When the watchdog library is not installed, automatic file watching is disabled.
+    Operators can trigger manual config reloads using the reload_configs() method:
+
+    >>> manager = HotReloadManager(config_dir=Path("config"))
+    >>> await manager.start()  # Start without file watcher
+    >>> await manager.reload_configs()  # Manual reload trigger
+
+    Manual reloads perform the same validation, atomic updates, and rollback behavior
+    as automatic file watching. This is useful for:
+    - Container environments without file system events
+    - Testing and development
+    - Explicit reload control (e.g., via HTTP endpoint or admin CLI)
+
 Last Updated: January 2025
 ADR Reference: docs/architecture/decisions/0080-config-hot-reload.md
 """
@@ -566,10 +580,10 @@ class HotReloadManager:
             timeout_duration_ms = service_config.get("timeout_duration_ms", 5000)
             if (
                 not isinstance(timeout_duration_ms, (int, float))
-                or timeout_duration_ms <= 0
+                or timeout_duration_ms < 1000
             ):
                 raise ConfigValidationError(
-                    f"timeout_duration_ms must be positive number, got {timeout_duration_ms}",
+                    f"timeout_duration_ms must be >= 1000, got {timeout_duration_ms}",
                     f"circuit_breakers.{service_name}",
                 )
 

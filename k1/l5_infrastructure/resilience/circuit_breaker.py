@@ -21,6 +21,19 @@ Key behaviours (per contracts):
 
 Performance budget (ADR-0009): <1ms state transition, <1ms rejection latency,
 <5ms failure recording when running on CPython 3.11.
+
+Threading Model:
+    All circuit breaker APIs are async and require an event loop. The circuit breaker
+    uses asyncio.Lock for state synchronization and must be called from within an
+    async context. Do not use threading.Thread or multiprocessing; K1 follows the
+    async/await concurrency model exclusively.
+
+    Example:
+        >>> breaker = CircuitBreaker(config)
+        >>> result = await breaker.call(async_operation)  # ✓ Correct
+        >>> # breaker.call(sync_operation)  # ✗ Wrong: missing await
+
+    For background tasks, use asyncio.create_task() instead of threads.
 """
 
 from __future__ import annotations
@@ -172,37 +185,37 @@ _TRACER = get_tracer()
 _STATE_GAUGE = _METRICS.gauge(
     "circuit_breaker_state",
     "Circuit breaker current state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
-    labelnames=("service", "alternate_service"),
+    labelnames=("component", "service", "alternate_service"),
 )
 
 _TRANSITIONS = _METRICS.counter(
     "circuit_breaker_transitions_total",
     "Total circuit breaker state transitions",
-    labelnames=("service", "alternate_service", "from_state", "to_state"),
+    labelnames=("component", "service", "alternate_service", "from_state", "to_state"),
 )
 
 _CALLS = _METRICS.counter(
     "circuit_breaker_calls_total",
     "Circuit breaker calls by result",
-    labelnames=("service", "alternate_service", "result"),
+    labelnames=("component", "service", "alternate_service", "result"),
 )
 
 _FAILURES = _METRICS.counter(
     "circuit_breaker_failures_total",
     "Circuit breaker failures by type",
-    labelnames=("service", "alternate_service", "failure_type"),
+    labelnames=("component", "service", "alternate_service", "failure_type"),
 )
 
 _FALLBACKS = _METRICS.counter(
     "circuit_breaker_fallbacks_total",
     "Circuit breaker fallback invocations",
-    labelnames=("service", "alternate_service", "fallback_strategy"),
+    labelnames=("component", "service", "alternate_service", "fallback_strategy"),
 )
 
 _LATENCY = _METRICS.histogram(
     "circuit_breaker_latency_ms",
     "Circuit breaker call latency in milliseconds",
-    labelnames=("service", "alternate_service", "state"),
+    labelnames=("component", "service", "alternate_service", "state"),
     buckets=(
         0.1,
         1.0,
@@ -257,7 +270,9 @@ class CircuitBreaker:
         self._opened_at_monotonic: float | None = None
 
         _STATE_GAUGE.labels(
-            service=config.service, alternate_service=config.alternate_service or ""
+            component="k1.resilience",
+            service=config.service,
+            alternate_service=config.alternate_service or "",
         ).set(CircuitState.CLOSED.value)
 
     @property
@@ -371,6 +386,7 @@ class CircuitBreaker:
         except self._config.failure_exceptions as exc:
             latency_ms = (self._monotonic() - start) * 1000.0
             _LATENCY.labels(
+                component="k1.resilience",
                 service=self.service,
                 alternate_service=self._config.alternate_service or "",
                 state=permission.state_at_call.name,
@@ -387,6 +403,7 @@ class CircuitBreaker:
 
         latency_ms = (self._monotonic() - start) * 1000.0
         _LATENCY.labels(
+            component="k1.resilience",
             service=self.service,
             alternate_service=self._config.alternate_service or "",
             state=permission.state_at_call.name,
@@ -468,6 +485,7 @@ class CircuitBreaker:
             raise FallbackUnavailableError(self.service, strategy, exc) from exc
 
         _FALLBACKS.labels(
+            component="k1.resilience",
             service=self.service,
             alternate_service=self._config.alternate_service or "",
             fallback_strategy=strategy,
@@ -484,6 +502,7 @@ class CircuitBreaker:
     async def _record_success(self, trace_id: str | None) -> None:
         async with self._lock:
             _CALLS.labels(
+                component="k1.resilience",
                 service=self.service,
                 alternate_service=self._config.alternate_service or "",
                 result="success",
@@ -520,11 +539,13 @@ class CircuitBreaker:
 
         async with self._lock:
             _CALLS.labels(
+                component="k1.resilience",
                 service=self.service,
                 alternate_service=self._config.alternate_service or "",
                 result="failure",
             ).inc()
             _FAILURES.labels(
+                component="k1.resilience",
                 service=self.service,
                 alternate_service=self._config.alternate_service or "",
                 failure_type=failure_type.value,
@@ -578,9 +599,12 @@ class CircuitBreaker:
         old_state = self._state
         self._state = new_state
         _STATE_GAUGE.labels(
-            service=self.service, alternate_service=self._config.alternate_service or ""
+            component="k1.resilience",
+            service=self.service,
+            alternate_service=self._config.alternate_service or "",
         ).set(new_state.value)
         _TRANSITIONS.labels(
+            component="k1.resilience",
             service=self.service,
             alternate_service=self._config.alternate_service or "",
             from_state=old_state.name,
@@ -620,6 +644,7 @@ class CircuitBreaker:
 
     def _record_rejection_locked(self, trace_id: str | None, reason: str) -> None:
         _CALLS.labels(
+            component="k1.resilience",
             service=self.service,
             alternate_service=self._config.alternate_service or "",
             result="rejected",

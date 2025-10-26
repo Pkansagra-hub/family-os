@@ -115,6 +115,16 @@ class _Subscriber:
         return fnmatch(topic, self.pattern)
 
     async def enqueue(self, topic: str, event: EventBase) -> None:
+        """Enqueue event for delivery to subscriber.
+
+        If queue is full, applies DROP_OLDEST policy: removes the oldest event
+        from the queue (FIFO head) to make room for the new event. This ensures
+        subscribers always process the most recent events under backpressure.
+
+        Args:
+            topic: Normalized topic name for metrics
+            event: Event to deliver
+        """
         queue = self.queue
         if queue.full():
             try:
@@ -137,57 +147,74 @@ class _Subscriber:
                 self.queue.qsize()
             )
 
+            trace_id = getattr(event, "cognitive_trace_id", None)
             start = time.perf_counter()
-            try:
-                result = self.handler(event)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:  # pragma: no cover - handler failure path
-                logger.exception(
-                    "event_bus_handler_error",
-                    topic=topic_value,
-                    handler=self.name,
-                    trace_id=getattr(event, "cognitive_trace_id", None),
-                )
-            finally:
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                _event_delivery_latency_ms.labels(
-                    topic=topic_value,
-                    subscriber=self.name,
-                ).observe(elapsed_ms)
 
-                if elapsed_ms > _SLOW_SUBSCRIBER_THRESHOLD_MS:
-                    _event_slow_subscriber_total.labels(
-                        topic=topic_value,
-                        subscriber=self.name,
-                        reason="handler_latency",
-                    ).inc()
-                    logger.warning(
-                        "event_bus_slow_handler",
+            # Start delivery tracing span if trace_id present
+            with (
+                _TRACER.span(
+                    "event_bus.deliver",
+                    attributes={
+                        "topic": topic_value,
+                        "subscriber": self.name,
+                        "cognitive_trace_id": trace_id,
+                    },
+                )
+                if trace_id
+                else _TRACER.noop_span()
+            ):
+                try:
+                    result = self.handler(event)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # pragma: no cover - handler failure path
+                    logger.exception(
+                        "event_bus_handler_error",
                         topic=topic_value,
                         handler=self.name,
-                        latency_ms=elapsed_ms,
-                        threshold_ms=_SLOW_SUBSCRIBER_THRESHOLD_MS,
+                        trace_id=trace_id,
                     )
-
-                queue_pressure = (
-                    self.queue.qsize() / self.queue_depth if self.queue_depth else 0.0
-                )
-                if queue_pressure >= _QUEUE_PRESSURE_RATIO:
-                    _event_slow_subscriber_total.labels(
+                finally:
+                    elapsed_ms = (time.perf_counter() - start) * 1000
+                    _event_delivery_latency_ms.labels(
                         topic=topic_value,
                         subscriber=self.name,
-                        reason="queue_pressure",
-                    ).inc()
-                    logger.warning(
-                        "event_bus_queue_pressure",
-                        topic=topic_value,
-                        handler=self.name,
-                        queue_depth=self.queue.qsize(),
-                        capacity=self.queue_depth,
-                    )
+                    ).observe(elapsed_ms)
 
-                self.queue.task_done()
+                    if elapsed_ms > _SLOW_SUBSCRIBER_THRESHOLD_MS:
+                        _event_slow_subscriber_total.labels(
+                            topic=topic_value,
+                            subscriber=self.name,
+                            reason="handler_latency",
+                        ).inc()
+                        logger.warning(
+                            "event_bus_slow_handler",
+                            topic=topic_value,
+                            handler=self.name,
+                            latency_ms=elapsed_ms,
+                            threshold_ms=_SLOW_SUBSCRIBER_THRESHOLD_MS,
+                        )
+
+                    queue_pressure = (
+                        self.queue.qsize() / self.queue_depth
+                        if self.queue_depth
+                        else 0.0
+                    )
+                    if queue_pressure >= _QUEUE_PRESSURE_RATIO:
+                        _event_slow_subscriber_total.labels(
+                            topic=topic_value,
+                            subscriber=self.name,
+                            reason="queue_pressure",
+                        ).inc()
+                        logger.warning(
+                            "event_bus_queue_pressure",
+                            topic=topic_value,
+                            handler=self.name,
+                            queue_depth=self.queue.qsize(),
+                            capacity=self.queue_depth,
+                        )
+
+                    self.queue.task_done()
 
 
 def _derive_handler_name(handler: EventHandler) -> str:
@@ -265,7 +292,7 @@ class EventBus:
         if self._shutdown:
             raise RuntimeError("EventBus.publish() called after shutdown")
 
-        topic_value = event.topic.value
+        topic_value = _normalise_topic_identifier(event.topic)
         start = time.perf_counter()
 
         async with self._lock:
@@ -376,6 +403,9 @@ class EventBus:
                         self._topic_index.pop(subscriber.pattern, None)
 
         await subscriber.stop()
+        _event_queue_depth.labels(
+            topic=subscriber.pattern, subscriber=subscriber.name
+        ).set(0)
         logger.debug(
             "event_bus_unsubscribed",
             pattern=subscriber.pattern,

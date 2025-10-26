@@ -1,5 +1,38 @@
 """
-OpenTelemetry Distributed Tracing
+OpenTelemetry Distributed Tracing - DESIGN DOCUMENT
+
+⚠️ **IMPORTANT: This file is a DESIGN SPECIFICATION, not implementation code.**
+
+**Current Implementation Status:**
+- ✅ **IMPLEMENTED:** K1 uses K0's TracerFactory (via k1.l5_infrastructure.observability.get_tracer())
+- ✅ **IMPLEMENTED:** Head-based sampling (1% baseline, 100% errors, configurable via OTEL_SAMPLE_RATIO)
+- ✅ **IMPLEMENTED:** cognitive_trace_id propagation (W3C Trace Context)
+- ✅ **IMPLEMENTED:** OTLP/HTTP export to Tempo (http://localhost:4318/v1/traces)
+- ❌ **NOT IMPLEMENTED:** Tail-based sampling (60s buffer, post-decision)
+- ❌ **NOT IMPLEMENTED:** Adaptive sampling FSM (NORMAL/DEGRADATION/CRITICAL states)
+- ❌ **NOT IMPLEMENTED:** Jaeger-specific integration (Badger storage)
+
+**To use K1 tracing:**
+```python
+from k1.l5_infrastructure.observability import get_tracer
+
+tracer = get_tracer()  # Returns K0 TracerFactory with k1_intelligence service name
+with tracer.span("k1.operation") as span:
+    span.set_attribute("key", "value")
+```
+
+**This file documents:**
+1. Future sampling strategies (tail-based, adaptive)
+2. Storage tier design (hot/warm/cold)
+3. Performance targets and benchmarks
+4. Research citations and ADR references
+
+**See Also:**
+- k1/l5_infrastructure/observability/__init__.py (actual tracing glue code)
+- k0/obs/tracing.py (K0 TracerFactory implementation)
+- ADR-0030: Intelligent Trace Sampling
+
+---
 
 Purpose: Distributed tracing with adaptive sampling for K1
 Location: k1/l5_infrastructure/observability/tracing.py
@@ -8,9 +41,9 @@ Performance: <5ms span creation
 Primary ADRs:
 - ADR-0030: Trace Sampling (cognitive_trace_id, 1% sampling)
 - ADR-0030a: Head-Based Sampling (baseline 1%, error 100%, slow 100%)
-- ADR-0030b: Tail-Based Sampling (span buffering, post-decision)
-- ADR-0030c: Adaptive Sampling (rate adjustment FSM, health indicators)
-- ADR-0030d: Jaeger Integration (OTLP exporter, Badger storage)
+- ADR-0030b: Tail-Based Sampling (span buffering, post-decision) [FUTURE]
+- ADR-0030c: Adaptive Sampling (rate adjustment FSM, health indicators) [FUTURE]
+- ADR-0030d: Jaeger Integration (OTLP exporter, Badger storage) [FUTURE]
 - ADR-0002d: Actor Fabric Observability (actor.send/recv spans)
 
 Related ADRs:
