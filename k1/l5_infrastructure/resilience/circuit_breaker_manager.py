@@ -69,6 +69,51 @@ except ImportError:  # pragma: no cover - fallback shim
 
 
 @dataclass(slots=True)
+class _CacheEntry:
+    """In-memory cache entry with TTL for cached_result fallback strategy."""
+
+    value: Any
+    expires_at: float  # Monotonic timestamp
+
+
+class _FallbackCache:
+    """
+    Simple in-memory cache with TTL for circuit breaker fallback results.
+
+    NOT production-ready:
+    - No LRU eviction (unbounded growth)
+    - No persistence across restarts
+    - No distributed cache support
+
+    For production, integrate with Redis/Memcached via k1.storage layer.
+    """
+
+    def __init__(self) -> None:
+        self._cache: Dict[str, _CacheEntry] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(self, key: str) -> Optional[Any]:
+        """Get cached value if not expired."""
+        async with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+
+            now = time.monotonic()
+            if now >= entry.expires_at:
+                del self._cache[key]
+                return None
+
+            return entry.value
+
+    async def set(self, key: str, value: Any, ttl_ms: int) -> None:
+        """Store value with TTL in milliseconds."""
+        expires_at = time.monotonic() + (ttl_ms / 1000.0)
+        async with self._lock:
+            self._cache[key] = _CacheEntry(value=value, expires_at=expires_at)
+
+
+@dataclass(slots=True)
 class ServiceCircuitBreakerConfig:
     """Circuit breaker configuration per ADR-0009b."""
 
@@ -82,6 +127,10 @@ class ServiceCircuitBreakerConfig:
     # Optional fields
     alternate_service: Optional[str] = None
     cache_ttl_ms: Optional[int] = None
+    default_value: Optional[Any] = None  # For default_value strategy
+    alternate_callable: Optional[Callable[[], Any]] = (
+        None  # For alternate_model strategy
+    )
 
 
 class ConfigManager:
@@ -238,6 +287,7 @@ class CircuitBreakerManager:
         self.config_manager = ConfigManager(config_path)
         self.circuits: Dict[str, CircuitBreaker] = {}
         self._lock = asyncio.Lock()
+        self._fallback_cache = _FallbackCache()  # In-memory cache for fallback results
 
     def get_circuit(self, service_name: str) -> CircuitBreaker:
         """Get or create circuit breaker for service."""
@@ -266,8 +316,7 @@ class CircuitBreakerManager:
     ) -> CircuitBreakerConfig:
         """Convert our config to circuit_breaker.CircuitBreakerConfig."""
         return CircuitBreakerConfig(
-            service=config.alternate_service
-            or service_name,  # Use alternate_service if available, otherwise use requested service name
+            service=service_name,  # Always use requested service name for metrics
             failure_threshold=config.failure_threshold,
             timeout_duration_ms=config.timeout_duration_ms,
             success_threshold=config.success_threshold,
@@ -275,24 +324,77 @@ class CircuitBreakerManager:
             time_window_ms=config.time_window_ms,
             failure_exceptions=(Exception,),  # Default to all exceptions
             fallback=self._create_fallback(config),
+            alternate_service=config.alternate_service,  # Separate label for metrics clarity
         )
 
     def _create_fallback(
         self, config: ServiceCircuitBreakerConfig
     ) -> Optional[Callable[[], Any]]:
-        """Create fallback function based on strategy."""
+        """
+        Create fallback function based on strategy.
+
+        Strategies:
+        - default_value: Return configured default value (from config.default_value)
+        - cached_result: Return cached result if available (uses in-memory cache with TTL)
+        - alternate_model: Delegate to alternate callable (from config.alternate_callable)
+        - raise_error: No fallback, raise original error
+
+        NOTE: cached_result uses simple in-memory cache. For production, integrate
+        with Redis/Memcached via k1.storage layer.
+        """
         if config.fallback_strategy == "default_value":
-            return lambda: None
+            # Return configured default value instead of None
+            default_val = config.default_value
+            return lambda: default_val
+
         elif config.fallback_strategy == "cached_result":
-            # Would integrate with cache here
-            return lambda: None
+            # Return cached result from in-memory cache if available
+            # NOTE: This is a placeholder implementation. Production should use
+            # persistent cache (Redis/Memcached) for distributed systems.
+            # TODO: Store successful results via cache_successful_result() method
+            cache_key = f"fallback:{config.alternate_service or 'unknown'}"
+
+            async def cached_fallback() -> Any:
+                cached_value = await self._fallback_cache.get(cache_key)
+                if cached_value is not None:
+                    logger.info(
+                        "circuit_breaker_fallback_cache_hit",
+                        service=config.alternate_service or "unknown",
+                        cache_key=cache_key,
+                    )
+                    return cached_value
+
+                logger.warning(
+                    "circuit_breaker_fallback_cache_miss",
+                    service=config.alternate_service or "unknown",
+                    cache_key=cache_key,
+                )
+                return None  # No cached value available
+
+            return cached_fallback
+
         elif config.fallback_strategy == "alternate_model":
-            # Would integrate with alternate service here
-            return lambda: None
+            # Delegate to injected alternate callable
+            if config.alternate_callable is not None:
+                return config.alternate_callable
+            else:
+                logger.warning(
+                    "circuit_breaker_alternate_callable_missing",
+                    service=config.alternate_service or "unknown",
+                    fallback_strategy="alternate_model",
+                )
+                return lambda: None  # Fallback to None if no callable provided
+
         elif config.fallback_strategy == "raise_error":
+            # No fallback, circuit breaker will raise the original error
             return None
+
         else:
-            return lambda: None
+            logger.warning(
+                "circuit_breaker_unknown_fallback_strategy",
+                strategy=config.fallback_strategy,
+            )
+            return lambda: None  # Safe default
 
     async def reload_configs(self) -> Dict[str, Any]:
         """Reload configurations and update existing circuits."""
@@ -305,12 +407,12 @@ class CircuitBreakerManager:
                 if new_config.enabled:
                     # Update the circuit breaker with new config
                     new_cb_config = self._convert_config(service_name, new_config)
-                    # For now, create a new circuit breaker instance with updated config
-                    # TODO: Add runtime config update support to CircuitBreaker class
-                    self.circuits[service_name] = CircuitBreaker(new_cb_config)
+
+                    # Preserve state by updating config instead of recreating breaker
+                    await self.circuits[service_name].update_config(new_cb_config)
 
                     logger.info(
-                        "circuit_breaker_recreated",
+                        "circuit_breaker_config_updated",
                         service=service_name,
                         new_failure_threshold=new_config.failure_threshold,
                         new_timeout_duration_ms=new_config.timeout_duration_ms,
@@ -333,3 +435,30 @@ class CircuitBreakerManager:
                 "is_open": circuit.is_open,
             }
         return stats
+
+    async def cache_successful_result(self, service_name: str, result: Any) -> None:
+        """
+        Cache successful result for fallback strategy.
+
+        Call this after successful circuit breaker operations to populate
+        the fallback cache for future circuit OPEN scenarios.
+
+        Args:
+            service_name: Service name to cache result for
+            result: Successful operation result to cache
+
+        Example:
+            result = await manager.get_circuit("llm").call(operation)
+            await manager.cache_successful_result("llm", result)
+        """
+        config = self.config_manager.get_circuit_config(service_name)
+        if config.fallback_strategy == "cached_result":
+            cache_key = f"fallback:{config.alternate_service or service_name}"
+            ttl_ms = config.cache_ttl_ms or 60000  # Default 60s TTL
+            await self._fallback_cache.set(cache_key, result, ttl_ms)
+            logger.debug(
+                "circuit_breaker_result_cached",
+                service=service_name,
+                cache_key=cache_key,
+                ttl_ms=ttl_ms,
+            )

@@ -1,0 +1,47 @@
+# K1 Metrics Configuration
+# Schema: k1/contracts/schemas/metrics.schema.json
+# ADR-0029: Prometheus Metrics Architecture
+# ADR-0029c: Component-Level Observability
+# Version: 1.0.0
+
+version: "1.0.0"
+
+metrics:
+  enabled: true
+
+  exporter:
+    host: "0.0.0.0"
+    port: 9090
+    path: "/metrics"
+
+  namespace: "k1_intelligence"
+
+  histograms:
+    latency_buckets_ms:
+      - 1
+      - 5
+      - 10
+      - 25
+      - 50
+      - 100
+      - 250
+      - 500
+      - 1000
+      - 2500
+      - 5000
+      - 10000
+    size_buckets_bytes:
+      - 100
+      - 500
+      - 1000
+      - 5000
+      - 10000
+      - 50000
+      - 100000
+      - 500000
+      - 1000000
+
+  sampling:
+    enabled: true
+    default_rate: 0.1  # 10% sampling
+    high_latency_threshold_ms: 2000  # 100% sampling for slow requests

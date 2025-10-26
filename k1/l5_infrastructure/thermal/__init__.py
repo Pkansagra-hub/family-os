@@ -80,7 +80,7 @@ class ThermalService:
         try:
             # Create components (ultra-fast initialization <2ms)
             self.monitor = ThermalMonitor()
-            self.placement_planner = PlacementPlanner()
+            self.placement_planner = PlacementPlanner(self.monitor)
 
             # Start thermal monitoring (continuous background service)
             await self.monitor.start_monitoring()

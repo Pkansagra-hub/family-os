@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/k1/thermal.schema.json",
+  "title": "K1 Thermal Management Configuration Schema",
+  "description": "Configuration schema for K1 thermal management and device placement (ADR-0019)",
+  "type": "object",
+  "required": ["version", "thermal"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "thermal": {
+      "type": "object",
+      "required": ["enabled", "thresholds", "migration"],
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable thermal management subsystem"
+        },
+        "thresholds": {
+          "type": "object",
+          "required": ["cool_celsius", "warm_celsius", "hot_celsius", "critical_celsius"],
+          "properties": {
+            "cool_celsius": {
+              "type": "number",
+              "minimum": 20,
+              "maximum": 60,
+              "default": 50,
+              "description": "Cool zone upper bound (<50°C = COOL)"
+            },
+            "warm_celsius": {
+              "type": "number",
+              "minimum": 50,
+              "maximum": 75,
+              "default": 65,
+              "description": "Warm zone upper bound (50-65°C = WARM)"
+            },
+            "hot_celsius": {
+              "type": "number",
+              "minimum": 65,
+              "maximum": 85,
+              "default": 80,
+              "description": "Hot zone upper bound (65-80°C = HOT)"
+            },
+            "critical_celsius": {
+              "type": "number",
+              "minimum": 80,
+              "maximum": 100,
+              "default": 90,
+              "description": "Critical threshold (>80°C = CRITICAL, migrate immediately)"
+            }
+          }
+        },
+        "migration": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable automatic task migration"
+            },
+            "policy": {
+              "type": "string",
+              "enum": ["npu_to_gpu", "npu_to_cpu", "gpu_to_cpu", "local_to_remote"],
+              "default": "npu_to_gpu",
+              "description": "Migration policy for thermal events"
+            },
+            "cooldown_threshold_celsius": {
+              "type": "number",
+              "minimum": 40,
+              "maximum": 70,
+              "default": 55,
+              "description": "Temperature below this allows migration back to NPU"
+            },
+            "check_interval_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 10000,
+              "default": 1000,
+              "description": "Thermal check interval (1s default)"
+            }
+          }
+        },
+        "devices": {
+          "type": "object",
+          "properties": {
+            "npu": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "sensor_path": {
+                  "type": "string",
+                  "default": "/sys/class/thermal/thermal_zone0/temp"
+                }
+              }
+            },
+            "gpu": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "sensor_path": {
+                  "type": "string",
+                  "default": "/sys/class/thermal/thermal_zone1/temp"
+                }
+              }
+            },
+            "cpu": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "sensor_path": {
+                  "type": "string",
+                  "default": "/sys/class/thermal/thermal_zone2/temp"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

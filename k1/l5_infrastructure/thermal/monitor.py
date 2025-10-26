@@ -336,13 +336,15 @@ class ThermalMonitor:
             # This would need custom drivers or specific hardware support
             # Look for any thermal-related WMI classes (this is mostly placeholder)
             # Real Windows thermal monitoring requires vendor-specific APIs
-            self.logger.info(
+            self.logger.warning(
                 "Windows thermal sensor discovery not fully implemented - requires vendor drivers"
             )
 
-            # For now, add a mock CPU sensor for development
-            if not self._sensor_paths:  # Only if no other sensors found
-                self._sensor_paths["CPU"] = "MOCK_CPU"
+            # No sensors found - graceful degradation (default to WARM zone)
+            if not self._sensor_paths:
+                self.logger.warning(
+                    "No thermal sensors discovered on Windows. Thermal monitoring will default to WARM zone."
+                )
 
         except Exception as e:
             self.logger.error(f"Failed to discover Windows sensors: {e}")
@@ -421,14 +423,16 @@ class ThermalMonitor:
         return None
 
     def _classify_thermal_zone(self, temperature_celsius: float) -> ThermalZone:
-        """Classify temperature into thermal zone (ADR-0026a, relaxed for gaming)."""
-        if temperature_celsius < 70:
+        """Classify temperature into thermal zone (ADR-0077 M3 Epic 2)."""
+        from .types import THERMAL_THRESHOLDS
+
+        if temperature_celsius < THERMAL_THRESHOLDS[ThermalZone.COOL]:
             return ThermalZone.COOL
-        elif temperature_celsius < 80:
+        elif temperature_celsius < THERMAL_THRESHOLDS[ThermalZone.WARM]:
             return ThermalZone.WARM
-        elif temperature_celsius < 90:
+        elif temperature_celsius < THERMAL_THRESHOLDS[ThermalZone.HOT]:
             return ThermalZone.HOT
-        elif temperature_celsius < 100:
+        elif temperature_celsius < THERMAL_THRESHOLDS[ThermalZone.CRITICAL]:
             return ThermalZone.CRITICAL
         else:
             return ThermalZone.EMERGENCY

@@ -118,6 +118,7 @@ class CircuitBreakerConfig:
     failure_exceptions: tuple[type[BaseException], ...] = (Exception,)
     fallback: Optional[FallbackCallable] = None
     failure_predicate: Optional[FailurePredicate] = None
+    alternate_service: Optional[str] = None  # Separate label for metrics clarity
 
     def __post_init__(self) -> None:
         if self.failure_threshold <= 0:
@@ -171,37 +172,37 @@ _TRACER = get_tracer()
 _STATE_GAUGE = _METRICS.gauge(
     "circuit_breaker_state",
     "Circuit breaker current state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)",
-    labelnames=("service",),
+    labelnames=("service", "alternate_service"),
 )
 
 _TRANSITIONS = _METRICS.counter(
     "circuit_breaker_transitions_total",
     "Total circuit breaker state transitions",
-    labelnames=("service", "from_state", "to_state"),
+    labelnames=("service", "alternate_service", "from_state", "to_state"),
 )
 
 _CALLS = _METRICS.counter(
     "circuit_breaker_calls_total",
     "Circuit breaker calls by result",
-    labelnames=("service", "result"),
+    labelnames=("service", "alternate_service", "result"),
 )
 
 _FAILURES = _METRICS.counter(
     "circuit_breaker_failures_total",
     "Circuit breaker failures by type",
-    labelnames=("service", "failure_type"),
+    labelnames=("service", "alternate_service", "failure_type"),
 )
 
 _FALLBACKS = _METRICS.counter(
     "circuit_breaker_fallbacks_total",
     "Circuit breaker fallback invocations",
-    labelnames=("service", "fallback_strategy"),
+    labelnames=("service", "alternate_service", "fallback_strategy"),
 )
 
 _LATENCY = _METRICS.histogram(
     "circuit_breaker_latency_ms",
     "Circuit breaker call latency in milliseconds",
-    labelnames=("service", "state"),
+    labelnames=("service", "alternate_service", "state"),
     buckets=(
         0.1,
         1.0,
@@ -255,7 +256,9 @@ class CircuitBreaker:
         self._half_open_probe_active = False
         self._opened_at_monotonic: float | None = None
 
-        _STATE_GAUGE.labels(service=config.service).set(CircuitState.CLOSED.value)
+        _STATE_GAUGE.labels(
+            service=config.service, alternate_service=config.alternate_service or ""
+        ).set(CircuitState.CLOSED.value)
 
     @property
     def service(self) -> str:
@@ -276,6 +279,67 @@ class CircuitBreaker:
     @property
     def is_open(self) -> bool:
         return self._state == CircuitState.OPEN
+
+    def retry_after_ms(self) -> float:
+        """
+        Return remaining OPEN timeout in milliseconds for HTTP Retry-After headers.
+
+        Returns 0.0 if circuit is not OPEN or timeout has elapsed.
+        Useful for populating HTTP 503 Retry-After headers when circuit is OPEN.
+
+        Example:
+            retry_ms = breaker.retry_after_ms()
+            if retry_ms > 0:
+                response.headers["Retry-After"] = str(int(retry_ms / 1000))
+
+        Returns:
+            Remaining timeout in milliseconds (0.0 if not OPEN or timeout elapsed)
+        """
+        return self._retry_after_ms(self._monotonic())
+
+    async def update_config(self, new_config: CircuitBreakerConfig) -> None:
+        """
+        Update circuit breaker configuration without resetting state.
+
+        Preserves:
+        - Current circuit state (CLOSED/OPEN/HALF_OPEN)
+        - Failure timestamps within the rolling window
+        - Opened timestamp (for OPEN timeout calculation)
+        - Success count (for HALF_OPEN probe tracking)
+
+        Used by ConfigManager during hot-reload to apply new thresholds/timeouts
+        without dropping failure history or resetting OPEN circuits.
+
+        Args:
+            new_config: New configuration to apply
+
+        Raises:
+            ValueError: If new_config has invalid parameters
+        """
+        # Validate new config (triggers __post_init__ checks)
+        new_config.__post_init__()
+
+        async with self._lock:
+            # Preserve state across config update
+            old_service = self._config.service
+            self._config = new_config
+
+            # If service name changed, log warning (metrics labels will change)
+            if old_service != new_config.service:
+                logger.warning(
+                    "circuit_breaker_service_name_changed",
+                    old_service=old_service,
+                    new_service=new_config.service,
+                    state=self._state.name,
+                )
+
+            logger.info(
+                "circuit_breaker_config_updated",
+                service=self.service,
+                failure_threshold=new_config.failure_threshold,
+                timeout_duration_ms=new_config.timeout_duration_ms,
+                state=self._state.name,
+            )
 
     async def call(
         self,
@@ -308,6 +372,7 @@ class CircuitBreaker:
             latency_ms = (self._monotonic() - start) * 1000.0
             _LATENCY.labels(
                 service=self.service,
+                alternate_service=self._config.alternate_service or "",
                 state=permission.state_at_call.name,
             ).observe(latency_ms)
             await self._record_failure(
@@ -323,6 +388,7 @@ class CircuitBreaker:
         latency_ms = (self._monotonic() - start) * 1000.0
         _LATENCY.labels(
             service=self.service,
+            alternate_service=self._config.alternate_service or "",
             state=permission.state_at_call.name,
         ).observe(latency_ms)
 
@@ -403,6 +469,7 @@ class CircuitBreaker:
 
         _FALLBACKS.labels(
             service=self.service,
+            alternate_service=self._config.alternate_service or "",
             fallback_strategy=strategy,
         ).inc()
         logger.warning(
@@ -416,7 +483,11 @@ class CircuitBreaker:
 
     async def _record_success(self, trace_id: str | None) -> None:
         async with self._lock:
-            _CALLS.labels(service=self.service, result="success").inc()
+            _CALLS.labels(
+                service=self.service,
+                alternate_service=self._config.alternate_service or "",
+                result="success",
+            ).inc()
 
             if self._state == CircuitState.HALF_OPEN:
                 self._success_count += 1
@@ -448,9 +519,14 @@ class CircuitBreaker:
         window_seconds = self._config.time_window_ms / 1000.0
 
         async with self._lock:
-            _CALLS.labels(service=self.service, result="failure").inc()
+            _CALLS.labels(
+                service=self.service,
+                alternate_service=self._config.alternate_service or "",
+                result="failure",
+            ).inc()
             _FAILURES.labels(
                 service=self.service,
+                alternate_service=self._config.alternate_service or "",
                 failure_type=failure_type.value,
             ).inc()
 
@@ -501,9 +577,12 @@ class CircuitBreaker:
 
         old_state = self._state
         self._state = new_state
-        _STATE_GAUGE.labels(service=self.service).set(new_state.value)
+        _STATE_GAUGE.labels(
+            service=self.service, alternate_service=self._config.alternate_service or ""
+        ).set(new_state.value)
         _TRANSITIONS.labels(
             service=self.service,
+            alternate_service=self._config.alternate_service or "",
             from_state=old_state.name,
             to_state=new_state.name,
         ).inc()
@@ -540,7 +619,11 @@ class CircuitBreaker:
             )
 
     def _record_rejection_locked(self, trace_id: str | None, reason: str) -> None:
-        _CALLS.labels(service=self.service, result="rejected").inc()
+        _CALLS.labels(
+            service=self.service,
+            alternate_service=self._config.alternate_service or "",
+            result="rejected",
+        ).inc()
         logger.warning(
             "circuit_breaker_rejected",
             service=self.service,

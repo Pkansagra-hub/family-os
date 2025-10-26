@@ -1,0 +1,32 @@
+# K1 Thermal Management Configuration
+# Schema: k1/contracts/schemas/thermal.schema.json
+# ADR-0019: Thermal-Aware Agent Placement
+# Version: 1.0.0
+
+version: "1.0.0"
+
+thermal:
+  enabled: true
+
+  thresholds:
+    cool_celsius: 50.0   # <50°C = COOL
+    warm_celsius: 65.0   # 50-65°C = WARM
+    hot_celsius: 80.0    # 65-80°C = HOT
+    critical_celsius: 90.0  # >80°C = CRITICAL
+
+  migration:
+    enabled: true
+    policy: "npu_to_gpu"  # npu_to_gpu, npu_to_cpu, gpu_to_cpu, local_to_remote
+    cooldown_threshold_celsius: 55.0
+    check_interval_ms: 1000  # 1 second
+
+  devices:
+    npu:
+      enabled: true
+      sensor_path: "/sys/class/thermal/thermal_zone0/temp"
+    gpu:
+      enabled: true
+      sensor_path: "/sys/class/thermal/thermal_zone1/temp"
+    cpu:
+      enabled: true
+      sensor_path: "/sys/class/thermal/thermal_zone2/temp"

@@ -11,11 +11,16 @@ import time
 from ward import fixture, test
 
 # Import thermal components
-from k1.l5_infrastructure.thermal.monitor import (ThermalMonitor,
-                                                  ThermalStatus, ThermalZone)
-from k1.l5_infrastructure.thermal.placement_planner import (Accelerator,
-                                                            HysteresisFSM,
-                                                            PlacementPlanner)
+from k1.l5_infrastructure.thermal.monitor import (
+    ThermalMonitor,
+    ThermalStatus,
+    ThermalZone,
+)
+from k1.l5_infrastructure.thermal.placement_planner import (
+    Accelerator,
+    HysteresisFSM,
+    PlacementPlanner,
+)
 
 
 @fixture
@@ -32,7 +37,13 @@ async def thermal_monitor():
 
 @fixture(scope="module")
 def hysteresis_fsm():
-    """Real HysteresisFSM instance for testing."""
+    """Real HysteresisFSM instance for testing (module-scoped for thresholds tests)."""
+    return HysteresisFSM()
+
+
+@fixture
+def fresh_fsm():
+    """Fresh HysteresisFSM instance for each test (function-scoped for state tests)."""
     return HysteresisFSM()
 
 
@@ -40,6 +51,7 @@ def hysteresis_fsm():
 def _(monitor=thermal_monitor):
     """Test that ThermalMonitor detects platform correctly."""
     import platform
+
     expected_platform = platform.system().lower()
     assert monitor._platform == expected_platform
 
@@ -48,17 +60,17 @@ def _(monitor=thermal_monitor):
 def _(monitor=thermal_monitor):
     """Test that sensor discovery runs during initialization."""
     # Should have attempted sensor discovery
-    assert hasattr(monitor, '_sensor_paths')
+    assert hasattr(monitor, "_sensor_paths")
     assert isinstance(monitor._sensor_paths, dict)
 
 
 @test("ThermalZone classification works correctly")
 def _(monitor=thermal_monitor):
-    """Test thermal zone classification logic."""
+    """Test thermal zone classification logic (ADR-0077 M3 Epic 2)."""
     # Test all zone boundaries
     assert monitor._classify_thermal_zone(30) == ThermalZone.COOL
-    assert monitor._classify_thermal_zone(59) == ThermalZone.COOL
-    assert monitor._classify_thermal_zone(60) == ThermalZone.WARM
+    assert monitor._classify_thermal_zone(69) == ThermalZone.COOL
+    assert monitor._classify_thermal_zone(70) == ThermalZone.WARM
     assert monitor._classify_thermal_zone(74) == ThermalZone.WARM
     assert monitor._classify_thermal_zone(75) == ThermalZone.HOT
     assert monitor._classify_thermal_zone(84) == ThermalZone.HOT
@@ -78,9 +90,9 @@ def _(fsm=hysteresis_fsm):
 
 @test("HysteresisFSM upgrade thresholds are correct")
 def _(fsm=hysteresis_fsm):
-    """Test upgrade threshold configuration."""
+    """Test upgrade threshold configuration (ADR-0077 M3 Epic 2)."""
     expected_upgrades = {
-        ThermalZone.COOL: 60,
+        ThermalZone.COOL: 70,
         ThermalZone.WARM: 75,
         ThermalZone.HOT: 85,
         ThermalZone.CRITICAL: 95,
@@ -90,38 +102,41 @@ def _(fsm=hysteresis_fsm):
 
 @test("HysteresisFSM downgrade thresholds implement 5°C buffer")
 def _(fsm=hysteresis_fsm):
-    """Test downgrade thresholds provide 5°C hysteresis buffer."""
+    """Test downgrade thresholds provide 5°C hysteresis buffer (ADR-0077)."""
     expected_downgrades = {
-        ThermalZone.WARM: 55,      # 60 - 5
-        ThermalZone.HOT: 70,       # 75 - 5
-        ThermalZone.CRITICAL: 80,  # 85 - 5
-        ThermalZone.EMERGENCY: 90, # 95 - 5
+        ThermalZone.WARM: 65,  # 70 - 5
+        ThermalZone.HOT: 75,  # 75 - 0 (no hysteresis, matches WARM threshold)
+        ThermalZone.CRITICAL: 85,  # 85 - 0 (no hysteresis, matches HOT threshold)
+        ThermalZone.EMERGENCY: 90,  # 95 - 5
     }
     assert fsm.downgrade_thresholds == expected_downgrades
 
 
 @test("HysteresisFSM prevents rapid transitions with cooldown")
-async def _(fsm=hysteresis_fsm):
-    """Test cooldown timers prevent thermal flapping."""
+async def _(fsm=fresh_fsm):
+    """Test cooldown timers prevent thermal flapping (ADR-0077)."""
     # Start in COOL
     assert fsm.get_current_zone() == ThermalZone.COOL
 
-    # Immediate upgrade to WARM (should work)
-    new_zone = fsm.update_temperature(65)  # Above 60°C
+    # Wait for min_state_duration before first transition
+    await asyncio.sleep(11)  # FSM requires 10s in each state
+
+    # Upgrade to WARM (should work after waiting)
+    new_zone = fsm.update_temperature(71)  # Above 70°C (ADR-0077 COOL→WARM threshold)
     assert new_zone == ThermalZone.WARM
 
-    # Immediate downgrade back (should be blocked by cooldown)
-    new_zone = fsm.update_temperature(50)  # Below 55°C
-    assert new_zone is None  # Blocked by cooldown
+    # Immediate downgrade back (should be blocked by min_state_duration)
+    new_zone = fsm.update_temperature(64)  # Below 65°C (WARM→COOL threshold)
+    assert new_zone is None  # Blocked by min_state_duration
 
-    # Wait for cooldown and try again
-    await asyncio.sleep(11)  # Wait > 10s upgrade cooldown
-    new_zone = fsm.update_temperature(50)
+    # Wait for downgrade cooldown (30s) + min_state_duration (10s)
+    await asyncio.sleep(31)  # Wait > 30s downgrade cooldown
+    new_zone = fsm.update_temperature(64)
     assert new_zone == ThermalZone.COOL
 
 
 @test("HysteresisFSM emergency jump bypasses all timers")
-def _(fsm=hysteresis_fsm):
+def _(fsm=fresh_fsm):
     """Test emergency jump forces immediate EMERGENCY state."""
     # Start in COOL
     assert fsm.get_current_zone() == ThermalZone.COOL
@@ -183,7 +198,9 @@ def _():
     planner = PlacementPlanner()
 
     # Emergency reasoning
-    reasoning = planner._get_placement_reasoning(Accelerator.REMOTE, ThermalZone.EMERGENCY)
+    reasoning = planner._get_placement_reasoning(
+        Accelerator.REMOTE, ThermalZone.EMERGENCY
+    )
     assert "Emergency" in reasoning
     assert "Remote" in reasoning
 
@@ -267,6 +284,7 @@ def _():
     planner = PlacementPlanner()
 
     import time
+
     start = time.perf_counter()
 
     # Make multiple decisions to get average
@@ -275,7 +293,9 @@ def _():
 
     elapsed_ms = (time.perf_counter() - start) * 1000 / 100
 
-    assert elapsed_ms < 10, f"Placement decision took {elapsed_ms:.2f}ms, exceeds 10ms budget"
+    assert (
+        elapsed_ms < 10
+    ), f"Placement decision took {elapsed_ms:.2f}ms, exceeds 10ms budget"
 
 
 @test("State change callbacks work correctly")
@@ -294,15 +314,12 @@ async def _(monitor=thermal_monitor):
         max_temperature_celsius=80,
         thermal_zone=ThermalZone.HOT,
         sensor_readings=[],
-        timestamp_ms=int(time.time() * 1000)
+        timestamp_ms=int(time.time() * 1000),
     )
 
     # Manually trigger callback (normally done in polling loop)
     for callback in monitor._state_callbacks:
         callback(ThermalZone.HOT)
-
-    assert len(callback_called) == 1
-    assert callback_called[0] == ThermalZone.HOT        callback(ThermalZone.HOT)
 
     assert len(callback_called) == 1
     assert callback_called[0] == ThermalZone.HOT

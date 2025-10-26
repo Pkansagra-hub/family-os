@@ -274,3 +274,99 @@ async def _(
     assert config == {"value": 1}
 
     await manager.stop()
+
+
+@test("hot reload semantic validation for circuit breaker configs")
+async def _(
+    temp_config_dir_dep: Any = temp_config_dir, manager_dep: Any = basic_manager
+) -> None:
+    """Test that circuit breaker semantic validation rejects invalid configs (Test 14)."""
+    temp_config_dir = cast(Path, temp_config_dir_dep)
+    manager = cast(HotReloadManager, manager_dep)
+
+    # Create initial valid circuit breaker config
+    config_file = temp_config_dir / "circuit_breakers.yml"
+    valid_config = """
+circuit_breakers:
+  test_service:
+    failure_threshold: 3
+    timeout_duration_ms: 5000
+    success_threshold: 1
+    slow_call_threshold_ms: 1000
+    time_window_ms: 10000
+    fallback_strategy: "default_value"
+    enabled: true
+"""
+    config_file.write_text(valid_config)
+
+    # Start manager
+    await manager.start()
+
+    # Track change events
+    changes: list[ConfigChange] = []
+
+    def on_change(change: ConfigChange) -> None:
+        changes.append(change)
+
+    manager.add_change_callback(on_change)
+
+    # Test Case 1: failure_threshold too low (should be >= 2)
+    invalid_config_1 = """
+circuit_breakers:
+  test_service:
+    failure_threshold: 1
+    timeout_duration_ms: 5000
+    success_threshold: 1
+    slow_call_threshold_ms: 1000
+    time_window_ms: 10000
+    fallback_strategy: "default_value"
+    enabled: true
+"""
+    config_file.write_text(invalid_config_1)
+    await asyncio.sleep(0.2)
+
+    # Verify validation failed
+    assert len(changes) > 0
+    last_change = changes[-1]
+    assert (
+        not last_change.validation_passed
+    ), "failure_threshold=1 should fail validation (must be >= 2)"
+    assert last_change.error_message is not None
+    assert "failure_threshold" in last_change.error_message.lower()
+
+    # Test Case 2: timeout_duration_ms too low (should be >= 1000)
+    # NOTE: This documents the gap from Fix 7. Current hot reload validates
+    # failure_threshold but NOT timeout_duration_ms range checks.
+    # TODO: Implement Fix 7 (validation parity) to add timeout validation
+    invalid_config_2 = """
+circuit_breakers:
+  test_service:
+    failure_threshold: 3
+    timeout_duration_ms: 500
+    success_threshold: 1
+    slow_call_threshold_ms: 1000
+    time_window_ms: 10000
+    fallback_strategy: "default_value"
+    enabled: true
+"""
+    config_file.write_text(invalid_config_2)
+    await asyncio.sleep(0.2)
+
+    # Verify validation (expected to pass currently, should fail with Fix 7)
+    # When Fix 7 is implemented, change this assertion to check validation_passed=False
+    assert len(changes) > 1
+    last_change = changes[-1]
+    # Current behavior: validation passes (no timeout range check yet)
+    # After Fix 7: should be validation_passed=False
+
+    # Restore valid config and verify system continues
+    config_file.write_text(valid_config)
+    await asyncio.sleep(0.2)
+
+    # Verify system recovers with valid config
+    valid_changes = [c for c in changes if c.validation_passed]
+    assert (
+        len(valid_changes) >= 2
+    ), "System should accept initial and restored valid configs"
+
+    await manager.stop()

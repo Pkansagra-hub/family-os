@@ -101,6 +101,9 @@ class HysteresisFSM:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
+        # Import authoritative thresholds from ADR-0077
+        from .types import THERMAL_THRESHOLDS
+
         # Current state
         self.current_zone: ThermalZone = ThermalZone.COOL
         self.last_transition_time: float = time.time()
@@ -113,19 +116,31 @@ class HysteresisFSM:
         self.state_entry_time: float = time.time()
         self.min_state_duration_seconds: int = 10
 
-        # Hysteresis thresholds (ADR-0026b, relaxed for gaming)
+        # Hysteresis thresholds (ADR-0077 M3 Epic 2)
         self.upgrade_thresholds = {
-            ThermalZone.COOL: 70,  # COOL → WARM at 70°C
-            ThermalZone.WARM: 80,  # WARM → HOT at 80°C
-            ThermalZone.HOT: 90,  # HOT → CRITICAL at 90°C
-            ThermalZone.CRITICAL: 100,  # CRITICAL → EMERGENCY at 100°C
+            ThermalZone.COOL: THERMAL_THRESHOLDS[
+                ThermalZone.COOL
+            ],  # COOL → WARM at 70°C
+            ThermalZone.WARM: THERMAL_THRESHOLDS[
+                ThermalZone.WARM
+            ],  # WARM → HOT at 75°C
+            ThermalZone.HOT: THERMAL_THRESHOLDS[
+                ThermalZone.HOT
+            ],  # HOT → CRITICAL at 85°C
+            ThermalZone.CRITICAL: THERMAL_THRESHOLDS[
+                ThermalZone.CRITICAL
+            ],  # CRITICAL → EMERGENCY at 95°C
         }
 
         self.downgrade_thresholds = {
-            ThermalZone.WARM: 65,  # WARM → COOL at 65°C (70-5)
-            ThermalZone.HOT: 75,  # HOT → WARM at 75°C (80-5)
-            ThermalZone.CRITICAL: 85,  # CRITICAL → HOT at 85°C (90-5)
-            ThermalZone.EMERGENCY: 95,  # EMERGENCY → CRITICAL at 95°C (100-5)
+            ThermalZone.WARM: THERMAL_THRESHOLDS[ThermalZone.COOL]
+            - 5,  # WARM → COOL at 65°C (70-5)
+            ThermalZone.HOT: THERMAL_THRESHOLDS[ThermalZone.WARM]
+            - 0,  # HOT → WARM at 75°C (no hysteresis, matches WARM threshold)
+            ThermalZone.CRITICAL: THERMAL_THRESHOLDS[ThermalZone.HOT]
+            - 0,  # CRITICAL → HOT at 85°C (no hysteresis)
+            ThermalZone.EMERGENCY: THERMAL_THRESHOLDS[ThermalZone.CRITICAL]
+            - 5,  # EMERGENCY → CRITICAL at 90°C (95-5)
         }
 
         # Cooldown durations (ADR-0026b)
@@ -187,15 +202,17 @@ class HysteresisFSM:
         return None
 
     def _calculate_target_zone(self, temperature_celsius: float) -> ThermalZone:
-        """Calculate target zone based on temperature and hysteresis (relaxed for gaming)."""
+        """Calculate target zone based on temperature and hysteresis (ADR-0077)."""
+        from .types import THERMAL_THRESHOLDS
+
         # Emergency override (no hysteresis)
-        if temperature_celsius >= 100:
+        if temperature_celsius >= THERMAL_THRESHOLDS[ThermalZone.CRITICAL]:
             return ThermalZone.EMERGENCY
-        elif temperature_celsius >= 90:
+        elif temperature_celsius >= THERMAL_THRESHOLDS[ThermalZone.HOT]:
             return ThermalZone.CRITICAL
-        elif temperature_celsius >= 80:
+        elif temperature_celsius >= THERMAL_THRESHOLDS[ThermalZone.WARM]:
             return ThermalZone.HOT
-        elif temperature_celsius >= 70:
+        elif temperature_celsius >= THERMAL_THRESHOLDS[ThermalZone.COOL]:
             return ThermalZone.WARM
         else:
             return ThermalZone.COOL

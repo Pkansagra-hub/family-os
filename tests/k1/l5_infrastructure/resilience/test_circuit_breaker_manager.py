@@ -122,3 +122,80 @@ async def _(basic_manager_dep: Any = basic_manager) -> None:
     assert (
         circuit.service == "unknown_service"
     )  # Uses requested service name when no alternate_service configured
+
+
+@test("circuit breaker state continuity on config reload")
+async def _(temp_config_dir_dep: Any = temp_config_dir) -> None:
+    """Test that circuit state is preserved across config reloads (Fix 3)."""
+    temp_config_dir = cast(Path, temp_config_dir_dep)
+
+    # Create initial config
+    config_file = temp_config_dir / "circuit_breakers_reload.yml"
+    config_content = """
+circuit_breakers:
+  reload_test:
+    failure_threshold: 2
+    timeout_duration_ms: 10000
+    success_threshold: 1
+    slow_call_threshold_ms: 1000
+    time_window_ms: 10000
+    fallback_strategy: "default_value"
+    enabled: true
+"""
+    config_file.write_text(config_content)
+
+    manager = CircuitBreakerManager(config_path=str(config_file))
+    circuit = manager.get_circuit("reload_test")
+
+    # Force circuit to OPEN by triggering failures
+    async def failing_operation() -> None:
+        raise RuntimeError("Test failure")
+
+    # Trigger 2 failures to open circuit (threshold=2)
+    for _ in range(2):
+        try:
+            await circuit.call(failing_operation)
+        except RuntimeError:
+            pass  # Expected
+
+    # Verify circuit is OPEN
+    assert circuit.is_open, "Circuit should be OPEN after failures"
+    assert circuit.state.name == "OPEN"
+
+    # Capture state before reload
+    pre_reload_state = circuit.state
+    pre_reload_opened_at = circuit._opened_at_monotonic
+    pre_reload_failure_count = circuit.failure_count
+
+    # Update config with different thresholds
+    config_content_updated = """
+circuit_breakers:
+  reload_test:
+    failure_threshold: 5
+    timeout_duration_ms: 20000
+    success_threshold: 2
+    slow_call_threshold_ms: 2000
+    time_window_ms: 20000
+    fallback_strategy: "default_value"
+    enabled: true
+"""
+    config_file.write_text(config_content_updated)
+
+    # Reload configs
+    await manager.reload_configs()
+
+    # Verify state preservation
+    assert circuit.state == pre_reload_state, "Circuit state should be preserved"
+    assert circuit.is_open, "Circuit should still be OPEN"
+    assert (
+        circuit._opened_at_monotonic == pre_reload_opened_at
+    ), "Opened timestamp should be preserved (critical for timeout calculation)"
+
+    # Verify config was updated
+    assert circuit._config.failure_threshold == 5, "Config should be updated"
+    assert circuit._config.timeout_duration_ms == 20000, "Timeout should be updated"
+
+    # Verify failure history preserved
+    assert (
+        circuit.failure_count == pre_reload_failure_count
+    ), "Failure count should be preserved"

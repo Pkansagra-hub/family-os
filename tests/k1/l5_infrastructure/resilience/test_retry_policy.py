@@ -18,6 +18,7 @@ from k1.l5_infrastructure.resilience.retry_policy import (
     FailureType,
     RetryAbortedError,
     RetryAttemptsExceeded,
+    RetryBudgetExceeded,
     RetryPolicy,
     RetryPolicyConfig,
 )
@@ -236,3 +237,66 @@ async def _(policy_dep: Any = retry_policy) -> None:
     )
 
     assert after_circuit == before_circuit + 1.0
+
+
+@test("retry policy enforces retry budget and raises RetryBudgetExceeded")
+async def _(
+    clock_dep: Any = fake_clock,
+    sleeper_dep: Any = fake_sleeper,
+) -> None:
+    """Test that retry budget is enforced and raises RetryBudgetExceeded (Test 13)."""
+    clock = cast(_FakeClock, clock_dep)
+    sleeper = cast(_FakeSleeper, sleeper_dep)
+
+    # Create policy with tight retry budget (500ms)
+    config = RetryPolicyConfig(
+        name="budget_test",
+        jitter_percent=0.0,
+        max_retries=10,  # Allow many retries
+        base_delay_ms=200.0,  # Each retry takes 200ms
+        max_delay_ms=400.0,
+        retry_budget_ms=500.0,  # Total budget: 500ms (can fit ~2 retries)
+    )
+    policy = RetryPolicy(
+        config=config,
+        random_seed=42,
+        sleep=sleeper.__call__,
+        time_source=clock.monotonic,
+    )
+
+    attempts = 0
+
+    async def always_fails() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise TimeoutError("transient failure")
+
+    # Execute should exhaust budget after ~2 retries (200ms + 200ms = 400ms < 500ms)
+    # But budget check happens BEFORE scheduling next retry, so may stop earlier
+    with raises(RetryBudgetExceeded) as exc_info:
+        await policy.execute(
+            always_fails,
+            idempotent=True,
+            description="budget-exhaustion-test",
+        )
+
+    err = exc_info.raised
+    assert err.description == "budget-exhaustion-test"
+    assert err.budget_ms == 500.0
+
+    # Should have attempted at least once before budget exhaustion
+    assert attempts >= 1, f"Expected at least 1 attempt, got {attempts}"
+
+    # Total delay should be positive (budget was checked after some delay)
+    total_delay = sum(sleeper.calls)
+    assert total_delay > 0, f"Total delay {total_delay}s should be positive"
+    assert (
+        total_delay <= 0.5
+    ), f"Total delay {total_delay}s should not exceed budget 0.5s"
+
+    # Verify budget_exhausted metric incremented
+    after_budget = await _get_metric(
+        "retry_outcomes_total",
+        {"policy": "budget_test", "outcome": "budget_exhausted"},
+    )
+    assert after_budget >= 1.0, "budget_exhausted metric should increment"

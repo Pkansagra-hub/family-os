@@ -118,6 +118,7 @@ async def _(
 async def _(
     breaker: Any = circuit_breaker_fixture, fake_clock: Any = fake_clock_fixture
 ) -> None:
+    """Test that only one probe executes in HALF_OPEN, second is rejected (Fix validation)."""
     circuit_breaker = cast(CircuitBreaker, breaker)
     clock = cast(_FakeClock, fake_clock)
 
@@ -137,8 +138,14 @@ async def _(
 
     async def second() -> None:
         await ready.wait()
-        with raises(CircuitBreakerOpenError):
+        with raises(CircuitBreakerOpenError) as exc_info:
             await circuit_breaker.call(lambda: "second")
+
+        # Verify rejection reason is half_open_probe_in_flight
+        err = exc_info.raised
+        assert (
+            "half_open_probe_in_flight" in err.reason or "probe" in err.reason.lower()
+        ), f"Expected half_open probe rejection, got: {err.reason}"
 
     first_task = asyncio.create_task(circuit_breaker.call(probe))
     second_task = asyncio.create_task(second())
