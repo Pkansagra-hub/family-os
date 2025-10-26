@@ -6,6 +6,7 @@ ADR References:
 - ADR-0006: 3-Phase Orchestration (main architecture)
 - ADR-0006b: Multi-Criteria Agent Scoring (MADM implementation)
 - ADR-0024: Performance Budgets (P95 <5ms target)
+- ADR-0029c: Component Metrics (orchestration_phase_latency_ms)
 
 This module implements Multi-Attribute Decision Making (MADM) to score agent proposals
 using 6 weighted factors:
@@ -29,9 +30,15 @@ Output:
   - Rejected proposals with scores (for telemetry)
 """
 
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional
+
+from k1.l5_infrastructure.observability.metrics import (
+    get_k1_metrics,
+    record_orchestration_phase,
+)
 
 
 class TieBreakStrategy(Enum):
@@ -155,55 +162,71 @@ class Selector:
         Performance: <5ms P95
         TODO: Implement MADM scoring, normalization, tie-breaking
         """
-        if not proposals:
-            return None
+        start_time = time.perf_counter()
+        status = "success"
 
-        # TODO: 1. Normalize latency/cost to 0-1 scale
-        #       - latency_norm = 1 - (latency / max_latency)
-        #       - cost_norm = 1 - (cost / max_cost)
+        try:
+            if not proposals:
+                return None
 
-        # TODO: 2. Calculate scores for each proposal
-        #       scores = []
-        #       for proposal in proposals:
-        #           score = (
-        #               proposal.confidence * weights.confidence +
-        #               latency_norm * weights.latency +
-        #               cost_norm * weights.cost +
-        #               (1.0 if proposal.can_parallelize else 0.0) * weights.parallelism +
-        #               historical_data.get(proposal.agent_id, 0.5) * weights.track_record +
-        #               busy_penalty_norm * weights.busy_penalty
-        #           )
-        #           scores.append((proposal, score))
+            # TODO: 1. Normalize latency/cost to 0-1 scale
+            #       - latency_norm = 1 - (latency / max_latency)
+            #       - cost_norm = 1 - (cost / max_cost)
 
-        # TODO: 3. Sort by score descending
-        #       scores.sort(key=lambda x: x[1], reverse=True)
+            # TODO: 2. Calculate scores for each proposal
+            #       scores = []
+            #       for proposal in proposals:
+            #           score = (
+            #               proposal.confidence * weights.confidence +
+            #               latency_norm * weights.latency +
+            #               cost_norm * weights.cost +
+            #               (1.0 if proposal.can_parallelize else 0.0) * weights.parallelism +
+            #               historical_data.get(proposal.agent_id, 0.5) * weights.track_record +
+            #               busy_penalty_norm * weights.busy_penalty
+            #           )
+            #           scores.append((proposal, score))
 
-        # TODO: 4. Check for tie (top 2 scores within 0.01)
-        #       if len(scores) > 1 and abs(scores[0][1] - scores[1][1]) < 0.01:
-        #           winner = self._apply_tie_break(scores[0][0], scores[1][0])
-        #       else:
-        #           winner = scores[0][0]
+            # TODO: 3. Sort by score descending
+            #       scores.sort(key=lambda x: x[1], reverse=True)
 
-        # TODO: 5. Build TaskAssignment
-        #       assignment = TaskAssignment(
-        #           agent_id=winner.agent_id,
-        #           task_id=task_id,
-        #           score=scores[0][1],
-        #           tie_break_reason=...,
-        #           runner_up_score=scores[1][1] if len(scores) > 1 else None
-        #       )
+            # TODO: 4. Check for tie (top 2 scores within 0.01)
+            #       if len(scores) > 1 and abs(scores[0][1] - scores[1][1]) < 0.01:
+            #           winner = self._apply_tie_break(scores[0][0], scores[1][0])
+            #       else:
+            #           winner = scores[0][0]
 
-        # TODO: 6. Emit metrics
-        #       self.score_histogram.observe(scores[0][1])
+            # TODO: 5. Build TaskAssignment
+            #       assignment = TaskAssignment(
+            #           agent_id=winner.agent_id,
+            #           task_id=task_id,
+            #           score=scores[0][1],
+            #           tie_break_reason=...,
+            #           runner_up_score=scores[1][1] if len(scores) > 1 else None
+            #       )
 
-        # Placeholder return
-        return TaskAssignment(
-            agent_id=proposals[0].agent_id,
-            task_id=task_id,
-            score=0.0,
-            tie_break_reason=None,
-            runner_up_score=None,
-        )
+            # TODO: 6. Record proposal count metric
+            metrics = get_k1_metrics()
+            metrics.orchestrator.orchestrator_proposals_total.labels(
+                task_type="generic"  # TODO: Extract task type from task_id
+            ).inc(len(proposals))
+
+            # Placeholder return
+            return TaskAssignment(
+                agent_id=proposals[0].agent_id,
+                task_id=task_id,
+                score=0.0,
+                tie_break_reason=None,
+                runner_up_score=None,
+            )
+        except Exception:
+            status = "failure"
+            raise
+        finally:
+            # Record selection phase latency (ADR-0029c: orchestration_phase_latency_ms)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            record_orchestration_phase(
+                phase="selection", status=status, latency_ms=latency_ms
+            )
 
     def _apply_tie_break(self, proposal_a: Proposal, proposal_b: Proposal) -> Proposal:
         """

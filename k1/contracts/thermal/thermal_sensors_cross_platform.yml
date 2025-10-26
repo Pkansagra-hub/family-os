@@ -1,0 +1,54 @@
+thermal_sensors_cross_platform:
+  name: "Cross-Platform Thermal Sensor Monitoring"
+  purpose: "Unified thermal sensor access across Linux (sysfs), Windows (WMI), macOS (IOKit)"
+  version: "1.0"
+  source_adr: "ADR-0026a"
+  polling_frequency_hz: 1
+
+  sensor_discovery:
+    linux_sysfs:
+      thermal_zones_path: "/sys/class/thermal/thermal_zone*/"
+      temp_file: "temp"
+      type_file: "type"
+      trip_points_file: "trip_point_*_temp"
+      unit_conversion: "millicelsius_to_celsius"
+      formula: "temperature_celsius = temp_value / 1000.0"
+
+    windows_wmi:
+      namespace: "root\\wmi"
+      class: "MSAcpi_ThermalZoneTemperature"
+      property: "CurrentTemperature"
+      unit_conversion: "kelvin_to_celsius"
+      formula: "temperature_celsius = (current_temp - 2732) / 10.0"
+
+    macos_iokit:
+      service: "IOService:/AppleACPIPlatformExpert/SMC"
+      key_pattern: "TC[0-9]D"  # TC0D, TC1D, etc.
+      unit_conversion: "smc_to_celsius"
+      formula: "temperature_celsius = smc_value / 256.0"
+
+  sensor_aggregation:
+    max_temperature_rule: "Use maximum temperature across all sensors"
+    sensor_weighting: "Equal weighting (no sensor prioritization)"
+    confidence_scoring: "1.0 for valid readings, 0.0 for failed sensors"
+
+  error_handling:
+    sensor_failure_grace_period: "30 seconds before marking sensor offline"
+    fallback_behavior: "Continue with remaining sensors, log warnings"
+    recovery_attempts: "3 retries with 5-second intervals"
+
+  performance_targets:
+    discovery_latency_ms: "<100"
+    polling_latency_ms: "<50"
+    memory_overhead_kb: "<10"
+
+  observability:
+    metrics:
+      - "thermal_sensors_discovered_total{sensor_type}"
+      - "thermal_sensor_readings_total{sensor_type, status}"
+      - "thermal_sensor_discovery_latency_ms"
+      - "thermal_sensor_polling_latency_ms"
+
+  related_contracts:
+    - "thermal_state_detection.yml"
+    - "ADR-0026a: Thermal Sensor Monitoring State Detection"

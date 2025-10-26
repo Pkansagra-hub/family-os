@@ -17,87 +17,485 @@ Related ADRs:
 - ADR-0024: Performance Budgets (placement <10ms)
 - ADR-0029: Prometheus Metrics (device temperature, placement decisions)
 - ADR-0009: Circuit Breaker (failure detection integration)
-
-Key Responsibilities:
-
-1. 4-Tier Placement Strategy:
-   - NPU (30ms, 10W): Optimal for on-device inference
-   - GPU (50ms, 12W): Fallback for NPU overload/thermal
-   - CPU (120ms, 15W): Fallback for GPU overload/thermal
-   - Remote (500ms, 5W): Cloud inference (last resort)
-
-2. Thermal Zone Management:
-   - COOL (<70°C): All accelerators available
-   - WARM (70-74°C): All accelerators available
-   - HOT (75-84°C): NPU disabled, GPU/CPU/Remote available
-   - CRITICAL (85-95°C): NPU/GPU disabled, CPU/Remote available
-   - EMERGENCY (>95°C): All local disabled, Remote only
-
-3. Hysteresis FSM:
-   - 5°C buffer prevents oscillation (upgrade +5°C, downgrade -2°C, 7°C band)
-   - Cooldown periods: 10s upgrade, 30-60s downgrade (3:1 to 6:1 ratio)
-   - Dead zone: Temperatures within zone maintain current state
-   - State persistence: Minimum 10s duration (exception: EMERGENCY)
-   - Emergency jump: CRITICAL → Remote (immediate, <50ms)
-
-4. Placement Decision Logic:
-   - Monitor device temperature (1 Hz polling)
-   - Choose accelerator based on thermal zone + availability
-   - State-aware policies: COOL/WARM (all), HOT (GPU/CPU/Remote), CRITICAL (CPU/Remote), EMERGENCY (Remote)
-   - Automatic failover: Running models migrate on thermal state change
-   - Failover: KV cache transfer <30ms, model loading <50ms, <100ms total
-
-5. Throttling Strategies:
-   - HOT: Increase batch interval 20% (100ms → 120ms), defer background tasks
-   - CRITICAL: Skip persona/grounding/vision, simplified responses
-   - EMERGENCY: Reject new turns, notify user "Device cooling down", Remote only
-
-Performance Metrics:
-- Placement decision: <10ms P95 (<5ms typical)
-- Thermal polling: 1 Hz
-- Temperature read: <5ms P95
-- Failover latency: <100ms (detection 20ms + transfer 30ms + loading 50ms)
-- Emergency jump: <50ms (CRITICAL → Remote)
-- State persistence: ≥10s (prevent rapid switching)
-
-Implementation Notes:
-- Hysteresis FSM prevents thermal oscillation (5°C buffer)
-- Asymmetric thresholds: Faster heat response, slower cool response
-- Cooldown timers enforce minimum state duration
-- Emergency path bypasses normal cascade (safety priority)
-- KV cache migration preserves conversation context during failover
-
-Example Usage:
-    planner = PlacementPlanner(thermal_monitor)
-
-    # Get optimal accelerator for current thermal state
-    accelerator = planner.choose_accelerator(model_config)
-    # Returns: "NPU" | "GPU" | "CPU" | "Remote"
-
-    # Handle thermal state change (automatic migration)
-    if planner.should_migrate(current_accelerator):
-        new_accelerator = planner.choose_accelerator(model_config)
-        # Trigger KV cache transfer + model reload
-
-Research Foundation:
-- Thermal hysteresis control (HVAC systems, Schmitt trigger)
-- Dynamic voltage and frequency scaling (DVFS, Intel SpeedStep, ARM big.LITTLE)
-- Mobile device thermal throttling (iPhone A-series, Android Snapdragon)
-- Embedded system thermal management (automotive, aerospace)
-
-TODO:
-- [ ] Implement ThermalZone enum (COOL/WARM/HOT/CRITICAL/EMERGENCY)
-- [ ] Implement Hysteresis FSM with 5°C buffer and cooldown timers
-- [ ] Implement 4-tier placement logic (NPU→GPU→CPU→Remote)
-- [ ] Implement automatic failover on thermal state change
-- [ ] Implement throttling strategies (HOT/CRITICAL/EMERGENCY)
-- [ ] Implement emergency jump path (CRITICAL → Remote, <50ms)
-- [ ] Add Prometheus metrics (placement_decisions, thermal_failovers, emergency_jumps)
-- [ ] Add state persistence enforcement (minimum 10s duration)
-- [ ] Integrate with ThermalMonitor for 1 Hz temperature polling
-- [ ] Implement KV cache migration during failover (<30ms)
-- [ ] Add unit tests for hysteresis FSM transitions
-- [ ] Add integration tests for 4-tier cascade with thermal simulation
 """
 
-# TODO: Implement PlacementPlanner class with hysteresis FSM
+import logging
+import time
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+# Prometheus metrics (optional)
+try:
+    from prometheus_client import CollectorRegistry, Counter, Histogram
+
+    prometheus_available = True
+except ImportError:
+    # Create dummy classes to avoid runtime errors
+    class DummyMetric:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def inc(self, *args, **kwargs):
+            pass
+
+        def observe(self, *args, **kwargs):
+            pass
+
+        def labels(self, *args, **kwargs):
+            return self
+
+        def set(self, *args, **kwargs):
+            pass
+
+    class DummyRegistry:
+        pass
+
+    Counter = DummyMetric
+    Histogram = DummyMetric
+    CollectorRegistry = DummyRegistry
+    prometheus_available = False
+
+# Import shared types
+from .types import ThermalZone
+
+
+class Accelerator(Enum):
+    """Available accelerators in 4-tier cascade."""
+
+    NPU = "npu"
+    GPU = "gpu"
+    CPU = "cpu"
+    REMOTE = "remote"
+
+
+@dataclass
+class AcceleratorProfile:
+    """Performance and thermal characteristics of each accelerator."""
+
+    latency_ms: float
+    power_watts: float
+    thermal_limit_celsius: float
+    supported_thermal_zones: List[ThermalZone]
+    cost_per_token: float
+
+
+@dataclass
+class PlacementDecision:
+    """Result of placement decision."""
+
+    accelerator: Accelerator
+    thermal_zone: ThermalZone
+    confidence: float
+    reasoning: str
+    timestamp_ms: int
+
+
+class HysteresisFSM:
+    """
+    Thermal hysteresis state machine with asymmetric thresholds and cooldowns.
+
+    Implements ADR-0026b hysteresis FSM with 5°C buffer and state persistence.
+    """
+
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+
+        # Current state
+        self.current_zone: ThermalZone = ThermalZone.COOL
+        self.last_transition_time: float = time.time()
+
+        # Cooldown timers
+        self.upgrade_cooldown_until: float = 0
+        self.downgrade_cooldown_until: float = 0
+
+        # State persistence
+        self.state_entry_time: float = time.time()
+        self.min_state_duration_seconds: int = 10
+
+        # Hysteresis thresholds (ADR-0026b, relaxed for gaming)
+        self.upgrade_thresholds = {
+            ThermalZone.COOL: 70,  # COOL → WARM at 70°C
+            ThermalZone.WARM: 80,  # WARM → HOT at 80°C
+            ThermalZone.HOT: 90,  # HOT → CRITICAL at 90°C
+            ThermalZone.CRITICAL: 100,  # CRITICAL → EMERGENCY at 100°C
+        }
+
+        self.downgrade_thresholds = {
+            ThermalZone.WARM: 65,  # WARM → COOL at 65°C (70-5)
+            ThermalZone.HOT: 75,  # HOT → WARM at 75°C (80-5)
+            ThermalZone.CRITICAL: 85,  # CRITICAL → HOT at 85°C (90-5)
+            ThermalZone.EMERGENCY: 95,  # EMERGENCY → CRITICAL at 95°C (100-5)
+        }
+
+        # Cooldown durations (ADR-0026b)
+        self.upgrade_cooldown_seconds: int = 10
+        self.downgrade_cooldown_seconds: Dict[ThermalZone, int] = {
+            ThermalZone.WARM: 30,
+            ThermalZone.HOT: 60,
+            ThermalZone.CRITICAL: 30,
+            ThermalZone.EMERGENCY: 10,
+        }
+
+    def update_temperature(self, temperature_celsius: float) -> Optional[ThermalZone]:
+        """
+        Update FSM with new temperature reading.
+
+        Returns new thermal zone if state changed, None otherwise.
+        """
+        current_time = time.time()
+
+        # Check minimum state duration
+        if (current_time - self.state_entry_time) < self.min_state_duration_seconds:
+            return None
+
+        # Check cooldown timers
+        if (
+            current_time < self.upgrade_cooldown_until
+            or current_time < self.downgrade_cooldown_until
+        ):
+            return None
+
+        # Determine if upgrade or downgrade is possible
+        new_zone = self._calculate_target_zone(temperature_celsius)
+
+        if new_zone != self.current_zone:
+            # Validate transition
+            if self._can_transition(self.current_zone, new_zone, temperature_celsius):
+                old_zone = self.current_zone
+                self.current_zone = new_zone
+                self.last_transition_time = current_time
+                self.state_entry_time = current_time
+
+                # Set cooldown timer
+                if new_zone.value > old_zone.value:  # Upgrade
+                    self.upgrade_cooldown_until = (
+                        current_time + self.upgrade_cooldown_seconds
+                    )
+                else:  # Downgrade
+                    cooldown_duration = self.downgrade_cooldown_seconds.get(
+                        new_zone, 30
+                    )
+                    self.downgrade_cooldown_until = current_time + cooldown_duration
+
+                self.logger.info(
+                    f"Thermal zone transition: {old_zone.name} → {new_zone.name} "
+                    f"(temp: {temperature_celsius:.1f}°C)"
+                )
+                return new_zone
+
+        return None
+
+    def _calculate_target_zone(self, temperature_celsius: float) -> ThermalZone:
+        """Calculate target zone based on temperature and hysteresis (relaxed for gaming)."""
+        # Emergency override (no hysteresis)
+        if temperature_celsius >= 100:
+            return ThermalZone.EMERGENCY
+        elif temperature_celsius >= 90:
+            return ThermalZone.CRITICAL
+        elif temperature_celsius >= 80:
+            return ThermalZone.HOT
+        elif temperature_celsius >= 70:
+            return ThermalZone.WARM
+        else:
+            return ThermalZone.COOL
+
+    def _can_transition(
+        self, from_zone: ThermalZone, to_zone: ThermalZone, temperature_celsius: float
+    ) -> bool:
+        """Check if transition is allowed based on hysteresis thresholds."""
+        if from_zone == to_zone:
+            return False
+
+        # Emergency transitions bypass hysteresis
+        if to_zone == ThermalZone.EMERGENCY:
+            return temperature_celsius >= self.upgrade_thresholds[ThermalZone.CRITICAL]
+
+        # Upgrade transitions (immediate)
+        if to_zone.value > from_zone.value:
+            threshold = self.upgrade_thresholds.get(from_zone)
+            return threshold is not None and temperature_celsius >= threshold
+
+        # Downgrade transitions (with hysteresis)
+        else:
+            threshold = self.downgrade_thresholds.get(to_zone)
+            return threshold is not None and temperature_celsius <= threshold
+
+    def force_emergency_jump(self) -> bool:
+        """Force immediate transition to EMERGENCY zone (bypasses all timers)."""
+        if self.current_zone != ThermalZone.EMERGENCY:
+            self.current_zone = ThermalZone.EMERGENCY
+            self.last_transition_time = time.time()
+            self.state_entry_time = time.time()
+            # Clear cooldowns for emergency
+            self.upgrade_cooldown_until = 0
+            self.downgrade_cooldown_until = 0
+            self.logger.warning("Emergency thermal jump activated")
+            return True
+        return False
+
+    def get_current_zone(self) -> ThermalZone:
+        """Get current thermal zone."""
+        return self.current_zone
+
+    def get_state_info(self) -> Dict[str, Any]:
+        """Get detailed state information for debugging."""
+        current_time = time.time()
+        return {
+            "current_zone": self.current_zone.name,
+            "state_duration_seconds": current_time - self.state_entry_time,
+            "upgrade_cooldown_remaining": max(
+                0, self.upgrade_cooldown_until - current_time
+            ),
+            "downgrade_cooldown_remaining": max(
+                0, self.downgrade_cooldown_until - current_time
+            ),
+            "last_transition_seconds_ago": current_time - self.last_transition_time,
+        }
+
+
+class PlacementPlanner:
+    """
+    Thermal-aware model placement planner with hysteresis FSM.
+
+    Implements ADR-0026c 4-tier placement cascade with thermal constraints.
+    """
+
+    def __init__(self, thermal_monitor: Optional[Any] = None):
+        self.logger = logging.getLogger(__name__)
+        self.thermal_monitor = thermal_monitor
+
+        # Hysteresis FSM
+        self.hysteresis_fsm = HysteresisFSM()
+
+        # Accelerator profiles (ADR-0026c, ADR-0027, relaxed for gaming)
+        self.accelerator_profiles = {
+            Accelerator.NPU: AcceleratorProfile(
+                latency_ms=30,
+                power_watts=10,
+                thermal_limit_celsius=80,  # Relaxed from 75°C
+                supported_thermal_zones=[ThermalZone.COOL, ThermalZone.WARM],
+                cost_per_token=0.0001,
+            ),
+            Accelerator.GPU: AcceleratorProfile(
+                latency_ms=50,
+                power_watts=12,
+                thermal_limit_celsius=95,  # Relaxed from 85°C
+                supported_thermal_zones=[
+                    ThermalZone.COOL,
+                    ThermalZone.WARM,
+                    ThermalZone.HOT,
+                ],
+                cost_per_token=0.0002,
+            ),
+            Accelerator.CPU: AcceleratorProfile(
+                latency_ms=120,
+                power_watts=15,
+                thermal_limit_celsius=105,  # Relaxed from 95°C
+                supported_thermal_zones=[
+                    ThermalZone.COOL,
+                    ThermalZone.WARM,
+                    ThermalZone.HOT,
+                    ThermalZone.CRITICAL,
+                ],
+                cost_per_token=0.0005,
+            ),
+            Accelerator.REMOTE: AcceleratorProfile(
+                latency_ms=500,
+                power_watts=5,
+                thermal_limit_celsius=110,  # Relaxed from 100°C
+                supported_thermal_zones=[
+                    ThermalZone.COOL,
+                    ThermalZone.WARM,
+                    ThermalZone.HOT,
+                    ThermalZone.CRITICAL,
+                    ThermalZone.EMERGENCY,
+                ],
+                cost_per_token=0.002,
+            ),
+        }
+
+        # Prometheus metrics
+        if prometheus_available:
+            self._setup_prometheus_metrics()
+
+        # State tracking
+        self.last_placement_decision: Optional[PlacementDecision] = None
+
+    def _setup_prometheus_metrics(self):
+        """Initialize Prometheus metrics."""
+        if not prometheus_available:
+            return
+
+        # Use custom registry to avoid conflicts in tests
+        self._prometheus_registry = CollectorRegistry()
+
+        self.placement_decisions_total = Counter(
+            "thermal_placement_decisions_total",
+            "Total placement decisions by accelerator and thermal zone",
+            ["accelerator", "thermal_zone"],
+            registry=self._prometheus_registry,
+        )
+        self.placement_latency_ms = Histogram(
+            "thermal_placement_latency_ms",
+            "Placement decision latency",
+            buckets=[1, 5, 10, 25, 50, 100],
+            registry=self._prometheus_registry,
+        )
+        self.emergency_jumps_total = Counter(
+            "thermal_emergency_jumps_total",
+            "Total emergency placement jumps to remote",
+            registry=self._prometheus_registry,
+        )
+
+    def choose_accelerator(
+        self, model_requirements: Optional[Dict[str, Any]] = None
+    ) -> PlacementDecision:
+        """
+        Choose optimal accelerator based on current thermal state.
+
+        Args:
+            model_requirements: Optional model requirements (quantization, memory, etc.)
+
+        Returns:
+            PlacementDecision with chosen accelerator and reasoning
+        """
+        start_time = time.time()
+
+        # Get current thermal zone from hysteresis FSM (not monitor)
+        if self.thermal_monitor:
+            current_temp = self.thermal_monitor.get_temperature("MAX")
+            if current_temp is not None:
+                # Update hysteresis FSM with current temperature
+                new_zone = self.hysteresis_fsm.update_temperature(current_temp)
+                if new_zone:
+                    self.logger.info(f"Thermal zone updated to {new_zone.name}")
+
+        # Use hysteresis FSM zone for stable placement decisions
+        thermal_zone = self.hysteresis_fsm.get_current_zone()
+
+        # Emergency jump check (ADR-0026c)
+        if thermal_zone in [ThermalZone.CRITICAL, ThermalZone.EMERGENCY]:
+            if self._should_emergency_jump(thermal_zone):
+                self.hysteresis_fsm.force_emergency_jump()
+                thermal_zone = ThermalZone.EMERGENCY
+                if prometheus_available:
+                    self.emergency_jumps_total.inc()
+
+        # 4-tier cascade selection (ADR-0026c)
+        chosen_accelerator = self._select_accelerator_cascade(
+            thermal_zone, model_requirements
+        )
+
+        # Create decision
+        decision = PlacementDecision(
+            accelerator=chosen_accelerator,
+            thermal_zone=thermal_zone,
+            confidence=1.0,  # Deterministic selection
+            reasoning=self._get_placement_reasoning(chosen_accelerator, thermal_zone),
+            timestamp_ms=int(time.time() * 1000),
+        )
+
+        # Update metrics
+        if prometheus_available:
+            self.placement_decisions_total.labels(
+                accelerator=chosen_accelerator.value, thermal_zone=thermal_zone.name
+            ).inc()
+            self.placement_latency_ms.observe((time.time() - start_time) * 1000)
+
+        self.last_placement_decision = decision
+        return decision
+
+    def _should_emergency_jump(self, thermal_zone: ThermalZone) -> bool:
+        """Check if emergency jump to Remote is needed."""
+        return thermal_zone in [ThermalZone.CRITICAL, ThermalZone.EMERGENCY]
+
+    def _select_accelerator_cascade(
+        self, thermal_zone: ThermalZone, model_requirements: Optional[Dict[str, Any]]
+    ) -> Accelerator:
+        """
+        Select accelerator using 4-tier cascade based on thermal zone.
+
+        Cascade order: NPU → GPU → CPU → Remote
+        """
+        # Define cascade order by thermal zone (relaxed for gaming)
+        cascade_by_zone = {
+            ThermalZone.COOL: [
+                Accelerator.NPU,
+                Accelerator.GPU,
+                Accelerator.CPU,
+                Accelerator.REMOTE,
+            ],
+            ThermalZone.WARM: [
+                Accelerator.NPU,
+                Accelerator.GPU,
+                Accelerator.CPU,
+                Accelerator.REMOTE,
+            ],
+            ThermalZone.HOT: [Accelerator.GPU, Accelerator.CPU, Accelerator.REMOTE],
+            ThermalZone.CRITICAL: [Accelerator.CPU, Accelerator.REMOTE],
+            ThermalZone.EMERGENCY: [Accelerator.REMOTE],
+        }
+
+        cascade = cascade_by_zone.get(thermal_zone, [Accelerator.REMOTE])
+
+        # Return first available accelerator in cascade
+        for accelerator in cascade:
+            profile = self.accelerator_profiles[accelerator]
+            if thermal_zone in profile.supported_thermal_zones:
+                return accelerator
+
+        # Fallback to Remote
+        return Accelerator.REMOTE
+
+    def _get_placement_reasoning(
+        self, accelerator: Accelerator, thermal_zone: ThermalZone
+    ) -> str:
+        """Generate human-readable reasoning for placement decision."""
+        profile = self.accelerator_profiles[accelerator]
+
+        if thermal_zone == ThermalZone.EMERGENCY:
+            return f"Emergency: Forced Remote placement due to {thermal_zone.name} thermal state"
+        elif thermal_zone == ThermalZone.CRITICAL:
+            return f"Critical: CPU/Remote only in {thermal_zone.name} state ({profile.latency_ms}ms latency)"
+        else:
+            return (
+                f"Optimal: {accelerator.value.upper()} selected for {thermal_zone.name} state "
+                f"({profile.latency_ms}ms latency, {profile.power_watts}W power)"
+            )
+
+    def should_migrate(self, current_accelerator: Accelerator) -> bool:
+        """
+        Check if current placement should migrate due to thermal state change.
+
+        Returns True if migration is recommended.
+        """
+        if not self.last_placement_decision:
+            return False
+
+        # Get current optimal placement
+        current_optimal = self.choose_accelerator()
+
+        # Check if different from current
+        should_migrate = current_optimal.accelerator != current_accelerator
+
+        if should_migrate:
+            self.logger.info(
+                f"Migration recommended: {current_accelerator.value} → "
+                f"{current_optimal.accelerator.value} "
+                f"(thermal zone: {current_optimal.thermal_zone.name})"
+            )
+
+        return should_migrate
+
+    def get_thermal_zone(self) -> ThermalZone:
+        """Get current thermal zone from hysteresis FSM."""
+        return self.hysteresis_fsm.get_current_zone()
+
+    def get_hysteresis_state_info(self) -> Dict[str, Any]:
+        """Get detailed hysteresis FSM state for debugging."""
+        return self.hysteresis_fsm.get_state_info()
+
+    def force_emergency_jump(self) -> bool:
+        """Force emergency jump to Remote accelerator."""
+        return self.hysteresis_fsm.force_emergency_jump()

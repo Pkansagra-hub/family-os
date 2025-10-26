@@ -1,0 +1,99 @@
+%% K1 Event Bus Architecture Diagram
+%% Component-level diagram for k1/l5_infrastructure/event_bus/
+%% Research Foundation:
+%% - Publish-Subscribe Pattern (Gamma et al. 1994)
+%% - Actor Model (Hewitt 1973)
+%% - AsyncIO Queues (Python 3.7+)
+%% Related ADRs: ADR-0005 (Event Bus), ADR-0086 (Async Pub/Sub)
+%% Performance: <5ms publish latency, <2ms subscribe latency
+
+graph TB
+    %% External Interfaces
+    subgraph "Layer 1 (Input)"
+        L1_PUB["L1 Publishers<br/>IntentRouter<br/>VoicePipeline<br/>Sensors"]
+    end
+
+    subgraph "Layer 2 (Orchestration)"
+        L2_PUB["L2 Publishers<br/>Planner<br/>Orchestrator"]
+        L2_SUB["L2 Subscribers<br/>Planner<br/>Orchestrator"]
+    end
+
+    subgraph "Layer 3 (Execution)"
+        L3_SUB["L3 Subscribers<br/>Agents<br/>ModelHub<br/>Tools"]
+    end
+
+    %% Event Bus Core
+    subgraph "EventBus Core [k1/l5_infrastructure/event_bus/event_bus.py]"
+        EB["EventBus<br/>Main Class"]
+        EB_PUB["publish()<br/>Async Publish"]
+        EB_SUB["subscribe()<br/>Pattern Matching"]
+        EB_UNSUB["unsubscribe()<br/>Cleanup"]
+
+        EB --> EB_PUB
+        EB --> EB_SUB
+        EB --> EB_UNSUB
+    end
+
+    %% Subscriber Management
+    subgraph "Subscriber Management"
+        SUB_MGR["SubscriberManager<br/>Internal Class"]
+        SUB_LIST["Subscriber List<br/>Dict[str, List[Subscriber]]"]
+        WILDCARD["Wildcard Matching<br/>*.topic, topic.*"]
+        QUEUES["AsyncIO Queues<br/>per Subscriber<br/>backpressure: 1000"]
+    end
+
+    %% Event Schemas
+    subgraph "Event Schemas [k1/l5_infrastructure/event_bus/schemas.py]"
+        BASE["EventBase<br/>Abstract Class"]
+        INTENT["IntentDetected<br/>user_intent, confidence"]
+        INPUT["UserInput<br/>text, modality, timestamp"]
+        VOICE["VoiceCommand<br/>transcript, barge_in"]
+        BARGE["BargeIn<br/>interrupt_type, priority"]
+        TOPIC_ENUM["EventTopic Enum<br/>17+ event types"]
+    end
+
+    %% Observability
+    subgraph "Observability Integration"
+        METRICS["Prometheus Metrics<br/>publish_total, subscribe_total<br/>queue_depth, latency_ms"]
+        TRACING["OpenTelemetry Spans<br/>cognitive_trace_id<br/>publish_span, deliver_span"]
+        LOGGING["Structured Logs<br/>event_type, subscriber_count<br/>queue_overflow, delivery_errors"]
+    end
+
+    %% Data Flow
+    L1_PUB -->|"publish('intent.detected', IntentDetected)"| EB_PUB
+    L2_PUB -->|"publish('task.announced', TaskAnnouncement)"| EB_PUB
+    EB_PUB -->|"zero-copy delivery"| SUB_MGR
+    SUB_MGR -->|"pattern match + enqueue"| QUEUES
+    QUEUES -->|"async get() + process"| L2_SUB
+    QUEUES -->|"async get() + process"| L3_SUB
+
+    %% Internal Architecture
+    EB -->|"manages"| SUB_MGR
+    SUB_MGR -->|"stores"| SUB_LIST
+    SUB_MGR -->|"supports"| WILDCARD
+    SUB_MGR -->|"creates"| QUEUES
+
+    %% Schema Relationships
+    EB -->|"validates against"| BASE
+    BASE -->|"extended by"| INTENT
+    BASE -->|"extended by"| INPUT
+    BASE -->|"extended by"| VOICE
+    BASE -->|"extended by"| BARGE
+    BASE -->|"uses"| TOPIC_ENUM
+
+    %% Observability Flow
+    EB -->|"emits"| METRICS
+    EB -->|"creates"| TRACING
+    EB -->|"writes"| LOGGING
+
+    %% Performance Notes
+    note1["<b>Performance Budget:</b><br/>• Publish: <5ms P95<br/>• Subscribe: <2ms P95<br/>• Queue depth: 1000 max<br/>• Zero-copy delivery<br/>• AsyncIO coroutines"]
+    note1 -.-> EB
+
+    %% Architecture Notes
+    note2["<b>Architecture:</b><br/>• Async pub/sub with backpressure<br/>• Wildcard subscriptions (*.topic)<br/>• Event validation & typing<br/>• Comprehensive observability<br/>• Thread-safe via asyncio"]
+    note2 -.-> EB
+
+    %% Event Flow Examples
+    note3["<b>Event Flows:</b><br/>• L1→L2: intent.detected<br/>• L2→L3: task.announced<br/>• L3→L2: task.completed<br/>• All flows: cognitive_trace_id"]
+    note3 -.-> EB_PUB

@@ -1,0 +1,69 @@
+thermal_placement_manager:
+  name: "Thermal-Aware Model Placement Manager"
+  purpose: "Integrate thermal state with model placement decisions using 4-tier cascade"
+  version: "1.0"
+  source_adr: "ADR-0026c"
+
+  placement_cascade:
+    tier_1_npu:
+      accelerator: "NPU"
+      thermal_states: ["COOL", "WARM"]
+      latency_ms: 140
+      power_watts: "5-8"
+      cost_per_token: 0.0001
+      availability: "COOL/WARM only"
+
+    tier_2_gpu:
+      accelerator: "GPU"
+      thermal_states: ["COOL", "WARM", "HOT"]
+      latency_ms: 180
+      power_watts: "15-25"
+      cost_per_token: 0.0002
+      availability: "COOL/WARM/HOT"
+
+    tier_3_cpu:
+      accelerator: "CPU"
+      thermal_states: ["COOL", "WARM", "HOT", "CRITICAL"]
+      latency_ms: 350
+      power_watts: "3-10"
+      cost_per_token: 0.0005
+      availability: "All states except EMERGENCY"
+
+    tier_4_remote:
+      accelerator: "Remote"
+      thermal_states: ["COOL", "WARM", "HOT", "CRITICAL", "EMERGENCY"]
+      latency_ms: 600
+      power_watts: 0
+      cost_per_token: 0.002
+      availability: "Always available"
+
+  placement_logic:
+    thermal_state_input: "Current thermal state from thermal_state_detection.yml"
+    cascade_order: "NPU → GPU → CPU → Remote"
+    thermal_filtering: "Filter available accelerators by thermal state"
+    selection_criteria: "First available in cascade order"
+
+  placement_decisions:
+    cool_state: "NPU preferred, GPU/CPU/Remote available"
+    warm_state: "NPU/GPU preferred, CPU/Remote available"
+    hot_state: "GPU preferred, CPU/Remote available"
+    critical_state: "CPU preferred, Remote available"
+    emergency_state: "Remote only (forced placement)"
+
+  performance_targets:
+    placement_decision_latency_ms: "<10"
+    cascade_evaluation_overhead_ms: "<5"
+    memory_overhead_kb: "<5"
+
+  observability:
+    metrics:
+      - "thermal_placement_decisions_total{accelerator, thermal_state}"
+      - "thermal_placement_cascade_fallbacks_total{from_tier, to_tier}"
+      - "thermal_placement_latency_ms{accelerator}"
+
+  related_contracts:
+    - "npu_placement_policy.yml"
+    - "gpu_placement_policy.yml"
+    - "cpu_remote_placement_policy.yml"
+    - "emergency_jump_handler.yml"
+    - "ADR-0026c: Model Placement Integration"

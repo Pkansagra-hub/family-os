@@ -1,0 +1,51 @@
+cpu_remote_placement_policy:
+  name: "CPU/Remote Placement Policy (120ms/500ms, 15W/5W)"
+  purpose: "Define CPU and Remote placement constraints for thermal management"
+  version: "1.0"
+  source_adr: "ADR-0026c"
+
+  cpu_characteristics:
+    latency_ms: 120
+    power_watts: 15
+    thermal_limit_celsius: 95
+    supported_models: "All model types"
+    memory_limit_gb: 16
+
+  remote_characteristics:
+    latency_ms: 500
+    power_watts: 5
+    thermal_limit_celsius: 100
+    supported_models: "All model types"
+    cost_per_token: 0.002
+
+  placement_constraints:
+    cpu_thermal_states_allowed: ["COOL", "WARM", "HOT", "CRITICAL"]
+    cpu_temperature_max_celsius: 95
+    cpu_exclusion: "EMERGENCY"
+    remote_thermal_states_allowed: ["COOL", "WARM", "HOT", "CRITICAL", "EMERGENCY"]
+    remote_temperature_max_celsius: 100
+    remote_exclusion: "None"
+
+  placement_logic:
+    cpu_availability: "CPU available if temperature < 95°C AND thermal_state != EMERGENCY"
+    remote_availability: "Remote always available"
+    preference_order: "CPU preferred over Remote"
+    thermal_cascade: "CPU → Remote when CPU unavailable"
+
+  performance_targets:
+    cpu_placement_check_latency_ms: "<2"
+    remote_placement_check_latency_ms: "<5"
+    cpu_inference_latency_ms: "<120"
+    remote_inference_latency_ms: "<500"
+
+  observability:
+    metrics:
+      - "cpu_placement_attempts_total{thermal_state, success}"
+      - "remote_placement_attempts_total{thermal_state, success}"
+      - "cpu_thermal_rejections_total{temperature_celsius}"
+
+  related_contracts:
+    - "thermal_placement_manager.yml"
+    - "gpu_placement_policy.yml"
+    - "emergency_jump_handler.yml"
+    - "ADR-0026c: Model Placement Integration"

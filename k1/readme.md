@@ -1,4 +1,4 @@
-# K1 Intelligence Kernel
+                     # K1 Intelligence Kernel
 
 **Privacy-first AI intelligence layer for FamilyOS dual-kernel architecture.**
 

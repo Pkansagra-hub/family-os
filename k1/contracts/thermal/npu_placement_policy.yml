@@ -1,0 +1,39 @@
+npu_placement_policy:
+  name: "NPU Placement Policy (30ms, 10W)"
+  purpose: "Define NPU placement constraints and thermal requirements"
+  version: "1.0"
+  source_adr: "ADR-0026c"
+
+  npu_characteristics:
+    latency_ms: 30
+    power_watts: 10
+    thermal_limit_celsius: 75
+    supported_models: "Quantized models (INT8, INT4)"
+    memory_limit_gb: 4
+
+  placement_constraints:
+    thermal_states_allowed: ["COOL", "WARM"]
+    temperature_max_celsius: 75
+    thermal_state_exclusion: "HOT, CRITICAL, EMERGENCY"
+    placement_condition: "temperature < 75°C AND thermal_state IN (COOL, WARM)"
+
+  placement_logic:
+    availability_check: "NPU available if thermal constraints met"
+    preference_score: 100
+    fallback_behavior: "Cascade to GPU if NPU unavailable"
+    thermal_override: "Skip NPU if temperature >= 75°C"
+
+  performance_targets:
+    placement_check_latency_ms: "<2"
+    npu_inference_latency_ms: "<30"
+    power_consumption_watts: "<10"
+
+  observability:
+    metrics:
+      - "npu_placement_attempts_total{thermal_state, success}"
+      - "npu_thermal_rejections_total{temperature_celsius}"
+
+  related_contracts:
+    - "thermal_placement_manager.yml"
+    - "gpu_placement_policy.yml"
+    - "ADR-0026c: Model Placement Integration"

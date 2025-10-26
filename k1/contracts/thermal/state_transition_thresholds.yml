@@ -1,0 +1,57 @@
+state_transition_thresholds:
+  name: "Thermal State Transition Thresholds"
+  purpose: "Define precise temperature thresholds for thermal state transitions with hysteresis"
+  version: "1.0"
+  source_adr: "ADR-0026b"
+
+  threshold_definitions:
+    cool_warm_threshold:
+      upgrade_celsius: 60
+      downgrade_celsius: 55
+      hysteresis_celsius: 5
+      description: "COOL↔WARM transition with 5°C hysteresis"
+
+    warm_hot_threshold:
+      upgrade_celsius: 75
+      downgrade_celsius: 70
+      hysteresis_celsius: 5
+      description: "WARM↔HOT transition with 5°C hysteresis"
+
+    hot_critical_threshold:
+      upgrade_celsius: 85
+      downgrade_celsius: 80
+      hysteresis_celsius: 5
+      description: "HOT↔CRITICAL transition with 5°C hysteresis"
+
+    critical_emergency_threshold:
+      upgrade_celsius: 95
+      downgrade_celsius: 90
+      hysteresis_celsius: 5
+      description: "CRITICAL↔EMERGENCY transition with 5°C hysteresis"
+
+  transition_logic:
+    upgrade_condition: "temperature >= upgrade_threshold"
+    downgrade_condition: "temperature <= downgrade_threshold"
+    hysteresis_calculation: "downgrade_threshold = upgrade_threshold - hysteresis"
+    threshold_validation: "hysteresis >= 0 and hysteresis <= 10"
+
+  threshold_configuration:
+    configurable_parameters: "All thresholds configurable via k1/config/thermal.yml"
+    runtime_updates: "Hot-reload supported without restart"
+    validation_rules: "upgrade > downgrade, hysteresis = upgrade - downgrade"
+    default_values: "ADR-0026b specified values"
+
+  performance_targets:
+    threshold_evaluation_latency_ms: "<1"
+    configuration_update_latency_ms: "<10"
+    memory_overhead_kb: "<2"
+
+  observability:
+    metrics:
+      - "thermal_threshold_crossings_total{threshold_name, direction}"
+      - "thermal_threshold_configuration_updates_total"
+
+  related_contracts:
+    - "hysteresis_fsm_5c_buffer.yml"
+    - "state_persistence_timer.yml"
+    - "ADR-0026b: Thermal Hysteresis State Machine"

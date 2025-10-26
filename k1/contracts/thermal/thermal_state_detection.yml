@@ -1,0 +1,65 @@
+thermal_state_detection:
+  name: "Thermal State Detection & Classification"
+  purpose: "Classify device thermal state into 5 zones with hysteresis and state persistence"
+  version: "1.0"
+  source_adr: "ADR-0026a"
+  state_zones:
+    - name: "COOL"
+      temperature_range_celsius: "< 60"
+      description: "Optimal performance, all accelerators available"
+      placement_policy: "NPU/GPU/CPU/Remote"
+    - name: "WARM"
+      temperature_range_celsius: "60-75"
+      description: "Good performance, prefer local accelerators"
+      placement_policy: "NPU/GPU/CPU/Remote"
+    - name: "HOT"
+      temperature_range_celsius: "75-85"
+      description: "Reduced performance, avoid NPU, prefer GPU/CPU"
+      placement_policy: "GPU/CPU/Remote"
+    - name: "CRITICAL"
+      temperature_range_celsius: "85-95"
+      description: "Emergency cooling, CPU/Remote only"
+      placement_policy: "CPU/Remote"
+    - name: "EMERGENCY"
+      temperature_range_celsius: "> 95"
+      description: "Critical shutdown imminent, Remote only"
+      placement_policy: "Remote"
+
+  state_detection:
+    input_temperature: "Max temperature from thermal_sensors_cross_platform.yml"
+    state_persistence_timer: "Minimum 10 seconds in state before transition"
+    hysteresis_buffer: "5°C buffer to prevent flapping"
+    transition_logic: "Temperature must cross threshold + hysteresis to change state"
+
+  state_transitions:
+    cool_to_warm: "temperature >= 65°C (60°C + 5°C hysteresis)"
+    warm_to_hot: "temperature >= 80°C (75°C + 5°C hysteresis)"
+    hot_to_critical: "temperature >= 90°C (85°C + 5°C hysteresis)"
+    critical_to_emergency: "temperature >= 100°C (95°C + 5°C hysteresis)"
+    warm_to_cool: "temperature <= 55°C (60°C - 5°C hysteresis)"
+    hot_to_warm: "temperature <= 70°C (75°C - 5°C hysteresis)"
+    critical_to_hot: "temperature <= 80°C (85°C - 5°C hysteresis)"
+    emergency_to_critical: "temperature <= 90°C (95°C - 5°C hysteresis)"
+
+  flapping_prevention:
+    minimum_state_duration_seconds: 10
+    transition_cooldown_seconds: 5
+    state_change_events: "Emit thermal_state_changed event with old/new states"
+
+  performance_targets:
+    state_detection_latency_ms: "<10"
+    state_persistence_overhead_ms: "<5"
+    memory_overhead_kb: "<5"
+
+  observability:
+    metrics:
+      - "thermal_state_current{state}"
+      - "thermal_state_transitions_total{from_state, to_state}"
+      - "thermal_state_duration_seconds{state}"
+      - "thermal_flap_preventions_total"
+
+  related_contracts:
+    - "thermal_sensors_cross_platform.yml"
+    - "hysteresis_fsm_5c_buffer.yml"
+    - "state_persistence_timer.yml"
+    - "ADR-0026a: Thermal Sensor Monitoring State Detection"

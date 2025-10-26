@@ -1,0 +1,124 @@
+%% K1 Bridge K0 Architecture Diagram
+%% Component-level diagram for k1/l5_infrastructure/bridge_k0/
+%% Research Foundation:
+%% - HTTP/1.1 Command Submission (Fielding 1999)
+%% - Server-Sent Events (W3C SSE)
+%% - Exponential Backoff (Varghese 2005)
+%% Related ADRs: ADR-0006 (K0 Bridge), ADR-0087 (Bridge Protocols)
+%% Performance: <50ms command latency, <100ms SSE reconnect
+
+graph TB
+    %% External Systems
+    subgraph "K0 Kernel"
+        K0_CMD["K0 Command API<br/>port:5200<br/>HTTP POST /commands"]
+        K0_QUERY["K0 Query API<br/>port:5201<br/>HTTP GET /queries"]
+        K0_SSE["K0 SSE Stream<br/>port:5202<br/>text/event-stream"]
+        K0_OBS["K0 Observability<br/>port:5203<br/>Prometheus /metrics"]
+        K0_HEALTH["K0 Health Check<br/>port:5204<br/>HTTP GET /health"]
+        K0_ARB["K0 Arbitration<br/>port:5205<br/>WebSocket /arbitrate"]
+    end
+
+    %% Bridge Components
+    subgraph "Bridge K0 [k1/l5_infrastructure/bridge_k0/]"
+        CMD_CLIENT["CommandClient<br/>HTTP Command Submission"]
+        SSE_CLIENT["SSEClient<br/>Event Streaming"]
+    end
+
+    %% Command Client Components
+    subgraph "Command Client [command_client.py]"
+        CMD_HTTP["HTTPClient<br/>aiohttp session<br/>connection pooling"]
+        CMD_ENVELOPE["EnvelopeBuilder<br/>K0CommandEnvelope<br/>idempotency_key<br/>cognitive_trace_id"]
+        CMD_RETRY["RetryLogic<br/>Transient failures<br/>Idempotent retries"]
+        CMD_ERROR["ErrorHandler<br/>K0CommandRejected<br/>K0IdempotentDuplicate<br/>Network errors"]
+        CMD_METRICS["CommandMetrics<br/>commands_total<br/>latency_ms<br/>errors_total"]
+    end
+
+    %% SSE Client Components
+    subgraph "SSE Client [sse_client.py]"
+        SSE_HTTP["SSEConnection<br/>aiohttp streaming<br/>Last-Event-ID"]
+        SSE_PARSER["EventParser<br/>W3C SSE format<br/>JSON payloads<br/>trace_context"]
+        SSE_RECONNECT["ReconnectionLogic<br/>Exponential backoff<br/>Resume from last_id"]
+        SSE_BACKPRESSURE["BackpressureHandler<br/>Async queue<br/>Overflow protection"]
+        SSE_ADVISORY["AdvisoryEvents<br/>K0 system events<br/>Health status<br/>Config changes"]
+        SSE_METRICS["SSEMetrics<br/>events_received_total<br/>reconnects_total<br/>connection_duration"]
+    end
+
+    %% Resilience Integration
+    subgraph "Resilience Stack Integration"
+        CIRCUIT_BREAKER["CircuitBreaker<br/>Fail-fast protection<br/>Automatic recovery"]
+        RETRY_POLICY["RetryPolicy<br/>Exponential backoff<br/>Jitter + budget"]
+    end
+
+    %% Observability Integration
+    subgraph "Observability Integration"
+        METRICS["Prometheus Metrics<br/>bridge_commands_total<br/>bridge_events_total<br/>connection_state"]
+        TRACING["OpenTelemetry Spans<br/>command_submit<br/>event_receive<br/>reconnection"]
+        LOGGING["Structured Logs<br/>command_id, trace_id<br/>event_type, payload_size<br/>error_details"]
+    end
+
+    %% Data Flow - Command Submission
+    CMD_CLIENT -->|"submit_command()"| CMD_HTTP
+    CMD_HTTP -->|"POST /commands"| K0_CMD
+    K0_CMD -->|"HTTP 200/4xx/5xx"| CMD_HTTP
+    CMD_HTTP -->|"success response"| CMD_CLIENT
+    CMD_HTTP -->|"transient failure"| CMD_RETRY
+    CMD_RETRY -->|"retry with backoff"| CMD_HTTP
+    CMD_HTTP -->|"permanent failure"| CMD_ERROR
+
+    %% Data Flow - SSE Streaming
+    SSE_CLIENT -->|"connect_stream()"| SSE_HTTP
+    SSE_HTTP -->|"GET /sse"| K0_SSE
+    K0_SSE -->|"text/event-stream"| SSE_PARSER
+    SSE_PARSER -->|"parsed events"| SSE_BACKPRESSURE
+    SSE_BACKPRESSURE -->|"queued events"| SSE_CLIENT
+    SSE_HTTP -->|"connection lost"| SSE_RECONNECT
+    SSE_RECONNECT -->|"exponential backoff"| SSE_HTTP
+
+    %% Internal Architecture - Command Client
+    CMD_CLIENT -->|"builds"| CMD_ENVELOPE
+    CMD_CLIENT -->|"uses"| CMD_HTTP
+    CMD_CLIENT -->|"handles"| CMD_ERROR
+    CMD_CLIENT -->|"tracks"| CMD_METRICS
+    CMD_ENVELOPE -->|"adds idempotency"| CMD_RETRY
+    CMD_RETRY -->|"integrates with"| RETRY_POLICY
+
+    %% Internal Architecture - SSE Client
+    SSE_CLIENT -->|"manages"| SSE_HTTP
+    SSE_CLIENT -->|"parses with"| SSE_PARSER
+    SSE_CLIENT -->|"reconnects via"| SSE_RECONNECT
+    SSE_CLIENT -->|"backpressures with"| SSE_BACKPRESSURE
+    SSE_CLIENT -->|"handles"| SSE_ADVISORY
+    SSE_CLIENT -->|"tracks"| SSE_METRICS
+    SSE_RECONNECT -->|"uses"| RETRY_POLICY
+
+    %% Resilience Integration
+    CMD_HTTP -->|"protected by"| CIRCUIT_BREAKER
+    SSE_HTTP -->|"protected by"| CIRCUIT_BREAKER
+    CIRCUIT_BREAKER -->|"fail-fast"| CMD_ERROR
+    CIRCUIT_BREAKER -->|"fail-fast"| SSE_RECONNECT
+
+    %% Observability Flow
+    CMD_CLIENT -->|"emits"| METRICS
+    SSE_CLIENT -->|"emits"| METRICS
+    CMD_CLIENT -->|"spans"| TRACING
+    SSE_CLIENT -->|"spans"| TRACING
+    CMD_CLIENT -->|"logs"| LOGGING
+    SSE_CLIENT -->|"logs"| LOGGING
+
+    %% K0 Integration Details
+    K0_CMD -.->|"Command Envelope Format<br/>idempotency_key<br/>cognitive_trace_id<br/>band: GREEN/AMBER/RED"| CMD_ENVELOPE
+    K0_SSE -.->|"SSE Event Format<br/>event: agent.lifecycle<br/>data: JSON payload<br/>id: sequence_id"| SSE_PARSER
+    K0_OBS -.->|"Shared Prometheus<br/>k0_kernel_* + k1_intelligence_*"| METRICS
+    K0_HEALTH -.->|"Health Status Events<br/>via SSE advisory"| SSE_ADVISORY
+
+    %% Performance Notes
+    note1["<b>Performance Budget:</b><br/>• Command latency: <50ms P95<br/>• SSE reconnect: <100ms<br/>• Event processing: <5ms<br/>• Connection pooling: 10 max<br/>• Backpressure queue: 1000 max"]
+    note1 -.-> CMD_CLIENT
+
+    %% Architecture Notes
+    note2["<b>Architecture:</b><br/>• HTTP/1.1 with connection pooling<br/>• SSE with Last-Event-ID resume<br/>• Idempotent command submission<br/>• Exponential backoff retry<br/>• Circuit breaker protection<br/>• Comprehensive observability"]
+    note2 -.-> SSE_CLIENT
+
+    %% Protocol Notes
+    note3["<b>K0 Bridge Protocols:</b><br/>• Command: HTTP POST with envelope<br/>• SSE: W3C streaming with JSON<br/>• Query: HTTP GET (future)<br/>• Arbitration: WebSocket (future)<br/>• All include cognitive_trace_id"]
+    note3 -.-> K0_CMD

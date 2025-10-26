@@ -1,0 +1,46 @@
+state_persistence_timer:
+  name: "Thermal State Persistence Timer"
+  purpose: "Enforce minimum state duration to prevent rapid thermal flapping"
+  version: "1.0"
+  source_adr: "ADR-0026b"
+
+  persistence_requirements:
+    minimum_state_duration_seconds: 10
+    timer_reset_conditions: "Reset on state entry, temperature change, cooldown expiry"
+    timer_enforcement: "Block state transitions until timer expires"
+    timer_granularity_seconds: 1
+
+  state_specific_timers:
+    cool_minimum_seconds: 10
+    warm_minimum_seconds: 10
+    hot_minimum_seconds: 10
+    critical_minimum_seconds: 10
+    emergency_minimum_seconds: 10
+
+  timer_logic:
+    timer_start: "Start when entering new state"
+    timer_check: "Check before allowing state transitions"
+    timer_remaining: "Report remaining seconds in state"
+    timer_override: "Emergency transitions (EMERGENCY state) bypass timer"
+
+  flapping_detection:
+    rapid_transition_window_seconds: 60
+    max_transitions_in_window: 3
+    flap_penalty_seconds: 300
+    flap_recovery: "Normal timer enforcement after penalty"
+
+  performance_targets:
+    timer_check_latency_ms: "<1"
+    timer_update_overhead_ms: "<2"
+    memory_overhead_kb: "<2"
+
+  observability:
+    metrics:
+      - "thermal_state_persistence_seconds{state}"
+      - "thermal_state_timer_blocks_total{blocked_transition}"
+      - "thermal_flap_penalties_total"
+
+  related_contracts:
+    - "hysteresis_fsm_5c_buffer.yml"
+    - "state_transition_thresholds.yml"
+    - "ADR-0026b: Thermal Hysteresis State Machine"

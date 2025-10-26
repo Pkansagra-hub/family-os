@@ -118,3 +118,105 @@ __version__ = "0.1.0"
 # TODO: Implement eviction_coordinator.py, memory_tracker.py, tier1_evictor.py, tier2_evictor.py,
 # tier3_oom_prevention.py, metrics_collector.py
 # Per ADR-0018 family (0018, 0018a-c) and ADR-0024c (Memory Budgets)
+
+# ==============================================================================
+# Observability Instrumentation (ADR-0029, ADR-0029c)
+# ==============================================================================
+
+from k1.l5_infrastructure.observability.metrics import get_k1_metrics
+
+
+def _record_eviction_tier1(bytes_evicted: int, latency_ms: float):
+    """
+    Record Tier 1 soft eviction metrics.
+
+    Args:
+        bytes_evicted: Bytes evicted from SessionState (meta section + old turns)
+        latency_ms: Eviction latency in milliseconds
+
+    Metrics:
+        - session_state_evictions_total: Counter (tier='tier1_soft')
+        - eviction_tier1_bytes: Total bytes evicted Tier 1
+        - eviction_tier1_latency_ms: Histogram <5ms P95
+
+    ADR References:
+        - ADR-0018a: Tier 1 Soft Eviction (LRU policy, <5ms)
+        - ADR-0029c: Component Metrics (eviction tracking)
+
+    Usage:
+        ```python
+        bytes_evicted = await tier1_soft_eviction(session_state)
+        _record_eviction_tier1(bytes_evicted, latency_ms)
+        ```
+    """
+    metrics = get_k1_metrics()
+    metrics.session_state.session_state_evictions_total.labels(tier="tier1_soft").inc()
+    # Note: eviction_tier1_bytes, eviction_tier1_latency_ms not yet in K1MetricsCollector
+    # TODO: Add to SessionStateMetrics dataclass
+
+
+def _record_eviction_tier2(bytes_evicted: int, latency_ms: float, section: str):
+    """
+    Record Tier 2 hard eviction metrics.
+
+    Args:
+        bytes_evicted: Bytes evicted (beliefs LRU, scoreboard LRU, multimodal compression)
+        latency_ms: Eviction latency in milliseconds
+        section: Section evicted ('beliefs', 'scoreboard', 'multimodal')
+
+    Metrics:
+        - session_state_evictions_total: Counter (tier='tier2_hard')
+        - eviction_tier2_bytes: Total bytes evicted Tier 2
+        - eviction_tier2_latency_ms: Histogram <3ms P95
+
+    ADR References:
+        - ADR-0018b: Tier 2 Hard Eviction (beliefs/scoreboard LRU, multimodal compression)
+        - ADR-0029c: Component Metrics
+
+    Usage:
+        ```python
+        bytes_evicted = await tier2_hard_eviction(session_state, section="beliefs")
+        _record_eviction_tier2(bytes_evicted, latency_ms, section)
+        ```
+    """
+    metrics = get_k1_metrics()
+    metrics.session_state.session_state_evictions_total.labels(tier="tier2_hard").inc()
+    # Note: eviction_tier2_bytes, eviction_tier2_latency_ms not yet in K1MetricsCollector
+    # TODO: Add to SessionStateMetrics dataclass with section label
+
+
+def _record_oom_termination(session_id: str, final_size_bytes: int):
+    """
+    Record Tier 3 OOM session termination (CRITICAL alert).
+
+    Args:
+        session_id: Session identifier (UUID)
+        final_size_bytes: SessionState size at OOM trigger (≥256KB)
+
+    Metrics:
+        - session_state_evictions_total: Counter (tier='tier3_oom')
+
+    ADR References:
+        - ADR-0018c: Tier 3 OOM Prevention (256KB trigger, session kill <20ms)
+        - ADR-0029c: Component Metrics (session_oom_terminated_total)
+
+    Usage:
+        ```python
+        if size_kb >= 256:
+            await tier3_oom_prevention(session_state)
+            _record_oom_termination(session_id, session_state.size_bytes)
+        ```
+
+    Alert: session_oom_terminated_total > 0 (should be ZERO in production)
+    """
+    metrics = get_k1_metrics()
+    metrics.session_state.session_state_evictions_total.labels(tier="tier3_oom").inc()
+    # Note: session_oom_terminated_total not yet in K1MetricsCollector
+    # TODO: Add to SessionStateMetrics dataclass
+
+
+__all__ = [
+    "_record_eviction_tier1",
+    "_record_eviction_tier2",
+    "_record_oom_termination",
+]

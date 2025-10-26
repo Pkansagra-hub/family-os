@@ -1,0 +1,43 @@
+upgrade_cooldown_10s:
+  name: "Thermal Upgrade Cooldown (10 seconds)"
+  purpose: "Prevent rapid thermal upgrades with 10-second cooldown after temperature increases"
+  version: "1.0"
+  source_adr: "ADR-0026b"
+
+  cooldown_parameters:
+    cooldown_duration_seconds: 10
+    cooldown_trigger: "Temperature increase crossing upgrade threshold"
+    cooldown_reset: "Reset on any temperature decrease"
+    cooldown_enforcement: "Block upgrade transitions during cooldown"
+
+  upgrade_transitions:
+    cool_to_warm_cooldown: "10s after temperature >= 60°C"
+    warm_to_hot_cooldown: "10s after temperature >= 75°C"
+    hot_to_critical_cooldown: "10s after temperature >= 85°C"
+    critical_to_emergency_cooldown: "10s after temperature >= 95°C"
+
+  cooldown_logic:
+    cooldown_start: "Start when upgrade threshold crossed"
+    cooldown_check: "Check before allowing upgrade transitions"
+    cooldown_remaining: "Report remaining cooldown seconds"
+    cooldown_override: "Emergency conditions bypass cooldown"
+
+  thermal_ramping_protection:
+    fast_degradation_response: "Allow immediate upgrades for thermal safety"
+    cooldown_purpose: "Prevent over-reaction to brief temperature spikes"
+    cooldown_balance: "10s balances responsiveness vs stability"
+
+  performance_targets:
+    cooldown_check_latency_ms: "<1"
+    cooldown_timer_overhead_ms: "<2"
+    memory_overhead_kb: "<1"
+
+  observability:
+    metrics:
+      - "thermal_upgrade_cooldown_active_seconds"
+      - "thermal_upgrade_cooldown_blocks_total{blocked_transition}"
+
+  related_contracts:
+    - "downgrade_cooldown_30_60s.yml"
+    - "hysteresis_fsm_5c_buffer.yml"
+    - "ADR-0026b: Thermal Hysteresis State Machine"

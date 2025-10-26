@@ -6,6 +6,7 @@ ADR References:
 - ADR-0006: 3-Phase Orchestration (main architecture)
 - ADR-0006c: Parallel DAG Execution (implementation details)
 - ADR-0024: Performance Budgets (variable latency, plan-dependent)
+- ADR-0029c: Component Metrics (orchestration_phase_latency_ms)
 
 This module executes multi-step plans using a Directed Acyclic Graph (DAG) representation
 with parallel execution of independent steps:
@@ -32,9 +33,15 @@ Output:
   - Per-step results for dependency resolution
 """
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
+
+from k1.l5_infrastructure.observability.metrics import (
+    get_k1_metrics,
+    record_orchestration_phase,
+)
 
 
 class StepStatus(Enum):
@@ -165,40 +172,56 @@ class Executor:
 
         TODO: Implement DAG builder, topological sort, parallel execution
         """
-        import time
+        start_time = time.perf_counter()
+        status = "success"
 
-        start_time = time.time()
+        try:
+            # TODO: 1. Build DAG from plan steps
+            #       dag = self._build_dag(plan_steps)
 
-        # TODO: 1. Build DAG from plan steps
-        #       dag = self._build_dag(plan_steps)
+            # TODO: 2. Compute execution waves via topological sort
+            #       waves = self._compute_waves(dag)
 
-        # TODO: 2. Compute execution waves via topological sort
-        #       waves = self._compute_waves(dag)
+            # TODO: 3. Execute waves in parallel
+            #       results = {}
+            #       for wave in waves:
+            #           wave_results = await self._execute_wave(wave, results)
+            #           results.update(wave_results)
 
-        # TODO: 3. Execute waves in parallel
-        #       results = {}
-        #       for wave in waves:
-        #           wave_results = await self._execute_wave(wave, results)
-        #           results.update(wave_results)
+            # TODO: 4. Build ExecutionResult
+            #       outputs = [results[step.step_id] for step in plan_steps]
+            #       success = all(r.status == StepStatus.COMPLETED for r in outputs)
+            #       failures = [r.step_id for r in outputs if r.status == StepStatus.FAILED]
 
-        # TODO: 4. Build ExecutionResult
-        #       outputs = [results[step.step_id] for step in plan_steps]
-        #       success = all(r.status == StepStatus.COMPLETED for r in outputs)
-        #       failures = [r.step_id for r in outputs if r.status == StepStatus.FAILED]
+            # TODO: 5. Track active tasks gauge
+            metrics = get_k1_metrics()
+            metrics.orchestrator.orchestrator_active_tasks.labels(
+                phase="execution"
+            ).set(len(plan_steps))
 
-        # TODO: 5. Emit metrics
-        #       total_latency = int((time.time() - start_time) * 1000)
-        #       self.execution_latency_histogram.observe(total_latency)
-        #       self.wave_count_histogram.observe(len(waves))
+            # Placeholder return
+            return ExecutionResult(
+                success=False,
+                outputs=[],
+                total_latency_ms=0,
+                failures=[],
+                stragglers=[],
+            )
+        except Exception:
+            status = "failure"
+            raise
+        finally:
+            # Record execution phase latency (ADR-0029c: orchestration_phase_latency_ms)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            record_orchestration_phase(
+                phase="execution", status=status, latency_ms=latency_ms
+            )
 
-        # Placeholder return
-        return ExecutionResult(
-            success=False,
-            outputs=[],
-            total_latency_ms=0,
-            failures=[],
-            stragglers=[],
-        )
+            # Reset active tasks gauge
+            metrics = get_k1_metrics()
+            metrics.orchestrator.orchestrator_active_tasks.labels(
+                phase="execution"
+            ).set(0)
 
     def _build_dag(self, plan_steps: List[PlanStep]) -> Dict[str, DAGNode]:
         """

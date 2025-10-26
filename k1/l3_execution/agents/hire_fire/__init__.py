@@ -190,3 +190,85 @@ AUTHOR: K1 Intelligence Module
 VERSION: 1.0.0
 LAST UPDATED: October 2025
 """
+
+# ==============================================================================
+# Observability Instrumentation (ADR-0029, ADR-0029c)
+# ==============================================================================
+
+from k1.l5_infrastructure.observability.metrics import (
+    get_k1_metrics,
+    record_agent_transition,
+)
+
+
+def _record_agent_hire_metrics(agent_type: str, latency_ms: float, warmup_type: str):
+    """
+    Record agent hire metrics (cold vs warm start).
+
+    Args:
+        agent_type: Agent type ('concierge', 'planner', 'researcher', 'safety_watch')
+        latency_ms: Hire latency in milliseconds
+        warmup_type: 'cold' (fresh start) or 'warm' (pool reactivation)
+
+    Metrics:
+        - agent_warmup_latency_ms: Histogram of hire latency by agent type
+
+    ADR References:
+        - ADR-0029c: Component Metrics (agent_warmup_latency_ms)
+        - ADR-0005a: WARMING State (cold vs warm start)
+    """
+    metrics = get_k1_metrics()
+    metrics.agent.agent_warmup_latency_ms.labels(agent_type=agent_type).observe(
+        latency_ms
+    )
+
+
+def _record_agent_crash_metrics(agent_type: str, crash_type: str):
+    """
+    Record agent crash events.
+
+    Args:
+        agent_type: Agent type that crashed
+        crash_type: Crash reason ('timeout', 'exception', 'oom', 'killed')
+
+    Metrics:
+        - agent_crashes_total: Counter of crashes by agent type and crash reason
+
+    ADR References:
+        - ADR-0029c: Component Metrics (agent_crashes_total)
+        - ADR-0005: Agent Lifecycle (crash handling)
+    """
+    metrics = get_k1_metrics()
+    metrics.agent.agent_crashes_total.labels(
+        agent_type=agent_type, crash_type=crash_type
+    ).inc()
+
+
+def _update_agent_active_count_metrics(state: str, agent_type: str, count: int):
+    """
+    Update gauge for agent count by state.
+
+    Args:
+        state: Agent state ('PENDING', 'WARMING', 'ACTIVE', 'IDLE', 'DRAINING', 'TERMINATED')
+        agent_type: Agent type
+        count: Current count of agents in this state
+
+    Metrics:
+        - agent_active_count: Gauge of agent count by state and type
+
+    ADR References:
+        - ADR-0029c: Component Metrics (agent_active_count)
+        - ADR-0005: Agent Lifecycle (6-state FSM)
+    """
+    metrics = get_k1_metrics()
+    metrics.agent.agent_active_count.labels(state=state, agent_type=agent_type).set(
+        count
+    )
+
+
+__all__ = [
+    "record_agent_transition",  # From metrics module
+    "_record_agent_hire_metrics",
+    "_record_agent_crash_metrics",
+    "_update_agent_active_count_metrics",
+]

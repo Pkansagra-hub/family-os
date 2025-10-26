@@ -1,0 +1,43 @@
+downgrade_cooldown_30_60s:
+  name: "Thermal Downgrade Cooldown (30-60 seconds)"
+  purpose: "Prevent rapid thermal downgrades with state-dependent cooldown after temperature decreases"
+  version: "1.0"
+  source_adr: "ADR-0026b"
+
+  cooldown_parameters:
+    cooldown_duration_range_seconds: "30-60"
+    cooldown_trigger: "Temperature decrease crossing downgrade threshold"
+    cooldown_reset: "Reset on any temperature increase"
+    cooldown_enforcement: "Block downgrade transitions during cooldown"
+
+  state_specific_cooldowns:
+    warm_to_cool_cooldown_seconds: 30
+    hot_to_warm_cooldown_seconds: 60
+    critical_to_hot_cooldown_seconds: 30
+    emergency_to_critical_cooldown_seconds: 10
+
+  cooldown_logic:
+    cooldown_start: "Start when downgrade threshold crossed"
+    cooldown_check: "Check before allowing downgrade transitions"
+    cooldown_remaining: "Report remaining cooldown seconds"
+    cooldown_override: "Emergency conditions can override"
+
+  thermal_recovery_protection:
+    slow_recovery_modeling: "Allow gradual thermal recovery"
+    cooldown_purpose: "Prevent premature return to higher-performance states"
+    cooldown_balance: "30-60s balances stability vs performance recovery"
+
+  performance_targets:
+    cooldown_check_latency_ms: "<1"
+    cooldown_timer_overhead_ms: "<2"
+    memory_overhead_kb: "<1"
+
+  observability:
+    metrics:
+      - "thermal_downgrade_cooldown_active_seconds{state}"
+      - "thermal_downgrade_cooldown_blocks_total{blocked_transition}"
+
+  related_contracts:
+    - "upgrade_cooldown_10s.yml"
+    - "hysteresis_fsm_5c_buffer.yml"
+    - "ADR-0026b: Thermal Hysteresis State Machine"

@@ -129,3 +129,39 @@ __version__ = "0.1.0"
 # TODO: Implement full_serializer.py, delta_serializer.py, deserializer.py, dirty_tracker.py,
 # k0_wal_writer.py, schema_versioning.py
 # Per ADR-0019 family (0019, 0019a-d)
+
+# ==============================================================================
+# Observability Instrumentation (ADR-0029, ADR-0029c)
+# ==============================================================================
+
+from k1.l5_infrastructure.observability.metrics import get_k1_metrics
+
+
+def _record_serialization_size(section: str, size_bytes: int):
+    """
+    Record SessionState serialization size.
+
+    Args:
+        section: Section name ('beliefs', 'scoreboard', 'control', 'persona', 'multimodal', 'meta', 'full')
+        size_bytes: Serialized size in bytes
+
+    Metrics:
+        - session_state_size_bytes: Histogram of serialized SessionState size
+
+    ADR References:
+        - ADR-0029c: Component Metrics (session_state_size_bytes)
+        - ADR-0019: Serialization Core (full <1ms P95, 64KB typical)
+
+    Usage:
+        ```python
+        serialized = await serialize_full(session_state)
+        _record_serialization_size("full", len(serialized))
+        ```
+    """
+    metrics = get_k1_metrics()
+    metrics.session_state.session_state_size_bytes.labels(section=section).observe(
+        size_bytes
+    )
+
+
+__all__ = ["_record_serialization_size"]

@@ -2,6 +2,7 @@
 Phase 1: Negotiation - Contract Net Protocol Implementation
 
 **ADR Reference:** ADR-0006a (Contract Net Protocol Negotiation Implementation)
+**Observability:** ADR-0029 (Prometheus Metrics), ADR-0029c (Component Metrics)
 
 **Purpose:**
 Broadcast TaskAnnouncement to all ACTIVE agents, collect Proposals within 50ms deadline.
@@ -45,6 +46,10 @@ Tier 4: Graceful degradation (return empty proposals, Phase 2 handles)
 - All agents decline → Trigger Tier 2 fallback (simplify task)
 - Timeout (50ms) → Return collected proposals (partial success acceptable)
 """
+
+import time
+
+from k1.l5_infrastructure.observability.metrics import record_orchestration_phase
 
 
 class Negotiator:
@@ -101,12 +106,25 @@ class Negotiator:
 
         **Performance:** <50ms P95
         """
-        # TODO: Implement negotiation logic
-        # 1. Get ACTIVE agents from registry
-        # 2. Broadcast to agent mailboxes
-        # 3. Collect proposals with deadline
-        # 4. Handle fallbacks if needed
-        pass
+        start_time = time.perf_counter()
+        status = "success"
+
+        try:
+            # TODO: Implement negotiation logic
+            # 1. Get ACTIVE agents from registry
+            # 2. Broadcast to agent mailboxes
+            # 3. Collect proposals with deadline
+            # 4. Handle fallbacks if needed
+            pass
+        except Exception:
+            status = "failure"
+            raise
+        finally:
+            # Record negotiation phase latency (ADR-0029c: orchestrator_phase_latency_ms)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            record_orchestration_phase(
+                phase="negotiation", status=status, latency_ms=latency_ms
+            )
 
     async def _collect_proposals(self, task_id, deadline_ms, expected_count):
         """
