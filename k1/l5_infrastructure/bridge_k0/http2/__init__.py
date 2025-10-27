@@ -64,19 +64,20 @@ Research Foundation:
 - TLS 1.3 (RFC 8446): Mutual authentication, 1-RTT handshake
 - zstd (Collet 2016): Fast compression, high ratio, streaming support
 
-Last Updated: January 2025
+Last Updated: October 2025
 ADR Reference: docs/architecture/decisions/0044-k0-bridge-http2.md
 """
 
-# TODO: Implement HTTP2ConnectionManager class
-# TODO: Add connection pooling (5 connections per K0 instance)
-# TODO: Add stream multiplexing (max 100 concurrent streams)
-# TODO: Add PING frames for keep-alive (every 10s)
-# TODO: Add TLS 1.3 mutual authentication
-# TODO: Add header compression (HPACK)
-# TODO: Add flow control per stream
-# TODO: Add batching strategy (time/size/count triggers)
-# TODO: Add exponential backoff retry
-# TODO: Add circuit breaker integration
-# TODO: Add dead letter queue (7-day retention)
-# TODO: Add Prometheus metrics (connection_pool_hit_rate, round_trip_latency)
+from k1.l5_infrastructure.bridge_k0.http2.connection_manager import (
+    ConnectionStats,
+    HTTP2ConnectionManager,
+    K0ConnectionError,
+    K0Port,
+)
+
+__all__ = [
+    "HTTP2ConnectionManager",
+    "K0Port",
+    "ConnectionStats",
+    "K0ConnectionError",
+]

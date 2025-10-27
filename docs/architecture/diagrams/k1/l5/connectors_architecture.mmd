@@ -1,0 +1,169 @@
+---
+description: Connectors Architecture — K0 connection lifecycle (establishment, health, reconnection) with TLS 1.3
+primary_adrs:
+  - ADR-0044a (Transport Protocol - HTTP/2, FlatBuffers, TLS 1.3)
+  - ADR-0001a (K0 Bridge Architecture - 5 clients, connection pooling)
+  - ADR-0044b (Connection Pooling - 1 connection per client)
+  - ADR-0044c (Health Check - PING every 10s, auto-reconnect)
+  - ADR-0044d (Reconnection Strategy - exponential backoff 1s-30s)
+related_adrs:
+  - ADR-0024 (Performance Budgets - connection <100ms, health check <20ms)
+  - ADR-0009 (Circuit Breaker - integration with K0 connector)
+  - ADR-0029 (Prometheus Metrics - connection pool health)
+research:
+  - "HTTP/2 RFC 7540 (Belshe et al. 2015) — Binary framing, multiplexing"
+  - "TLS 1.3 RFC 8446 (Rescorla 2018) — 0-RTT, mutual auth"
+  - "Connection Pooling (Apache HttpClient) — Lifecycle management"
+file_id: "CONN"
+performance_budgets:
+  connection_establishment: "<100ms P95"
+  health_check_ping: "<20ms P95"
+  reconnection_latency: "<200ms"
+  tls_handshake: "<50ms"
+  http2_preface: "<10ms"
+integration_tests: tests/integration/layer5/test_k0_connector.py
+created: 2025-01-18
+---
+
+```mermaid
+graph TB
+    subgraph Connectors_System["🔌 K0 Connectors (Connection Lifecycle Management)"]
+        direction TB
+
+        %% ===== K0 CONNECTOR =====
+        K0Connector["K0Connector<br/>🌉 Connection Manager<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Establish HTTP/2<br/>• TLS 1.3 handshake<br/>• Connection pooling<br/>• Health check orchestration<br/>• Auto-reconnect coordination<br/>───────────<br/>Connection Pool (5):<br/>🔵 CommandClient (port 7001)<br/>🟢 QueryClient (port 7002)<br/>🟡 StreamingClient (port 7003)<br/>🟠 BatchClient (port 7004)<br/>🔴 ObservabilityClient (port 7005)<br/>───────────<br/>Performance:<br/>⏱️ <100ms connection<br/>⏱️ <50ms TLS handshake<br/>⏱️ <10ms HTTP/2 preface<br/>───────────<br/>Files:<br/>k1/l5_infrastructure/<br/>connectors/k0_connector.py"]
+
+        %% ===== CONNECTION LIFECYCLE FSM =====
+        subgraph Connection_Lifecycle["🔄 Connection State Machine"]
+            direction LR
+            DISCONNECTED["🔴 DISCONNECTED<br/>Not Connected<br/>───────────<br/>• Initial state<br/>• Connection lost<br/>• Circuit OPEN<br/>───────────<br/>Next: CONNECTING"]
+            CONNECTING["🟡 CONNECTING<br/>Establishing<br/>───────────<br/>• DNS lookup<br/>• TCP handshake<br/>• TLS negotiation<br/>• HTTP/2 preface<br/>───────────<br/>Timeout: 5s<br/>Next: CONNECTED<br/>or FAILED"]
+            CONNECTED["🟢 CONNECTED<br/>Active Connection<br/>───────────<br/>• HTTP/2 active<br/>• Health checks<br/>• Requests allowed<br/>───────────<br/>Next: DRAINING<br/>or FAILED"]
+            DRAINING["🟠 DRAINING<br/>Graceful Shutdown<br/>───────────<br/>• No new requests<br/>• Complete in-flight<br/>• Send GOAWAY<br/>───────────<br/>Timeout: 10s<br/>Next: DISCONNECTED"]
+            FAILED["🔴 FAILED<br/>Error State<br/>───────────<br/>• Connection error<br/>• Health check fail<br/>• Circuit breaker<br/>───────────<br/>Next: RECONNECTING"]
+            RECONNECTING["🟡 RECONNECTING<br/>Exponential Backoff<br/>───────────<br/>• Wait backoff delay<br/>• 1s → 2s → 4s →<br/>  8s → 16s → 30s<br/>───────────<br/>Max: 30s<br/>Next: CONNECTING"]
+
+            DISCONNECTED -->|"Start connection"| CONNECTING
+            CONNECTING -->|"Success<br/><100ms"| CONNECTED
+            CONNECTING -->|"Timeout/Error<br/>>5s"| FAILED
+            CONNECTED -->|"Graceful close"| DRAINING
+            CONNECTED -->|"Health fail/<br/>Circuit OPEN"| FAILED
+            DRAINING -->|"In-flight complete<br/><10s"| DISCONNECTED
+            FAILED -->|"Auto-reconnect"| RECONNECTING
+            RECONNECTING -->|"Backoff elapsed"| CONNECTING
+        end
+
+        %% ===== HEALTH CHECK MANAGER =====
+        HealthCheckManager["HealthCheckManager<br/>❤️ Connection Health<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• PING every 10s<br/>• Round-trip latency<br/>• Failure detection<br/>• Circuit breaker integration<br/>• Trigger reconnection<br/>───────────<br/>Health Check Protocol:<br/>1. Send PING frame<br/>2. Await PONG frame<br/>3. Measure RTT<br/>4. Record success/failure<br/>───────────<br/>Failure Thresholds:<br/>• 3 consecutive fails<br/>  → Mark unhealthy<br/>• 5 consecutive fails<br/>  → Trigger reconnect<br/>───────────<br/>Performance:<br/>⏱️ <20ms P95 ping<br/>⏱️ 10s interval<br/>───────────<br/>Files:<br/>connectors/health_check.py"]
+
+        %% ===== RECONNECTION HANDLER =====
+        ReconnectionHandler["ReconnectionHandler<br/>🔄 Exponential Backoff<br/>═══════════════<br/>Reconnection Strategy:<br/>───────────<br/>• Exponential backoff<br/>  1s → 2s → 4s →<br/>  8s → 16s → 30s<br/>• Jitter: ±20% random<br/>• Max backoff: 30s<br/>• Reset on success<br/>───────────<br/>Reconnect Triggers:<br/>• Health check failure<br/>• Connection timeout<br/>• Circuit breaker OPEN<br/>• TLS error<br/>• HTTP/2 protocol error<br/>───────────<br/>Performance:<br/>⏱️ <200ms reconnect<br/>⏱️ <5 retries typical<br/>───────────<br/>Files:<br/>connectors/reconnect.py"]
+
+        %% ===== TLS 1.3 HANDLER =====
+        TLS13Handler["TLS13Handler<br/>🔐 Security Layer<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• TLS 1.3 negotiation<br/>• Mutual authentication<br/>• Certificate validation<br/>• Session resumption (0-RTT)<br/>• Perfect forward secrecy<br/>───────────<br/>TLS Configuration:<br/>• Protocol: TLSv1.3 only<br/>• Ciphers:<br/>  TLS_AES_256_GCM_SHA384<br/>  TLS_CHACHA20_POLY1305<br/>• Client cert required<br/>• Certificate pinning<br/>───────────<br/>Performance:<br/>⏱️ <50ms handshake<br/>⏱️ <10ms resumption<br/>───────────<br/>Files:<br/>connectors/tls_handler.py"]
+
+        %% ===== HTTP/2 MANAGER =====
+        HTTP2Manager["HTTP2Manager<br/>🌐 Protocol Handler<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• HTTP/2 preface<br/>• SETTINGS frame<br/>• Stream multiplexing<br/>• Flow control<br/>• GOAWAY handling<br/>───────────<br/>HTTP/2 Settings:<br/>• MAX_CONCURRENT_STREAMS: 100<br/>• INITIAL_WINDOW_SIZE: 64KB<br/>• MAX_FRAME_SIZE: 16KB<br/>• ENABLE_PUSH: false<br/>───────────<br/>Performance:<br/>⏱️ <10ms preface<br/>⏱️ <5ms per stream<br/>───────────<br/>Files:<br/>bridge_k0/http2_conn_mgr.py"]
+
+        %% ===== CONNECTOR METRICS =====
+        ConnectorMetrics["ConnectorMetrics<br/>📊 Prometheus Metrics<br/>═══════════════<br/>Connection Metrics:<br/>───────────<br/>• connection_state (0-5 enum)<br/>• connection_attempts_total<br/>• connection_success_rate<br/>• connection_latency_ms<br/>• tls_handshake_latency_ms<br/>───────────<br/>Health Check Metrics:<br/>───────────<br/>• health_check_ping_latency_ms<br/>• health_check_failures_total<br/>• health_check_success_rate<br/>───────────<br/>Reconnection Metrics:<br/>───────────<br/>• reconnection_attempts_total<br/>• reconnection_backoff_seconds<br/>• reconnection_success_rate<br/>───────────<br/>Files:<br/>observability/metrics/<br/>connector_metrics.py"]
+    end
+
+    %% ===== K0 KERNEL =====
+    K0Kernel["🔷 K0 Kernel<br/>═══════════════<br/>K0 Service Endpoints<br/>───────────<br/>Ports:<br/>• :7001 (Command)<br/>• :7002 (Query)<br/>• :7003 (Streaming)<br/>• :7004 (Batch)<br/>• :7005 (Observability)<br/>───────────<br/>Protocols:<br/>• HTTP/2<br/>• TLS 1.3<br/>• FlatBuffers"]
+
+    %% ===== K1 BRIDGE =====
+    K1Bridge["🌉 K1 Bridge<br/>═══════════════<br/>Bridge Clients<br/>───────────<br/>• CommandClient<br/>• QueryClient<br/>• StreamingClient<br/>• BatchClient<br/>• ObservabilityClient<br/>───────────<br/>Uses connector pool"]
+
+    Prometheus["📊 Prometheus<br/>═══════════════<br/>Port :9090<br/>───────────<br/>• Connection state<br/>• Health checks<br/>• Reconnection rate"]
+
+    %% ===== DATA FLOWS - CONNECTION LIFECYCLE =====
+    K1Bridge -->|"1. Request connection"| K0Connector
+    K0Connector -->|"2. Check state"| Connection_Lifecycle
+    Connection_Lifecycle -->|"DISCONNECTED"| TLS13Handler
+    TLS13Handler -->|"3. TLS handshake<br/><50ms"| HTTP2Manager
+    HTTP2Manager -->|"4. HTTP/2 preface<br/><10ms"| K0Kernel
+    K0Kernel -->|"5. SETTINGS ACK"| Connection_Lifecycle
+    Connection_Lifecycle -->|"CONNECTED"| K1Bridge
+
+    %% ===== DATA FLOWS - HEALTH CHECK =====
+    HealthCheckManager -->|"PING every 10s"| K0Kernel
+    K0Kernel -->|"PONG response<br/><20ms"| HealthCheckManager
+    HealthCheckManager -->|"Health status"| Connection_Lifecycle
+
+    %% ===== DATA FLOWS - RECONNECTION =====
+    Connection_Lifecycle -->|"FAILED state"| ReconnectionHandler
+    ReconnectionHandler -->|"6. Backoff delay<br/>1s-30s"| Connection_Lifecycle
+    Connection_Lifecycle -->|"RECONNECTING"| K0Connector
+
+    %% ===== DATA FLOWS - METRICS =====
+    K0Connector -->|"Emit metrics"| ConnectorMetrics
+    HealthCheckManager -->|"Emit metrics"| ConnectorMetrics
+    ReconnectionHandler -->|"Emit metrics"| ConnectorMetrics
+    ConnectorMetrics -->|"Scrape<br/>every 10s"| Prometheus
+
+    %% ===== STYLING =====
+    classDef connector fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef lifecycle fill:#E8F5E9,stroke:#388E3C,stroke-width:2px,color:#000
+    classDef health fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef reconnect fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef tls fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
+    classDef http2 fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#000
+    classDef metrics fill:#E0F2F1,stroke:#00897B,stroke-width:2px,color:#000
+    classDef external fill:#ECEFF1,stroke:#455A64,stroke-width:3px,color:#000
+
+    class K0Connector connector
+    class DISCONNECTED,CONNECTING,CONNECTED,DRAINING,FAILED,RECONNECTING lifecycle
+    class HealthCheckManager health
+    class ReconnectionHandler reconnect
+    class TLS13Handler tls
+    class HTTP2Manager http2
+    class ConnectorMetrics metrics
+    class K0Kernel,K1Bridge,Prometheus external
+```
+
+**Diagram Purpose**: K0 connection lifecycle management with health checks and auto-reconnection (TLS 1.3 + HTTP/2).
+
+**Connection State Machine (6 States)**:
+- 🔴 **DISCONNECTED** — Initial state, connection lost
+- 🟡 **CONNECTING** — Establishing (DNS + TCP + TLS + HTTP/2)
+- 🟢 **CONNECTED** — Active, health checks, requests allowed
+- 🟠 **DRAINING** — Graceful shutdown, complete in-flight (<10s)
+- 🔴 **FAILED** — Error state, trigger reconnection
+- 🟡 **RECONNECTING** — Exponential backoff (1s-30s)
+
+**Health Check Protocol**:
+1. Send PING frame every 10s
+2. Await PONG response (<20ms)
+3. Measure round-trip latency
+4. **3 consecutive fails** → Mark unhealthy
+5. **5 consecutive fails** → Trigger reconnection
+
+**Reconnection Strategy**:
+- **Exponential backoff**: 1s → 2s → 4s → 8s → 16s → 30s (max)
+- **Jitter**: ±20% random (prevent thundering herd)
+- **Reset on success**: First successful connection resets backoff counter
+- **Triggers**: Health failure, connection timeout, circuit OPEN, TLS/HTTP/2 errors
+
+**TLS 1.3 Configuration**:
+- **Protocol**: TLS 1.3 only (no downgrade)
+- **Ciphers**: TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305
+- **Mutual auth**: Client certificate required
+- **Certificate pinning**: Validate K0 certificate fingerprint
+- **Session resumption**: 0-RTT for subsequent connections (<10ms)
+
+**HTTP/2 Settings**:
+- MAX_CONCURRENT_STREAMS: 100
+- INITIAL_WINDOW_SIZE: 64KB
+- MAX_FRAME_SIZE: 16KB
+- ENABLE_PUSH: false
+
+**Performance Budget**:
+- Connection establishment: <100ms P95
+- TLS handshake: <50ms P95
+- HTTP/2 preface: <10ms
+- Health check ping: <20ms P95
+- Reconnection latency: <200ms
+
+**Integration Tests**: `tests/integration/layer5/test_k0_connector.py`
+```

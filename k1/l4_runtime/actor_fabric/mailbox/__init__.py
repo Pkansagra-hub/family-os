@@ -84,11 +84,13 @@ async def enqueue(message: Message) -> EnqueueResult:
 ```
 
 **Dead Letter Queue (DLQ):**
-- Stores dropped messages for debugging
-- Capacity: 100 messages
-- Retention: 5 minutes
-- Reasons: `mailbox_full`, `ttl_expired`, `invalid_schema`, `actor_terminated`
-- Prometheus metric: `actor_mailbox_dlq_total (counter, reason)`
+- Stores dropped messages for debugging and replay
+- Capacity: 10000 messages (production-ready)
+- Retention: 24 hours (configurable)
+- O(1) lookup by dlq_id and trace_id (hash-indexed)
+- Reasons: `OVERFLOW`, `TTL_EXPIRED`, `INVALID_SCHEMA`, `ACTOR_TERMINATED`
+- Replay support: Mark messages for replay to new recipient
+- Prometheus metrics: `mailbox_dlq_depth`, `mailbox_dlq_enqueued_total`, `mailbox_dlq_expired_total`
 
 **TTL (Time-to-Live):**
 - Each message has optional `ttl_ms` field
@@ -97,11 +99,12 @@ async def enqueue(message: Message) -> EnqueueResult:
 - Use case: Realtime messages (e.g., voice frames) with 500ms TTL
 
 **Files:**
-- mpsc_queue.py — Lock-free ring buffer, MPSC queue implementation
-- scheduler.py — WFQ scheduler with aging, priority queues
-- backpressure.py — Watermark monitoring, overflow policies
-- dlq.py — Dead letter queue, dropped message storage
-- ttl_tracker.py — TTL expiration tracking
+- base.py — Core MPSC queue implementation (Issue 2.1 ✅ COMPLETE)
+- scheduler.py — WFQ scheduler with aging, priority queues (Issue 2.2 ✅ COMPLETE)
+- backpressure.py — Watermark monitoring, overflow policies (TODO: Issue 2.3)
+- dead_letter.py — Dead letter queue, dropped message storage, replay (Issue 2.6 ✅ COMPLETE)
+- cleanup.py — TTL expiration tracking and cleanup task (Issue 2.4 ✅ COMPLETE)
+- model/ — FlatBuffers generated code (MessageEnvelope, MessagePriority, MessageType)
 
 **Integration:**
 - Actor Fabric: Core message routing infrastructure
@@ -122,11 +125,35 @@ async def enqueue(message: Message) -> EnqueueResult:
 - Weighted Fair Queuing (Demers et al. 1989) — Fair scheduling
 - MPSC Queue (Michael & Scott 1996) — Lock-free data structures
 
-**Last Updated:** October 2025
-**Status:** Production-ready MPSC mailbox with WFQ scheduling
+**Last Updated:** October 26, 2025
+**Status:** Issue 2.1 COMPLETE ✅ - Base MPSC queue production-ready
+          Issue 2.2 COMPLETE ✅ - Priority scheduler with WFQ aging
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-# TODO: Implement mpsc_queue.py, scheduler.py, backpressure.py, dlq.py, ttl_tracker.py
-# Per ADR-0002a (Mailbox)
+from .base import EnqueueResult, MessageQueue
+from .dead_letter import DeadLetterQueue, DLQEntry
+from .scheduler import (
+    PRIORITY_BACKGROUND,
+    PRIORITY_INTERACTIVE,
+    PRIORITY_REALTIME,
+    PRIORITY_URGENT,
+    MessageWithMetadata,
+    PriorityScheduler,
+    SendResult,
+)
+
+__all__ = [
+    "MessageQueue",
+    "EnqueueResult",
+    "PriorityScheduler",
+    "SendResult",
+    "MessageWithMetadata",
+    "PRIORITY_URGENT",
+    "PRIORITY_REALTIME",
+    "PRIORITY_INTERACTIVE",
+    "PRIORITY_BACKGROUND",
+    "DeadLetterQueue",
+    "DLQEntry",
+]

@@ -109,6 +109,8 @@ mailbox_message_envelope:
         example: 5000
         default: 5000
         validation: "Must be positive integer"
+        cleanup: "Periodic cleanup every 100ms checks for expired messages"
+        performance_budget: "<1ms cleanup per 1000 messages"
 
       - name: "payload"
         type: "bytes"
@@ -290,6 +292,17 @@ mailbox_message_envelope:
         labels: ["receiver_id", "message_type", "priority"]
         description: "Total messages received and processed"
 
+      - name: "mailbox_messages_expired_total"
+        type: "counter"
+        labels: ["component_id", "priority"]
+        description: "Total messages expired (TTL exceeded before processing)"
+
+      - name: "mailbox_cleanup_latency_ms"
+        type: "histogram"
+        labels: ["component_id"]
+        buckets: [0.1, 0.5, 1, 5, 10]
+        description: "Time taken for cleanup loop (target: <1ms per 1000 messages)"
+
       - name: "mailbox_queue_depth"
         type: "gauge"
         labels: ["component_id"]
@@ -350,6 +363,72 @@ mailbox_message_envelope:
     deserialization: "<0.1ms P95 (FlatBuffers zero-copy)"
     router_validation: "<0.5ms P95 (lease_id check + rate limit)"
     end_to_end_latency: "<5ms P95 (send → receive, including routing)"
+
+  ttl_cleanup:
+    description: "Periodic cleanup of expired messages (TTL enforcement)"
+
+    cleanup_configuration:
+      cleanup_interval_ms: 100
+      description: "Run cleanup every 100ms (async background task)"
+      rationale: "Balance between TTL accuracy and performance overhead"
+
+      performance_budget: "<1ms cleanup per 1000 messages"
+      implementation: "Lightweight scan of message queue, check timestamp vs TTL"
+
+    cleanup_behavior:
+      check_frequency: "Every 100ms (configurable)"
+      check_method: "(current_time_ms - message.timestamp) > message.ttl_ms"
+      expired_action: "Remove from queue, route to DLQ with reason='TTL_EXPIRED'"
+      non_blocking_mode: true
+      non_blocking_description: "Cleanup runs async, doesn't block enqueue/dequeue operations"
+      batch_processing: true
+      batch_description: "Process up to 100 expired messages per cleanup cycle (prevent blocking)"
+
+    integration_with_dlq:
+      expired_messages: "Moved to DLQ with reason='TTL_EXPIRED'"
+      dlq_entry_includes:
+        - "message_id"
+        - "message_type"
+        - "sender_id"
+        - "receiver_id"
+        - "timestamp"
+        - "ttl_ms"
+        - "age_at_expiry_ms"
+        - "cognitive_trace_id"
+
+      dlq_retention: "5 minutes (per ADR-0002a)"
+      dlq_capacity: "100 messages (FIFO, oldest dropped)"
+
+    metrics:
+      - name: "mailbox_messages_expired_total"
+        type: "counter"
+        labels: ["component_id", "priority"]
+        description: "Count of messages expired due to TTL"
+
+      - name: "mailbox_cleanup_latency_ms"
+        type: "histogram"
+        labels: ["component_id"]
+        buckets: [0.1, 0.5, 1, 5, 10]
+        description: "Cleanup loop execution time"
+
+      - name: "mailbox_cleanup_messages_scanned"
+        type: "histogram"
+        labels: ["component_id"]
+        buckets: [10, 50, 100, 500, 1000]
+        description: "Number of messages scanned per cleanup cycle"
+
+    alert_rules:
+      - alert: "HighTTLExpiration"
+        expr: "rate(mailbox_messages_expired_total[5m]) > 5"
+        duration: "2m"
+        severity: "warning"
+        description: "More than 5 messages/minute expiring (possible slow consumer or too short TTL)"
+
+      - alert: "SlowCleanup"
+        expr: "histogram_quantile(0.95, mailbox_cleanup_latency_ms) > 5"
+        duration: "1m"
+        severity: "warning"
+        description: "Cleanup taking >5ms P95 (exceeds performance budget)"
 
   related_adrs:
     - adr: "ADR-0002"

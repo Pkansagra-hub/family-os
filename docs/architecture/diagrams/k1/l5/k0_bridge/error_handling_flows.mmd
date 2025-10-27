@@ -1,0 +1,255 @@
+---
+title: Error Handling Flows - Classification, Recovery, and Fail-Fast Strategies
+description: Comprehensive error handling for transient vs permanent failures with circuit breaker integration
+authors: [K1 Intelligence Team]
+version: 1.0.0
+date: 2025-10-26
+tags: [k1, layer5, error-handling, classification, recovery, fail-fast]
+related_adrs: [ADR-0008b, ADR-0029]
+---
+
+graph TB
+    subgraph "Request Initiation"
+        START[K1 Agent Request<br/>submit_command/recall_state]
+        CLIENT[K0 Bridge Client<br/>CommandClient/QueryClient]
+        TRACE[Generate cognitive_trace_id]
+    end
+    
+    subgraph "Pre-Flight Checks"
+        CB_CHECK{Circuit Breaker<br/>State?}
+        CB_CLOSED[CLOSED<br/>Allow Request]
+        CB_OPEN[OPEN<br/>Reject Immediately]
+        CB_HALF[HALF_OPEN<br/>Test Request]
+        
+        RATE_LIMIT{Rate Limit<br/>Check?}
+        RATE_OK[Within Limit]
+        RATE_EXCEED[Limit Exceeded]
+    end
+    
+    subgraph "HTTP Request Execution"
+        HTTP_SEND[Send HTTP/2 Request<br/>POST /k0/command.submit]
+        HTTP_RESP{Response<br/>Status?}
+        
+        SUCCESS_2XX[2xx Success<br/>200 OK<br/>201 Created]
+        CLIENT_4XX[4xx Client Error]
+        SERVER_5XX[5xx Server Error]
+        TIMEOUT_ERR[Network Error<br/>Timeout/Connection]
+    end
+    
+    subgraph "4xx Client Error Classification"
+        ERR_400[400 Bad Request<br/>Malformed envelope<br/>Schema validation failed]
+        ERR_403[403 Forbidden<br/>Authorization failure<br/>Band policy violation]
+        ERR_404[404 Not Found<br/>Invalid endpoint<br/>Query position missing]
+        ERR_409[409 Conflict<br/>Duplicate receipt<br/>Idempotency violation]
+        ERR_413[413 Payload Too Large<br/>Envelope exceeds limit<br/>Max: 10MB]
+        ERR_429[429 Too Many Requests<br/>Rate limit exceeded<br/>Backpressure signal]
+        
+        CLIENT_CLASSIFY{Permanent<br/>or Retry?}
+        
+        PERM_400[Permanent<br/>Fix payload]
+        PERM_403[Permanent<br/>Check authz]
+        PERM_404[Permanent<br/>Check position]
+        IDEM_409[Idempotent<br/>Expected behavior]
+        PERM_413[Permanent<br/>Reduce payload]
+        RETRY_429[Transient<br/>Backoff + Retry]
+    end
+    
+    subgraph "5xx Server Error Classification"
+        ERR_500[500 Internal Server Error<br/>K0 kernel panic<br/>Unhandled exception]
+        ERR_502[502 Bad Gateway<br/>K0 unreachable<br/>Proxy failure]
+        ERR_503[503 Service Unavailable<br/>WAL lock timeout<br/>Overload]
+        ERR_504[504 Gateway Timeout<br/>K0 processing timeout<br/>Slow query]
+        
+        SERVER_CLASSIFY{Transient<br/>or Fatal?}
+        
+        RETRY_500[Transient<br/>Retry with backoff]
+        RETRY_502[Transient<br/>Retry with backoff]
+        RETRY_503[Transient<br/>Retry with backoff]
+        RETRY_504[Transient<br/>Retry with backoff]
+    end
+    
+    subgraph "Retry Logic - Exponential Backoff"
+        BACKOFF{Retry<br/>Attempt?}
+        ATTEMPT_1[Attempt 1<br/>Delay: 0ms<br/>Total: 0ms]
+        ATTEMPT_2[Attempt 2<br/>Delay: 100ms<br/>Total: 100ms]
+        ATTEMPT_3[Attempt 3<br/>Delay: 400ms<br/>Total: 500ms]
+        EXHAUST[Max Retries (3)<br/>Exhausted]
+        
+        SLEEP[await asyncio.sleep<br/>Exponential delay]
+    end
+    
+    subgraph "Circuit Breaker Update"
+        SUCCESS_CB[Record Success<br/>Reset failure count]
+        FAILURE_CB[Record Failure<br/>Increment count]
+        
+        THRESHOLD_CHECK{Failure<br/>Count >= 3?}
+        TRIP_CB[Trip Circuit<br/>CLOSED → OPEN<br/>Start 30s timeout]
+        KEEP_CLOSED[Keep CLOSED<br/>Count < 3]
+    end
+    
+    subgraph "Observability & Logging"
+        METRICS_SUCCESS[Increment k0_command_success_total<br/>Record latency histogram]
+        METRICS_ERROR[Increment k0_command_error_total<br/>Label: status_code]
+        METRICS_RETRY[Increment k0_command_retry_total<br/>Label: attempt]
+        METRICS_CB_TRIP[Increment k0_circuit_trip_total]
+        METRICS_CB_OPEN[Increment k0_circuit_open_total]
+        
+        LOG_ERROR[Structured Error Log<br/>{trace_id, status, error_msg}]
+        TRACE_ERROR[OTel Span Error<br/>Set span status=ERROR]
+    end
+    
+    subgraph "Recovery Actions"
+        RETRY_ACTION[Retry with Backoff<br/>Exponential delay]
+        FAIL_FAST[Fail Fast<br/>Return error immediately]
+        IDEM_SUCCESS[Idempotency Success<br/>Return original receipt]
+        CIRCUIT_REJECT[Circuit Open Rejection<br/>K0CircuitOpenError]
+    end
+    
+    subgraph "Agent Response"
+        RETURN_SUCCESS[Return Result<br/>CommandReceipt/QueryResult]
+        RETURN_ERROR[Raise Exception<br/>K0CommandError/K0QueryError]
+        RETURN_CIRCUIT[Raise K0CircuitOpenError<br/>Retry after timeout]
+    end
+    
+    %% Flow Connections
+    START --> CLIENT
+    CLIENT --> TRACE
+    TRACE --> CB_CHECK
+    
+    CB_CHECK -->|CLOSED| CB_CLOSED
+    CB_CHECK -->|OPEN| CB_OPEN
+    CB_CHECK -->|HALF_OPEN| CB_HALF
+    
+    CB_CLOSED --> RATE_LIMIT
+    CB_HALF --> RATE_LIMIT
+    
+    CB_OPEN --> CIRCUIT_REJECT
+    CIRCUIT_REJECT --> METRICS_CB_OPEN
+    METRICS_CB_OPEN --> RETURN_CIRCUIT
+    
+    RATE_LIMIT -->|OK| RATE_OK
+    RATE_LIMIT -->|Exceeded| RATE_EXCEED
+    
+    RATE_OK --> HTTP_SEND
+    RATE_EXCEED --> ERR_429
+    
+    HTTP_SEND --> HTTP_RESP
+    
+    HTTP_RESP -->|2xx| SUCCESS_2XX
+    HTTP_RESP -->|4xx| CLIENT_4XX
+    HTTP_RESP -->|5xx| SERVER_5XX
+    HTTP_RESP -->|Timeout| TIMEOUT_ERR
+    
+    %% Success Path
+    SUCCESS_2XX --> SUCCESS_CB
+    SUCCESS_CB --> METRICS_SUCCESS
+    METRICS_SUCCESS --> RETURN_SUCCESS
+    
+    %% 4xx Client Error Path
+    CLIENT_4XX --> ERR_400
+    CLIENT_4XX --> ERR_403
+    CLIENT_4XX --> ERR_404
+    CLIENT_4XX --> ERR_409
+    CLIENT_4XX --> ERR_413
+    CLIENT_4XX --> ERR_429
+    
+    ERR_400 --> CLIENT_CLASSIFY
+    ERR_403 --> CLIENT_CLASSIFY
+    ERR_404 --> CLIENT_CLASSIFY
+    ERR_409 --> CLIENT_CLASSIFY
+    ERR_413 --> CLIENT_CLASSIFY
+    ERR_429 --> CLIENT_CLASSIFY
+    
+    CLIENT_CLASSIFY --> PERM_400
+    CLIENT_CLASSIFY --> PERM_403
+    CLIENT_CLASSIFY --> PERM_404
+    CLIENT_CLASSIFY --> IDEM_409
+    CLIENT_CLASSIFY --> PERM_413
+    CLIENT_CLASSIFY --> RETRY_429
+    
+    PERM_400 --> FAIL_FAST
+    PERM_403 --> FAIL_FAST
+    PERM_404 --> FAIL_FAST
+    IDEM_409 --> IDEM_SUCCESS
+    PERM_413 --> FAIL_FAST
+    RETRY_429 --> RETRY_ACTION
+    
+    %% 5xx Server Error Path
+    SERVER_5XX --> ERR_500
+    SERVER_5XX --> ERR_502
+    SERVER_5XX --> ERR_503
+    SERVER_5XX --> ERR_504
+    
+    ERR_500 --> SERVER_CLASSIFY
+    ERR_502 --> SERVER_CLASSIFY
+    ERR_503 --> SERVER_CLASSIFY
+    ERR_504 --> SERVER_CLASSIFY
+    
+    SERVER_CLASSIFY --> RETRY_500
+    SERVER_CLASSIFY --> RETRY_502
+    SERVER_CLASSIFY --> RETRY_503
+    SERVER_CLASSIFY --> RETRY_504
+    
+    RETRY_500 --> RETRY_ACTION
+    RETRY_502 --> RETRY_ACTION
+    RETRY_503 --> RETRY_ACTION
+    RETRY_504 --> RETRY_ACTION
+    
+    %% Timeout Path
+    TIMEOUT_ERR --> RETRY_ACTION
+    
+    %% Retry Path
+    RETRY_ACTION --> BACKOFF
+    
+    BACKOFF -->|First| ATTEMPT_1
+    BACKOFF -->|Second| ATTEMPT_2
+    BACKOFF -->|Third| ATTEMPT_3
+    BACKOFF -->|None left| EXHAUST
+    
+    ATTEMPT_1 --> HTTP_SEND
+    ATTEMPT_2 --> SLEEP
+    ATTEMPT_3 --> SLEEP
+    
+    SLEEP --> HTTP_SEND
+    
+    EXHAUST --> FAILURE_CB
+    
+    %% Circuit Breaker Update
+    FAILURE_CB --> THRESHOLD_CHECK
+    
+    THRESHOLD_CHECK -->|Yes| TRIP_CB
+    THRESHOLD_CHECK -->|No| KEEP_CLOSED
+    
+    TRIP_CB --> METRICS_CB_TRIP
+    METRICS_CB_TRIP --> FAIL_FAST
+    
+    KEEP_CLOSED --> FAIL_FAST
+    
+    %% Error Handling
+    FAIL_FAST --> METRICS_ERROR
+    METRICS_ERROR --> LOG_ERROR
+    LOG_ERROR --> TRACE_ERROR
+    TRACE_ERROR --> RETURN_ERROR
+    
+    IDEM_SUCCESS --> METRICS_SUCCESS
+    
+    RETRY_ACTION --> METRICS_RETRY
+    
+    %% Error Classification Table
+    ERROR_TABLE[Error Classification Table<br/><br/>PERMANENT (Fail Fast):<br/>• 400 Bad Request<br/>• 403 Forbidden<br/>• 404 Not Found<br/>• 413 Payload Too Large<br/><br/>IDEMPOTENT (Success):<br/>• 409 Conflict (duplicate)<br/><br/>TRANSIENT (Retry):<br/>• 429 Rate Limited<br/>• 500 Internal Server Error<br/>• 502 Bad Gateway<br/>• 503 Service Unavailable<br/>• 504 Gateway Timeout<br/>• Network timeout<br/>• Connection refused<br/><br/>CIRCUIT BREAKER:<br/>• 3 consecutive failures → OPEN<br/>• 30s timeout → HALF_OPEN<br/>• Test success → CLOSED]
+    
+    classDef success fill:#50c878,stroke:#2d7a4a,stroke-width:2px,color:#fff
+    classDef error fill:#e74c3c,stroke:#a93226,stroke-width:2px,color:#fff
+    classDef retry fill:#f39c12,stroke:#c87f0a,stroke-width:2px,color:#fff
+    classDef circuit fill:#9b59b6,stroke:#6c3483,stroke-width:2px,color:#fff
+    classDef decision fill:#3498db,stroke:#2874a6,stroke-width:2px,color:#fff
+    classDef observability fill:#1abc9c,stroke:#148f77,stroke-width:2px,color:#fff
+    classDef table fill:#ecf0f1,stroke:#95a5a6,stroke-width:1px,color:#2c3e50
+    
+    class SUCCESS_2XX,SUCCESS_CB,METRICS_SUCCESS,RETURN_SUCCESS,IDEM_SUCCESS success
+    class ERR_400,ERR_403,ERR_404,ERR_409,ERR_413,ERR_429,ERR_500,ERR_502,ERR_503,ERR_504,TIMEOUT_ERR,PERM_400,PERM_403,PERM_404,PERM_413,FAIL_FAST,EXHAUST,RETURN_ERROR error
+    class RETRY_ACTION,RETRY_429,RETRY_500,RETRY_502,RETRY_503,RETRY_504,BACKOFF,ATTEMPT_1,ATTEMPT_2,ATTEMPT_3,SLEEP,METRICS_RETRY retry
+    class CB_CHECK,CB_CLOSED,CB_OPEN,CB_HALF,FAILURE_CB,THRESHOLD_CHECK,TRIP_CB,KEEP_CLOSED,CIRCUIT_REJECT,METRICS_CB_TRIP,METRICS_CB_OPEN,RETURN_CIRCUIT circuit
+    class HTTP_RESP,CLIENT_CLASSIFY,SERVER_CLASSIFY,RATE_LIMIT decision
+    class METRICS_ERROR,LOG_ERROR,TRACE_ERROR observability
+    class ERROR_TABLE table

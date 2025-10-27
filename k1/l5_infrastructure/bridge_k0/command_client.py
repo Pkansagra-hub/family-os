@@ -83,6 +83,9 @@ import httpx
 # Import K0's idempotency key derivation function
 from k0.idem import derive_idem_key
 
+# Import HTTP/2 connection manager
+from k1.l5_infrastructure.bridge_k0.http2 import HTTP2ConnectionManager, K0Port
+
 # Import K1 observability (wraps K0's observability stack)
 from k1.l5_infrastructure.observability import get_metrics, get_tracer
 from k1.l5_infrastructure.resilience.retry_policy import (
@@ -256,6 +259,7 @@ class K0CommandClient:
         timeout: float = 10.0,
         max_retries: int = 3,
         retry_policy: Optional[RetryPolicy] = None,
+        connection_manager: Optional[HTTP2ConnectionManager] = None,
     ):
         """Initialize K0 Command Client
 
@@ -264,22 +268,35 @@ class K0CommandClient:
             timeout: Request timeout in seconds (default: 10.0)
             max_retries: Maximum total attempts (initial try + retries, default: 3)
             retry_policy: Optional preconfigured retry policy (primarily for testing)
+            connection_manager: Optional HTTP/2 connection manager (creates one if not provided)
         """
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
 
-        # HTTP/2 async client with connection pooling
-        # ADR-0001a: HTTP/2 for multiplexing, header compression
-        self.client = httpx.AsyncClient(
-            http2=True,
-            timeout=httpx.Timeout(timeout),
-            limits=httpx.Limits(
-                max_connections=5,  # Connection pool size
-                max_keepalive_connections=5,
-                keepalive_expiry=60.0,  # 60s keep-alive
-            ),
-        )
+        # HTTP/2 Connection Manager (ADR-0044, ADR-0044a)
+        # Centralized connection pooling, health checks, exponential backoff reconnection
+        if connection_manager is None:
+            # Extract host from base_url (remove http:// or https://)
+            import re
+
+            match = re.match(r"^https?://([^:]+)", base_url)
+            k0_host = match.group(1) if match else "localhost"
+            use_tls = base_url.startswith("https://")
+
+            self._connection_manager = HTTP2ConnectionManager(
+                k0_base_url=k0_host,
+                command_port=5200,
+                query_port=5201,
+                sse_port=5202,
+                obs_port=5203,
+                timeout=timeout,
+                use_tls=use_tls,
+            )
+            self._own_connection_manager = True
+        else:
+            self._connection_manager = connection_manager
+            self._own_connection_manager = False
 
         # Retry policy used for idempotent command submission (ADR-0008b)
         self._retry_policy = retry_policy or self._create_retry_policy()
@@ -544,18 +561,24 @@ class K0CommandClient:
         start_time = time_module.time()
 
         try:
-            # HTTP POST to K0 Command Port
+            # HTTP POST to K0 Command Port using HTTP/2 connection manager
             # ADR-0001a: /k0/command.submit endpoint
+            # ADR-0044: HTTP/2 connection pooling, stream multiplexing
             headers = {
                 "Content-Type": "application/json",
                 "X-Cognitive-Trace-Id": cognitive_trace_id,
             }
             _tracer.inject(headers)
-            response = await self.client.post(
-                f"{self.base_url}/k0/command.submit",
-                json=payload,
-                headers=headers,
-            )
+
+            # Use HTTP/2 connection manager for consistent connection pooling
+            async with self._connection_manager.get_client(
+                K0Port.COMMAND, trace_id=cognitive_trace_id
+            ) as client:
+                response = await client.post(
+                    f"{self.base_url}/k0/command.submit",
+                    json=payload,
+                    headers=headers,
+                )
 
             latency_ms = (time_module.time() - start_time) * 1000
 
@@ -657,7 +680,7 @@ class K0CommandClient:
             raise K0Unavailable(status_code=503, detail=str(e))
 
     async def close(self):
-        """Close HTTP client connection pool"""
-        await self.client.aclose()
-        logger.info("k0_command_client_closed")
+        """Close HTTP/2 connection manager (if owned by this client)"""
+        if self._own_connection_manager:
+            await self._connection_manager.stop()
         logger.info("k0_command_client_closed")

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from k1.l5_infrastructure.bridge_k0.http2 import HTTP2ConnectionManager, K0Port
 from k1.l5_infrastructure.observability import get_metrics, get_tracer
 
 try:  # pragma: no cover - structlog is optional
@@ -260,22 +261,38 @@ class K0QueryClient:
         base_url: str = "http://localhost:5201",
         *,
         timeout: float = 10.0,
+        connection_manager: Optional[HTTP2ConnectionManager] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.client = httpx.AsyncClient(
-            http2=True,
-            timeout=httpx.Timeout(timeout),
-            limits=httpx.Limits(
-                max_connections=5,
-                max_keepalive_connections=5,
-                keepalive_expiry=60.0,
-            ),
-        )
+
+        # HTTP/2 Connection Manager (ADR-0044, ADR-0044a)
+        if connection_manager is None:
+            import re
+
+            match = re.match(r"^https?://([^:]+)", base_url)
+            k0_host = match.group(1) if match else "localhost"
+            use_tls = base_url.startswith("https://")
+
+            self._connection_manager = HTTP2ConnectionManager(
+                k0_base_url=k0_host,
+                command_port=5200,
+                query_port=5201,
+                sse_port=5202,
+                obs_port=5203,
+                timeout=timeout,
+                use_tls=use_tls,
+            )
+            self._own_connection_manager = True
+        else:
+            self._connection_manager = connection_manager
+            self._own_connection_manager = False
+
         logger.info("k0_query_client_initialized", base_url=self.base_url)
 
     async def close(self) -> None:
-        await self.client.aclose()
+        if self._own_connection_manager:
+            await self._connection_manager.stop()
         logger.info("k0_query_client_closed")
 
     async def recall(self, request: RecallRequest) -> RecallResponseBundle:
@@ -302,11 +319,17 @@ class K0QueryClient:
                     "X-Fusion-Strategy": request.fusion_strategy.upper(),
                 }
                 _tracer.inject(headers)
-                response = await self.client.post(
-                    f"{self.base_url}/k0/query.recall",
-                    json=payload,
-                    headers=headers,
-                )
+
+                # Use HTTP/2 connection manager for consistent connection pooling
+                async with self._connection_manager.get_client(
+                    K0Port.QUERY, trace_id=trace_id
+                ) as client:
+                    response = await client.post(
+                        f"{self.base_url}/k0/query.recall",
+                        json=payload,
+                        headers=headers,
+                    )
+
                 bundle = await self._process_response(response, trace_id)
         except K0QueryError as exc:
             status_label = "error"

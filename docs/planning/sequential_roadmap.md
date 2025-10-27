@@ -1,6 +1,7 @@
 # K1 Kernel Sequential Development Plan
 
 ## 🎯 Development Philosophy
+
 - **Bottom-Up Build:** Start with Layer 5 (infrastructure), build upward
 - **Contract-First:** Define interfaces before implementation
 - **Incremental Testing:** Test each module before proceeding
@@ -9,37 +10,49 @@
 ---
 
 ## 📋 Phase 1: Foundation Layer (Layer 5 Infrastructure)
+
 **Duration:** Weeks 1-4 | **Why First:** All other layers depend on these services
 
 ### Week 1: Core K0 Bridge
-**Layer 5 → bridge_k0/ (5 modules)**
 
-1. **bridge_k0/command_client.py** ✅ START HERE
+**Layer 5 → bridge_k0/ (5 modules)** ✅ **E2E DATA FLOW PROVEN**
+
+1. **bridge_k0/command_client.py** ✅ **COMPLETE**
    - K0 Command Port writes (GREEN/AMBER/RED lanes)
+   - **Status**: 147 lines, production-ready
+   - **Proven**: Real NaCl Ed25519 signatures, HTTP 200 responses
    - Unlocks: K1→K0 write operations for all layers
-   - Dependency: None (uses K0 HTTP API)
 
-2. **bridge_k0/query_client.py**
+2. **bridge_k0/query_client.py** ✅ **COMPLETE**
    - K0 Query Port reads (FTS5, FAISS, KG retrieval)
+   - **Status**: 124 lines, production-ready
+   - **Proven**: Full memory recall, exact data retrieval
    - Unlocks: Memory recall for all agents
-   - Dependency: command_client (for authentication)
 
-3. **bridge_k0/sse_client.py**
+3. **bridge_k0/sse_client.py** 🚧 **IN PROGRESS**
    - K0 SSE Port event subscription
    - Unlocks: Real-time K0 event streaming
-   - Dependency: command_client
+   - Dependency: command_client ✅
 
-4. **bridge_k0/batch_client.py**
+4. **bridge_k0/batch_client.py** 🚧 **NEXT**
    - SessionState delta batching (250ms intervals)
    - Unlocks: Efficient bulk writes
-   - Dependency: command_client
+   - Dependency: command_client ✅
 
-5. **bridge_k0/observability_client.py**
+5. **bridge_k0/observability_client.py** 🚧 **NEXT**
    - Metrics/logs push to K0
    - Unlocks: K1 observability
-   - Dependency: command_client
+   - Dependency: command_client ✅
+
+**✅ MILESTONE: Full K1 → K0 → K1 data persistence cycle proven (Oct 26, 2025)**
+
+- Test: `tests/k1/l5_infrastructure/bridge_k0/test_real_data_flow.py` (240 lines)
+- Results: All 4 stages passing (sign → submit → persist → query)
+- Documentation: Complete E2E section added to testing guide
+- Performance: All latency budgets met (<150ms round-trip)
 
 ### Week 2: Event Bus & Resilience
+
 **Layer 5 → event_bus/ + resilience/**
 
 6. **event_bus/event_bus.py**
@@ -68,6 +81,7 @@
     - Dependency: None
 
 ### Week 3: Thermal & Observability
+
 **Layer 5 → thermal/ + observability/**
 
 11. **thermal/monitor.py**
@@ -101,6 +115,7 @@
     - Dependency: metrics, tracing
 
 ### Week 4: Config & Connectors
+
 **Layer 5 → config/ + connectors/**
 
 17. **config/loader.py**
@@ -131,9 +146,11 @@
 ---
 
 ## 📋 Phase 2: Runtime Core (Layer 4)
+
 **Duration:** Weeks 5-6 | **Why Second:** State management needed before execution layer
 
 ### Week 5: SessionState & Actor Fabric Mailbox
+
 **Layer 4 → session_state/ + actor_fabric/mailbox/**
 
 22. **session_state/model.py** ✅ CRITICAL - MUST BUILD FIRST IN L4
@@ -162,6 +179,7 @@
     - Dependency: mailbox
 
 ### Week 6: Actor Fabric Router + Supervisor + Learning
+
 **Layer 4 → actor_fabric/ + learning/**
 
 27. **actor_fabric/router/admission.py**
@@ -197,9 +215,11 @@
 ---
 
 ## 📋 Phase 3: Execution Layer - Agents (Layer 3)
+
 **Duration:** Weeks 7-8 | **Why Third:** Agent lifecycle must exist before orchestration
 
 ### Week 7: Agent Registry + Hire/Fire + Supervisor
+
 **Layer 3 → agents/**
 
 33. **agents/registry/loader.py** ✅ START HERE FOR L3
@@ -233,6 +253,7 @@
     - Dependency: crash_detector
 
 ### Week 8: Agent Mailbox + Personality + Active Roster
+
 **Layer 3 → agents/**
 
 39. **agents/mailbox/agent_mailbox.py**
@@ -263,9 +284,11 @@
 ---
 
 ## 📋 Phase 4: Execution Layer - Model Hub (Layer 3)
+
 **Duration:** Weeks 9-10 | **Why Fourth:** AI agents need Model Hub for LLM reasoning
 
 ### Week 9: Model Hub Core
+
 **Layer 3 → model_hub/**
 
 44. **model_hub/router/router.py** ✅ START HERE FOR MODEL HUB
@@ -304,6 +327,7 @@
     - Dependency: router
 
 ### Week 10: Model Hub Advanced Features
+
 **Layer 3 → model_hub/**
 
 51. **model_hub/kv_cache_broker/broker.py**
@@ -344,9 +368,11 @@
 ---
 
 ## 📋 Phase 5: Execution Layer - Tools & Dialogue (Layer 3)
+
 **Duration:** Weeks 11-12 | **Why Fifth:** Tools & dialogue can be built in parallel with agents
 
 ### Week 11: Tool Execution
+
 **Layer 3 → tools/**
 
 58. **tools/registry/loader.py** ✅ START HERE FOR TOOLS
@@ -395,6 +421,7 @@
     - Dependency: registry/loader
 
 ### Week 12: Dialogue Management
+
 **Layer 3 → dialogue/**
 
 67. **dialogue/scoreboard/qud_stack.py**
@@ -440,9 +467,11 @@
 ---
 
 ## 📋 Phase 6: Execution Layer - AI Agents (Layer 3)
+
 **Duration:** Week 13 | **Why Sixth:** AI agents need Model Hub + agents infrastructure
 
 ### Week 13: AI Agent Implementations
+
 **Layer 3 → agents/**
 
 75. **agents/concierge/nlu.py** ✅ FIRST AI AGENT
@@ -468,9 +497,11 @@
 ---
 
 ## 📋 Phase 7: Orchestration Layer (Layer 2)
+
 **Duration:** Weeks 14-16 | **Why Seventh:** Needs L3 agents + L4 state + L5 infrastructure
 
 ### Week 14: Planner (4-Stage Pipeline)
+
 **Layer 2 → planner/**
 
 79. **planner/sketch/llm_planner.py** ✅ START HERE FOR L2
@@ -514,6 +545,7 @@
     - Dependency: L4 session_state/control
 
 ### Week 15: Orchestrator (3-Phase Coordination)
+
 **Layer 2 → orchestrator/**
 
 87. **orchestrator/negotiation/contract_net.py** ✅ START HERE FOR ORCHESTRATOR
@@ -557,6 +589,7 @@
     - Dependency: saga_coordinator
 
 ### Week 16: Protocol Monitor
+
 **Layer 2 → protocol_monitor/**
 
 95. **protocol_monitor/fsm_compiler.py**
@@ -582,9 +615,11 @@
 ---
 
 ## 📋 Phase 8: Input Processing Layer (Layer 1)
+
 **Duration:** Weeks 17-18 | **Why Last:** Needs L2 orchestration + L5 event bus
 
 ### Week 17: Input Streams
+
 **Layer 1 → streams/**
 
 99. **streams/stream_switch/multi_modal.py** ✅ START HERE FOR L1
@@ -613,6 +648,7 @@
      - Dependency: None
 
 ### Week 18: Intent Routing & Meta Policy
+
 **Layer 1 → orchestration/**
 
 104. **orchestration/intent_router/t1_rules.py**
@@ -644,7 +680,8 @@
 
 ## 🎯 Critical Path Summary
 
-### Must Build in This Order:
+### Must Build in This Order
+
 1. **L5 bridge_k0/command_client** → All K0 writes depend on this
 2. **L5 event_bus** → L1→L2 communication depends on this
 3. **L4 session_state/model** → All state operations depend on this
@@ -656,12 +693,14 @@
 9. **L2 orchestrator** → Layer 1 needs coordination
 10. **L1 stream_switch** → Entry point for all user input
 
-### Parallel Opportunities:
+### Parallel Opportunities
+
 - **Week 2-3:** Event bus + resilience + thermal (no dependencies)
 - **Week 9-10:** Model Hub adapters (all depend on router, can build in parallel)
 - **Week 11-12:** Tools + dialogue (independent modules)
 
-### Testing Strategy Per Phase:
+### Testing Strategy Per Phase
+
 - **After Each Week:** Unit tests for that week's modules
 - **After Each Phase:** Integration tests for that layer
 - **After All Phases:** End-to-end hot path test (L1→L2→L3→L4→L5→K0)

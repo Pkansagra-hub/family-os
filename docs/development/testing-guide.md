@@ -452,6 +452,316 @@ async def _(agent=agent):
     assert latency_ms < 200  # P95 budget
 ```
 
+## End-to-End Data Flow Testing
+
+### Comprehensive K1 → K0 → K1 Round-Trip Test
+
+K1's most critical integration test validates the complete data persistence cycle with real cryptographic signatures and K0 database operations.
+
+**Test Location**: `tests/k1/l5_infrastructure/bridge_k0/test_real_data_flow.py`
+
+**What This Test Proves**:
+
+1. ✅ K1 can create properly signed envelopes using K0's NaCl Ed25519 signing infrastructure
+2. ✅ K0 validates and accepts valid signatures (rejects invalid test signatures)
+3. ✅ K0 commits data to WAL database (receipt contains WAL offset)
+4. ✅ Data persists correctly (query retrieves exact data at WAL position)
+5. ✅ K1 can query and retrieve persisted data from K0
+6. ✅ Data integrity maintained (content matches exactly)
+7. ✅ `cognitive_trace_id` propagates through full cycle
+8. ✅ **Full K1 → K0 → K1 data flow: WORKING**
+
+### Test Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                    E2E Data Flow Test                       │
+└─────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+         [1] Sign        [2] Submit      [3] Query
+              │               │               │
+              ▼               ▼               ▼
+    ┌─────────────────┐ ┌──────────┐ ┌──────────────┐
+    │ K0 Signing      │ │ K0       │ │ K0 Query     │
+    │ Infrastructure  │ │ Command  │ │ Client       │
+    │                 │ │ Client   │ │              │
+    │ • dev_profile   │ │          │ │              │
+    │ • signing_key   │ │ POST     │ │ POST         │
+    │ • NaCl Ed25519  │ │ /command │ │ /query       │
+    └─────────────────┘ │ .submit  │ │ .recall      │
+                        └──────────┘ └──────────────┘
+                              │               │
+                              ▼               ▼
+                        ┌──────────────────────────┐
+                        │   K0 Docker Kernel       │
+                        │                          │
+                        │ • Policy validation      │
+                        │ • Signature verification │
+                        │ • WAL persistence        │
+                        │ • SQLite database        │
+                        └──────────────────────────┘
+```
+
+### Key Components
+
+#### 1. Real Signature Creation
+
+```python
+from k0.local.dev_profile import default_profile, signing_key_for
+from k0.security import canonical_envelope, canonical_json
+from k0.security.crypto import encode_base64url
+
+def create_signed_envelope(sequence: int) -> dict:
+    """Create properly signed command envelope."""
+    # Get development profile (tenant, space, device, topic)
+    profile = default_profile()
+    signing_key = signing_key_for(profile)
+
+    # Create memory payload
+    body = {
+        "operation": "memory.store",
+        "memory_id": f"test_e2e_{sequence}_{uuid.uuid4().hex[:8]}",
+        "content": {
+            "type": "episodic",
+            "title": f"E2E Test Memory #{sequence}",
+            "body": f"Real data flow test at {timestamp}",
+            "tags": ["e2e-test", "k1-k0-integration"],
+        }
+    }
+
+    # Build envelope with checksums
+    body_json = canonical_json(body)
+    envelope = {
+        "cognitive_trace_id": str(uuid.uuid4()),
+        "tenant_id": profile.tenant_id,
+        "space_id": profile.space_id,
+        "device_id": profile.device_id,
+        "topic": profile.topic,
+        "schema_uri": profile.schema_uri,
+        "band": "GREEN",
+        "payload_sha256": hashlib.sha256(body_json).hexdigest(),
+        # ... other envelope fields
+    }
+
+    # Sign with REAL NaCl signature
+    message = canonical_envelope(envelope)
+    signature = encode_base64url(signing_key.sign(message).signature)
+    envelope["sig"] = signature
+    envelope["body"] = body
+
+    return envelope
+```
+
+#### 2. Command Submission
+
+```python
+async def submit_command(envelope: dict) -> dict:
+    """Submit to K0 and get receipt with WAL offset."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "http://localhost:8080/k0/command.submit",
+            json=envelope,
+            headers={
+                "Content-Type": "application/json",
+                "X-Cognitive-Trace-Id": envelope["cognitive_trace_id"]
+            }
+        )
+        response.raise_for_status()
+        return response.json()  # Returns receipt with WAL offset
+```
+
+#### 3. WAL Persistence Verification
+
+```python
+def verify_wal_persistence(trace_id: str) -> dict | None:
+    """Check if command persisted to WAL database."""
+    result = subprocess.run([
+        "docker", "exec", "k0-kernel",
+        "sqlite3", "/data/k0_kernel.db",
+        f"SELECT pos, tenant_id, space_id, topic FROM st_wal "
+        f"WHERE cognitive_trace_id='{trace_id}' LIMIT 1"
+    ], capture_output=True, text=True)
+
+    if result.returncode == 0 and result.stdout.strip():
+        parts = result.stdout.strip().split("|")
+        return {
+            "pos": int(parts[0]),
+            "tenant_id": parts[1],
+            "space_id": parts[2],
+            "topic": parts[3],
+        }
+    return None
+```
+
+#### 4. Query Verification
+
+```python
+async def query_memories(space_id: str, tenant_id: str) -> dict:
+    """Query stored memories from K0."""
+    payload = {
+        "selectors": [{
+            "type": "episodic",
+            "tags": ["e2e-test"],
+            "limit": 10,
+        }],
+        "space_id": space_id,
+        "tenant_id": tenant_id,
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "http://localhost:8080/k0/query.recall",
+            json=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        response.raise_for_status()
+        return response.json()
+```
+
+### Expected Test Output
+
+```text
+================================================================================
+🚀 REAL K1 → K0 → K1 DATA FLOW TEST
+================================================================================
+
+📝 Step 1: Creating properly signed command envelope...
+   Trace ID: 92278fbe-1b01-49c9-b7f5-68f2d13217f7
+   Tenant: tenant-001
+   Space: space-home
+   Device: device-local-001
+   Signature: hIRxMKkvE7SuXJ7hXLtjS8ZX1FLmR_aZ... (NaCl Ed25519)
+
+📤 Step 2: Submitting command to K0...
+   ✅ Command accepted! (HTTP 200 SUCCESS)
+   Receipt: {
+     "receipt_id": "1b8428cb-28bb-41c6-af68-c07a2432859b",
+     "commit_ts": "2025-10-26T08:25:04.353378Z",
+     "offsets": {
+       "memory.delta": 87  // ← PROOF: Data persisted at WAL position 87
+     },
+     "idem_key": "726a57d314a34586f29e8224264ca8c52fe73139babad370287e28ee46dc56c4",
+     "obligations": ["kernel.audit.trace"]
+   }
+
+🔍 Step 3: Verifying WAL persistence...
+   ✅ Found in WAL at position 87
+   Tenant: tenant-001
+   Space: space-home
+   Topic: memory.delta
+
+🔎 Step 4: Querying memories from K0...
+   ✅ Query successful!
+   Retrieved memory at wal_pos 87:
+   {
+     "cognitive_trace_id": "92278fbe-1b01-49c9-b7f5-68f2d13217f7",
+     "body": {
+       "memory_id": "test_e2e_1_026258d6",
+       "content": {
+         "title": "E2E Test Memory #1",
+         "body": "Real data flow test at 2025-10-26T08:25:04.320Z",
+         "tags": ["e2e-test", "k1-k0-integration"]
+       }
+     }
+   }
+
+================================================================================
+✅ DATA FLOW TEST COMPLETE
+================================================================================
+
+Summary:
+  1. ✅ Command submitted with REAL signature
+  2. ✅ K0 accepted and validated signature (HTTP 200, not 400!)
+  3. ✅ Data persisted to WAL (position 87 confirmed in receipt AND query)
+  4. ✅ Query endpoint working (retrieved exact data)
+
+🎉 FULL K1 → K0 → K1 ROUND-TRIP PROVEN!
+```
+
+### K0 Kernel Logs Validation
+
+The test also validates K0's internal logs showing:
+
+```json
+// Policy validation passed
+{"logger": "k0.policy.pep_syscall", "message": "PEP allow",
+ "context": {"band": "GREEN", "topic": "memory.delta", "tenant": "tenant-001"}}
+
+// Unit of Work commit
+{"logger": "k0.uow.unit_of_work", "message": "🔍 DEBUG: _commit() method called"}
+
+// Snapshot watermark updated
+{"logger": "k0.uow.unit_of_work",
+ "message": "🔍 DEBUG: Updating snapshot_watermark to [REDACTED].392947"}
+
+// HTTP success
+{"logger": "uvicorn.access",
+ "message": "172.18.0.1:59592 - \"POST /k0/command.submit HTTP/1.1\" 200"}
+
+// Query success
+{"logger": "uvicorn.access",
+ "message": "172.18.0.1:59598 - \"POST /k0/query.recall HTTP/1.1\" 200"}
+```
+
+### Running the E2E Test
+
+```bash
+# Run from project root
+python test_real_data_flow.py
+
+# Or run as part of test suite
+python -m ward test --path tests/k1/l5_infrastructure/bridge_k0/test_real_data_flow.py
+```
+
+### Prerequisites
+
+1. **K0 Docker kernel running**: `docker ps | grep k0-kernel`
+2. **K0 database accessible**: SQLite at `/data/k0_kernel.db` in container
+3. **Development profile configured**: `k0.local.dev_profile` available
+4. **Signing keys present**: NaCl Ed25519 keys for device-local-001
+
+### What Makes This Test Different
+
+| Aspect | Previous Connectivity Tests | Real Data Flow Test |
+|--------|----------------------------|---------------------|
+| **Signatures** | Test placeholders (rejected by K0) | REAL NaCl Ed25519 signatures |
+| **K0 Response** | 400 INVALID_SIGNATURE | 200 OK with receipt |
+| **Persistence** | Not tested | Verified in WAL database |
+| **Query** | Not attempted | Full query and data retrieval |
+| **Data Integrity** | N/A | Exact content match confirmed |
+| **Proof** | Connection works | **Full data cycle works** |
+
+### Critical Success Criteria
+
+✅ **Signature Acceptance**: K0 returns HTTP 200, not 400 (proves valid signature)
+✅ **Receipt with Offset**: Receipt contains `offsets.memory.delta` (proves WAL write)
+✅ **WAL Persistence**: SQLite query finds data at exact WAL position
+✅ **Query Success**: K0 returns memory at correct `wal_pos`
+✅ **Data Integrity**: Retrieved content matches submitted content exactly
+✅ **Trace Propagation**: `cognitive_trace_id` present in all operations
+
+### Common Issues & Solutions
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| **400 INVALID_SIGNATURE** | Using test signature, not real | Use `k0.local.dev_profile` signing |
+| **404 Not Found** | Wrong K0 endpoint | Use unified port 8080, not 5200 |
+| **Connection refused** | K0 not running | Start K0: `docker-compose up -d` |
+| **Empty query results** | Wrong space/tenant | Use same IDs from dev_profile |
+| **SQLite permission denied** | Docker exec failed | Check container name: `k0-kernel` |
+
+### Integration with 5-Step Workflow
+
+This test validates **GATE 4 (Testing)** for Layer 5 Infrastructure:
+
+- **GATE 1 (ADRs)**: References ADR-0024 (K0 Bridge), ADR-0065 (Signing)
+- **GATE 2 (Contracts)**: Validates `k0/contracts/openapi.k0.yaml`
+- **GATE 3 (Implementation)**: Tests real `K0CommandClient`, `K0QueryClient`
+- **GATE 4 (Testing)**: ✅ **THIS TEST** - Proves full data persistence cycle
+- **GATE 5 (Memory)**: Documents test results, WAL positions, trace IDs
+
 ## Next Steps
 
 - **[Debugging Guide](./debugging-guide.md)**: Learn how to debug K1 with traces and metrics
@@ -460,6 +770,6 @@ async def _(agent=agent):
 
 ## References
 
-- **WARD Documentation**: https://ward.readthedocs.io/
+- **WARD Documentation**: <https://ward.readthedocs.io/>
 - **Testing Standards**: [.github/instructions/testing-standards.instructions.md](../../.github/instructions/testing-standards.instructions.md)
 - **K1 Module Analysis**: [../k1_module_analysis.md](../k1_module_analysis.md)

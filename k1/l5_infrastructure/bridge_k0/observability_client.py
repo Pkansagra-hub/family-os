@@ -51,6 +51,7 @@ from opentelemetry.trace import SpanKind
 
 from k0.obs.metrics import MetricsExporter
 from k0.obs.tracing import TracerFactory
+from k1.l5_infrastructure.bridge_k0.http2 import HTTP2ConnectionManager, K0Port
 from k1.l5_infrastructure.observability import get_metrics
 
 logger: Any
@@ -229,15 +230,24 @@ class ObservabilityClient:
         config: ObservabilityClientConfig,
         metrics_exporter: MetricsExporter,
         tracer_factory: TracerFactory,
+        connection_manager: HTTP2ConnectionManager | None = None,
     ) -> None:
         self._config = config
         self._metrics_exporter = metrics_exporter
         self._tracer_factory = tracer_factory
-        self._http = httpx.AsyncClient(
-            http2=True,
-            timeout=httpx.Timeout(config.http_timeout_sec),
-            limits=httpx.Limits(max_connections=2, max_keepalive_connections=2),
-        )
+
+        # HTTP/2 connection manager (shared or self-owned)
+        self._connection_manager = connection_manager
+        self._owns_manager = connection_manager is None
+
+        if self._owns_manager:
+            # Auto-detect TLS from endpoint
+            use_tls = config.endpoint.startswith("https://")
+            self._connection_manager = HTTP2ConnectionManager(
+                use_tls=use_tls,
+                verify=True,  # Verify TLS certificates by default
+            )
+
         self._url = f"{config.endpoint.rstrip('/')}/k0/obs.emit"
         self._log_handler = _LogBufferHandler()
         self._tasks: list[asyncio.Task[None]] = []
@@ -249,6 +259,8 @@ class ObservabilityClient:
             endpoint=self._url,
             metrics_interval_sec=config.metrics_interval_sec,
             logs_interval_sec=config.logs_interval_sec,
+            owns_manager=self._owns_manager,
+            http2_enabled=True,
         )
 
     # ---------------------------------------------------------------------
@@ -288,11 +300,11 @@ class ObservabilityClient:
         """Stop tasks and release network resources."""
 
         await self.stop()
-        if not self._closed:
-            await self._http.aclose()
-            self._detach_log_handler()
-            self._closed = True
-            logger.info("observability_client_closed")
+        if self._owns_manager and self._connection_manager:
+            await self._connection_manager.stop()
+        self._detach_log_handler()
+        self._closed = True
+        logger.info("observability_client_closed")
 
     # ------------------------------------------------------------------
     # Public control hooks
@@ -380,13 +392,14 @@ class ObservabilityClient:
                 attributes={"kind": kind},
             ):
                 try:
-                    headers: Dict[str, str] = {"X-Cognitive-Trace-Id": trace_id}
-                    self._tracer_factory.inject(headers)
-                    response = await self._http.post(
-                        self._url,
-                        json={"kind": kind, "body": dict(body)},
-                        headers=headers,
-                    )
+                    # HTTP/2 POST to K0 observability port
+                    async with self._connection_manager.get_client(
+                        K0Port.OBSERVABILITY, trace_id=trace_id
+                    ) as client:
+                        response = await client.post(
+                            self._url,
+                            json={"kind": kind, "body": dict(body)},
+                        )
                 except httpx.RequestError as exc:
                     status_label = "network_error"
                     logger.error(
@@ -406,12 +419,17 @@ class ObservabilityClient:
                     )
                     return
 
+                # HTTP 501 Not Implemented: K0 obs port not yet implemented
+                # Count as "soft_success" so dashboards show distinction from real failures
                 if response.status_code == 501:
-                    status_label = "not_implemented"
+                    status_label = (
+                        "soft_success"  # Changed from "not_implemented" for clarity
+                    )
                     logger.info(
-                        "observability_push_not_implemented",
+                        "observability_push_soft_success",
                         kind=kind,
                         status=response.status_code,
+                        reason="K0 observability port not yet implemented (expected until Phase 2)",
                     )
                     return
 

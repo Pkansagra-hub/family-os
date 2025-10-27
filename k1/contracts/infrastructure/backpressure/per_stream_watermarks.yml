@@ -1,0 +1,646 @@
+---
+# Per-Stream Watermark Monitoring Contract
+# ADR-0061, ADR-0061a: Progressive degradation for individual streams
+# Complements: watermark_thresholds.yml (global cascade)
+#
+# Purpose:
+#   Defines per-stream pressure level monitoring with 80/90/95 watermarks.
+#   Each stream (audio_frames, agent_mailbox, k0_outbox, sse_subscribers)
+#   monitors its queue depth independently and triggers progressive degradation:
+#   - 80% (WARN): Alert only
+#   - 90% (DEGRADE): Apply degradation action
+#   - 95% (REJECT): Block new items
+#   - <60% (NORMAL): Resume normal operation
+
+# ============================================================================
+# PRESSURE LEVEL ENUMERATION (ADR-0061a)
+# ============================================================================
+
+classes:
+  - name: PressureLevel
+    description: Per-stream pressure level (enum)
+    type: enum
+    research: ADR-0061 (3-Tier Backpressure Cascade), ADR-0061a (Watermark Thresholds)
+    performance_budget: <1ms to evaluate pressure, <0.1% CPU overhead
+    values:
+      - name: NORMAL
+        value: 0
+        description: Queue depth <80%, normal operation
+        action: None
+
+      - name: WARN
+        value: 1
+        description: Queue depth 80-89%, emit alert
+        action: log_warning, emit_metric
+
+      - name: DEGRADE
+        value: 2
+        description: Queue depth 90-94%, apply degradation action
+        action: drop_oldest | block_sender | merge_deltas | disconnect_slow
+
+      - name: REJECT
+        value: 3
+        description: Queue depth ≥95%, reject new items
+        action: reject_with_backpressure_response
+
+    python_implementation: |
+      from enum import IntEnum
+
+      class PressureLevel(IntEnum):
+          """Per-stream pressure level (0=NORMAL, 1=WARN, 2=DEGRADE, 3=REJECT)"""
+          NORMAL = 0
+          WARN = 1
+          DEGRADE = 2
+          REJECT = 3
+
+          def description(self) -> str:
+              """Human-readable description"""
+              return {
+                  0: "Normal (<80%)",
+                  1: "Warning (80-89%)",
+                  2: "Degradation (90-94%)",
+                  3: "Rejection (≥95%)"
+              }[self.value]
+
+          def severity(self) -> str:
+              """Alert severity"""
+              return {
+                  0: "INFO",
+                  1: "WARNING",
+                  2: "CRITICAL",
+                  3: "CRITICAL"
+              }[self.value]
+
+    rust_implementation: |
+      use serde::{Serialize, Deserialize};
+
+      #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+      pub enum PressureLevel {
+          Normal = 0,
+          Warn = 1,
+          Degrade = 2,
+          Reject = 3,
+      }
+
+      impl PressureLevel {
+          pub fn description(&self) -> &'static str {
+              match self {
+                  PressureLevel::Normal => "Normal (<80%)",
+                  PressureLevel::Warn => "Warning (80-89%)",
+                  PressureLevel::Degrade => "Degradation (90-94%)",
+                  PressureLevel::Reject => "Rejection (≥95%)",
+              }
+          }
+
+          pub fn severity(&self) -> &'static str {
+              match self {
+                  PressureLevel::Normal => "INFO",
+                  PressureLevel::Warn => "WARNING",
+                  PressureLevel::Degrade => "CRITICAL",
+                  PressureLevel::Reject => "CRITICAL",
+              }
+          }
+      }
+
+# ============================================================================
+# STREAM WATERMARK CONFIGURATION
+# ============================================================================
+
+  - name: StreamWatermarkConfig
+    description: Watermark configuration for a single stream
+    attributes:
+      - name: stream_id
+        type: str
+        description: Unique stream identifier
+        examples: ["audio_frames", "agent_mailbox", "k0_outbox", "sse_subscribers"]
+        required: true
+
+      - name: max_depth
+        type: int
+        description: Maximum queue capacity (items)
+        examples: [100, 50, 1000, 200]
+        required: true
+
+      - name: warn_threshold_pct
+        type: float
+        description: WARN threshold as percentage of max_depth
+        default: 0.80
+        range: [0.5, 0.95]
+        validation: "warn < degrade < reject"
+
+      - name: degrade_threshold_pct
+        type: float
+        description: DEGRADE threshold as percentage of max_depth
+        default: 0.90
+        range: [0.7, 0.99]
+        validation: "warn < degrade < reject"
+
+      - name: reject_threshold_pct
+        type: float
+        description: REJECT threshold as percentage of max_depth
+        default: 0.95
+        range: [0.85, 1.0]
+        validation: "warn < degrade < reject"
+
+      - name: recovery_threshold_pct
+        type: float
+        description: Recovery threshold to return to NORMAL
+        default: 0.60
+        range: [0.4, 0.8]
+        rationale: "Hysteresis prevents oscillation; recovery at 60% ensures stable return to NORMAL"
+
+      - name: hysteresis_band
+        type: float
+        description: Implicit hysteresis band (difference between degrade and warn thresholds)
+        calculated: "degrade_threshold_pct - warn_threshold_pct"
+        typical: 0.10
+        rationale: "10% hysteresis (80%→90%) prevents flapping between levels"
+
+      - name: degradation_action
+        type: str
+        description: Degradation action to apply at DEGRADE level
+        enum:
+          - drop_oldest
+          - block_sender
+          - merge_deltas
+          - disconnect_slow
+        required: true
+
+      - name: metrics_enabled
+        type: bool
+        description: Emit Prometheus metrics for this stream
+        default: true
+
+    python_implementation: |
+      from dataclasses import dataclass, field
+      from enum import Enum
+      from typing import Optional
+
+      class DegradationAction(str, Enum):
+          """Action to apply when stream enters DEGRADE level"""
+          DROP_OLDEST = "drop_oldest"           # Drop oldest items from buffer
+          BLOCK_SENDER = "block_sender"         # Return 503 Backpressure to sender
+          MERGE_DELTAS = "merge_deltas"         # Merge consecutive deltas
+          DISCONNECT_SLOW = "disconnect_slow"   # Disconnect slowest clients
+
+      @dataclass
+      class StreamWatermarkConfig:
+          """Watermark configuration for a single stream"""
+          stream_id: str
+          max_depth: int
+          degradation_action: DegradationAction
+          warn_threshold_pct: float = 0.80
+          degrade_threshold_pct: float = 0.90
+          reject_threshold_pct: float = 0.95
+          recovery_threshold_pct: float = 0.60
+          metrics_enabled: bool = True
+
+          def __post_init__(self):
+              """Validate thresholds"""
+              assert self.warn_threshold_pct < self.degrade_threshold_pct < self.reject_threshold_pct
+              assert self.recovery_threshold_pct < self.warn_threshold_pct
+
+          @property
+          def hysteresis_band(self) -> float:
+              """Hysteresis band between warn and degrade"""
+              return self.degrade_threshold_pct - self.warn_threshold_pct
+
+          @property
+          def warn_threshold_items(self) -> int:
+              """WARN threshold in items"""
+              return int(self.max_depth * self.warn_threshold_pct)
+
+          @property
+          def degrade_threshold_items(self) -> int:
+              """DEGRADE threshold in items"""
+              return int(self.max_depth * self.degrade_threshold_pct)
+
+          @property
+          def reject_threshold_items(self) -> int:
+              """REJECT threshold in items"""
+              return int(self.max_depth * self.reject_threshold_pct)
+
+          @property
+          def recovery_threshold_items(self) -> int:
+              """Recovery threshold in items"""
+              return int(self.max_depth * self.recovery_threshold_pct)
+
+# ============================================================================
+# STREAM WATERMARK MONITOR
+# ============================================================================
+
+  - name: StreamWatermarkMonitor
+    description: Monitors pressure level for a single stream with hysteresis
+    attributes:
+      - name: config
+        type: StreamWatermarkConfig
+
+      - name: current_level
+        type: PressureLevel
+        initial_value: PressureLevel.NORMAL
+
+      - name: level_entry_time
+        type: float
+        description: Timestamp when entered current level (seconds since epoch)
+
+    methods:
+      - name: evaluate
+        description: Evaluate queue depth and update pressure level with hysteresis
+        parameters:
+          - name: current_depth
+            type: int
+            description: Current queue depth (items)
+        returns:
+          type: PressureLevel
+          description: Current pressure level
+        implementation: |
+          def evaluate(self, current_depth: int) -> PressureLevel:
+              """
+              Evaluate queue depth and update pressure level with hysteresis.
+
+              Activation thresholds: 80%, 90%, 95%
+              Deactivation thresholds: apply hysteresis
+              Recovery: Return to NORMAL only at 60% threshold
+
+              Hysteresis Rationale:
+              - Prevents oscillation (flapping) between adjacent levels
+              - When at REJECT, only drop to DEGRADE at 85% (not 90%)
+              - When at DEGRADE, only drop to WARN at 72% (not 80%)
+              - When at WARN, only drop to NORMAL at 60% (recovery threshold)
+
+              Returns: Current PressureLevel after potential transition
+              """
+              utilization_pct = current_depth / self.config.max_depth
+
+              # Always transition UP (to higher pressure)
+              if utilization_pct >= self.config.reject_threshold_pct:
+                  old_level = self.current_level
+                  self.current_level = PressureLevel.REJECT
+                  if old_level != PressureLevel.REJECT:
+                      self._emit_transition(old_level, PressureLevel.REJECT, current_depth, utilization_pct)
+                  return PressureLevel.REJECT
+
+              elif utilization_pct >= self.config.degrade_threshold_pct:
+                  # Hysteresis on deactivation from REJECT: 5% band
+                  if self.current_level == PressureLevel.REJECT:
+                      deactivation_pct = self.config.reject_threshold_pct - 0.05
+                      if utilization_pct < deactivation_pct:
+                          old_level = self.current_level
+                          self.current_level = PressureLevel.DEGRADE
+                          self._emit_transition(old_level, PressureLevel.DEGRADE, current_depth, utilization_pct)
+                          return PressureLevel.DEGRADE
+
+                  if self.current_level != PressureLevel.DEGRADE:
+                      old_level = self.current_level
+                      self.current_level = PressureLevel.DEGRADE
+                      self._emit_transition(old_level, PressureLevel.DEGRADE, current_depth, utilization_pct)
+                  return PressureLevel.DEGRADE
+
+              elif utilization_pct >= self.config.warn_threshold_pct:
+                  # Hysteresis on deactivation from DEGRADE: 10% band
+                  if self.current_level == PressureLevel.DEGRADE:
+                      deactivation_pct = self.config.degrade_threshold_pct - self.config.hysteresis_band
+                      if utilization_pct < deactivation_pct:
+                          old_level = self.current_level
+                          self.current_level = PressureLevel.WARN
+                          self._emit_transition(old_level, PressureLevel.WARN, current_depth, utilization_pct)
+                          return PressureLevel.WARN
+
+                  if self.current_level != PressureLevel.WARN:
+                      old_level = self.current_level
+                      self.current_level = PressureLevel.WARN
+                      self._emit_transition(old_level, PressureLevel.WARN, current_depth, utilization_pct)
+                  return PressureLevel.WARN
+
+              else:  # utilization < 80%
+                  # Return to NORMAL only at recovery threshold (60%)
+                  if utilization_pct <= self.config.recovery_threshold_pct and self.current_level != PressureLevel.NORMAL:
+                      old_level = self.current_level
+                      self.current_level = PressureLevel.NORMAL
+                      self._emit_transition(old_level, PressureLevel.NORMAL, current_depth, utilization_pct)
+
+                  return self.current_level
+
+      - name: get_pressure_level
+        description: Get current pressure level without evaluation
+        returns:
+          type: PressureLevel
+
+      - name: should_reject
+        description: Check if stream is at REJECT level
+        returns:
+          type: bool
+          description: True if current_level >= REJECT
+
+# ============================================================================
+# PRESSURE CHANGE EVENT
+# ============================================================================
+
+  - name: PressureChangeEvent
+    description: Event emitted when pressure level changes
+    attributes:
+      - name: stream_id
+        type: str
+        description: Stream identifier
+
+      - name: old_level
+        type: PressureLevel
+        description: Previous pressure level
+
+      - name: new_level
+        type: PressureLevel
+        description: Current pressure level
+
+      - name: queue_depth
+        type: int
+        description: Queue depth at transition
+
+      - name: queue_max
+        type: int
+        description: Queue capacity
+
+      - name: queue_utilization_pct
+        type: float
+        description: Current utilization percentage
+
+      - name: degradation_action
+        type: str
+        description: Action triggered (if transitioning to DEGRADE)
+
+      - name: timestamp_ms
+        type: int
+        description: Event timestamp (milliseconds since epoch)
+
+    python_implementation: |
+      from dataclasses import dataclass
+      import time
+
+      @dataclass
+      class PressureChangeEvent:
+          """Event emitted on pressure level transition"""
+          stream_id: str
+          old_level: PressureLevel
+          new_level: PressureLevel
+          queue_depth: int
+          queue_max: int
+          queue_utilization_pct: float
+          degradation_action: Optional[str] = None
+          timestamp_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+
+# ============================================================================
+# PER-STREAM WATERMARK CONFIGURATIONS (ADR-0061a)
+# ============================================================================
+
+stream_configs:
+  # Audio frames: High-throughput, latency-sensitive, lossy
+  - stream_id: audio_frames
+    max_depth: 100
+    warn_threshold_pct: 0.80       # 80 frames
+    degrade_threshold_pct: 0.90    # 90 frames
+    reject_threshold_pct: 0.95     # 95 frames
+    recovery_threshold_pct: 0.60   # 60 frames
+    degradation_action: drop_oldest
+    metrics_enabled: true
+    description: |
+      Real-time audio frame buffer (50-100 fps at 16kHz).
+      Latency-sensitive (<50ms), lossy compression acceptable.
+      Action: Drop oldest frames to maintain real-time processing.
+      Typical throughput: 50-100 frames/sec
+
+  # Agent mailbox: Low-throughput, reliability-critical
+  - stream_id: agent_mailbox
+    max_depth: 50
+    warn_threshold_pct: 0.80       # 40 messages
+    degrade_threshold_pct: 0.90    # 45 messages
+    reject_threshold_pct: 0.95     # 48 messages
+    recovery_threshold_pct: 0.60   # 30 messages
+    degradation_action: block_sender
+    metrics_enabled: true
+    description: |
+      Per-agent MPSC message queue (5-20 msg/sec per agent).
+      Reliability-critical (control messages for coordination).
+      Action: Return 503 Backpressure to sender with Retry-After header.
+      Typical throughput: 5-20 messages/sec per agent
+
+  # K0 outbox: Medium-throughput, compression-friendly
+  - stream_id: k0_outbox
+    max_depth: 1000
+    warn_threshold_pct: 0.80       # 800 receipts
+    degrade_threshold_pct: 0.90    # 900 receipts
+    reject_threshold_pct: 0.95     # 950 receipts
+    recovery_threshold_pct: 0.60   # 600 receipts
+    degradation_action: merge_deltas
+    metrics_enabled: true
+    description: |
+      K0 bridge state delta queue (100-500 receipts/sec).
+      Compression-friendly (delta merging reduces 3 msgs to 1).
+      Action: Merge consecutive StateDelta messages for same entity.
+      Typical throughput: 100-500 receipts/sec
+      Compression ratio: 2-3× (3 deltas merged into 1)
+
+  # SSE subscribers: Variable-throughput, slow clients tolerable
+  - stream_id: sse_subscribers
+    max_depth: 200
+    warn_threshold_pct: 0.80       # 160 events
+    degrade_threshold_pct: 0.90    # 180 events
+    reject_threshold_pct: 0.95     # 190 events
+    recovery_threshold_pct: 0.60   # 120 events
+    degradation_action: disconnect_slow
+    metrics_enabled: true
+    description: |
+      Per-client SSE event buffer (1-50 events/sec per client).
+      Client-specific (slow clients exist, fast clients unaffected).
+      Action: Disconnect slowest 5% of clients (by buffer depth).
+      Typical throughput: 1-50 events/sec per client
+      Typical slow clients: Bottom 5% of clients by buffer depth
+
+# ============================================================================
+# PROMETHEUS METRICS (ADR-0061b)
+# ============================================================================
+
+metrics:
+  gauge_metrics:
+    - name: backpressure_stream_depth
+      description: Current queue depth for stream
+      labels: [stream_id]
+      unit: items
+      help: |
+        Current number of items in stream queue.
+        Use with max_depth for utilization calculation.
+
+    - name: backpressure_stream_utilization_pct
+      description: Current queue utilization (depth / max_depth)
+      labels: [stream_id]
+      unit: percent
+      range: [0, 100]
+      help: |
+        Percentage of stream capacity currently in use.
+        Compare against 80% (WARN), 90% (DEGRADE), 95% (REJECT).
+
+    - name: backpressure_stream_level
+      description: Current pressure level
+      labels: [stream_id]
+      unit: enum
+      range: [0, 3]
+      help: |
+        Current pressure level: 0=NORMAL, 1=WARN, 2=DEGRADE, 3=REJECT.
+
+  counter_metrics:
+    - name: backpressure_stream_transitions_total
+      description: Total pressure level transitions
+      labels: [stream_id, from_level, to_level]
+      unit: count
+      help: |
+        Total number of times pressure level changed.
+        Use for monitoring oscillation/flapping.
+
+    - name: backpressure_stream_actions_total
+      description: Total degradation actions applied
+      labels: [stream_id, action]
+      unit: count
+      help: |
+        Total degradation actions executed (drop_oldest, block_sender, etc.).
+        High values indicate sustained pressure.
+
+  histogram_metrics:
+    - name: backpressure_stream_time_in_level_seconds
+      description: Time spent in each pressure level
+      labels: [stream_id, level]
+      buckets: [0.01, 0.1, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0]
+      unit: seconds
+      help: |
+        Histogram of duration in each pressure level.
+        P95 > 10s indicates sustained pressure.
+
+# ============================================================================
+# ALERT RULES (ADR-0061b)
+# ============================================================================
+
+alert_rules:
+  - name: BackpressureStreamWarn
+    description: Stream pressure at WARN level (80% utilization)
+    severity: info
+    condition: backpressure_stream_level >= 1
+    for: 30s
+    annotations:
+      summary: "{{ $labels.stream_id }} at WARN level"
+      runbook: "docs/runbooks/backpressure_stream_warn.md"
+
+  - name: BackpressureStreamDegrade
+    description: Stream pressure at DEGRADE level (90% utilization)
+    severity: warning
+    condition: backpressure_stream_level >= 2
+    for: 10s
+    annotations:
+      summary: "{{ $labels.stream_id }} at DEGRADE level, degradation action active"
+      runbook: "docs/runbooks/backpressure_stream_degrade.md"
+
+  - name: BackpressureStreamReject
+    description: Stream pressure at REJECT level (95% utilization)
+    severity: critical
+    condition: backpressure_stream_level >= 3
+    for: 5s
+    annotations:
+      summary: "{{ $labels.stream_id }} at REJECT level, rejecting new items"
+      runbook: "docs/runbooks/backpressure_stream_reject.md"
+
+  - name: BackpressureStreamSustainedReject
+    description: Stream sustained in REJECT for >10s
+    severity: critical
+    action: escalate_to_oncall
+    condition: "histogram_quantile(0.95, rate(backpressure_stream_time_in_level_seconds_bucket{level='REJECT'}[5m])) > 10"
+    for: 60s
+    annotations:
+      summary: "{{ $labels.stream_id }} sustained REJECT >10s, investigate bottleneck"
+      runbook: "docs/runbooks/backpressure_stream_sustained_reject.md"
+
+# ============================================================================
+# INTEGRATION WITH PRIORITY SCHEDULER
+# ============================================================================
+
+scheduler_integration:
+  description: |
+    StreamWatermarkMonitor integrates with PriorityScheduler in send() path
+    to provide per-priority watermark monitoring.
+
+  code_pattern: |
+    # Pseudocode in PriorityScheduler.send()
+    async def send(self, message, priority, ttl_ms=0):
+        # ... existing validation logic ...
+
+        # Get watermark monitor for this priority
+        watermark = self._watermarks[priority]
+
+        # Evaluate new pressure level
+        new_level = watermark.evaluate(len(self._queues[priority]))
+        old_level = watermark.current_level
+
+        # Check if we should reject at REJECT level
+        if new_level == PressureLevel.REJECT:
+            self._metrics['backpressure_stream_actions_total'][priority]['reject'] += 1
+            return SendResult.BACKPRESSURE_REJECT
+
+        # Emit metric for level change
+        if new_level != old_level:
+            self._emit_pressure_event(priority, old_level, new_level)
+            self._metrics['backpressure_stream_transitions_total'][priority][old_level][new_level] += 1
+
+            # Apply degradation action at DEGRADE level
+            if new_level == PressureLevel.DEGRADE:
+                self._apply_degradation_action(priority, new_level)
+
+        # Enqueue message (if not rejected)
+        await self._queues[priority].enqueue(message)
+
+        # Update metrics
+        self._metrics['backpressure_stream_depth'][priority] = len(self._queues[priority])
+        self._metrics['backpressure_stream_utilization_pct'][priority] = \
+            (len(self._queues[priority]) / self._max_depths[priority]) * 100
+
+  per_priority_watermarks:
+    - priority: 0  # URGENT
+      max_depth: 50
+      degradation_action: none (URGENT never degraded)
+
+    - priority: 1  # REALTIME
+      max_depth: 100
+      degradation_action: drop_oldest_background_task
+
+    - priority: 2  # INTERACTIVE
+      max_depth: 200
+      degradation_action: drop_oldest_non_essential
+
+    - priority: 3  # BACKGROUND
+      max_depth: 1024
+      degradation_action: drop_oldest_analytics
+
+# ============================================================================
+# HYSTERESIS DESIGN RATIONALE (ADR-0061a)
+# ============================================================================
+
+hysteresis_analysis:
+  why_hysteresis: |
+    Without hysteresis, a stream at 90.5% utilization would oscillate:
+    - 90.5% > 90% → transition to DEGRADE, drop oldest frame
+    - After drop: 89.5% < 90% → transition to WARN
+    - New frame arrives: 90.5% > 90% → transition to DEGRADE again
+    - Result: Flapping 100x per second, excessive metrics/alerts
+
+  hysteresis_implementation:
+    activation_thresholds: [80%, 90%, 95%]
+    deactivation_thresholds_with_hysteresis:
+      from_reject_to_degrade: 90% (95% - 5%)
+      from_degrade_to_warn: 80% (90% - 10%)
+      from_warn_to_normal: 60% (recovery threshold)
+
+  hysteresis_band_width: |
+    - REJECT→DEGRADE: 5% band (95% → 90%)
+    - DEGRADE→WARN: 10% band (90% → 80%)
+    - WARN→NORMAL: 20% band (80% → 60%)
+    Wider bands allow more margin for noisy metrics.
+
+  stability_properties: |
+    - No oscillation between adjacent levels
+    - Smooth transitions on sustained load
+    - Rapid recovery to NORMAL when load drops
+    - Compatible with multi-level degradation

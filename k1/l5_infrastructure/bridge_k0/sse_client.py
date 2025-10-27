@@ -99,6 +99,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import httpx
 
+from k1.l5_infrastructure.bridge_k0.http2 import HTTP2ConnectionManager, K0Port
 from k1.l5_infrastructure.observability import get_metrics, get_tracer
 
 try:  # pragma: no cover - structlog is optional
@@ -219,6 +220,7 @@ class K0SSEClient:
         self,
         base_url: str = "http://localhost:5202",
         *,
+        connection_manager: Optional[HTTP2ConnectionManager] = None,
         timeout: float = 300.0,  # 5 minutes default (long-lived connection)
         max_backoff_seconds: float = 16.0,
         initial_backoff_seconds: float = 1.0,
@@ -227,6 +229,7 @@ class K0SSEClient:
 
         Args:
             base_url: K0 SSE port base URL (default: http://localhost:5202)
+            connection_manager: Optional HTTP/2 connection manager (created if None)
             timeout: Connection timeout in seconds (default: 300s for long-lived)
             max_backoff_seconds: Maximum exponential backoff (default: 16s)
             initial_backoff_seconds: Initial backoff delay (default: 1s)
@@ -236,26 +239,31 @@ class K0SSEClient:
         self.max_backoff_seconds = max_backoff_seconds
         self.initial_backoff_seconds = initial_backoff_seconds
 
-        # HTTP client for SSE (streaming)
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=10.0, read=timeout),
-            limits=httpx.Limits(
-                max_connections=5,
-                max_keepalive_connections=5,
-                keepalive_expiry=60.0,
-            ),
-        )
+        # HTTP/2 connection manager (shared or self-owned)
+        self._connection_manager = connection_manager
+        self._owns_manager = connection_manager is None
+
+        if self._owns_manager:
+            # Auto-detect TLS from base_url
+            use_tls = base_url.startswith("https://")
+            self._connection_manager = HTTP2ConnectionManager(
+                use_tls=use_tls,
+                verify=True,  # Verify TLS certificates by default
+            )
 
         logger.info(
             "k0_sse_client_initialized",
             base_url=self.base_url,
             timeout=timeout,
             max_backoff=max_backoff_seconds,
+            owns_manager=self._owns_manager,
+            http2_enabled=True,
         )
 
     async def close(self) -> None:
-        """Close HTTP client"""
-        await self.client.aclose()
+        """Close HTTP client and stop connection manager if owned"""
+        if self._owns_manager and self._connection_manager:
+            await self._connection_manager.stop()
         logger.info("k0_sse_client_closed")
 
     async def subscribe(
@@ -448,27 +456,30 @@ class K0SSEClient:
         )
 
         try:
-            # HTTP GET to K0 SSE port with streaming
-            async with self.client.stream(
-                "GET",
-                f"{self.base_url}/k0/sse.subscribe",
-                params=params,
-                headers=headers,
-            ) as response:
-                # Handle error responses
-                if response.status_code != 200:
-                    await self._handle_error_response(response, trace_id)
+            # HTTP GET to K0 SSE port with streaming (HTTP/2 with infinite read timeout)
+            async with self._connection_manager.get_client(
+                K0Port.SSE, trace_id=trace_id
+            ) as client:
+                async with client.stream(
+                    "GET",
+                    f"{self.base_url}/k0/sse.subscribe",
+                    params=params,
+                    headers=headers,
+                ) as response:
+                    # Handle error responses
+                    if response.status_code != 200:
+                        await self._handle_error_response(response, trace_id)
 
-                logger.info(
-                    "k0_sse_connected",
-                    cognitive_trace_id=trace_id,
-                    subscriber_id=subscriber_id,
-                    status_code=response.status_code,
-                )
+                    logger.info(
+                        "k0_sse_connected",
+                        cognitive_trace_id=trace_id,
+                        subscriber_id=subscriber_id,
+                        status_code=response.status_code,
+                    )
 
-                # Parse SSE event stream
-                async for event in self._parse_sse_stream(response, trace_id):
-                    yield event
+                    # Parse SSE event stream
+                    async for event in self._parse_sse_stream(response, trace_id):
+                        yield event
 
         except httpx.RequestError as e:
             logger.error(

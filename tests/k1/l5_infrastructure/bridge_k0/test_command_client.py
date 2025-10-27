@@ -16,8 +16,9 @@ Performance: <50ms GREEN, <200ms AMBER/RED
 from __future__ import annotations
 
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from ward import test  # type: ignore[attr-defined]
 
@@ -30,6 +31,16 @@ from k1.l5_infrastructure.bridge_k0.command_client import (
     K0QoSExhausted,
     K0Unavailable,
 )
+
+
+def mock_connection_manager_client(mock_http_client: AsyncMock):
+    """Helper to mock HTTP2ConnectionManager.get_client() context manager"""
+
+    @asynccontextmanager
+    async def mock_get_client(*args, **kwargs):
+        yield mock_http_client
+
+    return mock_get_client
 
 
 def create_sample_envelope() -> CommandEnvelope:
@@ -57,7 +68,6 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
 
     envelope = create_sample_envelope()
 
@@ -72,6 +82,11 @@ async def _() -> None:
         "obligations": [],
     }
     mock_http_client.post.return_value = mock_response
+
+    # Mock connection manager
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     # Execute
     receipt = await client.submit_command(envelope)
@@ -96,7 +111,6 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
 
     envelope = create_sample_envelope()
     envelope.band = "AMBER"  # Smart Lane
@@ -113,6 +127,11 @@ async def _() -> None:
     }
     mock_http_client.post.return_value = mock_response
 
+    # Mock connection manager
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
+
     # Execute
     receipt = await client.submit_command(envelope)
 
@@ -127,7 +146,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -159,7 +182,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -190,7 +217,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -219,7 +250,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -253,7 +288,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -294,7 +333,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
 
@@ -319,7 +362,11 @@ async def _() -> None:
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
     mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    # Mock connection manager
+
+    client._connection_manager.get_client = mock_connection_manager_client(
+        mock_http_client
+    )
 
     envelope = create_sample_envelope()
     envelope.idem_key = None  # Remove idempotency key
@@ -347,10 +394,9 @@ async def _() -> None:
 @test("submit_command: auto-computes payload SHA256 if not provided")
 async def _() -> None:
     """Test automatic payload SHA256 computation"""
+
     # Setup
     client = K0CommandClient(base_url="http://localhost:5200")
-    mock_http_client = AsyncMock()
-    client.client = mock_http_client
 
     envelope = create_sample_envelope()
     envelope.payload_sha256 = None  # Remove payload hash
@@ -365,10 +411,22 @@ async def _() -> None:
         "idem_key": "test_idem_key",
         "obligations": [],
     }
+
+    # Mock the HTTP client returned by connection manager
+    mock_http_client = AsyncMock()
     mock_http_client.post.return_value = mock_response
 
-    # Execute
-    receipt = await client.submit_command(envelope)
+    # Mock the connection manager's get_client context manager
+    mock_context_manager = MagicMock()
+    mock_context_manager.__aenter__.return_value = mock_http_client
+    mock_context_manager.__aexit__.return_value = AsyncMock()
+
+    # Patch the connection manager's get_client method
+    with patch.object(
+        client._connection_manager, "get_client", return_value=mock_context_manager
+    ):
+        # Execute
+        receipt = await client.submit_command(envelope)
 
     # Verify payload SHA256 was computed
     assert envelope.payload_sha256 is not None
@@ -379,13 +437,16 @@ async def _() -> None:
 @test("client close: properly closes HTTP connection pool")
 async def _() -> None:
     """Test client connection pool closure"""
-    # Setup
+
+    # Setup - client creates its own connection manager
     client = K0CommandClient(base_url="http://localhost:5200")
-    mock_http_client = AsyncMock()
-    client.client = mock_http_client
+    assert client._own_connection_manager is True  # Verify precondition
 
-    # Execute
-    await client.close()
+    # Mock the connection manager's stop method
+    mock_stop = AsyncMock()
+    with patch.object(client._connection_manager, "stop", new=mock_stop):
+        # Execute
+        await client.close()
 
-    # Verify
-    mock_http_client.aclose.assert_called_once()
+        # Verify connection manager stop was called (since client owns it)
+        mock_stop.assert_called_once()

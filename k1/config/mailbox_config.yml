@@ -1,0 +1,82 @@
+# Mailbox Configuration (ADR-0002a)
+# Source: Issue 2.6 - Dead Letter Queue
+# Related ADRs: ADR-0002 (Actor Model), ADR-0002a (Mailbox MPSC Queue)
+
+# Dead Letter Queue Configuration
+dlq:
+  # Retention period for DLQ entries (milliseconds)
+  # Default: 86400000 = 24 hours
+  # After this time, entries are automatically removed
+  retention_ms: 86400000
+
+  # Maximum number of DLQ entries
+  # Default: 10000
+  # When capacity exceeded, oldest entries evicted (FIFO)
+  max_entries: 10000
+
+  # Cleanup interval (milliseconds)
+  # Default: 100 = run cleanup every 100ms
+  # Cleanup removes expired entries based on retention_ms
+  cleanup_interval_ms: 100
+
+# Priority Queue Configuration (from Issue 2.2)
+priority:
+  # Capacity per priority tier
+  urgent_capacity: 50       # URGENT (priority 0)
+  realtime_capacity: 100    # REALTIME (priority 1)
+  interactive_capacity: 200 # INTERACTIVE (priority 2)
+  background_capacity: 1024 # BACKGROUND (priority 3)
+
+  # Weighted Fair Queueing (WFQ) weights
+  # Higher weight = processed more often
+  urgent_weight: 4
+  realtime_weight: 3
+  interactive_weight: 2
+  background_weight: 1
+
+  # Aging mechanism (prevent starvation)
+  # Messages promoted to higher priority after threshold
+  aging_threshold_ms: 5000  # 5 seconds
+
+# Backpressure Configuration (from Issue 2.3)
+backpressure:
+  # Watermark thresholds (total messages across all priorities)
+  high_watermark: 50   # Activate backpressure
+  low_watermark: 25    # Clear backpressure
+
+  # Overflow policy when backpressure active
+  # Options: DROP_OLDEST | BLOCK_SENDER | ALERT_SUPERVISOR
+  overflow_policy: DROP_OLDEST
+
+# Message TTL Configuration (from Issue 2.4)
+ttl:
+  # Default TTL for messages (milliseconds)
+  default_ttl_ms: 5000  # 5 seconds
+
+  # Cleanup interval (milliseconds)
+  cleanup_interval_ms: 100  # Run cleanup every 100ms
+
+# Performance Budgets (from ADR-0002a)
+performance:
+  # Enqueue latency target
+  enqueue_p95_ms: 0.5
+
+  # Dequeue latency target
+  dequeue_p95_ms: 0.5
+
+  # Cleanup latency per 1000 messages
+  cleanup_p95_ms: 1.0
+
+# Observability Configuration
+observability:
+  # Enable Prometheus metrics
+  metrics_enabled: true
+
+  # Metrics port
+  metrics_port: 9090
+
+  # Enable structured logging
+  logging_enabled: true
+
+  # Log level: DEBUG | INFO | WARN | ERROR
+  log_level: INFO

@@ -164,6 +164,27 @@ Each gate is a **BLOCKER**:
 - **Environment variables:** `K1_ENV`, `K1_LOG_LEVEL`, `K1_METRICS_PORT`, `K1_TRACE_ENABLED`
 - See *Appendix G: Config Example*
 
+### FlatBuffers Code Generation
+- **Schema location:** `k1/contracts/flatbuffers/<layer>/` (e.g., `layer5_infrastructure/`)
+- **Generated code location:** `k1/l4_runtime/<component>/model/` (NOT in contracts folder)
+- **Generation command:** `flatc --python -o k1/l4_runtime/<component>/model k1/contracts/flatbuffers/<layer>/<schema>.fbs`
+- **Post-generation:** Move files from nested namespace folders to `model/` root (flatc creates namespace structure)
+- **Import pattern:** `from k1.l4_runtime.<component>.model.<Type> import <Type>`
+- **Example (mailbox):**
+  ```bash
+  # Generate FlatBuffers Python files
+  flatc --python -o k1/l4_runtime/actor_fabric/mailbox/model k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+
+  # Flatten namespace structure (if needed)
+  Move-Item k1/l4_runtime/actor_fabric/mailbox/model/k1/actor_fabric/* k1/l4_runtime/actor_fabric/mailbox/model/ -Force
+  Remove-Item -Recurse k1/l4_runtime/actor_fabric/mailbox/model/k1
+
+  # Result: MessageEnvelope.py, MessagePriority.py, MessageType.py in model/
+  # Import: from k1.l4_runtime.actor_fabric.mailbox.model.MessageEnvelope import MessageEnvelope
+  ```
+- **Pattern reference:** See `k1/l4_runtime/session_state/model/` for existing example
+- **NO path hacks:** Don't use sys.path manipulation; use proper package imports
+
 ---
 
 ## 4️⃣ Playbooks: MCP Toolchain

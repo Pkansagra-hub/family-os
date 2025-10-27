@@ -1,0 +1,221 @@
+---
+description: Layer 5 (Infrastructure) Complete Architecture — All 8 subsystems with data flows and dependencies
+primary_adrs:
+  - ADR-0004 (52-Module 5-Layer Architecture)
+  - ADR-0001a (K0 Bridge Architecture)
+  - ADR-0029 (Prometheus Metrics)
+  - ADR-0009 (Circuit Breaker)
+  - ADR-0026 (Thermal Management)
+  - ADR-0004a (Event Bus)
+related_adrs:
+  - ADR-0004b (Import Linting - L5→none, leaf layer)
+  - ADR-0004d (Layer 5 Integration Tests)
+  - ADR-0024 (Performance Budgets)
+  - ADR-0074 (Module System)
+  - ADR-0075 (Layer 5 Extensibility)
+research:
+  - "SEDA Architecture (Welsh et al. 2001) — Stage-based event-driven architecture"
+  - "Circuit Breaker Pattern (Nygard 2007) — Release It! resilience patterns"
+  - "Observability (Majors et al. 2022) — High-cardinality data, distributed tracing"
+  - "Hot Code Reload (Erlang OTP) — Zero-downtime config updates"
+file_id: "L5CA"
+performance_budgets:
+  event_bus: "<5ms P95 (zero-copy delivery)"
+  circuit_breaker: "<10ms P95 (state check)"
+  thermal_placement: "<10ms P95 (placement decision)"
+  config_reload: "<100ms P95 (hot reload)"
+  metric_emission: "<10ms P95 (Prometheus push)"
+integration_tests: tests/integration/layer5/
+created: 2025-01-18
+---
+
+```mermaid
+graph TB
+    subgraph Layer_5_Infrastructure["🏗️ Layer 5 (Infrastructure) — 8 Core Subsystems"]
+        direction TB
+
+        %% ===== 1. K0 BRIDGE (K1↔K0 Communication Layer) =====
+        subgraph K0_Bridge["1️⃣ K0 Bridge (K1↔K0 Communication)"]
+            direction TB
+            CommandClient["CommandClient<br/>📤 Write Operations<br/>───────────<br/>• HTTP/2 POST :8080<br/>• P01 MemoryWrite<br/>• P02 PlanCommitted<br/>• FlatBuffers payload<br/>───────────<br/>⏱️ <50ms (GREEN)<br/>⏱️ <200ms (AMBER/RED)"]
+            QueryClient["QueryClient<br/>📥 Read Operations<br/>───────────<br/>• HTTP/2 POST :8080<br/>• Multi-store retrieval<br/>• FTS5+FAISS+KG<br/>• MMR fusion<br/>───────────<br/>⏱️ <100ms P95"]
+            SSEClient["SSEClient<br/>📡 Event Streaming<br/>───────────<br/>• HTTP GET :8080<br/>• EventSource SSE<br/>• Cursor-based resume<br/>• At-least-once<br/>───────────<br/>⏱️ <5ms delivery"]
+            BatchClient["BatchClient<br/>📦 Delta Batching<br/>───────────<br/>• 250ms interval<br/>• SessionState deltas<br/>• 64KB or 100 items<br/>• zstd compression<br/>───────────<br/>⏱️ <10ms batch"]
+            HTTP2Manager["HTTP2ConnectionManager<br/>🔌 Connection Pooling<br/>───────────<br/>• 1 conn per port<br/>• 100 streams/conn<br/>• PING every 10s<br/>• TLS 1.3<br/>───────────<br/>⏱️ <10ms round-trip"]
+
+            CommandClient --> HTTP2Manager
+            QueryClient --> HTTP2Manager
+            SSEClient --> HTTP2Manager
+            BatchClient --> HTTP2Manager
+        end
+
+        %% ===== 2. EVENT BUS (Layer 1→Layer 2 Communication) =====
+        subgraph Event_Bus["2️⃣ Event Bus (Cross-Layer Pub/Sub)"]
+            direction TB
+            EventBus["EventBus<br/>📬 Pub/Sub Router<br/>───────────<br/>• In-memory queues<br/>• Topic-based routing<br/>• Zero-copy delivery<br/>• 1-to-N fan-out<br/>───────────<br/>⏱️ <5ms delivery"]
+            EventSchemas["EventSchemas<br/>📋 Event Types<br/>───────────<br/>• IntentDetected<br/>• UserInput<br/>• VoiceCommand<br/>• BargeIn<br/>───────────<br/>🔗 cognitive_trace_id"]
+
+            EventBus --> EventSchemas
+        end
+
+        %% ===== 3. RESILIENCE (Circuit Breaker + Retry) =====
+        subgraph Resilience["3️⃣ Resilience (Fault Tolerance)"]
+            direction TB
+            CircuitBreaker["CircuitBreaker<br/>🔌 3-State FSM<br/>───────────<br/>• CLOSED (normal)<br/>• OPEN (fail-fast)<br/>• HALF_OPEN (test)<br/>• 5 failures → OPEN<br/>───────────<br/>⏱️ <10ms check"]
+            RetryPolicy["RetryPolicy<br/>🔄 Exponential Backoff<br/>───────────<br/>• Max 5 retries<br/>• 100ms→1600ms<br/>• Jitter ±20%<br/>• Idempotency keys<br/>───────────<br/>⏱️ <5ms decision"]
+            HotReload["HotReload<br/>♨️ Config Watcher<br/>───────────<br/>• File watcher<br/>• Async reload<br/>• Zero-downtime<br/>• Atomic updates<br/>───────────<br/>⏱️ <100ms reload"]
+
+            CircuitBreaker --> RetryPolicy
+            RetryPolicy --> HotReload
+        end
+
+        %% ===== 4. THERMAL (Temperature Monitoring + Placement) =====
+        subgraph Thermal["4️⃣ Thermal (Adaptive Placement)"]
+            direction TB
+            ThermalMonitor["ThermalMonitor<br/>🌡️ Temp Polling<br/>───────────<br/>• 1 Hz polling<br/>• 5 thermal zones<br/>• COOL → EMERGENCY<br/>• Alert ≥85°C<br/>───────────<br/>⏱️ <5ms read"]
+            PlacementPlanner["PlacementPlanner<br/>🎯 4-Tier Cascade<br/>───────────<br/>• NPU (30ms, 10W)<br/>• GPU (50ms, 12W)<br/>• CPU (120ms, 15W)<br/>• Remote (500ms, 5W)<br/>───────────<br/>⏱️ <10ms placement"]
+            HysteresisFSM["HysteresisFSM<br/>🔄 State Machine<br/>───────────<br/>• Asymmetric (7°C)<br/>• Upgrade +5°C<br/>• Downgrade -2°C<br/>• Cooldown 10-60s<br/>───────────<br/>🛑 Prevents oscillation"]
+
+            ThermalMonitor --> PlacementPlanner
+            PlacementPlanner --> HysteresisFSM
+        end
+
+        %% ===== 5. OBSERVABILITY (Metrics + Tracing + Logging) =====
+        subgraph Observability["5️⃣ Observability (Telemetry Stack)"]
+            direction TB
+            MetricsExporter["MetricsExporter<br/>📊 Prometheus (50+)<br/>───────────<br/>• Counters (15)<br/>• Gauges (15)<br/>• Histograms (20)<br/>• RED method<br/>───────────<br/>⏱️ <10ms emission"]
+            TracingExporter["TracingExporter<br/>🔍 OpenTelemetry<br/>───────────<br/>• 1% sampling<br/>• cognitive_trace_id<br/>• Jaeger export<br/>• Tail-based<br/>───────────<br/>⏱️ <5ms span"]
+            StructuredLogging["StructuredLogging<br/>📝 JSON Logs<br/>───────────<br/>• 6 event types<br/>• Actor events<br/>• Crash detection<br/>• 7-day retention<br/>───────────<br/>⏱️ <5ms write"]
+            GrafanaDashboards["GrafanaDashboards<br/>📈 7 Dashboards<br/>───────────<br/>• K1 Overview<br/>• Layer 1-5<br/>• Actor Fabric<br/>• SLO Alerts<br/>───────────<br/>🚨 10 alert rules"]
+
+            MetricsExporter --> GrafanaDashboards
+            TracingExporter --> GrafanaDashboards
+            StructuredLogging --> GrafanaDashboards
+        end
+
+        %% ===== 6. CONFIG (Configuration Management) =====
+        subgraph Config["6️⃣ Config (Hot Reload)"]
+            direction TB
+            ConfigLoader["ConfigLoader<br/>📁 YAML Loader<br/>───────────<br/>• kernel.yaml<br/>• logging.yaml<br/>• circuit_breaker.yaml<br/>• Schema validation<br/>───────────<br/>⏱️ <50ms load"]
+            ConfigValidator["ConfigValidator<br/>✅ Validation<br/>───────────<br/>• JSON schema<br/>• Semantic checks<br/>• Type safety<br/>• Error reporting<br/>───────────<br/>⏱️ <10ms validate"]
+            ConfigWatcher["ConfigWatcher<br/>👀 File Watcher<br/>───────────<br/>• watchdog lib<br/>• Async reload<br/>• Atomic updates<br/>• Rollback on error<br/>───────────<br/>⏱️ <100ms detection"]
+
+            ConfigLoader --> ConfigValidator
+            ConfigValidator --> ConfigWatcher
+        end
+
+        %% ===== 7. CONNECTORS (K0 Connection Lifecycle) =====
+        subgraph Connectors["7️⃣ Connectors (Connection Mgmt)"]
+            direction TB
+            K0Connector["K0Connector<br/>🔗 Connection Pool<br/>───────────<br/>• 5 connections<br/>• Keep-alive 60s<br/>• Auto-reconnect<br/>• Exponential backoff<br/>───────────<br/>⏱️ <100ms connect"]
+            HealthCheck["HealthCheck<br/>💓 K0 Ping<br/>───────────<br/>• Ping every 10s<br/>• Detect stale<br/>• Reconnect 1s-30s<br/>• TLS cert pinning<br/>───────────<br/>⏱️ <20ms ping"]
+
+            K0Connector --> HealthCheck
+        end
+
+        %% ===== 8. EXTENSIONS (Plugin Architecture) =====
+        subgraph Extensions["8️⃣ Extensions (Plugins)"]
+            direction TB
+            ExtensionDiscovery["ExtensionDiscovery<br/>🔎 Plugin Discovery<br/>───────────<br/>• Entry points<br/>• Metadata parsing<br/>• Dependency check<br/>• Version compat<br/>───────────<br/>⏱️ <50ms discovery"]
+            ExtensionPoints["ExtensionPoints (10)<br/>🔌 Plugin API<br/>───────────<br/>• ConfigProvider<br/>• MetricsExporter<br/>• TraceExporter<br/>• ThermalPolicy<br/>• PlacementStrategy<br/>• BackpressureHandler<br/>───────────<br/>🧩 ADR-0075"]
+
+            ExtensionDiscovery --> ExtensionPoints
+        end
+    end
+
+    %% ===== EXTERNAL DEPENDENCIES =====
+    K0_Kernel["🧠 K0 Memory Kernel<br/>═══════════════<br/>Port :8080<br/>───────────<br/>• /k0/command.submit<br/>• /k0/query.recall<br/>• /k0/sse.subscribe<br/>• /k0/obs.emit<br/>───────────<br/>WAL + Receipts"]
+
+    K1_Layers["🏢 K1 Layers 1-4<br/>═══════════════<br/>All Layers<br/>───────────<br/>• Layer 1 (Input)<br/>• Layer 2 (Orchestration)<br/>• Layer 3 (Execution)<br/>• Layer 4 (Runtime)<br/>───────────<br/>Universal dependency"]
+
+    Prometheus["📊 Prometheus<br/>═══════════════<br/>Port :9090<br/>───────────<br/>• Scrape every 10s<br/>• PromQL queries<br/>• Alert Manager<br/>───────────<br/>Time-series DB"]
+
+    Jaeger["🔍 Jaeger<br/>═══════════════<br/>Port :4317<br/>───────────<br/>• OTLP gRPC<br/>• 7-day hot<br/>• 30-day warm<br/>───────────<br/>Distributed tracing"]
+
+    %% ===== DATA FLOWS =====
+    %% K0 Bridge ↔ K0
+    CommandClient -->|"HTTP/2 POST<br/>FlatBuffers<br/><50ms"| K0_Kernel
+    QueryClient -->|"HTTP/2 POST<br/>Multi-store<br/><100ms"| K0_Kernel
+    SSEClient -->|"HTTP GET<br/>EventSource<br/><5ms"| K0_Kernel
+    BatchClient -->|"HTTP/2 POST<br/>Batched<br/>250ms"| K0_Kernel
+
+    %% Event Bus ↔ K1 Layers
+    K1_Layers -->|"Publish events<br/>(IntentDetected)"| EventBus
+    EventBus -->|"Subscribe<br/>(L1→L2)"| K1_Layers
+
+    %% Resilience ↔ All Components
+    K1_Layers -->|"Circuit breaker<br/>checks"| CircuitBreaker
+    K0_Bridge -->|"Retry policy<br/>exponential backoff"| RetryPolicy
+    K1_Layers -->|"Config<br/>access"| HotReload
+
+    %% Thermal ↔ K1 Layers
+    K1_Layers -->|"Placement<br/>requests"| PlacementPlanner
+    ThermalMonitor -->|"Temperature<br/>alerts"| K1_Layers
+
+    %% Observability ↔ External
+    MetricsExporter -->|"Scrape<br/>every 10s"| Prometheus
+    TracingExporter -->|"OTLP<br/>gRPC"| Jaeger
+    K1_Layers -->|"Emit metrics<br/>traces, logs"| Observability
+
+    %% Config ↔ K1 Layers
+    K1_Layers -->|"Load config<br/>hot reload"| Config
+    ConfigWatcher -->|"File change<br/>events"| K1_Layers
+
+    %% Connectors ↔ K0
+    K0_Bridge -->|"Connection<br/>lifecycle"| Connectors
+    Connectors -->|"Health check<br/>ping"| K0_Kernel
+
+    %% Extensions ↔ All
+    K1_Layers -->|"Custom<br/>providers"| Extensions
+    Extensions -->|"Plugin<br/>callbacks"| K1_Layers
+
+    %% ===== STYLING =====
+    classDef k0Bridge fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef eventBus fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef resilience fill:#E8F5E9,stroke:#388E3C,stroke-width:2px,color:#000
+    classDef thermal fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
+    classDef observability fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef config fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#000
+    classDef connectors fill:#E0F2F1,stroke:#00897B,stroke-width:2px,color:#000
+    classDef extensions fill:#EFEBE9,stroke:#5D4037,stroke-width:2px,color:#000
+    classDef external fill:#ECEFF1,stroke:#455A64,stroke-width:3px,color:#000
+
+    class CommandClient,QueryClient,SSEClient,BatchClient,HTTP2Manager k0Bridge
+    class EventBus,EventSchemas eventBus
+    class CircuitBreaker,RetryPolicy,HotReload resilience
+    class ThermalMonitor,PlacementPlanner,HysteresisFSM thermal
+    class MetricsExporter,TracingExporter,StructuredLogging,GrafanaDashboards observability
+    class ConfigLoader,ConfigValidator,ConfigWatcher config
+    class K0Connector,HealthCheck connectors
+    class ExtensionDiscovery,ExtensionPoints extensions
+    class K0_Kernel,K1_Layers,Prometheus,Jaeger external
+```
+
+**Diagram Purpose**: Complete Layer 5 architecture showing all 8 core subsystems, data flows, and external dependencies.
+
+**Key Insights**:
+1. **Leaf Layer**: L5 imports nothing (no L5→L1/L2/L3/L4), but universal dependency target
+2. **K0 Bridge**: Dual-kernel communication (K1↔K0) with HTTP/2, FlatBuffers, batching
+3. **Event Bus**: Cross-layer pub/sub (L1→L2) without direct imports (<5ms zero-copy delivery)
+4. **Resilience**: Circuit breaker (3-state FSM), retry policy (exponential backoff), hot reload (<100ms)
+5. **Thermal**: Adaptive placement (NPU→GPU→CPU→Remote) with hysteresis FSM (prevent oscillation)
+6. **Observability**: 50+ Prometheus metrics, OpenTelemetry tracing (1% sampling), JSON logs
+7. **Config**: Hot reload (<100ms) with file watcher, schema validation, atomic updates
+8. **Connectors**: K0 connection lifecycle (health checks, auto-reconnect, TLS)
+9. **Extensions**: Plugin architecture (10 extension points, ADR-0075)
+
+**Performance Budget**:
+- Event bus: <5ms P95 (zero-copy delivery)
+- Circuit breaker: <10ms P95 (state check)
+- Thermal placement: <10ms P95 (4-tier cascade)
+- Config reload: <100ms P95 (hot reload)
+- Metric emission: <10ms P95 (Prometheus push)
+- K0 Command (GREEN): <50ms P95
+- K0 Command (AMBER/RED): <200ms P95
+
+**Integration Tests**: `tests/integration/layer5/` (100% coverage)
+
+**Related Diagrams**:
+- K0 Bridge Details: `k0_bridge/` (8 comprehensive diagrams)
+- Individual Component Diagrams: `config_management.mmd`, `event_bus.mmd`, `thermal_management.mmd`, `resilience_patterns_centralized.mmd`, `observability_infrastructure.mmd`, `extensions_system.mmd`, `connectors_architecture.mmd`
+```
