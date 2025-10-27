@@ -24,10 +24,9 @@ Test Strategy:
 Last Updated: January 2025
 """
 
-import os
-
-# Ward conftest fixtures must be imported explicitly
 import sys
+from importlib import import_module
+from pathlib import Path
 
 from ward import test
 
@@ -42,8 +41,15 @@ from k1.l5_infrastructure.observability.metrics import (
     record_tool_call,
 )
 
-sys.path.insert(0, os.path.dirname(__file__))
-from conftest import k1_metrics_collector
+current_dir = Path(__file__).parent
+fixtures_dir = (current_dir / ".." / "k1" / "l5_infrastructure").resolve()
+
+sys.path.insert(0, str(current_dir))
+if str(fixtures_dir) not in sys.path:
+    sys.path.insert(0, str(fixtures_dir))
+
+_conftest = import_module("conftest")
+k1_metrics_collector = _conftest.k1_metrics_collector
 
 # ==============================================================================
 # Test Group 1: K1MetricsCollector Initialization
@@ -123,6 +129,9 @@ def _(collector=k1_metrics_collector):
     # Verify session_state metrics exist
     assert hasattr(collector.session_state, "session_state_size_bytes")
     assert hasattr(collector.session_state, "session_state_evictions_total")
+    assert hasattr(collector.session_state, "memory_pressure_level")
+    assert hasattr(collector.session_state, "memory_evicted_bytes_total")
+    assert hasattr(collector.session_state, "memory_audit_latency_ms")
 
 
 # ==============================================================================

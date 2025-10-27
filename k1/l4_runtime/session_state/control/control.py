@@ -44,12 +44,12 @@ except ImportError:
 
     logger = logging.getLogger(__name__)
 
-from k1.l4_runtime.session_state.model.wrapper import (SessionStateDelta,
-                                                       SessionStateWrapper)
-from k1.l5_infrastructure.bridge_k0.batch_client import (BatchClient,
-                                                         DeltaOperation)
-from k1.l5_infrastructure.bridge_k0.batch_client import \
-    SessionStateDelta as K0Delta
+from k1.l4_runtime.session_state.model.wrapper import (
+    SessionStateDelta,
+    SessionStateWrapper,
+)
+from k1.l5_infrastructure.bridge_k0.batch_client import BatchClient, DeltaOperation
+from k1.l5_infrastructure.bridge_k0.batch_client import SessionStateDelta as K0Delta
 from k1.l5_infrastructure.observability import get_metrics
 
 __all__ = ["SessionStateControl", "SessionStateControlError"]
@@ -597,7 +597,5 @@ class SessionStateControl:
 
         Returns:
             Receipt confirming flush success
-        """
-        return await self.flush_to_k0()
         """
         return await self.flush_to_k0()

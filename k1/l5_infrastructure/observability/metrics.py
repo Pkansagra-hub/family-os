@@ -178,6 +178,15 @@ class K1SessionStateMetrics:
     # Session state evictions
     session_state_evictions_total: Counter
 
+    # Memory pressure (0=green, 1=yellow, 2=red, 3=critical)
+    memory_pressure_level: Gauge
+
+    # Total bytes evicted due to pressure (per tier)
+    memory_evicted_bytes_total: Counter
+
+    # Memory audit latency (ms)
+    memory_audit_latency_ms: Histogram
+
 
 # ==============================================================================
 # K1 Metrics Collector (Main Class)
@@ -615,9 +624,29 @@ class K1MetricsCollector:
             labelnames=["tier", "reason"],
         )
 
+        memory_pressure_level = self._exporter.gauge(
+            name="memory_pressure_level",
+            description="Current memory pressure level (0=green, 3=critical)",
+        )
+
+        memory_evicted_bytes_total = self._exporter.counter(
+            name="memory_evicted_bytes_total",
+            description="Total bytes evicted due to memory pressure",
+            labelnames=["tier"],
+        )
+
+        memory_audit_latency_ms = self._exporter.histogram(
+            name="memory_audit_latency_ms",
+            description="Memory audit latency (ms)",
+            buckets=[1, 2, 5, 10, 25, 50, 100],
+        )
+
         return K1SessionStateMetrics(
             session_state_size_bytes=session_state_size_bytes,
             session_state_evictions_total=session_state_evictions_total,
+            memory_pressure_level=memory_pressure_level,
+            memory_evicted_bytes_total=memory_evicted_bytes_total,
+            memory_audit_latency_ms=memory_audit_latency_ms,
         )
 
 
