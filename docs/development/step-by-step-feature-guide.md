@@ -1,4 +1,4 @@
-# 📚 Step-by-Step Feature Development Guide
+﻿# ðŸ“š Step-by-Step Feature Development Guide
 
 **For:** New developers adding features to FamilyOS K1
 **Duration:** ~2-3 hours per feature (with ADR approval)
@@ -10,19 +10,19 @@
 
 ```
 STEP 1: ADR Discovery & Creation
-    ↓
+    â†“
 STEP 2: Contract Definition
-    ↓
+    â†“
 STEP 3: Write Implementation Code
-    ↓
+    â†“
 STEP 4: Write Tests
-    ↓
+    â†“
 STEP 5: Document & Update Diagrams
-    ↓
-Ready for PR! 🎉
+    â†“
+Ready for PR! ðŸŽ‰
 ```
 
-**⚠️ CRITICAL:** Each step must be complete before moving to the next. Do NOT skip steps.
+**âš ï¸ CRITICAL:** Each step must be complete before moving to the next. Do NOT skip steps.
 
 ---
 
@@ -48,16 +48,16 @@ code docs/architecture/decisions/
 
 Look for files that match your feature. Examples:
 
-- Adding agent scheduling? → Search for `agent`, `scheduling`, `lifecycle`
-- Adding a new protocol? → Search for `protocol`, `validation`
-- Adding observability? → Search for `metrics`, `tracing`, `logging`
+- Adding agent scheduling? â†’ Search for `agent`, `scheduling`, `lifecycle`
+- Adding a new protocol? â†’ Search for `protocol`, `validation`
+- Adding observability? â†’ Search for `metrics`, `tracing`, `logging`
 
 **If you find a matching ADR:**
 
 - Open it and read the `Decision` section
 - Check if it says `ACCEPTED` or `IMPLEMENTED` (status at top)
-- If yes → You can skip GATE 1 and move to Step 2
-- If no (says REJECTED/DEPRECATED) → Talk to team lead
+- If yes â†’ You can skip GATE 1 and move to Step 2
+- If no (says REJECTED/DEPRECATED) â†’ Talk to team lead
 
 **If you DON'T find a matching ADR:**
 
@@ -98,24 +98,24 @@ What other approaches did you think about?
 Example:
 1. **Always-on agents** - Simple but wasteful
 2. **Manual scheduling** - Requires human intervention
-3. **Automatic scheduling with state machine** - Complex but efficient ✅
+3. **Automatic scheduling with state machine** - Complex but efficient âœ…
 
 ## Decision
 What approach did you choose? Why?
 
 Example:
 "We will implement an automatic scheduling system using a state
-machine (PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED).
+machine (PENDING â†’ WARMING â†’ ACTIVE â†’ IDLE â†’ DRAINING â†’ TERMINATED).
 This is efficient and follows established patterns (Actor Model)."
 
 ## Consequences
 What are the trade-offs?
 
 Example:
-- ✅ Resource efficient
-- ✅ Scalable to 1000+ agents
-- ❌ More complex code
-- ❌ Requires monitoring
+- âœ… Resource efficient
+- âœ… Scalable to 1000+ agents
+- âŒ More complex code
+- âŒ Requires monitoring
 ```
 
 4. **Save the file** (don't commit yet)
@@ -129,13 +129,13 @@ Post in team chat or discussion:
 Please review: docs/architecture/decisions/0051-your-feature.md"
 ```
 
-Wait for at least 1 approval comment. Look for: ✅ LGTM (Looks Good To Me)
+Wait for at least 1 approval comment. Look for: âœ… LGTM (Looks Good To Me)
 
 **Once approved:**
 
 - Update status to `ACCEPTED` in ADR file
 - Note down your ADR number (e.g., `0051`)
-- Move to STEP 2 ✅
+- Move to STEP 2 âœ…
 
 ---
 
@@ -160,10 +160,10 @@ code k1/contracts/
 
 You'll see folders:
 
-- `api/` → API specifications
-- `jsonschema/` → Data structure definitions
-- `policy/` → Business rules
-- `observability/` → Metrics/logging schemas
+- `api/` â†’ API specifications
+- `jsonschema/` â†’ Data structure definitions
+- `policy/` â†’ Business rules
+- `observability/` â†’ Metrics/logging schemas
 
 **Look for:**
 
@@ -262,8 +262,8 @@ python k0/automation/lint_schemas.py --validate
 Expected output:
 
 ```
-✅ All schemas valid
-✅ All API specs valid
+âœ… All schemas valid
+âœ… All API specs valid
 ```
 
 If errors appear, fix them and run again.
@@ -282,7 +282,7 @@ version = "1.2.3"
 version = "1.2.4"
 ```
 
-**Move to STEP 3 ✅**
+**Move to STEP 3 âœ…**
 
 ---
 
@@ -300,7 +300,7 @@ K1 has 5 layers. Place your code in the appropriate layer:
 | L4 Ingress/Runtime | `k1/l4_ingress/`, `k1/l4_runtime/` | Runtime services |
 | L5 Infrastructure | `k1/l5_infrastructure/` | Low-level infrastructure |
 
-**Example:** Agent scheduling logic → `k1/l2_orchestration/`
+**Example:** Agent scheduling logic â†’ `k1/l2_orchestration/`
 
 ### 3.2: Create Your Module
 
@@ -315,13 +315,13 @@ New-Item -Path k1/l2_orchestration/agent_scheduler.py -ItemType File
 
 **MUST HAVE:**
 
-1. ✅ ADR reference in comment
-2. ✅ `cognitive_trace_id` for tracing
-3. ✅ Type hints
-4. ✅ Docstrings
-5. ✅ Structured logging
-6. ❌ NO `time.sleep()` or `asyncio.sleep()`
-7. ❌ NO mock implementations
+1. âœ… ADR reference in comment
+2. âœ… `cognitive_trace_id` for tracing
+3. âœ… Type hints
+4. âœ… Docstrings
+5. âœ… Structured logging
+6. âŒ NO `time.sleep()` or `asyncio.sleep()`
+7. âŒ NO mock implementations
 
 **Example Code:**
 
@@ -353,7 +353,7 @@ class AgentScheduler:
     Manages agent lifecycle scheduling.
 
     Implements the state machine from ADR-0051:
-    PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED
+    PENDING â†’ WARMING â†’ ACTIVE â†’ IDLE â†’ DRAINING â†’ TERMINATED
     """
 
     def __init__(self):
@@ -413,13 +413,13 @@ class AgentScheduler:
 
 Review your code:
 
-- Does it accept data matching your schema? ✅
-- Does it return data matching your schema? ✅
-- Does it implement all API endpoints? ✅
+- Does it accept data matching your schema? âœ…
+- Does it return data matching your schema? âœ…
+- Does it implement all API endpoints? âœ…
 
-If NO → Update contracts in STEP 2 and validate again.
+If NO â†’ Update contracts in STEP 2 and validate again.
 
-**Move to STEP 4 ✅**
+**Move to STEP 4 âœ…**
 
 ---
 
@@ -429,9 +429,9 @@ If NO → Update contracts in STEP 2 and validate again.
 
 WARD is FamilyOS's testing framework. Key principles:
 
-- ✅ **Real components** - Not mocks
-- ✅ **Integration tests** - Test whole workflows
-- ✅ **Performance budgets** - Track latencies
+- âœ… **Real components** - Not mocks
+- âœ… **Integration tests** - Test whole workflows
+- âœ… **Performance budgets** - Track latencies
 
 ### 4.2: Create Test File
 
@@ -450,14 +450,14 @@ Tests for agent scheduler module.
 References: ADR-0051-k1-agent-scheduling
 """
 
-import pytest
+import ward
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from k1.l2_orchestration.agent_scheduler import AgentScheduler, ScheduleRequest
 
 
-@pytest.fixture
+@ward.fixture
 def scheduler():
     """Fixture: Create a fresh scheduler for each test."""
     return AgentScheduler()
@@ -524,7 +524,7 @@ class TestAgentScheduler:
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    ward.main([__file__, "-v"])
 ```
 
 ### 4.4: Run Tests
@@ -533,16 +533,16 @@ if __name__ == "__main__":
 # Run all tests for your module
 python -m ward test --path tests/k1/l2_orchestration/ --search "agent_scheduler"
 
-# Or with pytest
-python -m pytest tests/k1/l2_orchestration/test_agent_scheduler.py -v
+# Or with ward
+python -m ward tests/k1/l2_orchestration/test_agent_scheduler.py -v
 ```
 
 Expected output:
 
 ```
-test_schedule_agent_success ✅ PASSED
-test_schedule_agent_with_valid_trace_id ✅ PASSED
-test_multiple_agents_scheduled ✅ PASSED
+test_schedule_agent_success âœ… PASSED
+test_schedule_agent_with_valid_trace_id âœ… PASSED
+test_multiple_agents_scheduled âœ… PASSED
 
 ===== 3 passed in 0.15s =====
 ```
@@ -551,9 +551,9 @@ test_multiple_agents_scheduled ✅ PASSED
 
 1. Read the error message
 2. Fix the bug in your implementation code
-3. Run tests again until all pass ✅
+3. Run tests again until all pass âœ…
 
-**Move to STEP 5 ✅**
+**Move to STEP 5 âœ…**
 
 ---
 
@@ -580,7 +580,7 @@ memory_id = mem_write(
     - Wasted resources and didn't scale
 
     **Solution Implemented**:
-    - State machine: PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED
+    - State machine: PENDING â†’ WARMING â†’ ACTIVE â†’ IDLE â†’ DRAINING â†’ TERMINATED
     - Automatic scheduling based on demand
     - Resource-aware resource allocation
 
@@ -590,18 +590,18 @@ memory_id = mem_write(
     - k1/contracts/api/agent-scheduler.yaml (NEW)
     - tests/k1/l2_orchestration/test_agent_scheduler.py (NEW)
 
-    **Tests**: 3 tests created, all passing ✅
+    **Tests**: 3 tests created, all passing âœ…
     - test_schedule_agent_success
     - test_schedule_agent_with_valid_trace_id
     - test_multiple_agents_scheduled
 
     **Performance**:
     - Schedule latency: ~10ms (P95)
-    - Budget: 50ms ✅
+    - Budget: 50ms âœ…
 
     **Validated With**:
-    - Contract validation: ✅
-    - Test coverage: ✅
+    - Contract validation: âœ…
+    - Test coverage: âœ…
     - Code review: Pending
     """,
     tags=["k1_agent_fabric", "scheduling", "lifecycle", "implementation"]
@@ -632,7 +632,7 @@ diagram_id = mmd_ingest("d:/familyos/architecture_diagrams/k1/agent_lifecycle.mm
 
 # Validate it
 mmd_validate(diagram_id)
-# Should show: ✅ Diagram valid
+# Should show: âœ… Diagram valid
 ```
 
 ---
@@ -696,23 +696,23 @@ Implements automatic agent lifecycle scheduling to manage resource efficiency.
 - ADR: ADR-0051-k1-agent-scheduling (ACCEPTED)
 
 ## Changes
-- ✅ Agent scheduler module (L2 orchestration)
-- ✅ JSON schema for schedule requests
-- ✅ OpenAPI specification for scheduler API
-- ✅ 3 integration tests, all passing
-- ✅ Contracts validated
-- ✅ Memory documented
+- âœ… Agent scheduler module (L2 orchestration)
+- âœ… JSON schema for schedule requests
+- âœ… OpenAPI specification for scheduler API
+- âœ… 3 integration tests, all passing
+- âœ… Contracts validated
+- âœ… Memory documented
 
 ## Tests
 ```bash
 python -m ward test --path tests/k1/l2_orchestration/
-# 3 tests PASSED ✅
+# 3 tests PASSED âœ…
 ```
 
 ## Performance
 
 - Schedule latency: ~10ms (P95)
-- Performance budget: 50ms ✅
+- Performance budget: 50ms âœ…
 
 ## Architecture Impact
 
@@ -727,43 +727,43 @@ python -m ward test --path tests/k1/l2_orchestration/
 ### 6.4: Review Process
 
 Wait for:
-- ✅ Code review approval
-- ✅ Tests passing
-- ✅ No conflicts
+- âœ… Code review approval
+- âœ… Tests passing
+- âœ… No conflicts
 
-Once approved: Merge and delete branch 🎉
+Once approved: Merge and delete branch ðŸŽ‰
 
 ---
 
 ## Checklist: Before Each Step
 
-### Before STEP 1 ✅
+### Before STEP 1 âœ…
 - [ ] Know what feature you're building
 - [ ] Talk to team about the idea
 - [ ] Have a GitHub issue or epic reference
 
-### Before STEP 2 ✅
+### Before STEP 2 âœ…
 - [ ] ADR created and approved
 - [ ] ADR status set to `ACCEPTED`
 - [ ] ADR number noted
 
-### Before STEP 3 ✅
+### Before STEP 3 âœ…
 - [ ] Contracts created and validated
 - [ ] Contracts VERSION updated
 - [ ] Understand which K1 layer to use
 
-### Before STEP 4 ✅
+### Before STEP 4 âœ…
 - [ ] Implementation code complete
 - [ ] Code follows patterns (trace_id, docstrings, logging)
 - [ ] No `time.sleep()` or `asyncio.sleep()` used
 - [ ] Contract compliance verified
 
-### Before STEP 5 ✅
+### Before STEP 5 âœ…
 - [ ] All tests passing
 - [ ] Test coverage reasonable
 - [ ] Performance within budget
 
-### Before PR ✅
+### Before PR âœ…
 - [ ] Memory entry created
 - [ ] Diagrams updated (if needed)
 - [ ] All files committed
@@ -776,7 +776,7 @@ Once approved: Merge and delete branch 🎉
 | Problem | Solution |
 |---------|----------|
 | **Contract validation fails** | Run `python k0/automation/lint_schemas.py --validate --fix` |
-| **Tests fail** | Run `python -m pytest -vv` for detailed output |
+| **Tests fail** | Run `python -m ward -vv` for detailed output |
 | **Can't find which layer** | Ask in team chat or check `docs/k1_module_analysis.md` |
 | **ADR template not clear** | Read existing ADRs in `docs/architecture/decisions/` |
 | **Git conflicts** | Run `git pull origin develop` then resolve conflicts |
@@ -843,18 +843,19 @@ def test_check_agent_health():
 - Open PR with all changes
 - Team reviews and approves
 
-**Done! 🎉**
+**Done! ðŸŽ‰**
 
 ---
 
 ## Getting Help
 
-- **Questions about ADR?** → Read `docs/architecture/decisions/0000-template.md`
-- **Questions about contracts?** → Read `k1/contracts/README.md`
-- **Questions about testing?** → Read `.github/instructions/testing-requirements.instructions.md`
-- **Questions about architecture?** → Read `docs/whiteboard.md`
-- **Still stuck?** → Ask in team chat with your ADR link
+- **Questions about ADR?** â†’ Read `docs/architecture/decisions/0000-template.md`
+- **Questions about contracts?** â†’ Read `k1/contracts/README.md`
+- **Questions about testing?** â†’ Read `.github/instructions/testing-requirements.instructions.md`
+- **Questions about architecture?** â†’ Read `docs/whiteboard.md`
+- **Still stuck?** â†’ Ask in team chat with your ADR link
 
 ---
 
-**Good luck! You've got this! 🚀**
+**Good luck! You've got this! ðŸš€**
+

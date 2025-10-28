@@ -1,21 +1,113 @@
 # ADR-0001b: Model Hub Architecture & LLM Integration
 
-**Status:** 🔄 **IN PROGRESS** (Draft)
+**Status:** 🔄 **IN PROGRESS** (Draft - Updated for Remote-First Reality)
 **Date:** 2025-10-12
-**Last Updated:** 2025-10-12
+**Last Updated:** 2025-10-27 ⚠️ **CRITICAL UPDATE: Provider Adapter Priorities Revised for 95% Remote Traffic**
 **Deciders:** K1 Architecture Team
+**Implementation Priority:** 🔥 **REMOTE ADAPTERS CRITICAL** (60% of development effort)
 **Technical Story:** Model Hub for K1 AI Agents - Multi-Provider LLM Integration with K0 Memory
 **Parent ADR:** [ADR-0001: K0/K1 Kernel Split](0001-k0-k1-kernel-split.md)
 **Related ADRs:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
+- [ADR-0027: Model Placement Cascade](0027-model-placement-cascade.md) - **Market Reality Context**
+- [ADR-0027c: Cost-Aware Fallback](0027c-cost-aware-fallback-010-session-budget.md) - 🔥 CRITICAL
+- [ADR-0027d: Remote Resilience](0027d-remote-resilience-3-retries-10s-timeout.md) - 🔥 CRITICAL
+
+---
+
+## ⚠️ Market Reality & Implementation Priority (2025-10-27 Update)
+
+**CRITICAL CONTEXT: This ADR describes a 4-provider architecture (OpenAI/Anthropic/vLLM/Ollama), but implementation priorities are heavily skewed toward Remote providers (OpenAI/Anthropic/Google) because 95% of traffic uses Remote tier TODAY.**
+
+### Provider Adapter Priority Rebalancing
+
+**Original ADR Assumed (Balanced Provider Usage):**
+
+- OpenAI adapter: 25% effort
+- Anthropic adapter: 25% effort
+- vLLM adapter: 25% effort (local GPU)
+- Ollama adapter: 25% effort (local CPU)
+
+**Revised Implementation Priorities (Market Reality - October 2025):**
+
+| Provider | Type | Original Priority | **Revised Priority** | **Effort %** | Reason |
+|----------|------|------------------|---------------------|--------------|--------|
+| **OpenAI** | Remote | Medium (25%) | 🔥 **P0 CRITICAL** | **30%** | PRIMARY provider, 50%+ of traffic TODAY |
+| **Anthropic** | Remote | Medium (25%) | 🔥 **P0 CRITICAL** | **25%** | SECONDARY provider, 30%+ of traffic |
+| **Google Gemini** | Remote | N/A (not in original) | 🔥 **HIGH** | **10%** | TERTIARY provider, 15% of traffic, cost optimization |
+| **vLLM** | Local GPU | High (25%) | 🟡 **LOW** | **10%** | <3% of traffic (high-end laptops only) |
+| **Ollama** | Local CPU | High (25%) | 🟡 **LOW** | **5%** | <2% of traffic (rare strong CPUs) |
+| **Circuit Breakers** | Cross-cutting | Medium | 🔥 **P0 CRITICAL** | **15%** | Prevent cost runaway, cascading failures |
+| **Cost Tracking** | Cross-cutting | Low | 🔥 **P0 CRITICAL** | **5%** | Daily budget enforcement ($5/day) |
+
+**Traffic Distribution TODAY (October 2025):**
+
+- 🔴 **50% OpenAI** (GPT-4, GPT-3.5 - primary provider)
+- 🔴 **30% Anthropic** (Claude 3.5 - secondary provider)
+- 🔴 **15% Google Gemini** (cost optimization - $0.001/1K tokens)
+- 🟡 **3% vLLM** (local GPU - high-end laptops)
+- 🟡 **2% Ollama** (local CPU - strong desktops)
+
+### Why Remote Adapters Get 60% of Effort
+
+**1. Production Traffic Volume:**
+
+- 95% of production requests flow through Remote adapters TODAY
+- Local adapters (vLLM/Ollama) handle <5% of traffic
+- **Implication:** Remote adapter bugs affect 95% of users, local adapter bugs affect <5%
+
+**2. Reliability Requirements:**
+
+- Remote adapters MUST handle transient failures (3-5% error rate observed)
+- Retry logic, circuit breakers, timeout handling are CRITICAL
+- Local adapters failures are rare (hardware is either available or not)
+
+**3. Cost Implications:**
+
+- Remote adapters cost $0.0005-$0.003 per turn × 95% traffic = PRIMARY cost driver
+- Without circuit breakers: $100 cost spike risk (OpenAI outage → retry loop)
+- Local adapters are free (no cost protection needed)
+
+**4. Multi-Provider Complexity:**
+
+- OpenAI, Anthropic, Google have DIFFERENT APIs (not compatible)
+- Each provider requires unique error handling, rate limit logic, auth
+- Local providers (vLLM/Ollama) share similar interfaces (easier to implement)
+
+### Implementation Roadmap (Phased Approach)
+
+**Phase 1 (Q4 2025): Remote Adapters + Cost Protection**
+
+- ✅ OpenAI adapter (GPT-4, GPT-3.5) - 30% effort, PRODUCTION READY
+- ✅ Anthropic adapter (Claude 3.5, Claude 3 Sonnet) - 25% effort, PRODUCTION READY
+- ✅ Google Gemini adapter (Gemini Pro, Gemini 1.5 Flash) - 10% effort, cost optimization
+- ✅ Circuit breakers (Netflix Hystrix pattern) - 15% effort, CRITICAL
+- ✅ Cost tracking ($5/day budget) - 5% effort, CRITICAL
+- 🟡 vLLM adapter (minimal viable) - 10% effort, future-ready interface
+- 🟡 Ollama adapter (minimal viable) - 5% effort, future-ready interface
+
+**Phase 2 (2026): Local Adapter Optimization (Dongle Beta)**
+
+- ⏳ vLLM adapter optimization (model loading, quantization, KV cache)
+- ⏳ Ollama adapter optimization (INT4 quantization, thermal throttling)
+- ⏳ Thermal-aware placement (integrate ADR-0026c)
+
+**Phase 3 (2027+): Local-First Default (Dongle Mass Market)**
+
+- ⏳ NPU adapter (FamilyOS Dongle dedicated NPU)
+- ⏳ GPU adapter optimization (sustained inference, thermal management)
+- ⏳ Remote tier becomes fallback (20% of traffic)
 
 ---
 
 ## Executive Summary
 
-K1 Intelligence Module requires a **Model Hub** to integrate multiple LLM providers (OpenAI, Anthropic, vLLM, Ollama) for its 4 AI agents (Concierge, Planner, Researcher, Safety Watch). The Model Hub provides:
+K1 Intelligence Module requires a **Model Hub** to integrate multiple LLM providers (OpenAI, Anthropic, Google Gemini, vLLM, Ollama) for its 4 AI agents (Concierge, Planner, Researcher, Safety Watch). The Model Hub provides:
+
+**⚠️ CRITICAL UPDATE: Implementation priorities heavily favor Remote providers (60% of effort) because 95% of traffic uses Remote tier TODAY.**
 
 1. **Prompt Library:** Agent persona prompts (Jinja2 templates with versioning)
 2. **Provider Adapters:** Multi-provider support with fallback cascade
@@ -27,6 +119,7 @@ K1 Intelligence Module requires a **Model Hub** to integrate multiple LLM provid
 8. **Cost Tracking:** Token usage & cost monitoring per agent/model
 
 **Key Decisions:**
+
 - ✅ Multi-provider architecture (4 providers: OpenAI, Anthropic, vLLM, Ollama)
 - ✅ Prompt library with Jinja2 templates & semantic versioning
 - ✅ Fallback cascade: Primary → Backup → Local → Template-based
@@ -208,6 +301,7 @@ We adopt a **Model Hub architecture** with the following components:
 ### 1.1 Agent Persona Prompts (System Messages)
 
 **Directory Structure:**
+
 ```
 model_hub/
 ├── prompt_library/
@@ -390,6 +484,7 @@ Return a structured JSON plan:
 ```
 
 Now generate the plan for the user's task:
+
 ```
 
 ---
@@ -443,11 +538,13 @@ class OpenAIAdapter:
 ### 2.2 Anthropic Adapter
 
 **Supported Models:**
+
 - Claude 3 Opus (200K context, $0.015/1K input tokens, $0.075/1K output tokens)
 - Claude 3 Sonnet (200K context, $0.003/1K input tokens, $0.015/1K output tokens)
 - Claude 3 Haiku (200K context, $0.00025/1K input tokens, $0.00125/1K output tokens)
 
 **Configuration:**
+
 ```python
 class AnthropicAdapter:
     def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229"):
@@ -492,11 +589,13 @@ class AnthropicAdapter:
 ### 2.3 vLLM Adapter (Local GPU Inference)
 
 **Supported Models:**
+
 - Llama 3.1 70B (128K context, local inference)
 - Llama 3.1 8B (128K context, local inference)
 - Mistral 7B (32K context, local inference)
 
 **Configuration:**
+
 ```python
 class vLLMAdapter:
     def __init__(self, base_url: str = "http://localhost:8000", model: str = "meta-llama/Llama-3.1-8B-Instruct"):
@@ -536,11 +635,13 @@ class vLLMAdapter:
 ### 2.4 Ollama Adapter (Local CPU Inference)
 
 **Supported Models:**
+
 - Llama 3.1 8B (quantized, CPU inference)
 - Mistral 7B (quantized, CPU inference)
 - Phi-3 Mini (quantized, CPU inference)
 
 **Configuration:**
+
 ```python
 class OllamaAdapter:
     def __init__(self, base_url: str = "http://localhost:11434", model: str = "llama3.1:8b"):
@@ -600,6 +701,7 @@ class OllamaAdapter:
 | **Safety Watch** | GPT-3.5 Turbo | Claude 3 Haiku | Llama 3.1 8B (Ollama) | <200ms P95 |
 
 **Fallback Cascade:**
+
 1. **Primary:** Remote API (OpenAI/Anthropic) - highest quality
 2. **Backup:** Alternative remote API - reliability
 3. **Local (GPU):** vLLM - cost savings, privacy
@@ -675,6 +777,7 @@ class ModelRouter:
 ### 4.1 Context Assembly from K0
 
 **Process:**
+
 1. **Agent requests LLM call** → Model Hub
 2. **Model Hub queries K0** (P01 Query Port via Bridge Client)
 3. **K0 performs multi-store retrieval:**
@@ -753,12 +856,14 @@ async def assemble_context_from_k0(
 **Purpose:** Detect and block harmful/malicious input before LLM call
 
 **Checks:**
+
 1. **Prompt Injection Detection:** Block adversarial prompts (e.g., "Ignore previous instructions...")
 2. **PII Redaction:** Detect and redact PII (phone numbers, addresses, SSNs)
 3. **Content Policy:** Block NSFW, violence, hate speech
 4. **Rate Limiting:** Throttle excessive requests per user
 
 **Implementation:**
+
 ```python
 class PreFilter:
     def __init__(self):
@@ -795,12 +900,14 @@ class PreFilter:
 **Purpose:** Validate LLM output before returning to user
 
 **Checks:**
+
 1. **Harmful Content Detection:** Block NSFW, violence, hate speech
 2. **Hallucination Check:** Verify output is grounded in K0 memory
 3. **Consistency Check:** Ensure output is coherent and relevant
 4. **PII Leakage:** Ensure no PII leaked from K0 memory
 
 **Implementation:**
+
 ```python
 class PostFilter:
     def __init__(self):
@@ -827,11 +934,13 @@ class PostFilter:
 **Purpose:** Deep content moderation when pre/post filters triggered
 
 **Triggered When:**
+
 - Pre-filter detects borderline content
 - Post-filter detects potential hallucination
 - User reports content as inappropriate
 
 **Implementation:**
+
 - Use Safety Watch Agent (GPT-3.5 / Claude 3 Haiku) for deep analysis
 - Analyze context, intent, and potential harm
 - Generate report with confidence score
@@ -844,31 +953,37 @@ class PostFilter:
 ### Positive ✅
 
 **✅ Multi-Provider Architecture:**
+
 - 4 providers (OpenAI, Anthropic, vLLM, Ollama) for reliability
 - Fallback cascade ensures 99.9% uptime
 - **Result:** K1 agents always have LLM access
 
 **✅ K0 Memory Integration:**
+
 - Context assembly from K0 (multi-store retrieval)
 - Cognitive enhancements (working memory, temporal, social bias)
 - **Result:** LLM responses grounded in family memories, reduced hallucinations
 
 **✅ Cost Optimization:**
+
 - Automatic routing to cheaper models for simple queries
 - Local inference (vLLM, Ollama) for cost savings
 - **Result:** Estimated 60% cost reduction vs OpenAI-only
 
 **✅ Prompt Versioning:**
+
 - Semantic versioning (1.0.0, 1.1.0, 2.0.0)
 - A/B testing for prompt improvements
 - **Result:** Prompt evolution without breaking changes
 
 **✅ Safety & Compliance:**
+
 - 3-tier moderation (pre-filter, post-filter, Safety Watch agent)
 - PII detection & redaction (K0 P10 integration)
 - **Result:** Production-grade safety with GDPR compliance
 
 **✅ Performance:**
+
 - Sync routing <500ms P95 (Concierge, Safety Watch)
 - Async routing <2000ms P95 (Planner, Researcher)
 - **Result:** Meets K1 performance budgets
@@ -878,21 +993,25 @@ class PostFilter:
 ### Negative ⚠️
 
 **⚠️ Provider Dependency:**
+
 - Relies on external APIs (OpenAI, Anthropic) for best quality
 - Remote API failures degrade to local models
 - **Mitigation:** Fallback cascade + local inference (vLLM, Ollama)
 
 **⚠️ Cost Management:**
+
 - Remote APIs expensive ($0.03/1K tokens for GPT-4)
 - Unpredictable costs if usage spikes
 - **Mitigation:** Token usage tracking, budget alerts, automatic cost optimization
 
 **⚠️ Local Model Quality:**
+
 - vLLM/Ollama models lower quality than GPT-4/Claude
 - May produce incorrect or hallucinated responses
 - **Mitigation:** K0 memory grounding, post-filter validation, hallucination detection
 
 **⚠️ Prompt Engineering Complexity:**
+
 - Maintaining multiple persona prompts is labor-intensive
 - Versioning adds overhead
 - **Mitigation:** Prompt library structure, versioning system, A/B testing
@@ -915,6 +1034,7 @@ K1 Intelligence Module integrates multiple LLM providers (OpenAI, Anthropic, vLL
 **Status:** Architecture approved, ready for Phase 1 implementation (Weeks 5-9).
 
 **Key Resources:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
 - [Sub-ADR Plan](../../../sub_adr_plan.md)
@@ -924,6 +1044,7 @@ K1 Intelligence Module integrates multiple LLM providers (OpenAI, Anthropic, vLL
 ## Implementation
 
 ### Phase 1: Prompt Library & OpenAI Adapter (Weeks 5-6)
+
 - [ ] Prompt library structure setup
 - [ ] Concierge agent system prompt (v1.0.0)
 - [ ] Planner agent system prompt (v1.0.0)
@@ -932,6 +1053,7 @@ K1 Intelligence Module integrates multiple LLM providers (OpenAI, Anthropic, vLL
 - [ ] Unit tests (WARD framework)
 
 ### Phase 2: Multi-Provider Support (Weeks 7-8)
+
 - [ ] Anthropic adapter implementation
 - [ ] vLLM adapter implementation
 - [ ] Ollama adapter implementation
@@ -940,18 +1062,21 @@ K1 Intelligence Module integrates multiple LLM providers (OpenAI, Anthropic, vLL
 - [ ] Integration tests
 
 ### Phase 3: K0 Memory Integration (Week 9)
+
 - [ ] Context assembly from K0 (P01 Query Port)
 - [ ] Token budget management
 - [ ] Memory grounding logic
 - [ ] Performance benchmarking (<500ms P95)
 
 ### Phase 4: Safety Filter (Week 10)
+
 - [ ] Pre-filter implementation (prompt injection, PII)
 - [ ] Post-filter implementation (harmful content)
 - [ ] Safety Watch agent integration
 - [ ] Content policy enforcement
 
 ### Phase 5: Cost Tracking & Optimization (Week 11)
+
 - [ ] Token usage tracking (Prometheus metrics)
 - [ ] Cost estimation per model
 - [ ] Budget alerts
@@ -962,22 +1087,26 @@ K1 Intelligence Module integrates multiple LLM providers (OpenAI, Anthropic, vLL
 ## Success Metrics
 
 **Performance:**
+
 - ✅ Sync inference <500ms P95 (Concierge, Safety Watch)
 - ✅ Async inference <2000ms P95 (Planner, Researcher)
 - ✅ KV cache hit rate >75%
 - ✅ Model placement: NPU/GPU preferred over CPU/Remote
 
 **Reliability:**
+
 - ✅ 99.9% uptime (fallback cascade)
 - ✅ Multi-provider failover <1s
 - ✅ Circuit breaker recovery <60s
 
 **Cost:**
+
 - ✅ 60% cost reduction vs OpenAI-only
 - ✅ Token usage tracking per agent/model
 - ✅ Budget alerts for daily/monthly thresholds
 
 **Safety:**
+
 - ✅ 3-tier moderation (pre/post/Safety Watch)
 - ✅ PII detection & redaction (100% coverage)
 - ✅ Prompt injection detection (100% block rate)

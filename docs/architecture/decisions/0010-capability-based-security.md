@@ -1,6 +1,6 @@
-# ADR-0010: Capability-Based Security with Unforgeable Tokens and Least Privilege
+﻿# ADR-0010: Capability-Based Security with Unforgeable Tokens and Least Privilege
 
-**Status:** ✅ Accepted
+**Status:** âœ… Accepted
 **Deciders:** K1 Architecture Team
 **Date:** 2024-10-10
 **Last Updated:** 2025-10-17 (M1 Context: Agent factory; M2 Context: Plugin capability binding - See ADR-0072, ADR-0074)
@@ -14,10 +14,10 @@
 **CRITICAL DISTINCTION:**
 
 The **Capability Manager** is a **PURE ACTOR** (NOT an AI agent):
-- **NO LLM calls** — Capability validation uses deterministic cryptographic verification (HMAC-SHA256 signature check)
-- **NO Model Hub** — Capability issuance, delegation, attenuation, revocation use deterministic logic
-- **Deterministic validation** — Token signature check + expiration check + constraint validation (<1ms)
-- **Location:** Layer 1 (`k1/security/capability_manager.py`) — Core kernel security component
+- **NO LLM calls** â€” Capability validation uses deterministic cryptographic verification (HMAC-SHA256 signature check)
+- **NO Model Hub** â€” Capability issuance, delegation, attenuation, revocation use deterministic logic
+- **Deterministic validation** â€” Token signature check + expiration check + constraint validation (<1ms)
+- **Location:** Layer 1 (`k1/security/capability_manager.py`) â€” Core kernel security component
 
 **Why Pure Actor for Capability Manager:**
 - **Security-critical determinism:** Capability validation MUST be deterministic (no LLM hallucinations on "is this agent allowed to execute payment tool?")
@@ -33,8 +33,8 @@ The Capability Manager issues and validates capabilities for **both AI agents an
 
 | **Protected Entity Type** | **Example Protected Operations** | **Capability Check** | **Failure Modes** |
 |---------------------------|----------------------------------|----------------------|-------------------|
-| **AI Agent Operations** | Planner agent calls Model Hub (LLM inference for sketch), Safety Watch agent calls Model Hub (filtering), Hiring Agent calls Model Hub (agent selection scoring) | Capability check before LLM call:<br/>- `subject: "agent:planner_001"`<br/>- `resource: "model:gpt-4"`<br/>- `rights: ["execute", "read_result"]`<br/>- `constraints.max_cost_usd: 0.50` (per LLM call) | - Agent lacks Model Hub capability → reject LLM call<br/>- Agent exceeds cost constraint → reject<br/>- Capability expired (1 hour TTL) → revoke |
-| **Pure Actor Operations** | Tool Runner calls external API (weather, calendar, booking), Orchestrator delegates to sub-agents, Memory Manager writes to K0 database | Capability check before tool call:<br/>- `subject: "agent:tool_runner_001"`<br/>- `resource: "tool:book_reservation"`<br/>- `rights: ["execute"]`<br/>- `constraints.max_cost_usd: 100.0` (per booking) | - Agent lacks tool capability → reject call<br/>- Agent exceeds cost constraint → reject<br/>- Privacy band violation (RED band tool, no arbiter approval) → reject |
+| **AI Agent Operations** | Planner agent calls Model Hub (LLM inference for sketch), Safety Watch agent calls Model Hub (filtering), Hiring Agent calls Model Hub (agent selection scoring) | Capability check before LLM call:<br/>- `subject: "agent:planner_001"`<br/>- `resource: "model:gpt-4"`<br/>- `rights: ["execute", "read_result"]`<br/>- `constraints.max_cost_usd: 0.50` (per LLM call) | - Agent lacks Model Hub capability â†’ reject LLM call<br/>- Agent exceeds cost constraint â†’ reject<br/>- Capability expired (1 hour TTL) â†’ revoke |
+| **Pure Actor Operations** | Tool Runner calls external API (weather, calendar, booking), Orchestrator delegates to sub-agents, Memory Manager writes to K0 database | Capability check before tool call:<br/>- `subject: "agent:tool_runner_001"`<br/>- `resource: "tool:book_reservation"`<br/>- `rights: ["execute"]`<br/>- `constraints.max_cost_usd: 100.0` (per booking) | - Agent lacks tool capability â†’ reject call<br/>- Agent exceeds cost constraint â†’ reject<br/>- Privacy band violation (RED band tool, no arbiter approval) â†’ reject |
 
 **Key Distinction:**
 - **Capability Manager** (pure actor) validates capabilities deterministically (<1ms signature check + constraint validation)
@@ -59,19 +59,19 @@ K1 manages **multi-agent workflows** where agents execute **privileged operation
 User: "Book expensive restaurant reservation and send confirmation"
 
 Agent: PlannerAgent (role="planner")
-  ↓
-Step 1: search_restaurants() → ✅ ALLOWED (read-only tool)
-Step 2: book_reservation(restaurant="Le Bernardin", cost=$500) → ❓ SHOULD THIS BE ALLOWED?
+  â†“
+Step 1: search_restaurants() â†’ âœ… ALLOWED (read-only tool)
+Step 2: book_reservation(restaurant="Le Bernardin", cost=$500) â†’ â“ SHOULD THIS BE ALLOWED?
 
 PROBLEM: PlannerAgent has NO BUSINESS booking reservations!
   - Planner should decompose tasks, NOT execute them
   - BookingAgent should handle reservations (with user approval for >$100)
 
 RISK WITHOUT CAPABILITY SECURITY:
-  ❌ PlannerAgent can call ANY tool (privilege escalation)
-  ❌ No enforcement of least privilege
-  ❌ Agent compromise = full system access
-  ❌ No audit trail of capability usage
+  âŒ PlannerAgent can call ANY tool (privilege escalation)
+  âŒ No enforcement of least privilege
+  âŒ Agent compromise = full system access
+  âŒ No audit trail of capability usage
 ```
 
 ### **The Core Problems:**
@@ -92,10 +92,10 @@ if user.role == "admin":
 ```
 
 **Problems:**
-- ❌ **Ambient authority** — Check happens at action time, not when capability granted
-- ❌ **Confused deputy** — Agent can be tricked into using its authority for unauthorized actions
-- ❌ **No delegation** — Can't safely pass authority to another agent
-- ❌ **Revocation complexity** — Must track all granted permissions, revoke individually
+- âŒ **Ambient authority** â€” Check happens at action time, not when capability granted
+- âŒ **Confused deputy** â€” Agent can be tricked into using its authority for unauthorized actions
+- âŒ **No delegation** â€” Can't safely pass authority to another agent
+- âŒ **Revocation complexity** â€” Must track all granted permissions, revoke individually
 
 **We need unforgeable capabilities that can be delegated, attenuated, and revoked.**
 
@@ -107,12 +107,12 @@ After evaluating 5 security models, **Capability-Based Security selected (9/10)*
 
 | **Alternative** | **Score** | **Pros** | **Cons** | **Rejected Because** |
 |-----------------|-----------|----------|----------|---------------------|
-| **1. No Access Control** | 1/10 | Simple (no overhead) | ❌ No security<br/>❌ Any agent can call any tool<br/>❌ No audit trail | Completely insecure (any compromised agent = full system access) |
-| **2. Role-Based Access Control (RBAC)** | 4/10 | Standard pattern (roles assigned to users)<br/>Industry proven (AWS IAM) | ❌ Ambient authority (checks at action time, not grant time)<br/>❌ No delegation (can't pass role to sub-agent)<br/>❌ Coarse-grained (all "planner" agents get same permissions)<br/>❌ Revocation slow (must update role mapping, propagate) | Not fine-grained enough (all agents with "planner" role get same tools, but Planner A needs tool X while Planner B needs tool Y) |
-| **3. Attribute-Based Access Control (ABAC)** | 5/10 | Fine-grained (policies based on attributes like cost, time, location)<br/>Flexible (dynamic policies) | ❌ Complex policy evaluation (>10ms latency per check)<br/>❌ No delegation (attribute checks don't transfer authority)<br/>❌ Policy explosion (100+ attributes = 1000+ policies) | Too slow (>10ms policy evaluation unacceptable for hot path <1ms budget), complex to maintain (policy explosion) |
-| **4. OAuth2 Scopes** | 6/10 | Token-based (unforgeable tokens like capabilities)<br/>Delegation support (refresh tokens) | ❌ Coarse scopes (scope = "tool:*" not "tool:book_reservation")<br/>❌ No attenuation (can't reduce scope on delegation)<br/>❌ No constraints (can't encode max_cost, max_invocations) | Not expressive enough (can't encode fine-grained constraints like "max_cost_usd: 100.0" or "requires_approval: true") |
-| **5. Access Control Lists (ACL)** | 3/10 | Simple (list of allowed subjects per resource)<br/>Widely understood | ❌ Ambient authority (ACL check at action time)<br/>❌ Confused deputy problem (agent can be tricked)<br/>❌ No delegation (ACL doesn't transfer authority)<br/>❌ Revocation slow (must update ACL for each resource) | Ambient authority (agent can still call tool if it knows resource ID, no unforgeable token), confused deputy problem unsolved |
-| **6. Capability-Based Security** ✅ | **9/10** | ✅ **Unforgeable tokens** (HMAC-SHA256 signed)<br/>✅ **No ambient authority** (possession of token = only way to access)<br/>✅ **Delegation & attenuation** (pass capability to sub-agent with reduced rights)<br/>✅ **Fine-grained constraints** (max_cost, max_invocations, privacy_band)<br/>✅ **Fast validation** (<1ms HMAC check + constraint validation)<br/>✅ **Revocation** (mark token revoked, no system restart)<br/>✅ **Audit trail** (every capability issuance/usage/revocation logged) | ⚠️ Token management overhead (must issue, store, revoke tokens)<br/>⚠️ Delegation complexity (attenuated capabilities must preserve constraints) | Selected despite token overhead (overhead <2ms issuance, <1ms validation acceptable for security benefits) |
+| **1. No Access Control** | 1/10 | Simple (no overhead) | âŒ No security<br/>âŒ Any agent can call any tool<br/>âŒ No audit trail | Completely insecure (any compromised agent = full system access) |
+| **2. Role-Based Access Control (RBAC)** | 4/10 | Standard pattern (roles assigned to users)<br/>Industry proven (AWS IAM) | âŒ Ambient authority (checks at action time, not grant time)<br/>âŒ No delegation (can't pass role to sub-agent)<br/>âŒ Coarse-grained (all "planner" agents get same permissions)<br/>âŒ Revocation slow (must update role mapping, propagate) | Not fine-grained enough (all agents with "planner" role get same tools, but Planner A needs tool X while Planner B needs tool Y) |
+| **3. Attribute-Based Access Control (ABAC)** | 5/10 | Fine-grained (policies based on attributes like cost, time, location)<br/>Flexible (dynamic policies) | âŒ Complex policy evaluation (>10ms latency per check)<br/>âŒ No delegation (attribute checks don't transfer authority)<br/>âŒ Policy explosion (100+ attributes = 1000+ policies) | Too slow (>10ms policy evaluation unacceptable for hot path <1ms budget), complex to maintain (policy explosion) |
+| **4. OAuth2 Scopes** | 6/10 | Token-based (unforgeable tokens like capabilities)<br/>Delegation support (refresh tokens) | âŒ Coarse scopes (scope = "tool:*" not "tool:book_reservation")<br/>âŒ No attenuation (can't reduce scope on delegation)<br/>âŒ No constraints (can't encode max_cost, max_invocations) | Not expressive enough (can't encode fine-grained constraints like "max_cost_usd: 100.0" or "requires_approval: true") |
+| **5. Access Control Lists (ACL)** | 3/10 | Simple (list of allowed subjects per resource)<br/>Widely understood | âŒ Ambient authority (ACL check at action time)<br/>âŒ Confused deputy problem (agent can be tricked)<br/>âŒ No delegation (ACL doesn't transfer authority)<br/>âŒ Revocation slow (must update ACL for each resource) | Ambient authority (agent can still call tool if it knows resource ID, no unforgeable token), confused deputy problem unsolved |
+| **6. Capability-Based Security** âœ… | **9/10** | âœ… **Unforgeable tokens** (HMAC-SHA256 signed)<br/>âœ… **No ambient authority** (possession of token = only way to access)<br/>âœ… **Delegation & attenuation** (pass capability to sub-agent with reduced rights)<br/>âœ… **Fine-grained constraints** (max_cost, max_invocations, privacy_band)<br/>âœ… **Fast validation** (<1ms HMAC check + constraint validation)<br/>âœ… **Revocation** (mark token revoked, no system restart)<br/>âœ… **Audit trail** (every capability issuance/usage/revocation logged) | âš ï¸ Token management overhead (must issue, store, revoke tokens)<br/>âš ï¸ Delegation complexity (attenuated capabilities must preserve constraints) | Selected despite token overhead (overhead <2ms issuance, <1ms validation acceptable for security benefits) |
 
 **Key Decision Factors:**
 - **Unforgeable tokens prevent privilege escalation:** Agent can only call tool if it possesses signed capability token (compromised agent can't forge tokens without secret key)
@@ -152,22 +152,22 @@ After evaluating 5 security models, **Capability-Based Security selected (9/10)*
 ### **Capability Model:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Capability Token (Unforgeable, Cryptographically Signed)   │
-├─────────────────────────────────────────────────────────────┤
-│ capability_id: "cap_tool_book_reservation_001"              │
-│ subject: "agent:booking_agent_001"                          │
-│ resource: "tool:book_reservation"                           │
-│ rights: ["execute", "read_result"]                          │
-│ constraints:                                                 │
-│   - max_cost_usd: 100.0                                     │
-│   - requires_approval: true (if cost > 100)                │
-│   - privacy_band: "GREEN" | "AMBER" | "RED"                │
-│ issued_at: 1696896123.456                                   │
-│ expires_at: 1696899723.456 (1 hour TTL)                    │
-│ issued_by: "orchestrator"                                   │
-│ signature: "sha256:abcdef123456..." (HMAC-SHA256)          │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Capability Token (Unforgeable, Cryptographically Signed)   â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ capability_id: "cap_tool_book_reservation_001"              â”‚
+â”‚ subject: "agent:booking_agent_001"                          â”‚
+â”‚ resource: "tool:book_reservation"                           â”‚
+â”‚ rights: ["execute", "read_result"]                          â”‚
+â”‚ constraints:                                                 â”‚
+â”‚   - max_cost_usd: 100.0                                     â”‚
+â”‚   - requires_approval: true (if cost > 100)                â”‚
+â”‚   - privacy_band: "GREEN" | "AMBER" | "RED"                â”‚
+â”‚ issued_at: 1696896123.456                                   â”‚
+â”‚ expires_at: 1696899723.456 (1 hour TTL)                    â”‚
+â”‚ issued_by: "orchestrator"                                   â”‚
+â”‚ signature: "sha256:abcdef123456..." (HMAC-SHA256)          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ### **Implementation:**
@@ -397,7 +397,7 @@ class CapabilityManager:
         # In-memory capability store (in production, use Redis)
         self.capabilities: Dict[str, Capability] = {}
 
-        # Revocation list (capability_id → revoke_time)
+        # Revocation list (capability_id â†’ revoke_time)
         self.revoked: Dict[str, float] = {}
 
         # Role-based capability templates
@@ -518,8 +518,8 @@ class CapabilityManager:
         Issue all capabilities for a role (batch operation).
 
         Example:
-            role="planner" → capabilities for planning tools only
-            role="booking_agent" → capabilities for booking + calendar tools
+            role="planner" â†’ capabilities for planning tools only
+            role="booking_agent" â†’ capabilities for booking + calendar tools
         """
         if role not in self.role_templates:
             raise ValueError(f"Unknown role: {role}")
@@ -672,21 +672,21 @@ class ToolRunner:
 
 ### **Alternative 1: Access Control Lists (ACLs)**
 
-**Approach:** Traditional permission model (user → roles → permissions).
+**Approach:** Traditional permission model (user â†’ roles â†’ permissions).
 
 **Pros:**
-- ✅ Well-understood (used in filesystems, databases)
-- ✅ Simple to implement (check role at action time)
+- âœ… Well-understood (used in filesystems, databases)
+- âœ… Simple to implement (check role at action time)
 
 **Cons:**
-- ❌ **Ambient authority** — Agent has implicit authority based on role
-- ❌ **Confused deputy problem** — Agent can be tricked into misusing authority
-- ❌ **No delegation** — Can't safely pass authority to another agent
-- ❌ **Revocation complexity** — Must track all granted permissions
+- âŒ **Ambient authority** â€” Agent has implicit authority based on role
+- âŒ **Confused deputy problem** â€” Agent can be tricked into misusing authority
+- âŒ **No delegation** â€” Can't safely pass authority to another agent
+- âŒ **Revocation complexity** â€” Must track all granted permissions
 
 **Research:** Lampson (1971), "Protection" paper introduces ACLs
 
-**Verdict:** ❌ **Rejected** — Doesn't solve confused deputy, no safe delegation.
+**Verdict:** âŒ **Rejected** â€” Doesn't solve confused deputy, no safe delegation.
 
 ---
 
@@ -695,18 +695,18 @@ class ToolRunner:
 **Approach:** Agents assigned roles (planner, booking_agent), permissions based on role.
 
 **Pros:**
-- ✅ Industry standard (used in enterprises)
-- ✅ Centralized management (add/remove roles)
+- âœ… Industry standard (used in enterprises)
+- âœ… Centralized management (add/remove roles)
 
 **Cons:**
-- ❌ **Coarse-grained** — All booking agents have same permissions (no per-agent attenuation)
-- ❌ **Ambient authority** — Still checks at action time (not possession-based)
-- ❌ **No delegation** — Can't temporarily grant reduced permissions
-- ❌ **Role explosion** — Need many roles for fine-grained control
+- âŒ **Coarse-grained** â€” All booking agents have same permissions (no per-agent attenuation)
+- âŒ **Ambient authority** â€” Still checks at action time (not possession-based)
+- âŒ **No delegation** â€” Can't temporarily grant reduced permissions
+- âŒ **Role explosion** â€” Need many roles for fine-grained control
 
 **Research:** Ferraiolo & Kuhn (1992), RBAC model
 
-**Verdict:** ❌ **Rejected** — Too coarse-grained, lacks delegation.
+**Verdict:** âŒ **Rejected** â€” Too coarse-grained, lacks delegation.
 
 ---
 
@@ -715,18 +715,18 @@ class ToolRunner:
 **Approach:** Policies based on attributes (agent.role, resource.cost, time.hour).
 
 **Pros:**
-- ✅ Fine-grained policies (e.g., "allow if cost < $100 AND time < 10pm")
-- ✅ Flexible (policies can be complex)
+- âœ… Fine-grained policies (e.g., "allow if cost < $100 AND time < 10pm")
+- âœ… Flexible (policies can be complex)
 
 **Cons:**
-- ❌ **Policy complexity** — Hard to reason about policy interactions
-- ❌ **Performance overhead** — Evaluate policy on every access
-- ❌ **Still ambient authority** — Checks at action time, not possession-based
-- ❌ **No unforgeable tokens** — Attributes can be spoofed
+- âŒ **Policy complexity** â€” Hard to reason about policy interactions
+- âŒ **Performance overhead** â€” Evaluate policy on every access
+- âŒ **Still ambient authority** â€” Checks at action time, not possession-based
+- âŒ **No unforgeable tokens** â€” Attributes can be spoofed
 
 **Research:** XACML (2003), NIST ABAC model
 
-**Verdict:** ❌ **Rejected** — Too complex, doesn't provide unforgeable tokens.
+**Verdict:** âŒ **Rejected** â€” Too complex, doesn't provide unforgeable tokens.
 
 ---
 
@@ -735,18 +735,18 @@ class ToolRunner:
 **Approach:** Use OAuth bearer tokens for authorization.
 
 **Pros:**
-- ✅ Industry standard (used in web APIs)
-- ✅ JWT tokens can carry claims (subject, scope, expiration)
+- âœ… Industry standard (used in web APIs)
+- âœ… JWT tokens can carry claims (subject, scope, expiration)
 
 **Cons:**
-- ❌ **Bearer tokens are forgeable** — Anyone with token can use it (no signature verification in K1 context)
-- ❌ **No attenuation** — Can't create weaker tokens from existing token
-- ❌ **Web-centric** — Designed for HTTP APIs, not actor model
-- ❌ **Heavyweight** — OAuth flow adds latency (token endpoint, refresh tokens)
+- âŒ **Bearer tokens are forgeable** â€” Anyone with token can use it (no signature verification in K1 context)
+- âŒ **No attenuation** â€” Can't create weaker tokens from existing token
+- âŒ **Web-centric** â€” Designed for HTTP APIs, not actor model
+- âŒ **Heavyweight** â€” OAuth flow adds latency (token endpoint, refresh tokens)
 
 **Research:** OAuth 2.0 RFC 6749 (2012)
 
-**Verdict:** ❌ **Rejected** — Too heavyweight, lacks attenuation.
+**Verdict:** âŒ **Rejected** â€” Too heavyweight, lacks attenuation.
 
 ---
 
@@ -755,16 +755,16 @@ class ToolRunner:
 **Approach:** Agents can call any tool without checks.
 
 **Pros:**
-- ✅ Zero overhead (no authorization checks)
-- ✅ Simple implementation
+- âœ… Zero overhead (no authorization checks)
+- âœ… Simple implementation
 
 **Cons:**
-- ❌ **Security disaster** — Compromised agent = full system access
-- ❌ **No audit trail** — Can't track who did what
-- ❌ **No least privilege** — Agents have more power than needed
-- ❌ **Regulatory non-compliance** — Violates security best practices
+- âŒ **Security disaster** â€” Compromised agent = full system access
+- âŒ **No audit trail** â€” Can't track who did what
+- âŒ **No least privilege** â€” Agents have more power than needed
+- âŒ **Regulatory non-compliance** â€” Violates security best practices
 
-**Verdict:** ❌ **Rejected** — Unacceptable security risk.
+**Verdict:** âŒ **Rejected** â€” Unacceptable security risk.
 
 ---
 
@@ -785,7 +785,7 @@ Capabilities require possession of signed token:
 ```python
 # Capability: Possession = authorization
 tool_runner.execute_tool(tool_id, params, capability=signed_token)
-# If token invalid/expired/revoked → Denied
+# If token invalid/expired/revoked â†’ Denied
 ```
 
 **No ambient authority = stronger security.**
@@ -797,14 +797,14 @@ tool_runner.execute_tool(tool_id, params, capability=signed_token)
 **Example without capabilities:**
 ```
 Agent A (malicious): Sends message to Agent B: "Book reservation for $500"
-Agent B (booking agent): Checks "I'm a booking agent, I can do this" → Books $500 reservation
+Agent B (booking agent): Checks "I'm a booking agent, I can do this" â†’ Books $500 reservation
 PROBLEM: Agent A doesn't have authority, but tricked Agent B into using its authority
 ```
 
 **With capabilities:**
 ```
 Agent A: Sends message with NO capability token
-Agent B: "Where's your capability token?" → Rejects
+Agent B: "Where's your capability token?" â†’ Rejects
 Agent A: Cannot forge capability (signature check fails)
 ```
 
@@ -847,24 +847,24 @@ capability_manager.revoke_capability("cap_tool_book_reservation_001")
 
 # Next use fails
 tool_runner.execute_tool(tool_id, params, capability=revoked_cap)
-# → PermissionError: "Capability revoked"
+# â†’ PermissionError: "Capability revoked"
 ```
 
 ### **5. Research-Backed, Production-Proven**
 
 Capability-based security is not theoretical:
-- **Dennis & Van Horn (1966)** — Original capability paper
-- **KeyKOS (1980s)** — Capability OS
-- **E Language (1997)** — Capability programming language
-- **Capsicum (FreeBSD, 2010)** — Capability mode for sandboxing
-- **Google Fuchsia (2016)** — Capability-based OS
-- **AWS IAM Roles (2010s)** — Capability-like temporary credentials
+- **Dennis & Van Horn (1966)** â€” Original capability paper
+- **KeyKOS (1980s)** â€” Capability OS
+- **E Language (1997)** â€” Capability programming language
+- **Capsicum (FreeBSD, 2010)** â€” Capability mode for sandboxing
+- **Google Fuchsia (2016)** â€” Capability-based OS
+- **AWS IAM Roles (2010s)** â€” Capability-like temporary credentials
 
 **Research Citations:**
-- Dennis & Van Horn (1966) — "Programming Semantics for Multiprogrammed Computations"
-- Miller et al. (2003) — "Capability Myths Demolished"
-- Hardy (1988) — "The Confused Deputy"
-- Shapiro (1999) — "EROS: A Fast Capability System"
+- Dennis & Van Horn (1966) â€” "Programming Semantics for Multiprogrammed Computations"
+- Miller et al. (2003) â€” "Capability Myths Demolished"
+- Hardy (1988) â€” "The Confused Deputy"
+- Shapiro (1999) â€” "EROS: A Fast Capability System"
 
 ### **6. Aligns with K1 Architecture Principles**
 
@@ -879,38 +879,38 @@ Capability-based security is not theoretical:
 
 ### **Positive Consequences:**
 
-1. ✅ **Least Privilege Enforced** — Agents get minimum capabilities needed (PlannerAgent can't book reservations)
+1. âœ… **Least Privilege Enforced** â€” Agents get minimum capabilities needed (PlannerAgent can't book reservations)
 
-2. ✅ **Confused Deputy Prevented** — Agent can't be tricked into misusing authority (token possession required)
+2. âœ… **Confused Deputy Prevented** â€” Agent can't be tricked into misusing authority (token possession required)
 
-3. ✅ **Safe Delegation** — Capabilities can be attenuated and delegated (multi-agent workflows)
+3. âœ… **Safe Delegation** â€” Capabilities can be attenuated and delegated (multi-agent workflows)
 
-4. ✅ **Simple Revocation** — Instant revocation via revocation list (no system restart)
+4. âœ… **Simple Revocation** â€” Instant revocation via revocation list (no system restart)
 
-5. ✅ **Audit Trail** — All capability usage logged to K0 (who did what, when, with which capability)
+5. âœ… **Audit Trail** â€” All capability usage logged to K0 (who did what, when, with which capability)
 
-6. ✅ **Unforgeable Tokens** — HMAC-SHA256 signature prevents forgery
+6. âœ… **Unforgeable Tokens** â€” HMAC-SHA256 signature prevents forgery
 
-7. ✅ **Expiration** — TTL prevents indefinite authority (default 1 hour, refresh as needed)
+7. âœ… **Expiration** â€” TTL prevents indefinite authority (default 1 hour, refresh as needed)
 
 ---
 
 ### **Negative Consequences:**
 
-1. ⚠️ **Signature Verification Overhead** — HMAC-SHA256 verification on every tool call (~0.1-0.5ms)
+1. âš ï¸ **Signature Verification Overhead** â€” HMAC-SHA256 verification on every tool call (~0.1-0.5ms)
    - **Mitigation:** Cache verified capabilities in memory (Redis), verify once per minute
 
-2. ⚠️ **Capability Management Complexity** — Must issue, track, revoke capabilities
+2. âš ï¸ **Capability Management Complexity** â€” Must issue, track, revoke capabilities
    - **Mitigation:** Role-based templates (issue all capabilities for role in batch), automated revocation on agent termination
 
-3. ⚠️ **Secret Key Management** — Capability signing key must be protected
+3. âš ï¸ **Secret Key Management** â€” Capability signing key must be protected
    - **Mitigation:** Rotate key every 90 days, store in secure vault (HashiCorp Vault, AWS Secrets Manager)
 
-4. ⚠️ **Delegation Depth Tracking** — Must limit delegation chain to prevent abuse
-   - **Mitigation:** Max delegation depth = 3 levels (parent → child → grandchild)
+4. âš ï¸ **Delegation Depth Tracking** â€” Must limit delegation chain to prevent abuse
+   - **Mitigation:** Max delegation depth = 3 levels (parent â†’ child â†’ grandchild)
 
-5. ⚠️ **Storage Overhead** — Capabilities stored in Redis (revocation list, capability cache)
-   - **Impact:** ~1KB per capability × 1000 agents = 1MB (negligible)
+5. âš ï¸ **Storage Overhead** â€” Capabilities stored in Redis (revocation list, capability cache)
+   - **Impact:** ~1KB per capability Ã— 1000 agents = 1MB (negligible)
 
 ---
 
@@ -927,11 +927,11 @@ Capability-based security is not theoretical:
 **Deliverable:** Working capability system with signing/verification
 
 **Tests:**
-- ✅ Issue capability → Sign → Verify (success)
-- ✅ Tampered capability → Verify (fails)
-- ✅ Expired capability → Verify (fails)
-- ✅ Revoked capability → Verify (fails)
-- ✅ Capability attenuation → Verify reduced rights
+- âœ… Issue capability â†’ Sign â†’ Verify (success)
+- âœ… Tampered capability â†’ Verify (fails)
+- âœ… Expired capability â†’ Verify (fails)
+- âœ… Revoked capability â†’ Verify (fails)
+- âœ… Capability attenuation â†’ Verify reduced rights
 
 ---
 
@@ -946,10 +946,10 @@ Capability-based security is not theoretical:
 **Deliverable:** All tool calls protected by capabilities
 
 **Tests:**
-- ✅ Tool call with valid capability → Success
-- ✅ Tool call with invalid capability → PermissionError
-- ✅ Tool call exceeding cost limit → PermissionError
-- ✅ Tool call requiring approval → User approval flow triggered
+- âœ… Tool call with valid capability â†’ Success
+- âœ… Tool call with invalid capability â†’ PermissionError
+- âœ… Tool call exceeding cost limit â†’ PermissionError
+- âœ… Tool call requiring approval â†’ User approval flow triggered
 
 ---
 
@@ -959,7 +959,7 @@ Capability-based security is not theoretical:
 1. Define role templates (planner, booking_agent, calendar_agent, etc.)
 2. Implement batch capability issuance for roles
 3. Add role-specific default rights and constraints
-4. Integrate with agent lifecycle (ADR-0005) — issue capabilities on agent hire
+4. Integrate with agent lifecycle (ADR-0005) â€” issue capabilities on agent hire
 
 **Deliverable:** Role-based capability issuance
 
@@ -1017,9 +1017,9 @@ capability_roles:
 **Deliverable:** Production-ready capability system
 
 **Tests:**
-- ✅ Secret key rotation → Old capabilities re-signed with new key
-- ✅ Delegation depth > 3 → Attenuation fails
-- ✅ 1000 concurrent capability verifications → All complete in <100ms (cached)
+- âœ… Secret key rotation â†’ Old capabilities re-signed with new key
+- âœ… Delegation depth > 3 â†’ Attenuation fails
+- âœ… 1000 concurrent capability verifications â†’ All complete in <100ms (cached)
 
 ---
 
@@ -1183,7 +1183,7 @@ async def _():
     )
 
     # Execute with cost > limit
-    with pytest.raises(PermissionError) as exc_info:
+    with ward.raises(PermissionError) as exc_info:
         await tool_runner.execute_tool(
             tool_id="book_reservation",
             params={"restaurant": "Le Bernardin", "cost_usd": 500.0},
@@ -1391,7 +1391,7 @@ k1_active_capabilities = Gauge(
 ## Decision History
 
 **Created:** 2024-10-10 by K1 Architecture Team
-**Status:** ✅ Accepted (ADR-0010)
+**Status:** âœ… Accepted (ADR-0010)
 **Supersedes:** None
 **Superseded by:** None
 
@@ -1406,9 +1406,9 @@ k1_active_capabilities = Gauge(
 **Last Updated:** 2025-02-06
 
 **Committee Approval:**
-- Architecture Team: ✅ **Approved** (2025-01-26) - Unforgeable token design validated
-- Security Team: ✅ **Approved** (2025-01-29) - HMAC-SHA256 signature security confirmed
-- Orchestration Team: ✅ **Approved** (2025-02-02) - <1ms validation latency confirmed
+- Architecture Team: âœ… **Approved** (2025-01-26) - Unforgeable token design validated
+- Security Team: âœ… **Approved** (2025-01-29) - HMAC-SHA256 signature security confirmed
+- Orchestration Team: âœ… **Approved** (2025-02-02) - <1ms validation latency confirmed
 
 **Proposed by:** K1 Architecture Team
 **Reviewed by:** Security Team, Orchestration Team, Compliance Team
@@ -1452,7 +1452,7 @@ k1_active_capabilities = Gauge(
 - **Unforgeable tokens prevent privilege escalation:** 0 incidents of compromised agent calling unauthorized tool (vs 3 incidents pre-capability with ambient authority)
 - **<1ms validation latency fits hot path:** Orchestrator checks capability before every tool call (41ms overhead budget, capability check <1ms = acceptable)
 - **Fine-grained constraints enable least privilege:** 18 capability templates with constraints (max_cost_usd, max_invocations_per_hour, privacy_band, requires_approval) - prevents Planner from booking $500 reservation
-- **Audit trail critical for security debugging:** 100% capability usage logged to K0 WAL (resolved 2 security incidents by tracing capability_id → agent_id → tool call)
+- **Audit trail critical for security debugging:** 100% capability usage logged to K0 WAL (resolved 2 security incidents by tracing capability_id â†’ agent_id â†’ tool call)
 
 **Challenges & Solutions:**
 - **Challenge**: Capability token management overhead (must issue, store, revoke tokens for every agent)
@@ -1468,13 +1468,13 @@ k1_active_capabilities = Gauge(
 
 **Delegation & Attenuation Completion (Planned - 15%):**
 - Full delegation support (agent A delegates capability to agent B with reduced rights)
-- Transitive attenuation (agent A → B → C with chained constraints)
+- Transitive attenuation (agent A â†’ B â†’ C with chained constraints)
 - Delegation depth limit (max 3 levels to prevent delegation chain explosion)
 - Estimated timeline: 3 weeks
 
 **Capability Revocation Propagation (Planned - 10%):**
 - Multi-instance K1 capability revocation (Redis pub/sub for revocation events)
-- Revocation of delegated capabilities (revoke parent → revoke all children)
+- Revocation of delegated capabilities (revoke parent â†’ revoke all children)
 - Graceful revocation (allow in-flight operations to complete before revocation)
 - Estimated timeline: 2 weeks
 
@@ -1511,3 +1511,4 @@ k1_active_capabilities = Gauge(
 - `docs/whiteboard.md` L1404 (Capability-based Security section - unforgeable tokens design)
 - `docs/whiteboard.md` L16097 (Capability research citation - Dennis & Van Horn 1966)
 - `architecture_diagrams/k1_orchestrator_3phase.mmd` (Orchestrator checks capabilities before tool delegation)
+

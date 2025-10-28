@@ -1,6 +1,6 @@
-# ADR-0066: Developer Testing & Simulation Harness
+﻿# ADR-0066: Developer Testing & Simulation Harness
 
-**Status:** Proposed 🔄 (Requirements Gathering - Ready for Detailed Design)
+**Status:** Proposed ðŸ”„ (Requirements Gathering - Ready for Detailed Design)
 **Decision Date:** 2025-10-16
 **Implementation Date:** TBD
 **Authors:** K1 Architecture Team
@@ -47,7 +47,7 @@ K1 Intelligence Module requires robust testing infrastructure for AI agent inter
    - **Strength:** Lightweight, integrates with LLM APIs
    - **Weakness:** No agent orchestration testing, no tool interaction simulation
 
-2. **Pytest + Fixtures (Standard Python):**
+2. **ward + Fixtures (Standard Python):**
    - **Pattern:** Unit tests with mocked dependencies
    - **Strength:** Simple, well-known
    - **Weakness:** Heavy mocking, tests don't reflect real behavior
@@ -70,19 +70,19 @@ K1 Intelligence Module requires robust testing infrastructure for AI agent inter
 ### Research Foundations
 
 **Automated Evaluation:**
-- **BLEU, ROUGE (Papineni et al., 2002)** — Text similarity metrics for evaluation
-- **BERTScore (Zhang et al., 2020)** — Semantic similarity using embeddings
-- **LLM-as-Evaluator (Fu et al., 2023)** — Use LLM to evaluate outputs
+- **BLEU, ROUGE (Papineni et al., 2002)** â€” Text similarity metrics for evaluation
+- **BERTScore (Zhang et al., 2020)** â€” Semantic similarity using embeddings
+- **LLM-as-Evaluator (Fu et al., 2023)** â€” Use LLM to evaluate outputs
 
 **Synthetic Data Generation:**
-- **GPT-3 Prompting (Brown et al., 2020)** — Few-shot learning for generation
-- **Data Augmentation (Wei & Zou, 2018)** — Perturbations for robustness testing
-- **Conversation Simulation (Purwana et al., 2022)** — Generate dialogue datasets
+- **GPT-3 Prompting (Brown et al., 2020)** â€” Few-shot learning for generation
+- **Data Augmentation (Wei & Zou, 2018)** â€” Perturbations for robustness testing
+- **Conversation Simulation (Purwana et al., 2022)** â€” Generate dialogue datasets
 
 **Regression Testing:**
-- **Continuous Integration (Fowler, 2006)** — Automate test runs on every commit
-- **Performance Regression Detection (Jones & Mueller, 2013)** — Statistical methods for latency tracking
-- **Mutation Testing (DeMillo et al., 1978)** — Verify test effectiveness
+- **Continuous Integration (Fowler, 2006)** â€” Automate test runs on every commit
+- **Performance Regression Detection (Jones & Mueller, 2013)** â€” Statistical methods for latency tracking
+- **Mutation Testing (DeMillo et al., 1978)** â€” Verify test effectiveness
 
 ### K1 Requirements
 
@@ -110,26 +110,26 @@ We will implement a **2-tier testing harness** for agent interactions:
 ### Architecture Overview
 
 ```
-Developer → Developer CLI
-              ↓
-         ┌────────────────────────────────────┐
-         │ TIER 1: Conversation Simulator     │
-         │  - Synthetic user personas        │
-         │  - Multi-turn generation          │
-         │  - Rapid-fire message injection   │
-         │  - Interruption/barge-in sim      │
-         │  Duration: <5 minutes (10 runs)   │
-         └────────────────────────────────────┘
-              ↓
-         ┌────────────────────────────────────┐
-         │ TIER 2: Regression Eval Suites    │
-         │  - Intent classification accuracy │
-         │  - Clarification rate tracking    │
-         │  - Repair success rate tracking   │
-         │  - Latency regression detection   │
-         │  - User satisfaction proxy        │
-         └────────────────────────────────────┘
-              ↓
+Developer â†’ Developer CLI
+              â†“
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚ TIER 1: Conversation Simulator     â”‚
+         â”‚  - Synthetic user personas        â”‚
+         â”‚  - Multi-turn generation          â”‚
+         â”‚  - Rapid-fire message injection   â”‚
+         â”‚  - Interruption/barge-in sim      â”‚
+         â”‚  Duration: <5 minutes (10 runs)   â”‚
+         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+              â†“
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚ TIER 2: Regression Eval Suites    â”‚
+         â”‚  - Intent classification accuracy â”‚
+         â”‚  - Clarification rate tracking    â”‚
+         â”‚  - Repair success rate tracking   â”‚
+         â”‚  - Latency regression detection   â”‚
+         â”‚  - User satisfaction proxy        â”‚
+         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+              â†“
          Eval Report (Metrics + Regression Alerts)
 ```
 
@@ -433,19 +433,19 @@ class ConversationSimulator:
         idx = random.randint(0, len(words) - 1)
 
         if strategy == "omit":
-            # Omit letter: "booking" → "bocking"
+            # Omit letter: "booking" â†’ "bocking"
             word = words[idx]
             if len(word) > 2:
                 pos = random.randint(1, len(word) - 1)
                 words[idx] = word[:pos] + word[pos+1:]
         elif strategy == "swap":
-            # Swap adjacent letters: "booking" → "bokoking"
+            # Swap adjacent letters: "booking" â†’ "bokoking"
             word = words[idx]
             if len(word) > 2:
                 pos = random.randint(0, len(word) - 2)
                 words[idx] = word[:pos] + word[pos+1] + word[pos] + word[pos+2:]
         elif strategy == "duplicate":
-            # Duplicate letter: "booking" → "boooking"
+            # Duplicate letter: "booking" â†’ "boooking"
             word = words[idx]
             pos = random.randint(0, len(word) - 1)
             words[idx] = word[:pos] + word[pos] + word[pos:]
@@ -927,7 +927,7 @@ class UserSatisfactionProxyEval:
     def _is_positive_sentiment(self, text: str) -> bool:
         """Detect positive sentiment"""
         positive_phrases = ["thank", "thanks", "appreciate", "great", "awesome", "perfect", "love"]
-        positive_emojis = ["👍", "😊", "🎉", "❤️"]
+        positive_emojis = ["ðŸ‘", "ðŸ˜Š", "ðŸŽ‰", "â¤ï¸"]
         text_lower = text.lower()
 
         has_positive_phrase = any(phrase in text_lower for phrase in positive_phrases)
@@ -977,8 +977,8 @@ class RegressionReport:
 **Generated:** {report.timestamp}
 
 ## Summary
-- ✅ Evals Passed: {len([e for e in evals if not e.regressed])}/{len(evals)}
-- ⚠️ Regressions Detected: {len(report.regressions)}
+- âœ… Evals Passed: {len([e for e in evals if not e.regressed])}/{len(evals)}
+- âš ï¸ Regressions Detected: {len(report.regressions)}
 
 ## Metrics
 
@@ -987,12 +987,12 @@ class RegressionReport:
 """
 
         for eval_result in evals:
-            status = "✅ PASS" if not eval_result.regressed else "❌ FAIL"
+            status = "âœ… PASS" if not eval_result.regressed else "âŒ FAIL"
             markdown += f"| {eval_result.metric} | {eval_result.value:.1%} | {eval_result.target:.1%} | {status} |\n"
 
         # Alert for regressions
         if report.regressions:
-            markdown += "\n## 🚨 Regression Alerts\n\n"
+            markdown += "\n## ðŸš¨ Regression Alerts\n\n"
             for reg in report.regressions:
                 markdown += f"- **{reg.metric}** regressed: {reg.value:.1%} (was {reg.baseline:.1%})\n"
 
@@ -1006,11 +1006,11 @@ class RegressionReport:
 
 | Alternative | Complexity | Developer Friction | Regression Detection | Synthetic Users | K1 Fit |
 |-------------|-----------|-------------------|----------------------|-----------------|--------|
-| **1. Manual Testing** | Low | ⚠️ High | ❌ No | ❌ No | 2/10 |
-| **2. WARD Only** | Low | ✅ Low | ⚠️ Manual | ❌ No | 6/10 |
-| **3. LangSmith Cloud** | Medium | ✅ Medium | ✅ Yes | ✅ Yes | 7/10 |
-| **4. Conversation Simulator + Regression Evals (ADR-0066)** | Medium | ✅ Low | ✅ Yes | ✅ Yes | **9/10** |
-| **5. Full Simulation (with tool execution)** | High | ❌ Very High | ✅ Comprehensive | ✅ Yes | 4/10 |
+| **1. Manual Testing** | Low | âš ï¸ High | âŒ No | âŒ No | 2/10 |
+| **2. WARD Only** | Low | âœ… Low | âš ï¸ Manual | âŒ No | 6/10 |
+| **3. LangSmith Cloud** | Medium | âœ… Medium | âœ… Yes | âœ… Yes | 7/10 |
+| **4. Conversation Simulator + Regression Evals (ADR-0066)** | Medium | âœ… Low | âœ… Yes | âœ… Yes | **9/10** |
+| **5. Full Simulation (with tool execution)** | High | âŒ Very High | âœ… Comprehensive | âœ… Yes | 4/10 |
 
 **Decision: Alternative 4 (ADR-0066) selected** - Optimal balance of developer ergonomics, regression detection, and realistic testing.
 
@@ -1018,7 +1018,7 @@ class RegressionReport:
 
 ## Consequences
 
-### ✅ Positive Consequences
+### âœ… Positive Consequences
 
 1. **Faster Feedback Loop:** Developers test changes locally in <5 minutes
 2. **Regression Detection:** Automated quality regression detection (5%+ drop triggers alert)
@@ -1026,7 +1026,7 @@ class RegressionReport:
 4. **Reproducible Testing:** Same scenarios run identically on all machines
 5. **Quality Metrics Tracked:** Intent accuracy, clarification rate, repair success, latency trends
 
-### ❌ Negative Consequences
+### âŒ Negative Consequences
 
 1. **Synthetic Data Bias:** LLM-generated messages may not reflect real user behavior
 2. **Maintenance Overhead:** Persona updates, scenario creation ongoing effort
@@ -1090,3 +1090,4 @@ testing:
 ---
 
 **ADR-0066 END**
+

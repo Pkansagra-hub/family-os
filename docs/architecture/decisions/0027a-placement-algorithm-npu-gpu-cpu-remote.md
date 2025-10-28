@@ -1,20 +1,83 @@
 # ADR-0027a: Placement Algorithm (NPU→GPU→CPU→Remote)
 
-**Status:** Accepted
+**Status:** ✅ Accepted (Updated for Market Reality - Remote-First CASCADE)
 **Date:** 2025-06-15
+**Last Updated:** 2025-10-27 ⚠️ **CRITICAL UPDATE: Phone Hardware Detection & Remote-First Logic**
 **Author:** K1 Architecture Team
+**Implementation Priority:** 🟡 MEDIUM (Correct abstraction TODAY, production-critical with dongle)
 **Parent ADR:** [ADR-0027: Model Placement Cascade](0027-model-placement-cascade-npu-gpu-cpu-remote.md)
 **Related ADRs:**
+
 - [ADR-0027b: Automatic Failover (<100ms Migration)](0027b-automatic-failover-100ms-migration.md)
-- [ADR-0027c: Cost-Aware Fallback ($0.10/Session Budget)](0027c-cost-aware-fallback-010-session-budget.md)
-- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md)
-- [ADR-0026c: Model Placement Integration (Thermal Cascade)](0026c-model-placement-integration-thermal-cascade.md)
+- [ADR-0027c: Cost-Aware Fallback ($0.10/Session Budget)](0027c-cost-aware-fallback-010-session-budget.md) - 🔥 CRITICAL TODAY
+- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md) - 🔥 CRITICAL TODAY
+- [ADR-0026c: Model Placement Integration (Thermal Cascade)](0026c-model-placement-integration-thermal-cascade.md) - 🟢 LOW PRIORITY TODAY
+
+---
+
+## ⚠️ Market Reality & Implementation Priority (2025-10-27 Update)
+
+**CRITICAL CONTEXT: This ADR describes future-ready placement logic, but implementation TODAY must detect phone hardware limitations and skip directly to Remote tier.**
+
+### Current Market Reality (October 2025)
+
+**Phone Hardware Constraints:**
+
+- **Snapdragon 8 Gen 3:** Cannot run quantized LLMs >2B parameters (insufficient NPU)
+- **Apple A17 Pro:** Thermal throttles within 30 seconds of sustained inference
+- **Samsung Exynos 2400:** NPU performance insufficient for real-time LLM inference
+- **Consumer laptops:** Limited NPU availability (Apple M-series only), GPU thermal concerns
+
+**Expected Cascade Behavior TODAY:**
+
+```python
+# Reality check in placement algorithm
+if device_capability.has_strong_npu_for_llm():  # Returns False for 99% of phones TODAY
+    cascade = ["NPU", "GPU", "CPU", "Remote"]
+else:
+    cascade = ["Remote"]  # Skip local tiers entirely (95% of traffic TODAY)
+```
+
+**Traffic Distribution TODAY:**
+
+- 🔴 **95% Remote tier** (OpenAI/Anthropic/Google) - DOMINANT PATH
+- 🟡 **4% CPU tier** (High-end laptops with active cooling)
+- 🟡 **1% GPU/NPU tier** (Rare flagship devices)
+
+**Why Keep 4-Tier Algorithm?**
+
+- **FamilyOS Dongle (2026-2027):** When dongle ships with dedicated NPU/GPU, cascade shifts to 80% local WITHOUT code changes
+- **Privacy Protection:** RED band queries (~2% of traffic) MUST fail gracefully if no local hardware available
+- **Future-Proof:** Correct abstraction ready when phone hardware catches up (2027+)
+
+### Implementation Phases
+
+**Phase 1 (TODAY - Q4 2025): Remote-First Detection**
+
+- `device_capability.detect_phone_hardware()` → Returns "insufficient" for 99% of devices
+- Placement algorithm sees insufficient hardware → Returns `[Remote]` immediately
+- NPU/GPU/CPU code paths exist but rarely executed (1-5% of traffic)
+- Focus: Remote tier robustness (ADR-0027c, ADR-0027d are CRITICAL)
+
+**Phase 2 (2026 - Dongle Beta): Hybrid Detection**
+
+- `device_capability.detect_familyos_dongle()` → Returns True for early adopters
+- Cascade shifts: 30% NPU/GPU (dongle), 70% Remote (phone-only users)
+- Thermal integration becomes important (ADR-0026c production-critical)
+
+**Phase 3 (2027+ - Mass Market): Local-First Default**
+
+- Dongle adoption 70%+ → Cascade returns `["NPU", "GPU", "CPU", "Remote"]` for most users
+- Remote tier becomes fallback (20% of traffic)
+- Full 4-tier cascade logic production-critical
 
 ---
 
 ## Context
 
 On-device inference accelerators provide different performance characteristics, power consumption, and availability:
+
+**⚠️ NOTE: Performance characteristics below are FUTURE-STATE (with dongle). TODAY, most devices cannot achieve these metrics.**
 
 ### Accelerator Characteristics
 
@@ -26,6 +89,7 @@ On-device inference accelerators provide different performance characteristics, 
 | Remote      | 600       | 0         | $0.002     | Always       | No local resources      |
 
 **Placement challenges:**
+
 1. **Performance vs. Availability:** NPU is fastest but not always available (thermal constraints, ADR-0026c)
 2. **Power vs. Latency:** CPU uses less power but 2.5x slower than NPU
 3. **Cost vs. Reliability:** Remote inference always available but costs $0.002/token ($0.10/session ~50 tokens)
@@ -112,22 +176,26 @@ def select_accelerator(
 ### Accelerator Availability Checks
 
 **NPU Availability:**
+
 - Driver loaded: Check `/dev/qaic*` (Linux) or system APIs
 - Thermal state: COOL or WARM only (ADR-0026c)
 - Memory available: >2GB VRAM for LLaMA-7B
 - Not blacklisted: No recent crashes (<3 failures in 10min)
 
 **GPU Availability:**
+
 - CUDA/OpenCL runtime available
 - Thermal state: Not CRITICAL or EMERGENCY
 - Memory available: >4GB VRAM for LLaMA-7B
 - Not blacklisted: No recent crashes
 
 **CPU Availability:**
+
 - Always available (fallback)
 - No thermal restrictions (low power consumption)
 
 **Remote Availability:**
+
 - Always available (ultimate fallback)
 - Network connectivity verified
 - API key/auth configured
@@ -718,21 +786,25 @@ groups:
 ## Implementation Roadmap
 
 ### Week 1: Accelerator Profiles & Availability
+
 - Implement `AcceleratorProfile` with performance characteristics
 - Implement `AcceleratorAvailability` with platform-specific checks
 - Add blacklist management for crashed accelerators
 
 ### Week 2: Placement Algorithm Core
+
 - Implement `PlacementAlgorithm` with cascade logic
 - Add thermal-aware cascade selection
 - Add preferred accelerator support
 
 ### Week 3: Testing & Validation
+
 - Write WARD tests for all placement scenarios
 - Benchmark placement selection latency (<100µs target)
 - Validate TTFT measurements per accelerator
 
 ### Week 4: Integration & Observability
+
 - Integrate with `ModelHub` (ADR-0001b)
 - Add Prometheus metrics for selections and availability
 - Create alert rules for accelerator unavailability
@@ -740,6 +812,7 @@ groups:
 ---
 
 **Related Files:**
+
 - `k1/infrastructure/model_placement/placement_algorithm.py` — Placement algorithm implementation
 - `k1/infrastructure/model_placement/accelerator_profiles.py` — Performance profiles
 - `tests/infrastructure/model_placement/test_placement_algorithm.py` — WARD test suite

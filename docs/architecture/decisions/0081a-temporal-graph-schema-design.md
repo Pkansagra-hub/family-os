@@ -1,4 +1,4 @@
-# ADR-0081a: Temporal Graph Schema Design
+﻿# ADR-0081a: Temporal Graph Schema Design
 
 **Status:** Proposed
 **Date:** 2025-10-22
@@ -11,13 +11,13 @@ From **ADR-0081**, we need a **temporal graph schema** that tracks:
 
 1. **Entities (Nodes):** People, locations, events, organizations, things
 2. **Relationships (Edges):** Family, social, employment, location, temporal connections
-3. **Temporal Validity:** Relationships change over time (Alice: single → married in 2020)
+3. **Temporal Validity:** Relationships change over time (Alice: single â†’ married in 2020)
 4. **Version History:** Track every change to relationships for temporal reasoning
 
 **Key Requirements:**
 
 - **Temporal Reasoning:** "Who was married to whom in 2020?" requires valid_from/valid_to timestamps
-- **Relationship Evolution:** Alice's marital status: single (2015-2020) → married to Bob (2020-present)
+- **Relationship Evolution:** Alice's marital status: single (2015-2020) â†’ married to Bob (2020-present)
 - **Property Versioning:** Attributes change (occupation, location, preferences)
 - **Performance:** <10ms P95 entity lookup, <50ms P95 relationship query
 
@@ -133,8 +133,8 @@ CREATE INDEX idx_kg_edges_bidirectional ON kg_edges(source_id, target_id, rel_ty
 
 | Category | Relationship Types | Symmetric? | Temporal? |
 |----------|-------------------|------------|-----------|
-| **Family** | parent, child, sibling, spouse, grandparent, grandchild, aunt, uncle, cousin, in_law | No (parent ≠ child) | Yes (marriages end) |
-| **Social** | friend, colleague, acquaintance, neighbor, mentor, mentee | Yes (friend ↔ friend) | Yes (friendships change) |
+| **Family** | parent, child, sibling, spouse, grandparent, grandchild, aunt, uncle, cousin, in_law | No (parent â‰  child) | Yes (marriages end) |
+| **Social** | friend, colleague, acquaintance, neighbor, mentor, mentee | Yes (friend â†” friend) | Yes (friendships change) |
 | **Employment** | employed_by, manages, reports_to, colleague_at | No | Yes (jobs change) |
 | **Location** | lives_in, works_at, visits, born_in, studied_at | No | Yes (moves) |
 | **Temporal** | married_to, divorced_from, dated, transitioned_to | No | Yes (always temporal) |
@@ -231,41 +231,41 @@ AND (valid_to IS NULL OR valid_to >= 1609459200000);  -- 2021-01-01
 ### Why 3 Tables (Not 1 or 2)?
 
 **Option 1: Single table with version columns**
-- ❌ Problem: Poor query performance (no clean separation of current vs. historical)
-- ❌ Problem: Complex queries (always need WHERE valid_to IS NULL)
+- âŒ Problem: Poor query performance (no clean separation of current vs. historical)
+- âŒ Problem: Complex queries (always need WHERE valid_to IS NULL)
 
 **Option 2: Two tables (nodes + versioned_edges)**
-- ❌ Problem: Slow current relationship queries (always scan versions)
-- ❌ Problem: No easy "give me current state" query
+- âŒ Problem: Slow current relationship queries (always scan versions)
+- âŒ Problem: No easy "give me current state" query
 
-**✅ Chosen: Three tables (nodes + edges + temporal_edges)**
-- ✅ Fast current state queries (kg_edges table)
-- ✅ Fast temporal queries (kg_temporal_edges table with indexes)
-- ✅ Clean separation: current vs. historical data
+**âœ… Chosen: Three tables (nodes + edges + temporal_edges)**
+- âœ… Fast current state queries (kg_edges table)
+- âœ… Fast temporal queries (kg_temporal_edges table with indexes)
+- âœ… Clean separation: current vs. historical data
 
 ### Why JSON Properties (Not Columns)?
 
 **Alternatives:**
 1. **Separate columns:** age, occupation, address, diet, allergies...
-   - ❌ Schema changes for every new property
-   - ❌ 90% columns null for most entities
+   - âŒ Schema changes for every new property
+   - âŒ 90% columns null for most entities
 
 2. **Key-value table:** kg_node_properties(node_id, key, value, timestamp)
-   - ❌ Slow queries (N+1 problem)
-   - ❌ Complex property updates
+   - âŒ Slow queries (N+1 problem)
+   - âŒ Complex property updates
 
-**✅ Chosen: JSON BLOB with schema validation**
-- ✅ Flexible schema (add properties without migrations)
-- ✅ Single query per entity (no N+1)
-- ✅ SQLite JSON1 extension for querying (`json_extract()`)
-- ✅ Schema validation in Python (Pydantic models)
+**âœ… Chosen: JSON BLOB with schema validation**
+- âœ… Flexible schema (add properties without migrations)
+- âœ… Single query per entity (no N+1)
+- âœ… SQLite JSON1 extension for querying (`json_extract()`)
+- âœ… Schema validation in Python (Pydantic models)
 
 ### Why UUID node_id (Not Integer)?
 
-- ✅ Distributed system compatibility (no coordination)
-- ✅ No sequential ID leakage (privacy)
-- ✅ Merge-friendly (multiple sources can generate IDs)
-- ✅ Consistent with K0 architecture (FlatBuffers use UUIDs)
+- âœ… Distributed system compatibility (no coordination)
+- âœ… No sequential ID leakage (privacy)
+- âœ… Merge-friendly (multiple sources can generate IDs)
+- âœ… Consistent with K0 architecture (FlatBuffers use UUIDs)
 
 ### Indexing Strategy
 
@@ -282,7 +282,7 @@ AND (valid_to IS NULL OR valid_to >= 1609459200000);  -- 2021-01-01
 For 1000 entities, 10000 edges:
 
 - kg_nodes indexes: ~50 KB
-- kg_edges indexes: ~500 KB (5 indexes × 100 KB each)
+- kg_edges indexes: ~500 KB (5 indexes Ã— 100 KB each)
 - kg_temporal_edges indexes: ~300 KB (3 indexes)
 - **Total:** ~850 KB (minimal overhead)
 
@@ -290,23 +290,23 @@ For 1000 entities, 10000 edges:
 
 ### Positive
 
-1. **✅ Fast Current Queries:** <10ms P95 entity lookup (kg_edges table optimized for current state)
-2. **✅ Fast Temporal Queries:** <50ms P95 temporal queries (kg_temporal_edges with indexes)
-3. **✅ Relationship Evolution:** Track every change (employment, location, relationships)
-4. **✅ Flexible Properties:** JSON schema allows new attributes without migrations
-5. **✅ Version History:** Complete audit trail for debugging and rollback
-6. **✅ Privacy Enforcement:** privacy_band property for K0 P10 redaction
+1. **âœ… Fast Current Queries:** <10ms P95 entity lookup (kg_edges table optimized for current state)
+2. **âœ… Fast Temporal Queries:** <50ms P95 temporal queries (kg_temporal_edges with indexes)
+3. **âœ… Relationship Evolution:** Track every change (employment, location, relationships)
+4. **âœ… Flexible Properties:** JSON schema allows new attributes without migrations
+5. **âœ… Version History:** Complete audit trail for debugging and rollback
+6. **âœ… Privacy Enforcement:** privacy_band property for K0 P10 redaction
 
 ### Negative
 
-1. **❌ Storage Overhead:** 3 tables + indexes (~2× storage vs. single table)
-2. **❌ Write Complexity:** Updates must touch both kg_edges and kg_temporal_edges
-3. **❌ Schema Migration:** Adding new relationship types requires code changes (extensible but not automatic)
-4. **❌ JSON Query Performance:** json_extract() slower than native columns
+1. **âŒ Storage Overhead:** 3 tables + indexes (~2Ã— storage vs. single table)
+2. **âŒ Write Complexity:** Updates must touch both kg_edges and kg_temporal_edges
+3. **âŒ Schema Migration:** Adding new relationship types requires code changes (extensible but not automatic)
+4. **âŒ JSON Query Performance:** json_extract() slower than native columns
 
 ### Mitigations
 
-1. **Storage Overhead:** Acceptable (1000 entities × 10000 edges = ~10 MB total)
+1. **Storage Overhead:** Acceptable (1000 entities Ã— 10000 edges = ~10 MB total)
 2. **Write Complexity:** Abstracted in SQLiteKGDriver (API: `upsert_relationship()`)
 3. **Schema Migration:** Relationship types are extensible via configuration
 4. **JSON Performance:** Cache frequently accessed properties in Python objects
@@ -346,7 +346,7 @@ WHERE json_type(properties, '$.allergies') = 'array'
 - Create nodes in kg_nodes
 
 **Phase 2:** Import from K0::st_social (social beliefs - D3)
-- Convert social beliefs → relationships
+- Convert social beliefs â†’ relationships
 - Create edges in kg_edges
 
 **Phase 3:** Backfill temporal data
@@ -359,7 +359,7 @@ WHERE json_type(properties, '$.allergies') = 'array'
 
 ```python
 # tests/k0/drivers/test_sqlite_kg_schema.py
-import pytest
+import ward
 from k0.drivers.sqlite_kg import SQLiteKGDriver
 
 async def test_insert_node_valid_entity_type():
@@ -373,7 +373,7 @@ async def test_insert_node_valid_entity_type():
 
 async def test_insert_node_invalid_entity_type():
     driver = SQLiteKGDriver(":memory:")
-    with pytest.raises(ValueError, match="Invalid entity_type"):
+    with ward.raises(ValueError, match="Invalid entity_type"):
         await driver.insert_node(
             entity_type="InvalidType",
             label="Alice",
@@ -408,7 +408,7 @@ async def test_temporal_edge_versioning():
 
 ```python
 # tests/k0/drivers/test_sqlite_kg_performance.py
-import pytest
+import ward
 import time
 
 async def test_entity_lookup_performance():
@@ -451,7 +451,7 @@ async def test_relationship_query_performance():
 **Related ADRs:**
 - ADR-0081: K0 Knowledge Graph Architecture (parent)
 - ADR-0081b: Query API & Traversal Algorithms
-- ADR-0081c: Episodic Memory → KG Integration
+- ADR-0081c: Episodic Memory â†’ KG Integration
 
 **Implementation Files:**
 - `k0/drivers/sqlite_kg.py`: SQLiteKGDriver with schema creation
@@ -466,3 +466,4 @@ async def test_relationship_query_performance():
 2. Create Pydantic models for validation
 3. Write schema validation tests
 4. Write performance tests
+

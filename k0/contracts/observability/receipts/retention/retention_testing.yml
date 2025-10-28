@@ -1,4 +1,4 @@
-classes:
+﻿classes:
   - name: RetentionTesting
     description: Comprehensive test suite for retention policies, auto-deletion, and compliance
     research: ADR-0038c (retention testing), Ward testing framework, GDPR compliance testing
@@ -320,7 +320,7 @@ classes:
                 }).collect()
             }
           python: |
-            import pytest
+            import ward
             from datetime import datetime, timedelta, timezone
             from typing import List, Dict, Any
             import asyncio
@@ -328,7 +328,7 @@ classes:
             class TestRetentionPolicyEngine:
                 """Test retention policy engine functionality"""
 
-                @pytest.fixture
+                @ward.fixture
                 async def test_db(self):
                     """Create isolated test database"""
                     db = TestDatabase()
@@ -336,12 +336,12 @@ classes:
                     yield db
                     await db.teardown()
 
-                @pytest.fixture
+                @ward.fixture
                 async def retention_engine(self, test_db):
                     """Create retention policy engine with test database"""
                     return RetentionPolicyEngine(test_db.connection)
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_green_band_retention(self, retention_engine, test_db):
                     """Test GREEN band retention policy (365 days)"""
                     user_id = "test_user_green"
@@ -360,7 +360,7 @@ classes:
                     remaining = await test_db.count_receipts(user_id)
                     assert remaining == 100
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_amber_band_retention(self, retention_engine, test_db):
                     """Test AMBER band retention policy (180 days)"""
                     user_id = "test_user_amber"
@@ -378,7 +378,7 @@ classes:
                     remaining = await test_db.count_receipts(user_id)
                     assert remaining == 0
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_red_band_retention(self, retention_engine, test_db):
                     """Test RED band retention policy (90 days)"""
                     user_id = "test_user_red"
@@ -395,7 +395,7 @@ classes:
                     remaining = await test_db.count_receipts(user_id)
                     assert remaining == 0
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_grace_period_respected(self, retention_engine, test_db):
                     """Test that grace period prevents premature deletion"""
                     user_id = "test_user_grace"
@@ -415,7 +415,7 @@ classes:
                     result = await retention_engine.execute_retention("GREEN", dry_run=False)
                     assert result.receipts_deleted == 10
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_mixed_bands_isolation(self, retention_engine, test_db):
                     """Test that retention policies don't affect other bands"""
                     # Insert receipts for all bands
@@ -440,7 +440,7 @@ classes:
                     assert green_remaining == 30
                     assert amber_remaining == 20
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_deletion_audit_trail(self, retention_engine, test_db):
                     """Test that deletions are properly audited"""
                     user_id = "test_user_audit"
@@ -463,12 +463,12 @@ classes:
             class TestComplianceReporting:
                 """Test GDPR compliance export functionality"""
 
-                @pytest.fixture
+                @ward.fixture
                 async def compliance_reporting(self, test_db):
                     """Create compliance reporting instance"""
                     return ComplianceReporting(test_db.connection, MockObservability())
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_export_completeness(self, compliance_reporting, test_db):
                     """Test that export includes all user receipts"""
                     user_id = "test_user_export"
@@ -488,7 +488,7 @@ classes:
                     receipt_ids = {r.receipt_id for r in export_result.receipts}
                     assert len(receipt_ids) == 20
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_privacy_redaction_green(self, compliance_reporting, test_db):
                     """Test GREEN band privacy redaction"""
                     user_id = "test_user_green_redaction"
@@ -507,7 +507,7 @@ classes:
                         assert "email" in receipt.data
                         assert "phone" in receipt.data
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_privacy_redaction_amber(self, compliance_reporting, test_db):
                     """Test AMBER band privacy redaction"""
                     user_id = "test_user_amber_redaction"
@@ -527,7 +527,7 @@ classes:
                         assert "email" not in receipt.data
                         assert "phone" not in receipt.data
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_privacy_redaction_red(self, compliance_reporting, test_db):
                     """Test RED band privacy redaction"""
                     user_id = "test_user_red_redaction"
@@ -545,7 +545,7 @@ classes:
                         # Verify all sensitive data is removed/sanitized
                         assert len(receipt.data) == 0 or "sanitized" in str(receipt.data)
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_hash_chain_verification(self, compliance_reporting, test_db):
                     """Test hash chain integrity verification"""
                     user_id = "test_user_hash"
@@ -562,7 +562,7 @@ classes:
                         assert receipt.hash_chain.chain_verified
                         assert receipt.hash_chain.current_hash
 
-                @pytest.mark.asyncio
+                @ward.mark.asyncio
                 async def test_export_audit_trail(self, compliance_reporting, test_db):
                     """Test that exports are properly audited"""
                     user_id = "test_user_audit_export"
@@ -634,10 +634,10 @@ classes:
     dependencies:
       - name: ward
         description: Testing framework for comprehensive test suites
-      - name: pytest
+      - name: ward
         description: Python testing framework with async support
-      - name: pytest-asyncio
-        description: Async test support for pytest
+      - name: ward-asyncio
+        description: Async test support for ward
       - name: faker
         description: Fake data generation for test receipts
 
@@ -671,5 +671,6 @@ test_coverage_requirements:
 compliance:
   - gdpr: Article 25 (data protection by design and by default)
   - gdpr: Article 30 (records of processing activities)
-  - hipaa: § 164.308(a)(1)(ii)(D) (information access management)
+  - hipaa: Â§ 164.308(a)(1)(ii)(D) (information access management)
   - soc2: CC7.1 (access to systems and data)
+

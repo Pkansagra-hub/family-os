@@ -1,4 +1,4 @@
-# Contract Testing Framework
+﻿# Contract Testing Framework
 
 **Source ADR:** ADR-0013d (Contract Testing & Compatibility Validation)
 
@@ -21,28 +21,28 @@ Consumer-driven contract testing ensures:
 
 ```
 testing/
-├── README.md                    # This file
-├── consumer_contracts/          # Consumer-defined expectations
-│   ├── agent_state_v1.0.0.yaml
-│   ├── agent_state_v1.1.0.yaml
-│   ├── recall_request_v2.0.0.yaml
-│   ├── recall_request_v2.1.0.yaml
-│   └── ... (76 schemas × 3-5 versions each)
-├── provider_contracts/          # Provider schema definitions
-│   ├── agent_state_v1.0.0.fbs
-│   ├── agent_state_v1.1.0.fbs
-│   ├── recall_request_v2.0.0.fbs
-│   ├── recall_request_v2.1.0.fbs
-│   └── ... (matching versions)
-├── compatibility_matrix/        # Test results & compatibility reports
-│   ├── agent_state_matrix.yaml
-│   ├── recall_request_matrix.yaml
-│   └── ... (one per schema)
-├── test_contract.py             # Contract testing framework
-├── test_forward_compat.py       # Forward compatibility tests
-├── test_backward_compat.py      # Backward compatibility tests
-├── test_multi_version.py        # Multi-version matrix tests
-└── ci_contract_tests.sh         # CI/CD integration script
+â”œâ”€â”€ README.md                    # This file
+â”œâ”€â”€ consumer_contracts/          # Consumer-defined expectations
+â”‚   â”œâ”€â”€ agent_state_v1.0.0.yaml
+â”‚   â”œâ”€â”€ agent_state_v1.1.0.yaml
+â”‚   â”œâ”€â”€ recall_request_v2.0.0.yaml
+â”‚   â”œâ”€â”€ recall_request_v2.1.0.yaml
+â”‚   â””â”€â”€ ... (76 schemas Ã— 3-5 versions each)
+â”œâ”€â”€ provider_contracts/          # Provider schema definitions
+â”‚   â”œâ”€â”€ agent_state_v1.0.0.fbs
+â”‚   â”œâ”€â”€ agent_state_v1.1.0.fbs
+â”‚   â”œâ”€â”€ recall_request_v2.0.0.fbs
+â”‚   â”œâ”€â”€ recall_request_v2.1.0.fbs
+â”‚   â””â”€â”€ ... (matching versions)
+â”œâ”€â”€ compatibility_matrix/        # Test results & compatibility reports
+â”‚   â”œâ”€â”€ agent_state_matrix.yaml
+â”‚   â”œâ”€â”€ recall_request_matrix.yaml
+â”‚   â””â”€â”€ ... (one per schema)
+â”œâ”€â”€ test_contract.py             # Contract testing framework
+â”œâ”€â”€ test_forward_compat.py       # Forward compatibility tests
+â”œâ”€â”€ test_backward_compat.py      # Backward compatibility tests
+â”œâ”€â”€ test_multi_version.py        # Multi-version matrix tests
+â””â”€â”€ ci_contract_tests.sh         # CI/CD integration script
 ```
 
 ## Contract Testing Workflow
@@ -296,7 +296,7 @@ class ContractTest:
         for field, expected_type in self.contract['expectations']['type_expectations'].items():
             provider_type = self._get_field_type(provider_schema, field)
             if provider_type and provider_type != expected_type:
-                breaking_changes.append(f"Type changed: {field} ({expected_type} → {provider_type})")
+                breaking_changes.append(f"Type changed: {field} ({expected_type} â†’ {provider_type})")
 
         return len(breaking_changes) > 0, breaking_changes
 
@@ -369,7 +369,7 @@ versions:
     deprecated: false
 
 compatibility_matrix:
-  # Format: consumer_version → provider_version → compatible
+  # Format: consumer_version â†’ provider_version â†’ compatible
 
   "1.0.0":
     "1.0.0": COMPATIBLE  # Same version
@@ -397,7 +397,7 @@ compatibility_matrix:
 
 test_results:
   last_run: "2025-10-13T10:30:00Z"
-  total_tests: 16  # 4 versions × 4 versions
+  total_tests: 16  # 4 versions Ã— 4 versions
   passed: 10
   failed: 6
   duration_seconds: 45
@@ -481,7 +481,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install flatbuffers pyyaml pytest
+          pip install flatbuffers pyyaml ward
 
       - name: Run contract tests
         run: |
@@ -635,3 +635,4 @@ alerts:
 **Contract Coverage:** 0/76 schemas (0%) - Implementation pending
 **CI/CD Status:** Not yet integrated
 **Test Framework:** Python-based, Pact-style consumer-driven contracts
+

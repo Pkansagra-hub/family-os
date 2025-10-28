@@ -1,4 +1,4 @@
-# ADR-0081d: Knowledge Graph Visualization & Debugging Tools
+﻿# ADR-0081d: Knowledge Graph Visualization & Debugging Tools
 
 **Status:** Proposed
 **Date:** 2025-10-22
@@ -302,11 +302,11 @@ def _escape_xml(text: str) -> str:
 ```bash
 # After exporting GraphML
 1. Open Gephi
-2. File → Open → Select family_graph.graphml
-3. Layout → ForceAtlas 2 (for automatic graph layout)
-4. Analyze → Network Diameter (for graph analysis)
-5. Visualize → Node color by entity_type
-6. Export → PNG/PDF for presentations
+2. File â†’ Open â†’ Select family_graph.graphml
+3. Layout â†’ ForceAtlas 2 (for automatic graph layout)
+4. Analyze â†’ Network Diameter (for graph analysis)
+5. Visualize â†’ Node color by entity_type
+6. Export â†’ PNG/PDF for presentations
 ```
 
 ### 3. JSON Export (Programmatic Access)
@@ -416,30 +416,30 @@ def launch_debug_ui(kg_driver: SQLiteKGDriver, port: int = 8765):
 **Screenshot (Conceptual):**
 
 ```
-╔═══════════════════════════════════════════════════════════════╗
-║  K0 Knowledge Graph Debug UI                                  ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Search: [Alice________________]  [Search] [Clear]            ║
-╠═══════════════════════════════════════════════════════════════╣
-║  Entity: Alice (Person)                                       ║
-║  ┌───────────────────────────────────────────────────────┐   ║
-║  │  Properties:                                           │   ║
-║  │  - age: 30                                             │   ║
-║  │  - diet: vegetarian                                    │   ║
-║  │  - city: Seattle                                       │   ║
-║  └───────────────────────────────────────────────────────┘   ║
-║                                                                ║
-║  Relationships:                                                ║
-║  ┌───────────────────────────────────────────────────────┐   ║
-║  │  sister_of → Mom (conf: 1.0)                          │   ║
-║  │  married_to → Bob (since 2020-06-15, conf: 1.0)       │   ║
-║  │  employed_by → Microsoft (2018-2023, conf: 0.95)      │   ║
-║  │  employed_by → Google (2023-present, conf: 1.0)       │   ║
-║  │  lives_in → Seattle (since 2018, conf: 0.9)           │   ║
-║  └───────────────────────────────────────────────────────┘   ║
-║                                                                ║
-║  [Export Mermaid] [Export GraphML] [View Timeline]            ║
-╚═══════════════════════════════════════════════════════════════╝
+â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—
+â•‘  K0 Knowledge Graph Debug UI                                  â•‘
+â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
+â•‘  Search: [Alice________________]  [Search] [Clear]            â•‘
+â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£
+â•‘  Entity: Alice (Person)                                       â•‘
+â•‘  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â•‘
+â•‘  â”‚  Properties:                                           â”‚   â•‘
+â•‘  â”‚  - age: 30                                             â”‚   â•‘
+â•‘  â”‚  - diet: vegetarian                                    â”‚   â•‘
+â•‘  â”‚  - city: Seattle                                       â”‚   â•‘
+â•‘  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â•‘
+â•‘                                                                â•‘
+â•‘  Relationships:                                                â•‘
+â•‘  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â•‘
+â•‘  â”‚  sister_of â†’ Mom (conf: 1.0)                          â”‚   â•‘
+â•‘  â”‚  married_to â†’ Bob (since 2020-06-15, conf: 1.0)       â”‚   â•‘
+â•‘  â”‚  employed_by â†’ Microsoft (2018-2023, conf: 0.95)      â”‚   â•‘
+â•‘  â”‚  employed_by â†’ Google (2023-present, conf: 1.0)       â”‚   â•‘
+â•‘  â”‚  lives_in â†’ Seattle (since 2018, conf: 0.9)           â”‚   â•‘
+â•‘  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â•‘
+â•‘                                                                â•‘
+â•‘  [Export Mermaid] [Export GraphML] [View Timeline]            â•‘
+â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 ```
 
 ### 5. Metrics Dashboard
@@ -518,45 +518,45 @@ async def update_kg_metrics(kg_driver: SQLiteKGDriver):
 **Grafana Dashboard (Conceptual):**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  K0 Knowledge Graph Metrics                                 │
-├─────────────────────────────────────────────────────────────┤
-│  Nodes: 1,234  |  Edges: 4,567  |  Queries/min: 45          │
-├─────────────────────────────────────────────────────────────┤
-│  Node Distribution                                          │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Person:        523 (42%)                            │  │
-│  │  Location:      312 (25%)                            │  │
-│  │  Organization:  189 (15%)                            │  │
-│  │  Event:         145 (12%)                            │  │
-│  │  Thing:          65 (5%)                             │  │
-│  └──────────────────────────────────────────────────────┘  │
-├─────────────────────────────────────────────────────────────┤
-│  Query Latency (P95)                                        │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │  Entity Lookup:        8ms  (target: 10ms)  ✅       │  │
-│  │  Relationship Query:  45ms  (target: 50ms)  ✅       │  │
-│  │  Shortest Path:       92ms  (target: 100ms) ✅       │  │
-│  │  Consolidation:      420ms  (target: 500ms) ✅       │  │
-│  └──────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚  K0 Knowledge Graph Metrics                                 â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚  Nodes: 1,234  |  Edges: 4,567  |  Queries/min: 45          â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚  Node Distribution                                          â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  Person:        523 (42%)                            â”‚  â”‚
+â”‚  â”‚  Location:      312 (25%)                            â”‚  â”‚
+â”‚  â”‚  Organization:  189 (15%)                            â”‚  â”‚
+â”‚  â”‚  Event:         145 (12%)                            â”‚  â”‚
+â”‚  â”‚  Thing:          65 (5%)                             â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚  Query Latency (P95)                                        â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  Entity Lookup:        8ms  (target: 10ms)  âœ…       â”‚  â”‚
+â”‚  â”‚  Relationship Query:  45ms  (target: 50ms)  âœ…       â”‚  â”‚
+â”‚  â”‚  Shortest Path:       92ms  (target: 100ms) âœ…       â”‚  â”‚
+â”‚  â”‚  Consolidation:      420ms  (target: 500ms) âœ…       â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ## Consequences
 
 ### Positive
 
-1. **✅ Visual Debugging:** Mermaid diagrams for quick visualization
-2. **✅ External Tool Integration:** GraphML export for advanced analysis (Gephi, Cytoscape)
-3. **✅ Development UI:** Web-based UI for debugging and testing
-4. **✅ Metrics Monitoring:** Prometheus metrics for production monitoring
-5. **✅ Documentation:** Mermaid diagrams for architecture documentation
+1. **âœ… Visual Debugging:** Mermaid diagrams for quick visualization
+2. **âœ… External Tool Integration:** GraphML export for advanced analysis (Gephi, Cytoscape)
+3. **âœ… Development UI:** Web-based UI for debugging and testing
+4. **âœ… Metrics Monitoring:** Prometheus metrics for production monitoring
+5. **âœ… Documentation:** Mermaid diagrams for architecture documentation
 
 ### Negative
 
-1. **❌ Export Performance:** Large graphs (10000+ edges) may be slow to export
-2. **❌ UI Complexity:** Debugging UI requires maintenance and security
-3. **❌ Metrics Overhead:** Collecting metrics adds latency (~5ms per query)
+1. **âŒ Export Performance:** Large graphs (10000+ edges) may be slow to export
+2. **âŒ UI Complexity:** Debugging UI requires maintenance and security
+3. **âŒ Metrics Overhead:** Collecting metrics adds latency (~5ms per query)
 
 ### Mitigations
 
@@ -579,17 +579,17 @@ prometheus-client>=0.19.0
 
 ```
 k0/kg/debug_ui/static/
-├── index.html         # Main UI
-├── styles.css         # Styling
-├── app.js             # JavaScript (D3.js for graph visualization)
-└── d3.v7.min.js       # D3.js library
+â”œâ”€â”€ index.html         # Main UI
+â”œâ”€â”€ styles.css         # Styling
+â”œâ”€â”€ app.js             # JavaScript (D3.js for graph visualization)
+â””â”€â”€ d3.v7.min.js       # D3.js library
 ```
 
 ### Testing Strategy
 
 ```python
 # tests/k0/kg/test_visualization.py
-import pytest
+import ward
 from k0.kg.visualization import export_to_mermaid, export_to_graphml
 
 async def test_export_mermaid():
@@ -682,7 +682,7 @@ launch_debug_ui(kg_driver, port=8765)
 - ADR-0081: K0 Knowledge Graph Architecture (parent)
 - ADR-0081a: Temporal Graph Schema Design
 - ADR-0081b: Query API & Traversal Algorithms
-- ADR-0081c: Episodic Memory → KG Integration
+- ADR-0081c: Episodic Memory â†’ KG Integration
 
 **Implementation Files:**
 - `k0/kg/visualization.py`: Mermaid, GraphML, JSON export
@@ -699,3 +699,4 @@ launch_debug_ui(kg_driver, port=8765)
 4. Implement metrics collection
 5. Write visualization tests
 6. Create Grafana dashboard
+

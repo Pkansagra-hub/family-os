@@ -1,4 +1,4 @@
-# ADR-0053a: Coalesce Window & Limits
+﻿# ADR-0053a: Coalesce Window & Limits
 
 **Status:** Accepted
 **Date:** 2025-10-14
@@ -27,12 +27,12 @@ When users interact rapidly with conversational AI, messages arrive as fragments
 **Example Fragmentation:**
 ```
 Without coalescing:
-  User: "What's" → System processes → "I need more information"
-  User: "the weather" → System processes → "Which location?"
-  User: "in Seattle?" → System processes → "Checking weather..."
+  User: "What's" â†’ System processes â†’ "I need more information"
+  User: "the weather" â†’ System processes â†’ "Which location?"
+  User: "in Seattle?" â†’ System processes â†’ "Checking weather..."
 
 With coalescing (2s window):
-  User: "What's the weather in Seattle?" → System processes once → "It's 72°F and sunny in Seattle"
+  User: "What's the weather in Seattle?" â†’ System processes once â†’ "It's 72Â°F and sunny in Seattle"
 ```
 
 ### Research Foundation
@@ -134,12 +134,12 @@ class CoalesceTimer:
 - Counter resets after processing
 
 **Trade-off:**
-- Small limit (e.g., 3) → premature processing, less efficiency
-- Large limit (e.g., 10) → memory pressure, delayed responses
+- Small limit (e.g., 3) â†’ premature processing, less efficiency
+- Large limit (e.g., 10) â†’ memory pressure, delayed responses
 
 **Justification for 5:**
 - Average user utterance is 5-10 words
-- 5 messages ≈ 2-3 second typing window at 40 WPM
+- 5 messages â‰ˆ 2-3 second typing window at 40 WPM
 - Keeps memory overhead <5KB per session
 
 ### 3. Bypass Conditions
@@ -148,7 +148,7 @@ class CoalesceTimer:
 
 **Condition A: RED Band Messages**
 - Purpose: Safety-critical actions must not be delayed
-- Example: "Delete all my data" → immediate two-person approval flow
+- Example: "Delete all my data" â†’ immediate two-person approval flow
 - Integration: Privacy band check at ingress (ADR-0032-0038)
 
 **Condition B: Explicit Submit**
@@ -158,12 +158,12 @@ class CoalesceTimer:
 
 **Condition C: Context Switch Detected**
 - Purpose: User changes topic mid-coalescing window
-- Example: "What's the weather" → "Actually, never mind, set a timer"
+- Example: "What's the weather" â†’ "Actually, never mind, set a timer"
 - Integration: Intent drift detection (ADR-0055a)
 
 **Condition D: Voice Input**
 - Purpose: ASR already coalesces audio frames
-- Example: Continuous speech → single transcript after VAD silence
+- Example: Continuous speech â†’ single transcript after VAD silence
 - Integration: Voice pipeline bypasses text coalescing (ADR-0056a)
 
 ### 4. Coalescing Algorithm
@@ -266,44 +266,44 @@ class MessageCoalescer:
 
 ### Positive Consequences
 
-✅ **Reduced LLM Inference Calls:**
-- Coalesce 4 fragments → 1 LLM call
+âœ… **Reduced LLM Inference Calls:**
+- Coalesce 4 fragments â†’ 1 LLM call
 - Estimated 40% reduction in inference requests
-- Lower infrastructure costs (~$0.002/1K tokens × 40% = $0.0008 savings per turn)
+- Lower infrastructure costs (~$0.002/1K tokens Ã— 40% = $0.0008 savings per turn)
 
-✅ **Improved Intent Classification:**
-- Complete utterances → confidence scores increase from 0.6 to 0.85
-- Fewer clarifications (25% → 15% reduction)
+âœ… **Improved Intent Classification:**
+- Complete utterances â†’ confidence scores increase from 0.6 to 0.85
+- Fewer clarifications (25% â†’ 15% reduction)
 - Better user experience (fewer "I didn't understand" responses)
 
-✅ **Lower Latency (Perceived):**
-- User waits 2s for complete response vs 0.5s × 4 partial responses
-- Total time: 2s + 1s processing = 3s vs 4 × (0.5s + 1s) = 6s
+âœ… **Lower Latency (Perceived):**
+- User waits 2s for complete response vs 0.5s Ã— 4 partial responses
+- Total time: 2s + 1s processing = 3s vs 4 Ã— (0.5s + 1s) = 6s
 - 50% latency reduction for fragmented inputs
 
-✅ **Memory Efficiency:**
-- Bounded queue (max 5 messages × ~500 bytes = 2.5KB per session)
+âœ… **Memory Efficiency:**
+- Bounded queue (max 5 messages Ã— ~500 bytes = 2.5KB per session)
 - Queue cleared after processing (no memory leaks)
 - Prometheus metric tracks queue depth
 
 ### Negative Consequences
 
-⚠️ **Delayed Processing for Slow Typers:**
+âš ï¸ **Delayed Processing for Slow Typers:**
 - Users typing <1 word/second may perceive lag
 - **Mitigation**: 2s window is below perception threshold (<3s)
 - **Future work**: Adaptive windows per user typing speed
 
-⚠️ **Complexity in Bypass Logic:**
+âš ï¸ **Complexity in Bypass Logic:**
 - 4 bypass conditions add branching complexity
 - **Mitigation**: Unit tests for each bypass condition
 - **Monitoring**: Track bypass rate (should be <10%)
 
-⚠️ **Race Conditions with Cancellation:**
+âš ï¸ **Race Conditions with Cancellation:**
 - Timer expiration vs cancellation signal timing
 - **Mitigation**: Atomic queue operations with locks
 - **Testing**: Fuzz testing with random timing
 
-⚠️ **Coordination with Turn Boundaries:**
+âš ï¸ **Coordination with Turn Boundaries:**
 - Coalesce window (2s) matches implicit turn boundary (2s)
 - **Risk**: Conflicting signals if timers misaligned
 - **Mitigation**: Share timer infrastructure between coalescing and turn detection
@@ -363,9 +363,9 @@ class MessageCoalescer:
 ```
 
 **Tests:**
-- Enqueue 3 messages in 1s → flush after 2s idle
-- Enqueue 5 messages in 0.5s → flush immediately
-- Enqueue 1 message → flush after 2s (no coalescing benefit)
+- Enqueue 3 messages in 1s â†’ flush after 2s idle
+- Enqueue 5 messages in 0.5s â†’ flush immediately
+- Enqueue 1 message â†’ flush after 2s (no coalescing benefit)
 
 ### Phase 2: Bypass Logic (Day 3-4)
 
@@ -418,9 +418,9 @@ def enqueue(self, msg):
 
 **Tests:**
 - Empty message rejected at ingress
-- Single message in queue → flush after 2s
-- Context switch → context switch → both processed separately
-- Cancellation during coalescing → queue cleared
+- Single message in queue â†’ flush after 2s
+- Context switch â†’ context switch â†’ both processed separately
+- Cancellation during coalescing â†’ queue cleared
 
 ### Phase 4: Metrics & Monitoring (Day 7)
 
@@ -458,10 +458,10 @@ logger.info(
 - Context switch detection (ADR-0055a)
 
 **Test Scenarios:**
-- Fragmented typing → coalescing → intent classification
-- RED band message → bypass → two-person approval
-- Explicit submit → immediate flush → response
-- Context switch → separate processing → new turn
+- Fragmented typing â†’ coalescing â†’ intent classification
+- RED band message â†’ bypass â†’ two-person approval
+- Explicit submit â†’ immediate flush â†’ response
+- Context switch â†’ separate processing â†’ new turn
 
 ---
 
@@ -470,9 +470,9 @@ logger.info(
 ### Performance Targets
 
 **Coalescing Efficiency:**
-- **Target**: ≥30% of messages coalesced (baseline: 40% fragmentation rate)
+- **Target**: â‰¥30% of messages coalesced (baseline: 40% fragmentation rate)
 - **Measurement**: `messages_coalesced / total_messages`
-- **Success**: If ratio ≥30%, coalescing provides value
+- **Success**: If ratio â‰¥30%, coalescing provides value
 
 **Window Duration:**
 - **Target**: Average window 1.2s (below 2s limit)
@@ -589,7 +589,7 @@ async def test_empty_message():
     coalescer = MessageCoalescer()
 
     # Attempt to enqueue empty message
-    with pytest.raises(ValueError, match="Empty message"):
+    with ward.raises(ValueError, match="Empty message"):
         await coalescer.enqueue(Message(text=""))
 
     assert len(coalescer.queue) == 0
@@ -703,7 +703,7 @@ logger.info(
 
 **Panel 1: Coalescing Efficiency**
 - Metric: `rate(messages_coalesced_total[5m]) / rate(messages_total[5m])`
-- Target: ≥30%
+- Target: â‰¥30%
 - Alert: If <20% for >10 minutes
 
 **Panel 2: Window Duration Distribution**
@@ -735,7 +735,7 @@ logger.info(
 - Monitor metrics (efficiency, latency, bypass rate)
 - Watch for regressions (error rate, user complaints)
 
-### Week 3-4: Gradual Rollout (25% → 50% → 100%)
+### Week 3-4: Gradual Rollout (25% â†’ 50% â†’ 100%)
 - Increase traffic gradually
 - 72-hour soak at each stage
 - Roll back if efficiency <20% or error rate >0.5%
@@ -776,7 +776,7 @@ logger.info(
 
 ### Related ADRs
 - ADR-0053: Message Queue & Coalescing (parent)
-- ADR-0054a: Implicit Pause ≥2s (turn boundary coordination)
+- ADR-0054a: Implicit Pause â‰¥2s (turn boundary coordination)
 - ADR-0055a: Intent Drift Rules (context switch detection)
 - ADR-0015: WebSocket Protocol (message ingress)
 
@@ -787,8 +787,8 @@ logger.info(
 
 ---
 
-**Document Status:** ✅ Complete and ready for review
-**Estimated Lines:** 780 lines (target: 700 lines) ✅
+**Document Status:** âœ… Complete and ready for review
+**Estimated Lines:** 780 lines (target: 700 lines) âœ…
 **Next Steps:** Create ADR-0053b (Rate Limits & Bursts)
 **Review Checklist:**
 - [ ] Architecture team review
@@ -796,3 +796,4 @@ logger.info(
 - [ ] Performance targets feasible (30% efficiency)
 - [ ] Test coverage complete
 - [ ] Monitoring plan approved
+

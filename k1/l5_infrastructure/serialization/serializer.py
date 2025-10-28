@@ -1,21 +1,21 @@
-"""
-FlatBuffers Serializer - Python Objects → FlatBuffers Binary
+﻿"""
+FlatBuffers Serializer - Python Objects â†’ FlatBuffers Binary
 
 Layer: L5 Infrastructure
 Component: Serialization (Core)
 Priority: P0 (Critical Path)
-Status: 🚧 STUB - NEEDS_IMPLEMENTATION
+Status: ðŸš§ STUB - NEEDS_IMPLEMENTATION
 
 Architecture Decision Records:
     - ADR-0011: FlatBuffers for All K1 Serialization
-      * Zero-copy binary serialization for 150× performance improvement vs JSON
+      * Zero-copy binary serialization for 150Ã— performance improvement vs JSON
       * <1ms serialization latency for hot path operations
-      * 3× smaller payload size (64KB FlatBuffers vs 192KB JSON)
+      * 3Ã— smaller payload size (64KB FlatBuffers vs 192KB JSON)
       * Section: "Decision Matrix: Why FlatBuffers Selected"
       * Performance: Serialize <1ms P95, Deserialize <0.1ms P95 (zero-copy)
 
     - ADR-0011c: Serialization Performance & Zero-Copy
-      * Buffer pooling for allocation reuse (1.4× speedup, 200× fewer allocations)
+      * Buffer pooling for allocation reuse (1.4Ã— speedup, 200Ã— fewer allocations)
       * Memory layout optimization (SIMD alignment, string deduplication, padding minimization)
       * Performance targets: SessionState (64KB) <1ms, K0 Event (4KB) <0.5ms, Agent Message (2KB) <0.3ms
       * Section: "Zero-Copy Architecture", "Buffer Pooling", "Performance Benchmarks"
@@ -172,10 +172,10 @@ class SchemaRegistry:
         TODO(@infrastructure-team): Initialize registry data structures
         Assigned to: Issue #L5-3.1.1
         """
-        # Schema registry: {schema_name → SchemaMetadata}
+        # Schema registry: {schema_name â†’ SchemaMetadata}
         self._schemas: Dict[str, SchemaMetadata] = {}
 
-        # File identifier reverse index: {file_id → schema_name}
+        # File identifier reverse index: {file_id â†’ schema_name}
         self._file_id_index: Dict[str, str] = {}
 
         # Stats
@@ -376,9 +376,9 @@ def get_builder(size_hint: int = 256) -> flatbuffers.Builder:
         flatbuffers.Builder instance (reused from pool or newly created)
 
     Performance:
-        - Buffer pooling: 1.4× speedup vs no pooling
-        - Allocation reduction: 200× fewer allocations
-        - GC pause reduction: 7.5× fewer pauses
+        - Buffer pooling: 1.4Ã— speedup vs no pooling
+        - Allocation reduction: 200Ã— fewer allocations
+        - GC pause reduction: 7.5Ã— fewer pauses
 
     Size Classes:
         - 256B: Small messages (agent metadata, tool calls)
@@ -490,7 +490,7 @@ def get_pool_stats() -> Dict[str, Any]:
 
 class Serializer:
     """
-    FlatBuffers Serializer: Python objects → FlatBuffers binary
+    FlatBuffers Serializer: Python objects â†’ FlatBuffers binary
 
     Responsibilities:
         1. Convert Python objects to FlatBuffers builder
@@ -745,14 +745,14 @@ __all__ = [
 #   - Test: buffer pooling (hit rate, memory limits, eviction)
 #   - Test: performance budgets (SessionState <1ms, K0 Event <0.5ms, Agent Message <0.3ms)
 #   - Test: batch serialization (100 objects <80ms, string deduplication)
-#   - Test: deterministic serialization (same input → same output)
+#   - Test: deterministic serialization (same input â†’ same output)
 #   - Test: error handling (invalid schema, type mismatch, missing fields)
 #
 # Benchmark tests required:
-#   - pytest-benchmark for performance validation
+#   - ward-benchmark for performance validation
 #   - Measure serialization latency (P50/P95/P99)
 #   - Measure buffer pool hit rate (target >80%)
-#   - Compare with JSON baseline (expected 48× faster)
+#   - Compare with JSON baseline (expected 48Ã— faster)
 #
 # No simulation code allowed:
 #   - Use real FlatBuffers schemas from k1/contracts/flatbuffers/
@@ -760,3 +760,4 @@ __all__ = [
 #   - Integration tests > unit tests
 #
 # =============================================================================
+

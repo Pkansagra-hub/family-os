@@ -1,4 +1,4 @@
-# ADR-0053c: Cancel Path P95 ≤120ms
+﻿# ADR-0053c: Cancel Path P95 â‰¤120ms
 
 **Status:** Accepted
 **Date:** 2025-10-14
@@ -21,22 +21,22 @@
 
 Users expect immediate response when they change their mind or interrupt the system:
 
-1. **User Starts New Query**: "What's the weather?" → "Actually, set a timer for 5 minutes"
+1. **User Starts New Query**: "What's the weather?" â†’ "Actually, set a timer for 5 minutes"
 2. **Voice Barge-In**: User starts speaking while agent is still responding
 3. **Explicit Stop**: User clicks "Stop" button while agent generates response
 4. **Context Switch**: User changes topic mid-conversation
 
 **Without Fast Cancellation:**
-- ❌ System continues processing obsolete request (wasted compute)
-- ❌ User waits for old response to complete before new request starts
-- ❌ Voice UX feels sluggish (barge-in latency >500ms)
-- ❌ Resources (KV cache, tool processes) not released promptly
+- âŒ System continues processing obsolete request (wasted compute)
+- âŒ User waits for old response to complete before new request starts
+- âŒ Voice UX feels sluggish (barge-in latency >500ms)
+- âŒ Resources (KV cache, tool processes) not released promptly
 
-**With Fast Cancellation (≤120ms P95):**
-- ✅ User feels in control (responsive UX)
-- ✅ System stops wasted computation immediately
-- ✅ Voice barge-in feels natural (<150ms perception threshold)
-- ✅ Resources freed for new request
+**With Fast Cancellation (â‰¤120ms P95):**
+- âœ… User feels in control (responsive UX)
+- âœ… System stops wasted computation immediately
+- âœ… Voice barge-in feels natural (<150ms perception threshold)
+- âœ… Resources freed for new request
 
 ### Research Foundation
 
@@ -47,9 +47,9 @@ Users expect immediate response when they change their mind or interrupt the sys
 - **>1000ms**: Slow response (user frustration)
 
 **Target: 120ms P95** falls in "fast response" range, balancing:
-- ✅ Achievable with careful optimization
-- ✅ Below voice barge-in threshold (150ms)
-- ✅ Responsive enough for interactive UX
+- âœ… Achievable with careful optimization
+- âœ… Below voice barge-in threshold (150ms)
+- âœ… Responsive enough for interactive UX
 
 **Voice Barge-In Research:**
 - **Conversational AI Studies**: Users expect barge-in latency <150ms
@@ -60,7 +60,7 @@ Users expect immediate response when they change their mind or interrupt the sys
 - **Go context.Context**: Propagate cancellation tokens through call stack
 - **Rust tokio**: Cooperative cancellation with `select!` macro
 - **gRPC**: Cancellation propagation across RPC boundaries
-- **Kubernetes**: Graceful shutdown with SIGTERM → SIGKILL timeout
+- **Kubernetes**: Graceful shutdown with SIGTERM â†’ SIGKILL timeout
 
 ### Current Situation
 
@@ -88,8 +88,8 @@ Users expect immediate response when they change their mind or interrupt the sys
 - SessionState reflects correct pre-cancellation state
 
 **Performance Requirements:**
-- **P95 latency**: ≤120ms (target)
-- **P99 latency**: ≤200ms (acceptable)
+- **P95 latency**: â‰¤120ms (target)
+- **P99 latency**: â‰¤200ms (acceptable)
 - **Hard timeout**: 250ms (fail-safe)
 
 **Latency Budget Breakdown:**
@@ -161,14 +161,14 @@ class CancellationToken:
 
 **Propagation Flow:**
 ```
-1. WebSocket Ingress → sets token.is_cancelled = True
-2. Message Queue → checks token, clears queue if cancelled
-3. Orchestrator → checks token, aborts agent selection
-4. Planner → checks token, stops plan generation
-5. Model Hub → checks token, aborts LLM inference
-6. Streaming Engine → checks token, stops TTS streaming
-7. Tool Runner → checks token, terminates tool processes
-8. K0 Bridge → checks token, rolls back uncommitted writes
+1. WebSocket Ingress â†’ sets token.is_cancelled = True
+2. Message Queue â†’ checks token, clears queue if cancelled
+3. Orchestrator â†’ checks token, aborts agent selection
+4. Planner â†’ checks token, stops plan generation
+5. Model Hub â†’ checks token, aborts LLM inference
+6. Streaming Engine â†’ checks token, stops TTS streaming
+7. Tool Runner â†’ checks token, terminates tool processes
+8. K0 Bridge â†’ checks token, rolls back uncommitted writes
 ```
 
 **Cooperative Cancellation:**
@@ -278,7 +278,7 @@ Total: 30ms
 **Guarantee 2: Complete Resource Cleanup**
 - **Mechanism**: RAII pattern (Resource Acquisition Is Initialization)
 - **Cleanup Order**:
-  1. Tool processes (SIGTERM → SIGKILL)
+  1. Tool processes (SIGTERM â†’ SIGKILL)
   2. KV cache entries (mark evictable)
   3. SessionState memory (free allocations)
   4. Network connections (close sockets)
@@ -308,7 +308,7 @@ Total: 30ms
 
 **Case 3: Cancellation During Tool Execution**
 - **Detection**: Tool Runner checks token every 100ms
-- **Action**: SIGTERM → wait 50ms → SIGKILL
+- **Action**: SIGTERM â†’ wait 50ms â†’ SIGKILL
 - **Latency**: +50ms (graceful shutdown timeout)
 
 **Case 4: Cancellation After Completion**
@@ -366,44 +366,44 @@ Total: 30ms
 
 ### Positive Consequences
 
-✅ **Responsive UX:**
+âœ… **Responsive UX:**
 - Cancellation completes in 120ms P95 (perceived as instant)
 - User feels in control (can interrupt anytime)
 - Voice barge-in feels natural (<150ms threshold)
 
-✅ **Resource Efficiency:**
+âœ… **Resource Efficiency:**
 - Stop wasted compute immediately
 - Free KV cache for new requests
 - Terminate tool processes (no lingering resources)
 
-✅ **Safety Guarantees:**
+âœ… **Safety Guarantees:**
 - No partial writes to K0 (atomicity)
 - SessionState consistency maintained
 - All resources cleaned up
 
-✅ **Low Overhead:**
+âœ… **Low Overhead:**
 - Token check <1ms per check
 - Cancellation path optimized (no blocking operations)
 - Graceful degradation (hard timeout at 250ms)
 
 ### Negative Consequences
 
-⚠️ **Implementation Complexity:**
+âš ï¸ **Implementation Complexity:**
 - 4-stage cascade requires careful coordination
 - Race conditions possible (token timing)
 - Extensive testing required (many edge cases)
 
-⚠️ **Latency Budget Pressure:**
+âš ï¸ **Latency Budget Pressure:**
 - 120ms budget requires optimization
 - Slow components (K0 rollback) may exceed budget
 - Hard timeout needed (fail-safe at 250ms)
 
-⚠️ **Resource Cleanup Timing:**
+âš ï¸ **Resource Cleanup Timing:**
 - KV cache marked evictable (not deleted immediately)
 - Tool processes may linger (SIGKILL fallback)
 - Memory pressure if cleanup lags
 
-⚠️ **Testing Challenges:**
+âš ï¸ **Testing Challenges:**
 - Race conditions hard to reproduce
 - Timing-sensitive behavior
 - Need fuzz testing for edge cases
@@ -482,7 +482,7 @@ class CancellationToken:
 ```python
 class CancellationManager:
     def __init__(self):
-        self.active_tokens = {}  # session_id → CancellationToken
+        self.active_tokens = {}  # session_id â†’ CancellationToken
 
     def trigger_cancellation(self, session_id, trigger):
         token = CancellationToken(
@@ -658,7 +658,7 @@ async def send_cancellation_ack(session_id, token):
 
 **Deliverables:**
 - End-to-end cancellation scenarios
-- Latency validation (≤120ms P95)
+- Latency validation (â‰¤120ms P95)
 - Edge case handling
 
 **Test Scenarios:**
@@ -676,8 +676,8 @@ async def send_cancellation_ack(session_id, token):
 ### Performance Targets
 
 **Cancellation Latency:**
-- **Target**: P95 ≤120ms
-- **Stretch Goal**: P50 ≤80ms
+- **Target**: P95 â‰¤120ms
+- **Stretch Goal**: P50 â‰¤80ms
 - **Hard Timeout**: 250ms (fail-safe)
 - **Measurement**: Prometheus histogram `cancellation_latency_ms`
 
@@ -735,7 +735,7 @@ async def test_cancel_during_llm():
     cancel_manager.trigger_cancellation("session_1", "explicit_stop")
 
     # Verify cancellation completed
-    with pytest.raises(asyncio.CancelledError):
+    with ward.raises(asyncio.CancelledError):
         await task
 
     # Verify no partial output
@@ -919,7 +919,7 @@ logger.info(
 
 **Panel 1: Cancellation Latency Distribution**
 - Metric: `histogram_quantile(0.95, cancellation_latency_ms)`
-- Target: P95 ≤120ms
+- Target: P95 â‰¤120ms
 - Alert: If P95 >150ms for >5 minutes
 
 **Panel 2: Cancellation Rate by Trigger**
@@ -951,7 +951,7 @@ logger.info(
 - Monitor cancellation latency P95
 - Watch for cancellation failures (target <0.1%)
 
-### Week 3-4: Gradual Rollout (25% → 50% → 100%)
+### Week 3-4: Gradual Rollout (25% â†’ 50% â†’ 100%)
 - Increase traffic gradually
 - 72-hour soak at each stage
 - Roll back if P95 >150ms or failure rate >1%
@@ -1009,9 +1009,9 @@ logger.info(
 
 ---
 
-**Document Status:** ✅ Complete and ready for review
-**Estimated Lines:** 920 lines (target: 900 lines) ✅
-**ADR-0053 Complete:** All sub-ADRs (0053a, 0053b, 0053c) finished ✅
+**Document Status:** âœ… Complete and ready for review
+**Estimated Lines:** 920 lines (target: 900 lines) âœ…
+**ADR-0053 Complete:** All sub-ADRs (0053a, 0053b, 0053c) finished âœ…
 **Next Steps:** Update ADR_IMPLEMENTATION_CHECKLIST.md and begin ADR-0054 (Turn Boundary Management)
 **Review Checklist:**
 - [ ] Architecture team review
@@ -1019,3 +1019,4 @@ logger.info(
 - [ ] Safety guarantees (no partial writes) confirmed
 - [ ] Test coverage complete (edge cases, race conditions)
 - [ ] Monitoring plan approved
+

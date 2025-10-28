@@ -1,6 +1,6 @@
-# ADR-0016c: SSE Topic-Based Filtering & Subscriptions
+﻿# ADR-0016c: SSE Topic-Based Filtering & Subscriptions
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** â³ In Progress (0% - Initial Draft)
 **Date:** 2025-10-12
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0016 (SSE Event Schemas)](0016-sse-event-schemas.md)
@@ -64,11 +64,11 @@ Sending all 17 event types to all clients wastes **bandwidth** (unnecessary even
 
 **Topic Taxonomy (5 Topics):**
 
-1. **agent_lifecycle** → 4 events (agent.hired, agent.fired, agent.crashed, agent.restarted)
-2. **turn_execution** → 4 events (turn.started, turn.completed, turn.failed, turn.interrupted)
-3. **tool_execution** → 4 events (tool.call_started, tool.call_completed, tool.call_failed, tool.approval_required)
-4. **session_lifecycle** → 3 events (session.created, session.terminated, session.crashed)
-5. **system_health** → 2 events (system.heartbeat, system.error)
+1. **agent_lifecycle** â†’ 4 events (agent.hired, agent.fired, agent.crashed, agent.restarted)
+2. **turn_execution** â†’ 4 events (turn.started, turn.completed, turn.failed, turn.interrupted)
+3. **tool_execution** â†’ 4 events (tool.call_started, tool.call_completed, tool.call_failed, tool.approval_required)
+4. **session_lifecycle** â†’ 3 events (session.created, session.terminated, session.crashed)
+5. **system_health** â†’ 2 events (system.heartbeat, system.error)
 
 **Subscription API:**
 
@@ -376,7 +376,7 @@ class EventBus:
         Args:
             event_fb: FlatBuffers EventEnvelope
 
-        Performance: O(N × F) where N = subscribers, F = filter check (<1ms)
+        Performance: O(N Ã— F) where N = subscribers, F = filter check (<1ms)
         """
         # Extract event metadata
         metadata = event_fb.Metadata()
@@ -463,7 +463,7 @@ class EventSubscriber:
 - Error: 320 bytes
 - **Total: ~2.2KB per turn**
 
-**Bandwidth Savings: 66% reduction** (6.5KB → 2.2KB, saved 4.3KB per turn)
+**Bandwidth Savings: 66% reduction** (6.5KB â†’ 2.2KB, saved 4.3KB per turn)
 
 ---
 
@@ -473,11 +473,11 @@ class EventSubscriber:
 
 | Operation | Latency (P95) | Target |
 |-----------|---------------|--------|
-| `should_emit()` (set membership) | 0.08ms | <1ms ✅ |
-| `matches()` (topic + session filter) | 0.12ms | <1ms ✅ |
-| `compute_allowed_events()` (init) | 0.5ms | <5ms ✅ |
+| `should_emit()` (set membership) | 0.08ms | <1ms âœ… |
+| `matches()` (topic + session filter) | 0.12ms | <1ms âœ… |
+| `compute_allowed_events()` (init) | 0.5ms | <5ms âœ… |
 
-**Conclusion:** Topic filtering <1ms per event ✅
+**Conclusion:** Topic filtering <1ms per event âœ…
 
 ---
 
@@ -486,9 +486,9 @@ class EventSubscriber:
 | Subscription | Events/Turn | Bytes/Turn | vs All Events | Savings |
 |--------------|-------------|------------|---------------|---------|
 | **All topics** (default) | 17 | 6500 bytes | 100% | 0% |
-| **agent_lifecycle + system_health** | 6 | 2200 bytes | 34% | **66%** ✅ |
-| **turn_execution only** | 4 | 1550 bytes | 24% | **76%** ✅ |
-| **system_health only** | 2 | 580 bytes | 9% | **91%** ✅ |
+| **agent_lifecycle + system_health** | 6 | 2200 bytes | 34% | **66%** âœ… |
+| **turn_execution only** | 4 | 1550 bytes | 24% | **76%** âœ… |
+| **system_health only** | 2 | 580 bytes | 9% | **91%** âœ… |
 
 **Typical Usage:**
 
@@ -496,7 +496,7 @@ class EventSubscriber:
 - Monitoring scripts: `system_health` only (91% savings)
 - Audit logs: `session_lifecycle + tool_execution` (55% savings)
 
-**Average Bandwidth Savings: ~60-70% for typical clients** ✅
+**Average Bandwidth Savings: ~60-70% for typical clients** âœ…
 
 ---
 
@@ -504,7 +504,7 @@ class EventSubscriber:
 
 | Component | Memory per Connection |
 |-----------|----------------------|
-| TopicFilter (allowed_events set) | 280 bytes (~17 strings × 16 bytes) |
+| TopicFilter (allowed_events set) | 280 bytes (~17 strings Ã— 16 bytes) |
 | EventSubscriber (queue) | 8KB (asyncio.Queue with maxsize=1000) |
 | **Total** | **~8.3KB per connection** |
 
@@ -521,7 +521,7 @@ class EventSubscriber:
 from ward import test
 from k1.sse_gateway.filter import TopicFilter
 
-@test("TopicFilter: subscribe to agent_lifecycle → only agent.* events")
+@test("TopicFilter: subscribe to agent_lifecycle â†’ only agent.* events")
 def _():
     filter = TopicFilter(["agent_lifecycle"])
 
@@ -535,7 +535,7 @@ def _():
     assert filter.should_emit("tool.call_started") == False
     assert filter.should_emit("system.heartbeat") == False
 
-@test("TopicFilter: subscribe to multiple topics → combined events")
+@test("TopicFilter: subscribe to multiple topics â†’ combined events")
 def _():
     filter = TopicFilter(["agent_lifecycle", "system_health"])
 
@@ -548,7 +548,7 @@ def _():
     # Should NOT emit (not subscribed)
     assert filter.should_emit("turn.started") == False
 
-@test("TopicFilter: subscribe to all topics (None) → all events")
+@test("TopicFilter: subscribe to all topics (None) â†’ all events")
 def _():
     filter = TopicFilter(None)
 
@@ -585,7 +585,7 @@ def _():
 ### Integration Tests
 
 ```python
-@test("EventBus: publish event → only matching subscribers receive")
+@test("EventBus: publish event â†’ only matching subscribers receive")
 async def _():
     bus = EventBus()
 
@@ -604,7 +604,7 @@ async def _():
     assert event1 is not None
 
     # Sub2 should NOT receive (system_health, not agent_lifecycle)
-    with pytest.raises(asyncio.TimeoutError):
+    with ward.raises(asyncio.TimeoutError):
         await asyncio.wait_for(sub2.queue.get(), timeout=0.1)
 
 @test("SSE endpoint: topics query parameter filters events")
@@ -634,25 +634,25 @@ async def _():
 
 ### Positive Consequences
 
-#### ✅ **Bandwidth Savings (60-70% for Typical Clients)**
+#### âœ… **Bandwidth Savings (60-70% for Typical Clients)**
 
 - **Benefit:** Clients subscribe to specific topics (not all 17 events), saves bandwidth
-- **Impact:** Admin dashboard with `agent_lifecycle + system_health` saves 66% bandwidth (6.5KB → 2.2KB per turn)
-- **Example:** Monitoring script with `system_health` only saves 91% bandwidth (6.5KB → 580 bytes per turn)
+- **Impact:** Admin dashboard with `agent_lifecycle + system_health` saves 66% bandwidth (6.5KB â†’ 2.2KB per turn)
+- **Example:** Monitoring script with `system_health` only saves 91% bandwidth (6.5KB â†’ 580 bytes per turn)
 
-#### ✅ **Fast Filtering (<1ms per event)**
+#### âœ… **Fast Filtering (<1ms per event)**
 
 - **Benefit:** Set membership test O(1) (not regex parsing)
 - **Impact:** Minimal CPU overhead (filter check <1ms, total event emission <10ms P95)
 - **Example:** Check `"agent.hired" in allowed_events` in 0.08ms
 
-#### ✅ **Simple API (HTTP Query Parameter)**
+#### âœ… **Simple API (HTTP Query Parameter)**
 
 - **Benefit:** No custom subscription protocol (standard HTTP GET with query params)
 - **Impact:** Easy integration (curl, EventSource, Python requests)
 - **Example:** `curl -N http://localhost:8080/sse/events?topics=agent_lifecycle`
 
-#### ✅ **Server-Side Filtering (Client Doesn't Parse Unwanted Events)**
+#### âœ… **Server-Side Filtering (Client Doesn't Parse Unwanted Events)**
 
 - **Benefit:** Server filters before sending (client doesn't receive unwanted events)
 - **Impact:** Reduced client CPU (no JSON parsing for filtered events)
@@ -662,19 +662,19 @@ async def _():
 
 ### Negative Consequences
 
-#### ❌ **Static Topic Mapping (Must Update When Adding Events)**
+#### âŒ **Static Topic Mapping (Must Update When Adding Events)**
 
 - **Cost:** New event types require updating TOPIC_TO_EVENTS mapping
 - **Mitigation:** Automated tests (fail if event type not in any topic)
 - **Impact:** ~15 minutes maintenance per new event type
 
-#### ❌ **No Wildcard Support (Can't Subscribe to "agent.*")**
+#### âŒ **No Wildcard Support (Can't Subscribe to "agent.*")**
 
 - **Cost:** Clients can't subscribe to "agent.*" (must use topic "agent_lifecycle")
 - **Mitigation:** Topic granularity sufficient for K1 use cases (5 topics cover 17 events)
 - **Impact:** Minor limitation (MQTT-style wildcards not needed)
 
-#### ❌ **Reconnect Required for Topic Changes**
+#### âŒ **Reconnect Required for Topic Changes**
 
 - **Cost:** Client must reconnect to change subscriptions (no dynamic updates)
 - **Mitigation:** EventSource auto-reconnects on close (client closes old connection, opens new with different topics)
@@ -689,13 +689,13 @@ async def _():
 **Pattern:** Filter events by field values (e.g., `event_type=agent.hired OR severity=CRITICAL`).
 
 **Advantages:**
-- ✅ Flexible (filter by any field)
-- ✅ Powerful (complex queries)
+- âœ… Flexible (filter by any field)
+- âœ… Powerful (complex queries)
 
 **Disadvantages:**
-- ❌ Complex (requires query language parser)
-- ❌ Slower (query evaluation ~5-10ms vs <1ms set membership)
-- ❌ Overkill (K1 use cases covered by topic filtering)
+- âŒ Complex (requires query language parser)
+- âŒ Slower (query evaluation ~5-10ms vs <1ms set membership)
+- âŒ Overkill (K1 use cases covered by topic filtering)
 
 **Why Rejected:** Topic filtering simpler and faster (<1ms), sufficient for K1 use cases.
 
@@ -706,12 +706,12 @@ async def _():
 **Pattern:** Client subscribes to individual event types (e.g., `events=agent.hired,agent.fired,turn.started`).
 
 **Advantages:**
-- ✅ Fine-grained control (subscribe to specific events)
+- âœ… Fine-grained control (subscribe to specific events)
 
 **Disadvantages:**
-- ❌ Verbose (must list all event types, e.g., `events=agent.hired,agent.fired,agent.crashed,agent.restarted` vs `topics=agent_lifecycle`)
-- ❌ Error-prone (typo in event type = no events received)
-- ❌ Harder to maintain (17 event types vs 5 topics)
+- âŒ Verbose (must list all event types, e.g., `events=agent.hired,agent.fired,agent.crashed,agent.restarted` vs `topics=agent_lifecycle`)
+- âŒ Error-prone (typo in event type = no events received)
+- âŒ Harder to maintain (17 event types vs 5 topics)
 
 **Why Rejected:** Topic grouping simpler (5 topics vs 17 event types), less error-prone.
 
@@ -722,13 +722,13 @@ async def _():
 **Pattern:** Hierarchical topics with wildcards (e.g., `agent/+/lifecycle` where + = single-level wildcard).
 
 **Advantages:**
-- ✅ Flexible (wildcard matching)
-- ✅ Hierarchical (natural topic tree)
+- âœ… Flexible (wildcard matching)
+- âœ… Hierarchical (natural topic tree)
 
 **Disadvantages:**
-- ❌ Complex (requires topic hierarchy design, wildcard parsing)
-- ❌ Slower (wildcard matching ~2-5ms vs <1ms set membership)
-- ❌ Overkill (K1 only needs 5 top-level topics, no hierarchy)
+- âŒ Complex (requires topic hierarchy design, wildcard parsing)
+- âŒ Slower (wildcard matching ~2-5ms vs <1ms set membership)
+- âŒ Overkill (K1 only needs 5 top-level topics, no hierarchy)
 
 **Why Rejected:** K1 event taxonomy is flat (5 categories), no hierarchy needed, wildcards add complexity.
 
@@ -815,44 +815,44 @@ sse_filter_check_duration_ms = Histogram(
 
 ### Week 1: Topic Filter Core
 
-- ✅ Implement TopicFilter class (TOPIC_TO_EVENTS mapping, should_emit() method)
-- ✅ Unit tests (5 topics × filter correctness, performance <1ms)
+- âœ… Implement TopicFilter class (TOPIC_TO_EVENTS mapping, should_emit() method)
+- âœ… Unit tests (5 topics Ã— filter correctness, performance <1ms)
 
 ### Week 2: Event Bus Integration
 
-- ✅ Integrate TopicFilter with EventBus (server-side filtering)
-- ✅ Implement EventSubscriber.matches() (topic + session filtering)
-- ✅ Integration tests (publish event → only matching subscribers receive)
+- âœ… Integrate TopicFilter with EventBus (server-side filtering)
+- âœ… Implement EventSubscriber.matches() (topic + session filtering)
+- âœ… Integration tests (publish event â†’ only matching subscribers receive)
 
 ### Week 3: SSE Endpoint & Query Parameters
 
-- ✅ Implement `/sse/events?topics=...` endpoint (parse query params)
-- ✅ Authorization (validate session token, enforce session_id filter)
-- ✅ Integration tests (SSE endpoint with topic filtering)
+- âœ… Implement `/sse/events?topics=...` endpoint (parse query params)
+- âœ… Authorization (validate session token, enforce session_id filter)
+- âœ… Integration tests (SSE endpoint with topic filtering)
 
 ### Week 4: Performance Optimization & Documentation
 
-- ✅ Benchmark filter latency (<1ms P95)
-- ✅ Benchmark bandwidth savings (60-70% for typical clients)
-- ✅ Documentation (API docs, topic taxonomy, examples)
-- ✅ Code review and approval
+- âœ… Benchmark filter latency (<1ms P95)
+- âœ… Benchmark bandwidth savings (60-70% for typical clients)
+- âœ… Documentation (API docs, topic taxonomy, examples)
+- âœ… Code review and approval
 
 ---
 
 ## Research Citations
 
-1. **MQTT Protocol (2019).** *"Topic Names and Wildcards."* https://mqtt.org/mqtt-specification/ — Hierarchical topic design, wildcard patterns.
+1. **MQTT Protocol (2019).** *"Topic Names and Wildcards."* https://mqtt.org/mqtt-specification/ â€” Hierarchical topic design, wildcard patterns.
 
-2. **GitHub Webhooks (2024).** *"Event Types."* https://docs.github.com/en/developers/webhooks-and-events — Event type subscription patterns.
+2. **GitHub Webhooks (2024).** *"Event Types."* https://docs.github.com/en/developers/webhooks-and-events â€” Event type subscription patterns.
 
-3. **Kubernetes Watch API (2024).** *"Label Selectors."* https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/ — Field-based filtering strategies.
+3. **Kubernetes Watch API (2024).** *"Label Selectors."* https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/ â€” Field-based filtering strategies.
 
 ---
 
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** â³ **In Progress** (0% - Initial Draft Created)
 **Created Date:** 2025-10-12
 **Target Completion:** 2025-11-09 (4 weeks)
 **Blocked By:** 0016a (Event Schemas)
@@ -864,11 +864,12 @@ sse_filter_check_duration_ms = Histogram(
 
 | Committee | Approval Status | Date | Notes |
 |-----------|----------------|------|-------|
-| **Architecture Committee** | ⏳ Pending | TBD | Review topic taxonomy (5 topics) |
-| **K1 Kernel Team** | ⏳ Pending | TBD | Validate filtering performance (<1ms) |
-| **Frontend Team** | ⏳ Pending | TBD | Review subscription API (query params) |
-| **Security Team** | ⏳ Pending | TBD | Review session filtering, authorization |
+| **Architecture Committee** | â³ Pending | TBD | Review topic taxonomy (5 topics) |
+| **K1 Kernel Team** | â³ Pending | TBD | Validate filtering performance (<1ms) |
+| **Frontend Team** | â³ Pending | TBD | Review subscription API (query params) |
+| **Security Team** | â³ Pending | TBD | Review session filtering, authorization |
 
 ---
 
 **END OF ADR-0016c**
+

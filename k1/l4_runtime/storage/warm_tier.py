@@ -43,12 +43,10 @@ ADR References:
     - ADR-0014: FlatBuffers for delta serialization
 """
 
-from collections import OrderedDict
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-import asyncio
 import time
-import zstd
+from collections import OrderedDict
+from typing import Any, Dict, List, Optional
+
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -210,7 +208,7 @@ class WarmTier:
 
     # Constants
     MAX_CAPACITY_MB = 100  # 100MB compressed capacity
-    RETENTION_DAYS = 30    # 30-day retention before cold migration
+    RETENTION_DAYS = 30  # 30-day retention before cold migration
     COMPRESSION_LEVEL = 3  # zstd level 3 (fast, 66% reduction)
     MIGRATION_INTERVAL_SEC = 3600  # Check every hour for old sessions
 
@@ -219,9 +217,9 @@ class WarmTier:
         capacity_mb: int = MAX_CAPACITY_MB,
         backend: str = "k0_wal",  # "k0_wal" or "ssd_cache"
         retention_days: int = RETENTION_DAYS,
-        k0_bridge=None,       # K0 bridge for WAL backend
-        hot_tier=None,        # Hot tier for cache promotion
-        cold_tier=None,       # Cold tier for 30-day archival
+        k0_bridge=None,  # K0 bridge for WAL backend
+        hot_tier=None,  # Hot tier for cache promotion
+        cold_tier=None,  # Cold tier for 30-day archival
     ):
         """
         Initialize warm tier.

@@ -1,6 +1,6 @@
-# ADR-0013d: Contract Testing & Compatibility Validation
+﻿# ADR-0013d: Contract Testing & Compatibility Validation
 
-**Status:** ✅ Accepted (In Progress - 65% Complete)
+**Status:** âœ… Accepted (In Progress - 65% Complete)
 **Date:** 2025-10-12
 **Parent ADR:** [ADR-0013](0013-pipeline-versioning-policy.md) (Pipeline Versioning Policy)
 **Deciders:** K1 Architecture Team
@@ -12,14 +12,14 @@
 
 Schema versioning enables evolution (new fields, deprecation), but introduces compatibility risks:
 
-- **Breaking changes undetected:** Developer removes field, bumps MINOR instead of MAJOR → clients break
+- **Breaking changes undetected:** Developer removes field, bumps MINOR instead of MAJOR â†’ clients break
 - **Forward compatibility unknown:** Can old client (v2.0.0) work with new schema (v2.1.0)?
 - **Backward compatibility unknown:** Can new client (v2.1.0) work with old schema (v2.0.0)?
-- **Multi-version matrix complexity:** With 76 schemas × 3-5 versions = 228-380 combinations, manual testing infeasible
+- **Multi-version matrix complexity:** With 76 schemas Ã— 3-5 versions = 228-380 combinations, manual testing infeasible
 
 **Solution:** Implement consumer-driven contract testing with:
 - **Pact-style contracts:** Consumers define expectations, providers validate
-- **Forward/backward compatibility tests:** Test old↔new combinations
+- **Forward/backward compatibility tests:** Test oldâ†”new combinations
 - **Multi-version matrix:** Automated testing across MAJOR version boundaries
 - **Breaking change detection:** Fail CI/CD if breaking change without MAJOR bump
 - **Contract publishing:** Results stored in schema registry for runtime queries
@@ -31,9 +31,9 @@ Schema versioning enables evolution (new fields, deprecation), but introduces co
 
 ### Functional Requirements
 - **FR1:** >95% compatibility detection (catch breaking changes before production)
-- **FR2:** Forward compatibility validation (old client + new schema → ✅)
-- **FR3:** Backward compatibility validation (new client + old schema → ✅)
-- **FR4:** Multi-version matrix testing (76 schemas × 3 versions = 228 tests)
+- **FR2:** Forward compatibility validation (old client + new schema â†’ âœ…)
+- **FR3:** Backward compatibility validation (new client + old schema â†’ âœ…)
+- **FR4:** Multi-version matrix testing (76 schemas Ã— 3 versions = 228 tests)
 - **FR5:** Contract publishing (store results in registry, API endpoint for queries)
 - **FR6:** CI/CD integration (automated testing on schema PRs)
 
@@ -55,19 +55,19 @@ Schema versioning enables evolution (new fields, deprecation), but introduces co
 ## Considered Options
 
 ### Option 1: Consumer-Driven Contract Testing (Pact-Style) (SELECTED)
-**Description:** Consumers define expected schema, providers validate compatibility. Test old↔new combinations.
+**Description:** Consumers define expected schema, providers validate compatibility. Test oldâ†”new combinations.
 
 **Pros:**
-- ✅ Consumer-driven (matches real-world usage)
-- ✅ Automated (CI/CD runs tests on every PR)
-- ✅ Comprehensive (forward + backward compatibility)
-- ✅ Parallelizable (tests independent)
+- âœ… Consumer-driven (matches real-world usage)
+- âœ… Automated (CI/CD runs tests on every PR)
+- âœ… Comprehensive (forward + backward compatibility)
+- âœ… Parallelizable (tests independent)
 
 **Cons:**
-- ❌ Complex setup (Pact framework, contract storage)
-- ❌ Test maintenance (update contracts when schemas change)
+- âŒ Complex setup (Pact framework, contract storage)
+- âŒ Test maintenance (update contracts when schemas change)
 
-**Decision:** ✅ **SELECTED** (best balance: automation, coverage, industry standard)
+**Decision:** âœ… **SELECTED** (best balance: automation, coverage, industry standard)
 
 ---
 
@@ -75,15 +75,15 @@ Schema versioning enables evolution (new fields, deprecation), but introduces co
 **Description:** Developers manually test schema changes in staging.
 
 **Pros:**
-- ✅ Simple (no automation framework)
-- ✅ Flexible (ad-hoc test scenarios)
+- âœ… Simple (no automation framework)
+- âœ… Flexible (ad-hoc test scenarios)
 
 **Cons:**
-- ❌ Slow (depends on manual testing)
-- ❌ Incomplete coverage (humans miss edge cases)
-- ❌ Not scalable (76 schemas × 228 combinations)
+- âŒ Slow (depends on manual testing)
+- âŒ Incomplete coverage (humans miss edge cases)
+- âŒ Not scalable (76 schemas Ã— 228 combinations)
 
-**Decision:** ❌ **REJECTED** (too manual, not scalable)
+**Decision:** âŒ **REJECTED** (too manual, not scalable)
 
 ---
 
@@ -91,15 +91,15 @@ Schema versioning enables evolution (new fields, deprecation), but introduces co
 **Description:** Rely solely on schema diff analysis (ADR-0013b) without runtime execution.
 
 **Pros:**
-- ✅ Fast (static analysis, no execution)
-- ✅ Deterministic (diff algorithm reliable)
+- âœ… Fast (static analysis, no execution)
+- âœ… Deterministic (diff algorithm reliable)
 
 **Cons:**
-- ❌ Misses semantic changes (e.g., field meaning changed)
-- ❌ No runtime validation (serialization/deserialization not tested)
-- ❌ False negatives (complex changes missed)
+- âŒ Misses semantic changes (e.g., field meaning changed)
+- âŒ No runtime validation (serialization/deserialization not tested)
+- âŒ False negatives (complex changes missed)
 
-**Decision:** ❌ **REJECTED** (insufficient coverage, no runtime validation)
+**Decision:** âŒ **REJECTED** (insufficient coverage, no runtime validation)
 
 ---
 
@@ -320,7 +320,7 @@ class ContractTest:
 
             if consumer_type != provider_type:
                 breaking_changes.append(
-                    f"Type changed: {field} ({consumer_type} → {provider_type})"
+                    f"Type changed: {field} ({consumer_type} â†’ {provider_type})"
                 )
 
         # Check for new required fields
@@ -357,7 +357,7 @@ class ContractTest:
 **Example Test:**
 
 ```python
-import pytest
+import ward
 
 def test_recall_request_forward_compatibility():
     """Test RecallRequest v2.0.0 consumer with v2.1.0 provider."""
@@ -406,11 +406,11 @@ def test_recall_request_breaking_change():
 
 | Schema | Consumer Version | Provider Version | Test Type | Expected Result |
 |--------|------------------|------------------|-----------|-----------------|
-| AgentState | 2.0.0 | 2.1.0 | Forward | ✅ Compatible |
-| AgentState | 2.1.0 | 2.0.0 | Backward | ✅ Compatible |
-| AgentState | 2.0.0 | 3.0.0 | Breaking | ❌ Incompatible |
-| TaskAnnouncement | 2.1.0 | 2.2.0 | Forward | ✅ Compatible |
-| TaskAnnouncement | 2.2.0 | 2.1.0 | Backward | ✅ Compatible |
+| AgentState | 2.0.0 | 2.1.0 | Forward | âœ… Compatible |
+| AgentState | 2.1.0 | 2.0.0 | Backward | âœ… Compatible |
+| AgentState | 2.0.0 | 3.0.0 | Breaking | âŒ Incompatible |
+| TaskAnnouncement | 2.1.0 | 2.2.0 | Forward | âœ… Compatible |
+| TaskAnnouncement | 2.2.0 | 2.1.0 | Backward | âœ… Compatible |
 | ... | ... | ... | ... | ... |
 
 **Matrix Generation:**
@@ -418,7 +418,7 @@ def test_recall_request_breaking_change():
 ```python
 def generate_test_matrix(schemas: List[str], versions: Dict[str, List[str]]) -> List[Dict]:
     """
-    Generate test matrix for all schema × version combinations.
+    Generate test matrix for all schema Ã— version combinations.
 
     Args:
         schemas: List of schema names (e.g., ['AgentState', 'TaskAnnouncement'])
@@ -484,7 +484,7 @@ matrix = generate_test_matrix(schemas, versions)
 print(f"Generated {len(matrix)} test cases")
 
 # Output:
-# Generated 228 test cases (76 schemas × 3 avg versions × 2 test types)
+# Generated 228 test cases (76 schemas Ã— 3 avg versions Ã— 2 test types)
 ```
 
 ---
@@ -550,11 +550,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install flatbuffers pyyaml pytest
+          pip install flatbuffers pyyaml ward
 
       - name: Run contract test
         run: |
-          pytest tests/contract_tests/test_${{ matrix.test.schema }}.py \
+          ward tests/contract_tests/test_${{ matrix.test.schema }}.py \
             --consumer-version=${{ matrix.test.consumer_version }} \
             --provider-version=${{ matrix.test.provider_version }} \
             --test-type=${{ matrix.test.test_type }} \
@@ -605,9 +605,9 @@ jobs:
             const total = results.length;
 
             const body = `## Contract Test Results\n\n` +
-              `✅ Passed: ${passed} / ${total}\n` +
-              `❌ Failed: ${failed} / ${total}\n\n` +
-              (failed > 0 ? `### Failures:\n${results.filter(r => r.status === 'failed').map(r => `- ${r.schema} (${r.consumer_version} ↔ ${r.provider_version}): ${r.error}`).join('\n')}` : '');
+              `âœ… Passed: ${passed} / ${total}\n` +
+              `âŒ Failed: ${failed} / ${total}\n\n` +
+              (failed > 0 ? `### Failures:\n${results.filter(r => r.status === 'failed').map(r => `- ${r.schema} (${r.consumer_version} â†” ${r.provider_version}): ${r.error}`).join('\n')}` : '');
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -620,9 +620,9 @@ jobs:
 **CI/CD Performance:**
 - **Matrix generation:** <10s (parse registry, generate 228 test cases)
 - **Single test:** <5s (serialize + deserialize + validate)
-- **Parallel execution:** 228 tests / 10 parallel workers = ~23 batches × 5s = ~115s = ~2 min
+- **Parallel execution:** 228 tests / 10 parallel workers = ~23 batches Ã— 5s = ~115s = ~2 min
 - **Setup + teardown:** ~3 min
-- **Total:** <25 min ✅ (meets budget)
+- **Total:** <25 min âœ… (meets budget)
 
 ---
 
@@ -737,19 +737,19 @@ curl "https://api.k1.example.com/api/v1/schemas/compatibility?schema=AgentState&
 - **Serialize:** <2s (FlatBuffers compile + serialize)
 - **Deserialize:** <1s (FlatBuffers deserialize)
 - **Validate:** <1s (check required fields)
-- **Total:** <5s ✅ (meets budget)
+- **Total:** <5s âœ… (meets budget)
 
 ### Full Test Matrix
 - **Matrix generation:** <10s (parse registry, generate 228 test cases)
-- **Parallel execution:** 228 tests / 10 workers = ~23 batches × 5s = ~115s = ~2 min
-- **Total:** <20 min ✅ (meets budget)
+- **Parallel execution:** 228 tests / 10 workers = ~23 batches Ã— 5s = ~115s = ~2 min
+- **Total:** <20 min âœ… (meets budget)
 
 ### CI/CD Pipeline
 - **Checkout:** <30s (full git history for version tags)
 - **Setup:** <60s (install dependencies)
 - **Tests:** <120s (parallelized)
 - **Publish:** <30s (update registry, post comment)
-- **Total:** <25 min ✅ (meets budget)
+- **Total:** <25 min âœ… (meets budget)
 
 ---
 
@@ -788,7 +788,7 @@ def test_breaking_change_major_version():
 def test_ci_cd_contract_pipeline():
     """Test full CI/CD pipeline (matrix generation + tests + publish)."""
     result = subprocess.run([
-        'pytest', 'tests/integration/test_contract_pipeline.py', '-v'
+        'ward', 'tests/integration/test_contract_pipeline.py', '-v'
     ])
     assert result.returncode == 0
 ```
@@ -827,21 +827,21 @@ def test_ci_cd_contract_pipeline():
 ## Consequences
 
 ### Positive
-- ✅ **Automated compatibility validation:** >95% breaking changes caught before production
-- ✅ **Consumer-driven:** Tests match real-world usage patterns
-- ✅ **Fast feedback:** <25 min CI/CD (parallelized)
-- ✅ **Contract publishing:** Runtime queries for deployment decisions
-- ✅ **Comprehensive coverage:** Forward + backward + breaking change detection
+- âœ… **Automated compatibility validation:** >95% breaking changes caught before production
+- âœ… **Consumer-driven:** Tests match real-world usage patterns
+- âœ… **Fast feedback:** <25 min CI/CD (parallelized)
+- âœ… **Contract publishing:** Runtime queries for deployment decisions
+- âœ… **Comprehensive coverage:** Forward + backward + breaking change detection
 
 ### Negative
-- ❌ **Complex setup:** Pact framework, contract storage, CI/CD integration
-- ❌ **Test maintenance:** Update contracts when schemas change
-- ❌ **CI/CD latency:** 25 min pipeline (mitigated by parallelization)
-- ❌ **False negatives:** <5% complex semantic changes might be missed
+- âŒ **Complex setup:** Pact framework, contract storage, CI/CD integration
+- âŒ **Test maintenance:** Update contracts when schemas change
+- âŒ **CI/CD latency:** 25 min pipeline (mitigated by parallelization)
+- âŒ **False negatives:** <5% complex semantic changes might be missed
 
 ### Neutral
-- ⚠️ **MAJOR boundary testing only:** Skip MINOR/PATCH for efficiency (acceptable trade-off)
-- ⚠️ **Git history dependency:** Requires version tags (standard practice)
+- âš ï¸ **MAJOR boundary testing only:** Skip MINOR/PATCH for efficiency (acceptable trade-off)
+- âš ï¸ **Git history dependency:** Requires version tags (standard practice)
 
 ---
 
@@ -871,10 +871,11 @@ def test_ci_cd_contract_pipeline():
 
 ---
 
-**Status:** ✅ **65% Complete** (Pending: Multi-version matrix testing optimization)
+**Status:** âœ… **65% Complete** (Pending: Multi-version matrix testing optimization)
 
 **Next Steps:**
-1. Optimize matrix generation for large schema sets (76 schemas × 3 versions)
+1. Optimize matrix generation for large schema sets (76 schemas Ã— 3 versions)
 2. Implement breaking change detection for nested unions
 3. Add semantic change detection (field meaning changed)
 4. Deploy to staging CI/CD (test with real PRs)
+

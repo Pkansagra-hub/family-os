@@ -9,7 +9,7 @@
 - **NO MD FILES UNLESS REQUIRED** — Do NOT create any Markdown files that are not explicitly requested or mandatory (ADRs, API docs, etc.). No completion reports, guides, analysis docs, or summary files.
 - **No auto-generated Markdown** — Create .md files ONLY when explicitly requested
 - **No simulation code** — No `asyncio.sleep()`, `time.sleep()`, mock delays, or playground patterns
-- **No mock theater** — Use real components with WARD; never fake functionality
+- **No mock theater** — Use real components with pytest; never fake functionality
 - **ADR is mandatory** — All code changes require contract/ADR review FIRST or create ADRs before proceeding
 - **Ask, don't assume** — When unclear, request clarification rather than guessing
 - **Violation = PR rejection** — Immediate rejection for simulation code, excessive docs, or missing ADRs
@@ -66,12 +66,12 @@ Whether you're:
 - Add `cognitive_trace_id`, reference ADR numbers in comments
 - Check for contract deviations → Update contracts if needed
 
-**🚦 GATE 4: Test Implementation (WARD Framework, KG-Enhanced)**
+**🚦 GATE 4: Test Implementation (pytest Framework, KG-Enhanced)**
 - **Test Patterns:** `kg_v2_search("test integration component")` for similar tests
 - **Existing Tests:** `kg_v2_neighbors("module_id", relation="tested_by")` to find patterns
 - Integration tests > unit tests, real components only
 - Test contract compliance and performance budgets
-- Run: `python -m ward test --path tests/`
+- Run: `python -m pytest tests/`
 - All tests must pass before proceeding
 
 **🚦 GATE 5: Memory Documentation (KG-Enhanced)**
@@ -135,15 +135,15 @@ Each gate is a **BLOCKER**:
 
 ### Git Workflow
 - **Branch naming:** `feature/<issue>-<desc>`, `fix/<issue>-<desc>`, `docs/<desc>`, `refactor/<desc>`, `test/<desc>`
-- **PR requirements:** Description + architecture impact + diagram updates + ADR reference + WARD tests + performance notes + docs updates
+- **PR requirements:** Description + architecture impact + diagram updates + ADR reference + pytest tests + performance notes + docs updates
 - **PR Checklist:** See *Appendix B: PR Standards*
 
-### Testing (WARD Framework)
+### Testing (pytest Framework)
 - **Philosophy:** Integration > unit, real components only, comprehensive coverage, performance validation
-- **No mock theater** — Use real implementations with WARD fixtures
+- **No mock theater** — Use real implementations with pytest fixtures
 - **Test organization:** See `tests/` structure in *Appendix C: Test Structure*
-- **Run tests:** `python -m ward test --path tests/`
-- See *Appendix D: WARD Test Example*
+- **Run tests:** `python -m pytest tests/`
+- See *Appendix D: pytest Test Example*
 
 ### Observability
 - **Metrics** — Export Prometheus counters, histograms, gauges for all components
@@ -404,15 +404,15 @@ grep_search("dynamic.*agent|agent.*creation")
 | Issue | Solution |
 |-------|----------|
 | Diagram won't validate | Check syntax with `mmd_validate`, fix special chars, avoid keywords |
-| WARD tests failing | Initialize fixtures properly, check async/await, verify test isolation, run `--verbose` |
+| pytest tests failing | Initialize fixtures properly, check async/await, verify test isolation, run `--verbose` |
 | Performance budget exceeded | Profile with `py-spy`, check for blocking I/O, verify KV cache hit rate (~75%) |
 | ADR unclear | Use template in `docs/architecture/decisions/0000-template.md`, include problem/alternatives/decision/consequences |
 
 ### Useful Commands
 ```bash
 # Testing
-python -m ward test --path tests/
-python -m ward test --search "orchestrator"
+python -m pytest tests/
+python -m pytest tests/ -k "orchestrator"
 
 # Profiling
 py-spy top --pid <pid>
@@ -445,7 +445,7 @@ Each instruction file provides domain-specific guidance for different tasks. **R
 | **mmd-diagrams.instructions.md** | Before working with diagrams | Diagram structure, locations, naming, validation | Creating/editing `.mmd` files |
 | **mmd-mcp-usage.instructions.md** | Ingesting diagrams into MCP | How to use MCP tools for diagram analysis | Using `mmd_ingest`, `mmd_validate`, etc. |
 | **testing-requirements.instructions.md** | Before GATE 4 (Testing) | Comprehensive testing standards, coverage, performance | Understanding testing philosophy & requirements |
-| **tests.instructions.md** | Writing tests | Test structure, WARD framework, patterns, assertions | Actually writing test code |
+| **tests.instructions.md** | Writing tests | Test structure, pytest framework, patterns, assertions | Actually writing test code |
 
 ### Instruction File Decision Tree
 
@@ -519,7 +519,7 @@ Before implementing:
 - [ ] Architecture diagrams updated
 - [ ] Module impact analyzed
 - [ ] Performance budget defined
-- [ ] WARD tests planned (integration > unit)
+- [ ] pytest tests planned (integration > unit)
 - [ ] Observability planned (metrics, traces, logs)
 - [ ] Security/privacy implications assessed
 - [ ] Configuration schema defined

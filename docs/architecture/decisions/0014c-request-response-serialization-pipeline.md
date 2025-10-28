@@ -1,6 +1,6 @@
-# ADR-0014c: Request/Response Serialization Pipeline
+﻿# ADR-0014c: Request/Response Serialization Pipeline
 
-**Status:** ✅ Accepted (In Progress - 75% Complete)
+**Status:** âœ… Accepted (In Progress - 75% Complete)
 **Date:** 2025-10-12
 **Parent ADR:** [ADR-0014](0014-json-rest-api-dual-format.md) (JSON for REST API - Dual Format Support)
 **Deciders:** K1 Architecture Team
@@ -13,25 +13,25 @@
 K1 Intelligence Module's REST API supports dual formats (JSON + FlatBuffers). Each request/response must be serialized/deserialized based on negotiated format.
 
 **Problem:** How to implement bidirectional serialization that:
-- Supports JSON → FlatBuffers (request deserialization)
-- Supports FlatBuffers → JSON (response serialization)
-- Ensures lossless round-trip (JSON ↔ FlatBuffers ↔ JSON)
+- Supports JSON â†’ FlatBuffers (request deserialization)
+- Supports FlatBuffers â†’ JSON (response serialization)
+- Ensures lossless round-trip (JSON â†” FlatBuffers â†” JSON)
 - Returns errors always in JSON (406/415/500, even if FlatBuffers requested)
 - Meets <5ms serialization overhead P95 (REST API budget)
 
-**Solution:** Implement FastAPI serialization pipeline with FlatBuffers↔JSON conversion, zero-copy deserialization, and error normalization.
+**Solution:** Implement FastAPI serialization pipeline with FlatBuffersâ†”JSON conversion, zero-copy deserialization, and error normalization.
 
 ---
 
 ## Decision Drivers
 
 ### Functional Requirements
-- **FR1:** JSON → FlatBuffers Python object (parse JSON, validate against schema, construct FlatBuffers builder)
-- **FR2:** FlatBuffers binary → Python object (zero-copy buffer access, validate schema identifier)
-- **FR3:** Python object → JSON (FlatBuffers Python object → dict → JSON, use to_dict() reflection)
-- **FR4:** Python object → FlatBuffers (FlatBuffers builder → binary buffer, Pack() method)
+- **FR1:** JSON â†’ FlatBuffers Python object (parse JSON, validate against schema, construct FlatBuffers builder)
+- **FR2:** FlatBuffers binary â†’ Python object (zero-copy buffer access, validate schema identifier)
+- **FR3:** Python object â†’ JSON (FlatBuffers Python object â†’ dict â†’ JSON, use to_dict() reflection)
+- **FR4:** Python object â†’ FlatBuffers (FlatBuffers builder â†’ binary buffer, Pack() method)
 - **FR5:** Errors always JSON (406/415/500 errors, even if FlatBuffers requested)
-- **FR6:** Lossless round-trip (JSON → FlatBuffers → JSON produces same result)
+- **FR6:** Lossless round-trip (JSON â†’ FlatBuffers â†’ JSON produces same result)
 
 ### Non-Functional Requirements
 - **NFR1:** Performance: <5ms serialization overhead P95 (typical 1-10KB payloads)
@@ -49,19 +49,19 @@ K1 Intelligence Module's REST API supports dual formats (JSON + FlatBuffers). Ea
 ## Considered Options
 
 ### Option 1: FastAPI Dependency Injection with Converter Classes (SELECTED)
-**Description:** Use FastAPI dependencies to inject JSON↔FlatBuffers converters, handle serialization in route handlers.
+**Description:** Use FastAPI dependencies to inject JSONâ†”FlatBuffers converters, handle serialization in route handlers.
 
 **Pros:**
-- ✅ FastAPI-native (dependency injection)
-- ✅ Type-safe (Pydantic models + FlatBuffers schemas)
-- ✅ Flexible (route-specific converters)
-- ✅ Zero-copy FlatBuffers deserialization
+- âœ… FastAPI-native (dependency injection)
+- âœ… Type-safe (Pydantic models + FlatBuffers schemas)
+- âœ… Flexible (route-specific converters)
+- âœ… Zero-copy FlatBuffers deserialization
 
 **Cons:**
-- ❌ Boilerplate per endpoint (inject dependencies)
-- ❌ Manual error normalization (ensure errors always JSON)
+- âŒ Boilerplate per endpoint (inject dependencies)
+- âŒ Manual error normalization (ensure errors always JSON)
 
-**Decision:** ✅ **SELECTED** (FastAPI-native, type-safe, flexible)
+**Decision:** âœ… **SELECTED** (FastAPI-native, type-safe, flexible)
 
 ---
 
@@ -69,14 +69,14 @@ K1 Intelligence Module's REST API supports dual formats (JSON + FlatBuffers). Ea
 **Description:** Middleware intercepts all requests/responses, handles serialization transparently.
 
 **Pros:**
-- ✅ No boilerplate (transparent serialization)
-- ✅ Consistent error handling (middleware normalizes errors)
+- âœ… No boilerplate (transparent serialization)
+- âœ… Consistent error handling (middleware normalizes errors)
 
 **Cons:**
-- ❌ Less flexible (hard to customize per endpoint)
-- ❌ Debugging complexity (serialization hidden in middleware)
+- âŒ Less flexible (hard to customize per endpoint)
+- âŒ Debugging complexity (serialization hidden in middleware)
 
-**Decision:** ❌ **REJECTED** (less flexible, debugging complexity)
+**Decision:** âŒ **REJECTED** (less flexible, debugging complexity)
 
 ---
 
@@ -84,14 +84,14 @@ K1 Intelligence Module's REST API supports dual formats (JSON + FlatBuffers). Ea
 **Description:** Subclass FastAPI Response (JSONResponse, BinaryResponse), handle serialization in response class.
 
 **Pros:**
-- ✅ FastAPI-native (response classes)
-- ✅ Reusable (inherit response classes)
+- âœ… FastAPI-native (response classes)
+- âœ… Reusable (inherit response classes)
 
 **Cons:**
-- ❌ Limited request deserialization (response-only)
-- ❌ Boilerplate per response type
+- âŒ Limited request deserialization (response-only)
+- âŒ Boilerplate per response type
 
-**Decision:** ⚠️ **PARTIAL ADOPTION** (use for responses, not requests)
+**Decision:** âš ï¸ **PARTIAL ADOPTION** (use for responses, not requests)
 
 ---
 
@@ -109,7 +109,7 @@ K1 Intelligence Module's REST API supports dual formats (JSON + FlatBuffers). Ea
 
 ## Implementation Details
 
-### 1. JSON → FlatBuffers Conversion
+### 1. JSON â†’ FlatBuffers Conversion
 
 **Converter Class:**
 
@@ -203,7 +203,7 @@ class TurnStart(object):
 
 ---
 
-### 2. FlatBuffers → JSON Conversion
+### 2. FlatBuffers â†’ JSON Conversion
 
 **Converter Class:**
 
@@ -542,10 +542,10 @@ async def generic_exception_handler(request: Request, exc: Exception):
 **Round-Trip Test:**
 
 ```python
-import pytest
+import ward
 
 def test_json_to_flatbuffers_to_json_roundtrip():
-    """Test lossless JSON → FlatBuffers → JSON round-trip."""
+    """Test lossless JSON â†’ FlatBuffers â†’ JSON round-trip."""
 
     # Original JSON
     original_json = {
@@ -561,11 +561,11 @@ def test_json_to_flatbuffers_to_json_roundtrip():
         }
     }
 
-    # JSON → FlatBuffers
+    # JSON â†’ FlatBuffers
     json_to_fb = JsonToFlatBuffersConverter(TurnStart)
     fb_object = json_to_fb.convert(original_json)
 
-    # FlatBuffers → JSON
+    # FlatBuffers â†’ JSON
     fb_to_json = FlatBuffersToJsonConverter(TurnStart)
     roundtrip_json = fb_to_json.convert(fb_object)
 
@@ -573,7 +573,7 @@ def test_json_to_flatbuffers_to_json_roundtrip():
     assert roundtrip_json == original_json, 'Round-trip must be lossless'
 
 def test_flatbuffers_to_json_to_flatbuffers_roundtrip():
-    """Test lossless FlatBuffers → JSON → FlatBuffers round-trip."""
+    """Test lossless FlatBuffers â†’ JSON â†’ FlatBuffers round-trip."""
 
     # Original FlatBuffers
     builder = flatbuffers.Builder(1024)
@@ -588,12 +588,12 @@ def test_flatbuffers_to_json_to_flatbuffers_roundtrip():
     builder.Finish(turn_start_offset)
     original_buffer = builder.Output()
 
-    # FlatBuffers → JSON
+    # FlatBuffers â†’ JSON
     fb_object = TurnStart.GetRootAs(original_buffer, 0)
     fb_to_json = FlatBuffersToJsonConverter(TurnStart)
     json_data = fb_to_json.convert(fb_object)
 
-    # JSON → FlatBuffers
+    # JSON â†’ FlatBuffers
     json_to_fb = JsonToFlatBuffersConverter(TurnStart)
     roundtrip_fb_object = json_to_fb.convert(json_data)
 
@@ -610,12 +610,12 @@ def test_flatbuffers_to_json_to_flatbuffers_roundtrip():
 
 | Operation | Payload Size | Budget | Actual | Status |
 |-----------|-------------|--------|--------|--------|
-| JSON → FlatBuffers | 1KB | <2ms | 0.8ms P50 | ✅ |
-| JSON → FlatBuffers | 10KB | <5ms | 3.2ms P50 | ✅ |
-| FlatBuffers → JSON | 1KB | <1ms | 0.4ms P50 | ✅ |
-| FlatBuffers → JSON | 10KB | <3ms | 1.8ms P50 | ✅ |
-| FlatBuffers deserialization (zero-copy) | 10KB | <0.5ms | 0.2ms P50 | ✅ |
-| Error serialization (JSON) | <1KB | <1ms | 0.3ms P50 | ✅ |
+| JSON â†’ FlatBuffers | 1KB | <2ms | 0.8ms P50 | âœ… |
+| JSON â†’ FlatBuffers | 10KB | <5ms | 3.2ms P50 | âœ… |
+| FlatBuffers â†’ JSON | 1KB | <1ms | 0.4ms P50 | âœ… |
+| FlatBuffers â†’ JSON | 10KB | <3ms | 1.8ms P50 | âœ… |
+| FlatBuffers deserialization (zero-copy) | 10KB | <0.5ms | 0.2ms P50 | âœ… |
+| Error serialization (JSON) | <1KB | <1ms | 0.3ms P50 | âœ… |
 
 **Benchmarking Script:**
 
@@ -624,7 +624,7 @@ import time
 from statistics import quantiles
 
 def benchmark_serialization():
-    """Benchmark JSON ↔ FlatBuffers serialization."""
+    """Benchmark JSON â†” FlatBuffers serialization."""
 
     # Test payloads
     payloads = {
@@ -635,7 +635,7 @@ def benchmark_serialization():
     results = {}
 
     for size, payload in payloads.items():
-        # JSON → FlatBuffers
+        # JSON â†’ FlatBuffers
         json_to_fb_latencies = []
         for _ in range(1000):
             start = time.perf_counter()
@@ -644,7 +644,7 @@ def benchmark_serialization():
             latency_ms = (time.perf_counter() - start) * 1000
             json_to_fb_latencies.append(latency_ms)
 
-        # FlatBuffers → JSON
+        # FlatBuffers â†’ JSON
         fb_to_json_latencies = []
         for _ in range(1000):
             start = time.perf_counter()
@@ -677,7 +677,7 @@ def benchmark_serialization():
 
 ```python
 def test_json_to_flatbuffers_conversion():
-    """Test JSON → FlatBuffers conversion."""
+    """Test JSON â†’ FlatBuffers conversion."""
     json_data = {'user_message': 'Hello', 'trace_id': 'xyz'}
     converter = JsonToFlatBuffersConverter(TurnStart)
     fb_object = converter.convert(json_data)
@@ -686,7 +686,7 @@ def test_json_to_flatbuffers_conversion():
     assert fb_object.TraceId().decode('utf-8') == 'xyz'
 
 def test_flatbuffers_to_json_conversion():
-    """Test FlatBuffers → JSON conversion."""
+    """Test FlatBuffers â†’ JSON conversion."""
     builder = flatbuffers.Builder(1024)
     user_message_offset = builder.CreateString('Hello')
 
@@ -719,10 +719,10 @@ def test_error_always_json():
     assert 'error' in response.json()
 
 def test_lossless_roundtrip():
-    """Test lossless JSON ↔ FlatBuffers round-trip."""
+    """Test lossless JSON â†” FlatBuffers round-trip."""
     original_json = {'user_message': 'Hello', 'trace_id': 'xyz'}
 
-    # JSON → FlatBuffers → JSON
+    # JSON â†’ FlatBuffers â†’ JSON
     json_to_fb = JsonToFlatBuffersConverter(TurnStart)
     fb_object = json_to_fb.convert(original_json)
 
@@ -736,7 +736,7 @@ def test_lossless_roundtrip():
 
 ```python
 def test_end_to_end_json_request_json_response():
-    """Test JSON request → JSON response."""
+    """Test JSON request â†’ JSON response."""
     client = TestClient(app)
     response = client.post(
         '/sessions/test123/turns',
@@ -749,7 +749,7 @@ def test_end_to_end_json_request_json_response():
     assert 'turn_id' in response.json()
 
 def test_end_to_end_json_request_flatbuffers_response():
-    """Test JSON request → FlatBuffers response."""
+    """Test JSON request â†’ FlatBuffers response."""
     client = TestClient(app)
     response = client.post(
         '/sessions/test123/turns',
@@ -765,7 +765,7 @@ def test_end_to_end_json_request_flatbuffers_response():
     assert turn_response.TurnId() is not None
 
 def test_end_to_end_flatbuffers_request_flatbuffers_response():
-    """Test FlatBuffers request → FlatBuffers response."""
+    """Test FlatBuffers request â†’ FlatBuffers response."""
     client = TestClient(app)
 
     # Serialize FlatBuffers request
@@ -796,8 +796,8 @@ def test_end_to_end_flatbuffers_request_flatbuffers_response():
 ## Migration Path
 
 ### Phase 1: Converter Implementation (Week 1)
-1. Implement JsonToFlatBuffersConverter (JSON → FlatBuffers)
-2. Implement FlatBuffersToJsonConverter (FlatBuffers → JSON)
+1. Implement JsonToFlatBuffersConverter (JSON â†’ FlatBuffers)
+2. Implement FlatBuffersToJsonConverter (FlatBuffers â†’ JSON)
 3. Test lossless round-trip (unit tests)
 
 ### Phase 2: FastAPI Integration (Week 2)
@@ -815,18 +815,18 @@ def test_end_to_end_flatbuffers_request_flatbuffers_response():
 ## Consequences
 
 ### Positive
-- ✅ **Lossless round-trip:** JSON ↔ FlatBuffers ↔ JSON preserves data
-- ✅ **Performance:** <5ms serialization overhead P95 (meets budget)
-- ✅ **Zero-copy:** FlatBuffers deserialization avoids buffer copy
-- ✅ **Error clarity:** All errors JSON format (406/415/500, not FlatBuffers)
+- âœ… **Lossless round-trip:** JSON â†” FlatBuffers â†” JSON preserves data
+- âœ… **Performance:** <5ms serialization overhead P95 (meets budget)
+- âœ… **Zero-copy:** FlatBuffers deserialization avoids buffer copy
+- âœ… **Error clarity:** All errors JSON format (406/415/500, not FlatBuffers)
 
 ### Negative
-- ❌ **Pack() dependency:** Requires FlatBuffers Python codegen with Pack() method
-- ❌ **Boilerplate:** Each endpoint needs dependency injection (parse_*_request)
+- âŒ **Pack() dependency:** Requires FlatBuffers Python codegen with Pack() method
+- âŒ **Boilerplate:** Each endpoint needs dependency injection (parse_*_request)
 
 ### Neutral
-- ⚠️ **FlatBuffers Unpack():** Adds overhead for FlatBuffers → JSON (acceptable trade-off)
-- ⚠️ **Error normalization:** Middleware ensures errors always JSON (slight complexity)
+- âš ï¸ **FlatBuffers Unpack():** Adds overhead for FlatBuffers â†’ JSON (acceptable trade-off)
+- âš ï¸ **Error normalization:** Middleware ensures errors always JSON (slight complexity)
 
 ---
 
@@ -835,7 +835,7 @@ def test_end_to_end_flatbuffers_request_flatbuffers_response():
 - **ADR-0014a:** Content Negotiation Middleware (negotiates format, used by serialization pipeline)
 - **ADR-0014b:** OpenAPI 3.1 Spec Generation (documents JSON Schema for validation)
 - **ADR-0014d:** Client SDK Examples (shows JSON and FlatBuffers request/response examples)
-- **ADR-0011c:** FlatBuffers↔JSON Conversion (foundational conversion layer)
+- **ADR-0011c:** FlatBuffersâ†”JSON Conversion (foundational conversion layer)
 - **ADR-0012:** 76 FlatBuffers Schemas (40 schemas used in REST API)
 
 ---
@@ -854,10 +854,11 @@ def test_end_to_end_flatbuffers_request_flatbuffers_response():
 
 ---
 
-**Status:** ✅ **75% Complete** (Pending: Error serialization consistency validation, nested union round-trip tests)
+**Status:** âœ… **75% Complete** (Pending: Error serialization consistency validation, nested union round-trip tests)
 
 **Next Steps:**
 1. Validate error serialization consistency (all 406/415/500 errors JSON format)
 2. Test nested union round-trip (union within union)
 3. Benchmark large payloads (100KB+)
 4. Deploy to staging
+

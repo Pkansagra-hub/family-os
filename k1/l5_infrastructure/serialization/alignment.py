@@ -1,14 +1,14 @@
-"""
+﻿"""
 Buffer Alignment - SIMD Optimization Utilities for FlatBuffers
 
 Layer: L5 Infrastructure
 Component: Serialization (Memory Management)
 Priority: P0 (Critical Path)
-Status: 🚧 STUB - NEEDS_IMPLEMENTATION
+Status: ðŸš§ STUB - NEEDS_IMPLEMENTATION
 
 Architecture Decision Records:
     - ADR-0011c: Serialization Performance & Zero-Copy
-      * SIMD alignment for vectorization (3-4× speedup for audio)
+      * SIMD alignment for vectorization (3-4Ã— speedup for audio)
       * 4-byte alignment: SSE minimum requirement
       * 8-byte alignment: 64-bit memory access optimization
       * 16-byte alignment: AVX/SSE optimal vectorization
@@ -28,7 +28,7 @@ Connects To:
         - k1.contracts.flatbuffers.* (force_align attributes in schemas)
 
 Performance Impact:
-    - Audio processing with alignment: 3-4× speedup (SIMD vectorization)
+    - Audio processing with alignment: 3-4Ã— speedup (SIMD vectorization)
     - Alignment overhead: <0.1ms P95 (<10% typical)
     - Memory overhead: <10% typical (padding bytes)
 
@@ -90,11 +90,11 @@ def calculate_padding(current_offset: int, target_alignment: int) -> int:
         padding = (target_alignment - (current_offset % target_alignment)) % target_alignment
 
     Examples:
-        calculate_padding(0, 16) → 0 (already aligned)
-        calculate_padding(1, 16) → 15 (need 15 bytes to reach next 16-byte boundary)
-        calculate_padding(8, 16) → 8 (need 8 bytes)
-        calculate_padding(16, 16) → 0 (already aligned)
-        calculate_padding(5, 4) → 3 (need 3 bytes to reach next 4-byte boundary)
+        calculate_padding(0, 16) â†’ 0 (already aligned)
+        calculate_padding(1, 16) â†’ 15 (need 15 bytes to reach next 16-byte boundary)
+        calculate_padding(8, 16) â†’ 8 (need 8 bytes)
+        calculate_padding(16, 16) â†’ 0 (already aligned)
+        calculate_padding(5, 4) â†’ 3 (need 3 bytes to reach next 4-byte boundary)
 
     ADR-0011c: Padding calculation for SIMD alignment
 
@@ -207,7 +207,7 @@ def align_buffer(buffer: bytearray, alignment: int = DEFAULT_ALIGNMENT) -> bytea
         With 16-byte alignment:
             - Load 4 samples with single SSE instruction
             - Vectorized processing (parallel operations)
-            - 3-4× speedup for audio frames
+            - 3-4Ã— speedup for audio frames
 
     Examples:
         # Small buffer (already aligned)
@@ -216,7 +216,7 @@ def align_buffer(buffer: bytearray, alignment: int = DEFAULT_ALIGNMENT) -> bytea
 
         # Unaligned buffer
         buf = bytearray(17)
-        aligned_buf = align_buffer(buf, 16)  # Add 15 bytes padding → 32 bytes total
+        aligned_buf = align_buffer(buf, 16)  # Add 15 bytes padding â†’ 32 bytes total
 
     ADR-0011c: Buffer alignment for SIMD vectorization
 
@@ -275,14 +275,14 @@ Audio Processing Example (16-bit PCM samples):
         for sample in audio_frame:
             result = process_sample(sample)  # One at a time
 
-        Performance: 1.0× baseline (slow)
+        Performance: 1.0Ã— baseline (slow)
 
     With 16-byte Alignment (Vectorized):
         # Load 4 samples (8 bytes) with single SSE instruction
-        samples_vec = _mm_load_si128(audio_frame)  # 4 × 16-bit samples
+        samples_vec = _mm_load_si128(audio_frame)  # 4 Ã— 16-bit samples
         results_vec = _mm_process_vector(samples_vec)  # Parallel processing
 
-        Performance: 3-4× faster (vectorized)
+        Performance: 3-4Ã— faster (vectorized)
 
 Alignment Requirements by Instruction Set:
     - SSE (Streaming SIMD Extensions): 16-byte alignment
@@ -295,7 +295,7 @@ FlatBuffers Schemas Using Alignment:
     - Future: VideoFrame (force_align=16 for pixel data)
 
 Performance Impact:
-    - Aligned audio processing: 3-4× speedup
+    - Aligned audio processing: 3-4Ã— speedup
     - Alignment overhead: <0.1ms (<10% typical)
     - Memory overhead: <10% (padding bytes)
 
@@ -345,10 +345,10 @@ __all__ = [
 #   - Test: supported alignments validation (4/8/16 only)
 #
 # Benchmark tests required:
-#   - pytest-benchmark for performance validation
+#   - ward-benchmark for performance validation
 #   - Measure alignment overhead (<0.1ms P95)
 #   - Measure memory overhead (<10% padding)
-#   - Compare SIMD performance (aligned vs unaligned: 3-4× speedup)
+#   - Compare SIMD performance (aligned vs unaligned: 3-4Ã— speedup)
 #
 # No simulation code allowed:
 #   - Use real buffer allocation (bytearray)
@@ -356,3 +356,4 @@ __all__ = [
 #   - Integration tests > unit tests
 #
 # =============================================================================
+

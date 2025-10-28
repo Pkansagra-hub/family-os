@@ -1,20 +1,74 @@
 # ADR-0027b: Automatic Failover (<100ms Migration)
 
-**Status:** Accepted
+**Status:** ✅ Accepted (Lower Priority for Remote-First Implementation)
 **Date:** 2025-06-15
+**Last Updated:** 2025-10-27 ⚠️ **Priority Adjustment: Less Critical Without Local Inference TODAY**
 **Author:** K1 Architecture Team
+**Implementation Priority:** 🟢 LOW (Future dongle readiness, minimal impact TODAY)
 **Parent ADR:** [ADR-0027: Model Placement Cascade](0027-model-placement-cascade-npu-gpu-cpu-remote.md)
 **Related ADRs:**
 - [ADR-0027a: Placement Algorithm (NPU→GPU→CPU→Remote)](0027a-placement-algorithm-npu-gpu-cpu-remote.md)
-- [ADR-0027c: Cost-Aware Fallback ($0.10/Session Budget)](0027c-cost-aware-fallback-010-session-budget.md)
-- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md)
+- [ADR-0027c: Cost-Aware Fallback ($0.10/Session Budget)](0027c-cost-aware-fallback-010-session-budget.md) - 🔥 CRITICAL TODAY
+- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md) - 🔥 CRITICAL TODAY
 - [ADR-0025: KV Cache Management (512MB Budget)](0025-kv-cache-management-512mb-budget.md)
+
+---
+
+## ⚠️ Market Reality & Priority Adjustment (2025-10-27 Update)
+
+**CRITICAL CONTEXT: Automatic failover is ESSENTIAL for local inference tiers (NPU/GPU/CPU migrations), but with 95% Remote traffic TODAY, this feature has minimal impact on production.**
+
+### Why Lower Priority TODAY?
+
+**95% Remote Tier Traffic:**
+- Remote tier failures handled by ADR-0027d (Remote Resilience - CRITICAL)
+- No tier migrations needed (Remote → Remote retry, not Remote → NPU failover)
+- KV cache managed server-side by OpenAI/Anthropic (no client-side transfer)
+- Failover within Remote tier is provider-level (OpenAI → Anthropic), not accelerator-level
+
+**Rare Local Inference (<5% of traffic):**
+- High-end laptops with strong GPUs: May use local inference occasionally
+- When local tiers ARE used, failover is valuable (GPU crash → CPU fallback)
+- But impact is limited: 5% of traffic × 1% failure rate = 0.05% of total requests
+
+**What DOES Matter TODAY:**
+- **Remote provider failover:** OpenAI down → Anthropic (covered in ADR-0027d)
+- **Circuit breakers:** Prevent retry loops on Remote tier (covered in ADR-0027d)
+- **Cost tracking:** Remote tier cost control (covered in ADR-0027c)
+
+### When This Becomes CRITICAL (Phase 2-3)
+
+**Phase 2 (2026 - Dongle Beta): 30% Local Traffic**
+- NPU/GPU failures require failover to CPU tier
+- KV cache transfer becomes important (preserve conversation state)
+- <100ms migration budget is user-facing (30% of traffic affected)
+- **Priority elevation:** MEDIUM → HIGH
+
+**Phase 3 (2027+ - Mass Market): 80% Local Traffic**
+- Tier migrations common (NPU thermal throttle → GPU → CPU)
+- Failover latency directly impacts UX (80% of traffic)
+- **Priority elevation:** HIGH → CRITICAL
+
+### Implementation Strategy TODAY
+
+**Minimal Viable Implementation:**
+- Correct abstraction (failover interface exists)
+- Basic KV cache transfer logic (tested but not optimized)
+- Graceful fallback if failover fails (log error, use Remote tier)
+- **No production optimization needed** (rarely executed code path)
+
+**Future Optimization (Phase 2):**
+- Optimize KV cache transfer (<30ms target)
+- Pre-load models in RAM for fast migration
+- Thermal-aware failover prediction (migrate BEFORE thermal throttle)
 
 ---
 
 ## Context
 
 Accelerators can fail during inference for multiple reasons:
+
+**⚠️ NOTE: Failure modes below are FUTURE-STATE concerns (with local inference). TODAY, Remote tier failures are handled by ADR-0027d.**
 
 **Failure modes:**
 1. **Driver crashes:** NPU/GPU driver segfaults (kernel panic, OOM)

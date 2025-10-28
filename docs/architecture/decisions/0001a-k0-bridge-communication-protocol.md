@@ -1,6 +1,6 @@
-# ADR-0001a: K0 Bridge Communication Protocol (K1 ↔ K0)
+﻿# ADR-0001a: K0 Bridge Communication Protocol (K1 â†” K0)
 
-**Status:** ✅ **APPROVED** (Ready for Implementation)
+**Status:** âœ… **APPROVED** (Ready for Implementation)
 **Date:** 2025-10-12
 **Last Updated:** 2025-10-12
 **Deciders:** K1 Architecture Team
@@ -15,12 +15,12 @@
 K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Module (brain-inspired storage backbone) via **K0 Bridge Client** using dual protocol support (JSON envelopes + FlatBuffers). K1 calls **4 external ports** (Command, Query, SSE, Observability); K0 routes internally to **20 pipelines** (P01-P20) with brain-inspired cognitive processing (Hippocampus, Attention Gate, Working Memory).
 
 **Key Decisions:**
-- ✅ JSON envelopes as PRIMARY format (K0 native, backward compatible)
-- ✅ FlatBuffers as OPTIMIZATION layer (K1 high-frequency operations)
-- ✅ K1 calls 4 ports (external interface), K0 routes to 20 pipelines (internal)
-- ✅ Smart Lane processing (Hippocampus DG→CA3→CA1) for complex episodic memories
-- ✅ Fast Lane processing (<50ms) for simple writes (GREEN band, obligations=∅)
-- ✅ Multi-store retrieval (FTS + Vector + KG + Episodic) with fusion & MMR
+- âœ… JSON envelopes as PRIMARY format (K0 native, backward compatible)
+- âœ… FlatBuffers as OPTIMIZATION layer (K1 high-frequency operations)
+- âœ… K1 calls 4 ports (external interface), K0 routes to 20 pipelines (internal)
+- âœ… Smart Lane processing (Hippocampus DGâ†’CA3â†’CA1) for complex episodic memories
+- âœ… Fast Lane processing (<50ms) for simple writes (GREEN band, obligations=âˆ…)
+- âœ… Multi-store retrieval (FTS + Vector + KG + Episodic) with fusion & MMR
 
 ---
 
@@ -64,17 +64,17 @@ The K1 Intelligence Module (AI agentic orchestrator) must communicate with the K
    - K1 respects cognitive enhancements (working memory, affect, temporal, social bias)
 
 4. **Performance:**
-   - Bridge latency <10ms P95 (K1→K0 boundary overhead)
+   - Bridge latency <10ms P95 (K1â†’K0 boundary overhead)
    - Batching to amortize overhead (250ms or 64KB flush triggers)
    - Compression for large payloads (Zstd level 3 for >4KB)
 
 5. **Reliability:**
-   - Circuit breaker protection (3 failures → open for 60s)
+   - Circuit breaker protection (3 failures â†’ open for 60s)
    - Zero data loss on transient failures (local cache + retry with exponential backoff)
    - cognitive_trace_id propagation for end-to-end tracing
 
 6. **Security:**
-   - TLS 1.3 encryption (K1↔K0 transport)
+   - TLS 1.3 encryption (K1â†”K0 transport)
    - Device-signed receipts (K0 persistence proof)
    - Capability-based access control (K0 PEP enforcement)
 
@@ -89,64 +89,64 @@ We adopt a **dual-protocol bridge** with **JSON envelopes as PRIMARY** (K0 nativ
 **See:** [k0_k1_integration_architecture.mmd](../../../architecture_diagrams/k0_k1_integration_architecture.mmd) for complete visual architecture.
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                  K1 Intelligence Module (AI Agentic Kernel)          │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  Agent Fabric │ Orchestrator │ Planner │ Model Hub │ Tools    │  │
-│  │  (Lifecycle)  │ (3-Phase)    │ (4-Stage) │ (LLM)   │ (MCP)    │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │              K0 Bridge Client (Integration Layer)              │  │
-│  │  - Protocol Negotiation (JSON PRIMARY, FlatBuffers OPT)       │  │
-│  │  - Batching Engine (250ms / 64KB flush triggers)              │  │
-│  │  - Circuit Breaker (3 failures → open for 60s)                │  │
-│  │  - Compression (Zstd level 3 for >4KB payloads)               │  │
-│  │  - HTTP/2 Connection Pool (multiplexing, keep-alive)          │  │
-│  │  - Request Router (Command/Query/SSE/Observability)           │  │
-│  └────────────────────┬───────────────────────────────────────────┘  │
-└────────────────────────┼───────────────────────────────────────────────┘
-                         │ HTTP/2 + TLS 1.3
-                         │ Headers: Content-Type, Protocol-Version, X-Cognitive-Trace-Id
-                         │ Body: JSON envelope OR FlatBuffers payload
-                         ↓
-┌──────────────────────────────────────────────────────────────────────┐
-│             K0 Memory Module (Brain-Inspired Storage Backbone)       │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  4 External Ports (K1 Interface)                               │  │
-│  │  • Command Port (submit) - Write operations                    │  │
-│  │  • Query Port (recall) - Read operations                       │  │
-│  │  • SSE Port (subscribe/ack) - Event streaming                  │  │
-│  │  • Observability Port (metrics/spans/logs) - Telemetry        │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  K0 Routing Layer                                              │  │
-│  │  - K0 Minimal Gate (envelope validation, signature check)     │  │
-│  │  - Envelope Router (port → pipeline routing logic)            │  │
-│  │  - K0 Scheduler (global QoS, priority lanes, backpressure)    │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  20 Internal Pipelines (P01-P20)                               │  │
-│  │  • P01: Recall/Read (multi-store retrieval)                   │  │
-│  │  • P02: Write/Ingest (memory formation, Fast/Smart Lane)      │  │
-│  │  • P03: Consolidation, P04: Arbitration, P05: Triggers        │  │
-│  │  • P06: Learning, P07: Sync/CRDT, P08: Embedding              │  │
-│  │  • P10-P20: PII, GDPR, Safety, Dedup, Reindex, etc.           │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  Cognitive Layer (Brain-Inspired)                              │  │
-│  │  • Attention Gate (Thalamus): Salience evaluation, admission  │  │
-│  │  • Hippocampus (DG→CA3→CA1): Pattern separation/completion    │  │
-│  │  • Memory Steward: Policy enforcement, redaction              │  │
-│  │  • Working Memory: Active context buffering                   │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────────────┐  │
-│  │  Storage Drivers (Multi-Tier)                                  │  │
-│  │  • CACHE (RAM, <1ms): wm_items, workspace_focus, affect       │  │
-│  │  • HOT (SQLite WAL, <10ms): episodic, semantic, procedures    │  │
-│  │  • COLD (Disk/Vector/KG, <100ms): kg_nodes, embeddings        │  │
-│  │  • ACID Cohort (tx): WAL, receipts, outbox, offsets           │  │
-│  └────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                  K1 Intelligence Module (AI Agentic Kernel)          â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  Agent Fabric â”‚ Orchestrator â”‚ Planner â”‚ Model Hub â”‚ Tools    â”‚  â”‚
+â”‚  â”‚  (Lifecycle)  â”‚ (3-Phase)    â”‚ (4-Stage) â”‚ (LLM)   â”‚ (MCP)    â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚              K0 Bridge Client (Integration Layer)              â”‚  â”‚
+â”‚  â”‚  - Protocol Negotiation (JSON PRIMARY, FlatBuffers OPT)       â”‚  â”‚
+â”‚  â”‚  - Batching Engine (250ms / 64KB flush triggers)              â”‚  â”‚
+â”‚  â”‚  - Circuit Breaker (3 failures â†’ open for 60s)                â”‚  â”‚
+â”‚  â”‚  - Compression (Zstd level 3 for >4KB payloads)               â”‚  â”‚
+â”‚  â”‚  - HTTP/2 Connection Pool (multiplexing, keep-alive)          â”‚  â”‚
+â”‚  â”‚  - Request Router (Command/Query/SSE/Observability)           â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                         â”‚ HTTP/2 + TLS 1.3
+                         â”‚ Headers: Content-Type, Protocol-Version, X-Cognitive-Trace-Id
+                         â”‚ Body: JSON envelope OR FlatBuffers payload
+                         â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚             K0 Memory Module (Brain-Inspired Storage Backbone)       â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  4 External Ports (K1 Interface)                               â”‚  â”‚
+â”‚  â”‚  â€¢ Command Port (submit) - Write operations                    â”‚  â”‚
+â”‚  â”‚  â€¢ Query Port (recall) - Read operations                       â”‚  â”‚
+â”‚  â”‚  â€¢ SSE Port (subscribe/ack) - Event streaming                  â”‚  â”‚
+â”‚  â”‚  â€¢ Observability Port (metrics/spans/logs) - Telemetry        â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  K0 Routing Layer                                              â”‚  â”‚
+â”‚  â”‚  - K0 Minimal Gate (envelope validation, signature check)     â”‚  â”‚
+â”‚  â”‚  - Envelope Router (port â†’ pipeline routing logic)            â”‚  â”‚
+â”‚  â”‚  - K0 Scheduler (global QoS, priority lanes, backpressure)    â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  20 Internal Pipelines (P01-P20)                               â”‚  â”‚
+â”‚  â”‚  â€¢ P01: Recall/Read (multi-store retrieval)                   â”‚  â”‚
+â”‚  â”‚  â€¢ P02: Write/Ingest (memory formation, Fast/Smart Lane)      â”‚  â”‚
+â”‚  â”‚  â€¢ P03: Consolidation, P04: Arbitration, P05: Triggers        â”‚  â”‚
+â”‚  â”‚  â€¢ P06: Learning, P07: Sync/CRDT, P08: Embedding              â”‚  â”‚
+â”‚  â”‚  â€¢ P10-P20: PII, GDPR, Safety, Dedup, Reindex, etc.           â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  Cognitive Layer (Brain-Inspired)                              â”‚  â”‚
+â”‚  â”‚  â€¢ Attention Gate (Thalamus): Salience evaluation, admission  â”‚  â”‚
+â”‚  â”‚  â€¢ Hippocampus (DGâ†’CA3â†’CA1): Pattern separation/completion    â”‚  â”‚
+â”‚  â”‚  â€¢ Memory Steward: Policy enforcement, redaction              â”‚  â”‚
+â”‚  â”‚  â€¢ Working Memory: Active context buffering                   â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚  Storage Drivers (Multi-Tier)                                  â”‚  â”‚
+â”‚  â”‚  â€¢ CACHE (RAM, <1ms): wm_items, workspace_focus, affect       â”‚  â”‚
+â”‚  â”‚  â€¢ HOT (SQLite WAL, <10ms): episodic, semantic, procedures    â”‚  â”‚
+â”‚  â”‚  â€¢ COLD (Disk/Vector/KG, <100ms): kg_nodes, embeddings        â”‚  â”‚
+â”‚  â”‚  â€¢ ACID Cohort (tx): WAL, receipts, outbox, offsets           â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -159,10 +159,10 @@ K0 exposes **4 external ports** (what K1 calls), which internally route to **20 
 
 | Port | Purpose | Access | Transport | K1 Usage | Internal Routing |
 |------|---------|--------|-----------|----------|------------------|
-| **Command Port** | Memory writes, actions | Write (transactional) | HTTP/2 POST | Memory formation, tool results, plan persistence | → P02 (Write), P04 (Arbitration), P05 (Triggers) |
-| **Query Port** | Memory retrieval | Read-only | HTTP/2 GET | Context assembly, agent recall, LLM context | → P01 (Recall/Read, multi-store retrieval) |
-| **SSE Port** | Event streaming | Subscribe/ACK | HTTP/2 SSE | Real-time memory updates, consolidation events | ← P02 (write confirmations), P03 (consolidation) |
-| **Observability Port** | Telemetry | Read-only | HTTP/2 GET | Metrics, traces, logs | → K0 Scheduler, P01/P02 metrics |
+| **Command Port** | Memory writes, actions | Write (transactional) | HTTP/2 POST | Memory formation, tool results, plan persistence | â†’ P02 (Write), P04 (Arbitration), P05 (Triggers) |
+| **Query Port** | Memory retrieval | Read-only | HTTP/2 GET | Context assembly, agent recall, LLM context | â†’ P01 (Recall/Read, multi-store retrieval) |
+| **SSE Port** | Event streaming | Subscribe/ACK | HTTP/2 SSE | Real-time memory updates, consolidation events | â† P02 (write confirmations), P03 (consolidation) |
+| **Observability Port** | Telemetry | Read-only | HTTP/2 GET | Metrics, traces, logs | â†’ K0 Scheduler, P01/P02 metrics |
 
 ---
 
@@ -399,7 +399,7 @@ enum CommandType: byte {
 
 #### **1.3 Protocol Negotiation**
 
-**K1 → K0 Request Headers:**
+**K1 â†’ K0 Request Headers:**
 ```http
 POST /k0/ports/P01 HTTP/2
 Host: localhost:8080
@@ -413,7 +413,7 @@ Content-Length: 1024
 Content-Encoding: zstd
 ```
 
-**K0 → K1 Response:**
+**K0 â†’ K1 Response:**
 ```http
 HTTP/2 200 OK
 Content-Type: application/flatbuffers
@@ -436,7 +436,7 @@ Content-Length: 512
 
 K0's P02 Write pipeline implements **dual processing paths** inspired by brain architecture. K1 controls which path is used via `qos_band` and `obligations` fields.
 
-### 2.1 Fast Lane Processing ⚡ (GREEN Band)
+### 2.1 Fast Lane Processing âš¡ (GREEN Band)
 
 **Purpose:** Simple, fast writes for preferences, configs, and low-salience memories
 
@@ -446,9 +446,9 @@ K0's P02 Write pipeline implements **dual processing paths** inspired by brain a
 
 **Processing Flow:**
 ```
-Command Port → K0 Gate → K0 Router → K0 Scheduler
-    → evt_types → evt_bus → P02 Pipeline → st_sqlite (WAL)
-    → st_receipts (persistence proof)
+Command Port â†’ K0 Gate â†’ K0 Router â†’ K0 Scheduler
+    â†’ evt_types â†’ evt_bus â†’ P02 Pipeline â†’ st_sqlite (WAL)
+    â†’ st_receipts (persistence proof)
 ```
 
 **Performance:**
@@ -477,30 +477,30 @@ Command Port → K0 Gate → K0 Router → K0 Scheduler
 
 ---
 
-### 2.2 Smart Lane Processing 🧠 (AMBER/RED Band)
+### 2.2 Smart Lane Processing ðŸ§  (AMBER/RED Band)
 
 **Purpose:** Complex episodic memories requiring brain-inspired cognitive processing (Hippocampus)
 
 **Trigger Conditions:**
 - `qos_band = "AMBER"` or `"RED"` (elevated cognitive importance)
-- `obligations ≠ []` (requires pattern separation, consolidation, semantic integration)
+- `obligations â‰  []` (requires pattern separation, consolidation, semantic integration)
 
 **Processing Flow:**
 ```
-Command Port → K0 Gate → K0 Router → K0 Scheduler
-    → INTENT_RT (Intent Router)
-    → GATE (Attention Gate - Thalamus)
-        ↓ Salience Evaluation
-    → ADMISSION_CTRL (Cognitive Load Management)
-        ↓ Admit/Defer/Boost/Drop Decision
-    → HIPPOCAMPUS (Memory Formation System)
-        ↓ HIPPO_DG (Dentate Gyrus - Pattern Separation)
-        ↓ HIPPO_CA3 (CA3 Region - Pattern Completion)
-        ↓ HIPPO_CA1 (CA1 Region - Cortical Bridge)
-    → MS_STEWARD (Memory Steward - Policy Enforcement)
-        ↓ Redaction, Deduplication, Compliance
-    → P02 Pipeline
-    → Storage (multi-store)
+Command Port â†’ K0 Gate â†’ K0 Router â†’ K0 Scheduler
+    â†’ INTENT_RT (Intent Router)
+    â†’ GATE (Attention Gate - Thalamus)
+        â†“ Salience Evaluation
+    â†’ ADMISSION_CTRL (Cognitive Load Management)
+        â†“ Admit/Defer/Boost/Drop Decision
+    â†’ HIPPOCAMPUS (Memory Formation System)
+        â†“ HIPPO_DG (Dentate Gyrus - Pattern Separation)
+        â†“ HIPPO_CA3 (CA3 Region - Pattern Completion)
+        â†“ HIPPO_CA1 (CA1 Region - Cortical Bridge)
+    â†’ MS_STEWARD (Memory Steward - Policy Enforcement)
+        â†“ Redaction, Deduplication, Compliance
+    â†’ P02 Pipeline
+    â†’ Storage (multi-store)
         - st_sqlite (episodic_memories)
         - st_semantic (semantic_memories)
         - st_kg (knowledge graph nodes/edges)
@@ -511,19 +511,19 @@ Command Port → K0 Gate → K0 Router → K0 Scheduler
 1. **HIPPO_DG (Dentate Gyrus):** Pattern Separation
    - **Purpose:** Prevent interference between similar memories
    - **Mechanism:** Orthogonalization of memory representations, sparse coding
-   - **Example:** "Emma's soccer practice Wednesday 4pm" vs "Emma's piano lesson Thursday 3pm" → Encoded as distinct patterns
+   - **Example:** "Emma's soccer practice Wednesday 4pm" vs "Emma's piano lesson Thursday 3pm" â†’ Encoded as distinct patterns
    - **Latency:** ~20ms
 
 2. **HIPPO_CA3 (CA3 Region):** Pattern Completion
    - **Purpose:** Create associations, enable recall from partial cues
    - **Mechanism:** Autoassociative memory network, recurrent connectivity
-   - **Example:** Query "Emma soccer" → Retrieves full memory "Emma's soccer practice Wednesday 4pm"
+   - **Example:** Query "Emma soccer" â†’ Retrieves full memory "Emma's soccer practice Wednesday 4pm"
    - **Latency:** ~30ms
 
 3. **HIPPO_CA1 (CA1 Region):** Cortical Bridge
    - **Purpose:** Integrate episodic memory with semantic memory
    - **Mechanism:** Bind episodic details with long-term semantic knowledge
-   - **Example:** Link "Emma soccer practice" → Semantic knowledge "Emma is daughter, soccer is sport, Wednesday is weekday"
+   - **Example:** Link "Emma soccer practice" â†’ Semantic knowledge "Emma is daughter, soccer is sport, Wednesday is weekday"
    - **Latency:** ~40ms
 
 **Performance:**
@@ -577,7 +577,7 @@ K0's retrieval system (P01) provides brain-inspired cognitive enhancements:
 
 **Temporal Bias:**
 - **Purpose:** Recency & frequency weighting (recent = more relevant)
-- **Mechanism:** Exponential decay function: score × e^(-λt)
+- **Mechanism:** Exponential decay function: score Ã— e^(-Î»t)
 - **K1 Control:** `cognitive_enhancements.temporal_bias = "recency"` or `"frequency"`
 
 **Social Bias:**
@@ -591,13 +591,13 @@ K0's retrieval system (P01) provides brain-inspired cognitive enhancements:
 
 Each port has:
 - **Semantics**: Query vs Command vs Event
-- **Direction**: K1→K0, K0→K1, or Bidirectional
+- **Direction**: K1â†’K0, K0â†’K1, or Bidirectional
 - **Performance Budget**: Latency target (P95)
 - **Payload Schema**: FlatBuffers + JSON schemas
 
 ---
 
-#### **P01: RecallQuery (K1 → K0)**
+#### **P01: RecallQuery (K1 â†’ K0)**
 
 **Purpose:** K1 queries K0 for relevant memories (context retrieval for AI agents)
 
@@ -700,7 +700,7 @@ async def generate_plan(self, task: TaskAnnouncement):
 
 ---
 
-#### **P02: MemoryWrite (K1 → K0)**
+#### **P02: MemoryWrite (K1 â†’ K0)**
 
 **Purpose:** K1 writes state deltas to K0 (SessionState batching, conversation turns)
 
@@ -808,7 +808,7 @@ table MemoryWriteResponse {
 **Usage Example (K1 Bridge Batching):**
 ```python
 class K0BridgeClient:
-    """Pure Actor - handles K1→K0 communication batching"""
+    """Pure Actor - handles K1â†’K0 communication batching"""
 
     def __init__(self):
         self.batch_buffer = []
@@ -867,24 +867,24 @@ class K0BridgeClient:
 
 | Port | Name | Direction | Purpose | Latency Budget |
 |------|------|-----------|---------|----------------|
-| P03 | Consolidation | K0→K1 | Memory consolidation triggers | <100ms |
-| P04 | ActionArbitration | K1→K0 | Action selection queries | <80ms |
-| P05 | ProspectiveTriggers | K0→K1 | Reminder/schedule events | <50ms |
-| P06 | LearningFeedback | K1→K0 | Feedback signals (async) | Best-effort |
-| P07 | Sync/CRDT | K0↔K1 | WAL replay, multi-device sync | <200ms |
-| P08 | EmbeddingLifecycle | K1→K0 | Embedding requests | <150ms |
-| P09 | ConnectorIngestion | K1→K0 | External data ingestion | <500ms |
-| P10 | PIIDetection | K1→K0 | PII redaction requests | <100ms |
-| P11 | DSAR/GDPR | K0→K1 | Data export/deletion | <5000ms |
-| P12 | PolicyEval | K1→K0 | Policy decisions (caps/bands) | <20ms |
-| P13 | IndexRebuild | K0→K1 | Reindex coordination | <1000ms |
-| P14 | Deduplication | K0→K1 | Near-duplicate detection | <200ms |
-| P15 | Rollups | K0→K1 | Summary generation | <500ms |
-| P16 | FeatureFlags | K0→K1 | A/B testing config | <10ms |
-| P17 | QoS | K1→K0 | Resource allocation, budgets | <20ms |
-| P18 | PersonalizationSync | K0→K1 | Persona state (traits) | <50ms |
-| P19 | Safety | K1→K0 | Safety filtering | <50ms |
-| P20 | Procedures | K0↔K1 | Habit execution | <100ms |
+| P03 | Consolidation | K0â†’K1 | Memory consolidation triggers | <100ms |
+| P04 | ActionArbitration | K1â†’K0 | Action selection queries | <80ms |
+| P05 | ProspectiveTriggers | K0â†’K1 | Reminder/schedule events | <50ms |
+| P06 | LearningFeedback | K1â†’K0 | Feedback signals (async) | Best-effort |
+| P07 | Sync/CRDT | K0â†”K1 | WAL replay, multi-device sync | <200ms |
+| P08 | EmbeddingLifecycle | K1â†’K0 | Embedding requests | <150ms |
+| P09 | ConnectorIngestion | K1â†’K0 | External data ingestion | <500ms |
+| P10 | PIIDetection | K1â†’K0 | PII redaction requests | <100ms |
+| P11 | DSAR/GDPR | K0â†’K1 | Data export/deletion | <5000ms |
+| P12 | PolicyEval | K1â†’K0 | Policy decisions (caps/bands) | <20ms |
+| P13 | IndexRebuild | K0â†’K1 | Reindex coordination | <1000ms |
+| P14 | Deduplication | K0â†’K1 | Near-duplicate detection | <200ms |
+| P15 | Rollups | K0â†’K1 | Summary generation | <500ms |
+| P16 | FeatureFlags | K0â†’K1 | A/B testing config | <10ms |
+| P17 | QoS | K1â†’K0 | Resource allocation, budgets | <20ms |
+| P18 | PersonalizationSync | K0â†’K1 | Persona state (traits) | <50ms |
+| P19 | Safety | K1â†’K0 | Safety filtering | <50ms |
+| P20 | Procedures | K0â†”K1 | Habit execution | <100ms |
 
 **Note:** Detailed FlatBuffers + JSON schemas for P03-P20 will be defined in separate schema files.
 
@@ -893,11 +893,11 @@ class K0BridgeClient:
 ### **3. HTTP/2 Transport Layer**
 
 **Why HTTP/2?**
-- ✅ **Multiplexing**: Multiple requests over single connection (no head-of-line blocking)
-- ✅ **Server push**: K0 can push events to K1 (P05 ProspectiveTriggers)
-- ✅ **Header compression**: HPACK reduces overhead
-- ✅ **TLS 1.3**: Built-in encryption, modern ciphers
-- ✅ **Widespread support**: FastAPI (K0), aiohttp (K1) both support HTTP/2
+- âœ… **Multiplexing**: Multiple requests over single connection (no head-of-line blocking)
+- âœ… **Server push**: K0 can push events to K1 (P05 ProspectiveTriggers)
+- âœ… **Header compression**: HPACK reduces overhead
+- âœ… **TLS 1.3**: Built-in encryption, modern ciphers
+- âœ… **Widespread support**: FastAPI (K0), aiohttp (K1) both support HTTP/2
 
 **Connection Pool:**
 ```python
@@ -1020,7 +1020,7 @@ async def send_batch(self, batch: MemoryWriteBatch):
 **Measured Results:**
 - Zstd level 3: ~60% compression ratio, <5ms overhead
 - Batch size: 20-50 deltas per batch (typical)
-- Latency savings: ~80% (50 individual calls → 1 batch call)
+- Latency savings: ~80% (50 individual calls â†’ 1 batch call)
 
 ---
 
@@ -1107,9 +1107,9 @@ K0 issues receipts for all writes:
 ```
 
 Signature proves:
-- ✅ K0 accepted the write
-- ✅ Timestamp is accurate (K0 clock)
-- ✅ Non-repudiation (K0 cannot deny receipt)
+- âœ… K0 accepted the write
+- âœ… Timestamp is accurate (K0 clock)
+- âœ… Non-repudiation (K0 cannot deny receipt)
 
 ---
 
@@ -1185,49 +1185,49 @@ logger.info(
 
 ## Consequences
 
-### Positive ✅
+### Positive âœ…
 
-**✅ Dual Protocol Support:**
+**âœ… Dual Protocol Support:**
 - JSON (PRIMARY): K0 native format, human-readable, backward compatible, no conversion overhead on K0
 - FlatBuffers (SECONDARY): K1 optimization for high-frequency operations, zero-copy, <0.5ms serialization
 - **Result:** Best of both worlds - K0 compatibility + K1 performance
 
-**✅ Brain-Inspired Processing:**
+**âœ… Brain-Inspired Processing:**
 - Fast Lane (GREEN, <50ms): Simple writes bypass cognitive layer
-- Smart Lane (AMBER/RED, <200ms): Hippocampus DG→CA3→CA1 for complex episodic memories
+- Smart Lane (AMBER/RED, <200ms): Hippocampus DGâ†’CA3â†’CA1 for complex episodic memories
 - **Result:** K1 controls processing intelligence via qos_band + obligations
 
-**✅ Multi-Store Retrieval:**
+**âœ… Multi-Store Retrieval:**
 - P01 orchestrates FTS + Vector + KG + Episodic retrieval in parallel
 - Fusion Engine combines results with MMR for diversity
 - Cognitive enhancements (working memory, affect, temporal, social bias)
 - **Result:** Rich context assembly with brain-inspired intelligence
 
-**✅ Performance & Scalability:**
+**âœ… Performance & Scalability:**
 - Bridge latency <10ms P95 (measured 8ms)
 - Batching (250ms / 64KB) amortizes overhead for writes
 - HTTP/2 multiplexing prevents head-of-line blocking
 - **Result:** Meets K1 performance budgets (TTFT <150ms, E2E <2000ms)
 
-**✅ Reliability & Resilience:**
-- Circuit breaker (3 failures → open for 60s) prevents cascading failures
+**âœ… Reliability & Resilience:**
+- Circuit breaker (3 failures â†’ open for 60s) prevents cascading failures
 - Local cache + exponential backoff retry for K0 unavailability
 - Device-signed receipts for persistence proof
 - **Result:** Zero data loss, graceful degradation
 
-**✅ Observability & Tracing:**
-- cognitive_trace_id propagates K1 → K0 → Storage → K1 (end-to-end)
+**âœ… Observability & Tracing:**
+- cognitive_trace_id propagates K1 â†’ K0 â†’ Storage â†’ K1 (end-to-end)
 - Prometheus metrics for all bridge operations (latency, errors, batch size)
 - OpenTelemetry spans for distributed tracing
-- **Result:** Full visibility into K1↔K0 interactions
+- **Result:** Full visibility into K1â†”K0 interactions
 
-**✅ Security & Privacy:**
-- TLS 1.3 encryption for all K1↔K0 transport
+**âœ… Security & Privacy:**
+- TLS 1.3 encryption for all K1â†”K0 transport
 - Device signatures for authentication
 - K0 enforces privacy bands (GREEN/AMBER/RED) and PII minimization (P10)
 - **Result:** Production-grade security with GDPR compliance
 
-**✅ Versioning & Evolution:**
+**âœ… Versioning & Evolution:**
 - Schema versions in envelopes enable graceful upgrades
 - K0 supports multiple protocol versions simultaneously
 - FlatBuffers backward/forward compatibility
@@ -1235,42 +1235,42 @@ logger.info(
 
 ---
 
-### Negative ⚠️
+### Negative âš ï¸
 
-**⚠️ Dual Format Maintenance:**
+**âš ï¸ Dual Format Maintenance:**
 - Must maintain both JSON and FlatBuffers schemas
 - Schema changes require updates to both formats
 - **Mitigation:** Use schema-first design with FlatBuffers IDL, generate JSON schemas from FlatBuffers
-- **Mitigation:** Automated schema validation in CI/CD (pytest + Ward tests)
+- **Mitigation:** Automated schema validation in CI/CD (ward + Ward tests)
 
-**⚠️ Batching Latency:**
+**âš ï¸ Batching Latency:**
 - 250ms batching window adds delay for writes
 - Non-critical writes wait up to 250ms before flush
 - **Mitigation:** Async writes don't block K1 agents, acceptable for non-critical paths
 - **Mitigation:** K1 can force immediate flush for critical writes (qos_band="RED")
 
-**⚠️ FlatBuffers Debugging:**
+**âš ï¸ FlatBuffers Debugging:**
 - FlatBuffers binary format not human-readable
 - Harder to debug than JSON with `jq` or text editors
 - **Mitigation:** Use FlatBuffers reflection API to convert to JSON for debugging
 - **Mitigation:** K1 Bridge Client logs all operations with JSON-formatted payloads
 - **Mitigation:** Fallback to JSON format in development/staging environments
 
-**⚠️ K0 Dependency:**
+**âš ï¸ K0 Dependency:**
 - K1 depends on K0 for all memory operations
 - K0 unavailability degrades K1 capabilities
 - **Mitigation:** Circuit breaker + local cache allows K1 to operate with stale context
 - **Mitigation:** K1 SessionState (64KB in-memory) provides working memory buffer
 - **Mitigation:** Graceful degradation: K1 operates with reduced context if K0 unavailable >5 minutes
 
-**⚠️ Smart Lane Latency:**
+**âš ï¸ Smart Lane Latency:**
 - Hippocampus processing adds 150-175ms latency (vs 42ms Fast Lane)
 - May impact TTFT budget for conversational AI
 - **Mitigation:** K1 chooses Fast Lane (GREEN) for low-salience writes
 - **Mitigation:** Smart Lane (AMBER/RED) reserved for complex episodic memories only
 - **Mitigation:** Async writes don't block AI agent response generation
 
-**⚠️ Learning Curve:**
+**âš ï¸ Learning Curve:**
 - K1 developers must understand K0 architecture (ports, pipelines, cognitive layer)
 - QoS band selection requires cognitive reasoning (GREEN vs AMBER/RED)
 - **Mitigation:** Comprehensive documentation (this ADR + integration summary)
@@ -1281,7 +1281,7 @@ logger.info(
 
 ## Summary
 
-**K0↔K1 Integration Architecture Complete** ✅
+**K0â†”K1 Integration Architecture Complete** âœ…
 
 K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Module (brain-inspired storage backbone) via **K0 Bridge Client** using:
 
@@ -1324,7 +1324,7 @@ K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Mod
 - [ ] P03-P20 schemas (FlatBuffers + JSON)
 - [ ] Port routing logic
 - [ ] Performance testing (latency budgets)
-- [ ] Integration tests (K1 ↔ K0 end-to-end)
+- [ ] Integration tests (K1 â†” K0 end-to-end)
 
 ### **Phase 4: Observability (Week 4)**
 - [ ] Prometheus metrics
@@ -1337,20 +1337,20 @@ K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Mod
 ## Success Metrics
 
 **Performance:**
-- ✅ Bridge latency <10ms P95 (measured per port)
-- ✅ Batch compression ratio >50%
-- ✅ Circuit breaker recovery <60s
-- ✅ Zero data loss (receipts for all writes)
+- âœ… Bridge latency <10ms P95 (measured per port)
+- âœ… Batch compression ratio >50%
+- âœ… Circuit breaker recovery <60s
+- âœ… Zero data loss (receipts for all writes)
 
 **Reliability:**
-- ✅ K0 downtime handled gracefully (queued writes replayed)
-- ✅ Circuit breaker prevents cascading failures
-- ✅ HTTP/2 multiplexing prevents head-of-line blocking
+- âœ… K0 downtime handled gracefully (queued writes replayed)
+- âœ… Circuit breaker prevents cascading failures
+- âœ… HTTP/2 multiplexing prevents head-of-line blocking
 
 **Observability:**
-- ✅ cognitive_trace_id propagates end-to-end
-- ✅ All bridge operations logged with Prometheus metrics
-- ✅ OpenTelemetry spans for distributed tracing
+- âœ… cognitive_trace_id propagates end-to-end
+- âœ… All bridge operations logged with Prometheus metrics
+- âœ… OpenTelemetry spans for distributed tracing
 
 ---
 
@@ -1366,7 +1366,7 @@ K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Mod
 
 ---
 
-**Document Status:** Draft → In Progress
+**Document Status:** Draft â†’ In Progress
 **Next Steps:**
 1. Implement HTTP/2 connection pool (K1)
 2. Implement FastAPI gateway (K0)
@@ -1377,3 +1377,4 @@ K1 Intelligence Module (AI agentic orchestrator) communicates with K0 Memory Mod
 
 **Amendment History:**
 - 2025-10-12: Initial draft with dual protocol support (JSON + FlatBuffers)
+

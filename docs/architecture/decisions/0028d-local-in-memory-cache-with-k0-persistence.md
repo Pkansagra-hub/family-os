@@ -1,4 +1,4 @@
-# ADR-0028d: Local In-Memory Cache with K0 Persistence Fallback
+﻿# ADR-0028d: Local In-Memory Cache with K0 Persistence Fallback
 
 **Status:** PROPOSED
 
@@ -46,87 +46,87 @@ K1 needs a **fast, reliable local cache** with ZERO external dependencies. Three
 
 ```
 RUNTIME REQUEST PATH (99% of requests):
-┌─────────────────┐
-│ Request arrives │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Check in-memory cache (<0.1ms)          │
-│ ✅ Token revoked?                       │
-│ ✅ Capability revoked?                  │
-│ ✅ Idempotent request?                  │
-└────────┬────────────────────────────────┘
-         │ CACHE HIT (99% of time)
-         ▼
-┌─────────────────────────────────────────┐
-│ Return result immediately               │
-│ No K0 call needed!                      │
-└─────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Request arrives â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Check in-memory cache (<0.1ms)          â”‚
+â”‚ âœ… Token revoked?                       â”‚
+â”‚ âœ… Capability revoked?                  â”‚
+â”‚ âœ… Idempotent request?                  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚ CACHE HIT (99% of time)
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Return result immediately               â”‚
+â”‚ No K0 call needed!                      â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 REVOCATION EVENT PATH:
-┌─────────────────────────────────────────┐
-│ Admin revokes token/capability          │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ 1. Add to in-memory cache (0.1ms)       │
-│    ✅ Immediate protection              │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ 2. Async write to K0 (2-5ms)            │
-│    ✅ Non-blocking                      │
-│    ✅ Survives restart                  │
-└─────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Admin revokes token/capability          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ 1. Add to in-memory cache (0.1ms)       â”‚
+â”‚    âœ… Immediate protection              â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ 2. Async write to K0 (2-5ms)            â”‚
+â”‚    âœ… Non-blocking                      â”‚
+â”‚    âœ… Survives restart                  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 K1 STARTUP/WARMUP PATH:
-┌─────────────────────────────────────────┐
-│ K1 starting up                          │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Query K0: "All revoked tokens"          │
-│ Query K0: "All revoked capabilities"    │
-│ Time: <100ms (batch load)               │
-└────────┬────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────┐
-│ Load into in-memory cache               │
-│ ✅ Ready for requests                   │
-└─────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 starting up                          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Query K0: "All revoked tokens"          â”‚
+â”‚ Query K0: "All revoked capabilities"    â”‚
+â”‚ Time: <100ms (batch load)               â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+         â”‚
+         â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Load into in-memory cache               â”‚
+â”‚ âœ… Ready for requests                   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ### Characteristics
 
 **Pros:**
 
-- ✅ **ZERO external dependencies** (no Redis, Memcached, external processes)
-- ✅ **Sub-millisecond latency** (<0.1ms in-memory lookup)
-- ✅ **Minimal memory overhead** (~1MB dict structure)
-- ✅ **Instant startup** (<1ms to initialize)
-- ✅ **No operational burden** (nothing to manage/monitor)
-- ✅ **Security data persisted** (K0 stores all revocations)
-- ✅ **Pure Python** (no binary dependencies)
-- ✅ **On-device only** (no cloud dependency)
-- ✅ **Automatic recovery** (cache repopulated on restart)
-- ✅ **Non-critical data loss OK** (idempotency cache expires in 5min anyway)
+- âœ… **ZERO external dependencies** (no Redis, Memcached, external processes)
+- âœ… **Sub-millisecond latency** (<0.1ms in-memory lookup)
+- âœ… **Minimal memory overhead** (~1MB dict structure)
+- âœ… **Instant startup** (<1ms to initialize)
+- âœ… **No operational burden** (nothing to manage/monitor)
+- âœ… **Security data persisted** (K0 stores all revocations)
+- âœ… **Pure Python** (no binary dependencies)
+- âœ… **On-device only** (no cloud dependency)
+- âœ… **Automatic recovery** (cache repopulated on restart)
+- âœ… **Non-critical data loss OK** (idempotency cache expires in 5min anyway)
 
 **Cons:**
 
-- ⚠️ Idempotency cache lost on K1 restart (acceptable - 5min window)
-- ⚠️ Requires K0 integration (already required for persistence)
-- ⚠️ Background TTL cleanup needed (simple coroutine)
+- âš ï¸ Idempotency cache lost on K1 restart (acceptable - 5min window)
+- âš ï¸ Requires K0 integration (already required for persistence)
+- âš ï¸ Background TTL cleanup needed (simple coroutine)
 
 ### Performance Profile
 
 ```
 RUNTIME PERFORMANCE:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 GET (in-memory):           <0.1ms  (direct dict access)
 SET (in-memory):           <0.1ms  (dict insert + lock)
 PERSIST to K0:             2-5ms   (async, non-blocking)
@@ -134,29 +134,29 @@ Cache warmup (startup):    <100ms  (batch load 1000 entries)
 Memory overhead:           ~1MB    (dict + lock + structures)
 
 CONSISTENCY GUARANTEE:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 Critical Data (tokens, capabilities):
 - Revocation in-memory:    0.1ms (immediate)
 - Persisted to K0:         2-5ms (async)
 - On restart:              <100ms (recovered from K0)
-- Guarantee:               ✅ NEVER lose security data
+- Guarantee:               âœ… NEVER lose security data
 
 Non-Critical (idempotency):
 - Cache entry:             0.1ms (immediate)
 - Persistence:             None (acceptable)
 - On restart:              Lost (OK - 5min window)
-- Guarantee:               ✅ Deduplication during session
+- Guarantee:               âœ… Deduplication during session
 ```
 
 ### Reliability Matrix
 
 | Scenario | Latency | Persistence | Recovery | Status |
 |----------|---------|-------------|----------|--------|
-| Token check (runtime) | <0.1ms | ✅ Async K0 | ✅ Auto | ✅ |
-| Capability check (runtime) | <0.1ms | ✅ Async K0 | ✅ Auto | ✅ |
-| Idempotency check (runtime) | <0.1ms | ❌ None | ❌ Lost | ✅ |
-| Token revocation | <1ms total | ✅ Sync K0 | ✅ Auto | ✅ |
-| K1 restart | N/A | ✅ K0 | ✅ <100ms | ✅ |
+| Token check (runtime) | <0.1ms | âœ… Async K0 | âœ… Auto | âœ… |
+| Capability check (runtime) | <0.1ms | âœ… Async K0 | âœ… Auto | âœ… |
+| Idempotency check (runtime) | <0.1ms | âŒ None | âŒ Lost | âœ… |
+| Token revocation | <1ms total | âœ… Sync K0 | âœ… Auto | âœ… |
+| K1 restart | N/A | âœ… K0 | âœ… <100ms | âœ… |
 
 ---
 
@@ -178,7 +178,7 @@ class InMemoryCache:
     """Local in-memory cache with TTL expiration (zero external dependencies)"""
 
     def __init__(self, max_size: int = 10000, cleanup_interval: int = 60):
-        self._cache: Dict[str, Tuple[Any, float]] = {}  # key → (value, expire_time)
+        self._cache: Dict[str, Tuple[Any, float]] = {}  # key â†’ (value, expire_time)
         self._max_size = max_size
         self._lock = asyncio.Lock()
         self._cleanup_task = None
@@ -287,8 +287,8 @@ class PersistentCache(InMemoryCache):
     async def persist_token_revocation(self, token_id: str) -> None:
         """
         Revoke JWT token:
-        1. Immediate in-memory cache (0.1ms) → request protection starts NOW
-        2. Async K0 write (2-5ms) → survives restart
+        1. Immediate in-memory cache (0.1ms) â†’ request protection starts NOW
+        2. Async K0 write (2-5ms) â†’ survives restart
         """
         cache_key = f"revoked_token:{token_id}"
         await self.set(cache_key, True, ttl_seconds=86400)
@@ -305,8 +305,8 @@ class PersistentCache(InMemoryCache):
     async def persist_capability_revocation(self, agent_id: str, capability_name: str) -> None:
         """
         Revoke agent capability:
-        1. Immediate in-memory cache (0.1ms) → access denied starts NOW
-        2. Async K0 write (2-5ms) → survives restart
+        1. Immediate in-memory cache (0.1ms) â†’ access denied starts NOW
+        2. Async K0 write (2-5ms) â†’ survives restart
         """
         cache_key = f"revoked_capability:{agent_id}:{capability_name}"
         await self.set(cache_key, True, ttl_seconds=86400)
@@ -412,9 +412,9 @@ class OrchestrationCore:
         Revoke JWT token immediately.
 
         Execution:
-        1. Add to in-memory cache (0.1ms) ← immediate effect
-        2. Store in K0 (async 2-5ms) ← survives restart
-        3. Return to caller (~0.2ms) ← non-blocking
+        1. Add to in-memory cache (0.1ms) â† immediate effect
+        2. Store in K0 (async 2-5ms) â† survives restart
+        3. Return to caller (~0.2ms) â† non-blocking
         """
         await self.cache.persist_token_revocation(token_id)
 
@@ -432,9 +432,9 @@ class OrchestrationCore:
         Revoke agent capability immediately.
 
         Execution:
-        1. Add to in-memory cache (0.1ms) ← immediate effect
-        2. Store in K0 (async 2-5ms) ← survives restart
-        3. Return to caller (~0.2ms) ← non-blocking
+        1. Add to in-memory cache (0.1ms) â† immediate effect
+        2. Store in K0 (async 2-5ms) â† survives restart
+        3. Return to caller (~0.2ms) â† non-blocking
         """
         await self.cache.persist_capability_revocation(agent_id, capability_name)
 
@@ -457,11 +457,11 @@ class OrchestrationCore:
 
 | Operation | Target | Actual | Status |
 |-----------|--------|--------|--------|
-| **Token revocation check** | <1ms | <0.1ms | ✅ 10× better |
-| **Capability revocation check** | <1ms | <0.1ms | ✅ 10× better |
-| **Cache set operation** | <1ms | <0.1ms | ✅ 10× better |
-| **K1 startup (cache warm)** | <500ms | <100ms | ✅ 5× better |
-| **Memory overhead** | <10MB | ~1MB | ✅ 90% savings |
+| **Token revocation check** | <1ms | <0.1ms | âœ… 10Ã— better |
+| **Capability revocation check** | <1ms | <0.1ms | âœ… 10Ã— better |
+| **Cache set operation** | <1ms | <0.1ms | âœ… 10Ã— better |
+| **K1 startup (cache warm)** | <500ms | <100ms | âœ… 5Ã— better |
+| **Memory overhead** | <10MB | ~1MB | âœ… 90% savings |
 
 ### Consistency Guarantees
 
@@ -469,24 +469,24 @@ class OrchestrationCore:
 
 ```
 Timeline:
-0ms    → Revocation event triggered
-0.1ms  → In-memory cache updated (protection active)
-2-5ms  → K0 persistence complete (durable)
-∞      → On K1 restart, reload from K0 (<100ms)
+0ms    â†’ Revocation event triggered
+0.1ms  â†’ In-memory cache updated (protection active)
+2-5ms  â†’ K0 persistence complete (durable)
+âˆž      â†’ On K1 restart, reload from K0 (<100ms)
 
-Guarantee: ✅ NEVER lose revocation data
+Guarantee: âœ… NEVER lose revocation data
 ```
 
 **Non-Critical Data (Idempotency):**
 
 ```
 Timeline:
-0ms    → Request arrives
-0.1ms  → Checked in cache (no duplicate execution)
-5min   → TTL expires (entry removed)
-K1 restart → Lost (acceptable, 5min window)
+0ms    â†’ Request arrives
+0.1ms  â†’ Checked in cache (no duplicate execution)
+5min   â†’ TTL expires (entry removed)
+K1 restart â†’ Lost (acceptable, 5min window)
 
-Guarantee: ✅ Deduplication during session
+Guarantee: âœ… Deduplication during session
 ```
 
 ---
@@ -497,10 +497,10 @@ Guarantee: ✅ Deduplication during session
 
 ```python
 # tests/k1/l5_infrastructure/cache/test_in_memory_cache.py
-import pytest
+import ward
 from k1.l5_infrastructure.cache.in_memory import InMemoryCache
 
-@pytest.mark.asyncio
+@ward.mark.asyncio
 async def test_basic_get_set():
     cache = InMemoryCache()
     await cache.start()
@@ -511,7 +511,7 @@ async def test_basic_get_set():
 
     await cache.stop()
 
-@pytest.mark.asyncio
+@ward.mark.asyncio
 async def test_ttl_expiration():
     cache = InMemoryCache()
     await cache.start()
@@ -524,7 +524,7 @@ async def test_ttl_expiration():
 
     await cache.stop()
 
-@pytest.mark.asyncio
+@ward.mark.asyncio
 async def test_latency_sub_millisecond():
     cache = InMemoryCache()
     await cache.start()
@@ -540,7 +540,7 @@ async def test_latency_sub_millisecond():
     assert elapsed_ms < 1.0  # <1ms average
     await cache.stop()
 
-@pytest.mark.asyncio
+@ward.mark.asyncio
 async def test_lru_eviction():
     cache = InMemoryCache(max_size=2)
     await cache.start()
@@ -559,7 +559,7 @@ async def test_lru_eviction():
 ### Integration Tests (With K0)
 
 ```python
-@pytest.mark.asyncio
+@ward.mark.asyncio
 async def test_token_revocation_with_persistence(k0_mock):
     cache = PersistentCache(k0_mock.memory_port)
     await cache.start()
@@ -583,9 +583,9 @@ async def test_token_revocation_with_persistence(k0_mock):
 
 **Week 1 (NOW):**
 
-- ✅ Create InMemoryCache core
-- ✅ Create PersistentCache wrapper
-- ✅ Create CacheWarmer recovery logic
+- âœ… Create InMemoryCache core
+- âœ… Create PersistentCache wrapper
+- âœ… Create CacheWarmer recovery logic
 - Write comprehensive tests
 
 **Week 2:**
@@ -671,3 +671,4 @@ GET /healthz/cache
 - [ ] Add monitoring & metrics
 - [ ] Performance profile (<100ms warmup, <0.1ms lookup)
 - [ ] Update ADR status to IMPLEMENTED
+

@@ -1,4 +1,4 @@
-# ADR-0081b: Graph Query API & Traversal Algorithms
+﻿# ADR-0081b: Graph Query API & Traversal Algorithms
 
 **Status:** Proposed
 **Date:** 2025-10-22
@@ -9,9 +9,9 @@
 
 From **ADR-0081**, LLMs need **structured query API** to:
 
-1. **Entity Lookup:** "Who is Alice?" → retrieve entity with relationships + attributes
-2. **Temporal Queries:** "Who got married in 2024?" → event-based queries with timestamps
-3. **Relationship Traversal:** "How is Bob related to Eve?" → graph path algorithms (BFS/DFS)
+1. **Entity Lookup:** "Who is Alice?" â†’ retrieve entity with relationships + attributes
+2. **Temporal Queries:** "Who got married in 2024?" â†’ event-based queries with timestamps
+3. **Relationship Traversal:** "How is Bob related to Eve?" â†’ graph path algorithms (BFS/DFS)
 4. **Performance:** <10ms P95 entity lookup, <50ms P95 graph queries
 
 **From K0 Architecture Diagrams:**
@@ -158,7 +158,7 @@ async def get_relationships(
     Args:
         source_id: Node ID
         rel_type: Filter by relationship type (None = all types)
-        direction: outgoing (source → target), incoming (target → source), both
+        direction: outgoing (source â†’ target), incoming (target â†’ source), both
         as_of: Unix timestamp (ms) for temporal snapshot (None = current)
         include_properties: Include relationship properties
 
@@ -203,8 +203,8 @@ async def find_path(
         paths = await find_path("node-bob", "node-eve", max_depth=6)
         if paths:
             shortest = paths[0]
-            print(" → ".join(rel.rel_type for rel in shortest))
-            # Output: brother_of → parent → married_to
+            print(" â†’ ".join(rel.rel_type for rel in shortest))
+            # Output: brother_of â†’ parent â†’ married_to
     """
     # BFS algorithm (see implementation below)
     pass
@@ -234,10 +234,10 @@ async def get_relationship_history(
             "employed_by"
         )
         for rel in history:
-            print(f"{rel.valid_from} → {rel.valid_to}: {rel.rel_type}")
+            print(f"{rel.valid_from} â†’ {rel.valid_to}: {rel.rel_type}")
         # Output:
-        # 2018-01-01 → 2023-01-01: employed_by
-        # 2023-01-01 → None: employed_by (Google)
+        # 2018-01-01 â†’ 2023-01-01: employed_by
+        # 2023-01-01 â†’ None: employed_by (Google)
     """
     pass
 ```
@@ -397,7 +397,7 @@ async def get_neighbors(
         as_of: Unix timestamp (ms) for temporal snapshot
 
     Returns:
-        Dict mapping depth → list of entities at that depth
+        Dict mapping depth â†’ list of entities at that depth
 
     Performance: <50ms P95 (depth 3)
 
@@ -513,7 +513,7 @@ async def find_path_bidirectional_bfs(
     Time Complexity: O(2 * b^(d/2)) vs O(b^d) for standard BFS
     where b = branching factor, d = depth
 
-    Performance: ~2× faster for depth > 4
+    Performance: ~2Ã— faster for depth > 4
     """
     # Implementation: Two BFS queues (forward + backward)
     pass
@@ -634,7 +634,7 @@ async def update_entity(entity_id: str, properties: Dict):
 async def get_entities_batch(entity_ids: List[str]) -> Dict[str, Entity]:
     """Batch entity lookup (single query).
 
-    Performance: 10× faster than N individual queries
+    Performance: 10Ã— faster than N individual queries
     """
     query = f"""
         SELECT node_id, entity_type, label, properties, created_at, updated_at
@@ -716,24 +716,24 @@ class QueryPort:
 
 ### Positive
 
-1. **✅ Fast Entity Lookup:** <10ms P95 (indexed queries)
-2. **✅ Fast Relationship Queries:** <30ms P95 (1 hop), <80ms P95 (3 hops)
-3. **✅ Shortest Path:** <100ms P95 (BFS, depth 6, 1000 nodes)
-4. **✅ Temporal Reasoning:** Query graph state at any point in time
-5. **✅ Flexible Traversal:** Generic traversal API with filters
-6. **✅ Batch Queries:** 10× faster for multiple entity lookups
-7. **✅ Caching:** LRU cache reduces repeated queries
+1. **âœ… Fast Entity Lookup:** <10ms P95 (indexed queries)
+2. **âœ… Fast Relationship Queries:** <30ms P95 (1 hop), <80ms P95 (3 hops)
+3. **âœ… Shortest Path:** <100ms P95 (BFS, depth 6, 1000 nodes)
+4. **âœ… Temporal Reasoning:** Query graph state at any point in time
+5. **âœ… Flexible Traversal:** Generic traversal API with filters
+6. **âœ… Batch Queries:** 10Ã— faster for multiple entity lookups
+7. **âœ… Caching:** LRU cache reduces repeated queries
 
 ### Negative
 
-1. **❌ Graph Complexity:** Large graphs (10000+ edges) may exceed P95 targets
-2. **❌ Deep Traversal:** Depth > 6 hops can be slow (exponential growth)
-3. **❌ Cache Invalidation:** Complex invalidation logic for entity updates
-4. **❌ Memory Usage:** LRU cache uses ~10 MB for 1000 entities
+1. **âŒ Graph Complexity:** Large graphs (10000+ edges) may exceed P95 targets
+2. **âŒ Deep Traversal:** Depth > 6 hops can be slow (exponential growth)
+3. **âŒ Cache Invalidation:** Complex invalidation logic for entity updates
+4. **âŒ Memory Usage:** LRU cache uses ~10 MB for 1000 entities
 
 ### Mitigations
 
-1. **Graph Complexity:** Use bidirectional BFS for long paths (2× speedup)
+1. **Graph Complexity:** Use bidirectional BFS for long paths (2Ã— speedup)
 2. **Deep Traversal:** Limit max_depth to 6 hops (reasonable for family graphs)
 3. **Cache Invalidation:** TTL-based expiration (60 seconds) + manual invalidation
 4. **Memory Usage:** Configurable cache size (default 1000 entities)
@@ -795,7 +795,7 @@ class SQLiteKGDriver:
 
 ```python
 # tests/k0/query/test_kg_temporal.py
-import pytest
+import ward
 from k0.query.kg_temporal import get_entity, find_path, get_events
 
 async def test_get_entity():
@@ -822,7 +822,7 @@ async def test_temporal_query():
 
 ```python
 # tests/k0/query/test_kg_temporal_performance.py
-import pytest
+import ward
 import time
 
 async def test_entity_lookup_performance():
@@ -860,7 +860,7 @@ async def test_find_path_performance():
 **Related ADRs:**
 - ADR-0081: K0 Knowledge Graph Architecture (parent)
 - ADR-0081a: Temporal Graph Schema Design
-- ADR-0081c: Episodic Memory → KG Integration
+- ADR-0081c: Episodic Memory â†’ KG Integration
 - ADR-0001: K0/K1 Kernel Split (Query Port)
 
 **Implementation Files:**
@@ -877,3 +877,4 @@ async def test_find_path_performance():
 3. Write query API tests
 4. Write performance tests
 5. Integrate with K0 Query Port
+

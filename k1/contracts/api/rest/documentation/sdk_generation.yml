@@ -1,4 +1,4 @@
-# SDK Auto-Generation - TypeScript, Python, Go, Ruby
+﻿# SDK Auto-Generation - TypeScript, Python, Go, Ruby
 # Part of: ADR-0041d (OpenAPI Spec & RFC 7807 Error Handling)
 # Purpose: Auto-generate type-safe client SDKs from OpenAPI 3.1 spec
 # Research: openapi-generator-cli, semantic versioning, type safety
@@ -54,7 +54,7 @@ sdk_generation_architecture:
   benefits:
     - "Type-safe API clients (compile-time errors)"
     - "Auto-completion in IDEs"
-    - "50% faster integration (8 hours → 4 hours)"
+    - "50% faster integration (8 hours â†’ 4 hours)"
     - "No manual HTTP requests/parsing"
     - "Consistent error handling"
 
@@ -72,19 +72,19 @@ generator_commands:
 
     output_structure: |
       sdk/typescript/
-      ├── src/
-      │   ├── api/
-      │   │   ├── sessions-api.ts       # SessionsApi class
-      │   │   ├── turns-api.ts          # TurnsApi class
-      │   │   └── agents-api.ts         # AgentsApi class
-      │   ├── models/
-      │   │   ├── create-session-request.ts
-      │   │   ├── session-response.ts
-      │   │   └── problem-details.ts
-      │   └── index.ts
-      ├── package.json
-      ├── tsconfig.json
-      └── README.md
+      â”œâ”€â”€ src/
+      â”‚   â”œâ”€â”€ api/
+      â”‚   â”‚   â”œâ”€â”€ sessions-api.ts       # SessionsApi class
+      â”‚   â”‚   â”œâ”€â”€ turns-api.ts          # TurnsApi class
+      â”‚   â”‚   â””â”€â”€ agents-api.ts         # AgentsApi class
+      â”‚   â”œâ”€â”€ models/
+      â”‚   â”‚   â”œâ”€â”€ create-session-request.ts
+      â”‚   â”‚   â”œâ”€â”€ session-response.ts
+      â”‚   â”‚   â””â”€â”€ problem-details.ts
+      â”‚   â””â”€â”€ index.ts
+      â”œâ”€â”€ package.json
+      â”œâ”€â”€ tsconfig.json
+      â””â”€â”€ README.md
 
     generated_lines: "~4,500 lines TypeScript"
 
@@ -98,19 +98,19 @@ generator_commands:
 
     output_structure: |
       sdk/python/
-      ├── k1_rest_api_client/
-      │   ├── api/
-      │   │   ├── sessions_api.py       # SessionsApi class
-      │   │   ├── turns_api.py          # TurnsApi class
-      │   │   └── agents_api.py         # AgentsApi class
-      │   ├── models/
-      │   │   ├── create_session_request.py
-      │   │   ├── session_response.py
-      │   │   └── problem_details.py
-      │   └── __init__.py
-      ├── setup.py
-      ├── requirements.txt
-      └── README.md
+      â”œâ”€â”€ k1_rest_api_client/
+      â”‚   â”œâ”€â”€ api/
+      â”‚   â”‚   â”œâ”€â”€ sessions_api.py       # SessionsApi class
+      â”‚   â”‚   â”œâ”€â”€ turns_api.py          # TurnsApi class
+      â”‚   â”‚   â””â”€â”€ agents_api.py         # AgentsApi class
+      â”‚   â”œâ”€â”€ models/
+      â”‚   â”‚   â”œâ”€â”€ create_session_request.py
+      â”‚   â”‚   â”œâ”€â”€ session_response.py
+      â”‚   â”‚   â””â”€â”€ problem_details.py
+      â”‚   â””â”€â”€ __init__.py
+      â”œâ”€â”€ setup.py
+      â”œâ”€â”€ requirements.txt
+      â””â”€â”€ README.md
 
     generated_lines: "~5,200 lines Python"
 
@@ -124,17 +124,17 @@ generator_commands:
 
     output_structure: |
       sdk/go/
-      ├── api/
-      │   ├── sessions_api.go           # SessionsApi struct
-      │   ├── turns_api.go              # TurnsApi struct
-      │   └── agents_api.go             # AgentsApi struct
-      ├── model/
-      │   ├── create_session_request.go
-      │   ├── session_response.go
-      │   └── problem_details.go
-      ├── go.mod
-      ├── go.sum
-      └── README.md
+      â”œâ”€â”€ api/
+      â”‚   â”œâ”€â”€ sessions_api.go           # SessionsApi struct
+      â”‚   â”œâ”€â”€ turns_api.go              # TurnsApi struct
+      â”‚   â””â”€â”€ agents_api.go             # AgentsApi struct
+      â”œâ”€â”€ model/
+      â”‚   â”œâ”€â”€ create_session_request.go
+      â”‚   â”œâ”€â”€ session_response.go
+      â”‚   â””â”€â”€ problem_details.go
+      â”œâ”€â”€ go.mod
+      â”œâ”€â”€ go.sum
+      â””â”€â”€ README.md
 
     generated_lines: "~4,100 lines Go"
 
@@ -148,20 +148,20 @@ generator_commands:
 
     output_structure: |
       sdk/ruby/
-      ├── lib/
-      │   ├── k1_rest_api_client/
-      │   │   ├── api/
-      │   │   │   ├── sessions_api.rb
-      │   │   │   ├── turns_api.rb
-      │   │   │   └── agents_api.rb
-      │   │   ├── models/
-      │   │   │   ├── create_session_request.rb
-      │   │   │   ├── session_response.rb
-      │   │   │   └── problem_details.rb
-      │   │   └── version.rb
-      │   └── k1_rest_api_client.rb
-      ├── k1_rest_api_client.gemspec
-      └── README.md
+      â”œâ”€â”€ lib/
+      â”‚   â”œâ”€â”€ k1_rest_api_client/
+      â”‚   â”‚   â”œâ”€â”€ api/
+      â”‚   â”‚   â”‚   â”œâ”€â”€ sessions_api.rb
+      â”‚   â”‚   â”‚   â”œâ”€â”€ turns_api.rb
+      â”‚   â”‚   â”‚   â””â”€â”€ agents_api.rb
+      â”‚   â”‚   â”œâ”€â”€ models/
+      â”‚   â”‚   â”‚   â”œâ”€â”€ create_session_request.rb
+      â”‚   â”‚   â”‚   â”œâ”€â”€ session_response.rb
+      â”‚   â”‚   â”‚   â””â”€â”€ problem_details.rb
+      â”‚   â”‚   â””â”€â”€ version.rb
+      â”‚   â””â”€â”€ k1_rest_api_client.rb
+      â”œâ”€â”€ k1_rest_api_client.gemspec
+      â””â”€â”€ README.md
 
     generated_lines: "~3,800 lines Ruby"
 
@@ -369,15 +369,15 @@ semantic_versioning:
   versioning_rules:
     major:
       trigger: "Breaking changes (remove endpoint, rename field)"
-      example: "1.0.0 → 2.0.0"
+      example: "1.0.0 â†’ 2.0.0"
       breaking_changes:
         - "Remove deprecated endpoint"
-        - "Rename field (session_id → id)"
+        - "Rename field (session_id â†’ id)"
         - "Change response format"
 
     minor:
       trigger: "New features (add endpoint, add optional field)"
-      example: "1.0.0 → 1.1.0"
+      example: "1.0.0 â†’ 1.1.0"
       new_features:
         - "Add new endpoint (POST /v1/memories)"
         - "Add optional field (privacy_band)"
@@ -385,7 +385,7 @@ semantic_versioning:
 
     patch:
       trigger: "Bug fixes (fix typo, update docs)"
-      example: "1.0.0 → 1.0.1"
+      example: "1.0.0 â†’ 1.0.1"
       bug_fixes:
         - "Fix typo in error message"
         - "Update README examples"
@@ -459,7 +459,7 @@ cicd_pipeline:
       action: "Run SDK tests"
       tests:
         - "TypeScript: npm test"
-        - "Python: pytest"
+        - "Python: ward"
         - "Go: go test ./..."
         - "Ruby: rspec"
 
@@ -500,7 +500,7 @@ performance_comparison:
         - "Handle errors with typed exceptions (30 minutes)"
         - "Write tests (1 hour)"
 
-  speedup: "50% faster integration (8 hours → 4 hours)"
+  speedup: "50% faster integration (8 hours â†’ 4 hours)"
 
 # Production Metrics (6 months)
 production_metrics:
@@ -564,3 +564,4 @@ related_contracts:
   - "openapi_3_1_spec.yml - Source for SDK generation"
   - "rfc7807_error_format.yml - Error handling in SDKs"
   - "swagger_ui_integration.yml - Alternative to SDKs for manual testing"
+

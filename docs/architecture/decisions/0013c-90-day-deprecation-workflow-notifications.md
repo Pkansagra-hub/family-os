@@ -1,6 +1,6 @@
-# ADR-0013c: 90-Day Deprecation Workflow & Notifications
+﻿# ADR-0013c: 90-Day Deprecation Workflow & Notifications
 
-**Status:** ✅ Accepted (In Progress - 70% Complete)
+**Status:** âœ… Accepted (In Progress - 70% Complete)
 **Date:** 2025-10-12
 **Parent ADR:** [ADR-0013](0013-pipeline-versioning-policy.md) (Pipeline Versioning Policy)
 **Deciders:** K1 Architecture Team
@@ -12,7 +12,7 @@
 
 Schema fields evolve: new fields replace old fields, deprecated fields eventually removed. Without clear deprecation workflow, clients face:
 
-- **Unexpected breakage:** Field removed without warning → client crashes
+- **Unexpected breakage:** Field removed without warning â†’ client crashes
 - **No migration time:** Insufficient notice for clients to migrate
 - **No visibility:** Clients don't know which fields deprecated, when removal
 
@@ -58,16 +58,16 @@ Schema fields evolve: new fields replace old fields, deprecated fields eventuall
 **Description:** FlatBuffers schema annotations, CI/CD tracking, email/Slack notifications, runtime alerts, Grafana dashboard.
 
 **Pros:**
-- ✅ Industry standard (90 days)
-- ✅ Multi-channel (email, Slack, dashboard)
-- ✅ Runtime visibility (warning logs)
-- ✅ Automated (CI/CD extracts deprecations)
+- âœ… Industry standard (90 days)
+- âœ… Multi-channel (email, Slack, dashboard)
+- âœ… Runtime visibility (warning logs)
+- âœ… Automated (CI/CD extracts deprecations)
 
 **Cons:**
-- ❌ Notification spam (if many deprecations)
-- ❌ Complex tracking (90-day countdown per field)
+- âŒ Notification spam (if many deprecations)
+- âŒ Complex tracking (90-day countdown per field)
 
-**Decision:** ✅ **SELECTED** (best balance: visibility, automation, safety)
+**Decision:** âœ… **SELECTED** (best balance: visibility, automation, safety)
 
 ---
 
@@ -75,15 +75,15 @@ Schema fields evolve: new fields replace old fields, deprecated fields eventuall
 **Description:** Shorter 30-day window for faster iteration.
 
 **Pros:**
-- ✅ Faster removal (clients adapt quickly)
-- ✅ Less tracking (30 vs 90 days)
+- âœ… Faster removal (clients adapt quickly)
+- âœ… Less tracking (30 vs 90 days)
 
 **Cons:**
-- ❌ Too short (clients need time to deploy updates)
-- ❌ Not industry standard (Stripe, GitHub use 90 days)
-- ❌ Risk: Clients miss notifications
+- âŒ Too short (clients need time to deploy updates)
+- âŒ Not industry standard (Stripe, GitHub use 90 days)
+- âŒ Risk: Clients miss notifications
 
-**Decision:** ❌ **REJECTED** (too short, not enough migration time)
+**Decision:** âŒ **REJECTED** (too short, not enough migration time)
 
 ---
 
@@ -91,15 +91,15 @@ Schema fields evolve: new fields replace old fields, deprecated fields eventuall
 **Description:** Developers manually track deprecations in spreadsheet.
 
 **Pros:**
-- ✅ Simple (no automation needed)
-- ✅ Flexible (ad-hoc decisions)
+- âœ… Simple (no automation needed)
+- âœ… Flexible (ad-hoc decisions)
 
 **Cons:**
-- ❌ Error-prone (humans forget)
-- ❌ No runtime alerts (clients unaware)
-- ❌ Not scalable (76 schemas × 10 fields = 760+ deprecations over time)
+- âŒ Error-prone (humans forget)
+- âŒ No runtime alerts (clients unaware)
+- âŒ Not scalable (76 schemas Ã— 10 fields = 760+ deprecations over time)
 
-**Decision:** ❌ **REJECTED** (too manual, not scalable)
+**Decision:** âŒ **REJECTED** (too manual, not scalable)
 
 ---
 
@@ -222,7 +222,7 @@ jobs:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_SCHEMA_CHANGES }}
           payload: |
             {
-              "text": "⚠️ Schema deprecation alerts (< 30 days remaining)",
+              "text": "âš ï¸ Schema deprecation alerts (< 30 days remaining)",
               "attachments": ${{ steps.check_removals.outputs.alerts }}
             }
 
@@ -326,7 +326,7 @@ if __name__ == '__main__':
     sys.exit(main())
 ```
 
-**CI/CD Performance Budget:** <10s (parse 76 schemas, extract deprecations, update registry) ✅
+**CI/CD Performance Budget:** <10s (parse 76 schemas, extract deprecations, update registry) âœ…
 
 ---
 
@@ -395,7 +395,7 @@ K1 Schema Bot
 
 ```json
 {
-  "text": "⚠️ Schema Deprecation Alert",
+  "text": "âš ï¸ Schema Deprecation Alert",
   "attachments": [
     {
       "color": "warning",
@@ -613,7 +613,7 @@ def deserialize_recall_request(buffer: bytes, trace_id: str):
 }
 ```
 
-**Performance:** <1ms (cached registry lookup, log once per session) ✅
+**Performance:** <1ms (cached registry lookup, log once per session) âœ…
 
 ---
 
@@ -624,13 +624,13 @@ def deserialize_recall_request(buffer: bytes, trace_id: str):
 **Panels:**
 
 #### Panel 1: Deprecation Timeline (Gantt Chart)
-- **X-axis:** Date (today → +90 days)
+- **X-axis:** Date (today â†’ +90 days)
 - **Y-axis:** Schema.field
 - **Bars:** Color-coded by days remaining
-  * 🟢 Green: >60 days remaining
-  * 🟡 Yellow: 30-60 days remaining
-  * 🔴 Red: <30 days remaining
-  * ⚫ Black: <7 days remaining (urgent)
+  * ðŸŸ¢ Green: >60 days remaining
+  * ðŸŸ¡ Yellow: 30-60 days remaining
+  * ðŸ”´ Red: <30 days remaining
+  * âš« Black: <7 days remaining (urgent)
 
 #### Panel 2: Field Usage (Time Series)
 - **X-axis:** Time (last 30 days)
@@ -759,7 +759,7 @@ def main():
                     break
 
     if not deprecation_info:
-        print(f"❌ Field {args.schema}.{args.field} not found in deprecation registry")
+        print(f"âŒ Field {args.schema}.{args.field} not found in deprecation registry")
         return 1
 
     # 2. Check if 90-day window passed
@@ -768,7 +768,7 @@ def main():
     days_remaining = (removal_date - today).days
 
     if days_remaining > 0 and not args.force:
-        print(f"❌ 90-day window not complete ({days_remaining} days remaining)")
+        print(f"âŒ 90-day window not complete ({days_remaining} days remaining)")
         print(f"   Removal date: {deprecation_info['removal_date']}")
         print(f"   Use --force to override (not recommended)")
         return 1
@@ -779,23 +779,23 @@ def main():
         print(f"Current usage: {usage_percentage:.1f}% of requests\n")
 
         if usage_percentage > 5.0:
-            print(f"❌ Field still in use ({usage_percentage:.1f}% > 5% threshold)")
+            print(f"âŒ Field still in use ({usage_percentage:.1f}% > 5% threshold)")
             print(f"   Action required: Contact clients to migrate")
             print(f"   Use --force to override (will break clients!)")
             return 1
 
-        print(f"✅ Usage below threshold ({usage_percentage:.1f}% < 5%), safe to remove\n")
+        print(f"âœ… Usage below threshold ({usage_percentage:.1f}% < 5%), safe to remove\n")
 
     # 4. Remove field from schema
     schema_path = args.schemas_dir / f"{args.schema.lower()}.fbs"
 
     if not schema_path.exists():
-        print(f"❌ Schema file not found: {schema_path}")
+        print(f"âŒ Schema file not found: {schema_path}")
         return 1
 
     print(f"Removing field from {schema_path}...")
     remove_field_from_schema(schema_path, args.field)
-    print(f"✅ Field removed from schema\n")
+    print(f"âœ… Field removed from schema\n")
 
     # 5. Update registry (mark as removed)
     for schema in registry['schemas']:
@@ -808,10 +808,10 @@ def main():
     with open(args.registry, 'w') as f:
         yaml.safe_dump(registry, f, default_flow_style=False, sort_keys=False)
 
-    print(f"✅ Registry updated (marked as removed)\n")
+    print(f"âœ… Registry updated (marked as removed)\n")
 
     # 6. Bump MAJOR version (breaking change)
-    print(f"⚠️ Breaking change detected!")
+    print(f"âš ï¸ Breaking change detected!")
     print(f"   Action required: Bump schema version (MAJOR)")
     print(f"   Run: k1-schema-bump --schema {args.schema} --auto")
     print()
@@ -842,14 +842,14 @@ Preparing to remove RecallRequest.legacy_query_format...
 
 Current usage: 2.3% of requests
 
-✅ Usage below threshold (2.3% < 5%), safe to remove
+âœ… Usage below threshold (2.3% < 5%), safe to remove
 
 Removing field from k1/schemas/recall_request.fbs...
-✅ Field removed from schema
+âœ… Field removed from schema
 
-✅ Registry updated (marked as removed)
+âœ… Registry updated (marked as removed)
 
-⚠️ Breaking change detected!
+âš ï¸ Breaking change detected!
    Action required: Bump schema version (MAJOR)
    Run: k1-schema-bump --schema RecallRequest --auto
 
@@ -868,13 +868,13 @@ Ready to create PR:
 ### CI/CD Deprecation Tracker
 - **Parse 76 schemas:** <10s (regex extraction from .fbs files)
 - **Update registry:** <1s (YAML write)
-- **Total:** <10s ✅ (meets budget)
+- **Total:** <10s âœ… (meets budget)
 
 ### Runtime Deprecation Alerts
 - **Registry lookup:** <1ms (cached in memory)
 - **Log emit:** <1ms (once per session, not per request)
 - **Prometheus metric:** <0.1ms (counter increment)
-- **Total:** <1ms ✅ (meets budget)
+- **Total:** <1ms âœ… (meets budget)
 
 ### Grafana Dashboard
 - **Refresh interval:** 5s (PromQL queries cached)
@@ -920,7 +920,7 @@ def test_removal_cli_checks_usage():
 def test_slack_notification():
     """Test Slack notification sent for 30-day alert."""
     # Trigger deprecation tracker workflow
-    result = subprocess.run(['pytest', 'tests/test_slack_notifications.py'])
+    result = subprocess.run(['ward', 'tests/test_slack_notifications.py'])
     assert result.returncode == 0
 ```
 
@@ -958,20 +958,20 @@ def test_slack_notification():
 ## Consequences
 
 ### Positive
-- ✅ **90-day window:** Industry standard, sufficient migration time
-- ✅ **Multi-channel notifications:** High visibility (email, Slack, runtime, dashboard)
-- ✅ **Automated tracking:** No manual spreadsheet maintenance
-- ✅ **Usage metrics:** Data-driven removal decisions (prevent breaking live clients)
-- ✅ **Runtime warnings:** Clients notified immediately when using deprecated fields
+- âœ… **90-day window:** Industry standard, sufficient migration time
+- âœ… **Multi-channel notifications:** High visibility (email, Slack, runtime, dashboard)
+- âœ… **Automated tracking:** No manual spreadsheet maintenance
+- âœ… **Usage metrics:** Data-driven removal decisions (prevent breaking live clients)
+- âœ… **Runtime warnings:** Clients notified immediately when using deprecated fields
 
 ### Negative
-- ❌ **Notification fatigue:** Many deprecations → spam (mitigated by weekly digest)
-- ❌ **Complex tracking:** 90-day countdown per field (mitigated by automation)
-- ❌ **CI/CD dependency:** Daily cron job (mitigated by <10s latency)
+- âŒ **Notification fatigue:** Many deprecations â†’ spam (mitigated by weekly digest)
+- âŒ **Complex tracking:** 90-day countdown per field (mitigated by automation)
+- âŒ **CI/CD dependency:** Daily cron job (mitigated by <10s latency)
 
 ### Neutral
-- ⚠️ **90-day minimum:** Enforced (no exceptions, even for unused fields)
-- ⚠️ **Usage threshold:** 5% for safe removal (configurable per schema)
+- âš ï¸ **90-day minimum:** Enforced (no exceptions, even for unused fields)
+- âš ï¸ **Usage threshold:** 5% for safe removal (configurable per schema)
 
 ---
 
@@ -997,10 +997,11 @@ def test_slack_notification():
 
 ---
 
-**Status:** ✅ **70% Complete** (Pending: Slack bot integration + email automation)
+**Status:** âœ… **70% Complete** (Pending: Slack bot integration + email automation)
 
 **Next Steps:**
 1. Implement Slack bot webhook integration
 2. Configure email SMTP server (k1-dev@example.com)
 3. Deploy Grafana dashboard to production
-4. Test full workflow (deprecation → notification → removal)
+4. Test full workflow (deprecation â†’ notification â†’ removal)
+

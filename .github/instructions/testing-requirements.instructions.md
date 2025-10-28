@@ -3,7 +3,7 @@ description: Testing standards and coverage requirements for MemoryOS components
 applyTo: "tests/**/*.py,**/*test*.py"
 ---
 
-# 🧪 Testing Requirements & WARD Framework
+# 🧪 Testing Requirements & pytest Framework
 
 ## Overview
 
@@ -13,7 +13,7 @@ Testing is **GATE 4** in the 5-step workflow. All production code changes requir
 - **No mock theater** — test real components under controlled conditions
 - **Contract validation** — prove interface compliance with actual schemas
 - **Performance budgets** — validate SLA requirements with measurable metrics
-- **WARD framework** — use `python -m ward test --path tests/` for async testing
+- **pytest framework** — use `python -m pytest tests/` for async testing
 - **Integration > Unit** — prioritize integration tests with real components
 
 ---
@@ -27,14 +27,14 @@ Testing is **GATE 4** in the 5-step workflow. All production code changes requir
 | Performance budgets | Test P95 latency, throughput, memory under load | ❌ No assumptions—measure everything |
 | Determinism | Use fixed test data, seeded randomness, frozen time | ❌ No `asyncio.sleep()`, `time.sleep()` |
 | Isolation | Each test gets clean fixtures and fresh state | ❌ No shared test state between tests |
-| Async-native | Use WARD for async tests; proper `await` semantics | ❌ No blocking I/O in tests |
+| Async-native | Use pytest-asyncio for async tests; proper `await` semantics | ❌ No blocking I/O in tests |
 
 ## 2) Coverage Standards (Measurable)
 
 | Category | Requirement | Tool | Threshold |
 |----------|-------------|------|-----------|
 | **Code coverage** | Unit + integration combined | `coverage.py` | ≥95% |
-| **Integration tests** | 100% of I/O paths tested | `ward` | 100% |
+| **Integration tests** | 100% of I/O paths tested | `pytest` | 100% |
 | **Contract compliance** | API/event/storage schemas | JSONSchema + AsyncAPI | 100% |
 | **Performance** | P95 latency, throughput, memory | `py-spy`, custom benchmarks | Meet SLA |
 | **Security** | RBAC, encryption, input validation | security tests | 100% |
@@ -90,15 +90,15 @@ tests/k1/
 
 ---
 
-## 4) WARD Framework Usage
+## 4) pytest Framework Usage
 
 ### Basic Test Structure
 ```python
-from ward import test, fixture
+import pytest
 import asyncio
 
 # Fixtures for real component instances
-@fixture
+@pytest.fixture
 async def orchestrator():
     """Real orchestrator instance with test config"""
     orch = Orchestrator(config=test_config)
@@ -106,7 +106,7 @@ async def orchestrator():
     yield orch
     await orch.shutdown()
 
-@fixture
+@pytest.fixture
 async def agent_fabric():
     """Real agent fabric with 3 test agents"""
     fabric = AgentFabric(max_agents=3)
@@ -115,20 +115,20 @@ async def agent_fabric():
     await fabric.shutdown()
 
 # Tests with real components
-@test("orchestrator completes 3-phase coordination")
-async def _(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_orchestrator_completes_3_phase_coordination(orchestrator):
     task = TaskAnnouncement(
         task_id="test-123",
         description="Test task",
         deadline_ms=2000
     )
-    result = await orch.coordinate(task)
+    result = await orchestrator.coordinate(task)
     assert result.status == "COMPLETED"
     assert result.latency_ms < 250  # Performance validation
 
-@test("agent transitions through lifecycle states correctly")
-async def _(fabric=agent_fabric):
-    agent = fabric.create_agent(agent_id="test-agent")
+@pytest.mark.asyncio
+async def test_agent_transitions_through_lifecycle_states_correctly(agent_fabric):
+    agent = agent_fabric.create_agent(agent_id="test-agent")
     assert agent.state == AgentState.PENDING
 
     await agent.warm()
@@ -140,7 +140,7 @@ async def _(fabric=agent_fabric):
 
 ### Contract Validation in Tests
 ```python
-@test("API response matches OpenAPI schema")
+@pytest.mark.asyncio
 async def test_api_contract_compliance():
     response = await api_client.get("/api/v1/agents/123")
     validate_against_schema(
@@ -148,7 +148,7 @@ async def test_api_contract_compliance():
         "k1/contracts/api/agent-fabric-openapi.yaml"
     )
 
-@test("Event payload matches AsyncAPI schema")
+@pytest.mark.asyncio
 async def test_event_contract_compliance():
     event = AgentTransitionEvent(
         agent_id="123",
@@ -164,8 +164,8 @@ async def test_event_contract_compliance():
 
 ### Performance & Benchmark Tests
 ```python
-@test("TTFT latency is under 150ms p95")
-async def test_ttft_budget(orchestrator=orchestrator):
+@pytest.mark.asyncio
+async def test_ttft_budget(orchestrator):
     latencies = []
     for i in range(100):
         start = time.perf_counter()
@@ -175,8 +175,8 @@ async def test_ttft_budget(orchestrator=orchestrator):
     p95 = sorted(latencies)[int(len(latencies) * 0.95)]
     assert p95 < 150, f"TTFT p95={p95}ms exceeds 150ms budget"
 
-@test("E2E latency is under 2000ms p95")
-async def test_e2e_budget(orchestrator=orchestrator):
+@pytest.mark.asyncio
+async def test_e2e_budget(orchestrator):
     latencies = []
     for i in range(50):
         start = time.perf_counter()
@@ -194,8 +194,9 @@ async def test_e2e_budget(orchestrator=orchestrator):
 All contracts must be validated during test execution:
 
 ```python
+```python
 # API Contract Validation
-@test("All API responses match OpenAPI schema")
+@pytest.mark.asyncio
 async def test_agent_fabric_api_contracts():
     """Validate k1/contracts/api/agent-fabric-openapi.yaml"""
     validator = OpenAPIValidator("k1/contracts/api/agent-fabric-openapi.yaml")
@@ -208,7 +209,7 @@ async def test_agent_fabric_api_contracts():
     validator.validate_response("/tasks", "POST", 201, response.json())
 
 # Event Contract Validation
-@test("All events match AsyncAPI schema")
+@pytest.mark.asyncio
 async def test_event_contracts():
     """Validate k1/contracts/events/*.yaml"""
     validator = AsyncAPIValidator("k1/contracts/events/")
@@ -220,12 +221,12 @@ async def test_event_contracts():
     validator.validate_event("task.completed", event.dict())
 
 # Storage Contract Validation
-@test("All storage operations comply with schema")
-async def test_storage_contracts(fabric=agent_fabric):
+@pytest.mark.asyncio
+async def test_storage_contracts(agent_fabric):
     """Validate k1/contracts/storage/*.schema.json"""
     validator = JSONSchemaValidator("k1/contracts/storage/")
 
-    agent = fabric.create_agent(agent_id="test-agent")
+    agent = agent_fabric.create_agent(agent_id="test-agent")
     stored = await storage.save_agent(agent)
     validator.validate(stored, "agent-schema.json")
 ```
@@ -243,8 +244,8 @@ async def test_storage_contracts(fabric=agent_fabric):
 
 ### Load Testing Pattern
 ```python
-@test("Orchestrator handles 100 concurrent tasks")
-async def test_concurrent_load(orchestrator=orchestrator):
+@pytest.mark.asyncio
+async def test_concurrent_load(orchestrator):
     tasks = [
         TaskAnnouncement(task_id=f"task-{i}", ...)
         for i in range(100)
@@ -264,11 +265,12 @@ async def test_concurrent_load(orchestrator=orchestrator):
 ## 7) Quality Gates (Automated Validation)
 
 ```bash
+```bash
 # GATE 4 Quality Checks - Run before proceeding to memory documentation
 
 # 1. Coverage measurement (≥95%)
-python -m ward test --path tests/ --output=json > test_results.json
-coverage run -m ward test --path tests/
+python -m pytest tests/ --json-report > test_results.json
+coverage run -m pytest tests/
 coverage report --fail-under=95 --show-missing
 
 # 2. Contract compliance (100%)
@@ -276,14 +278,15 @@ python k1/automation/lint_schemas.py --test-all
 python k0/automation/lint_schemas.py --test-all
 
 # 3. Performance validation (meet SLA)
-python -m ward test --path tests/k1/performance/ --verbose
-python -m ward test --path tests/k0/performance/ --verbose
+python -m pytest tests/k1/performance/ -v
+python -m pytest tests/k0/performance/ -v
 
 # 4. Security testing (100% coverage)
-python -m ward test --path tests/security/ --verbose
+python -m pytest tests/security/ -v
 
 # 5. All tests must pass
-python -m ward test --path tests/ --fail-fast
+python -m pytest tests/ --tb=short
+```
 ```
 
 ### Required Outputs
@@ -300,10 +303,10 @@ python -m ward test --path tests/ --fail-fast
 **GATE 4: Test Implementation** blocks progression to GATE 5 (Memory Documentation).
 
 Before marking tests complete:
-- [ ] All tests pass: `python -m ward test --path tests/`
+- [ ] All tests pass: `python -m pytest tests/`
 - [ ] Coverage ≥95%: `coverage report --fail-under=95`
 - [ ] Contracts validated: `python k1/automation/lint_schemas.py --test-all`
-- [ ] Performance budgets met: `python -m ward test --path tests/*/performance/`
+- [ ] Performance budgets met: `python -m pytest tests/*/performance/`
 - [ ] No simulation code: Grep for `asyncio.sleep`, `time.sleep`, mocks
 - [ ] ADR references in comments: All key decisions documented
 - [ ] Memory entry ready: Include test results, coverage %, budget status
@@ -320,24 +323,24 @@ Before marking tests complete:
 ### Development Workflow
 ```bash
 # Quick test during development
-python -m ward test --path tests/component/ --verbose
+python -m pytest tests/component/ -v
 
 # Full suite with coverage
-python -m ward test --path tests/
-coverage run -m ward test --path tests/
+python -m pytest tests/
+coverage run -m pytest tests/
 coverage report --show-missing --fail-under=95
 
 # Specific test module
-python -m ward test --path tests/k1/component/test_orchestrator_3phase.py --verbose
+python -m pytest tests/k1/component/test_orchestrator_3phase.py -v
 
 # Watch mode (re-run on file changes)
-python -m ward test --path tests/ --watch
+python -m pytest tests/ --watch
 ```
 
 ### Pre-Commit Validation
 ```bash
 # Fast smoke test (component tests only)
-python -m ward test --path tests/component/ --fail-fast
+python -m pytest tests/component/ --tb=short
 
 # Contract validation
 python k1/automation/lint_schemas.py --test-all
@@ -347,25 +350,25 @@ python k0/automation/lint_schemas.py --test-all
 ### CI/CD Pipeline
 ```bash
 # Full validation for PR
-python -m ward test --path tests/ --output=json > test_results.json
-coverage run -m ward test --path tests/
+python -m pytest tests/ --json-report > test_results.json
+coverage run -m pytest tests/
 coverage report --fail-under=95 --format=json > coverage.json
 
 # Performance regression check
-python -m ward test --path tests/k1/performance/ --verbose > perf_results.json
-python -m ward test --path tests/k0/performance/ --verbose >> perf_results.json
+python -m pytest tests/k1/performance/ -v > perf_k1.json
+python -m pytest tests/k0/performance/ -v >> perf_k0.json
 
 # Security scanning
-python -m ward test --path tests/security/ --verbose
+python -m pytest tests/security/ -v
 ```
 
 ---
 
 ## 10) Test Data Management
 
-### Fixtures (WARD)
+### Fixtures (pytest)
 ```python
-@fixture
+@pytest.fixture
 def test_config():
     """Deterministic test configuration"""
     return Config(
@@ -376,7 +379,7 @@ def test_config():
         seed=42  # Fixed seed for reproducibility
     )
 
-@fixture(scope="module")
+@pytest.fixture(scope="module")
 async def storage():
     """Shared storage instance for module tests"""
     store = InMemoryStore()
@@ -399,8 +402,9 @@ random_port = random.randint(10000, 20000)
 
 # Frozen timestamps
 from freezegun import freeze_time
+
 @freeze_time("2025-10-23 12:00:00")
-async def test_timestamp_handling():
+def test_timestamp_handling():
     # Time is now fixed at 2025-10-23 12:00:00
     pass
 ```
@@ -438,27 +442,27 @@ Real components: Orchestrator, AgentFabric, PlannerAgent, ProtocolMonitor.
 Tests: Task negotiation → selection → execution.
 """
 
-from ward import test, fixture
+import pytest
 
-@fixture
+@pytest.fixture
 async def orchestrator():
     orch = Orchestrator(config=test_config)
     await orch.initialize()
     yield orch
     await orch.shutdown()
 
-@fixture
+@pytest.fixture
 async def agent_fabric():
     fabric = AgentFabric(max_agents=3)
     await fabric.initialize()
     yield fabric
     await fabric.shutdown()
 
-@test("End-to-end task coordination with 3 agents")
-async def _(orch=orchestrator, fabric=agent_fabric):
+@pytest.mark.asyncio
+async def test_end_to_end_task_coordination_with_3_agents(orchestrator, agent_fabric):
     # Create 3 real agents
     agents = [
-        fabric.create_agent(agent_id=f"agent-{i}")
+        agent_fabric.create_agent(agent_id=f"agent-{i}")
         for i in range(3)
     ]
 
@@ -470,16 +474,16 @@ async def _(orch=orchestrator, fabric=agent_fabric):
     )
 
     # Phase 1: Negotiation (all 3 agents propose)
-    proposals = await orch.negotiate(task, timeout_ms=500)
+    proposals = await orchestrator.negotiate(task, timeout_ms=500)
     assert len(proposals) == 3
 
     # Phase 2: Selection (best agent chosen)
-    selected = await orch.select(proposals, timeout_ms=300)
+    selected = await orchestrator.select(proposals, timeout_ms=300)
     assert selected is not None
     assert selected.score > 0
 
     # Phase 3: Execution (task executes)
-    result = await orch.execute(task, selected.agent_id, timeout_ms=1000)
+    result = await orchestrator.execute(task, selected.agent_id, timeout_ms=1000)
     assert result.status == "COMPLETED"
     assert result.latency_ms < 250  # Performance budget
 ```
@@ -488,7 +492,8 @@ async def _(orch=orchestrator, fabric=agent_fabric):
 
 ## 13) References
 
-- **WARD Documentation**: Framework for async testing in Python
+- **pytest Documentation**: Framework for testing in Python
+- **pytest-asyncio**: Async testing support for pytest
 - **Coverage.py**: Code coverage measurement tool
 - **Freezegun**: Time freezing for deterministic tests
 - **5-Step Workflow**: `.github/instructions/service-design.instructions.md` (GATE 4)

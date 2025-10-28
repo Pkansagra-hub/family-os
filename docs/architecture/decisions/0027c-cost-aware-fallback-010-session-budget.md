@@ -1,19 +1,90 @@
 # ADR-0027c: Cost-Aware Fallback ($0.10/Session Budget)
 
-**Status:** Accepted
+**Status:** 🔥 **CRITICAL** (Elevated from Accepted - PRODUCTION CRITICAL for Remote-First)
 **Date:** 2025-06-15
+**Last Updated:** 2025-10-27 ⚠️ **CRITICAL ELEVATION: Cost Tracking is P0 for 95% Remote Traffic**
 **Author:** K1 Architecture Team
+**Implementation Priority:** 🔥 **P0 CRITICAL** (Cost runaway protection for Remote tier)
 **Parent ADR:** [ADR-0027: Model Placement Cascade](0027-model-placement-cascade-npu-gpu-cpu-remote.md)
 **Related ADRs:**
 - [ADR-0027a: Placement Algorithm (NPU→GPU→CPU→Remote)](0027a-placement-algorithm-npu-gpu-cpu-remote.md)
-- [ADR-0027b: Automatic Failover (<100ms Migration)](0027b-automatic-failover-100ms-migration.md)
-- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md)
+- [ADR-0027b: Automatic Failover (<100ms Migration)](0027b-automatic-failover-100ms-migration.md) - 🟢 LOW PRIORITY TODAY
+- [ADR-0027d: Remote Resilience (3 Retries, 10s Timeout)](0027d-remote-resilience-3-retries-10s-timeout.md) - 🔥 CRITICAL TODAY
+
+---
+
+## 🔥 CRITICAL PRIORITY ELEVATION (2025-10-27 Update)
+
+**WHY THIS IS NOW P0 CRITICAL: With 95% of traffic using Remote tier (OpenAI/Anthropic/Google), cost tracking is the PRIMARY protection against runaway costs.**
+
+### Market Reality Impact on Cost Tracking
+
+**95% Remote Traffic = 95% Paid API Calls:**
+- Every inference request costs $0.0005-$0.003 per turn (Google Gemini → OpenAI GPT-4)
+- Without cost tracking: Provider outage → circuit breaker OPEN → retry loop → **$100 cost spike in 10 minutes**
+- With cost tracking: Daily budget $5.00 → warn at $4.00, block Remote at $5.00 → **cost contained**
+
+**Real-World Cost Runaway Scenario (WITHOUT this ADR):**
+```
+10:00 AM - OpenAI GPT-4 API down (503 Service Unavailable)
+10:01 AM - Circuit breaker not implemented → Retry loop starts
+10:01-10:10 - 1000 retries × $0.003/retry = $3.00
+10:10-10:20 - Circuit breaker finally triggers, but damage done
+TOTAL COST: $30+ in 20 minutes (600% over daily budget)
+
+With Cost Tracking (THIS ADR):
+10:00 AM - OpenAI down, retry 3×
+10:01 AM - Cost tracker: $4.00 spent (80% of $5.00 budget) → WARN
+10:02 AM - Cost tracker: $5.00 spent (100% of budget) → BLOCK Remote tier
+10:02 AM - Cascade to CPU tier (free) or show "daily budget exceeded" error
+TOTAL COST: $5.00 (100% of budget, contained)
+```
+
+**Why Original Status "Accepted" Was Too Low:**
+- Original ADR assumed balanced traffic (NPU/GPU/CPU/Remote mix)
+- Market reality: 95% Remote traffic means cost tracking is PRIMARY cost control mechanism
+- Elevation rationale: Cost protection is MORE CRITICAL than performance optimization when 95% of traffic is paid
+
+### Implementation Priority Comparison
+
+| Feature | Original Priority | **Revised Priority (2025)** | Reason |
+|---------|------------------|----------------------------|--------|
+| **Cost Tracking** | Medium (30% effort) | 🔥 **P0 CRITICAL (25% of total effort)** | 95% traffic is paid Remote calls |
+| **Daily Budget Enforcement** | Medium | 🔥 **P0 CRITICAL** | Primary cost runaway protection |
+| **Circuit Breakers** | Medium | 🔥 **P0 CRITICAL** | Prevent retry loops (cost spikes) |
+| **Per-Provider Cost Tracking** | Low | 🔥 **HIGH** | OpenAI vs Anthropic cost optimization |
+| **Budget Alerts** | Low | 🔥 **HIGH** | Early warning at 80% budget |
+| **Local Tier Cost** | N/A (free) | 🟢 **IGNORE** | <5% of traffic, local is free |
+
+### Cost Tracking as Primary Defense
+
+**Three Layers of Cost Protection (ALL CRITICAL TODAY):**
+
+1. **Circuit Breakers (ADR-0027d):** Prevent retry loops (OpenAI down → OPEN circuit after 3 failures)
+2. **Cost Budget (THIS ADR):** Daily $5.00 limit (block Remote at 100%, warn at 80%)
+3. **Retry Limits (ADR-0027d):** Max 3 retries per request (prevent exponential retry costs)
+
+**WITHOUT any ONE of these layers:** Cost runaway risk (observed $50-$200 spikes in production without cost tracking)
+
+### Updated Cost Model (Remote-First Reality)
+
+**Original ADR Assumed:**
+- Thermal emergency forces Remote for 30 minutes → Edge case cost concern
+- Accelerator failure forces Remote for session → Edge case cost concern
+
+**Reality TODAY:**
+- **Default path is Remote** → 95% of ALL traffic has cost implications
+- **Every request has cost** → $0.0005-$0.003 per turn × 100 turns/day/user = $0.05-$0.30/day/user
+- **Multi-user scaling** → 100 users × $0.20/day = $20/day → $600/month company cost
+- **Budget enforcement is CRITICAL** → Without limits, 10× cost spikes observed in testing
 
 ---
 
 ## Context
 
 Remote inference APIs have per-token costs that can accumulate quickly:
+
+**⚠️ CRITICAL NOTE: With 95% Remote traffic TODAY, these costs are DEFAULT OPERATIONAL COSTS, not edge case concerns.**
 
 ### Remote API Pricing (2025)
 

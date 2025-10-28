@@ -1,4 +1,4 @@
-classes:
+﻿classes:
   - name: QueryTesting
     description: Comprehensive testing suite for receipt query interface and security controls
     research: ADR-0038d (query interface testing), GDPR Article 15 testing requirements
@@ -1209,12 +1209,12 @@ classes:
                         self.violations.append(f"Compliance violation in {result.name}")
 
     dependencies:
-      - name: pytest
+      - name: ward
         description: Test framework for Python unit and integration tests
-      - name: pytest-asyncio
-        description: Async testing support for pytest
-      - name: pytest-cov
-        description: Code coverage reporting for pytest
+      - name: ward-asyncio
+        description: Async testing support for ward
+      - name: ward-cov
+        description: Code coverage reporting for ward
       - name: locust
         description: Load testing framework for performance testing
       - name: hypothesis
@@ -1234,7 +1234,7 @@ testing_requirements:
   - integration_tests:
       - end_to_end_queries: Complete query pipeline from API to database
       - cache_database_sync: Cache invalidation keeps data consistent
-      - security_pipeline: Authentication → authorization → rate limiting
+      - security_pipeline: Authentication â†’ authorization â†’ rate limiting
       - observability_integration: Metrics and traces collected correctly
   - security_tests:
       - authentication_bypass: Cannot access without valid credentials
@@ -1296,3 +1296,4 @@ compliance_validation:
       - cc7_operations: System operations monitoring
       - cc8_change_management: Change control procedures
       - cc9_risk_management: Risk mitigation strategies
+

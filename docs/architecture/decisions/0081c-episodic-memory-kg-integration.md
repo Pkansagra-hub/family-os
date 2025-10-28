@@ -1,4 +1,4 @@
-# ADR-0081c: Episodic Memory → Knowledge Graph Integration
+﻿# ADR-0081c: Episodic Memory â†’ Knowledge Graph Integration
 
 **Status:** Proposed
 **Date:** 2025-10-22
@@ -10,21 +10,21 @@
 From **ADR-0081**, the Knowledge Graph needs **automated population** from episodic memories:
 
 **Current K0 Pipeline (D4):**
-- **P03 Consolidation:** Episodic → Semantic memory transformation
-- **Missing:** Episodic → Knowledge Graph transformation
+- **P03 Consolidation:** Episodic â†’ Semantic memory transformation
+- **Missing:** Episodic â†’ Knowledge Graph transformation
 
 **Use Cases:**
 
-1. **Conversation Parsing:** "Alice visited last Tuesday" → Entity(Alice, Person), Event(visit, 2024-01-16)
-2. **Relationship Extraction:** "My sister Alice works at Microsoft" → Edge(User, sister_of, Alice), Edge(Alice, employed_by, Microsoft)
-3. **Entity Resolution:** Multiple mentions of "Alice" → single Entity(node-alice)
-4. **Temporal Extraction:** "Bob got married in 2020" → Edge(Bob, married_to, Carol, valid_from=2020-01-01)
+1. **Conversation Parsing:** "Alice visited last Tuesday" â†’ Entity(Alice, Person), Event(visit, 2024-01-16)
+2. **Relationship Extraction:** "My sister Alice works at Microsoft" â†’ Edge(User, sister_of, Alice), Edge(Alice, employed_by, Microsoft)
+3. **Entity Resolution:** Multiple mentions of "Alice" â†’ single Entity(node-alice)
+4. **Temporal Extraction:** "Bob got married in 2020" â†’ Edge(Bob, married_to, Carol, valid_from=2020-01-01)
 
 **From K0 Architecture Diagrams:**
 
-- **D3 (project_architecture_part3.mmd):** P03 Consolidation pipeline for episodic → semantic transformation
+- **D3 (project_architecture_part3.mmd):** P03 Consolidation pipeline for episodic â†’ semantic transformation
 - **D4 (project_architecture_part4.mmd):** `KG_RELATION_DISCOVERY` for relationship discovery, `KG_CONCEPT_EVOLUTION` for entity evolution
-- **Missing:** Pipeline handler for episodic → KG
+- **Missing:** Pipeline handler for episodic â†’ KG
 
 **Key Requirements:**
 
@@ -35,7 +35,7 @@ From **ADR-0081**, the Knowledge Graph needs **automated population** from episo
 
 ## Decision
 
-Implement **K0 P03 Consolidation → KG pipeline** with 4-stage extraction:
+Implement **K0 P03 Consolidation â†’ KG pipeline** with 4-stage extraction:
 
 ### Stage 1: Entity Extraction (NER)
 
@@ -133,7 +133,7 @@ class EntityExtractor:
     def _extract_properties(self, entity: spacy.tokens.Span, doc: spacy.tokens.Doc) -> Dict:
         """Extract additional properties for entity.
 
-        Example: "Dr. Alice Smith" → {"title": "Dr.", "full_name": "Alice Smith"}
+        Example: "Dr. Alice Smith" â†’ {"title": "Dr.", "full_name": "Alice Smith"}
         """
         properties = {}
 
@@ -185,7 +185,7 @@ class RelationshipExtractor:
     def __init__(self):
         self.nlp = spacy.load("en_core_web_sm")
 
-        # Relationship patterns (verb → relationship type)
+        # Relationship patterns (verb â†’ relationship type)
         self.patterns = {
             # Employment
             "work": "employed_by",
@@ -308,7 +308,7 @@ class RelationshipExtractor:
     ) -> List[ExtractedRelationship]:
         """Extract temporal information (valid_from/valid_to) from text.
 
-        Example: "Bob married Carol in 2020" → valid_from=2020-01-01
+        Example: "Bob married Carol in 2020" â†’ valid_from=2020-01-01
         """
         # Look for DATE entities near relationships
         for rel in relationships:
@@ -325,9 +325,9 @@ class RelationshipExtractor:
         """Parse date text to Unix timestamp.
 
         Examples:
-        - "2020" → 1577836800000 (2020-01-01)
-        - "last Tuesday" → calculate from today
-        - "in June" → calculate from today
+        - "2020" â†’ 1577836800000 (2020-01-01)
+        - "last Tuesday" â†’ calculate from today
+        - "in June" â†’ calculate from today
         """
         import dateutil.parser
         try:
@@ -378,10 +378,10 @@ class EntityResolver:
         Performance: <100ms P95 (10 entities, 1000 existing nodes)
 
         Resolution Strategy:
-        1. Exact label match (high confidence): "Alice" → existing node-alice (conf=0.95)
-        2. Fuzzy match (medium confidence): "Alicia" → node-alice (conf=0.7)
-        3. Context match (medium confidence): "Mom" → node-mother (conf=0.8 if in family)
-        4. No match (new entity): "Bob" → new node (conf=1.0 for new creation)
+        1. Exact label match (high confidence): "Alice" â†’ existing node-alice (conf=0.95)
+        2. Fuzzy match (medium confidence): "Alicia" â†’ node-alice (conf=0.7)
+        3. Context match (medium confidence): "Mom" â†’ node-mother (conf=0.8 if in family)
+        4. No match (new entity): "Bob" â†’ new node (conf=1.0 for new creation)
         """
         resolved = []
 
@@ -414,7 +414,7 @@ class EntityResolver:
                     ))
                     continue
 
-            # Strategy 3: Context match (e.g., "Mom" → user's mother)
+            # Strategy 3: Context match (e.g., "Mom" â†’ user's mother)
             context_match = await self._context_match(entity, context)
             if context_match:
                 resolved.append(ResolvedEntity(
@@ -465,7 +465,7 @@ class EntityResolver:
     ) -> ResolvedEntity | None:
         """Match entity using user context.
 
-        Example: "Mom" → user's mother (if in family context)
+        Example: "Mom" â†’ user's mother (if in family context)
         """
         # Common family terms
         family_terms = {
@@ -563,7 +563,7 @@ async def consolidate_episodic_to_kg(
     # Stage 4: Insert/update entities
     entities_created = 0
     entities_updated = 0
-    entity_id_map = {}  # Map extracted entity text → node_id
+    entity_id_map = {}  # Map extracted entity text â†’ node_id
 
     for resolved in resolved_entities:
         if resolved.is_new:
@@ -643,10 +643,10 @@ async def handle_p03_consolidation(event: PipelineEvent):
 
     episodic_memory = event.payload
 
-    # Existing: Episodic → Semantic
+    # Existing: Episodic â†’ Semantic
     await consolidate_episodic_to_semantic(episodic_memory)
 
-    # NEW: Episodic → KG
+    # NEW: Episodic â†’ KG
     kg_result = await consolidate_episodic_to_kg(
         episodic_memory,
         kg_driver=event.drivers["kg"],
@@ -717,20 +717,20 @@ async def request_user_disambiguation(
 
 ### Positive
 
-1. **✅ Automated KG Population:** No manual entity tagging required
-2. **✅ Incremental Updates:** New conversations update existing entities
-3. **✅ Confidence Scoring:** Handles ambiguous entities with confidence levels
-4. **✅ Temporal Extraction:** Extracts valid_from/valid_to from conversation text
-5. **✅ Context-Aware Resolution:** Uses user context (family members) for disambiguation
-6. **✅ Performance:** <500ms P95 for conversation processing
+1. **âœ… Automated KG Population:** No manual entity tagging required
+2. **âœ… Incremental Updates:** New conversations update existing entities
+3. **âœ… Confidence Scoring:** Handles ambiguous entities with confidence levels
+4. **âœ… Temporal Extraction:** Extracts valid_from/valid_to from conversation text
+5. **âœ… Context-Aware Resolution:** Uses user context (family members) for disambiguation
+6. **âœ… Performance:** <500ms P95 for conversation processing
 
 ### Negative
 
-1. **❌ NER Accuracy:** spaCy NER has ~85-90% accuracy (F1 score), may miss entities
-2. **❌ Relationship Extraction Complexity:** Dependency parsing may miss complex relationships
-3. **❌ Entity Disambiguation:** Ambiguous names (multiple "Alice") require user confirmation
-4. **❌ Temporal Extraction Accuracy:** Date parsing may fail for vague dates ("last week")
-5. **❌ Processing Latency:** 500ms may be too slow for real-time conversations
+1. **âŒ NER Accuracy:** spaCy NER has ~85-90% accuracy (F1 score), may miss entities
+2. **âŒ Relationship Extraction Complexity:** Dependency parsing may miss complex relationships
+3. **âŒ Entity Disambiguation:** Ambiguous names (multiple "Alice") require user confirmation
+4. **âŒ Temporal Extraction Accuracy:** Date parsing may fail for vague dates ("last week")
+5. **âŒ Processing Latency:** 500ms may be too slow for real-time conversations
 
 ### Mitigations
 
@@ -763,7 +763,7 @@ python -m spacy download en_core_web_lg  # 560 MB (slow, best accuracy)
 
 ```python
 # tests/k0/kg/test_episodic_integration.py
-import pytest
+import ward
 from k0.kg.episodic_integration import consolidate_episodic_to_kg
 
 async def test_entity_extraction():
@@ -833,3 +833,4 @@ async def test_entity_resolution():
 4. Integrate with K0 P03 Consolidation pipeline
 5. Write extraction tests
 6. Write performance tests
+

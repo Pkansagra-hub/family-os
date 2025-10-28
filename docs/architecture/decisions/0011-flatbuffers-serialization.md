@@ -1,9 +1,9 @@
-# ADR-0011: FlatBuffers for All K1 Serialization
+﻿# ADR-0011: FlatBuffers for All K1 Serialization
 
-**Status:** ✅ Accepted
+**Status:** âœ… Accepted
 **Date:** 2025-10-10
 **Deciders:** K1 Architecture Team
-**Technical Story:** K1 Intelligence Module requires efficient, zero-copy serialization for all internal contracts (K1↔K0, agent messaging, state persistence) to meet aggressive performance budgets (TTFT <150ms P95, E2E <2000ms P95).
+**Technical Story:** K1 Intelligence Module requires efficient, zero-copy serialization for all internal contracts (K1â†”K0, agent messaging, state persistence) to meet aggressive performance budgets (TTFT <150ms P95, E2E <2000ms P95).
 
 ---
 
@@ -14,8 +14,8 @@
 **FlatBuffers** is a **SERIALIZATION FORMAT** (NOT a component with AI/actor classification):
 - **Purpose:** Zero-copy binary serialization for high-performance, low-latency messaging
 - **Used by:** ALL K1 components (both pure actors and AI agents) for inter-component communication
-- **Location:** Pervasive across all 5 layers (Layer 1-5) — serialization boundary, not execution logic
-- **Research:** FlatBuffers (Google 2014) — Zero-copy serialization for games/real-time systems
+- **Location:** Pervasive across all 5 layers (Layer 1-5) â€” serialization boundary, not execution logic
+- **Research:** FlatBuffers (Google 2014) â€” Zero-copy serialization for games/real-time systems
 
 **Why FlatBuffers for K1:**
 - **Performance-critical:** <1ms serialization latency required for hot path (TTFT <150ms budget)
@@ -33,11 +33,11 @@ FlatBuffers is used for **all inter-component messaging** in K1:
 |--------------------|--------------------------------|------------------------|---------------------------|
 | **Pure Actor Messaging** | Orchestrator sends TaskAnnouncement to agents (Contract Net Protocol), Saga Coordinator sends CompensationCommand to agents, Circuit Breaker records FailureEvent, Capability Manager issues CapabilityToken | `TaskAnnouncement.fbs`, `CompensationCommand.fbs`, `FailureEvent.fbs`, `CapabilityToken.fbs` | Agent mailbox (lock-free ring buffer, zero-copy enqueue/dequeue) |
 | **AI Agent Contracts** | Planner sends PlanSketchRequest to Model Hub (LLM inference), Planner receives PlanSketchResponse (LLM output), Safety Watch sends FilterRequest to Model Hub, Hiring Agent sends AgentScoreRequest to Model Hub | `PlanSketchRequest.fbs`, `PlanSketchResponse.fbs`, `FilterRequest.fbs`, `AgentScoreRequest.fbs` | Model Hub API (FlatBuffers over HTTP/2, zero-copy buffer pool) |
-| **K1↔K0 Bridge** | SessionState deltas (6 sections), MemoryFormationRequest (P02), RecallRequest (P01), LearningTickRequest (P03), receipts (tool/model/memory) | `SessionStateDelta.fbs`, `MemoryFormationRequest.fbs`, `RecallRequest.fbs`, `Receipt.fbs` | K0 Bridge batching (250ms flush interval, FlatBuffers batches <5ms serialization for 100+ messages) |
+| **K1â†”K0 Bridge** | SessionState deltas (6 sections), MemoryFormationRequest (P02), RecallRequest (P01), LearningTickRequest (P03), receipts (tool/model/memory) | `SessionStateDelta.fbs`, `MemoryFormationRequest.fbs`, `RecallRequest.fbs`, `Receipt.fbs` | K0 Bridge batching (250ms flush interval, FlatBuffers batches <5ms serialization for 100+ messages) |
 | **Tool Invocation** | Tool Runner sends ToolCallRequest to MCP sandbox, Tool Runner receives ToolCallResult from sandbox, Tool Runner logs ToolReceipt | `ToolCallRequest.fbs`, `ToolCallResult.fbs`, `ToolReceipt.fbs` | MCP sandbox boundary (FlatBuffers envelope + JSON MCP payload for external compatibility) |
 
 **Key Distinction:**
-- **FlatBuffers serialization** is deterministic (<1ms, zero-copy, type-safe) — used by both pure actors and AI agents
+- **FlatBuffers serialization** is deterministic (<1ms, zero-copy, type-safe) â€” used by both pure actors and AI agents
 - **Pure actors** (Orchestrator, Saga, Circuit Breaker) use FlatBuffers for coordination messages (deterministic logic)
 - **AI agents** (Planner, Safety Watch, Hiring Agent) use FlatBuffers for Model Hub contracts (non-deterministic LLM calls)
 
@@ -45,7 +45,7 @@ FlatBuffers is used for **all inter-component messaging** in K1:
 - Serialization latency: <1ms (vs JSON 8ms, Protobuf 3-5ms)
 - Zero-copy deserialization: 0ms (directly access buffer, no allocation)
 - Memory overhead: 1x size (vs JSON 3x size, Protobuf 1.5x size)
-- Hot path contribution: <1ms per operation × 10 operations/turn = <10ms total (vs JSON 80ms, Protobuf 30-50ms)
+- Hot path contribution: <1ms per operation Ã— 10 operations/turn = <10ms total (vs JSON 80ms, Protobuf 30-50ms)
 
 ---
 
@@ -55,18 +55,18 @@ After evaluating 5 serialization formats, **FlatBuffers selected (9/10)**:
 
 | **Alternative** | **Score** | **Pros** | **Cons** | **Rejected Because** |
 |-----------------|-----------|----------|----------|---------------------|
-| **1. JSON (Ubiquitous)** | 3/10 | Human-readable (easy debugging)<br/>Universal support (every language)<br/>Schema validation (JSON Schema) | ❌ 8ms overhead per operation (parse + validate)<br/>❌ No zero-copy (full parse required)<br/>❌ Large payloads (2-3x size vs binary)<br/>❌ No type safety (runtime errors on malformed JSON) | Too slow (8ms × 10 operations/turn = 80ms = 53% of TTFT budget), no zero-copy (memory allocation overhead), 3x size bloat (SessionState 192KB vs 64KB) |
-| **2. Protobuf (Industry Standard)** | 6/10 | Industry standard (gRPC compatible)<br/>Schema evolution (optional fields)<br/>Type safety (compile-time validation) | ❌ 3-5ms overhead (parse + deserialize)<br/>❌ No zero-copy (must parse before access)<br/>❌ Complex toolchain (protoc compiler) | Too slow (3-5ms × 10 operations/turn = 30-50ms = 20-33% of TTFT budget), no zero-copy (requires full deserialization pass) |
-| **3. MessagePack (Binary JSON)** | 4/10 | Compact binary format (smaller than JSON)<br/>Language support (many languages)<br/>Fast serialization (faster than JSON) | ❌ 2-4ms overhead (parse + validate)<br/>❌ No zero-copy (must parse before access)<br/>❌ No schema validation (runtime errors)<br/>❌ No type safety (dynamic typing) | Too slow (2-4ms × 10 operations/turn = 20-40ms), no zero-copy, no compile-time type safety (runtime errors possible) |
-| **4. Apache Avro** | 5/10 | Schema evolution (reader/writer schemas)<br/>Compact binary format<br/>Dynamic typing with schema registry | ❌ 2-3ms overhead (parse + schema lookup)<br/>❌ No zero-copy (must deserialize)<br/>❌ Complex schema registry (operational overhead)<br/>❌ Python support limited | Too slow (2-3ms × 10 operations/turn = 20-30ms), no zero-copy, schema registry operational complexity (external dependency for schema versioning) |
-| **5. FlatBuffers** ✅ | **9/10** | ✅ **Zero-copy deserialization** (0ms, direct access)<br/>✅ **<1ms serialization** (meets hot path budget)<br/>✅ **Type safety** (compile-time schema validation)<br/>✅ **Schema evolution** (optional fields, forward/backward compatible)<br/>✅ **Cross-platform** (Python, Rust, C++, Java)<br/>✅ **Memory efficient** (1x size, no parse overhead)<br/>✅ **Production proven** (Google games, real-time systems) | ⚠️ Schema changes require recompilation (flatc codegen)<br/>⚠️ Not human-readable (binary format, need tools to inspect) | Selected despite recompilation overhead (acceptable for 76 schemas with CI/CD automation) and binary format (tooling available for debugging) |
+| **1. JSON (Ubiquitous)** | 3/10 | Human-readable (easy debugging)<br/>Universal support (every language)<br/>Schema validation (JSON Schema) | âŒ 8ms overhead per operation (parse + validate)<br/>âŒ No zero-copy (full parse required)<br/>âŒ Large payloads (2-3x size vs binary)<br/>âŒ No type safety (runtime errors on malformed JSON) | Too slow (8ms Ã— 10 operations/turn = 80ms = 53% of TTFT budget), no zero-copy (memory allocation overhead), 3x size bloat (SessionState 192KB vs 64KB) |
+| **2. Protobuf (Industry Standard)** | 6/10 | Industry standard (gRPC compatible)<br/>Schema evolution (optional fields)<br/>Type safety (compile-time validation) | âŒ 3-5ms overhead (parse + deserialize)<br/>âŒ No zero-copy (must parse before access)<br/>âŒ Complex toolchain (protoc compiler) | Too slow (3-5ms Ã— 10 operations/turn = 30-50ms = 20-33% of TTFT budget), no zero-copy (requires full deserialization pass) |
+| **3. MessagePack (Binary JSON)** | 4/10 | Compact binary format (smaller than JSON)<br/>Language support (many languages)<br/>Fast serialization (faster than JSON) | âŒ 2-4ms overhead (parse + validate)<br/>âŒ No zero-copy (must parse before access)<br/>âŒ No schema validation (runtime errors)<br/>âŒ No type safety (dynamic typing) | Too slow (2-4ms Ã— 10 operations/turn = 20-40ms), no zero-copy, no compile-time type safety (runtime errors possible) |
+| **4. Apache Avro** | 5/10 | Schema evolution (reader/writer schemas)<br/>Compact binary format<br/>Dynamic typing with schema registry | âŒ 2-3ms overhead (parse + schema lookup)<br/>âŒ No zero-copy (must deserialize)<br/>âŒ Complex schema registry (operational overhead)<br/>âŒ Python support limited | Too slow (2-3ms Ã— 10 operations/turn = 20-30ms), no zero-copy, schema registry operational complexity (external dependency for schema versioning) |
+| **5. FlatBuffers** âœ… | **9/10** | âœ… **Zero-copy deserialization** (0ms, direct access)<br/>âœ… **<1ms serialization** (meets hot path budget)<br/>âœ… **Type safety** (compile-time schema validation)<br/>âœ… **Schema evolution** (optional fields, forward/backward compatible)<br/>âœ… **Cross-platform** (Python, Rust, C++, Java)<br/>âœ… **Memory efficient** (1x size, no parse overhead)<br/>âœ… **Production proven** (Google games, real-time systems) | âš ï¸ Schema changes require recompilation (flatc codegen)<br/>âš ï¸ Not human-readable (binary format, need tools to inspect) | Selected despite recompilation overhead (acceptable for 76 schemas with CI/CD automation) and binary format (tooling available for debugging) |
 
 **Key Decision Factors:**
-- **Zero-copy deserialization:** 0ms access time (vs JSON 8ms, Protobuf 3-5ms, MessagePack 2-4ms, Avro 2-3ms) — critical for hot path <150ms TTFT budget
+- **Zero-copy deserialization:** 0ms access time (vs JSON 8ms, Protobuf 3-5ms, MessagePack 2-4ms, Avro 2-3ms) â€” critical for hot path <150ms TTFT budget
 - **<1ms serialization latency:** Fits hot path performance budget (10 operations/turn = <10ms total vs JSON 80ms, Protobuf 30-50ms)
 - **Type safety prevents runtime errors:** Compile-time schema validation (76 schemas) catches errors before production (vs JSON/MessagePack runtime errors)
 - **Schema evolution support:** Optional fields + deprecation annotations enable rolling deployments (90-day deprecation windows)
-- **Memory efficiency:** 1x size (vs JSON 3x) — SessionState 64KB vs 192KB, reduces K0 WAL storage + network bandwidth
+- **Memory efficiency:** 1x size (vs JSON 3x) â€” SessionState 64KB vs 192KB, reduces K0 WAL storage + network bandwidth
 
 **Rejection Rationale:**
 - **JSON (3/10):** Too slow (8ms per operation = 53% of TTFT budget), no zero-copy (memory allocation overhead), 3x size bloat, no compile-time type safety
@@ -89,7 +89,7 @@ After evaluating 5 serialization formats, **FlatBuffers selected (9/10)**:
 
 K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 - **Agent-to-Agent Messaging:** 100-1000 messages/second during multi-agent coordination
-- **K1→K0 State Persistence:** SessionState deltas (64KB) flushed every 250ms
+- **K1â†’K0 State Persistence:** SessionState deltas (64KB) flushed every 250ms
 - **Model Hub Coordination:** Model calls, KV cache metadata, receipts
 - **Voice Pipeline:** Real-time ASR frames (16kHz), TTS chunks, streaming
 - **Observability:** Traces, metrics, receipts (1000+ events/second)
@@ -106,10 +106,10 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Why Serialization Matters
 
 1. **Hot Path Operations:**
-   - Every agent message → serialize → enqueue → deserialize
-   - Every state delta → serialize → batch → K0 WAL
-   - Every model call → serialize request → deserialize response
-   - Every tool invocation → serialize → sandbox → deserialize result
+   - Every agent message â†’ serialize â†’ enqueue â†’ deserialize
+   - Every state delta â†’ serialize â†’ batch â†’ K0 WAL
+   - Every model call â†’ serialize request â†’ deserialize response
+   - Every tool invocation â†’ serialize â†’ sandbox â†’ deserialize result
 
 2. **Memory Efficiency:**
    - SessionState (64KB) serialized for K0 persistence
@@ -118,9 +118,9 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
    - Streaming chunks (audio/video frames)
 
 3. **Cross-Process Communication:**
-   - K1 ↔ K0 Bridge (HTTP/2 + binary)
-   - K1 ↔ MCP Sandboxes (stdio/HTTP)
-   - K1 ↔ Remote Model Providers (gRPC/REST)
+   - K1 â†” K0 Bridge (HTTP/2 + binary)
+   - K1 â†” MCP Sandboxes (stdio/HTTP)
+   - K1 â†” Remote Model Providers (gRPC/REST)
 
 4. **Schema Evolution:**
    - 76 schemas across 20 pipelines + APIs
@@ -140,7 +140,7 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 **We will use FlatBuffers for all K1 serialization**, including:
 
-### 1. K1↔K0 Communication (20 Pipelines)
+### 1. K1â†”K0 Communication (20 Pipelines)
 - **P01-P20 Pipeline Contracts:** RecallRequest, MemoryFormationRequest, LearningTickRequest, etc.
 - **StateDeltas:** SessionState changes batched to K0 every 250ms
 - **Receipts:** MemoryReceipt, ToolReceipt, ModelReceipt (auditability)
@@ -179,12 +179,12 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 | Boundary | Format | Rationale |
 |----------|--------|-----------|
-| **K1 Internal (agent↔agent)** | FlatBuffers | Zero-copy, <1ms, type-safe |
-| **K1 ↔ K0 Bridge** | FlatBuffers (HTTP/2) | Binary efficiency, schema evolution |
-| **K1 ↔ MCP Sandboxes** | FlatBuffers envelope + JSON payload | MCP spec requires JSON, wrap in FlatBuffers for metadata |
-| **K1 ↔ Remote Models** | JSON (OpenAI API) or Protobuf (gRPC) | External API compatibility |
-| **K1 ↔ Frontend (WebSocket)** | FlatBuffers (binary frames) | Reduced bandwidth, faster parsing |
-| **K1 ↔ Frontend (REST API)** | JSON (external) + FlatBuffers (internal) | Developer experience (JSON) + performance (FlatBuffers) |
+| **K1 Internal (agentâ†”agent)** | FlatBuffers | Zero-copy, <1ms, type-safe |
+| **K1 â†” K0 Bridge** | FlatBuffers (HTTP/2) | Binary efficiency, schema evolution |
+| **K1 â†” MCP Sandboxes** | FlatBuffers envelope + JSON payload | MCP spec requires JSON, wrap in FlatBuffers for metadata |
+| **K1 â†” Remote Models** | JSON (OpenAI API) or Protobuf (gRPC) | External API compatibility |
+| **K1 â†” Frontend (WebSocket)** | FlatBuffers (binary frames) | Reduced bandwidth, faster parsing |
+| **K1 â†” Frontend (REST API)** | JSON (external) + FlatBuffers (internal) | Developer experience (JSON) + performance (FlatBuffers) |
 
 **Hybrid Strategy:** FlatBuffers internally, JSON/Protobuf at process boundaries where external compatibility required.
 
@@ -195,20 +195,20 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Alternative 1: JSON (Ubiquitous, Human-Readable)
 
 **Pros:**
-- ✅ Human-readable (easy debugging)
-- ✅ Universal support (every language, every tool)
-- ✅ Schema validation (JSON Schema)
-- ✅ Dynamic typing (no code generation)
+- âœ… Human-readable (easy debugging)
+- âœ… Universal support (every language, every tool)
+- âœ… Schema validation (JSON Schema)
+- âœ… Dynamic typing (no code generation)
 
 **Cons:**
-- ❌ **8ms overhead per operation** (parse + validate + allocate)
-- ❌ **No zero-copy:** Full JSON parse required before access
-- ❌ **Large payloads:** 2-3x size vs binary (quotes, whitespace)
-- ❌ **No type safety:** Runtime errors on malformed JSON
-- ❌ **Slow at scale:** 100 messages/sec = 800ms JSON overhead
+- âŒ **8ms overhead per operation** (parse + validate + allocate)
+- âŒ **No zero-copy:** Full JSON parse required before access
+- âŒ **Large payloads:** 2-3x size vs binary (quotes, whitespace)
+- âŒ **No type safety:** Runtime errors on malformed JSON
+- âŒ **Slow at scale:** 100 messages/sec = 800ms JSON overhead
 
 **Why Rejected:**
-- **Performance unacceptable:** 8ms × 10 operations/turn = 80ms (53% of TTFT budget)
+- **Performance unacceptable:** 8ms Ã— 10 operations/turn = 80ms (53% of TTFT budget)
 - **Memory overhead:** 3x size for SessionState (192KB vs 64KB)
 - **Type safety:** Runtime errors in production (no compile-time validation)
 
@@ -219,19 +219,19 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Alternative 2: Protobuf (Industry Standard)
 
 **Pros:**
-- ✅ Industry standard (gRPC, many services)
-- ✅ Schema evolution (optional fields, defaults)
-- ✅ Cross-language support
-- ✅ Type safety (compile-time validation)
+- âœ… Industry standard (gRPC, many services)
+- âœ… Schema evolution (optional fields, defaults)
+- âœ… Cross-language support
+- âœ… Type safety (compile-time validation)
 
 **Cons:**
-- ❌ **Not zero-copy:** Requires full parse before access
-- ❌ **3-5ms overhead per operation** (parse + validate)
-- ❌ **Memory allocations:** New objects created on deserialization
-- ❌ **Slower than FlatBuffers:** 3-5x slower for nested structures
+- âŒ **Not zero-copy:** Requires full parse before access
+- âŒ **3-5ms overhead per operation** (parse + validate)
+- âŒ **Memory allocations:** New objects created on deserialization
+- âŒ **Slower than FlatBuffers:** 3-5x slower for nested structures
 
 **Why Rejected:**
-- **Performance gap:** 3-5ms × 10 operations/turn = 30-50ms overhead (20-33% of TTFT budget)
+- **Performance gap:** 3-5ms Ã— 10 operations/turn = 30-50ms overhead (20-33% of TTFT budget)
 - **Not zero-copy:** Can't memory-map SessionState for instant access
 - **Complexity:** Two serialization formats (FlatBuffers + Protobuf) adds maintenance burden
 
@@ -242,16 +242,16 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Alternative 3: MessagePack (Binary JSON)
 
 **Pros:**
-- ✅ Binary format (smaller than JSON)
-- ✅ Fast serialization (~2ms)
-- ✅ Cross-language support
-- ✅ Dynamic typing (no code generation)
+- âœ… Binary format (smaller than JSON)
+- âœ… Fast serialization (~2ms)
+- âœ… Cross-language support
+- âœ… Dynamic typing (no code generation)
 
 **Cons:**
-- ❌ **No schema evolution:** Breaking changes require full redeployment
-- ❌ **Not zero-copy:** Requires full parse
-- ❌ **No type safety:** Runtime errors on malformed data
-- ❌ **Smaller ecosystem:** Less tooling than JSON/Protobuf/FlatBuffers
+- âŒ **No schema evolution:** Breaking changes require full redeployment
+- âŒ **Not zero-copy:** Requires full parse
+- âŒ **No type safety:** Runtime errors on malformed data
+- âŒ **Smaller ecosystem:** Less tooling than JSON/Protobuf/FlatBuffers
 
 **Why Rejected:**
 - **No schema evolution:** 76 schemas evolving independently require forward/backward compatibility
@@ -265,16 +265,16 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Alternative 4: Cap'n Proto (Zero-Copy, Similar to FlatBuffers)
 
 **Pros:**
-- ✅ Zero-copy deserialization
-- ✅ Fast (<1ms)
-- ✅ Schema evolution
-- ✅ Type safety
+- âœ… Zero-copy deserialization
+- âœ… Fast (<1ms)
+- âœ… Schema evolution
+- âœ… Type safety
 
 **Cons:**
-- ❌ **Smaller ecosystem:** Less tooling, fewer languages
-- ❌ **C++ focus:** Python bindings less mature
-- ❌ **Less documentation:** Harder onboarding
-- ❌ **RPC-focused:** More than serialization (unnecessary complexity)
+- âŒ **Smaller ecosystem:** Less tooling, fewer languages
+- âŒ **C++ focus:** Python bindings less mature
+- âŒ **Less documentation:** Harder onboarding
+- âŒ **RPC-focused:** More than serialization (unnecessary complexity)
 
 **Why Rejected:**
 - **Ecosystem risk:** FlatBuffers has Google backing, wider adoption (Android, game engines)
@@ -288,16 +288,16 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 ### Alternative 5: Custom Binary Format
 
 **Pros:**
-- ✅ Perfectly optimized for K1 use cases
-- ✅ Minimal overhead
-- ✅ No external dependencies
+- âœ… Perfectly optimized for K1 use cases
+- âœ… Minimal overhead
+- âœ… No external dependencies
 
 **Cons:**
-- ❌ **Months of development:** Build parser, generator, validator
-- ❌ **Maintenance burden:** Fix bugs, add features, cross-language support
-- ❌ **Schema evolution complexity:** Build versioning, migration tools
-- ❌ **No tooling:** No debuggers, inspectors, validators
-- ❌ **Risk:** Unforeseen edge cases, production bugs
+- âŒ **Months of development:** Build parser, generator, validator
+- âŒ **Maintenance burden:** Fix bugs, add features, cross-language support
+- âŒ **Schema evolution complexity:** Build versioning, migration tools
+- âŒ **No tooling:** No debuggers, inspectors, validators
+- âŒ **Risk:** Unforeseen edge cases, production bugs
 
 **Why Rejected:**
 - **Time-to-market:** FlatBuffers solves 95% of needs today
@@ -314,11 +314,11 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 | Format | Serialize (ms) | Deserialize (ms) | Size (KB) | Zero-Copy? | Type Safety? |
 |--------|---------------|------------------|-----------|------------|--------------|
-| **FlatBuffers** | **0.9** | **0.05** (zero-copy) | **64** | ✅ Yes | ✅ Yes |
-| JSON | 8.2 | 7.5 | 192 | ❌ No | ❌ No |
-| Protobuf | 3.1 | 2.8 | 68 | ❌ No | ✅ Yes |
-| MessagePack | 2.3 | 2.1 | 72 | ❌ No | ❌ No |
-| Cap'n Proto | 0.8 | 0.04 (zero-copy) | 65 | ✅ Yes | ✅ Yes |
+| **FlatBuffers** | **0.9** | **0.05** (zero-copy) | **64** | âœ… Yes | âœ… Yes |
+| JSON | 8.2 | 7.5 | 192 | âŒ No | âŒ No |
+| Protobuf | 3.1 | 2.8 | 68 | âŒ No | âœ… Yes |
+| MessagePack | 2.3 | 2.1 | 72 | âŒ No | âŒ No |
+| Cap'n Proto | 0.8 | 0.04 (zero-copy) | 65 | âœ… Yes | âœ… Yes |
 
 **FlatBuffers wins on:**
 - **Deserialization speed:** 150x faster than JSON (0.05ms vs 7.5ms)
@@ -407,7 +407,7 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 3. **Binary Size Overhead:**
    - FlatBuffers library adds ~500KB to K1 binary
-   - Generated code adds ~2MB (76 schemas × ~25KB each)
+   - Generated code adds ~2MB (76 schemas Ã— ~25KB each)
 
    **Mitigation:**
    - Acceptable trade-off (3MB total vs gigabytes of performance loss with JSON)
@@ -476,20 +476,20 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 ### Related ADRs
 
-- **ADR-0001:** K0/K1 Kernel Split — K1↔K0 communication requires efficient serialization
-- **ADR-0002:** Actor Model — Agent messages serialized with FlatBuffers
-- **ADR-0004:** 52-Module Architecture — Module boundaries use FlatBuffers contracts
-- **ADR-0012:** 76 FlatBuffers Schemas — Complete schema inventory (NEXT)
-- **ADR-0013:** Pipeline Versioning Policy — Schema evolution strategy (NEXT)
-- **ADR-0017:** SessionState Structure — SessionState serialized with FlatBuffers
-- **ADR-0020:** Multi-Tier Storage — K0 WAL uses FlatBuffers for durability
-- **ADR-0044:** K0 Bridge Design — HTTP/2 + FlatBuffers for K1→K0
+- **ADR-0001:** K0/K1 Kernel Split â€” K1â†”K0 communication requires efficient serialization
+- **ADR-0002:** Actor Model â€” Agent messages serialized with FlatBuffers
+- **ADR-0004:** 52-Module Architecture â€” Module boundaries use FlatBuffers contracts
+- **ADR-0012:** 76 FlatBuffers Schemas â€” Complete schema inventory (NEXT)
+- **ADR-0013:** Pipeline Versioning Policy â€” Schema evolution strategy (NEXT)
+- **ADR-0017:** SessionState Structure â€” SessionState serialized with FlatBuffers
+- **ADR-0020:** Multi-Tier Storage â€” K0 WAL uses FlatBuffers for durability
+- **ADR-0044:** K0 Bridge Design â€” HTTP/2 + FlatBuffers for K1â†’K0
 
 ### Architecture Diagrams
 
-- `architecture_diagrams/k1_architecture_diagram.mmd` — Complete 52-module architecture with serialization boundaries
-- `architecture_diagrams/k1_k0_bridge.mmd` — K1↔K0 communication flow (FlatBuffers batching)
-- `architecture_diagrams/k1_agent_messaging.mmd` — Agent-to-agent message flow (FlatBuffers envelopes)
+- `architecture_diagrams/k1_architecture_diagram.mmd` â€” Complete 52-module architecture with serialization boundaries
+- `architecture_diagrams/k1_k0_bridge.mmd` â€” K1â†”K0 communication flow (FlatBuffers batching)
+- `architecture_diagrams/k1_agent_messaging.mmd` â€” Agent-to-agent message flow (FlatBuffers envelopes)
 
 ### External Resources
 
@@ -512,35 +512,35 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 5. Add CI validation (schema compilation)
 
 **Deliverables:**
-- `k1/schemas/*.fbs` — FlatBuffers schema files
-- `k1/generated/` — Generated Python code
-- `Makefile` — `make schemas` target
-- `.github/workflows/validate-schemas.yml` — CI validation
+- `k1/schemas/*.fbs` â€” FlatBuffers schema files
+- `k1/generated/` â€” Generated Python code
+- `Makefile` â€” `make schemas` target
+- `.github/workflows/validate-schemas.yml` â€” CI validation
 
 ---
 
 ### Phase 2: K1 Internal Messaging (Week 2-3)
 
 **Tasks:**
-1. Migrate agent mailboxes to FlatBuffers (agent↔agent messages)
+1. Migrate agent mailboxes to FlatBuffers (agentâ†”agent messages)
 2. Migrate SessionState serialization to FlatBuffers
 3. Migrate protocol_monitor events to FlatBuffers
 4. Add benchmarks (`<1ms serialization`, `<0.5ms enqueue`)
 
 **Deliverables:**
-- `k1/agents/mailbox/` — FlatBuffers-based mailboxes
-- `k1/runtime/session_state/` — FlatBuffers serialization
-- `k1/runtime/protocol_monitor/` — FlatBuffers protocol events
-- `tests/benchmarks/test_serialization.py` — Performance validation
+- `k1/agents/mailbox/` â€” FlatBuffers-based mailboxes
+- `k1/runtime/session_state/` â€” FlatBuffers serialization
+- `k1/runtime/protocol_monitor/` â€” FlatBuffers protocol events
+- `tests/benchmarks/test_serialization.py` â€” Performance validation
 
 **Success Criteria:**
-- ✅ SessionState serialization <1ms P95
-- ✅ Agent message enqueue <0.5ms P95
-- ✅ All WARD tests passing
+- âœ… SessionState serialization <1ms P95
+- âœ… Agent message enqueue <0.5ms P95
+- âœ… All WARD tests passing
 
 ---
 
-### Phase 3: K1↔K0 Bridge (Week 4)
+### Phase 3: K1â†”K0 Bridge (Week 4)
 
 **Tasks:**
 1. Define 20 pipeline schemas (P01-P20)
@@ -549,15 +549,15 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 4. Performance validation (250ms flush interval)
 
 **Deliverables:**
-- `k1/schemas/pipelines/*.fbs` — 20 pipeline schemas
-- `k1/connectors/k0_bridge/` — FlatBuffers batching
-- `tests/contracts/` — Contract tests
-- `docs/api/k0_bridge.md` — API documentation
+- `k1/schemas/pipelines/*.fbs` â€” 20 pipeline schemas
+- `k1/connectors/k0_bridge/` â€” FlatBuffers batching
+- `tests/contracts/` â€” Contract tests
+- `docs/api/k0_bridge.md` â€” API documentation
 
 **Success Criteria:**
-- ✅ K0 bridge flush <250ms P95
-- ✅ StateDelta serialization <5ms P95
-- ✅ Contract tests passing
+- âœ… K0 bridge flush <250ms P95
+- âœ… StateDelta serialization <5ms P95
+- âœ… Contract tests passing
 
 ---
 
@@ -569,13 +569,13 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 3. Add observability schemas (Trace, Metric, Receipt)
 
 **Deliverables:**
-- `k1/schemas/model_hub/*.fbs` — Model Hub schemas
-- `k1/schemas/tools/*.fbs` — Tool Runtime schemas
-- `k1/schemas/observability/*.fbs` — Observability schemas
+- `k1/schemas/model_hub/*.fbs` â€” Model Hub schemas
+- `k1/schemas/tools/*.fbs` â€” Tool Runtime schemas
+- `k1/schemas/observability/*.fbs` â€” Observability schemas
 
 **Success Criteria:**
-- ✅ Model call serialization <2ms P95
-- ✅ Tool call serialization <1ms P95
+- âœ… Model call serialization <2ms P95
+- âœ… Tool call serialization <1ms P95
 
 ---
 
@@ -588,15 +588,15 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 4. Add JSON export for debugging
 
 **Deliverables:**
-- `k1/schemas/websocket/*.fbs` — WebSocket schemas
-- `k1/schemas/sse/*.fbs` — SSE event schemas
-- `k1/generated/typescript/` — TypeScript bindings
-- `docs/api/websocket.md` — WebSocket API documentation
+- `k1/schemas/websocket/*.fbs` â€” WebSocket schemas
+- `k1/schemas/sse/*.fbs` â€” SSE event schemas
+- `k1/generated/typescript/` â€” TypeScript bindings
+- `docs/api/websocket.md` â€” WebSocket API documentation
 
 **Success Criteria:**
-- ✅ WebSocket message serialization <1ms
-- ✅ SSE event serialization <0.5ms
-- ✅ TypeScript types generated and validated
+- âœ… WebSocket message serialization <1ms
+- âœ… SSE event serialization <0.5ms
+- âœ… TypeScript types generated and validated
 
 ---
 
@@ -614,9 +614,9 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 - Rollback plan (JSON fallback if needed)
 
 **Success Criteria:**
-- ✅ All performance budgets met
-- ✅ Zero production incidents
-- ✅ Developer documentation complete
+- âœ… All performance budgets met
+- âœ… Zero production incidents
+- âœ… Developer documentation complete
 
 ---
 
@@ -641,7 +641,7 @@ K1 Intelligence Module processes **high-throughput, low-latency** workloads:
 
 | Metric | Target | Measurement Method |
 |--------|--------|-------------------|
-| SessionState serialization | <1ms P95 | Benchmark suite, `pytest-benchmark` |
+| SessionState serialization | <1ms P95 | Benchmark suite, `ward-benchmark` |
 | Agent message enqueue | <0.5ms P95 | Mailbox performance tests |
 | K0 bridge flush | <250ms P95 | Production metrics (Prometheus) |
 | Model call serialization | <2ms P95 | Model Hub integration tests |
@@ -682,7 +682,7 @@ If FlatBuffers proves inadequate in production:
    - Decision gate: Keep FlatBuffers or migrate
 
 3. **Long-term (Month 2-3):**
-   - If migration needed: Gradual rollout (20% → 50% → 100%)
+   - If migration needed: Gradual rollout (20% â†’ 50% â†’ 100%)
    - Schema compatibility maintained (both formats supported)
    - Zero downtime migration
 
@@ -694,21 +694,21 @@ If FlatBuffers proves inadequate in production:
 
 **We chose FlatBuffers because:**
 
-1. ✅ **Performance:** <1ms serialization, zero-copy deserialization (150x faster than JSON)
-2. ✅ **Type Safety:** Compile-time schema validation, no runtime parsing errors
-3. ✅ **Schema Evolution:** Forward/backward compatible, 90-day deprecation windows
-4. ✅ **Cross-Platform:** Python + TypeScript + (future Rust/C++)
-5. ✅ **Proven Technology:** Google (Android), Facebook, Unreal Engine, game industry
-6. ✅ **Zero-Copy Architecture:** Memory-map SessionState, shared-memory ring buffers
-7. ✅ **Reduced Memory:** 3x smaller than JSON (64KB vs 192KB for SessionState)
+1. âœ… **Performance:** <1ms serialization, zero-copy deserialization (150x faster than JSON)
+2. âœ… **Type Safety:** Compile-time schema validation, no runtime parsing errors
+3. âœ… **Schema Evolution:** Forward/backward compatible, 90-day deprecation windows
+4. âœ… **Cross-Platform:** Python + TypeScript + (future Rust/C++)
+5. âœ… **Proven Technology:** Google (Android), Facebook, Unreal Engine, game industry
+6. âœ… **Zero-Copy Architecture:** Memory-map SessionState, shared-memory ring buffers
+7. âœ… **Reduced Memory:** 3x smaller than JSON (64KB vs 192KB for SessionState)
 
 **We rejected alternatives because:**
 
-- ❌ **JSON:** 8ms overhead (unacceptable for hot path)
-- ❌ **Protobuf:** Not zero-copy (3-5ms overhead)
-- ❌ **MessagePack:** No schema evolution, no type safety
-- ❌ **Cap'n Proto:** Smaller ecosystem, less mature Python bindings
-- ❌ **Custom Format:** Months of development, maintenance burden
+- âŒ **JSON:** 8ms overhead (unacceptable for hot path)
+- âŒ **Protobuf:** Not zero-copy (3-5ms overhead)
+- âŒ **MessagePack:** No schema evolution, no type safety
+- âŒ **Cap'n Proto:** Smaller ecosystem, less mature Python bindings
+- âŒ **Custom Format:** Months of development, maintenance burden
 
 **FlatBuffers is the right choice for K1's performance-critical, schema-heavy architecture.**
 
@@ -723,9 +723,9 @@ If FlatBuffers proves inadequate in production:
 **Last Updated:** 2025-10-15
 
 **Committee Approval:**
-- Architecture Team: ✅ **Approved** (2025-10-10) - Zero-copy design validated, 76 schemas approved
-- Performance Team: ✅ **Approved** (2025-10-12) - <1ms serialization latency confirmed in benchmarks
-- K0 Bridge Team: ✅ **Approved** (2025-10-13) - FlatBuffers HTTP/2 integration validated
+- Architecture Team: âœ… **Approved** (2025-10-10) - Zero-copy design validated, 76 schemas approved
+- Performance Team: âœ… **Approved** (2025-10-12) - <1ms serialization latency confirmed in benchmarks
+- K0 Bridge Team: âœ… **Approved** (2025-10-13) - FlatBuffers HTTP/2 integration validated
 
 **Proposed by:** K1 Architecture Team
 **Reviewed by:** Performance Team, K0 Bridge Team, DevOps Team, Model Hub Team
@@ -745,10 +745,10 @@ If FlatBuffers proves inadequate in production:
 - `tests/serialization/test_zero_copy_perf.py` - 12 WARD tests (performance benchmarks)
 
 **Performance Metrics (Production):**
-- Serialization latency: <1ms P95 (0.7ms P50, 0.9ms P95, 1.2ms P99) — meets hot path budget
+- Serialization latency: <1ms P95 (0.7ms P50, 0.9ms P95, 1.2ms P99) â€” meets hot path budget
 - Zero-copy deserialization: 0ms (direct buffer access, no allocation overhead)
 - Memory overhead: 1x size (SessionState 64KB vs JSON 192KB = 3x reduction)
-- Hot path total overhead: <10ms per turn (10 operations × <1ms each vs JSON 80ms = 8x faster)
+- Hot path total overhead: <10ms per turn (10 operations Ã— <1ms each vs JSON 80ms = 8x faster)
 - Buffer pool hit rate: 88% (reuse allocated buffers, reduces GC pressure)
 
 **76 Schemas Implemented (Organized by Category):**
@@ -779,12 +779,12 @@ If FlatBuffers proves inadequate in production:
 - **Memory efficiency 3x reduction:** SessionState 64KB vs JSON 192KB (reduces K0 WAL storage by 67%, network bandwidth by 67%)
 
 **Challenges & Solutions:**
-- **Challenge:** FlatBuffers schema changes require recompilation (`flatc` codegen) — slower iteration than JSON
-  - **Solution:** CI/CD automation with pre-commit hooks (auto-recompile schemas on change, run tests, commit generated bindings) — 15s overhead acceptable
+- **Challenge:** FlatBuffers schema changes require recompilation (`flatc` codegen) â€” slower iteration than JSON
+  - **Solution:** CI/CD automation with pre-commit hooks (auto-recompile schemas on change, run tests, commit generated bindings) â€” 15s overhead acceptable
 - **Challenge:** Binary format not human-readable (debugging difficult vs JSON)
-  - **Solution:** Built `flatbuffers_inspector` tool (pretty-print binary buffers as JSON for debugging) — 90% of team adopted tool within 2 weeks
+  - **Solution:** Built `flatbuffers_inspector` tool (pretty-print binary buffers as JSON for debugging) â€” 90% of team adopted tool within 2 weeks
 - **Challenge:** Buffer pool memory leaks (buffers not returned to pool after use)
-  - **Solution:** Added context manager `with buffer_pool.acquire() as buf:` to guarantee buffer return — reduced leak incidents from 5/week to 0
+  - **Solution:** Added context manager `with buffer_pool.acquire() as buf:` to guarantee buffer return â€” reduced leak incidents from 5/week to 0
 
 ---
 
@@ -839,3 +839,4 @@ If FlatBuffers proves inadequate in production:
 ---
 
 **END OF ADR-0011**
+

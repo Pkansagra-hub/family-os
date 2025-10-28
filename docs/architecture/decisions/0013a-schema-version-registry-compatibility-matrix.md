@@ -1,6 +1,6 @@
-# ADR-0013a: Schema Version Registry & Compatibility Matrix
+﻿# ADR-0013a: Schema Version Registry & Compatibility Matrix
 
-**Status:** ✅ Accepted (In Progress - 80% Complete)
+**Status:** âœ… Accepted (In Progress - 80% Complete)
 **Date:** 2025-10-12
 **Last Updated:** 2025-01-15 (M3 Context: See ADR-0076 for KVCacheEntry schema v3 update)
 **Parent ADR:** [ADR-0013](0013-pipeline-versioning-policy.md) (Pipeline Versioning Policy)
@@ -17,7 +17,7 @@
 K1 Intelligence Module uses 76 FlatBuffers schemas (documented in ADR-0012) across 5 architectural layers for agent communication, memory management, tool execution, API communication, and infrastructure monitoring. As these schemas evolve (adding fields, deprecating fields, changing types), we need:
 
 1. **Centralized Version Tracking:** Single source of truth for all schema versions (MAJOR.MINOR.PATCH)
-2. **Compatibility Matrix:** Know which schema versions work together (v2.1.0 ↔ v2.0.0?)
+2. **Compatibility Matrix:** Know which schema versions work together (v2.1.0 â†” v2.0.0?)
 3. **Deprecation Schedule:** Track deprecated fields with 90-day countdown to removal
 4. **Runtime Queries:** Clients check version compatibility at runtime (<20ms latency)
 5. **CI/CD Validation:** Fail builds if schema version bumps incorrect
@@ -35,7 +35,7 @@ K1 Intelligence Module uses 76 FlatBuffers schemas (documented in ADR-0012) acro
 ## Decision Drivers
 
 ### Functional Requirements
-- **FR1:** Track all 76 schemas × 10+ versions each = 760+ version entries over lifecycle
+- **FR1:** Track all 76 schemas Ã— 10+ versions each = 760+ version entries over lifecycle
 - **FR2:** Compatibility matrix auto-generated (v2.1.0 backward-compatible with v2.0.0, not v1.x)
 - **FR3:** Deprecation schedule with 90-day countdown (alert at 30/60/90 days before removal)
 - **FR4:** CLI tool for version queries (<100ms latency, cached registry)
@@ -65,18 +65,18 @@ K1 Intelligence Module uses 76 FlatBuffers schemas (documented in ADR-0012) acro
 **Description:** Store schema version metadata in YAML file (`k1/config/schema_registry.yml`), auto-generate compatibility matrix, provide CLI tool and REST API.
 
 **Pros:**
-- ✅ Human-readable (Git diffs show version changes)
-- ✅ Version-controlled (code review for registry updates)
-- ✅ Fast load time (<50ms for 760+ entries)
-- ✅ Easy CI/CD integration (parse YAML, validate versions)
-- ✅ Simple CLI tool (Python script, <100ms latency)
+- âœ… Human-readable (Git diffs show version changes)
+- âœ… Version-controlled (code review for registry updates)
+- âœ… Fast load time (<50ms for 760+ entries)
+- âœ… Easy CI/CD integration (parse YAML, validate versions)
+- âœ… Simple CLI tool (Python script, <100ms latency)
 
 **Cons:**
-- ❌ Manual registry updates (developer updates YAML on version bump)
-- ❌ YAML parsing overhead (50ms load time)
-- ❌ Limited query performance (in-memory only, no indexing)
+- âŒ Manual registry updates (developer updates YAML on version bump)
+- âŒ YAML parsing overhead (50ms load time)
+- âŒ Limited query performance (in-memory only, no indexing)
 
-**Decision:** ✅ **SELECTED** (best balance: simplicity, Git integration, performance)
+**Decision:** âœ… **SELECTED** (best balance: simplicity, Git integration, performance)
 
 ---
 
@@ -84,18 +84,18 @@ K1 Intelligence Module uses 76 FlatBuffers schemas (documented in ADR-0012) acro
 **Description:** Store schema version metadata in PostgreSQL database, provide SQL query API.
 
 **Pros:**
-- ✅ Rich query API (SQL queries for complex compatibility checks)
-- ✅ Indexing for fast queries (<1ms with indexes)
-- ✅ Transaction support (atomic version updates)
-- ✅ Scalability (handle 100K+ version entries)
+- âœ… Rich query API (SQL queries for complex compatibility checks)
+- âœ… Indexing for fast queries (<1ms with indexes)
+- âœ… Transaction support (atomic version updates)
+- âœ… Scalability (handle 100K+ version entries)
 
 **Cons:**
-- ❌ Operational complexity (requires PostgreSQL deployment)
-- ❌ Not version-controlled (registry changes not in Git)
-- ❌ Slower CI/CD integration (need DB connection)
-- ❌ Overkill for 760 entries (in-memory cache sufficient)
+- âŒ Operational complexity (requires PostgreSQL deployment)
+- âŒ Not version-controlled (registry changes not in Git)
+- âŒ Slower CI/CD integration (need DB connection)
+- âŒ Overkill for 760 entries (in-memory cache sufficient)
 
-**Decision:** ❌ **REJECTED** (too complex for current scale, future consideration)
+**Decision:** âŒ **REJECTED** (too complex for current scale, future consideration)
 
 ---
 
@@ -103,17 +103,17 @@ K1 Intelligence Module uses 76 FlatBuffers schemas (documented in ADR-0012) acro
 **Description:** Use Confluent Schema Registry (Kafka ecosystem) for schema versioning.
 
 **Pros:**
-- ✅ Industry-standard (proven for Avro/Protobuf schemas)
-- ✅ REST API built-in (no custom implementation)
-- ✅ Compatibility checks built-in (forward/backward validation)
+- âœ… Industry-standard (proven for Avro/Protobuf schemas)
+- âœ… REST API built-in (no custom implementation)
+- âœ… Compatibility checks built-in (forward/backward validation)
 
 **Cons:**
-- ❌ Kafka ecosystem dependency (overkill without Kafka)
-- ❌ Not FlatBuffers-native (requires adapter layer)
-- ❌ Operational complexity (deploy Schema Registry service)
-- ❌ Not Git-based (registry not version-controlled)
+- âŒ Kafka ecosystem dependency (overkill without Kafka)
+- âŒ Not FlatBuffers-native (requires adapter layer)
+- âŒ Operational complexity (deploy Schema Registry service)
+- âŒ Not Git-based (registry not version-controlled)
 
-**Decision:** ❌ **REJECTED** (too heavyweight, Kafka not in K1 architecture)
+**Decision:** âŒ **REJECTED** (too heavyweight, Kafka not in K1 architecture)
 
 ---
 
@@ -149,7 +149,7 @@ schemas:
     file_identifier: AGST
     layer: 1
     module: agent_fabric
-    description: "Agent lifecycle FSM (6 states: PENDING → WARMING → ACTIVE → IDLE → DRAINING → TERMINATED)"
+    description: "Agent lifecycle FSM (6 states: PENDING â†’ WARMING â†’ ACTIVE â†’ IDLE â†’ DRAINING â†’ TERMINATED)"
     schema_path: "k1/schemas/agent_fabric/agent_state.fbs"
     versions:
       - version: "2.1.0"
@@ -179,7 +179,7 @@ schemas:
         status: deprecated
         deprecated_at: "2025-09-15"
         removal_date: "2025-12-15"  # 90 days after deprecation
-        breaking: true  # v1.x → v2.x is breaking
+        breaking: true  # v1.x â†’ v2.x is breaking
         changelog: "Legacy version (MAJOR v1), deprecated in favor of v2.x"
         compatible_with: ["1.4.0", "1.5.0"]
 
@@ -323,7 +323,7 @@ compatibility_matrix:
     compatible: false
     forward_compatible: false
     backward_compatible: false
-    reason: "MAJOR version change (v1.x → v2.x), breaking changes"
+    reason: "MAJOR version change (v1.x â†’ v2.x), breaking changes"
 
   # TaskAnnouncement compatibility
   - schema: TaskAnnouncement
@@ -346,7 +346,7 @@ compatibility_matrix:
 metadata:
   registry_version: "1.0.0"
   total_schemas: 76
-  total_versions: 228  # 76 schemas × 3 versions average
+  total_versions: 228  # 76 schemas Ã— 3 versions average
   layers:
     - layer: 1
       name: "Core Kernel"
@@ -370,7 +370,7 @@ metadata:
 2. **Compatibility Tracking:** compatible_with list (backward-compatible versions)
 3. **Deprecation Schedule:** deprecated_at, removal_date (90 days), replacement guidance
 4. **Performance Metrics:** serialize_ms, deserialize_ms, size_bytes (from ADR-0012)
-5. **Compatibility Matrix:** Auto-generated from version metadata (version_a ↔ version_b)
+5. **Compatibility Matrix:** Auto-generated from version metadata (version_a â†” version_b)
 
 ---
 
@@ -383,8 +383,8 @@ def generate_compatibility_matrix(registry: SchemaRegistry) -> List[Compatibilit
     Auto-generate compatibility matrix from schema version metadata.
 
     Rules:
-    - MINOR/PATCH versions: Backward compatible (v2.1.0 ↔ v2.0.0)
-    - MAJOR versions: Breaking (v2.x ↔ v1.x incompatible)
+    - MINOR/PATCH versions: Backward compatible (v2.1.0 â†” v2.0.0)
+    - MAJOR versions: Breaking (v2.x â†” v1.x incompatible)
     - Forward compatible: Old client works with new schema
     - Backward compatible: New client works with old schema
     """
@@ -399,19 +399,19 @@ def generate_compatibility_matrix(registry: SchemaRegistry) -> List[Compatibilit
                 major_a, minor_a, patch_a = parse_semver(version_a.version)
                 major_b, minor_b, patch_b = parse_semver(version_b.version)
 
-                # Same MAJOR version → compatible
+                # Same MAJOR version â†’ compatible
                 if major_a == major_b:
                     compatible = True
                     forward_compatible = True
                     backward_compatible = True
                     reason = f"Same MAJOR version ({major_a}), MINOR/PATCH changes only"
 
-                # Different MAJOR version → incompatible (breaking change)
+                # Different MAJOR version â†’ incompatible (breaking change)
                 else:
                     compatible = False
                     forward_compatible = False
                     backward_compatible = False
-                    reason = f"MAJOR version change ({major_a} → {major_b}), breaking changes"
+                    reason = f"MAJOR version change ({major_a} â†’ {major_b}), breaking changes"
 
                 matrix.append(CompatibilityEntry(
                     schema=schema.name,
@@ -427,10 +427,10 @@ def generate_compatibility_matrix(registry: SchemaRegistry) -> List[Compatibilit
 ```
 
 **Compatibility Rules:**
-1. **Same MAJOR version (v2.x ↔ v2.y):** ✅ Compatible (MINOR/PATCH changes only)
-2. **Different MAJOR version (v2.x ↔ v1.y):** ❌ Incompatible (breaking changes)
-3. **Forward compatible:** Old client (v2.0.0) works with new schema (v2.1.0) → ✅ Yes (new optional fields ignored)
-4. **Backward compatible:** New client (v2.1.0) works with old schema (v2.0.0) → ✅ Yes (missing optional fields handled gracefully)
+1. **Same MAJOR version (v2.x â†” v2.y):** âœ… Compatible (MINOR/PATCH changes only)
+2. **Different MAJOR version (v2.x â†” v1.y):** âŒ Incompatible (breaking changes)
+3. **Forward compatible:** Old client (v2.0.0) works with new schema (v2.1.0) â†’ âœ… Yes (new optional fields ignored)
+4. **Backward compatible:** New client (v2.1.0) works with old schema (v2.0.0) â†’ âœ… Yes (missing optional fields handled gracefully)
 
 ---
 
@@ -454,12 +454,12 @@ k1-schema-version --version
 k1-schema-version check AgentState 2.1.0 2.0.0
 
 # Output:
-✅ Compatible
+âœ… Compatible
 Schema: AgentState
 Version A: 2.1.0
 Version B: 2.0.0
-Forward compatible: ✅ Yes (old client 2.0.0 works with new schema 2.1.0)
-Backward compatible: ✅ Yes (new client 2.1.0 works with old schema 2.0.0)
+Forward compatible: âœ… Yes (old client 2.0.0 works with new schema 2.1.0)
+Backward compatible: âœ… Yes (new client 2.1.0 works with old schema 2.0.0)
 Reason: Same MAJOR version (2), MINOR changes only
 ```
 
@@ -468,13 +468,13 @@ Reason: Same MAJOR version (2), MINOR changes only
 k1-schema-version check AgentState 2.1.0 1.5.0
 
 # Output:
-❌ Incompatible
+âŒ Incompatible
 Schema: AgentState
 Version A: 2.1.0
 Version B: 1.5.0
-Forward compatible: ❌ No (breaking changes)
-Backward compatible: ❌ No (breaking changes)
-Reason: MAJOR version change (2 → 1), breaking changes
+Forward compatible: âŒ No (breaking changes)
+Backward compatible: âŒ No (breaking changes)
+Reason: MAJOR version change (2 â†’ 1), breaking changes
 ```
 
 #### 3.2. List Deprecations
@@ -496,7 +496,7 @@ Deprecated Fields (2 total):
    Deprecated: 2025-09-15
    Removal: 2025-12-15 (65 days remaining)
    Replacement: Use task_intent enum instead
-   Usage: 12.5% (⚠️ HIGH USAGE, manual migration guide required)
+   Usage: 12.5% (âš ï¸ HIGH USAGE, manual migration guide required)
    Migration: https://docs.k1.example.com/migrations/task-announcement-v3
 ```
 
@@ -532,8 +532,8 @@ Changes:
 
 Compatibility:
 - Compatible with: v2.0.0, v2.1.0
-- Forward compatible: ✅ Yes
-- Backward compatible: ✅ Yes
+- Forward compatible: âœ… Yes
+- Backward compatible: âœ… Yes
 ```
 
 #### 3.4. List All Versions
@@ -556,7 +556,7 @@ AgentState Versions (3 total):
 
 3. v1.5.0 (Deprecated, removal: 2025-12-15)
    Released: 2025-03-01
-   Breaking: Yes (v1.x → v2.x)
+   Breaking: Yes (v1.x â†’ v2.x)
    Changelog: Legacy version, deprecated in favor of v2.x
 ```
 
@@ -805,12 +805,12 @@ def validate_registry(registry_path: Path, schemas_path: Path) -> bool:
 
     # Print errors
     if errors:
-        print("❌ Schema Registry Validation Failed\n")
+        print("âŒ Schema Registry Validation Failed\n")
         for i, error in enumerate(errors, 1):
             print(f"{i}. {error}")
         return False
     else:
-        print("✅ Schema Registry Validation Passed")
+        print("âœ… Schema Registry Validation Passed")
         print(f"   Total schemas: {len(registry.get('schemas', []))}")
         print(f"   Total versions: {sum(len(s.get('versions', [])) for s in registry.get('schemas', []))}")
         print(f"   Total deprecations: {len(deprecations)}")
@@ -828,12 +828,12 @@ if __name__ == '__main__':
 ```
 
 **Validation Checks:**
-1. ✅ Required fields present (name, file_identifier, versions)
-2. ✅ SemVer validation (valid MAJOR.MINOR.PATCH format)
-3. ✅ Schema files exist (schema_path points to valid .fbs file)
-4. ✅ Status validation (active/deprecated/removed)
-5. ✅ Deprecation fields (deprecated_at, removal_date required if status=deprecated)
-6. ✅ Compatibility matrix consistency (version_a, version_b exist)
+1. âœ… Required fields present (name, file_identifier, versions)
+2. âœ… SemVer validation (valid MAJOR.MINOR.PATCH format)
+3. âœ… Schema files exist (schema_path points to valid .fbs file)
+4. âœ… Status validation (active/deprecated/removed)
+5. âœ… Deprecation fields (deprecated_at, removal_date required if status=deprecated)
+6. âœ… Compatibility matrix consistency (version_a, version_b exist)
 
 ---
 
@@ -842,7 +842,7 @@ if __name__ == '__main__':
 ### Registry Load Performance
 - **YAML parse:** 30-40ms (760 entries, PyYAML)
 - **In-memory cache:** 10ms (dictionary lookup)
-- **Total load time:** <50ms ✅ (meets budget)
+- **Total load time:** <50ms âœ… (meets budget)
 
 ### Query Performance
 - **Compatibility query:** <5ms (in-memory lookup, no parsing)
@@ -947,7 +947,7 @@ logger.warning(
 
 ### Unit Tests
 ```python
-import pytest
+import ward
 from k1.schema_registry import SchemaRegistry
 
 def test_registry_load():
@@ -1003,7 +1003,7 @@ def test_cli_compatibility_check():
         text=True
     )
     assert result.returncode == 0
-    assert '✅ Compatible' in result.stdout
+    assert 'âœ… Compatible' in result.stdout
 ```
 
 ---
@@ -1040,37 +1040,37 @@ def test_cli_compatibility_check():
 ### Alternative 1: Database-Based Registry (PostgreSQL)
 **Pros:** Fast queries, indexing, transactions
 **Cons:** Operational complexity, not Git-based
-**Decision:** ❌ Rejected (too complex for current scale)
+**Decision:** âŒ Rejected (too complex for current scale)
 
 ### Alternative 2: Confluent Schema Registry
 **Pros:** Industry-standard, built-in compatibility checks
 **Cons:** Kafka dependency, not FlatBuffers-native
-**Decision:** ❌ Rejected (too heavyweight, Kafka not in K1)
+**Decision:** âŒ Rejected (too heavyweight, Kafka not in K1)
 
 ### Alternative 3: JSON-Based Registry
 **Pros:** Easier parsing (Python json module)
 **Cons:** Less human-readable, verbose
-**Decision:** ❌ Rejected (YAML preferred for readability)
+**Decision:** âŒ Rejected (YAML preferred for readability)
 
 ---
 
 ## Consequences
 
 ### Positive
-- ✅ **Centralized version tracking:** Single source of truth for all 76 schemas
-- ✅ **Compatibility guarantees:** Clients know if versions are compatible (<5ms query)
-- ✅ **Deprecation visibility:** 90-day countdown tracked, automated notifications
-- ✅ **CI/CD validation:** Fail builds on incorrect version bumps
-- ✅ **Performance:** <50ms registry load, <20ms REST API latency
+- âœ… **Centralized version tracking:** Single source of truth for all 76 schemas
+- âœ… **Compatibility guarantees:** Clients know if versions are compatible (<5ms query)
+- âœ… **Deprecation visibility:** 90-day countdown tracked, automated notifications
+- âœ… **CI/CD validation:** Fail builds on incorrect version bumps
+- âœ… **Performance:** <50ms registry load, <20ms REST API latency
 
 ### Negative
-- ❌ **Manual registry updates:** Developer must update YAML on version bump (mitigated by CLI tool in 0013b)
-- ❌ **YAML size growth:** Registry grows over time (760+ entries, ~50KB file)
-- ❌ **No database queries:** Limited query capabilities (no SQL, in-memory only)
+- âŒ **Manual registry updates:** Developer must update YAML on version bump (mitigated by CLI tool in 0013b)
+- âŒ **YAML size growth:** Registry grows over time (760+ entries, ~50KB file)
+- âŒ **No database queries:** Limited query capabilities (no SQL, in-memory only)
 
 ### Neutral
-- ⚠️ **Git-based storage:** Version-controlled but not real-time updates (5 min cache TTL)
-- ⚠️ **SemVer requirement:** All schemas must follow SemVer (enforced by CI/CD)
+- âš ï¸ **Git-based storage:** Version-controlled but not real-time updates (5 min cache TTL)
+- âš ï¸ **SemVer requirement:** All schemas must follow SemVer (enforced by CI/CD)
 
 ---
 
@@ -1111,12 +1111,12 @@ def test_cli_compatibility_check():
 ### Query 1: Check Compatibility
 ```bash
 $ k1-schema-version check AgentState 2.1.0 2.0.0
-✅ Compatible
+âœ… Compatible
 Schema: AgentState
 Version A: 2.1.0
 Version B: 2.0.0
-Forward compatible: ✅ Yes
-Backward compatible: ✅ Yes
+Forward compatible: âœ… Yes
+Backward compatible: âœ… Yes
 Reason: Same MAJOR version (2), MINOR changes only
 ```
 
@@ -1147,8 +1147,8 @@ Changes:
 
 Compatibility:
 - Compatible with: v2.0.0, v2.1.0, v2.2.0
-- Forward compatible: ✅ Yes
-- Backward compatible: ✅ Yes
+- Forward compatible: âœ… Yes
+- Backward compatible: âœ… Yes
 ```
 
 ---
@@ -1157,7 +1157,7 @@ Compatibility:
 
 ### Registry Load Benchmarks (Python 3.11, M1 MacBook Pro)
 ```
-Registry size: 760 entries (76 schemas × 10 versions avg)
+Registry size: 760 entries (76 schemas Ã— 10 versions avg)
 File size: 48 KB (YAML)
 
 Benchmark results (10,000 iterations):
@@ -1166,7 +1166,7 @@ Benchmark results (10,000 iterations):
 - Build in-memory cache: 8.2ms (P50), 12.1ms (P95), 15.8ms (P99)
 - Total: 53.0ms (P50), 76.0ms (P95), 99.3ms (P99)
 
-✅ Meets budget: <50ms P50, <80ms P95
+âœ… Meets budget: <50ms P50, <80ms P95
 ```
 
 ### Query Benchmarks
@@ -1177,7 +1177,7 @@ Compatibility query (in-memory lookup):
 - Generate response: 0.5ms (P50), 0.8ms (P95)
 - Total: 1.6ms (P50), 2.5ms (P95)
 
-✅ Meets budget: <5ms P95
+âœ… Meets budget: <5ms P95
 ```
 
 ### REST API Benchmarks (FastAPI, gunicorn 4 workers)
@@ -1192,12 +1192,12 @@ Results:
 - Throughput: 1,250 req/s
 - Error rate: 0%
 
-✅ Meets budget: <20ms P95 latency
+âœ… Meets budget: <20ms P95 latency
 ```
 
 ---
 
-**Status:** ✅ **80% Complete** (Pending: Compatibility matrix auto-generation optimization)
+**Status:** âœ… **80% Complete** (Pending: Compatibility matrix auto-generation optimization)
 
 **Next Steps:**
 1. Implement compatibility matrix auto-generation (Week 1)
@@ -1205,3 +1205,4 @@ Results:
 3. Deploy REST API endpoint (`/schemas/version`) (Week 2)
 4. Integrate with CI/CD (GitHub Actions workflow) (Week 2)
 5. Populate registry with all 76 schemas (Week 3)
+

@@ -1,11 +1,81 @@
 # ADR-0027: Model Placement Cascade
 
-**Status:** ✅ Approved
+**Status:** ✅ Approved (Updated for Market Reality - Remote-First Implementation)
 **Date:** 2025-06-16
-**Last Updated:** 2025-01-15 (M3 Context: See ADR-0077 for thermal-aware placement engine)
+**Last Updated:** 2025-10-27 ⚠️ **CRITICAL UPDATE: Market Reality & Implementation Phases**
 **Authors:** K1 Architecture Team
 **Category:** Performance & Optimization
+**Implementation Priority:** 🔥 **REMOTE TIER CRITICAL** (95% of traffic TODAY)
 **Related ADRs:** ADR-0024 (Performance Budgets), ADR-0026 (Thermal Hysteresis Matrix), ADR-0031 (Cost Tracking), ADR-0075 (Layer 5 Extensibility - M2), ADR-0076 (KV Cache Optimization Strategy - M3), ADR-0077 (Thermal Placement Algorithm V2 - **NEW M3**)
+
+---
+
+## ⚠️ Market Reality & Implementation Strategy (2025-10-27 Update)
+
+**CRITICAL CONTEXT: This ADR describes a future-ready 4-tier architecture, but implementation priorities are heavily skewed toward Remote tier TODAY.**
+
+### Current Market Reality (October 2025)
+
+**Hardware Constraints:**
+- **Consumer phone CPUs (2025):** NOT strong enough for LLM inference
+  - Qualcomm Snapdragon 8 Gen 3: Struggles with quantized INT4 models >2B parameters
+  - Apple A17 Pro: Can run small models (<2B) but thermal throttles within 30 seconds
+  - Samsung Exynos 2400: Insufficient NPU performance for real-time inference
+- **Expected traffic distribution TODAY:**
+  - 🔴 **95% Remote tier** (OpenAI/Anthropic/Google APIs) - PRODUCTION CRITICAL
+  - 🟡 **4% CPU tier** (Ollama on high-end devices with strong cooling)
+  - 🟡 **1% GPU/NPU tier** (Limited to flagship devices with active cooling)
+
+**Why Build 4-Tier Abstraction NOW?**
+1. **FamilyOS Dongle Vision (2026-2027):** Alexa-like device with dedicated NPU/GPU for local inference
+2. **Graceful Migration Path:** When dongle ships, traffic shifts from Remote → NPU/GPU WITHOUT code changes
+3. **Privacy-First Future:** RED band families can use local inference (dongle) instead of cloud
+4. **Cost Savings:** $5/day/user (remote) → $0/day (local on dongle) when hardware catches up
+
+**Analogies (Build Abstraction Before Traffic):**
+- **Kubernetes:** Designed for 1000-node clusters, works on Raspberry Pi (abstraction ready, scale follows)
+- **Apple Neural Engine API:** Core ML API existed 2 years before A13 Bionic had sufficient NPU performance
+- **HTTP/3 QUIC:** Protocol standardized in 2018, widespread adoption took 4 years (infrastructure ready, traffic follows)
+
+### Implementation Phases
+
+**Phase 1 (TODAY - Q4 2025): Remote-First Production**
+- **Priority:** 🔥 Remote tier robustness (OpenAI/Anthropic/Google)
+  - Circuit breakers (prevent cost runaway)
+  - Cost tracking ($5/day budget enforcement)
+  - Retry logic (3 retries, exponential backoff)
+  - Provider failover (OpenAI → Anthropic → Google)
+- **NPU/GPU/CPU tiers:** Minimal viable implementation (correct interface, graceful fallback)
+- **Thermal management:** Lower priority (phones won't thermal throttle without local inference)
+- **Expected behavior:** `device_capability.has_strong_cpu() == False` → skip to Remote tier immediately
+
+**Phase 2 (2026 - Dongle Beta): Early Adopter Transition**
+- **FamilyOS Dongle (Alexa-like device):** Dedicated NPU (10 TOPS), GPU (4 TFLOPS), 8GB RAM
+- **Traffic shift:** 30% NPU/GPU (dongle users), 70% Remote (phone-only users)
+- **NPU/GPU tiers:** Production-ready optimization (model loading, KV cache, quantization)
+- **Thermal management:** Full integration (dongle has thermal sensors, ADR-0026 applies)
+- **Privacy win:** RED band users get 100% local inference on dongle
+
+**Phase 3 (2027+ - Mass Market): Local-First Default**
+- **Dongle adoption:** 70%+ of families have FamilyOS Dongle
+- **Traffic shift:** 80% NPU/GPU/CPU (local), 20% Remote (fallback only)
+- **Cost savings:** $5/day → $0.50/day (10× reduction per user)
+- **Privacy default:** Local-first for all privacy bands, remote only when necessary
+
+### Revised Implementation Priorities
+
+| Component | Original Priority | **Revised Priority (2025)** | Reason |
+|-----------|------------------|----------------------------|--------|
+| **Remote Tier Adapters** | Medium (25% effort) | 🔥 **CRITICAL (60% effort)** | 95% of traffic TODAY |
+| **Circuit Breakers** | Medium | 🔥 **CRITICAL** | Prevent cost runaway ($100 spike risk) |
+| **Cost Tracking** | Medium | 🔥 **CRITICAL** | Daily budget enforcement ($5/day) |
+| **Provider Failover** | Low | 🔥 **HIGH** | OpenAI down → Anthropic → Google |
+| **NPU/GPU/CPU Tiers** | High (50% effort) | 🟡 **LOW (15% effort)** | Future-ready interface only |
+| **Placement Algorithm** | High | 🟡 **MEDIUM** | Correct logic, but expects Remote fallback |
+| **Thermal Integration** | High | 🟢 **LOW** | Less critical without local inference TODAY |
+| **KV Cache Transfer** | High | 🟢 **LOW** | Minimal impact when using Remote tier |
+
+**Key Insight:** We're building the **abstraction layer** (4-tier cascade) NOW, knowing that **implementation effort** skews 60% toward Remote tier. When FamilyOS Dongle ships, the infrastructure is ready to shift traffic to local tiers WITHOUT rewriting the orchestrator.
 
 ---
 
@@ -40,6 +110,7 @@
 | **4-Tier Cascade + Circuit Breakers + Privacy** | 10/10     | NPU → GPU → CPU → Remote (gradual fallback), circuit breakers (5 failures → open 30s), privacy enforcement (RED local only, AMBER preferred, GREEN any), max 2 retries per tier, 5s total timeout | Complex implementation (circuit breaker state per adapter, privacy checks, capability matching)                                  | **SELECTED:** 4-tier cascade balances performance (try fastest first), fault tolerance (automatic fallback), privacy (RED local only, AMBER preferred, GREEN any), cost (minimize remote). Circuit breakers prevent cascade loops (NPU OOM → open circuit 30s → skip NPU). Max 2 retries per tier + 5s total timeout respect performance budgets. 98% success rate, 0 cascade loops. |
 
 **Rejection Summary:**
+
 - **Binary Local/Remote:** 18% failure rate when NPU unavailable, violates RED privacy
 - **Fixed Placement:** 12% failure rate when NPU unavailable, wastes GPU/CPU capacity
 - **Random Placement:** Violates privacy, poor performance, no fault tolerance (worst option)
@@ -47,7 +118,43 @@
 - **3-Tier Local-Only:** 8% of GREEN tasks stuck on slow CPU when remote would be higher quality
 - **Unlimited Retries:** 420 cascade loops/hour, violates 2000ms E2E budget (retries take 5-10s)
 
+### ⚠️ Market Reality vs Architectural Design (October 2025)
+
+**CRITICAL DISTINCTION: The decision matrix above evaluates ARCHITECTURAL COMPLETENESS (future-state with dongle), NOT current market implementation priorities.**
+
+**Why 4-Tier Scores 10/10 (Architecture) Despite 95% Remote Traffic (Reality)?**
+
+1. **Privacy Preservation (RED Band):** Even TODAY, RED band data MUST fail gracefully without remote
+   - Example: User asks "What's my blood pressure trend?" → RED band → Local only → If NPU/GPU/CPU unavailable, show privacy error (NOT send to OpenAI)
+   - Binary local/remote would violate this (NPU unavailable → fallback to Remote → privacy breach)
+
+2. **Future-Proof Abstraction:** 4-tier interface is ready when dongle ships (2026-2027)
+   - When dongle adoption hits 30% (2026), traffic shifts from 95% Remote → 50% Local WITHOUT code changes
+   - Alternative architectures (binary, 2-tier) would require rewrite when dongle launches
+
+3. **Cost Protection:** Circuit breakers prevent runaway costs even when 95% Remote
+   - OpenAI down → retry loop → $100 spike in 10 minutes WITHOUT circuit breakers
+   - 4-tier cascade with circuit breakers protects even Remote-heavy workload
+
+**Implementation Reality Check (October 2025):**
+
+- **4-Tier Architecture Score:** 10/10 (correct design for future-state + RED band privacy)
+- **Implementation Effort Distribution:**
+  - 🔥 **60% Remote tier** (OpenAI/Anthropic/Google) - PRODUCTION CRITICAL TODAY
+  - 🟡 **25% Circuit Breakers + Cost Tracking** - CRITICAL for Remote tier robustness
+  - 🟢 **15% NPU/GPU/CPU tiers** - Minimal viable implementation (future-ready interface)
+- **Traffic Distribution TODAY:**
+  - 95% Remote (cloud APIs)
+  - 4% CPU (Ollama on high-end devices)
+  - 1% GPU/NPU (flagship devices only)
+- **Traffic Distribution FUTURE (2027+ with dongle):**
+  - 20% Remote (fallback only)
+  - 80% NPU/GPU/CPU (local inference on dongle)
+
+**Key Insight:** We're implementing the **right architecture** (4-tier cascade) with **realistic priorities** (Remote tier gets 60% of development effort) because phone hardware isn't ready yet, but dongle is coming.
+
 **Research Foundation:**
+
 - **Netflix Hystrix (2012):** Circuit breaker pattern (open/closed/half-open states, failure threshold, automatic recovery)
 - **AWS Multi-Region Failover (2018):** Geographic fallback cascade (primary → secondary → tertiary, health checks, 9s availability)
 - **Google Borg (2015):** Resource scheduling with priority tiers (best-effort → batch → production, graceful degradation)
@@ -87,25 +194,56 @@ Desired: NPU → GPU → CPU → (block Remote for RED) → Show error
 
 ### System Constraints
 
+**⚠️ Market Reality (October 2025): Phone hardware constraints dominate implementation priorities.**
+
 1. **Hardware Availability:**
-   - Consumer laptops: NPU (if modern), GPU (usually), CPU (always)
-   - Mobile phones: NPU (if flagship), GPU (usually), CPU (always)
-   - Desktops: GPU (gaming PCs), CPU (always), NPU (rare)
-   - Remote: Always available (cloud LLM APIs)
+   - **Consumer phones (2025 - PRIMARY TARGET):**
+     - ❌ **NPU:** Insufficient for LLM inference (Snapdragon 8 Gen 3 struggles with >2B models)
+     - ⚠️ **GPU:** Limited (thermal throttles within 30s on sustained inference)
+     - ❌ **CPU:** Too slow (350ms+ TTFT, violates performance budgets)
+     - ✅ **Remote:** Always available (OpenAI/Anthropic/Google APIs)
+   - **Consumer laptops (2025 - SECONDARY TARGET):**
+     - ⚠️ **NPU:** If modern (Apple M-series, Intel Core Ultra), but limited models
+     - ✅ **GPU:** Usually available (NVIDIA/AMD), but thermal concerns
+     - ✅ **CPU:** Always available, but slow
+     - ✅ **Remote:** Always available
+   - **FamilyOS Dongle (2026-2027 - FUTURE TARGET):**
+     - ✅ **NPU:** Dedicated 10 TOPS neural accelerator (production-ready local inference)
+     - ✅ **GPU:** 4 TFLOPS GPU (sustained inference without throttling)
+     - ✅ **CPU:** 8-core ARM Cortex-A78 (fallback tier)
+     - ✅ **Remote:** Always available (fallback only)
+
+   **Expected Traffic Distribution:**
+   - **TODAY (Q4 2025):** 95% Remote, 4% CPU (high-end laptops), 1% GPU/NPU (rare)
+   - **2026 (Dongle Beta):** 70% Remote, 25% NPU/GPU (early adopters), 5% CPU
+   - **2027+ (Dongle Mass Market):** 20% Remote, 75% NPU/GPU (dongle standard), 5% CPU
 
 2. **Performance Characteristics (from ADR-0024, ADR-0026):**
-   - NPU: 30ms TTFT, 10W power, best for realtime
-   - GPU: 50ms TTFT, 12W power, mid-tier
-   - CPU: 120ms TTFT, 15W power, slow but universal
-   - Remote: 250-500ms TTFT, 5W local power (idle), network latency
+   - NPU: 30ms TTFT, 10W power, best for realtime **(when available - FUTURE with dongle)**
+   - GPU: 50ms TTFT, 12W power, mid-tier **(limited availability TODAY)**
+   - CPU: 120ms TTFT, 15W power, slow but universal **(4% of traffic TODAY)**
+   - Remote: 250-500ms TTFT, 5W local power (idle), network latency **(95% of traffic TODAY)**
+
+   **⚠️ CRITICAL: Remote tier performance is ACCEPTABLE for most use cases (Concierge <500ms budget, Planner <2000ms budget). Local inference is optimization, not requirement.**
 
 3. **Privacy Bands (from whiteboard.md):**
-   - GREEN: Public data (weather, general knowledge) → any placement OK
-   - AMBER: Semi-private (user preferences, habits) → local preferred, remote with PII masking
-   - RED: Sensitive (medical, financial, location) → local ONLY
-   - BLACK: Not allowed (user-defined blacklist)
+   - GREEN: Public data (weather, general knowledge) → any placement OK **(90% of queries, Remote acceptable)**
+   - AMBER: Semi-private (user preferences, habits) → local preferred, remote with PII masking **(8% of queries)**
+   - RED: Sensitive (medical, financial, location) → local ONLY **(2% of queries, MUST fail gracefully if no local hardware)**
+   - BLACK: Not allowed (user-defined blacklist) **(rare)**
 
-4. **Model Availability:**
+   **⚠️ CRITICAL: RED band queries (~2% of traffic) MUST fail gracefully without remote. This is why 4-tier cascade is essential even when 95% traffic uses Remote.**
+
+4. **Cost Constraints (CRITICAL for Remote-first implementation):**
+   - **OpenAI GPT-4:** $0.03/1K tokens (~$0.0015/turn @ 50 tokens)
+   - **Anthropic Claude 3.5:** $0.015/1K tokens (~$0.00075/turn)
+   - **Google Gemini Pro:** $0.001/1K tokens (~$0.00005/turn)
+   - **Daily budget:** $5.00/user (default, configurable)
+   - **Per-session budget:** $0.10 (~67 turns with Claude, ~133 turns with Gemini)
+
+   **⚠️ CRITICAL: At 95% Remote traffic, cost tracking is PRODUCTION CRITICAL. Without circuit breakers, provider outage → retry loop → $100 cost spike in 10 minutes.**
+
+5. **Model Availability:**
    - NPU: Gemma 2 2B/7B, Mistral 7B (quantized INT8/INT4)
    - GPU: Llama 3.1 8B, Mistral 7B, Gemma 2 9B
    - CPU: Same as GPU but slower
@@ -146,25 +284,45 @@ Desired: NPU → GPU → CPU → (block Remote for RED) → Show error
 
 ### Core Principles
 
-1. **Local-First Philosophy:**
-   - Always try on-device first (NPU → GPU → CPU)
+**⚠️ Updated for Market Reality (October 2025): Remote-first implementation with future-ready abstraction**
+
+1. **Remote-First Reality (TODAY):**
+   - **95% of traffic uses Remote tier** (OpenAI/Anthropic/Google APIs)
+   - Phone CPUs insufficient for LLM inference (Snapdragon 8 Gen 3 struggles)
+   - Implementation priority: Remote tier robustness (circuit breakers, cost tracking, retry logic)
+   - Local tiers (NPU/GPU/CPU): Minimal viable implementation (future-ready interface)
+
+2. **Local-First Vision (FUTURE with dongle):**
+   - Always try on-device first (NPU → GPU → CPU) when FamilyOS Dongle available
    - Only use remote as last resort (cost, latency, privacy)
-   - Maximize on-device processing
+   - Maximize on-device processing for cost savings ($5/day → $0/day)
 
-2. **Privacy Enforcement:**
-   - RED band: Block remote, fail gracefully if all local options exhausted
-   - AMBER band: Prefer local, allow remote with PII masking
-   - GREEN band: Any placement acceptable
+3. **Privacy Enforcement (CRITICAL ALWAYS):**
+   - RED band (~2% of queries): Block remote, fail gracefully if all local options exhausted
+     - **TODAY:** Most phones lack local inference → RED band shows "privacy protected, local inference unavailable" error
+     - **FUTURE:** Dongle provides local inference → RED band stays on-device
+   - AMBER band (~8% of queries): Prefer local, allow remote with PII masking
+   - GREEN band (~90% of queries): Any placement acceptable (Remote is DEFAULT TODAY)
 
-3. **Performance Optimization:**
-   - Start with fastest (NPU), fall back to slower (GPU → CPU → Remote)
-   - Respect thermal state from ADR-0026
+4. **Cost Protection (PRODUCTION CRITICAL TODAY):**
+   - **Circuit breakers per provider:** OpenAI/Anthropic/Google independent failure tracking
+   - **Daily budget enforcement:** $5.00/user default (warn at 80%, block at 100%)
+   - **Cost tracking:** Per-provider, per-agent, per-session cost monitoring
+   - **Without cost protection:** Provider outage → retry loop → $100 spike in 10 minutes
+
+5. **Performance Optimization:**
+   - **TODAY:** Remote tier latency acceptable (250-500ms within budgets: Concierge <500ms, Planner <2000ms)
+   - **FUTURE:** Start with fastest (NPU), fall back to slower (GPU → CPU → Remote) when dongle available
+   - Respect thermal state from ADR-0026 (less critical WITHOUT local inference TODAY)
    - Respect performance budgets from ADR-0024
 
-4. **Fault Tolerance:**
-   - Circuit breakers per adapter (Netflix Hystrix pattern)
+6. **Fault Tolerance:**
+   - Circuit breakers per adapter (Netflix Hystrix pattern) - **CRITICAL for Remote tier TODAY**
    - Max retries per target (2× before fallback)
    - Timeout per cascade (5s total)
+   - Provider failover (OpenAI → Anthropic → Google) - **CRITICAL TODAY**
+
+**Key Implementation Philosophy:** Build the 4-tier abstraction NOW (correct architecture for future dongle), but implement with Remote-first priorities (60% effort on Remote tier) because phone hardware isn't ready yet.
 
 ---
 

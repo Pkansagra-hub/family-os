@@ -1,10 +1,10 @@
-"""
+﻿"""
 Zero-Copy Access - Direct Buffer Access Helpers for FlatBuffers
 
 Layer: L5 Infrastructure
 Component: Serialization (Optimization & Advanced Features)
 Priority: P0 (Critical Path)
-Status: 🚧 STUB - NEEDS_IMPLEMENTATION
+Status: ðŸš§ STUB - NEEDS_IMPLEMENTATION
 
 Architecture Decision Records:
     - ADR-0011: FlatBuffers Serialization Core
@@ -15,7 +15,7 @@ Architecture Decision Records:
 
     - ADR-0011c: Serialization Performance & Zero-Copy
       * Vtable-based field access: Pointer arithmetic + dereference
-      * No parsing overhead: 35-200× faster than JSON/Protobuf
+      * No parsing overhead: 35-200Ã— faster than JSON/Protobuf
       * Buffer lifetime management: Keep buffer alive for object lifetime
       * Section: "Zero-Copy Deserialization" (Memory Layout, Vtable Compression)
 
@@ -113,32 +113,32 @@ class ZeroCopyAccessor:
         - Nested object access: <0.05ms P95 (chain offsets)
 
     Memory Layout (from ADR-0011c):
-        ┌─────────────────────────────────────────────────────────────┐
-        │  File Identifier (4 bytes): "AGST"                          │
-        ├─────────────────────────────────────────────────────────────┤
-        │  Buffer Size (4 bytes): 256                                 │
-        ├─────────────────────────────────────────────────────────────┤
-        │  Root Table Offset (4 bytes): 12                            │
-        ├─────────────────────────────────────────────────────────────┤
-        │  AgentState Table:                                          │
-        │    Vtable Offset (4 bytes): -8 (relative offset)           │
-        │    agent_id Offset (4 bytes): 24 (relative offset)         │
-        │    state (1 byte): 2                                        │
-        │    padding (3 bytes): 0x00                                  │
-        │    memory_mb (4 bytes): 512                                 │
-        ├─────────────────────────────────────────────────────────────┤
-        │  Vtable:                                                    │
-        │    Vtable Size (2 bytes): 12                                │
-        │    Table Size (2 bytes): 20                                 │
-        │    Field 0 Offset (2 bytes): 4  (agent_id)                 │
-        │    Field 1 Offset (2 bytes): 8  (state)                    │
-        │    Field 2 Offset (2 bytes): 12 (memory_mb)                │
-        ├─────────────────────────────────────────────────────────────┤
-        │  String: "agent_xyz"                                        │
-        │    Length (4 bytes): 9                                      │
-        │    Data (9 bytes): "agent_xyz"                              │
-        │    Null terminator (1 byte): 0x00                           │
-        └─────────────────────────────────────────────────────────────┘
+        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        â”‚  File Identifier (4 bytes): "AGST"                          â”‚
+        â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+        â”‚  Buffer Size (4 bytes): 256                                 â”‚
+        â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+        â”‚  Root Table Offset (4 bytes): 12                            â”‚
+        â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+        â”‚  AgentState Table:                                          â”‚
+        â”‚    Vtable Offset (4 bytes): -8 (relative offset)           â”‚
+        â”‚    agent_id Offset (4 bytes): 24 (relative offset)         â”‚
+        â”‚    state (1 byte): 2                                        â”‚
+        â”‚    padding (3 bytes): 0x00                                  â”‚
+        â”‚    memory_mb (4 bytes): 512                                 â”‚
+        â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+        â”‚  Vtable:                                                    â”‚
+        â”‚    Vtable Size (2 bytes): 12                                â”‚
+        â”‚    Table Size (2 bytes): 20                                 â”‚
+        â”‚    Field 0 Offset (2 bytes): 4  (agent_id)                 â”‚
+        â”‚    Field 1 Offset (2 bytes): 8  (state)                    â”‚
+        â”‚    Field 2 Offset (2 bytes): 12 (memory_mb)                â”‚
+        â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+        â”‚  String: "agent_xyz"                                        â”‚
+        â”‚    Length (4 bytes): 9                                      â”‚
+        â”‚    Data (9 bytes): "agent_xyz"                              â”‚
+        â”‚    Null terminator (1 byte): 0x00                           â”‚
+        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
     ADR-0011: Zero-copy deserialization architecture
     ADR-0011c: Vtable-based field access performance
@@ -575,11 +575,11 @@ __all__ = [
 #   - Test: buffer lifetime (keep buffer alive during access)
 #
 # Benchmark tests required:
-#   - pytest-benchmark for performance validation
+#   - ward-benchmark for performance validation
 #   - Measure root table access (<0.01ms P95)
 #   - Measure field offset calculation (<0.01ms P95)
 #   - Measure string access (<1ms P95 for 1KB string)
-#   - Compare with JSON deserialization (35-200× faster)
+#   - Compare with JSON deserialization (35-200Ã— faster)
 #
 # No simulation code allowed:
 #   - Use real FlatBuffers buffers (serialized with flatbuffers.Builder)
@@ -587,3 +587,4 @@ __all__ = [
 #   - Integration tests > unit tests
 #
 # =============================================================================
+

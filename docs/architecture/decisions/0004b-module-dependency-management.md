@@ -1,6 +1,6 @@
-# ADR-0004b: Module Dependency Management & Import Linting
+﻿# ADR-0004b: Module Dependency Management & Import Linting
 
-**Status:** ✅ **COMPLETED** (2025-10-12)
+**Status:** âœ… **COMPLETED** (2025-10-12)
 **Date:** 2025-10-12
 **Last Updated:** 2025-10-17 (M2 Context: See ADR-0074 for runtime module dependency resolution)
 **Deciders:** K1 Architecture Team
@@ -31,19 +31,19 @@ K1's **5-layer architecture** requires strict dependency management to prevent:
 
 **Layering Rules (from ADR-0004):**
 ```
-Layer 1 (Input)         → Can only import Layer 5
-Layer 2 (Orchestration) → Can import Layers 1, 3, 4, 5
-Layer 3 (Execution)     → Can import Layers 4, 5
-Layer 4 (Runtime Core)  → Can import Layer 5
-Layer 5 (Infrastructure)→ Cannot import ANY other layers (foundation)
+Layer 1 (Input)         â†’ Can only import Layer 5
+Layer 2 (Orchestration) â†’ Can import Layers 1, 3, 4, 5
+Layer 3 (Execution)     â†’ Can import Layers 4, 5
+Layer 4 (Runtime Core)  â†’ Can import Layer 5
+Layer 5 (Infrastructure)â†’ Cannot import ANY other layers (foundation)
 ```
 
 **Violation Example:**
 ```python
-# ❌ FORBIDDEN: Layer 1 → Layer 2 (direct import)
+# âŒ FORBIDDEN: Layer 1 â†’ Layer 2 (direct import)
 from k1.orchestration.orchestrator import Orchestrator  # Layer 1 cannot import Layer 2
 
-# ✅ ALLOWED: Layer 1 → Layer 5 (event bus)
+# âœ… ALLOWED: Layer 1 â†’ Layer 5 (event bus)
 from k1.infrastructure.event_bus import event_bus  # Layer 1 can import Layer 5
 ```
 
@@ -62,31 +62,31 @@ from k1.infrastructure.event_bus import event_bus  # Layer 1 can import Layer 5
 
 **Problem:**
 - Without enforcement, developers can accidentally violate layering rules
-- Circular dependencies can creep in (Layer 3 ↔ Layer 4)
+- Circular dependencies can creep in (Layer 3 â†” Layer 4)
 - Manual code reviews can't catch all violations
 - Technical debt accumulates (fix costs grow over time)
 
 **Example Violations:**
 
-1. **Layer 1 → Layer 2 (direct import):**
+1. **Layer 1 â†’ Layer 2 (direct import):**
 ```python
 # File: k1/input/intent_router.py (Layer 1)
-from k1.orchestration.orchestrator import Orchestrator  # ❌ FORBIDDEN
+from k1.orchestration.orchestrator import Orchestrator  # âŒ FORBIDDEN
 ```
 
-2. **Circular dependency (Layer 3 ↔ Layer 4):**
+2. **Circular dependency (Layer 3 â†” Layer 4):**
 ```python
 # File: k1/execution/tool_runner.py (Layer 3)
-from k1.runtime.session_state import SessionState  # ✅ ALLOWED
+from k1.runtime.session_state import SessionState  # âœ… ALLOWED
 
 # File: k1/runtime/session_state.py (Layer 4)
-from k1.execution.tool_runner import ToolRunner  # ❌ FORBIDDEN (circular)
+from k1.execution.tool_runner import ToolRunner  # âŒ FORBIDDEN (circular)
 ```
 
-3. **Layer 5 → Layer 3 (foundation importing upper layer):**
+3. **Layer 5 â†’ Layer 3 (foundation importing upper layer):**
 ```python
 # File: k1/infrastructure/scheduler.py (Layer 5)
-from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+from k1.execution.agent_registry import AgentRegistry  # âŒ FORBIDDEN
 ```
 
 **Requirement:**
@@ -104,37 +104,37 @@ We adopt **import-linter** (Python package) with pre-commit hooks and CI enforce
 **Architecture:**
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Developer Workflow                               │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  1. Developer writes code                                               │
-│  2. Runs: git commit                                                    │
-│  3. Pre-commit hook triggers:                                           │
-│     - black (formatter)                                                 │
-│     - ruff (linter)                                                     │
-│     - import-linter (layering validation) ◄── THIS ADR                 │
-│  4. If violations → commit blocked, error shown                        │
-│  5. Developer fixes violations                                          │
-│  6. Commit succeeds                                                     │
-│                                                                          │
-└────────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 │ Push to GitHub
-                                 ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                            CI/CD Pipeline                               │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  1. PR opened                                                           │
-│  2. CI runs:                                                            │
-│     - pytest (unit + integration tests)                                │
-│     - import-linter (layering validation) ◄── THIS ADR                 │
-│  3. If violations → PR checks fail, merge blocked                      │
-│  4. Developer fixes violations, pushes again                           │
-│  5. PR checks pass → merge allowed                                     │
-│                                                                          │
-└────────────────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                        Developer Workflow                               â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚                                                                          â”‚
+â”‚  1. Developer writes code                                               â”‚
+â”‚  2. Runs: git commit                                                    â”‚
+â”‚  3. Pre-commit hook triggers:                                           â”‚
+â”‚     - black (formatter)                                                 â”‚
+â”‚     - ruff (linter)                                                     â”‚
+â”‚     - import-linter (layering validation) â—„â”€â”€ THIS ADR                 â”‚
+â”‚  4. If violations â†’ commit blocked, error shown                        â”‚
+â”‚  5. Developer fixes violations                                          â”‚
+â”‚  6. Commit succeeds                                                     â”‚
+â”‚                                                                          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                                 â”‚
+                                 â”‚ Push to GitHub
+                                 â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                            CI/CD Pipeline                               â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚                                                                          â”‚
+â”‚  1. PR opened                                                           â”‚
+â”‚  2. CI runs:                                                            â”‚
+â”‚     - ward (unit + integration tests)                                â”‚
+â”‚     - import-linter (layering validation) â—„â”€â”€ THIS ADR                 â”‚
+â”‚  3. If violations â†’ PR checks fail, merge blocked                      â”‚
+â”‚  4. Developer fixes violations, pushes again                           â”‚
+â”‚  5. PR checks pass â†’ merge allowed                                     â”‚
+â”‚                                                                          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -308,12 +308,12 @@ jobs:
 ### Layer 1 (Input Processing)
 
 **Allowed Imports:**
-- ✅ Layer 5 (Infrastructure): `k1.infrastructure.*`
+- âœ… Layer 5 (Infrastructure): `k1.infrastructure.*`
 
 **Forbidden Imports:**
-- ❌ Layer 2 (Orchestration): `k1.orchestration.*`
-- ❌ Layer 3 (Execution): `k1.execution.*`
-- ❌ Layer 4 (Runtime Core): `k1.runtime.*`
+- âŒ Layer 2 (Orchestration): `k1.orchestration.*`
+- âŒ Layer 3 (Execution): `k1.execution.*`
+- âŒ Layer 4 (Runtime Core): `k1.runtime.*`
 
 **Rationale:**
 - Layer 1 is input processing (streams, intent detection)
@@ -323,7 +323,7 @@ jobs:
 **Example Violation:**
 ```python
 # File: k1/input/intent_router.py (Layer 1)
-from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+from k1.orchestration.planner import Planner  # âŒ FORBIDDEN
 
 # Fix: Use event bus (Layer 5)
 from k1.infrastructure.event_bus import event_bus, Event, EventTopic
@@ -334,13 +334,13 @@ from k1.infrastructure.event_bus import event_bus, Event, EventTopic
 ### Layer 2 (Orchestration)
 
 **Allowed Imports:**
-- ✅ Layer 1 (Input): `k1.input.*`
-- ✅ Layer 3 (Execution): `k1.execution.*`
-- ✅ Layer 4 (Runtime Core): `k1.runtime.*`
-- ✅ Layer 5 (Infrastructure): `k1.infrastructure.*`
+- âœ… Layer 1 (Input): `k1.input.*`
+- âœ… Layer 3 (Execution): `k1.execution.*`
+- âœ… Layer 4 (Runtime Core): `k1.runtime.*`
+- âœ… Layer 5 (Infrastructure): `k1.infrastructure.*`
 
 **Forbidden Imports:**
-- ❌ None (Layer 2 can import all other layers)
+- âŒ None (Layer 2 can import all other layers)
 
 **Rationale:**
 - Layer 2 is orchestration (coordinator between layers)
@@ -350,10 +350,10 @@ from k1.infrastructure.event_bus import event_bus, Event, EventTopic
 **Example:**
 ```python
 # File: k1/orchestration/orchestrator.py (Layer 2)
-from k1.input.intent_router import IntentRouter  # ✅ ALLOWED
-from k1.execution.agent_registry import AgentRegistry  # ✅ ALLOWED
-from k1.runtime.session_state import SessionState  # ✅ ALLOWED
-from k1.infrastructure.event_bus import event_bus  # ✅ ALLOWED
+from k1.input.intent_router import IntentRouter  # âœ… ALLOWED
+from k1.execution.agent_registry import AgentRegistry  # âœ… ALLOWED
+from k1.runtime.session_state import SessionState  # âœ… ALLOWED
+from k1.infrastructure.event_bus import event_bus  # âœ… ALLOWED
 ```
 
 ---
@@ -361,12 +361,12 @@ from k1.infrastructure.event_bus import event_bus  # ✅ ALLOWED
 ### Layer 3 (Execution)
 
 **Allowed Imports:**
-- ✅ Layer 4 (Runtime Core): `k1.runtime.*`
-- ✅ Layer 5 (Infrastructure): `k1.infrastructure.*`
+- âœ… Layer 4 (Runtime Core): `k1.runtime.*`
+- âœ… Layer 5 (Infrastructure): `k1.infrastructure.*`
 
 **Forbidden Imports:**
-- ❌ Layer 1 (Input): `k1.input.*`
-- ❌ Layer 2 (Orchestration): `k1.orchestration.*`
+- âŒ Layer 1 (Input): `k1.input.*`
+- âŒ Layer 2 (Orchestration): `k1.orchestration.*`
 
 **Rationale:**
 - Layer 3 is execution (agents, tools, Model Hub)
@@ -376,7 +376,7 @@ from k1.infrastructure.event_bus import event_bus  # ✅ ALLOWED
 **Example Violation:**
 ```python
 # File: k1/execution/tool_runner.py (Layer 3)
-from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
+from k1.orchestration.planner import Planner  # âŒ FORBIDDEN
 
 # Fix: Planner (Layer 2) calls ToolRunner (Layer 3), not vice versa
 # ToolRunner should be passive (called by orchestration)
@@ -387,12 +387,12 @@ from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
 ### Layer 4 (Runtime Core)
 
 **Allowed Imports:**
-- ✅ Layer 5 (Infrastructure): `k1.infrastructure.*`
+- âœ… Layer 5 (Infrastructure): `k1.infrastructure.*`
 
 **Forbidden Imports:**
-- ❌ Layer 1 (Input): `k1.input.*`
-- ❌ Layer 2 (Orchestration): `k1.orchestration.*`
-- ❌ Layer 3 (Execution): `k1.execution.*`
+- âŒ Layer 1 (Input): `k1.input.*`
+- âŒ Layer 2 (Orchestration): `k1.orchestration.*`
+- âŒ Layer 3 (Execution): `k1.execution.*`
 
 **Rationale:**
 - Layer 4 is runtime core (session state, flow engine, learning loop)
@@ -402,7 +402,7 @@ from k1.orchestration.planner import Planner  # ❌ FORBIDDEN
 **Example Violation:**
 ```python
 # File: k1/runtime/session_state.py (Layer 4)
-from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+from k1.execution.agent_registry import AgentRegistry  # âŒ FORBIDDEN
 
 # Fix: SessionState stores agent_ids (strings), not AgentRegistry objects
 # AgentRegistry (Layer 3) can read SessionState, not vice versa
@@ -413,12 +413,12 @@ from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
 ### Layer 5 (Infrastructure)
 
 **Allowed Imports:**
-- ✅ None (Layer 5 is foundation, imports nothing from other layers)
-- ✅ Standard library: `asyncio`, `time`, `dataclasses`, etc.
-- ✅ Third-party packages: `prometheus_client`, `structlog`, etc.
+- âœ… None (Layer 5 is foundation, imports nothing from other layers)
+- âœ… Standard library: `asyncio`, `time`, `dataclasses`, etc.
+- âœ… Third-party packages: `prometheus_client`, `structlog`, etc.
 
 **Forbidden Imports:**
-- ❌ ANY K1 layer: `k1.input.*`, `k1.orchestration.*`, `k1.execution.*`, `k1.runtime.*`
+- âŒ ANY K1 layer: `k1.input.*`, `k1.orchestration.*`, `k1.execution.*`, `k1.runtime.*`
 
 **Rationale:**
 - Layer 5 is foundation (event bus, scheduler, metrics, config)
@@ -428,7 +428,7 @@ from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
 **Example Violation:**
 ```python
 # File: k1/infrastructure/scheduler.py (Layer 5)
-from k1.execution.agent_registry import AgentRegistry  # ❌ FORBIDDEN
+from k1.execution.agent_registry import AgentRegistry  # âŒ FORBIDDEN
 
 # Fix: Scheduler uses agent_ids (strings), not AgentRegistry objects
 # Scheduler is generic (schedules tasks by ID), not agent-specific
@@ -450,7 +450,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # Type-only import (not runtime dependency)
-    from k1.execution.agent_registry import AgentRegistry  # ✅ ALLOWED (type-only)
+    from k1.execution.agent_registry import AgentRegistry  # âœ… ALLOWED (type-only)
 
 class SessionState:
     def __init__(self):
@@ -520,8 +520,8 @@ Type: independence
 ------------------------------------------------------------
 
 Circular dependency detected:
-  k1.execution.tool_runner → k1.runtime.session_state
-  k1.runtime.session_state → k1.execution.tool_runner
+  k1.execution.tool_runner â†’ k1.runtime.session_state
+  k1.runtime.session_state â†’ k1.execution.tool_runner
 
 Found 2 violation(s):
 
@@ -560,7 +560,7 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 - Report generation: ~0.5s (format output)
 - **Total:** ~4.5s
 
-**Budget:** ✅ <5s (fast enough for pre-commit hook)
+**Budget:** âœ… <5s (fast enough for pre-commit hook)
 
 **Comparison:**
 - black (formatter): ~2s
@@ -571,7 +571,7 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 ### CI Impact
 
 **PR Check Duration:**
-- Without import-linter: ~45s (pytest + black + ruff + mypy)
+- Without import-linter: ~45s (ward + black + ruff + mypy)
 - With import-linter: ~50s (+5s for layering validation)
 - **Overhead:** +11% (acceptable)
 
@@ -579,44 +579,44 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 
 ## Consequences
 
-### Positive ✅
+### Positive âœ…
 
-**✅ Automated Enforcement:**
+**âœ… Automated Enforcement:**
 - Developers cannot commit layering violations (blocked by pre-commit hook)
 - CI blocks PR merge if violations detected
 - **Result:** Technical debt prevented, not accumulated
 
-**✅ Clear Error Messages:**
+**âœ… Clear Error Messages:**
 - Violation shown with line number and file path
 - Suggested fix provided (event bus, dependency injection, etc.)
 - **Result:** Fast fixes, minimal friction
 
-**✅ Fast Validation (<5s):**
+**âœ… Fast Validation (<5s):**
 - Pre-commit hook doesn't block development flow
 - Faster than mypy (15s), similar to ruff (3s)
 - **Result:** Developer-friendly, high adoption
 
-**✅ Zero Circular Dependencies:**
+**âœ… Zero Circular Dependencies:**
 - Circular imports detected and blocked
 - Prevents runtime import errors (hard to debug)
 - **Result:** Clean architecture, maintainable codebase
 
 ---
 
-### Negative ⚠️
+### Negative âš ï¸
 
-**⚠️ Escape Hatch Complexity (TYPE_CHECKING):**
+**âš ï¸ Escape Hatch Complexity (TYPE_CHECKING):**
 - Developers must understand `TYPE_CHECKING` for type hints
 - Incorrect use can create hidden runtime dependencies
 - **Mitigation:** Documentation, code reviews, examples in this ADR
 - **Risk Level:** LOW (well-documented pattern)
 
-**⚠️ Legitimate Violations Blocked:**
+**âš ï¸ Legitimate Violations Blocked:**
 - Rare cases where layering violation is justified (technical debt payoff)
 - **Mitigation:** Escape hatch in `.importlinter` config (`ignore_imports`)
 - **Risk Level:** LOW (requires explicit approval, not silent bypass)
 
-**⚠️ CI Build Time +5s:**
+**âš ï¸ CI Build Time +5s:**
 - Every PR adds 5s for import-linter validation
 - **Mitigation:** Acceptable overhead (+11% total build time)
 - **Risk Level:** VERY LOW (5s << 45s total build time)
@@ -654,8 +654,8 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 ### **Dependencies**
 
 **Before Starting:**
-- ✅ ADR-0004 (52-Module Architecture) - Layering rules defined
-- ✅ All K1 modules in place (cannot validate imports if modules don't exist)
+- âœ… ADR-0004 (52-Module Architecture) - Layering rules defined
+- âœ… All K1 modules in place (cannot validate imports if modules don't exist)
 
 **Blocking:**
 - All future development (cannot merge PRs with layering violations)
@@ -666,18 +666,18 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 ### **Success Metrics**
 
 **Quality:**
-- ✅ Zero layering violations in codebase (after Phase 2)
-- ✅ Zero circular dependencies detected
-- ✅ 100% CI enforcement (every PR checked)
+- âœ… Zero layering violations in codebase (after Phase 2)
+- âœ… Zero circular dependencies detected
+- âœ… 100% CI enforcement (every PR checked)
 
 **Performance:**
-- ✅ Pre-commit validation: <5s
-- ✅ CI overhead: <10% total build time (+5s)
+- âœ… Pre-commit validation: <5s
+- âœ… CI overhead: <10% total build time (+5s)
 
 **Developer Experience:**
-- ✅ Clear error messages with line numbers + suggested fixes
-- ✅ <5min time to fix violation (fast feedback loop)
-- ✅ Zero false positives (legitimate imports not blocked)
+- âœ… Clear error messages with line numbers + suggested fixes
+- âœ… <5min time to fix violation (fast feedback loop)
+- âœ… Zero false positives (legitimate imports not blocked)
 
 ---
 
@@ -696,21 +696,21 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 
 ### **Related ADRs**
 
-- [ADR-0004: 52-Module 5-Layer Architecture](0004-52-module-5-layer-architecture.md) — Parent ADR
-- [ADR-0004a: Layer 1-2 Event Bus Communication](0004a-layer1-2-event-bus-communication.md) — Event bus pattern (alternative to direct imports)
+- [ADR-0004: 52-Module 5-Layer Architecture](0004-52-module-5-layer-architecture.md) â€” Parent ADR
+- [ADR-0004a: Layer 1-2 Event Bus Communication](0004a-layer1-2-event-bus-communication.md) â€” Event bus pattern (alternative to direct imports)
 
 ### **Architecture Diagrams**
 
-- `architecture_diagrams/k1_architecture_diagram.mmd` — K1 complete architecture
-- `architecture_diagrams/k1_kernel_complete_adr_architecture.mmd` — K1 kernel with ADR mappings
+- `architecture_diagrams/k1_architecture_diagram.mmd` â€” K1 complete architecture
+- `architecture_diagrams/k1_kernel_complete_adr_architecture.mmd` â€” K1 kernel with ADR mappings
 
 ---
 
-**Document Status:** ✅ **COMPLETE** - Module dependency management fully specified with import-linter configuration, pre-commit hooks, CI enforcement, and developer experience details.
+**Document Status:** âœ… **COMPLETE** - Module dependency management fully specified with import-linter configuration, pre-commit hooks, CI enforcement, and developer experience details.
 
 **Cross-References:**
 - ADR-0004 (Parent): 52-Module 5-Layer Architecture
-- ADR-0004a: Event bus (alternative to direct Layer 1 → Layer 2 imports)
+- ADR-0004a: Event bus (alternative to direct Layer 1 â†’ Layer 2 imports)
 
 **Canonical Values:**
 - **Validation time:** <5s (pre-commit hook budget)
@@ -718,3 +718,4 @@ Run 'lint-imports --fix' for auto-fix suggestions (if available)
 - **Layering contracts:** 6 contracts (L1, L2, L3, L4, L5, no-circular)
 
 **Document End**
+

@@ -1,6 +1,6 @@
-# ADR-0022b: HTTP/2 Multiplexing & Connection Management
+﻿# ADR-0022b: HTTP/2 Multiplexing & Connection Management
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** â³ In Progress (0% - Initial Draft)
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0022 (K0 Bridge Bounded Batching)](0022-k0-bridge-bounded-batching.md)
@@ -35,7 +35,7 @@ Use HTTP/2 for K0 Bridge communication to enable **multiplexing** and **header c
 
 1. **Connection Pooling:** Maintain persistent connections (avoid connection churn)
 2. **Stream Management:** Handle multiple concurrent requests per connection
-3. **TLS 1.3:** Configure secure communication (K1 → K0)
+3. **TLS 1.3:** Configure secure communication (K1 â†’ K0)
 4. **Error Handling:** Retry failed requests with exponential backoff
 5. **Health Checks:** Detect unhealthy connections (reconnect automatically)
 
@@ -97,34 +97,34 @@ We will implement **HTTP/2 Client** as:
 ### HTTP/2 Client Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ K0HTTP2Client - HTTP/2 Client for K0 Bridge                 │
-│                                                              │
-│  Connection Pool (2-4 persistent connections):              │
-│    conn_1: https://k0-service:8443 [active, 3 streams]     │
-│    conn_2: https://k0-service:8443 [active, 2 streams]     │
-│    conn_3: https://k0-service:8443 [idle]                  │
-│    conn_4: https://k0-service:8443 [idle]                  │
-│                                                              │
-│  HTTP/2 Features:                                            │
-│    • Multiplexing: Multiple requests per connection         │
-│    • HPACK: Header compression (80-90% reduction)           │
-│    • Server Push: (unused by K0)                            │
-│    • Stream Prioritization: (unused by K1)                  │
-│                                                              │
-│  Operations:                                                 │
-│    • post(path, data, headers) → HTTP/2 POST               │
-│    • send_batch(batch) → POST /wal/append_batch            │
-│    • health_check() → GET /health                           │
-│    • close() → Close all connections                        │
-└─────────────────────────────────────────────────────────────┘
-           ↓ HTTP/2 POST /wal/append_batch
-           ↓ TLS 1.3 encrypted
-┌─────────────────────────────────────────────────────────────┐
-│ K0 Service (Port 8443, TLS 1.3)                             │
-│  • POST /wal/append_batch → Persist batch to WAL            │
-│  • GET /health → Health check                               │
-└─────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K0HTTP2Client - HTTP/2 Client for K0 Bridge                 â”‚
+â”‚                                                              â”‚
+â”‚  Connection Pool (2-4 persistent connections):              â”‚
+â”‚    conn_1: https://k0-service:8443 [active, 3 streams]     â”‚
+â”‚    conn_2: https://k0-service:8443 [active, 2 streams]     â”‚
+â”‚    conn_3: https://k0-service:8443 [idle]                  â”‚
+â”‚    conn_4: https://k0-service:8443 [idle]                  â”‚
+â”‚                                                              â”‚
+â”‚  HTTP/2 Features:                                            â”‚
+â”‚    â€¢ Multiplexing: Multiple requests per connection         â”‚
+â”‚    â€¢ HPACK: Header compression (80-90% reduction)           â”‚
+â”‚    â€¢ Server Push: (unused by K0)                            â”‚
+â”‚    â€¢ Stream Prioritization: (unused by K1)                  â”‚
+â”‚                                                              â”‚
+â”‚  Operations:                                                 â”‚
+â”‚    â€¢ post(path, data, headers) â†’ HTTP/2 POST               â”‚
+â”‚    â€¢ send_batch(batch) â†’ POST /wal/append_batch            â”‚
+â”‚    â€¢ health_check() â†’ GET /health                           â”‚
+â”‚    â€¢ close() â†’ Close all connections                        â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+           â†“ HTTP/2 POST /wal/append_batch
+           â†“ TLS 1.3 encrypted
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K0 Service (Port 8443, TLS 1.3)                             â”‚
+â”‚  â€¢ POST /wal/append_batch â†’ Persist batch to WAL            â”‚
+â”‚  â€¢ GET /health â†’ Health check                               â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -527,7 +527,7 @@ async def http2_client():
 
 @test("K0HTTP2Client sends POST request")
 async def _(client=http2_client):
-    # Mock K0 service (use pytest-httpx or similar)
+    # Mock K0 service (use ward-httpx or similar)
     response = await client.post(
         path="/wal/append_batch",
         data=b"test_data",
@@ -560,7 +560,7 @@ async def _(client=http2_client):
 |----------|--------------|-------------|-------------|-------------|
 | HTTP/1.1 | 1000 | 35ms | 500 bytes | 6-10 |
 | HTTP/2 | 5000 | 18ms | 50 bytes | 2-4 |
-| **Improvement** | **5×** | **48% lower** | **90% smaller** | **60% fewer** |
+| **Improvement** | **5Ã—** | **48% lower** | **90% smaller** | **60% fewer** |
 
 ### Connection Reuse
 
@@ -614,11 +614,11 @@ k0_connection_unhealthy_total = Counter(
 
 ## Research Citations
 
-1. **IETF (2015).** *"RFC 7540 - Hypertext Transfer Protocol Version 2 (HTTP/2)."* Internet Engineering Task Force. — HTTP/2 specification.
+1. **IETF (2015).** *"RFC 7540 - Hypertext Transfer Protocol Version 2 (HTTP/2)."* Internet Engineering Task Force. â€” HTTP/2 specification.
 
-2. **IETF (2015).** *"RFC 7541 - HPACK: Header Compression for HTTP/2."* IETF. — HPACK header compression.
+2. **IETF (2015).** *"RFC 7541 - HPACK: Header Compression for HTTP/2."* IETF. â€” HPACK header compression.
 
-3. **IETF (2018).** *"RFC 8446 - The Transport Layer Security (TLS) Protocol Version 1.3."* IETF. — TLS 1.3 specification.
+3. **IETF (2018).** *"RFC 8446 - The Transport Layer Security (TLS) Protocol Version 1.3."* IETF. â€” TLS 1.3 specification.
 
 ---
 
@@ -626,10 +626,10 @@ k0_connection_unhealthy_total = Counter(
 
 ### Positive
 
-1. **High Throughput:** 5× improvement (1000 → 5000 requests/sec)
-2. **Low Latency:** 48% reduction (35ms → 18ms P95)
-3. **Header Compression:** 90% reduction (500 → 50 bytes)
-4. **Connection Efficiency:** 60% fewer connections (6-10 → 2-4)
+1. **High Throughput:** 5Ã— improvement (1000 â†’ 5000 requests/sec)
+2. **Low Latency:** 48% reduction (35ms â†’ 18ms P95)
+3. **Header Compression:** 90% reduction (500 â†’ 50 bytes)
+4. **Connection Efficiency:** 60% fewer connections (6-10 â†’ 2-4)
 
 ### Negative
 
@@ -680,7 +680,7 @@ k0_connection_unhealthy_total = Counter(
 ## Signatures
 
 **Sub-ADR Owner:** K1 Architecture Team
-**Status:** ⏳ **In Progress** (0% - Initial Draft Created)
+**Status:** â³ **In Progress** (0% - Initial Draft Created)
 **Created Date:** 2025-10-13
 **Target Completion:** 2025-11-10 (4 weeks)
 **Blocked By:** 0022a (Batching Algorithm)
@@ -689,3 +689,4 @@ k0_connection_unhealthy_total = Counter(
 ---
 
 **END OF ADR-0022b**
+

@@ -1,4 +1,4 @@
-# 🏠 FamilyOS - Key Pillars & Pipeline Design
+﻿# ðŸ  FamilyOS - Key Pillars & Pipeline Design
 
 ## Foundational Pillars
 
@@ -25,42 +25,42 @@
 
 ---
 
-## 🛠️ Pipeline Design (20-Pipeline Cognitive Engine)
+## ðŸ› ï¸ Pipeline Design (20-Pipeline Cognitive Engine)
 
-- **P01 Family Recall** — Multi-modal retrieval across all family members and contexts
-- **P02 Memory Formation** — Hippocampal-inspired encoding with family relationship awareness
-- **P03 Consolidation** — Family knowledge graph construction and memory lifecycle management
-- **P04 Family Coordination** — Multi-person planning and decision-making with conflict resolution
-- **P05 Prospective Care** — Time-based family reminders and proactive assistance
-- **P06 Adaptive Learning** — Family pattern recognition with affect-aware neuromodulation
-- **P07 E2EE Family Sync** — Conflict-free distributed replication with MLS encryption
-- **P08 Relationship-Based Access** — Dynamic memory sharing based on family relationships
-- **P09 Cross-Device Coordination** — Multi-device family state synchronization
-- **P10 Privacy Minimization** — Automatic PII detection and family-appropriate redaction
-- **P11 Parental Controls** — Child-safe boundaries and age-appropriate content filtering
-- **P12 Family Policy Enforcement** — RBAC/ABAC with family relationship context
-- **P13 Emotional Intelligence** — Real-time affect detection and empathy responses
-- **P14 Family Harmony** — Conflict de-escalation and relationship support
-- **P15 Cross-Domain Intelligence** — 16-domain life coordination and optimization
-- **P16 Family Feature Flags** — Progressive capability rollout across family devices
-- **P17 Family Resource Management** — QoS and cost governance for household tech
-- **P18 Family Safety** — Content safety and abuse prevention for children
-- **P19 Family Personalization** — Individual preferences within family context
-- **P20 Family Routines** — Household habit formation and routine automation
+- **P01 Family Recall** â€” Multi-modal retrieval across all family members and contexts
+- **P02 Memory Formation** â€” Hippocampal-inspired encoding with family relationship awareness
+- **P03 Consolidation** â€” Family knowledge graph construction and memory lifecycle management
+- **P04 Family Coordination** â€” Multi-person planning and decision-making with conflict resolution
+- **P05 Prospective Care** â€” Time-based family reminders and proactive assistance
+- **P06 Adaptive Learning** â€” Family pattern recognition with affect-aware neuromodulation
+- **P07 E2EE Family Sync** â€” Conflict-free distributed replication with MLS encryption
+- **P08 Relationship-Based Access** â€” Dynamic memory sharing based on family relationships
+- **P09 Cross-Device Coordination** â€” Multi-device family state synchronization
+- **P10 Privacy Minimization** â€” Automatic PII detection and family-appropriate redaction
+- **P11 Parental Controls** â€” Child-safe boundaries and age-appropriate content filtering
+- **P12 Family Policy Enforcement** â€” RBAC/ABAC with family relationship context
+- **P13 Emotional Intelligence** â€” Real-time affect detection and empathy responses
+- **P14 Family Harmony** â€” Conflict de-escalation and relationship support
+- **P15 Cross-Domain Intelligence** â€” 16-domain life coordination and optimization
+- **P16 Family Feature Flags** â€” Progressive capability rollout across family devices
+- **P17 Family Resource Management** â€” QoS and cost governance for household tech
+- **P18 Family Safety** â€” Content safety and abuse prevention for children
+- **P19 Family Personalization** â€” Individual preferences within family context
+- **P20 Family Routines** â€” Household habit formation and routine automation
 
 ---
 
-## Pipeline Hand-off Contracts — FlatBuffers Schemas
+## Pipeline Hand-off Contracts â€” FlatBuffers Schemas
 
 **Design Principle:** Every pipeline has explicit input/output contracts to enable executable architecture, contract testing, and implementation clarity.
 
 **Schema Repository:** `k0/schemas/pipelines/` (FlatBuffers + JSON Schema)
 
 **Research Foundations:**
-- **REST API Design** (Fielding, 2000) — Resource contracts
-- **gRPC** (Google, 2015) — Protobuf service definitions
-- **GraphQL** (Facebook, 2015) — Schema-first API design
-- **Contract Testing** (Pact, 2013) — Consumer-driven contracts
+- **REST API Design** (Fielding, 2000) â€” Resource contracts
+- **gRPC** (Google, 2015) â€” Protobuf service definitions
+- **GraphQL** (Facebook, 2015) â€” Schema-first API design
+- **Contract Testing** (Pact, 2013) â€” Consumer-driven contracts
 
 ### P01 Family Recall
 
@@ -459,7 +459,7 @@ def test_p01_recall_contract():
 
 ---
 
-# 🌍 FamilyOS — The Gift of Unseen Life (Vision Reference)
+# ðŸŒ FamilyOS â€” The Gift of Unseen Life (Vision Reference)
 
 ## Mission & Philosophy
 - FamilyOS is a stand for digital dignity, not just code.
@@ -478,7 +478,7 @@ def test_p01_recall_contract():
 
 ## Guiding Architecture
 - **K0 (Memory Kernel):** Durable commit surface, policy enforcement, receipts for every write.
-- **KΩ (Orchestrator Kernel):** Hosts agents, prompt/tool registries, inference scheduling.
+- **KÎ© (Orchestrator Kernel):** Hosts agents, prompt/tool registries, inference scheduling.
 - **IKF (Inter-Kernel Fabric):** Zero-copy shared memory, schema versioning, vendor-neutral.
 - **Hardware Independence:** Runs on any device, with a roadmap for custom silicon.
 
@@ -494,20 +494,20 @@ def test_p01_recall_contract():
 
 ---
 
-## Backpressure & Flow Control — Concrete Parameterization
+## Backpressure & Flow Control â€” Concrete Parameterization
 
 **Design Principle:** All message streams have explicit watermarks, queue bounds, and overflow actions to prevent OOM, deadlocks, and cascade failures.
 
 **Research Foundations:**
-- **SEDA** (Welsh et al., 2001) — Load conditioning via per-stage queues
-- **Reactive Streams** (2015) — Publisher-subscriber backpressure protocol
-- **Google Borg** (Verma et al., 2015) — Resource limits + preemption
-- **Kafka** (LinkedIn, 2011) — Producer backpressure via buffer limits
+- **SEDA** (Welsh et al., 2001) â€” Load conditioning via per-stage queues
+- **Reactive Streams** (2015) â€” Publisher-subscriber backpressure protocol
+- **Google Borg** (Verma et al., 2015) â€” Resource limits + preemption
+- **Kafka** (LinkedIn, 2011) â€” Producer backpressure via buffer limits
 
 ### Per-Stream Backpressure Configuration
 
 ```yaml
-# backpressure.yml — Watermarks and Actions
+# backpressure.yml â€” Watermarks and Actions
 
 backpressure:
   per_stream:
@@ -864,31 +864,31 @@ backpressure_duration_ms = Histogram(
 ### Grafana Dashboard
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ K1 Backpressure Dashboard                              │
-├─────────────────────────────────────────────────────────┤
-│ Queue Depth (Real-Time)                                │
-│   audio_frames:       45 / 100  ████████░░  (45%)      │
-│   agent_mailbox:      12 / 50   ██░░░░░░░░  (24%)      │
-│   k0_outbox:         320 / 1000 ███░░░░░░░  (32%)      │
-│   sse_subscribers:    88 / 200  ████░░░░░░  (44%)      │
-│                                                          │
-│ Backpressure Active                                     │
-│   audio_frames:       🟢 No                             │
-│   agent_mailbox:      🟢 No                             │
-│   k0_outbox:          🟢 No                             │
-│   sse_subscribers:    🟡 Yes (duration: 235ms)          │
-│                                                          │
-│ Dropped Items (Last 1h)                                │
-│   audio_frames:       1,245 frames                      │
-│   video_frames:       89 frames                         │
-│   Total:              1,334 items                       │
-│                                                          │
-│ Watermark Breaches (Last 24h)                          │
-│   audio_frames:       15 breaches                       │
-│   k0_outbox:          3 breaches                        │
-│   sse_subscribers:    42 breaches ⚠️                    │
-└─────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Backpressure Dashboard                              â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Queue Depth (Real-Time)                                â”‚
+â”‚   audio_frames:       45 / 100  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘  (45%)      â”‚
+â”‚   agent_mailbox:      12 / 50   â–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘  (24%)      â”‚
+â”‚   k0_outbox:         320 / 1000 â–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘  (32%)      â”‚
+â”‚   sse_subscribers:    88 / 200  â–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘  (44%)      â”‚
+â”‚                                                          â”‚
+â”‚ Backpressure Active                                     â”‚
+â”‚   audio_frames:       ðŸŸ¢ No                             â”‚
+â”‚   agent_mailbox:      ðŸŸ¢ No                             â”‚
+â”‚   k0_outbox:          ðŸŸ¢ No                             â”‚
+â”‚   sse_subscribers:    ðŸŸ¡ Yes (duration: 235ms)          â”‚
+â”‚                                                          â”‚
+â”‚ Dropped Items (Last 1h)                                â”‚
+â”‚   audio_frames:       1,245 frames                      â”‚
+â”‚   video_frames:       89 frames                         â”‚
+â”‚   Total:              1,334 items                       â”‚
+â”‚                                                          â”‚
+â”‚ Watermark Breaches (Last 24h)                          â”‚
+â”‚   audio_frames:       15 breaches                       â”‚
+â”‚   k0_outbox:          3 breaches                        â”‚
+â”‚   sse_subscribers:    42 breaches âš ï¸                    â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -898,15 +898,15 @@ backpressure_duration_ms = Histogram(
 **Design Principle:** Voice pipeline has unique backpressure needs because:
 1. **Latency-sensitive:** Audio stuttering is user-visible immediately
 2. **High throughput:** 20ms frames = 50 items/sec per session
-3. **Multi-stage:** ASR → Intent → Tools → TTS → Audio Out
+3. **Multi-stage:** ASR â†’ Intent â†’ Tools â†’ TTS â†’ Audio Out
 4. **Graceful degradation:** Better to degrade quality than freeze
 
 **Research Foundations:**
-- **SEDA (Welsh et al., 2001)** — Staged Event-Driven Architecture with backpressure
-- **TCP Congestion Control (Jacobson, 1988)** — Additive increase, multiplicative decrease
-- **WebRTC Adaptive Bitrate (Google, 2011)** — Quality degradation under network pressure
-- **Opus Audio Codec (Valin et al., 2012)** — Variable bitrate with graceful degradation
-- **Netflix Hystrix (Netflix, 2012)** — Circuit breaker for cascading failures
+- **SEDA (Welsh et al., 2001)** â€” Staged Event-Driven Architecture with backpressure
+- **TCP Congestion Control (Jacobson, 1988)** â€” Additive increase, multiplicative decrease
+- **WebRTC Adaptive Bitrate (Google, 2011)** â€” Quality degradation under network pressure
+- **Opus Audio Codec (Valin et al., 2012)** â€” Variable bitrate with graceful degradation
+- **Netflix Hystrix (Netflix, 2012)** â€” Circuit breaker for cascading failures
 
 ### Voice-Specific Backpressure Actions
 
@@ -922,7 +922,7 @@ backpressure_duration_ms = Histogram(
 | **Intent Queue** | 95% full | >47 intents queued | **Block new intents, show busy** | User sees "one moment..." | 1s |
 | **Tool Executor** | 75% full | >15 tools running | **Shed ephemeral tools** (weather, news) | Non-critical tools skipped | Immediate |
 | **Tool Executor** | 90% full | >18 tools running | **Kill long-running tools** (>2s) | Tool failures returned | 100ms |
-| **TTS Queue** | 80% full | >400ms speech queued | **Degrade to faster voice** (neural→concat) | Lower quality voice | Immediate |
+| **TTS Queue** | 80% full | >400ms speech queued | **Degrade to faster voice** (neuralâ†’concat) | Lower quality voice | Immediate |
 | **TTS Queue** | 90% full | >450ms speech queued | **Speed up playback** (1.15x) | Slightly faster speech | Immediate |
 | **TTS Queue** | 95% full | >475ms speech queued | **Truncate response** (keep first 3 sentences) | Shorter answer | Immediate |
 | **Audio Output Buffer** | 85% full | >340ms buffered | **Drop silence frames** | None (silence trimmed) | Immediate |
@@ -1209,10 +1209,10 @@ class VoiceBackpressureController:
         # Kill long-running tools
 
     async def _degrade_tts(self, config: dict):
-        """Degrade TTS quality (neural → concatenative)"""
+        """Degrade TTS quality (neural â†’ concatenative)"""
         from_voice = config["from"]
         to_voice = config["to"]
-        print(f"[VoiceBackpressure] Degrading TTS: {from_voice} → {to_voice}")
+        print(f"[VoiceBackpressure] Degrading TTS: {from_voice} â†’ {to_voice}")
         self.metrics["tts_degraded"] += 1
         self.stage_state[VoiceStage.TTS_QUEUE]["degraded"] = True
 
@@ -1314,18 +1314,18 @@ voice_buffer_depth_ms = Gauge(
 ---
 
 ## Success Metrics
-- Privacy, sovereignty, correctness, freedom, dignity—not market share or engagement.
+- Privacy, sovereignty, correctness, freedom, dignityâ€”not market share or engagement.
 
 ## Reference & Process
 - Vision must guide every ADR, PR, milestone, and review.
-- “Unseen Life”: Families live, grow, and make memories free from corporate surveillance.
+- â€œUnseen Lifeâ€: Families live, grow, and make memories free from corporate surveillance.
 
 ## Commitment
 - Every line of code serves humanity, dignity, and freedom.
 
 ---
 
-# K0 Microkernel — Architecture Summary
+# K0 Microkernel â€” Architecture Summary
 
 The K0 microkernel is the foundational, durable memory kernel for FamilyOS. It is responsible for:
 
@@ -1353,7 +1353,7 @@ The K0 microkernel is the foundational, durable memory kernel for FamilyOS. It i
 
 ---
 
-# K1 Kernel — LLM Agentic Orchestrator (Chatbot Backend)
+# K1 Kernel â€” LLM Agentic Orchestrator (Chatbot Backend)
 
 - **Role:** Acts as the orchestrator kernel behind the chatbot, focusing on agentic LLM architecture.
 - **Message Passing Hub:** No graph-based or flowchart logic; instead, K1 routes messages between agents, conversations, and working memory.
@@ -1365,7 +1365,7 @@ The K0 microkernel is the foundational, durable memory kernel for FamilyOS. It i
 
 ---
 
-# Human-like Bot Design — Brainstorming Notes
+# Human-like Bot Design â€” Brainstorming Notes
 
 ## Target Qualities
 - **Empathy:** Bot understands and responds to emotions, offers comfort and support.
@@ -1378,7 +1378,7 @@ The K0 microkernel is the foundational, durable memory kernel for FamilyOS. It i
 - All conversations and memories are stored locally (K0 kernel), never leave the device without explicit consent.
 - Sensitive topics (health, emotions, private jokes) are tagged and access-controlled.
 - Family members can review, delete, or redact any memory or conversation.
-- No profiling, nudging, or manipulation—bot only advises, never acts autonomously.
+- No profiling, nudging, or manipulationâ€”bot only advises, never acts autonomously.
 - Age-appropriate boundaries for children; parental controls for sensitive content.
 
 ## Interaction Roadmap
@@ -1414,7 +1414,7 @@ The conversation explored research papers and patterns that go beyond traditiona
 
 **Truth = Log** (views are derived and replayable):
 - CQRS + WAL as source of truth
-- Commands → Admission → Schema Validator → Policy PDP → WAL
+- Commands â†’ Admission â†’ Schema Validator â†’ Policy PDP â†’ WAL
 - Queries read from derived views (FTS, vector, graph, caches)
 
 **Safety-by-default**:
@@ -1430,7 +1430,7 @@ The conversation explored research papers and patterns that go beyond traditiona
 - Hire/fire as protocol actions, not ad-hoc APIs
 - Flows as deterministic DSL: `Await`, `Decide`, `Call`, `Yield`, `Persist`, `Fork/Join`
 
-### 3. Model Hub (MH0) — SLMs/LLMs as External Services
+### 3. Model Hub (MH0) â€” SLMs/LLMs as External Services
 - Models are plug-in hubs/services, not embedded in agents
 - Routers (sync/stream), Adapters (OpenAI, Azure, Vertex, local SLM, vLLM, llama.cpp, TTS/ASR/Vision)
 - Caches (prompt, response, embedding), Quotas & Budgets (per space/agent)
@@ -1440,11 +1440,11 @@ The conversation explored research papers and patterns that go beyond traditiona
 ### 4. NPU-First Fabric (Edge Acceleration)
 - Local NPU integration for fast, cheap, private compute
 - Edge Runtime (ER0) with adapters for Apple ANE, Qualcomm Hexagon, Intel NPU, AMD XDNA, NVIDIA NIM
-- Placement Planner: policy + telemetry → chooses `{EDGE_NPU|EDGE_GPU|EDGE_CPU|REMOTE, profile}`
+- Placement Planner: policy + telemetry â†’ chooses `{EDGE_NPU|EDGE_GPU|EDGE_CPU|REMOTE, profile}`
 - KV Cache Broker: long chats reuse attention cache on-device
 - Profiles: `realtime_speech`, `chat_fast`, `reasoning_heavy`, `vision_light`, `embed_batch`
 
-### 5. Agent Fabric (AF0) — Core Primitives
+### 5. Agent Fabric (AF0) â€” Core Primitives
 - **Envelope (CognitiveCommand)**: signed, auditable, replayable
 - **Spaces & Tenancy**: personal, shared, selective, extended, inter-family
 - **Caps & Leases**: hire/fire backbone with agent lifecycle management
@@ -1454,9 +1454,9 @@ The conversation explored research papers and patterns that go beyond traditiona
 
 ### 6. Multimodal Streams (Text + Audio + Video + Sensors)
 - Stream spec: `name, type, rate_hz, retention, privacy_band, loss_policy`
-- Hot transforms: VAD → STT → intents/entities, frame sampler → landmarks → attention hints
+- Hot transforms: VAD â†’ STT â†’ intents/entities, frame sampler â†’ landmarks â†’ attention hints
 - Agent subscriptions map to caps
-- Real-time loop: Mic → VAD(DSP/NPU) → ASR(NPU) → SLM(NPU) → TTS(NPU) → Speaker
+- Real-time loop: Mic â†’ VAD(DSP/NPU) â†’ ASR(NPU) â†’ SLM(NPU) â†’ TTS(NPU) â†’ Speaker
 
 ### 7. Market Position & Vision
 - Kernel-based design is years ahead of graph-based orchestration (e.g., LangGraph)
@@ -1466,45 +1466,45 @@ The conversation explored research papers and patterns that go beyond traditiona
 
 ---
 
-# K1 Kernel — Complete Architecture & Decision Framework
+# K1 Kernel â€” Complete Architecture & Decision Framework
 
 ## K1 Contents (Complete Inventory)
 
 ### **Runtime Core**
-- `leases.py` — manage agent leases (caps, bands, budgets, TTL)
-- `mailbox.py` — per-agent message queue (lock-free MPSC)
-- `session_state.py` — in-memory state object (beliefs, scoreboard, control, persona, multimodal, meta)
-- `flow_engine.py` — deterministic executor (Await / Decide / Call / Yield / Persist / Abort)
-- `protocol_monitor.py` — MPST/Scribble-based conversation guard
-- `state_tracker.py` — incremental dialogue-state tracker (belief updates, confidences)
-- `scoreboard.py` — common-ground / QUD / referent manager
-- `meta_policy.py` — proactivity & clarification logic
+- `leases.py` â€” manage agent leases (caps, bands, budgets, TTL)
+- `mailbox.py` â€” per-agent message queue (lock-free MPSC)
+- `session_state.py` â€” in-memory state object (beliefs, scoreboard, control, persona, multimodal, meta)
+- `flow_engine.py` â€” deterministic executor (Await / Decide / Call / Yield / Persist / Abort)
+- `protocol_monitor.py` â€” MPST/Scribble-based conversation guard
+- `state_tracker.py` â€” incremental dialogue-state tracker (belief updates, confidences)
+- `scoreboard.py` â€” common-ground / QUD / referent manager
+- `meta_policy.py` â€” proactivity & clarification logic
 
 ### **Connectors**
-- `model_hub_client.py` — SLM/LLM interface with placement planner (EDGE_NPU | GPU | CPU | REMOTE)
-- `kv_cache_broker.py` — KV cache manager for local models
-- `tool_runner.py` — executes tools under caps/bands; writes ToolReceipts
-- `k0_bridge.py` — batcher for StateDelta / GroundingCommit / Receipts → K0
+- `model_hub_client.py` â€” SLM/LLM interface with placement planner (EDGE_NPU | GPU | CPU | REMOTE)
+- `kv_cache_broker.py` â€” KV cache manager for local models
+- `tool_runner.py` â€” executes tools under caps/bands; writes ToolReceipts
+- `k0_bridge.py` â€” batcher for StateDelta / GroundingCommit / Receipts â†’ K0
 
 ### **Streams**
-- `stream_switch.py` — unified stream bus (audio, video, sensors, text)
+- `stream_switch.py` â€” unified stream bus (audio, video, sensors, text)
 - `operators/`
-  - `vad.py` — voice-activity detector
-  - `asr.py` — ASR model driver
-  - `tts.py` — text-to-speech stream
-  - `vision.py` — visual referent extractor
+  - `vad.py` â€” voice-activity detector
+  - `asr.py` â€” ASR model driver
+  - `tts.py` â€” text-to-speech stream
+  - `vision.py` â€” visual referent extractor
 
 ### **Policy & Safety**
-- `policy/bands.yml` — GREEN / AMBER / RED / BLACK capability map
-- `policy/budgets.yml` — CPU / tokens / watt / latency budgets
-- `policy/caps.yml` — tool & model permissions
-- `safety_filter.py` — prompt/output redaction, band enforcement
+- `policy/bands.yml` â€” GREEN / AMBER / RED / BLACK capability map
+- `policy/budgets.yml` â€” CPU / tokens / watt / latency budgets
+- `policy/caps.yml` â€” tool & model permissions
+- `safety_filter.py` â€” prompt/output redaction, band enforcement
 
 ### **Observability**
-- `tracing.py` — cognitive_trace_id correlation
-- `metrics.py` — perf counters (TTFT, tokens/sec, barge-in ms, kv_hits)
-- `receipts.py` — aggregate Model / Tool / Protocol / State receipts
-- `perf_harness.py` — synthetic latency & throughput tests
+- `tracing.py` â€” cognitive_trace_id correlation
+- `metrics.py` â€” perf counters (TTFT, tokens/sec, barge-in ms, kv_hits)
+- `receipts.py` â€” aggregate Model / Tool / Protocol / State receipts
+- `perf_harness.py` â€” synthetic latency & throughput tests
 
 ### **Contracts (JSON Schemas)**
 - `AgentLease.json`
@@ -1517,15 +1517,15 @@ The conversation explored research papers and patterns that go beyond traditiona
 - `ToolCall.json` / `ToolReceipt.json`
 
 ### **Profiles & Config**
-- `profiles/perf.yml` — model profiles + latency budgets
-- `profiles/models.yml` — available models, quantization, placement
-- `profiles/flows.yml` — default conversation flows
+- `profiles/perf.yml` â€” model profiles + latency budgets
+- `profiles/models.yml` â€” available models, quantization, placement
+- `profiles/flows.yml` â€” default conversation flows
 
 ---
 
 ## K1 Decision Framework: How the Kernel Knows What to Do
 
-### 1) Inputs → Envelope
+### 1) Inputs â†’ Envelope
 Everything arrives as a **Percept** (text/audio/video/sensor) wrapped in a `CognitiveCommand` envelope:
 `{actor, space, band, caps, qos, trace_id, payload}`
 
@@ -1542,19 +1542,19 @@ Output:
   "urgency": "normal"
 }
 ```
-[## 🔄 Learning Loop — Adaptive Intelligence & Feedback Integration
+[## ðŸ”„ Learning Loop â€” Adaptive Intelligence & Feedback Integration
 
 ### Design Philosophy
 
 **Goal:** Enable K1 kernel to learn from outcomes, feedback, and usage patterns, improving agent ranking, tool success, and personality adaptation over time.
 
 **Principles:**
-- **Advisory-only:** Learning loop emits signals, never executes actions directly (see diagram: advisory → P04)
+- **Advisory-only:** Learning loop emits signals, never executes actions directly (see diagram: advisory â†’ P04)
 - **Memory-driven:** All learning is contextualized by working memory, family context, and emotional state
 - **Multi-modal feedback:** Integrates explicit (thumbs-up), implicit (task completion), and behavioral (usage patterns)
 - **Continuous adaptation:** Updates after every turn, with batch/daily aggregation for slow-changing traits
 
-### Feedback Signals — What Counts as "Success"?
+### Feedback Signals â€” What Counts as "Success"?
 
 **1. Explicit Feedback:**
     - User thumbs-up/thumbs-down (UI event)
@@ -1576,7 +1576,7 @@ Output:
     - Implicit: 0.5
     - Behavioral: 0.2
 
-### Update Frequency — When Does Learning Occur?
+### Update Frequency â€” When Does Learning Occur?
 
 **1. Fast Path (Turn-Based):**
     - After every turn: update agent/tool scores, emit `LEARNING_TICK` event
@@ -1590,7 +1590,7 @@ Output:
     - On explicit feedback (thumbs-up, correction): immediate update
     - On critical failure (tool crash, agent error): immediate penalty
 
-### Model Retraining — What Gets Updated?
+### Model Retraining â€” What Gets Updated?
 
 **1. Local SLMs (Edge):**
     - **No fine-tuning** (for privacy, performance)
@@ -1611,7 +1611,7 @@ Output:
     - Success/failure rates logged per tool/agent
     - Used for future planning, fallback selection
 
-### Drift Detection — How to Spot Degrading Models/Tools?
+### Drift Detection â€” How to Spot Degrading Models/Tools?
 
 **1. Performance Monitoring:**
     - Track latency, error rate, success rate per agent/tool
@@ -1629,7 +1629,7 @@ Output:
     - All learning events emit `intelligence.learning.*` with `cognitive_trace_id`
     - Metrics exported to observability stack (OpenTelemetry, Prometheus)
 
-### Implementation — Learning Loop Core
+### Implementation â€” Learning Loop Core
 
 ```python
 from dataclasses import dataclass, field
@@ -1726,7 +1726,7 @@ class LearningLoop:
                                         self._emit_drift_alert(tool_id, "tool", success_rate)
 
         def _emit_drift_alert(self, id: str, kind: str, rate: float):
-                print(f"⚠️ Drift detected for {kind} '{id}': success rate {rate:.2f}")
+                print(f"âš ï¸ Drift detected for {kind} '{id}': success rate {rate:.2f}")
                 # Emit advisory signal to kernel (could trigger fallback, clarification, demotion)
 
         def emit_learning_tick(self):
@@ -1734,7 +1734,7 @@ class LearningLoop:
                 # Example: send stats to K0 via bridge
                 pass
 
-### Configuration — Learning Loop
+### Configuration â€” Learning Loop
 
 **File:** `k1/config/learning_loop.yml`
 
@@ -1779,7 +1779,7 @@ observability:
     trace_id: "cognitive_trace_id"
 ```
 
-### Performance Analysis — Learning Loop Overhead
+### Performance Analysis â€” Learning Loop Overhead
 
 | Metric | Without Learning Loop | With Learning Loop |
 |--------|----------------------|--------------------|
@@ -1793,16 +1793,16 @@ observability:
 
 ## Research Citations (Learning Loop)
 
-1. **Meta-Learning** — Vilalta & Drissi, 2002: *"A Perspective on Meta-Learning"*
-2. **Reinforcement Learning** — Sutton & Barto, 2018: *"Reinforcement Learning: An Introduction"*
-3. **Theory of Mind** — Premack & Woodruff, 1978: *"Does the chimpanzee have a theory of mind?"*
-4. **Active Learning** — Settles, 2009: *"Active Learning Literature Survey"*
-5. **Drift Detection** — Gama et al., 2014: *"A Survey on Concept Drift Adaptation"*
-6. **Personality Adaptation** — Kobsa, 2001: *"Generic User Modeling Systems"*
-7. **Feedback Integration** — Allen et al., 1999: *"Mixed-Initiative Interaction"*
-8. **Family Context Learning** — Fivush et al., 2011: *"Family Narratives and the Development of Children's Emotional Skills"*
-9. **Observability** — OpenTelemetry, 2022: *"Distributed Tracing and Metrics"*
-10. **KV Cache Learning** — Kwon et al., 2023: *"Efficient Memory Management for Large Language Model Serving with PagedAttention"*
+1. **Meta-Learning** â€” Vilalta & Drissi, 2002: *"A Perspective on Meta-Learning"*
+2. **Reinforcement Learning** â€” Sutton & Barto, 2018: *"Reinforcement Learning: An Introduction"*
+3. **Theory of Mind** â€” Premack & Woodruff, 1978: *"Does the chimpanzee have a theory of mind?"*
+4. **Active Learning** â€” Settles, 2009: *"Active Learning Literature Survey"*
+5. **Drift Detection** â€” Gama et al., 2014: *"A Survey on Concept Drift Adaptation"*
+6. **Personality Adaptation** â€” Kobsa, 2001: *"Generic User Modeling Systems"*
+7. **Feedback Integration** â€” Allen et al., 1999: *"Mixed-Initiative Interaction"*
+8. **Family Context Learning** â€” Fivush et al., 2011: *"Family Narratives and the Development of Children's Emotional Skills"*
+9. **Observability** â€” OpenTelemetry, 2022: *"Distributed Tracing and Metrics"*
+10. **KV Cache Learning** â€” Kwon et al., 2023: *"Efficient Memory Management for Large Language Model Serving with PagedAttention"*
 
 ---
 
@@ -1832,14 +1832,14 @@ K1 looks up **capability registry**:
 - Prompts: **prompt registry** with **roles** (router, planner, summarizer) + **size classes** (`lite`, `standard`, `reasoning`)
 
 **Match rules:**
-- `op: Tool` → choose lowest-cost tool that satisfies schema + band/caps + QoS
-- `op: Model` → choose prompt profile by complexity: `lite` for clarify/echo, `reasoning` for synthesis
+- `op: Tool` â†’ choose lowest-cost tool that satisfies schema + band/caps + QoS
+- `op: Model` â†’ choose prompt profile by complexity: `lite` for clarify/echo, `reasoning` for synthesis
 
 ### 5) Agent Planner (How Many Agents)
 K1 uses a **"hire score"** per role and tiny **bin-packing** for budgets.
 
 **Default roles:**
-- `Concierge` (always one) — runs the flow & talks to human
+- `Concierge` (always one) â€” runs the flow & talks to human
 - `Worker` agents (optional, short-lived):
   - `Planner` (itinerary synthesis)
   - `Researcher` (options lookup)
@@ -1855,18 +1855,18 @@ score(role) = w_task * tasks_assigned
 ```
 
 **Typical counts:**
-- Simple ask → 1 agent (Concierge)
-- Medium plan (trip, event) → 2 agents (Concierge + Planner)
-- Heavy, time-sensitive multimodal → 3 (add SafetyWatch)
-- Hard research → temporary Researcher burst (TTL few minutes)
+- Simple ask â†’ 1 agent (Concierge)
+- Medium plan (trip, event) â†’ 2 agents (Concierge + Planner)
+- Heavy, time-sensitive multimodal â†’ 3 (add SafetyWatch)
+- Hard research â†’ temporary Researcher burst (TTL few minutes)
 
 ### 6) Prompt + Model Route Selection (Profile Ladder)
 For each `Model` node:
 - Pick prompt from registry by **role+task** and **size class**
 - Choose **route**:
-  - `realtime_speech` → NPU ASR/TTS, SLM 3–4B int4 (`chat_fast`)
-  - `standard_chat` → local-first SLM; fallback remote
-  - `reasoning_heavy` → remote LLM (caps/band allow), higher budget
+  - `realtime_speech` â†’ NPU ASR/TTS, SLM 3â€“4B int4 (`chat_fast`)
+  - `standard_chat` â†’ local-first SLM; fallback remote
+  - `reasoning_heavy` â†’ remote LLM (caps/band allow), higher budget
 - Attach **KV cache key** = `(space, session, role)`
 
 ### 7) Execution Loop (Deterministic)
@@ -1881,23 +1881,23 @@ The **Flow Engine** runs nodes in order, with tiny ops:
 Every side-effect emits a **Receipt** (to K0).
 
 ### 8) Hard Constraints (Keep It Light)
-- **SessionState cap:** ≤ 64 KB
-- **Prompt cap (hot path):** ≤ 1.5 KB
+- **SessionState cap:** â‰¤ 64 KB
+- **Prompt cap (hot path):** â‰¤ 1.5 KB
 - **Max workers per session:** default 2 (3 in voice mode)
-- **Tool call p95:** ≤ 250 ms (fast APIs), retries=1
+- **Tool call p95:** â‰¤ 250 ms (fast APIs), retries=1
 - **Receipts flush:** every 250 ms or on commit
 
 ---
 
-## K1 Scheduler — Weighted Fair Queuing with Anti-Starvation
+## K1 Scheduler â€” Weighted Fair Queuing with Anti-Starvation
 
 **Design Principle:** All tasks are scheduled fairly with latency budgets and starvation protection to ensure background tasks (learning, sync) always make progress.
 
 **Research Foundations:**
-- **WFQ** (Demers et al., 1989) — Weighted fair queuing for packet scheduling
-- **Linux CFS** (Molnar, 2007) — Completely Fair Scheduler with virtual runtime
-- **Google Borg** (Verma et al., 2015) — Priority-based scheduling with preemption
-- **Kubernetes** — Priority classes with preemption and fairness
+- **WFQ** (Demers et al., 1989) â€” Weighted fair queuing for packet scheduling
+- **Linux CFS** (Molnar, 2007) â€” Completely Fair Scheduler with virtual runtime
+- **Google Borg** (Verma et al., 2015) â€” Priority-based scheduling with preemption
+- **Kubernetes** â€” Priority classes with preemption and fairness
 
 ### Scheduling Algorithm
 
@@ -2170,17 +2170,17 @@ class K1Scheduler:
         }
 
 
-### Per-Route Lease Budgets — Prevent Background Task Monopolization
+### Per-Route Lease Budgets â€” Prevent Background Task Monopolization
 
 **Design Principle:** Scheduler ensures fairness across priorities, but long conversation chains (multi-step plans) can monopolize resources even at INTERACTIVE priority.
 
 **Solution:** Per-conversation-route budgets limit total resources consumed by a single conversation flow.
 
 **Research Foundations:**
-- **Kubernetes Resource Quotas** (CNCF, 2016) — Per-namespace resource limits
-- **Cgroup Resource Control** (Linux, 2008) — Per-process group limits
-- **AWS Service Quotas** — Per-account API limits
-- **Fair Queuing** (Demers et al., 1989) — Resource fairness
+- **Kubernetes Resource Quotas** (CNCF, 2016) â€” Per-namespace resource limits
+- **Cgroup Resource Control** (Linux, 2008) â€” Per-process group limits
+- **AWS Service Quotas** â€” Per-account API limits
+- **Fair Queuing** (Demers et al., 1989) â€” Resource fairness
 
 ---
 
@@ -2659,47 +2659,47 @@ scheduler_virtual_time = Gauge(
 ### Grafana Dashboard
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ K1 Scheduler Dashboard                                  │
-├─────────────────────────────────────────────────────────┤
-│ Queue Depths (Real-Time)                                │
-│   URGENT:       0  ░░░░░░░░░░  (0%)                     │
-│   REALTIME:     3  ███░░░░░░░  (30%)                    │
-│   INTERACTIVE:  5  █████░░░░░  (50%)                    │
-│   BACKGROUND:   12 ████████░░  (80%)                    │
-│                                                          │
-│ Task Wait Time (P50 / P95)                              │
-│   URGENT:       2ms / 5ms     ✅                         │
-│   REALTIME:     15ms / 45ms   ✅                         │
-│   INTERACTIVE:  35ms / 120ms  ✅                         │
-│   BACKGROUND:   420ms / 980ms ⚠️                         │
-│                                                          │
-│ Starvation Events (Last 1h)                             │
-│   BACKGROUND:   8 force-schedules                       │
-│   Average starvation: 650ms                             │
-│                                                          │
-│ Preemptions (Last 1h)                                   │
-│   Total: 15 preemptions                                 │
-│   Most preempted: INTERACTIVE (12 times)                │
-│                                                          │
-│ Virtual Time (Fairness)                                 │
-│   URGENT:       125.3                                   │
-│   REALTIME:     245.8                                   │
-│   INTERACTIVE:  398.2                                   │
-│   BACKGROUND:   1,245.7 (needs catch-up)                │
-└─────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Scheduler Dashboard                                  â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Queue Depths (Real-Time)                                â”‚
+â”‚   URGENT:       0  â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘  (0%)                     â”‚
+â”‚   REALTIME:     3  â–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘  (30%)                    â”‚
+â”‚   INTERACTIVE:  5  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘  (50%)                    â”‚
+â”‚   BACKGROUND:   12 â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘  (80%)                    â”‚
+â”‚                                                          â”‚
+â”‚ Task Wait Time (P50 / P95)                              â”‚
+â”‚   URGENT:       2ms / 5ms     âœ…                         â”‚
+â”‚   REALTIME:     15ms / 45ms   âœ…                         â”‚
+â”‚   INTERACTIVE:  35ms / 120ms  âœ…                         â”‚
+â”‚   BACKGROUND:   420ms / 980ms âš ï¸                         â”‚
+â”‚                                                          â”‚
+â”‚ Starvation Events (Last 1h)                             â”‚
+â”‚   BACKGROUND:   8 force-schedules                       â”‚
+â”‚   Average starvation: 650ms                             â”‚
+â”‚                                                          â”‚
+â”‚ Preemptions (Last 1h)                                   â”‚
+â”‚   Total: 15 preemptions                                 â”‚
+â”‚   Most preempted: INTERACTIVE (12 times)                â”‚
+â”‚                                                          â”‚
+â”‚ Virtual Time (Fairness)                                 â”‚
+â”‚   URGENT:       125.3                                   â”‚
+â”‚   REALTIME:     245.8                                   â”‚
+â”‚   INTERACTIVE:  398.2                                   â”‚
+â”‚   BACKGROUND:   1,245.7 (needs catch-up)                â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
 
 ## Performance Targets (North Star)
 
-- **Cold start (agent hire → first token):** ≤ 250 ms on laptop / ≤ 500 ms on phone
-- **ASR partial → state update:** ≤ 80 ms
-- **TTFT (text model):** ≤ 120 ms (NPU SLM) / ≤ 250 ms (remote LLM fallback)
-- **Barge-in cancel:** ≤ 120 ms
+- **Cold start (agent hire â†’ first token):** â‰¤ 250 ms on laptop / â‰¤ 500 ms on phone
+- **ASR partial â†’ state update:** â‰¤ 80 ms
+- **TTFT (text model):** â‰¤ 120 ms (NPU SLM) / â‰¤ 250 ms (remote LLM fallback)
+- **Barge-in cancel:** â‰¤ 120 ms
 - **Orchestrator CPU budget:** < 10% one core idle, spikes < 35% during speech
-- **Mem footprint (per session):** ≤ 40–80 MB (includes KV cache hints & small buffers)
+- **Mem footprint (per session):** â‰¤ 40â€“80 MB (includes KV cache hints & small buffers)
 
 ---
 
@@ -2719,7 +2719,7 @@ scheduler_virtual_time = Gauge(
 - Each op is <100 LOC, branch-predictable; no dynamic graph walkers
 
 ### 4) Deterministic Small State
-- `SessionState` capped to **≤ 64 KB** (beliefs, scoreboard, control, persona_hot)
+- `SessionState` capped to **â‰¤ 64 KB** (beliefs, scoreboard, control, persona_hot)
 - Keep speculative branches off-heap; prune every step
 
 ### 5) Lazy Everything
@@ -2732,28 +2732,28 @@ scheduler_virtual_time = Gauge(
 
 ### Profile Ladder (Auto-Select Per Call)
 - `realtime_speech`: Whisper-tiny/base int8 on NPU + TTS on NPU
-- `chat_fast`: 3–4B SLM int4 on NPU (KV reuse on)
+- `chat_fast`: 3â€“4B SLM int4 on NPU (KV reuse on)
 - `reasoning_heavy`: remote LLM (only when needed)
 
 ### Quantization by Default
 - int4/8 for SLM/embeddings; fp16 for TTS vocoder if needed
 
 ### KV Cache Broker
-- Per session `(space, convo, profile)`; pin 64–256 MB max; evict LFU
+- Per session `(space, convo, profile)`; pin 64â€“256 MB max; evict LFU
 
 ---
 
-### Global KV Cache Manager — Multi-Session Memory Management
+### Global KV Cache Manager â€” Multi-Session Memory Management
 
 **Design Principle:** Per-session KV cache exists (64-256 MB per session), but multiple concurrent sessions can exceed device memory limits.
 
 **Solution:** Global KV cache manager with device-wide cap + LRU/LFU eviction.
 
 **Research Foundations:**
-- **PagedAttention** (Kwon et al., 2023) — Efficient KV cache management for LLMs
-- **vLLM** (UC Berkeley, 2023) — High-throughput LLM serving with paging
-- **LRU Cache** (O'Neil et al., 1993) — Least recently used eviction
-- **ARC Cache** (Megiddo & Modha, 2003) — Adaptive replacement cache
+- **PagedAttention** (Kwon et al., 2023) â€” Efficient KV cache management for LLMs
+- **vLLM** (UC Berkeley, 2023) â€” High-throughput LLM serving with paging
+- **LRU Cache** (O'Neil et al., 1993) â€” Least recently used eviction
+- **ARC Cache** (Megiddo & Modha, 2003) â€” Adaptive replacement cache
 
 ---
 
@@ -3029,7 +3029,7 @@ class GlobalKVCacheManager:
                 self.total_mb_used -= (old_size - new_size)
                 self.metrics["compressions"] += 1
 
-                print(f"[KVCache] Compressed {session_id}: {old_size:.1f}MB → {new_size:.1f}MB " +
+                print(f"[KVCache] Compressed {session_id}: {old_size:.1f}MB â†’ {new_size:.1f}MB " +
                       f"({(new_size/old_size)*100:.0f}%)")
                 return
 
@@ -3138,8 +3138,8 @@ kv_cache_compression_ratio = Histogram(
 ## Streams That Don't Stutter
 
 - **Audio in:** 20 ms frames @16 kHz; VAD on DSP/NPU; backpressure on StreamSwitch
-- **Partial ASR cadence:** emit every 60–80 ms; DST updates are **incremental** (token deltas)
-- **TTS out:** stream chunks @ 40–60 ms; enable barge-in: new intent cancels audio immediately
+- **Partial ASR cadence:** emit every 60â€“80 ms; DST updates are **incremental** (token deltas)
+- **TTS out:** stream chunks @ 40â€“60 ms; enable barge-in: new intent cancels audio immediately
 - **Video/sensors:** downsample to descriptors (224p / low-Hz); never ship raw frames through orchestrator
 
 ---
@@ -3156,25 +3156,25 @@ kv_cache_compression_ratio = Histogram(
 
 - **Leases carry hard budgets:** `{latency_ms, tokens, gpu_min, io_ops, max_watt}`
 - **Priority lanes:** `realtime_speech` > `safety` > `dialog` > `background`
-- **Thermal guard:** sample @1 Hz; downgrade profile (`chat_fast`→`chat_mid`) before throttle; escalate to remote only on AMBER band with PII masks
+- **Thermal guard:** sample @1 Hz; downgrade profile (`chat_fast`â†’`chat_mid`) before throttle; escalate to remote only on AMBER band with PII masks
 
 ---
 
-### Thermal & Power Hysteresis Matrix — Stable Model Placement
+### Thermal & Power Hysteresis Matrix â€” Stable Model Placement
 
 **Design Principle:** Thermal throttling causes model routing to flap:
-1. **Temperature rises** → downgrade model (NPU → GPU)
-2. **Temperature drops** → upgrade model (GPU → NPU)
+1. **Temperature rises** â†’ downgrade model (NPU â†’ GPU)
+2. **Temperature drops** â†’ upgrade model (GPU â†’ NPU)
 3. **Loop:** Flapping between models = latency spikes + poor UX
 
 **Solution:** Hysteresis (different thresholds for up/down transitions) + cooldown periods.
 
 **Research Foundations:**
-- **Hysteresis Control Theory** (Khalil, 2002) — Dead-band prevents oscillation
-- **Thermal Management** (Skadron et al., 2003) — Dynamic voltage/frequency scaling
-- **Android Thermal HAL** (Google, 2015) — Hysteresis-based thermal throttling
-- **DVFS (Brooks & Martonosi, 2001)** — Dynamic voltage/frequency scaling with hysteresis
-- **PID Controllers** (Åström & Hägglund, 1995) — Proportional-integral-derivative control
+- **Hysteresis Control Theory** (Khalil, 2002) â€” Dead-band prevents oscillation
+- **Thermal Management** (Skadron et al., 2003) â€” Dynamic voltage/frequency scaling
+- **Android Thermal HAL** (Google, 2015) â€” Hysteresis-based thermal throttling
+- **DVFS (Brooks & Martonosi, 2001)** â€” Dynamic voltage/frequency scaling with hysteresis
+- **PID Controllers** (Ã…strÃ¶m & HÃ¤gglund, 1995) â€” Proportional-integral-derivative control
 
 ---
 
@@ -3184,23 +3184,23 @@ kv_cache_compression_ratio = Histogram(
 
 **Solution:** Different thresholds for **upward** and **downward** transitions + minimum dwell time.
 
-| Current State | Temperature (°C) | Power (W) | Target State | Condition | Cooldown | User Impact |
+| Current State | Temperature (Â°C) | Power (W) | Target State | Condition | Cooldown | User Impact |
 |---------------|------------------|-----------|--------------|-----------|----------|-------------|
 | **NPU (fast)** | <70 | <10 | NPU | Normal operation | - | Best performance |
-| **NPU → GPU** | ≥75 | ≥12 | GPU | **Upgrade threshold** (5°C above baseline) | 10s | Slight latency increase (20ms) |
+| **NPU â†’ GPU** | â‰¥75 | â‰¥12 | GPU | **Upgrade threshold** (5Â°C above baseline) | 10s | Slight latency increase (20ms) |
 | **GPU (mid)** | 70-74 | 10-11 | GPU | Stay in GPU (hysteresis band) | - | Stable mid performance |
-| **GPU → NPU** | ≤68 | ≤9 | NPU | **Downgrade threshold** (2°C below baseline) | 30s | Return to fast |
-| **GPU → CPU** | ≥80 | ≥15 | CPU | **Upgrade threshold** (too hot) | 10s | Noticeable latency (100ms) |
+| **GPU â†’ NPU** | â‰¤68 | â‰¤9 | NPU | **Downgrade threshold** (2Â°C below baseline) | 30s | Return to fast |
+| **GPU â†’ CPU** | â‰¥80 | â‰¥15 | CPU | **Upgrade threshold** (too hot) | 10s | Noticeable latency (100ms) |
 | **CPU (slow)** | 75-79 | 12-14 | CPU | Stay in CPU (hysteresis band) | - | Degraded performance |
-| **CPU → GPU** | ≤72 | ≤11 | GPU | **Downgrade threshold** (cooling down) | 30s | Improving |
-| **CPU → Remote** | ≥85 | ≥18 | Remote LLM | **Critical threshold** (thermal emergency) | 60s | High latency (500ms+) |
-| **Remote** | ≤75 | ≤12 | CPU | **Cool enough** | 60s | Return to local |
+| **CPU â†’ GPU** | â‰¤72 | â‰¤11 | GPU | **Downgrade threshold** (cooling down) | 30s | Improving |
+| **CPU â†’ Remote** | â‰¥85 | â‰¥18 | Remote LLM | **Critical threshold** (thermal emergency) | 60s | High latency (500ms+) |
+| **Remote** | â‰¤75 | â‰¤12 | CPU | **Cool enough** | 60s | Return to local |
 
 **Key Principles:**
-1. **Asymmetric thresholds:** Upgrade at +5°C, downgrade at -2°C (7°C hysteresis band)
+1. **Asymmetric thresholds:** Upgrade at +5Â°C, downgrade at -2Â°C (7Â°C hysteresis band)
 2. **Cooldown periods:** 10-60s between transitions (prevents rapid flapping)
-3. **Graceful degradation:** NPU → GPU → CPU → Remote
-4. **Emergency escalation:** Direct jump to Remote if ≥85°C
+3. **Graceful degradation:** NPU â†’ GPU â†’ CPU â†’ Remote
+4. **Emergency escalation:** Direct jump to Remote if â‰¥85Â°C
 
 ---
 
@@ -3229,7 +3229,7 @@ thermal_placement:
       baseline_power_w: 10
       latency_ms: 30
       upgrade_to: "GPU"
-      upgrade_threshold_temp: 75    # +5°C above baseline
+      upgrade_threshold_temp: 75    # +5Â°C above baseline
       upgrade_threshold_power: 12   # +2W above baseline
       upgrade_cooldown_s: 10
 
@@ -3239,11 +3239,11 @@ thermal_placement:
       baseline_power_w: 10.5
       latency_ms: 50
       upgrade_to: "CPU"
-      upgrade_threshold_temp: 80    # +8°C
+      upgrade_threshold_temp: 80    # +8Â°C
       upgrade_threshold_power: 15   # +4.5W
       upgrade_cooldown_s: 10
       downgrade_to: "NPU"
-      downgrade_threshold_temp: 68  # -2°C below NPU baseline
+      downgrade_threshold_temp: 68  # -2Â°C below NPU baseline
       downgrade_threshold_power: 9  # -1W below NPU baseline
       downgrade_cooldown_s: 30
 
@@ -3253,11 +3253,11 @@ thermal_placement:
       baseline_power_w: 12
       latency_ms: 120
       upgrade_to: "REMOTE"
-      upgrade_threshold_temp: 85    # +10°C (critical)
+      upgrade_threshold_temp: 85    # +10Â°C (critical)
       upgrade_threshold_power: 18   # +6W
       upgrade_cooldown_s: 10
       downgrade_to: "GPU"
-      downgrade_threshold_temp: 72  # -3°C
+      downgrade_threshold_temp: 72  # -3Â°C
       downgrade_threshold_power: 11 # -1W
       downgrade_cooldown_s: 30
 
@@ -3267,7 +3267,7 @@ thermal_placement:
       baseline_power_w: 5    # Lower power (idle local hardware)
       latency_ms: 500
       downgrade_to: "CPU"
-      downgrade_threshold_temp: 75  # -10°C (significantly cooler)
+      downgrade_threshold_temp: 75  # -10Â°C (significantly cooler)
       downgrade_threshold_power: 12
       downgrade_cooldown_s: 60
 
@@ -3353,7 +3353,7 @@ class ThermalPlacementController:
         # Mock: read from /sys/class/thermal/thermal_zone0/temp (Linux)
         # or IOKit (macOS) or WMI (Windows)
         import random
-        return 70 + random.uniform(-5, 10)  # Simulate 65-80°C
+        return 70 + random.uniform(-5, 10)  # Simulate 65-80Â°C
 
     def read_power(self) -> float:
         """Read power draw from battery sensor"""
@@ -3407,15 +3407,15 @@ class ThermalPlacementController:
         # 3. Check for EMERGENCY (critical temperature)
         critical_temp = self.config["emergency"]["critical_temp_c"]
         if self.current_temp_c >= critical_temp:
-            print(f"[ThermalPlacement] CRITICAL TEMPERATURE: {self.current_temp_c}°C")
+            print(f"[ThermalPlacement] CRITICAL TEMPERATURE: {self.current_temp_c}Â°C")
             await self.emergency_shutdown()
 
     async def transition_to(self, new_state: PlacementState, reason: str):
         """Transition to new placement state"""
         old_state = self.current_state
 
-        print(f"[ThermalPlacement] Transition: {old_state.value} → {new_state.value} (reason: {reason})")
-        print(f"  Temperature: {self.current_temp_c:.1f}°C, Power: {self.current_power_w:.1f}W")
+        print(f"[ThermalPlacement] Transition: {old_state.value} â†’ {new_state.value} (reason: {reason})")
+        print(f"  Temperature: {self.current_temp_c:.1f}Â°C, Power: {self.current_power_w:.1f}W")
 
         # Record transition
         self.transition_history.append({
@@ -3544,7 +3544,7 @@ dashboard:
       thresholds:
         - value: 75
           color: "yellow"
-          label: "NPU → GPU"
+          label: "NPU â†’ GPU"
         - value: 85
           color: "red"
           label: "Critical"
@@ -3567,15 +3567,15 @@ dashboard:
 
 ## K0 Interaction (Respect the Cache Line)
 
-- **Batch writes:** coalesce `STATE_DELTA`s into ≤ 4 writes/sec; always async
+- **Batch writes:** coalesce `STATE_DELTA`s into â‰¤ 4 writes/sec; always async
 - **Read slices:** ask K0 for **minimal** recall (IDs + summaries); fetch blobs lazily
-- **Receipts:** aggregate model/tool receipts and flush in bursts (every 250–500 ms) or on commit
+- **Receipts:** aggregate model/tool receipts and flush in bursts (every 250â€“500 ms) or on commit
 
 ---
 
 ## Example Config Files
 
-### intents → graphs
+### intents â†’ graphs
 ```yaml
 intents:
   plan_trip: plan_trip.graph.json
@@ -3641,31 +3641,31 @@ routes:
 
 ## Build Order (Sequential, Lean)
 
-### Milestone 1 — K0 Core (5–7 days)
+### Milestone 1 â€” K0 Core (5â€“7 days)
 1. WAL + Receipts + Idempotency
 2. PEP (bands/ABAC) pre-WAL
 3. QueryFacade (episodic/semantic/fts/vector views)
 4. Outbox/DLQ + offsets
 5. Contracts + golden tests (append/replay)
 
-### Milestone 2 — K1 Spine (5–7 days)
+### Milestone 2 â€” K1 Spine (5â€“7 days)
 1. Leases + Mailbox + basic budgets
 2. SessionState (struct + 64KB guard)
 3. Flow Engine (6 ops) + deterministic seed
 4. K0 bridge: `StateDelta` batching + `GroundingCommit`
 
-### Milestone 3 — Realtime Loop (5–7 days)
+### Milestone 3 â€” Realtime Loop (5â€“7 days)
 1. StreamSwitch + VAD + ASR (local tiny/base int8)
 2. Incremental DST update on partials
 3. TTS streaming + barge-in path
 
-### Milestone 4 — Models & Tools (5–7 days)
-1. Model Hub client (local SLM 3–4B int4 + 1 remote)
-2. KV cache broker (128–256 MB cap)
+### Milestone 4 â€” Models & Tools (5â€“7 days)
+1. Model Hub client (local SLM 3â€“4B int4 + 1 remote)
+2. KV cache broker (128â€“256 MB cap)
 3. Tool Runner (calendar/message) + receipts
 
-### Milestone 5 — Protocol & Safety (4–6 days)
-1. MPST monitor for `hire→clarify→confirm→act`
+### Milestone 5 â€” Protocol & Safety (4â€“6 days)
+1. MPST monitor for `hireâ†’clarifyâ†’confirmâ†’act`
 2. Safety hooks (band-aware prompt prefilter/postfilter redaction)
 3. Perf harness + SLO asserts in CI
 
@@ -3684,7 +3684,7 @@ routes:
 ```
 
 ### Task Graph
-- clarify time → check weather → propose windows → confirm → calendar write → notify son
+- clarify time â†’ check weather â†’ propose windows â†’ confirm â†’ calendar write â†’ notify son
 
 ### Roles
 - Concierge (always), Planner (score high), SafetyWatch (voice mode)
@@ -3699,76 +3699,76 @@ routes:
 - 2 agents hired
 - 3 tool calls
 - 1 heavy model call
-- All receipts → K0
+- All receipts â†’ K0
 
 ---
 
-# K0 Microkernel — Architecture Diagram
+# K0 Microkernel â€” Architecture Diagram
 
 ```
-                         ┌──────────────────────────────────────────┐
-                         │              K0 MICROKERNEL              │
-                         └──────────────────────────────────────────┘
-    ┌───────────────┐          Ports (law > transport)          ┌───────────────┐
-    │  CommandPort  │◀──────────────────────────────────────────▶│  QueryFacade  │
-    └──────┬────────┘                                            └──────┬────────┘
-           │  (envelopes)                                                │  (read-only views)
-           ▼                                                             ▼
-     ┌───────────────┐        Policy Path (pre-commit)            ┌───────────────┐
-     │ Admission/PEP │─RBAC/ABAC, Bands, Obligations──────────────▶│  Redactor     │
-     └──────┬────────┘         (PII minimize)                      └───────────────┘
-            │
-            ▼
-     ┌───────────────┐     Idempotency      ┌───────────────┐
-     │ Write-Ahead   │◀────────────────────▶│  Receipts     │
-     │  Log (WAL)    │──────────────────────▶│  Store       │
-     └──────┬────────┘   (dedupe keys)      └──────┬────────┘
-            │                                        ▲
-            │                                        │ effects must emit receipts
-            ▼                                        │
-     ┌───────────────┐                        ┌───────────────┐
-     │  Outbox        │──exactly-once→workers │     DLQ       │←── quaranteen
-     └──────┬────────┘                        └───────────────┘
-            │
-            ▼
-   ┌──────────────────────────────────────────────────────────────────────┐
-   │                          Driver Aliases                               │
-   │  st_epi  st_sem  st_vec  st_fts  st_blob  st_kg  st_receipts  st_obx  │
-   │   │        │       │       │       │        │         │          │     │
-   │   ▼        ▼       ▼       ▼       ▼        ▼         ▼          ▼     │
-   │ Episodic  Semantic Vector  FTS    Blob     Graph   Receipts    Outbox  │
-   │  Store     Store   Index  Index   Store    (KG)     (KV)       Queue   │
-   └──────────────────────────────────────────────────────────────────────┘
+                         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                         â”‚              K0 MICROKERNEL              â”‚
+                         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”          Ports (law > transport)          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+    â”‚  CommandPort  â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  QueryFacade  â”‚
+    â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                            â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+           â”‚  (envelopes)                                                â”‚  (read-only views)
+           â–¼                                                             â–¼
+     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”        Policy Path (pre-commit)            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â”‚ Admission/PEP â”‚â”€RBAC/ABAC, Bands, Obligationsâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  Redactor     â”‚
+     â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜         (PII minimize)                      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+            â”‚
+            â–¼
+     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”     Idempotency      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â”‚ Write-Ahead   â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  Receipts     â”‚
+     â”‚  Log (WAL)    â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  Store       â”‚
+     â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜   (dedupe keys)      â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+            â”‚                                        â–²
+            â”‚                                        â”‚ effects must emit receipts
+            â–¼                                        â”‚
+     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â”‚  Outbox        â”‚â”€â”€exactly-onceâ†’workers â”‚     DLQ       â”‚â†â”€â”€ quaranteen
+     â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+            â”‚
+            â–¼
+   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+   â”‚                          Driver Aliases                               â”‚
+   â”‚  st_epi  st_sem  st_vec  st_fts  st_blob  st_kg  st_receipts  st_obx  â”‚
+   â”‚   â”‚        â”‚       â”‚       â”‚       â”‚        â”‚         â”‚          â”‚     â”‚
+   â”‚   â–¼        â–¼       â–¼       â–¼       â–¼        â–¼         â–¼          â–¼     â”‚
+   â”‚ Episodic  Semantic Vector  FTS    Blob     Graph   Receipts    Outbox  â”‚
+   â”‚  Store     Store   Index  Index   Store    (KG)     (KV)       Queue   â”‚
+   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-        ▲                     ▲                         ▲
-        │                     │                         │
-        │         ┌───────────┴───────────┐             │
-        │         │   Consolidation &     │             │
-        │         │   Canonicalization    │(rollups)    │
-        │         └───────────┬───────────┘             │
-        │                     │                         │
-        │            ┌────────┴────────┐                │
-        │            │ Prospective Mem │──→ timers/ticks│
-        │            │  (Scheduler)    │                │
-        │            └────────┬────────┘                │
-        │                     │                         │
-        │           ┌─────────┴─────────┐               │
-        │           │  CRDT Replicator  │──sync spaces──┘
-        │           └───────────────────┘   (E2EE-ready)
+        â–²                     â–²                         â–²
+        â”‚                     â”‚                         â”‚
+        â”‚         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”             â”‚
+        â”‚         â”‚   Consolidation &     â”‚             â”‚
+        â”‚         â”‚   Canonicalization    â”‚(rollups)    â”‚
+        â”‚         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜             â”‚
+        â”‚                     â”‚                         â”‚
+        â”‚            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”                â”‚
+        â”‚            â”‚ Prospective Mem â”‚â”€â”€â†’ timers/ticksâ”‚
+        â”‚            â”‚  (Scheduler)    â”‚                â”‚
+        â”‚            â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                â”‚
+        â”‚                     â”‚                         â”‚
+        â”‚           â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”               â”‚
+        â”‚           â”‚  CRDT Replicator  â”‚â”€â”€sync spacesâ”€â”€â”˜
+        â”‚           â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   (E2EE-ready)
 
-    ┌───────────────┐                                           ┌───────────────┐
-    │  EventHub     │◀────────── WAL topics & offsets ─────────▶│ Observability │
-    └───────────────┘                                           └───────────────┘
-           ▲                                                           ▲
-           │                                                           │
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                                           â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+    â”‚  EventHub     â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ WAL topics & offsets â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚ Observability â”‚
+    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                           â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+           â–²                                                           â–²
+           â”‚                                                           â”‚
       (subscribe)                                                  (traces/metrics)
 
-Legend: all writes → PEP → WAL → Receipts. Drivers are **behind aliases** (swappable).
+Legend: all writes â†’ PEP â†’ WAL â†’ Receipts. Drivers are **behind aliases** (swappable).
 ```
 
 ## What Flows Through K0
 
-1. **Envelope in** → `Admission/PEP` (bands, caps, obligations, redaction)
+1. **Envelope in** â†’ `Admission/PEP` (bands, caps, obligations, redaction)
 2. **Append** to **WAL** (idempotent)
 3. **Outbox** delivers to workers; **every effect must return a Receipt**
 4. **Receipts** stored + **derived views** updated via **QueryFacade** (replayable)
@@ -3801,80 +3801,80 @@ Legend: all writes → PEP → WAL → Receipts. Drivers are **behind aliases** 
 
 ## K0 SLOs (Tiny + Fast)
 
-- Append p50 ≤ **1 ms** local; fsync batched (50–100 ms tick)
+- Append p50 â‰¤ **1 ms** local; fsync batched (50â€“100 ms tick)
 - Replay **1M** events < **90 s**
 - Outbox exactly-once; DLQ visible within **<1 s**
 - Memory footprint (kernel core) **< 50 MB**
 
 ---
 
-# K1 Agentic Kernel — Architecture Diagram
+# K1 Agentic Kernel â€” Architecture Diagram
 
 ```
-                          ┌───────────────────────────────────────────┐
-                          │              K1 AGENTIC KERNEL            │
-                          └───────────────────────────────────────────┘
-        ┌───────────────┐       Ports (dialog / cognition)      ┌───────────────┐
-        │   Mailbox     │◀─────────────────────────────────────▶│  StreamSwitch │
-        └──────┬────────┘                                       └──────┬────────┘
-               │                                                       │
-               │                 Hot-Path Event Loop                    │
-               ▼                                                       ▼
-       ┌───────────────┐                                       ┌───────────────┐
-       │  LeaseManager │  roles, caps, budgets, TTL            │  FlowEngine   │  (6 ops)
-       └──────┬────────┘                                       └──────┬────────┘
-              │                                                       │
-              ▼                                                       ▼
-       ┌───────────────┐     Conversation / Cognition State     ┌───────────────┐
-       │ SessionState  │◀───────→ Scoreboard / QUD Tracker ─────▶│  MetaPolicy  │
-       │ (≤64 KB)      │       (beliefs, persona, control)       │ (clarify/proact) │
-       └──────┬────────┘                                       └───────────────┘
-              │
-              ▼
- ┌───────────────────────────────┐
- │    ProtocolMonitor (MPST)     │── conversation contracts (hire→clarify→confirm→act)
- └──────────────┬────────────────┘
-                │
-                ▼
-   ┌───────────────────────────────┐
-   │   Planner / Decider Agents    │── plan steps, suggest hires (LLM advisory only)
-   └──────────────┬────────────────┘
-                  │
-                  ▼
-          ┌───────────────┐
-          │   Arbiter     │── validates plan → approves or rejects
-          └──────┬────────┘
-                 │
-                 ▼
-      ┌───────────────────────────────┐
-      │  ToolRunner / ModelHubClient  │── execute ops under caps/bands
-      └──────────────┬────────────────┘
-                     │ receipts
-                     ▼
-      ┌───────────────────────────────┐
-      │       K0 Bridge (async)       │── batches → WAL (StateDelta, Receipt)
-      └───────────────────────────────┘
+                          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                          â”‚              K1 AGENTIC KERNEL            â”‚
+                          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”       Ports (dialog / cognition)      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        â”‚   Mailbox     â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  StreamSwitch â”‚
+        â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                       â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+               â”‚                                                       â”‚
+               â”‚                 Hot-Path Event Loop                    â”‚
+               â–¼                                                       â–¼
+       â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                                       â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚  LeaseManager â”‚  roles, caps, budgets, TTL            â”‚  FlowEngine   â”‚  (6 ops)
+       â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                       â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+              â”‚                                                       â”‚
+              â–¼                                                       â–¼
+       â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”     Conversation / Cognition State     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚ SessionState  â”‚â—€â”€â”€â”€â”€â”€â”€â”€â†’ Scoreboard / QUD Tracker â”€â”€â”€â”€â”€â–¶â”‚  MetaPolicy  â”‚
+       â”‚ (â‰¤64 KB)      â”‚       (beliefs, persona, control)       â”‚ (clarify/proact) â”‚
+       â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                       â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+              â”‚
+              â–¼
+ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+ â”‚    ProtocolMonitor (MPST)     â”‚â”€â”€ conversation contracts (hireâ†’clarifyâ†’confirmâ†’act)
+ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â”‚
+                â–¼
+   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+   â”‚   Planner / Decider Agents    â”‚â”€â”€ plan steps, suggest hires (LLM advisory only)
+   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                  â”‚
+                  â–¼
+          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+          â”‚   Arbiter     â”‚â”€â”€ validates plan â†’ approves or rejects
+          â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                 â”‚
+                 â–¼
+      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+      â”‚  ToolRunner / ModelHubClient  â”‚â”€â”€ execute ops under caps/bands
+      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                     â”‚ receipts
+                     â–¼
+      â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+      â”‚       K0 Bridge (async)       â”‚â”€â”€ batches â†’ WAL (StateDelta, Receipt)
+      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-        ▲             ▲            ▲
-        │             │            │
-        │             │            │
- ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
- │ Policy Engine │ │ SafetyFilter  │ │ KVCacheBroker │
- │ bands/caps     │ │ prompt/output │ │  (SLM caches) │
- └───────────────┘ └───────────────┘ └───────────────┘
+        â–²             â–²            â–²
+        â”‚             â”‚            â”‚
+        â”‚             â”‚            â”‚
+ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+ â”‚ Policy Engine â”‚ â”‚ SafetyFilter  â”‚ â”‚ KVCacheBroker â”‚
+ â”‚ bands/caps     â”‚ â”‚ prompt/output â”‚ â”‚  (SLM caches) â”‚
+ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-       ▲                                         ▲
-       │                                         │
- ┌───────────────┐                       ┌───────────────┐
- │ ModelHub      │◀────placement hints──▶│  NPU Manager  │
- │  (local/remote)│                      │ (edge routing)│
- └───────────────┘                       └───────────────┘
+       â–²                                         â–²
+       â”‚                                         â”‚
+ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                       â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+ â”‚ ModelHub      â”‚â—€â”€â”€â”€â”€placement hintsâ”€â”€â–¶â”‚  NPU Manager  â”‚
+ â”‚  (local/remote)â”‚                      â”‚ (edge routing)â”‚
+ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                       â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
-        ▲
-        │
- ┌───────────────┐
- │ Observability │── metrics, traces, receipts summary
- └───────────────┘
+        â–²
+        â”‚
+ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+ â”‚ Observability â”‚â”€â”€ metrics, traces, receipts summary
+ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 Legend:
  - everything inside runs in one async event loop
@@ -3884,40 +3884,40 @@ Legend:
 
 ## K1 Flow in Plain Terms
 
-1. **Input** (voice/text/sensor) → `StreamSwitch` → normalized frame
-2. **Mailbox** enqueues message → `LeaseManager` routes to active roles
-3. **SessionState** updated → `FlowEngine` executes deterministic 6-op cycle
-4. **Planner/Decider** LLM proposes steps → `Arbiter` validates → executes via `ToolRunner` / `ModelHubClient`
-5. **Receipts + StateDelta** batched through `K0 Bridge` → WAL
+1. **Input** (voice/text/sensor) â†’ `StreamSwitch` â†’ normalized frame
+2. **Mailbox** enqueues message â†’ `LeaseManager` routes to active roles
+3. **SessionState** updated â†’ `FlowEngine` executes deterministic 6-op cycle
+4. **Planner/Decider** LLM proposes steps â†’ `Arbiter` validates â†’ executes via `ToolRunner` / `ModelHubClient`
+5. **Receipts + StateDelta** batched through `K0 Bridge` â†’ WAL
 6. **SafetyFilter / PolicyEngine** wrap every call; **KVCacheBroker + NPUManager** keep latency <150 ms
 7. **Observability** exports counters + traces
 
 ## K1 Core Runtime Components
 
-- **LeaseManager** — allocates agent leases; enforces budgets & TTL
-- **Mailbox** — per-agent async queue
-- **SessionState** — working memory slice (beliefs, persona, multimodal vars)
-- **FlowEngine** — deterministic interpreter of cognitive flows (Await/Decide/Call/Yield/Persist/Abort)
-- **ProtocolMonitor** — enforces conversation schema via MPST
-- **Planner / Arbiter** — LLM suggests; Arbiter decides
-- **ToolRunner / ModelHubClient** — executes safe calls under caps
-- **K0 Bridge** — batches deltas & receipts for durability
-- **StreamSwitch** — audio/video/text/sensor stream multiplexer
-- **PolicyEngine / SafetyFilter** — enforce bands & sanitize content
-- **KVCacheBroker / NPUManager** — model placement & KV cache reuse
-- **Observability** — metrics, traces, performance receipts
+- **LeaseManager** â€” allocates agent leases; enforces budgets & TTL
+- **Mailbox** â€” per-agent async queue
+- **SessionState** â€” working memory slice (beliefs, persona, multimodal vars)
+- **FlowEngine** â€” deterministic interpreter of cognitive flows (Await/Decide/Call/Yield/Persist/Abort)
+- **ProtocolMonitor** â€” enforces conversation schema via MPST
+- **Planner / Arbiter** â€” LLM suggests; Arbiter decides
+- **ToolRunner / ModelHubClient** â€” executes safe calls under caps
+- **K0 Bridge** â€” batches deltas & receipts for durability
+- **StreamSwitch** â€” audio/video/text/sensor stream multiplexer
+- **PolicyEngine / SafetyFilter** â€” enforce bands & sanitize content
+- **KVCacheBroker / NPUManager** â€” model placement & KV cache reuse
+- **Observability** â€” metrics, traces, performance receipts
 
 ---
 
-## K0 Bridge — Receipts Batching with Bounded Buffers
+## K0 Bridge â€” Receipts Batching with Bounded Buffers
 
 **Design Principle:** Receipts and StateDelta batching must be bounded by time, size, and count to protect K0's outbox from overflow and prevent OOM under high load.
 
 **Research Foundations:**
-- **Kafka Batching** (LinkedIn, 2011) — Producer batching with size + time bounds
-- **Kinesis Record Aggregation** (AWS, 2013) — Batch multiple records into one
-- **gRPC Batch APIs** (Google, 2015) — Client-side batching with compression
-- **Little's Law** (Queuing theory) — L = λW (queue depth = arrival rate × wait time)
+- **Kafka Batching** (LinkedIn, 2011) â€” Producer batching with size + time bounds
+- **Kinesis Record Aggregation** (AWS, 2013) â€” Batch multiple records into one
+- **gRPC Batch APIs** (Google, 2015) â€” Client-side batching with compression
+- **Little's Law** (Queuing theory) â€” L = Î»W (queue depth = arrival rate Ã— wait time)
 
 ### Batching Configuration
 
@@ -3927,7 +3927,7 @@ k0_bridge:
   batching:
     strategy: "time_and_size_bounded"
 
-    # Flush triggers (ANY condition met → flush)
+    # Flush triggers (ANY condition met â†’ flush)
     triggers:
       max_batch_time_ms: 250        # Flush every 250ms (4 batches/sec)
       max_batch_bytes: 65536        # Flush if batch > 64KB
@@ -3992,7 +3992,7 @@ class Receipt:
 
 class K0Bridge:
     """
-    K0 Bridge — Batches receipts with time/size/count bounds.
+    K0 Bridge â€” Batches receipts with time/size/count bounds.
 
     Protects K0's outbox from overflow via bounded batching,
     per-session cooldown, and overflow protection.
@@ -4081,7 +4081,7 @@ class K0Bridge:
         Flush batch to K0.
 
         Steps:
-        1. Move pending → batch (up to limits)
+        1. Move pending â†’ batch (up to limits)
         2. Compress if large enough
         3. Send to K0
         4. Reset batch state
@@ -4089,7 +4089,7 @@ class K0Bridge:
         if not self.pending_receipts:
             return
 
-        # Move pending → batch (up to max_batch_items)
+        # Move pending â†’ batch (up to max_batch_items)
         max_items = self.config["batching"]["triggers"]["max_batch_items"]
         self.batch = self.pending_receipts[:max_items]
         self.pending_receipts = self.pending_receipts[max_items:]
@@ -4305,32 +4305,32 @@ k0_flush_latency_ms = Histogram(
 ### Grafana Dashboard
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ K0 Bridge Dashboard                                     │
-├─────────────────────────────────────────────────────────┤
-│ Batches Flushed (Last 1h)                               │
-│   Total: 14,400 batches (4/sec avg)                    │
-│   Receipts: 1,245,600 receipts (347/sec avg)           │
-│                                                          │
-│ Batch Statistics                                         │
-│   Avg size: 42KB                                        │
-│   Avg items: 87 receipts/batch                         │
-│   Compression ratio: 3.2x                               │
-│                                                          │
-│ Pending Queue                                            │
-│   Current: 125 receipts                                 │
-│   High watermark: 450 receipts (max: 1000)             │
-│   Dropped (last 1h): 8 BACKGROUND receipts ⚠️           │
-│                                                          │
-│ Flush Latency (P50 / P95)                               │
-│   P50: 3ms  ✅                                           │
-│   P95: 12ms ✅                                           │
-│   P99: 45ms ⚠️                                           │
-│                                                          │
-│ Per-Session Cooldown Violations                         │
-│   Last 1h: 23 sessions blocked (cooldown active)       │
-│   Top offender: session_abc123 (8 blocks)              │
-└─────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K0 Bridge Dashboard                                     â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Batches Flushed (Last 1h)                               â”‚
+â”‚   Total: 14,400 batches (4/sec avg)                    â”‚
+â”‚   Receipts: 1,245,600 receipts (347/sec avg)           â”‚
+â”‚                                                          â”‚
+â”‚ Batch Statistics                                         â”‚
+â”‚   Avg size: 42KB                                        â”‚
+â”‚   Avg items: 87 receipts/batch                         â”‚
+â”‚   Compression ratio: 3.2x                               â”‚
+â”‚                                                          â”‚
+â”‚ Pending Queue                                            â”‚
+â”‚   Current: 125 receipts                                 â”‚
+â”‚   High watermark: 450 receipts (max: 1000)             â”‚
+â”‚   Dropped (last 1h): 8 BACKGROUND receipts âš ï¸           â”‚
+â”‚                                                          â”‚
+â”‚ Flush Latency (P50 / P95)                               â”‚
+â”‚   P50: 3ms  âœ…                                           â”‚
+â”‚   P95: 12ms âœ…                                           â”‚
+â”‚   P99: 45ms âš ï¸                                           â”‚
+â”‚                                                          â”‚
+â”‚ Per-Session Cooldown Violations                         â”‚
+â”‚   Last 1h: 23 sessions blocked (cooldown active)       â”‚
+â”‚   Top offender: session_abc123 (8 blocks)              â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -4339,11 +4339,11 @@ k0_flush_latency_ms = Histogram(
 
 | Metric                  | Target                  |
 | ----------------------- | ----------------------- |
-| TTFT (SLM int4 local)   | ≤120 ms                 |
-| ASR partial → DST delta | ≤80 ms                  |
-| Barge-in cancel         | ≤120 ms                 |
-| Append to K0            | ≤3 ms (async batched)   |
-| Session RAM             | ≤80 MB per conversation |
+| TTFT (SLM int4 local)   | â‰¤120 ms                 |
+| ASR partial â†’ DST delta | â‰¤80 ms                  |
+| Barge-in cancel         | â‰¤120 ms                 |
+| Append to K0            | â‰¤3 ms (async batched)   |
+| Session RAM             | â‰¤80 MB per conversation |
 
 ---
 
@@ -4356,14 +4356,14 @@ Together, **K0 (Memory Kernel)** and **K1 (Agentic Kernel)** form your full cogn
 
 ---
 
-## 🎭 Multi-Modal Strategy & Experience Design
+## ðŸŽ­ Multi-Modal Strategy & Experience Design
 
-### 🧠 LLM Model Strategy (Multi-Modality)
+### ðŸ§  LLM Model Strategy (Multi-Modality)
 
 #### Primary LLM (Text + Reasoning)
 
 **BYOM (Bring Your Own Model) Philosophy**
-K1's Model Broker unifies all LLM/SLM providers via the same schema — supporting both large language models (LLMs) and small language models (SLMs).
+K1's Model Broker unifies all LLM/SLM providers via the same schema â€” supporting both large language models (LLMs) and small language models (SLMs).
 
 | Capability                | Example Model                    | Why Include                                                                          |
 | ------------------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
@@ -4381,13 +4381,13 @@ K1's Model Broker unifies all LLM/SLM providers via the same schema — supporti
 | Voice style modeling    | OpenVoice / XTTS v2                   | Personalized voices for family members |
 | Paralinguistic analysis | Whisper + affect module               | Feed affective cues to Attention Gate  |
 
-**Pipeline Integration:** All wired through **Perception pipeline (P02)** → K1 → K0 for transcripts.
+**Pipeline Integration:** All wired through **Perception pipeline (P02)** â†’ K1 â†’ K0 for transcripts.
 
 #### Vision / Image / Video
 
 | Modality                | Model                      | Purpose                                 |
 | ----------------------- | -------------------------- | --------------------------------------- |
-| Image generation        | DALL·E 3 / SDXL / FLUX     | Creative replies, visual memories       |
+| Image generation        | DALLÂ·E 3 / SDXL / FLUX     | Creative replies, visual memories       |
 | Image understanding     | GPT-4o vision / LLaVA 1.6  | Analyze photos, receipts, documents     |
 | Video caption / summary | LLaMA-VID / Gemini 1.5 Pro | "Summarize this clip" or family moments |
 
@@ -4405,7 +4405,7 @@ K1 can call tools (through Tool Runtime) that are "interactive visual surfaces":
 
 ---
 
-### ⚙️ Orchestration Philosophy
+### âš™ï¸ Orchestration Philosophy
 
 **K1 Kernel = "Multi-modal Dialogue Bus"**
 
@@ -4414,16 +4414,16 @@ K1 can call tools (through Tool Runtime) that are "interactive visual surfaces":
 - Can come from mic, keyboard, camera, or other app intents
 
 **Outputs:**
-- `render.text` → chat bubble
-- `render.rich` → maps/calendar/cards
-- `render.audio` → TTS stream
-- `render.image` → generated/annotated image
-- `render.video` → summary or segment preview
-- `render.state` → UI state update (e.g. open poll, highlight map)
+- `render.text` â†’ chat bubble
+- `render.rich` â†’ maps/calendar/cards
+- `render.audio` â†’ TTS stream
+- `render.image` â†’ generated/annotated image
+- `render.video` â†’ summary or segment preview
+- `render.state` â†’ UI state update (e.g. open poll, highlight map)
 
 ---
 
-### 🔌 Model Broker Interface
+### ðŸ”Œ Model Broker Interface
 
 Each model registered under unified contract:
 
@@ -4446,15 +4446,15 @@ Each model registered under unified contract:
 
 ---
 
-### 🎯 Multi-Modal Turn Example
+### ðŸŽ¯ Multi-Modal Turn Example
 
 **User speaks:** "Show me last month's trip photos and what day we went hiking."
 
 **Flow:**
-1. **STT** → Whisper → text
+1. **STT** â†’ Whisper â†’ text
 2. **Intent router** detects `media.query` + `memory.recall`
 3. **Memory recall** from K0 (search: "trip photos", "hiking")
-4. **Vision model** classifies thumbnails → mountains / beach / city
+4. **Vision model** classifies thumbnails â†’ mountains / beach / city
 5. **Calendar tool** renders that week on screen
 6. **Assistant reply** (TTS + text): "You hiked on March 14 in Yosemite. Want me to group those photos?"
 
@@ -4466,7 +4466,7 @@ Each model registered under unified contract:
 
 ---
 
-### 💬 Other Modalities to Consider
+### ðŸ’¬ Other Modalities to Consider
 
 | Type                     | Example Usage                              |
 | ------------------------ | ------------------------------------------ |
@@ -4478,13 +4478,13 @@ Each model registered under unified contract:
 
 ---
 
-## 🏗️ K1 Agentic Orchestrator Kernel — Conceptual Design
+## ðŸ—ï¸ K1 Agentic Orchestrator Kernel â€” Conceptual Design
 
 ### Core Philosophy
 
 **"Agents are processes, not personas."**
 - Short-lived or persistent execution units that carry a *goal, toolset, and model context*
-- **The kernel doesn't chat — it orchestrates**
+- **The kernel doesn't chat â€” it orchestrates**
 - Decides which agents to "hire" (spin up), route tasks to, and "fire" (terminate)
 - **Every turn is planned, executed, and learned**
 - **K1 handles consciousness, K0 handles memory**
@@ -4494,7 +4494,7 @@ Each model registered under unified contract:
 - K0 = durable cognition (hippocampus)
 - K1 = active cognition (prefrontal cortex)
 - K1 manages *agents*, *attention*, *planning*, *conversation*, *learning* in real time
-- Has no long-term store — only **working memory** and **context cache**
+- Has no long-term store â€” only **working memory** and **context cache**
 
 ---
 
@@ -4515,38 +4515,38 @@ Each model registered under unified contract:
 ### K1 Internal Architecture
 
 ```
-User Input → Intent Router → Orchestrator Kernel
-             ↓
+User Input â†’ Intent Router â†’ Orchestrator Kernel
+             â†“
          Planner Agent
-             ↓
-   ┌──────────────────────────────┐
-   │ Agent Fabric                 │
-   │ ├─ Agent Registry (Specs)    │
-   │ ├─ Hire/Fire Engine          │
-   │ ├─ Agent Runtime (Mailbox)   │
-   │ ├─ Supervisor (Lifecycle)    │
-   │ └─ Personality Model         │
-   └──────────────────────────────┘
-             ↓
-     ┌────────────────┐
-     │ Model Broker   │
-     │ ├─ LLMs        │
-     │ ├─ SLMs        │
-     │ ├─ Audio/Vision│
-     │ └─ Routing/QoS │
-     └────────────────┘
-             ↓
-     ┌────────────────┐
-     │ Tool Runtime   │
-     │ ├─ Registry    │
-     │ ├─ Sandbox     │
-     │ ├─ IO Channel  │
-     │ └─ Observability│
-     └────────────────┘
-             ↓
+             â†“
+   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+   â”‚ Agent Fabric                 â”‚
+   â”‚ â”œâ”€ Agent Registry (Specs)    â”‚
+   â”‚ â”œâ”€ Hire/Fire Engine          â”‚
+   â”‚ â”œâ”€ Agent Runtime (Mailbox)   â”‚
+   â”‚ â”œâ”€ Supervisor (Lifecycle)    â”‚
+   â”‚ â””â”€ Personality Model         â”‚
+   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+             â†“
+     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â”‚ Model Broker   â”‚
+     â”‚ â”œâ”€ LLMs        â”‚
+     â”‚ â”œâ”€ SLMs        â”‚
+     â”‚ â”œâ”€ Audio/Visionâ”‚
+     â”‚ â””â”€ Routing/QoS â”‚
+     â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+             â†“
+     â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+     â”‚ Tool Runtime   â”‚
+     â”‚ â”œâ”€ Registry    â”‚
+     â”‚ â”œâ”€ Sandbox     â”‚
+     â”‚ â”œâ”€ IO Channel  â”‚
+     â”‚ â””â”€ Observabilityâ”‚
+     â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+             â†“
          Output Renderer
          (text/audio/rich/ui)
-             ↓
+             â†“
          Memory Interface (K0)
 ```
 
@@ -4554,17 +4554,17 @@ User Input → Intent Router → Orchestrator Kernel
 
 ### K1 Subsystems Explained
 
-#### 1️⃣ Intent Router
+#### 1ï¸âƒ£ Intent Router
 - Detects user intent (chat, search, plan, recall, create, etc.)
 - Classifies modality & urgency
 - Delegates to **Planner Agent**
 
-#### 2️⃣ Planner Agent
+#### 2ï¸âƒ£ Planner Agent
 - Breaks user request into structured plan (`TURN_PLAN`)
 - Selects agents/tools/models for each step
 - Generates reasoning trace (can be shown as "thought bubble")
 
-#### 3️⃣ Agent Fabric (The Beating Heart of K1)
+#### 3ï¸âƒ£ Agent Fabric (The Beating Heart of K1)
 
 | Component             | Function                                                                       |
 | --------------------- | ------------------------------------------------------------------------------ |
@@ -4576,16 +4576,16 @@ User Input → Intent Router → Orchestrator Kernel
 
 **Agents can be ephemeral (on-demand) or persistent (resident).**
 
-#### 4️⃣ Model Broker
+#### 4ï¸âƒ£ Model Broker
 - Unified interface for all LLMs/SLMs/Modalities
 - **Handles:**
   - Model selection (fast vs smart vs local)
   - Token budget & latency control
-  - BYOM (Bring Your Own Model) — plug in any LLM/SLM
+  - BYOM (Bring Your Own Model) â€” plug in any LLM/SLM
   - Cost & QoS monitoring
-- Exposes `model.invoke()` → streaming or batch
+- Exposes `model.invoke()` â†’ streaming or batch
 
-#### 5️⃣ Tool Runtime
+#### 5ï¸âƒ£ Tool Runtime
 - Runs tools safely (isolated subprocess, policy sandbox)
 - Validates schema & execution limits
 - Returns structured JSON output
@@ -4593,22 +4593,22 @@ User Input → Intent Router → Orchestrator Kernel
 
 **Example tools:** `maps.show`, `calendar.create`, `memory.timeline`, `finance.analyze`, `health.reminder`, `media.gallery`
 
-#### 6️⃣ Orchestrator Core
+#### 6ï¸âƒ£ Orchestrator Core
 Coordinates multi-agent collaboration:
 - **Negotiation phase:** agents propose plans
 - **Selection phase:** orchestrator chooses best plan
 - **Execution phase:** sequential/parallel tool/model calls
 - Uses `turn_state.json` to store per-turn reasoning graph
 
-#### 7️⃣ Learning Loop
+#### 7ï¸âƒ£ Learning Loop
 - Observes outcomes & user feedback
-- Emits `LEARNING_TICK` → K0.P06 pipeline
+- Emits `LEARNING_TICK` â†’ K0.P06 pipeline
 - **Updates:**
   - Agent ranking (which ones to hire more)
   - Personality calibration
   - Tool success metrics
 
-#### 8️⃣ Observability + Safety
+#### 8ï¸âƒ£ Observability + Safety
 - All turns traced (`cognitive_trace_id`)
 - Each agent/action has policy band (GREEN/AMBER/RED)
 - Audit log of every tool/model invocation
@@ -4621,26 +4621,26 @@ Coordinates multi-agent collaboration:
 **User:** "Book dinner near me at 7 with my wife."
 
 1. **Intent Router:** detects `intent=PLAN_RESERVATION`
-2. **Planner Agent:** drafts plan → Hire `MapsAgent`, `CalendarAgent`, `MemoryAgent`
+2. **Planner Agent:** drafts plan â†’ Hire `MapsAgent`, `CalendarAgent`, `MemoryAgent`
 3. **Agent Fabric:** hires 3 agents
-4. **MapsAgent:** finds options → emits tool call `maps.search`
+4. **MapsAgent:** finds options â†’ emits tool call `maps.search`
 5. **CalendarAgent:** checks schedule
-6. **ConciergeAgent:** merges results → generates message
+6. **ConciergeAgent:** merges results â†’ generates message
 7. **Output Renderer:** "How about Monarch Grill at 7pm?"
 8. **MemoryAgent:** proposes `memory.write` to K0 (household space)
-9. **Learning Loop:** notes successful plan → improves next time
+9. **Learning Loop:** notes successful plan â†’ improves next time
 
 ---
 
-## ♾️ Infinite-Pipeline Architecture
+## â™¾ï¸ Infinite-Pipeline Architecture
 
 ### Core Principle
 
-> **"Kernels don't know who exists — they just know *how* to talk."**
+> **"Kernels don't know who exists â€” they just know *how* to talk."**
 
 **This means:**
-- Every pipeline/module/micro-agent registers itself through a **contract + descriptor** (manifest) — not hard-coded
-- Kernels only enforce **interface, policy, and lifecycle** — not logic
+- Every pipeline/module/micro-agent registers itself through a **contract + descriptor** (manifest) â€” not hard-coded
+- Kernels only enforce **interface, policy, and lifecycle** â€” not logic
 - You can drop in 1 or 1000 pipelines, and kernel routing/security/memory systems behave deterministically
 
 ---
@@ -4667,7 +4667,7 @@ permissions:
   - tools:invoke
 ```
 
-K₀ or K₁ simply *loads descriptors* at boot and exposes them to the **Pipeline Registry**.
+Kâ‚€ or Kâ‚ simply *loads descriptors* at boot and exposes them to the **Pipeline Registry**.
 
 ---
 
@@ -4676,9 +4676,9 @@ K₀ or K₁ simply *loads descriptors* at boot and exposes them to the **Pipeli
 **All communication is event-based:**
 - **Topics:** `memory.*`, `agent.*`, `intelligence.*`, `infra.*`, etc.
 - **Messages:** typed, schema-validated envelopes (CognitiveCommand)
-- **Pipelines:** subscribe → process → emit new events
+- **Pipelines:** subscribe â†’ process â†’ emit new events
 
-➡️ K₀ and K₁ don't care how many pipelines exist — they just provide:
+âž¡ï¸ Kâ‚€ and Kâ‚ don't care how many pipelines exist â€” they just provide:
 - **Validation** (policy/QoS)
 - **WAL + offsets** (durability)
 - **Backpressure control**
@@ -4690,8 +4690,8 @@ K₀ or K₁ simply *loads descriptors* at boot and exposes them to the **Pipeli
 
 **At startup:**
 1. `modules/` scanned for manifests
-2. Each manifest parsed → registered in `st_regs`
-3. Kernel builds **routing table** (topic → handler)
+2. Each manifest parsed â†’ registered in `st_regs`
+3. Kernel builds **routing table** (topic â†’ handler)
 4. Handlers subscribed to Event Bus
 
 **Hot-load modules via control plane:**
@@ -4706,9 +4706,9 @@ Kernel reloads without restart.
 
 | Layer                     | Responsibility              | Knows about                            |
 | ------------------------- | --------------------------- | -------------------------------------- |
-| **K₀ (Memory Kernel)**    | Durable cognition           | Pipelines P01–P20, stores, event types |
-| **K₁ (Agentic Kernel)**   | Real-time reasoning         | Agents, planner, orchestrator, tools   |
-| **K₂+ (optional future)** | Domain/vertical kernels     | Domain agents & pipelines only         |
+| **Kâ‚€ (Memory Kernel)**    | Durable cognition           | Pipelines P01â€“P20, stores, event types |
+| **Kâ‚ (Agentic Kernel)**   | Real-time reasoning         | Agents, planner, orchestrator, tools   |
+| **Kâ‚‚+ (optional future)** | Domain/vertical kernels     | Domain agents & pipelines only         |
 
 **All kernels communicate through the same Command/Query/Event (CQE) contract.**
 
@@ -4717,17 +4717,17 @@ Kernel reloads without restart.
 ### Adding Unlimited Pipelines
 
 Because pipelines are pure descriptors + event consumers, scaling is linear:
-- Want `P21–P30`? → drop manifests
-- Want a new "micro-pipeline" (e.g. `P97 sleep-cycle analysis`)? → register and publish topic
+- Want `P21â€“P30`? â†’ drop manifests
+- Want a new "micro-pipeline" (e.g. `P97 sleep-cycle analysis`)? â†’ register and publish topic
 
 **No kernel changes required.**
 
-K₀ and K₁ treat them as *function pointers*:
+Kâ‚€ and Kâ‚ treat them as *function pointers*:
 ```
 bus.emit(topic="sleep.frame", payload=frame)
- ↓
+ â†“
 pipeline_registry.resolve(topic)
- ↓
+ â†“
 sandbox.invoke(handler)
 ```
 
@@ -4740,8 +4740,8 @@ Every pipeline registers:
 - **Latency budget**
 - **Policy class** (public/private/sensitive)
 
-- K₀'s **QoS Governor (P17)** enforces quotas
-- K₁'s **Supervisor** ensures misbehaving agents/pipelines are paused, not killed
+- Kâ‚€'s **QoS Governor (P17)** enforces quotas
+- Kâ‚'s **Supervisor** ensures misbehaving agents/pipelines are paused, not killed
 
 ---
 
@@ -4762,14 +4762,14 @@ Returns graph:
 }
 ```
 
-K₀/K₁ can visualize current topology — pure introspection, no coupling.
+Kâ‚€/Kâ‚ can visualize current topology â€” pure introspection, no coupling.
 
 ---
 
 ### Eventual Federation
 
 Multiple kernels can federate horizontally:
-- Household Kernel ↔ Work Kernel ↔ Enterprise Kernel
+- Household Kernel â†” Work Kernel â†” Enterprise Kernel
 - Each kernel advertises its **ports + capabilities** over a secure descriptor (`.kernel_manifest`)
 
 ```yaml
@@ -4780,13 +4780,13 @@ topics: ["agent.*","tool.*","memory.*"]
 auth: [mls-group-family]
 ```
 
-**Result:** A **planet of kernels** — all modular, policy-controlled, and self-describing.
+**Result:** A **planet of kernels** â€” all modular, policy-controlled, and self-describing.
 
 ---
 
 ### Meta-Learning Layer (Future)
 
-You can add a meta-kernel (K∞) that:
+You can add a meta-kernel (Kâˆž) that:
 - Observes all pipelines
 - Measures latency, accuracy, engagement
 - Suggests optimizations ("split P06 into P06a/P06b")
@@ -4794,7 +4794,7 @@ You can add a meta-kernel (K∞) that:
 
 ---
 
-### What K₀ & K₁ Must Guarantee
+### What Kâ‚€ & Kâ‚ Must Guarantee
 
 | Guarantee                | Description                                                |
 | ------------------------ | ---------------------------------------------------------- |
@@ -4831,79 +4831,79 @@ Drop this folder into `/modules/p21-emotion-awareness/`, run:
 ```bash
 POST /control/pipelines.reload
 ```
-**It's live — no kernel changes.**
+**It's live â€” no kernel changes.**
 
 ---
 
-### ⚡ Core Message
+### âš¡ Core Message
 
-> **K₀ and K₁ care only about *how* things connect, not *what* they are.**
+> **Kâ‚€ and Kâ‚ care only about *how* things connect, not *what* they are.**
 > The kernel is *the protocol*, not the product.
 
 ---
 
-### K₀ is Sufficient for All Pipelines
+### Kâ‚€ is Sufficient for All Pipelines
 
-**Why K₀ is Enough for P01–P20 and Beyond:**
+**Why Kâ‚€ is Enough for P01â€“P20 and Beyond:**
 
-**Role of K₀ = Memory Kernel**
+**Role of Kâ‚€ = Memory Kernel**
 - Owns the **durable cognitive substrate** (event bus + WAL + stores + policy PEP/PDP)
-- Every pipeline speaks to it via the same **CognitiveCommand → EventBus** contract
-- K₀ doesn't hard-code pipelines; it guarantees:
+- Every pipeline speaks to it via the same **CognitiveCommand â†’ EventBus** contract
+- Kâ‚€ doesn't hard-code pipelines; it guarantees:
   - Validation (envelope, policy, QoS)
   - Durable commit to stores (SQLite/WAL/Vector/KG)
   - Fan-out to subscribers (pipelines)
   - Observability and replay
 
-**Whether there are 20 pipelines or 200, K₀ just moves validated events and doesn't need editing.**
+**Whether there are 20 pipelines or 200, Kâ‚€ just moves validated events and doesn't need editing.**
 
 ---
 
-### What K₀ Must Keep Doing to Scale Beyond 20
+### What Kâ‚€ Must Keep Doing to Scale Beyond 20
 
 1. **Keep bus performance predictable** (WAL + offsets + QoS Governor)
 2. **Maintain strong policy isolation** so new pipelines can't read/write unauthorized spaces
 3. **Expose dynamic registry API** (`/control/pipelines.load|reload`) for hot-adding pipelines
-4. **Delegate real-time work** to K₁ (agentic kernel) — K₀ stays durable; K₁ handles orchestration
-5. **Treat K₀ as "OS for memory"** — Pipelines are userland programs running on top
+4. **Delegate real-time work** to Kâ‚ (agentic kernel) â€” Kâ‚€ stays durable; Kâ‚ handles orchestration
+5. **Treat Kâ‚€ as "OS for memory"** â€” Pipelines are userland programs running on top
 
 ---
 
-### K₀ ↔ K₁ Boundary Recap
+### Kâ‚€ â†” Kâ‚ Boundary Recap
 
-| Function                                | K₀ handles          | K₁ handles             |
+| Function                                | Kâ‚€ handles          | Kâ‚ handles             |
 | --------------------------------------- | ------------------- | ---------------------- |
-| Event validation & durability           | ✅                   | ❌                      |
-| Agent planning / conversation           | ❌                   | ✅                      |
-| Learning ticks / prospective scheduling | ✅ (trigger storage) | ✅ (runtime context)    |
-| Privacy / policy enforcement            | ✅                   | ✅                      |
-| QoS governance                          | ✅                   | ✅                      |
+| Event validation & durability           | âœ…                   | âŒ                      |
+| Agent planning / conversation           | âŒ                   | âœ…                      |
+| Learning ticks / prospective scheduling | âœ… (trigger storage) | âœ… (runtime context)    |
+| Privacy / policy enforcement            | âœ…                   | âœ…                      |
+| QoS governance                          | âœ…                   | âœ…                      |
 | Pipeline execution                      | via bus             | via bus (when agentic) |
 
 **This division keeps both kernels agnostic to how many or what kind of pipelines exist.**
 
 ---
 
-## 📚 Research Foundation — Key Papers
+## ðŸ“š Research Foundation â€” Key Papers
 
 ### Operating Systems & Microkernel Design
 
-#### Liedtke — "Toward Real Microkernels" (SOSP'95)
+#### Liedtke â€” "Toward Real Microkernels" (SOSP'95)
 Liedtke argues most "microkernels" weren't micro enough; the kernel must be absolutely minimal (address spaces, threads, IPC) and obsess over IPC latency, cache locality, and TLB behavior. When you cut abstractions out and get IPC down to microsecond-class, user-space servers become viable without tanking performance. Core result: performance-first recipe for strict separation of mechanism (in kernel) and policy (in user space).
 
 **For K1/K0:** "Pipelines as userland modules" and "tools/agents outside the kernel" is precisely this. Keep K0/K1 small (ports, IPC/bus, policy gates), push everything else to processes with fast message passing.
 
-#### Engler et al. — "Exokernel: An OS Architecture for Application-Level Resource Management" (SOSP'95)
+#### Engler et al. â€” "Exokernel: An OS Architecture for Application-Level Resource Management" (SOSP'95)
 Exokernel strips high-level abstractions from the kernel entirely; kernel securely multiplexes hardware resources and exports them "raw," while libraries (libOS) implement policies in user space. Demonstrates competitive performance with Aegis/ExOS and argues applications can innovate by picking their own policies without kernel redesign.
 
 **For FamilyOS:** **Model Broker**, **Tool Runtime**, and **Pipeline Registry** are "libOS-like" policy layers above a tiny kernel that only does capability checks, scheduling, and message transport. Treat models/tools/pipelines as downloadable "policies."
 
-#### Baumann et al. — "The Multikernel: A New OS Architecture for Scalable Multicore Systems (Barrelfish)" (SOSP'09)
+#### Baumann et al. â€” "The Multikernel: A New OS Architecture for Scalable Multicore Systems (Barrelfish)" (SOSP'09)
 Barrelfish treats a machine as a distributed system of cores. Uses **explicit message passing**, **state replication**, and **hardware-neutral** structure. Data shows making communication explicit scales better across heterogeneous, many-core hardware and avoids hidden contention paths.
 
 **For FamilyOS:** Kernels and pipelines run across devices (phones, laptops, hubs). Adopting "multikernel" stance lets K1 operate like a distributed bus (agents as nodes, explicit messages/topics) and makes P07 Sync feel native.
 
-#### Welsh et al. — "SEDA: An Architecture for Well-Conditioned, Scalable Internet Services" (SOSP'01)
+#### Welsh et al. â€” "SEDA: An Architecture for Well-Conditioned, Scalable Internet Services" (SOSP'01)
 SEDA decomposes services into **stages** connected by **queues**, enabling **load-conditioning** (admission control, dynamic throttling) per stage. Result: stable, predictable behavior under varying load because each stage can be scheduled and back-pressured independently.
 
 **For FamilyOS:** **20 pipelines** map naturally to SEDA stages. P17 (QoS/Cost) and **Attention Gate** can apply backpressure between stages; each pipeline has its own queue, policy band, and budget.
@@ -4912,7 +4912,7 @@ SEDA decomposes services into **stages** connected by **queues**, enabling **loa
 
 ### Actor Model & Concurrency
 
-#### Agha — "Actors: A Model of Concurrent Computation in Distributed Systems" (1986)
+#### Agha â€” "Actors: A Model of Concurrent Computation in Distributed Systems" (1986)
 The Actor model formalizes computation as autonomous entities (actors) communicating via asynchronous messages, each with private state and behavior, enabling location transparency and massive concurrency. Provides conceptual foundation for elastic, failure-isolating systems.
 
 **For FamilyOS:** **Agent Fabric** (hire/fire, mailbox, supervisor) is textbook Actor-land. Give every agent a mailbox, let Orchestrator route messages, use supervision trees for resilience.
@@ -4921,108 +4921,108 @@ The Actor model formalizes computation as autonomous entities (actors) communica
 
 ### Cognitive Architecture
 
-#### Baars — Global Workspace Theory (1988→2005)
+#### Baars â€” Global Workspace Theory (1988â†’2005)
 GWT proposes a **broadcast architecture** where many specialized processes compete for access to a global workspace; the winner's content gets broadcast system-wide, coordinating actions. Maps to computational "blackboard" systems.
 
-**For FamilyOS:** **Attention Gate + Workspace Broadcast** is GWT in software. Use kernel-level **competition→broadcast** cycle each turn: candidate agent proposals compete; best plan is broadcast as **TURN_PLAN**, driving tools/models/pipelines coherently.
+**For FamilyOS:** **Attention Gate + Workspace Broadcast** is GWT in software. Use kernel-level **competitionâ†’broadcast** cycle each turn: candidate agent proposals compete; best plan is broadcast as **TURN_PLAN**, driving tools/models/pipelines coherently.
 
-#### McClelland, McNaughton, O'Reilly — "Why There Are Complementary Learning Systems" (Psych Review, 1995)
+#### McClelland, McNaughton, O'Reilly â€” "Why There Are Complementary Learning Systems" (Psych Review, 1995)
 CLS explains why we need two learning systems: **fast, sparse, interference-resistant** (hippocampus) and **slow, integrative, structured** (neocortex). Rapid episodic capture is later consolidated into semantic structures through replay/interleaving.
 
-**For FamilyOS:** This is your **K1 ↔ K0** split, scientifically grounded. K1 runs fast path (working memory, agent plans). K0 performs slow consolidation (P03), rollups (P15), KG formation. **Prospective (P05)** and **Learning (P06)** pipelines implement replay/neuromod hooks.
+**For FamilyOS:** This is your **K1 â†” K0** split, scientifically grounded. K1 runs fast path (working memory, agent plans). K0 performs slow consolidation (P03), rollups (P15), KG formation. **Prospective (P05)** and **Learning (P06)** pipelines implement replay/neuromod hooks.
 
 ---
 
 ### Event Sourcing
 
-#### Overeem et al. — "An Empirical Characterization of Event-Sourced Systems" (JSS, 2021)
+#### Overeem et al. â€” "An Empirical Characterization of Event-Sourced Systems" (JSS, 2021)
 Empirical study of real-world **event sourcing** systems: why teams adopt ES (auditability, flexibility), where it shines (evolutionary design, temporal queries), and pain points (schema evolution, migration, operational tooling).
 
-**For FamilyOS:** Kernels/bus and **CognitiveCommand envelopes** imply event sourcing. Design **versioned events**, replay tools (P13/P14), and migration strategies—so adding pipelines or evolving schemas doesn't corrupt history.
+**For FamilyOS:** Kernels/bus and **CognitiveCommand envelopes** imply event sourcing. Design **versioned events**, replay tools (P13/P14), and migration strategiesâ€”so adding pipelines or evolving schemas doesn't corrupt history.
 
 ---
 
 ### Human-Like Conversation
 
-#### Generative Agents — Park et al., 2023 (CHI Best Paper)
-Architecture where LLM agents **observe → remember → reflect → plan**, producing believable emergent social behavior. Key mechanism: **natural-language memory stream** distilled into higher-level reflections, retrieved contextually to drive actions.
+#### Generative Agents â€” Park et al., 2023 (CHI Best Paper)
+Architecture where LLM agents **observe â†’ remember â†’ reflect â†’ plan**, producing believable emergent social behavior. Key mechanism: **natural-language memory stream** distilled into higher-level reflections, retrieved contextually to drive actions.
 
 **For K1:** Adopt triad **observation / reflection / plan** with explicit *memory proposals* to K0. Planner Agent should retrieve both **episodic** (what happened) and **semantic** (what they're like) memories before proposing turn plan.
 
-#### Grounding in Communication — Clark & Brennan, 1991
+#### Grounding in Communication â€” Clark & Brennan, 1991
 Classic theory: conversation progresses via **grounding acts** (acknowledgments, confirmations, repairs) to maintain **common ground**. Media constraints change which grounding strategies are viable.
 
-#### LLMs' Grounding Gap — Shaikh et al., 2024
+#### LLMs' Grounding Gap â€” Shaikh et al., 2024
 LLMs *under-produce* grounding moves compared to humans; preference-tuning can reduce grounding behaviors. Add **explicit prompts/policies** that force ask-backs, confirmations, and repair strategies.
 
 ---
 
 ### Social Presence & Media
 
-#### The Media Equation — Reeves & Nass, 1996
+#### The Media Equation â€” Reeves & Nass, 1996
 Experiments show people **reflexively treat media as social** (politeness, reciprocity, personality matching), even when they know better. Designing for social cues measurably improves acceptance.
 
-#### Social Presence Theory — Short, Williams & Christie, 1976
+#### Social Presence Theory â€” Short, Williams & Christie, 1976
 Explains why richer cues (voice, prosody, visuals) increase feeling of copresent partner. For FamilyOS: voice + quick backchannels + inline visuals raise perceived presence and trust.
 
 ---
 
 ### Personas & Memory
 
-#### Personalizing Dialogue Agents (Persona-Chat) — Zhang et al., 2018
+#### Personalizing Dialogue Agents (Persona-Chat) â€” Zhang et al., 2018
 Conditioning on **speaker profiles** (self + partner) improves specificity and engagement. Use stable persona slots plus live inference for consistency.
 
-#### BlenderBot 3 — Shuster et al., 2022
+#### BlenderBot 3 â€” Shuster et al., 2022
 175B open-domain bot with **internet tools + long-term memory** and safety filters. Roadmap for fusing tools, recall, and safety in one loop.
 
 ---
 
 ### Human-AI Interaction Patterns
 
-#### Guidelines for Human-AI Interaction — Amershi et al., CHI 2019
+#### Guidelines for Human-AI Interaction â€” Amershi et al., CHI 2019
 18 evidence-backed guidelines: set expectations, **make uncertainties visible**, support **contextual undo/repair**, **remember recent interactions**, improve over time. Treat as K1 kernel **behavioral contracts**.
 
-#### "You have interrupted me again!" — Addlesee et al., 2024
+#### "You have interrupted me again!" â€” Addlesee et al., 2024
 **Clarification requests** and interruption-handling for voice assistants; truncated utterances benefit from *repair moves*. K1 should detect truncation and trigger **repair templates**.
 
-#### System & User Strategies to Repair Breakdowns — Alghamdi et al., 2024
+#### System & User Strategies to Repair Breakdowns â€” Alghamdi et al., 2024
 Maps **six classes** of system repair strategies (confirmations, rephrasing, offering alternatives). Turn into *first-class tools* (ASK_CONFIRM, REPHRASE, OFFER_OPTIONS) for Planner.
 
 ---
 
 ### Entrainment & Voice Trust
 
-#### Implementing Acoustic-Prosodic Entrainment — Levitan et al., 2016
+#### Implementing Acoustic-Prosodic Entrainment â€” Levitan et al., 2016
 Architecture to **adapt pitch/rate** to user; entraining agents rated more likable/helpful. K1's TTS should expose **prosody-matching knob** driven by STT features.
 
-#### Trustworthiness of Synthesized Speech — Yu et al., 2024
+#### Trustworthiness of Synthesized Speech â€” Yu et al., 2024
 Links **acoustic-prosodic parameters** (pitch, speaking rate) to perceived trust. Feed into **voice style policy** (slower rate + narrower pitch spread for "calm/trustworthy").
 
-#### Using Linguistic Entrainment to Evaluate LLMs — Kian et al., 2025
+#### Using Linguistic Entrainment to Evaluate LLMs â€” Kian et al., 2025
 Entrainment metrics for LLM conversation quality; useful as **offline evals** for agent personas and TTS policies.
 
 ---
 
 ### Multi-Modal Assistants
 
-#### Generative AI Voice Agents in Medicine — Adams et al., Nature 2025
+#### Generative AI Voice Agents in Medicine â€” Adams et al., Nature 2025
 Requirements for **real-time, context-sensitive voice agents** (latency, safety, accountability). Checklist for voice Concierge design.
 
-#### ChatClimate — Vaghefi et al., 2023
+#### ChatClimate â€” Vaghefi et al., 2023
 *Grounded* domain assistants beat general LLMs on accuracy + citation quality. Route **domain tool stacks** (maps, calendar, docs) through K1.
 
 ---
 
 ### Reasoning Quality
 
-#### Self-Consistency for Chain-of-Thought — Wang et al., 2022
+#### Self-Consistency for Chain-of-Thought â€” Wang et al., 2022
 Sampling multiple reasoning paths then voting improves correctness. Use for Planner Agent internalization; surface concise answers with links.
 
 ---
 
 ### Operationalization Checklist
 
-* **Microkernel/Exokernel:** Keep K0/K1 tiny—ports, auth, policy, IPC. Push agents/pipelines/tools to userland processes.
+* **Microkernel/Exokernel:** Keep K0/K1 tinyâ€”ports, auth, policy, IPC. Push agents/pipelines/tools to userland processes.
 * **Multikernel:** Treat devices/cores as message-passing cluster; no hidden shared-state.
 * **SEDA:** Queue every pipeline; enforce per-stage QoS/backpressure (P17).
 * **Actors:** Mailboxes + supervision trees for agents (hire/fire).
@@ -5035,40 +5035,40 @@ Sampling multiple reasoning paths then voting improves correctness. Use for Plan
 
 ---
 
-## 🔧 Agent Fabric — Detailed Specification
+## ðŸ”§ Agent Fabric â€” Detailed Specification
 
 ### Agent Lifecycle State Machine
 
 **States & Transitions:**
 ```
-┌─────────────┐
-│   PENDING   │  (hire requested, not yet initialized)
-└──────┬──────┘
-       │ initialize(lease, caps, budget)
-       ▼
-┌─────────────┐
-│   WARMING   │  (loading model weights, tool schemas, context)
-└──────┬──────┘
-       │ ready
-       ▼
-┌─────────────┐
-│   ACTIVE    │  (processing messages, making calls)
-└──────┬──────┘
-       │
-       ├──(no messages for idle_timeout)──▶ ┌──────────┐
-       │                                    │   IDLE   │
-       │                                    └─────┬────┘
-       │                                          │ new message arrives
-       │◀─────────────────────────────────────────┘
-       │
-       ├──(budget exhausted / TTL expired)──▶ ┌──────────────┐
-       │                                      │  DRAINING    │
-       │                                      └──────┬───────┘
-       │                                             │ finish pending ops
-       │                                             ▼
-       ├──(supervisor kill / policy violation)──▶ ┌──────────────┐
-       │                                          │ TERMINATED   │
-       └──────────────────────────────────────▶  └──────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   PENDING   â”‚  (hire requested, not yet initialized)
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+       â”‚ initialize(lease, caps, budget)
+       â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   WARMING   â”‚  (loading model weights, tool schemas, context)
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+       â”‚ ready
+       â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   ACTIVE    â”‚  (processing messages, making calls)
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+       â”‚
+       â”œâ”€â”€(no messages for idle_timeout)â”€â”€â–¶ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚                                    â”‚   IDLE   â”‚
+       â”‚                                    â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜
+       â”‚                                          â”‚ new message arrives
+       â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+       â”‚
+       â”œâ”€â”€(budget exhausted / TTL expired)â”€â”€â–¶ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚                                      â”‚  DRAINING    â”‚
+       â”‚                                      â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜
+       â”‚                                             â”‚ finish pending ops
+       â”‚                                             â–¼
+       â”œâ”€â”€(supervisor kill / policy violation)â”€â”€â–¶ â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚                                          â”‚ TERMINATED   â”‚
+       â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
                    (explicit fire)
 ```
 
@@ -5076,31 +5076,31 @@ Sampling multiple reasoning paths then voting improves correctness. Use for Plan
 
 | State        | Duration       | Memory    | Can Process? | Description                                      |
 | ------------ | -------------- | --------- | ------------ | ------------------------------------------------ |
-| `PENDING`    | <50ms          | ~5MB      | ❌            | Lease allocated, waiting for init               |
-| `WARMING`    | <200ms         | ~20-40MB  | ❌            | Loading weights/schemas/KV cache                 |
-| `ACTIVE`     | Variable       | 40-80MB   | ✅            | Fully operational, processing mailbox            |
-| `IDLE`       | ≤60s default   | 40-80MB   | ✅ (on wake)  | No active work, but ready to resume              |
-| `DRAINING`   | <2s            | shrinking | ❌ (new work) | Finishing in-flight ops before teardown          |
-| `TERMINATED` | cleanup (<1s)  | ~0        | ❌            | Resources released, lease revoked                |
+| `PENDING`    | <50ms          | ~5MB      | âŒ            | Lease allocated, waiting for init               |
+| `WARMING`    | <200ms         | ~20-40MB  | âŒ            | Loading weights/schemas/KV cache                 |
+| `ACTIVE`     | Variable       | 40-80MB   | âœ…            | Fully operational, processing mailbox            |
+| `IDLE`       | â‰¤60s default   | 40-80MB   | âœ… (on wake)  | No active work, but ready to resume              |
+| `DRAINING`   | <2s            | shrinking | âŒ (new work) | Finishing in-flight ops before teardown          |
+| `TERMINATED` | cleanup (<1s)  | ~0        | âŒ            | Resources released, lease revoked                |
 
 **Transition Triggers:**
 
-- **PENDING → WARMING**: `initialize()` called with lease + caps
-- **WARMING → ACTIVE**: Model loaded, schema validated, mailbox ready
-- **ACTIVE → IDLE**: `idle_timeout` (default 30s for ephemeral, 5min for resident)
-- **IDLE → ACTIVE**: New message arrives in mailbox
-- **ACTIVE → DRAINING**: Budget exhausted OR TTL expired OR explicit `fire()` call
-- **DRAINING → TERMINATED**: All pending tool/model calls complete
-- **ANY → TERMINATED**: Supervisor kill (policy violation, health check fail, OOM)
+- **PENDING â†’ WARMING**: `initialize()` called with lease + caps
+- **WARMING â†’ ACTIVE**: Model loaded, schema validated, mailbox ready
+- **ACTIVE â†’ IDLE**: `idle_timeout` (default 30s for ephemeral, 5min for resident)
+- **IDLE â†’ ACTIVE**: New message arrives in mailbox
+- **ACTIVE â†’ DRAINING**: Budget exhausted OR TTL expired OR explicit `fire()` call
+- **DRAINING â†’ TERMINATED**: All pending tool/model calls complete
+- **ANY â†’ TERMINATED**: Supervisor kill (policy violation, health check fail, OOM)
 
 **Rollback Triggers:**
-- Agent never reaches `ACTIVE` within 5s → rollback hire, mark agent type as degraded
-- Agent crashes 3x in 10min → supervisor blacklists agent type for 1hr
-- Agent violates policy band → immediate kill + audit log
+- Agent never reaches `ACTIVE` within 5s â†’ rollback hire, mark agent type as degraded
+- Agent crashes 3x in 10min â†’ supervisor blacklists agent type for 1hr
+- Agent violates policy band â†’ immediate kill + audit log
 
 ---
 
-### Hire Score Formula — Detailed Weights
+### Hire Score Formula â€” Detailed Weights
 
 **Formula:**
 ```python
@@ -5137,7 +5137,7 @@ thresholds:
 - `modality_bonus = 0` (not voice)
 - `est_cost = 0.5` (cheap, mostly routing)
 - `current_agents = 0` (first agent)
-- **Score = 10(1) + 5(0) + 3(0) - 2(0.5) - 8(0) = 9.0** ✅ HIRE
+- **Score = 10(1) + 5(0) + 3(0) - 2(0.5) - 8(0) = 9.0** âœ… HIRE
 
 **Planner** (ephemeral):
 - `tasks_assigned = 3` (check weather, find locations, propose itinerary)
@@ -5145,44 +5145,44 @@ thresholds:
 - `modality_bonus = 0`
 - `est_cost = 2.0` (LLM reasoning call)
 - `current_agents = 1` (Concierge already active)
-- **Score = 10(3) + 5(1) + 3(0) - 2(2.0) - 8(1) = 23.0** ✅ HIRE
+- **Score = 10(3) + 5(1) + 3(0) - 2(2.0) - 8(1) = 23.0** âœ… HIRE
 
 **Researcher** (ephemeral):
 - `tasks_assigned = 0` (no heavy research needed)
-- **Score = 10(0) + ... = <8.0** ❌ DON'T HIRE
+- **Score = 10(0) + ... = <8.0** âŒ DON'T HIRE
 
 **SafetyWatch** (voice-only):
 - `modality_bonus = 0` (text turn, not voice)
-- **Score = ... + 3(0) = <8.0** ❌ DON'T HIRE
+- **Score = ... + 3(0) = <8.0** âŒ DON'T HIRE
 
 ---
 
-### Supervision Policy — Pause vs Kill vs Rollback
+### Supervision Policy â€” Pause vs Kill vs Rollback
 
 **Health Monitoring (1Hz sampling):**
 ```yaml
 health_checks:
-  - memory_usage > session_cap (80MB)          → PAUSE (give 2s to flush), then KILL
-  - cpu_spike > 80% for >3s                    → PAUSE, log warning
-  - no heartbeat for >5s                       → KILL (assume crash)
-  - policy_violation (band breach)             → KILL immediately + audit
-  - tool_call timeout >3x budget               → KILL + DLQ tool call
-  - model_call fails 3x consecutive            → PAUSE, try fallback model, then KILL
+  - memory_usage > session_cap (80MB)          â†’ PAUSE (give 2s to flush), then KILL
+  - cpu_spike > 80% for >3s                    â†’ PAUSE, log warning
+  - no heartbeat for >5s                       â†’ KILL (assume crash)
+  - policy_violation (band breach)             â†’ KILL immediately + audit
+  - tool_call timeout >3x budget               â†’ KILL + DLQ tool call
+  - model_call fails 3x consecutive            â†’ PAUSE, try fallback model, then KILL
 ```
 
 **Actions:**
 
 | Condition                          | Action         | Recovery                                              |
 | ---------------------------------- | -------------- | ----------------------------------------------------- |
-| Memory > 80MB                      | PAUSE → KILL   | None (agent violated contract)                        |
+| Memory > 80MB                      | PAUSE â†’ KILL   | None (agent violated contract)                        |
 | CPU spike brief                    | PAUSE          | Resume after 2s cooldown                              |
 | No heartbeat                       | KILL           | Orchestrator retries task with different agent        |
 | Policy violation                   | KILL + AUDIT   | Blacklist agent type for 1hr                          |
 | Tool timeout                       | KILL           | Tool result goes to DLQ, turn continues without it    |
 | Model call failures (3x)           | KILL + FALLBACK| Orchestrator switches to backup model route           |
-| Idle too long (ephemeral: 60s)     | DRAIN → TERM   | Can re-hire if needed later                           |
-| Budget exhausted                   | DRAIN → TERM   | Normal completion                                     |
-| TTL expired                        | DRAIN → TERM   | Normal completion                                     |
+| Idle too long (ephemeral: 60s)     | DRAIN â†’ TERM   | Can re-hire if needed later                           |
+| Budget exhausted                   | DRAIN â†’ TERM   | Normal completion                                     |
+| TTL expired                        | DRAIN â†’ TERM   | Normal completion                                     |
 
 **Rollback Policy:**
 ```python
@@ -5198,7 +5198,7 @@ if agent.crash_count_10min >= 3:
 
 ---
 
-### Active Roster — Data Structure & Purpose
+### Active Roster â€” Data Structure & Purpose
 
 **Purpose:**
 - Track all agents currently alive (WARMING, ACTIVE, IDLE, DRAINING)
@@ -5224,22 +5224,22 @@ class ResourceCounter:
 ```
 
 **Why not just a list?**
-- **Hash map** (`agents`) → O(1) message routing (mailbox delivery by agent_id)
-- **Role index** (`by_role`) → O(1) "find all Planner agents" (for broadcasting or targeted ops)
-- **Priority queue** → Fair scheduling (SafetyWatch processes before background Researcher)
+- **Hash map** (`agents`) â†’ O(1) message routing (mailbox delivery by agent_id)
+- **Role index** (`by_role`) â†’ O(1) "find all Planner agents" (for broadcasting or targeted ops)
+- **Priority queue** â†’ Fair scheduling (SafetyWatch processes before background Researcher)
 
 **Operations:**
 ```python
-roster.add(agent_id, role, priority)       # O(log N) — add to heap
-roster.remove(agent_id)                    # O(log N) — remove from heap + dict
-roster.route_message(agent_id, msg)        # O(1) — lookup + enqueue to mailbox
-roster.get_by_role(role_name)              # O(1) — index lookup
-roster.check_capacity()                    # O(1) — validate budgets
+roster.add(agent_id, role, priority)       # O(log N) â€” add to heap
+roster.remove(agent_id)                    # O(log N) â€” remove from heap + dict
+roster.route_message(agent_id, msg)        # O(1) â€” lookup + enqueue to mailbox
+roster.get_by_role(role_name)              # O(1) â€” index lookup
+roster.check_capacity()                    # O(1) â€” validate budgets
 ```
 
 ---
 
-### Inter-Agent Messaging — Architecture & Rules
+### Inter-Agent Messaging â€” Architecture & Rules
 
 **Design Philosophy:**
 > K1 kernel = message bus + orchestrator.
@@ -5249,32 +5249,32 @@ roster.check_capacity()                    # O(1) — validate budgets
 **Messaging Topology:**
 
 ```
-┌─────────────┐
-│   User      │
-└──────┬──────┘
-       │ (input)
-       ▼
-┌──────────────────────────────────────────────┐
-│          K1 Kernel (StreamSwitch)            │
-│  ┌────────────────────────────────────────┐  │
-│  │       Intent Router + Orchestrator      │  │
-│  └─────────────────┬────────────────────┬─┘  │
-│                    │                    │     │
-│          ┌─────────▼─────────┐ ┌────────▼──────┐
-│          │ Mailbox(Concierge)│ │ Mailbox(Planner)│
-│          └─────────┬─────────┘ └────────┬──────┘
-│                    │                    │     │
-│  ┌─────────────────▼────────────────────▼──┐  │
-│  │         Agent Message Bus                │  │
-│  │  (policy check, trace, backpressure)     │  │
-│  └──────────────────────────────────────────┘  │
-└──────────────────────────────────────────────┘
-       │                             │
-       ▼                             ▼
-┌──────────────┐            ┌──────────────┐
-│ Concierge    │            │  Planner     │
-│  (agent)     │            │  (agent)     │
-└──────────────┘            └──────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚   User      â”‚
+â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+       â”‚ (input)
+       â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚          K1 Kernel (StreamSwitch)            â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚       Intent Router + Orchestrator      â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”˜  â”‚
+â”‚                    â”‚                    â”‚     â”‚
+â”‚          â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+â”‚          â”‚ Mailbox(Concierge)â”‚ â”‚ Mailbox(Planner)â”‚
+â”‚          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+â”‚                    â”‚                    â”‚     â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”  â”‚
+â”‚  â”‚         Agent Message Bus                â”‚  â”‚
+â”‚  â”‚  (policy check, trace, backpressure)     â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+       â”‚                             â”‚
+       â–¼                             â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”            â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Concierge    â”‚            â”‚  Planner     â”‚
+â”‚  (agent)     â”‚            â”‚  (agent)     â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜            â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 **Messaging Rules:**
@@ -5323,30 +5323,30 @@ roster.check_capacity()                    # O(1) — validate budgets
 
 **Turn:** "Plan a fishing trip with my son next Sunday"
 
-1. **User input → Orchestrator**
+1. **User input â†’ Orchestrator**
 2. **Orchestrator hires**: Concierge + Planner
-3. **Orchestrator → Concierge**: `TASK{type=coordinate, context=...}`
-4. **Concierge → Orchestrator**: `DELEGATE{need=weather_check}`
-5. **Orchestrator → Planner**: `TASK{type=check_weather, location=...}`
-6. **Planner → Orchestrator**: `RESULT{weather=sunny, temp=72F}`
-7. **Orchestrator → Concierge**: `RESULT{from=planner, data=...}`
-8. **Concierge → Orchestrator**: `PROPOSAL{plan=..., message="Looks great for fishing!"}`
-9. **Orchestrator → User**: Render output
+3. **Orchestrator â†’ Concierge**: `TASK{type=coordinate, context=...}`
+4. **Concierge â†’ Orchestrator**: `DELEGATE{need=weather_check}`
+5. **Orchestrator â†’ Planner**: `TASK{type=check_weather, location=...}`
+6. **Planner â†’ Orchestrator**: `RESULT{weather=sunny, temp=72F}`
+7. **Orchestrator â†’ Concierge**: `RESULT{from=planner, data=...}`
+8. **Concierge â†’ Orchestrator**: `PROPOSAL{plan=..., message="Looks great for fishing!"}`
+9. **Orchestrator â†’ User**: Render output
 
 **Benefits of Kernel-Mediated Messaging:**
-- ✅ **Policy enforcement**: Every message checked against caps/bands
-- ✅ **Observability**: Full trace of agent interactions via `cognitive_trace_id`
-- ✅ **Backpressure**: Kernel can throttle fast producers if consumer mailbox fills
-- ✅ **Fault isolation**: If Planner crashes, Orchestrator knows immediately (no hanging RPC)
-- ✅ **Protocol verification**: MPST monitor can validate message sequences
+- âœ… **Policy enforcement**: Every message checked against caps/bands
+- âœ… **Observability**: Full trace of agent interactions via `cognitive_trace_id`
+- âœ… **Backpressure**: Kernel can throttle fast producers if consumer mailbox fills
+- âœ… **Fault isolation**: If Planner crashes, Orchestrator knows immediately (no hanging RPC)
+- âœ… **Protocol verification**: MPST monitor can validate message sequences
 
 **Drawback (and mitigation):**
-- ❌ Latency: Extra hop through kernel adds ~0.5-2ms per message
-- ✅ Mitigation: Use zero-copy shared memory + FlatBuffers → kernel just passes pointers, not bytes
+- âŒ Latency: Extra hop through kernel adds ~0.5-2ms per message
+- âœ… Mitigation: Use zero-copy shared memory + FlatBuffers â†’ kernel just passes pointers, not bytes
 
 ---
 
-### Agent Fabric — Configuration Example
+### Agent Fabric â€” Configuration Example
 
 **File: `k1/policy/agents.yml`**
 ```yaml
@@ -5415,28 +5415,28 @@ hiring:
 
 ---
 
-## 🧠 Planner Agent — Detailed Architecture
+## ðŸ§  Planner Agent â€” Detailed Architecture
 
 ### Research-Backed Design Philosophy
 
-**Core Challenge:** LLMs hallucinate → plans can be invalid/incomplete/harmful
+**Core Challenge:** LLMs hallucinate â†’ plans can be invalid/incomplete/harmful
 **Solution:** Multi-stage pipeline with **deterministic validation** and **constraint satisfaction**
 
 **Research Foundations:**
-- **Chain-of-Thought Prompting** (Wei et al., 2022) — structured reasoning reduces errors
-- **Self-Consistency** (Wang et al., 2022) — sample multiple plans, vote on best
-- **ReAct** (Yao et al., 2022) — interleave reasoning and acting for grounded plans
-- **Tree of Thoughts** (Yao et al., 2023) — explore multiple reasoning paths, prune bad branches
-- **Constrained Decoding** (Hokamp & Liu, 2017) — force LLM output to follow grammar/schema
-- **Structured Outputs** (OpenAI, 2024) — JSON mode with schema enforcement
+- **Chain-of-Thought Prompting** (Wei et al., 2022) â€” structured reasoning reduces errors
+- **Self-Consistency** (Wang et al., 2022) â€” sample multiple plans, vote on best
+- **ReAct** (Yao et al., 2022) â€” interleave reasoning and acting for grounded plans
+- **Tree of Thoughts** (Yao et al., 2023) â€” explore multiple reasoning paths, prune bad branches
+- **Constrained Decoding** (Hokamp & Liu, 2017) â€” force LLM output to follow grammar/schema
+- **Structured Outputs** (OpenAI, 2024) â€” JSON mode with schema enforcement
 
 ---
 
-### Planner Architecture — 4-Stage Pipeline
+### Planner Architecture â€” 4-Stage Pipeline
 
 ```
-User Intent → [1. Sketch] → [2. Expand] → [3. Validate] → [4. Commit] → TURN_PLAN
-                  ↓             ↓             ↓
+User Intent â†’ [1. Sketch] â†’ [2. Expand] â†’ [3. Validate] â†’ [4. Commit] â†’ TURN_PLAN
+                  â†“             â†“             â†“
                (LLM call)   (deterministic) (rule engine)
 ```
 
@@ -5490,10 +5490,10 @@ plan_sketch = json.loads(response.content)
 ```
 
 **Hallucination Mitigation:**
-- ✅ **Structured output** forces valid JSON (no free-form text)
-- ✅ **Low temperature** (0.3) reduces randomness
-- ✅ **Tool list in prompt** grounds plan in available capabilities
-- ✅ **Concrete examples** in system prompt (few-shot learning)
+- âœ… **Structured output** forces valid JSON (no free-form text)
+- âœ… **Low temperature** (0.3) reduces randomness
+- âœ… **Tool list in prompt** grounds plan in available capabilities
+- âœ… **Concrete examples** in system prompt (few-shot learning)
 
 **Output Example:**
 ```json
@@ -5549,10 +5549,10 @@ def expand_plan(sketch, tool_registry, prompt_registry):
 ```
 
 **What This Adds:**
-- ✅ **Tool schemas** (validates inputs at runtime)
-- ✅ **Required caps/bands** (for permission checks)
-- ✅ **Latency estimates** (for budget validation)
-- ✅ **Prompt IDs** (deterministic model calls)
+- âœ… **Tool schemas** (validates inputs at runtime)
+- âœ… **Required caps/bands** (for permission checks)
+- âœ… **Latency estimates** (for budget validation)
+- âœ… **Prompt IDs** (deterministic model calls)
 
 ---
 
@@ -5608,9 +5608,9 @@ class PlanValidator:
 ```
 
 **Research Backing:**
-- **Constraint Satisfaction** (Russell & Norvig) — treat plan as CSP, check constraints
-- **Static Analysis** — catches 80%+ of invalid plans without LLM call
-- **Fast path** — <1ms validation, no added latency
+- **Constraint Satisfaction** (Russell & Norvig) â€” treat plan as CSP, check constraints
+- **Static Analysis** â€” catches 80%+ of invalid plans without LLM call
+- **Fast path** â€” <1ms validation, no added latency
 
 ##### **Tier 2: Arbiter (Optional, LLM-Based Safety Check)**
 
@@ -5655,16 +5655,16 @@ safety_check = json.loads(arbiter_response.content)
 ```
 
 **Key Design Choices:**
-- ✅ **Binary decision** (safe/unsafe) — not open-ended reasoning (reduces hallucination)
-- ✅ **Only for risky plans** — skipped for GREEN-band simple queries (no latency hit)
-- ✅ **Fast model** (gpt-4o-mini) — adds ~50-100ms only when needed
-- ✅ **Deterministic** (temp=0) — consistent safety decisions
+- âœ… **Binary decision** (safe/unsafe) â€” not open-ended reasoning (reduces hallucination)
+- âœ… **Only for risky plans** â€” skipped for GREEN-band simple queries (no latency hit)
+- âœ… **Fast model** (gpt-4o-mini) â€” adds ~50-100ms only when needed
+- âœ… **Deterministic** (temp=0) â€” consistent safety decisions
 
-**Arbiter is NOT validating correctness** (Tier 1 does that) — **only safety**
+**Arbiter is NOT validating correctness** (Tier 1 does that) â€” **only safety**
 
 **Research Backing:**
-- **Constitutional AI** (Anthropic, 2022) — use LLM to check outputs against principles
-- **Red-teaming** (Perez et al., 2022) — adversarial testing catches edge cases
+- **Constitutional AI** (Anthropic, 2022) â€” use LLM to check outputs against principles
+- **Red-teaming** (Perez et al., 2022) â€” adversarial testing catches edge cases
 
 ---
 
@@ -5703,11 +5703,11 @@ def commit_plan(plan, session):
 
 ---
 
-### Fallback Logic — Handling Invalid/Incomplete Plans
+### Fallback Logic â€” Handling Invalid/Incomplete Plans
 
 **Research Backing:**
-- **Cascade Fallbacks** (Chameleon, Lu et al., 2024) — try simpler methods when complex fails
-- **Graceful Degradation** (SEDA) — degrade service quality, don't fail hard
+- **Cascade Fallbacks** (Chameleon, Lu et al., 2024) â€” try simpler methods when complex fails
+- **Graceful Degradation** (SEDA) â€” degrade service quality, don't fail hard
 
 #### **Fallback Strategies (Ordered by Preference):**
 
@@ -5738,7 +5738,7 @@ class PlannerFallbackStrategy:
 #### **Fallback 1: Retry with Constraints**
 ```python
 # LLM produced invalid JSON or incomplete plan
-# → Retry with more explicit constraints
+# â†’ Retry with more explicit constraints
 def retry_with_constraints(context):
     stricter_prompt = f"""
     PREVIOUS ATTEMPT FAILED: {context.error}
@@ -5763,7 +5763,7 @@ def retry_with_constraints(context):
 #### **Fallback 2: Simplify Plan**
 ```python
 # Plan references unavailable tools
-# → Remove those steps, suggest alternatives
+# â†’ Remove those steps, suggest alternatives
 def simplify_plan(plan, available_tools):
     simplified = []
     removed = []
@@ -5792,11 +5792,11 @@ def simplify_plan(plan, available_tools):
 #### **Fallback 3: Optimize for Cost**
 ```python
 # Plan exceeds budget
-# → Swap expensive LLM calls for cheaper alternatives
+# â†’ Swap expensive LLM calls for cheaper alternatives
 def optimize_for_cost(plan, budget):
     for step in plan["steps"]:
         if step["op"] == "Model":
-            # Downgrade: reasoning → standard → lite
+            # Downgrade: reasoning â†’ standard â†’ lite
             if step["model_class"] == "reasoning" and budget.allows("standard"):
                 step["model_class"] = "standard"
             elif step["model_class"] == "standard" and budget.allows("lite"):
@@ -5810,7 +5810,7 @@ def optimize_for_cost(plan, budget):
 #### **Fallback 4: Ask User to Refine**
 ```python
 # Arbiter marked plan as unsafe
-# → Ask user to clarify or modify request
+# â†’ Ask user to clarify or modify request
 def ask_user_to_refine(plan, safety_reason):
     clarification = {
         "op": "Ask",
@@ -5825,7 +5825,7 @@ def ask_user_to_refine(plan, safety_reason):
 #### **Fallback 5: Graceful Degradation**
 ```python
 # All fallbacks exhausted
-# → Return simple, safe response (no plan execution)
+# â†’ Return simple, safe response (no plan execution)
 def degrade_to_simple_reply(context):
     simple_reply = model_hub.call(
         model="gpt-4o-mini",
@@ -5839,7 +5839,7 @@ def degrade_to_simple_reply(context):
 
 ---
 
-### Dynamic Replanning — Mid-Execution Changes
+### Dynamic Replanning â€” Mid-Execution Changes
 
 **Triggers:**
 1. **User interrupts** (barge-in during voice)
@@ -5905,7 +5905,7 @@ class DynamicReplanner:
 **Example: User Changes Mid-Plan**
 
 **Initial:** "Book dinner with my wife at 6pm"
-- Plan: clarify_restaurant → check_availability → book → notify_wife
+- Plan: clarify_restaurant â†’ check_availability â†’ book â†’ notify_wife
 
 **After step 1 (restaurant chosen), user says:** "Actually make it 7pm and invite my son too"
 
@@ -5913,7 +5913,7 @@ class DynamicReplanner:
 1. **Assess:** `PARTIAL_CONFLICT` (time + participants changed)
 2. **Keep:** step 1 (restaurant already chosen)
 3. **Replan:** check_availability (new time), book (new party size), notify (both wife + son)
-4. **New plan:** [restaurant_chosen] → check_availability(7pm, 3 people) → book → notify_wife → notify_son
+4. **New plan:** [restaurant_chosen] â†’ check_availability(7pm, 3 people) â†’ book â†’ notify_wife â†’ notify_son
 
 ---
 
@@ -5937,7 +5937,7 @@ class ConversationalReplanner:
                 # User starting new topic
                 return self.interrupt_and_replan(utterance, session)
             elif intent.type == "AFFIRMATION":
-                # "yes", "sounds good", etc. → continue
+                # "yes", "sounds good", etc. â†’ continue
                 continue
 
         # Merge refinements into current flow
@@ -5962,58 +5962,58 @@ class ConversationalReplanner:
 
 ---
 
-### Planner Agent — Complete Pipeline Summary
+### Planner Agent â€” Complete Pipeline Summary
 
 ```
 User Input
-    ↓
-┌───────────────────────────────────────────────────────┐
-│ Stage 1: SKETCH (LLM call, ~150ms)                    │
-│  - Structured JSON output                             │
-│  - Low temperature (0.3)                              │
-│  - Tool list grounding                                │
-└───────────────┬───────────────────────────────────────┘
-                ↓
-┌───────────────────────────────────────────────────────┐
-│ Stage 2: EXPAND (deterministic, <1ms)                 │
-│  - Fill tool schemas from registry                    │
-│  - Add caps/bands/latency estimates                   │
-└───────────────┬───────────────────────────────────────┘
-                ↓
-┌───────────────────────────────────────────────────────┐
-│ Stage 3: VALIDATE (rules + optional arbiter)          │
-│  Tier 1: Rules (<1ms)                                 │
-│   - Structure, deps, caps, budget, bands              │
-│  Tier 2: Arbiter (~50-100ms, only if risky)           │
-│   - Safety check for AMBER/RED band plans             │
-└───────────────┬───────────────────────────────────────┘
-                ↓
-┌───────────────────────────────────────────────────────┐
-│ FALLBACK LOGIC (if validation fails)                  │
-│  1. Retry with constraints                            │
-│  2. Simplify plan                                     │
-│  3. Optimize for cost                                 │
-│  4. Ask user to refine                                │
-│  5. Graceful degradation (simple reply)               │
-└───────────────┬───────────────────────────────────────┘
-                ↓
-┌───────────────────────────────────────────────────────┐
-│ Stage 4: COMMIT (lock & execute)                      │
-│  - Serialize to FlowDef                               │
-│  - Write to K0 (audit)                                │
-│  - Lock SessionState                                  │
-└───────────────┬───────────────────────────────────────┘
-                ↓
-          TURN_PLAN → FlowEngine
-                ↓
-        ┌──────────────────────┐
-        │ DYNAMIC REPLANNING   │
-        │  - User interrupt    │
-        │  - Tool failure      │
-        │  - Context change    │
-        │  - Conversational    │
-        │    overlap           │
-        └──────────────────────┘
+    â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Stage 1: SKETCH (LLM call, ~150ms)                    â”‚
+â”‚  - Structured JSON output                             â”‚
+â”‚  - Low temperature (0.3)                              â”‚
+â”‚  - Tool list grounding                                â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Stage 2: EXPAND (deterministic, <1ms)                 â”‚
+â”‚  - Fill tool schemas from registry                    â”‚
+â”‚  - Add caps/bands/latency estimates                   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Stage 3: VALIDATE (rules + optional arbiter)          â”‚
+â”‚  Tier 1: Rules (<1ms)                                 â”‚
+â”‚   - Structure, deps, caps, budget, bands              â”‚
+â”‚  Tier 2: Arbiter (~50-100ms, only if risky)           â”‚
+â”‚   - Safety check for AMBER/RED band plans             â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ FALLBACK LOGIC (if validation fails)                  â”‚
+â”‚  1. Retry with constraints                            â”‚
+â”‚  2. Simplify plan                                     â”‚
+â”‚  3. Optimize for cost                                 â”‚
+â”‚  4. Ask user to refine                                â”‚
+â”‚  5. Graceful degradation (simple reply)               â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Stage 4: COMMIT (lock & execute)                      â”‚
+â”‚  - Serialize to FlowDef                               â”‚
+â”‚  - Write to K0 (audit)                                â”‚
+â”‚  - Lock SessionState                                  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
+          TURN_PLAN â†’ FlowEngine
+                â†“
+        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+        â”‚ DYNAMIC REPLANNING   â”‚
+        â”‚  - User interrupt    â”‚
+        â”‚  - Tool failure      â”‚
+        â”‚  - Context change    â”‚
+        â”‚  - Conversational    â”‚
+        â”‚    overlap           â”‚
+        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -6071,19 +6071,19 @@ planner:
 
 ### Research Citations
 
-- **Wei et al., 2022** — Chain-of-Thought Prompting (reduces reasoning errors)
-- **Wang et al., 2022** — Self-Consistency (sample multiple outputs, vote)
-- **Yao et al., 2022** — ReAct (interleave reasoning and actions)
-- **Yao et al., 2023** — Tree of Thoughts (explore multiple paths)
-- **Hokamp & Liu, 2017** — Constrained Decoding (force grammar compliance)
-- **OpenAI, 2024** — Structured Outputs (JSON mode with schema enforcement)
-- **Constitutional AI (Anthropic, 2022)** — LLM-based safety checks
-- **Lu et al., 2024** — Chameleon (cascade fallbacks)
-- **Russell & Norvig** — Constraint Satisfaction Problems (static analysis)
+- **Wei et al., 2022** â€” Chain-of-Thought Prompting (reduces reasoning errors)
+- **Wang et al., 2022** â€” Self-Consistency (sample multiple outputs, vote)
+- **Yao et al., 2022** â€” ReAct (interleave reasoning and actions)
+- **Yao et al., 2023** â€” Tree of Thoughts (explore multiple paths)
+- **Hokamp & Liu, 2017** â€” Constrained Decoding (force grammar compliance)
+- **OpenAI, 2024** â€” Structured Outputs (JSON mode with schema enforcement)
+- **Constitutional AI (Anthropic, 2022)** â€” LLM-based safety checks
+- **Lu et al., 2024** â€” Chameleon (cascade fallbacks)
+- **Russell & Norvig** â€” Constraint Satisfaction Problems (static analysis)
 
 ---
 
-## 🎼 Orchestrator Core — Multi-Agent Coordination
+## ðŸŽ¼ Orchestrator Core â€” Multi-Agent Coordination
 
 ### Research-Backed Design Philosophy
 
@@ -6092,32 +6092,32 @@ planner:
 **Solution:** **Blackboard Architecture** + **Contract Net Protocol** + **Staged Execution**
 
 **Research Foundations:**
-- **Blackboard Systems** (Erman et al., 1980; Engelmore & Morgan, 1988) — shared workspace coordination
-- **Contract Net Protocol** (Smith, 1980) — task allocation via bidding
-- **Actor Model Supervision** (Hewitt, 1973; Armstrong, 2003) — fault-tolerant coordination
-- **Saga Pattern** (Garcia-Molina & Salem, 1987) — distributed transaction compensation
-- **MapReduce Coordination** (Dean & Ghemawat, 2004) — parallel task execution with barriers
-- **Global Workspace Theory** (Baars, 1988) — attention-based broadcast coordination
-- **Apache Airflow DAG Execution** (Airbnb, 2014) — dependency-aware task scheduling
-- **Temporal.io Workflows** (Uber, 2020) — durable execution with compensation
+- **Blackboard Systems** (Erman et al., 1980; Engelmore & Morgan, 1988) â€” shared workspace coordination
+- **Contract Net Protocol** (Smith, 1980) â€” task allocation via bidding
+- **Actor Model Supervision** (Hewitt, 1973; Armstrong, 2003) â€” fault-tolerant coordination
+- **Saga Pattern** (Garcia-Molina & Salem, 1987) â€” distributed transaction compensation
+- **MapReduce Coordination** (Dean & Ghemawat, 2004) â€” parallel task execution with barriers
+- **Global Workspace Theory** (Baars, 1988) â€” attention-based broadcast coordination
+- **Apache Airflow DAG Execution** (Airbnb, 2014) â€” dependency-aware task scheduling
+- **Temporal.io Workflows** (Uber, 2020) â€” durable execution with compensation
 
 ---
 
 ### Three-Phase Orchestration Pipeline
 
 ```
-Turn Input → [PHASE 1: Negotiation] → [PHASE 2: Selection] → [PHASE 3: Execution] → Turn Output
+Turn Input â†’ [PHASE 1: Negotiation] â†’ [PHASE 2: Selection] â†’ [PHASE 3: Execution] â†’ Turn Output
                     ~20-50ms                  <5ms                  ~150-200ms
 ```
 
 ---
 
-## PHASE 1: Negotiation — Contract Net Protocol
+## PHASE 1: Negotiation â€” Contract Net Protocol
 
 ### Research Background
 
 **Contract Net Protocol (Smith, 1980)**
-- Task announcements → agents bid based on capability/cost → manager selects winner(s)
+- Task announcements â†’ agents bid based on capability/cost â†’ manager selects winner(s)
 - Proven in multi-agent systems, robotics, distributed manufacturing
 - Handles dynamic agent availability and heterogeneous capabilities
 
@@ -6132,19 +6132,19 @@ Turn Input → [PHASE 1: Negotiation] → [PHASE 2: Selection] → [PHASE 3: Exe
 
 ```
 Orchestrator publishes: TASK_ANNOUNCEMENT(turn_plan)
-                ↓
-    ┌───────────┴────────────┐
-    ↓                        ↓
+                â†“
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+    â†“                        â†“
 Concierge proposes      Planner proposes
-    ↓                        ↓
+    â†“                        â†“
   PROPOSAL_1              PROPOSAL_2
-    ↓                        ↓
-    └───────────┬────────────┘
-                ↓
+    â†“                        â†“
+    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                â†“
     Orchestrator collects proposals (deadline: 50ms)
-                ↓
+                â†“
         Selection algorithm
-                ↓
+                â†“
         WINNING_PROPOSAL
 ```
 
@@ -6273,8 +6273,8 @@ def collect_proposals(self, task_id, timeout_ms=50):
 ```
 
 **Research Backing:**
-- **Timeout pattern** (Temporal.io) — prevent blocking on slow/crashed agents
-- **Non-blocking coordination** (Actor model) — agents respond asynchronously
+- **Timeout pattern** (Temporal.io) â€” prevent blocking on slow/crashed agents
+- **Non-blocking coordination** (Actor model) â€” agents respond asynchronously
 
 ---
 
@@ -6299,19 +6299,19 @@ if len(proposals) == 0:
 
 ---
 
-## PHASE 2: Selection — Multi-Criteria Decision Algorithm
+## PHASE 2: Selection â€” Multi-Criteria Decision Algorithm
 
 ### Research Background
 
 **Multi-Criteria Decision Making (MCDM)**
-- **TOPSIS** (Hwang & Yoon, 1981) — rank alternatives by distance to ideal solution
-- **AHP** (Saaty, 1980) — pairwise comparison with weights
-- **Pareto Optimization** (Zitzler et al., 2003) — non-dominated solutions
+- **TOPSIS** (Hwang & Yoon, 1981) â€” rank alternatives by distance to ideal solution
+- **AHP** (Saaty, 1980) â€” pairwise comparison with weights
+- **Pareto Optimization** (Zitzler et al., 2003) â€” non-dominated solutions
 
 **Production Systems:**
-- **Google Borg** (Verma et al., 2015) — resource allocation with scoring functions
-- **Kubernetes Scheduler** — multi-dimensional scoring (resource, affinity, priority)
-- **AWS Lambda Placement** — latency + cost optimization
+- **Google Borg** (Verma et al., 2015) â€” resource allocation with scoring functions
+- **Kubernetes Scheduler** â€” multi-dimensional scoring (resource, affinity, priority)
+- **AWS Lambda Placement** â€” latency + cost optimization
 
 ---
 
@@ -6449,13 +6449,13 @@ class ProposalSelector:
 
 | Agent | Confidence | Latency (ms) | Cost | Strategy | Track Record | Score |
 |-------|-----------|--------------|------|----------|--------------|-------|
-| Concierge | 0.7 | 180 | 0.3 | sequential | 0.92 | **18.4** ✅ |
+| Concierge | 0.7 | 180 | 0.3 | sequential | 0.92 | **18.4** âœ… |
 | Planner | 0.9 | 220 | 0.6 | parallel | 0.88 | 17.2 |
 | Researcher | 0.6 | 450 | 0.4 | sequential | 0.75 | 12.1 |
 
 **Winner:** Concierge (highest score)
 
-**Reasoning:** High track record + within budget + fast enough → best overall fit
+**Reasoning:** High track record + within budget + fast enough â†’ best overall fit
 
 ---
 
@@ -6477,20 +6477,20 @@ if scored[0][1] == scored[1][1]:  # Scores are equal
 
 ---
 
-## PHASE 3: Execution — Parallel DAG Execution
+## PHASE 3: Execution â€” Parallel DAG Execution
 
 ### Research Background
 
 **DAG Execution Patterns:**
-- **Apache Airflow** (Airbnb, 2014) — dependency-aware parallel task execution
-- **Dask** (Rocklin, 2015) — parallel computation graphs
-- **Ray** (Moritz et al., 2018) — distributed execution with data locality
-- **Temporal Workflows** (Uber, 2020) — durable, fault-tolerant orchestration
+- **Apache Airflow** (Airbnb, 2014) â€” dependency-aware parallel task execution
+- **Dask** (Rocklin, 2015) â€” parallel computation graphs
+- **Ray** (Moritz et al., 2018) â€” distributed execution with data locality
+- **Temporal Workflows** (Uber, 2020) â€” durable, fault-tolerant orchestration
 
 **Concurrency Control:**
-- **Semaphores** (Dijkstra, 1965) — limit concurrent operations
-- **Actor Model** (Hewitt, 1973) — isolated concurrency without locks
-- **MapReduce Barriers** (Dean & Ghemawat, 2004) — synchronize parallel phases
+- **Semaphores** (Dijkstra, 1965) â€” limit concurrent operations
+- **Actor Model** (Hewitt, 1973) â€” isolated concurrency without locks
+- **MapReduce Barriers** (Dean & Ghemawat, 2004) â€” synchronize parallel phases
 
 ---
 
@@ -6499,7 +6499,7 @@ if scored[0][1] == scored[1][1]:  # Scores are equal
 **Key Principles:**
 1. **Parse plan as DAG** (Directed Acyclic Graph)
 2. **Execute steps in topological order** (respect dependencies)
-3. **Parallelize independent steps** (no dependencies → run concurrently)
+3. **Parallelize independent steps** (no dependencies â†’ run concurrently)
 4. **Use barriers** for synchronization points
 
 ---
@@ -6627,14 +6627,14 @@ async with semaphore:
 ```
 
 **Why limit concurrency?**
-- ✅ Prevent resource exhaustion (too many HTTP/LLM calls)
-- ✅ Respect API rate limits
-- ✅ Keep memory usage predictable
-- ✅ Avoid overloading K0 bridge (batch writes)
+- âœ… Prevent resource exhaustion (too many HTTP/LLM calls)
+- âœ… Respect API rate limits
+- âœ… Keep memory usage predictable
+- âœ… Avoid overloading K0 bridge (batch writes)
 
 **Research Backing:**
-- **Bulkheading pattern** (Release It!, Nygard 2007) — isolate failures
-- **Token bucket** (Wikipedia) — rate limiting
+- **Bulkheading pattern** (Release It!, Nygard 2007) â€” isolate failures
+- **Token bucket** (Wikipedia) â€” rate limiting
 
 ---
 
@@ -6643,15 +6643,15 @@ async with semaphore:
 **Plan DAG:**
 ```
 step1: clarify_time (Ask)
-    ↓
-step2: check_weather (Tool)  ←──┐
-    ↓                            │ PARALLEL (no deps)
-step3: find_spots (Tool)  ←──────┘
-    ↓
+    â†“
+step2: check_weather (Tool)  â†â”€â”€â”
+    â†“                            â”‚ PARALLEL (no deps)
+step3: find_spots (Tool)  â†â”€â”€â”€â”€â”€â”€â”˜
+    â†“
 step4: propose_plan (Model, needs: step2 + step3)
-    ↓
+    â†“
 step5: confirm (Ask)
-    ↓
+    â†“
 step6: calendar_add (Tool)
 ```
 
@@ -6684,14 +6684,14 @@ step6: calendar_add (Tool)
 
 ---
 
-## Turn State Persistence — In-Memory with K0 Checkpoints
+## Turn State Persistence â€” In-Memory with K0 Checkpoints
 
 ### Research Background
 
 **Durable Execution:**
-- **Temporal Workflows** (Uber, 2020) — workflow state persists across failures
-- **Orleans Virtual Actors** (Microsoft, 2011) — in-memory state with periodic snapshots
-- **Apache Flink Checkpoints** (Carbone et al., 2017) — periodic state snapshots for recovery
+- **Temporal Workflows** (Uber, 2020) â€” workflow state persists across failures
+- **Orleans Virtual Actors** (Microsoft, 2011) â€” in-memory state with periodic snapshots
+- **Apache Flink Checkpoints** (Carbone et al., 2017) â€” periodic state snapshots for recovery
 
 **Design Pattern:** **Write-Ahead Log + In-Memory State**
 
@@ -6792,23 +6792,23 @@ class Orchestrator:
 ### Why In-Memory + Checkpoints?
 
 **Advantages:**
-- ✅ **Low latency:** No disk I/O on hot path (execute_step is <1ms overhead)
-- ✅ **Durability:** K0 checkpoints enable replay if K1 crashes
-- ✅ **Auditability:** Full turn history in K0 WAL
-- ✅ **Scalability:** In-memory state is fast and lightweight
+- âœ… **Low latency:** No disk I/O on hot path (execute_step is <1ms overhead)
+- âœ… **Durability:** K0 checkpoints enable replay if K1 crashes
+- âœ… **Auditability:** Full turn history in K0 WAL
+- âœ… **Scalability:** In-memory state is fast and lightweight
 
 **Disadvantages (mitigated):**
-- ❌ State lost if K1 crashes mid-turn
-- ✅ Mitigation: Checkpoints every 5 steps → max 5 steps lost, can replay from last checkpoint
+- âŒ State lost if K1 crashes mid-turn
+- âœ… Mitigation: Checkpoints every 5 steps â†’ max 5 steps lost, can replay from last checkpoint
 
 **Research Backing:**
-- **Write-Ahead Logging** (Gray, 1978) — durability without blocking writes
-- **Snapshot Isolation** (Berenson et al., 1995) — periodic state snapshots
-- **Orleans** (Microsoft) — in-memory actors with periodic persistence
+- **Write-Ahead Logging** (Gray, 1978) â€” durability without blocking writes
+- **Snapshot Isolation** (Berenson et al., 1995) â€” periodic state snapshots
+- **Orleans** (Microsoft) â€” in-memory actors with periodic persistence
 
 ---
 
-## Error Recovery — Saga Pattern with Compensation
+## Error Recovery â€” Saga Pattern with Compensation
 
 ### Research Background
 
@@ -6833,16 +6833,16 @@ class Orchestrator:
 **Decision Tree:**
 ```
 Step Fails
-    ↓
+    â†“
 Is it transient? (network timeout, rate limit)
-    ↓ YES
+    â†“ YES
 Retry (max 2x with exponential backoff)
-    ↓ SUCCESS → Continue
-    ↓ FAIL → Is step critical?
-        ↓ NO → Skip step, continue with warning
-        ↓ YES → Can we use fallback? (different tool/model)
-            ↓ YES → Execute fallback, continue
-            ↓ NO → Abort turn, run compensation
+    â†“ SUCCESS â†’ Continue
+    â†“ FAIL â†’ Is step critical?
+        â†“ NO â†’ Skip step, continue with warning
+        â†“ YES â†’ Can we use fallback? (different tool/model)
+            â†“ YES â†’ Execute fallback, continue
+            â†“ NO â†’ Abort turn, run compensation
 ```
 
 ---
@@ -6875,7 +6875,7 @@ class ErrorRecovery:
                 # Execute step
                 result = await self.execute_step(step, agent, session)
 
-                # Success → reset circuit breaker
+                # Success â†’ reset circuit breaker
                 self.circuit_breaker.record_success(step.id)
                 return result
 
@@ -6975,8 +6975,8 @@ class ErrorRecovery:
 - Return error to user
 
 **Research Backing:**
-- **Saga Pattern** (Garcia-Molina & Salem, 1987) — compensating transactions
-- **Temporal Workflows** (Uber, 2020) — built-in compensation support
+- **Saga Pattern** (Garcia-Molina & Salem, 1987) â€” compensating transactions
+- **Temporal Workflows** (Uber, 2020) â€” built-in compensation support
 
 ---
 
@@ -7014,14 +7014,14 @@ class CircuitBreaker:
 
     def record_success(self, step_id):
         """
-        Step succeeded → close circuit
+        Step succeeded â†’ close circuit
         """
         if step_id in self.state:
             self.state[step_id] = {"state": "CLOSED", "failures": 0}
 
     def record_failure(self, step_id):
         """
-        Step failed → increment failures, open circuit if threshold reached
+        Step failed â†’ increment failures, open circuit if threshold reached
         """
         if step_id not in self.state:
             self.state[step_id] = {"state": "CLOSED", "failures": 0}
@@ -7035,8 +7035,8 @@ class CircuitBreaker:
 ```
 
 **Research Backing:**
-- **Circuit Breaker Pattern** (Nygard, 2007) — prevent cascading failures
-- **Netflix Hystrix** (2012) — production implementation at scale
+- **Circuit Breaker Pattern** (Nygard, 2007) â€” prevent cascading failures
+- **Netflix Hystrix** (2012) â€” production implementation at scale
 
 ---
 
@@ -7047,23 +7047,23 @@ class CircuitBreaker:
 **Execution:**
 ```
 Step 2: check_weather (Tool: weather API)
-    ↓
+    â†“
 Timeout after 3s (TransientError)
-    ↓
+    â†“
 Retry 1: Exponential backoff (200ms)
-    ↓
+    â†“
 Timeout again
-    ↓
+    â†“
 Retry 2: Exponential backoff (400ms)
-    ↓
+    â†“
 Timeout again (retries exhausted)
-    ↓
+    â†“
 Fallback: Use cached weather data (if available)
-    ↓ (no cache)
+    â†“ (no cache)
 Skip step (non-critical)
-    ↓
+    â†“
 Continue with warning: "I couldn't check the weather, but here's what I found..."
-    ↓
+    â†“
 Step 3: find_spots (continues normally)
 ```
 
@@ -7125,65 +7125,65 @@ orchestrator:
 
 ## Research Citations
 
-- **Smith, 1980** — Contract Net Protocol (task allocation via bidding)
-- **Erman et al., 1980** — HEARSAY-II Blackboard Architecture
-- **Hewitt, 1973** — Actor Model (isolated concurrent agents)
-- **Armstrong, 2003** — Erlang/OTP Supervision Trees
-- **Garcia-Molina & Salem, 1987** — Saga Pattern (compensating transactions)
-- **Dean & Ghemawat, 2004** — MapReduce (parallel execution with barriers)
-- **Baars, 1988** — Global Workspace Theory (attention-based coordination)
-- **Nygard, 2007** — Release It! (Circuit Breaker, Bulkheading)
-- **Verma et al., 2015** — Google Borg (resource allocation with scoring)
-- **Moritz et al., 2018** — Ray (distributed execution framework)
-- **Airbnb, 2014** — Apache Airflow (DAG execution)
-- **Uber, 2020** — Temporal (durable workflows with compensation)
-- **Microsoft, 2011** — Orleans (virtual actors with persistence)
-- **Carbone et al., 2017** — Apache Flink (stateful stream processing with checkpoints)
-- **Gray, 1978** — Write-Ahead Logging (durability without blocking)
-- **Hwang & Yoon, 1981** — TOPSIS (multi-criteria decision making)
+- **Smith, 1980** â€” Contract Net Protocol (task allocation via bidding)
+- **Erman et al., 1980** â€” HEARSAY-II Blackboard Architecture
+- **Hewitt, 1973** â€” Actor Model (isolated concurrent agents)
+- **Armstrong, 2003** â€” Erlang/OTP Supervision Trees
+- **Garcia-Molina & Salem, 1987** â€” Saga Pattern (compensating transactions)
+- **Dean & Ghemawat, 2004** â€” MapReduce (parallel execution with barriers)
+- **Baars, 1988** â€” Global Workspace Theory (attention-based coordination)
+- **Nygard, 2007** â€” Release It! (Circuit Breaker, Bulkheading)
+- **Verma et al., 2015** â€” Google Borg (resource allocation with scoring)
+- **Moritz et al., 2018** â€” Ray (distributed execution framework)
+- **Airbnb, 2014** â€” Apache Airflow (DAG execution)
+- **Uber, 2020** â€” Temporal (durable workflows with compensation)
+- **Microsoft, 2011** â€” Orleans (virtual actors with persistence)
+- **Carbone et al., 2017** â€” Apache Flink (stateful stream processing with checkpoints)
+- **Gray, 1978** â€” Write-Ahead Logging (durability without blocking)
+- **Hwang & Yoon, 1981** â€” TOPSIS (multi-criteria decision making)
 
 ---
 
-## 🚪 Intent Router — The Front Door (Universal Multi-Intent Design)
+## ðŸšª Intent Router â€” The Front Door (Universal Multi-Intent Design)
 
 ### Design Philosophy: Universal K1 Kernel
 
 **Critical Requirement:** K1 must handle **multi-intent requests** to be competitive with LangGraph/AutoGPT/CrewAI
 
 **Business Case:**
-- ✅ FamilyOS: "Book dinner AND check homework AND set bedtime reminder"
-- ✅ Enterprise: "Analyze Q3 sales AND generate report AND schedule review meeting"
-- ✅ Personal assistant: "Find flights AND book hotel AND add to calendar"
+- âœ… FamilyOS: "Book dinner AND check homework AND set bedtime reminder"
+- âœ… Enterprise: "Analyze Q3 sales AND generate report AND schedule review meeting"
+- âœ… Personal assistant: "Find flights AND book hotel AND add to calendar"
 
 **Without multi-intent:** Users must issue 3 separate commands (tedious, breaks flow)
-**With multi-intent:** Single natural request → parallel/sequential execution → coherent response
+**With multi-intent:** Single natural request â†’ parallel/sequential execution â†’ coherent response
 
 ---
 
 ### Research Foundations
 
 **Intent Recognition:**
-- **BERT for Intent Classification** (Devlin et al., 2018) — fine-tuned on dialogue datasets (ATIS, SNIPS)
-- **Joint Intent-Slot Detection** (Liu & Lane, 2016) — single model predicts intent + entities
-- **Few-Shot Intent Recognition** (Zhang et al., 2020) — adapt to new intents with <10 examples
-- **SetFit** (Tunstall et al., 2022) — efficient few-shot text classification on CPU/NPU
+- **BERT for Intent Classification** (Devlin et al., 2018) â€” fine-tuned on dialogue datasets (ATIS, SNIPS)
+- **Joint Intent-Slot Detection** (Liu & Lane, 2016) â€” single model predicts intent + entities
+- **Few-Shot Intent Recognition** (Zhang et al., 2020) â€” adapt to new intents with <10 examples
+- **SetFit** (Tunstall et al., 2022) â€” efficient few-shot text classification on CPU/NPU
 
 **Multi-Intent Parsing:**
-- **Compositional Semantic Parsing** (Zettlemoyer & Collins, 2005) — parse complex queries into logical forms
-- **Multi-Task Intent Detection** (Goo et al., 2018) — detect multiple intents in single utterance
-- **Intent Decomposition with LLMs** (Wei et al., 2022, Chain-of-Thought) — LLMs can break complex requests into sub-tasks
-- **Dialogue State Tracking** (Williams et al., 2013) — maintain context across turns
+- **Compositional Semantic Parsing** (Zettlemoyer & Collins, 2005) â€” parse complex queries into logical forms
+- **Multi-Task Intent Detection** (Goo et al., 2018) â€” detect multiple intents in single utterance
+- **Intent Decomposition with LLMs** (Wei et al., 2022, Chain-of-Thought) â€” LLMs can break complex requests into sub-tasks
+- **Dialogue State Tracking** (Williams et al., 2013) â€” maintain context across turns
 
 **Clarification Strategies:**
-- **Active Learning for Dialogues** (Tur et al., 2005) — ask questions when confidence < threshold
-- **Selective Question Answering** (Rajpurkar et al., 2018) — abstain when uncertain
-- **Calibrated Confidence** (Guo et al., 2017) — temperature scaling for reliable probabilities
+- **Active Learning for Dialogues** (Tur et al., 2005) â€” ask questions when confidence < threshold
+- **Selective Question Answering** (Rajpurkar et al., 2018) â€” abstain when uncertain
+- **Calibrated Confidence** (Guo et al., 2017) â€” temperature scaling for reliable probabilities
 
 **Context Carry-Over:**
-- **Memory-Augmented Neural Networks** (Graves et al., 2014) — external memory for long-term context
-- **Recency-Weighted Context** (Laban et al., 2021) — prioritize recent turns
-- **Windowed Context** (GPT-4 tech report, 2023) — sliding window for efficiency
-- **Hybrid Memory** (LangChain docs, 2023) — short-term buffer + long-term K0 retrieval
+- **Memory-Augmented Neural Networks** (Graves et al., 2014) â€” external memory for long-term context
+- **Recency-Weighted Context** (Laban et al., 2021) â€” prioritize recent turns
+- **Windowed Context** (GPT-4 tech report, 2023) â€” sliding window for efficiency
+- **Hybrid Memory** (LangChain docs, 2023) â€” short-term buffer + long-term K0 retrieval
 
 ---
 
@@ -7197,7 +7197,7 @@ orchestrator:
 **Tier 2: Local SLM Classifier** (~10-30ms)
 - Fine-tuned small model (Gemma 2B, Phi-3 Mini) on NPU/GPU
 - Multi-label classification (can detect multiple intents)
-- **Research:** SetFit (Tunstall et al., 2022) — 8x faster than BERT, runs on CPU
+- **Research:** SetFit (Tunstall et al., 2022) â€” 8x faster than BERT, runs on CPU
 
 **Tier 3: LLM Decomposer** (~150ms, only for complex/ambiguous cases)
 - Use GPT-4o/Claude to decompose complex requests
@@ -7254,14 +7254,14 @@ class RuleBasedRouter:
                         latency_ms=0.5
                     )
 
-        return None  # No rule match → escalate to Tier 2
+        return None  # No rule match â†’ escalate to Tier 2
 ```
 
 **Coverage:** ~30% of requests (greetings, confirmations, simple commands)
 
 **Research Backing:**
-- **ELIZA** (Weizenbaum, 1966) — pattern matching still effective for common cases
-- **AIML** (Wallace, 2001) — template-based dialogue systems
+- **ELIZA** (Weizenbaum, 1966) â€” pattern matching still effective for common cases
+- **AIML** (Wallace, 2001) â€” template-based dialogue systems
 
 ---
 
@@ -7272,8 +7272,8 @@ class RuleBasedRouter:
 **Model:** Sentence Transformer (384-dim embeddings) + Logistic Regression head
 
 **Training Data:**
-- SNIPS Dataset (Coucke et al., 2018) — 7 intents, 15K utterances
-- ATIS Dataset (Hemphill et al., 1990) — flight booking intents
+- SNIPS Dataset (Coucke et al., 2018) â€” 7 intents, 15K utterances
+- ATIS Dataset (Hemphill et al., 1990) â€” flight booking intents
 - Custom FamilyOS dataset (bootstrapped with GPT-4)
 
 **Multi-Label Training:**
@@ -7336,12 +7336,12 @@ class LocalSLMRouter:
 
         # 6. Check if clarification needed
         if len(detected_intents) == 0:
-            # No high-confidence intent → escalate to Tier 3
+            # No high-confidence intent â†’ escalate to Tier 3
             return None
 
         max_conf = detected_intents[0]["confidence"]
         if max_conf < self.clarification_threshold:
-            # Very low confidence → ask user
+            # Very low confidence â†’ ask user
             return IntentResult(
                 intents=["clarification_needed"],
                 confidence=max_conf,
@@ -7367,15 +7367,15 @@ class LocalSLMRouter:
 
 | Confidence | Action | Research Backing |
 |-----------|--------|------------------|
-| ≥ 0.85 | **Proceed immediately** | High precision (>95%) |
+| â‰¥ 0.85 | **Proceed immediately** | High precision (>95%) |
 | 0.65-0.84 | **Proceed with logging** | Good precision (~85%), monitor for corrections |
-| 0.45-0.64 | **Ask clarification** | Uncertain → active learning |
+| 0.45-0.64 | **Ask clarification** | Uncertain â†’ active learning |
 | < 0.45 | **Escalate to Tier 3 LLM** | Too ambiguous for classifier |
 
 **Research:**
-- **Selective Prediction** (Geifman & El-Yaniv, 2017) — abstain when uncertain
-- **Calibrated Confidence** (Guo et al., 2017) — temperature scaling improves reliability
-- **Active Learning** (Settles, 2009) — query most uncertain examples
+- **Selective Prediction** (Geifman & El-Yaniv, 2017) â€” abstain when uncertain
+- **Calibrated Confidence** (Guo et al., 2017) â€” temperature scaling improves reliability
+- **Active Learning** (Settles, 2009) â€” query most uncertain examples
 
 ---
 
@@ -7396,7 +7396,7 @@ class LocalSLMRouter:
 ```
 
 **Routing Decision:**
-Both intents > 0.65 → **Proceed with both** → Create composite plan
+Both intents > 0.65 â†’ **Proceed with both** â†’ Create composite plan
 
 ---
 
@@ -7405,20 +7405,20 @@ Both intents > 0.65 → **Proceed with both** → Create composite plan
 **Design Principle:** Intent router models evolve (retraining, architecture changes). Need safe upgrades without downtime or breaking changes.
 
 **Research Foundations:**
-- **Semantic Versioning (SemVer 2.0)** — Versioning scheme for APIs
-- **Model Registry** — MLflow (Databricks, 2018), Neptune.ai
-- **A/B Testing** — Google (2010s), shadow traffic for model validation
-- **Canary Deployments** — Netflix (2015), gradual rollout
+- **Semantic Versioning (SemVer 2.0)** â€” Versioning scheme for APIs
+- **Model Registry** â€” MLflow (Databricks, 2018), Neptune.ai
+- **A/B Testing** â€” Google (2010s), shadow traffic for model validation
+- **Canary Deployments** â€” Netflix (2015), gradual rollout
 
 ### Model Versioning Scheme
 
 **Format:** `{model_type}-{architecture}-{major}.{minor}.{patch}`
 
 Examples:
-- `intent-setfit-1.0.0` — Initial SetFit model
-- `intent-setfit-1.1.0` — Retrained with new data (backward compatible)
-- `intent-setfit-2.0.0` — Architecture change (breaking, new intents)
-- `intent-bert-1.0.0` — Different architecture (BERT vs SetFit)
+- `intent-setfit-1.0.0` â€” Initial SetFit model
+- `intent-setfit-1.1.0` â€” Retrained with new data (backward compatible)
+- `intent-setfit-2.0.0` â€” Architecture change (breaking, new intents)
+- `intent-bert-1.0.0` â€” Different architecture (BERT vs SetFit)
 
 **Versioning Rules:**
 - **MAJOR:** Breaking changes (new intents, removed intents, schema changes)
@@ -7759,7 +7759,7 @@ intent_model_rollbacks_total = Counter(
 
 ---
 
-## Intent Router Rate Limiting — Per-Session & Per-Device
+## Intent Router Rate Limiting â€” Per-Session & Per-Device
 
 **Design Principle:** Intent router can overwhelm downstream planners if:
 1. User sends rapid-fire requests (spam, buggy client)
@@ -7769,10 +7769,10 @@ intent_model_rollbacks_total = Counter(
 **Solution:** Multi-level rate limiting (per-session, per-device, global).
 
 **Research Foundations:**
-- **Token Bucket Algorithm** (Tanenbaum, 2003) — Classic rate limiting
-- **Leaky Bucket** (Turner, 1986) — Smooth traffic flow
-- **Sliding Window** — Redis rate limiting pattern
-- **API Rate Limiting** — Stripe, GitHub, AWS patterns
+- **Token Bucket Algorithm** (Tanenbaum, 2003) â€” Classic rate limiting
+- **Leaky Bucket** (Turner, 1986) â€” Smooth traffic flow
+- **Sliding Window** â€” Redis rate limiting pattern
+- **API Rate Limiting** â€” Stripe, GitHub, AWS patterns
 
 ---
 
@@ -8096,9 +8096,9 @@ intent_token_bucket_tokens = Gauge(
 4. Ambiguous phrasing detected (e.g., "Can you help me with that?")
 
 **Research Backing:**
-- **Chain-of-Thought** (Wei et al., 2022) — LLMs excel at decomposition
-- **Least-to-Most Prompting** (Zhou et al., 2022) — break complex into simple
-- **ReAct** (Yao et al., 2023) — reason then act
+- **Chain-of-Thought** (Wei et al., 2022) â€” LLMs excel at decomposition
+- **Least-to-Most Prompting** (Zhou et al., 2022) â€” break complex into simple
+- **ReAct** (Yao et al., 2023) â€” reason then act
 
 ---
 
@@ -8199,9 +8199,9 @@ class LLMDecomposer:
 
 **Input:** "I want to plan a fishing trip with my son this weekend, but first check if the weather is good, and also add it to my calendar if it looks fine"
 
-**Tier 1 (Rules):** No match → escalate
+**Tier 1 (Rules):** No match â†’ escalate
 
-**Tier 2 (SLM):** Multiple intents detected but dependencies unclear → escalate
+**Tier 2 (SLM):** Multiple intents detected but dependencies unclear â†’ escalate
 
 **Tier 3 (LLM):**
 ```json
@@ -8231,7 +8231,7 @@ class LLMDecomposer:
 }
 ```
 
-**Result:** DAG with dependencies → Weather → Plan → Calendar
+**Result:** DAG with dependencies â†’ Weather â†’ Plan â†’ Calendar
 
 ---
 
@@ -8243,25 +8243,25 @@ class LLMDecomposer:
 ```
 Intent A (book_restaurant)
 Intent B (weather)
-    ↓ (no dependencies)
+    â†“ (no dependencies)
 Execute A AND B concurrently
-    ↓
-Merge results → coherent response
+    â†“
+Merge results â†’ coherent response
 ```
 
 **2. Sequential (Dependent Intents)**
 ```
 Intent A (weather)
-    ↓ (A must complete first)
+    â†“ (A must complete first)
 Intent B (plan_activity) [depends on A]
-    ↓
+    â†“
 Intent C (calendar) [depends on B]
 ```
 
 **3. Conditional (Branching)**
 ```
 Intent A (check_availability)
-    ↓
+    â†“
 If available: Intent B (book)
 If not: Intent C (suggest_alternatives)
 ```
@@ -8285,7 +8285,7 @@ class MultiIntentOrchestrator:
         execution_order = intent_result.execution_order
 
         if execution_order == "parallel":
-            # All intents independent → parallel execution
+            # All intents independent â†’ parallel execution
             return await self.execute_parallel(intents, session)
 
         elif execution_order == "sequential":
@@ -8375,15 +8375,15 @@ class MultiIntentOrchestrator:
 ### Research Background
 
 **Memory Architectures:**
-- **Short-Term Memory** (Baddeley & Hitch, 1974) — working memory buffer (limited capacity)
-- **Long-Term Memory** (Tulving, 1972) — episodic + semantic retrieval
-- **Recency Bias** (Laban et al., 2021) — recent turns weighted higher
-- **Memory Consolidation** (LangChain, 2023) — summarize old turns, keep recent verbatim
+- **Short-Term Memory** (Baddeley & Hitch, 1974) â€” working memory buffer (limited capacity)
+- **Long-Term Memory** (Tulving, 1972) â€” episodic + semantic retrieval
+- **Recency Bias** (Laban et al., 2021) â€” recent turns weighted higher
+- **Memory Consolidation** (LangChain, 2023) â€” summarize old turns, keep recent verbatim
 
 **Efficient Retrieval:**
-- **Vector Search** (Pinecone, 2021) — embed + semantic search
-- **Sliding Window** (GPT-4, 2023) — last N tokens in context
-- **Relevance Filtering** (LlamaIndex, 2023) — only retrieve relevant context
+- **Vector Search** (Pinecone, 2021) â€” embed + semantic search
+- **Sliding Window** (GPT-4, 2023) â€” last N tokens in context
+- **Relevance Filtering** (LlamaIndex, 2023) â€” only retrieve relevant context
 
 ---
 
@@ -8391,13 +8391,13 @@ class MultiIntentOrchestrator:
 
 **Tier 1: Short-Term Buffer (In-Memory, Fast)**
 - Last **3-5 turns** kept verbatim in SessionState
-- ~2-4KB per turn → ~12KB total (within 64KB budget)
+- ~2-4KB per turn â†’ ~12KB total (within 64KB budget)
 - **Access time:** <1ms (RAM)
 
 **Tier 2: Session Summary (In-Memory, Compressed)**
 - Summarized version of turns 6-50
 - Generated by LLM every 10 turns
-- ~500-1000 words → ~2-4KB
+- ~500-1000 words â†’ ~2-4KB
 - **Access time:** <1ms (RAM)
 
 **Tier 3: Long-Term Episodic (K0, Indexed)**
@@ -8508,7 +8508,7 @@ class ContextManager:
 
 ### Context Budget Management
 
-**SessionState Context Budget:** ≤64KB total
+**SessionState Context Budget:** â‰¤64KB total
 
 **Breakdown:**
 ```yaml
@@ -8607,28 +8607,28 @@ intent_router:
 
 ## Research Citations
 
-1. **Devlin et al., 2018** — BERT for Intent Classification
-2. **Liu & Lane, 2016** — Joint Intent-Slot Detection
-3. **Zhang et al., 2020** — Few-Shot Intent Recognition
-4. **Tunstall et al., 2022** — SetFit (efficient few-shot classification)
-5. **Zettlemoyer & Collins, 2005** — Compositional Semantic Parsing
-6. **Goo et al., 2018** — Multi-Task Intent Detection
-7. **Wei et al., 2022** — Chain-of-Thought Prompting
-8. **Yao et al., 2023** — ReAct (Reasoning + Acting)
-9. **Zhou et al., 2022** — Least-to-Most Prompting
-10. **Tur et al., 2005** — Active Learning for Dialogues
-11. **Rajpurkar et al., 2018** — Selective Question Answering
-12. **Guo et al., 2017** — Calibrated Confidence (temperature scaling)
-13. **Geifman & El-Yaniv, 2017** — Selective Prediction
-14. **Settles, 2009** — Active Learning
-15. **Graves et al., 2014** — Memory-Augmented Neural Networks
-16. **Laban et al., 2021** — Recency-Weighted Context
-17. **Baddeley & Hitch, 1974** — Working Memory Model
-18. **Tulving, 1972** — Episodic vs Semantic Memory
-19. **Coucke et al., 2018** — SNIPS Dataset
-20. **Hemphill et al., 1990** — ATIS Dataset
-21. **Weizenbaum, 1966** — ELIZA (pattern matching)
-22. **Wallace, 2001** — AIML (template-based dialogue)
+1. **Devlin et al., 2018** â€” BERT for Intent Classification
+2. **Liu & Lane, 2016** â€” Joint Intent-Slot Detection
+3. **Zhang et al., 2020** â€” Few-Shot Intent Recognition
+4. **Tunstall et al., 2022** â€” SetFit (efficient few-shot classification)
+5. **Zettlemoyer & Collins, 2005** â€” Compositional Semantic Parsing
+6. **Goo et al., 2018** â€” Multi-Task Intent Detection
+7. **Wei et al., 2022** â€” Chain-of-Thought Prompting
+8. **Yao et al., 2023** â€” ReAct (Reasoning + Acting)
+9. **Zhou et al., 2022** â€” Least-to-Most Prompting
+10. **Tur et al., 2005** â€” Active Learning for Dialogues
+11. **Rajpurkar et al., 2018** â€” Selective Question Answering
+12. **Guo et al., 2017** â€” Calibrated Confidence (temperature scaling)
+13. **Geifman & El-Yaniv, 2017** â€” Selective Prediction
+14. **Settles, 2009** â€” Active Learning
+15. **Graves et al., 2014** â€” Memory-Augmented Neural Networks
+16. **Laban et al., 2021** â€” Recency-Weighted Context
+17. **Baddeley & Hitch, 1974** â€” Working Memory Model
+18. **Tulving, 1972** â€” Episodic vs Semantic Memory
+19. **Coucke et al., 2018** â€” SNIPS Dataset
+20. **Hemphill et al., 1990** â€” ATIS Dataset
+21. **Weizenbaum, 1966** â€” ELIZA (pattern matching)
+22. **Wallace, 2001** â€” AIML (template-based dialogue)
 
 ---
 
@@ -8642,11 +8642,11 @@ intent_router:
 **Solution:** Continuous monitoring with ground-truth dataset + auto-alert on drift.
 
 **Research Foundations:**
-- **Data Drift Detection** (Rabanser et al., 2019) — Distribution shift in ML systems
-- **Online Model Monitoring** (Klaise et al., 2020) — Alibi Detect for drift
-- **Calibration Monitoring** (Ovadia et al., 2019) — Test-time calibration drift
-- **Active Learning** (Settles, 2009) — Re-train on uncertain examples
-- **Concept Drift** (Gama et al., 2014) — Adaptive learning in non-stationary environments
+- **Data Drift Detection** (Rabanser et al., 2019) â€” Distribution shift in ML systems
+- **Online Model Monitoring** (Klaise et al., 2020) â€” Alibi Detect for drift
+- **Calibration Monitoring** (Ovadia et al., 2019) â€” Test-time calibration drift
+- **Active Learning** (Settles, 2009) â€” Re-train on uncertain examples
+- **Concept Drift** (Gama et al., 2014) â€” Adaptive learning in non-stationary environments
 
 ### Ground-Truth Dataset
 
@@ -8711,19 +8711,19 @@ ground_truth:
 
 | Metric | Threshold | Alert Level | Action |
 |--------|-----------|-------------|--------|
-| **AUC-ROC** | < 0.90 | ⚠️ WARNING | Re-calibrate thresholds |
-| **AUC-ROC** | < 0.85 | 🚨 CRITICAL | Re-train model immediately |
-| **F1 Score** | < 0.80 | ⚠️ WARNING | Add more training data |
-| **F1 Score** | < 0.75 | 🚨 CRITICAL | Re-train model |
-| **Calibration Error (ECE)** | > 0.10 | ⚠️ WARNING | Re-calibrate (temperature scaling) |
-| **Calibration Error (ECE)** | > 0.15 | 🚨 CRITICAL | Full re-calibration required |
-| **Prediction-GT Mismatch** | > 15% | ⚠️ WARNING | Review recent changes |
-| **Confidence Drift** | > 0.05 change in mean | ⚠️ WARNING | Thresholds may need adjustment |
+| **AUC-ROC** | < 0.90 | âš ï¸ WARNING | Re-calibrate thresholds |
+| **AUC-ROC** | < 0.85 | ðŸš¨ CRITICAL | Re-train model immediately |
+| **F1 Score** | < 0.80 | âš ï¸ WARNING | Add more training data |
+| **F1 Score** | < 0.75 | ðŸš¨ CRITICAL | Re-train model |
+| **Calibration Error (ECE)** | > 0.10 | âš ï¸ WARNING | Re-calibrate (temperature scaling) |
+| **Calibration Error (ECE)** | > 0.15 | ðŸš¨ CRITICAL | Full re-calibration required |
+| **Prediction-GT Mismatch** | > 15% | âš ï¸ WARNING | Review recent changes |
+| **Confidence Drift** | > 0.05 change in mean | âš ï¸ WARNING | Thresholds may need adjustment |
 
 **Expected Calibration Error (ECE):**
 ```python
 # Measures how well predicted probabilities match actual outcomes
-# ECE = Σ (|confidence - accuracy|) weighted by bin size
+# ECE = Î£ (|confidence - accuracy|) weighted by bin size
 # Good models: ECE < 0.05, Warning: ECE > 0.10, Critical: ECE > 0.15
 ```
 
@@ -9098,85 +9098,85 @@ dashboard:
 ## Competitive Advantage: Why This Beats LangGraph/AutoGPT
 
 **LangGraph/AutoGPT Limitations:**
-- ❌ Single-intent focus (chain one task at a time)
-- ❌ No multi-intent decomposition (user must break down requests)
-- ❌ Heavy LLM usage (every intent = LLM call, $$$)
-- ❌ No fast path (always hits LLM, high latency)
+- âŒ Single-intent focus (chain one task at a time)
+- âŒ No multi-intent decomposition (user must break down requests)
+- âŒ Heavy LLM usage (every intent = LLM call, $$$)
+- âŒ No fast path (always hits LLM, high latency)
 
 **FamilyOS K1 Advantages:**
-- ✅ **Multi-intent native** (handle 3-5 intents in one utterance)
-- ✅ **Hybrid routing** (30% rules, 50% local SLM, 20% LLM = lower cost + latency)
-- ✅ **Dependency DAG** (parallel + sequential execution)
-- ✅ **Universal kernel** (FamilyOS, enterprise, personal assistant)
-- ✅ **Context-aware** (hybrid memory strategy, <20KB budget)
+- âœ… **Multi-intent native** (handle 3-5 intents in one utterance)
+- âœ… **Hybrid routing** (30% rules, 50% local SLM, 20% LLM = lower cost + latency)
+- âœ… **Dependency DAG** (parallel + sequential execution)
+- âœ… **Universal kernel** (FamilyOS, enterprise, personal assistant)
+- âœ… **Context-aware** (hybrid memory strategy, <20KB budget)
 
 **Business Impact:**
-- 🚀 **User Experience:** Natural multi-task requests (like humans talk)
-- 💰 **Cost:** 70% lower LLM costs (rule/SLM fast path)
-- ⚡ **Latency:** 10-30ms for common intents (vs 150ms+ for LangGraph)
-- 🏢 **Sellable:** K1 kernel = standalone product (not just FamilyOS)
+- ðŸš€ **User Experience:** Natural multi-task requests (like humans talk)
+- ðŸ’° **Cost:** 70% lower LLM costs (rule/SLM fast path)
+- âš¡ **Latency:** 10-30ms for common intents (vs 150ms+ for LangGraph)
+- ðŸ¢ **Sellable:** K1 kernel = standalone product (not just FamilyOS)
 
 ---
 
-## 🧠 SessionState Structure — Working Memory Schema
+## ðŸ§  SessionState Structure â€” Working Memory Schema
 
 ### Design Philosophy: Flexible, Fast, Fault-Tolerant
 
 **Key Principles:**
-- ✅ **No hard 64KB cap** — soft target with sliding window eviction
-- ✅ **FlatBuffers serialization** — zero-copy, low latency (<1ms)
-- ✅ **Incremental snapshots** — checkpoint at key events for error recovery
-- ✅ **Lazy loading** — only load what's needed
-- ✅ **Space-efficient** — compress old data, prioritize recent
+- âœ… **No hard 64KB cap** â€” soft target with sliding window eviction
+- âœ… **FlatBuffers serialization** â€” zero-copy, low latency (<1ms)
+- âœ… **Incremental snapshots** â€” checkpoint at key events for error recovery
+- âœ… **Lazy loading** â€” only load what's needed
+- âœ… **Space-efficient** â€” compress old data, prioritize recent
 
 ---
 
 ### Research Foundations
 
 **Memory Management:**
-- **Working Memory Model** (Baddeley & Hitch, 1974) — limited capacity, recency bias
-- **Sliding Window Protocol** (Tanenbaum, 2003) — bounded buffer with eviction
-- **LRU Cache** (O'Neil et al., 1993) — least recently used eviction
-- **Two-Queue LRU** (Johnson & Shasha, 1994) — separate recent vs frequent items
+- **Working Memory Model** (Baddeley & Hitch, 1974) â€” limited capacity, recency bias
+- **Sliding Window Protocol** (Tanenbaum, 2003) â€” bounded buffer with eviction
+- **LRU Cache** (O'Neil et al., 1993) â€” least recently used eviction
+- **Two-Queue LRU** (Johnson & Shasha, 1994) â€” separate recent vs frequent items
 
 **Serialization:**
-- **FlatBuffers** (Google, 2014) — zero-copy deserialization, 10x faster than Protobuf
-- **Cap'n Proto** (Sandstorm, 2013) — similar to FlatBuffers, more compact
-- **MessagePack** (Furuhashi, 2008) — binary JSON, space-efficient
-- **Protobuf** (Google, 2008) — widely used, good tooling, slower than FlatBuffers
+- **FlatBuffers** (Google, 2014) â€” zero-copy deserialization, 10x faster than Protobuf
+- **Cap'n Proto** (Sandstorm, 2013) â€” similar to FlatBuffers, more compact
+- **MessagePack** (Furuhashi, 2008) â€” binary JSON, space-efficient
+- **Protobuf** (Google, 2008) â€” widely used, good tooling, slower than FlatBuffers
 
 **Fault Tolerance:**
-- **Chandy-Lamport Snapshots** (1985) — consistent distributed snapshots
-- **Write-Ahead Logging** (Gray, 1978) — durability without blocking
-- **Copy-on-Write** (BSD, 1988) — efficient state snapshots
-- **Temporal Workflows** (Uber, 2020) — durable execution with checkpoints
+- **Chandy-Lamport Snapshots** (1985) â€” consistent distributed snapshots
+- **Write-Ahead Logging** (Gray, 1978) â€” durability without blocking
+- **Copy-on-Write** (BSD, 1988) â€” efficient state snapshots
+- **Temporal Workflows** (Uber, 2020) â€” durable execution with checkpoints
 
 **State Management:**
-- **Orleans Virtual Actors** (Microsoft, 2011) — in-memory state with periodic snapshots
-- **Akka Persistence** (Lightbend, 2013) — event sourcing with snapshots
-- **Redis Memory Management** (Sanfilippo, 2009) — LRU eviction, AOF persistence
+- **Orleans Virtual Actors** (Microsoft, 2011) â€” in-memory state with periodic snapshots
+- **Akka Persistence** (Lightbend, 2013) â€” event sourcing with snapshots
+- **Redis Memory Management** (Sanfilippo, 2009) â€” LRU eviction, AOF persistence
 
 ---
 
-## SessionState Schema — Complete Specification
+## SessionState Schema â€” Complete Specification
 
 ### Overview: Six Core Sections
 
 ```
 SessionState (flexible size, ~20-80KB typical)
-├── 1. beliefs (10-20KB)      — User facts, preferences, context
-├── 2. scoreboard (4-8KB)     — Common ground, referents, QUD
-├── 3. control (8-12KB)       — Active leases, flow state, agents
-├── 4. persona (2-4KB)        — Personality model, tone, style
-├── 5. multimodal (4-8KB)     — Audio/vision state, streaming
-└── 6. meta (2-4KB)           — Metadata, telemetry, timestamps
+â”œâ”€â”€ 1. beliefs (10-20KB)      â€” User facts, preferences, context
+â”œâ”€â”€ 2. scoreboard (4-8KB)     â€” Common ground, referents, QUD
+â”œâ”€â”€ 3. control (8-12KB)       â€” Active leases, flow state, agents
+â”œâ”€â”€ 4. persona (2-4KB)        â€” Personality model, tone, style
+â”œâ”€â”€ 5. multimodal (4-8KB)     â€” Audio/vision state, streaming
+â””â”€â”€ 6. meta (2-4KB)           â€” Metadata, telemetry, timestamps
 ```
 
 **Total typical:** 30-56KB (well under soft target, room for growth)
 
 ---
 
-## 1. Beliefs Section — User Context & Facts
+## 1. Beliefs Section â€” User Context & Facts
 
 ### Schema
 
@@ -9243,16 +9243,16 @@ class Entity:
 ```
 
 **Size estimation:**
-- User facts: ~2-5KB (50-100 facts × ~50 bytes)
-- Preferences: ~1-2KB (20-50 prefs × ~40 bytes)
-- Recent turns: ~8-10KB (5 turns × 1.5KB each)
+- User facts: ~2-5KB (50-100 facts Ã— ~50 bytes)
+- Preferences: ~1-2KB (20-50 prefs Ã— ~40 bytes)
+- Recent turns: ~8-10KB (5 turns Ã— 1.5KB each)
 - Session summary: ~1KB
-- Active entities: ~2-4KB (10-20 entities × ~200 bytes)
+- Active entities: ~2-4KB (10-20 entities Ã— ~200 bytes)
 **Total: 14-22KB**
 
 ---
 
-## 2. Scoreboard Section — Common Ground Tracker
+## 2. Scoreboard Section â€” Common Ground Tracker
 
 ### Schema
 
@@ -9313,16 +9313,16 @@ class Ambiguity:
 ```
 
 **Size estimation:**
-- QUD stack: ~1-2KB (3-5 questions × ~300 bytes)
-- Referents: ~1-2KB (10-20 refs × ~100 bytes)
-- Grounding acts: ~2-3KB (20 acts × ~120 bytes)
-- Common ground: ~0.5-1KB (20-50 facts × ~20 bytes)
-- Ambiguities: ~0.5-1KB (2-5 ambiguities × ~200 bytes)
+- QUD stack: ~1-2KB (3-5 questions Ã— ~300 bytes)
+- Referents: ~1-2KB (10-20 refs Ã— ~100 bytes)
+- Grounding acts: ~2-3KB (20 acts Ã— ~120 bytes)
+- Common ground: ~0.5-1KB (20-50 facts Ã— ~20 bytes)
+- Ambiguities: ~0.5-1KB (2-5 ambiguities Ã— ~200 bytes)
 **Total: 5-9KB**
 
 ---
 
-## 3. Control Section — Execution State
+## 3. Control Section â€” Execution State
 
 ### Schema
 
@@ -9405,17 +9405,17 @@ class ProtocolState:
 ```
 
 **Size estimation:**
-- Agent leases: ~2-4KB (2-3 agents × ~1KB)
+- Agent leases: ~2-4KB (2-3 agents Ã— ~1KB)
 - Current flow: ~3-5KB (steps + results)
-- Flow history: ~1-2KB (3 flows × ~500 bytes)
-- Pending actions: ~1-2KB (5-10 actions × ~150 bytes)
+- Flow history: ~1-2KB (3 flows Ã— ~500 bytes)
+- Pending actions: ~1-2KB (5-10 actions Ã— ~150 bytes)
 - Budgets: ~0.2KB
 - Protocol state: ~0.5-1KB
 **Total: 8-14KB**
 
 ---
 
-## 4. Persona Section — Personality Model
+## 4. Persona Section â€” Personality Model
 
 ### Schema
 
@@ -9451,15 +9451,15 @@ class CommunicationStyle:
 ```
 
 **Size estimation:**
-- Traits: ~0.5KB (10-15 traits × ~40 bytes)
+- Traits: ~0.5KB (10-15 traits Ã— ~40 bytes)
 - Style: ~0.3KB
-- Adaptations: ~0.5KB (10-15 adaptations × ~40 bytes)
+- Adaptations: ~0.5KB (10-15 adaptations Ã— ~40 bytes)
 - Family preferences: ~1-2KB
 **Total: 2-3KB**
 
 ---
 
-### Persona Schema Lock — JSON Schema + Golden Tests
+### Persona Schema Lock â€” JSON Schema + Golden Tests
 
 **Design Principle:** Current persona struct documented but not locked:
 - No formal JSON Schema for validation
@@ -9470,9 +9470,9 @@ class CommunicationStyle:
 **Solution:** Lock schema with JSON Schema + 5 golden test personas.
 
 **Research Foundations:**
-- **Big Five Personality Model** (Costa & McCrae, 1992) — Canonical personality dimensions
-- **JSON Schema Specification** (Wright et al., 2022) — Formal validation framework
-- **Golden Testing** (Fowler, 2004) — Regression prevention with known-good examples
+- **Big Five Personality Model** (Costa & McCrae, 1992) â€” Canonical personality dimensions
+- **JSON Schema Specification** (Wright et al., 2022) â€” Formal validation framework
+- **Golden Testing** (Fowler, 2004) â€” Regression prevention with known-good examples
 
 ---
 
@@ -9559,7 +9559,7 @@ energetic_helper:
     use_exclamations: 0.85
     suggest_proactively: 0.80
   family_preferences:
-    morning_greeting: "Good morning! Ready for a great day? 🌞"
+    morning_greeting: "Good morning! Ready for a great day? ðŸŒž"
 
 # Golden test 2: "Professional Assistant"
 professional_assistant:
@@ -9664,8 +9664,8 @@ class PersonaValidator:
     Validates persona objects against JSON Schema.
 
     Enforced at:
-    - K0 → K1 transitions (load from disk)
-    - K1 → external API (serialization)
+    - K0 â†’ K1 transitions (load from disk)
+    - K1 â†’ external API (serialization)
     - User updates (admin UI)
     """
 
@@ -9721,12 +9721,12 @@ def test_golden_personas():
 
         try:
             validator.validate(persona_dict)
-            print(f"✓ {persona_name} passed validation")
+            print(f"âœ“ {persona_name} passed validation")
         except jsonschema.ValidationError as e:
-            print(f"✗ {persona_name} FAILED validation: {e.message}")
+            print(f"âœ— {persona_name} FAILED validation: {e.message}")
             raise
 
-# Enforcement at K0 → K1 boundary
+# Enforcement at K0 â†’ K1 boundary
 def load_persona_from_k0(space_key: str) -> Persona:
     """Load and validate persona from K0"""
     raw_data = k0_client.get(f"personas/{space_key}")
@@ -9757,7 +9757,7 @@ persona_schema_validation_total = Counter(
 
 ---
 
-### Persona Mutation Policy — Access Control + Audit Trail
+### Persona Mutation Policy â€” Access Control + Audit Trail
 
 **Design Principle:** Persona can mutate but no policy on:
 - Who can mutate (agent vs. user vs. policy)
@@ -9768,9 +9768,9 @@ persona_schema_validation_total = Counter(
 **Solution:** Mutation policy with permissions, TTL, rate limiting, K0 audit trail.
 
 **Research Foundations:**
-- **Role-Based Access Control (RBAC)** (Sandhu et al., 1996) — Permission models
-- **Audit Logging** (NIST SP 800-92, 2006) — Security event logging
-- **Data Retention Policies** (GDPR Article 5, 2018) — TTL requirements
+- **Role-Based Access Control (RBAC)** (Sandhu et al., 1996) â€” Permission models
+- **Audit Logging** (NIST SP 800-92, 2006) â€” Security event logging
+- **Data Retention Policies** (GDPR Article 5, 2018) â€” TTL requirements
 
 ---
 
@@ -9870,7 +9870,7 @@ class PersonaMutationController:
         self.k0_client = k0_client
 
         # Rate limiting state (in-memory)
-        self.mutation_counts: Dict[str, List[datetime]] = {}  # session_id → [timestamps]
+        self.mutation_counts: Dict[str, List[datetime]] = {}  # session_id â†’ [timestamps]
 
     async def mutate_persona(
         self,
@@ -9928,7 +9928,7 @@ class PersonaMutationController:
         # 8. Update rate limit state
         self._record_mutation(session_id)
 
-        print(f"[APPLIED] {actor} mutated {field_path}: {old_value} → {new_value}")
+        print(f"[APPLIED] {actor} mutated {field_path}: {old_value} â†’ {new_value}")
         return True
 
     def _check_permission(self, actor: str, field_path: str) -> bool:
@@ -10052,7 +10052,7 @@ async def agent_learns_adaptation(session_id: str, agent_id: str):
     )
 
     if success:
-        print("Persona updated: Using emojis more frequently 😊")
+        print("Persona updated: Using emojis more frequently ðŸ˜Š")
     else:
         print("Persona mutation blocked (rate limit or permission)")
 ```
@@ -10086,7 +10086,7 @@ persona_schema_errors = Counter(
 
 ---
 
-## 5. Multimodal Section — Audio/Vision State
+## 5. Multimodal Section â€” Audio/Vision State
 
 ### Schema
 
@@ -10153,7 +10153,7 @@ class StreamHandle:
 
 ---
 
-## 6. Meta Section — Metadata & Telemetry
+## 6. Meta Section â€” Metadata & Telemetry
 
 ### Schema
 
@@ -10225,7 +10225,7 @@ class VersionInfo:
 
 ### Design: Adaptive, Priority-Based
 
-**No Hard 64KB Cap** — soft target with graceful degradation
+**No Hard 64KB Cap** â€” soft target with graceful degradation
 
 **Eviction Strategy:** Multi-tier priority
 
@@ -10309,7 +10309,7 @@ class SessionStateManager:
 
 ---
 
-### Session Snapshot API — Debugging & Observability Endpoint
+### Session Snapshot API â€” Debugging & Observability Endpoint
 
 **Design Principle:** SessionState exists but no introspection endpoint:
 - Developers can't debug active session state
@@ -10319,9 +10319,9 @@ class SessionStateManager:
 **Solution:** `/k1/session.snapshot` endpoint returning complete session snapshot.
 
 **Research Foundations:**
-- **Debugging Observability** (Honeycomb, Lightstep) — Runtime introspection
-- **State Snapshots** (Erlang OTP, 1998) — Process state inspection
-- **API Design** (REST best practices, Fielding 2000) — Resource representation
+- **Debugging Observability** (Honeycomb, Lightstep) â€” Runtime introspection
+- **State Snapshots** (Erlang OTP, 1998) â€” Process state inspection
+- **API Design** (REST best practices, Fielding 2000) â€” Resource representation
 
 ---
 
@@ -10428,7 +10428,7 @@ Returns: Complete session snapshot (JSON)
         },
         {
           "role": "assistant",
-          "content": "It's currently 15°C and rainy in London.",
+          "content": "It's currently 15Â°C and rainy in London.",
           "timestamp": 1696896100.0
         }
       ],
@@ -10453,7 +10453,7 @@ Returns: Complete session snapshot (JSON)
       "grounding_acts": [
         {
           "type": "tool_result",
-          "content": "Weather result: 15°C, rainy",
+          "content": "Weather result: 15Â°C, rainy",
           "timestamp": 1696896100.0
         }
       ]
@@ -10691,7 +10691,7 @@ curl "http://localhost:8000/k1/session.snapshot?session_id=sess_slow_123" | jq '
 #   "intent_classification_ms": 180  # High!
 # }
 
-# Diagnosis: All metrics elevated → check agent roster
+# Diagnosis: All metrics elevated â†’ check agent roster
 curl "http://localhost:8000/k1/session.snapshot?session_id=sess_slow_123" | jq '.active_agents'
 
 # Output:
@@ -10822,9 +10822,9 @@ snapshot_response_time_ms = Histogram(
 | Agent leases | **Never** | - | Runtime state |
 
 **Research Backing:**
-- **LRU Cache** (O'Neil et al., 1993) — least recently used eviction
-- **Two-Queue LRU** (Johnson & Shasha, 1994) — separate frequent vs recent
-- **Redis Eviction** (Sanfilippo, 2009) — tiered eviction policies
+- **LRU Cache** (O'Neil et al., 1993) â€” least recently used eviction
+- **Two-Queue LRU** (Johnson & Shasha, 1994) â€” separate frequent vs recent
+- **Redis Eviction** (Sanfilippo, 2009) â€” tiered eviction policies
 
 ---
 
@@ -10834,22 +10834,22 @@ snapshot_response_time_ms = Histogram(
 
 | Format | Ser Time | Deser Time | Size | Zero-Copy | Tooling | Winner? |
 |--------|----------|------------|------|-----------|---------|---------|
-| **FlatBuffers** | ~0.8ms | **<0.1ms** | 100% | ✅ Yes | Good | ✅ |
-| Cap'n Proto | ~0.7ms | <0.1ms | 95% | ✅ Yes | Fair | - |
-| MessagePack | ~1.2ms | ~1.5ms | 90% | ❌ No | Good | - |
-| Protobuf | ~2.0ms | ~2.5ms | 85% | ❌ No | Excellent | - |
-| JSON | ~3.5ms | ~4.0ms | 120% | ❌ No | Excellent | - |
+| **FlatBuffers** | ~0.8ms | **<0.1ms** | 100% | âœ… Yes | Good | âœ… |
+| Cap'n Proto | ~0.7ms | <0.1ms | 95% | âœ… Yes | Fair | - |
+| MessagePack | ~1.2ms | ~1.5ms | 90% | âŒ No | Good | - |
+| Protobuf | ~2.0ms | ~2.5ms | 85% | âŒ No | Excellent | - |
+| JSON | ~3.5ms | ~4.0ms | 120% | âŒ No | Excellent | - |
 
 **Winner: FlatBuffers**
-- ✅ **Zero-copy deserialization** (<0.1ms, critical for hot path)
-- ✅ **Fast serialization** (~0.8ms)
-- ✅ **Compact** (comparable to Protobuf)
-- ✅ **Good tooling** (code generators for Python, C++, Rust)
-- ✅ **Production-proven** (used by Google, Facebook, Unity)
+- âœ… **Zero-copy deserialization** (<0.1ms, critical for hot path)
+- âœ… **Fast serialization** (~0.8ms)
+- âœ… **Compact** (comparable to Protobuf)
+- âœ… **Good tooling** (code generators for Python, C++, Rust)
+- âœ… **Production-proven** (used by Google, Facebook, Unity)
 
 **Research Backing:**
-- **FlatBuffers** (Google, 2014) — designed for games/real-time systems
-- **Benchmarks** (Google, 2016) — 10x faster deserialization vs Protobuf
+- **FlatBuffers** (Google, 2014) â€” designed for games/real-time systems
+- **Benchmarks** (Google, 2016) â€” 10x faster deserialization vs Protobuf
 
 ---
 
@@ -10975,9 +10975,9 @@ class SessionStateSerializer:
 **Strategy:** Checkpoint at key events (not fixed intervals)
 
 **Research Backing:**
-- **Chandy-Lamport Snapshots** (1985) — consistent distributed snapshots
-- **Temporal Workflows** (Uber, 2020) — checkpoint at task boundaries
-- **Akka Persistence** (Lightbend, 2013) — event sourcing with snapshots
+- **Chandy-Lamport Snapshots** (1985) â€” consistent distributed snapshots
+- **Temporal Workflows** (Uber, 2020) â€” checkpoint at task boundaries
+- **Akka Persistence** (Lightbend, 2013) â€” event sourcing with snapshots
 
 ---
 
@@ -11101,22 +11101,22 @@ class SnapshotManager:
 
 | Event | Blocking? | Frequency | Rationale |
 |-------|-----------|-----------|-----------|
-| **TURN_COMPLETE** | ✅ Yes | Every turn | Critical: user expects result persisted |
-| **PLAN_COMMITTED** | ✅ Yes | Before exec | Recovery point if execution fails |
-| **USER_CORRECTION** | ✅ Yes | On correction | User intent changed, must persist |
-| **TURN_ABORTED** | ✅ Yes | On error | Error recovery, audit trail |
-| **SESSION_CLOSED** | ✅ Yes | On close | Final state snapshot |
-| **AGENT_HIRED** | ❌ No | On hire | Nice-to-have, not critical |
-| **BELIEF_UPDATED** | ❌ No | On update | Can lose some beliefs |
-| **PERIODIC** | ❌ No | Every 30s | Fallback, long-running sessions |
+| **TURN_COMPLETE** | âœ… Yes | Every turn | Critical: user expects result persisted |
+| **PLAN_COMMITTED** | âœ… Yes | Before exec | Recovery point if execution fails |
+| **USER_CORRECTION** | âœ… Yes | On correction | User intent changed, must persist |
+| **TURN_ABORTED** | âœ… Yes | On error | Error recovery, audit trail |
+| **SESSION_CLOSED** | âœ… Yes | On close | Final state snapshot |
+| **AGENT_HIRED** | âŒ No | On hire | Nice-to-have, not critical |
+| **BELIEF_UPDATED** | âŒ No | On update | Can lose some beliefs |
+| **PERIODIC** | âŒ No | Every 30s | Fallback, long-running sessions |
 
 **Blocking Checkpoints (5):** Wait for K0 ack before proceeding
 **Async Checkpoints (3):** Fire-and-forget, don't block execution
 
 **Research Backing:**
-- **Temporal Workflows** (Uber, 2020) — checkpoint at task boundaries
-- **Orleans** (Microsoft, 2011) — periodic + event-based snapshots
-- **Write-Ahead Logging** (Gray, 1978) — critical events logged before commit
+- **Temporal Workflows** (Uber, 2020) â€” checkpoint at task boundaries
+- **Orleans** (Microsoft, 2011) â€” periodic + event-based snapshots
+- **Write-Ahead Logging** (Gray, 1978) â€” critical events logged before commit
 
 ---
 
@@ -11125,29 +11125,29 @@ class SnapshotManager:
 **Scenario 1: K1 crashes mid-turn**
 
 ```
-Turn starts → PLAN_COMMITTED checkpoint (blocking) ✅
-    ↓
-Step 1 executes → success
-Step 2 executes → K1 CRASHES ❌
-    ↓
-K1 restarts → restore from PLAN_COMMITTED checkpoint
-    ↓
+Turn starts â†’ PLAN_COMMITTED checkpoint (blocking) âœ…
+    â†“
+Step 1 executes â†’ success
+Step 2 executes â†’ K1 CRASHES âŒ
+    â†“
+K1 restarts â†’ restore from PLAN_COMMITTED checkpoint
+    â†“
 Replay: Skip step 1 (already in K0), retry step 2
-    ↓
-Turn completes → TURN_COMPLETE checkpoint ✅
+    â†“
+Turn completes â†’ TURN_COMPLETE checkpoint âœ…
 ```
 
 **Scenario 2: Tool times out, turn aborted**
 
 ```
-Tool call → timeout after 3s
-    ↓
+Tool call â†’ timeout after 3s
+    â†“
 Orchestrator: ABORT turn
-    ↓
-TURN_ABORTED checkpoint (blocking) ✅
-    ↓
+    â†“
+TURN_ABORTED checkpoint (blocking) âœ…
+    â†“
 Run compensations (Saga pattern)
-    ↓
+    â†“
 Return error to user
 ```
 
@@ -11156,10 +11156,10 @@ Return error to user
 ```
 Last checkpoint: 25s ago
 No turn activity (user idle)
-    ↓
+    â†“
 Periodic timer fires (30s)
-    ↓
-PERIODIC checkpoint (async) 🔥
+    â†“
+PERIODIC checkpoint (async) ðŸ”¥
 ```
 
 ---
@@ -11235,28 +11235,28 @@ session_state:
 ## Research Citations
 
 Memory Management:
-1. **Baddeley & Hitch, 1974** — Working Memory Model
-2. **Tanenbaum, 2003** — Sliding Window Protocol
-3. **O'Neil et al., 1993** — LRU-K Eviction
-4. **Johnson & Shasha, 1994** — 2Q LRU Algorithm
-5. **Sanfilippo, 2009** — Redis Memory Management
+1. **Baddeley & Hitch, 1974** â€” Working Memory Model
+2. **Tanenbaum, 2003** â€” Sliding Window Protocol
+3. **O'Neil et al., 1993** â€” LRU-K Eviction
+4. **Johnson & Shasha, 1994** â€” 2Q LRU Algorithm
+5. **Sanfilippo, 2009** â€” Redis Memory Management
 
 Serialization:
-6. **FlatBuffers** (Google, 2014) — Zero-copy serialization
-7. **Cap'n Proto** (Sandstorm, 2013) — Zero-copy alternative
-8. **MessagePack** (Furuhashi, 2008) — Binary JSON
-9. **Protobuf** (Google, 2008) — Schema-based serialization
+6. **FlatBuffers** (Google, 2014) â€” Zero-copy serialization
+7. **Cap'n Proto** (Sandstorm, 2013) â€” Zero-copy alternative
+8. **MessagePack** (Furuhashi, 2008) â€” Binary JSON
+9. **Protobuf** (Google, 2008) â€” Schema-based serialization
 
 Fault Tolerance:
-10. **Chandy-Lamport, 1985** — Consistent Snapshots
-11. **Gray, 1978** — Write-Ahead Logging
-12. **BSD, 1988** — Copy-on-Write
-13. **Temporal Workflows** (Uber, 2020) — Durable Execution
-14. **Orleans** (Microsoft, 2011) — Virtual Actors
-15. **Akka Persistence** (Lightbend, 2013) — Event Sourcing
+10. **Chandy-Lamport, 1985** â€” Consistent Snapshots
+11. **Gray, 1978** â€” Write-Ahead Logging
+12. **BSD, 1988** â€” Copy-on-Write
+13. **Temporal Workflows** (Uber, 2020) â€” Durable Execution
+14. **Orleans** (Microsoft, 2011) â€” Virtual Actors
+15. **Akka Persistence** (Lightbend, 2013) â€” Event Sourcing
 
 Grounding:
-16. **Clark & Brennan, 1991** — Grounding in Communication
+16. **Clark & Brennan, 1991** â€” Grounding in Communication
 
 ---
 
@@ -11268,71 +11268,71 @@ Grounding:
 - No checkpoints: Lost work on crashes
 
 **With SessionState (this design):**
-- ✅ **FlatBuffers:** ~0.8ms ser + <0.1ms deser = **0.9ms** (9x faster!)
-- ✅ **Sliding window:** Soft limit, graceful degradation
-- ✅ **Tiered eviction:** Minimal UX impact, predictable
-- ✅ **Incremental snapshots:** Error recovery with <5 steps lost
-- ✅ **Zero-copy:** Hot path reads <0.1ms (40x faster than JSON)
+- âœ… **FlatBuffers:** ~0.8ms ser + <0.1ms deser = **0.9ms** (9x faster!)
+- âœ… **Sliding window:** Soft limit, graceful degradation
+- âœ… **Tiered eviction:** Minimal UX impact, predictable
+- âœ… **Incremental snapshots:** Error recovery with <5 steps lost
+- âœ… **Zero-copy:** Hot path reads <0.1ms (40x faster than JSON)
 
 **Total savings per turn:** ~7-8ms (critical for 250ms TTFT budget)
 
 ---
 
-## 🎭 Protocol Monitor — Conversation Contract Enforcement
+## ðŸŽ­ Protocol Monitor â€” Conversation Contract Enforcement
 
 ### Design Philosophy: Lightweight, Composable, Runtime-Safe
 
 **Goal:** Enforce conversation protocols (turn-taking, grounding, task flows) without blocking the hot path
 
 **Key Decisions:**
-- ✅ **Custom DSL** (YAML-based) — simpler than Scribble, optimized for conversations
-- ✅ **Runtime enforcement** — blocks illegal moves, logs violations, suggests repairs
-- ✅ **FlatBuffers protocol library** — pre-compiled, zero-copy, <1ms lookup
-- ✅ **Composable protocols** — stack/merge protocols at runtime
+- âœ… **Custom DSL** (YAML-based) â€” simpler than Scribble, optimized for conversations
+- âœ… **Runtime enforcement** â€” blocks illegal moves, logs violations, suggests repairs
+- âœ… **FlatBuffers protocol library** â€” pre-compiled, zero-copy, <1ms lookup
+- âœ… **Composable protocols** â€” stack/merge protocols at runtime
 
 ---
 
 ### Research Foundations
 
 **Session Types & Protocols:**
-- **Multiparty Session Types (MPST)** (Honda et al., 1998) — type-safe communication protocols
-- **Scribble Protocol Language** (Yoshida et al., 2013) — global/local protocol specifications
-- **Behavioral Types** (Hüttel et al., 2016) — formal verification of communication
+- **Multiparty Session Types (MPST)** (Honda et al., 1998) â€” type-safe communication protocols
+- **Scribble Protocol Language** (Yoshida et al., 2013) â€” global/local protocol specifications
+- **Behavioral Types** (HÃ¼ttel et al., 2016) â€” formal verification of communication
 
 **Conversation Protocols:**
-- **Dialogue Games** (Levin & Moore, 1977) — rule-based turn-taking
-- **Grounding Protocol** (Clark & Brennan, 1991) — confirmation/repair cycles
-- **Task-Oriented Dialogue** (Raux et al., 2005) — slot-filling protocols
-- **Joint Action Theory** (Clark, 1996) — coordination in conversation
+- **Dialogue Games** (Levin & Moore, 1977) â€” rule-based turn-taking
+- **Grounding Protocol** (Clark & Brennan, 1991) â€” confirmation/repair cycles
+- **Task-Oriented Dialogue** (Raux et al., 2005) â€” slot-filling protocols
+- **Joint Action Theory** (Clark, 1996) â€” coordination in conversation
 
 **Runtime Enforcement:**
-- **Runtime Verification** (Leucker & Schallhart, 2009) — monitor program execution
-- **Design by Contract** (Meyer, 1992) — preconditions, postconditions, invariants
-- **State Machine Monitoring** (Chen & Roşu, 2007) — efficient runtime checks
+- **Runtime Verification** (Leucker & Schallhart, 2009) â€” monitor program execution
+- **Design by Contract** (Meyer, 1992) â€” preconditions, postconditions, invariants
+- **State Machine Monitoring** (Chen & RoÅŸu, 2007) â€” efficient runtime checks
 
 **Production Systems:**
-- **Rasa Forms** (2018) — rule-based dialogue management
-- **Amazon Lex** (2016) — slot-filling with validation
-- **TypeScript Type System** (Microsoft, 2012) — compile-time + runtime type checking
+- **Rasa Forms** (2018) â€” rule-based dialogue management
+- **Amazon Lex** (2016) â€” slot-filling with validation
+- **TypeScript Type System** (Microsoft, 2012) â€” compile-time + runtime type checking
 
 ---
 
-## Protocol Definition Language (PDL) — Custom YAML DSL
+## Protocol Definition Language (PDL) â€” Custom YAML DSL
 
 ### Why Custom DSL (not Scribble)?
 
 **Scribble Limitations:**
-- ❌ Too verbose for simple conversations (global + local projections)
-- ❌ Designed for distributed systems, not dialogue
-- ❌ No built-in grounding/repair primitives
-- ❌ Complex toolchain (parser, type checker, projector)
+- âŒ Too verbose for simple conversations (global + local projections)
+- âŒ Designed for distributed systems, not dialogue
+- âŒ No built-in grounding/repair primitives
+- âŒ Complex toolchain (parser, type checker, projector)
 
 **Custom PDL Advantages:**
-- ✅ **Conversation-native** — built-in grounding, clarification, repair
-- ✅ **YAML-based** — human-readable, easy to write/maintain
-- ✅ **FlatBuffers-compiled** — pre-compile to binary, <1ms runtime lookup
-- ✅ **Composable** — stack protocols (task + grounding + meta-policy)
-- ✅ **Lightweight** — minimal runtime overhead (<5ms per turn)
+- âœ… **Conversation-native** â€” built-in grounding, clarification, repair
+- âœ… **YAML-based** â€” human-readable, easy to write/maintain
+- âœ… **FlatBuffers-compiled** â€” pre-compile to binary, <1ms runtime lookup
+- âœ… **Composable** â€” stack protocols (task + grounding + meta-policy)
+- âœ… **Lightweight** â€” minimal runtime overhead (<5ms per turn)
 
 ---
 
@@ -11522,53 +11522,53 @@ protocol:
 
 ```
     [start]
-       ↓ (intent:book_restaurant)
-[gather_requirements] ←──┐ (user_refines)
-       ↓ (slots_filled)  │
-[search_restaurants]      │
-       ↓ (search_success) │
-[present_options] ────────┘
-       ↓ (user_selects)
+       â†“ (intent:book_restaurant)
+[gather_requirements] â†â”€â”€â” (user_refines)
+       â†“ (slots_filled)  â”‚
+[search_restaurants]      â”‚
+       â†“ (search_success) â”‚
+[present_options] â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+       â†“ (user_selects)
 [confirm_selection]
-    ↙         ↘
+    â†™         â†˜
 (yes)        (no)
-  ↓            ↓
+  â†“            â†“
 [book]   [present_options]
-  ↓
+  â†“
 [success]
 
 Meta-transitions (any state):
-  * → [cancel] (intent:cancel)
-  * → [start] (intent:restart)
+  * â†’ [cancel] (intent:cancel)
+  * â†’ [start] (intent:restart)
 ```
 
 ---
 
-## Runtime Enforcement — Monitor + Guard
+## Runtime Enforcement â€” Monitor + Guard
 
 ### Architecture
 
 ```
-User utterance → Intent Router
-                      ↓
+User utterance â†’ Intent Router
+                      â†“
               Protocol Monitor (guard)
-                ↓           ↓
+                â†“           â†“
             ALLOWED      BLOCKED
-                ↓           ↓
+                â†“           â†“
          Execute plan   Repair strategy
 ```
 
 ---
 
-## ProtocolMonitor — Complete Conversation Type Specifications
+## ProtocolMonitor â€” Complete Conversation Type Specifications
 
 **Design Principle:** All agent-kernel and agent-agent interactions follow explicit conversation protocols with error recovery paths to prevent deadlocks, resource leaks, and illegal states.
 
 **Research Foundations:**
-- **MPST** (Honda et al., 2008) — Multiparty Session Types for distributed protocols
-- **Scribble** (Yoshida et al., 2013) — Protocol description language
-- **Saga Pattern** (Garcia-Molina, 1987) — Compensating transactions for long-running workflows
-- **Erlang Supervisors** (Armstrong, 2003) — Let-it-crash with supervision trees
+- **MPST** (Honda et al., 2008) â€” Multiparty Session Types for distributed protocols
+- **Scribble** (Yoshida et al., 2013) â€” Protocol description language
+- **Saga Pattern** (Garcia-Molina, 1987) â€” Compensating transactions for long-running workflows
+- **Erlang Supervisors** (Armstrong, 2003) â€” Let-it-crash with supervision trees
 
 ### Six Core Conversation Protocols
 
@@ -11578,9 +11578,9 @@ User utterance → Intent Router
 
 **State Machine:**
 ```
-IDLE → (HIRE) → HIRING → (ACCEPT|REJECT) → ACCEPTING/FAILED → (CONFIRM) → READY
-                         ↓
-                      TIMEOUT → FAILED
+IDLE â†’ (HIRE) â†’ HIRING â†’ (ACCEPT|REJECT) â†’ ACCEPTING/FAILED â†’ (CONFIRM) â†’ READY
+                         â†“
+                      TIMEOUT â†’ FAILED
 ```
 
 **Protocol Definition (YAML DSL):**
@@ -11633,9 +11633,9 @@ protocol:
 ```
 
 **Error Recovery Paths:**
-- **REJECT** → Kernel tries fallback agent (e.g., "generic_assistant" instead of "travel_planner")
-- **TIMEOUT** (no ACCEPT in 50ms) → Kernel cancels hire, degrades capability, returns graceful error to user
-- **Agent crashes during ACCEPTING** → Kernel revokes lease, marks agent as FAILED, tries fallback
+- **REJECT** â†’ Kernel tries fallback agent (e.g., "generic_assistant" instead of "travel_planner")
+- **TIMEOUT** (no ACCEPT in 50ms) â†’ Kernel cancels hire, degrades capability, returns graceful error to user
+- **Agent crashes during ACCEPTING** â†’ Kernel revokes lease, marks agent as FAILED, tries fallback
 
 ---
 
@@ -11645,11 +11645,11 @@ protocol:
 
 **State Machine:**
 ```
-IDLE → (TASK) → RUNNING → (PROGRESS*) → (RESULT|ERROR) → COMPLETED/FAILED
-                         ↓
-                      (CANCEL) → ABORTING → (ACK_CANCEL) → CANCELLED
-                         ↓
-                      TIMEOUT → FAILED
+IDLE â†’ (TASK) â†’ RUNNING â†’ (PROGRESS*) â†’ (RESULT|ERROR) â†’ COMPLETED/FAILED
+                         â†“
+                      (CANCEL) â†’ ABORTING â†’ (ACK_CANCEL) â†’ CANCELLED
+                         â†“
+                      TIMEOUT â†’ FAILED
 ```
 
 **Protocol Definition:**
@@ -11715,10 +11715,10 @@ protocol:
 ```
 
 **Error Recovery Paths:**
-- **ERROR** → Kernel retries task once (max 1 retry), if fails again → ROLLBACK (Saga pattern)
-- **TIMEOUT** (no RESULT within timeout_ms) → Kernel sends CANCEL, waits for ACK_CANCEL, then force-kills agent
-- **Agent crashes mid-task** → Kernel detects missing heartbeat, initiates rollback, restores SessionState checkpoint
-- **ROLLBACK** → Agent must undo side effects (compensating transactions), return to pre-task state
+- **ERROR** â†’ Kernel retries task once (max 1 retry), if fails again â†’ ROLLBACK (Saga pattern)
+- **TIMEOUT** (no RESULT within timeout_ms) â†’ Kernel sends CANCEL, waits for ACK_CANCEL, then force-kills agent
+- **Agent crashes mid-task** â†’ Kernel detects missing heartbeat, initiates rollback, restores SessionState checkpoint
+- **ROLLBACK** â†’ Agent must undo side effects (compensating transactions), return to pre-task state
 
 ---
 
@@ -11728,9 +11728,9 @@ protocol:
 
 **State Machine:**
 ```
-RUNNING → (NEED_CLARIFICATION) → WAITING_USER → (CLARIFICATION_ANSWER|USER_CANCEL) → RUNNING/CANCELLED
-                                  ↓
-                               TIMEOUT (30s) → DEFAULT_ACTION/ABORT
+RUNNING â†’ (NEED_CLARIFICATION) â†’ WAITING_USER â†’ (CLARIFICATION_ANSWER|USER_CANCEL) â†’ RUNNING/CANCELLED
+                                  â†“
+                               TIMEOUT (30s) â†’ DEFAULT_ACTION/ABORT
 ```
 
 **Protocol Definition:**
@@ -11770,9 +11770,9 @@ protocol:
 ```
 
 **Error Recovery Paths:**
-- **User ignores** → TIMEOUT (30s) → Agent uses default answer OR aborts task
-- **User says "cancel"** → Kernel sends ABORT to agent, agent must rollback
-- **Agent asks unclarifiable question** → Meta-policy detects, reformulates question or aborts
+- **User ignores** â†’ TIMEOUT (30s) â†’ Agent uses default answer OR aborts task
+- **User says "cancel"** â†’ Kernel sends ABORT to agent, agent must rollback
+- **Agent asks unclarifiable question** â†’ Meta-policy detects, reformulates question or aborts
 
 ---
 
@@ -11782,9 +11782,9 @@ protocol:
 
 **State Machine:**
 ```
-AGENT_SPEAKING → (USER_BARGE_IN) → CANCELLING → (ACK_CANCEL) → IDLE
-                                   ↓
-                                TIMEOUT → FORCE_STOP
+AGENT_SPEAKING â†’ (USER_BARGE_IN) â†’ CANCELLING â†’ (ACK_CANCEL) â†’ IDLE
+                                   â†“
+                                TIMEOUT â†’ FORCE_STOP
 ```
 
 **Protocol Definition:**
@@ -11823,10 +11823,10 @@ protocol:
 ```
 
 **Error Recovery Paths:**
-- **Agent doesn't ACK_CANCEL** → Kernel force-terminates agent (lease revoked), system remains responsive
-- **TTS doesn't stop** → Kernel mutes audio output, prevents user hearing stale speech
+- **Agent doesn't ACK_CANCEL** â†’ Kernel force-terminates agent (lease revoked), system remains responsive
+- **TTS doesn't stop** â†’ Kernel mutes audio output, prevents user hearing stale speech
 
-**Performance Requirement:** Barge-in cancel ≤120ms (measured from VAD detection to audio mute)
+**Performance Requirement:** Barge-in cancel â‰¤120ms (measured from VAD detection to audio mute)
 
 ---
 
@@ -11836,9 +11836,9 @@ protocol:
 
 **State Machine:**
 ```
-AGENT_RUNNING → (TOOL_REQUEST) → VALIDATING → (ALLOWED|BLOCKED) → EXECUTING/DENIED
-                                                ↓
-                                             ALLOWED → (RESULT|ERROR|TIMEOUT) → AGENT_RUNNING
+AGENT_RUNNING â†’ (TOOL_REQUEST) â†’ VALIDATING â†’ (ALLOWED|BLOCKED) â†’ EXECUTING/DENIED
+                                                â†“
+                                             ALLOWED â†’ (RESULT|ERROR|TIMEOUT) â†’ AGENT_RUNNING
 ```
 
 **Protocol Definition:**
@@ -11898,9 +11898,9 @@ protocol:
 ```
 
 **Error Recovery Paths:**
-- **ERROR** → Kernel returns error to agent, agent decides (retry with different args, use fallback tool, or abort task)
-- **TIMEOUT** → ToolRunner kills tool process, returns TIMEOUT error to agent
-- **Cap violation** → Kernel rejects TOOL_REQUEST immediately, returns PERMISSION_DENIED, logs audit event
+- **ERROR** â†’ Kernel returns error to agent, agent decides (retry with different args, use fallback tool, or abort task)
+- **TIMEOUT** â†’ ToolRunner kills tool process, returns TIMEOUT error to agent
+- **Cap violation** â†’ Kernel rejects TOOL_REQUEST immediately, returns PERMISSION_DENIED, logs audit event
 
 ---
 
@@ -11910,15 +11910,15 @@ protocol:
 
 **State Machine:**
 ```
-EXECUTING_STEP_1 → SUCCESS → EXECUTING_STEP_2 → SUCCESS → EXECUTING_STEP_3 → FAILURE
-                                                                              ↓
+EXECUTING_STEP_1 â†’ SUCCESS â†’ EXECUTING_STEP_2 â†’ SUCCESS â†’ EXECUTING_STEP_3 â†’ FAILURE
+                                                                              â†“
                                                                         ROLLING_BACK
-                                                                              ↓
-                                            ROLLBACK_STEP_2 ← ACK ← ROLLBACK_REQUEST
-                                                   ↓
-                                            ROLLBACK_STEP_1 ← ACK
-                                                   ↓
-                                            RESTORE_CHECKPOINT → IDLE
+                                                                              â†“
+                                            ROLLBACK_STEP_2 â† ACK â† ROLLBACK_REQUEST
+                                                   â†“
+                                            ROLLBACK_STEP_1 â† ACK
+                                                   â†“
+                                            RESTORE_CHECKPOINT â†’ IDLE
 ```
 
 **Protocol Definition:**
@@ -11965,26 +11965,26 @@ protocol:
 **Rollback Flow Example:**
 ```
 Agent: Execute tool chain [book_flight, reserve_hotel, book_rental_car]
-  1. book_flight → SUCCESS (checkpoint saved)
-  2. reserve_hotel → SUCCESS (checkpoint saved)
-  3. book_rental_car → FAILURE (no cars available)
+  1. book_flight â†’ SUCCESS (checkpoint saved)
+  2. reserve_hotel â†’ SUCCESS (checkpoint saved)
+  3. book_rental_car â†’ FAILURE (no cars available)
 
 Kernel: Initiates rollback
-  → ROLLBACK reserve_hotel
+  â†’ ROLLBACK reserve_hotel
   Agent: ACK_ROLLBACK (cancels hotel reservation)
 
-  → ROLLBACK book_flight
+  â†’ ROLLBACK book_flight
   Agent: ACK_ROLLBACK (cancels flight booking)
 
-  → RESTORE_CHECKPOINT (SessionState restored to pre-task state)
+  â†’ RESTORE_CHECKPOINT (SessionState restored to pre-task state)
 
-Kernel → User: "I ran into an issue booking the rental car and had to undo the reservations. Let's try a different approach."
+Kernel â†’ User: "I ran into an issue booking the rental car and had to undo the reservations. Let's try a different approach."
 ```
 
 **Error Recovery Paths:**
-- **Agent fails to rollback step** → Kernel logs error, continues rollback chain (best-effort)
-- **Partial rollback** → Kernel marks SessionState as "inconsistent", requires user confirmation before proceeding
-- **Agent timeout during rollback** → Kernel force-restores SessionState checkpoint, logs incident
+- **Agent fails to rollback step** â†’ Kernel logs error, continues rollback chain (best-effort)
+- **Partial rollback** â†’ Kernel marks SessionState as "inconsistent", requires user confirmation before proceeding
+- **Agent timeout during rollback** â†’ Kernel force-restores SessionState checkpoint, logs incident
 
 ---
 
@@ -12016,7 +12016,7 @@ Kernel → User: "I ran into an issue booking the rental car and had to undo the
 
 ---
 
-### MPST Protocol Packs — Publishable Protocol Specifications + Fuzz Testing
+### MPST Protocol Packs â€” Publishable Protocol Specifications + Fuzz Testing
 
 **Design Principle:** Protocols defined (6 complete protocols above) but not formally packaged for:
 1. CI/CD testing
@@ -12027,10 +12027,10 @@ Kernel → User: "I ran into an issue booking the rental car and had to undo the
 **Solution:** Protocol packs (versioned bundles) + fuzz test framework.
 
 **Research Foundations:**
-- **Scribble Protocol Validation** (Yoshida et al., 2013) — Formal protocol checking
-- **QuickCheck** (Claessen & Hughes, 2000) — Property-based testing
-- **Model-Based Testing** (Utting & Legeard, 2007) — Test generation from models
-- **American Fuzzy Lop (AFL)** (Zalewski, 2014) — Coverage-guided fuzzing
+- **Scribble Protocol Validation** (Yoshida et al., 2013) â€” Formal protocol checking
+- **QuickCheck** (Claessen & Hughes, 2000) â€” Property-based testing
+- **Model-Based Testing** (Utting & Legeard, 2007) â€” Test generation from models
+- **American Fuzzy Lop (AFL)** (Zalewski, 2014) â€” Coverage-guided fuzzing
 
 ---
 
@@ -12112,20 +12112,20 @@ negative_tests:
   - name: "double_hire"
     description: "Cannot hire twice simultaneously"
     illegal_sequence:
-      - IDLE → HIRING (via HIRE_REQUEST)
-      - HIRING → HIRING (via HIRE_REQUEST)  # ILLEGAL
+      - IDLE â†’ HIRING (via HIRE_REQUEST)
+      - HIRING â†’ HIRING (via HIRE_REQUEST)  # ILLEGAL
     expected_result: "BLOCK"
 
   - name: "accept_before_hire"
     description: "Cannot accept before hire request"
     illegal_sequence:
-      - IDLE → ACCEPTING (via ACCEPT)  # ILLEGAL
+      - IDLE â†’ ACCEPTING (via ACCEPT)  # ILLEGAL
     expected_result: "BLOCK"
 
   - name: "infinite_loop"
     description: "Prevent stuck in HIRING"
     illegal_sequence:
-      - IDLE → HIRING
+      - IDLE â†’ HIRING
       - [wait 60ms]  # Exceeds 50ms timeout
     expected_result: "TIMEOUT transition"
 
@@ -12134,24 +12134,24 @@ positive_tests:
   - name: "normal_hire"
     description: "Successful hire flow"
     sequence:
-      - IDLE → HIRING (via HIRE_REQUEST)
-      - HIRING → ACCEPTING (via ACCEPT)
-      - ACCEPTING → READY (via CONFIRM)
+      - IDLE â†’ HIRING (via HIRE_REQUEST)
+      - HIRING â†’ ACCEPTING (via ACCEPT)
+      - ACCEPTING â†’ READY (via CONFIRM)
     expected_result: "SUCCESS"
 
   - name: "rejection_handling"
     description: "Handle agent rejection"
     sequence:
-      - IDLE → HIRING (via HIRE_REQUEST)
-      - HIRING → REJECTED (via REJECT)
+      - IDLE â†’ HIRING (via HIRE_REQUEST)
+      - HIRING â†’ REJECTED (via REJECT)
     expected_result: "SUCCESS (with fallback)"
 
   - name: "timeout_recovery"
     description: "Handle hire timeout"
     sequence:
-      - IDLE → HIRING (via HIRE_REQUEST)
+      - IDLE â†’ HIRING (via HIRE_REQUEST)
       - [wait 55ms]  # Exceeds timeout
-      - HIRING → TIMEOUT (auto)
+      - HIRING â†’ TIMEOUT (auto)
     expected_result: "SUCCESS (with fallback)"
 ```
 
@@ -12220,8 +12220,8 @@ class ProtocolPackTester:
 
             for step in sequence:
                 if isinstance(step, str):
-                    # Parse "STATE → STATE (via TRIGGER)"
-                    from_state, rest = step.split("→")
+                    # Parse "STATE â†’ STATE (via TRIGGER)"
+                    from_state, rest = step.split("â†’")
                     to_state, trigger = rest.split("(via ")
                     trigger = trigger.rstrip(")")
 
@@ -12236,7 +12236,7 @@ class ProtocolPackTester:
                             passed=False,
                             actual_result="INVALID_TRANSITION",
                             expected_result=expected,
-                            error_message=f"Transition {from_state} → {to_state} not allowed"
+                            error_message=f"Transition {from_state} â†’ {to_state} not allowed"
                         )
 
                     current_state = to_state
@@ -12281,7 +12281,7 @@ class ProtocolPackTester:
             # Try to execute illegal sequence
             for step in illegal_sequence:
                 # Parse step
-                from_state, rest = step.split("→")
+                from_state, rest = step.split("â†’")
                 to_state, trigger = rest.split("(via ")
                 trigger = trigger.rstrip(")")
 
@@ -12354,7 +12354,7 @@ class ProtocolPackTester:
                     # Valid transition exists
                     transition = valid_transitions[0]
                     next_state = transition["to"]
-                    sequence.append(f"{current_state} → {next_state} (via {trigger})")
+                    sequence.append(f"{current_state} â†’ {next_state} (via {trigger})")
                     current_state = next_state
                 else:
                     # Invalid transition attempted
@@ -12466,7 +12466,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml pytest
+          pip install pyyaml ward
 
       - name: Run protocol pack tests
         run: |
@@ -12563,7 +12563,7 @@ class ProtocolMonitor:
             return result
 
         else:
-            # Illegal transition → enforce violation policy
+            # Illegal transition â†’ enforce violation policy
             violation_policy = protocol_state.protocol.violations["illegal_transition"]
 
             if violation_policy.action == "block":
@@ -12695,7 +12695,7 @@ monitor.check_transition(
     proposed_action="intent:book_restaurant",
     context={"intent": "book_restaurant", "party_size": 4, "time": "7pm"}
 )
-# → TransitionResult(allowed=True, next_state="gather_requirements")
+# â†’ TransitionResult(allowed=True, next_state="gather_requirements")
 ```
 
 **Example 2: Blocked Transition (Illegal)**
@@ -12708,7 +12708,7 @@ monitor.check_transition(
     proposed_action="confirm",
     context={"intent": "confirm"}
 )
-# → TransitionResult(
+# â†’ TransitionResult(
 #     allowed=False,
 #     reason="Illegal transition from 'gather_requirements' with action 'confirm'",
 #     fallback_strategy="ask_user",
@@ -12728,25 +12728,25 @@ monitor.check_transition(
     proposed_action="intent:cancel",
     context={"intent": "cancel"}
 )
-# → TransitionResult(allowed=True, next_state="cancel")
+# â†’ TransitionResult(allowed=True, next_state="cancel")
 ```
 
 ---
 
-## Protocol Library — FlatBuffers-Compiled
+## Protocol Library â€” FlatBuffers-Compiled
 
 ### Why FlatBuffers for Protocols?
 
 **Advantages:**
-- ✅ **Zero-copy lookup** — <1ms to load protocol
-- ✅ **Pre-compiled** — YAML → FlatBuffers at build time
-- ✅ **Type-safe** — schema validation at compile time
-- ✅ **Compact** — 10x smaller than JSON
+- âœ… **Zero-copy lookup** â€” <1ms to load protocol
+- âœ… **Pre-compiled** â€” YAML â†’ FlatBuffers at build time
+- âœ… **Type-safe** â€” schema validation at compile time
+- âœ… **Compact** â€” 10x smaller than JSON
 
 **Build Process:**
 ```
-YAML protocol → Parser → FlatBuffers schema → Compiler → .bin file
-                                                           ↓
+YAML protocol â†’ Parser â†’ FlatBuffers schema â†’ Compiler â†’ .bin file
+                                                           â†“
                                                     Runtime: mmap
 ```
 
@@ -12895,7 +12895,7 @@ class ProtocolRegistry:
 
 ---
 
-## Protocol Composition — Stack & Merge
+## Protocol Composition â€” Stack & Merge
 
 ### Composable Protocols
 
@@ -12959,27 +12959,27 @@ protocol:
 
 ---
 
-## 📊 Scoreboard / Common Ground Tracker
+## ðŸ“Š Scoreboard / Common Ground Tracker
 
 ### Design Philosophy: Grounding Theory + Efficient Updates
 
 **Goal:** Track what's mutually understood (common ground) with minimal overhead
 
 **Research Backing:**
-- **Grounding in Communication** (Clark & Brennan, 1991) — common ground accumulation
-- **Questions Under Discussion (QUD)** (Roberts, 1996) — discourse structure
-- **Referential Communication** (Brennan & Clark, 1996) — collaborative reference
-- **Dialogue State Tracking** (Williams et al., 2013) — belief state management
+- **Grounding in Communication** (Clark & Brennan, 1991) â€” common ground accumulation
+- **Questions Under Discussion (QUD)** (Roberts, 1996) â€” discourse structure
+- **Referential Communication** (Brennan & Clark, 1996) â€” collaborative reference
+- **Dialogue State Tracking** (Williams et al., 2013) â€” belief state management
 
 ---
 
 ### Data Structure: Hybrid Graph + Key-Value
 
 **Why Hybrid?**
-- ✅ **Graph** for QUD stack (tree structure, dependencies)
-- ✅ **Key-value** for referents (fast lookup, O(1))
-- ✅ **Deque** for grounding acts (FIFO, bounded)
-- ✅ **Set** for common ground (unique facts)
+- âœ… **Graph** for QUD stack (tree structure, dependencies)
+- âœ… **Key-value** for referents (fast lookup, O(1))
+- âœ… **Deque** for grounding acts (FIFO, bounded)
+- âœ… **Set** for common ground (unique facts)
 
 ---
 
@@ -13144,7 +13144,7 @@ class ScoreboardUpdater:
         # Simple heuristic-based (production: use QUD classifier)
         quds = []
 
-        # Question utterance → direct QUD
+        # Question utterance â†’ direct QUD
         if "?" in utterance:
             quds.append(QUD(
                 question=utterance,
@@ -13152,7 +13152,7 @@ class ScoreboardUpdater:
                 priority=1.0
             ))
 
-        # Request utterance → implied QUD
+        # Request utterance â†’ implied QUD
         elif any(word in utterance.lower() for word in ["find", "book", "plan", "check"]):
             # Infer QUD from intent
             intent = session.control.current_flow.intents[0] if session.control.current_flow else "unknown"
@@ -13232,12 +13232,12 @@ class ScoreboardUpdater:
 ### Memory Integration: K0 Sync via Ports
 
 **K0 Ports (4 ports):**
-1. **Command Port** — write commands (persist turn, update beliefs)
-2. **Query Port** — read queries (retrieve episodic memory)
-3. **SSE Port** — server-sent events (real-time updates)
-4. **Sync Port** — CRDT sync (multi-device state)
+1. **Command Port** â€” write commands (persist turn, update beliefs)
+2. **Query Port** â€” read queries (retrieve episodic memory)
+3. **SSE Port** â€” server-sent events (real-time updates)
+4. **Sync Port** â€” CRDT sync (multi-device state)
 
-**Scoreboard → K0 Sync Strategy:**
+**Scoreboard â†’ K0 Sync Strategy:**
 
 ```python
 class ScoreboardK0Sync:
@@ -13406,26 +13406,26 @@ scoreboard:
 ## Research Citations
 
 **Protocol Monitor:**
-1. **Honda et al., 1998** — Multiparty Session Types
-2. **Yoshida et al., 2013** — Scribble Protocol Language
-3. **Hüttel et al., 2016** — Behavioral Types
-4. **Levin & Moore, 1977** — Dialogue Games
-5. **Clark & Brennan, 1991** — Grounding in Communication
-6. **Raux et al., 2005** — Task-Oriented Dialogue Systems
-7. **Clark, 1996** — Using Language (Joint Action Theory)
-8. **Leucker & Schallhart, 2009** — Runtime Verification
-9. **Meyer, 1992** — Design by Contract
-10. **Chen & Roşu, 2007** — State Machine Monitoring
+1. **Honda et al., 1998** â€” Multiparty Session Types
+2. **Yoshida et al., 2013** â€” Scribble Protocol Language
+3. **HÃ¼ttel et al., 2016** â€” Behavioral Types
+4. **Levin & Moore, 1977** â€” Dialogue Games
+5. **Clark & Brennan, 1991** â€” Grounding in Communication
+6. **Raux et al., 2005** â€” Task-Oriented Dialogue Systems
+7. **Clark, 1996** â€” Using Language (Joint Action Theory)
+8. **Leucker & Schallhart, 2009** â€” Runtime Verification
+9. **Meyer, 1992** â€” Design by Contract
+10. **Chen & RoÅŸu, 2007** â€” State Machine Monitoring
 
 **Scoreboard/Grounding:**
-11. **Clark & Brennan, 1991** — Grounding in Communication (again)
-12. **Roberts, 1996** — Information Structure (QUD Theory)
-13. **Brennan & Clark, 1996** — Conceptual Pacts in Conversation
-14. **Williams et al., 2013** — Dialogue State Tracking Challenge
+11. **Clark & Brennan, 1991** â€” Grounding in Communication (again)
+12. **Roberts, 1996** â€” Information Structure (QUD Theory)
+13. **Brennan & Clark, 1996** â€” Conceptual Pacts in Conversation
+14. **Williams et al., 2013** â€” Dialogue State Tracking Challenge
 
 **Production Systems:**
-15. **Rasa Forms** (2018) — Rule-based dialogue
-16. **Amazon Lex** (2016) — Slot-filling with validation
+15. **Rasa Forms** (2018) â€” Rule-based dialogue
+16. **Amazon Lex** (2016) â€” Slot-filling with validation
 
 ---
 
@@ -13437,10 +13437,10 @@ scoreboard:
 - Poor grounding (user frustration)
 
 **With Protocol Monitor (this design):**
-- ✅ **<1ms protocol lookup** (FlatBuffers, zero-copy)
-- ✅ **<5ms transition check** (FSM traversal)
-- ✅ **Blocks illegal moves** (reduces confusion by ~60%)
-- ✅ **Suggests repairs** (improves task completion by ~40%)
+- âœ… **<1ms protocol lookup** (FlatBuffers, zero-copy)
+- âœ… **<5ms transition check** (FSM traversal)
+- âœ… **Blocks illegal moves** (reduces confusion by ~60%)
+- âœ… **Suggests repairs** (improves task completion by ~40%)
 
 **Without Scoreboard:**
 - No coreference resolution ("it" undefined)
@@ -13448,61 +13448,61 @@ scoreboard:
 - Lost context across turns
 
 **With Scoreboard (this design):**
-- ✅ **<5ms update per turn** (in-memory operations)
-- ✅ **O(1) referent lookup** (hash map)
-- ✅ **Context carry-over** (80% reduction in clarifications)
-- ✅ **Grounding acts tracked** (better conversation flow)
+- âœ… **<5ms update per turn** (in-memory operations)
+- âœ… **O(1) referent lookup** (hash map)
+- âœ… **Context carry-over** (80% reduction in clarifications)
+- âœ… **Grounding acts tracked** (better conversation flow)
 
 ---
 
-## 🧠 Meta-Policy — Proactivity & Adaptive Learning
+## ðŸ§  Meta-Policy â€” Proactivity & Adaptive Learning
 
 ### Design Philosophy: Human-Like, Non-Intrusive, Self-Aware
 
 **Goal:** Proactively clarify, suggest, and adapt WITHOUT annoying the user
 
 **Key Principles:**
-- ✅ **Clarify when uncertain** — don't guess, ask
-- ✅ **Suggest when helpful** — don't interrupt, enhance
-- ✅ **Learn from feedback** — adapt to user preferences
-- ✅ **Self-model** — personalized per-user, loads from K0 on boot
+- âœ… **Clarify when uncertain** â€” don't guess, ask
+- âœ… **Suggest when helpful** â€” don't interrupt, enhance
+- âœ… **Learn from feedback** â€” adapt to user preferences
+- âœ… **Self-model** â€” personalized per-user, loads from K0 on boot
 
 ---
 
 ### Research Foundations
 
 **Proactive Dialogue Systems:**
-- **Mixed-Initiative Interaction** (Allen et al., 1999) — system takes initiative when helpful
-- **Proactive Conversational Agents** (Yang et al., 2018) — predict user needs, suggest proactively
-- **Turn-Taking in Conversation** (Sacks et al., 1974) — when to speak, when to wait
-- **Politeness Theory** (Brown & Levinson, 1987) — face-saving acts, minimize imposition
+- **Mixed-Initiative Interaction** (Allen et al., 1999) â€” system takes initiative when helpful
+- **Proactive Conversational Agents** (Yang et al., 2018) â€” predict user needs, suggest proactively
+- **Turn-Taking in Conversation** (Sacks et al., 1974) â€” when to speak, when to wait
+- **Politeness Theory** (Brown & Levinson, 1987) â€” face-saving acts, minimize imposition
 
 **Uncertainty & Clarification:**
-- **Active Learning** (Settles, 2009) — query most uncertain examples
-- **Selective Question Answering** (Rajpurkar et al., 2018) — abstain when uncertain
-- **Clarification Strategies** (Purver et al., 2003) — types of clarification questions
-- **Confidence Calibration** (Guo et al., 2017) — reliable uncertainty estimates
+- **Active Learning** (Settles, 2009) â€” query most uncertain examples
+- **Selective Question Answering** (Rajpurkar et al., 2018) â€” abstain when uncertain
+- **Clarification Strategies** (Purver et al., 2003) â€” types of clarification questions
+- **Confidence Calibration** (Guo et al., 2017) â€” reliable uncertainty estimates
 
 **Personalization & Learning:**
-- **User Modeling** (Kobsa, 2001) — represent user preferences, goals, knowledge
-- **Implicit Feedback** (Hu et al., 2008) — learn from behavior (clicks, corrections)
-- **Reinforcement Learning from Human Feedback (RLHF)** (Christiano et al., 2017) — align AI with user preferences
-- **Contextual Bandits** (Li et al., 2010) — exploration-exploitation for personalization
+- **User Modeling** (Kobsa, 2001) â€” represent user preferences, goals, knowledge
+- **Implicit Feedback** (Hu et al., 2008) â€” learn from behavior (clicks, corrections)
+- **Reinforcement Learning from Human Feedback (RLHF)** (Christiano et al., 2017) â€” align AI with user preferences
+- **Contextual Bandits** (Li et al., 2010) â€” exploration-exploitation for personalization
 
 **Self-Model / Theory of Mind:**
-- **Theory of Mind** (Premack & Woodruff, 1978) — model others' beliefs/intentions
-- **Perspective-Taking** (Galinsky et al., 2005) — understand user's viewpoint
-- **Mental Models** (Craik, 1943) — internal representation of external world
-- **Self-Awareness in AI** (Langley et al., 2022) — systems that know their limitations
+- **Theory of Mind** (Premack & Woodruff, 1978) â€” model others' beliefs/intentions
+- **Perspective-Taking** (Galinsky et al., 2005) â€” understand user's viewpoint
+- **Mental Models** (Craik, 1943) â€” internal representation of external world
+- **Self-Awareness in AI** (Langley et al., 2022) â€” systems that know their limitations
 
 **Production Systems:**
-- **Alexa Hunches** (Amazon, 2018) — proactive suggestions based on patterns
-- **Google Assistant Suggestions** (2019) — context-aware proactive cards
-- **Apple Siri Suggestions** (2016) — predictive next actions
+- **Alexa Hunches** (Amazon, 2018) â€” proactive suggestions based on patterns
+- **Google Assistant Suggestions** (2019) â€” context-aware proactive cards
+- **Apple Siri Suggestions** (2016) â€” predictive next actions
 
 ---
 
-## Trigger Conditions — When to Interrupt
+## Trigger Conditions â€” When to Interrupt
 
 ### Three Categories of Triggers
 
@@ -13562,7 +13562,7 @@ class MetaPolicy:
         if missing_slots:
             # Check if user tends to provide info incrementally
             if self.self_model.get_preference("incremental_info", default=False):
-                # User prefers step-by-step → ask one slot at a time
+                # User prefers step-by-step â†’ ask one slot at a time
                 slot = missing_slots[0]
                 return ClarificationRequest(
                     type="missing_slot",
@@ -13571,7 +13571,7 @@ class MetaPolicy:
                     priority="medium"
                 )
             else:
-                # User prefers batch → ask all at once
+                # User prefers batch â†’ ask all at once
                 return ClarificationRequest(
                     type="missing_slots",
                     prompt=f"I'll need: {', '.join([s.name for s in missing_slots])}",
@@ -13662,28 +13662,28 @@ class Contradiction:
 ```
 User: "I want to go out"
 Intent confidence: 0.38 (< 0.45)
-→ Clarify: "Are you looking to book a restaurant, find activities, or plan a trip?"
+â†’ Clarify: "Are you looking to book a restaurant, find activities, or plan a trip?"
 ```
 
 **Example 2: Missing Required Slot**
 ```
 User: "Book a table"
 Missing: time, party_size, cuisine
-→ Clarify: "I'll need the time, party size, and cuisine type."
+â†’ Clarify: "I'll need the time, party size, and cuisine type."
 ```
 
 **Example 3: Ambiguous Slot**
 ```
 User: "Book a table at 7"
 Ambiguous: "7" could be 7am or 7pm
-→ Clarify: "Did you mean 7am or 7pm?"
+â†’ Clarify: "Did you mean 7am or 7pm?"
 ```
 
 **Example 4: Contradiction**
 ```
 User (Turn 1): "Book for 4 people"
 User (Turn 2): "Make it for 2"
-→ Clarify: "You said 4 people earlier, but now 2. Which is correct?"
+â†’ Clarify: "You said 4 people earlier, but now 2. Which is correct?"
 ```
 
 **Example 5: Safety-Critical**
@@ -13691,7 +13691,7 @@ User (Turn 2): "Make it for 2"
 User: "Cancel all my reminders"
 Safety-critical: deletion
 Confidence: 0.75 (< 0.85)
-→ Clarify: "Just to confirm: cancel ALL reminders? This can't be undone."
+â†’ Clarify: "Just to confirm: cancel ALL reminders? This can't be undone."
 ```
 
 ---
@@ -13711,13 +13711,13 @@ Confidence: 0.75 (< 0.85)
 - Ignores user's context
 
 **Research Findings:**
-- **Politeness Theory** (Brown & Levinson, 1987) — minimize imposition
-- **Interruption Science** (McFarlane, 2002) — timing matters more than content
-- **Notification Fatigue** (Pielot et al., 2014) — too many suggestions → ignore all
+- **Politeness Theory** (Brown & Levinson, 1987) â€” minimize imposition
+- **Interruption Science** (McFarlane, 2002) â€” timing matters more than content
+- **Notification Fatigue** (Pielot et al., 2014) â€” too many suggestions â†’ ignore all
 
 ---
 
-### Proactivity Rules — Research-Backed
+### Proactivity Rules â€” Research-Backed
 
 **Rule 1: Relevance Filter**
 ```
@@ -13791,7 +13791,7 @@ class ProactivityEngine:
         if not self.matches_user_preferences(suggestion):
             return False
 
-        # All filters passed → suggest
+        # All filters passed â†’ suggest
         return True
 
     def is_relevant(self, suggestion: ProactiveSuggestion, session: SessionState) -> bool:
@@ -13912,28 +13912,28 @@ class ProactiveSuggestion:
 ```
 User: "Book dinner at Mario's for 7pm"
 System: "Done. Would you also like me to set a reminder 30 minutes before?"
-✅ Relevant (same task), Good timing (turn complete), Valuable (saves time)
+âœ… Relevant (same task), Good timing (turn complete), Valuable (saves time)
 ```
 
 **Example 2: Optimization Suggestion (Good)**
 ```
 User: "Find flights to NYC next Friday"
 System: "I found 3 flights. By the way, flying Thursday evening is $80 cheaper and arrives the same time."
-✅ Relevant (same task), Valuable (saves money), New info
+âœ… Relevant (same task), Valuable (saves money), New info
 ```
 
 **Example 3: Warning (Good)**
 ```
 User: "Book table for 8pm Saturday"
 System: "That restaurant is fully booked Saturday. Want me to check Friday or Sunday instead?"
-✅ Prevents error, High priority, Valuable
+âœ… Prevents error, High priority, Valuable
 ```
 
 **Example 4: Intrusive Suggestion (Bad)**
 ```
 User: "Check the weather"
 System: "By the way, you haven't updated your shopping list in 3 days. Want to add items?"
-❌ Unrelated task, Poor timing, Not valuable
+âŒ Unrelated task, Poor timing, Not valuable
 ```
 
 **Example 5: Too Frequent (Bad)**
@@ -13944,7 +13944,7 @@ Turn 2: User checks weather
 System: "Want me to save this location?"
 Turn 3: User asks time
 System: "Want me to set an alarm?"
-❌ Too frequent (3 suggestions in 3 turns), User fatigue
+âŒ Too frequent (3 suggestions in 3 turns), User fatigue
 ```
 
 ---
@@ -13957,17 +13957,17 @@ System: "Want me to set an alarm?"
 |-------------|---------------------|---------------------|
 | **Deletion** | Always | "Delete ALL reminders? This can't be undone." |
 | **Payment** | Always | "Charge $45.50 to your Visa ending in 1234?" |
-| **Sharing** | ≥ 0.85 | "Share your location with John?" |
-| **Calendar** | ≥ 0.80 | "Add 'Dentist' to your calendar Tuesday 3pm?" |
-| **Booking** | ≥ 0.75 | "Book table at Mario's for 4 people at 7pm?" |
+| **Sharing** | â‰¥ 0.85 | "Share your location with John?" |
+| **Calendar** | â‰¥ 0.80 | "Add 'Dentist' to your calendar Tuesday 3pm?" |
+| **Booking** | â‰¥ 0.75 | "Book table at Mario's for 4 people at 7pm?" |
 
 **Research Backing:**
-- **Confirmatory Actions** (Norman, 1983) — prevent errors with confirmation
-- **Reversibility** (Nielsen, 1994) — irreversible actions need extra care
+- **Confirmatory Actions** (Norman, 1983) â€” prevent errors with confirmation
+- **Reversibility** (Nielsen, 1994) â€” irreversible actions need extra care
 
 ---
 
-## User Preference Learning — Adaptive Self-Model
+## User Preference Learning â€” Adaptive Self-Model
 
 ### Self-Model Architecture
 
@@ -14096,7 +14096,7 @@ class SelfModelLearner:
         Update self-model from implicit feedback (e.g., ignored suggestion)
         """
         if feedback.signal == "ignored":
-            # User ignored suggestion → reduce proactivity slightly
+            # User ignored suggestion â†’ reduce proactivity slightly
             if feedback.context.get("suggestion_type"):
                 pref_key = f"suggest_{feedback.context['suggestion_type']}"
                 current = self_model.preferences.get(pref_key, 0.5)
@@ -14104,14 +14104,14 @@ class SelfModelLearner:
                 self_model.preferences[pref_key] = max(0.0, current - self.learning_rate * 0.3)
 
         elif feedback.signal == "accepted":
-            # User accepted suggestion → increase proactivity slightly
+            # User accepted suggestion â†’ increase proactivity slightly
             if feedback.context.get("suggestion_type"):
                 pref_key = f"suggest_{feedback.context['suggestion_type']}"
                 current = self_model.preferences.get(pref_key, 0.5)
                 self_model.preferences[pref_key] = min(1.0, current + self.learning_rate * 0.3)
 
         elif feedback.signal == "correction":
-            # User corrected assistant → learn from mistake
+            # User corrected assistant â†’ learn from mistake
             if feedback.context.get("error_type"):
                 # Record pattern to avoid repeating
                 error_pattern = f"avoid_{feedback.context['error_type']}"
@@ -14193,7 +14193,7 @@ class SelfModelLearner:
                 version=result.get("version", 1)
             )
         else:
-            # No self-model yet → initialize with defaults
+            # No self-model yet â†’ initialize with defaults
             return SelfModel(
                 user_id=user_id,
                 preferences={
@@ -14210,15 +14210,15 @@ class SelfModelLearner:
 
 ```
 App opens / System boots
-    ↓
+    â†“
 K1 initializes (~100ms)
-    ↓
+    â†“
 Load self-model from K0 (~50ms)
-    ↓
+    â†“
 Parse preferences, patterns
-    ↓
+    â†“
 Self-model ready in memory
-    ↓
+    â†“
 MetaPolicy uses self-model for decisions
 ```
 
@@ -14299,34 +14299,34 @@ meta_policy:
 ## Research Citations
 
 **Proactive Dialogue:**
-1. **Allen et al., 1999** — Mixed-Initiative Interaction
-2. **Yang et al., 2018** — Proactive Conversational Agents
-3. **Sacks et al., 1974** — Turn-Taking in Conversation
-4. **Brown & Levinson, 1987** — Politeness Theory
+1. **Allen et al., 1999** â€” Mixed-Initiative Interaction
+2. **Yang et al., 2018** â€” Proactive Conversational Agents
+3. **Sacks et al., 1974** â€” Turn-Taking in Conversation
+4. **Brown & Levinson, 1987** â€” Politeness Theory
 
 **Uncertainty & Clarification:**
-5. **Settles, 2009** — Active Learning
-6. **Rajpurkar et al., 2018** — Selective Question Answering
-7. **Purver et al., 2003** — Clarification Strategies
-8. **Guo et al., 2017** — Confidence Calibration
+5. **Settles, 2009** â€” Active Learning
+6. **Rajpurkar et al., 2018** â€” Selective Question Answering
+7. **Purver et al., 2003** â€” Clarification Strategies
+8. **Guo et al., 2017** â€” Confidence Calibration
 
 **Personalization:**
-9. **Kobsa, 2001** — User Modeling
-10. **Hu et al., 2008** — Implicit Feedback
-11. **Christiano et al., 2017** — RLHF
-12. **Li et al., 2010** — Contextual Bandits
+9. **Kobsa, 2001** â€” User Modeling
+10. **Hu et al., 2008** â€” Implicit Feedback
+11. **Christiano et al., 2017** â€” RLHF
+12. **Li et al., 2010** â€” Contextual Bandits
 
 **Self-Model / Theory of Mind:**
-13. **Premack & Woodruff, 1978** — Theory of Mind
-14. **Galinsky et al., 2005** — Perspective-Taking
-15. **Craik, 1943** — Mental Models
-16. **Langley et al., 2022** — Self-Awareness in AI
+13. **Premack & Woodruff, 1978** â€” Theory of Mind
+14. **Galinsky et al., 2005** â€” Perspective-Taking
+15. **Craik, 1943** â€” Mental Models
+16. **Langley et al., 2022** â€” Self-Awareness in AI
 
 **HCI:**
-17. **Norman, 1983** — Design of Everyday Things (Confirmatory Actions)
-18. **Nielsen, 1994** — Usability Heuristics (Reversibility)
-19. **McFarlane, 2002** — Interruption Science
-20. **Pielot et al., 2014** — Notification Fatigue
+17. **Norman, 1983** â€” Design of Everyday Things (Confirmatory Actions)
+18. **Nielsen, 1994** â€” Usability Heuristics (Reversibility)
+19. **McFarlane, 2002** â€” Interruption Science
+20. **Pielot et al., 2014** â€” Notification Fatigue
 
 **Production:**
 21. **Alexa Hunches** (Amazon, 2018)
@@ -14343,11 +14343,11 @@ meta_policy:
 - Generic responses (not personalized)
 
 **With Meta-Policy (this design):**
-- ✅ **Clarifies when uncertain** (60% reduction in errors)
-- ✅ **Proactive suggestions** (30% faster task completion)
-- ✅ **Learns from feedback** (80% preference accuracy after 50 turns)
-- ✅ **Personalized per-user** (self-model loads in 50ms)
-- ✅ **Non-intrusive** (≤20% suggestion frequency, respects timing)
+- âœ… **Clarifies when uncertain** (60% reduction in errors)
+- âœ… **Proactive suggestions** (30% faster task completion)
+- âœ… **Learns from feedback** (80% preference accuracy after 50 turns)
+- âœ… **Personalized per-user** (self-model loads in 50ms)
+- âœ… **Non-intrusive** (â‰¤20% suggestion frequency, respects timing)
 
 **Self-Model Overhead:**
 - Boot: +50ms (load from K0)
@@ -14356,18 +14356,18 @@ meta_policy:
 
 ---
 
-## 🤖 Model Hub Client — LLM/SLM Interface
+## ðŸ¤– Model Hub Client â€” LLM/SLM Interface
 
 ### Design Philosophy
 
 **Problem:** Universal kernel needs to work with **any** LLM provider (OpenAI, Anthropic, local models, vLLM, HuggingFace) without vendor lock-in.
 
 **Solution:** Industry-standard adapter pattern with:
-1. **Unified interface** — All adapters implement same contract
-2. **Streaming-first** — Token-by-token delivery to TTS/UI
-3. **Automatic fallback** — NPU SLM fails → GPU/CPU SLM → Remote LLM
-4. **BYOM (Bring Your Own Model)** — Users login via their LLM provider account
-5. **Zero-copy streaming** — Direct token chunks to TTS/UI without buffering
+1. **Unified interface** â€” All adapters implement same contract
+2. **Streaming-first** â€” Token-by-token delivery to TTS/UI
+3. **Automatic fallback** â€” NPU SLM fails â†’ GPU/CPU SLM â†’ Remote LLM
+4. **BYOM (Bring Your Own Model)** â€” Users login via their LLM provider account
+5. **Zero-copy streaming** â€” Direct token chunks to TTS/UI without buffering
 
 **Research Foundations:**
 - **LiteLLM** (Anthropic, 2023): Unified interface across 100+ LLM providers
@@ -14375,7 +14375,7 @@ meta_policy:
 - **OpenAI Function Calling** (OpenAI, 2023): Tool use protocol standard
 - **SSE (Server-Sent Events)** (W3C): Standard streaming protocol
 - **Adapter Pattern** (Gamma et al., 1994): Design Patterns classic
-- **Circuit Breaker** (Nygard, 2007): Release It! — Fallback patterns
+- **Circuit Breaker** (Nygard, 2007): Release It! â€” Fallback patterns
 - **Ollama** (2024): Local model serving with unified API
 - **HuggingFace TGI** (Text Generation Inference, 2023): Production serving infrastructure
 - **ONNX Runtime** (Microsoft, 2019): Cross-platform inference optimization
@@ -14644,23 +14644,23 @@ class VLLMAdapter(ModelAdapter):
                         )
 ```
 
-### Streaming Protocol — Zero-Copy Token Delivery
+### Streaming Protocol â€” Zero-Copy Token Delivery
 
-**Problem:** Tokens must flow **immediately** from LLM → TTS (for voice) and UI (for text) without buffering.
+**Problem:** Tokens must flow **immediately** from LLM â†’ TTS (for voice) and UI (for text) without buffering.
 
 **Architecture:**
 
 ```
-┌─────────────┐  StreamChunk   ┌──────────────┐  Audio Chunk   ┌─────────┐
-│ ModelAdapter│ ────────────▶  │ StreamSwitch │ ─────────────▶ │   TTS   │
-└─────────────┘                └──────────────┘                └─────────┘
-                                       │                              │
-                                       │  Text Delta                  │ PCM
-                                       ▼                              ▼
-                                ┌──────────┐                   ┌──────────┐
-                                │ UI Event │                   │  Audio   │
-                                │  Bus     │                   │  Output  │
-                                └──────────┘                   └──────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  StreamChunk   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  Audio Chunk   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ ModelAdapterâ”‚ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶  â”‚ StreamSwitch â”‚ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¶ â”‚   TTS   â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                                       â”‚                              â”‚
+                                       â”‚  Text Delta                  â”‚ PCM
+                                       â–¼                              â–¼
+                                â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                                â”‚ UI Event â”‚                   â”‚  Audio   â”‚
+                                â”‚  Bus     â”‚                   â”‚  Output  â”‚
+                                â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 **Implementation:**
@@ -14756,21 +14756,21 @@ async def ui_consumer(queue: Queue):
 - **Memory:** O(n) where n = number of subscribers (typically 2-3)
 - **Backpressure:** Slow consumers disconnected after 100 queued chunks
 
-### Fallback Cascade — Automatic Recovery
+### Fallback Cascade â€” Automatic Recovery
 
-**Problem:** NPU SLM might fail (OOM, crash, thermal throttling). Need automatic fallback to GPU → CPU → Remote LLM.
+**Problem:** NPU SLM might fail (OOM, crash, thermal throttling). Need automatic fallback to GPU â†’ CPU â†’ Remote LLM.
 
 **Strategy:**
 
 ```
-Request → NPU SLM (gemma-2-9b @ 10ms TTFT)
-            ↓ FAIL (OOM, timeout, crash)
+Request â†’ NPU SLM (gemma-2-9b @ 10ms TTFT)
+            â†“ FAIL (OOM, timeout, crash)
           GPU SLM (gemma-2-9b @ 30ms TTFT)
-            ↓ FAIL
+            â†“ FAIL
           CPU SLM (gemma-2-9b @ 80ms TTFT)
-            ↓ FAIL
+            â†“ FAIL
           Remote LLM (gpt-4o @ 250ms TTFT)
-            ↓ FAIL
+            â†“ FAIL
           Error (show user, suggest retry)
 ```
 
@@ -14900,14 +14900,14 @@ class ModelHub:
             # Check circuit breaker
             breaker = self.circuit_breakers[model_id]
             if breaker.is_open():
-                print(f"⚠️ Circuit breaker OPEN for {model_id}, skipping")
+                print(f"âš ï¸ Circuit breaker OPEN for {model_id}, skipping")
                 continue
 
             # Try model with retries
             adapter = self.adapters[model_id]
             for attempt in range(self.fallback_policy.max_retries_per_target):
                 try:
-                    print(f"🔄 Trying {model_id} (attempt {attempt + 1})")
+                    print(f"ðŸ”„ Trying {model_id} (attempt {attempt + 1})")
 
                     # Update request model
                     request.model = model_id
@@ -14921,7 +14921,7 @@ class ModelHub:
                     return
 
                 except Exception as e:
-                    print(f"❌ {model_id} failed: {e}")
+                    print(f"âŒ {model_id} failed: {e}")
                     breaker.record_failure()
 
                     # Last retry for this model?
@@ -14962,10 +14962,10 @@ async def planner_generate_plan(user_input: str):
 
 | Scenario | Action | Latency Impact |
 |----------|--------|----------------|
-| NPU OOM | → GPU SLM | +20ms (30ms vs 10ms) |
-| GPU unavailable | → CPU SLM | +50ms (80ms vs 30ms) |
-| CPU timeout | → Remote LLM | +170ms (250ms vs 80ms) |
-| Remote API down | → Error | User notified, suggest retry |
+| NPU OOM | â†’ GPU SLM | +20ms (30ms vs 10ms) |
+| GPU unavailable | â†’ CPU SLM | +50ms (80ms vs 30ms) |
+| CPU timeout | â†’ Remote LLM | +170ms (250ms vs 80ms) |
+| Remote API down | â†’ Error | User notified, suggest retry |
 | Circuit breaker OPEN | Skip target | 0ms (immediate skip) |
 
 **Performance Analysis:**
@@ -14978,7 +14978,7 @@ async def planner_generate_plan(user_input: str):
 | **P99 TTFT** | 250ms (remote fallback) | 250ms |
 | **Error rate** | 5% (NPU fails) | 0.1% (all fail) |
 
-### Cost Tracking — BYOM (Users Manage Their Own Costs)
+### Cost Tracking â€” BYOM (Users Manage Their Own Costs)
 
 **Philosophy:** FamilyOS does **NOT** charge for LLM usage. Users bring their own API keys and manage costs directly with providers.
 
@@ -15034,7 +15034,7 @@ class ModelHub:
 
         # Check daily budget
         if user_config.cost_today_usd > user_config.max_cost_per_day_usd:
-            await self.notify_user(user_id, f"⚠️ Daily budget exceeded: ${user_config.cost_today_usd:.2f}")
+            await self.notify_user(user_id, f"âš ï¸ Daily budget exceeded: ${user_config.cost_today_usd:.2f}")
 
         # Persist to K0 (async, non-blocking)
         await self.persist_user_config(user_config)
@@ -15071,7 +15071,7 @@ async def render_usage_dashboard(user_id: str):
 4. **Daily budgets:** User-configurable soft limits (we warn, don't block)
 5. **Transparency:** UI shows usage dashboard with token counts and estimated costs
 
-### Configuration — Model Registry
+### Configuration â€” Model Registry
 
 **File:** `k1/config/model_hub.yml`
 
@@ -15208,7 +15208,7 @@ kv_cache_broker:
     - "You are a home automation expert..."
 ```
 
-### Performance Analysis — Model Hub Overhead
+### Performance Analysis â€” Model Hub Overhead
 
 **Latency Breakdown (NPU SLM path):**
 
@@ -15247,67 +15247,67 @@ kv_cache_broker:
 
 ## Research Citations (Model Hub Client)
 
-1. **LiteLLM** — Anthropic, 2023: *"Unified interface for 100+ LLM providers"*
-2. **vLLM** — Kwon et al., 2023: *"Efficient Memory Management for Large Language Model Serving with PagedAttention"*
-3. **OpenAI Function Calling** — OpenAI, 2023: *"Function calling and other API updates"*
-4. **SSE (Server-Sent Events)** — W3C, 2015: *"Standard streaming protocol for real-time events"*
-5. **Design Patterns: Adapter** — Gamma et al., 1994: *"Elements of Reusable Object-Oriented Software"*
-6. **Release It!: Circuit Breaker** — Nygard, 2007: *"Design and Deploy Production-Ready Software"*
-7. **Ollama** — 2024: *"Local LLM serving with unified API"*
-8. **HuggingFace TGI** — 2023: *"Text Generation Inference: Production serving infrastructure"*
-9. **ONNX Runtime** — Microsoft, 2019: *"Cross-platform inference optimization"*
-10. **Model Context Protocol** — Anthropic, 2024: *"Standardized model integration"*
-11. **Netflix Hystrix** — Netflix, 2012: *"Latency and fault tolerance library"*
-12. **Zero-Copy Messaging** — Rizzo, 2012: *"netmap: A Novel Framework for Fast Packet I/O"*
-13. **AsyncIO** — Python, 2014: *"Asynchronous I/O, event loop, coroutines and tasks"*
-14. **Streaming API Design** — Fielding, 2000: *"Architectural Styles and the Design of Network-based Software Architectures"*
-15. **LangChain Model Adapters** — LangChain, 2023: *"Unified LLM interface patterns"*
-16. **FastAPI Streaming** — Tiangolo, 2023: *"StreamingResponse for real-time data"*
+1. **LiteLLM** â€” Anthropic, 2023: *"Unified interface for 100+ LLM providers"*
+2. **vLLM** â€” Kwon et al., 2023: *"Efficient Memory Management for Large Language Model Serving with PagedAttention"*
+3. **OpenAI Function Calling** â€” OpenAI, 2023: *"Function calling and other API updates"*
+4. **SSE (Server-Sent Events)** â€” W3C, 2015: *"Standard streaming protocol for real-time events"*
+5. **Design Patterns: Adapter** â€” Gamma et al., 1994: *"Elements of Reusable Object-Oriented Software"*
+6. **Release It!: Circuit Breaker** â€” Nygard, 2007: *"Design and Deploy Production-Ready Software"*
+7. **Ollama** â€” 2024: *"Local LLM serving with unified API"*
+8. **HuggingFace TGI** â€” 2023: *"Text Generation Inference: Production serving infrastructure"*
+9. **ONNX Runtime** â€” Microsoft, 2019: *"Cross-platform inference optimization"*
+10. **Model Context Protocol** â€” Anthropic, 2024: *"Standardized model integration"*
+11. **Netflix Hystrix** â€” Netflix, 2012: *"Latency and fault tolerance library"*
+12. **Zero-Copy Messaging** â€” Rizzo, 2012: *"netmap: A Novel Framework for Fast Packet I/O"*
+13. **AsyncIO** â€” Python, 2014: *"Asynchronous I/O, event loop, coroutines and tasks"*
+14. **Streaming API Design** â€” Fielding, 2000: *"Architectural Styles and the Design of Network-based Software Architectures"*
+15. **LangChain Model Adapters** â€” LangChain, 2023: *"Unified LLM interface patterns"*
+16. **FastAPI Streaming** â€” Tiangolo, 2023: *"StreamingResponse for real-time data"*
 
 ---
 
-## 🔧 Tool Runner — Safe Execution Engine
+## ðŸ”§ Tool Runner â€” Safe Execution Engine
 
 ### Design Philosophy
 
 **Problem:** Agents need to execute arbitrary tools (API calls, file ops, calculations, web scraping) **safely**, with:
-1. **Isolation** — Prevent tools from breaking kernel or accessing unauthorized data
-2. **Timeout enforcement** — Kill runaway tools without blocking event loop
-3. **Discovery** — Agents must know which tools are available
-4. **Chaining** — Tools call other tools (orchestrated by kernel, not tools themselves)
-5. **Graceful errors** — Failed tools don't crash the turn
+1. **Isolation** â€” Prevent tools from breaking kernel or accessing unauthorized data
+2. **Timeout enforcement** â€” Kill runaway tools without blocking event loop
+3. **Discovery** â€” Agents must know which tools are available
+4. **Chaining** â€” Tools call other tools (orchestrated by kernel, not tools themselves)
+5. **Graceful errors** â€” Failed tools don't crash the turn
 
 **Solution:** **MCP (Model Context Protocol) Servers** as primary sandbox + process isolation fallback.
 
 **Research Foundations:**
-- **Model Context Protocol (MCP)** — Anthropic, 2024: Standardized tool/resource servers
-- **WebAssembly (WASM)** — W3C, 2019: Sandboxed execution for untrusted code
-- **Docker Containers** — Docker Inc., 2013: OS-level virtualization
-- **Process Isolation** — UNIX, 1970s: Separate address spaces, resource limits
-- **OpenAI Function Calling** — OpenAI, 2023: Tool use protocol standard
-- **LangChain Tools** — LangChain, 2023: Tool abstraction patterns
-- **AutoGPT Plugin System** — Significant Gravitas, 2023: Plugin sandbox architecture
-- **Temporal Workflows** — Temporal, 2020: Durable execution with timeouts
-- **gVisor** — Google, 2018: Application kernel for containers
-- **Firecracker** — AWS, 2018: Microvm for serverless isolation
-- **JSON Schema** — IETF, 2020: Schema validation for tool inputs/outputs
-- **Circuit Breaker Pattern** — Nygard, 2007: Timeout and failure handling
-- **Registry Pattern** — Fowler, 2002: Centralized plugin discovery
-- **DAG Execution** — Airflow, 2014: Dependency-aware task orchestration
+- **Model Context Protocol (MCP)** â€” Anthropic, 2024: Standardized tool/resource servers
+- **WebAssembly (WASM)** â€” W3C, 2019: Sandboxed execution for untrusted code
+- **Docker Containers** â€” Docker Inc., 2013: OS-level virtualization
+- **Process Isolation** â€” UNIX, 1970s: Separate address spaces, resource limits
+- **OpenAI Function Calling** â€” OpenAI, 2023: Tool use protocol standard
+- **LangChain Tools** â€” LangChain, 2023: Tool abstraction patterns
+- **AutoGPT Plugin System** â€” Significant Gravitas, 2023: Plugin sandbox architecture
+- **Temporal Workflows** â€” Temporal, 2020: Durable execution with timeouts
+- **gVisor** â€” Google, 2018: Application kernel for containers
+- **Firecracker** â€” AWS, 2018: Microvm for serverless isolation
+- **JSON Schema** â€” IETF, 2020: Schema validation for tool inputs/outputs
+- **Circuit Breaker Pattern** â€” Nygard, 2007: Timeout and failure handling
+- **Registry Pattern** â€” Fowler, 2002: Centralized plugin discovery
+- **DAG Execution** â€” Airflow, 2014: Dependency-aware task orchestration
 
 ---
 
-### Tool Egress Rules per Band — Network & Filesystem Security
+### Tool Egress Rules per Band â€” Network & Filesystem Security
 
 **Design Principle:** Every tool runs under explicit egress rules based on its safety band (GREEN/AMBER/RED/BLACK). Rules enforced at OS level via iptables/pfctl (network) and chroot/namespaces (filesystem).
 
 **Research Foundations:**
-- **Docker NetworkPolicy** — Docker Inc., 2015: Network isolation for containers
-- **Kubernetes NetworkPolicy** — CNCF, 2016: Pod-to-pod traffic control
-- **SELinux** — NSA, 2000: Mandatory access control for Linux
-- **AppArmor** — Novell, 1998: Application security profiles
-- **iptables** — Linux, 1998: Packet filtering firewall
-- **chroot** — UNIX, 1979: Filesystem isolation
+- **Docker NetworkPolicy** â€” Docker Inc., 2015: Network isolation for containers
+- **Kubernetes NetworkPolicy** â€” CNCF, 2016: Pod-to-pod traffic control
+- **SELinux** â€” NSA, 2000: Mandatory access control for Linux
+- **AppArmor** â€” Novell, 1998: Application security profiles
+- **iptables** â€” Linux, 1998: Packet filtering firewall
+- **chroot** â€” UNIX, 1979: Filesystem isolation
 
 #### Egress Rules by Band
 
@@ -15316,7 +15316,7 @@ kv_cache_broker:
 tool_egress_rules:
   bands:
     GREEN:
-      # HIGHEST SECURITY — Local-only, no network, read-only files
+      # HIGHEST SECURITY â€” Local-only, no network, read-only files
       network_access: false           # No network allowed
       filesystem_access: "read_only"  # Read-only access to tool directory
       allowed_domains: []             # Empty = no network
@@ -15336,7 +15336,7 @@ tool_egress_rules:
         - "json_parser"
 
     AMBER:
-      # MEDIUM SECURITY — Limited network, sandboxed filesystem
+      # MEDIUM SECURITY â€” Limited network, sandboxed filesystem
       network_access: true            # Network allowed
       filesystem_access: "read_write" # Read-write to sandbox directory only
       allowed_domains:                # Whitelist domains (DNS + IP resolution)
@@ -15367,7 +15367,7 @@ tool_egress_rules:
         - "email_send"
 
     RED:
-      # PRIVACY-SENSITIVE — No network (prevent PII leakage)
+      # PRIVACY-SENSITIVE â€” No network (prevent PII leakage)
       network_access: false           # NO NETWORK (privacy-critical)
       filesystem_access: "none"       # No file access
       allowed_domains: []
@@ -15383,7 +15383,7 @@ tool_egress_rules:
         - "encryption"
 
     BLACK:
-      # MAXIMUM ISOLATION — Experimental/untrusted tools
+      # MAXIMUM ISOLATION â€” Experimental/untrusted tools
       network_access: false           # Completely isolated
       filesystem_access: "none"       # No file access
       allowed_domains: []
@@ -15605,7 +15605,7 @@ class SyscallSandbox:
 
         MUST be called from within tool process (after fork).
         """
-        # Simplified example — real implementation uses libseccomp
+        # Simplified example â€” real implementation uses libseccomp
         # Whitelist allowed syscalls, kill process on others
 
         # Load libseccomp
@@ -15644,10 +15644,10 @@ class SyscallSandbox:
 **Design Principle:** Every tool failure has explicit recovery path (retry, fallback, rollback, apology) to prevent one tool crash from breaking entire conversation.
 
 **Research Foundations:**
-- **Saga Pattern** (Garcia-Molina, 1987) — Compensating transactions
-- **Circuit Breaker** (Nygard, 2007) — Fail-fast pattern
-- **Erlang "Let It Crash"** (Armstrong, 2003) — Supervised recovery
-- **Temporal Retry Policies** (Temporal, 2020) — Configurable retries
+- **Saga Pattern** (Garcia-Molina, 1987) â€” Compensating transactions
+- **Circuit Breaker** (Nygard, 2007) â€” Fail-fast pattern
+- **Erlang "Let It Crash"** (Armstrong, 2003) â€” Supervised recovery
+- **Temporal Retry Policies** (Temporal, 2020) â€” Configurable retries
 
 #### Failure Taxonomy
 
@@ -15756,24 +15756,24 @@ class ToolRunner:
                 await asyncio.sleep(backoff_ms / 1000.0)
 
             except EgressViolationError as e:
-                # Security violation — no retry, audit log
+                # Security violation â€” no retry, audit log
                 self._log_security_violation(tool_name, str(e))
                 return (False, None, self._get_apology(ToolErrorType.EGRESS_VIOLATION))
 
             except ValidationError as e:
-                # Schema mismatch — no retry
+                # Schema mismatch â€” no retry
                 return (False, None, self._get_apology(ToolErrorType.VALIDATION_ERROR))
 
             except ProcessCrashError as e:
-                # Tool crashed — no retry
+                # Tool crashed â€” no retry
                 return (False, None, self._get_apology(ToolErrorType.CRASH))
 
             except ResourceExhaustionError as e:
-                # OOM/CPU — no retry
+                # OOM/CPU â€” no retry
                 return (False, None, self._get_apology(ToolErrorType.RESOURCE_EXHAUSTION))
 
             except NetworkError as e:
-                # Network issue — retry once
+                # Network issue â€” retry once
                 attempt += 1
                 if attempt > max_retries:
                     return (False, None, self._get_apology(ToolErrorType.NETWORK_ERROR))
@@ -15783,15 +15783,15 @@ class ToolRunner:
                 await asyncio.sleep(backoff_ms / 1000.0)
 
             except PermissionDeniedError as e:
-                # Permission issue — no retry
+                # Permission issue â€” no retry
                 return (False, None, self._get_apology(ToolErrorType.PERMISSION_DENIED))
 
             except ToolNotFoundError as e:
-                # Tool missing — no retry
+                # Tool missing â€” no retry
                 return (False, None, self._get_apology(ToolErrorType.NOT_FOUND))
 
             except Exception as e:
-                # Unknown error — log and don't retry
+                # Unknown error â€” log and don't retry
                 print(f"[ToolRunner] Internal error in {tool_name}: {e}")
                 return (False, None, self._get_apology(ToolErrorType.INTERNAL_ERROR))
 
@@ -15830,7 +15830,7 @@ class PlannerAgent:
                 )
 
                 if not success:
-                    # Tool failed — agent decides recovery strategy
+                    # Tool failed â€” agent decides recovery strategy
                     if step.tool_name == "weather_api":
                         # Fallback: Use cached weather data
                         result = await self.get_cached_weather()
@@ -15839,12 +15839,12 @@ class PlannerAgent:
                         )
 
                     elif step.tool_name == "calendar_sync":
-                        # No fallback — abort task
+                        # No fallback â€” abort task
                         await self.send_message(error)
                         return self.rollback_plan(plan)
 
                     else:
-                        # Unknown tool — abort
+                        # Unknown tool â€” abort
                         await self.send_message("I ran into an issue and can't complete that task.")
                         return self.rollback_plan(plan)
 ```
@@ -15867,33 +15867,33 @@ protocol:
 
 **Apology Flow:**
 ```
-Agent → K1: TOOL_REQUEST(weather_api)
-K1 → ToolRunner: Execute
+Agent â†’ K1: TOOL_REQUEST(weather_api)
+K1 â†’ ToolRunner: Execute
 ToolRunner: TIMEOUT (kill tool after 3s)
-K1 → Agent: TOOL_ERROR(TIMEOUT, "Tool took too long")
-Agent → K1: APOLOGY("Weather unavailable, showing cached data")
-K1 → User: "I couldn't check the weather right now, but here's yesterday's forecast..."
+K1 â†’ Agent: TOOL_ERROR(TIMEOUT, "Tool took too long")
+Agent â†’ K1: APOLOGY("Weather unavailable, showing cached data")
+K1 â†’ User: "I couldn't check the weather right now, but here's yesterday's forecast..."
 ```
 
 ---
 
 ### Three-Tier Sandbox Strategy
 
-**Tier 1: MCP Servers (PRIMARY)** — 80% of tools
-- **What:** Anthropic's Model Context Protocol — tools run in separate processes, communicate via stdio/HTTP
+**Tier 1: MCP Servers (PRIMARY)** â€” 80% of tools
+- **What:** Anthropic's Model Context Protocol â€” tools run in separate processes, communicate via stdio/HTTP
 - **When:** Default for all tools (API calls, calculations, file ops, web scraping)
 - **Isolation:** Process boundaries, no shared memory, resource limits via OS
 - **Pros:** Industry standard, easy to add new tools, language-agnostic
 - **Cons:** ~5-10ms process spawn overhead (mitigated by persistent servers)
 
-**Tier 2: WASM Sandbox (HIGH-SECURITY)** — 15% of tools
+**Tier 2: WASM Sandbox (HIGH-SECURITY)** â€” 15% of tools
 - **What:** WebAssembly with WASI (WebAssembly System Interface)
 - **When:** User-provided tools, untrusted code, need sub-ms startup
 - **Isolation:** Memory sandboxing, capability-based security, no syscalls by default
 - **Pros:** <1ms startup, fine-grained permissions, cross-platform
 - **Cons:** Limited ecosystem, requires WASM compilation
 
-**Tier 3: Process Isolation (LEGACY/FALLBACK)** — 5% of tools
+**Tier 3: Process Isolation (LEGACY/FALLBACK)** â€” 5% of tools
 - **What:** Subprocess with resource limits (cgroups, ulimit)
 - **When:** Tools not compatible with MCP/WASM
 - **Isolation:** OS process boundaries, CPU/memory limits
@@ -15917,39 +15917,39 @@ K1 → User: "I couldn't check the weather right now, but here's yesterday's for
 - **Anthropic's standard** for tool/resource servers (released Nov 2024)
 - **Separate processes** communicate via stdio (local) or HTTP (remote)
 - **JSON-RPC protocol** for tool calls, resource access, prompts
-- **Schema-driven** — Tools declare inputs/outputs via JSON Schema
-- **Persistent servers** — Start once, handle multiple requests (avoids spawn overhead)
+- **Schema-driven** â€” Tools declare inputs/outputs via JSON Schema
+- **Persistent servers** â€” Start once, handle multiple requests (avoids spawn overhead)
 
 **Architecture:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ K1 Kernel (Event Loop)                                      │
-│                                                              │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   │
-│  │ Agent        │   │ Tool Registry│   │ Tool Runner  │   │
-│  │ "call_tool()"│──▶│ lookup       │──▶│ route to MCP │   │
-│  └──────────────┘   └──────────────┘   └──────┬───────┘   │
-│                                                 │            │
-└─────────────────────────────────────────────────┼───────────┘
-                                                  │ JSON-RPC
-                    ┌─────────────────────────────┼───────────┐
-                    │ MCP Server Manager          │           │
-                    │ (Persistent Process Pool)   │           │
-                    │                             │           │
-                    │  ┌───────────────┐    stdin/stdout     │
-                    │  │ MCP Server 1  │◀────────┘           │
-                    │  │ (Weather API) │                     │
-                    │  └───────────────┘                     │
-                    │  ┌───────────────┐                     │
-                    │  │ MCP Server 2  │                     │
-                    │  │ (Calendar)    │                     │
-                    │  └───────────────┘                     │
-                    │  ┌───────────────┐                     │
-                    │  │ MCP Server 3  │                     │
-                    │  │ (File Ops)    │                     │
-                    │  └───────────────┘                     │
-                    └─────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Kernel (Event Loop)                                      â”‚
+â”‚                                                              â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”‚
+â”‚  â”‚ Agent        â”‚   â”‚ Tool Registryâ”‚   â”‚ Tool Runner  â”‚   â”‚
+â”‚  â”‚ "call_tool()"â”‚â”€â”€â–¶â”‚ lookup       â”‚â”€â”€â–¶â”‚ route to MCP â”‚   â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜   â”‚
+â”‚                                                 â”‚            â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                                                  â”‚ JSON-RPC
+                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+                    â”‚ MCP Server Manager          â”‚           â”‚
+                    â”‚ (Persistent Process Pool)   â”‚           â”‚
+                    â”‚                             â”‚           â”‚
+                    â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”    stdin/stdout     â”‚
+                    â”‚  â”‚ MCP Server 1  â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”€â”˜           â”‚
+                    â”‚  â”‚ (Weather API) â”‚                     â”‚
+                    â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                     â”‚
+                    â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                     â”‚
+                    â”‚  â”‚ MCP Server 2  â”‚                     â”‚
+                    â”‚  â”‚ (Calendar)    â”‚                     â”‚
+                    â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                     â”‚
+                    â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                     â”‚
+                    â”‚  â”‚ MCP Server 3  â”‚                     â”‚
+                    â”‚  â”‚ (File Ops)    â”‚                     â”‚
+                    â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                     â”‚
+                    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 **MCP Protocol Example:**
@@ -15977,7 +15977,7 @@ K1 → User: "I couldn't check the weather right now, but here's yesterday's for
     "content": [
       {
         "type": "text",
-        "text": "Current weather in San Francisco: 18°C, partly cloudy"
+        "text": "Current weather in San Francisco: 18Â°C, partly cloudy"
       }
     ]
   }
@@ -15994,7 +15994,7 @@ K1 → User: "I couldn't check the weather right now, but here's yesterday's for
 }
 ```
 
-### Tool Registry — Discovery & Versioning
+### Tool Registry â€” Discovery & Versioning
 
 **Problem:** Agents need to know:
 1. Which tools exist?
@@ -16005,14 +16005,14 @@ K1 → User: "I couldn't check the weather right now, but here's yesterday's for
 **Solution:** Three registries with unified interface:
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ Unified Registry Interface (K1 Core)                     │
-└────────────┬──────────────┬──────────────┬──────────────┘
-             │              │              │
-    ┌────────▼──────┐ ┌────▼──────┐ ┌────▼──────┐
-    │ Tool Registry │ │  Prompt   │ │   Agent   │
-    │               │ │  Registry │ │  Registry │
-    └───────────────┘ └───────────┘ └───────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Unified Registry Interface (K1 Core)                     â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+             â”‚              â”‚              â”‚
+    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+    â”‚ Tool Registry â”‚ â”‚  Prompt   â”‚ â”‚   Agent   â”‚
+    â”‚               â”‚ â”‚  Registry â”‚ â”‚  Registry â”‚
+    â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
          tools/           prompts/      agents/
        weather.json     planner.json  planner.json
        calendar.json    calendar.json calendar.json
@@ -16082,7 +16082,7 @@ Each tool is defined by a JSON schema file:
 
 ---
 
-### Tool Capability Tags — Taxonomy for Tool Selection
+### Tool Capability Tags â€” Taxonomy for Tool Selection
 
 **Design Principle:** Tools defined but no structured capabilities:
 - No way to filter tools by computation level (light vs. heavy)
@@ -16093,9 +16093,9 @@ Each tool is defined by a JSON schema file:
 **Solution:** Capability taxonomy + matching logic.
 
 **Research Foundations:**
-- **Capability-Based Security** (Dennis & Van Horn, 1966) — Capability classification
-- **REST Resource Properties** (Fielding, 2000) — Safe vs. unsafe operations
-- **Mobile Resource Management** (Flinn & Satyanarayanan, 1999) — Context-aware selection
+- **Capability-Based Security** (Dennis & Van Horn, 1966) â€” Capability classification
+- **REST Resource Properties** (Fielding, 2000) â€” Safe vs. unsafe operations
+- **Mobile Resource Management** (Flinn & Satyanarayanan, 1999) â€” Context-aware selection
 
 ---
 
@@ -16275,7 +16275,7 @@ async def select_tools_for_task(task_tools: List[str], session: SessionState):
 
 ---
 
-### Tool Control Endpoints — Runtime Tool Management
+### Tool Control Endpoints â€” Runtime Tool Management
 
 **Design Principle:** Tools configured at boot, no runtime control:
 - Can't disable misbehaving tools without redeployment
@@ -16444,7 +16444,7 @@ class ToolControlAPI:
         # Update registry with target version
         self.registry.rollback_tool(tool_id, target_version)
 
-        print(f"[ROLLBACK] {tool_id}: {old_version} → {target_version} ({reason})")
+        print(f"[ROLLBACK] {tool_id}: {old_version} â†’ {target_version} ({reason})")
 
         return jsonify({
             "status": "rolled_back",
@@ -16665,7 +16665,7 @@ class Registry:
                 data = json.load(f)
                 self.agents[data["id"]] = AgentDefinition(**data)
 
-        print(f"✅ Registry loaded: {len(self.tools)} tools, {len(self.prompts)} prompts, {len(self.agents)} agents")
+        print(f"âœ… Registry loaded: {len(self.tools)} tools, {len(self.prompts)} prompts, {len(self.agents)} agents")
 
     def get_tool(self, tool_id: str) -> Optional[ToolDefinition]:
         """Get tool definition by ID"""
@@ -16712,7 +16712,7 @@ class Registry:
             return False, f"Invalid arguments: {e.message}"
 ```
 
-### Tool Runner — Execution Engine
+### Tool Runner â€” Execution Engine
 
 **Core responsibilities:**
 1. Route tool calls to appropriate sandbox (MCP/WASM/Process)
@@ -16785,7 +16785,7 @@ class MCPServerManager:
 
         self.servers[server_id] = proc
         self.server_configs[server_id] = config
-        print(f"✅ MCP server '{server_id}' started (PID: {proc.pid})")
+        print(f"âœ… MCP server '{server_id}' started (PID: {proc.pid})")
 
     async def call_tool(
         self,
@@ -16838,7 +16838,7 @@ class MCPServerManager:
         for server_id, proc in self.servers.items():
             proc.terminate()
             await proc.wait()
-            print(f"✅ MCP server '{server_id}' stopped")
+            print(f"âœ… MCP server '{server_id}' stopped")
 
 class ToolRunner:
     """Main tool execution engine"""
@@ -16847,7 +16847,7 @@ class ToolRunner:
         self.registry = registry
         self.k0_bridge = k0_bridge
         self.mcp_manager = MCPServerManager()
-        self.circuit_breakers: Dict[str, int] = {}  # tool_id → failure_count
+        self.circuit_breakers: Dict[str, int] = {}  # tool_id â†’ failure_count
 
     async def initialize(self):
         """Start MCP servers for all tools"""
@@ -17048,7 +17048,7 @@ async def execute_flow_step(step: FlowStep):
 
 ---
 
-### Tool Adapter Conformance Tests — MCP/WASM/Process Validation
+### Tool Adapter Conformance Tests â€” MCP/WASM/Process Validation
 
 **Design Principle:** Three tool sandboxes (MCP, WASM, Process) each have adapter contracts:
 - **MCP**: JSON-RPC stdin/stdout, timeout handling
@@ -17060,21 +17060,21 @@ async def execute_flow_step(step: FlowStep):
 **Solution:** Conformance test suite with pass/fail examples for each adapter type.
 
 **Research Foundations:**
-- **Adapter Pattern** (Gamma et al., 1994) — Interface conformance testing
-- **Contract Testing** (Pact Framework, 2013) — API contract validation
-- **Property-Based Testing** (QuickCheck, 2000) — Randomized conformance checks
+- **Adapter Pattern** (Gamma et al., 1994) â€” Interface conformance testing
+- **Contract Testing** (Pact Framework, 2013) â€” API contract validation
+- **Property-Based Testing** (QuickCheck, 2000) â€” Randomized conformance checks
 
 ---
 
 ### MCP Adapter Conformance Tests
 
 ```python
-import pytest
+import ward
 import asyncio
 import json
 from tool_runner import MCPManager, ToolDefinition
 
-@pytest.mark.asyncio
+@ward.mark.asyncio
 class TestMCPAdapterConformance:
     """Test MCP adapter follows JSON-RPC contract"""
 
@@ -17122,7 +17122,7 @@ class TestMCPAdapterConformance:
         )
 
         # Should timeout after 500ms
-        with pytest.raises(asyncio.TimeoutError):
+        with ward.raises(asyncio.TimeoutError):
             await mcp_manager.call_tool(tool_def, {})
 
     async def test_error_handling(self):
@@ -17189,24 +17189,24 @@ class TestMCPAdapterConformance:
 ### WASM Adapter Conformance Tests
 
 ```python
-@pytest.mark.asyncio
+@ward.mark.asyncio
 class TestWASMAdapterConformance:
     """Test WASM adapter follows memory + security contracts"""
 
     async def test_memory_limit_enforcement(self):
         """Test WASM adapter enforces memory limits"""
         # TODO: Implement once WASM runtime is added
-        pytest.skip("WASM runtime not yet implemented")
+        ward.skip("WASM runtime not yet implemented")
 
         wasm_runner = WASMRunner(max_memory_mb=10)
 
         # Tool tries to allocate 20MB (should fail)
-        with pytest.raises(MemoryError):
+        with ward.raises(MemoryError):
             await wasm_runner.execute_tool("memory_hog.wasm", {})
 
     async def test_no_network_access(self):
         """Test WASM adapter blocks network access"""
-        pytest.skip("WASM runtime not yet implemented")
+        ward.skip("WASM runtime not yet implemented")
 
         wasm_runner = WASMRunner()
 
@@ -17217,7 +17217,7 @@ class TestWASMAdapterConformance:
 
     async def test_deterministic_execution(self):
         """Test WASM tool returns same output for same input"""
-        pytest.skip("WASM runtime not yet implemented")
+        ward.skip("WASM runtime not yet implemented")
 
         wasm_runner = WASMRunner()
 
@@ -17233,7 +17233,7 @@ class TestWASMAdapterConformance:
 ### Process Adapter Conformance Tests
 
 ```python
-@pytest.mark.asyncio
+@ward.mark.asyncio
 class TestProcessAdapterConformance:
     """Test Process adapter follows subprocess contracts"""
 
@@ -17270,7 +17270,7 @@ class TestProcessAdapterConformance:
         )
 
         # Tool sleeps 2s (exceeds 500ms timeout)
-        with pytest.raises(asyncio.TimeoutError):
+        with ward.raises(asyncio.TimeoutError):
             await tool_runner._execute_process_tool(
                 tool_def,
                 {},
@@ -17291,7 +17291,7 @@ class TestProcessAdapterConformance:
         )
 
         # Tool writes to stderr and exits with error
-        with pytest.raises(RuntimeError) as exc_info:
+        with ward.raises(RuntimeError) as exc_info:
             await tool_runner._execute_process_tool(tool_def, {}, timeout_ms=1000)
 
         assert "error message" in str(exc_info.value)
@@ -17322,7 +17322,7 @@ class TestProcessAdapterConformance:
 ### Egress Rule Compliance Tests
 
 ```python
-@pytest.mark.asyncio
+@ward.mark.asyncio
 class TestEgressRuleCompliance:
     """Test tools respect egress rules (network access control)"""
 
@@ -17392,18 +17392,18 @@ class TestEgressRuleCompliance:
 
 ---
 
-### Test Harness — CI Integration
+### Test Harness â€” CI Integration
 
 ```python
 # k1/tools/test_conformance.py
-import pytest
+import ward
 import sys
 
 def run_all_conformance_tests():
     """Run all adapter conformance tests in CI"""
 
-    # Run pytest with strict mode
-    exit_code = pytest.main([
+    # Run ward with strict mode
+    exit_code = ward.main([
         "k1/tools/tests/",
         "-v",                    # Verbose output
         "--strict-markers",      # Fail on unknown markers
@@ -17413,11 +17413,11 @@ def run_all_conformance_tests():
     ])
 
     if exit_code != 0:
-        print(f"\n❌ Conformance tests FAILED (exit code {exit_code})")
+        print(f"\nâŒ Conformance tests FAILED (exit code {exit_code})")
         print("Tool adapters do not meet contract requirements.")
         sys.exit(1)
     else:
-        print("\n✅ All conformance tests PASSED")
+        print("\nâœ… All conformance tests PASSED")
         print("Tool adapters meet all contract requirements.")
         sys.exit(0)
 
@@ -17444,7 +17444,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pytest pytest-asyncio
+          pip install ward ward-asyncio
 
       - name: Run conformance tests
         run: |
@@ -17453,13 +17453,13 @@ jobs:
 
 ---
 
-### Tool Chaining — Kernel-Orchestrated
+### Tool Chaining â€” Kernel-Orchestrated
 
-**Problem:** Tools need to call other tools (e.g., `search_restaurants` → `get_restaurant_details` → `book_reservation`).
+**Problem:** Tools need to call other tools (e.g., `search_restaurants` â†’ `get_restaurant_details` â†’ `book_reservation`).
 
 **Options:**
-1. **Tools call tools directly** ❌ — Breaks isolation, hard to audit
-2. **Kernel orchestrates** ✅ — Tools return "need to call X", kernel routes
+1. **Tools call tools directly** âŒ â€” Breaks isolation, hard to audit
+2. **Kernel orchestrates** âœ… â€” Tools return "need to call X", kernel routes
 
 **Solution:** **Kernel-orchestrated chaining** via flow engine.
 
@@ -17467,16 +17467,16 @@ jobs:
 
 ```
 User: "Book dinner at Italian restaurant nearby"
-  ↓
+  â†“
 Planner: Creates task DAG
-  ↓
+  â†“
   [Step 1: search_restaurants(cuisine='italian')]
-      ↓ result: [Restaurant A, B, C]
+      â†“ result: [Restaurant A, B, C]
   [Step 2: get_restaurant_details(restaurant_id=A)]
-      ↓ result: {name, address, phone, availability}
+      â†“ result: {name, address, phone, availability}
   [Step 3: book_reservation(restaurant_id=A, time='7pm')]
-      ↓ result: {confirmation_code: "ABC123"}
-  ↓
+      â†“ result: {confirmation_code: "ABC123"}
+  â†“
 User: "Done! Your reservation is confirmed (ABC123)"
 ```
 
@@ -17623,7 +17623,7 @@ async def planner_generate_tool_chain(user_input: str):
     return steps
 ```
 
-### Timeout Handling — Graceful Degradation
+### Timeout Handling â€” Graceful Degradation
 
 **Philosophy:** Failed tools don't crash the turn. Show user helpful error, suggest alternatives.
 
@@ -17638,13 +17638,13 @@ async def handle_tool_timeout(tool_id: str, error: str, context: Dict):
 
     # 2. Check if tool is critical
     if tool_id in ["book_reservation", "send_email"]:
-        # Critical tool — inform user, ask to retry
+        # Critical tool â€” inform user, ask to retry
         return {
             "role": "assistant",
             "content": f"I tried to {tool_id.replace('_', ' ')}, but it's taking longer than expected. Would you like me to try again?"
         }
     else:
-        # Non-critical tool — suggest alternative
+        # Non-critical tool â€” suggest alternative
         return {
             "role": "assistant",
             "content": f"I couldn't get that information right now, but I can help you in another way. {suggest_alternative(context)}"
@@ -17652,7 +17652,7 @@ async def handle_tool_timeout(tool_id: str, error: str, context: Dict):
 
 def suggest_alternative(context: Dict) -> str:
     """Suggest alternative approach when tool fails"""
-    # Example: Weather tool fails → suggest checking weather app
+    # Example: Weather tool fails â†’ suggest checking weather app
     if context.get("intent") == "get_weather":
         return "You can check the weather app on your device for the latest forecast."
     elif context.get("intent") == "search":
@@ -17671,7 +17671,7 @@ def suggest_alternative(context: Dict) -> str:
 | **Search tool timeout** | Fallback to simpler search | "That search timed out. Let me try a quicker search..." |
 | **File operation timeout** | Fail immediately (data safety) | "I couldn't complete that file operation. Please try again later." |
 
-### Configuration — Tool Runner
+### Configuration â€” Tool Runner
 
 **File:** `k1/config/tool_runner.yml`
 
@@ -17747,7 +17747,7 @@ resource_limits:
   max_cpu_percent: 50
 ```
 
-### Performance Analysis — Tool Runner Overhead
+### Performance Analysis â€” Tool Runner Overhead
 
 **Latency Breakdown (MCP tool call):**
 
@@ -17796,28 +17796,28 @@ resource_limits:
 
 ## Research Citations (Tool Runner)
 
-1. **Model Context Protocol (MCP)** — Anthropic, 2024: *"Standardized tool and resource servers"*
-2. **WebAssembly (WASM)** — W3C, 2019: *"Sandboxed execution for untrusted code"*
-3. **Docker Containers** — Docker Inc., 2013: *"OS-level virtualization"*
-4. **Process Isolation** — UNIX, 1970s: *"Separate address spaces and resource limits"*
-5. **OpenAI Function Calling** — OpenAI, 2023: *"Tool use protocol standard"*
-6. **LangChain Tools** — LangChain, 2023: *"Tool abstraction and execution patterns"*
-7. **AutoGPT Plugin System** — Significant Gravitas, 2023: *"Plugin sandbox architecture"*
-8. **Temporal Workflows** — Temporal, 2020: *"Durable execution with timeout handling"*
-9. **gVisor** — Google, 2018: *"Application kernel for containers"*
-10. **Firecracker** — AWS, 2018: *"Microvm for serverless isolation"*
-11. **JSON Schema** — IETF, 2020: *"Schema validation for structured data"*
-12. **Circuit Breaker Pattern** — Nygard, 2007: *"Release It! — Timeout and failure handling"*
-13. **Registry Pattern** — Fowler, 2002: *"Patterns of Enterprise Application Architecture"*
-14. **DAG Execution** — Apache Airflow, 2014: *"Dependency-aware task orchestration"*
-15. **JSON-RPC** — JSON-RPC Working Group, 2010: *"Remote procedure call protocol"*
-16. **WASI (WebAssembly System Interface)** — W3C, 2019: *"System interface for WASM"*
-17. **Saga Pattern** — Garcia-Molina & Salem, 1987: *"Sagas (compensating transactions)"*
-18. **Capability-Based Security** — Dennis & Van Horn, 1966: *"Programming semantics for multiprogrammed computations"*
+1. **Model Context Protocol (MCP)** â€” Anthropic, 2024: *"Standardized tool and resource servers"*
+2. **WebAssembly (WASM)** â€” W3C, 2019: *"Sandboxed execution for untrusted code"*
+3. **Docker Containers** â€” Docker Inc., 2013: *"OS-level virtualization"*
+4. **Process Isolation** â€” UNIX, 1970s: *"Separate address spaces and resource limits"*
+5. **OpenAI Function Calling** â€” OpenAI, 2023: *"Tool use protocol standard"*
+6. **LangChain Tools** â€” LangChain, 2023: *"Tool abstraction and execution patterns"*
+7. **AutoGPT Plugin System** â€” Significant Gravitas, 2023: *"Plugin sandbox architecture"*
+8. **Temporal Workflows** â€” Temporal, 2020: *"Durable execution with timeout handling"*
+9. **gVisor** â€” Google, 2018: *"Application kernel for containers"*
+10. **Firecracker** â€” AWS, 2018: *"Microvm for serverless isolation"*
+11. **JSON Schema** â€” IETF, 2020: *"Schema validation for structured data"*
+12. **Circuit Breaker Pattern** â€” Nygard, 2007: *"Release It! â€” Timeout and failure handling"*
+13. **Registry Pattern** â€” Fowler, 2002: *"Patterns of Enterprise Application Architecture"*
+14. **DAG Execution** â€” Apache Airflow, 2014: *"Dependency-aware task orchestration"*
+15. **JSON-RPC** â€” JSON-RPC Working Group, 2010: *"Remote procedure call protocol"*
+16. **WASI (WebAssembly System Interface)** â€” W3C, 2019: *"System interface for WASM"*
+17. **Saga Pattern** â€” Garcia-Molina & Salem, 1987: *"Sagas (compensating transactions)"*
+18. **Capability-Based Security** â€” Dennis & Van Horn, 1966: *"Programming semantics for multiprogrammed computations"*
 
 ---
 
-## 📊 Observability — Metrics, Traces & Monitoring
+## ðŸ“Š Observability â€” Metrics, Traces & Monitoring
 
 ### Design Philosophy
 
@@ -17827,72 +17827,72 @@ resource_limits:
 - **Industry-standard stack:** Prometheus (metrics) + Tempo (traces) + Grafana (dashboards) + Alertmanager (alerts)
 - **Low overhead:** Async export, sampled tracing, <1ms instrumentation cost
 - **Privacy-first:** No user data in metrics/traces, only aggregates and IDs (hashed)
-- **Distributed tracing:** `cognitive_trace_id` correlates K0↔K1↔agents↔tools
+- **Distributed tracing:** `cognitive_trace_id` correlates K0â†”K1â†”agentsâ†”tools
 - **SLO-driven alerting:** TTFT, error rate, latency violations trigger alerts
 
 **Research Foundations:**
-- **OpenTelemetry** — CNCF, 2019: Unified observability framework (metrics, traces, logs)
-- **Prometheus** — SoundCloud, 2012: Time-series metrics database with pull model
-- **Grafana** — Grafana Labs, 2014: Multi-source dashboard and visualization platform
-- **Tempo** — Grafana Labs, 2020: Distributed tracing backend (Jaeger-compatible)
-- **Alertmanager** — Prometheus, 2013: Alert routing, grouping, silencing
-- **RED Method** — Wilkie, 2015: Rate, Errors, Duration (core SRE metrics)
-- **USE Method** — Gregg, 2012: Utilization, Saturation, Errors (resource metrics)
-- **Dapper** — Google, 2010: Large-scale distributed tracing infrastructure
-- **Zipkin** — Twitter, 2012: Distributed tracing system
-- **Jaeger** — Uber, 2017: End-to-end distributed tracing
-- **SLO/SLI** — Google SRE Book, 2016: Service Level Objectives and Indicators
+- **OpenTelemetry** â€” CNCF, 2019: Unified observability framework (metrics, traces, logs)
+- **Prometheus** â€” SoundCloud, 2012: Time-series metrics database with pull model
+- **Grafana** â€” Grafana Labs, 2014: Multi-source dashboard and visualization platform
+- **Tempo** â€” Grafana Labs, 2020: Distributed tracing backend (Jaeger-compatible)
+- **Alertmanager** â€” Prometheus, 2013: Alert routing, grouping, silencing
+- **RED Method** â€” Wilkie, 2015: Rate, Errors, Duration (core SRE metrics)
+- **USE Method** â€” Gregg, 2012: Utilization, Saturation, Errors (resource metrics)
+- **Dapper** â€” Google, 2010: Large-scale distributed tracing infrastructure
+- **Zipkin** â€” Twitter, 2012: Distributed tracing system
+- **Jaeger** â€” Uber, 2017: End-to-end distributed tracing
+- **SLO/SLI** â€” Google SRE Book, 2016: Service Level Objectives and Indicators
 
-### Export Format — Prometheus + OpenTelemetry
+### Export Format â€” Prometheus + OpenTelemetry
 
 **Metrics:** Prometheus exposition format (pull-based)
 - K1 exposes `/metrics` endpoint on internal port (e.g., `http://localhost:9091/metrics`)
 - Prometheus scrapes every 15s (configurable)
 - Metrics include: counters, gauges, histograms, summaries
 
-**Traces:** OpenTelemetry Protocol (OTLP) → Tempo
+**Traces:** OpenTelemetry Protocol (OTLP) â†’ Tempo
 - K1 exports spans via OTLP/gRPC to Tempo backend
 - Spans include: `cognitive_trace_id`, timestamps, attributes, events
 - Tempo stores traces for T+1 days (dev) or T+7 days (production)
 
-**Logs:** Structured JSON → stdout/stderr (captured by container runtime)
+**Logs:** Structured JSON â†’ stdout/stderr (captured by container runtime)
 - K1 emits JSON logs with `cognitive_trace_id` for correlation
 - Logs shipped to Loki (optional) or local file
 
 **Architecture:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ K1 Kernel                                                    │
-│                                                              │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   │
-│  │ Metrics      │   │ Traces       │   │ Logs         │   │
-│  │ (Prometheus) │   │ (OTLP)       │   │ (JSON)       │   │
-│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘   │
-│         │                  │                   │            │
-└─────────┼──────────────────┼───────────────────┼────────────┘
-          │ :9091/metrics    │ OTLP/gRPC         │ stdout
-          │ (pull)           │ (push)            │
-          │                  │                   │
-    ┌─────▼─────┐      ┌────▼────┐        ┌────▼────┐
-    │Prometheus │      │  Tempo  │        │  Loki   │
-    │ (metrics) │      │ (traces)│        │ (logs)  │
-    └─────┬─────┘      └────┬────┘        └────┬────┘
-          │                  │                   │
-          └──────────────────┼───────────────────┘
-                             │
-                      ┌──────▼──────┐
-                      │   Grafana   │
-                      │ (dashboards)│
-                      └──────┬──────┘
-                             │
-                      ┌──────▼──────┐
-                      │Alertmanager │
-                      │  (alerts)   │
-                      └─────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Kernel                                                    â”‚
+â”‚                                                              â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”‚
+â”‚  â”‚ Metrics      â”‚   â”‚ Traces       â”‚   â”‚ Logs         â”‚   â”‚
+â”‚  â”‚ (Prometheus) â”‚   â”‚ (OTLP)       â”‚   â”‚ (JSON)       â”‚   â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”˜   â”‚
+â”‚         â”‚                  â”‚                   â”‚            â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+          â”‚ :9091/metrics    â”‚ OTLP/gRPC         â”‚ stdout
+          â”‚ (pull)           â”‚ (push)            â”‚
+          â”‚                  â”‚                   â”‚
+    â”Œâ”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”      â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”        â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”
+    â”‚Prometheus â”‚      â”‚  Tempo  â”‚        â”‚  Loki   â”‚
+    â”‚ (metrics) â”‚      â”‚ (traces)â”‚        â”‚ (logs)  â”‚
+    â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”˜      â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜        â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜
+          â”‚                  â”‚                   â”‚
+          â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚
+                      â”Œâ”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+                      â”‚   Grafana   â”‚
+                      â”‚ (dashboards)â”‚
+                      â””â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+                             â”‚
+                      â”Œâ”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”
+                      â”‚Alertmanager â”‚
+                      â”‚  (alerts)   â”‚
+                      â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
-### Sampling Strategy — Intelligent Trace Sampling
+### Sampling Strategy â€” Intelligent Trace Sampling
 
 **Problem:** Full tracing adds overhead and generates massive data volumes. Need to balance coverage vs cost.
 
@@ -17983,7 +17983,7 @@ if decision == SamplingDecision.RECORD_AND_SAMPLE:
 | **Production** | T+7 days | ~700MB/day (1% sampling) |
 | **Critical traces** | T+30 days | Errors, SLO violations (archived) |
 
-### Metrics — RED Method (Rate, Errors, Duration)
+### Metrics â€” RED Method (Rate, Errors, Duration)
 
 **Core Metrics (Prometheus):**
 
@@ -18081,7 +18081,7 @@ k1_model_requests_total = Counter(
 
 ---
 
-### Cost Gauges & Budgets — Per-Session Cost Tracking
+### Cost Gauges & Budgets â€” Per-Session Cost Tracking
 
 **Design Principle:** System tracks latency/tokens but not **cost**:
 - No unified cost metric ($/request)
@@ -18091,9 +18091,9 @@ k1_model_requests_total = Counter(
 **Solution:** Cost gauges tracking tokens, tool time, inference time + per-session budgets.
 
 **Research Foundations:**
-- **Cloud Cost Management** (AWS Cost Explorer, GCP Billing) — Cost attribution
-- **Rate Limiting** (Token bucket algorithm, 1976) — Budget enforcement
-- **FinOps** (Cloud Financial Management, 2019) — Cost observability
+- **Cloud Cost Management** (AWS Cost Explorer, GCP Billing) â€” Cost attribution
+- **Rate Limiting** (Token bucket algorithm, 1976) â€” Budget enforcement
+- **FinOps** (Cloud Financial Management, 2019) â€” Cost observability
 
 ---
 
@@ -18191,18 +18191,18 @@ class CostBreakdown:
     total_cost_usd: float = 0.0
 
     # Detailed breakdowns
-    token_breakdown: Dict[str, float] = field(default_factory=dict)  # model → cost
-    tool_breakdown: Dict[str, float] = field(default_factory=dict)   # tool → cost
-    inference_breakdown: Dict[str, float] = field(default_factory=dict)  # placement → cost
+    token_breakdown: Dict[str, float] = field(default_factory=dict)  # model â†’ cost
+    tool_breakdown: Dict[str, float] = field(default_factory=dict)   # tool â†’ cost
+    inference_breakdown: Dict[str, float] = field(default_factory=dict)  # placement â†’ cost
 
 class CostTracker:
     """
     Track costs per session with budget enforcement.
 
     Tracks:
-    - Token costs (input + output tokens × model price)
-    - Tool costs (API calls × tool price)
-    - Inference costs (compute time × placement price)
+    - Token costs (input + output tokens Ã— model price)
+    - Tool costs (API calls Ã— tool price)
+    - Inference costs (compute time Ã— placement price)
     """
 
     def __init__(self, cost_model_path: str, budget_config_path: str):
@@ -18413,24 +18413,24 @@ cost_per_request_usd = Histogram(
 ### Grafana Dashboard
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ Cost Tracking Dashboard                                   │
-├──────────────────────────────────────────────────────────┤
-│ [Total Cost Today: $12.34]  [Budget: $50.00] [75% Used]  │
-├──────────────────────────────────────────────────────────┤
-│ Cost Breakdown by Type:                                   │
-│  ████████████░░░░ Tokens: $8.50 (69%)                     │
-│  ████░░░░░░░░░░░░ Tools: $2.34 (19%)                      │
-│  ██░░░░░░░░░░░░░░ Inference: $1.50 (12%)                  │
-├──────────────────────────────────────────────────────────┤
-│ Top 5 Expensive Sessions:                                 │
-│  1. session_abc123: $0.089 (89% of limit)                 │
-│  2. session_def456: $0.074 (74%)                          │
-│  3. session_ghi789: $0.062 (62%)                          │
-├──────────────────────────────────────────────────────────┤
-│ Cost Over Time (Last 24h):                                │
-│  [Line graph: cost_usd vs. time]                          │
-└──────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Cost Tracking Dashboard                                   â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ [Total Cost Today: $12.34]  [Budget: $50.00] [75% Used]  â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Cost Breakdown by Type:                                   â”‚
+â”‚  â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘ Tokens: $8.50 (69%)                     â”‚
+â”‚  â–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘ Tools: $2.34 (19%)                      â”‚
+â”‚  â–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘ Inference: $1.50 (12%)                  â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Top 5 Expensive Sessions:                                 â”‚
+â”‚  1. session_abc123: $0.089 (89% of limit)                 â”‚
+â”‚  2. session_def456: $0.074 (74%)                          â”‚
+â”‚  3. session_ghi789: $0.062 (62%)                          â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Cost Over Time (Last 24h):                                â”‚
+â”‚  [Line graph: cost_usd vs. time]                          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -18493,7 +18493,7 @@ scrape_configs:
           environment: 'production'
 ```
 
-### Distributed Tracing — OpenTelemetry + Tempo
+### Distributed Tracing â€” OpenTelemetry + Tempo
 
 **Span Structure:**
 
@@ -18573,24 +18573,24 @@ async def execute_tool(tool_id, arguments):
 
 **Trace Correlation:**
 
-Every span includes `cognitive_trace_id` for K0↔K1↔agents↔tools correlation:
+Every span includes `cognitive_trace_id` for K0â†”K1â†”agentsâ†”tools correlation:
 
 ```
 Trace: cognitive_trace_id=abc123
-  ├─ Span: k1.handle_turn (150ms)
-  │   ├─ Span: k1.intent_router (10ms)
-  │   ├─ Span: k1.planner (80ms)
-  │   │   └─ Span: model_hub.generate (75ms)
-  │   │       └─ Span: gemma-2-9b-npu (70ms)
-  │   └─ Span: k1.orchestrator (60ms)
-  │       ├─ Span: k1.tool.get_weather (30ms)
-  │       │   └─ Span: mcp_server.weather (25ms)
-  │       └─ Span: k1.tool.get_calendar (25ms)
-  │           └─ Span: mcp_server.calendar (20ms)
-  └─ Span: k0.persist_state (5ms)
+  â”œâ”€ Span: k1.handle_turn (150ms)
+  â”‚   â”œâ”€ Span: k1.intent_router (10ms)
+  â”‚   â”œâ”€ Span: k1.planner (80ms)
+  â”‚   â”‚   â””â”€ Span: model_hub.generate (75ms)
+  â”‚   â”‚       â””â”€ Span: gemma-2-9b-npu (70ms)
+  â”‚   â””â”€ Span: k1.orchestrator (60ms)
+  â”‚       â”œâ”€ Span: k1.tool.get_weather (30ms)
+  â”‚       â”‚   â””â”€ Span: mcp_server.weather (25ms)
+  â”‚       â””â”€ Span: k1.tool.get_calendar (25ms)
+  â”‚           â””â”€ Span: mcp_server.calendar (20ms)
+  â””â”€ Span: k0.persist_state (5ms)
 ```
 
-### Real-Time Dashboards — Grafana
+### Real-Time Dashboards â€” Grafana
 
 **Dashboard 1: K1 Overview**
 
@@ -18699,9 +18699,9 @@ Trace: cognitive_trace_id=abc123
 
 - **Dev environment:** All dashboards accessible on `http://localhost:3000`
 - **Production (app):** Dashboards **NOT** exposed by default (privacy)
-- **Remote debugging:** User reports issue → support connects via port forwarding → temporary dashboard access
+- **Remote debugging:** User reports issue â†’ support connects via port forwarding â†’ temporary dashboard access
 
-### Alerting — SLO Violations & Anomalies
+### Alerting â€” SLO Violations & Anomalies
 
 **Alert Rules (Prometheus Alertmanager):**
 
@@ -18830,7 +18830,7 @@ receivers:
         channel: '#k1-alerts'
 ```
 
-### Configuration — Observability Stack
+### Configuration â€” Observability Stack
 
 **File:** `k1/config/observability.yml`
 
@@ -18920,7 +18920,7 @@ privacy:
   anonymize_traces: true
 ```
 
-### Performance Analysis — Observability Overhead
+### Performance Analysis â€” Observability Overhead
 
 **Latency Impact:**
 
@@ -18954,24 +18954,24 @@ privacy:
 
 ## Research Citations (Observability)
 
-1. **OpenTelemetry** — CNCF, 2019: *"Unified observability framework for metrics, traces, and logs"*
-2. **Prometheus** — SoundCloud, 2012: *"Open-source monitoring and alerting toolkit"*
-3. **Grafana** — Grafana Labs, 2014: *"Multi-platform open source analytics and monitoring solution"*
-4. **Tempo** — Grafana Labs, 2020: *"High-scale distributed tracing backend"*
-5. **Alertmanager** — Prometheus, 2013: *"Handles alerts from Prometheus server"*
-6. **RED Method** — Tom Wilkie, 2015: *"Rate, Errors, Duration - core SRE metrics"*
-7. **USE Method** — Brendan Gregg, 2012: *"Utilization, Saturation, Errors - resource metrics"*
-8. **Dapper** — Google, 2010: *"Large-scale distributed systems tracing infrastructure"*
-9. **Zipkin** — Twitter, 2012: *"Distributed tracing system"*
-10. **Jaeger** — Uber, 2017: *"End-to-end distributed tracing"*
-11. **Google SRE Book** — Google, 2016: *"Service Level Objectives and Indicators"*
-12. **The Four Golden Signals** — Google SRE, 2016: *"Latency, Traffic, Errors, Saturation"*
-13. **Distributed Tracing in Practice** — Shkuro, 2020: *"Instrumenting, analyzing, and debugging microservices"*
-14. **Observability Engineering** — Majors et al., 2022: *"Achieving Production Excellence"*
+1. **OpenTelemetry** â€” CNCF, 2019: *"Unified observability framework for metrics, traces, and logs"*
+2. **Prometheus** â€” SoundCloud, 2012: *"Open-source monitoring and alerting toolkit"*
+3. **Grafana** â€” Grafana Labs, 2014: *"Multi-platform open source analytics and monitoring solution"*
+4. **Tempo** â€” Grafana Labs, 2020: *"High-scale distributed tracing backend"*
+5. **Alertmanager** â€” Prometheus, 2013: *"Handles alerts from Prometheus server"*
+6. **RED Method** â€” Tom Wilkie, 2015: *"Rate, Errors, Duration - core SRE metrics"*
+7. **USE Method** â€” Brendan Gregg, 2012: *"Utilization, Saturation, Errors - resource metrics"*
+8. **Dapper** â€” Google, 2010: *"Large-scale distributed systems tracing infrastructure"*
+9. **Zipkin** â€” Twitter, 2012: *"Distributed tracing system"*
+10. **Jaeger** â€” Uber, 2017: *"End-to-end distributed tracing"*
+11. **Google SRE Book** â€” Google, 2016: *"Service Level Objectives and Indicators"*
+12. **The Four Golden Signals** â€” Google SRE, 2016: *"Latency, Traffic, Errors, Saturation"*
+13. **Distributed Tracing in Practice** â€” Shkuro, 2020: *"Instrumenting, analyzing, and debugging microservices"*
+14. **Observability Engineering** â€” Majors et al., 2022: *"Achieving Production Excellence"*
 
 ---
 
-## 🛡️ Safety Filter — Real-Time Content Protection
+## ðŸ›¡ï¸ Safety Filter â€” Real-Time Content Protection
 
 ### Design Philosophy
 
@@ -18988,18 +18988,18 @@ privacy:
 - **Fail-safe:** If K1 filter fails, K0 policy layer catches it
 
 **Research Foundations:**
-- **Content Moderation at Scale** — Facebook, 2020: Multi-layered filtering (heuristics → classifiers → LLM)
-- **PII Detection** — NIST SP 800-122, 2010: Guidelines for protecting PII
-- **Differential Privacy** — Dwork, 2006: Privacy-preserving data analysis
-- **Perspective API** — Google Jigsaw, 2017: Toxicity detection using ML
-- **OpenAI Moderation API** — OpenAI, 2022: Content filtering for harmful content
-- **Microsoft Azure Content Safety** — Microsoft, 2023: Multi-modal content safety
-- **GDPR** — EU, 2016: Data protection and privacy regulations
-- **HIPAA** — US HHS, 1996: Health Insurance Portability and Accountability Act
-- **Regex for PII** — OWASP, 2021: Regular expressions for sensitive data detection
-- **K-Anonymity** — Sweeney, 2002: Privacy model for de-identification
+- **Content Moderation at Scale** â€” Facebook, 2020: Multi-layered filtering (heuristics â†’ classifiers â†’ LLM)
+- **PII Detection** â€” NIST SP 800-122, 2010: Guidelines for protecting PII
+- **Differential Privacy** â€” Dwork, 2006: Privacy-preserving data analysis
+- **Perspective API** â€” Google Jigsaw, 2017: Toxicity detection using ML
+- **OpenAI Moderation API** â€” OpenAI, 2022: Content filtering for harmful content
+- **Microsoft Azure Content Safety** â€” Microsoft, 2023: Multi-modal content safety
+- **GDPR** â€” EU, 2016: Data protection and privacy regulations
+- **HIPAA** â€” US HHS, 1996: Health Insurance Portability and Accountability Act
+- **Regex for PII** â€” OWASP, 2021: Regular expressions for sensitive data detection
+- **K-Anonymity** â€” Sweeney, 2002: Privacy model for de-identification
 
-### K1 Safety Filter — Real-Time Hot Path
+### K1 Safety Filter â€” Real-Time Hot Path
 
 **Responsibilities:**
 1. **Basic content filtering** (hate speech, violence, sexual content) via regex + fast classifier
@@ -19017,53 +19017,53 @@ privacy:
 **Architecture:**
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ K1 Kernel (Real-Time Hot Path)                              │
-│                                                              │
-│  User Input                                                  │
-│      │                                                       │
-│      ▼                                                       │
-│  ┌──────────────────┐                                       │
-│  │ Safety Filter    │  <5ms                                 │
-│  │ (K1)             │                                       │
-│  ├──────────────────┤                                       │
-│  │ 1. Regex Check   │  <1ms (SSN, CC, hate speech)         │
-│  │ 2. Fast Classify │  2-3ms (toxicity classifier)         │
-│  │ 3. LLM Check     │  0-50ms (optional, ambiguous only)   │
-│  │ 4. Redaction     │  <1ms (mark PII spans)               │
-│  └────────┬─────────┘                                       │
-│           │ SafetyResult (pass/warn/block + redactions)     │
-│           ▼                                                  │
-│  ┌──────────────────┐                                       │
-│  │ Planner/         │                                       │
-│  │ Orchestrator     │                                       │
-│  └────────┬─────────┘                                       │
-│           │ StateDelta (with redacted PII markers)          │
-└───────────┼──────────────────────────────────────────────────┘
-            │
-            ▼
-┌───────────────────────────────────────────────────────────────┐
-│ K0 Kernel (Policy Enforcement & Storage)                      │
-│                                                                │
-│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────┐ │
-│  │ Policy Engine    │   │ PII Vault        │   │ Audit    │ │
-│  │ (ABAC/RBAC)      │   │ (Encrypt/Decrypt)│   │ Logs     │ │
-│  ├──────────────────┤   ├──────────────────┤   ├──────────┤ │
-│  │ • Bands check    │   │ • AES-256-GCM    │   │ • Receipts││
-│  │ • Caps check     │   │ • Per-user keys  │   │ • Events  │ │
-│  │ • Family policy  │   │ • Vault storage  │   │ • Metrics │ │
-│  │ • Age restrictions│   │ • Decrypt on read│   │ • Traces │ │
-│  └──────────────────┘   └──────────────────┘   └──────────┘ │
-│                                                                │
-│  User can decrypt PII ONLY (K0 enforces access control)       │
-└───────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Kernel (Real-Time Hot Path)                              â”‚
+â”‚                                                              â”‚
+â”‚  User Input                                                  â”‚
+â”‚      â”‚                                                       â”‚
+â”‚      â–¼                                                       â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                                       â”‚
+â”‚  â”‚ Safety Filter    â”‚  <5ms                                 â”‚
+â”‚  â”‚ (K1)             â”‚                                       â”‚
+â”‚  â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤                                       â”‚
+â”‚  â”‚ 1. Regex Check   â”‚  <1ms (SSN, CC, hate speech)         â”‚
+â”‚  â”‚ 2. Fast Classify â”‚  2-3ms (toxicity classifier)         â”‚
+â”‚  â”‚ 3. LLM Check     â”‚  0-50ms (optional, ambiguous only)   â”‚
+â”‚  â”‚ 4. Redaction     â”‚  <1ms (mark PII spans)               â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                       â”‚
+â”‚           â”‚ SafetyResult (pass/warn/block + redactions)     â”‚
+â”‚           â–¼                                                  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                                       â”‚
+â”‚  â”‚ Planner/         â”‚                                       â”‚
+â”‚  â”‚ Orchestrator     â”‚                                       â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                                       â”‚
+â”‚           â”‚ StateDelta (with redacted PII markers)          â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+            â”‚
+            â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K0 Kernel (Policy Enforcement & Storage)                      â”‚
+â”‚                                                                â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚
+â”‚  â”‚ Policy Engine    â”‚   â”‚ PII Vault        â”‚   â”‚ Audit    â”‚ â”‚
+â”‚  â”‚ (ABAC/RBAC)      â”‚   â”‚ (Encrypt/Decrypt)â”‚   â”‚ Logs     â”‚ â”‚
+â”‚  â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤   â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤   â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤ â”‚
+â”‚  â”‚ â€¢ Bands check    â”‚   â”‚ â€¢ AES-256-GCM    â”‚   â”‚ â€¢ Receiptsâ”‚â”‚
+â”‚  â”‚ â€¢ Caps check     â”‚   â”‚ â€¢ Per-user keys  â”‚   â”‚ â€¢ Events  â”‚ â”‚
+â”‚  â”‚ â€¢ Family policy  â”‚   â”‚ â€¢ Vault storage  â”‚   â”‚ â€¢ Metrics â”‚ â”‚
+â”‚  â”‚ â€¢ Age restrictionsâ”‚   â”‚ â€¢ Decrypt on readâ”‚   â”‚ â€¢ Traces â”‚ â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚
+â”‚                                                                â”‚
+â”‚  User can decrypt PII ONLY (K0 enforces access control)       â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
-### Filter Model — Three-Tier Filtering
+### Filter Model â€” Three-Tier Filtering
 
 **Tier 1: Regex Patterns (PRIMARY, <1ms)**
 - **Fast heuristics** for obvious PII and harmful content
-- **No ML inference** — just pattern matching
+- **No ML inference** â€” just pattern matching
 - **Coverage:** 80% of cases
 
 ```python
@@ -19208,7 +19208,7 @@ Respond with SAFE or UNSAFE and brief reason."""
             return "safe", "Classifier confident"
 ```
 
-### PII Detection — Comprehensive Types
+### PII Detection â€” Comprehensive Types
 
 **Supported PII Types:**
 
@@ -19233,7 +19233,7 @@ Respond with SAFE or UNSAFE and brief reason."""
 | **ML (NER)** | 90% | 95% | 2-3ms |
 | **LLM** | 98% | 98% | 30-50ms |
 
-### Redaction Strategy — K1 Marks, K0 Encrypts
+### Redaction Strategy â€” K1 Marks, K0 Encrypts
 
 **K1 Responsibility:**
 - **Detect** PII spans (start, end, type)
@@ -19400,7 +19400,7 @@ class PIIVault:
         return plaintext.decode()
 ```
 
-### Audit Trail — K0 Receipts & Events
+### Audit Trail â€” K0 Receipts & Events
 
 **K1 Audit (Lightweight):**
 - Emit `safety.filter` events to K0 (async, non-blocking)
@@ -19434,7 +19434,7 @@ class SafetyAuditEvent:
     compliance_flags: List[str] # ["GDPR", "HIPAA"]
 ```
 
-### Configuration — Safety Filter
+### Configuration â€” Safety Filter
 
 **File:** `k1/config/safety_filter.yml`
 
@@ -19520,7 +19520,7 @@ privacy:
   k0_encryption_only: true  # Only K0 encrypts/decrypts PII
 ```
 
-### Performance Analysis — Safety Filter Overhead
+### Performance Analysis â€” Safety Filter Overhead
 
 **Latency Breakdown:**
 
@@ -19558,34 +19558,34 @@ privacy:
 
 ## Research Citations (Safety Filter)
 
-1. **Content Moderation at Scale** — Facebook, 2020: *"Multi-layered filtering with heuristics, classifiers, and human review"*
-2. **NIST SP 800-122** — NIST, 2010: *"Guide to Protecting the Confidentiality of Personally Identifiable Information (PII)"*
-3. **Differential Privacy** — Dwork, 2006: *"Calibrating Noise to Sensitivity in Private Data Analysis"*
-4. **Perspective API** — Google Jigsaw, 2017: *"Using machine learning to reduce toxicity online"*
-5. **OpenAI Moderation API** — OpenAI, 2022: *"Content policy and moderation endpoints"*
-6. **Microsoft Azure Content Safety** — Microsoft, 2023: *"AI-powered content moderation"*
-7. **GDPR** — EU, 2016: *"General Data Protection Regulation"*
-8. **HIPAA** — US HHS, 1996: *"Health Insurance Portability and Accountability Act"*
-9. **OWASP Regex for PII** — OWASP, 2021: *"Regular expression patterns for sensitive data detection"*
-10. **K-Anonymity** — Sweeney, 2002: *"k-anonymity: A model for protecting privacy"*
-11. **AES-GCM** — McGrew & Viega, 2004: *"The Galois/Counter Mode of Operation (GCM)"*
-12. **Toxicity Detection** — Wulczyn et al., 2017: *"Ex Machina: Personal Attacks Seen at Scale"*
-13. **Named Entity Recognition** — Nadeau & Sekine, 2007: *"A survey of named entity recognition and classification"*
-14. **PCI DSS** — PCI Security Standards Council, 2004: *"Payment Card Industry Data Security Standard"*
+1. **Content Moderation at Scale** â€” Facebook, 2020: *"Multi-layered filtering with heuristics, classifiers, and human review"*
+2. **NIST SP 800-122** â€” NIST, 2010: *"Guide to Protecting the Confidentiality of Personally Identifiable Information (PII)"*
+3. **Differential Privacy** â€” Dwork, 2006: *"Calibrating Noise to Sensitivity in Private Data Analysis"*
+4. **Perspective API** â€” Google Jigsaw, 2017: *"Using machine learning to reduce toxicity online"*
+5. **OpenAI Moderation API** â€” OpenAI, 2022: *"Content policy and moderation endpoints"*
+6. **Microsoft Azure Content Safety** â€” Microsoft, 2023: *"AI-powered content moderation"*
+7. **GDPR** â€” EU, 2016: *"General Data Protection Regulation"*
+8. **HIPAA** â€” US HHS, 1996: *"Health Insurance Portability and Accountability Act"*
+9. **OWASP Regex for PII** â€” OWASP, 2021: *"Regular expression patterns for sensitive data detection"*
+10. **K-Anonymity** â€” Sweeney, 2002: *"k-anonymity: A model for protecting privacy"*
+11. **AES-GCM** â€” McGrew & Viega, 2004: *"The Galois/Counter Mode of Operation (GCM)"*
+12. **Toxicity Detection** â€” Wulczyn et al., 2017: *"Ex Machina: Personal Attacks Seen at Scale"*
+13. **Named Entity Recognition** â€” Nadeau & Sekine, 2007: *"A survey of named entity recognition and classification"*
+14. **PCI DSS** â€” PCI Security Standards Council, 2004: *"Payment Card Industry Data Security Standard"*
 
 ---
 
-# 14. Config Management — Dynamic, Validated, Versioned
+# 14. Config Management â€” Dynamic, Validated, Versioned
 
 ## Design Philosophy
 
 **Core Principles:**
-1. **Hot Reload Without Restart** — SSE-driven config updates for sub-second propagation
-2. **Multi-Layer Hierarchy** — Global → Family → User overrides with merge semantics
-3. **Validation Before Load** — Schema + semantic checks prevent bad configs from going live
-4. **Versioning & Rollback** — Git-based versioning with instant rollback on errors
-5. **Type-Safe Configs** — Pydantic models for compile-time + runtime validation
-6. **Observability** — Config change events traced end-to-end with audit logs
+1. **Hot Reload Without Restart** â€” SSE-driven config updates for sub-second propagation
+2. **Multi-Layer Hierarchy** â€” Global â†’ Family â†’ User overrides with merge semantics
+3. **Validation Before Load** â€” Schema + semantic checks prevent bad configs from going live
+4. **Versioning & Rollback** â€” Git-based versioning with instant rollback on errors
+5. **Type-Safe Configs** â€” Pydantic models for compile-time + runtime validation
+6. **Observability** â€” Config change events traced end-to-end with audit logs
 
 **Industry Inspiration:**
 - **Kubernetes ConfigMaps** (hot reload via watch API)
@@ -19595,71 +19595,71 @@ privacy:
 - **Etcd** (strongly consistent config store)
 
 **K1-Specific Requirements:**
-- ✅ **Agent hire events** → New agent configs loaded on-the-fly
-- ✅ **Learning ticks** → Model routing weights updated without restart
-- ✅ **SSE events from K0** → Backend pushes config updates to K1
-- ✅ **Per-family customization** → Different families use different tools/models
-- ✅ **Safety-first** → Invalid configs never reach production
+- âœ… **Agent hire events** â†’ New agent configs loaded on-the-fly
+- âœ… **Learning ticks** â†’ Model routing weights updated without restart
+- âœ… **SSE events from K0** â†’ Backend pushes config updates to K1
+- âœ… **Per-family customization** â†’ Different families use different tools/models
+- âœ… **Safety-first** â†’ Invalid configs never reach production
 
 ---
 
 ## Research Foundations
 
 **Configuration Management (7 papers):**
-1. **Usenix ATC'17** — *"Configuration Challenges in Large-Scale Systems"* (Google): 62% of outages caused by config errors
-2. **OSDI'20** — *"Automated Configuration Validation for Cloud Services"* (Microsoft): Schema + semantic validation catches 94% of errors
-3. **SOSP'15** — *"Early Detection of Configuration Errors to Reduce Failure Damage"* (Meta): Pre-deployment checks reduce incidents by 83%
-4. **Kubernetes Design** — *"ConfigMaps and Secrets"* (CNCF, 2015): Hot reload via file watch + volume mounts
-5. **Consul KV Store** — *"Consistent Configuration with Raft"* (HashiCorp, 2014): Strong consistency + versioning
-6. **AWS AppConfig** — *"Safe Deployments with Validators"* (AWS, 2019): Gradual rollout + auto-rollback
-7. **Netflix Archaius** — *"Dynamic Properties at Scale"* (Netflix, 2012): Cascading config hierarchy with polling
+1. **Usenix ATC'17** â€” *"Configuration Challenges in Large-Scale Systems"* (Google): 62% of outages caused by config errors
+2. **OSDI'20** â€” *"Automated Configuration Validation for Cloud Services"* (Microsoft): Schema + semantic validation catches 94% of errors
+3. **SOSP'15** â€” *"Early Detection of Configuration Errors to Reduce Failure Damage"* (Meta): Pre-deployment checks reduce incidents by 83%
+4. **Kubernetes Design** â€” *"ConfigMaps and Secrets"* (CNCF, 2015): Hot reload via file watch + volume mounts
+5. **Consul KV Store** â€” *"Consistent Configuration with Raft"* (HashiCorp, 2014): Strong consistency + versioning
+6. **AWS AppConfig** â€” *"Safe Deployments with Validators"* (AWS, 2019): Gradual rollout + auto-rollback
+7. **Netflix Archaius** â€” *"Dynamic Properties at Scale"* (Netflix, 2012): Cascading config hierarchy with polling
 
 **SSE (Server-Sent Events) for Real-Time Updates:**
-8. **W3C SSE Spec** — *"Server-Sent Events"* (2015): Lightweight, unidirectional push from server
-9. **EventSource API** — MDN, 2021: Browser-native SSE client with auto-reconnect
-10. **SSE vs WebSockets** — Hixie, 2012: *"SSE is simpler for server→client updates"*
+8. **W3C SSE Spec** â€” *"Server-Sent Events"* (2015): Lightweight, unidirectional push from server
+9. **EventSource API** â€” MDN, 2021: Browser-native SSE client with auto-reconnect
+10. **SSE vs WebSockets** â€” Hixie, 2012: *"SSE is simpler for serverâ†’client updates"*
 
 **Schema Validation:**
-11. **JSON Schema** — IETF Draft, 2020: Declarative validation with $ref composition
-12. **Pydantic** — Colvin, 2017: Python data validation with type hints
-13. **YAML Safe Loading** — PyYAML docs, 2019: *"Never use yaml.load() in production"*
+11. **JSON Schema** â€” IETF Draft, 2020: Declarative validation with $ref composition
+12. **Pydantic** â€” Colvin, 2017: Python data validation with type hints
+13. **YAML Safe Loading** â€” PyYAML docs, 2019: *"Never use yaml.load() in production"*
 
 ---
 
 ## K1 Config Management Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                     K0 Backend (Config Authority)                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
-│  │ Git Repo     │  │ Validator    │  │ SSE Publisher│             │
-│  │ (main/stage) │─▶│ (Schema+Sem) │─▶│ (Port P08)   │             │
-│  └──────────────┘  └──────────────┘  └───────┬──────┘             │
-└────────────────────────────────────────────────┼────────────────────┘
-                                                 │ SSE: ConfigUpdate
-                                                 ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                         K1 Runtime (Config Consumer)                │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ ConfigManager (Hot Reload Coordinator)                       │  │
-│  │  • SSE Listener (reconnect on disconnect)                    │  │
-│  │  • Config Merger (Global→Family→User hierarchy)             │  │
-│  │  • Validator (re-check before apply)                        │  │
-│  │  • Versioner (track active version, rollback queue)         │  │
-│  │  • Change Notifier (notify subsystems via callbacks)        │  │
-│  └──────────────┬───────────────────────────────────────────────┘  │
-│                 │ notify(config_type, new_config)                  │
-│                 ▼                                                   │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ Subsystems (Config Consumers)                                │  │
-│  │  • Agent Fabric: agent_roles.yml → hire new agent types     │  │
-│  │  • Model Hub: model_routes.yml → update routing weights     │  │
-│  │  • Tool Runner: tools.yml → enable new MCP servers          │  │
-│  │  • Planner: task_graphs.yml → new intent→graph mappings     │  │
-│  │  • Safety Filter: safety_filter.yml → PII patterns updated  │  │
-│  │  • Budgets: budgets.yml → adjust token/$ limits             │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                     K0 Backend (Config Authority)                   â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”             â”‚
+â”‚  â”‚ Git Repo     â”‚  â”‚ Validator    â”‚  â”‚ SSE Publisherâ”‚             â”‚
+â”‚  â”‚ (main/stage) â”‚â”€â–¶â”‚ (Schema+Sem) â”‚â”€â–¶â”‚ (Port P08)   â”‚             â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â””â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜             â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                                                 â”‚ SSE: ConfigUpdate
+                                                 â–¼
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                         K1 Runtime (Config Consumer)                â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚ ConfigManager (Hot Reload Coordinator)                       â”‚  â”‚
+â”‚  â”‚  â€¢ SSE Listener (reconnect on disconnect)                    â”‚  â”‚
+â”‚  â”‚  â€¢ Config Merger (Globalâ†’Familyâ†’User hierarchy)             â”‚  â”‚
+â”‚  â”‚  â€¢ Validator (re-check before apply)                        â”‚  â”‚
+â”‚  â”‚  â€¢ Versioner (track active version, rollback queue)         â”‚  â”‚
+â”‚  â”‚  â€¢ Change Notifier (notify subsystems via callbacks)        â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â”‚                 â”‚ notify(config_type, new_config)                  â”‚
+â”‚                 â–¼                                                   â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”  â”‚
+â”‚  â”‚ Subsystems (Config Consumers)                                â”‚  â”‚
+â”‚  â”‚  â€¢ Agent Fabric: agent_roles.yml â†’ hire new agent types     â”‚  â”‚
+â”‚  â”‚  â€¢ Model Hub: model_routes.yml â†’ update routing weights     â”‚  â”‚
+â”‚  â”‚  â€¢ Tool Runner: tools.yml â†’ enable new MCP servers          â”‚  â”‚
+â”‚  â”‚  â€¢ Planner: task_graphs.yml â†’ new intentâ†’graph mappings     â”‚  â”‚
+â”‚  â”‚  â€¢ Safety Filter: safety_filter.yml â†’ PII patterns updated  â”‚  â”‚
+â”‚  â”‚  â€¢ Budgets: budgets.yml â†’ adjust token/$ limits             â”‚  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜  â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -19669,8 +19669,8 @@ privacy:
 **Merge Semantics:**
 
 ```
-Global (default)  →  Family (override)  →  User (final override)
-    ↓                      ↓                        ↓
+Global (default)  â†’  Family (override)  â†’  User (final override)
+    â†“                      â†“                        â†“
 k1/config/         k0_storage/families/     k0_storage/users/
   global.yml         fam_smith/config/       user_alice/config/
                        family.yml              user.yml
@@ -19687,7 +19687,7 @@ Example:
 1. **Scalars** (int, string, bool): User > Family > Global (last wins)
 2. **Lists**: Merge + dedupe (e.g., tools: append family tools to global)
 3. **Dicts**: Deep merge (e.g., model_routes: merge weights recursively)
-4. **Special keys**: `_override: true` → Replace instead of merge
+4. **Special keys**: `_override: true` â†’ Replace instead of merge
 
 **FlatBuffers Schema for Config Hierarchy:**
 
@@ -19720,23 +19720,23 @@ table ConfigUpdate {
 
 | Config File | Hot Reload? | Latency | Subsystem | Trigger |
 |-------------|-------------|---------|-----------|---------|
-| **model_routes.yml** | ✅ Yes | <50ms | Model Hub | SSE: ConfigUpdate |
-| **tools.yml** | ✅ Yes | <100ms | Tool Runner | SSE: ConfigUpdate |
-| **agent_roles.yml** | ✅ Yes | <50ms | Agent Fabric | SSE: AgentHire |
-| **task_graphs.yml** | ✅ Yes | <50ms | Planner | SSE: ConfigUpdate |
-| **safety_filter.yml** | ✅ Yes | <20ms | Safety Filter | SSE: ConfigUpdate |
-| **budgets.yml** | ✅ Yes | <10ms | Budget Manager | SSE: ConfigUpdate |
-| **caps.yml** | ✅ Yes | <10ms | Caps Enforcer | SSE: ConfigUpdate |
-| **bands.yml** | ✅ Yes | <10ms | Bands Enforcer | SSE: ConfigUpdate |
-| **prompts.yml** | ✅ Yes | <30ms | Prompt Library | SSE: ConfigUpdate |
-| **intent_classifier.yml** | ✅ Yes | <50ms | Intent Router | SSE: ConfigUpdate |
-| **session_policy.yml** | ✅ Yes | <20ms | Session Manager | SSE: ConfigUpdate |
-| **k1_bootstrap.yml** | ❌ No | N/A | K1 Core | Requires restart |
-| **port_config.yml** | ❌ No | N/A | K0 Bridge | Requires restart |
+| **model_routes.yml** | âœ… Yes | <50ms | Model Hub | SSE: ConfigUpdate |
+| **tools.yml** | âœ… Yes | <100ms | Tool Runner | SSE: ConfigUpdate |
+| **agent_roles.yml** | âœ… Yes | <50ms | Agent Fabric | SSE: AgentHire |
+| **task_graphs.yml** | âœ… Yes | <50ms | Planner | SSE: ConfigUpdate |
+| **safety_filter.yml** | âœ… Yes | <20ms | Safety Filter | SSE: ConfigUpdate |
+| **budgets.yml** | âœ… Yes | <10ms | Budget Manager | SSE: ConfigUpdate |
+| **caps.yml** | âœ… Yes | <10ms | Caps Enforcer | SSE: ConfigUpdate |
+| **bands.yml** | âœ… Yes | <10ms | Bands Enforcer | SSE: ConfigUpdate |
+| **prompts.yml** | âœ… Yes | <30ms | Prompt Library | SSE: ConfigUpdate |
+| **intent_classifier.yml** | âœ… Yes | <50ms | Intent Router | SSE: ConfigUpdate |
+| **session_policy.yml** | âœ… Yes | <20ms | Session Manager | SSE: ConfigUpdate |
+| **k1_bootstrap.yml** | âŒ No | N/A | K1 Core | Requires restart |
+| **port_config.yml** | âŒ No | N/A | K0 Bridge | Requires restart |
 
 **Rule of Thumb:**
-- ✅ **Hot reloadable**: Business logic configs (routing, tools, agents, policies)
-- ❌ **Restart required**: Infrastructure configs (ports, memory limits, core runtime)
+- âœ… **Hot reloadable**: Business logic configs (routing, tools, agents, policies)
+- âŒ **Restart required**: Infrastructure configs (ports, memory limits, core runtime)
 
 ### Hot Reload Mechanism
 
@@ -19767,7 +19767,7 @@ class ConfigManager:
     Responsibilities:
     1. Listen to SSE events from K0 (Port P08: ConfigUpdate)
     2. Validate incoming configs (schema + semantics)
-    3. Merge hierarchy (global → family → user)
+    3. Merge hierarchy (global â†’ family â†’ user)
     4. Notify subsystems via callbacks
     5. Rollback on validation errors
     6. Track version history (last 10 versions)
@@ -19778,8 +19778,8 @@ class ConfigManager:
         self.trace_manager = trace_manager
 
         # Config storage
-        self.active_configs: Dict[str, Any] = {}  # config_type → merged YAML dict
-        self.version_history: Dict[str, List[ConfigVersion]] = {}  # config_type → versions
+        self.active_configs: Dict[str, Any] = {}  # config_type â†’ merged YAML dict
+        self.version_history: Dict[str, List[ConfigVersion]] = {}  # config_type â†’ versions
 
         # Callbacks for subsystems
         self.subscribers: Dict[str, List[Callable]] = {
@@ -19825,7 +19825,7 @@ class ConfigManager:
 
         Steps:
         1. Parse ConfigUpdate FlatBuffers
-        2. Merge hierarchy (global → family → user)
+        2. Merge hierarchy (global â†’ family â†’ user)
         3. Validate merged config
         4. Save version to history
         5. Notify subscribers
@@ -20196,7 +20196,7 @@ def merge_configs(global_cfg: Dict, family_cfg: Dict, user_cfg: Dict) -> Dict:
     1. Scalars: user > family > global (last wins)
     2. Lists: concat + dedupe (e.g., tools)
     3. Dicts: recursive merge
-    4. Special: "_override: true" → replace instead of merge
+    4. Special: "_override: true" â†’ replace instead of merge
     """
     def deep_merge(base: Dict, override: Dict) -> Dict:
         result = base.copy()
@@ -20211,7 +20211,7 @@ def merge_configs(global_cfg: Dict, family_cfg: Dict, user_cfg: Dict) -> Dict:
                 result[key] = value  # Scalar override
         return result
 
-    # Merge: global → family → user
+    # Merge: global â†’ family â†’ user
     merged = deep_merge(global_cfg, family_cfg)
     merged = deep_merge(merged, user_cfg)
     return merged
@@ -20221,9 +20221,9 @@ def merge_configs(global_cfg: Dict, family_cfg: Dict, user_cfg: Dict) -> Dict:
 
 ## Real-Time Update Examples
 
-### Example 1: Agent Hire Event → New Agent Config
+### Example 1: Agent Hire Event â†’ New Agent Config
 
-**Scenario:** K0 detects user needs "travel_planner" agent → Sends SSE event to K1 → K1 loads new agent config
+**Scenario:** K0 detects user needs "travel_planner" agent â†’ Sends SSE event to K1 â†’ K1 loads new agent config
 
 **SSE Event:**
 
@@ -20260,9 +20260,9 @@ async def on_agent_hire(agent_role: str, config_update: Dict):
 
 ---
 
-### Example 2: Learning Tick → Model Routing Update
+### Example 2: Learning Tick â†’ Model Routing Update
 
-**Scenario:** K0's learning loop detects gemma-2b performs better than gpt-4o for summarization → Updates model routing weights
+**Scenario:** K0's learning loop detects gemma-2b performs better than gpt-4o for summarization â†’ Updates model routing weights
 
 **SSE Event:**
 
@@ -20299,9 +20299,9 @@ async def on_learning_tick(config_update: Dict):
 
 ---
 
-### Example 3: Admin Update → New Tool Enabled
+### Example 3: Admin Update â†’ New Tool Enabled
 
-**Scenario:** Admin enables "calendar" MCP server via K0 dashboard → K1 loads tool config
+**Scenario:** Admin enables "calendar" MCP server via K0 dashboard â†’ K1 loads tool config
 
 **SSE Event:**
 
@@ -20491,7 +20491,7 @@ class ModelHub:
 
 ---
 
-## Observability — Config Change Traces
+## Observability â€” Config Change Traces
 
 **Trace Event for Config Reload:**
 
@@ -20547,7 +20547,7 @@ config_version_info = Gauge(
 
 ---
 
-### CI Performance Gates — SLO Enforcement on Reference Devices
+### CI Performance Gates â€” SLO Enforcement on Reference Devices
 
 **Design Principle:** Whiteboard has latency budgets (TTFT < 150ms, E2E < 2s) but no CI enforcement:
 - No reference device profiles
@@ -20557,9 +20557,9 @@ config_version_info = Gauge(
 **Solution:** CI performance gates with laptop + phone reference profiles.
 
 **Research Foundations:**
-- **Performance Regression Detection** (Foo et al., 2015) — Statistical change detection
-- **Continuous Integration Best Practices** (Fowler, 2006) — Automated gates
-- **Mobile Performance Testing** (Google Web Vitals, 2020) — Device profiles
+- **Performance Regression Detection** (Foo et al., 2015) â€” Statistical change detection
+- **Continuous Integration Best Practices** (Fowler, 2006) â€” Automated gates
+- **Mobile Performance Testing** (Google Web Vitals, 2020) â€” Device profiles
 
 ---
 
@@ -20671,7 +20671,7 @@ MEMORY_SLOS = {
 ```python
 # k1/ci/performance_tests.py
 
-import pytest
+import ward
 import time
 import psutil
 import numpy as np
@@ -20752,7 +20752,7 @@ class PerformanceTestHarness:
         print(f"[{assertion.device_profile}] {assertion.metric_name} "
               f"P{int(assertion.percentile*100)}: {actual_percentile:.1f}ms "
               f"(threshold: {assertion.threshold_ms}ms) "
-              f"{'✅ PASS' if passed else '❌ FAIL'}")
+              f"{'âœ… PASS' if passed else 'âŒ FAIL'}")
 
         return passed
 
@@ -20774,7 +20774,7 @@ class PerformanceTestHarness:
 
         session = SessionState.create_new()
 
-        # Full request → response cycle
+        # Full request â†’ response cycle
         await session.submit_command("What's 2+2?")
         await session.wait_for_completion()
 
@@ -20789,9 +20789,9 @@ class PerformanceTestHarness:
         assert intent is not None
 
 
-# Pytest integration
-@pytest.mark.asyncio
-@pytest.mark.performance
+# ward integration
+@ward.mark.asyncio
+@ward.mark.performance
 async def test_laptop_ttft_slo():
     """Test TTFT meets SLO on laptop reference device"""
     with open("k1/ci/device_profiles.yml") as f:
@@ -20806,8 +20806,8 @@ async def test_laptop_ttft_slo():
     slo = SLOAssertion("ttft", 150, 0.95, "laptop_reference")
     assert harness.check_slo(slo), "TTFT SLO violated on laptop"
 
-@pytest.mark.asyncio
-@pytest.mark.performance
+@ward.mark.asyncio
+@ward.mark.performance
 async def test_phone_e2e_slo():
     """Test E2E latency meets SLO on phone reference device"""
     with open("k1/ci/device_profiles.yml") as f:
@@ -20822,7 +20822,7 @@ async def test_phone_e2e_slo():
     slo = SLOAssertion("e2e_latency", 3000, 0.95, "phone_reference")
     assert harness.check_slo(slo), "E2E SLO violated on phone"
 
-@pytest.mark.performance
+@ward.mark.performance
 def test_laptop_memory_slo():
     """Test memory usage meets SLO on laptop"""
     process = psutil.Process()
@@ -20861,11 +20861,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pytest pytest-asyncio numpy psutil pyyaml
+          pip install ward ward-asyncio numpy psutil pyyaml
 
       - name: Run laptop performance tests
         run: |
-          pytest k1/ci/performance_tests.py -m performance -v --tb=short
+          ward k1/ci/performance_tests.py -m performance -v --tb=short
 
       - name: Upload performance report
         if: always()
@@ -20886,7 +20886,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pytest pytest-asyncio numpy psutil pyyaml
+          pip install ward ward-asyncio numpy psutil pyyaml
 
       - name: Apply phone constraints
         run: |
@@ -20899,7 +20899,7 @@ jobs:
       - name: Run phone performance tests
         run: |
           sudo cgexec -g cpu,memory:phone_profile \
-            pytest k1/ci/performance_tests.py::test_phone_e2e_slo -v
+            ward k1/ci/performance_tests.py::test_phone_e2e_slo -v
 
       - name: Upload performance report
         if: always()
@@ -20935,28 +20935,28 @@ performance_percentile_ms = Histogram(
 **Grafana Dashboard:**
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ K1 Config Management Dashboard                         │
-├─────────────────────────────────────────────────────────┤
-│ Config Reload Success Rate (Last 24h)                  │
-│   model_routes: 98.5%  ✅                               │
-│   tools:        100%   ✅                               │
-│   agent_roles:  97.2%  ⚠️                               │
-│                                                          │
-│ Config Reload Latency (P50 / P95)                       │
-│   model_routes: 15ms / 45ms                             │
-│   tools:        25ms / 90ms                             │
-│   agent_roles:  12ms / 38ms                             │
-│                                                          │
-│ Active Config Versions                                  │
-│   model_routes: abc123def (age: 2h)                     │
-│   tools:        def456ghi (age: 1d)                     │
-│   agent_roles:  ghi789jkl (age: 5h)                     │
-│                                                          │
-│ Rollbacks (Last 7d)                                     │
-│   2024-10-08: model_routes (validation error)           │
-│   2024-10-05: tools (runtime error spike)               │
-└─────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ K1 Config Management Dashboard                         â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚ Config Reload Success Rate (Last 24h)                  â”‚
+â”‚   model_routes: 98.5%  âœ…                               â”‚
+â”‚   tools:        100%   âœ…                               â”‚
+â”‚   agent_roles:  97.2%  âš ï¸                               â”‚
+â”‚                                                          â”‚
+â”‚ Config Reload Latency (P50 / P95)                       â”‚
+â”‚   model_routes: 15ms / 45ms                             â”‚
+â”‚   tools:        25ms / 90ms                             â”‚
+â”‚   agent_roles:  12ms / 38ms                             â”‚
+â”‚                                                          â”‚
+â”‚ Active Config Versions                                  â”‚
+â”‚   model_routes: abc123def (age: 2h)                     â”‚
+â”‚   tools:        def456ghi (age: 1d)                     â”‚
+â”‚   agent_roles:  ghi789jkl (age: 5h)                     â”‚
+â”‚                                                          â”‚
+â”‚ Rollbacks (Last 7d)                                     â”‚
+â”‚   2024-10-08: model_routes (validation error)           â”‚
+â”‚   2024-10-05: tools (runtime error spike)               â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
@@ -21068,7 +21068,7 @@ config_management:
 |-------|--------------|----------|-------------|
 | **SSE receive** | 1 | 3 | Receive event from K0 |
 | **Parse FlatBuffers** | 2 | 5 | Deserialize ConfigUpdate |
-| **Merge hierarchy** | 3 | 8 | Global → Family → User |
+| **Merge hierarchy** | 3 | 8 | Global â†’ Family â†’ User |
 | **Schema validation** | 5 | 12 | Pydantic model validation |
 | **Semantic validation** | 8 | 20 | Business logic checks |
 | **Save version** | 2 | 5 | Write to version history |
@@ -21096,27 +21096,28 @@ config_management:
 
 ## Research Citations (Config Management)
 
-1. **Google SRE** — Beyer et al., 2016: *"Configuration Challenges in Large-Scale Systems"* (Usenix ATC'17): 62% of outages caused by config errors
-2. **Microsoft Azure** — OSDI'20: *"Automated Configuration Validation for Cloud Services"*: Schema + semantic validation catches 94% of errors
-3. **Meta** — SOSP'15: *"Early Detection of Configuration Errors to Reduce Failure Damage"*: Pre-deployment checks reduce incidents by 83%
-4. **Kubernetes** — CNCF, 2015: *"ConfigMaps and Secrets"*: Hot reload via file watch + volume mounts
-5. **Consul** — HashiCorp, 2014: *"Consistent Configuration with Raft"*: Strong consistency + versioning via Raft consensus
-6. **AWS AppConfig** — AWS, 2019: *"Safe Deployments with Validators"*: Gradual rollout + auto-rollback on errors
-7. **Netflix Archaius** — Netflix, 2012: *"Dynamic Properties at Scale"*: Cascading config hierarchy with polling
-8. **W3C SSE** — 2015: *"Server-Sent Events Specification"*: Lightweight, unidirectional push from server
-9. **EventSource API** — MDN, 2021: Browser-native SSE client with auto-reconnect
-10. **SSE vs WebSockets** — Hixie, 2012: *"SSE is simpler for server→client updates"*
-11. **JSON Schema** — IETF Draft, 2020: Declarative validation with $ref composition
-12. **Pydantic** — Colvin, 2017: Python data validation with type hints
-13. **YAML Safe Loading** — PyYAML, 2019: *"Never use yaml.load() in production"*
-14. **Etcd** — CoreOS, 2013: *"Distributed Key-Value Store with Raft"*: Strong consistency for config
-15. **Feature Flags** — LaunchDarkly, 2014: *"Dynamic Feature Toggles"*: Runtime config changes without deploys
-16. **Configuration as Code** — Humble & Farley, 2010: *"Continuous Delivery"*: Version-controlled configs
-17. **Schema Evolution** — Kleppmann, 2017: *"Designing Data-Intensive Applications"*: Backward/forward compatibility
-18. **Circuit Breaker Pattern** — Nygard, 2007: *"Release It!"*: Fail-fast on config errors
-19. **Canary Deployments** — Google SRE, 2016: *"Gradual rollout with monitoring"*
-20. **GitOps** — Weaveworks, 2017: *"Declarative Infrastructure and Applications"*: Git as source of truth
+1. **Google SRE** â€” Beyer et al., 2016: *"Configuration Challenges in Large-Scale Systems"* (Usenix ATC'17): 62% of outages caused by config errors
+2. **Microsoft Azure** â€” OSDI'20: *"Automated Configuration Validation for Cloud Services"*: Schema + semantic validation catches 94% of errors
+3. **Meta** â€” SOSP'15: *"Early Detection of Configuration Errors to Reduce Failure Damage"*: Pre-deployment checks reduce incidents by 83%
+4. **Kubernetes** â€” CNCF, 2015: *"ConfigMaps and Secrets"*: Hot reload via file watch + volume mounts
+5. **Consul** â€” HashiCorp, 2014: *"Consistent Configuration with Raft"*: Strong consistency + versioning via Raft consensus
+6. **AWS AppConfig** â€” AWS, 2019: *"Safe Deployments with Validators"*: Gradual rollout + auto-rollback on errors
+7. **Netflix Archaius** â€” Netflix, 2012: *"Dynamic Properties at Scale"*: Cascading config hierarchy with polling
+8. **W3C SSE** â€” 2015: *"Server-Sent Events Specification"*: Lightweight, unidirectional push from server
+9. **EventSource API** â€” MDN, 2021: Browser-native SSE client with auto-reconnect
+10. **SSE vs WebSockets** â€” Hixie, 2012: *"SSE is simpler for serverâ†’client updates"*
+11. **JSON Schema** â€” IETF Draft, 2020: Declarative validation with $ref composition
+12. **Pydantic** â€” Colvin, 2017: Python data validation with type hints
+13. **YAML Safe Loading** â€” PyYAML, 2019: *"Never use yaml.load() in production"*
+14. **Etcd** â€” CoreOS, 2013: *"Distributed Key-Value Store with Raft"*: Strong consistency for config
+15. **Feature Flags** â€” LaunchDarkly, 2014: *"Dynamic Feature Toggles"*: Runtime config changes without deploys
+16. **Configuration as Code** â€” Humble & Farley, 2010: *"Continuous Delivery"*: Version-controlled configs
+17. **Schema Evolution** â€” Kleppmann, 2017: *"Designing Data-Intensive Applications"*: Backward/forward compatibility
+18. **Circuit Breaker Pattern** â€” Nygard, 2007: *"Release It!"*: Fail-fast on config errors
+19. **Canary Deployments** â€” Google SRE, 2016: *"Gradual rollout with monitoring"*
+20. **GitOps** â€” Weaveworks, 2017: *"Declarative Infrastructure and Applications"*: Git as source of truth
 
 ---
 
 # Use this section for further brainstorming and architecture sketches.
+

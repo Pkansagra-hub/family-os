@@ -1,6 +1,6 @@
-# ADR-0014a: Content Negotiation Middleware & Format Detection
+﻿# ADR-0014a: Content Negotiation Middleware & Format Detection
 
-**Status:** ✅ Accepted (In Progress - 75% Complete)
+**Status:** âœ… Accepted (In Progress - 75% Complete)
 **Date:** 2025-10-12
 **Parent ADR:** [ADR-0014](0014-json-rest-api-dual-format.md) (JSON for REST API - Dual Format Support)
 **Deciders:** K1 Architecture Team
@@ -35,7 +35,7 @@ K1 Intelligence Module's REST API must support both JSON (human-readable, develo
 
 ### Non-Functional Requirements
 - **NFR1:** Performance: Content negotiation <0.2ms latency (header parsing cached)
-- **NFR2:** Performance: Zero overhead for cached results (same Accept header → cached response)
+- **NFR2:** Performance: Zero overhead for cached results (same Accept header â†’ cached response)
 - **NFR3:** Observability: Prometheus metrics for format adoption (JSON vs FlatBuffers %)
 - **NFR4:** Error clarity: 406/415 errors include list of supported formats
 
@@ -52,16 +52,16 @@ K1 Intelligence Module's REST API must support both JSON (human-readable, develo
 **Description:** Implement FastAPI middleware to parse Accept/Content-Type headers, sort by quality values, select best format.
 
 **Pros:**
-- ✅ Standard HTTP content negotiation (RFC 7231)
-- ✅ Quality value support (weighted format selection)
-- ✅ FastAPI integration (middleware lifecycle)
-- ✅ Cached header parsing (<0.2ms latency)
+- âœ… Standard HTTP content negotiation (RFC 7231)
+- âœ… Quality value support (weighted format selection)
+- âœ… FastAPI integration (middleware lifecycle)
+- âœ… Cached header parsing (<0.2ms latency)
 
 **Cons:**
-- ❌ Complex quality value parsing (e.g., `q=0.9` vs `q=1.0`)
-- ❌ Edge cases (multiple Accept formats, wildcards)
+- âŒ Complex quality value parsing (e.g., `q=0.9` vs `q=1.0`)
+- âŒ Edge cases (multiple Accept formats, wildcards)
 
-**Decision:** ✅ **SELECTED** (standard HTTP, FastAPI-native)
+**Decision:** âœ… **SELECTED** (standard HTTP, FastAPI-native)
 
 ---
 
@@ -69,15 +69,15 @@ K1 Intelligence Module's REST API must support both JSON (human-readable, develo
 **Description:** Use query parameter `?format=json` or `?format=flatbuffers` instead of Accept header.
 
 **Pros:**
-- ✅ Simple parsing (no quality values)
-- ✅ Easy testing (curl `?format=json`)
+- âœ… Simple parsing (no quality values)
+- âœ… Easy testing (curl `?format=json`)
 
 **Cons:**
-- ❌ Non-standard (breaks HTTP content negotiation)
-- ❌ Not cacheable (same URL + different format = different responses)
-- ❌ Poor REST API design (format should be in headers, not URL)
+- âŒ Non-standard (breaks HTTP content negotiation)
+- âŒ Not cacheable (same URL + different format = different responses)
+- âŒ Poor REST API design (format should be in headers, not URL)
 
-**Decision:** ❌ **REJECTED** (non-standard, breaks HTTP semantics)
+**Decision:** âŒ **REJECTED** (non-standard, breaks HTTP semantics)
 
 ---
 
@@ -85,15 +85,15 @@ K1 Intelligence Module's REST API must support both JSON (human-readable, develo
 **Description:** Separate endpoints: `/api/v1/json/sessions` and `/api/v1/binary/sessions`.
 
 **Pros:**
-- ✅ Simple routing (no content negotiation)
-- ✅ Clear separation (no format detection)
+- âœ… Simple routing (no content negotiation)
+- âœ… Clear separation (no format detection)
 
 **Cons:**
-- ❌ Duplicated endpoints (20 REST endpoints × 2 formats = 40 endpoints)
-- ❌ Poor maintainability (schema changes require updates to both)
-- ❌ Confusing for clients (which endpoint to use?)
+- âŒ Duplicated endpoints (20 REST endpoints Ã— 2 formats = 40 endpoints)
+- âŒ Poor maintainability (schema changes require updates to both)
+- âŒ Confusing for clients (which endpoint to use?)
 
-**Decision:** ❌ **REJECTED** (poor maintainability, duplicated logic)
+**Decision:** âŒ **REJECTED** (poor maintainability, duplicated logic)
 
 ---
 
@@ -215,7 +215,7 @@ class DualFormatMiddleware:
         """
         content_type = request.headers.get('content-type', 'application/json')
 
-        # Strip parameters (e.g., 'application/json; charset=utf-8' → 'application/json')
+        # Strip parameters (e.g., 'application/json; charset=utf-8' â†’ 'application/json')
         media_type = content_type.split(';')[0].strip().lower()
 
         return self.SUPPORTED_FORMATS.get(media_type)
@@ -227,7 +227,7 @@ class DualFormatMiddleware:
 
         Example:
             Accept: application/json;q=0.9, application/x-flatbuffers;q=1.0
-            → Returns: 'flatbuffers' (highest quality)
+            â†’ Returns: 'flatbuffers' (highest quality)
 
         Returns:
             'json' | 'flatbuffers' | None (no acceptable format)
@@ -254,7 +254,7 @@ class DualFormatMiddleware:
 
         Example:
             "application/json;q=0.9, application/x-flatbuffers;q=1.0"
-            → [MediaType('application/x-flatbuffers', 1.0), MediaType('application/json', 0.9)]
+            â†’ [MediaType('application/x-flatbuffers', 1.0), MediaType('application/json', 0.9)]
         """
         media_types = []
 
@@ -267,7 +267,7 @@ class DualFormatMiddleware:
                 continue
 
             # Split media type and parameters
-            # Example: "application/json;q=0.9" → ["application/json", "q=0.9"]
+            # Example: "application/json;q=0.9" â†’ ["application/json", "q=0.9"]
             tokens = part.split(';')
             media_type_str = tokens[0].strip().lower()
 
@@ -289,7 +289,7 @@ class DualFormatMiddleware:
                             # Clamp to [0.0, 1.0]
                             quality = max(0.0, min(1.0, quality))
                         except ValueError:
-                            quality = 1.0  # Invalid q value → default to 1.0
+                            quality = 1.0  # Invalid q value â†’ default to 1.0
                     else:
                         params[key] = value
 
@@ -496,11 +496,11 @@ topk(10, sum by (endpoint) (
 
 | Operation | Budget | Actual | Status |
 |-----------|--------|--------|--------|
-| Accept header parsing (cached) | <0.2ms | 0.05ms P50 | ✅ |
-| Accept header parsing (uncached) | <1ms | 0.8ms P50 | ✅ |
-| Content-Type parsing | <0.1ms | 0.03ms P50 | ✅ |
-| Quality value sorting | <0.5ms | 0.2ms P50 | ✅ |
-| Total middleware overhead | <1ms | 0.5ms P95 | ✅ |
+| Accept header parsing (cached) | <0.2ms | 0.05ms P50 | âœ… |
+| Accept header parsing (uncached) | <1ms | 0.8ms P50 | âœ… |
+| Content-Type parsing | <0.1ms | 0.03ms P50 | âœ… |
+| Quality value sorting | <0.5ms | 0.2ms P50 | âœ… |
+| Total middleware overhead | <1ms | 0.5ms P95 | âœ… |
 
 **Benchmarking Script:**
 
@@ -560,7 +560,7 @@ def benchmark_content_negotiation():
 ### Unit Tests
 
 ```python
-import pytest
+import ward
 from fastapi.testclient import TestClient
 
 def test_accept_json():
@@ -699,19 +699,19 @@ def test_end_to_end_flatbuffers():
 ## Consequences
 
 ### Positive
-- ✅ **Standard HTTP:** RFC 7231 compliant content negotiation
-- ✅ **Quality value support:** Weighted format selection enables client preferences
-- ✅ **Performance:** <0.2ms latency with cached header parsing
-- ✅ **Observability:** Prometheus metrics track format adoption (% FlatBuffers usage)
-- ✅ **Clear errors:** 406/415 errors include supported formats list
+- âœ… **Standard HTTP:** RFC 7231 compliant content negotiation
+- âœ… **Quality value support:** Weighted format selection enables client preferences
+- âœ… **Performance:** <0.2ms latency with cached header parsing
+- âœ… **Observability:** Prometheus metrics track format adoption (% FlatBuffers usage)
+- âœ… **Clear errors:** 406/415 errors include supported formats list
 
 ### Negative
-- ❌ **Quality value complexity:** Parsing `q=0.9` adds ~0.15ms latency (cached mitigates)
-- ❌ **Edge case handling:** Wildcards, multiple formats require careful logic
+- âŒ **Quality value complexity:** Parsing `q=0.9` adds ~0.15ms latency (cached mitigates)
+- âŒ **Edge case handling:** Wildcards, multiple formats require careful logic
 
 ### Neutral
-- ⚠️ **JSON default:** Broad compatibility, but FlatBuffers opt-in (acceptable trade-off)
-- ⚠️ **LRU cache:** 128-entry cache (balance memory vs performance)
+- âš ï¸ **JSON default:** Broad compatibility, but FlatBuffers opt-in (acceptable trade-off)
+- âš ï¸ **LRU cache:** 128-entry cache (balance memory vs performance)
 
 ---
 
@@ -742,10 +742,11 @@ def test_end_to_end_flatbuffers():
 
 ---
 
-**Status:** ✅ **75% Complete** (Pending: Quality value parsing edge cases, adaptive format selection)
+**Status:** âœ… **75% Complete** (Pending: Quality value parsing edge cases, adaptive format selection)
 
 **Next Steps:**
 1. Implement quality value parsing edge cases (invalid q values, out-of-range)
 2. Add adaptive format selection (increase FlatBuffers quality if client consistently uses it)
 3. Test with real-world Accept headers (browsers, Postman, curl)
 4. Deploy to staging, monitor metrics
+

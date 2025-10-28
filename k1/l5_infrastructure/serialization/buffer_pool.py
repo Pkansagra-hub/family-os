@@ -1,18 +1,18 @@
-"""
+﻿"""
 Buffer Pool - Reusable Buffer Management for FlatBuffers Serialization
 
 Layer: L5 Infrastructure
 Component: Serialization (Memory Management)
 Priority: P0 (Critical Path)
-Status: 🚧 STUB - NEEDS_IMPLEMENTATION
+Status: ðŸš§ STUB - NEEDS_IMPLEMENTATION
 
 Architecture Decision Records:
     - ADR-0011c: Serialization Performance & Zero-Copy
-      * Buffer pooling for allocation reuse (1.4× speedup, 200× fewer allocations)
+      * Buffer pooling for allocation reuse (1.4Ã— speedup, 200Ã— fewer allocations)
       * Thread-local pool management (avoid lock contention)
       * 5 size classes (256B, 1KB, 4KB, 16KB, 64KB) for efficient memory usage
       * Section: "Buffer Pooling" (Per-Thread Buffer Pools, Pool Eviction Policy)
-      * Performance: Hit rate target >80%, speedup 1.4× vs allocation
+      * Performance: Hit rate target >80%, speedup 1.4Ã— vs allocation
 
 Dependencies:
     Internal:
@@ -33,7 +33,7 @@ Performance Budgets:
     - Buffer acquisition (miss): <1ms P95 (allocation overhead)
     - Buffer release: <0.1ms P95
     - Hit rate target: >80% (buffer reuse)
-    - Speedup vs allocation: 1.4× (average hit+miss)
+    - Speedup vs allocation: 1.4Ã— (average hit+miss)
 
 Observability:
     - Metrics:
@@ -111,7 +111,7 @@ class BufferPool:
         - Reduces allocation overhead (malloc/free)
         - Improves locality (warm cache)
         - Reduces GC pressure (fewer allocations)
-        - 1.4× speedup vs allocating new buffers
+        - 1.4Ã— speedup vs allocating new buffers
 
     Thread Safety:
         Thread-local storage (no locks required)
@@ -121,8 +121,8 @@ class BufferPool:
 
     Performance Targets (from ADR-0011c):
         - Hit rate: >80% (buffer reuse)
-        - Speedup: 1.4× vs allocation
-        - GC reduction: 7.5× fewer pauses
+        - Speedup: 1.4Ã— vs allocation
+        - GC reduction: 7.5Ã— fewer pauses
 
     ADR-0011c: Buffer pooling optimization (Section "Buffer Pooling")
     """
@@ -184,9 +184,9 @@ class BufferPool:
             Size class (power of 2) that fits requested size
 
         Example:
-            _find_size_class(500) → 1024 (1KB)
-            _find_size_class(3000) → 4096 (4KB)
-            _find_size_class(70000) → 65536 (64KB)
+            _find_size_class(500) â†’ 1024 (1KB)
+            _find_size_class(3000) â†’ 4096 (4KB)
+            _find_size_class(70000) â†’ 65536 (64KB)
 
         TODO(@infrastructure-team): Implement size class lookup
         Assigned to: Issue #L5-3.2.1
@@ -211,7 +211,7 @@ class BufferPool:
         Performance:
             - Hit (from pool): <0.1ms P95 (deque pop)
             - Miss (allocate): <1ms P95 (allocation overhead)
-            - Average speedup: 1.4× faster (hit vs miss)
+            - Average speedup: 1.4Ã— faster (hit vs miss)
 
         Usage:
             # Acquire 1KB buffer for TaskAnnouncement
@@ -336,7 +336,7 @@ class BufferPool:
 
         Returns:
             Dict with:
-                - size_class_stats: {size_class → {pool_depth, hit_rate, evictions}}
+                - size_class_stats: {size_class â†’ {pool_depth, hit_rate, evictions}}
                 - total_memory_bytes: Sum of all buffers in pool
                 - hit_rate_overall: Across all size classes (0.0-1.0)
                 - total_hits: Lifetime hit count
@@ -472,9 +472,9 @@ __all__ = [
 #   - Test: performance (acquire <0.1ms hit, <1ms miss)
 #
 # Benchmark tests required:
-#   - pytest-benchmark for performance validation
+#   - ward-benchmark for performance validation
 #   - Measure hit rate (target >80%)
-#   - Measure speedup (1.4× vs allocation)
+#   - Measure speedup (1.4Ã— vs allocation)
 #   - Compare with no pooling (baseline)
 #
 # No simulation code allowed:
@@ -483,3 +483,4 @@ __all__ = [
 #   - Integration tests > unit tests
 #
 # =============================================================================
+

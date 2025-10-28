@@ -1,10 +1,10 @@
-"""
+﻿"""
 String Deduplication - Reduce Payload Size by Deduplicating Strings
 
 Layer: L5 Infrastructure
 Component: Serialization (Optimization & Advanced Features)
 Priority: P1 (Important for Optimization)
-Status: 🚧 STUB - NEEDS_IMPLEMENTATION
+Status: ðŸš§ STUB - NEEDS_IMPLEMENTATION
 
 Architecture Decision Records:
     - ADR-0011c: Serialization Performance & Zero-Copy
@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 
 # String deduplication thresholds
 MIN_STRING_LENGTH_FOR_DEDUP = 8  # Strings < 8 bytes not worth deduplicating
-MIN_OCCURRENCES_FOR_DEDUP = 2  # Must occur at least 2× to deduplicate
+MIN_OCCURRENCES_FOR_DEDUP = 2  # Must occur at least 2Ã— to deduplicate
 
 # Hash algorithm for string deduplication
 STRING_HASH_ALGORITHM = "xxhash64"  # Fast non-cryptographic hash
@@ -107,11 +107,11 @@ class StringDeduplicator:
         SessionState contains: ["intent", "reminder", "intent", "reminder"]
 
         Without deduplication:
-            4 strings × 7 bytes average = 28 bytes total
+            4 strings Ã— 7 bytes average = 28 bytes total
 
         With deduplication:
-            2 unique strings × 7 bytes = 14 bytes
-            2 references × 4 bytes = 8 bytes
+            2 unique strings Ã— 7 bytes = 14 bytes
+            2 references Ã— 4 bytes = 8 bytes
             Total: 22 bytes
             Savings: 21% (6 bytes saved)
 
@@ -126,11 +126,11 @@ class StringDeduplicator:
         - Deserialization speedup: Fewer allocations (strings stored once)
 
     Trade-offs:
-        - ✅ Smaller payload: 30-50% reduction for text-heavy data
-        - ✅ Faster deserialization: Fewer allocations (strings stored once)
-        - ✅ Network savings: Reduced bandwidth for K0 bridge
-        - ⚠️ Slower serialization: 2-pass (build frequency map + serialize)
-        - ⚠️ Memory overhead: Hash table (O(unique_strings))
+        - âœ… Smaller payload: 30-50% reduction for text-heavy data
+        - âœ… Faster deserialization: Fewer allocations (strings stored once)
+        - âœ… Network savings: Reduced bandwidth for K0 bridge
+        - âš ï¸ Slower serialization: 2-pass (build frequency map + serialize)
+        - âš ï¸ Memory overhead: Hash table (O(unique_strings))
 
     ADR-0011c: "Memory Layout Optimization" (String Deduplication section)
     """
@@ -145,23 +145,23 @@ class StringDeduplicator:
 
         Args:
             min_length: Minimum string length to deduplicate (default: 8 bytes)
-            min_occurrences: Minimum occurrences to deduplicate (default: 2×)
+            min_occurrences: Minimum occurrences to deduplicate (default: 2Ã—)
 
         TODO(@infrastructure-team): Initialize string deduplicator
         Assigned to: Issue #L5-3.3.2
 
         Steps:
-            1. Initialize frequency map (str → count)
-            2. Initialize offset map (str → FlatBuffers offset)
+            1. Initialize frequency map (str â†’ count)
+            2. Initialize offset map (str â†’ FlatBuffers offset)
             3. Initialize stats (size_before, size_after, savings)
         """
         self.min_length = min_length
         self.min_occurrences = min_occurrences
 
-        # Frequency map: string → count
+        # Frequency map: string â†’ count
         self.frequency_map: Dict[str, int] = defaultdict(int)
 
-        # Offset map: string → FlatBuffers offset (for deduplication)
+        # Offset map: string â†’ FlatBuffers offset (for deduplication)
         self.offset_map: Dict[str, int] = {}
 
         # Stats
@@ -188,7 +188,7 @@ class StringDeduplicator:
 
         Criteria:
             1. String length >= min_length (8 bytes)
-            2. String occurrences >= min_occurrences (2×)
+            2. String occurrences >= min_occurrences (2Ã—)
 
         TODO(@infrastructure-team): Implement deduplication check
         Assigned to: Issue #L5-3.3.2
@@ -349,7 +349,7 @@ class StringDeduplicator:
                 - size_before: Original size (bytes)
                 - size_after: After dedup (bytes)
                 - size_saved: Bytes saved
-                - savings_percent: (size_before - size_after) / size_before × 100
+                - savings_percent: (size_before - size_after) / size_before Ã— 100
                 - hit_rate: offset_map hits / strings_total
 
         Example:
@@ -362,7 +362,7 @@ class StringDeduplicator:
 
         Steps:
             1. Calculate size_saved = size_before - size_after
-            2. Calculate savings_percent = (size_saved / size_before) × 100
+            2. Calculate savings_percent = (size_saved / size_before) Ã— 100
             3. Calculate hit_rate = (strings_total - strings_unique) / strings_total
             4. Return stats dict
         """
@@ -490,10 +490,10 @@ __all__ = [
 #   - Test: performance overhead (<10% serialization time)
 #   - Test: size savings (30-50% for text-heavy data)
 #   - Test: min_length threshold (strings < 8 bytes not deduplicated)
-#   - Test: min_occurrences threshold (strings occurring <2× not deduplicated)
+#   - Test: min_occurrences threshold (strings occurring <2Ã— not deduplicated)
 #
 # Benchmark tests required:
-#   - pytest-benchmark for performance validation
+#   - ward-benchmark for performance validation
 #   - Measure overhead (<10% vs no deduplication)
 #   - Measure size savings (30-50% for SessionState with 100 entities)
 #   - Compare with no deduplication (baseline)
@@ -512,7 +512,7 @@ __all__ = [
 # Current implementation uses SHA256 for string hashing (STUB).
 #
 # Production optimization:
-#   - Replace SHA256 with xxhash (10-100× faster)
+#   - Replace SHA256 with xxhash (10-100Ã— faster)
 #   - Use C extension for hash computation
 #   - Consider inline caching for hot strings
 #
@@ -527,3 +527,4 @@ __all__ = [
 #   - Network savings: Reduced payload size (30-50%)
 #
 # =============================================================================
+

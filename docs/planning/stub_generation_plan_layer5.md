@@ -6339,84 +6339,223 @@ Downstream (Uses thermal data):
 
 ### 📋 Overview
 
-**Purpose:** Cascading model placement engine with cost tracking and privacy enforcement
-**Priority:** M1 (High, Core Placement Strategy)
-**Status:** 🚧 STUB - NEEDS_IMPLEMENTATION
-**Files:** 5 Python modules
-**ADRs:** ADR-0027 (Model Placement Cascade)
-**Assigned To:** @model-team
+**Purpose:** Multi-provider LLM routing platform with user credential management and intelligent placement cascade
+**Priority:** 🔥 P0 CRITICAL (Remote-First Phase 1, Core Platform Strategy)
+**Status:** ✅ PARTIAL (4 files created: cascade_engine.py, circuit_breaker.py, cost_tracker.py, capability_matcher.py)
+**Remaining:** 1 file (placement_policy.py - privacy enforcement)
+**Files:** 5 Python modules (4 created, 1 remaining)
+**ADRs:** ADR-0027 (Model Placement Cascade), ADR-0027a/b/c/d, ADR-0001b (Model Hub)
+**Assigned To:** @ml-platform-team
 
-**Key Features:**
+---
 
-- **4-Tier Fallback:** NPU (optimal) → GPU (fast) → CPU (compatible) → Remote (emergency)
-- **Cost Tracking:** $0.001-0.01 per remote turn, daily budget enforcement
-- **Privacy Enforcement:** RED-band data local-only, AMBER on-device, GREEN flexible
-- **Capability Matching:** Device capability detection vs model requirements
-- **Performance Budgets:** <50ms placement decision, <100ms per-model cost check
-- **Circuit Breaking:** Fallback to CPU if GPU/NPU experiences failures (>10% error rate)
+**🌟 Market Reality & Architecture Strategy (October 2025):**
 
-**Model Tiers & Characteristics:**
+**Phase 1 (Q4 2025 - TODAY): "Bring Your Own LLM" + Feature-Flagged Local**
+- 95% Remote traffic (users' OpenAI/Anthropic/Google API keys)
+- FamilyOS = Credential broker + secure routing (NOT centralized API costs)
+- Feature flag: `ENABLE_LOCAL_INFERENCE = False` (default OFF, turn ON when ready)
+- PC capability: ASUS ProArt P16 (50 TOPS NPU) CAN run LLMs locally TODAY
+- Phone capability: Insufficient (Snapdragon 8 Gen 3 = 45 TOPS, wait for dongle)
 
+**Phase 2 (2026-2027): FamilyOS Dongle + Hybrid**
+- Dongle: 10 TOPS NPU, 4 TFLOPS GPU, 8GB RAM (for phones)
+- `ENABLE_LOCAL_INFERENCE = True` for dongle/capable PCs
+- Traffic: 30% Local, 70% Remote (hybrid)
+- RED band stays local (privacy protected)
+
+**Phase 3 (2027+): FamilyOS-Hosted LLMs (Optional)**
+- FamilyOS scales → Host our own LLM endpoints
+- User choice: (1) Their keys, (2) FamilyOS LLMs, (3) Local dongle
+- Competitive pricing vs OpenAI/Anthropic
+- Traffic: 40% Local, 40% FamilyOS LLMs, 20% User's cloud keys
+
+---
+
+**🎯 Key Features:**
+
+**Remote-First (Phase 1 - TODAY):**
+- ✅ **Multi-Provider Support:** OpenAI (50%), Anthropic (30%), Google (15%), vLLM (3%), Ollama (2%)
+- ✅ **User Credential Management:** OAuth flows, secure keychain, per-user API keys
+- ✅ **User Quota Monitoring:** Track token usage, warn on rate limits, estimated bill projection
+- ✅ **Circuit Breaking (User-Level):** Detect invalid/expired keys, rate limit errors, multi-provider failover
+- ✅ **Privacy Enforcement:** RED-band blocks remote (wait for dongle), AMBER/GREEN uses user's keys
+- ✅ **Cost Tracking (User Budget):** Monitor user's API usage (NOT FamilyOS operational costs)
+
+**Local Inference (Feature-Flagged, Ready for Phase 2):**
+- 🔄 **Device Capability Detection:** PC (50 TOPS) vs Phone (45 TOPS) vs Dongle (10 TOPS)
+- 🔄 **4-Tier Cascade:** NPU → GPU → CPU → Remote (when `ENABLE_LOCAL_INFERENCE = True`)
+- 🔄 **Thermal Integration:** Monitor NPU/GPU temperature, throttle on overheat (future-ready)
+- 🔄 **Feature Flag Control:** `config.yml: local_inference.enabled = false` (default)
+
+**Architecture-Ready (Future Phases):**
+- 🎯 **FamilyOS-Hosted LLMs:** Same adapter pattern, different endpoint (Phase 3)
+- 🎯 **Dongle Integration:** Detect FamilyOS Dongle, enable local inference (Phase 2)
+- 🎯 **Hybrid Routing:** Local for privacy, Remote for accuracy (Phase 2-3)
+
+---
+
+**📊 4-Tier Cascade Architecture (Feature-Ready, Controlled by Flag):**
+
+```yaml
+Tier    | Latency | Power | Cost (User)    | Privacy | Today's Usage | Phase 2 | Phase 3 | Capable Devices
+--------|---------|-------|----------------|---------|---------------|---------|---------|------------------
+NPU     | 30ms    | 5W    | $0 (local)     | Device  | <1% (OFF)     | 10%     | 40%     | PC (50 TOPS), Dongle
+GPU     | 50ms    | 12W   | $0 (local)     | Device  | <1% (OFF)     | 20%     | 40%     | PC, Dongle
+CPU     | 120ms   | 15W   | $0 (local)     | Device  | 4% (fallback) | 10%     | 10%     | All devices
+Remote  | 250ms   | 0W    | User's API key | Cloud   | 95% (PRIMARY) | 60%     | 10%     | User credentials
 ```
-Tier       | Latency | Power | Cost      | Privacy | Capability Check | Fallback
------------|---------|-------|-----------|---------|------------------|----------
-NPU        | 30ms    | 5W    | $0        | Device  | NPU capability   | → GPU
-GPU        | 50ms    | 12W   | $0.001    | Device  | GPU capability   | → CPU
-CPU        | 120ms   | 15W   | $0.00     | Device  | CPU always ready | (final)
+
+**Feature Flag Configuration:**
+
+```yaml
+# k1/config/placement.yml
+
+local_inference:
+  enabled: false  # Phase 1: OFF (Remote-first), Phase 2: ON (Hybrid)
+
+  device_requirements:
+    min_npu_tops: 50        # ASUS ProArt P16 meets this TODAY
+    min_gpu_vram_gb: 8      # RTX 3060+ capable
+    min_cpu_cores: 8        # Fallback requirement
+
+  thermal_management:
+    enabled: false          # Phase 1: OFF, Phase 2: ON
+    max_npu_temp_celsius: 80
+    max_gpu_temp_celsius: 85
+    throttle_on_overheat: true
+
+  dongle_detection:
+    enabled: false          # Phase 1: OFF, Phase 2: ON
+    dongle_device_id: "familyos_dongle_v1"
+
+remote_providers:
+  enabled: true             # Phase 1: ON (primary path)
+
+  openai:
+    enabled: true
+    default_model: "gpt-4"
+    fallback_model: "gpt-3.5-turbo"
+
+  anthropic:
+    enabled: true
+    default_model: "claude-3-5-sonnet-20241022"
+
+  google:
+    enabled: true
+    default_model: "gemini-pro"
+
+user_quota:
+  default_daily_budget_cents: 500  # $5.00
+  warn_threshold_pct: 0.8          # Warn at 80%
+  block_threshold_pct: 1.0         # Block at 100%
 ```
 
-**LOCAL-ONLY ARCHITECTURE (No Cloud Remote Tier):**
+---
 
-The Remote tier has been **removed**. K1 now operates on local devices only with graceful failure when capacity is exhausted.
+**🔄 Placement Decision Flow (Phase 1 - Remote-First with Feature Flag):**
 
-**Placement Decision Flow (LOCAL-ONLY, No Cloud):**
+```yaml
+1. Check Feature Flag: ENABLE_LOCAL_INFERENCE
+   ├─ FALSE (Phase 1 - TODAY)? → Skip to Step 4 (Remote-first)
+   └─ TRUE (Phase 2+)? → Continue to Step 2 (Full cascade)
 
+2. Check Privacy Band (if local enabled)
+   ├─ RED (2%)? → Block remote, require local (wait for dongle if unavailable)
+   ├─ AMBER (8%)? → Prefer local, allow remote with masking
+   └─ GREEN (90%)? → Any tier allowed
+
+3. Device Capability Detection (if local enabled)
+   ├─ PC with 50 TOPS NPU? → Try NPU (30ms)
+   ├─ PC with GPU (8GB VRAM)? → Try GPU (50ms)
+   ├─ Phone with 45 TOPS? → Skip local (insufficient), go to Remote
+   └─ FamilyOS Dongle detected? → Enable full local cascade
+
+4. Remote Tier (PRIMARY PATH Phase 1, Fallback Phase 2+)
+   ├─ User has OpenAI key? → Route to OpenAI using THEIR key
+   ├─ OpenAI circuit OPEN? → Failover to Anthropic (if user has key)
+   ├─ Anthropic unavailable? → Failover to Google Gemini
+   └─ No valid credentials? → Show "Connect your LLM provider" prompt
+
+5. Circuit Breaker Check (Per User, Per Provider)
+   ├─ User's OpenAI key invalid? → Mark OPEN, prompt re-login
+   ├─ User hit rate limit? → Mark OPEN, retry in Xmin
+   └─ Success? → Mark CLOSED, continue
+
+6. User Quota Check
+   ├─ Daily budget exceeded? → Block remote, show "Increase limit or wait"
+   ├─ At 80% budget? → Warn user "Approaching your $5 limit"
+   └─ Under budget? → Execute request, track tokens
 ```
-1. Get Model Requirements (size, batch, privacy_band)
-   ↓
-2. Check NPU Capability & Budget
-   ├─ Available? → Try NPU (30ms)
-   ├─ Failed? → Cascade to GPU
-   └─ No budget? → Skip to GPU
-   ↓
-3. Check GPU Capability & Budget
-   ├─ Available? → Try GPU (50ms)
-   ├─ Failed? → Cascade to CPU
-   └─ No budget? → Skip to CPU
-   ↓
-4. Check CPU (Always available)
-   ├─ Try CPU (120ms)
-   ├─ Success? → Return
-   └─ Failed? → FAIL GRACEFULLY (no cloud)
-   ↓
-5. No Device Available → REJECT REQUEST
-   ├─ Error: "No local device available"
-   ├─ Client can retry later or reduce batch size
-   └─ Honest about local capacity limits
+
+---
+
+**💰 Cost Model ("Bring Your Own LLM" - User's Perspective):**
+
+```yaml
+FamilyOS Does NOT Pay:
+  - User brings their own OpenAI/Anthropic/Google subscription
+  - User's OpenAI bill = Their usage × OpenAI pricing
+  - FamilyOS revenue = Subscription fee ($10/month), NOT LLM markup
+
+FamilyOS Tracks (User Quota Monitoring):
+  - Tokens used: 1.5M tokens/day → Estimated $45/month OpenAI bill
+  - Rate limits: 90 RPM, 200K TPM → Warn at 80%
+  - Daily budget (user-set): $5/day → Block at 100%
+  - Show user: "You've used 1.2M tokens today (~$36), 80% of your $45 limit"
+
+Cost Protection (User's Budget, Not Ours):
+  - Warn user at 80% of their self-set budget
+  - Block remote tier at 100% (prevent runaway OpenAI bills)
+  - User can adjust: "Increase my daily limit to $10"
+
+Future FamilyOS LLMs (Phase 3):
+  - FamilyOS-hosted pricing: $0.01/1K (competitive vs OpenAI $0.03/1K)
+  - User pays FamilyOS (not OpenAI) → FamilyOS keeps margin
+  - Still cheaper than OpenAI for most workloads
 ```
 
-**Failure Handling (LOCAL-ONLY):**
+---
 
+**🔒 Privacy Enforcement (Phase 1 - Remote Reality with Feature Flag):**
+
+```yaml
+RED Band (2% of queries): Medical, financial, location
+  ├─ Phase 1 (local OFF): Block remote, show "Privacy protected. Local unavailable. Coming 2026."
+  ├─ Phase 2 (local ON + dongle): Use dongle NPU/GPU for RED band
+  └─ Future: Always local (never cloud)
+
+AMBER Band (8% of queries): User preferences, habits
+  ├─ Phase 1: Allow remote with PII masking (if user consents)
+  ├─ Phase 2: Prefer local (if dongle), fallback to remote
+  └─ Use user's API keys (their trust, their data)
+
+GREEN Band (90% of queries): Public data, general questions
+  ├─ Remote allowed (default path Phase 1)
+  ├─ Use user's API keys (OpenAI/Anthropic/Google)
+  └─ Fast (250ms) + Accurate (GPT-4, Claude 3.5)
 ```
-OLD: Model fails on CPU → Try Remote Cloud (500ms)
-NEW: Model fails on CPU → FAIL (graceful error)
 
-Benefits:
-  - No cloud dependency
-  - Faster failure detection (120ms vs 500ms network call)
-  - Clear error to client
-  - Honest about capability limits
-  - On-device only execution
+---
 
-Error Response:
-  {
-    "status": "FAILED",
-    "reason": "no_local_device_available",
-    "available_devices": ["cpu"],  # CPU tried and failed
-    "suggestion": "retry_later_or_reduce_batch_size",
-    "tiers_tried": ["npu", "gpu", "cpu"]
-  }
+**⚙️ Implementation Priorities (Phase 1 - Remote-First):**
+
+```yaml
+Priority         | Component                    | Effort | Lines | Status      | Rationale
+-----------------|------------------------------|--------|-------|-------------|----------------------------------
+🔥 P0 CRITICAL   | provider_adapters.py         | 60%    | 800   | ✅ CREATED  | OpenAI/Anthropic/Google (95% traffic)
+🔥 P0 CRITICAL   | circuit_breaker.py           | 15%    | 400   | ✅ CREATED  | Use existing resilience/circuit_breaker_manager.py
+🔥 P0 CRITICAL   | cost_tracker.py              | 10%    | 500   | ✅ CREATED  | User quota monitoring (rate limits)
+🟡 HIGH          | placement_policy.py          | 10%    | 300   | ⏳ TODO     | Privacy enforcement (RED blocks remote)
+🟡 MEDIUM        | capability_matcher.py        | 5%     | 500   | ✅ CREATED  | Device detection (feature-flagged)
+-----------------|------------------------------|--------|-------|-------------|----------------------------------
+Total            | 5 files                      | 100%   | 2500  | 80% DONE    | Remote-first, dongle-ready
 ```
+
+**Note on Existing Circuit Breaker:**
+- Use `k1/l5_infrastructure/resilience/circuit_breaker_manager.py` (already implemented)
+- Adapt for per-user, per-provider circuit breaking
+- Netflix Hystrix pattern: CLOSED → OPEN → HALF_OPEN → CLOSED
 
 ---
 

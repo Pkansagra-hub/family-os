@@ -3,7 +3,7 @@ description: Test layout, coverage, and contract/integration expectations.
 applyTo: "tests/**/*.py"
 ---
 
-# ✅ Test Standards — WARD Framework
+# ✅ Test Standards — pytest Framework
 
 ## Overview
 
@@ -61,7 +61,7 @@ tests/
 │   ├── k1_fixtures.py
 │   └── test_data.py
 │
-└── conftest.py                   # Global WARD configuration
+└── conftest.py                   # Global pytest configuration
 ```
 
 ### Naming Conventions
@@ -76,15 +76,15 @@ tests/
 
 | Type | Purpose | Coverage Target | Tools |
 |------|---------|-----------------|-------|
-| **Unit** | Pure logic validation | ≥95% of component code | WARD, coverage.py |
-| **Integration** | Real I/O paths (API ↔ events ↔ storage) | 100% of critical paths | WARD with real fixtures |
+| **Unit** | Pure logic validation | ≥95% of component code | pytest, coverage.py |
+| **Integration** | Real I/O paths (API ↔ events ↔ storage) | 100% of critical paths | pytest with real fixtures |
 | **Contract** | Schema/API/event compliance | 100% of contracts | JSONSchema, OpenAPI validators |
 | **Performance** | SLA validation (latency, throughput, memory) | All budgets met | Custom benchmarks, py-spy |
 | **Security** | RBAC, encryption, input validation | 100% of protected paths | Security-specific tests |
 
 ---
 
-## 3) WARD Framework & Conventions
+## 3) pytest Framework & Conventions
 
 ### Test File Template
 ```python
@@ -94,10 +94,9 @@ Purpose: Test 3-phase coordination orchestration
 Related ADRs: ADR-0005, ADR-0086
 """
 
-from ward import test, fixture
-import asyncio
+import pytest
 
-@fixture
+@pytest.fixture
 async def orchestrator():
     """Real orchestrator instance for testing"""
     orch = Orchestrator(config=test_config)
@@ -105,29 +104,29 @@ async def orchestrator():
     yield orch
     await orch.shutdown()
 
-@test("orchestrator coordinates 3 phases correctly")
-async def _(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_orchestrator_coordinates_3_phases_correctly(orchestrator):
     # Test with REAL component
     task = TaskAnnouncement(task_id="test-123", ...)
-    result = await orch.coordinate(task)
+    result = await orchestrator.coordinate(task)
 
     # Assert behavioral outcomes
     assert result.status == "COMPLETED"
     assert result.latency_ms < 250  # Performance budget
 ```
 
-### WARD Conventions
-- **Framework**: `python -m ward test --path tests/`
-- **Test Decorator**: `@test("human-readable description")`
+### pytest Conventions
+- **Framework**: `python -m pytest tests/`
+- **Test Functions**: `def test_*()` or `async def test_*()` with `@pytest.mark.asyncio`
 - **Fixture Scope**: Function-scoped by default (isolation); module-scoped for expensive resources
 - **Real Components**: Use actual implementations, never mock core logic
-- **Async Support**: Native `async`/`await`; no blocking I/O
+- **Async Support**: Use `pytest-asyncio` for async tests; proper `await` semantics
 - **Determinism**: Freeze time, seed RNG, use fixed test data
 
 ### Fixtures Best Practices
 ```python
 # Function-scoped fixture (fresh for each test)
-@fixture
+@pytest.fixture
 async def fresh_orchestrator():
     orch = Orchestrator(config=test_config)
     await orch.initialize()
@@ -135,7 +134,7 @@ async def fresh_orchestrator():
     await orch.shutdown()
 
 # Module-scoped fixture (shared across tests)
-@fixture(scope="module")
+@pytest.fixture(scope="module")
 async def shared_storage():
     store = StorageLayer()
     await store.initialize()
@@ -143,7 +142,7 @@ async def shared_storage():
     await store.cleanup()
 
 # Factory fixture (creates multiple instances)
-@fixture
+@pytest.fixture
 def agent_factory():
     def _create_agent(agent_id: str):
         return Agent(agent_id=agent_id, config=test_config)
@@ -169,13 +168,13 @@ def agent_factory():
 
 ### Example: Multi-Level Assertions
 ```python
-@test("task completes with correct outcomes and side effects")
-async def test_task_completion(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_task_completion(orchestrator):
     # Setup
     task = TaskAnnouncement(task_id="test-task", ...)
 
     # Act
-    result = await orch.coordinate(task)
+    result = await orchestrator.coordinate(task)
 
     # Assert: Behavioral outcomes
     assert result.status == "COMPLETED"
@@ -206,7 +205,7 @@ async def test_task_completion(orch=orchestrator):
 
 ### API Schema Validation
 ```python
-@test("all API responses match OpenAPI schema")
+@pytest.mark.asyncio
 async def test_api_contract_compliance():
     """Validate k1/contracts/api/agent-fabric-openapi.yaml"""
     from jsonschema import validate
@@ -225,7 +224,7 @@ async def test_api_contract_compliance():
 
 ### Event Schema Validation
 ```python
-@test("all events match AsyncAPI schemas")
+@pytest.mark.asyncio
 async def test_event_contract_compliance():
     """Validate k1/contracts/events/*.yaml"""
     validator = AsyncAPIValidator("k1/contracts/events/")
@@ -247,8 +246,8 @@ async def test_event_contract_compliance():
 
 ### Storage Schema Validation
 ```python
-@test("all storage operations comply with schema")
-async def test_storage_contract_compliance(storage=storage_fixture):
+@pytest.mark.asyncio
+async def test_storage_contract_compliance(storage):
     """Validate k1/contracts/storage/*.schema.json"""
     validator = JSONSchemaValidator("k1/contracts/storage/")
 
@@ -273,37 +272,37 @@ async def test_storage_contract_compliance(storage=storage_fixture):
 
 ### Performance Budget Assertions
 ```python
-@test("TTFT latency stays under 150ms p95")
-async def test_ttft_budget(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_ttft_budget(orchestrator):
     latencies = []
     for i in range(100):
         start = time.perf_counter()
-        result = await orch.generate_first_token(prompt="test")
+        result = await orchestrator.generate_first_token(prompt="test")
         latencies.append((time.perf_counter() - start) * 1000)
 
     p95 = sorted(latencies)[int(len(latencies) * 0.95)]
     assert p95 < 150, f"TTFT p95={p95}ms exceeds 150ms budget"
 
-@test("E2E latency stays under 2000ms p95")
-async def test_e2e_budget(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_e2e_budget(orchestrator):
     latencies = []
     for i in range(50):
         start = time.perf_counter()
-        result = await orch.complete_turn(task)
+        result = await orchestrator.complete_turn(task)
         latencies.append((time.perf_counter() - start) * 1000)
 
     p95 = sorted(latencies)[int(len(latencies) * 0.95)]
     assert p95 < 2000, f"E2E p95={p95}ms exceeds 2000ms budget"
 
-@test("concurrent load: 100 tasks complete successfully")
-async def test_concurrent_load(orch=orchestrator):
+@pytest.mark.asyncio
+async def test_concurrent_load(orchestrator):
     tasks = [
         TaskAnnouncement(task_id=f"task-{i}", ...)
         for i in range(100)
     ]
 
     results = await asyncio.gather(
-        *[orch.coordinate(t) for t in tasks],
+        *[orchestrator.coordinate(t) for t in tasks],
         return_exceptions=True
     )
 
@@ -318,27 +317,27 @@ async def test_concurrent_load(orch=orchestrator):
 ### Development Workflow
 ```bash
 # Quick test during development
-python -m ward test --path tests/component/ --verbose
+python -m pytest tests/component/ -v
 
 # Full suite with coverage
-python -m ward test --path tests/
-coverage run -m ward test --path tests/
+python -m pytest tests/
+coverage run -m pytest tests/
 coverage report --show-missing --fail-under=95
 
 # Specific test module
-python -m ward test --path tests/k1/component/test_orchestrator_3phase.py --verbose
+python -m pytest tests/k1/component/test_orchestrator_3phase.py -v
 
 # Watch mode (re-run on file changes)
-python -m ward test --path tests/ --watch
+python -m pytest tests/ --watch
 ```
 
 ### GATE 4 Quality Validation (Pre-Commit)
 ```bash
 # All tests must pass
-python -m ward test --path tests/ --fail-fast
+python -m pytest tests/ --tb=short
 
 # Coverage must be ≥95%
-coverage run -m ward test --path tests/
+coverage run -m pytest tests/
 coverage report --fail-under=95
 
 # Contracts must be valid
@@ -346,8 +345,8 @@ python k1/automation/lint_schemas.py --test-all
 python k0/automation/lint_schemas.py --test-all
 
 # Performance budgets must be met
-python -m ward test --path tests/k1/performance/ --verbose
-python -m ward test --path tests/k0/performance/ --verbose
+python -m pytest tests/k1/performance/ -v
+python -m pytest tests/k0/performance/ -v
 
 # No simulation code
 grep -r "asyncio.sleep\|time.sleep" tests/ && echo "FAIL: Simulation code found" || echo "PASS: No simulation code"
@@ -356,16 +355,16 @@ grep -r "asyncio.sleep\|time.sleep" tests/ && echo "FAIL: Simulation code found"
 ### CI/CD Pipeline
 ```bash
 # Full validation for PR
-python -m ward test --path tests/ --output=json > test_results.json
-coverage run -m ward test --path tests/
+python -m pytest tests/ --json-report > test_results.json
+coverage run -m pytest tests/
 coverage report --fail-under=95 --format=json > coverage.json
 
 # Performance regression
-python -m ward test --path tests/k1/performance/ --verbose > perf_k1.json
-python -m ward test --path tests/k0/performance/ --verbose > perf_k0.json
+python -m pytest tests/k1/performance/ -v > perf_k1.json
+python -m pytest tests/k0/performance/ -v >> perf_k0.json
 
 # Security testing
-python -m ward test --path tests/security/ --verbose
+python -m pytest tests/security/ -v
 ```
 
 ---
@@ -385,24 +384,27 @@ python -m ward test --path tests/security/ --verbose
 ```python
 # ❌ WRONG: Sleeps cause flakiness
 async def test_timeout():
-    asyncio.sleep(1)  # FLAKY!
+    await asyncio.sleep(1)  # FLAKY!
 
 # ✅ CORRECT: Use freezegun for time
 from freezegun import freeze_time
 
 @freeze_time("2025-10-23 12:00:00")
-async def test_timeout():
+def test_timeout():
     # Time is frozen; test is deterministic
     pass
 
 # ❌ WRONG: Mocking core logic
+from unittest.mock import patch, Mock
+
 @patch("orchestrator.coordinate")
-async def test_coordination(mock_coord):
+def test_coordination(mock_coord):
     mock_coord.return_value = Mock()  # WRONG!
 
 # ✅ CORRECT: Use real components
-async def test_coordination(orch=orchestrator):
-    result = await orch.coordinate(task)  # Real implementation
+@pytest.mark.asyncio
+async def test_coordination(orchestrator):
+    result = await orchestrator.coordinate(task)  # Real implementation
     assert result.status == "COMPLETED"
 ```
 
@@ -438,14 +440,14 @@ def create_test_task(task_id=None, **kwargs):
 # Store common fixtures in tests/fixtures/
 # tests/fixtures/k1_fixtures.py
 
-@fixture(scope="module")
+@pytest.fixture(scope="module")
 async def orchestrator_fixture():
     orch = Orchestrator(config=test_config)
     await orch.initialize()
     yield orch
     await orch.shutdown()
 
-@fixture(scope="module")
+@pytest.fixture(scope="module")
 async def agent_fabric_fixture():
     fabric = AgentFabric(max_agents=3)
     await fabric.initialize()
@@ -458,7 +460,7 @@ async def agent_fabric_fixture():
 ## 10) Integration with 5-Step Workflow
 
 ### GATE 4 Checklist
-- [ ] All tests pass: `python -m ward test --path tests/`
+- [ ] All tests pass: `python -m pytest tests/`
 - [ ] Coverage ≥95%: `coverage report --fail-under=95`
 - [ ] Contracts validated: `python k1/automation/lint_schemas.py --test-all`
 - [ ] Performance budgets met: All p95 latencies documented
@@ -476,7 +478,8 @@ async def agent_fabric_fixture():
 
 ## 11) References
 
-- **WARD Framework**: Python async testing library
+- **pytest Framework**: Python testing framework
+- **pytest-asyncio**: Async testing support for pytest
 - **Coverage.py**: Code coverage measurement
 - **Testing Requirements**: `.github/instructions/testing-requirements.instructions.md`
 - **5-Step Workflow**: `.github/instructions/service-design.instructions.md` (GATE 4)

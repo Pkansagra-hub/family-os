@@ -1,6 +1,6 @@
-# ADR-0009: Circuit Breaker Pattern for Cascading Failure Prevention
+﻿# ADR-0009: Circuit Breaker Pattern for Cascading Failure Prevention
 
-**Status:** ✅ Accepted (Implementation 75% Complete - Production Ready)
+**Status:** âœ… Accepted (Implementation 75% Complete - Production Ready)
 **Decision Date:** 2025-01-26
 **Implementation Date:** 2025-02-05 (Core circuit breaker FSM complete)
 **Review Date:** 2025-04-26 (3-month post-deployment review)
@@ -23,7 +23,7 @@
 K1 uses a **hybrid Actor Model + AI architecture** (established in ADR-0001, ADR-0002, ADR-0004):
 
 **Circuit Breaker is a PURE ACTOR (NOT an AI agent):**
-- **NO LLM calls:** Circuit Breaker uses deterministic 3-state FSM (CLOSED → OPEN → HALF-OPEN)
+- **NO LLM calls:** Circuit Breaker uses deterministic 3-state FSM (CLOSED â†’ OPEN â†’ HALF-OPEN)
 - **NO Model Hub:** Failure detection and state transitions are pure deterministic logic
 - **Deterministic State Machine:** Transition based on failure count, timeout elapsed, probe results (no AI reasoning)
 - **Location:** Layer 3 (`k1/infrastructure/circuit_breaker.py`) - Infrastructure component
@@ -41,7 +41,7 @@ K1 uses a **hybrid Actor Model + AI architecture** (established in ADR-0001, ADR
 
 | Aspect | Circuit Breaker FSM (Pure Actor) | Protected Operations (Mixed) |
 |--------|----------------------------------|------------------------------|
-| **State Transitions** | Deterministic FSM (failure count >= threshold → OPEN, timeout elapsed → HALF-OPEN, probe success → CLOSED) | AI agents: non-deterministic failures (LLM timeouts, hallucinations), Pure actors: deterministic failures (API errors) |
+| **State Transitions** | Deterministic FSM (failure count >= threshold â†’ OPEN, timeout elapsed â†’ HALF-OPEN, probe success â†’ CLOSED) | AI agents: non-deterministic failures (LLM timeouts, hallucinations), Pure actors: deterministic failures (API errors) |
 | **Latency** | <1ms state transition, <5ms failure recording | AI agent failures: 500-5000ms timeout, Pure actor failures: 100-3000ms timeout |
 | **Recovery Detection** | Single probe call in HALF-OPEN state (test health) | AI agents: probe with simple prompt (<500ms), Pure actors: probe with health endpoint (<100ms) |
 | **Resource Protection** | Prevents thread/coroutine blocking on failing operations | AI agents: prevents GPU/NPU blocking on failing models, Pure actors: prevents network socket exhaustion |
@@ -57,20 +57,20 @@ K1 calls external services (tools, APIs, models) that can **fail or degrade**, c
 ```
 User: "Plan fishing trip with weather forecast"
 
-Step 1: check_weather (calls Weather API) → ⏱️ TIMEOUT (5s wait, API is down)
-Step 2: check_weather (retry #1)            → ⏱️ TIMEOUT (5s wait)
-Step 3: check_weather (retry #2)            → ⏱️ TIMEOUT (5s wait)
+Step 1: check_weather (calls Weather API) â†’ â±ï¸ TIMEOUT (5s wait, API is down)
+Step 2: check_weather (retry #1)            â†’ â±ï¸ TIMEOUT (5s wait)
+Step 3: check_weather (retry #2)            â†’ â±ï¸ TIMEOUT (5s wait)
 TOTAL TIME WASTED: 15 seconds
 
 Next User: "What's the weather like?"
-Step 1: check_weather                       → ⏱️ TIMEOUT (5s wait, API still down)
-Step 2: check_weather (retry #1)            → ⏱️ TIMEOUT (5s wait)
+Step 1: check_weather                       â†’ â±ï¸ TIMEOUT (5s wait, API still down)
+Step 2: check_weather (retry #1)            â†’ â±ï¸ TIMEOUT (5s wait)
 TOTAL TIME WASTED: 10 seconds
 
 100 Users: All wait 10-15s for weather API that's clearly down
-→ RESULT: 1000-1500 seconds of total wasted latency
-→ RESOURCES: 100 blocked agent threads, memory accumulation
-→ USER IMPACT: Slow responses, frustrated users, abandoned sessions
+â†’ RESULT: 1000-1500 seconds of total wasted latency
+â†’ RESOURCES: 100 blocked agent threads, memory accumulation
+â†’ USER IMPACT: Slow responses, frustrated users, abandoned sessions
 ```
 
 ### **The Core Problems:**
@@ -80,7 +80,7 @@ TOTAL TIME WASTED: 10 seconds
    - Thread/coroutine (blocked for timeout duration)
    - Memory (buffered requests, error logs)
    - Network connections (TCP sockets held open)
-3. **Cascading Failures:** Blocked threads → orchestrator queue backup → session timeout → user churn
+3. **Cascading Failures:** Blocked threads â†’ orchestrator queue backup â†’ session timeout â†’ user churn
 4. **No Fast-Fail:** System doesn't learn "weather API is down, stop calling it"
 5. **Slow Recovery:** When service recovers, system takes minutes to resume (no probe mechanism)
 
@@ -107,32 +107,32 @@ TOTAL TIME WASTED: 10 seconds
 ### **3-State Finite State Machine:**
 
 ```
-         ┌────────────┐
-         │   CLOSED   │ ← Normal operation (service healthy)
-         │  (Healthy) │
-         └─────┬──────┘
-               │
-  Failure count ≥ threshold
-               │
-               ▼
-         ┌────────────┐
-         │    OPEN    │ ← Fail-fast (reject calls immediately)
-         │  (Failing) │
-         └─────┬──────┘
-               │
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚   CLOSED   â”‚ â† Normal operation (service healthy)
+         â”‚  (Healthy) â”‚
+         â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+               â”‚
+  Failure count â‰¥ threshold
+               â”‚
+               â–¼
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚    OPEN    â”‚ â† Fail-fast (reject calls immediately)
+         â”‚  (Failing) â”‚
+         â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+               â”‚
     Timeout elapsed (e.g., 60s)
-               │
-               ▼
-         ┌────────────┐
-         │ HALF-OPEN  │ ← Testing (allow 1 probe call)
-         │ (Testing)  │
-         └─────┬──────┘
-               │
-       ┌───────┴────────┐
-       │                │
+               â”‚
+               â–¼
+         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+         â”‚ HALF-OPEN  â”‚ â† Testing (allow 1 probe call)
+         â”‚ (Testing)  â”‚
+         â””â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”˜
+               â”‚
+       â”Œâ”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”
+       â”‚                â”‚
   Success (1 call)   Failure
-       │                │
-       ▼                ▼
+       â”‚                â”‚
+       â–¼                â–¼
   Back to CLOSED   Back to OPEN
 ```
 
@@ -224,7 +224,7 @@ class CircuitBreaker:
             current_state = await self._get_state()
 
             if current_state == CircuitState.OPEN:
-                # Circuit OPEN → reject call immediately (fail-fast)
+                # Circuit OPEN â†’ reject call immediately (fail-fast)
                 self.rejected_calls += 1
 
                 logger.warning(
@@ -241,7 +241,7 @@ class CircuitBreaker:
                 )
 
             elif current_state == CircuitState.HALF_OPEN:
-                # Circuit HALF-OPEN → allow probe call
+                # Circuit HALF-OPEN â†’ allow probe call
                 logger.info(
                     "circuit_breaker_probing",
                     name=self.config.name,
@@ -252,14 +252,14 @@ class CircuitBreaker:
         try:
             result = await func(*args, **kwargs)
 
-            # Success → record success
+            # Success â†’ record success
             async with self._lock:
                 await self._on_success()
 
             return result
 
         except self.config.expected_exception as e:
-            # Expected failure → record failure
+            # Expected failure â†’ record failure
             async with self._lock:
                 await self._on_failure(e)
 
@@ -267,7 +267,7 @@ class CircuitBreaker:
             raise
 
     async def _get_state(self) -> CircuitState:
-        """Get current state (with automatic OPEN → HALF-OPEN transition)"""
+        """Get current state (with automatic OPEN â†’ HALF-OPEN transition)"""
 
         if self.state == CircuitState.OPEN:
             # Check if timeout elapsed
@@ -284,11 +284,11 @@ class CircuitBreaker:
         self.successful_calls += 1
 
         if self.state == CircuitState.HALF_OPEN:
-            # Success in HALF-OPEN → increment success count
+            # Success in HALF-OPEN â†’ increment success count
             self.success_count += 1
 
             if self.success_count >= self.config.success_threshold:
-                # Threshold reached → CLOSE circuit
+                # Threshold reached â†’ CLOSE circuit
                 await self._transition_to(CircuitState.CLOSED)
                 self.failure_count = 0
                 self.success_count = 0
@@ -300,7 +300,7 @@ class CircuitBreaker:
                 )
 
         elif self.state == CircuitState.CLOSED:
-            # Success in CLOSED → reset failure count
+            # Success in CLOSED â†’ reset failure count
             self.failure_count = 0
 
     async def _on_failure(self, exception: Exception):
@@ -318,7 +318,7 @@ class CircuitBreaker:
         )
 
         if self.state == CircuitState.HALF_OPEN:
-            # Failure in HALF-OPEN → back to OPEN
+            # Failure in HALF-OPEN â†’ back to OPEN
             await self._transition_to(CircuitState.OPEN)
             self.success_count = 0
 
@@ -331,7 +331,7 @@ class CircuitBreaker:
         elif self.state == CircuitState.CLOSED:
             # Check threshold
             if self.failure_count >= self.config.failure_threshold:
-                # Threshold reached → OPEN circuit
+                # Threshold reached â†’ OPEN circuit
                 await self._transition_to(CircuitState.OPEN)
 
                 logger.error(
@@ -417,7 +417,7 @@ async def get_weather_with_cb(location: str):
         return result
 
     except CircuitBreakerOpenError as e:
-        # Circuit OPEN → use fallback (cached data)
+        # Circuit OPEN â†’ use fallback (cached data)
         logger.warning("weather_api_circuit_open", message=str(e))
         return get_cached_weather(location)
 
@@ -439,12 +439,12 @@ for i in range(10):
 # Output:
 # Call 1: Timeout (failure #1)
 # Call 2: Timeout (failure #2)
-# Call 3: Timeout (failure #3) → Circuit OPENS
+# Call 3: Timeout (failure #3) â†’ Circuit OPENS
 # Call 4: CircuitBreakerOpenError (rejected, fail-fast)
 # Call 5: CircuitBreakerOpenError (rejected, fail-fast)
 # ... (wait 60s)
 # Call 65: Probing (HALF-OPEN, allow 1 call)
-# Call 65: Success → Circuit CLOSES
+# Call 65: Success â†’ Circuit CLOSES
 # Call 66: Success (normal operation resumed)
 ```
 
@@ -458,12 +458,12 @@ for i in range(10):
 
 | Alternative | Fail-Fast | Automatic Recovery | Resource Protection | Latency | Complexity | K1 Fit |
 |-------------|-----------|-------------------|---------------------|---------|------------|--------|
-| **1. Retry-Only** | ❌ No | ❌ No | ❌ No | ❌ High (15s retries) | ✅ Low | ❌ 2/10 |
-| **2. Global Rate Limiting** | ❌ No | ❌ No | ⚠️ Partial (limits load) | ⚠️ Medium (queue delay) | ✅ Low | ⚠️ 4/10 |
-| **3. Health Check Polling** | ❌ No | ⚠️ Slow (10s interval) | ❌ No | ⚠️ Medium (polling overhead) | ⚠️ Medium | ⚠️ 5/10 |
-| **4. Manual Service Disable** | ⚠️ Slow (minutes) | ❌ No (manual) | ✅ Yes | ✅ Low (once disabled) | ✅ Low | ❌ 3/10 |
-| **5. Netflix Hystrix (Full)** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Low (<1ms) | ❌ High (heavyweight) | ⚠️ 7/10 |
-| **6. Circuit Breaker (Lightweight)** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Low (<1ms) | ⚠️ Medium | ✅ **9/10** |
+| **1. Retry-Only** | âŒ No | âŒ No | âŒ No | âŒ High (15s retries) | âœ… Low | âŒ 2/10 |
+| **2. Global Rate Limiting** | âŒ No | âŒ No | âš ï¸ Partial (limits load) | âš ï¸ Medium (queue delay) | âœ… Low | âš ï¸ 4/10 |
+| **3. Health Check Polling** | âŒ No | âš ï¸ Slow (10s interval) | âŒ No | âš ï¸ Medium (polling overhead) | âš ï¸ Medium | âš ï¸ 5/10 |
+| **4. Manual Service Disable** | âš ï¸ Slow (minutes) | âŒ No (manual) | âœ… Yes | âœ… Low (once disabled) | âœ… Low | âŒ 3/10 |
+| **5. Netflix Hystrix (Full)** | âœ… Yes | âœ… Yes | âœ… Yes | âœ… Low (<1ms) | âŒ High (heavyweight) | âš ï¸ 7/10 |
+| **6. Circuit Breaker (Lightweight)** | âœ… Yes | âœ… Yes | âœ… Yes | âœ… Low (<1ms) | âš ï¸ Medium | âœ… **9/10** |
 
 **Decision: Alternative 6 (Circuit Breaker Pattern with 3-State FSM) selected.**
 
@@ -485,7 +485,7 @@ for i in range(10):
 - **Alternative 5 (Netflix Hystrix):** Heavyweight Java framework, K1 is Python-based, overkill for lightweight circuit breaker needs (bulkhead + fallback not required)
 
 **Research Foundation:**
-- **Circuit Breaker Pattern (Nygard, 2007):** 3-state FSM (CLOSED → OPEN → HALF-OPEN) for fail-fast and automatic recovery
+- **Circuit Breaker Pattern (Nygard, 2007):** 3-state FSM (CLOSED â†’ OPEN â†’ HALF-OPEN) for fail-fast and automatic recovery
 - **Netflix Hystrix (2012):** Production implementation with metrics, fallbacks, bulkheads
 - **Akka Circuit Breaker (2015):** Lightweight Actor Model implementation
 
@@ -496,16 +496,16 @@ for i in range(10):
 **Approach:** Just retry failed calls with exponential backoff.
 
 **Pros:**
-- ✅ Simple implementation (standard retry logic)
-- ✅ No additional state management
+- âœ… Simple implementation (standard retry logic)
+- âœ… No additional state management
 
 **Cons:**
-- ❌ **Wastes resources** — Every request pays full retry penalty (15s for 3 retries)
-- ❌ **No learning** — System doesn't learn "service is down, stop calling"
-- ❌ **Slow failure detection** — Takes multiple retries to surface error to user
-- ❌ **No automatic recovery** — System keeps retrying forever (or until max retries)
+- âŒ **Wastes resources** â€” Every request pays full retry penalty (15s for 3 retries)
+- âŒ **No learning** â€” System doesn't learn "service is down, stop calling"
+- âŒ **Slow failure detection** â€” Takes multiple retries to surface error to user
+- âŒ **No automatic recovery** â€” System keeps retrying forever (or until max retries)
 
-**Verdict:** ❌ **Rejected** — Doesn't solve cascading failure problem.
+**Verdict:** âŒ **Rejected** â€” Doesn't solve cascading failure problem.
 
 ---
 
@@ -514,16 +514,16 @@ for i in range(10):
 **Approach:** Limit total requests to service (e.g., max 10 req/s).
 
 **Pros:**
-- ✅ Prevents overwhelming failing service
-- ✅ Simple rate limiting logic
+- âœ… Prevents overwhelming failing service
+- âœ… Simple rate limiting logic
 
 **Cons:**
-- ❌ **Doesn't fail-fast** — Requests still queue up, waste resources
-- ❌ **Slow recovery** — Rate limit applies even when service recovers
-- ❌ **No health probing** — System doesn't actively test service health
-- ❌ **Poor user experience** — Queue delays for all users
+- âŒ **Doesn't fail-fast** â€” Requests still queue up, waste resources
+- âŒ **Slow recovery** â€” Rate limit applies even when service recovers
+- âŒ **No health probing** â€” System doesn't actively test service health
+- âŒ **Poor user experience** â€” Queue delays for all users
 
-**Verdict:** ❌ **Rejected** — Doesn't provide fail-fast or automatic recovery.
+**Verdict:** âŒ **Rejected** â€” Doesn't provide fail-fast or automatic recovery.
 
 ---
 
@@ -532,16 +532,16 @@ for i in range(10):
 **Approach:** Background thread polls service health endpoint every 10s.
 
 **Pros:**
-- ✅ Proactive health monitoring
-- ✅ Detects failures before user requests
+- âœ… Proactive health monitoring
+- âœ… Detects failures before user requests
 
 **Cons:**
-- ❌ **Extra load** — Constant polling adds overhead (even when service healthy)
-- ❌ **Stale state** — 10s polling interval = up to 10s delay in failure detection
-- ❌ **No fail-fast** — User requests still try to call service during polling interval
-- ❌ **Requires health endpoint** — Not all external APIs provide `/health` endpoint
+- âŒ **Extra load** â€” Constant polling adds overhead (even when service healthy)
+- âŒ **Stale state** â€” 10s polling interval = up to 10s delay in failure detection
+- âŒ **No fail-fast** â€” User requests still try to call service during polling interval
+- âŒ **Requires health endpoint** â€” Not all external APIs provide `/health` endpoint
 
-**Verdict:** ❌ **Rejected** — Polling overhead, doesn't provide fail-fast.
+**Verdict:** âŒ **Rejected** â€” Polling overhead, doesn't provide fail-fast.
 
 ---
 
@@ -550,16 +550,16 @@ for i in range(10):
 **Approach:** Operations team manually disables failing service via control endpoint.
 
 **Pros:**
-- ✅ Full control over service availability
-- ✅ No automatic false positives
+- âœ… Full control over service availability
+- âœ… No automatic false positives
 
 **Cons:**
-- ❌ **Manual intervention required** — Operations team must monitor, react (slow)
-- ❌ **No automatic recovery** — Must manually re-enable service
-- ❌ **24/7 operations burden** — Requires on-call team
-- ❌ **Slow response** — Minutes to detect and disable (vs. seconds with circuit breaker)
+- âŒ **Manual intervention required** â€” Operations team must monitor, react (slow)
+- âŒ **No automatic recovery** â€” Must manually re-enable service
+- âŒ **24/7 operations burden** â€” Requires on-call team
+- âŒ **Slow response** â€” Minutes to detect and disable (vs. seconds with circuit breaker)
 
-**Verdict:** ❌ **Rejected** — Too slow, requires manual intervention.
+**Verdict:** âŒ **Rejected** â€” Too slow, requires manual intervention.
 
 ---
 
@@ -568,17 +568,17 @@ for i in range(10):
 **Approach:** Use Netflix Hystrix library (Java) for circuit breaker + bulkhead + fallback.
 
 **Pros:**
-- ✅ Battle-tested at Netflix scale
-- ✅ Rich features (thread pools, semaphores, metrics)
-- ✅ Dashboard for monitoring
+- âœ… Battle-tested at Netflix scale
+- âœ… Rich features (thread pools, semaphores, metrics)
+- âœ… Dashboard for monitoring
 
 **Cons:**
-- ❌ **Java-only** — K1 is Python-based
-- ❌ **Heavy dependency** — Large library, steep learning curve
-- ❌ **Over-engineered** — K1 needs simpler, lightweight solution
-- ❌ **Maintenance burden** — Netflix archived Hystrix in 2020 (moved to Resilience4j)
+- âŒ **Java-only** â€” K1 is Python-based
+- âŒ **Heavy dependency** â€” Large library, steep learning curve
+- âŒ **Over-engineered** â€” K1 needs simpler, lightweight solution
+- âŒ **Maintenance burden** â€” Netflix archived Hystrix in 2020 (moved to Resilience4j)
 
-**Verdict:** ❌ **Rejected** — Too heavyweight, wrong language.
+**Verdict:** âŒ **Rejected** â€” Too heavyweight, wrong language.
 
 ---
 
@@ -589,8 +589,8 @@ for i in range(10):
 ### **1. Fail-Fast Prevents Resource Waste**
 
 When service is down:
-- **Without circuit breaker:** 100 users × 15s timeout = 1500s wasted
-- **With circuit breaker:** 3 failures × 5s timeout = 15s wasted, then fail-fast (<1ms rejection)
+- **Without circuit breaker:** 100 users Ã— 15s timeout = 1500s wasted
+- **With circuit breaker:** 3 failures Ã— 5s timeout = 15s wasted, then fail-fast (<1ms rejection)
 
 **Resource savings:**
 - Threads/coroutines freed immediately (no blocking)
@@ -602,8 +602,8 @@ When service is down:
 Circuit breaker detects service recovery:
 1. After 60s timeout, transition to HALF-OPEN
 2. Send 1 probe call to test health
-3. If probe succeeds → CLOSE circuit (resume normal operation)
-4. If probe fails → back to OPEN (wait another 60s)
+3. If probe succeeds â†’ CLOSE circuit (resume normal operation)
+4. If probe fails â†’ back to OPEN (wait another 60s)
 
 **No operations team involvement required.**
 
@@ -619,16 +619,16 @@ Each external service gets its own circuit breaker:
 ### **4. Industry-Proven Pattern**
 
 Circuit breaker is battle-tested in production:
-- **Netflix** — Hystrix protects 100+ microservices (2012-2020)
-- **Amazon** — AWS SDK uses circuit breakers for service calls
-- **Microsoft** — Azure SDK implements circuit breaker pattern
-- **Akka** — Built-in circuit breaker for actor systems (2015)
+- **Netflix** â€” Hystrix protects 100+ microservices (2012-2020)
+- **Amazon** â€” AWS SDK uses circuit breakers for service calls
+- **Microsoft** â€” Azure SDK implements circuit breaker pattern
+- **Akka** â€” Built-in circuit breaker for actor systems (2015)
 
 **Research Citations:**
-- Nygard (2007) — Release It! (original circuit breaker pattern)
-- Netflix Hystrix (2012) — Production implementation at scale
-- Akka Circuit Breaker (2015) — Actor-based implementation
-- Microsoft Cloud Design Patterns (2014) — Circuit breaker for cloud services
+- Nygard (2007) â€” Release It! (original circuit breaker pattern)
+- Netflix Hystrix (2012) â€” Production implementation at scale
+- Akka Circuit Breaker (2015) â€” Actor-based implementation
+- Microsoft Cloud Design Patterns (2014) â€” Circuit breaker for cloud services
 
 ### **5. Aligns with K1 Architecture Principles**
 
@@ -643,39 +643,39 @@ Circuit breaker is battle-tested in production:
 
 ### **Positive Consequences:**
 
-1. ✅ **Fast Failure Detection** — 3 failures = circuit opens (15s total vs. 1500s without CB)
+1. âœ… **Fast Failure Detection** â€” 3 failures = circuit opens (15s total vs. 1500s without CB)
 
-2. ✅ **Fail-Fast** — Rejected calls return in <1ms (vs. 5-10s timeout)
+2. âœ… **Fail-Fast** â€” Rejected calls return in <1ms (vs. 5-10s timeout)
 
-3. ✅ **Resource Conservation** — Threads/memory freed immediately (no blocking on timeouts)
+3. âœ… **Resource Conservation** â€” Threads/memory freed immediately (no blocking on timeouts)
 
-4. ✅ **Automatic Recovery** — Circuit probes service health every 60s (no manual intervention)
+4. âœ… **Automatic Recovery** â€” Circuit probes service health every 60s (no manual intervention)
 
-5. ✅ **Better User Experience** — Fast error messages instead of long timeouts
+5. âœ… **Better User Experience** â€” Fast error messages instead of long timeouts
    - Without CB: "Please wait... (10s timeout)"
    - With CB: "Weather service unavailable, showing cached data"
 
-6. ✅ **Cascading Failure Prevention** — Failing service doesn't block orchestrator queue
+6. âœ… **Cascading Failure Prevention** â€” Failing service doesn't block orchestrator queue
 
-7. ✅ **Granular Control** — Per-service circuit breakers (weather failure doesn't affect calendar)
+7. âœ… **Granular Control** â€” Per-service circuit breakers (weather failure doesn't affect calendar)
 
 ---
 
 ### **Negative Consequences:**
 
-1. ⚠️ **False Positives** — Circuit may open due to transient network blip (3 failures in 10s)
+1. âš ï¸ **False Positives** â€” Circuit may open due to transient network blip (3 failures in 10s)
    - **Mitigation:** Tune `failure_threshold` and `timeout_s` based on service characteristics (weather API: 5 failures, 30s timeout)
 
-2. ⚠️ **Cold Start Penalty** — First call after recovery may be slow (service warming up)
+2. âš ï¸ **Cold Start Penalty** â€” First call after recovery may be slow (service warming up)
    - **Mitigation:** HALF-OPEN state allows 1 probe call to warm up service before full load
 
-3. ⚠️ **Additional State Management** — Circuit breaker state per service (memory overhead)
-   - **Impact:** ~1KB per circuit breaker × 50 services = 50KB total (negligible)
+3. âš ï¸ **Additional State Management** â€” Circuit breaker state per service (memory overhead)
+   - **Impact:** ~1KB per circuit breaker Ã— 50 services = 50KB total (negligible)
 
-4. ⚠️ **Configuration Tuning Required** — Each service needs tuned thresholds
+4. âš ï¸ **Configuration Tuning Required** â€” Each service needs tuned thresholds
    - **Mitigation:** Default config (3 failures, 60s timeout), override per service in YAML
 
-5. ⚠️ **Monitoring Overhead** — Must monitor circuit breaker state (Prometheus, Grafana dashboards)
+5. âš ï¸ **Monitoring Overhead** â€” Must monitor circuit breaker state (Prometheus, Grafana dashboards)
    - **Mitigation:** Automated alerting when circuits open (PagerDuty/Slack)
 
 ---
@@ -685,7 +685,7 @@ Circuit breaker is battle-tested in production:
 ### **Phase 1: Core Circuit Breaker (Days 1-3)**
 
 **Tasks:**
-1. Implement `CircuitBreaker` class with 3-state FSM (CLOSED → OPEN → HALF-OPEN)
+1. Implement `CircuitBreaker` class with 3-state FSM (CLOSED â†’ OPEN â†’ HALF-OPEN)
 2. Add thread-safe state transitions with asyncio locks
 3. Implement `call()` wrapper for protected function execution
 4. Add failure tracking (failure_count, last_failure_time)
@@ -693,11 +693,11 @@ Circuit breaker is battle-tested in production:
 **Deliverable:** Working circuit breaker with state transitions
 
 **Tests:**
-- ✅ Circuit CLOSED → 3 failures → Circuit OPEN
-- ✅ Circuit OPEN → 60s timeout → Circuit HALF-OPEN
-- ✅ Circuit HALF-OPEN → 1 success → Circuit CLOSED
-- ✅ Circuit HALF-OPEN → 1 failure → Circuit OPEN
-- ✅ Circuit OPEN → reject calls immediately (fail-fast)
+- âœ… Circuit CLOSED â†’ 3 failures â†’ Circuit OPEN
+- âœ… Circuit OPEN â†’ 60s timeout â†’ Circuit HALF-OPEN
+- âœ… Circuit HALF-OPEN â†’ 1 success â†’ Circuit CLOSED
+- âœ… Circuit HALF-OPEN â†’ 1 failure â†’ Circuit OPEN
+- âœ… Circuit OPEN â†’ reject calls immediately (fail-fast)
 
 ---
 
@@ -705,16 +705,16 @@ Circuit breaker is battle-tested in production:
 
 **Tasks:**
 1. Add circuit breakers to all external tool calls (weather, calendar, search APIs)
-2. Create `CircuitBreakerRegistry` (map tool_id → circuit breaker instance)
+2. Create `CircuitBreakerRegistry` (map tool_id â†’ circuit breaker instance)
 3. Wrap tool calls with `circuit_breaker.call(tool_fn, *args, **kwargs)`
 4. Add fallback logic when circuit is OPEN (use cached data, skip step, etc.)
 
 **Deliverable:** All tool calls protected by circuit breakers
 
 **Tests:**
-- ✅ Tool call fails 3x → Circuit opens → Next call rejected immediately
-- ✅ Circuit open → Use fallback (cached weather data)
-- ✅ Circuit half-open → Probe succeeds → Resume normal tool calls
+- âœ… Tool call fails 3x â†’ Circuit opens â†’ Next call rejected immediately
+- âœ… Circuit open â†’ Use fallback (cached weather data)
+- âœ… Circuit half-open â†’ Probe succeeds â†’ Resume normal tool calls
 
 ---
 
@@ -755,10 +755,10 @@ circuit_breakers:
 **Deliverable:** Full observability for circuit breakers
 
 **Metrics:**
-- `k1_circuit_breaker_state{name, state}` — Current state (CLOSED=0, OPEN=1, HALF_OPEN=2)
-- `k1_circuit_breaker_failures_total{name}` — Total failures
-- `k1_circuit_breaker_rejections_total{name}` — Total rejections (fail-fast)
-- `k1_circuit_breaker_state_changes_total{name, from_state, to_state}` — State transitions
+- `k1_circuit_breaker_state{name, state}` â€” Current state (CLOSED=0, OPEN=1, HALF_OPEN=2)
+- `k1_circuit_breaker_failures_total{name}` â€” Total failures
+- `k1_circuit_breaker_rejections_total{name}` â€” Total rejections (fail-fast)
+- `k1_circuit_breaker_state_changes_total{name, from_state, to_state}` â€” State transitions
 
 ---
 
@@ -772,8 +772,8 @@ circuit_breakers:
 **Deliverable:** Circuit breakers integrated with saga pattern
 
 **Tests:**
-- ✅ Saga compensation fails 3x → Circuit opens → Next compensation skipped (logged to DLQ)
-- ✅ Circuit open during saga execution → Use fallback compensation strategy
+- âœ… Saga compensation fails 3x â†’ Circuit opens â†’ Next compensation skipped (logged to DLQ)
+- âœ… Circuit open during saga execution â†’ Use fallback compensation strategy
 
 ---
 
@@ -788,9 +788,9 @@ circuit_breakers:
 **Deliverable:** Production-ready circuit breakers
 
 **Tests:**
-- ✅ 1000 concurrent requests with circuit open → All rejected in <1ms (no resource exhaustion)
-- ✅ Service recovery → Circuit closes within 60s (automatic)
-- ✅ Manual override → Operations team can force circuit state
+- âœ… 1000 concurrent requests with circuit open â†’ All rejected in <1ms (no resource exhaustion)
+- âœ… Service recovery â†’ Circuit closes within 60s (automatic)
+- âœ… Manual override â†’ Operations team can force circuit state
 
 ---
 
@@ -835,7 +835,7 @@ async def _(cb=circuit_breaker):
 
     # Call 3 times (failure threshold)
     for i in range(3):
-        with pytest.raises(TimeoutError):
+        with ward.raises(TimeoutError):
             await cb.call(failing_fn)
 
     # Circuit should be OPEN now
@@ -852,7 +852,7 @@ async def _(cb=circuit_breaker):
         return "success"
 
     # Call should be rejected
-    with pytest.raises(CircuitBreakerOpenError):
+    with ward.raises(CircuitBreakerOpenError):
         await cb.call(dummy_fn)
 
     assert cb.rejected_calls == 1
@@ -897,7 +897,7 @@ async def _(cb=circuit_breaker):
         raise TimeoutError("Still failing")
 
     # Failure should reopen circuit
-    with pytest.raises(TimeoutError):
+    with ward.raises(TimeoutError):
         await cb.call(failing_fn)
 
     assert cb.state == CircuitState.OPEN
@@ -966,7 +966,7 @@ async def _():
 
     # Call 3 times (open circuit)
     for _ in range(3):
-        with pytest.raises(TimeoutError):
+        with ward.raises(TimeoutError):
             await weather_cb.call(mock_weather_api.get_weather, location="London")
 
     assert weather_cb.state == CircuitState.OPEN
@@ -1158,7 +1158,7 @@ k1_circuit_breaker_success_rate = Gauge(
 ## Decision History
 
 **Created:** 2024-10-10 by K1 Architecture Team
-**Status:** ✅ Accepted (ADR-0009)
+**Status:** âœ… Accepted (ADR-0009)
 **Supersedes:** None
 **Superseded by:** None
 
@@ -1173,9 +1173,9 @@ k1_circuit_breaker_success_rate = Gauge(
 **Last Updated:** 2025-02-05
 
 **Committee Approval:**
-- Architecture Team: ✅ **Approved** (2025-01-26) - 3-state FSM design validated
-- Reliability Team: ✅ **Approved** (2025-01-30) - Fail-fast latency confirmed (<1ms rejection)
-- Performance Team: ✅ **Approved** (2025-02-03) - State transition latency <1ms validated
+- Architecture Team: âœ… **Approved** (2025-01-26) - 3-state FSM design validated
+- Reliability Team: âœ… **Approved** (2025-01-30) - Fail-fast latency confirmed (<1ms rejection)
+- Performance Team: âœ… **Approved** (2025-02-03) - State transition latency <1ms validated
 
 **Proposed by:** K1 Architecture Team
 **Reviewed by:** Reliability Team, Orchestration Team, Performance Team
@@ -1188,10 +1188,10 @@ k1_circuit_breaker_success_rate = Gauge(
 **Files Implemented:**
 - `k1/infrastructure/circuit_breaker.py` - 380 lines (Circuit breaker FSM with 3 states)
 - `k1/infrastructure/circuit_breaker_config.yml` - Per-service thresholds (failure threshold, timeout, probe interval)
-- `tests/infrastructure/test_circuit_breaker_fsm.py` - 18 WARD tests (100% coverage: CLOSED→OPEN, OPEN→HALF-OPEN, HALF-OPEN→CLOSED/OPEN)
+- `tests/infrastructure/test_circuit_breaker_fsm.py` - 18 WARD tests (100% coverage: CLOSEDâ†’OPEN, OPENâ†’HALF-OPEN, HALF-OPENâ†’CLOSED/OPEN)
 
 **Performance Metrics (Production):**
-- State transition latency: <1ms (CLOSED→OPEN, OPEN→HALF-OPEN deterministic FSM)
+- State transition latency: <1ms (CLOSEDâ†’OPEN, OPENâ†’HALF-OPEN deterministic FSM)
 - Failure detection latency: <5ms (record failure + increment counter + check threshold)
 - Fail-fast rejection latency: <1ms (compare state == OPEN in hot path)
 - HALF-OPEN probe latency: AI agent probe <500ms (simple prompt), Pure actor probe <100ms (health endpoint)
@@ -1206,7 +1206,7 @@ k1_circuit_breaker_success_rate = Gauge(
 ### Lessons Learned (Production Experience)
 
 **What Worked Well:**
-- **3-state FSM optimal for fail-fast**: CLOSED→OPEN→HALF-OPEN→CLOSED cycle provides automatic recovery with <1ms rejection latency (vs 5-15s timeout waste)
+- **3-state FSM optimal for fail-fast**: CLOSEDâ†’OPENâ†’HALF-OPENâ†’CLOSED cycle provides automatic recovery with <1ms rejection latency (vs 5-15s timeout waste)
 - **Automatic recovery via HALF-OPEN probes**: Single probe call (AI: simple prompt <500ms, Pure: health endpoint <100ms) prevents manual intervention (reduces MTTR from minutes to seconds)
 - **Per-service granular control**: 8 services with different timeout/threshold/probe settings (weather API 3s vs database 1s vs LLM 5s) - one-size-fits-all not viable
 - **Lightweight deterministic FSM**: No LLM reasoning required (pure actor with boolean failure threshold check) - <1ms state transition critical for hot path
@@ -1226,7 +1226,7 @@ k1_circuit_breaker_success_rate = Gauge(
 **Distributed Circuit Breaker Coordination (Planned - 10%):**
 - Multi-instance K1 circuit breaker state sharing (Redis pub/sub for state transitions)
 - Distributed failure threshold (aggregate failures across 3 K1 instances, not per-instance)
-- Global OPEN state broadcast (one K1 opens circuit → all K1 instances fail-fast)
+- Global OPEN state broadcast (one K1 opens circuit â†’ all K1 instances fail-fast)
 - Estimated timeline: 2 weeks
 
 **Adaptive Timeout Tuning (Planned - 10%):**
@@ -1268,3 +1268,4 @@ k1_circuit_breaker_success_rate = Gauge(
 - `docs/whiteboard.md` L6812-7112 (Error Recovery section - Circuit breaker cascading failure prevention)
 - `docs/whiteboard.md` L910 (Netflix Hystrix reference - 3-state FSM design)
 - `architecture_diagrams/k1_orchestrator_3phase.mmd` (Orchestrator uses circuit breaker for tool calls)
+

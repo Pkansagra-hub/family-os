@@ -1,4 +1,4 @@
-# MCP End-to-End Implementation Plan
+﻿# MCP End-to-End Implementation Plan
 
 **Version:** 1.0
 **Date:** October 25, 2025
@@ -8,7 +8,7 @@
 
 ---
 
-## 📋 Table of Contents
+## ðŸ“‹ Table of Contents
 
 1. [Vision & Objectives](#vision--objectives)
 2. [Current State Assessment](#current-state-assessment)
@@ -36,70 +36,70 @@ AI agents struggle to use the MCP server effectively because:
 
 **End State (After All Phases Complete):**
 
-- ✅ AI agents receive **lightweight, focused results** (200 chars max, ≤8 tags, clean scores)
-- ✅ Agents can **search contracts effectively** (dedicated tool with type/layer filtering)
-- ✅ Agents **discover tools through meta-guidance** (tools_help() tells them what to use)
-- ✅ Agents **understand K1 architecture** (ask() routes layer-specific queries correctly)
-- ✅ **Contract relationships fully indexed** (can traverse OpenAPI → schemas → examples)
-- ✅ **Performance sustained** (all queries <100ms P95, <5ms event delivery)
+- âœ… AI agents receive **lightweight, focused results** (200 chars max, â‰¤8 tags, clean scores)
+- âœ… Agents can **search contracts effectively** (dedicated tool with type/layer filtering)
+- âœ… Agents **discover tools through meta-guidance** (tools_help() tells them what to use)
+- âœ… Agents **understand K1 architecture** (ask() routes layer-specific queries correctly)
+- âœ… **Contract relationships fully indexed** (can traverse OpenAPI â†’ schemas â†’ examples)
+- âœ… **Performance sustained** (all queries <100ms P95, <5ms event delivery)
 
 ### Objectives
 
 | # | Objective | Metric | Priority |
 |---|-----------|--------|----------|
-| 1 | Reduce payload bloat | 75% reduction (800→200 chars) | 🔴 CRITICAL |
-| 2 | Enable contract search | New `kg_v2_contract_search()` tool | 🔴 CRITICAL |
-| 3 | Add agent guidance | New `kg_v2_tools_help()` meta-tool | 🟡 HIGH |
-| 4 | K1-aware routing | Enhanced `ask()` with layer patterns | 🟡 HIGH |
-| 5 | Complete indexing | Contract relationships captured | 🟡 HIGH |
-| 6 | Maintain performance | All queries <100ms P95 | 🔴 CRITICAL |
+| 1 | Reduce payload bloat | 75% reduction (800â†’200 chars) | ðŸ”´ CRITICAL |
+| 2 | Enable contract search | New `kg_v2_contract_search()` tool | ðŸ”´ CRITICAL |
+| 3 | Add agent guidance | New `kg_v2_tools_help()` meta-tool | ðŸŸ¡ HIGH |
+| 4 | K1-aware routing | Enhanced `ask()` with layer patterns | ðŸŸ¡ HIGH |
+| 5 | Complete indexing | Contract relationships captured | ðŸŸ¡ HIGH |
+| 6 | Maintain performance | All queries <100ms P95 | ðŸ”´ CRITICAL |
 
 ---
 
 ## Current State Assessment
 
-### ✅ Completed Work (From Previous Session)
+### âœ… Completed Work (From Previous Session)
 
 | Component | Status | Details |
 |-----------|--------|---------|
-| `hybrid_search()` bug fix | ✅ DONE | Fixed division-by-zero with empty FTS results |
-| `ask()` tool bug fix | ✅ DONE | Now returns results in all code paths |
-| `_light_node()` helper | ✅ DONE | Reduces payloads by ~75% |
-| Embedding fallback | ✅ DONE | Graceful degradation when embeddings fail |
-| Smoke tests | ✅ PASS | 5 tests validated fixes work correctly |
+| `hybrid_search()` bug fix | âœ… DONE | Fixed division-by-zero with empty FTS results |
+| `ask()` tool bug fix | âœ… DONE | Now returns results in all code paths |
+| `_light_node()` helper | âœ… DONE | Reduces payloads by ~75% |
+| Embedding fallback | âœ… DONE | Graceful degradation when embeddings fail |
+| Smoke tests | âœ… PASS | 5 tests validated fixes work correctly |
 
-### 📊 Current Metrics
+### ðŸ“Š Current Metrics
 
 | Metric | Current | Target | Status |
 |--------|---------|--------|--------|
-| Payload reduction | 75% (200/800 chars) | 75%+ | ✅ |
-| Query latency | <2s (5 items) | <100ms | ⚠️ Need profiling |
-| Hybrid search accuracy | Blends correctly | Maintain | ✅ |
-| Empty result handling | Graceful | Graceful | ✅ |
-| Contract search tool | ❌ Missing | New tool | 🔴 |
-| Tools guidance tool | ❌ Missing | New tool | 🔴 |
+| Payload reduction | 75% (200/800 chars) | 75%+ | âœ… |
+| Query latency | <2s (5 items) | <100ms | âš ï¸ Need profiling |
+| Hybrid search accuracy | Blends correctly | Maintain | âœ… |
+| Empty result handling | Graceful | Graceful | âœ… |
+| Contract search tool | âŒ Missing | New tool | ðŸ”´ |
+| Tools guidance tool | âŒ Missing | New tool | ðŸ”´ |
 
-### 📁 File Inventory (MCP Directory)
+### ðŸ“ File Inventory (MCP Directory)
 
 ```
 .github/mcp/
-├── kg_v2_server.py (877 lines) ← Main server, needs: contract_search + tools_help tools
-├── kg_store.py (935 lines) ← Storage layer, needs: contract filtering
-├── kg_indexers.py (878 lines) ← Indexing, needs: enhanced contract indexing
-├── kg_scheduler.py (scheduler for reindex)
-├── memory_server.py (memory operations)
-├── mmd_mcp_server.py (Mermaid diagram tool)
-├── mmd_parser.py (Mermaid parsing)
-├── reindex_kg.py (one-shot reindex)
-└── MCP_END_TO_END_PLAN.md ← THIS FILE
+â”œâ”€â”€ kg_v2_server.py (877 lines) â† Main server, needs: contract_search + tools_help tools
+â”œâ”€â”€ kg_store.py (935 lines) â† Storage layer, needs: contract filtering
+â”œâ”€â”€ kg_indexers.py (878 lines) â† Indexing, needs: enhanced contract indexing
+â”œâ”€â”€ kg_scheduler.py (scheduler for reindex)
+â”œâ”€â”€ memory_server.py (memory operations)
+â”œâ”€â”€ mmd_mcp_server.py (Mermaid diagram tool)
+â”œâ”€â”€ mmd_parser.py (Mermaid parsing)
+â”œâ”€â”€ reindex_kg.py (one-shot reindex)
+â””â”€â”€ MCP_END_TO_END_PLAN.md â† THIS FILE
 ```
 
-### 🚨 Known Issues (From Session Analysis)
+### ðŸš¨ Known Issues (From Session Analysis)
 
 1. **No contract-specific search**: Contracts indexed but queried via generic `search()` tool
 2. **No agent guidance**: Agents unaware of tool capabilities
 3. **K1 architecture unaware**: `ask()` doesn't understand layer structure
-4. **Relationship gaps**: Contract → Schema, OpenAPI → Methods not captured
+4. **Relationship gaps**: Contract â†’ Schema, OpenAPI â†’ Methods not captured
 5. **Embedding model loading**: First load ~10s, causes latency spikes
 
 ---
@@ -162,16 +162,16 @@ graph TB
 
 | # | Tool Name | Purpose | Priority |
 |---|-----------|---------|----------|
-| 1 | `kg_v2_contract_search()` | Contract-specific search (OpenAPI, JSON Schema, FlatBuffers) | 🔴 CRITICAL |
-| 2 | `kg_v2_tools_help()` | Agent guidance + tool recommendations | 🟡 HIGH |
-| 3 | `kg_v2_ask_k1_architecture()` | K1-aware ask() routing | 🟡 HIGH |
-| 4 | `kg_v2_contract_relationships()` | Query contract references & usage | 🟡 HIGH |
+| 1 | `kg_v2_contract_search()` | Contract-specific search (OpenAPI, JSON Schema, FlatBuffers) | ðŸ”´ CRITICAL |
+| 2 | `kg_v2_tools_help()` | Agent guidance + tool recommendations | ðŸŸ¡ HIGH |
+| 3 | `kg_v2_ask_k1_architecture()` | K1-aware ask() routing | ðŸŸ¡ HIGH |
+| 4 | `kg_v2_contract_relationships()` | Query contract references & usage | ðŸŸ¡ HIGH |
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1: Contract Search Tool (3 days) 🔴 CRITICAL
+### Phase 1: Contract Search Tool (3 days) ðŸ”´ CRITICAL
 
 **Goal:** Enable agents to search contracts effectively
 
@@ -206,7 +206,7 @@ async def kg_v2_contract_search(
 
 ---
 
-### Phase 2: Tools Guidance Tool (2 days) 🟡 HIGH
+### Phase 2: Tools Guidance Tool (2 days) ðŸŸ¡ HIGH
 
 **Goal:** Help agents discover right tool for their needs
 
@@ -233,7 +233,7 @@ async def kg_v2_tools_help(topic: str | None = None) -> Dict:
 
 ---
 
-### Phase 3: K1 Architecture Routing (3 days) 🟡 HIGH
+### Phase 3: K1 Architecture Routing (3 days) ðŸŸ¡ HIGH
 
 **Goal:** Make `ask()` aware of K1 layer structure
 
@@ -256,15 +256,15 @@ async def kg_v2_tools_help(topic: str | None = None) -> Dict:
 
 ---
 
-### Phase 4: Contract Relationship Indexing (3 days) 🟡 HIGH
+### Phase 4: Contract Relationship Indexing (3 days) ðŸŸ¡ HIGH
 
 **Goal:** Capture contract relationships for traversal
 
 **Deliverables:**
 
 - [ ] Enhanced `ContractIndexer` in `kg_indexers.py`
-- [ ] OpenAPI → JSON schemas relationships
-- [ ] Nested structure indexing (API → paths → methods → parameters)
+- [ ] OpenAPI â†’ JSON schemas relationships
+- [ ] Nested structure indexing (API â†’ paths â†’ methods â†’ parameters)
 - [ ] Example payload indexing
 - [ ] Full reindex with new relationships
 - [ ] Integration tests
@@ -279,7 +279,7 @@ async def kg_v2_tools_help(topic: str | None = None) -> Dict:
 
 ---
 
-### Phase 5: Performance Optimization (2 days) 🟢 ENHANCEMENT
+### Phase 5: Performance Optimization (2 days) ðŸŸ¢ ENHANCEMENT
 
 **Goal:** Sustain <100ms P95 with all new tools
 
@@ -510,7 +510,7 @@ K1_LAYER_PATTERNS = {
         "patterns": [
             r"layer\s+(\d+|one|two|three|four|five).{0,30}layer\s+(\d+|one|two|three|four|five)",
             r"communication.{0,30}between",
-            r"(?:layer|l)(\d).*(?:to|→|->).*(?:layer|l)(\d)"
+            r"(?:layer|l)(\d).*(?:to|â†’|->).*(?:layer|l)(\d)"
         ],
         "response_template": "search for ADRs with 'communication' tag and layer numbers",
         "example_query": "What's the communication between Layer 1 and Layer 2?"
@@ -640,14 +640,14 @@ def test_traverse_contract_dependencies():
 
 ```powershell
 # Run performance test suite
-python.exe -m pytest tests/k1_intelligence/mcp/test_performance.py -v --tb=short
+python.exe -m ward tests/k1_intelligence/mcp/test_performance.py -v --tb=short
 ```
 
 **Task 12.2: Identify Slowest Paths**
 
 ```python
 # In performance test
-@pytest.mark.performance
+@ward.mark.performance
 async def test_all_tools_latency():
     """Measure latency of all tools"""
     tools = [
@@ -684,14 +684,14 @@ Possible optimizations based on findings:
 
 ```powershell
 # Run full test suite
-python.exe -m pytest tests/k1_intelligence/mcp/ -v --cov --tb=short
+python.exe -m ward tests/k1_intelligence/mcp/ -v --cov --tb=short
 ```
 
 ---
 
 ## Success Criteria
 
-### Phase 1: Contract Search Tool ✅
+### Phase 1: Contract Search Tool âœ…
 
 - [ ] `kg_v2_contract_search()` deployed
 - [ ] Filters by type (openapi, jsonschema, flatbuffers)
@@ -699,18 +699,18 @@ python.exe -m pytest tests/k1_intelligence/mcp/ -v --cov --tb=short
 - [ ] Returns lightweight nodes
 - [ ] <100ms P95 latency
 - [ ] 100% test coverage
-- [ ] Example: `kg_v2_contract_search("envelope", layer="k0_only")` → finds envelope schema
+- [ ] Example: `kg_v2_contract_search("envelope", layer="k0_only")` â†’ finds envelope schema
 
-### Phase 2: Tools Guidance Tool ✅
+### Phase 2: Tools Guidance Tool âœ…
 
 - [ ] `kg_v2_tools_help()` deployed
 - [ ] Covers 6+ topics (search, adrs, contracts, modules, dependencies, architecture)
 - [ ] Includes tool recommendations + examples per topic
 - [ ] <50ms response time
 - [ ] 100% test coverage
-- [ ] Example: `kg_v2_tools_help("contracts")` → returns contract-search recommendations
+- [ ] Example: `kg_v2_tools_help("contracts")` â†’ returns contract-search recommendations
 
-### Phase 3: K1 Architecture Routing ✅
+### Phase 3: K1 Architecture Routing âœ…
 
 - [ ] Enhanced `ask()` with layer-aware routing
 - [ ] Recognizes layer communication queries
@@ -718,17 +718,17 @@ python.exe -m pytest tests/k1_intelligence/mcp/ -v --cov --tb=short
 - [ ] Recognizes error reference queries
 - [ ] Returns K1-relevant results
 - [ ] 100% test coverage
-- [ ] Example: `ask("What's the communication between Layer 1 and Layer 2?")` → routes correctly
+- [ ] Example: `ask("What's the communication between Layer 1 and Layer 2?")` â†’ routes correctly
 
-### Phase 4: Contract Relationship Indexing ✅
+### Phase 4: Contract Relationship Indexing âœ…
 
 - [ ] Contract relationships captured (openapi_uses_schema, schema_defines_error, etc.)
-- [ ] Can traverse API → schemas → examples
+- [ ] Can traverse API â†’ schemas â†’ examples
 - [ ] Full reindex completes without errors
 - [ ] Relationship queries work correctly
 - [ ] 100% test coverage
 
-### Phase 5: Performance Optimization ✅
+### Phase 5: Performance Optimization âœ…
 
 - [ ] All tools <100ms P95
 - [ ] No performance regressions from Phase 1-4
@@ -745,7 +745,7 @@ python.exe -m pytest tests/k1_intelligence/mcp/ -v --cov --tb=short
 | Tool discovery adoption | 100% | All new tools documented in tools_help() |
 | K1 awareness | Layer queries work | Test layer communication patterns |
 | Relationship coverage | 90%+ | Check contract relationship density |
-| Test coverage | >85% | Run pytest --cov |
+| Test coverage | >85% | Run ward --cov |
 
 ---
 
@@ -770,9 +770,9 @@ async def warmup_embeddings():
     """Pre-load embedding model"""
     try:
         test_embedding = await generate_embedding("warmup query")
-        print("✅ Embedding model loaded")
+        print("âœ… Embedding model loaded")
     except Exception as e:
-        print(f"⚠️ Embedding model failed: {e}, falling back to FTS5")
+        print(f"âš ï¸ Embedding model failed: {e}, falling back to FTS5")
 ```
 
 ---
@@ -849,28 +849,28 @@ py-spy record -o profile.svg -- python kg_v2_server.py
 
 ```
 Week 1:
-├─ Phase 1 (Days 1-3): Contract Search Tool
-│  ├─ Day 1: DB layer
-│  ├─ Day 2: MCP tool
-│  └─ Day 3: Tests
-├─ Phase 2 (Days 4-5): Tools Guidance Tool [Can start Day 2]
-│  ├─ Day 4: Metadata
-│  └─ Day 5: Tool + tests
+â”œâ”€ Phase 1 (Days 1-3): Contract Search Tool
+â”‚  â”œâ”€ Day 1: DB layer
+â”‚  â”œâ”€ Day 2: MCP tool
+â”‚  â””â”€ Day 3: Tests
+â”œâ”€ Phase 2 (Days 4-5): Tools Guidance Tool [Can start Day 2]
+â”‚  â”œâ”€ Day 4: Metadata
+â”‚  â””â”€ Day 5: Tool + tests
 
 Week 2:
-├─ Phase 3 (Days 6-8): K1 Architecture Routing [Can start Day 5]
-│  ├─ Day 6: Analysis
-│  ├─ Day 7: Implementation
-│  └─ Day 8: Tests
-├─ Phase 4 (Days 9-11): Contract Indexing [After Phase 1]
-│  ├─ Day 9: Indexer enhancement
-│  ├─ Day 10: Reindex
-│  └─ Day 11: Tests
+â”œâ”€ Phase 3 (Days 6-8): K1 Architecture Routing [Can start Day 5]
+â”‚  â”œâ”€ Day 6: Analysis
+â”‚  â”œâ”€ Day 7: Implementation
+â”‚  â””â”€ Day 8: Tests
+â”œâ”€ Phase 4 (Days 9-11): Contract Indexing [After Phase 1]
+â”‚  â”œâ”€ Day 9: Indexer enhancement
+â”‚  â”œâ”€ Day 10: Reindex
+â”‚  â””â”€ Day 11: Tests
 
 Week 3:
-└─ Phase 5 (Days 12-13): Performance Optimization
-   ├─ Day 12: Profiling
-   └─ Day 13: Optimization + final tests
+â””â”€ Phase 5 (Days 12-13): Performance Optimization
+   â”œâ”€ Day 12: Profiling
+   â””â”€ Day 13: Optimization + final tests
 ```
 
 **Parallelization Opportunities:**
@@ -957,8 +957,8 @@ See **Phase 1: Contract Search Tool** section above for detailed implementation.
 5. Performance validation (Phase 5)
 
 **Current Status:**
-- Bugs fixed: ✅ hybrid_search, ask()
-- Data reduction: ✅ 75% payload reduction
+- Bugs fixed: âœ… hybrid_search, ask()
+- Data reduction: âœ… 75% payload reduction
 - Ready to implement: 4 new features + 1 indexing enhancement
 ```
 
@@ -970,31 +970,31 @@ See **Phase 1: Contract Search Tool** section above for detailed implementation.
 
 | Tool | Purpose | Status | Latency |
 |------|---------|--------|---------|
-| kg_v2_search | FTS5 keyword search | ✅ | <2ms |
-| kg_v2_hybrid_search | FTS5 + vector search | ✅ FIXED | <50ms |
-| kg_v2_ask | Smart routing | ✅ FIXED | <100ms |
-| kg_v2_find_by_type | Filter by node type | ✅ | <2ms |
-| kg_v2_neighbors | Adjacent nodes | ✅ | <5ms |
-| kg_v2_paths | Path finding | ✅ | <20ms |
-| kg_v2_get_module_deps | Dependencies | ✅ | <50ms |
-| kg_v2_dependency_impact | Change impact | ✅ | <100ms |
-| kg_v2_find_circular_deps | Cycle detection | ✅ | <100ms |
-| kg_v2_implementation_chain | ADR context | ✅ | <100ms |
-| kg_v2_get_feature_context | Feature discovery | ✅ | <100ms |
-| kg_v2_graph_summary | Architecture overview | ✅ | <10ms |
-| kg_v2_diagnostics | Health checks | ✅ | <20ms |
-| kg_v2_add_node | Add node | ✅ | <10ms |
-| kg_v2_add_edge | Add relationship | ✅ | <10ms |
-| kg_v2_remove_node | Remove node | ✅ | <10ms |
+| kg_v2_search | FTS5 keyword search | âœ… | <2ms |
+| kg_v2_hybrid_search | FTS5 + vector search | âœ… FIXED | <50ms |
+| kg_v2_ask | Smart routing | âœ… FIXED | <100ms |
+| kg_v2_find_by_type | Filter by node type | âœ… | <2ms |
+| kg_v2_neighbors | Adjacent nodes | âœ… | <5ms |
+| kg_v2_paths | Path finding | âœ… | <20ms |
+| kg_v2_get_module_deps | Dependencies | âœ… | <50ms |
+| kg_v2_dependency_impact | Change impact | âœ… | <100ms |
+| kg_v2_find_circular_deps | Cycle detection | âœ… | <100ms |
+| kg_v2_implementation_chain | ADR context | âœ… | <100ms |
+| kg_v2_get_feature_context | Feature discovery | âœ… | <100ms |
+| kg_v2_graph_summary | Architecture overview | âœ… | <10ms |
+| kg_v2_diagnostics | Health checks | âœ… | <20ms |
+| kg_v2_add_node | Add node | âœ… | <10ms |
+| kg_v2_add_edge | Add relationship | âœ… | <10ms |
+| kg_v2_remove_node | Remove node | âœ… | <10ms |
 
 ### New Tools to Implement (4 total)
 
 | Tool | Purpose | Status | Latency | Phase |
 |------|---------|--------|---------|-------|
-| kg_v2_contract_search | Contract-specific search | ⏳ TODO | <100ms | 1 |
-| kg_v2_tools_help | Agent guidance | ⏳ TODO | <50ms | 2 |
-| kg_v2_ask_k1_architecture | K1-aware ask() | ⏳ TODO | <100ms | 3 |
-| kg_v2_contract_relationships | Query contract refs | ⏳ TODO | <100ms | 4 |
+| kg_v2_contract_search | Contract-specific search | â³ TODO | <100ms | 1 |
+| kg_v2_tools_help | Agent guidance | â³ TODO | <50ms | 2 |
+| kg_v2_ask_k1_architecture | K1-aware ask() | â³ TODO | <100ms | 3 |
+| kg_v2_contract_relationships | Query contract refs | â³ TODO | <100ms | 4 |
 
 ---
 
@@ -1027,3 +1027,4 @@ See **Phase 1: Contract Search Tool** section above for detailed implementation.
 **Next Action:** Begin Phase 1, Day 1
 
 ---
+
