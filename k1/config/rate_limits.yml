@@ -1,0 +1,23 @@
+# Rate Limiting Configurations
+# Global rate limiting settings
+
+global:
+  default_tokens_per_second: 10
+  default_burst_size: 50
+
+services:
+  agent_creation:
+    tokens_per_second: 5
+    burst_size: 20
+
+  model_inference:
+    tokens_per_second: 100
+    burst_size: 200
+
+  data_retrieval:
+    tokens_per_second: 50
+    burst_size: 100
+
+  orchestration:
+    tokens_per_second: 20
+    burst_size: 50

@@ -1,0 +1,21 @@
+# Example Module Metadata
+# Plugin module configuration
+
+name: example_module
+version: 1.0.0
+description: Example extension module for K1 infrastructure
+
+interfaces:
+  - config_provider
+  - metrics_exporter
+
+dependencies:
+  - python: ">=3.9"
+  - libraries: []
+
+configuration:
+  enabled: true
+  priority: 10
+
+author: K1 Team
+license: MIT

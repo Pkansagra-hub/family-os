@@ -1,0 +1,21 @@
+# Circuit Breaker Configurations
+# Global circuit breaker settings
+
+global:
+  failure_threshold: 5
+  recovery_timeout: 60
+  success_threshold: 3
+  monitoring_interval: 10
+
+services:
+  agent_fabric:
+    failure_threshold: 3
+    recovery_timeout: 30
+
+  model_hub:
+    failure_threshold: 10
+    recovery_timeout: 120
+
+  storage:
+    failure_threshold: 5
+    recovery_timeout: 60

@@ -1,0 +1,26 @@
+# Performance Budgets
+# P95 performance targets
+
+latency:
+  ttft_ms: 150      # Time to first token
+  e2e_ms: 2000      # End-to-end latency
+  inter_token_ms: 50 # Inter-token latency
+
+throughput:
+  requests_per_second: 100
+  tokens_per_second: 1000
+
+resources:
+  memory_mb: 500
+  cpu_percent: 80
+  gpu_percent: 90
+  npu_percent: 95
+
+reliability:
+  uptime_percent: 99.9
+  error_rate_percent: 0.1
+
+monitoring:
+  budget_tracking: true
+  alert_on_violation: true
+  performance_profiling: true

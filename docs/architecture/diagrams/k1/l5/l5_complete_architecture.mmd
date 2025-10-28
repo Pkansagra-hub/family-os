@@ -1,35 +1,3 @@
----
-description: Layer 5 (Infrastructure) Complete Architecture — All 8 subsystems with data flows and dependencies
-primary_adrs:
-  - ADR-0004 (52-Module 5-Layer Architecture)
-  - ADR-0001a (K0 Bridge Architecture)
-  - ADR-0029 (Prometheus Metrics)
-  - ADR-0009 (Circuit Breaker)
-  - ADR-0026 (Thermal Management)
-  - ADR-0004a (Event Bus)
-related_adrs:
-  - ADR-0004b (Import Linting - L5→none, leaf layer)
-  - ADR-0004d (Layer 5 Integration Tests)
-  - ADR-0024 (Performance Budgets)
-  - ADR-0074 (Module System)
-  - ADR-0075 (Layer 5 Extensibility)
-research:
-  - "SEDA Architecture (Welsh et al. 2001) — Stage-based event-driven architecture"
-  - "Circuit Breaker Pattern (Nygard 2007) — Release It! resilience patterns"
-  - "Observability (Majors et al. 2022) — High-cardinality data, distributed tracing"
-  - "Hot Code Reload (Erlang OTP) — Zero-downtime config updates"
-file_id: "L5CA"
-performance_budgets:
-  event_bus: "<5ms P95 (zero-copy delivery)"
-  circuit_breaker: "<10ms P95 (state check)"
-  thermal_placement: "<10ms P95 (placement decision)"
-  config_reload: "<100ms P95 (hot reload)"
-  metric_emission: "<10ms P95 (Prometheus push)"
-integration_tests: tests/integration/layer5/
-created: 2025-01-18
----
-
-```mermaid
 graph TB
     subgraph Layer_5_Infrastructure["🏗️ Layer 5 (Infrastructure) — 8 Core Subsystems"]
         direction TB
@@ -59,14 +27,23 @@ graph TB
         end
 
         %% ===== 3. RESILIENCE (Circuit Breaker + Retry) =====
-        subgraph Resilience["3️⃣ Resilience (Fault Tolerance)"]
+        subgraph Resilience_Backpressure["3️⃣ Resilience & Backpressure (Fault Tolerance + Flow Control)"]
             direction TB
-            CircuitBreaker["CircuitBreaker<br/>🔌 3-State FSM<br/>───────────<br/>• CLOSED (normal)<br/>• OPEN (fail-fast)<br/>• HALF_OPEN (test)<br/>• 5 failures → OPEN<br/>───────────<br/>⏱️ <10ms check"]
+            WatermarkChecker["WatermarkChecker<br/>📊 Tier Thresholds<br/>───────────<br/>• 80/90/95% bands<br/>• 5% hysteresis<br/>• Queue depth, latency<br/>• Prom metrics export<br/>───────────<br/>⏱️ <5ms check"]
+            VoicePipelineMonitor["VoicePipelineMonitor<br/>🎙️ Voice Signals<br/>───────────<br/>• ASR frame drops<br/>• TTS degradation<br/>• Barge-in priority<br/>• Buffer saturation<br/>───────────<br/>⏱️ <5ms poll"]
+            GlobalLimitsEnforcer["GlobalLimitsEnforcer<br/>� Session Caps<br/>───────────<br/>• Max 3 agents/session<br/>• CPU ≥85% throttle<br/>• Memory ≥480MB shed<br/>• Fairness enforcement<br/>───────────<br/>⏱️ <5ms eval"]
+            CascadeManager["CascadeManager<br/>🌊 Tier Aggregator<br/>───────────<br/>• Merge signals<br/>• Tier escalation<br/>• Thermal multipliers<br/>• Audit playback<br/>───────────<br/>⏱️ <5ms aggregate"]
+            CascadeDecision["CascadeDecision<br/>⚖️ Action Planner<br/>───────────<br/>• ALLOW/WARN/DEGRADE/REJECT<br/>• Tier order T1→T3<br/>• 10s stability checks<br/>• Rollback safeguards<br/>───────────<br/>⏱️ <10ms decide"]
+            CircuitBreaker["CircuitBreaker<br/>🔌 3-State FSM<br/>───────────<br/>• CLOSED / OPEN / HALF_OPEN<br/>• 5 failures → OPEN<br/>• 30s cooldown<br/>• Fallback cascade<br/>───────────<br/>⏱️ <10ms check"]
             RetryPolicy["RetryPolicy<br/>🔄 Exponential Backoff<br/>───────────<br/>• Max 5 retries<br/>• 100ms→1600ms<br/>• Jitter ±20%<br/>• Idempotency keys<br/>───────────<br/>⏱️ <5ms decision"]
-            HotReload["HotReload<br/>♨️ Config Watcher<br/>───────────<br/>• File watcher<br/>• Async reload<br/>• Zero-downtime<br/>• Atomic updates<br/>───────────<br/>⏱️ <100ms reload"]
 
+            WatermarkChecker --> CascadeManager
+            VoicePipelineMonitor --> CascadeManager
+            GlobalLimitsEnforcer --> CascadeManager
+            CascadeManager --> CascadeDecision
+            CascadeDecision --> CircuitBreaker
+            CascadeDecision --> RetryPolicy
             CircuitBreaker --> RetryPolicy
-            RetryPolicy --> HotReload
         end
 
         %% ===== 4. THERMAL (Temperature Monitoring + Placement) =====
@@ -99,9 +76,11 @@ graph TB
             ConfigLoader["ConfigLoader<br/>📁 YAML Loader<br/>───────────<br/>• kernel.yaml<br/>• logging.yaml<br/>• circuit_breaker.yaml<br/>• Schema validation<br/>───────────<br/>⏱️ <50ms load"]
             ConfigValidator["ConfigValidator<br/>✅ Validation<br/>───────────<br/>• JSON schema<br/>• Semantic checks<br/>• Type safety<br/>• Error reporting<br/>───────────<br/>⏱️ <10ms validate"]
             ConfigWatcher["ConfigWatcher<br/>👀 File Watcher<br/>───────────<br/>• watchdog lib<br/>• Async reload<br/>• Atomic updates<br/>• Rollback on error<br/>───────────<br/>⏱️ <100ms detection"]
+            HotReload["HotReload<br/>♨️ Live Apply<br/>───────────<br/>• Atomic swap<br/>• Dependency guards<br/>• Telemetry hooks<br/>• <100ms reload<br/>───────────<br/>⏱️ <100ms apply"]
 
             ConfigLoader --> ConfigValidator
             ConfigValidator --> ConfigWatcher
+            ConfigWatcher --> HotReload
         end
 
         %% ===== 7. CONNECTORS (K0 Connection Lifecycle) =====
@@ -143,10 +122,15 @@ graph TB
     K1_Layers -->|"Publish events<br/>(IntentDetected)"| EventBus
     EventBus -->|"Subscribe<br/>(L1→L2)"| K1_Layers
 
-    %% Resilience ↔ All Components
+    %% Resilience & Backpressure ↔ All Components
+    K1_Layers -->|"Queue depth<br/>telemetry"| WatermarkChecker
+    K1_Layers -->|"Voice load<br/>metrics"| VoicePipelineMonitor
     K1_Layers -->|"Circuit breaker<br/>checks"| CircuitBreaker
     K0_Bridge -->|"Retry policy<br/>exponential backoff"| RetryPolicy
+    CascadeDecision -->|"Tier actions<br/>WARN/DEGRADE/REJECT"| K1_Layers
+    CascadeDecision -->|"Batch throttling<br/>/ shed"| BatchClient
     K1_Layers -->|"Config<br/>access"| HotReload
+    HotReload -->|"Applied<br/>settings"| K1_Layers
 
     %% Thermal ↔ K1 Layers
     K1_Layers -->|"Placement<br/>requests"| PlacementPlanner
@@ -182,40 +166,10 @@ graph TB
 
     class CommandClient,QueryClient,SSEClient,BatchClient,HTTP2Manager k0Bridge
     class EventBus,EventSchemas eventBus
-    class CircuitBreaker,RetryPolicy,HotReload resilience
+    class WatermarkChecker,VoicePipelineMonitor,GlobalLimitsEnforcer,CascadeManager,CascadeDecision,CircuitBreaker,RetryPolicy resilience
     class ThermalMonitor,PlacementPlanner,HysteresisFSM thermal
     class MetricsExporter,TracingExporter,StructuredLogging,GrafanaDashboards observability
-    class ConfigLoader,ConfigValidator,ConfigWatcher config
+    class ConfigLoader,ConfigValidator,ConfigWatcher,HotReload config
     class K0Connector,HealthCheck connectors
     class ExtensionDiscovery,ExtensionPoints extensions
     class K0_Kernel,K1_Layers,Prometheus,Jaeger external
-```
-
-**Diagram Purpose**: Complete Layer 5 architecture showing all 8 core subsystems, data flows, and external dependencies.
-
-**Key Insights**:
-1. **Leaf Layer**: L5 imports nothing (no L5→L1/L2/L3/L4), but universal dependency target
-2. **K0 Bridge**: Dual-kernel communication (K1↔K0) with HTTP/2, FlatBuffers, batching
-3. **Event Bus**: Cross-layer pub/sub (L1→L2) without direct imports (<5ms zero-copy delivery)
-4. **Resilience**: Circuit breaker (3-state FSM), retry policy (exponential backoff), hot reload (<100ms)
-5. **Thermal**: Adaptive placement (NPU→GPU→CPU→Remote) with hysteresis FSM (prevent oscillation)
-6. **Observability**: 50+ Prometheus metrics, OpenTelemetry tracing (1% sampling), JSON logs
-7. **Config**: Hot reload (<100ms) with file watcher, schema validation, atomic updates
-8. **Connectors**: K0 connection lifecycle (health checks, auto-reconnect, TLS)
-9. **Extensions**: Plugin architecture (10 extension points, ADR-0075)
-
-**Performance Budget**:
-- Event bus: <5ms P95 (zero-copy delivery)
-- Circuit breaker: <10ms P95 (state check)
-- Thermal placement: <10ms P95 (4-tier cascade)
-- Config reload: <100ms P95 (hot reload)
-- Metric emission: <10ms P95 (Prometheus push)
-- K0 Command (GREEN): <50ms P95
-- K0 Command (AMBER/RED): <200ms P95
-
-**Integration Tests**: `tests/integration/layer5/` (100% coverage)
-
-**Related Diagrams**:
-- K0 Bridge Details: `k0_bridge/` (8 comprehensive diagrams)
-- Individual Component Diagrams: `config_management.mmd`, `event_bus.mmd`, `thermal_management.mmd`, `resilience_patterns_centralized.mmd`, `observability_infrastructure.mmd`, `extensions_system.mmd`, `connectors_architecture.mmd`
-```

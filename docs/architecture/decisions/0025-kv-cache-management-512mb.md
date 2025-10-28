@@ -44,6 +44,7 @@
 | **LRU/LFU Hybrid + Protection** | 10/10 | Balances recency (60%) vs frequency (40%), protects critical sessions (active conversation, safety), simple fixed weights, low overhead (<5ms eviction) | Fixed weights may not be optimal for all workloads (need tuning) | **SELECTED:** LRU/LFU hybrid with 60% recency, 40% frequency balances user's active sessions (recency) with important long-running sessions (frequency). Protected sessions (active conversation, safety monitoring) never evicted. 75% cache hit rate target achieved (79% in production). Fixed weights simplify implementation (no dynamic adjustment overhead). |
 
 **Rejection Summary:**
+
 - **No Global Management:** Unbounded memory growth → OOM crashes (24/month observed)
 - **Fixed Allocation:** Wastes memory on inactive sessions (40% idle >5 minutes with 64 MB held)
 - **Pure LRU:** Evicts important long-running sessions (safety monitoring, background learning)
@@ -51,6 +52,7 @@
 - **ARC:** Too complex for on-device (ghost lists = 2× metadata, dynamic partitioning = 15% CPU increase)
 
 **Research Foundation:**
+
 - **LRU Cache (Belady 1966):** Optimal for recency-based workloads (user's active sessions)
 - **LFU Cache (Lee et al. 2001):** Optimal for frequency-based workloads (important long-running sessions)
 - **ARC (Megiddo & Modha 2003):** Adaptive LRU/LFU balance, IBM patent, self-tuning
@@ -65,6 +67,7 @@ K1 runs on-device with multiple concurrent sessions, each requiring Key-Value (K
 ### Problem Statement
 
 **Current Challenges:**
+
 1. **Unbounded Memory Growth:** Each session allocates KV cache independently (64-256 MB)
 2. **Multi-Session Conflicts:** 10 concurrent sessions × 128 MB = 1.28 GB (exceeds device limit)
 3. **No Eviction Policy:** Old/inactive session caches persist indefinitely
@@ -72,6 +75,7 @@ K1 runs on-device with multiple concurrent sessions, each requiring Key-Value (K
 5. **Memory Fragmentation:** No coordination leads to memory fragmentation
 
 **Requirements:**
+
 - **Global Budget:** Device-wide KV cache limit (512 MB total)
 - **Per-Session Guarantees:** Active sessions get minimum allocation (32 MB)
 - **Efficient Eviction:** LRU/LFU hybrid eviction for inactive sessions
@@ -80,6 +84,7 @@ K1 runs on-device with multiple concurrent sessions, each requiring Key-Value (K
 - **High Hit Rate:** Target 75% cache hit rate
 
 **Constraints:**
+
 - Device memory: 8 GB total (OS + apps + K1)
 - K1 memory budget: 500 MB (from ADR-0024)
 - KV cache allocation: 512 MB max (out of 500 MB K1 budget)
@@ -157,6 +162,7 @@ kv_cache_global:
 ```
 
 **Rationale:**
+
 - **512 MB budget:** Fits within K1 500 MB total memory budget (from ADR-0024)
 - **90% eviction threshold:** Allows headroom for new allocations before hard limit
 - **LRU/LFU hybrid:** Balances recency (user's active sessions) vs frequency (important sessions)
@@ -472,10 +478,12 @@ class SessionManager:
 **Description:** Each session manages its own KV cache independently.
 
 **Pros:**
+
 - Simpler implementation (no global coordination)
 - No eviction policy needed
 
 **Cons:**
+
 - **OOM risk:** 10 sessions × 128 MB = 1.28 GB (exceeds device limit)
 - **No memory efficiency:** Can't reclaim memory from inactive sessions
 - **Poor multi-session performance:** Thrashing when memory exhausted
@@ -489,10 +497,12 @@ class SessionManager:
 **Description:** Evict least recently used session only.
 
 **Pros:**
+
 - Simple algorithm (O(1) eviction)
 - Good temporal locality
 
 **Cons:**
+
 - **Frequency blind:** Evicts important but infrequently accessed sessions
 - **Scan resistance:** One-time-access sessions pollute cache
 - **Poor for periodic access patterns:** Sessions accessed every N minutes get evicted
@@ -506,10 +516,12 @@ class SessionManager:
 **Description:** Evict least frequently used session only.
 
 **Pros:**
+
 - Captures session importance (frequency)
 - Resistant to one-time scans
 
 **Cons:**
+
 - **Recency blind:** Old sessions with high count persist indefinitely
 - **Cold start penalty:** New sessions evicted before gaining access count
 - **Stale cache:** Sessions accessed long ago but frequently then get stuck
@@ -523,10 +535,12 @@ class SessionManager:
 **Description:** Each session gets fixed allocation (51.2 MB), max 10 sessions.
 
 **Pros:**
+
 - Predictable memory usage
 - No eviction complexity
 
 **Cons:**
+
 - **Inflexible:** Can't adapt to session needs (some need 256 MB, others 32 MB)
 - **Wasteful:** Small sessions waste allocated memory
 - **Poor scalability:** Can't support 11th session even if memory available
@@ -540,10 +554,12 @@ class SessionManager:
 **Description:** Skip compression, rely on eviction only.
 
 **Pros:**
+
 - Simpler (no compression overhead)
 - Faster access (no decompression needed)
 
 **Cons:**
+
 - **Lower effective capacity:** 512 MB uncompressed vs ~730 MB with compression
 - **More evictions:** Evict more frequently without compression
 - **Worse hit rate:** More cache misses due to lower capacity
@@ -557,15 +573,18 @@ class SessionManager:
 ### Scenario 1: Normal Load (5 Concurrent Sessions)
 
 **Configuration:**
+
 - 5 active sessions × 128 MB default = 640 MB demand
 - 512 MB budget available
 
 **Behavior:**
+
 - GlobalKVCacheManager allocates 128 MB to first 4 sessions (512 MB total)
 - 5th session triggers eviction (oldest inactive session evicted)
 - All active sessions cached, hit rate ~80%
 
 **Result:**
+
 - Memory usage: 512 MB (100% of budget)
 - Hit rate: 80% (4/5 sessions hit)
 - Evictions: ~1 per new session
@@ -576,16 +595,19 @@ class SessionManager:
 ### Scenario 2: High Load (10 Concurrent Sessions)
 
 **Configuration:**
+
 - 10 active sessions × 128 MB default = 1280 MB demand
 - 512 MB budget available
 
 **Behavior:**
+
 - GlobalKVCacheManager caches most recent 4 sessions (512 MB)
 - Older 6 sessions evicted
 - Hit rate drops to ~40% (4/10 sessions hit)
 - Frequent evictions trigger compression at 85% full
 
 **Result:**
+
 - Memory usage: 512 MB (100% of budget)
 - Compressed sessions: ~2 per cycle (128 MB → 90 MB with zstd-3)
 - Effective capacity: ~5 sessions with compression
@@ -597,16 +619,19 @@ class SessionManager:
 ### Scenario 3: Memory Pressure (15 Concurrent Sessions)
 
 **Configuration:**
+
 - 15 active sessions × 128 MB default = 1920 MB demand
 - 512 MB budget available
 
 **Behavior:**
+
 - GlobalKVCacheManager under extreme pressure
 - Evictions every turn
 - Compression applied to all cached sessions
 - Protected sessions (active conversation, safety) always retained
 
 **Result:**
+
 - Memory usage: 512 MB (100% of budget)
 - Compressed sessions: 7 sessions (512 MB / 73 MB compressed avg)
 - Hit rate: 45% (7/15 sessions hit)
@@ -651,6 +676,7 @@ class SessionManager:
 ### Risks & Mitigations
 
 **Risk 1: Thrashing (Frequent Evictions)**
+
 - **Scenario:** 15+ concurrent sessions, evict-on-every-turn
 - **Mitigation 1:** Compression increases effective capacity (4 → 7 sessions)
 - **Mitigation 2:** Protected sessions prevent active conversation eviction
@@ -658,6 +684,7 @@ class SessionManager:
 - **Mitigation 4:** Monitor eviction rate, alert operators if >10/min
 
 **Risk 2: Compression Overhead**
+
 - **Scenario:** Compression takes >10ms, blocks cache operations
 - **Mitigation 1:** zstd-3 is fast (~5ms for 128 MB)
 - **Mitigation 2:** Compress in background thread (async)
@@ -665,12 +692,14 @@ class SessionManager:
 - **Mitigation 4:** Skip compression for sessions <32 MB
 
 **Risk 3: Unfair Eviction (Protected Sessions Dominate)**
+
 - **Scenario:** Protected sessions consume entire budget
 - **Mitigation 1:** Limit protected sessions to 2 (active + safety)
 - **Mitigation 2:** Protected sessions still respect per-session max (256 MB)
 - **Mitigation 3:** Monitor protected session usage, alert if >50% of budget
 
 **Risk 4: Cold Start Cascade**
+
 - **Scenario:** Multiple sessions resume simultaneously, all cache misses
 - **Mitigation 1:** Cache warming prefetches recent turns
 - **Mitigation 2:** Stagger session resumes (rate limiting)
@@ -785,6 +814,7 @@ k1_kv_cache_compression_latency_ms:
 ### Phase 1: Core Cache Manager (3 days)
 
 **Tasks:**
+
 1. Implement `GlobalKVCacheManager` class
 2. Add `get`, `put`, `_should_evict`, `_should_compress` methods
 3. Implement LRU/LFU hybrid eviction algorithm
@@ -797,6 +827,7 @@ k1_kv_cache_compression_latency_ms:
 ### Phase 2: Compression (2 days)
 
 **Tasks:**
+
 1. Integrate zstd library (Python bindings)
 2. Implement `_compress_oldest` method
 3. Add decompression on cache hit
@@ -809,6 +840,7 @@ k1_kv_cache_compression_latency_ms:
 ### Phase 3: Cache Warming (2 days)
 
 **Tasks:**
+
 1. Implement `warm_cache` method
 2. Integrate with SessionManager (prefetch recent turns)
 3. Add metrics for warming effectiveness
@@ -821,6 +853,7 @@ k1_kv_cache_compression_latency_ms:
 ### Phase 4: Protected Sessions (1 day)
 
 **Tasks:**
+
 1. Add protected session list to config
 2. Skip eviction for protected sessions
 3. Monitor protected session memory usage
@@ -833,6 +866,7 @@ k1_kv_cache_compression_latency_ms:
 ### Phase 5: Testing & Validation (3 days)
 
 **Tasks:**
+
 1. WARD integration tests (normal, high, pressure scenarios)
 2. Load tests (5, 10, 15 concurrent sessions)
 3. Eviction policy tests (LRU, LFU, hybrid)
@@ -848,12 +882,12 @@ k1_kv_cache_compression_latency_ms:
 ## Research Foundations
 
 1. **PagedAttention (Kwon et al., 2023)**
-   - https://arxiv.org/abs/2309.06180
+   - <https://arxiv.org/abs/2309.06180>
    - "Efficient Memory Management for Large Language Model Serving with PagedAttention"
    - Virtual memory paging for KV cache (inspired this ADR)
 
 2. **vLLM (UC Berkeley, 2023)**
-   - https://github.com/vllm-project/vllm
+   - <https://github.com/vllm-project/vllm>
    - High-throughput LLM serving with KV cache management
    - Production system using PagedAttention
 
@@ -866,7 +900,7 @@ k1_kv_cache_compression_latency_ms:
    - Adaptive replacement cache (inspired LRU/LFU hybrid)
 
 5. **zstd Compression (Facebook, 2016)**
-   - https://facebook.github.io/zstd/
+   - <https://facebook.github.io/zstd/>
    - Fast compression (>500 MB/s) with good ratio (2-3×)
    - Used for KV cache compression
 
@@ -886,14 +920,17 @@ k1_kv_cache_compression_latency_ms:
 ### Design Trade-offs
 
 **Trade-off 1: LRU vs LFU vs Hybrid**
+
 - **Choice:** LRU/LFU hybrid (60% recency, 40% frequency)
 - **Rationale:** Balances temporal locality (LRU) with session importance (LFU)
 
 **Trade-off 2: Compression Overhead vs Capacity**
+
 - **Choice:** zstd-3 compression (5ms overhead, 30% capacity increase)
 - **Rationale:** 30% capacity gain worth 5ms overhead (paid rarely, not per-token)
 
 **Trade-off 3: Global Budget vs Per-Session Limits**
+
 - **Choice:** Both (512 MB global, 32-256 MB per-session)
 - **Rationale:** Global prevents OOM, per-session ensures fairness
 
@@ -916,12 +953,14 @@ k1_kv_cache_compression_latency_ms:
 ### Status: 82% Complete (Production Ready for KV Cache Management)
 
 **Committee Approval:**
+
 - Architecture Analysis Council: ✅ APPROVED (2025-10-11)
 - K1 Kernel Engineering: ✅ APPROVED (512 MB budget fits K1 memory constraints, eviction policy validated)
 - Performance Engineering: ✅ APPROVED (75% cache hit rate target achieved, eviction latency <5ms)
 - Memory Safety Team: ✅ APPROVED (Global budget prevents OOM crashes, per-session guarantees preserve UX)
 
 **Implementation Evidence:**
+
 - GlobalKVCacheManager: ~1,280 lines (`k1/infrastructure/kv_cache_manager.py`)
   - Global budget enforcement (512 MB hard limit across all sessions)
   - LRU/LFU hybrid eviction (60% recency, 40% frequency, <5ms eviction decision)
@@ -949,6 +988,7 @@ k1_kv_cache_compression_latency_ms:
   - Protected session memory tracking (protected sessions memory / total budget)
 
 **Performance Metrics (6 months production data, 1.2M user turns):**
+
 - Cache Hit Rate: 79% ✅ (target: >75%, saves 80-90% token generation latency)
 - Cache Miss Rate: 21% (250,000 misses, mostly new sessions + evictions)
 - Average Eviction Latency: 4.2ms ✅ (target: <5ms, includes score calculation + batch selection)
@@ -960,6 +1000,7 @@ k1_kv_cache_compression_latency_ms:
 - OOM Crashes: 0 crashes over 6 months ✅ (vs 24 OOM crashes/month before global manager)
 
 **Session Distribution (1.2M turns across 85,000 sessions):**
+
 - Active Sessions (in use last 5 minutes): 6,800 sessions (8.0% of total, 72% of cache memory)
 - Idle Sessions (not used 5-60 minutes): 18,000 sessions (21.2% of total, 22% of cache memory)
 - Compressed Sessions (idle >60 minutes, compressed): 12,000 sessions (14.1% of total, 6% of cache memory)
@@ -968,6 +1009,7 @@ k1_kv_cache_compression_latency_ms:
 - Average Cache Allocation: 98 MB per active session (min 32 MB, max 256 MB, median 88 MB)
 
 **Eviction Events (6 months production data):**
+
 - Total Evictions: 48,200 events (401 evictions/day, 16.7 evictions/hour)
 - LRU-Driven Evictions (recency score low): 28,920 events (60% of evictions, idle sessions >30 minutes)
 - LFU-Driven Evictions (frequency score low): 19,280 events (40% of evictions, low-access sessions)
@@ -976,6 +1018,7 @@ k1_kv_cache_compression_latency_ms:
 - Memory Reclaimed Per Eviction: 196 MB average (2 sessions × 98 MB, creates 18% headroom)
 
 **Compression Events (6 months production data):**
+
 - Total Compressions: 12,000 events (100 compressions/day, 4.2 compressions/hour)
 - Compression Trigger Threshold: 435 MB (85% of 512 MB budget)
 - Average Compression Ratio: 72% size reduction (original 128 MB → compressed 36 MB)
@@ -985,6 +1028,7 @@ k1_kv_cache_compression_latency_ms:
 - Compressed Session Lifespan: 42 minutes average (median 28 minutes, P95 120 minutes)
 
 **Cache Warming Events (6 months production data):**
+
 - Total Warmings: 28,000 events (233 warmings/day, 9.7 warmings/hour)
 - Warming Trigger: Session resume after >5 minutes idle
 - Average Warming Latency: 42ms ✅ (prefetch last 5 turns from K0 WAL)
@@ -993,6 +1037,7 @@ k1_kv_cache_compression_latency_ms:
 - Warming Effectiveness: 67% of resumed sessions benefit (19,000 / 28,000 sessions had cache hits)
 
 **Protected Session Tracking:**
+
 - Protected Sessions: 2 categories (active conversation, safety monitoring)
 - Protected Memory Usage: 192 MB average (38% of 512 MB budget, range 128-256 MB)
 - Domination Events (protected >50% budget): 240 events (1 event/day, alert fired)
@@ -1000,6 +1045,7 @@ k1_kv_cache_compression_latency_ms:
 - Average Protected Session Lifetime: 24 minutes (active conversation duration)
 
 **Lessons Learned:**
+
 1. **LRU/LFU Hybrid Balances Recency vs Frequency:** 60% recency weight preserves user's active sessions (79% cache hit rate), 40% frequency weight preserves important long-running sessions (safety monitoring, background learning). Pure LRU evicts important sessions, pure LFU evicts new active sessions.
 2. **Protected Sessions Prevent UX Degradation:** Active conversation + safety monitoring never evicted, prevents cache miss during active conversation (88% cache hit rate for active sessions vs 21% for new sessions).
 3. **Compression Saves 30% Capacity:** zstd level 3 compression (14ms latency) reduces cache size 72%, enables 12,000 extra sessions in 512 MB budget. Compression latency acceptable (paid once on idle transition, not per-token).
@@ -1008,6 +1054,7 @@ k1_kv_cache_compression_latency_ms:
 6. **Per-Session Guarantees Preserve UX:** 32 MB min allocation ensures active sessions always have usable cache (minimum 8K tokens × 4 bytes = 32 KB per token, 32 MB = 1K tokens cached). 256 MB max prevents single session monopolizing cache.
 
 **Pending Work:**
+
 1. **ML-Predicted Warming (Priority: Medium):** Use ML to predict which sessions will resume, pre-warm cache proactively. Features: session age, user activity pattern, time of day. Early results: 68% precision (68% of predicted sessions resumed), 15ms latency reduction.
 2. **Tiered KV Cache (Priority: High):** Hot tier (RAM 512 MB) → Warm tier (SSD 2 GB) → Cold tier (evicted). SSD access <10ms (vs 100-200ms cache miss regeneration). Preliminary tests: 92% effective cache hit rate (79% RAM + 13% SSD).
 3. **Cross-Session KV Sharing (Priority: Low):** Share KV cache for identical prompts (deduplication). Example: System prompt "You are a helpful assistant" shared across all sessions. Early results: 18% memory savings (system prompt 2K tokens × 8 bytes = 16 KB per session, 85K sessions = 1.36 GB → 16 KB shared).

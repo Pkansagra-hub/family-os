@@ -120,7 +120,7 @@ K1 uses a **5-layer microkernel architecture** with **58 modules** organized by 
 **Purpose:** Agent lifecycle + AI integration (Model Hub) + tool execution + dialogue
 **Performance Budget:** Model Hub <50ms P95, Tools <3000ms P95, Agent Hire <600ms P95
 **Modules:** 22 modules (agents 8, model_hub 7, tools 5, dialogue 4)
-**ADR Coverage:** 50+ ADRs ([LAYER3_ADR_MAP.md](./l3_execution/LAYER3_ADR_MAP.md))
+**ADR Coverage:** 50+ ADRs ([LAYER3_ADR_MAP.md](../k1.backup/l3_execution/LAYER3_ADR_MAP.md))
 
 **Core Capabilities:**
 
@@ -180,7 +180,7 @@ K1 uses a **5-layer microkernel architecture** with **58 modules** organized by 
 **Purpose:** SessionState management + Actor Fabric + Learning Loop + Attention
 **Performance Budget:** <1ms SessionState ops, <1ms mailbox, <100ms learning
 **Modules:** 8 modules (session_state 3, actor_fabric 3, learning 1, attention 1)
-**ADR Coverage:** 35+ ADRs ([LAYER4_ADR_MAP.md](./l4_runtime/LAYER4_ADR_MAP.md))
+**ADR Coverage:** 35+ ADRs ([LAYER4_ADR_MAP.md](../k1.backup/l4_runtime/LAYER4_ADR_MAP.md))
 
 **Core Capabilities:**
 
@@ -251,7 +251,7 @@ K1 uses a **5-layer microkernel architecture** with **58 modules** organized by 
 **Purpose:** K0 Bridge + Resilience + Thermal + Event Bus + Observability + Config
 **Performance Budget:** <5ms event bus, <50ms K0 Bridge (GREEN), <10ms circuit breaker
 **Modules:** 19 modules (bridge_k0 5, resilience 3, thermal 2, event_bus 2, observability 4, config/connectors 3)
-**ADR Coverage:** 25+ ADRs ([LAYER5_ADR_MAP.md](./l5_infrastructure/LAYER5_ADR_MAP.md))
+**ADR Coverage:** 25+ ADRs ([LAYER5_ADR_MAP.md](../k1.backup/l5_infrastructure/LAYER5_ADR_MAP.md))
 
 **Core Capabilities:**
 
@@ -534,9 +534,9 @@ Use the layer ADR maps for navigation:
 
 - **Layer 1:** [LAYER1_ADR_MAP.md](./l1_input/LAYER1_ADR_MAP.md) — 4 modules, 40+ ADRs
 - **Layer 2:** [LAYER2_ADR_MAP.md](./l2_orchestration/LAYER2_ADR_MAP.md) — 7 modules, 35+ ADRs
-- **Layer 3:** [LAYER3_ADR_MAP.md](./l3_execution/LAYER3_ADR_MAP.md) — 22 modules, 50+ ADRs
-- **Layer 4:** [LAYER4_ADR_MAP.md](./l4_runtime/LAYER4_ADR_MAP.md) — 8 modules, 35+ ADRs
-- **Layer 5:** [LAYER5_ADR_MAP.md](./l5_infrastructure/LAYER5_ADR_MAP.md) — 19 modules, 25+ ADRs
+- **Layer 3:** [LAYER3_ADR_MAP.md](../k1.backup/l3_execution/LAYER3_ADR_MAP.md) — 22 modules, 50+ ADRs
+- **Layer 4:** [LAYER4_ADR_MAP.md](../k1.backup/l4_runtime/LAYER4_ADR_MAP.md) — 8 modules, 35+ ADRs
+- **Layer 5:** [LAYER5_ADR_MAP.md](../k1.backup/l5_infrastructure/LAYER5_ADR_MAP.md) — 19 modules, 25+ ADRs
 
 **Module Examples:**
 
@@ -638,14 +638,14 @@ ward test --path tests/
 
 - **[LAYER1_ADR_MAP.md](./l1_input/LAYER1_ADR_MAP.md)** — 4 modules, 40+ ADRs (stream_switch, operators, intent_router, meta_policy)
 - **[LAYER2_ADR_MAP.md](./l2_orchestration/LAYER2_ADR_MAP.md)** — 7 modules, 35+ ADRs (planner 4 sub-modules, orchestrator, protocol_monitor)
-- **[LAYER3_ADR_MAP.md](./l3_execution/LAYER3_ADR_MAP.md)** — 22 modules, 50+ ADRs (agents 8, model_hub 7, tools 5, dialogue 4)
-- **[LAYER4_ADR_MAP.md](./l4_runtime/LAYER4_ADR_MAP.md)** — 8 modules, 35+ ADRs (session_state 3, actor_fabric 3, learning 1, attention 1)
-- **[LAYER5_ADR_MAP.md](./l5_infrastructure/LAYER5_ADR_MAP.md)** — 19 modules, 25+ ADRs (bridge_k0 5, resilience 3, thermal 2, event_bus 2, observability 4, config/connectors 3)
+- **[LAYER3_ADR_MAP.md](../k1.backup/l3_execution/LAYER3_ADR_MAP.md)** — 22 modules, 50+ ADRs (agents 8, model_hub 7, tools 5, dialogue 4)
+- **[LAYER4_ADR_MAP.md](../k1.backup/l4_runtime/LAYER4_ADR_MAP.md)** — 8 modules, 35+ ADRs (session_state 3, actor_fabric 3, learning 1, attention 1)
+- **[LAYER5_ADR_MAP.md](../k1.backup/l5_infrastructure/LAYER5_ADR_MAP.md)** — 19 modules, 25+ ADRs (bridge_k0 5, resilience 3, thermal 2, event_bus 2, observability 4, config/connectors 3)
 
 ### Diagrams
 
-- **K1 Diagrams:** [architecture_diagrams/k1/](../architecture_diagrams/k1/) — Mermaid diagrams for K1 architecture
-- **K0 Diagrams:** [architecture_diagrams/k0/](../architecture_diagrams/k0/) — Mermaid diagrams for K0 architecture
+- **K1 Diagrams:** [architecture_diagrams/k1/](../architecture_diagrams/k1) — Mermaid diagrams for K1 architecture
+- **K0 Diagrams:** [architecture_diagrams/k0/](../architecture_diagrams/k0) — Mermaid diagrams for K0 architecture
 
 ---
 

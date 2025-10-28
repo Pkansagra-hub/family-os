@@ -1,0 +1,27 @@
+# Backpressure Tiers
+# Multi-tier backpressure configuration
+
+tiers:
+  tier1:  # Fast rejection (< 1ms)
+    watermark_high: 0.8
+    watermark_low: 0.6
+    action: reject
+
+  tier2:  # Queue management (< 10ms)
+    watermark_high: 0.9
+    watermark_low: 0.7
+    action: queue
+
+  tier3:  # Cascade signaling (< 100ms)
+    watermark_high: 0.95
+    watermark_low: 0.8
+    action: cascade
+
+global_limits:
+  max_concurrent_requests: 1000
+  max_queue_depth: 5000
+  cascade_timeout_ms: 5000
+
+monitoring:
+  watermark_tracking: true
+  cascade_events: true
