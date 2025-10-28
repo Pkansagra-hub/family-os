@@ -1,4 +1,4 @@
----
+ ---
 description: Testing standards and coverage requirements for MemoryOS components.
 applyTo: "tests/**/*.py,**/*test*.py"
 ---

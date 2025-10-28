@@ -88,11 +88,11 @@ error("Tool execution failed", component="tool_runner",
 
 ## K0 Observability Port Endpoints
 
-The K0 Bridge exposes these endpoints for K1 telemetry:
+The K0 observability stack exposes these endpoints for K1 telemetry:
 
-- **POST /k0/obs/metrics**: Receive Prometheus metrics (batched)
-- **POST /k0/obs/traces**: Receive OpenTelemetry spans (batched)
-- **POST /k0/obs/logs**: Receive structured logs (batched)
+- **GET /k0/metrics**: Prometheus-compatible metrics (scraped by external Prometheus)
+- **GET /k0/traces**: OpenTelemetry trace export (OTLP, pulled by external Tempo)
+- **GET /k0/logs**: Structured logs via logging system (pulled by external Loki)
 - **GET /k0/obs/health**: Health check (K1 pings every 30s)
 
 ## Batching & Performance
