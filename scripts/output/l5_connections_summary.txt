@@ -1,0 +1,250 @@
+================================================================================
+L5 INFRASTRUCTURE CONNECTIONS SUMMARY
+================================================================================
+
+Total stub files analyzed: 94
+Files with connections: 50
+Total upstream connections: 85
+Total downstream connections: 75
+
+CONNECTIONS BY COMPONENT:
+----------------------------------------
+
+ADMISSION:
+  Files: 3
+  Upstream connections: 3
+  Downstream connections: 3
+  Upstream:
+    - k1.l2_orchestration.orchestrator (system health signals)
+    - k1.l3_execution.request_router (incoming requests)
+    - k1.l5_infrastructure.admission.admission_controller (validation requests)
+  Downstream:
+    - k1.contracts.jsonschema.tasks (schema registry)
+    - k1.l3_execution.model_hub (task execution)
+    - k1.l5_infrastructure.scheduling.scheduler (admitted tasks)
+
+BACKPRESSURE:
+  Files: 9
+  Upstream connections: 9
+  Downstream connections: 9
+  Upstream:
+    - k1.l5_infrastructure.backpressure.backpressure_manager (Receives metrics)
+    - k1.l5_infrastructure.backpressure.backpressure_manager (Receives privacy band)
+    - k1.l5_infrastructure.backpressure.backpressure_manager (Receives tier signals)
+    - k1.l5_infrastructure.backpressure.cascade_actions (Receives action events)
+    - k1.l5_infrastructure.backpressure.privacy_override (Receives override events)
+    - k1.l5_infrastructure.backpressure.watermark_tracker (Receives depth readings)
+    - k1.l5_infrastructure.backpressure.watermark_tracker (Receives watermark breaches)
+    - k1.telemetry.metrics_collector (Receives metrics)
+    - k1.telemetry.metrics_collector (Receives queue depth, memory, CPU, thermal)
+  Downstream:
+    - Grafana dashboards (visualization)
+    - Prometheus server (metrics export)
+    - k1.api.gateway (HTTP 503 rejection)
+    - k1.api.gateway (Return HTTP 503)
+    - k1.api.gateway (Returns HTTP 503 or accepts request)
+    - k1.l2_orchestration.orchestrator (Cancel background tasks)
+    - k1.l3_execution.agent_fabric (Drain idle agents)
+    - k1.l5_infrastructure.backpressure.backpressure_manager (Reports breaches)
+    - k1.l5_infrastructure.placement.cascade_engine (Downgrade model tiers)
+
+BRIDGE_K0:
+  Files: 13
+  Upstream connections: 24
+  Downstream connections: 16
+  Upstream:
+    - K0 SSE Port: GET /k0/sse/stream (Server-Sent Events)
+    - k1.bridge_k0.batch_client (compress batches)
+    - k1.bridge_k0.command_client (compress command payloads)
+    - k1.bridge_k0.command_client (protect command requests)
+    - k1.bridge_k0.command_client.CommandClient (command operations)
+    - k1.bridge_k0.command_client.CommandClient (format selection)
+    - k1.bridge_k0.ports.* (port adapters)
+    - k1.bridge_k0.ports.query_port (protect query requests)
+    - k1.bridge_k0.protocol (compress before serialization)
+    - k1.bridge_k0.saga_logger (persists compensation logs)
+    - k1.l2_orchestration.orchestrator (agent coordination)
+    - k1.l2_orchestration.orchestrator (emits state deltas on decision)
+    - k1.l2_orchestration.orchestrator (logs orchestration plans)
+    - k1.l2_orchestration.orchestrator (query requests)
+    - k1.l2_orchestration.saga_coordinator (logs compensations during rollback)
+    - k1.l2_orchestration.saga_coordinator (logs saga decisions)
+    - k1.l2_orchestration.saga_coordinator (persists saga state)
+    - k1.l2_orchestration.sessions.SessionManager (SessionState deltas)
+    - k1.l3_execution.agents (context retrieval)
+    - k1.l3_execution.orchestrator.Orchestrator (tool results, plans)
+    - k1.l3_execution.tool_runner (logs tool compensation actions)
+    - k1.l4_runtime.session_state (SessionState delta generator)
+    - k1.l4_runtime.session_state (SessionState deltas)
+    - k1.l4_runtime.session_state.manager (tracks SessionState changes)
+  Downstream:
+    - K0 Command Port (HTTP POST /k0/command)
+    - K0 Command Port (P02 MemoryWrite → SAGA_LOG persistence)
+    - K0 Command Port (P02 MemoryWrite → SAGA_LOG topic)
+    - K0 Command Port (P02 MemoryWrite → StateDelta batches)
+    - K0 Command Port: POST /k0/command (P02 MemoryWrite)
+    - K0 HTTP/2 endpoints (localhost:8080 or production K0 cluster)
+    - K0 Query Port (P01 RecallQuery → SAGA_LOG retrieval)
+    - K0 Query Port: POST /k0/query (P01 RecallQuery)
+    - K0 ports (accepts both JSON and FlatBuffers)
+    - K0 ports (all external K0 communication)
+    - K0 ports (all payloads >4KB)
+    - k1.bridge_k0.command_client (send batched MemoryWrite commands)
+    - k1.bridge_k0.wal_writer (writes COMPENSATION_LOG to K0)
+    - k1.l2_orchestration.orchestrator (consolidation_complete events)
+    - k1.l5_infrastructure.event_bus (publish K0 events to K1 components)
+    - k1.l5_infrastructure.event_bus.EventBus (receipt events)
+
+CACHING:
+  Files: 7
+  Upstream connections: 11
+  Downstream connections: 7
+  Upstream:
+    - k1.api.gateway (Uses CacheIntegration for token validation)
+    - k1.l2_orchestration.orchestrator (Calls warm_on_startup during K1 init)
+    - k1.l2_orchestration.orchestrator (Uses CacheIntegration for revocation)
+    - k1.l3_execution.agents (Uses CacheIntegration for capability checks)
+    - k1.l5_infrastructure.caching.cache_integration (Uses PersistentCache)
+    - k1.l5_infrastructure.caching.cache_integration (uses PersistentCache)
+    - k1.l5_infrastructure.caching.cache_warmer (Uses pool for K0 queries)
+    - k1.l5_infrastructure.caching.persistent_cache (Uses InMemoryCache)
+    - k1.l5_infrastructure.caching.persistent_cache (Uses pool for K0 persistence)
+    - k1.l5_infrastructure.caching.persistent_cache (extends LocalKVCache)
+    - k1.l5_infrastructure.caching.persistent_cache (uses LocalKVCache)
+  Downstream:
+    - None (leaf component)
+    - k0.bus.core (Pooled connections to K0 bus)
+    - k0.ports.recall (Queries K0 storage)
+    - k1.l5_infrastructure.caching.in_memory_cache (Populates cache)
+    - k1.l5_infrastructure.caching.kv_cache_local (LocalKVCache implementation)
+    - k1.l5_infrastructure.caching.persistent_cache (PersistentCache implementation)
+    - k1.l5_infrastructure.caching.persistent_cache (Revocation persistence)
+
+EVENT_BUS:
+  Files: 3
+  Upstream connections: 0
+  Downstream connections: 0
+
+EXTENSIONS:
+  Files: 11
+  Upstream connections: 11
+  Downstream connections: 2
+  Upstream:
+    - All K1 components (configuration access)
+    - All K1 components (logging)
+    - All K1 components (metrics emission)
+    - All K1 components (security enforcement)
+    - All K1 components (trace emission)
+    - k1.l3_execution.agents (model placement)
+    - k1.l4_runtime components (data storage)
+    - k1.l4_runtime components (fault tolerance)
+    - k1.l4_runtime components (performance optimization)
+    - k1.l4_runtime components (thermal management)
+    - k1.l5_infrastructure.modules (plugin loading)
+  Downstream:
+    - All extension implementations (registration)
+    - k1.l5_infrastructure.extensions (extension registry)
+
+MODULES:
+  Files: 2
+  Upstream connections: 2
+  Downstream connections: 4
+  Upstream:
+    - Filesystem: k1/l5_infrastructure/modules/*/manifest.yaml
+    - k1.l5_infrastructure.modules.plugin_discovery (PluginDiscovery)
+  Downstream:
+    - Application code using plugins
+    - Extension points (ConfigProvider, MetricsExporter, etc.)
+    - k1.l5_infrastructure.extensions (extension point registration)
+    - k1.l5_infrastructure.modules.plugin_loader (provides plugin metadata)
+
+OBSERVABILITY:
+  Files: 4
+  Upstream connections: 0
+  Downstream connections: 0
+
+PLACEMENT:
+  Files: 7
+  Upstream connections: 13
+  Downstream connections: 16
+  Upstream:
+    - k1.l2_orchestration.orchestrator (initiates inference tasks)
+    - k1.l2_orchestration.orchestrator (placement decisions)
+    - k1.l3_execution.model_hub (receives placement requests)
+    - k1.l3_execution.model_hub (routes requests to providers)
+    - k1.l5_infrastructure.placement.cascade_engine (Privacy enforcement)
+    - k1.l5_infrastructure.placement.cascade_engine (Reports placement decisions)
+    - k1.l5_infrastructure.placement.cascade_engine (Tier evaluation)
+    - k1.l5_infrastructure.placement.cascade_engine (checks budget before routing)
+    - k1.l5_infrastructure.placement.cascade_engine (checks circuit state)
+    - k1.l5_infrastructure.placement.circuit_breaker (Reports circuit state)
+    - k1.l5_infrastructure.placement.cost_tracker (Reports cost data)
+    - k1.l5_infrastructure.placement.provider_adapters (reports failures)
+    - k1.l5_infrastructure.placement.provider_adapters (reports token usage)
+  Downstream:
+    - Anthropic API (api.anthropic.com) - using user's API key
+    - Google Gemini API (generativelanguage.googleapis.com) - using user's API key
+    - Grafana dashboards (visualizes metrics)
+    - OpenAI API (api.openai.com) - using user's API key
+    - Prometheus server (scrapes /metrics endpoint)
+    - k1.l3_execution.ui_notifications (sends budget warnings)
+    - k1.l4_runtime.device.detector (Hardware enumeration)
+    - k1.l5_infrastructure.placement.provider_adapters (routes to OpenAI/Anthropic/Google)
+    - k1.l5_infrastructure.resilience.circuit_breaker_manager (state machine)
+    - k1.l5_infrastructure.thermal.monitor (Thermal constraints)
+    - k1.l5_infrastructure.thermal.monitor (checks thermal state before local inference)
+    - k1.security.credential_manager (OAuth token refresh)
+    - k1.security.pii.masker (Data masking)
+    - k1.security.privacy.classifier (Privacy band lookup)
+    - k1.storage.kv.redis_client (persists daily/monthly usage)
+    - k1.telemetry.audit_logger (Audit trail)
+
+RATE_LIMITING:
+  Files: 3
+  Upstream connections: 3
+  Downstream connections: 4
+  Upstream:
+    - k1.api.gateway (Rate limit API requests)
+    - k1.l2_orchestration.orchestrator (Rate limit orchestration calls)
+    - k1.l3_execution.agents (Rate limit agent operations)
+  Downstream:
+    - Redis (distributed quota state)
+    - Redis (distributed token bucket state)
+    - k0.bus (fallback local state)
+    - k1.l5_infrastructure.rate_limiting.token_bucket (Token consumption)
+
+RESILIENCE:
+  Files: 16
+  Upstream connections: 0
+  Downstream connections: 0
+
+SCHEDULING:
+  Files: 2
+  Upstream connections: 4
+  Downstream connections: 3
+  Upstream:
+    - k1.api.gateway (API requests as tasks)
+    - k1.l2_orchestration.orchestrator (Submit tasks for scheduling)
+    - k1.l3_execution.agents (Agent operations as tasks)
+    - k1.l5_infrastructure.scheduling.scheduler (TaskScheduler uses WeightedQueue internally)
+  Downstream:
+    - k1.l3_execution.executor (Dequeued tasks sent for execution)
+    - k1.l3_execution.executor (Execute dequeued tasks)
+    - k1.l5_infrastructure.backpressure (Check watermarks before enqueue)
+
+SERIALIZATION:
+  Files: 6
+  Upstream connections: 0
+  Downstream connections: 0
+
+STORAGE:
+  Files: 3
+  Upstream connections: 0
+  Downstream connections: 0
+
+THERMAL:
+  Files: 5
+  Upstream connections: 0
+  Downstream connections: 0
+
+================================================================================

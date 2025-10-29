@@ -447,9 +447,7 @@ class CircuitBreaker:
         # 3. Log INFO: circuit half_open
         # 4. Emit metric: k1_k0_bridge_circuit_breaker_state = 2
         self.state = CircuitState.HALF_OPEN
-        self._logger.info(
-            "circuit_half_open", recovery_timeout_ms=self.config.recovery_timeout_ms
-        )
+        self._logger.info("circuit_half_open", recovery_timeout_ms=self.config.recovery_timeout_ms)
         pass
 
     async def _transition_to_closed(self) -> None:

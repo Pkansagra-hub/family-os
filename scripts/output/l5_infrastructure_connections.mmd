@@ -1,0 +1,286 @@
+---
+title: L5 Infrastructure Module Connections
+---
+
+graph TD
+
+    ext_k1_l3_execution_request_router["k1.l3_execution.request_router<br/>(External)"]
+    ext_k1_l2_orchestration_orchestrator["k1.l2_orchestration.orchestrator<br/>(External)"]
+    ext_k1_l3_execution_model_hub["k1.l3_execution.model_hub<br/>(External)"]
+    ext_k1_contracts_jsonschema_tasks["k1.contracts.jsonschema.tasks<br/>(External)"]
+    ext_k1_telemetry_metrics_collector["k1.telemetry.metrics_collector<br/>(External)"]
+    ext_k1_api_gateway["k1.api.gateway<br/>(External)"]
+    ext_k1_l3_execution_agent_fabric["k1.l3_execution.agent_fabric<br/>(External)"]
+    ext_Prometheus_server["Prometheus_server<br/>(External)"]
+    ext_Grafana_dashboards["Grafana_dashboards<br/>(External)"]
+    ext_k1_l4_runtime_session_state["k1.l4_runtime.session_state<br/>(External)"]
+    ext_k1_bridge_k0_command_client["k1.bridge_k0.command_client<br/>(External)"]
+    ext_k1_bridge_k0_ports_query_port["k1.bridge_k0.ports.query_port<br/>(External)"]
+    ext_K0_ports["K0_ports<br/>(External)"]
+    ext_k1_l2_orchestration_sessions_SessionManager["k1.l2_orchestration.sessions.SessionManager<br/>(External)"]
+    ext_k1_l3_execution_orchestrator_Orchestrator["k1.l3_execution.orchestrator.Orchestrator<br/>(External)"]
+    ext_K0_Command_Port["K0_Command_Port<br/>(External)"]
+    ext_k1_bridge_k0_batch_client["k1.bridge_k0.batch_client<br/>(External)"]
+    ext_k1_bridge_k0_protocol["k1.bridge_k0.protocol<br/>(External)"]
+    ext_k1_bridge_k0_command_client_CommandClient["k1.bridge_k0.command_client.CommandClient<br/>(External)"]
+    ext_k1_bridge_k0_ports__["k1.bridge_k0.ports.*<br/>(External)"]
+    ext_K0_HTTP_2_endpoints["K0_HTTP/2_endpoints<br/>(External)"]
+    ext_K0_Command_Port__POST__k0_command["K0_Command_Port:_POST_/k0/command<br/>(External)"]
+    ext_k1_l3_execution_agents["k1.l3_execution.agents<br/>(External)"]
+    ext_K0_Query_Port__POST__k0_query["K0_Query_Port:_POST_/k0/query<br/>(External)"]
+    ext_K0_SSE_Port__GET__k0_sse_stream["K0_SSE_Port:_GET_/k0/sse/stream<br/>(External)"]
+    ext_k1_l2_orchestration_saga_coordinator["k1.l2_orchestration.saga_coordinator<br/>(External)"]
+    ext_k1_l3_execution_tool_runner["k1.l3_execution.tool_runner<br/>(External)"]
+    ext_k1_bridge_k0_wal_writer["k1.bridge_k0.wal_writer<br/>(External)"]
+    ext_k1_bridge_k0_saga_logger["k1.bridge_k0.saga_logger<br/>(External)"]
+    ext_K0_Query_Port["K0_Query_Port<br/>(External)"]
+    ext_k1_l4_runtime_session_state_manager["k1.l4_runtime.session_state.manager<br/>(External)"]
+    ext_k0_ports_recall["k0.ports.recall<br/>(External)"]
+    ext_k0_bus_core["k0.bus.core<br/>(External)"]
+    ext_None["None<br/>(External)"]
+    ext_k1_l4_runtime_components["k1.l4_runtime_components<br/>(External)"]
+    ext_All_K1_components["All_K1_components<br/>(External)"]
+    ext_All_extension_implementations["All_extension_implementations<br/>(External)"]
+    ext_Filesystem__k1_l5_infrastructure_modules___manifest_yaml["Filesystem:_k1/l5_infrastructure/modules/*/manifest.yaml<br/>(External)"]
+    ext_Extension_points["Extension_points<br/>(External)"]
+    ext_Application_code_using_plugins["Application_code_using_plugins<br/>(External)"]
+    ext_k1_l4_runtime_device_detector["k1.l4_runtime.device.detector<br/>(External)"]
+    ext_k1_security_credential_manager["k1.security.credential_manager<br/>(External)"]
+    ext_k1_storage_kv_redis_client["k1.storage.kv.redis_client<br/>(External)"]
+    ext_k1_l3_execution_ui_notifications["k1.l3_execution.ui_notifications<br/>(External)"]
+    ext_k1_security_privacy_classifier["k1.security.privacy.classifier<br/>(External)"]
+    ext_k1_security_pii_masker["k1.security.pii.masker<br/>(External)"]
+    ext_k1_telemetry_audit_logger["k1.telemetry.audit_logger<br/>(External)"]
+    ext_OpenAI_API["OpenAI_API<br/>(External)"]
+    ext_Anthropic_API["Anthropic_API<br/>(External)"]
+    ext_Google_Gemini_API["Google_Gemini_API<br/>(External)"]
+    ext_Redis["Redis<br/>(External)"]
+    ext_k0_bus["k0.bus<br/>(External)"]
+    ext_k1_l3_execution_executor["k1.l3_execution.executor<br/>(External)"]
+    subgraph ADMISSION
+        admission_admission_controller["admission\nadmission_controller"]
+        admission_task_validator["admission\ntask_validator"]
+    end
+
+    subgraph BACKPRESSURE
+        backpressure_backpressure_manager["backpressure\nbackpressure_manager"]
+        backpressure_cascade_actions["backpressure\ncascade_actions"]
+        backpressure_metrics["backpressure\nmetrics"]
+        backpressure_privacy_override["backpressure\nprivacy_override"]
+        backpressure_watermark_tracker["backpressure\nwatermark_tracker"]
+    end
+
+    subgraph BRIDGE_K0
+        bridge_k0_batch_client["bridge_k0\nbatch_client"]
+        bridge_k0_circuit_breaker["bridge_k0\ncircuit_breaker"]
+        bridge_k0_command_client["bridge_k0\ncommand_client"]
+        bridge_k0_compression["bridge_k0\ncompression"]
+        bridge_k0_http2_client["bridge_k0\nhttp2_client"]
+        bridge_k0_ports_command_port["bridge_k0\nports\ncommand_port"]
+        bridge_k0_ports_query_port["bridge_k0\nports\nquery_port"]
+        bridge_k0_ports_sse_port["bridge_k0\nports\nsse_port"]
+        bridge_k0_protocol["bridge_k0\nprotocol"]
+        bridge_k0_saga_logger["bridge_k0\nsaga_logger"]
+        bridge_k0_saga_persistence["bridge_k0\nsaga_persistence"]
+        bridge_k0_state_delta_emitter["bridge_k0\nstate_delta_emitter"]
+        bridge_k0_wal_writer["bridge_k0\nwal_writer"]
+    end
+
+    subgraph CACHING
+        caching_cache_integration["caching\ncache_integration"]
+        caching_cache_warmer["caching\ncache_warmer"]
+        caching_connection_pool["caching\nconnection_pool"]
+        caching_in_memory_cache["caching\nin_memory_cache"]
+        caching_kv_cache["caching\nkv_cache"]
+        caching_kv_cache_local["caching\nkv_cache_local"]
+    end
+
+    subgraph EXTENSIONS
+        extensions_circuit_breaker_strategy["extensions\ncircuit_breaker_strategy"]
+        extensions_config_provider["extensions\nconfig_provider"]
+        extensions_extension_registry["extensions\nextension_registry"]
+        extensions_log_handler["extensions\nlog_handler"]
+        extensions_metrics_exporter["extensions\nmetrics_exporter"]
+        extensions_performance_optimizer["extensions\nperformance_optimizer"]
+        extensions_placement_strategy["extensions\nplacement_strategy"]
+        extensions_security_policy["extensions\nsecurity_policy"]
+        extensions_storage_tier["extensions\nstorage_tier"]
+        extensions_thermal_policy["extensions\nthermal_policy"]
+        extensions_trace_exporter["extensions\ntrace_exporter"]
+    end
+
+    subgraph MODULES
+        modules_plugin_discovery["modules\nplugin_discovery"]
+        modules_plugin_loader["modules\nplugin_loader"]
+    end
+
+    subgraph PLACEMENT
+        placement_capability_matcher["placement\ncapability_matcher"]
+        placement_cascade_engine["placement\ncascade_engine"]
+        placement_circuit_breaker["placement\ncircuit_breaker"]
+        placement_cost_tracker["placement\ncost_tracker"]
+        placement_metrics["placement\nmetrics"]
+        placement_placement_policy["placement\nplacement_policy"]
+        placement_provider_adapters["placement\nprovider_adapters"]
+    end
+
+    subgraph RATE_LIMITING
+        rate_limiting_rate_limiter["rate_limiting\nrate_limiter"]
+        rate_limiting_token_bucket["rate_limiting\ntoken_bucket"]
+    end
+
+    subgraph SCHEDULING
+        scheduling_scheduler["scheduling\nscheduler"]
+        scheduling_weighted_queue["scheduling\nweighted_queue"]
+    end
+
+    %% Connections
+    admission_admission_controller --> admission_task_validator
+    admission_admission_controller --> ext_k1_l3_execution_model_hub
+    admission_admission_controller --> scheduling_scheduler
+    admission_task_validator --> ext_k1_contracts_jsonschema_tasks
+    backpressure_backpressure_manager --> backpressure_cascade_actions
+    backpressure_backpressure_manager --> backpressure_metrics
+    backpressure_backpressure_manager --> backpressure_privacy_override
+    backpressure_backpressure_manager --> ext_k1_api_gateway
+    backpressure_backpressure_manager --> ext_k1_l2_orchestration_orchestrator
+    backpressure_backpressure_manager --> ext_k1_l3_execution_agent_fabric
+    backpressure_cascade_actions --> backpressure_metrics
+    backpressure_cascade_actions --> ext_k1_api_gateway
+    backpressure_cascade_actions --> ext_k1_l2_orchestration_orchestrator
+    backpressure_cascade_actions --> placement_cascade_engine
+    backpressure_metrics --> ext_Grafana_dashboards
+    backpressure_metrics --> ext_Prometheus_server
+    backpressure_privacy_override --> backpressure_metrics
+    backpressure_privacy_override --> ext_k1_api_gateway
+    backpressure_watermark_tracker --> backpressure_backpressure_manager
+    backpressure_watermark_tracker --> backpressure_metrics
+    bridge_k0_batch_client --> ext_k1_bridge_k0_command_client
+    bridge_k0_circuit_breaker --> ext_K0_ports
+    bridge_k0_command_client --> ext_K0_Command_Port
+    bridge_k0_compression --> ext_K0_ports
+    bridge_k0_http2_client --> ext_K0_HTTP_2_endpoints
+    bridge_k0_ports_command_port --> ext_K0_Command_Port__POST__k0_command
+    bridge_k0_ports_query_port --> ext_K0_Query_Port__POST__k0_query
+    bridge_k0_ports_sse_port --> ext_k1_l2_orchestration_orchestrator
+    bridge_k0_protocol --> ext_K0_ports
+    bridge_k0_saga_logger --> ext_k1_bridge_k0_wal_writer
+    bridge_k0_saga_persistence --> ext_K0_Command_Port
+    bridge_k0_saga_persistence --> ext_K0_Query_Port
+    bridge_k0_state_delta_emitter --> ext_K0_Command_Port
+    bridge_k0_wal_writer --> ext_K0_Command_Port
+    caching_cache_integration --> caching_in_memory_cache
+    caching_cache_integration --> caching_kv_cache
+    caching_cache_integration --> caching_persistent_cache
+    caching_cache_warmer --> caching_connection_pool
+    caching_cache_warmer --> caching_in_memory_cache
+    caching_cache_warmer --> ext_k0_ports_recall
+    caching_connection_pool --> ext_k0_bus_core
+    caching_in_memory_cache --> ext_None
+    caching_kv_cache --> caching_kv_cache_local
+    caching_kv_cache --> caching_persistent_cache
+    caching_kv_cache_local --> ext_None
+    caching_persistent_cache --> caching_connection_pool
+    caching_persistent_cache --> caching_in_memory_cache
+    caching_persistent_cache --> caching_kv_cache
+    caching_persistent_cache --> caching_kv_cache_local
+    ext_All_K1_components --> extensions_config_provider
+    ext_All_K1_components --> extensions_log_handler
+    ext_All_K1_components --> extensions_metrics_exporter
+    ext_All_K1_components --> extensions_security_policy
+    ext_All_K1_components --> extensions_trace_exporter
+    ext_Filesystem__k1_l5_infrastructure_modules___manifest_yaml --> modules_plugin_discovery
+    ext_K0_SSE_Port__GET__k0_sse_stream --> bridge_k0_ports_sse_port
+    ext_k1_api_gateway --> caching_cache_integration
+    ext_k1_api_gateway --> rate_limiting_rate_limiter
+    ext_k1_api_gateway --> rate_limiting_token_bucket
+    ext_k1_api_gateway --> scheduling_scheduler
+    ext_k1_bridge_k0_batch_client --> bridge_k0_compression
+    ext_k1_bridge_k0_command_client --> bridge_k0_circuit_breaker
+    ext_k1_bridge_k0_command_client --> bridge_k0_compression
+    ext_k1_bridge_k0_command_client_CommandClient --> bridge_k0_http2_client
+    ext_k1_bridge_k0_command_client_CommandClient --> bridge_k0_protocol
+    ext_k1_bridge_k0_ports__ --> bridge_k0_http2_client
+    ext_k1_bridge_k0_ports__ --> bridge_k0_protocol
+    ext_k1_bridge_k0_ports_query_port --> bridge_k0_circuit_breaker
+    ext_k1_bridge_k0_protocol --> bridge_k0_compression
+    ext_k1_bridge_k0_saga_logger --> bridge_k0_saga_persistence
+    ext_k1_l2_orchestration_orchestrator --> admission_admission_controller
+    ext_k1_l2_orchestration_orchestrator --> bridge_k0_batch_client
+    ext_k1_l2_orchestration_orchestrator --> bridge_k0_ports_command_port
+    ext_k1_l2_orchestration_orchestrator --> bridge_k0_ports_query_port
+    ext_k1_l2_orchestration_orchestrator --> bridge_k0_state_delta_emitter
+    ext_k1_l2_orchestration_orchestrator --> bridge_k0_wal_writer
+    ext_k1_l2_orchestration_orchestrator --> caching_cache_integration
+    ext_k1_l2_orchestration_orchestrator --> caching_cache_warmer
+    ext_k1_l2_orchestration_orchestrator --> placement_cascade_engine
+    ext_k1_l2_orchestration_orchestrator --> placement_provider_adapters
+    ext_k1_l2_orchestration_orchestrator --> rate_limiting_rate_limiter
+    ext_k1_l2_orchestration_orchestrator --> rate_limiting_token_bucket
+    ext_k1_l2_orchestration_orchestrator --> scheduling_scheduler
+    ext_k1_l2_orchestration_saga_coordinator --> bridge_k0_saga_logger
+    ext_k1_l2_orchestration_saga_coordinator --> bridge_k0_saga_persistence
+    ext_k1_l2_orchestration_saga_coordinator --> bridge_k0_wal_writer
+    ext_k1_l2_orchestration_sessions_SessionManager --> bridge_k0_command_client
+    ext_k1_l3_execution_agents --> bridge_k0_ports_query_port
+    ext_k1_l3_execution_agents --> caching_cache_integration
+    ext_k1_l3_execution_agents --> extensions_placement_strategy
+    ext_k1_l3_execution_agents --> rate_limiting_rate_limiter
+    ext_k1_l3_execution_agents --> rate_limiting_token_bucket
+    ext_k1_l3_execution_agents --> scheduling_scheduler
+    ext_k1_l3_execution_model_hub --> placement_cascade_engine
+    ext_k1_l3_execution_model_hub --> placement_provider_adapters
+    ext_k1_l3_execution_orchestrator_Orchestrator --> bridge_k0_command_client
+    ext_k1_l3_execution_request_router --> admission_admission_controller
+    ext_k1_l3_execution_tool_runner --> bridge_k0_saga_logger
+    ext_k1_l4_runtime_components --> extensions_circuit_breaker_strategy
+    ext_k1_l4_runtime_components --> extensions_performance_optimizer
+    ext_k1_l4_runtime_components --> extensions_storage_tier
+    ext_k1_l4_runtime_components --> extensions_thermal_policy
+    ext_k1_l4_runtime_session_state --> bridge_k0_batch_client
+    ext_k1_l4_runtime_session_state --> bridge_k0_ports_command_port
+    ext_k1_l4_runtime_session_state_manager --> bridge_k0_state_delta_emitter
+    ext_k1_telemetry_metrics_collector --> backpressure_backpressure_manager
+    ext_k1_telemetry_metrics_collector --> backpressure_watermark_tracker
+    extensions_extension_registry --> ext_All_extension_implementations
+    modules_plugin_discovery --> modules_plugin_loader
+    modules_plugin_loader --> ext_Application_code_using_plugins
+    modules_plugin_loader --> ext_Extension_points
+    placement_capability_matcher --> ext_k1_l4_runtime_device_detector
+    placement_cascade_engine --> placement_capability_matcher
+    placement_cascade_engine --> placement_circuit_breaker
+    placement_cascade_engine --> placement_cost_tracker
+    placement_cascade_engine --> placement_metrics
+    placement_cascade_engine --> placement_placement_policy
+    placement_cascade_engine --> placement_provider_adapters
+    placement_circuit_breaker --> ext_k1_security_credential_manager
+    placement_circuit_breaker --> placement_metrics
+    placement_circuit_breaker --> resilience_circuit_breaker_manager
+    placement_cost_tracker --> ext_k1_l3_execution_ui_notifications
+    placement_cost_tracker --> ext_k1_storage_kv_redis_client
+    placement_cost_tracker --> placement_metrics
+    placement_metrics --> ext_Grafana_dashboards
+    placement_metrics --> ext_Prometheus_server
+    placement_placement_policy --> ext_k1_security_pii_masker
+    placement_placement_policy --> ext_k1_security_privacy_classifier
+    placement_placement_policy --> ext_k1_telemetry_audit_logger
+    placement_provider_adapters --> ext_Anthropic_API
+    placement_provider_adapters --> ext_Google_Gemini_API
+    placement_provider_adapters --> ext_OpenAI_API
+    placement_provider_adapters --> placement_circuit_breaker
+    placement_provider_adapters --> placement_cost_tracker
+    rate_limiting_rate_limiter --> ext_Redis
+    rate_limiting_rate_limiter --> rate_limiting_token_bucket
+    rate_limiting_token_bucket --> ext_Redis
+    rate_limiting_token_bucket --> ext_k0_bus
+    scheduling_scheduler --> ext_k1_l3_execution_executor
+    scheduling_scheduler --> scheduling_weighted_queue
+    scheduling_weighted_queue --> ext_k1_l3_execution_executor
+
+    %% Styling
+    classDef l5Infrastructure fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef external fill:#fff3e0,stroke:#e65100,stroke-width:2px
+
+    %% Apply classes
+    class backpressure_backpressure_manager,caching_cache_integration,caching_in_memory_cache,backpressure_cascade_actions,scheduling_scheduler,extensions_security_policy,bridge_k0_ports_sse_port,bridge_k0_http2_client,extensions_config_provider,scheduling_weighted_queue,placement_cost_tracker,extensions_log_handler,bridge_k0_state_delta_emitter,bridge_k0_saga_logger,bridge_k0_batch_client,extensions_extension_registry,bridge_k0_ports_command_port,rate_limiting_token_bucket,extensions_performance_optimizer,backpressure_privacy_override,extensions_thermal_policy,bridge_k0_circuit_breaker,backpressure_watermark_tracker,bridge_k0_command_client,bridge_k0_protocol,caching_cache_warmer,extensions_metrics_exporter,bridge_k0_compression,caching_kv_cache,modules_plugin_loader,placement_provider_adapters,admission_task_validator,admission_admission_controller,placement_capability_matcher,bridge_k0_saga_persistence,caching_kv_cache_local,extensions_trace_exporter,rate_limiting_rate_limiter,placement_placement_policy,placement_metrics,placement_circuit_breaker,backpressure_metrics,modules_plugin_discovery,extensions_placement_strategy,bridge_k0_wal_writer,extensions_storage_tier,bridge_k0_ports_query_port,placement_cascade_engine,caching_connection_pool,extensions_circuit_breaker_strategy l5Infrastructure
+    class ext_k0_ports_recall,ext_Anthropic_API,ext_k1_bridge_k0_wal_writer,ext_Prometheus_server,ext_k1_l3_execution_executor,ext_k1_bridge_k0_batch_client,ext_k1_bridge_k0_command_client_CommandClient,ext_k1_l4_runtime_session_state,ext_OpenAI_API,ext_k1_l3_execution_agents,ext_None,ext_k1_l3_execution_model_hub,ext_k1_l3_execution_agent_fabric,ext_All_extension_implementations,ext_k1_l2_orchestration_saga_coordinator,ext_k1_contracts_jsonschema_tasks,ext_k1_l3_execution_ui_notifications,ext_k1_bridge_k0_saga_logger,ext_Grafana_dashboards,ext_k1_telemetry_audit_logger,ext_K0_Command_Port__POST__k0_command,ext_All_K1_components,ext_K0_HTTP_2_endpoints,ext_k1_api_gateway,ext_k1_bridge_k0_command_client,ext_k1_l4_runtime_session_state_manager,ext_K0_Query_Port,ext_k1_l2_orchestration_orchestrator,ext_k1_l4_runtime_device_detector,ext_k1_security_credential_manager,ext_k1_l3_execution_orchestrator_Orchestrator,ext_k1_l3_execution_tool_runner,ext_k1_bridge_k0_protocol,ext_Google_Gemini_API,ext_k1_l2_orchestration_sessions_SessionManager,ext_k0_bus,ext_k1_telemetry_metrics_collector,ext_k1_security_privacy_classifier,ext_K0_SSE_Port__GET__k0_sse_stream,ext_Redis,ext_Application_code_using_plugins,ext_k1_bridge_k0_ports_query_port,ext_k0_bus_core,ext_K0_Query_Port__POST__k0_query,ext_Filesystem__k1_l5_infrastructure_modules___manifest_yaml,ext_k1_l3_execution_request_router,ext_K0_ports,ext_k1_l4_runtime_components,ext_k1_security_pii_masker,ext_k1_bridge_k0_ports__,ext_k1_storage_kv_redis_client,ext_K0_Command_Port,ext_Extension_points external

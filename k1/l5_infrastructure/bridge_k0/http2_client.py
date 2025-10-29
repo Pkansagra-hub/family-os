@@ -55,11 +55,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import ssl
 import time
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import httpx
 
@@ -70,7 +71,10 @@ try:  # Best-effort observability integration (Gate 3 requirement)
         emit_gauge,
         emit_histogram,
     )
-except (ModuleNotFoundError, ImportError):  # pragma: no cover - observability package not yet implemented
+except (
+    ModuleNotFoundError,
+    ImportError,
+):  # pragma: no cover - observability package not yet implemented
 
     class _NullSpan:
         def __init__(self, *_args, **_kwargs):
@@ -142,8 +146,9 @@ class HTTP2Config:
         request_timeout_s: Request timeout in seconds
         keepalive_timeout_s: Keepalive timeout in seconds
         max_connections_per_pool: Max connections per host (connection pooling)
-        max_concurrent_streams: Max concurrent HTTP/2 streams (multiplexing)
+        max_concurrent_streams: Max concurrent HTTP/2 streams (client-side cap; effective limit may be lower based on server SETTINGS)
         pool_size_mb: Connection pool memory budget (MB)
+        health_path: Health check endpoint path (default: /healthz)
     """
 
     k0_host: str = DEFAULT_CONFIG["k0_host"]
@@ -159,6 +164,7 @@ class HTTP2Config:
     keepalive_interval_s: float = DEFAULT_CONFIG["keepalive_interval_s"]
     reconnect_backoff_base_s: float = DEFAULT_CONFIG["reconnect_backoff_base_s"]
     max_reconnect_attempts: int = DEFAULT_CONFIG["max_reconnect_attempts"]
+    health_path: str = "/healthz"  # NEW: configurable health path
     transport: Optional[httpx.AsyncBaseTransport] = field(default=None, repr=False)
     # TODO(@infrastructure-team): Add TLS certificate paths (ADR-0001b)
 
@@ -188,7 +194,7 @@ class HTTP2Connection:
     Lifecycle:
         INIT → CONNECTING → CONNECTED → [DEGRADED] → CLOSING → CLOSED
 
-    Thread Safety: Yes (async-safe with asyncio locks)
+    Thread Safety: Async-safe (not thread-safe across threads)
     Async Safe: Yes (fully async/await compatible)
 
     Cognitive Trace:
@@ -203,15 +209,13 @@ class HTTP2Connection:
 
     Examples:
         >>> config = HTTP2Config(k0_host='localhost', k0_port=8080)
-        >>> connection = HTTP2Connection(config)
-        >>> await connection.connect()
-        >>> response = await connection.post(
-        ...     path='/k0/command',
-        ...     headers={'Content-Type': 'application/json'},
-        ...     body=b'{"command": "test"}'
-        ... )
+        >>> async with HTTP2Connection(config) as connection:
+        ...     response = await connection.post(
+        ...         path='/k0/command',
+        ...         headers={'Content-Type': 'application/json'},
+        ...         body=b'{"command": "test"}'
+        ...     )
         >>> print(f'Status: {response.status}, Body: {response.body}')
-        >>> await connection.close()
 
     References:
         - ADR-0001: K0/K1 Kernel Split
@@ -262,6 +266,13 @@ class HTTP2Connection:
         self._reconnect_attempts = 0
         self._reconnect_lock = asyncio.Lock()
 
+    async def __aenter__(self):
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
+
     async def connect(self) -> None:
         """
         Establish HTTP/2 connection to K0.
@@ -296,7 +307,7 @@ class HTTP2Connection:
         start_time = time.perf_counter()
 
         try:
-            verify: Optional[ssl.SSLContext]
+            verify: Union[ssl.SSLContext, bool]
             if self.config.use_tls:
                 self._ssl_context = self._create_ssl_context()
                 verify = self._ssl_context
@@ -368,6 +379,7 @@ class HTTP2Connection:
         headers: Optional[Dict[str, str]] = None,
         body: Optional[bytes] = None,
         timeout: Optional[float] = None,
+        cognitive_trace_id: Optional[str] = None,
     ) -> "HTTP2Response":
         """
         Send HTTP/2 request to K0.
@@ -380,6 +392,7 @@ class HTTP2Connection:
             headers: HTTP headers (dict)
             body: Request body (bytes)
             timeout: Request timeout in seconds (default: config.request_timeout_s)
+            cognitive_trace_id: Cognitive trace ID to propagate (default: None)
 
         Returns:
             HTTP2Response with status, headers, body
@@ -392,7 +405,7 @@ class HTTP2Connection:
 
         Performance:
             - Target: <1ms P95 (enqueue to stream)
-            - Stream limit: Max 100 concurrent streams (HTTP/2 multiplexing)
+            - Stream limit: Max 100 concurrent streams (client-side cap; effective limit may be lower based on server SETTINGS)
 
         Observability:
             - Metrics: k1_k0_bridge_http2_requests_total{method, status}
@@ -400,8 +413,8 @@ class HTTP2Connection:
             - Attributes: method, path, status_code, cognitive_trace_id
 
         Cognitive Trace:
-            - Accepts cognitive_trace_id from headers['X-Cognitive-Trace-Id']
-            - Propagates to K0 via HTTP header
+            - Accepts cognitive_trace_id from caller
+            - Propagates to K0 via HTTP header: X-Cognitive-Trace-Id
 
         ADR: ADR-0001a (K0 Bridge Communication Protocol)
         Assigned to: Issue #L5-1.1.2
@@ -430,6 +443,8 @@ class HTTP2Connection:
             if headers is None:
                 headers = {}
             headers.setdefault("User-Agent", "K1-Bridge/1.0")
+            if cognitive_trace_id and "X-Cognitive-Trace-Id" not in headers:
+                headers["X-Cognitive-Trace-Id"] = cognitive_trace_id
 
             start_time = time.perf_counter()
             with create_span(
@@ -485,7 +500,9 @@ class HTTP2Connection:
             raise TimeoutError(f"Request timeout after {request_timeout}s") from exc
 
         except httpx.HTTPError as exc:
-            emit_counter("k1_k0_bridge_http2_requests_total", 1, {**labels, "status": "transport_error"})
+            emit_counter(
+                "k1_k0_bridge_http2_requests_total", 1, {**labels, "status": "transport_error"}
+            )
             self._logger.error(
                 "http2_request_failed",
                 extra={"method": method, "path": path, "error": str(exc)},
@@ -502,6 +519,7 @@ class HTTP2Connection:
         path: str,
         headers: Optional[Dict[str, str]] = None,
         body: Optional[bytes] = None,
+        cognitive_trace_id: Optional[str] = None,
     ) -> "HTTP2Response":
         """
         Convenience method for HTTP POST requests.
@@ -510,18 +528,22 @@ class HTTP2Connection:
             path: Request path (e.g., /k0/command)
             headers: HTTP headers
             body: Request body (bytes)
+            cognitive_trace_id: Cognitive trace ID to propagate
 
         Returns:
             HTTP2Response
 
         ADR: ADR-0001a (K0 Bridge Communication Protocol)
         """
-        return await self.request("POST", path, headers, body)
+        return await self.request(
+            "POST", path, headers, body, cognitive_trace_id=cognitive_trace_id
+        )
 
     async def get(
         self,
         path: str,
         headers: Optional[Dict[str, str]] = None,
+        cognitive_trace_id: Optional[str] = None,
     ) -> "HTTP2Response":
         """
         Convenience method for HTTP GET requests.
@@ -529,13 +551,16 @@ class HTTP2Connection:
         Args:
             path: Request path (e.g., /k0/query)
             headers: HTTP headers
+            cognitive_trace_id: Cognitive trace ID to propagate
 
         Returns:
             HTTP2Response
 
         ADR: ADR-0001a (K0 Bridge Communication Protocol)
         """
-        return await self.request("GET", path, headers, body=None)
+        return await self.request(
+            "GET", path, headers, body=None, cognitive_trace_id=cognitive_trace_id
+        )
 
     async def close(self) -> None:
         """
@@ -545,8 +570,7 @@ class HTTP2Connection:
 
         Lifecycle:
             - Waits for active streams to complete (timeout: 10s)
-            - Sends HTTP/2 GOAWAY frame
-            - Closes TCP connection
+            - Closes underlying HTTP/2 connections
             - Finalizes metrics
 
         Guarantees:
@@ -649,7 +673,7 @@ class HTTP2Connection:
         client = self._require_client()
         try:
             response = await client.get(
-                "/healthz",
+                self.config.health_path,
                 headers={"Accept": "application/json"},
                 timeout=min(self.config.request_timeout_s, 5.0),
             )
@@ -729,7 +753,7 @@ class HTTP2Connection:
         client = self._require_client()
         start = time.perf_counter()
         response = await client.get(
-            "/healthz",
+            self.config.health_path,
             headers={"Accept": "application/json"},
             timeout=min(self.config.request_timeout_s, self.config.keepalive_interval_s / 2),
         )
@@ -752,9 +776,10 @@ class HTTP2Connection:
                 return
 
             backoff = min(
-                self.config.reconnect_backoff_base_s * (2 ** self._reconnect_attempts),
+                self.config.reconnect_backoff_base_s * (2**self._reconnect_attempts),
                 60.0,
             )
+            backoff *= 1 + random.random() * 0.25  # +0–25% jitter
             self._reconnect_attempts += 1
 
         await asyncio.sleep(backoff)
