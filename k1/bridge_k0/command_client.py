@@ -66,16 +66,49 @@ from enum import Enum
 # SECTION 1: IMPORTS
 # =============================================================================
 # Standard library imports
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Deque, Dict, Optional
 
 # Third-party imports
-# aiohttp - HTTP/2 client with multiplexing support
-# import aiohttp
+import random
+from collections import deque
 
 # Internal imports
-# from k1.bridge_k0.protocol import ProtocolNegotiator
-# from k1.bridge_k0.http2_client import HTTP2Connection
-# from k1.l5_infrastructure.serialization import Serializer
+from k1.bridge_k0.http2_client import HTTP2Connection, HTTP2Config
+from k1.bridge_k0.protocol import ProtocolConfig, ProtocolNegotiator, SerializationFormat
+from k1.bridge_k0.compression import (
+    CompressionUtility,
+    CompressionConfig,
+)
+
+try:  # pragma: no cover - observability package may not yet exist
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_gauge,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_attrs: Any):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: Any) -> None:
+                return None
+
+            def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_gauge(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -124,6 +157,32 @@ class CommandStatus(Enum):
     TIMEOUT = "TIMEOUT"  # Receipt timeout exceeded
     FAILED = "FAILED"  # Command failed (network, validation, K0 error)
     CIRCUIT_OPEN = "CIRCUIT_OPEN"  # Circuit breaker open, rejected
+
+
+class CircuitState(Enum):
+    """Circuit breaker states (ADR-0009, ADR-0044d)"""
+    CLOSED = 0      # Normal operation
+    OPEN = 1        # Failing, reject immediately
+    HALF_OPEN = 2   # Testing recovery
+
+
+class ErrorType(Enum):
+    """Error classification (ADR-0044d)"""
+    NETWORK = "network"              # Connection refused, timeout
+    TIMEOUT = "timeout"              # Request timeout
+    SERVER_ERROR = "server_error"    # 5xx errors
+    RATE_LIMIT = "rate_limit"        # 429 Too Many Requests
+    CLIENT_ERROR = "client_error"    # 4xx errors
+    SCHEMA_ERROR = "schema_error"    # Schema validation
+    UNKNOWN = "unknown"
+
+
+class Priority(Enum):
+    """Command priority classes (ADR-0022)"""
+    CRITICAL = 0     # User-facing state changes
+    REALTIME = 1     # Turn completions, tool results
+    INTERACTIVE = 2  # Config updates, learning ticks
+    BACKGROUND = 3   # Metrics, observability
 
 
 @dataclass

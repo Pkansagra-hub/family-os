@@ -84,9 +84,9 @@ optimization_strategies:
     - Priority lanes: recall_query always fast-tracked
 
   compression:
-    - LZ4 for message payloads >1KB
-    - Compression ratio: ~3:1 typical
-    - Decompression overhead: <10us
+    - zstd level 3 for payloads >4KB
+    - Compression ratio: ≥70% reduction (0.30 ratio target)
+    - Compression budget: <10ms compress, <5ms decompress
 
   connection_pooling:
     - HTTP/2 multiplexing (100 concurrent streams)

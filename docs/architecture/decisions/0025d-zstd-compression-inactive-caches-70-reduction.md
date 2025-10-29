@@ -1,6 +1,6 @@
 # ADR-0025d: zstd Compression for Inactive Caches (70% Reduction)
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** ✅ Accepted (Implementation Authorized)
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0025 (KV Cache Management 512MB)](0025-kv-cache-management-512mb.md)

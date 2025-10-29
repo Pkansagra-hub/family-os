@@ -1,0 +1,414 @@
+# K0 Bridge Command Client Contract
+# Source: ADR-0044d (Error Handling & Retry Strategy)
+# Purpose: Command queuing, receipt tracking, retry mechanism, timeout handling for K1 → K0 communication
+# Version: 1.0.0
+# Last Updated: 2025-10-28
+
+contract:
+  name: "k0_bridge_command_client"
+  version: "1.0.0"
+  status: "ACCEPTED"
+  owner: "K1 Bridge K0"
+  source_adrs:
+    - "ADR-0044d (Error Handling & Retry Strategy)"
+    - "ADR-0022 (K0 Bridge Bounded Batching)"
+    - "ADR-0001a (K0 Bridge Communication Protocol)"
+
+overview:
+  purpose: |
+    Command Client provides reliable K1 → K0 communication with:
+    - Command queuing with priority support
+    - Receipt tracking for idempotency
+    - Retry mechanism with exponential backoff (3 retries max)
+    - Timeout handling for requests
+    - Circuit breaker protection
+    - Dead Letter Queue (DLQ) for failed commands
+
+  rationale: |
+    Achieving >99.9% delivery reliability requires robust error handling:
+    - Retry with exponential backoff recovers from transient failures (85% success rate)
+    - Circuit breaker prevents cascading failures during K0 outages
+    - Idempotency keys prevent duplicate writes on retry
+    - DLQ provides audit trail and manual resubmit capability
+    - Priority queues ensure critical commands aren't blocked by background operations
+
+# ============================================================================
+# Command Queuing
+# ============================================================================
+
+command_queuing:
+  queue_structure:
+    description: "Priority queue with 4 tiers (CRITICAL → BACKGROUND)"
+    
+    priority_classes:
+      CRITICAL:
+        value: 0
+        description: "User-facing state changes (turn completions)"
+        examples: ["state_delta", "turn_receipt"]
+        
+      REALTIME:
+        value: 1
+        description: "Tool results, grounding commits"
+        examples: ["tool_receipt", "grounding_commit"]
+        
+      INTERACTIVE:
+        value: 2
+        description: "Config updates, learning feedback"
+        examples: ["config_update", "learning_tick"]
+        
+      BACKGROUND:
+        value: 3
+        description: "Metrics, observability"
+        examples: ["metrics_batch", "log_batch"]
+
+  queue_management:
+    max_pending_commands: 1000  # Bounded memory (1000 × 5KB avg = 5MB)
+    overflow_policy: "drop_oldest_background"
+    alert_threshold: 800  # Alert when 80% full
+    
+  queue_operations:
+    enqueue:
+      description: "Add command to priority queue"
+      parameters:
+        - command_id: string (UUID)
+        - port: string (P01-P20)
+        - payload: bytes (FlatBuffers)
+        - priority: CRITICAL | REALTIME | INTERACTIVE | BACKGROUND
+        - idempotency_key: string (session_id/command_id)
+        - timeout_ms: int (default 3000)
+        
+    dequeue:
+      description: "Remove highest priority command from queue"
+      ordering: "Priority first (lowest value), then FIFO within priority"
+
+# ============================================================================
+# Receipt Tracking (Idempotency)
+# ============================================================================
+
+receipt_tracking:
+  purpose: |
+    Track command receipts to prevent duplicate processing on retry.
+    K0 deduplicates using idempotency_key (session_id/command_id) with 24-hour window.
+    
+  idempotency_key_format:
+    pattern: "{session_id}/{command_id}"
+    examples:
+      - "session_abc123/cmd_001"
+      - "session_xyz789/cmd_042"
+      
+  idempotency_cache:
+    description: "In-memory cache of processed commands (24-hour TTL)"
+    structure:
+      key: string (idempotency_key)
+      value: timestamp_ms (when processed)
+    ttl_ms: 86400000  # 24 hours
+    cleanup_policy: "lazy_eviction"  # Remove expired entries on access
+    
+  deduplication:
+    check_before_send: true
+    behavior: "If key exists in cache, skip send and return success immediately"
+    metrics: "Track deduplication rate (<0.1% expected)"
+
+# ============================================================================
+# Retry Mechanism
+# ============================================================================
+
+retry_mechanism:
+  strategy: "exponential_backoff"
+  
+  retry_policy:
+    max_attempts: 3  # Total 3 retries (4 executions including original)
+    base_delay_ms: 1000  # Start at 1s
+    max_delay_ms: 16000  # Cap at 16s
+    jitter_ms: 500  # ±500ms random jitter (prevent thundering herd)
+    
+  backoff_formula: "delay = base_delay × 2^(attempt - 1) + random(0, jitter_ms)"
+  
+  backoff_sequence:
+    attempt_0:
+      delay_before: 0  # Original attempt
+      
+    attempt_1:
+      delay_before: "1000-1500ms (1.0-1.5s)"
+      formula: "1000 × 2^0 + jitter = 1000-1500ms"
+      
+    attempt_2:
+      delay_before: "2000-2500ms (2.0-2.5s)"
+      formula: "1000 × 2^1 + jitter = 2000-2500ms"
+      
+    attempt_3:
+      delay_before: "4000-4500ms (4.0-4.5s)"
+      formula: "1000 × 2^2 + jitter = 4000-4500ms"
+      
+  retryable_errors:
+    - NETWORK_ERROR: "Connection refused, timeout"
+    - TIMEOUT_ERROR: "Request timeout"
+    - SERVER_ERROR: "5xx status codes"
+    - RATE_LIMIT: "429 Too Many Requests"
+    
+  non_retryable_errors:
+    - CLIENT_ERROR: "4xx status codes (except 429)"
+    - SCHEMA_ERROR: "Schema validation failure"
+    - UNAUTHORIZED: "401 Unauthorized"
+    - FORBIDDEN: "403 Forbidden"
+
+# ============================================================================
+# Timeout Handling
+# ============================================================================
+
+timeout_handling:
+  request_timeout:
+    default_ms: 3000  # 3s default
+    configurable: true
+    per_port_overrides:
+      P01_RECALL: 5000  # Recall may take longer
+      P02_WRITE: 3000
+      P03_CONSOLIDATION: 10000  # Consolidation can be slow
+      
+  timeout_behavior:
+    on_timeout:
+      - "Cancel request"
+      - "Classify as TIMEOUT_ERROR (retryable)"
+      - "Retry with exponential backoff"
+      - "After max retries, send to DLQ"
+      
+  timeout_metrics:
+    - timeout_total{port, priority}
+    - timeout_retry_success_rate
+    - timeout_to_dlq_rate
+
+# ============================================================================
+# Circuit Breaker
+# ============================================================================
+
+circuit_breaker:
+  purpose: "Fail-fast protection during K0 outages"
+  
+  states:
+    CLOSED:
+      description: "Normal operation, track failures"
+      behavior: "Allow all requests, record success/failure"
+      
+    OPEN:
+      description: "K0 is down, fail immediately"
+      behavior: "Reject all requests immediately (send to DLQ)"
+      duration_s: 30  # Stay open for 30s
+      
+    HALF_OPEN:
+      description: "Testing recovery with 1 test request"
+      behavior: "Allow 1 test request, then transition to CLOSED or OPEN"
+      
+  failure_threshold: 3  # Open after 3 consecutive failures
+  recovery_timeout_s: 30  # Wait 30s before half-open
+  
+  transition_logic:
+    CLOSED_to_OPEN:
+      condition: "failure_count >= 3"
+      action: "Open circuit, start recovery timer"
+      
+    OPEN_to_HALF_OPEN:
+      condition: "recovery_timeout_s elapsed"
+      action: "Allow 1 test request"
+      
+    HALF_OPEN_to_CLOSED:
+      condition: "Test request succeeded"
+      action: "Close circuit, reset failure count"
+      
+    HALF_OPEN_to_OPEN:
+      condition: "Test request failed"
+      action: "Reopen circuit, restart recovery timer"
+
+# ============================================================================
+# Dead Letter Queue (DLQ)
+# ============================================================================
+
+dead_letter_queue:
+  purpose: "Store failed commands after max retries for audit and manual resubmit"
+  
+  dlq_entry_structure:
+    dlq_id: string (UUID)
+    session_id: string
+    command_data: bytes (original command payload)
+    error_info:
+      error_type: NETWORK | TIMEOUT | SERVER_ERROR | CLIENT_ERROR | SCHEMA_ERROR
+      status_code: int (optional)
+      message: string
+      trace_id: string
+    enqueued_at_ms: int64
+    retry_count: int
+    metadata:
+      port: string
+      priority: string
+      idempotency_key: string
+      
+  dlq_configuration:
+    max_size: 10000  # Max 10K entries
+    retention_days: 7  # 7-day retention
+    alert_threshold: 100  # Alert if > 100 items
+    
+  dlq_operations:
+    send_to_dlq:
+      when: "Max retries exceeded OR circuit breaker OPEN"
+      action: "Store command with full context"
+      
+    resubmit_from_dlq:
+      description: "Manual resubmit capability"
+      parameters:
+        - dlq_id: string
+      action: "Remove from DLQ, re-enqueue to command queue"
+
+# ============================================================================
+# Performance Budgets (P95)
+# ============================================================================
+
+performance_budgets:
+  delivery_reliability: ">99.9%"
+  retry_success_rate: ">80% (first retry)"
+  circuit_breaker_recovery_time: "<30s"
+  dlq_size_steady_state: "<100 items"
+  idempotency_deduplication_rate: "<0.1%"
+  
+  latency_targets:
+    successful_request_p95: "<300ms"
+    with_1_retry_p95: "<1500ms"  # 300ms + 1000ms retry delay
+    with_2_retries_p95: "<3500ms"  # 300ms + 1000ms + 2000ms
+    max_with_3_retries: "<7500ms"  # 300ms + 1000ms + 2000ms + 4000ms
+
+# ============================================================================
+# Monitoring & Observability
+# ============================================================================
+
+observability:
+  metrics:
+    # Command queue metrics
+    - name: "command_queue_size"
+      type: gauge
+      labels: ["priority"]
+      description: "Current command queue size by priority"
+      
+    - name: "commands_enqueued_total"
+      type: counter
+      labels: ["port", "priority"]
+      description: "Total commands enqueued"
+      
+    - name: "commands_dequeued_total"
+      type: counter
+      labels: ["port", "priority"]
+      description: "Total commands dequeued"
+      
+    # Retry metrics
+    - name: "retry_attempts_total"
+      type: counter
+      labels: ["error_type", "attempt"]
+      description: "Total retry attempts by error type and attempt number"
+      
+    - name: "retry_success_total"
+      type: counter
+      labels: ["attempt"]
+      description: "Successful retries by attempt number"
+      
+    # Circuit breaker metrics
+    - name: "circuit_breaker_state"
+      type: gauge
+      labels: ["state"]
+      description: "Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)"
+      
+    - name: "circuit_breaker_state_changes_total"
+      type: counter
+      labels: ["from_state", "to_state"]
+      description: "Circuit breaker state transitions"
+      
+    # DLQ metrics
+    - name: "dlq_items"
+      type: gauge
+      labels: ["reason"]
+      description: "Items in Dead Letter Queue"
+      
+    - name: "dlq_enqueued_total"
+      type: counter
+      labels: ["error_type"]
+      description: "Total items sent to DLQ"
+      
+    # Idempotency metrics
+    - name: "idempotency_dedupe_total"
+      type: counter
+      labels: []
+      description: "Deduplicated idempotent requests"
+      
+  alerts:
+    - name: "CommandQueueNearFull"
+      condition: "command_queue_size > 800"
+      duration: "1m"
+      severity: "warning"
+      
+    - name: "CircuitBreakerOpen"
+      condition: "circuit_breaker_state == 1"
+      duration: "1m"
+      severity: "critical"
+      
+    - name: "DLQGrowth"
+      condition: "rate(dlq_items[5m]) > 0"
+      duration: "1m"
+      severity: "warning"
+      
+    - name: "HighRetryRate"
+      condition: "rate(retry_attempts_total[5m]) / rate(commands_enqueued_total[5m]) > 0.2"
+      duration: "5m"
+      severity: "warning"
+
+# ============================================================================
+# API Interface
+# ============================================================================
+
+api:
+  submit_command:
+    description: "Submit command to K0 with automatic retry and error handling"
+    signature: |
+      async def submit_command(
+          port: str,
+          payload: bytes,
+          priority: Priority = Priority.REALTIME,
+          timeout_ms: int = 3000,
+          idempotency_key: Optional[str] = None,
+          trace_id: Optional[str] = None
+      ) -> Result[Receipt, Error]
+      
+    parameters:
+      - port: "K0 port (P01-P20)"
+      - payload: "FlatBuffers encoded request"
+      - priority: "CRITICAL | REALTIME | INTERACTIVE | BACKGROUND"
+      - timeout_ms: "Request timeout (default 3000ms)"
+      - idempotency_key: "Optional idempotency key (auto-generated if not provided)"
+      - trace_id: "Optional trace ID for observability"
+      
+    returns:
+      success: "Receipt with command_id and timestamp"
+      failure: "Error with error_type and message"
+      
+  get_dlq_entries:
+    description: "Get DLQ entries for monitoring"
+    signature: |
+      async def get_dlq_entries(
+          limit: int = 100,
+          error_type: Optional[ErrorType] = None
+      ) -> List[DLQEntry]
+      
+  resubmit_dlq_entry:
+    description: "Manually resubmit DLQ entry"
+    signature: |
+      async def resubmit_dlq_entry(dlq_id: str) -> bool
+
+# ============================================================================
+# Related Contracts
+# ============================================================================
+
+related_contracts:
+  - "batching/readme.md: Batching System (batch commands before send)"
+  - "ports/p02_memory_write.yml: Memory write port"
+  - "../error_recovery/circuit_breaker/: Circuit breaker patterns"
+  - "../observability/receipts/: Receipt tracking"
+
+---
+
+# Revision History
+# 2025-10-28: v1.0.0 - Initial contract based on ADR-0044d

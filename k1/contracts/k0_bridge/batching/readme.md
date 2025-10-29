@@ -1,6 +1,6 @@
 # K0 Bridge Batching Contracts
 
-**Source ADRs:** ADR-0001a, ADR-0044c
+**Source ADRs:** ADR-0001a, ADR-0022 (K0 Bridge Bounded Batching), ADR-0044c
 
 ## Overview
 
@@ -16,8 +16,9 @@ This directory contains contracts for K0 Bridge batching strategies, which optim
 ## Contracts Included
 
 ### 1. Batch Configuration Contract (`batch_config.yaml`)
-- Batch size limits (10-50 messages)
-- Flush interval (100ms)
+- Batch size limits (100 messages max)
+- Flush interval (250ms max)
+- 3-trigger flush policy (time/size/count)
 - Adaptive batching rules
 
 ### 2. Batch Ordering Contract (`batch_ordering.yaml`)
@@ -26,45 +27,51 @@ This directory contains contracts for K0 Bridge batching strategies, which optim
 - Priority handling
 
 ### 3. Batch Compression Contract (`batch_compression.yaml`)
-- Compression algorithms (LZ4)
-- Compression thresholds
+- Compression algorithms (zstd level 3)
+- Compression thresholds (1KB min)
 - Decompression strategies
 
 ## Batch Configuration
 
-**Source:** ADR-0044c
+**Source:** ADR-0022
 
 ```yaml
 batch_configuration:
-  min_batch_size: 10
-  max_batch_size: 50
-  flush_interval_ms: 100
-  max_payload_size_kb: 64
+  # 3-Trigger Flush Policy (flush when ANY condition met)
+  triggers:
+    max_batch_time_ms: 250       # Flush every 250ms (4 batches/sec)
+    max_batch_bytes: 65536       # Flush if batch > 64KB
+    max_batch_items: 100         # Flush if > 100 receipts
 
-  flush_triggers:
-    - Timer expired (100ms)
-    - Batch size reached (50 messages)
-    - Critical operation (immediate flush)
-    - Backpressure signal (delay flush)
-    - Session termination (immediate flush)
+  # Per-session cooldown (prevent session flooding)
+  per_session_cooldown_ms: 50    # Min 50ms between batches per session
 
-  adaptive_batching:
+  # Overflow protection
+  overflow_protection:
+    max_pending_receipts: 1000   # Drop oldest if > 1000 pending
+    drop_policy: "drop_oldest_background"  # Keep REALTIME/INTERACTIVE receipts
+    alert_threshold: 800         # Alert if > 800 pending
+
+  # Compression (zstd level 3 for fast compression)
+  compression:
     enabled: true
+    algorithm: "zstd"            # Fast compression (level 3)
+    min_size_bytes: 1024         # Only compress if batch > 1KB
+    compression_level: 3         # Balance speed vs ratio
 
-    low_load:
-      condition: queue_size < 10
-      batch_size: 10
-      flush_interval_ms: 50
+  # Priority classes
+  priority_classes:
+    CRITICAL: 0                  # User-facing state changes
+    REALTIME: 1                  # Turn completions, tool results
+    INTERACTIVE: 2               # Config updates, learning ticks
+    BACKGROUND: 3                # Metrics, observability
 
-    normal_load:
-      condition: 10 <= queue_size < 30
-      batch_size: 30
-      flush_interval_ms: 100
-
-    high_load:
-      condition: queue_size >= 30
-      batch_size: 50
-      flush_interval_ms: 150
+  # Backpressure (if K0 outbox is full)
+  backpressure:
+    enabled: true
+    k0_outbox_threshold: 5000    # Apply backpressure if K0 outbox > 5000
+    action: "slow_down_flush"    # Options: "block", "slow_down_flush", "drop_background"
+    slow_down_factor: 2.0        # Double flush interval
 ```
 
 ## Batch Structure
@@ -86,7 +93,7 @@ batch_structure:
     trace_id: string
 
   constraints:
-    max_operations: 50
+    max_operations: 100
     max_payload_kb: 64
 ```
 
@@ -139,20 +146,21 @@ batch_ordering:
 
 ```yaml
 batch_compression:
-  algorithm: LZ4
+  algorithm: zstd
+  compression_level: 3          # Fast compression (level 3)
 
   compression_threshold:
-    min_payload_size_kb: 4
-    compression_ratio_target: 2.0
+    min_payload_size_bytes: 1024  # 1KB minimum
+    compression_ratio_target: 2.5
 
   strategy:
-    - If batch payload < 4KB: no compression
-    - If batch payload >= 4KB: compress with LZ4
-    - If compression ratio < 1.2: send uncompressed
+    - If batch payload < 1KB: no compression
+    - If batch payload >= 1KB: compress with zstd level 3
+    - Achieves 2-3× compression with <1ms overhead
 
   compression_overhead:
-    cpu_overhead_ms: 5
-    decompression_overhead_ms: 3
+    cpu_overhead_ms: 1
+    decompression_overhead_ms: 1
 
   compression_metadata:
     compressed: boolean
@@ -171,7 +179,7 @@ batch_processing:
       - Monitor batch size and time
 
     2_trigger_flush:
-      - Timer expired OR batch size reached OR critical op
+      - Timer expired (250ms) OR batch size reached (100) OR batch bytes (64KB)
 
     3_create_batch:
       - Combine operations from queues (round-robin)
@@ -179,7 +187,7 @@ batch_processing:
       - Apply priority rules
 
     4_compress:
-      - Compress if payload > 4KB
+      - Compress with zstd if payload > 1KB
 
     5_send:
       - Send batch over HTTP/2 stream
@@ -210,16 +218,16 @@ batch_processing:
 ```yaml
 performance:
   batch_creation_latency_ms: 10
-  compression_latency_ms: 5
+  compression_latency_ms: 1     # zstd level 3
   network_latency_ms: 10
   k0_processing_latency_ms: 50
-  decompression_latency_ms: 3
-  total_latency_p95_ms: 100
+  decompression_latency_ms: 1
+  total_latency_p95_ms: 250     # Max batch time
 
   throughput:
-    operations_per_second: 1000
-    batches_per_second: 20
-    avg_batch_size: 50
+    operations_per_second: 5000-10000
+    batches_per_second: 4        # 250ms flush interval
+    avg_batch_size: 100          # At high load
 
   efficiency:
     overhead_reduction: 80% (vs individual operations)
@@ -289,19 +297,19 @@ observability:
 ```python
 # K1 side: Add operations to batch
 batch_queue = BatchQueue(
-    min_size=10,
-    max_size=50,
-    flush_interval_ms=100
+    max_batch_items=100,
+    max_batch_time_ms=250,
+    max_batch_bytes=65536
 )
 
 # Add operation
 await batch_queue.add(
     port=Port.P02_PERSIST,
     payload=persist_request,
-    priority=Priority.NORMAL
+    priority=Priority.REALTIME
 )
 
-# Batch flushed automatically after 100ms or 50 ops
+# Batch flushed automatically after 250ms OR 100 ops OR 64KB
 ```
 
 ## Related Contracts
@@ -312,4 +320,4 @@ await batch_queue.add(
 
 ---
 
-**Last Updated:** 2025-10-13
+**Last Updated:** 2025-10-28 (Updated to ADR-0022 specs)

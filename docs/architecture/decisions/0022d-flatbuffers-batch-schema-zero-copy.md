@@ -1,6 +1,6 @@
 # ADR-0022d: FlatBuffers Batch Schema & Zero-Copy Serialization
 
-**Status:** ⏳ In Progress (0% - Initial Draft)
+**Status:** ✅ Accepted (Implementation Authorized)
 **Date:** 2025-10-13
 **Authors:** K1 Architecture Team
 **Parent ADR:** [ADR-0022 (K0 Bridge Bounded Batching)](0022-k0-bridge-bounded-batching.md)

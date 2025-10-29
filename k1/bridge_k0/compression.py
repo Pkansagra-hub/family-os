@@ -52,6 +52,7 @@ References:
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -62,10 +63,40 @@ from enum import Enum
 from typing import Optional
 
 # Third-party imports
-# import zstandard as zstd  # Zstd compression library
+try:
+    import zstandard as zstd  # Zstd compression library
+except ModuleNotFoundError as exc:  # pragma: no cover - dependency enforcement
+    raise ImportError(
+        "zstandard library is required for compression utilities"
+    ) from exc
 
 # Internal imports
-# None
+# Observability (best-effort; fall back to no-ops if module missing)
+try:  # pragma: no cover - observability package optional during early integration
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_: object):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback) -> None:
+                return None
+
+            def set_attribute(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, **_labels: object) -> None:
+        return None
+
+    def emit_histogram(_name: str, value: float, **_labels: object) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -209,11 +240,16 @@ class CompressionUtility:
         # 1. Validate config (check compression_level 1-22, threshold_bytes >0)
         # 2. Initialize Zstd compressor (level 3)
         # 3. Initialize Zstd decompressor
+        if not 1 <= config.compression_level <= 22:
+            raise ValueError(
+                "compression_level must be between 1 and 22 (ADR-0025d requirement)"
+            )
+        if config.threshold_bytes <= 0:
+            raise ValueError("threshold_bytes must be positive (ADR-0025d requirement)")
         self.config = config
         self._logger = logger
-        # self._compressor = zstd.ZstdCompressor(level=config.compression_level)
-        # self._decompressor = zstd.ZstdDecompressor()
-        pass
+        self._compressor = zstd.ZstdCompressor(level=config.compression_level)
+        self._decompressor = zstd.ZstdDecompressor()
 
     def compress(self, payload: bytes) -> tuple[bytes, CompressionResult]:
         """
@@ -254,26 +290,79 @@ class CompressionUtility:
         original_size = len(payload)
 
         if original_size <= self.config.threshold_bytes:
-            self._logger.debug("compression_skipped", size_bytes=original_size)
+            self._logger.debug(
+                "compression_skipped size_bytes=%d threshold_bytes=%d",
+                original_size,
+                self.config.threshold_bytes,
+            )
+            emit_counter(
+                "k1_k0_bridge_compression_skipped_total",
+                reason="below_threshold",
+            )
             return payload, CompressionResult(
-                status=CompressionStatus.SKIPPED, original_size=original_size
+                status=CompressionStatus.SKIPPED,
+                original_size=original_size,
             )
 
-        # Compression logic here
-        # import time
-        # start_time = time.perf_counter()
-        # compressed = self._compressor.compress(payload)
-        # compression_time_ms = (time.perf_counter() - start_time) * 1000
+        with create_span(
+            "k0_bridge.compression.compress",
+            compression_level=self.config.compression_level,
+            original_size=original_size,
+        ) as span:
+            start_time = time.perf_counter()
+            try:
+                compressed = self._compressor.compress(payload)
+            except zstd.ZstdError as exc:  # pragma: no cover - exceptional path
+                emit_counter(
+                    "k1_k0_bridge_compression_failures_total",
+                    reason="compression_error",
+                )
+                self._logger.exception("compression_failed error=%s", exc)
+                raise CompressionError("zstd compression failed") from exc
 
-        self._logger.debug("compression_applied", original_size=original_size)
+            compression_time_ms = (time.perf_counter() - start_time) * 1000
+            compressed_size = len(compressed)
+            ratio = compressed_size / original_size if original_size else 1.0
+            span.set_attribute("compression.duration_ms", compression_time_ms)
+            span.set_attribute("compression.compressed_size", compressed_size)
+            span.set_attribute("compression.ratio", ratio)
 
-        # Placeholder return
-        return payload, CompressionResult(
+        emit_counter(
+            "k1_k0_bridge_compression_compressed_bytes_total",
+            port="k0_bridge",
+            codec="zstd",
+            value=compressed_size,
+        )
+        emit_counter(
+            "k1_k0_bridge_compression_uncompressed_bytes_total",
+            port="k0_bridge",
+            value=original_size,
+        )
+        emit_histogram(
+            "k1_k0_bridge_compression_duration_ms",
+            value=compression_time_ms,
+            port="k0_bridge",
+        )
+        emit_histogram(
+            "k1_k0_bridge_compression_ratio",
+            value=ratio,
+            port="k0_bridge",
+        )
+
+        self._logger.debug(
+            "compression_applied original_size=%d compressed_size=%d ratio=%.4f duration_ms=%.3f",
+            original_size,
+            compressed_size,
+            ratio,
+            compression_time_ms,
+        )
+
+        return compressed, CompressionResult(
             status=CompressionStatus.COMPRESSED,
             original_size=original_size,
-            compressed_size=original_size,  # TODO: Replace with actual compressed size
-            compression_ratio=1.0,  # TODO: Replace with actual ratio
-            compression_time_ms=0.0,  # TODO: Replace with actual time
+            compressed_size=compressed_size,
+            compression_ratio=ratio,
+            compression_time_ms=compression_time_ms,
         )
 
     def decompress(self, compressed: bytes) -> bytes:
@@ -306,8 +395,38 @@ class CompressionUtility:
         # decompressed = self._decompressor.decompress(compressed)
         # decompression_time_ms = (time.perf_counter() - start_time) * 1000
 
-        # Placeholder return
-        return compressed
+        with create_span(
+            "k0_bridge.compression.decompress",
+            compressed_size=len(compressed),
+        ) as span:
+            start_time = time.perf_counter()
+            try:
+                decompressed = self._decompressor.decompress(compressed)
+            except zstd.ZstdError as exc:  # pragma: no cover - exceptional path
+                emit_counter(
+                    "k1_k0_bridge_decompression_failures_total",
+                    reason="decompression_error",
+                )
+                self._logger.exception("decompression_failed error=%s", exc)
+                raise DecompressionError("zstd decompression failed") from exc
+            decompression_time_ms = (time.perf_counter() - start_time) * 1000
+            span.set_attribute("decompression.duration_ms", decompression_time_ms)
+            span.set_attribute("decompression.output_size", len(decompressed))
+
+        emit_histogram(
+            "k1_k0_bridge_decompression_duration_ms",
+            value=decompression_time_ms,
+            port="k0_bridge",
+        )
+
+        self._logger.debug(
+            "decompression_completed compressed_size=%d decompressed_size=%d duration_ms=%.3f",
+            len(compressed),
+            len(decompressed),
+            decompression_time_ms,
+        )
+
+        return decompressed
 
     def should_compress(self, payload_size: int) -> bool:
         """
