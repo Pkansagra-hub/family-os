@@ -57,22 +57,51 @@ References:
 import asyncio
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
-
-# =============================================================================
-# SECTION 1: IMPORTS
-# =============================================================================
-# Standard library imports
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 # Third-party imports
-# from deepdiff import DeepDiff  # For field-level diffing
+try:  # pragma: no cover - optional dependency
+    from deepdiff import DeepDiff  # type: ignore
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    DeepDiff = None  # type: ignore
 
 # Internal imports
-# from k1.bridge_k0.command_client import CommandClient
-# from k1.bridge_k0.batch_client import BatchClient
-# from k1.l4_runtime.session_state import SessionState, SessionSection
+from k1.bridge_k0.batch_client import (
+    BatchClient,
+    FlushTrigger,
+    SessionStateDelta,
+)
+from k1.bridge_k0.command_client import CommandClient
+
+try:  # pragma: no cover - observability package may not yet exist
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_attrs: Any):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: Any) -> None:
+                return None
+
+            def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[dict] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[dict] = None) -> None:
+        return None
+
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -139,6 +168,7 @@ class StateDelta:
     old_value: Optional[Any] = None
     timestamp: Optional[int] = None
     cognitive_trace_id: Optional[str] = None
+    privacy_band: str = "GREEN"
 
 
 @dataclass
@@ -230,7 +260,8 @@ class StateDeltaEmitter:
     def __init__(
         self,
         config: "StateDeltaEmitterConfig",
-        command_client: Optional[Any] = None,  # CommandClient
+        batch_client: BatchClient,
+        command_client: Optional[CommandClient] = None,
     ) -> None:
         """
         Initialize StateDeltaEmitter.
@@ -250,20 +281,18 @@ class StateDeltaEmitter:
         ADR: ADR-0001a (State Delta Emitter initialization)
         Assigned to: Issue #L5-1.4.2
         """
-        # TODO(@infrastructure-team): Implement initialization (ADR-0001a)
-        # 1. Validate config (check batch_flush_interval_ms, batch_size_max_bytes)
-        # 2. Initialize command_client (K0 Command Port P02)
-        # 3. Initialize batch buffer (empty list)
-        # 4. Initialize batch flush timer (250ms interval)
-        # 5. Initialize metrics (Prometheus counters, histograms)
+        self._validate_config(config)
+        if batch_client is None:
+            raise ValueError("batch_client is required for StateDeltaEmitter")
+
         self.config = config
-        self.command_client = command_client
+        self._command_client = command_client
+        self._batch_client = batch_client
         self._logger = logger
         self._batch_buffer: List[StateDelta] = []
         self._batch_lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
-        pass
 
     async def initialize(self) -> None:
         """
@@ -282,9 +311,17 @@ class StateDeltaEmitter:
         # 1. Verify command_client initialized
         # 2. Start batch flush timer (250ms interval)
         # 3. Log initialization event
+        if self._flush_task is not None:
+            raise RuntimeError("StateDeltaEmitter already initialized")
+
+        self._shutdown_event.clear()
         self._flush_task = asyncio.create_task(self._batch_flush_loop())
-        self._logger.info("state_delta_emitter_initialized")
-        pass
+        self._logger.info(
+            "state_delta_emitter_initialized batch_flush_interval_ms=%d batch_size_max_bytes=%d batch_count_max=%d",
+            self.config.batch_flush_interval_ms,
+            self.config.batch_size_max_bytes,
+            self.config.batch_count_max,
+        )
 
     async def compute_deltas(
         self, old_state: Any, new_state: Any  # SessionState  # SessionState
@@ -308,23 +345,37 @@ class StateDeltaEmitter:
         ADR: ADR-0001a (State delta computation)
         Assigned to: Issue #L5-1.4.2
         """
-        # TODO(@infrastructure-team): Implement compute_deltas (ADR-0001a)
-        # 1. Use DeepDiff to compute field-level changes
-        # 2. For each changed field:
-        #    - Determine section (BELIEFS, SCOREBOARD, etc.)
-        #    - Generate field_path (JSONPath-style)
-        #    - Determine operation (SET, DELETE, APPEND)
-        #    - Create StateDelta object
-        # 3. Return list of StateDelta objects
-        # 4. Emit metrics (delta_count, diff_latency_ms)
-        deltas: List[StateDelta] = []
+        if DeepDiff is None:
+            raise DeltaComputeError("DeepDiff dependency missing for delta computation")
 
-        # Diff logic here (DeepDiff)
-        # diff = DeepDiff(old_state.to_dict(), new_state.to_dict(), max_level=self.config.diff_max_depth)
+        start = time.perf_counter()
+        with create_span("k0_bridge.state_delta_emitter.compute_delta") as span:
+            diff = DeepDiff(  # type: ignore[operator]
+                getattr(old_state, "to_dict", lambda: old_state)(),
+                getattr(new_state, "to_dict", lambda: new_state)(),
+                max_level=self.config.diff_max_depth,
+                verbose_level=2,
+            )
 
-        # Parse diff results and create StateDelta objects
+            deltas = list(self._deepdiff_to_deltas(diff, new_state))
+            span.set_attribute("delta_count", len(deltas))
 
-        self._logger.debug("deltas_computed", delta_count=len(deltas))
+        latency_ms = (time.perf_counter() - start) * 1000
+        emit_histogram(
+            "k1_state_delta_emitter_diff_latency_ms",
+            latency_ms,
+            None,
+        )
+        emit_counter(
+            "k1_state_delta_emitter_deltas_total",
+            len(deltas),
+            None,
+        )
+        self._logger.debug(
+            "deltas_computed delta_count=%d latency_ms=%.2f",
+            len(deltas),
+            latency_ms,
+        )
 
         return deltas
 
@@ -350,36 +401,61 @@ class StateDeltaEmitter:
         ADR: ADR-0001a (State delta emit)
         Assigned to: Issue #L5-1.4.2
         """
-        # TODO(@infrastructure-team): Implement emit_deltas (ADR-0001a)
-        # 1. Acquire batch lock
-        # 2. Add deltas to batch buffer
-        # 3. Calculate batch size (bytes)
-        # 4. If batch_size >= 64KB OR batch_count >= 100:
-        #    - Flush batch immediately
-        #    - Return DeltaEmitResult(batched=False)
-        # 5. Otherwise:
-        #    - Return DeltaEmitResult(batched=True)
-        #    - Batch will flush on 250ms timer
-        # 6. Emit metrics (k1_state_delta_emitter_deltas_total)
-        async with self._batch_lock:
-            self._batch_buffer.extend(deltas)
+        start = time.perf_counter()
+        accepted: List[StateDelta] = []
+        for delta in deltas:
+            if delta.privacy_band == "BLACK":
+                self._logger.warning(
+                    "delta_rejected_privacy session_id=%s field_path=%s",
+                    delta.session_id,
+                    delta.field_path,
+                )
+                emit_counter(
+                    "k1_state_delta_emitter_deltas_rejected_total",
+                    1,
+                    {"reason": "privacy_band_black"},
+                )
+                continue
+            accepted.append(delta)
 
+        if not accepted:
+            emit_histogram(
+                "k1_state_delta_emitter_emit_latency_ms",
+                (time.perf_counter() - start) * 1000,
+                None,
+            )
+            return DeltaEmitResult(
+                deltas_emitted=0,
+                bytes_saved=0,
+                emit_latency_ms=0.0,
+                batched=True,
+            )
+
+        async with self._batch_lock:
+            self._batch_buffer.extend(accepted)
             batch_size_bytes = self._calculate_batch_size()
 
-            if (
+            should_flush = (
                 batch_size_bytes >= self.config.batch_size_max_bytes
                 or len(self._batch_buffer) >= self.config.batch_count_max
-            ):
-                # Flush immediately
-                return await self._flush_batch()
+            )
+
+            if should_flush:
+                result = await self._flush_batch(trigger=FlushTrigger.SIZE)
             else:
-                # Will flush on timer
-                return DeltaEmitResult(
-                    deltas_emitted=len(deltas),
-                    bytes_saved=0,  # Will be calculated on flush
+                result = DeltaEmitResult(
+                    deltas_emitted=len(accepted),
+                    bytes_saved=0,
                     emit_latency_ms=0.0,
                     batched=True,
                 )
+
+        emit_histogram(
+            "k1_state_delta_emitter_emit_latency_ms",
+            (time.perf_counter() - start) * 1000,
+            None,
+        )
+        return result
 
     async def shutdown(self) -> None:
         """
@@ -401,17 +477,21 @@ class StateDeltaEmitter:
         # 3. Cancel batch flush timer
         # 4. Close command_client connection
         # 5. Log shutdown event
+        if self._flush_task is None:
+            return
+
         self._shutdown_event.set()
 
         async with self._batch_lock:
             if self._batch_buffer:
-                await self._flush_batch()
+                await self._flush_batch(trigger=FlushTrigger.MANUAL)
 
-        if self._flush_task:
-            self._flush_task.cancel()
+        self._flush_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._flush_task
 
+        self._flush_task = None
         self._logger.info("state_delta_emitter_shutdown_complete")
-        pass
 
     # =========================================================================
     # PRIVATE METHODS (Implementation Details)
@@ -432,15 +512,17 @@ class StateDeltaEmitter:
         # 3. Acquire batch lock
         # 4. If batch non-empty: flush batch
         # 5. Release batch lock
-        while not self._shutdown_event.is_set():
-            await asyncio.sleep(self.config.batch_flush_interval_ms / 1000)
+        interval = self.config.batch_flush_interval_ms / 1000
+        try:
+            while not self._shutdown_event.is_set():
+                await asyncio.sleep(interval)
+                async with self._batch_lock:
+                    if self._batch_buffer:
+                        await self._flush_batch(trigger=FlushTrigger.TIME)
+        except asyncio.CancelledError:  # pragma: no cover
+            raise
 
-            async with self._batch_lock:
-                if self._batch_buffer:
-                    await self._flush_batch()
-        pass
-
-    async def _flush_batch(self) -> DeltaEmitResult:
+    async def _flush_batch(self, trigger: FlushTrigger) -> DeltaEmitResult:
         """
         Flush batch buffer to K0 Command Port.
 
@@ -455,61 +537,123 @@ class StateDeltaEmitter:
         ADR: ADR-0001a (Delta batch flush)
         Assigned to: Issue #L5-1.4.2
         """
-        # TODO(@infrastructure-team): Implement batch flush (ADR-0001a)
-        # 1. Calculate batch size (bytes)
-        # 2. Calculate full state size (for comparison)
-        # 3. Calculate bytes_saved (full_state_size - batch_size)
-        # 4. Serialize batch to FlatBuffers (MemoryWriteBatch)
-        # 5. Send to K0 Command Port (P02)
-        # 6. Wait for receipt_id
-        # 7. Clear batch buffer
-        # 8. Emit metrics (k1_state_delta_emitter_batch_flush_duration_seconds, bytes_saved)
-        # 9. Return DeltaEmitResult
         start_time = time.perf_counter()
-
-        delta_count = len(self._batch_buffer)
-        batch_size_bytes = self._calculate_batch_size()
-
-        # Estimate full state size (for comparison)
-        # Typical full state: 128KB, typical delta batch: 12KB
-        full_state_size_estimate = 128 * 1024  # 128KB
-        bytes_saved = full_state_size_estimate - batch_size_bytes
-
-        # Flush logic here (send to K0)
-
+        deltas = list(self._batch_buffer)
         self._batch_buffer.clear()
+        batch_size_bytes = self._calculate_batch_size_from_deltas(deltas)
 
-        flush_latency_ms = (time.perf_counter() - start_time) * 1000
+        full_state_size_estimate = 128 * 1024  # 128KB baseline
+        bytes_saved = max(full_state_size_estimate - batch_size_bytes, 0)
 
+        receipt = await self._emit_to_batch_client(deltas, trigger)
+
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        emit_histogram(
+            "k1_state_delta_emitter_batch_flush_duration_seconds",
+            latency_ms / 1000.0,
+            {"trigger": trigger.value},
+        )
+        emit_counter(
+            "k1_state_delta_emitter_bytes_saved_total",
+            bytes_saved,
+            None,
+        )
         self._logger.info(
-            "delta_batch_flushed",
-            delta_count=delta_count,
-            bytes_saved=bytes_saved,
-            flush_latency_ms=flush_latency_ms,
+            "delta_batch_flushed delta_count=%d bytes_saved=%d trigger=%s receipt_status=%s",
+            len(deltas),
+            bytes_saved,
+            trigger.value,
+            receipt.status if receipt else "pending",
         )
 
         return DeltaEmitResult(
-            deltas_emitted=delta_count,
+            deltas_emitted=len(deltas),
             bytes_saved=bytes_saved,
-            emit_latency_ms=flush_latency_ms,
+            emit_latency_ms=latency_ms,
             batched=False,
         )
 
     def _calculate_batch_size(self) -> int:
-        """
-        Calculate batch size in bytes.
+        return self._calculate_batch_size_from_deltas(self._batch_buffer)
 
-        Returns:
-            Batch size (bytes)
+    def _calculate_batch_size_from_deltas(self, deltas: Iterable[StateDelta]) -> int:
+        return sum(len(delta.field_path) + len(str(delta.value)) for delta in deltas)
 
-        ADR: ADR-0022 (Batch size calculation for 64KB trigger)
-        Assigned to: Issue #L5-1.4.2
-        """
-        # TODO(@infrastructure-team): Implement batch size calculation
-        # 1. Serialize batch_buffer to JSON or FlatBuffers
-        # 2. Return byte length
-        # Placeholder: 1KB per delta average
-        return len(self._batch_buffer) * 1024
+    async def _emit_to_batch_client(
+        self,
+        deltas: List[StateDelta],
+        trigger: FlushTrigger,
+    ) -> Optional[Any]:
+        receipts = []
+        for delta in deltas:
+            if delta.privacy_band == "BLACK":
+                self._logger.warning(
+                    "delta_rejected_privacy session_id=%s field_path=%s",
+                    delta.session_id,
+                    delta.field_path,
+                )
+                emit_counter(
+                    "k1_state_delta_emitter_deltas_rejected_total",
+                    1,
+                    {"reason": "privacy_band_black"},
+                )
+                continue
+
+            session_delta = SessionStateDelta(
+                session_id=delta.session_id,
+                field_path=delta.field_path,
+                value=delta.value,
+                timestamp=delta.timestamp or time.time() * 1000,
+                privacy_band=delta.privacy_band,
+            )
+            receipt = await self._batch_client.add_delta(
+                session_delta,
+                cognitive_trace_id=delta.cognitive_trace_id,
+            )
+            if receipt:
+                receipts.append(receipt)
+
+        if receipts:
+            return receipts[-1]
+
+        if trigger != FlushTrigger.MANUAL:
+            return None
+
+        return await self._batch_client.flush(trigger=trigger)
+
+    def _deepdiff_to_deltas(self, diff: Any, new_state: Any) -> Iterable[StateDelta]:
+        # Placeholder conversion: only handle values_changed entries
+        if not diff:
+            return []
+
+        deltas: List[StateDelta] = []
+        values_changed = diff.get("values_changed", {})
+        for path, change in values_changed.items():
+            session_id = getattr(new_state, "session_id", "unknown_session")
+            field_path = path.replace("root", "", 1).strip(".")
+            deltas.append(
+                StateDelta(
+                    session_id=session_id,
+                    section=SessionSection.META,
+                    field_path=field_path,
+                    operation=DeltaOperation.SET,
+                    value=change.get("new_value"),
+                    old_value=change.get("old_value"),
+                    timestamp=int(time.time() * 1000),
+                    cognitive_trace_id=getattr(new_state, "cognitive_trace_id", None),
+                    privacy_band=getattr(new_state, "privacy_band", "GREEN"),
+                )
+            )
+
+        return deltas
+
+    def _validate_config(self, config: "StateDeltaEmitterConfig") -> None:
+        if config.batch_flush_interval_ms <= 0:
+            raise ValueError("batch_flush_interval_ms must be positive")
+        if config.batch_size_max_bytes <= 0:
+            raise ValueError("batch_size_max_bytes must be positive")
+        if config.batch_count_max <= 0:
+            raise ValueError("batch_count_max must be positive")
 
 
 @dataclass
@@ -551,7 +695,8 @@ class DeltaEmitError(Exception):
 
 def create_state_delta_emitter(
     config: Optional[StateDeltaEmitterConfig] = None,
-    command_client: Optional[Any] = None,
+    batch_client: Optional[BatchClient] = None,
+    command_client: Optional[CommandClient] = None,
 ) -> StateDeltaEmitter:
     """
     Create StateDeltaEmitter with default or provided configuration.
@@ -569,7 +714,10 @@ def create_state_delta_emitter(
     if config is None:
         config = StateDeltaEmitterConfig()
 
-    return StateDeltaEmitter(config, command_client)
+    if batch_client is None:
+        raise ValueError("batch_client is required")
+
+    return StateDeltaEmitter(config, batch_client=batch_client, command_client=command_client)
 
 
 # =============================================================================

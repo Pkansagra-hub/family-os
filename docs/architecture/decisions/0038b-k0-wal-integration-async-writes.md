@@ -1,7 +1,7 @@
 # ADR-0038b: K0 WAL Integration & Async Writes
 
-**Status:** ⏳ Pending Implementation
-**Date:** 2025-10-13
+**Status:** ✅ Accepted
+**Date:** 2025-10-28
 **Authors:** K1 Architecture Team
 **Parent ADR:** ADR-0038 (Audit Trail to K0 Receipts)
 **Priority:** ⭐⭐⭐ CRITICAL
