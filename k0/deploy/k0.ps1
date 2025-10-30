@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("up","down","restart","status","logs")]
+    [ValidateSet("up", "down", "restart", "status", "logs")]
     [string]$Command,
 
     [switch]$Rebuild,
@@ -129,7 +129,8 @@ function Do-Status {
 function Do-Logs {
     if ($Service) {
         docker compose @(Compose-Args) logs -f --no-log-prefix --tail=200 -- $Service
-    } else {
+    }
+    else {
         docker compose @(Compose-Args) logs -f --no-log-prefix --tail=100
     }
 }
@@ -149,10 +150,12 @@ function Do-Verify {
             $code = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri $c.Url).StatusCode
             if ($code -ge 200 -and $code -lt 300) {
                 Write-Ok ("{0}: {1}" -f $c.Name, $code)
-            } else {
+            }
+            else {
                 Write-Warn ("{0}: {1}" -f $c.Name, $code)
             }
-        } catch {
+        }
+        catch {
             Write-Err ("{0}: {1}" -f $c.Name, $_.Exception.Message)
         }
     }
