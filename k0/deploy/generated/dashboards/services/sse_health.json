@@ -304,8 +304,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(k0_bus_dispatch_latency_bucket[$__interval])) by (le, driver))",
-          "legendFormat": "{{driver}}",
+          "expr": "histogram_quantile(0.95, sum by (le, topic, outcome) (rate(k0_kernel_bus_dispatch_latency_seconds_bucket[$__interval])))",
+          "legendFormat": "{{topic}} ({{outcome}})",
           "refId": "A"
         }
       ],
