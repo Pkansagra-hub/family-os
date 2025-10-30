@@ -1,0 +1,87 @@
+{
+  "components": [
+    {
+      "component": "storage",
+      "path": "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-storage.yml",
+      "sha256": "e316978b6bf55a75b0574b6b906416d9a10862279167ecd7ec516f662652997e",
+      "size_bytes": 519
+    },
+    {
+      "component": "telemetry",
+      "path": "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-telemetry.yml",
+      "sha256": "07d1b53938c9975afaeb1fe287a374f7d5e196d125647e2cde4676d5556cab02",
+      "size_bytes": 1195
+    }
+  ],
+  "extra": {
+    "outputs": {
+      "secrets": {
+        "artifacts": [],
+        "metadata": [],
+        "missing": []
+      },
+      "storage": {
+        "blob_provider": "localfs",
+        "compose_artifacts": [
+          {
+            "path": "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-storage.yml",
+            "sha256": "e316978b6bf55a75b0574b6b906416d9a10862279167ecd7ec516f662652997e",
+            "size_bytes": 519
+          }
+        ],
+        "compose_fragments": [
+          "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-storage.yml"
+        ],
+        "enable_postgres": false,
+        "encryption_key_id": null,
+        "env_file": "./env/k0.env",
+        "extra_tags": {},
+        "kernel_image": "ghcr.io/familyos/k0-kernel:latest",
+        "kernel_port": 8080,
+        "snapshot_bucket": null,
+        "sqlite_path": "./data/k0.sqlite3",
+        "worker_image": "ghcr.io/familyos/k0-scheduler:latest"
+      },
+      "telemetry": {
+        "alert_rules_path": "./generated/rules",
+        "alertmanager_config": "./telemetry/alertmanager.yml",
+        "compose_artifacts": [
+          {
+            "path": "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-telemetry.yml",
+            "sha256": "07d1b53938c9975afaeb1fe287a374f7d5e196d125647e2cde4676d5556cab02",
+            "size_bytes": 1195
+          }
+        ],
+        "compose_fragments": [
+          "D:\\memory_kernel\\k0\\deployment\\compose\\generated\\local-single-node\\local-single-node-telemetry.yml"
+        ],
+        "dashboards_path": "./generated/dashboards",
+        "enable_alertmanager": true,
+        "enable_grafana": true,
+        "enable_tempo": true,
+        "grafana_provisioning": "./telemetry/grafana/provisioning",
+        "network_name": "k0-local",
+        "ports": {
+          "alertmanager": 9093,
+          "grafana": 3000,
+          "prometheus": 9090,
+          "tempo": {
+            "grpc": 4317,
+            "http": 3200,
+            "otlp_http": 4318
+          }
+        },
+        "prometheus_config": "./telemetry/prometheus.yml",
+        "scrape_interval_seconds": 15,
+        "tempo_config": "./telemetry/tempo.yml",
+        "tempo_image": "grafana/tempo:2.3.1"
+      }
+    }
+  },
+  "generated_at": "2025-10-09T00:30:56.570905+00:00",
+  "secrets": {
+    "metadata": [],
+    "missing": []
+  },
+  "stack": "local-single-node"
+}

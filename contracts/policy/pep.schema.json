@@ -1,0 +1,128 @@
+{
+  "version": "2025-09-28T00:00:00Z",
+  "bands": {
+    "GREEN": {
+      "max_fanout": 16,
+      "max_throughput_pps": 512,
+      "max_payload_bytes": 262144,
+      "violation_obligation": {
+        "name": "kernel.qos.tighten"
+      }
+    },
+    "AMBER": {
+      "max_fanout": 8,
+      "max_throughput_pps": 256,
+      "max_payload_bytes": 131072,
+      "obligations": [
+        {
+          "name": "kernel.audit.log",
+          "details": {
+            "level": "amber"
+          }
+        }
+      ],
+      "violation_obligation": {
+        "name": "kernel.qos.tighten",
+        "details": {
+          "band": "AMBER"
+        }
+      }
+    },
+    "RED": {
+      "deny": true,
+      "obligations": [
+        {
+          "name": "kernel.security.notify",
+          "details": {
+            "severity": "critical"
+          }
+        }
+      ]
+    }
+  },
+  "roles": [
+    {
+      "name": "coordinator",
+      "allow_topics": [
+        "memory.*",
+        "events.*",
+        "policy.*"
+      ],
+      "max_band": "AMBER",
+      "obligations": [
+        {
+          "name": "kernel.audit.trace",
+          "details": {
+            "role": "coordinator"
+          }
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "allow_topics": [
+        "memory.*",
+        "events.*",
+        "policy.*",
+        "infra.sanitized.*"
+      ],
+      "max_band": "RED"
+    },
+    {
+      "name": "guest",
+      "allow_topics": [
+        "ui.*"
+      ],
+      "max_band": "GREEN",
+      "obligations": [
+        {
+          "name": "kernel.redact.enforce",
+          "details": {
+            "scope": "PII"
+          }
+        }
+      ]
+    }
+  ],
+  "device_postures": {
+    "revoked": {
+      "deny": true,
+      "obligations": [
+        {
+          "name": "kernel.device.reauth",
+          "details": {
+            "reason": "revoked"
+          }
+        }
+      ]
+    },
+    "out_of_date": {
+      "deny": false,
+      "obligations": [
+        {
+          "name": "kernel.device.patch",
+          "details": {
+            "deadline": "PT24H"
+          }
+        }
+      ]
+    }
+  },
+  "sunset_windows": {
+    "schema://memory.delta/1.0": {
+      "warn_after": "2025-12-01T00:00:00Z",
+      "deny_after": "2026-01-01T00:00:00Z",
+      "obligation": {
+        "name": "kernel.schema.upgrade",
+        "details": {
+          "schema": "memory.delta",
+          "target": ">=1.1"
+        }
+      }
+    }
+  },
+  "role_violation_obligation": {
+    "name": "kernel.policy.review"
+  },
+  "default_obligations": []
+}
