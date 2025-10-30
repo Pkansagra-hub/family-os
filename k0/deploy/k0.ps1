@@ -32,7 +32,7 @@ function Write-Ok($msg) { Write-Host "[k0] $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "[k0] $msg" -ForegroundColor Yellow }
 function Write-Err($msg) { Write-Host "[k0] $msg" -ForegroundColor Red }
 
-function Ensure-Compose-Prereqs {
+function Test-ComposePrereqs {
     Write-Info "Ensuring deploy directories and files"
 
     New-Item -ItemType Directory -Path $EnvDir -Force | Out-Null
@@ -76,66 +76,66 @@ function Ensure-Compose-Prereqs {
     }
 }
 
-function Ensure-Image {
+function Update-Image {
     $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-kernel-local:latest")
     if ($Rebuild -or -not $imagePresent) {
         Write-Info "Building image k0-kernel-local:latest"
-        docker build -t k0-kernel-local:latest -f (Join-Path $RepoRoot "Dockerfile") $RepoRoot | Write-Host
+        docker build -t k0-kernel-local:latest -f (Join-Path $RepoRoot "Dockerfile") $RepoRoot
     }
 }
 
-function Ensure-Database {
+function Update-Database {
     if ($Migrate -or -not (Test-Path $DbPath)) {
         Write-Info "Bootstrapping SQLite database at $DbPath"
         $env:PYTHONPATH = $RepoRoot
-        $py = "from k0.automation.migrate import apply_migrations; from pathlib import Path; p=Path(r'''$DbPath'''); r=apply_migrations(p); print('Applied:', sum(1 for x in r if x.action=='applied'), 'Skipped:', sum(1 for x in r if x.action=='skipped'))"
-        python -c $py | Write-Host
+        $py = "from k0.automation.migrate import apply_migrations; from pathlib import Path; p=Path(r'$DbPath'); r=apply_migrations(p); print('Applied:', sum(1 for x in r if x.action==' + "'applied'" + "), 'Skipped:', sum(1 for x in r if x.action==' + "'skipped'" + '))"'
+        python -c $py
     }
 }
 
-function Compose-Args {
-    "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
+function Get-ComposeArgs {
+    return @("-p", $ProjectName, " -f ", $ComposeKernel, " -f ", $ComposeTelemetry)
 }
 
-function Do-Up {
-    Ensure-Compose-Prereqs
-    Ensure-Image
-    Ensure-Database
+function Start-Up {
+    Test-ComposePrereqs
+    Update-Image
+    Update-Database
     Write-Info "Starting services (kernel + telemetry)"
-    docker compose @(Compose-Args) up -d | Write-Host
+    docker compose @(Get-ComposeArgs) up -d
     if ($Verify) {
         if ($WaitSeconds -gt 0) {
             Write-Info "Waiting $WaitSeconds seconds before verification"
             Start-Sleep -Seconds $WaitSeconds
         }
-        Do-Verify
+        Test-Verify
     }
 }
 
-function Do-Down {
+function Stop-Down {
     Write-Info "Stopping services"
-    docker compose @(Compose-Args) down | Write-Host
+    docker compose @(Get-ComposeArgs) down
 }
 
-function Do-Restart {
-    Do-Down
-    Do-Up
+function Restart-Up {
+    Stop-Down
+    Start-Up
 }
 
-function Do-Status {
-    docker compose @(Compose-Args) ps
+function Get-Status {
+    docker compose @(Get-ComposeArgs) ps
 }
 
-function Do-Logs {
+function Show-Logs {
     if ($Service) {
-        docker compose @(Compose-Args) logs -f --no-log-prefix --tail=200 -- $Service
+        docker compose @(Get-ComposeArgs) logs -f --no-log-prefix --tail=200 -- $Service
     }
     else {
-        docker compose @(Compose-Args) logs -f --no-log-prefix --tail=100
+        docker compose @(Get-ComposeArgs) logs -f --no-log-prefix --tail=100
     }
 }
 
-function Do-Verify {
+function Test-Verify {
     Write-Info "Verifying service health"
     $checks = @(
         @{ Name = "kernel /healthz"; Url = "http://localhost:8080/healthz" },
@@ -149,22 +149,22 @@ function Do-Verify {
         try {
             $code = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri $c.Url).StatusCode
             if ($code -ge 200 -and $code -lt 300) {
-                Write-Ok ("{0}: {1}" -f $c.Name, $code)
+                Write-Ok ("{ 0 }: { 1 }" -f $c.Name, $code)
             }
             else {
-                Write-Warn ("{0}: {1}" -f $c.Name, $code)
+                Write-Warn ("{ 0 }: { 1 }" -f $c.Name, $code)
             }
         }
         catch {
-            Write-Err ("{0}: {1}" -f $c.Name, $_.Exception.Message)
+            Write-Err ("{ 0 }: { 1 }" -f $c.Name, $_.Exception.Message)
         }
     }
 }
 
 switch ($Command) {
-    "up" { Do-Up }
-    "down" { Do-Down }
-    "restart" { Do-Restart }
-    "status" { Do-Status }
-    "logs" { Do-Logs }
+    "up" { Start-Up }
+    "down" { Stop-Down }
+    "restart" { Restart-Up }
+    "status" { Get-Status }
+    "logs" { Show-Logs }
 }

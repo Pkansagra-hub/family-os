@@ -1,6 +1,6 @@
 # Start k0 kernel locally (Docker Compose)
 
-This guide runs the k0 kernel locally with Docker Compose using the pre-generated compose in `k0/deployment/compose/generated/local-single-node`.
+This guide runs the k0 kernel locally with Docker Compose using the deploy setup in `k0/deploy`.
 
 ## Prerequisites
 
@@ -19,8 +19,8 @@ docker build -t k0-kernel-local:latest -f .\Dockerfile .
 ## 2) Prepare the compose directory
 
 ```powershell
-# Navigate to the generated compose folder
-cd D:\familyos\k0\deployment\compose\generated\local-single-node
+# Navigate to the deploy folder
+cd D:\familyos\k0\deploy
 
 # Ensure folders/files expected by compose exist
 mkdir data -Force
@@ -28,7 +28,6 @@ mkdir secrets -Force
 mkdir env -Force
 if (!(Test-Path env\k0.env)) { New-Item -Path env\k0.env -ItemType File | Out-Null }
 ```
-
 
 ## 3) Fix policy schema bind mount (one-time)
 
@@ -42,7 +41,6 @@ if (!(Test-Path D:\familyos\contracts\policy)) { New-Item -Path D:\familyos\cont
 Copy-Item -Path D:\familyos\k0\contracts\policy\pep.schema.json -Destination D:\familyos\contracts\policy\pep.schema.json -Force
 ```
 
-
 ## 4) Bootstrap the SQLite database (optional but recommended)
 
 Create and migrate the local database at `data\kernel.sqlite3`.
@@ -53,8 +51,8 @@ python - <<'PY'
 from pathlib import Path
 from k0.automation.migrate import apply_migrations
 
-# Target DB file inside the compose folder
-db = Path(r"D:\familyos\k0\deployment\compose\generated\local-single-node\data\kernel.sqlite3")
+# Target DB file inside the deploy folder
+db = Path(r"D:\familyos\k0\deploy\data\kernel.sqlite3")
 results = apply_migrations(db)
 print("Applied:", sum(1 for r in results if r.action=="applied"),
       "Skipped:", sum(1 for r in results if r.action=="skipped"),
@@ -65,8 +63,9 @@ PY
 ## 5) Start the stack
 
 ```powershell
-# From: D:\familyos\k0\deployment\compose\generated\local-single-node
-docker compose up -d
+# From: D:\familyos\k0\deploy
+# Start kernel + telemetry stack
+docker compose -f .\docker-compose.yml -f .\local-single-node-telemetry.yml up -d
 ```
 
 ## 6) Verify health
@@ -103,9 +102,8 @@ docker compose down
 docker compose config
 ```
 
-
 ## Paths reference
 
-- Compose file: `k0/deployment/compose/generated/local-single-node/docker-compose.yml`
-- DB file: `k0/deployment/compose/generated/local-single-node/data/kernel.sqlite3`
+- Compose files: `k0/deploy/docker-compose.yml`, `k0/deploy/local-single-node-telemetry.yml`
+- DB file: `k0/deploy/data/kernel.sqlite3`
 - Policy schema: `k0/contracts/policy/pep.schema.json` (copied to `contracts/policy/pep.schema.json` at repo root)
