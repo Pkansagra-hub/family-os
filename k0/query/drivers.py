@@ -4,396 +4,392 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 import time
 from dataclasses import dataclass
 from typing import Any, Iterable, List, MutableMapping, Sequence
-
-import sqlite3
 
 from k0.query.common import DriverContext, DriverExecution, QueryDriver
 from k0.uow.connection_pool import connection_scope
 
 
 class DriverRegistry:
-	"""Registry that resolves selectors to concrete drivers."""
+    """Registry that resolves selectors to concrete drivers."""
 
-	def __init__(self, drivers: Sequence[QueryDriver] | None = None) -> None:
-		self._drivers: List[QueryDriver] = list(drivers or [])
+    def __init__(self, drivers: Sequence[QueryDriver] | None = None) -> None:
+        self._drivers: List[QueryDriver] = list(drivers or [])
 
-	def register(self, driver: QueryDriver) -> None:
-		self._drivers.append(driver)
+    def register(self, driver: QueryDriver) -> None:
+        self._drivers.append(driver)
 
-	def extend(self, drivers: Iterable[QueryDriver]) -> None:
-		for driver in drivers:
-			self.register(driver)
+    def extend(self, drivers: Iterable[QueryDriver]) -> None:
+        for driver in drivers:
+            self.register(driver)
 
-	def resolve(self, selector: Any) -> QueryDriver:
-		for driver in self._drivers:
-			if driver.supports(selector):
-				return driver
-		raise LookupError(f"No query driver registered for selector: {selector!r}")
+    def resolve(self, selector: Any) -> QueryDriver:
+        for driver in self._drivers:
+            if driver.supports(selector):
+                return driver
+        raise LookupError(f"No query driver registered for selector: {selector!r}")
 
-	@property
-	def drivers(self) -> Sequence[QueryDriver]:
-		return tuple(self._drivers)
+    @property
+    def drivers(self) -> Sequence[QueryDriver]:
+        return tuple(self._drivers)
 
 
 def build_default_registry(
-	*,
-	default_limit: int,
-	max_limit: int,
+    *,
+    default_limit: int,
+    max_limit: int,
 ) -> DriverRegistry:
-	registry = DriverRegistry([
-		WalDriver(default_limit=default_limit, max_limit=max_limit),
-		FtsDriver(default_limit=default_limit, max_limit=max_limit),
-		AliasDriver(
-			name="episodic",
-			supported_types={"episodic", "timeline", "memory.timeline"},
-			reason="episodic alias driver not configured",
-		),
-		AliasDriver(
-			name="snapshot",
-			supported_types={"snapshot", "snapshots"},
-			reason="snapshot recall driver not configured",
-		),
-		AliasDriver(
-			name="vector",
-			supported_types={"vector", "semantic_vector", "embedding"},
-			reason="vector recall driver not configured",
-		),
-		AliasDriver(
-			name="kg",
-			supported_types={"kg", "graph", "knowledge"},
-			reason="knowledge graph recall driver not configured",
-		),
-	])
-	return registry
+    registry = DriverRegistry(
+        [
+            WalDriver(default_limit=default_limit, max_limit=max_limit),
+            FtsDriver(default_limit=default_limit, max_limit=max_limit),
+            AliasDriver(
+                name="episodic",
+                supported_types={"episodic", "timeline", "memory.timeline"},
+                reason="episodic alias driver not configured",
+            ),
+            AliasDriver(
+                name="snapshot",
+                supported_types={"snapshot", "snapshots"},
+                reason="snapshot recall driver not configured",
+            ),
+            AliasDriver(
+                name="vector",
+                supported_types={"vector", "semantic_vector", "embedding"},
+                reason="vector recall driver not configured",
+            ),
+            AliasDriver(
+                name="kg",
+                supported_types={"kg", "graph", "knowledge"},
+                reason="knowledge graph recall driver not configured",
+            ),
+        ]
+    )
+    return registry
 
 
 def _selector_payload(selector: Any) -> MutableMapping[str, Any]:
-	payload: MutableMapping[str, Any] = {}
-	for attribute in (
-		"type",
-		"topic",
-		"limit",
-		"cursor",
-		"after",
-		"tenant_id",
-		"space_id",
-		"query",
-	):
-		value = getattr(selector, attribute, None)
-		if value is not None:
-			payload[attribute] = value
-	return payload
+    payload: MutableMapping[str, Any] = {}
+    for attribute in (
+        "type",
+        "topic",
+        "limit",
+        "cursor",
+        "after",
+        "tenant_id",
+        "space_id",
+        "query",
+    ):
+        value = getattr(selector, attribute, None)
+        if value is not None:
+            payload[attribute] = value
+    return payload
 
 
 def _resolve_next_cursor(items: list[dict[str, Any]], cursor: int | None) -> int | None:
-	if not items:
-		return cursor
-	return int(min(item["wal_pos"] for item in items))
+    if not items:
+        return cursor
+    return int(min(item["wal_pos"] for item in items))
 
 
 def _decode_body(body: bytes | None) -> Any:
-	if body is None:
-		return None
-	try:
-		decoded = body.decode("utf-8")
-	except UnicodeDecodeError:
-		return {
-			"encoding": "base64",
-			"payload": base64.b64encode(body).decode("ascii"),
-		}
-	try:
-		return json.loads(decoded)
-	except json.JSONDecodeError:
-		return decoded
+    if body is None:
+        return None
+    try:
+        decoded = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "encoding": "base64",
+            "payload": base64.b64encode(body).decode("ascii"),
+        }
+    try:
+        return json.loads(decoded)
+    except json.JSONDecodeError:
+        return decoded
 
 
 class WalDriver(QueryDriver):
-	"""Primary driver that fans out into the WAL slice."""
+    """Primary driver that fans out into the WAL slice."""
 
-	name = "wal"
+    name = "wal"
 
-	def __init__(self, *, default_limit: int, max_limit: int) -> None:
-		self._default_limit = default_limit
-		self._max_limit = max_limit
+    def __init__(self, *, default_limit: int, max_limit: int) -> None:
+        self._default_limit = default_limit
+        self._max_limit = max_limit
 
-	def supports(self, selector: Any) -> bool:
-		selector_type = getattr(selector, "type", None)
-		if selector_type is None:
-			return True
-		selector_type_lower = str(selector_type).lower()
-		return selector_type_lower in {
-			"wal",
-			"timeline",
-			"episodic",
-			"memory.timeline",
-			"event",
-			"default",
-		}
+    def supports(self, selector: Any) -> bool:
+        selector_type = getattr(selector, "type", None)
+        if selector_type is None:
+            return True
+        selector_type_lower = str(selector_type).lower()
+        return selector_type_lower in {
+            "wal",
+            "timeline",
+            "episodic",
+            "memory.timeline",
+            "event",
+            "default",
+        }
 
-	def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
-		allowed_limit = context.allowed_limit
-		if allowed_limit <= 0:
-			return DriverExecution(
-				driver=self.name,
-				selector_index=context.selector_index,
-				selector=_selector_payload(selector),
-			)
+    def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+        allowed_limit = context.allowed_limit
+        if allowed_limit <= 0:
+            return DriverExecution(
+                driver=self.name,
+                selector_index=context.selector_index,
+                selector=_selector_payload(selector),
+            )
 
-		selector_topic = getattr(selector, "topic", None)
-		selector_cursor = getattr(selector, "cursor", None)
-		selector_after = getattr(selector, "after", None)
-		selector_tenant = getattr(selector, "tenant_id", None) or context.tenant_id
+        selector_topic = getattr(selector, "topic", None)
+        selector_cursor = getattr(selector, "cursor", None)
+        selector_after = getattr(selector, "after", None)
+        selector_tenant = getattr(selector, "tenant_id", None) or context.tenant_id
 
-		start = time.perf_counter()
-		with connection_scope() as connection:
-			rows = self._fetch_rows(
-				connection,
-				space_id=context.space_id,
-				tenant_id=selector_tenant,
-				topic=selector_topic,
-				cursor=selector_cursor,
-				after=selector_after,
-				limit=allowed_limit,
-			)
-		latency_ms = (time.perf_counter() - start) * 1_000.0
+        start = time.perf_counter()
+        with connection_scope() as connection:
+            rows = self._fetch_rows(
+                connection,
+                space_id=context.space_id,
+                tenant_id=selector_tenant,
+                topic=selector_topic,
+                cursor=selector_cursor,
+                after=selector_after,
+                limit=allowed_limit,
+            )
+        latency_ms = (time.perf_counter() - start) * 1_000.0
 
-		items = [self._row_to_item(row) for row in rows]
-		consumed = len(items)
-		next_cursor = _resolve_next_cursor(items, selector_cursor)
-		exhausted_time_budget = (
-			context.elapsed_ms + latency_ms >= context.time_budget_ms
-		)
-		metadata: MutableMapping[str, Any] = {
-			"source": "st_wal",
-			"rows": consumed,
-		}
-		return DriverExecution(
-			driver=self.name,
-			selector_index=context.selector_index,
-			selector=_selector_payload(selector),
-			items=items,
-			next_cursor=next_cursor,
-			latency_ms=round(latency_ms, 3),
-			consumed_top_k=consumed,
-			exhausted_time_budget=exhausted_time_budget,
-			metadata=metadata,
-		)
+        items = [self._row_to_item(row) for row in rows]
+        consumed = len(items)
+        next_cursor = _resolve_next_cursor(items, selector_cursor)
+        exhausted_time_budget = context.elapsed_ms + latency_ms >= context.time_budget_ms
+        metadata: MutableMapping[str, Any] = {
+            "source": "st_wal",
+            "rows": consumed,
+        }
+        return DriverExecution(
+            driver=self.name,
+            selector_index=context.selector_index,
+            selector=_selector_payload(selector),
+            items=items,
+            next_cursor=next_cursor,
+            latency_ms=round(latency_ms, 3),
+            consumed_top_k=consumed,
+            exhausted_time_budget=exhausted_time_budget,
+            metadata=metadata,
+        )
 
-	def _fetch_rows(
-		self,
-		connection: sqlite3.Connection,
-		*,
-		space_id: str,
-		tenant_id: str | None,
-		topic: str | None,
-		cursor: int | None,
-		after: int | None,
-		limit: int,
-	) -> list[sqlite3.Row]:
-		query_parts = [
-			"SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts",
-			"FROM st_wal",
-			"WHERE space_id = ?",
-		]
-		params: list[Any] = [space_id]
+    def _fetch_rows(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        space_id: str,
+        tenant_id: str | None,
+        topic: str | None,
+        cursor: int | None,
+        after: int | None,
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        query_parts = [
+            "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts",
+            "FROM st_wal",
+            "WHERE space_id = ?",
+        ]
+        params: list[Any] = [space_id]
 
-		if tenant_id:
-			query_parts.append("AND tenant_id = ?")
-			params.append(tenant_id)
+        if tenant_id:
+            query_parts.append("AND tenant_id = ?")
+            params.append(tenant_id)
 
-		if topic:
-			query_parts.append("AND topic = ?")
-			params.append(topic)
+        if topic:
+            query_parts.append("AND topic = ?")
+            params.append(topic)
 
-		if cursor is not None:
-			query_parts.append("AND pos < ?")
-			params.append(int(cursor))
+        if cursor is not None:
+            query_parts.append("AND pos < ?")
+            params.append(int(cursor))
 
-		if after is not None:
-			query_parts.append("AND pos > ?")
-			params.append(int(after))
+        if after is not None:
+            query_parts.append("AND pos > ?")
+            params.append(int(after))
 
-		query_parts.append("ORDER BY pos DESC")
-		query_parts.append("LIMIT ?")
-		params.append(int(limit))
+        query_parts.append("ORDER BY pos DESC")
+        query_parts.append("LIMIT ?")
+        params.append(int(limit))
 
-		statement = " ".join(query_parts)
-		return list(connection.execute(statement, params).fetchall())
+        statement = " ".join(query_parts)
+        return list(connection.execute(statement, params).fetchall())
 
-	def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
-		body_value = _decode_body(row["body"]) if "body" in row.keys() else None
-		return {
-			"wal_pos": row["pos"],
-			"tenant_id": row["tenant_id"],
-			"space_id": row["space_id"],
-			"topic": row["topic"],
-			"commit_ts": row["commit_ts"],
-			"schema_uri": row["schema_uri"],
-			"schema_version": row["schema_version"],
-			"device_id": row["device_id"],
-			"payload_sha256": row["payload_sha256"],
-			"envelope": json.loads(row["envelope_json"]),
-			"body": body_value,
-		}
+    def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
+        body_value = _decode_body(row["body"]) if "body" in row.keys() else None
+        return {
+            "wal_pos": row["pos"],
+            "tenant_id": row["tenant_id"],
+            "space_id": row["space_id"],
+            "topic": row["topic"],
+            "commit_ts": row["commit_ts"],
+            "schema_uri": row["schema_uri"],
+            "schema_version": row["schema_version"],
+            "device_id": row["device_id"],
+            "payload_sha256": row["payload_sha256"],
+            "envelope": json.loads(row["envelope_json"]),
+            "body": body_value,
+        }
 
 
 @dataclass(slots=True)
 class AliasDriver(QueryDriver):
-	"""Placeholder driver that records unsupported selector types."""
+    """Placeholder driver that records unsupported selector types."""
 
-	name: str
-	supported_types: set[str]
-	reason: str
+    name: str
+    supported_types: set[str]
+    reason: str
 
-	def supports(self, selector: Any) -> bool:
-		selector_type = getattr(selector, "type", None)
-		if selector_type is None:
-			return False
-		return str(selector_type).lower() in self.supported_types
+    def supports(self, selector: Any) -> bool:
+        selector_type = getattr(selector, "type", None)
+        if selector_type is None:
+            return False
+        return str(selector_type).lower() in self.supported_types
 
-	def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
-		metadata: MutableMapping[str, Any] = {
-			"status": "unavailable",
-			"reason": self.reason,
-		}
-		return DriverExecution(
-			driver=self.name,
-			selector_index=context.selector_index,
-			selector=_selector_payload(selector),
-			latency_ms=0.0,
-			metadata=metadata,
-		)
+    def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+        metadata: MutableMapping[str, Any] = {
+            "status": "unavailable",
+            "reason": self.reason,
+        }
+        return DriverExecution(
+            driver=self.name,
+            selector_index=context.selector_index,
+            selector=_selector_payload(selector),
+            latency_ms=0.0,
+            metadata=metadata,
+        )
 
 
 class FtsDriver(QueryDriver):
-	"""Full-text search driver using SQLite FTS5 virtual table."""
+    """Full-text search driver using SQLite FTS5 virtual table."""
 
-	name = "fts"
+    name = "fts"
 
-	def __init__(self, *, default_limit: int, max_limit: int) -> None:
-		self._default_limit = default_limit
-		self._max_limit = max_limit
+    def __init__(self, *, default_limit: int, max_limit: int) -> None:
+        self._default_limit = default_limit
+        self._max_limit = max_limit
 
-	def supports(self, selector: Any) -> bool:
-		selector_type = getattr(selector, "type", None)
-		if selector_type is None:
-			return False
-		selector_type_lower = str(selector_type).lower()
-		return selector_type_lower in {
-			"fts",
-			"semantic",
-			"semantic_memory",
-			"fulltext",
-			"text",
-		}
+    def supports(self, selector: Any) -> bool:
+        selector_type = getattr(selector, "type", None)
+        if selector_type is None:
+            return False
+        selector_type_lower = str(selector_type).lower()
+        return selector_type_lower in {
+            "fts",
+            "semantic",
+            "semantic_memory",
+            "fulltext",
+            "text",
+        }
 
-	def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
-		allowed_limit = context.allowed_limit
-		if allowed_limit <= 0:
-			return DriverExecution(
-				driver=self.name,
-				selector_index=context.selector_index,
-				selector=_selector_payload(selector),
-			)
+    def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+        allowed_limit = context.allowed_limit
+        if allowed_limit <= 0:
+            return DriverExecution(
+                driver=self.name,
+                selector_index=context.selector_index,
+                selector=_selector_payload(selector),
+            )
 
-		selector_query = getattr(selector, "query", None)
-		selector_topic = getattr(selector, "topic", None)
-		selector_tenant = getattr(selector, "tenant_id", None) or context.tenant_id
+        selector_query = getattr(selector, "query", None)
+        selector_topic = getattr(selector, "topic", None)
+        selector_tenant = getattr(selector, "tenant_id", None) or context.tenant_id
 
-		if not selector_query:
-			# No query provided, return empty result
-			return DriverExecution(
-				driver=self.name,
-				selector_index=context.selector_index,
-				selector=_selector_payload(selector),
-				latency_ms=0.0,
-				metadata={"status": "no_query"},
-			)
+        if not selector_query:
+            # No query provided, return empty result
+            return DriverExecution(
+                driver=self.name,
+                selector_index=context.selector_index,
+                selector=_selector_payload(selector),
+                latency_ms=0.0,
+                metadata={"status": "no_query"},
+            )
 
-		start = time.perf_counter()
-		with connection_scope() as connection:
-			rows = self._search_fts(
-				connection,
-				space_id=context.space_id,
-				tenant_id=selector_tenant,
-				topic=selector_topic,
-				query=selector_query,
-				limit=allowed_limit,
-			)
-		latency_ms = (time.perf_counter() - start) * 1_000.0
+        start = time.perf_counter()
+        with connection_scope() as connection:
+            rows = self._search_fts(
+                connection,
+                space_id=context.space_id,
+                tenant_id=selector_tenant,
+                topic=selector_topic,
+                query=selector_query,
+                limit=allowed_limit,
+            )
+        latency_ms = (time.perf_counter() - start) * 1_000.0
 
-		items = [self._row_to_item(row) for row in rows]
-		consumed = len(items)
-		exhausted_time_budget = (
-			context.elapsed_ms + latency_ms >= context.time_budget_ms
-		)
-		metadata: MutableMapping[str, Any] = {
-			"source": "st_fts",
-			"rows": consumed,
-			"query": selector_query,
-		}
-		return DriverExecution(
-			driver=self.name,
-			selector_index=context.selector_index,
-			selector=_selector_payload(selector),
-			items=items,
-			latency_ms=round(latency_ms, 3),
-			consumed_top_k=consumed,
-			exhausted_time_budget=exhausted_time_budget,
-			metadata=metadata,
-		)
+        items = [self._row_to_item(row) for row in rows]
+        consumed = len(items)
+        exhausted_time_budget = context.elapsed_ms + latency_ms >= context.time_budget_ms
+        metadata: MutableMapping[str, Any] = {
+            "source": "st_fts",
+            "rows": consumed,
+            "query": selector_query,
+        }
+        return DriverExecution(
+            driver=self.name,
+            selector_index=context.selector_index,
+            selector=_selector_payload(selector),
+            items=items,
+            latency_ms=round(latency_ms, 3),
+            consumed_top_k=consumed,
+            exhausted_time_budget=exhausted_time_budget,
+            metadata=metadata,
+        )
 
-	def _search_fts(
-		self,
-		connection: sqlite3.Connection,
-		*,
-		space_id: str,
-		tenant_id: str | None,
-		topic: str | None,
-		query: str,
-		limit: int,
-	) -> list[sqlite3.Row]:
-		# Build FTS query with filtering
-		query_parts = [
-			"SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts, bm25(st_fts) as score",
-			"FROM st_fts",
-			f"WHERE st_fts MATCH '{query}'",  # FTS5 match query
-			"AND space_id = ?",
-		]
-		params: list[Any] = [space_id]
+    def _search_fts(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        space_id: str,
+        tenant_id: str | None,
+        topic: str | None,
+        query: str,
+        limit: int,
+    ) -> list[sqlite3.Row]:
+        # Build FTS query with filtering
+        query_parts = [
+            "SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts, bm25(st_fts) as score",
+            "FROM st_fts",
+            f"WHERE st_fts MATCH '{query}'",  # FTS5 match query
+            "AND space_id = ?",
+        ]
+        params: list[Any] = [space_id]
 
-		if tenant_id:
-			query_parts.append("AND tenant_id = ?")
-			params.append(tenant_id)
+        if tenant_id:
+            query_parts.append("AND tenant_id = ?")
+            params.append(tenant_id)
 
-		if topic:
-			query_parts.append("AND topic = ?")
-			params.append(topic)
+        if topic:
+            query_parts.append("AND topic = ?")
+            params.append(topic)
 
-		query_parts.append("ORDER BY bm25(st_fts)")  # Order by relevance score
-		query_parts.append("LIMIT ?")
-		params.append(int(limit))
+        query_parts.append("ORDER BY bm25(st_fts)")  # Order by relevance score
+        query_parts.append("LIMIT ?")
+        params.append(int(limit))
 
-		statement = " ".join(query_parts)
-		return list(connection.execute(statement, params).fetchall())
+        statement = " ".join(query_parts)
+        return list(connection.execute(statement, params).fetchall())
 
-	def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
-		body_value = _decode_body(row["body"]) if "body" in row.keys() else None
-		return {
-			"wal_pos": row["wal_pos"],
-			"tenant_id": row["tenant_id"],
-			"space_id": row["space_id"],
-			"topic": row["topic"],
-			"commit_ts": row["commit_ts"],
-			"schema_uri": row["schema_uri"],
-			"schema_version": row["schema_version"],
-			"device_id": row["device_id"],
-			"payload_sha256": row["payload_sha256"],
-			"envelope": json.loads(row["envelope_json"]),
-			"body": body_value,
-			"fts_score": row["score"],  # Include FTS relevance score
-		}
-
+    def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
+        body_value = _decode_body(row["body"]) if "body" in row.keys() else None
+        return {
+            "wal_pos": row["wal_pos"],
+            "tenant_id": row["tenant_id"],
+            "space_id": row["space_id"],
+            "topic": row["topic"],
+            "commit_ts": row["commit_ts"],
+            "schema_uri": row["schema_uri"],
+            "schema_version": row["schema_version"],
+            "device_id": row["device_id"],
+            "payload_sha256": row["payload_sha256"],
+            "envelope": json.loads(row["envelope_json"]),
+            "body": body_value,
+            "fts_score": row["score"],  # Include FTS relevance score
+        }
