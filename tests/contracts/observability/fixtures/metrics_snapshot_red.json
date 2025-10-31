@@ -1,0 +1,47 @@
+{
+  "snapshot_version": "v0.1.0",
+  "captured_at": "2025-10-31T19:22:00Z",
+  "source": "k1_bridge",
+  "privacy_band": "RED",
+  "policy_version": "policy-2025-10-30",
+  "metrics": {
+    "counters": [
+      {
+        "name": "k0.pep.decisions_total",
+        "value": 42,
+        "labels": {
+          "decision": "deny",
+          "band": "RED"
+        },
+        "band_redacted": false
+      },
+      {
+        "name": "k0.pipeline.p07.records_redacted_total",
+        "value": 5,
+        "labels": {
+          "pipeline": "p07"
+        },
+        "band_redacted": true
+      }
+    ],
+    "gauges": [],
+    "histograms": [
+      {
+        "name": "k0.unit_of_work.commit_latency_ms",
+        "sum": 1200.0,
+        "count": 40,
+        "buckets": [
+          { "le": 25, "cumulative_count": 10 },
+          { "le": 50, "cumulative_count": 25 },
+          { "le": 100, "cumulative_count": 35 },
+          { "le": 250, "cumulative_count": 40 }
+        ],
+        "labels": {
+          "space": "household"
+        },
+        "band_redacted": true
+      }
+    ]
+  },
+  "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

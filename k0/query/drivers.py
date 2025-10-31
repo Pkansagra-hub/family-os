@@ -45,11 +45,7 @@ def build_default_registry(
 ) -> DriverRegistry:
 	registry = DriverRegistry([
 		WalDriver(default_limit=default_limit, max_limit=max_limit),
-		AliasDriver(
-			name="semantic",
-			supported_types={"semantic", "semantic_memory", "fts"},
-			reason="semantic storage driver not configured",
-		),
+		FtsDriver(default_limit=default_limit, max_limit=max_limit),
 		AliasDriver(
 			name="episodic",
 			supported_types={"episodic", "timeline", "memory.timeline"},
@@ -270,4 +266,134 @@ class AliasDriver(QueryDriver):
 			latency_ms=0.0,
 			metadata=metadata,
 		)
+
+
+class FtsDriver(QueryDriver):
+	"""Full-text search driver using SQLite FTS5 virtual table."""
+
+	name = "fts"
+
+	def __init__(self, *, default_limit: int, max_limit: int) -> None:
+		self._default_limit = default_limit
+		self._max_limit = max_limit
+
+	def supports(self, selector: Any) -> bool:
+		selector_type = getattr(selector, "type", None)
+		if selector_type is None:
+			return False
+		selector_type_lower = str(selector_type).lower()
+		return selector_type_lower in {
+			"fts",
+			"semantic",
+			"semantic_memory",
+			"fulltext",
+			"text",
+		}
+
+	def execute(self, selector: Any, context: DriverContext) -> DriverExecution:
+		allowed_limit = context.allowed_limit
+		if allowed_limit <= 0:
+			return DriverExecution(
+				driver=self.name,
+				selector_index=context.selector_index,
+				selector=_selector_payload(selector),
+			)
+
+		selector_query = getattr(selector, "query", None)
+		selector_topic = getattr(selector, "topic", None)
+		selector_tenant = getattr(selector, "tenant_id", None) or context.tenant_id
+
+		if not selector_query:
+			# No query provided, return empty result
+			return DriverExecution(
+				driver=self.name,
+				selector_index=context.selector_index,
+				selector=_selector_payload(selector),
+				latency_ms=0.0,
+				metadata={"status": "no_query"},
+			)
+
+		start = time.perf_counter()
+		with connection_scope() as connection:
+			rows = self._search_fts(
+				connection,
+				space_id=context.space_id,
+				tenant_id=selector_tenant,
+				topic=selector_topic,
+				query=selector_query,
+				limit=allowed_limit,
+			)
+		latency_ms = (time.perf_counter() - start) * 1_000.0
+
+		items = [self._row_to_item(row) for row in rows]
+		consumed = len(items)
+		exhausted_time_budget = (
+			context.elapsed_ms + latency_ms >= context.time_budget_ms
+		)
+		metadata: MutableMapping[str, Any] = {
+			"source": "st_fts",
+			"rows": consumed,
+			"query": selector_query,
+		}
+		return DriverExecution(
+			driver=self.name,
+			selector_index=context.selector_index,
+			selector=_selector_payload(selector),
+			items=items,
+			latency_ms=round(latency_ms, 3),
+			consumed_top_k=consumed,
+			exhausted_time_budget=exhausted_time_budget,
+			metadata=metadata,
+		)
+
+	def _search_fts(
+		self,
+		connection: sqlite3.Connection,
+		*,
+		space_id: str,
+		tenant_id: str | None,
+		topic: str | None,
+		query: str,
+		limit: int,
+	) -> list[sqlite3.Row]:
+		# Build FTS query with filtering
+		query_parts = [
+			"SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts, bm25(st_fts) as score",
+			"FROM st_fts",
+			f"WHERE st_fts MATCH '{query}'",  # FTS5 match query
+			"AND space_id = ?",
+		]
+		params: list[Any] = [space_id]
+
+		if tenant_id:
+			query_parts.append("AND tenant_id = ?")
+			params.append(tenant_id)
+
+		if topic:
+			query_parts.append("AND topic = ?")
+			params.append(topic)
+
+		query_parts.append("ORDER BY bm25(st_fts)")  # Order by relevance score
+		query_parts.append("LIMIT ?")
+		params.append(int(limit))
+
+		statement = " ".join(query_parts)
+		return list(connection.execute(statement, params).fetchall())
+
+	def _row_to_item(self, row: sqlite3.Row) -> dict[str, Any]:
+		body_value = _decode_body(row["body"]) if "body" in row.keys() else None
+		return {
+			"wal_pos": row["wal_pos"],
+			"tenant_id": row["tenant_id"],
+			"space_id": row["space_id"],
+			"topic": row["topic"],
+			"commit_ts": row["commit_ts"],
+			"schema_uri": row["schema_uri"],
+			"schema_version": row["schema_version"],
+			"device_id": row["device_id"],
+			"payload_sha256": row["payload_sha256"],
+			"envelope": json.loads(row["envelope_json"]),
+			"body": body_value,
+			"fts_score": row["score"],  # Include FTS relevance score
+		}
 

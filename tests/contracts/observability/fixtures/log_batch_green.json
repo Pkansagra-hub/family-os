@@ -1,0 +1,26 @@
+{
+  "batch_version": "v0.1.0",
+  "captured_at": "2025-10-31T19:30:00Z",
+  "source": "k1_bridge",
+  "privacy_band": "GREEN",
+  "policy_version": "policy-2025-10-30",
+  "entries": [
+    {
+      "timestamp": "2025-10-31T19:29:59.900Z",
+      "level": "info",
+      "component": "k0.qos.scheduler",
+      "event": "token_refill",
+      "message": "Refilled fast lane tokens",
+      "context": {
+        "lane": "fast",
+        "refill_tokens": 12
+      },
+      "cognitive_trace_id": "abc123def456",
+      "unit_of_work_id": "uow-001",
+      "wal_offset": 1024,
+      "band_redacted": false,
+      "obligations_applied": []
+    }
+  ],
+  "checksum": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+}
