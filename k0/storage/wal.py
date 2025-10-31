@@ -28,6 +28,7 @@ class WalEntry:
     body: bytes | None = None
     payload_sha256: str | None = None
     idem_key: str | None = None
+    redacted_body_json: str | None = None
     position: int | None = None
 
 
@@ -101,8 +102,8 @@ class WriteAheadLog:
             cursor = conn.execute(
                 (
                     "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
-                    "payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 ),
                 (
                     insert_entry.tenant_id,
@@ -110,6 +111,7 @@ class WriteAheadLog:
                     insert_entry.topic,
                     insert_entry.envelope_json,
                     insert_entry.body,
+                    insert_entry.redacted_body_json,
                     insert_entry.payload_sha256,
                     insert_entry.schema_uri,
                     insert_entry.schema_version,
@@ -139,7 +141,7 @@ class WriteAheadLog:
             rows = conn.execute(
                 (
                     "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, "
-                    "schema_uri, schema_version, idem_key, device_id, commit_ts "
+                    "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts "
                     "FROM st_wal WHERE pos > ? ORDER BY pos ASC LIMIT ?"
                 ),
                 (position, limit),
@@ -155,6 +157,7 @@ class WriteAheadLog:
                     device_id=row["device_id"],
                     commit_ts=row["commit_ts"],
                     body=row["body"],
+                    redacted_body_json=row["redacted_body_json"],
                     payload_sha256=row["payload_sha256"],
                     idem_key=row["idem_key"],
                     position=row["pos"],

@@ -5,16 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from threading import Lock
 from types import TracebackType
-from typing import Callable, Optional, Type, cast
+from typing import TYPE_CHECKING, Callable, Optional, Type, cast
+
+if TYPE_CHECKING:
+    from .metrics import QoSMetrics
 
 
 @dataclass(slots=True)
 class SchedulerProfile:
     name: str
     description: str
-    port_limits: dict[str, int] = field(
-        default_factory=lambda: cast(dict[str, int], {})
-    )
+    port_limits: dict[str, int] = field(default_factory=lambda: cast(dict[str, int], {}))
     default_port_limit: int = 16
 
 
@@ -67,13 +68,15 @@ class Scheduler:
         profile: SchedulerProfile | None = None,
         chaos_config=None,
         metrics_exporter=None,
+        qos_metrics: QoSMetrics | None = None,
     ) -> None:
-        """Initialize scheduler with optional chaos starvation.
+        """Initialize scheduler with optional chaos starvation and metrics.
 
         Args:
             profile: Scheduler profile with port limits
             chaos_config: Optional ChaosSettings for capacity reduction
             metrics_exporter: Optional MetricsExporter for telemetry
+            qos_metrics: Optional QoSMetrics for token acquisition tracking
         """
         base_profile = profile or SchedulerProfile(
             name="balanced",
@@ -86,14 +89,13 @@ class Scheduler:
         if chaos_config is not None and chaos_config.enabled:
             from k0.chaos.toggles import apply_scheduler_starvation
 
-            self.profile = apply_scheduler_starvation(
-                base_profile, chaos_config, metrics_exporter
-            )
+            self.profile = apply_scheduler_starvation(base_profile, chaos_config, metrics_exporter)
         else:
             self.profile = base_profile
 
         self._lock = Lock()
         self._active: dict[str, int] = {}
+        self._qos_metrics = qos_metrics
 
     def acquire(self, *, band: str, port: str, cost: int) -> SchedulerToken:
         if cost <= 0:
@@ -103,6 +105,9 @@ class Scheduler:
         with self._lock:
             current = self._active.get(port, 0)
             if current + cost > limit:
+                # Emit rejection metric before raising
+                if self._qos_metrics is not None:
+                    self._qos_metrics.record_rejection_capacity(band=band, port=port)
                 raise SchedulerCapacityError(
                     band=band,
                     port=port,
@@ -111,15 +116,19 @@ class Scheduler:
                 )
             self._active[port] = current + cost
 
+            # Emit acquisition metric and update utilization
+            if self._qos_metrics is not None:
+                self._qos_metrics.record_acquisition(band=band, port=port)
+                new_active = self._active[port]
+                self._qos_metrics.update_port_metrics(port=port, active=new_active, limit=limit)
+
         return SchedulerToken(self._release, port, cost)
 
     def tighten(self, profile: SchedulerProfile) -> None:
         with self._lock:
             self.profile = profile
             self._active = {
-                port: min(
-                    count, profile.port_limits.get(port, profile.default_port_limit)
-                )
+                port: min(count, profile.port_limits.get(port, profile.default_port_limit))
                 for port, count in self._active.items()
             }
 
@@ -131,6 +140,11 @@ class Scheduler:
                 self._active.pop(port, None)
             else:
                 self._active[port] = new_value
+
+            # Update utilization metrics after release
+            if self._qos_metrics is not None:
+                limit = self.profile.port_limits.get(port, self.profile.default_port_limit)
+                self._qos_metrics.update_port_metrics(port=port, active=new_value, limit=limit)
 
     def active_tokens(self, port: str) -> int:
         with self._lock:

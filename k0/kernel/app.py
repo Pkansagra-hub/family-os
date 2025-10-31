@@ -42,15 +42,17 @@ from ..obs import (
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
 from ..ports import command, drivers, observe, query, sse
+from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
+    DeadLetterQueue,
+    ObligationStore,
     OffsetStore,
     OutboxStore,
     ProvisioningLedger,
     ReceiptStore,
     WriteAheadLog,
 )
-from ..storage.dlq import DeadLetterQueue
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
 from ..uow.connection_pool import configure_pool, shutdown_pool
@@ -110,18 +112,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         observability_emitter=observability_emitter,
     )
 
+    # Create QoS metrics instrumentation
+    qos_metrics = QoSMetrics(metrics_exporter)
+
     # Register process metrics collectors for CPU/Memory monitoring
     # CRITICAL: Must store collectors at module or app state level to prevent GC
     # ProcessCollector and PlatformCollector auto-register with the registry
     try:
         # Store collectors in a persistent location (app.state will hold them)
-        logger.debug(
-            "Registering ProcessCollector to registry: %s", metrics_exporter.registry
-        )
+        logger.debug("Registering ProcessCollector to registry: %s", metrics_exporter.registry)
         _process_collector = ProcessCollector(registry=metrics_exporter.registry)
-        logger.debug(
-            "Registering PlatformCollector to registry: %s", metrics_exporter.registry
-        )
+        logger.debug("Registering PlatformCollector to registry: %s", metrics_exporter.registry)
         _platform_collector = PlatformCollector(registry=metrics_exporter.registry)
         logger.info("Successfully registered ProcessCollector and PlatformCollector")
         logger.debug("ProcessCollector: %s", _process_collector)
@@ -166,9 +167,9 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
     # Bus dispatch latency histogram
     bus_dispatch_latency = metrics_exporter.histogram(
-        "bus_dispatch_latency",
+        "bus_dispatch_latency_seconds",
         "Event bus dispatch latency in seconds",
-        labelnames=("driver",),
+        labelnames=("topic", "outcome"),
         buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
     )
 
@@ -182,6 +183,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     write_ahead_log = WriteAheadLog()
     outbox_store = OutboxStore(metrics=metrics_exporter)
     dead_letter_queue = DeadLetterQueue()
+    obligation_store = ObligationStore()
     offset_store = OffsetStore()
     receipt_store = ReceiptStore()
     receipt_signer = ReceiptSigner(SigningKey.generate())
@@ -212,9 +214,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     )
 
     bus_settings = getattr(settings, "bus", None)
-    middleware_settings = (
-        getattr(bus_settings, "middleware", None) if bus_settings else None
-    )
+    middleware_settings = getattr(bus_settings, "middleware", None) if bus_settings else None
     timestamps_enabled = (
         bool(getattr(middleware_settings, "timestamps_enabled", True))
         if middleware_settings is not None
@@ -248,6 +248,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.tracer_factory = tracer_factory
     app.state.metrics_exporter = metrics_exporter
+    app.state.qos_metrics = qos_metrics
     app.state.forwarded_metrics = observe.ForwardedMetricsBuffer()
     app.state.snapshot_watermark = snapshot_watermark
     app.state.active_connections = active_connections
@@ -256,12 +257,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.bus_dispatch_latency = bus_dispatch_latency
     app.state.process_collector = _process_collector
     app.state.platform_collector = _platform_collector
-    app.state.scheduler = dependency_provider.scheduler
+
+    # Inject QoS metrics into scheduler
+    scheduler = dependency_provider.scheduler
+    scheduler._qos_metrics = qos_metrics
+    app.state.scheduler = scheduler
     app.state.readiness = ReadinessState()
     app.state.schema_registry = schema_registry
     app.state.provisioning_ledger = provisioning_ledger
     app.state.write_ahead_log = write_ahead_log
     app.state.outbox_store = outbox_store
+    app.state.obligation_store = obligation_store
     app.state.dead_letter_queue = dead_letter_queue
     app.state.offset_store = offset_store
     app.state.receipt_store = receipt_store
@@ -391,11 +397,7 @@ def _install_middlewares(
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         incoming_trace_id = request.headers.get("X-Cognitive-Trace-Id")
-        trace_id = (
-            incoming_trace_id.strip()
-            if incoming_trace_id
-            else tracer_factory.new_trace_id()
-        )
+        trace_id = incoming_trace_id.strip() if incoming_trace_id else tracer_factory.new_trace_id()
         request.state.cognitive_trace_id = trace_id
 
         extracted_context = tracer_factory.extract(request.headers)
@@ -453,9 +455,7 @@ def _install_middlewares(
                     update_log_context(http_status=status_code)
                 except Exception as exc:  # pragma: no cover - recorded below
                     span.record_exception(exc)
-                    span.set_attribute(
-                        "http.status_code", status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
+                    span.set_attribute("http.status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
                     span.set_status(Status(status_code=StatusCode.ERROR))
                     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
                     raise
@@ -501,9 +501,7 @@ def _install_middlewares(
 
     _ = telemetry_chain
 
-    def _process_admission_records(
-        request: Request, error: Exception | None = None
-    ) -> None:
+    def _process_admission_records(request: Request, error: Exception | None = None) -> None:
         records: list[AdmissionRecord] = consume_admission_records(request)
         if not records:
             return
@@ -513,20 +511,14 @@ def _install_middlewares(
         metrics_exporter = getattr(app.state, "metrics_exporter", None)
         receipt_saver = getattr(receipt_store, "save", None) if receipt_store else None
         observability_emit = (
-            getattr(observability_emitter, "emit", None)
-            if observability_emitter
-            else None
+            getattr(observability_emitter, "emit", None) if observability_emitter else None
         )
-        metrics_emit = (
-            getattr(metrics_exporter, "emit", None) if metrics_exporter else None
-        )
+        metrics_emit = getattr(metrics_exporter, "emit", None) if metrics_exporter else None
         trace_id = _ensure_trace_id(request)
 
         for record in records:
             decision_label = "allow" if record.decision.admit else "deny"
-            obligations = [
-                obligation.name for obligation in record.decision.obligations
-            ]
+            obligations = [obligation.name for obligation in record.decision.obligations]
             obligation_details = [
                 dict(obligation.details) for obligation in record.decision.obligations
             ]
@@ -611,35 +603,23 @@ def _install_middlewares(
 
 def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(
-        request: Request, exc: HTTPException
-    ) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         trace_id = _ensure_trace_id(request)
         default_code = _status_code_to_kernel_code(exc.status_code)
         default_reason = _default_reason(exc.status_code)
-        payload = _normalize_error_payload(
-            exc.detail, trace_id, default_code, default_reason
-        )
+        payload = _normalize_error_payload(exc.detail, trace_id, default_code, default_reason)
 
         headers = exc.headers if exc.headers else None
         if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
-            logger.exception(
-                "HTTPException triggered internal error response", exc_info=exc
-            )
-        return JSONResponse(
-            status_code=exc.status_code, content=payload, headers=headers
-        )
+            logger.exception("HTTPException triggered internal error response", exc_info=exc)
+        return JSONResponse(status_code=exc.status_code, content=payload, headers=headers)
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         trace_id = _ensure_trace_id(request)
         logger.exception("Unhandled exception bubbled to FastAPI", exc_info=exc)
         payload = _compose_error("UNEXPECTED_ERROR", "Internal server error", trace_id)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload
-        )
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload)
 
     _ = (http_exception_handler, unhandled_exception_handler)
 
@@ -703,11 +683,7 @@ def _register_operational_probes(app: FastAPI) -> None:
             "ready": snapshot.ready,
             "components": snapshot.asdict(),
         }
-        status_code = (
-            status.HTTP_200_OK
-            if snapshot.ready
-            else status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        status_code = status.HTTP_200_OK if snapshot.ready else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=status_code, content=payload)
 
     @app.get("/metrics", summary="Prometheus metrics endpoint")
@@ -755,9 +731,7 @@ def _ensure_trace_id(request: Request) -> str:
     trace_id = getattr(request.state, "cognitive_trace_id", None)
     if trace_id:
         return trace_id
-    tracer_factory = getattr(
-        getattr(request.app, "state", None), "tracer_factory", None
-    )
+    tracer_factory = getattr(getattr(request.app, "state", None), "tracer_factory", None)
     if isinstance(tracer_factory, TracerFactory):
         trace_id = tracer_factory.new_trace_id()
     else:
@@ -803,9 +777,7 @@ def _normalize_error_payload(
             return {"error": error_content}
         code = str(detail_mapping.get("code", default_code))
         reason = str(
-            detail_mapping.get("reason")
-            or detail_mapping.get("message")
-            or default_reason
+            detail_mapping.get("reason") or detail_mapping.get("message") or default_reason
         )
         hint = detail_mapping.get("hint")
         budgets = detail_mapping.get("budgets")

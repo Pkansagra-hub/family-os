@@ -11,6 +11,9 @@ authors = [
 ]
 requires-python = ">=3.10"
 
+[tool.setuptools]
+packages = ["k0", "k1", "services"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
@@ -20,18 +23,43 @@ dev = [
     "black>=24.0.0",
     "isort>=5.12.0",
     "mypy>=1.8.0",
+    "rich>=13.0.0",
+    "pytest-sugar>=1.0.0",
+    "pytest-clarity>=1.0.0",
+    "pytest-emoji>=0.2.0",
+    "pytest-xdist>=3.0.0",
+    "pytest-watch>=4.2.0",
 ]
 
 [tool.pytest.ini_options]
 python_files = "test_*.py"
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --cov=k1 --cov-report=term-missing"
+addopts = "-v --color=yes --tb=short --disable-warnings --strict-markers"
+# Use --cov=k0 or --cov=k1 to enable coverage; disable by default for clean output
+# Example: pytest --cov=k0 tests/k0/
+markers = [
+    "integration: integration tests",
+    "unit: unit tests",
+    "performance: performance tests",
+    "slow: slow tests",
+]
 
-# Disable OpenTelemetry export during tests
-env = [
-    "OTEL_TRACES_EXPORTER=none",
-    "OTEL_METRICS_EXPORTER=none",
+[tool.coverage.run]
+# Only measure coverage for main packages, not tests
+branch = true
+parallel = true
+source = ["k0", "k1"]
+
+[tool.coverage.report]
+skip_covered = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
 ]
 
 [tool.black]
@@ -47,4 +75,3 @@ include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
-

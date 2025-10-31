@@ -1,0 +1,39 @@
+{
+  "version": "2025-10-30T00:00:00Z",
+  "default_obligations": [
+    {
+      "name": "kernel.audit.log",
+      "details": {
+        "scenario": "deny_household_device",
+        "level": "warning"
+      }
+    }
+  ],
+  "bands": {
+    "GREEN": {
+      "max_fanout": 8,
+      "max_throughput_pps": 128,
+      "max_payload_bytes": 65536,
+      "obligations": []
+    }
+  },
+  "roles": [
+    {
+      "name": "household_device",
+      "allow_topics": [
+        "memory.*"
+      ],
+      "max_band": "GREEN",
+      "obligations": []
+    }
+  ],
+  "device_postures": {},
+  "sunset_windows": {},
+  "role_violation_obligation": {
+    "name": "kernel.audit.log",
+    "details": {
+      "scenario": "deny_household_device",
+      "level": "error"
+    }
+  }
+}

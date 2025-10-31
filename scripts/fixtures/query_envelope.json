@@ -1,0 +1,11 @@
+{
+  "space_id": "space-home",
+  "tenant_id": "tenant-001",
+  "selectors": [
+    {
+      "type": "semantic",
+      "topic": "memory.delta",
+      "limit": 1
+    }
+  ]
+}

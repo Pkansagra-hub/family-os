@@ -39,6 +39,8 @@ class ReceiptDocument:
     key_version: str
     device_sig: str
     obligations: tuple[str, ...]
+    manifest_fingerprint: str | None = None
+    obligation_details: tuple[dict[str, str], ...] = ()
 
 
 class ReceiptSigner:
@@ -83,6 +85,7 @@ class ReceiptIssuer:
         mls_group_id: str,
         key_version: str,
         obligations: Sequence[Obligation | str] = (),
+        manifest_fingerprint: str | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> ReceiptDocument:
         """Create, sign, persist, and emit observability for a receipt."""
@@ -101,6 +104,8 @@ class ReceiptIssuer:
             "key_version": key_version,
             "obligations": list(names),
         }
+        if manifest_fingerprint is not None:
+            signature_payload["policy_manifest_fingerprint"] = manifest_fingerprint
         device_sig = self._signer.sign(signature_payload)
 
         stored_receipt = Receipt(
@@ -114,6 +119,7 @@ class ReceiptIssuer:
             mls_group_id=mls_group_id,
             key_version=key_version,
             device_sig=device_sig,
+            manifest_fingerprint=manifest_fingerprint,
         )
 
         try:
@@ -148,6 +154,7 @@ class ReceiptIssuer:
                 "key_version": key_version,
                 "obligations": list(names),
                 "obligation_details": detail_payloads,
+                "policy_manifest_fingerprint": manifest_fingerprint,
             }
         )
 
@@ -164,6 +171,8 @@ class ReceiptIssuer:
             key_version=key_version,
             device_sig=device_sig,
             obligations=names,
+            manifest_fingerprint=manifest_fingerprint,
+            obligation_details=tuple(detail_payloads),
         )
 
     def _normalise_obligations(

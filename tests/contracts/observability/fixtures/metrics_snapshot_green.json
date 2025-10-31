@@ -1,0 +1,58 @@
+{
+  "snapshot_version": "v0.1.0",
+  "captured_at": "2025-10-31T19:20:30Z",
+  "source": "k1_bridge",
+  "device_id": "edge-device-001",
+  "privacy_band": "GREEN",
+  "policy_version": "policy-2025-10-30",
+  "metrics": {
+    "counters": [
+      {
+        "name": "k0.port.command.requests_total",
+        "value": 128,
+        "labels": {
+          "endpoint": "command.submit",
+          "status": "success"
+        },
+        "monotonic": true,
+        "band_redacted": false
+      }
+    ],
+    "gauges": [
+      {
+        "name": "k0.qos.scheduler.queue_depth",
+        "value": 12,
+        "labels": {
+          "lane": "fast"
+        },
+        "min_observed": 4,
+        "max_observed": 20,
+        "band_redacted": false
+      }
+    ],
+    "histograms": [
+      {
+        "name": "k0.pipeline.p01.duration_seconds",
+        "sum": 2.45,
+        "count": 32,
+        "buckets": [
+          { "le": 0.1, "cumulative_count": 5 },
+          { "le": 0.25, "cumulative_count": 18 },
+          { "le": 0.5, "cumulative_count": 28 },
+          { "le": 1.0, "cumulative_count": 32 }
+        ],
+        "labels": {
+          "pipeline": "p01",
+          "stage": "ingest"
+        },
+        "band_redacted": false
+      }
+    ]
+  },
+  "qos_budget_snapshot": {
+    "lane": "fast",
+    "available_tokens": 84,
+    "refill_rate_per_second": 12.5
+  },
+  "checksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

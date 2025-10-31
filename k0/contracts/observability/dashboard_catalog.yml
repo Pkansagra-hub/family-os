@@ -1,0 +1,193 @@
+meta:
+  adr: ADR-0091
+  version: 0.1.0
+  status: draft
+  description: Catalog of K0 observability dashboards and data source requirements.
+  owners:
+    - observability-wg
+  tags:
+    - dashboards
+    - observability
+
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  title: K0DashboardCatalog
+  type: object
+  required:
+    - catalog_version
+    - updated_at
+    - dashboards
+  properties:
+    catalog_version:
+      type: string
+      pattern: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      description: Semantic version of the dashboard catalog format.
+    updated_at:
+      type: string
+      format: date-time
+      description: Timestamp (UTC ISO-8601) when the catalog was last updated.
+    contact:
+      type: object
+      description: Dashboard ownership information.
+      properties:
+        team:
+          type: string
+        email:
+          type: string
+          format: email
+      additionalProperties: false
+    dashboards:
+      type: array
+      minItems: 1
+      items:
+        $ref: "#/definitions/dashboard"
+  additionalProperties: false
+
+  definitions:
+    panel:
+      type: object
+      required:
+        - title
+        - datasource
+        - queries
+      properties:
+        title:
+          type: string
+          maxLength: 128
+        datasource:
+          type: string
+          enum: [prometheus, tempo, loki]
+        queries:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required:
+              - ref_id
+              - expr
+            properties:
+              ref_id:
+                type: string
+                pattern: "^[A-Z]+$"
+              expr:
+                type: string
+                maxLength: 2048
+              legend:
+                type: string
+                maxLength: 128
+              thresholds:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      enum: [gt, lt]
+                    value:
+                      type: number
+              min_step_seconds:
+                type: integer
+                minimum: 1
+            additionalProperties: false
+        description:
+          type: string
+          maxLength: 256
+      additionalProperties: false
+
+    alert_rule:
+      type: object
+      required:
+        - name
+        - condition
+        - severity
+        - runbook
+      properties:
+        name:
+          type: string
+          maxLength: 128
+        condition:
+          type: string
+          maxLength: 2048
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        notification_route:
+          type: string
+        runbook:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    dashboard:
+      type: object
+      required:
+        - id
+        - title
+        - kind
+        - privacy_band
+        - panels
+      properties:
+        id:
+          type: string
+          pattern: "^k0_[a-z0-9_]+$"
+        title:
+          type: string
+          maxLength: 128
+        description:
+          type: string
+          maxLength: 512
+        kind:
+          type: string
+          enum: [core_health, pipeline_matrix, policy_compliance, storage_ops, async_dlq, trace_explorer]
+        privacy_band:
+          type: string
+          enum: [GREEN, AMBER, RED, BLACK]
+        panels:
+          type: array
+          items:
+            $ref: "#/definitions/panel"
+          minItems: 1
+        alerts:
+          type: array
+          items:
+            $ref: "#/definitions/alert_rule"
+        tags:
+          type: array
+          items:
+            type: string
+        owner_team:
+          type: string
+      additionalProperties: false
+
+validation:
+  tooling:
+    - name: jsonschema
+      version: ">=4.21"
+      instructions: Validate dashboard catalog files against K0DashboardCatalog.
+    - name: grafana-lint
+      version: latest
+      instructions: Ensure referenced dashboards compile before promotion.
+
+testing:
+  fixtures:
+    - path: tests/contracts/observability/fixtures/dashboard_catalog.json
+      description: Catalog including Kernel Core Health and Pipeline Matrix dashboards.
+  invariants:
+    - name: panel_datasource_alignment
+      description: Panel datasource must match queries (e.g., Prometheus queries only on prometheus source).
+    - name: alert_runbook_required
+      description: Alerts must supply runbook URIs for severity>=warning.
+
+observability:
+  metrics:
+    - name: k0.contracts.dashboard_catalog.validation_total
+      type: counter
+      labels:
+        - outcome
+      description: Validation attempts for dashboard catalog payloads.
+  logs:
+    - event: k0.contracts.dashboard_catalog.invalid
+      level: warning
+      context:
+        - field_path
+        - error

@@ -1,0 +1,76 @@
+version: 0.1.2
+scope: testing-only
+kernel:
+  database:
+    path: temp
+    migrations_required: true
+    wal_replay_required: true
+  readiness:
+    expect_readyz: true
+    components:
+      migrations_applied: true
+      wal_replay_complete: true
+seed:
+  schemas:
+    - uri: schema://memory.delta
+      version: 1.0
+      sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      status: ACTIVE
+  devices:
+    - device_id: device-local-001
+      tenant_id: tenant-001
+      space_id: space-home
+      mls_group_id: mls-group-1
+      provisioned_ts: 2025-08-01T12:00:00Z
+      keys:
+        - key_version: v1
+          verify_key: zJ6gyyoRUpftHzoTPZ7JKpRnfyqrXEQIHggbOkgBEKs
+          key_state: ACTIVE
+          registered_ts: 2025-08-01T12:00:00Z
+          activated_ts: 2025-08-01T12:00:00Z
+requests:
+  command_submit:
+    route: /k0/command.submit
+    method: POST
+    envelope_fixture: scripts/fixtures/command_envelope.json
+    expect:
+      status: 200
+      wal_appended: true
+      receipt_issued: true
+      admission_decision: allow
+      metrics:
+        - http_requests_total
+        - receipt_issue_total
+  query_recall:
+    route: /k0/query.recall
+    method: POST
+    envelope_fixture: scripts/fixtures/query_envelope.json
+    expect:
+      status: 200
+      admission_logged: true
+  driver_handshake:
+    route: /k0/driver.handshake
+    method: POST
+    payload_fixture: scripts/fixtures/driver_handshake.json
+    expect:
+      status: 200
+      driver_pool_touched: true
+  sse_subscribe:
+    route: /k0/sse.subscribe
+    method: GET
+    headers:
+      Accept: text/event-stream
+    expect:
+      status: 200
+      connection_open: true
+telemetry:
+  collect_metrics: true
+  collect_traces: true
+  verify_gauges:
+    - kernel_ready_state
+    - sse_active_subscriptions
+cleanup:
+  remove_temp_db: true
+  remove_fixtures: true
+notes: |
+  This contract is scoped to TEST0001 ADR. Update SHA256 and fixture payloads when schema or admission policies change.

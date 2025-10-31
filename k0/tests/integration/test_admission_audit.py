@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Tuple
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
-from ward import test  # type: ignore[attr-defined]
 
 from k0.kernel.admission import record_admission_decision
 from k0.kernel.app import create_app
@@ -38,8 +37,7 @@ class RecordingMetricsExporter:
         self.calls.append((metric_name, value, dict(labels)))
 
 
-@test("admission middleware persists receipts and emits telemetry signals")
-def _() -> None:
+def test_admission_middleware_persists_receipts_and_emits_telemetry_signals() -> None:
     settings = KernelSettings.load(overrides={"telemetry": {"otlp_endpoint": None}})
     app = create_app(settings=settings)
 
@@ -94,8 +92,15 @@ def _() -> None:
     saved_receipt = receipt_store.saved[0]
     assert saved_receipt.receipt_id == "receipt-001"
 
-    assert len(observability_emitter.events) == 1
-    event = observability_emitter.events[0]
+    decision_events = [
+        evt
+        for evt in observability_emitter.events
+        if evt.get("event") == "observe_policy_decision"
+    ]
+
+    assert len(decision_events) == 1
+    event = decision_events[0]
+    assert event["event"] == "observe_policy_decision"
     assert event["trace_id"] == "trace-fixed"
     assert event["decision"] == "allow"
     assert event["obligations"] == ["AUDIT_TRAIL"]
@@ -105,6 +110,8 @@ def _() -> None:
     assert event["band"] == "GREEN"
     assert event["receipt_id"] == "receipt-001"
     assert event["wal_pos"] == 77
+    assert event["sanitized_body_sha256"] is None
+    assert event["original_body_sha256"] is None
     assert "error" not in event
 
     assert len(metrics_exporter.calls) == 1
@@ -114,8 +121,7 @@ def _() -> None:
     assert labels == {"decision": "allow", "port": "observe"}
 
 
-@test("admission middleware captures errors when downstream handlers fail")
-def _() -> None:
+def test_admission_middleware_captures_errors_when_downstream_handlers_fail() -> None:
     settings = KernelSettings.load(overrides={"telemetry": {"otlp_endpoint": None}})
     app = create_app(settings=settings)
 
@@ -152,14 +158,21 @@ def _() -> None:
     assert response.status_code == 500
 
     assert receipt_store.saved == []
-    assert len(observability_emitter.events) == 1
-    event = observability_emitter.events[0]
+    decision_events = [
+        evt
+        for evt in observability_emitter.events
+        if evt.get("event") == "command_policy_decision"
+    ]
+    assert len(decision_events) == 1
+    event = decision_events[0]
+    assert event["event"] == "command_policy_decision"
     assert event["decision"] == "deny"
     assert event["deny_reason"] == "ROLE_FORBIDDEN"
     assert event["obligations"] == []
     assert "receipt_id" not in event
     assert event["port"] == "command"
-    assert event["error"] == "RuntimeError"
+    assert event["sanitized_body_sha256"] is None
+    assert event["original_body_sha256"] is None
     trace_id = event["trace_id"]
     assert len(trace_id) == 32
     int(trace_id, 16)
