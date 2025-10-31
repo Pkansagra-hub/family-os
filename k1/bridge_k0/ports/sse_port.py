@@ -49,7 +49,12 @@ References:
     - Test: tests/k1/bridge_k0/ports/test_sse_port.py
 """
 
+import asyncio
+import json
 import logging
+import random
+import time
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
 
@@ -57,14 +62,44 @@ from enum import Enum
 # SECTION 1: IMPORTS
 # =============================================================================
 # Standard library imports
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 # Third-party imports
 # None
 
 # Internal imports
-# from k1.l5_infrastructure.event_bus import EventBus, Event, EventTopic
-# from k1.bridge_k0.http2_client import HTTP2Connection
+from k1.bridge_k0.http2_client import HTTP2Config, HTTP2Connection
+
+# Observability (best-effort; fall back to no-ops if module not available)
+try:  # pragma: no cover
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_gauge,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_: object):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: object) -> None:
+                return None
+
+            def set_attribute(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_gauge(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -82,6 +117,11 @@ DEFAULT_CONFIG = {
     "reconnect_interval_s": 5,  # 5s reconnection interval
     "max_reconnect_attempts": 10,  # Max reconnection attempts before giving up
     "heartbeat_interval_s": 30,  # 30s heartbeat (keepalive)
+    "subscriber_id": "k1-bridge",  # default subscriber identifier
+    "topics": ["k0.events"],  # default catch-all topic
+    "space_id": "household",  # default space scope
+    "tenant_id": "tenant-default",  # default tenant scope
+    "backoff_jitter": 0.25,  # jitter factor for reconnection
 }
 
 # =============================================================================
@@ -203,15 +243,28 @@ class SSEPort:
         # 2. Initialize state machine (INIT → CONNECTING → CONNECTED)
         # 3. Initialize subscriber registry (event_type → handlers)
         # 4. Initialize reconnection logic (backoff, max attempts)
-        self.config = config
-        self.state = (
-            "INIT"  # State: INIT | CONNECTING | CONNECTED | RECONNECTING | TERMINATED
-        )
+        merged_config = {**DEFAULT_CONFIG, **config}
+        if not merged_config.get("k0_host"):
+            raise ValueError("k0_host is required")
+        if merged_config.get("k0_sse_port", 0) <= 0:
+            raise ValueError("k0_sse_port must be positive")
+        self.config = merged_config
+        self.state = "INIT"  # State: INIT | CONNECTING | CONNECTED | RECONNECTING | TERMINATED
         self._logger = logger
-        self._subscribers: Dict[SSEEventType, list] = {}
+        self._subscribers: Dict[SSEEventType, List[Callable[[SSEEvent], Awaitable[None] | None]]] = {}
         self._connection_status = ConnectionStatus.DISCONNECTED
         self._reconnect_attempts = 0
-        pass
+        self._shutdown_event = asyncio.Event()
+        self._http2_config = HTTP2Config(
+            k0_host=merged_config["k0_host"],
+            k0_port=merged_config["k0_sse_port"],
+            use_tls=merged_config.get("use_tls", False),
+        )
+        self._http2_connection = HTTP2Connection(self._http2_config)
+        self._stream_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._last_event_time = time.time()
+        emit_gauge("k1_k0_sse_port_connection_status", 0, {"status": ConnectionStatus.DISCONNECTED.value})
 
     async def initialize(self) -> None:
         """
@@ -234,17 +287,28 @@ class SSEPort:
         # 2. Start event loop task (read SSE events)
         # 3. Start heartbeat task (30s interval)
         # 4. Transition state: INIT → CONNECTING → CONNECTED
+        if self.state != "INIT":
+            raise RuntimeError("SSEPort already initialized")
+
+        self.state = "CONNECTING"
+        self._connection_status = ConnectionStatus.CONNECTING
+
+        await self._http2_connection.connect()
+        self._stream_task = asyncio.create_task(self._event_loop())
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
         self.state = "CONNECTED"
         self._connection_status = ConnectionStatus.CONNECTED
+        emit_gauge("k1_k0_sse_port_connection_status", 1, {"status": ConnectionStatus.CONNECTED.value})
         self._logger.info(
             "sse_port_initialized",
             k0_host=self.config.get("k0_host"),
             k0_port=self.config.get("k0_sse_port"),
+            topics=self.config.get("topics"),
         )
-        pass
 
     def subscribe(
-        self, event_type: SSEEventType, handler: Callable[[SSEEvent], None]
+        self, event_type: SSEEventType, handler: Callable[[SSEEvent], Awaitable[None] | None]
     ) -> None:
         """
         Subscribe to SSE event type.
@@ -272,7 +336,6 @@ class SSEPort:
         if event_type not in self._subscribers:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(handler)
-        pass
 
     async def _event_loop(self) -> None:
         """
@@ -294,28 +357,155 @@ class SSEPort:
         # 4. Deliver event to subscribers (handlers)
         # 5. If connection lost, trigger reconnection
         # 6. Record metrics (events received, latency)
-        pass
+        backoff = self._initial_backoff()
+        while not self._shutdown_event.is_set():
+            try:
+                await self._consume_stream()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                await self._handle_stream_error(exc, backoff)
+                backoff = min(backoff * 2, 60.0)
+                continue
+            else:
+                backoff = self._initial_backoff()
+            await asyncio.sleep(0)
 
-    async def _reconnect(self) -> None:
-        """
-        Reconnection logic with exponential backoff.
+    async def _consume_stream(self) -> None:
+        self._connection_status = ConnectionStatus.CONNECTED
+        emit_gauge("k1_k0_sse_port_connection_status", 1, {"status": ConnectionStatus.CONNECTED.value})
+        self._reconnect_attempts = 0
+        headers = self._build_headers()
 
-        This method attempts reconnection up to max_reconnect_attempts.
+        # K0 SSE stream returns events incrementally. We rely on HTTP2Connection.get
+        # to provide streaming bytes; to avoid buffering entire stream we iterate
+        # using httpx.AsyncClient.stream via proxy helper.
+        stream = await self._stream_request(headers)
+        async with stream as response:
+            if response.status_code != 200:
+                raise ConnectionError(f"Unexpected SSE status {response.status_code}")
 
-        Raises:
-            RuntimeError: If max reconnection attempts exceeded
+            async for line in response.aiter_lines():
+                if self._shutdown_event.is_set():
+                    break
+                if line is None:
+                    continue
+                stripped = line.strip()
+                if not stripped or not stripped.startswith("data:"):
+                    continue
+                payload = stripped[5:].strip()
+                if not payload:
+                    continue
+                try:
+                    event_dict = json.loads(payload)
+                except json.JSONDecodeError:
+                    self._logger.warning("sse_invalid_payload", extra={"payload": payload[:128]})
+                    continue
+                await self._dispatch_event(event_dict)
 
-        ADR: ADR-0001a (K0 Bridge Dual Protocol)
-        Assigned to: Issue #L5-1.2.3
-        """
-        # TODO(@infrastructure-team): Implement reconnection logic (ADR-0001a)
-        # 1. Set state to RECONNECTING
-        # 2. Exponential backoff: 1s, 2s, 4s, 8s, ... up to 60s
-        # 3. Attempt reconnection (connect to K0 SSE stream)
-        # 4. If successful, restart event loop
-        # 5. If failed, increment reconnect_attempts
-        # 6. If max_reconnect_attempts exceeded, set state to DISCONNECTED
-        pass
+    async def _stream_request(self, headers: Dict[str, str]):
+        client = self._http2_connection._require_client()  # internal, but needed for streaming
+        return client.stream("GET", self.config["endpoint"], headers=headers, timeout=None)
+
+    async def _dispatch_event(self, event_payload: Dict[str, Any]) -> None:
+        event_name = event_payload.get("event") or event_payload.get("type")
+        if not event_name:
+            return
+        event_type = SSEEventType(event_name)
+        sse_event = SSEEvent(
+            event=event_type,
+            session_id=event_payload.get("session_id"),
+            timestamp=event_payload.get("timestamp", time.time()),
+            data=event_payload,
+        )
+        emit_counter(
+            "k1_k0_sse_port_events_received_total",
+            1,
+            {"event_type": event_type.value},
+        )
+        with create_span(
+            "k0_bridge.sse_port_receive",
+            event_type=event_type.value,
+            session_id=sse_event.session_id or "",
+            cognitive_trace_id=event_payload.get("cognitive_trace_id", ""),
+        ) as span:
+            span.set_attribute("timestamp_ms", sse_event.timestamp)
+
+        handlers = self._subscribers.get(event_type, [])
+        if not handlers:
+            return
+
+        for handler in handlers:
+            try:
+                result = handler(sse_event)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:  # pragma: no cover - handler errors
+                self._logger.error(
+                    "sse_handler_error",
+                    extra={
+                        "event_type": event_type.value,
+                        "error": str(exc),
+                    },
+                )
+
+    async def _handle_stream_error(self, exc: Exception, backoff: float) -> None:
+        self._reconnect_attempts += 1
+        self._connection_status = ConnectionStatus.RECONNECTING
+        emit_counter(
+            "k1_k0_sse_port_reconnect_attempts_total",
+            1,
+            {"attempt": self._reconnect_attempts},
+        )
+        self._logger.warning(
+            "sse_stream_error",
+            extra={
+                "error": str(exc),
+                "attempt": self._reconnect_attempts,
+            },
+        )
+        if self._reconnect_attempts >= self.config["max_reconnect_attempts"]:
+            self._logger.error(
+                "sse_reconnect_failed",
+                extra={
+                    "error": str(exc),
+                    "attempt": self._reconnect_attempts,
+                },
+            )
+            emit_counter(
+                "k1_k0_sse_port_reconnect_failures_total",
+                1,
+                {"attempt": self._reconnect_attempts},
+            )
+            self.state = "TERMINATED"
+            self._shutdown_event.set()
+            return
+        await asyncio.sleep(backoff + self._backoff_jitter(backoff))
+        self._connection_status = ConnectionStatus.CONNECTING
+        try:
+            await self._http2_connection.connect()
+        except Exception as reconnect_exc:
+            self._logger.error(
+                "sse_reconnect_failed",
+                extra={"error": str(reconnect_exc)},
+            )
+
+    async def _heartbeat_loop(self) -> None:
+        interval = self.config["heartbeat_interval_s"]
+        while not self._shutdown_event.is_set():
+            await asyncio.sleep(interval)
+            idle_seconds = time.time() - self._last_event_time
+            emit_histogram(
+                "k1_k0_sse_port_idle_time_ms",
+                idle_seconds * 1000,
+                {},
+            )
+            if idle_seconds > interval * 2:
+                self._logger.warning(
+                    "sse_idle_exceeded",
+                    extra={"idle_seconds": round(idle_seconds, 2)},
+                )
+                await self._handle_stream_error(RuntimeError("SSE idle timeout"), self._initial_backoff())
 
     async def shutdown(self) -> None:
         """
@@ -338,10 +528,50 @@ class SSEPort:
         # 4. Close SSE connection
         # 5. Clear subscribers
         # 6. Flush metrics (Prometheus)
+        if self.state == "TERMINATED":
+            return
+
         self.state = "TERMINATED"
+        self._shutdown_event.set()
+        if self._stream_task:
+            self._stream_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._stream_task
+            self._stream_task = None
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._heartbeat_task
+            self._heartbeat_task = None
+
+        await self._http2_connection.close()
+
+        self._subscribers.clear()
         self._connection_status = ConnectionStatus.DISCONNECTED
+        emit_gauge("k1_k0_sse_port_connection_status", 0, {"status": ConnectionStatus.DISCONNECTED.value})
         self._logger.info("sse_port_shutdown_complete")
-        pass
+
+    def _build_headers(self) -> Dict[str, str]:
+        trace_id = self.config.get("cognitive_trace_id", "")
+        headers = {
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-SSE-Subscriber": self.config.get("subscriber_id", "k1-bridge"),
+            "X-SSE-Topics": ",".join(self.config.get("topics", [])),
+            "X-SSE-Space": self.config.get("space_id", "household"),
+            "X-SSE-Tenant": self.config.get("tenant_id", "tenant-default"),
+        }
+        if trace_id:
+            headers["X-Cognitive-Trace-Id"] = trace_id
+        return headers
+
+    def _initial_backoff(self) -> float:
+        return float(self.config.get("reconnect_interval_s", 5))
+
+    def _backoff_jitter(self, base: float) -> float:
+        jitter_factor = float(self.config.get("backoff_jitter", 0.25))
+        return base * jitter_factor * (0.5 - random.random())
+
 
 
 # =============================================================================

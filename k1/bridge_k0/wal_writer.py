@@ -54,23 +54,46 @@ References:
 """
 
 import asyncio
+import json
 import logging
 import time
+import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
-
-# =============================================================================
-# SECTION 1: IMPORTS
-# =============================================================================
-# Standard library imports
 from typing import Any, Dict, List, Optional
 
-# Third-party imports
-# None
+from k1.bridge_k0.command_client import Command, CommandClient, CommandReceipt, CommandType
 
-# Internal imports
-# from k1.bridge_k0.command_client import CommandClient, Command, CommandType
-# from k1.bridge_k0.batch_client import BatchClient
+try:  # pragma: no cover - observability package may not yet exist
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_gauge,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_attrs: Any):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: Any) -> None:
+                return None
+
+            def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_gauge(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -86,8 +109,12 @@ DEFAULT_CONFIG = {
     "retention_days": 7,  # 7-day retention in K0
     "write_timeout_ms": 5000,  # 5s write timeout
     "batch_flush_interval_ms": 250,  # 250ms batch flush (aligned with ADR-0022)
-    "batch_size_max": 100,  # 100 logs per batch
+    "batch_size_max": 100,  # 100 logs per batch (count trigger)
+    "batch_size_bytes": 64 * 1024,  # 64KB payload trigger
     "replay_cache_size": 1000,  # 1000 logs in replay cache
+    "queue_capacity": 10_000,  # Max buffered WAL entries (ADR-0038b)
+    "max_buffer_bytes": 5 * 1024 * 1024,  # 5MB bounded buffer (guidance)
+    "pending_receipts_max": 1000,  # Guard pending receipts (ADR-0038b)
 }
 
 # =============================================================================
@@ -255,7 +282,7 @@ class WALWriter:
     def __init__(
         self,
         config: "WALWriterConfig",
-        command_client: Optional[Any] = None,  # CommandClient
+        command_client: Optional[CommandClient] = None,
     ) -> None:
         """
         Initialize WALWriter.
@@ -275,20 +302,23 @@ class WALWriter:
         ADR: ADR-0008c (WAL Writer with SAGA_LOG topic)
         Assigned to: Issue #L5-1.4.1
         """
-        # TODO(@infrastructure-team): Implement initialization (ADR-0008c)
-        # 1. Validate config (check wal_topic, retention_days, timeouts)
-        # 2. Initialize command_client (K0 Command Port P02)
-        # 3. Initialize batch buffer (empty list)
-        # 4. Initialize batch flush timer (250ms interval)
-        # 5. Initialize metrics (Prometheus counters, histograms)
+        self._validate_config(config)
+
+        if command_client is None:
+            raise ValueError("command_client is required for WALWriter")
+
         self.config = config
         self.command_client = command_client
         self._logger = logger
         self._batch_buffer: List[WALLogEntry] = []
+        self._batch_buffer_bytes: int = 0
         self._batch_lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
-        pass
+        self._pending_receipts: Dict[str, CommandReceipt] = {}
+        self._last_flush_monotonic = time.monotonic()
+
+        emit_gauge("k1_wal_writer_queue_depth", 0, {"topic": self.config.wal_topic})
 
     async def initialize(self) -> None:
         """
@@ -303,13 +333,19 @@ class WALWriter:
         ADR: ADR-0008c (WAL Writer initialization)
         Assigned to: Issue #L5-1.4.1
         """
-        # TODO(@infrastructure-team): Implement initialization (ADR-0008c)
-        # 1. Verify command_client initialized
-        # 2. Start batch flush timer (250ms interval)
-        # 3. Log initialization event
+        if self._flush_task is not None:
+            raise RuntimeError("WALWriter already initialized")
+
+        self._shutdown_event.clear()
         self._flush_task = asyncio.create_task(self._batch_flush_loop())
-        self._logger.info("wal_writer_initialized", topic=self.config.wal_topic)
-        pass
+        self._last_flush_monotonic = time.monotonic()
+        self._logger.info(
+            "wal_writer_initialized",
+            topic=self.config.wal_topic,
+            batch_flush_interval_ms=self.config.batch_flush_interval_ms,
+            batch_size_max=self.config.batch_size_max,
+            batch_size_bytes=self.config.batch_size_bytes,
+        )
 
     async def log(self, entry: WALLogEntry) -> WALWriteResult:
         """
@@ -344,19 +380,49 @@ class WALWriter:
         #    - Batch will flush on 250ms timer
         # 5. Emit metrics (k1_wal_writer_logs_total)
         async with self._batch_lock:
-            self._batch_buffer.append(entry)
+            entry_size = self._estimate_entry_size(entry)
 
-            if len(self._batch_buffer) >= self.config.batch_size_max:
-                # Flush immediately
-                return await self._flush_batch()
-            else:
-                # Will flush on timer
-                return WALWriteResult(
-                    log_id=entry.log_id,
-                    receipt_id="pending",
-                    write_latency_ms=0.0,
-                    batched=True,
+            if len(self._batch_buffer) >= self.config.queue_capacity:
+                emit_counter(
+                    "k1_wal_writer_logs_rejected_total",
+                    1,
+                    {"reason": "queue_capacity", "topic": entry.topic.value},
                 )
+                raise RuntimeError("WALWriter queue capacity exceeded")
+
+            if self._batch_buffer_bytes + entry_size > self.config.max_buffer_bytes:
+                emit_counter(
+                    "k1_wal_writer_logs_rejected_total",
+                    1,
+                    {"reason": "buffer_bytes", "topic": entry.topic.value},
+                )
+                raise RuntimeError("WALWriter buffer byte limit exceeded")
+
+            self._batch_buffer.append(entry)
+            self._batch_buffer_bytes += entry_size
+
+            emit_gauge(
+                "k1_wal_writer_queue_depth",
+                len(self._batch_buffer),
+                {"topic": self.config.wal_topic},
+            )
+
+            should_flush = False
+            if len(self._batch_buffer) >= self.config.batch_size_max:
+                should_flush = True
+            elif self._batch_buffer_bytes >= self.config.batch_size_bytes:
+                should_flush = True
+
+            if should_flush:
+                result = await self._flush_batch(trigger="count")
+                return result
+
+            return WALWriteResult(
+                log_id=entry.log_id,
+                receipt_id="pending",
+                write_latency_ms=0.0,
+                batched=True,
+            )
 
     async def replay(
         self, saga_id: str, from_timestamp: Optional[int] = None
@@ -432,13 +498,15 @@ class WALWriter:
 
         async with self._batch_lock:
             if self._batch_buffer:
-                await self._flush_batch()
+                await self._flush_batch(trigger="shutdown")
 
         if self._flush_task:
             self._flush_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._flush_task
 
+        self._flush_task = None
         self._logger.info("wal_writer_shutdown_complete")
-        pass
 
     # =========================================================================
     # PRIVATE METHODS (Implementation Details)
@@ -459,15 +527,22 @@ class WALWriter:
         # 3. Acquire batch lock
         # 4. If batch non-empty: flush batch
         # 5. Release batch lock
-        while not self._shutdown_event.is_set():
-            await asyncio.sleep(self.config.batch_flush_interval_ms / 1000)
+        interval = self.config.batch_flush_interval_ms / 1000
+        try:
+            while not self._shutdown_event.is_set():
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            while not self._shutdown_event.is_set():
+                async with self._batch_lock:
+                    if self._batch_buffer:
+                        await self._flush_batch(trigger="timer")
+                        self._last_flush_monotonic = time.monotonic()
+                try:
+                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    continue
 
-            async with self._batch_lock:
-                if self._batch_buffer:
-                    await self._flush_batch()
-        pass
-
-    async def _flush_batch(self) -> WALWriteResult:
+    async def _flush_batch(self, trigger: str) -> WALWriteResult:
         """
         Flush batch buffer to K0 Command Port.
 
@@ -482,37 +557,134 @@ class WALWriter:
         ADR: ADR-0008c (WAL batch flush)
         Assigned to: Issue #L5-1.4.1
         """
-        # TODO(@infrastructure-team): Implement batch flush (ADR-0008c)
-        # 1. Serialize batch buffer to JSON
-        # 2. Send to K0 Command Port (P02) with topic=SAGA_LOG
-        # 3. Wait for receipt_id
-        # 4. Clear batch buffer
-        # 5. Emit metrics (k1_wal_writer_batch_flush_duration_seconds)
-        # 6. Return WALWriteResult with receipt_id
+        if not self._batch_buffer:
+            return WALWriteResult(
+                log_id="batch_none",
+                receipt_id="noop",
+                write_latency_ms=0.0,
+                batched=False,
+            )
+
         start_time = time.perf_counter()
+        entries = list(self._batch_buffer)
+        batch_bytes = self._batch_buffer_bytes
+        self._batch_buffer = []
+        self._batch_buffer_bytes = 0
+        emit_gauge("k1_wal_writer_queue_depth", 0, {"topic": self.config.wal_topic})
 
-        batch_count = len(self._batch_buffer)
+        batch_id = f"wal_{uuid.uuid4()}"
+        payload_dict = {
+            "batch_id": batch_id,
+            "topic": self.config.wal_topic,
+            "count": len(entries),
+            "trigger": trigger,
+            "generated_at_ms": int(time.time() * 1000),
+            "entries": [
+                {
+                    "log_id": entry.log_id,
+                    "topic": entry.topic.value,
+                    "log_type": entry.log_type.value,
+                    "saga_id": entry.saga_id,
+                    "timestamp": entry.timestamp,
+                    "payload": entry.payload,
+                    "cognitive_trace_id": entry.cognitive_trace_id,
+                }
+                for entry in entries
+            ],
+        }
 
-        # Flush logic here (send to K0)
-        receipt_id = "receipt_placeholder"
+        serialized = json.dumps(payload_dict, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-        self._batch_buffer.clear()
+        saga_ids = {entry.saga_id for entry in entries}
+        session_id = saga_ids.pop() if len(saga_ids) == 1 else "wal_batch"
+        trace_id = next((entry.cognitive_trace_id for entry in entries if entry.cognitive_trace_id), batch_id)
+
+        command = Command(
+            command_id=str(uuid.uuid4()),
+            command_type=CommandType.MEMORY_WRITE,
+            session_id=session_id,
+            cognitive_trace_id=trace_id,
+            payload=serialized,
+            priority=CommandType.MEMORY_WRITE.value == "MEMORY_WRITE",
+        )
+
+        # Command.priority expects int; ensure proper value
+        command.priority = 1
+
+        with create_span(
+            "k0_bridge.wal_writer.flush",
+            batch_id=batch_id,
+            topic=self.config.wal_topic,
+            trigger=trigger,
+            entry_count=len(entries),
+            size_bytes=len(serialized),
+        ) as span:
+            span.set_attribute("queue_bytes", batch_bytes)
+            receipt = await self.command_client.send_command(command, cognitive_trace_id=trace_id)
 
         flush_latency_ms = (time.perf_counter() - start_time) * 1000
+        emit_histogram(
+            "k1_wal_writer_batch_flush_duration_seconds",
+            flush_latency_ms / 1000.0,
+            {"topic": self.config.wal_topic, "trigger": trigger},
+        )
+        emit_counter(
+            "k1_wal_writer_logs_total",
+            len(entries),
+            {"topic": self.config.wal_topic},
+        )
+
+        self._pending_receipts[receipt.receipt_id] = receipt
+        if len(self._pending_receipts) > self.config.pending_receipts_max:
+            self._logger.warning(
+                "wal_writer_pending_receipts_high",
+                pending=len(self._pending_receipts),
+                max_allowed=self.config.pending_receipts_max,
+            )
 
         self._logger.info(
             "wal_batch_flushed",
             topic=self.config.wal_topic,
-            batch_count=batch_count,
-            flush_latency_ms=flush_latency_ms,
+            batch_count=len(entries),
+            flush_latency_ms=round(flush_latency_ms, 2),
+            receipt_id=receipt.receipt_id,
         )
 
         return WALWriteResult(
-            log_id="batch",
-            receipt_id=receipt_id,
+            log_id=batch_id,
+            receipt_id=receipt.receipt_id,
             write_latency_ms=flush_latency_ms,
             batched=False,
         )
+
+    def _estimate_entry_size(self, entry: WALLogEntry) -> int:
+        entry_dict = {
+            "log_id": entry.log_id,
+            "topic": entry.topic.value,
+            "log_type": entry.log_type.value,
+            "saga_id": entry.saga_id,
+            "timestamp": entry.timestamp,
+            "payload": entry.payload,
+        }
+        if entry.cognitive_trace_id:
+            entry_dict["cognitive_trace_id"] = entry.cognitive_trace_id
+        return len(json.dumps(entry_dict, ensure_ascii=False).encode("utf-8"))
+
+    def _validate_config(self, config: "WALWriterConfig") -> None:
+        if not config.wal_topic:
+            raise ValueError("wal_topic must be provided")
+        if config.batch_flush_interval_ms <= 0:
+            raise ValueError("batch_flush_interval_ms must be positive")
+        if config.batch_size_max <= 0:
+            raise ValueError("batch_size_max must be positive")
+        if config.batch_size_bytes <= 0:
+            raise ValueError("batch_size_bytes must be positive")
+        if config.queue_capacity <= 0:
+            raise ValueError("queue_capacity must be positive")
+        if config.max_buffer_bytes <= 0:
+            raise ValueError("max_buffer_bytes must be positive")
+        if config.pending_receipts_max <= 0:
+            raise ValueError("pending_receipts_max must be positive")
 
 
 @dataclass
@@ -534,7 +706,11 @@ class WALWriterConfig:
     write_timeout_ms: int = DEFAULT_CONFIG["write_timeout_ms"]
     batch_flush_interval_ms: int = DEFAULT_CONFIG["batch_flush_interval_ms"]
     batch_size_max: int = DEFAULT_CONFIG["batch_size_max"]
+    batch_size_bytes: int = DEFAULT_CONFIG["batch_size_bytes"]
     replay_cache_size: int = DEFAULT_CONFIG["replay_cache_size"]
+    queue_capacity: int = DEFAULT_CONFIG["queue_capacity"]
+    max_buffer_bytes: int = DEFAULT_CONFIG["max_buffer_bytes"]
+    pending_receipts_max: int = DEFAULT_CONFIG["pending_receipts_max"]
 
 
 # =============================================================================

@@ -54,23 +54,63 @@ References:
 """
 
 import asyncio
+import json
 import logging
+import time
+import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 # =============================================================================
 # SECTION 1: IMPORTS
 # =============================================================================
 # Standard library imports
-from typing import Any, Dict, List, Optional
 
 # Third-party imports
 # None
 
 # Internal imports
-# from k1.bridge_k0.command_client import CommandClient, Command, CommandReceipt
+from k1.bridge_k0.command_client import (
+    Command,
+    CommandClient,
+    CommandStatus,
+    CommandType,
+    Priority,
+)
 # from k1.bridge_k0.protocol import ProtocolNegotiator, SerializationFormat
 # from k1.l5_infrastructure.event_bus import EventBus, Event, EventTopic
+
+try:  # pragma: no cover - observability package may not yet exist
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_gauge,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_attrs: Any):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: Any) -> None:
+                return None
+
+            def set_attribute(self, *_args: Any, **_kwargs: Any) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_gauge(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -114,8 +154,9 @@ class SessionStateDelta:
         field_path: JSON path to field (e.g., "turn[0].assistant_response.text")
         value: New value (Any type, JSON-serializable)
         timestamp: Unix timestamp (milliseconds)
-        privacy_band: Privacy classification (GREEN | AMBER | RED)
+        privacy_band: Privacy classification (GREEN | AMBER | RED | BLACK)
         size_bytes: Estimated size in bytes (for batch size calculation)
+        priority: Command priority (maps to CommandClient priorities)
     """
 
     session_id: str
@@ -124,13 +165,13 @@ class SessionStateDelta:
     timestamp: float
     privacy_band: str = "GREEN"
     size_bytes: int = 0
+    priority: int = Priority.REALTIME.value
 
-    def __post_init__(self):
-        if self.size_bytes == 0:
-            # Estimate size: field_path + JSON value
-            import json
-
+    def __post_init__(self) -> None:
+        if self.size_bytes <= 0:
             self.size_bytes = len(self.field_path) + len(json.dumps(self.value))
+        if self.priority not in {p.value for p in Priority}:
+            raise ValueError(f"Invalid priority value: {self.priority}")
 
 
 @dataclass
@@ -235,7 +276,11 @@ class BatchClient:
         - Diagram: architecture_diagrams/k1/k1_complete_with_flows.mmd
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: Optional[Dict[str, Any]] = None,
+        command_client: Optional[CommandClient] = None,
+    ) -> None:
         """
         Initialize BatchClient.
 
@@ -253,21 +298,25 @@ class BatchClient:
         ADR: ADR-0022 (Bounded Batching)
         Assigned to: Issue #L5-1.3.1
         """
-        # TODO(@infrastructure-team): Implement initialization (ADR-0022)
-        # 1. Validate config (check batch_window_ms, batch_size_bytes, batch_count_max)
-        # 2. Initialize state machine (INIT → READY)
-        # 3. Initialize batch buffer (list of SessionStateDelta)
-        # 4. Initialize receipt tracker (batch_id → BatchReceipt)
-        # 5. Initialize flush triggers (time, size, count)
-        self.config = config
-        self.state = "INIT"  # State: INIT | READY | DRAINING | TERMINATED
+        merged_config = {**DEFAULT_CONFIG, **(config or {})}
+        self._validate_config(merged_config)
+
+        if command_client is None:
+            raise ValueError("command_client is required for BatchClient")
+
+        self.config = merged_config
+        self._command_client = command_client
+        self.state = "INIT"  # INIT | READY | DRAINING | TERMINATED
         self._logger = logger
-        self._batch_buffer: List[SessionStateDelta] = []
+        self._batch_buffer: List[Tuple[SessionStateDelta, Optional[str]]] = []
+        self._buffer_size_bytes: int = 0
         self._receipt_tracker: Dict[str, BatchReceipt] = {}
-        self._current_batch: Optional[Batch] = None
+        self._pending_receipts: Dict[str, BatchReceipt] = {}
         self._batch_timer_task: Optional[asyncio.Task] = None
         self._flush_lock = asyncio.Lock()
-        pass
+        self._shutdown_event = asyncio.Event()
+        self._last_flush_monotonic = time.monotonic()
+        self._dlq: List[Dict[str, Any]] = []
 
     async def initialize(self) -> None:
         """
@@ -288,20 +337,27 @@ class BatchClient:
         # 1. Start batch timer task (250ms interval)
         # 2. Initialize current batch (empty)
         # 3. Transition state: INIT → READY
+        if self.state != "INIT":
+            raise RuntimeError("BatchClient already initialized")
+
+        self._shutdown_event.clear()
+        self._last_flush_monotonic = time.monotonic()
+        if self.config.get("enable_batching", True):
+            self._batch_timer_task = asyncio.create_task(self._batch_timer_loop())
+
         self.state = "READY"
         self._logger.info(
-            "batch_client_initialized",
-            batch_window_ms=self.config.get("batch_window_ms"),
-            batch_size_bytes=self.config.get("batch_size_bytes"),
-            batch_count_max=self.config.get("batch_count_max"),
+            "batch_client_initialized batch_window_ms=%d batch_size_bytes=%d batch_count_max=%d",
+            self.config["batch_window_ms"],
+            self.config["batch_size_bytes"],
+            self.config["batch_count_max"],
         )
-        pass
 
     async def add_delta(
         self,
         delta: SessionStateDelta,
         cognitive_trace_id: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[BatchReceipt]:
         """
         Add SessionState delta to batch buffer.
 
@@ -326,26 +382,48 @@ class BatchClient:
         ADR: ADR-0022 (Bounded Batching)
         Assigned to: Issue #L5-1.3.1
         """
-        # TODO(@infrastructure-team): Implement add_delta (ADR-0022)
-        # 1. Validate delta (session_id, field_path, value)
-        # 2. Check buffer bounds:
-        #    - If total_size >5MB: Drop oldest delta, log WARNING
-        #    - If pending_receipts >1000: Drop oldest, log WARNING
-        # 3. Add delta to batch buffer
-        # 4. Update batch size (accumulate delta.size_bytes)
-        # 5. Check flush triggers:
-        #    - If time_since_last_flush ≥250ms: flush(FlushTrigger.TIME)
-        #    - If batch_size ≥64KB: flush(FlushTrigger.SIZE)
-        #    - If batch_count ≥100: flush(FlushTrigger.COUNT)
-        # 6. Record metrics (batch accumulation size)
-        self._logger.debug(
-            "delta_added",
-            session_id=delta.session_id,
-            field_path=delta.field_path,
-            size_bytes=delta.size_bytes,
-            trace_id=cognitive_trace_id,
-        )
-        pass
+        if self.state not in {"READY", "DRAINING"}:
+            raise RuntimeError("BatchClient is not ready")
+
+        if delta.privacy_band == "BLACK":
+            self._logger.warning(
+                "delta_rejected_privacy session_id=%s field_path=%s trace_id=%s",
+                delta.session_id,
+                delta.field_path,
+                cognitive_trace_id,
+            )
+            emit_counter(
+                "k1_k0_bridge_batch_deltas_rejected_total",
+                1,
+                {"reason": "privacy_band_black"},
+            )
+            return None
+
+        async with self._flush_lock:
+            self._enforce_bounds(delta)
+
+            self._batch_buffer.append((delta, cognitive_trace_id))
+            self._buffer_size_bytes += delta.size_bytes
+
+            emit_gauge(
+                "k1_k0_bridge_batch_accumulation_size",
+                self._buffer_size_bytes,
+                None,
+            )
+
+            trigger: Optional[FlushTrigger] = None
+            if self._buffer_size_bytes >= self.config["batch_size_bytes"]:
+                trigger = FlushTrigger.SIZE
+            elif len(self._batch_buffer) >= self.config["batch_count_max"]:
+                trigger = FlushTrigger.COUNT
+
+            if trigger is not None or not self.config.get("enable_batching", True):
+                return await self._flush_locked(
+                    trigger or FlushTrigger.MANUAL,
+                    cognitive_trace_id=cognitive_trace_id,
+                )
+
+        return None
 
     async def flush(
         self,
@@ -389,13 +467,7 @@ class BatchClient:
         # 8. Record metrics (flush latency, batch size, trigger)
         # 9. Return BatchReceipt
         async with self._flush_lock:
-            self._logger.info(
-                "batch_flushed",
-                trigger=trigger.value,
-                delta_count=len(self._batch_buffer),
-                trace_id=cognitive_trace_id,
-            )
-            pass
+            return await self._flush_locked(trigger, cognitive_trace_id)
 
     async def get_receipt(self, batch_id: str) -> Optional[BatchReceipt]:
         """
@@ -438,29 +510,245 @@ class BatchClient:
         # 4. Set state to TERMINATED
         # 5. Clear batch buffer and receipt tracker
         # 6. Flush metrics (Prometheus)
+        if self.state == "TERMINATED":
+            return
+
+        self.state = "DRAINING"
+        async with self._flush_lock:
+            await self._flush_locked(FlushTrigger.MANUAL, cognitive_trace_id=None)
+
+        self._shutdown_event.set()
+
+        if self._batch_timer_task:
+            self._batch_timer_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._batch_timer_task
+
         self.state = "TERMINATED"
         self._logger.info("batch_client_shutdown_complete")
-        pass
 
     # =========================================================================
     # PRIVATE METHODS (Implementation Details)
     # =========================================================================
 
     async def _batch_timer_loop(self) -> None:
-        """
-        Background task: Flush batch on 250ms timer.
+        interval = self.config["batch_window_ms"] / 1000.0
+        try:
+            while not self._shutdown_event.is_set():
+                await asyncio.sleep(interval)
+                if self.state not in {"READY", "DRAINING"}:
+                    continue
 
-        This method runs continuously, flushing batch every 250ms.
+                time_since_flush = time.monotonic() - self._last_flush_monotonic
+                if time_since_flush * 1000 < self.config["batch_window_ms"]:
+                    continue
 
-        ADR: ADR-0022 (Bounded Batching)
-        Assigned to: Issue #L5-1.3.1
-        """
-        # TODO(@infrastructure-team): Implement batch timer loop (ADR-0022)
-        # 1. Sleep for batch_window_ms (250ms)
-        # 2. Check if buffer has deltas
-        # 3. If buffer not empty, flush(FlushTrigger.TIME)
-        # 4. Repeat until canceled
-        pass
+                if not self._batch_buffer:
+                    continue
+
+                await self.flush(FlushTrigger.TIME)
+        except asyncio.CancelledError:  # pragma: no cover - expected on shutdown
+            raise
+
+    async def _flush_locked(
+        self,
+        trigger: FlushTrigger,
+        cognitive_trace_id: Optional[str],
+    ) -> Optional[BatchReceipt]:
+        if not self._batch_buffer:
+            return None
+
+        deltas_snapshot = list(self._batch_buffer)
+        buffer_size_snapshot = self._buffer_size_bytes
+        self._batch_buffer.clear()
+        self._buffer_size_bytes = 0
+
+        batch_id = self._generate_batch_id()
+        trace_id = cognitive_trace_id or deltas_snapshot[0][1] or deltas_snapshot[0][0].session_id
+        priority = min(delta.priority for delta, _ in deltas_snapshot)
+        session_ids = {delta.session_id for delta, _ in deltas_snapshot}
+        session_id = session_ids.pop() if len(session_ids) == 1 else "batch"
+
+        payload = self._serialize_batch(batch_id, deltas_snapshot, trigger, buffer_size_snapshot, trace_id)
+        command = Command(
+            command_id=str(uuid.uuid4()),
+            command_type=CommandType.MEMORY_WRITE,
+            session_id=session_id,
+            cognitive_trace_id=trace_id or batch_id,
+            payload=payload,
+            priority=priority,
+        )
+
+        start_time = time.perf_counter()
+        try:
+            with create_span(
+                "k0_bridge.batch_client.flush",
+                batch_id=batch_id,
+                trigger=trigger.value,
+                delta_count=len(deltas_snapshot),
+            ) as span:
+                span.set_attribute("size_bytes", buffer_size_snapshot)
+                receipt = await self._command_client.send_command(
+                    command,
+                    cognitive_trace_id=command.cognitive_trace_id,
+                )
+
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            emit_histogram(
+                "k1_k0_bridge_batch_flush_latency_ms",
+                latency_ms,
+                {"trigger": trigger.value},
+            )
+            emit_counter(
+                "k1_k0_bridge_batch_flushes_total",
+                1,
+                {"trigger": trigger.value},
+            )
+
+            status = receipt.status.value if isinstance(receipt.status, CommandStatus) else str(receipt.status)
+            batch_receipt = BatchReceipt(
+                batch_id=batch_id,
+                receipt_id=receipt.receipt_id,
+                status=status,
+                timestamp=receipt.timestamp_ms,
+            )
+            self._receipt_tracker[batch_id] = batch_receipt
+            if receipt.status == CommandStatus.PENDING:
+                self._pending_receipts[batch_id] = batch_receipt
+            else:
+                self._pending_receipts.pop(batch_id, None)
+
+            self._logger.info(
+                "batch_flushed batch_id=%s trigger=%s delta_count=%d size_bytes=%d latency_ms=%.2f status=%s trace_id=%s",
+                batch_id,
+                trigger.value,
+                len(deltas_snapshot),
+                buffer_size_snapshot,
+                latency_ms,
+                status,
+                trace_id,
+            )
+
+            self._last_flush_monotonic = time.monotonic()
+            return batch_receipt
+        except Exception as exc:
+            # Restore buffer on failure
+            self._batch_buffer[:0] = deltas_snapshot
+            self._buffer_size_bytes += buffer_size_snapshot
+            emit_counter(
+                "k1_k0_bridge_batch_flush_failures_total",
+                1,
+                {"trigger": trigger.value, "error": exc.__class__.__name__},
+            )
+            await self._send_to_dlq(batch_id, deltas_snapshot, str(exc), trace_id)
+            self._logger.error(
+                "batch_flush_failed batch_id=%s error=%s trace_id=%s",
+                batch_id,
+                str(exc),
+                trace_id,
+            )
+            raise
+
+    def _serialize_batch(
+        self,
+        batch_id: str,
+        deltas_snapshot: List[Tuple[SessionStateDelta, Optional[str]]],
+        trigger: FlushTrigger,
+        size_bytes: int,
+        trace_id: Optional[str],
+    ) -> bytes:
+        payload = {
+            "batch_id": batch_id,
+            "trigger": trigger.value,
+            "size_bytes": size_bytes,
+            "deltas": [
+                {
+                    "session_id": delta.session_id,
+                    "field_path": delta.field_path,
+                    "value": delta.value,
+                    "timestamp": delta.timestamp,
+                    "privacy_band": delta.privacy_band,
+                    "priority": delta.priority,
+                    "trace_id": trace,
+                }
+                for delta, trace in deltas_snapshot
+            ],
+            "trace_id": trace_id,
+        }
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    def _enforce_bounds(self, delta: SessionStateDelta) -> None:
+        pending_limit = self.config["pending_receipts_max"]
+        if len(self._pending_receipts) >= pending_limit:
+            raise RuntimeError("Pending receipt limit exceeded; apply backpressure upstream")
+
+        max_buffer_bytes = self.config["max_buffer_bytes"]
+        while self._buffer_size_bytes + delta.size_bytes > max_buffer_bytes:
+            dropped = self._drop_oldest_with_priority(Priority.BACKGROUND.value)
+            if not dropped:
+                raise RuntimeError("Batch buffer exceeded max capacity and no background items to drop")
+
+    def _drop_oldest_with_priority(self, priority: int) -> bool:
+        for idx, (existing_delta, _) in enumerate(self._batch_buffer):
+            if existing_delta.priority == priority:
+                self._buffer_size_bytes -= existing_delta.size_bytes
+                dropped = self._batch_buffer.pop(idx)
+                self._logger.warning(
+                    "batch_delta_dropped priority=%d session_id=%s field_path=%s",
+                    priority,
+                    dropped[0].session_id,
+                    dropped[0].field_path,
+                )
+                emit_counter(
+                    "k1_k0_bridge_batch_deltas_dropped_total",
+                    1,
+                    {"priority": priority},
+                )
+                return True
+
+        return False
+
+    def _validate_config(self, config: Dict[str, Any]) -> None:
+        required_positive = [
+            "batch_window_ms",
+            "batch_size_bytes",
+            "batch_count_max",
+            "pending_receipts_max",
+            "max_buffer_bytes",
+        ]
+        for key in required_positive:
+            if config[key] <= 0:
+                raise ValueError(f"BatchClient config value for {key} must be positive")
+
+    def _generate_batch_id(self) -> str:
+        return f"batch_{uuid.uuid4()}"
+
+    async def _send_to_dlq(
+        self,
+        batch_id: str,
+        deltas_snapshot: List[Tuple[SessionStateDelta, Optional[str]]],
+        error: str,
+        trace_id: Optional[str],
+    ) -> None:
+        dlq_entry = {
+            "batch_id": batch_id,
+            "error": error,
+            "trace_id": trace_id,
+            "deltas": [delta.field_path for delta, _ in deltas_snapshot],
+            "timestamp": int(time.time() * 1000),
+        }
+        self._dlq.append(dlq_entry)
+        emit_counter(
+            "k1_k0_bridge_batch_dlq_total",
+            1,
+            None,
+        )
+        if len(self._dlq) > 10000:
+            self._dlq.pop(0)
+
+    @property
+    def dlq(self) -> List[Dict[str, Any]]:
+        return list(self._dlq)
 
 
 # =============================================================================

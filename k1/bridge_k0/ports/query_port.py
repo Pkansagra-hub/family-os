@@ -56,7 +56,10 @@ References:
     - Test: tests/k1/bridge_k0/ports/test_query_port.py
 """
 
+import asyncio
+import json
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 
@@ -64,14 +67,44 @@ from enum import Enum
 # SECTION 1: IMPORTS
 # =============================================================================
 # Standard library imports
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+from k1.bridge_k0.http2_client import HTTP2Config, HTTP2Connection, HTTP2Response
+from k1.bridge_k0.protocol import ProtocolConfig, ProtocolNegotiator, SerializationFormat
 
 # Third-party imports
 # None
 
-# Internal imports
-# from k1.bridge_k0.http2_client import HTTP2Connection
-# from k1.bridge_k0.protocol import ProtocolNegotiator, SerializationFormat
+# Observability (best-effort; fall back to no-ops if module not available)
+try:  # pragma: no cover
+    from k1.l5_infrastructure.observability import (  # type: ignore
+        create_span,
+        emit_counter,
+        emit_gauge,
+        emit_histogram,
+    )
+except (ModuleNotFoundError, ImportError):  # pragma: no cover
+    def create_span(name: str, **_: object):  # type: ignore
+        class _NullSpan:
+            def __enter__(self) -> "_NullSpan":
+                return self
+
+            def __exit__(self, *_exc: object) -> None:
+                return None
+
+            def set_attribute(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+        return _NullSpan()
+
+    def emit_counter(_name: str, _value: float = 1.0, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_histogram(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
+
+    def emit_gauge(_name: str, _value: float, _labels: Optional[Dict[str, Any]] = None) -> None:
+        return None
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -129,11 +162,16 @@ class QueryRequest:
     """
 
     query: str
+    session_id: str
+    query_type: str = "episodic"
     lane: QueryLane = QueryLane.SMART
     privacy_band: str = "GREEN"
-    stores: List[QueryStore] = None
+    stores: Optional[List[QueryStore]] = None
     max_results: int = 10
     mmr_diversity: float = 0.5
+    cursor: Optional[str] = None
+    filters: Optional[Dict[str, Any]] = None
+    cognitive_enhancements: Optional[Dict[str, Any]] = None
     cognitive_trace_id: Optional[str] = None
 
     def __post_init__(self):
@@ -186,6 +224,8 @@ class QueryResponse:
     results: List[QueryResult]
     query_latency_ms: float
     stores_queried: List[QueryStore]
+    total_count: int
+    next_cursor: Optional[str] = None
 
 
 # =============================================================================
@@ -251,7 +291,7 @@ class QueryPort:
         - Diagram: architecture_diagrams/k1/k1_complete_with_flows.mmd
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: Dict[str, Any], protocol_config: Optional[ProtocolConfig] = None) -> None:
         """
         Initialize QueryPort adapter.
 
@@ -273,10 +313,23 @@ class QueryPort:
         # 1. Validate config (check k0_host, k0_query_port, endpoint)
         # 2. Initialize state machine (INIT → CONNECTING → READY)
         # 3. Initialize protocol negotiator (JSON vs FlatBuffers)
-        self.config = config
+        merged_config = {**DEFAULT_CONFIG, **config}
+        self.config = merged_config
         self.state = "INIT"  # State: INIT | CONNECTING | READY | DEGRADED | TERMINATED
         self._logger = logger
-        pass
+        self._http2_config = HTTP2Config(
+            k0_host=merged_config["k0_host"],
+            k0_port=merged_config["k0_query_port"],
+        )
+        self._http2_connection = HTTP2Connection(self._http2_config)
+        self._protocol_negotiator = ProtocolNegotiator(
+            ProtocolConfig() if protocol_config is None else protocol_config
+        )
+        self._shutdown_event = asyncio.Event()
+        self._query_semaphore = asyncio.Semaphore(merged_config.get("max_concurrent_queries", 32))
+        self._query_queue_depth = 0
+        self._queue_lock = asyncio.Lock()
+        emit_gauge("k1_k0_query_port_queue_depth", 0, {"lane": merged_config["default_lane"]})
 
     async def initialize(self) -> None:
         """
@@ -294,17 +347,20 @@ class QueryPort:
         ADR: ADR-0001a (K0 Bridge Dual Protocol)
         Assigned to: Issue #L5-1.2.2
         """
-        # TODO(@infrastructure-team): Implement async initialization (ADR-0001a)
-        # 1. Connect to K0 Query Port (HTTP/2 connection)
-        # 2. Negotiate format (JSON vs FlatBuffers via OPTIONS request)
-        # 3. Transition state: INIT → CONNECTING → READY
+        if self.state != "INIT":
+            raise RuntimeError("QueryPort already initialized")
+
+        await self._http2_connection.connect()
+        await self._protocol_negotiator.initialize()
+
         self.state = "READY"
         self._logger.info(
             "query_port_initialized",
             k0_host=self.config.get("k0_host"),
             k0_port=self.config.get("k0_query_port"),
+            default_lane=self.config.get("default_lane"),
+            max_results=self.config.get("max_results"),
         )
-        pass
 
     async def query(self, request: QueryRequest) -> QueryResponse:
         """
@@ -335,27 +391,63 @@ class QueryPort:
         Assigned to: Issue #L5-1.2.2
         Depends on: K0 P01 Pipeline (multi-store retrieval + MMR fusion)
         """
-        # TODO(@infrastructure-team): Implement query (ADR-0001f)
-        # 1. Validate request (query text, lane, stores)
-        # 2. Create HTTP request payload (JSON or FlatBuffers)
-        # 3. Send via HTTP/2 (POST /k0/query)
-        # 4. Parse response (MMR-fused results from K0)
-        # 5. Convert to QueryResponse (results, latency, stores_queried)
-        # 6. Record metrics (latency, result count, lane)
-        # 7. Return QueryResponse
-        #
-        # CRITICAL: K1 does NOT implement MMR fusion or multi-store logic.
-        # K0 P01 Pipeline returns results already ranked and deduplicated.
+        if self.state not in {"READY", "DEGRADED"}:
+            raise RuntimeError("QueryPort is not ready")
+
+        if not request.query:
+            raise ValueError("query text must be provided")
+        if request.max_results <= 0 or request.max_results > 100:
+            raise ValueError("max_results must be within 1..100")
+
+        if request.lane == QueryLane.SMART:
+            target_lane = "SMART"
+        elif request.lane == QueryLane.FAST:
+            target_lane = "FAST"
+        else:
+            raise ValueError(f"Unsupported lane: {request.lane}")
+
+        serialized_body, format_used = await self._serialize_request(request)
+        headers = self._build_headers(request, format_used)
+
+        query_labels = {
+            "lane": target_lane,
+            "status": "pending",
+        }
+
+        async with self._acquire_query_slot(target_lane):
+            start_time = time.perf_counter()
+            response = await self._dispatch_request(serialized_body, headers, request)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+
+        emit_histogram("k1_k0_query_port_latency_ms", latency_ms, query_labels)
+        emit_counter("k1_k0_query_port_requests_total", 1, {**query_labels, "status": str(response.status)})
+
+        parsed_results, result_count, next_cursor, total_count, query_latency = self._parse_response(
+            response,
+            request,
+        )
+
+        emit_histogram(
+            "k1_k0_query_port_result_count",
+            float(result_count),
+            {"lane": target_lane},
+        )
+
         self._logger.info(
             "query_executed",
             query_text=request.query,
-            lane=request.lane.value,
+            lane=target_lane,
+            result_count=result_count,
+            latency_ms=round(query_latency, 2),
             trace_id=request.cognitive_trace_id,
         )
 
-        # Placeholder return (MUST be replaced with actual implementation)
         return QueryResponse(
-            results=[], query_latency_ms=0.0, stores_queried=request.stores
+            results=parsed_results,
+            query_latency_ms=query_latency,
+            stores_queried=request.stores,
+            total_count=total_count,
+            next_cursor=next_cursor,
         )
 
     async def shutdown(self) -> None:
@@ -371,13 +463,165 @@ class QueryPort:
         ADR: ADR-0001a (K0 Bridge Dual Protocol)
         Assigned to: Issue #L5-1.2.2
         """
-        # TODO(@infrastructure-team): Implement shutdown (ADR-0001a)
-        # 1. Set state to TERMINATED
-        # 2. Close HTTP/2 connection
-        # 3. Flush metrics (Prometheus)
+        if self.state == "TERMINATED":
+            return
+
+        self.state = "DEGRADED"
+        self._shutdown_event.set()
+
+        await self._http2_connection.close()
+
         self.state = "TERMINATED"
         self._logger.info("query_port_shutdown_complete")
-        pass
+
+    async def _acquire_query_slot(self, lane: str):
+        class _QuerySlot:
+            def __init__(self, outer: "QueryPort", lane_value: str) -> None:
+                self._outer = outer
+                self._lane = lane_value
+
+            async def __aenter__(self) -> "_QuerySlot":
+                async with self._outer._queue_lock:
+                    self._outer._query_queue_depth += 1
+                    emit_gauge(
+                        "k1_k0_query_port_queue_depth",
+                        self._outer._query_queue_depth,
+                        {"lane": self._lane},
+                    )
+                await self._outer._query_semaphore.acquire()
+                return self
+
+            async def __aexit__(self, *_exc: object) -> None:
+                self._outer._query_semaphore.release()
+                async with self._outer._queue_lock:
+                    self._outer._query_queue_depth = max(self._outer._query_queue_depth - 1, 0)
+                    emit_gauge(
+                        "k1_k0_query_port_queue_depth",
+                        self._outer._query_queue_depth,
+                        {"lane": self._lane},
+                    )
+
+        return _QuerySlot(self, lane)
+
+    async def _serialize_request(self, request: QueryRequest) -> Tuple[bytes, SerializationFormat]:
+        payload = {
+            "port_id": "P01",
+            "command_type": "recall_query",
+            "cognitive_trace_id": request.cognitive_trace_id or "",
+            "session_id": request.session_id,
+            "privacy_band": request.privacy_band,
+            "capability": "READ_MEMORY/RECALL",
+            "payload": {
+                "query": request.query,
+                "query_type": request.query_type,
+                "lane": request.lane.value,
+                "stores": [store.value for store in request.stores],
+                "max_results": request.max_results,
+                "mmr_diversity": request.mmr_diversity,
+            },
+        }
+        if request.cursor:
+            payload["payload"]["cursor"] = request.cursor
+        if request.filters:
+            payload["payload"]["filters"] = request.filters
+        if request.cognitive_enhancements:
+            payload["payload"]["cognitive_enhancements"] = request.cognitive_enhancements
+
+        format_used = await self._protocol_negotiator.select_format(
+            endpoint=self.config["endpoint"],
+            payload=payload,
+        )
+
+        serialized_body = await self._protocol_negotiator.serialize(
+            payload,
+            format_used,
+        )
+
+        return serialized_body, format_used
+
+    def _build_headers(self, request: QueryRequest, format_used: SerializationFormat) -> Dict[str, str]:
+        headers = {
+            "Content-Type": "application/json" if format_used == SerializationFormat.JSON else "application/octet-stream",
+            "Accept": "application/json",
+            "X-Cognitive-Trace-Id": request.cognitive_trace_id or "",  # propagate trace
+            "X-Query-Lane": request.lane.value,
+            "X-Privacy-Band": request.privacy_band,
+            "X-Query-Max-Results": str(request.max_results),
+        }
+        return headers
+
+    async def _dispatch_request(
+        self,
+        body: bytes,
+        headers: Dict[str, str],
+        request: QueryRequest,
+    ) -> HTTP2Response:
+        path = self.config["endpoint"]
+        timeout_s = self.config["timeout_ms"] / 1000.0
+        with create_span(
+            "k0_bridge.query_port.request",
+            query=request.query,
+            lane=request.lane.value,
+            max_results=request.max_results,
+        ) as span:
+            span.set_attribute("privacy_band", request.privacy_band)
+            span.set_attribute("stores", ",".join(store.value for store in request.stores))
+            response = await self._http2_connection.request(
+                method="POST",
+                path=path,
+                headers=headers,
+                body=body,
+                timeout=timeout_s,
+            )
+            span.set_attribute("status", response.status)
+        return response
+
+    def _parse_response(
+        self,
+        response: HTTP2Response,
+        request: QueryRequest,
+    ) -> Tuple[List[QueryResult], int, Optional[str], int, float]:
+        if response.status != 200:
+            raise RuntimeError(f"Query failed with status {response.status}")
+
+        try:
+            decoded = json.loads(response.body.decode("utf-8"))
+        except json.JSONDecodeError as exc:  # pragma: no cover - indicates upstream bug
+            raise RuntimeError("Invalid JSON response from K0") from exc
+
+        results_payload = decoded.get("results", [])
+        query_latency = float(decoded.get("query_latency_ms", 0.0))
+        total_count = int(decoded.get("total_count", len(results_payload)))
+        next_cursor = decoded.get("next_cursor")
+
+        results: List[QueryResult] = []
+        for index, result in enumerate(results_payload, start=1):
+            store_value = result.get("store") or result.get("memory_type", "FTS")
+            try:
+                store_enum = QueryStore(store_value.upper())
+            except ValueError:
+                store_enum = QueryStore.FTS
+            results.append(
+                QueryResult(
+                    rank=index,
+                    store=store_enum,
+                    text=result.get("content", ""),
+                    score=float(result.get("relevance_score", 0.0)),
+                    source=result.get("memory_id", ""),
+                    metadata=result.get("provenance"),
+                )
+            )
+
+        if total_count < len(results):
+            raise RuntimeError("K0 returned total_count less than results length")
+
+        if next_cursor:
+            emit_counter("k1_k0_query_port_pagination", 1, {"lane": request.lane.value})
+
+        return results, len(results_payload), next_cursor, total_count, query_latency
+
+    def _require_session_id(self, request: QueryRequest) -> str:
+        return request.session_id
 
 
 # =============================================================================
