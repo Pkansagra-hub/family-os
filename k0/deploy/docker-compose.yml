@@ -9,9 +9,21 @@ services:
     volumes:
       - ./data:/data
       - ./secrets:/secrets:ro
+      # PEP Schema (core policy enforcement schema)
       - type: bind
         source: ../contracts/policy/pep.schema.json
         target: /app/k0/contracts/policy/pep.schema.json
+        read_only: true
+      # Bridge Policy Contract (defines P00-P03 endpoints, manifest_fingerprint validation)
+      - type: bind
+        source: ../contracts/policy/bridge_policy.yml
+        target: /app/k0/contracts/policy/bridge_policy.yml
+        read_only: true
+      # Policy Manifests (mounted from generated/ subdirectory for local development)
+      # In production, these would be distributed via secure provisioning service
+      - type: bind
+        source: ./generated/manifests
+        target: /mnt/policy
         read_only: true
     ports:
       - "8080:8080"

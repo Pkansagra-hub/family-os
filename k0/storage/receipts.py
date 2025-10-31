@@ -22,6 +22,7 @@ class Receipt:
     mls_group_id: str
     key_version: str
     device_sig: str
+    manifest_fingerprint: str | None = None
 
 
 @contextmanager
@@ -47,12 +48,12 @@ class ReceiptStore:
             conn.execute(
                 (
                     "INSERT INTO st_receipts (receipt_id, idem_key, wal_pos, commit_ts, tenant_id, "
-                    "space_id, device_id, mls_group_id, key_version, device_sig) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "space_id, device_id, mls_group_id, key_version, device_sig, manifest_fingerprint) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT(receipt_id) DO UPDATE SET idem_key=excluded.idem_key, wal_pos=excluded.wal_pos, "
                     "commit_ts=excluded.commit_ts, tenant_id=excluded.tenant_id, space_id=excluded.space_id, "
                     "device_id=excluded.device_id, mls_group_id=excluded.mls_group_id, key_version=excluded.key_version, "
-                    "device_sig=excluded.device_sig"
+                    "device_sig=excluded.device_sig, manifest_fingerprint=excluded.manifest_fingerprint"
                 ),
                 (
                     receipt.receipt_id,
@@ -65,6 +66,7 @@ class ReceiptStore:
                     receipt.mls_group_id,
                     receipt.key_version,
                     receipt.device_sig,
+                    receipt.manifest_fingerprint,
                 ),
             )
 
@@ -78,7 +80,7 @@ class ReceiptStore:
             row = conn.execute(
                 (
                     "SELECT receipt_id, idem_key, wal_pos, commit_ts, tenant_id, space_id, device_id, "
-                    "mls_group_id, key_version, device_sig FROM st_receipts WHERE receipt_id = ?"
+                    "mls_group_id, key_version, device_sig, manifest_fingerprint FROM st_receipts WHERE receipt_id = ?"
                 ),
                 (receipt_id,),
             ).fetchone()
@@ -95,4 +97,5 @@ class ReceiptStore:
                 mls_group_id=row["mls_group_id"],
                 key_version=row["key_version"],
                 device_sig=row["device_sig"],
+                manifest_fingerprint=row["manifest_fingerprint"],
             )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .dlq import DeadLetterQueue
 from .offsets import OffsetStore
+from .obligations import ObligationRecord, ObligationStore
 from .outbox import OutboxStore
 from .provisioning import ProvisionedDevice, ProvisioningLedger
 from .receipts import ReceiptStore
@@ -23,6 +24,8 @@ __all__ = [
     "ProvisionedDevice",
     "ProvisioningLedger",
     "ReceiptStore",
+    "ObligationRecord",
+    "ObligationStore",
     "Replayer",
     "ReplayError",
     "SnapshotError",

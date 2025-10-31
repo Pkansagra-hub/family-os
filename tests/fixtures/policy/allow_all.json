@@ -1,0 +1,44 @@
+{
+  "version": "2025-10-30T00:00:00Z",
+  "default_obligations": [
+    {
+      "name": "kernel.audit.trace",
+      "details": {
+        "scenario": "allow_all"
+      }
+    }
+  ],
+  "bands": {
+    "GREEN": {
+      "max_fanout": 16,
+      "max_throughput_pps": 512,
+      "max_payload_bytes": 262144,
+      "obligations": []
+    },
+    "AMBER": {
+      "max_fanout": 8,
+      "max_throughput_pps": 256,
+      "max_payload_bytes": 131072,
+      "obligations": []
+    },
+    "RED": {
+      "deny": false,
+      "obligations": []
+    }
+  },
+  "roles": [
+    {
+      "name": "coordinator",
+      "allow_topics": [
+        "memory.*"
+      ],
+      "max_band": "GREEN",
+      "obligations": []
+    }
+  ],
+  "device_postures": {},
+  "sunset_windows": {},
+  "role_violation_obligation": {
+    "name": "kernel.policy.review"
+  }
+}

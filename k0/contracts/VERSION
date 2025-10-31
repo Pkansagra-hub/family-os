@@ -2,9 +2,9 @@
 # This file tracks the canonical version and checksums for all contract artifacts.
 # Changes to this file require Architecture + Security + Ops approval.
 
-version: 1.0.0
-release_date: '2025-10-06'
-status: frozen
+version: 1.0.1
+release_date: '2025-10-30'
+status: active
 artifacts:
   openapi:
     file: openapi.k0.yaml
@@ -37,14 +37,23 @@ artifacts:
     sha256: d095b18bd3aa678138eca90db5674b440fe13fde691c4abe4b9c4ff0c97dc4ed
   - file: jsonschema/sse.ack.request.json
     sha256: e2c886fd2c790974579fcd5361d3a9895e9f6a5cd138bdc6ff3b66c63bc4b287
+  bridge_policy:
+    file: policy/bridge_policy.yml
+    version: 0.1.0
+    sha256: f15bb2f19320bc61b733bb284cd6c62df726a886aa5914fdaf433feeb280106e
   storage:
     file: sql/storage.sql
     sha256: 0c33b91061442e5efa28a66d085959e0928df96e694992312969b015813a50bc
 approvals:
-  architecture: null
-  security: null
-  operations: null
+  architecture: '2025-10-30'
+  security: '2025-10-30'
+  operations: '2025-10-30'
 changelog:
+- version: 1.0.1
+  date: '2025-10-30'
+  changes:
+  - Added bridge policy contract policy/bridge_policy.yml (ADR-0089) with SHA256 f15bb2f19320bc61b733bb284cd6c62df726a886aa5914fdaf433feeb280106e
+  - Revalidated contracts via `python -m k0.automation.lint_schemas`
 - version: 1.0.0
   date: '2025-10-06'
   changes:

@@ -5,17 +5,23 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, cast
 
-
 LOGGER = logging.getLogger(__name__)
 
-_POLICY_PATH = Path(__file__).resolve().parents[1] / "contracts" / "policy" / "pep.schema.json"
+_DEFAULT_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" / "policy" / "pep.schema.json"
+)
+_POLICY_ENV_VAR = "K0_POLICY_MANIFEST_PATH"
 _BAND_ORDER = ("GREEN", "AMBER", "RED")
+
+# Cache for manifest fingerprints
+_cached_manifest_fingerprint: dict[str, str] = {}
 
 
 class PolicyConfigurationError(RuntimeError):
@@ -56,10 +62,7 @@ def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     obligations.extend(_build_obligations(band_policy.get("obligations", [])))
 
     policy_ctx = _coerce_mapping(
-    envelope.get("policy")
-    or envelope.get("pep")
-    or envelope.get("policy_ctx")
-    or {}
+        envelope.get("policy") or envelope.get("pep") or envelope.get("policy_ctx") or {}
     )
     abac_ctx = _coerce_mapping(policy_ctx.get("abac", {}))
     caps_ctx = _coerce_mapping(policy_ctx.get("caps", {}))
@@ -98,16 +101,55 @@ def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     return decision
 
 
+def _resolve_policy_manifest_path() -> Path:
+    override = os.getenv(_POLICY_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    return _DEFAULT_POLICY_PATH
+
+
 def _load_policy_manifest() -> dict[str, Any]:
+    manifest_path = _resolve_policy_manifest_path()
     try:
-        return _cached_manifest()
+        return _cached_manifest(manifest_path)
     except FileNotFoundError as exc:  # pragma: no cover - configuration bug
-        raise PolicyConfigurationError(f"Policy manifest not found at {_POLICY_PATH}") from exc
+        raise PolicyConfigurationError(f"Policy manifest not found at {manifest_path}") from exc
 
 
-@lru_cache(maxsize=1)
-def _cached_manifest() -> dict[str, Any]:
-    raw: dict[str, Any] = json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
+def get_manifest_fingerprint() -> str | None:
+    """Get the fingerprint (SHA-256 hash) of the current policy manifest.
+
+    Returns None if the manifest cannot be loaded.
+    """
+    import hashlib
+
+    try:
+        manifest_path = _resolve_policy_manifest_path()
+        path_str = str(manifest_path)
+
+        # Check cache first
+        if path_str in _cached_manifest_fingerprint:
+            return _cached_manifest_fingerprint[path_str]
+
+        # Compute and cache
+        if not manifest_path.exists():
+            return None
+        manifest_bytes = manifest_path.read_bytes()
+        fingerprint = hashlib.sha256(manifest_bytes).hexdigest()
+        _cached_manifest_fingerprint[path_str] = fingerprint
+        return fingerprint
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _clear_manifest_fingerprint_cache() -> None:
+    """Clear the manifest fingerprint cache. Used in tests."""
+    _cached_manifest_fingerprint.clear()
+
+
+@lru_cache(maxsize=4)
+def _cached_manifest(path: Path) -> dict[str, Any]:
+    raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if "bands" not in raw or "roles" not in raw:
         raise PolicyConfigurationError("Policy manifest missing required keys: 'bands' and 'roles'")
     return raw
@@ -154,9 +196,19 @@ def _build_obligations(
             name = mapping_entry.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            detail_map = {
-                str(k): _stringify_detail(v) for k, v in _coerce_mapping(mapping_entry.get("details", {})).items()
-            }
+            # For structured obligations like kernel.redact.field, preserve complex types
+            # Otherwise stringify simple scalar values
+            detail_map = {}
+            for k, v in _coerce_mapping(mapping_entry.get("details", {})).items():
+                if name == "kernel.redact.field" and k in ("fields", "target"):
+                    # Preserve list/sequence types for redaction directives
+                    detail_map[str(k)] = v
+                elif name == "kernel.redact.field" and k == "mask":
+                    # Keep mask as-is (usually a string)
+                    detail_map[str(k)] = v
+                else:
+                    # Stringify other detail values for backward compatibility
+                    detail_map[str(k)] = _stringify_detail(v)
             details = {**detail_map, **merged_extra}
             obligations.append(Obligation(name=name, details=details))
     return obligations
@@ -407,10 +459,23 @@ def _band_rank(band: str) -> int:
 
 
 def _deduplicate_obligations(obligations: Iterable[Obligation]) -> list[Obligation]:
-    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    def _make_hashable(value: Any) -> Any:
+        """Convert a value to a hashable type for deduplication keys."""
+        if isinstance(value, list):
+            return tuple(_make_hashable(v) for v in value)
+        elif isinstance(value, dict):
+            return tuple(sorted((k, _make_hashable(v)) for k, v in value.items()))
+        else:
+            return value
+
+    seen: set[tuple[str, Any]] = set()
     deduped: list[Obligation] = []
     for obligation in obligations:
-        key = (obligation.name, tuple(sorted(obligation.details.items())))
+        # Convert details to a hashable form
+        hashable_details = tuple(
+            sorted((k, _make_hashable(v)) for k, v in obligation.details.items())
+        )
+        key = (obligation.name, hashable_details)
         if key in seen:
             continue
         deduped.append(obligation)

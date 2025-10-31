@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "tenant": "tenant-001",
+  "space": "space-home",
+  "description": "Default development manifest - allows all operations with audit logging",
+  "bands": {
+    "GREEN": {
+      "description": "Development - all access allowed",
+      "deny": false,
+      "obligations": []
+    }
+  },
+  "roles": [
+    {
+      "name": "admin",
+      "description": "Administrator role - full access",
+      "max_band": "RED",
+      "allow_topics": ["*"],
+      "obligations": []
+    },
+    {
+      "name": "device",
+      "description": "Device role - all write access",
+      "max_band": "GREEN",
+      "allow_topics": ["commands.*"],
+      "obligations": []
+    }
+  ],
+  "policies": [
+    {
+      "name": "allow_all",
+      "band": "GREEN",
+      "description": "Development policy - allows all actions with audit trail",
+      "rules": [
+        {
+          "action": "ALLOW",
+          "target": "*",
+          "obligations": ["kernel.audit.log"]
+        }
+      ]
+    }
+  ]
+}

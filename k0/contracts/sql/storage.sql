@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS st_wal (
   topic TEXT NOT NULL,
   envelope_json TEXT NOT NULL,
   body BLOB,
+  redacted_body_json TEXT,
   payload_sha256 TEXT,
   schema_uri TEXT NOT NULL,
   schema_version TEXT NOT NULL,
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS st_receipts (
   device_id TEXT NOT NULL,
   mls_group_id TEXT NOT NULL,
   key_version TEXT NOT NULL,
-  device_sig TEXT NOT NULL
+  device_sig TEXT NOT NULL,
+  manifest_fingerprint TEXT
 );
 
 -- Offsets (per topic/subscriber)
@@ -133,7 +135,22 @@ CREATE INDEX IF NOT EXISTS idx_wal_space_pos ON st_wal(space_id, pos);
 CREATE INDEX IF NOT EXISTS idx_wal_tenant_topic ON st_wal(tenant_id, topic, pos);
 CREATE INDEX IF NOT EXISTS idx_receipts_space ON st_receipts(space_id, wal_pos);
 CREATE INDEX IF NOT EXISTS idx_receipts_walpos ON st_receipts(wal_pos);
+CREATE INDEX IF NOT EXISTS idx_receipts_manifest ON st_receipts(manifest_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_outbox_space ON st_outbox(space_id, requeue_seq, id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_outbox_idem ON st_outbox(tenant_id, space_id, driver, fingerprint, requeue_seq);
 CREATE INDEX IF NOT EXISTS idx_dlq_space ON st_dlq(space_id, first_failure_ts);
 CREATE INDEX IF NOT EXISTS idx_device_keys_state ON st_device_keys(device_id, key_state);
+
+CREATE TABLE IF NOT EXISTS st_obligation_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wal_pos INTEGER NOT NULL,
+  obligation TEXT NOT NULL,
+  details_json TEXT,
+  commit_ts TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  FOREIGN KEY(wal_pos) REFERENCES st_wal(pos)
+);
+
+CREATE INDEX IF NOT EXISTS idx_obligation_log_wal ON st_obligation_log(wal_pos);
+CREATE INDEX IF NOT EXISTS idx_obligation_log_tenant_space ON st_obligation_log(tenant_id, space_id, commit_ts);

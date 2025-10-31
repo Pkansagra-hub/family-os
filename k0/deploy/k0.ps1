@@ -32,12 +32,60 @@ function Write-Ok($msg) { Write-Host "[k0] $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "[k0] $msg" -ForegroundColor Yellow }
 function Write-Err($msg) { Write-Host "[k0] $msg" -ForegroundColor Red }
 
+function Get-ManifestFingerprint {
+    param([string]$ManifestPath)
+
+    if (-not (Test-Path $ManifestPath)) {
+        Write-Err "Manifest not found: $ManifestPath"
+        return $null
+    }
+
+    try {
+        $content = Get-Content -Path $ManifestPath -Raw
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+        $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+        $fingerprint = [System.Convert]::ToBase64String($hash)
+        return $fingerprint
+    }
+    catch {
+        Write-Err "Failed to compute fingerprint for $ManifestPath : $_"
+        return $null
+    }
+}
+
+function Validate-Manifest {
+    param([string]$ManifestPath)
+
+    Write-Info "Validating policy manifest: $ManifestPath"
+
+    if (-not (Test-Path $ManifestPath)) {
+        Write-Err "Policy manifest not found: $ManifestPath"
+        return $false
+    }
+
+    try {
+        $content = Get-Content -Path $ManifestPath -Raw
+        $json = $content | ConvertFrom-Json
+        Write-Ok "Manifest valid JSON structure"
+
+        $fingerprint = Get-ManifestFingerprint $ManifestPath
+        Write-Info "Manifest fingerprint: $fingerprint"
+
+        return $true
+    }
+    catch {
+        Write-Err "Failed to validate manifest: $_"
+        return $false
+    }
+}
+
 function Ensure-Compose-Prereqs {
     Write-Info "Ensuring deploy directories and files"
 
     New-Item -ItemType Directory -Path $EnvDir -Force | Out-Null
     New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
     New-Item -ItemType Directory -Path $SecretsDir -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $GeneratedDir "manifests") -Force | Out-Null
 
     $EnvFile = Join-Path $EnvDir "k0.env"
     if (-not (Test-Path $EnvFile)) { New-Item -ItemType File -Path $EnvFile | Out-Null }
@@ -57,6 +105,80 @@ function Ensure-Compose-Prereqs {
         else {
             Write-Warn "Policy schema not found at $PolicyDest or $K0Policy. Compose may fail to mount."
         }
+    }
+
+    # Ensure bridge policy contract is available
+    $BridgePolicyDest = Join-Path $ContractsPolicy "bridge_policy.yml"
+    if (-not (Test-Path $BridgePolicyDest)) {
+        $K0BridgePolicy = Join-Path (Join-Path $RepoRoot "k0\contracts\policy") "bridge_policy.yml"
+        if (Test-Path $K0BridgePolicy) {
+            Copy-Item -Path $K0BridgePolicy -Destination $BridgePolicyDest -Force
+            Write-Info "Copied bridge policy contract to $BridgePolicyDest"
+        }
+        else {
+            Write-Warn "Bridge policy contract not found at $K0BridgePolicy"
+        }
+    }
+
+    # Ensure default policy manifests exist in generated/manifests
+    # These are actual policy instances (for device provisioning and RBAC)
+    $ManifestsDir = Join-Path $GeneratedDir "manifests"
+    New-Item -ItemType Directory -Path $ManifestsDir -Force | Out-Null
+
+    $AllowAllManifest = Join-Path $ManifestsDir "allow_all.json"
+    if (-not (Test-Path $AllowAllManifest)) {
+        Write-Info "Creating default allow_all.json manifest for device provisioning"
+        $defaultManifest = @{
+            version     = "1.0"
+            tenant      = "tenant-001"
+            space       = "space-home"
+            description = "Default development manifest - allows all operations with audit logging"
+            bands       = @{
+                GREEN = @{
+                    description = "Development - all access allowed"
+                    deny        = $false
+                    obligations = @()
+                }
+            }
+            roles       = @(
+                @{
+                    name         = "admin"
+                    description  = "Administrator role - full access"
+                    max_band     = "RED"
+                    allow_topics = @("*")
+                    obligations  = @()
+                },
+                @{
+                    name         = "device"
+                    description  = "Device role - all write access"
+                    max_band     = "GREEN"
+                    allow_topics = @("commands.*")
+                    obligations  = @()
+                }
+            )
+            policies    = @(
+                @{
+                    name        = "allow_all"
+                    band        = "GREEN"
+                    description = "Development policy - allows all actions with audit trail"
+                    rules       = @(
+                        @{
+                            action      = "ALLOW"
+                            target      = "*"
+                            obligations = @("kernel.audit.log")
+                        }
+                    )
+                }
+            )
+        } | ConvertTo-Json -Depth 10
+        Set-Content -Path $AllowAllManifest -Value $defaultManifest
+        Write-Ok "Created manifest for device provisioning: $AllowAllManifest"
+    }
+
+    # Validate manifest before deploy
+    if (-not (Validate-Manifest $AllowAllManifest)) {
+        Write-Err "Manifest validation failed. Deploy cannot proceed."
+        exit 1
     }
 
     # Verify telemetry configs exist

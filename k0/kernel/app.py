@@ -42,15 +42,17 @@ from ..obs import (
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
 from ..ports import command, drivers, observe, query, sse
+from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
+    DeadLetterQueue,
+    ObligationStore,
     OffsetStore,
     OutboxStore,
     ProvisioningLedger,
     ReceiptStore,
     WriteAheadLog,
 )
-from ..storage.dlq import DeadLetterQueue
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
 from ..uow.connection_pool import configure_pool, shutdown_pool
@@ -109,6 +111,9 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         namespace=telemetry_settings.metrics_namespace,
         observability_emitter=observability_emitter,
     )
+
+    # Create QoS metrics instrumentation
+    qos_metrics = QoSMetrics(metrics_exporter)
 
     # Register process metrics collectors for CPU/Memory monitoring
     # CRITICAL: Must store collectors at module or app state level to prevent GC
@@ -178,6 +183,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     write_ahead_log = WriteAheadLog()
     outbox_store = OutboxStore(metrics=metrics_exporter)
     dead_letter_queue = DeadLetterQueue()
+    obligation_store = ObligationStore()
     offset_store = OffsetStore()
     receipt_store = ReceiptStore()
     receipt_signer = ReceiptSigner(SigningKey.generate())
@@ -242,6 +248,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.tracer_factory = tracer_factory
     app.state.metrics_exporter = metrics_exporter
+    app.state.qos_metrics = qos_metrics
     app.state.forwarded_metrics = observe.ForwardedMetricsBuffer()
     app.state.snapshot_watermark = snapshot_watermark
     app.state.active_connections = active_connections
@@ -250,12 +257,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.bus_dispatch_latency = bus_dispatch_latency
     app.state.process_collector = _process_collector
     app.state.platform_collector = _platform_collector
-    app.state.scheduler = dependency_provider.scheduler
+
+    # Inject QoS metrics into scheduler
+    scheduler = dependency_provider.scheduler
+    scheduler._qos_metrics = qos_metrics
+    app.state.scheduler = scheduler
     app.state.readiness = ReadinessState()
     app.state.schema_registry = schema_registry
     app.state.provisioning_ledger = provisioning_ledger
     app.state.write_ahead_log = write_ahead_log
     app.state.outbox_store = outbox_store
+    app.state.obligation_store = obligation_store
     app.state.dead_letter_queue = dead_letter_queue
     app.state.offset_store = offset_store
     app.state.receipt_store = receipt_store

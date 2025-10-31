@@ -233,6 +233,101 @@ K0 is a **microkernel** with four ABIs (Ports): **Command**, **Query**, **SSE**,
 
 ---
 
+## 1.5) Policy Enforcement Module (PEM)
+
+K0 enforces **policy at the syscall level** through the **Policy Enforcement Module (PEM)**. Every command submission is evaluated against a policy manifest before being written to the WAL.
+
+### PEM Decision Flow
+
+```
+Envelope → PEP@Syscall → Policy Evaluation → Decision (ALLOW/DENY/REDACT) → Obligations
+                                              ↓
+                                         Redaction (if needed)
+                                              ↓
+                                         Audit Logging
+                                              ↓
+                                         WAL Commit (or Reject)
+```
+
+### Key Features
+
+- **Band-based decisions**: GREEN/AMBER/RED policy bands with role-based access control (ABAC).
+- **Obligation execution**: Automatic redaction, audit logging, QoS tightening, and device re-authentication.
+- **Per-space isolation**: Each `{tenant_id, space_id}` has its own policy manifest.
+- **Deterministic outcomes**: All policy evaluations are repeatable and side-effect-free before WAL commit.
+- **Observable results**: Every decision is recorded with metrics, traces, and audit logs.
+
+### Configuration
+
+Policy manifests are stored in `/k0/deploy/generated/manifests/` and configured via environment variables:
+
+```powershell
+# Override policy manifest path
+$env:K0_PEM_MANIFEST_PATH = "C:\path\to\policy.json"
+
+# Configure redaction fields
+$env:K0_PEM_REDACTION_FIELDS = "device_id,tenant_id,user_email"
+
+# Set enforcement mode (shadow|enforce|disabled)
+$env:K0_PEM_ENFORCEMENT_MODE = "enforce"
+
+# Restart kernel with new settings
+./k0.ps1 restart
+```
+
+### Policy Manifest Example
+
+```json
+{
+  "version": "1.0",
+  "tenant": "tenant-001",
+  "space": "space-home",
+  "bands": {
+    "GREEN": {
+      "description": "Development - all access",
+      "deny": false,
+      "obligations": ["kernel.audit.log"]
+    }
+  },
+  "roles": [
+    {
+      "name": "device",
+      "max_band": "GREEN",
+      "allow_topics": ["commands.*"]
+    }
+  ]
+}
+```
+
+### Observability
+
+Monitor PEM decisions via Prometheus metrics:
+
+- `k0_pep_decisions_total{decision,band}` — Policy decisions by outcome and band
+- `k0_pep_obligations_total{obligation}` — Obligations applied per type
+- `k0_pep_evaluation_latency_ms` — P50/P95/P99 policy evaluation time
+
+**View PEM dashboards:**
+1. Open Grafana: `http://localhost:3000`
+2. Dashboard: **"K0 Policy Enforcement"**
+
+### Troubleshooting & Operations
+
+See the comprehensive **PEM Operations Runbook** at `docs/development/runbooks/pem-operations.md` for:
+- Policy manifest configuration and versioning
+- Obligation execution and audit trails
+- Troubleshooting decision denials and redaction issues
+- Emergency operations (GDPR redaction, policy rollback, etc.)
+- Security best practices and key rotation
+
+### Design References
+
+- **ADR-0089**: [`docs/architecture/decisions/0089-k0-bridge-policy-enforcement.md`](../docs/architecture/decisions/0089-k0-bridge-policy-enforcement.md) — Detailed policy enforcement architecture
+- **Bridge Policy Contract**: [`k0/contracts/policy/bridge_policy.yml`](./contracts/policy/bridge_policy.yml) — Formal policy constraints
+- **Policy Schema**: [`k0/contracts/policy/pep.schema.json`](./contracts/policy/pep.schema.json) — Policy definition schema
+
+---
+
 ## 2) Language & Platform
 
 **Primary language:** **Python 3.12** for the kernel process, ports, policy, and SPI shims — matches the surrounding stack and file layout, keeps iteration fast, and uses stable SQLite/FTS5 bindings.

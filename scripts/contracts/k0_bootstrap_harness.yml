@@ -1,4 +1,4 @@
-version: 0.1.0
+version: 0.1.2
 scope: testing-only
 kernel:
   database:
@@ -24,7 +24,7 @@ seed:
       provisioned_ts: 2025-08-01T12:00:00Z
       keys:
         - key_version: v1
-          verify_key: _B3q9RNE4SShQk0Xlh_OPu2l09lAfYfDvrP8_69fppw
+          verify_key: zJ6gyyoRUpftHzoTPZ7JKpRnfyqrXEQIHggbOkgBEKs
           key_state: ACTIVE
           registered_ts: 2025-08-01T12:00:00Z
           activated_ts: 2025-08-01T12:00:00Z
@@ -46,14 +46,14 @@ requests:
     method: POST
     envelope_fixture: scripts/fixtures/query_envelope.json
     expect:
-      status: 501
+      status: 200
       admission_logged: true
   driver_handshake:
     route: /k0/driver.handshake
     method: POST
     payload_fixture: scripts/fixtures/driver_handshake.json
     expect:
-      status: 501
+      status: 200
       driver_pool_touched: true
   sse_subscribe:
     route: /k0/sse.subscribe

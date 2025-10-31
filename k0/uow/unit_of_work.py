@@ -92,16 +92,10 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> bool:
-        logger.info("🔍 DEBUG: __exit__ called with exc_type=%s", exc_type)
         try:
             if exc_type is None:
-                logger.info("🔍 DEBUG: No exception, calling _commit()")
                 self._commit()
             else:
-                logger.warning(
-                    "🔍 DEBUG: Exception %s, calling _rollback()",
-                    exc_type.__name__,
-                )
                 self._rollback(reason=exc_type.__name__)
                 self._run_hooks(self.on_rollback)
         finally:
@@ -169,7 +163,6 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
     def _commit(self) -> None:
         if self._connection is None:
             return
-        logger.info("🔍 DEBUG: _commit() method called")
         try:
             self._flush_outbox()
             self._connection.commit()
@@ -230,17 +223,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
 
                 # Update snapshot watermark to current time on successful commit
                 if self.snapshot_watermark_gauge is not None:
-                    watermark_ts = time.time()
-                    logger.info(
-                        "🔍 DEBUG: Updating snapshot_watermark to %s",
-                        watermark_ts,
-                    )
-                    self.snapshot_watermark_gauge(watermark_ts)
-                    logger.info("🔍 DEBUG: snapshot_watermark update completed")
-                else:
-                    logger.warning(
-                        "🔍 DEBUG: snapshot_watermark_gauge is None, skipping update"
-                    )
+                    self.snapshot_watermark_gauge(time.time())
         finally:
             self._staged_outbox.clear()
             self._wal_positions.clear()

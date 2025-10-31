@@ -1,0 +1,155 @@
+meta:
+  adr: ADR-0091
+  version: 0.1.0
+  status: draft
+  description: Structured log batch contract for K0 observability ingress with privacy-band enforcement.
+  owners:
+    - observability-wg
+  tags:
+    - logs
+    - k0
+    - observability
+
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  title: K0LogBatch
+  type: object
+  required:
+    - batch_version
+    - captured_at
+    - source
+    - privacy_band
+    - entries
+  properties:
+    batch_version:
+      type: string
+      pattern: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      description: Semantic version of the log batch payload format.
+    captured_at:
+      type: string
+      format: date-time
+      description: ISO-8601 timestamp (UTC) when the batch was emitted.
+    source:
+      type: string
+      description: Component emitting the batch (e.g., "k1_bridge", "k0_kernel").
+    device_id:
+      type: string
+      description: Optional stable device identifier.
+    privacy_band:
+      type: string
+      enum: [GREEN, AMBER, RED, BLACK]
+      description: Privacy band applied to all entries in the batch.
+    policy_version:
+      type: string
+      description: Hash or version of the policy manifest used for log redaction.
+    entries:
+      type: array
+      minItems: 1
+      maxItems: 200
+      description: Structured log entries ordered by occurrence time.
+      items:
+        $ref: "#/definitions/logEntry"
+    checksum:
+      type: string
+      pattern: "^[0-9a-fA-F]{64}$"
+      description: SHA-256 hash computed over canonicalized batch payload.
+  additionalProperties: false
+
+  definitions:
+    logEntry:
+      type: object
+      required:
+        - timestamp
+        - level
+        - component
+        - event
+        - message
+        - context
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Event timestamp (UTC ISO-8601 with millisecond precision).
+        level:
+          type: string
+          enum: [debug, info, warning, error, critical]
+        component:
+          type: string
+          pattern: "^k0\\.[a-z0-9_.:-]+$"
+          description: Component identifier (e.g., k0.qos.scheduler).
+        event:
+          type: string
+          pattern: "^[a-z0-9_.:-]+$"
+        message:
+          type: string
+          maxLength: 1024
+        context:
+          type: object
+          description: Key/value context payload with privacy-filtered fields.
+          propertyNames:
+            pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
+          additionalProperties:
+            type: [string, number, boolean, 'null']
+          maxProperties: 20
+        cognitive_trace_id:
+          type: string
+          description: Optional cognitive trace correlation identifier.
+        unit_of_work_id:
+          type: string
+          description: Optional UnitOfWork identifier when available.
+        wal_offset:
+          type: integer
+          minimum: 0
+          description: WAL offset associated with the event when applicable.
+        band_redacted:
+          type: boolean
+          default: false
+          description: Indicates if message/context were redacted for privacy.
+        obligations_applied:
+          type: array
+          items:
+            type: string
+          maxItems: 5
+          description: List of policy obligations applied during redaction.
+        structured_payload:
+          type: object
+          description: Optional nested structured payload after redaction.
+          additionalProperties: true
+      additionalProperties: false
+
+validation:
+  tooling:
+    - name: jsonschema
+      version: ">=4.21"
+      instructions: Validate batches against K0LogBatch schema.
+    - name: k0-log-sanitizer
+      version: latest
+      instructions: Ensure redacted fields comply with privacy requirements before ingestion.
+
+testing:
+  fixtures:
+    - path: tests/contracts/observability/fixtures/log_batch_green.json
+      description: GREEN band log entries with full context.
+    - path: tests/contracts/observability/fixtures/log_batch_red.json
+      description: RED band entries verifying redaction and obligations.
+  invariants:
+    - name: chronological_order
+      description: Entry timestamps must be non-decreasing.
+    - name: redaction_obligations
+      description: RED/BLACK entries must set band_redacted=true if sensitive fields removed.
+
+observability:
+  metrics:
+    - name: k0.contracts.log_batch.validation_total
+      type: counter
+      labels:
+        - outcome
+        - band
+      description: Validation attempts for log batch payloads.
+  logs:
+    - event: k0.contracts.log_batch.invalid
+      level: warning
+      context:
+        - field_path
+        - error
+        - band
