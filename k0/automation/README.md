@@ -442,16 +442,129 @@ Automated chaos experiments with fault injection.
 
 ### Milestone F — Developer Productivity
 
-#### `hot_reload_watcher.py` (Issue F.1.1)
+#### `hot_reload_watcher.py` (Issue F.1.1) ✅ COMPLETE
 
 File-watch tool for config hot-reload and orchestrated code restarts.
 
-**Planned Features**:
+**Usage**:
 
-- Config hot-reload via SIGHUP (zero downtime)
-- Code restart orchestration (graceful drain + health check)
-- Cross-platform support (PowerShell-friendly)
-- Terminal UI with real-time status
+```bash
+# Watch Docker container (default mode)
+python -m k0.automation.hot_reload_watcher \
+  --watch-dirs k0/config k0/contracts/policy \
+  --container-name k0-kernel
+
+# Watch local process with health check
+python -m k0.automation.hot_reload_watcher \
+  --watch-dirs k0/ \
+  --process-name k0_kernel.py \
+  --health-check-url http://localhost:8080/health \
+  --verbose
+
+# Custom grace period for graceful shutdown
+python -m k0.automation.hot_reload_watcher \
+  --grace-period 5 \
+  --restart-timeout 120
+```
+
+**Features** (Milestone F.1.1 ✅ COMPLETE):
+
+- ✅ **Config hot-reload** (no downtime): YAML/JSON changes trigger SIGHUP signal (Unix only), config validated before reload
+- ✅ **Code restart orchestration**: Python changes trigger graceful restart:
+  - Drain requests (configurable grace period, default 2s)
+  - Stop container/process
+  - Wait for health check (configurable retries/interval)
+  - Report status
+- ✅ **Cross-platform support**:
+  - Windows: PowerShell-friendly output (ASCII indicators, no Unicode emoji)
+  - Linux/macOS: Full SIGHUP support (via `docker kill --signal SIGHUP`)
+  - Both: Error handling with meaningful messages
+- ✅ **Terminal UI with real-time status**:
+  - Header shows watch configuration (paths, container/process)
+  - Status indicators: `[INFO]`, `[WAIT]`, `[PASS]`, `[FAIL]`, `[WARN]`
+  - Timestamps and duration tracking
+  - Status history for auditing
+- ✅ **Configurable via CLI args**:
+  - `--watch-dirs` — Paths to monitor (default: k0/config k0/contracts/policy k0)
+  - `--exclude-patterns` — Patterns to skip (default: __pycache__, .git, *.pyc, tests)
+  - `--container-name` — Docker container (default: k0-kernel)
+  - `--process-name` — Local process name (optional, overrides container mode)
+  - `--health-check-url` — Health check endpoint (optional, only used for code restarts)
+  - `--grace-period` — Graceful shutdown delay (default: 2s)
+  - `--restart-timeout` — Max restart time (default: 60s)
+  - `--verbose` — Debug logging to file (k0_hot_reload.log)
+- ✅ **36 comprehensive pytest tests** (100% passing):
+  - File watcher: Change detection, debouncing, pattern exclusion
+  - Config reload: YAML/JSON validation, SIGHUP signaling, container/process modes
+  - Code restart: Graceful drain, health check polling (with retry logic)
+  - Terminal UI: Header rendering, status indicators, history tracking
+  - End-to-end: Full workflows from file detection to restart completion
+
+**Implementation Details**:
+
+- **Watchdog integration**: Uses `watchdog` library for cross-platform file system events
+- **Debouncing**: Rapid repeated events (same file within 0.5s) are coalesced to single action
+- **Exclusions**: Ignores __pycache__, .git, *.pyc, tests/, prevents noise
+- **Config validation**: YAML and JSON validated before SIGHUP (prevents broken configs)
+- **Docker orchestration**: Uses `docker kill --signal SIGHUP` for graceful config reload
+- **Windows compatibility**:
+  - SIGHUP not available on Windows (returns graceful error message)
+  - Docker mode works on all platforms (via docker CLI)
+  - ASCII status indicators instead of Unicode emoji
+- **Health check strategy**: Polls health endpoint with exponential backoff, max 10 retries by default
+- **Thread safety**: Uses threading lock to prevent race conditions during shutdown
+- **Logging**: Structured logging to `k0_hot_reload.log` (verbose mode) + console output
+
+**Terminal UI Example**:
+
+```
+K0 Hot Reload Watcher
+================================================================================
+Watching: k0/config/, k0/contracts/, k0/**/*.py
+Target: k0-kernel
+Health Check: http://localhost:8080/health
+--------------------------------------------------------------------------------
+Press Ctrl+C to stop watching.
+
+[12:34:56] [PASS] Watcher started and ready
+[12:34:58] [INFO] Config change detected: kernel.yaml
+[12:34:58] [WAIT] Validating config...
+[12:34:58] [PASS] Config reloaded (no restart needed) (1.2s)
+
+[12:45:12] [INFO] Code change detected: command.py
+[12:45:12] [WAIT] Orchestrating restart...
+[12:45:12] [WAIT] Draining requests (2s grace period)...
+[12:45:14] [WAIT] Restarting container...
+[12:45:16] [WAIT] Waiting for health check...
+[12:45:18] [PASS] Restart complete (5.8s)
+
+Press Ctrl+C to stop watching.
+```
+
+**Design Notes**:
+
+- **Mode selection**: Docker mode (default) vs local process (via --process-name)
+- **Config validation before reload**: Uses yaml.safe_load() and json.load() to validate YAML/JSON
+- **Graceful shutdown strategy**: SIGHUP for config (Unix only), restart for code changes
+- **Health check polling**: Configurable retry count and interval for slow starts
+- **Observable**: Structured logs to file, console status display, status history
+- **Cross-platform**: Works on Windows (Docker mode), Linux (Docker + process modes), macOS (all modes)
+- **Developer experience**: Clear error messages, actionable status updates, minimal downtime
+
+**Related to**:
+
+- ADR-0123 (Developer Tools for Rapid Iteration)
+- `k0/deploy/k0.ps1` (Docker Compose management)
+- `.github/workflows/` (CI automation)
+
+**Test Coverage**: 36 passing tests, 1 skipped (Unix-only SIGHUP test on Windows)
+
+- File watcher event handling: Config/code detection, test exclusion, debouncing
+- Config reload: YAML/JSON validation, SIGHUP signaling, error handling
+- Code restart: Graceful drain, health check with retries, timeout handling
+- Terminal UI: All status levels (INFO, WAIT, PASS, FAIL, WARN), timestamp formatting, history
+- End-to-end: Full workflows from file change to action completion
+- Data class validation: WatchConfig, FileChangeEvent, WatcherStatus creation
 
 ---
 

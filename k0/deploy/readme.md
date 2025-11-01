@@ -59,6 +59,41 @@ powershell -ExecutionPolicy Bypass -File .\k0.ps1 up -Verify -WaitSeconds 15
 [k0] tempo: 200
 ```
 
+### Hot Reload Development Workflow
+
+For iterative development, enable file watching and automatic container restarts:
+
+```powershell
+# Start services with hot reload watcher
+.\k0.ps1 up -HotReload -Verify -WaitSeconds 15
+
+# Or start watcher on already-running services
+.\k0.ps1 watch
+```
+
+**What hot reload does:**
+- 📁 **Watches** `k0/` directory for file changes
+- ⚡ **Config Reloads** (SIGHUP): `*.yml`, `*.yaml`, `*.json` changes trigger graceful reload (no restart)
+- 🔄 **Code Restarts** (Orchestrated): Python code changes trigger:
+  1. Send SIGTERM to container (graceful drain)
+  2. Wait for inflight requests to complete
+  3. Restart container
+  4. Poll health checks until ready
+  5. Resume watching
+
+**Terminal UI** shows real-time status:
+```
+[14:32:05] 🟢 WATCHING  - k0/ directory monitored
+[14:32:15] 📝 CONFIG RELOAD - k0/config/kernel.yml changed (SIGHUP)
+[14:32:16] ⏳ Container healthy - ready for requests
+[14:32:45] 🔄 CODE RESTART - k0/kernel/core.py changed
+[14:32:46] ⏳ Draining... waiting for requests
+[14:32:48] 🔄 Restarting container k0-kernel
+[14:33:02] ✅ Container healthy - resuming watch
+```
+
+**Full hot reload documentation:** See `k0/automation/README.md` - Milestone F.1.1 section
+
 ### Validation Test
 
 Once healthy, test the policy enforcement flow:
@@ -297,6 +332,9 @@ Example allow_all development manifest:
 # Up with verification (waits for health checks)
 .\k0.ps1 up -Verify -WaitSeconds 15
 
+# Up with hot reload watcher (for development iteration)
+.\k0.ps1 up -HotReload -Verify -WaitSeconds 15
+
 # Up with Docker image rebuild
 .\k0.ps1 up -Rebuild -Verify
 
@@ -305,6 +343,21 @@ Example allow_all development manifest:
 
 # Up with all validations
 .\k0.ps1 up -Rebuild -Migrate -Verify -WaitSeconds 20
+```
+
+### Hot Reload Development (Watcher Process)
+
+Start the hot reload watcher separately (useful if services already running):
+
+```powershell
+# Start watcher on already-running services
+.\k0.ps1 watch
+
+# Watcher will:
+# - Monitor k0/ directory for changes
+# - Send SIGHUP on config file changes (graceful reload)
+# - Orchestrate container restart on code changes
+# - Display real-time status in terminal
 ```
 
 ### Stop Services

@@ -284,7 +284,7 @@ def test_lint_schemas_validate_broken_refs():
             base_path=Path(tmpdir),
         )
         assert len(errors) > 0
-        assert "Failed to resolve pointer" in errors[0]
+        assert "Failed to resolve internal reference" in errors[0].message
 
 
 # ============================================================================
