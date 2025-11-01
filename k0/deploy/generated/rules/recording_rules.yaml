@@ -26,10 +26,10 @@ groups:
 - interval: 15s
   name: k0-sli-availability-recording
   rules:
-  - expr: 1 - (sum(rate(k0_kernel_http_requests_total{status=~"5.."}[5m])) / sum(rate(k0_kernel_http_requests_total[5m]))) or vector(1)
+  - expr: 1 - (sum(rate(k0_kernel_http_requests_total{status=~"5.."}[5m])) / sum(rate(k0_kernel_http_requests_total[5m])))
     record: job:k0_api_availability:ratio5m
   - expr: 1 - (sum by (route) (rate(k0_kernel_http_requests_total{status=~"5.."}[5m]))
-      / sum by (route) (rate(k0_kernel_http_requests_total[5m]))) or vector(1)
+      / sum by (route) (rate(k0_kernel_http_requests_total[5m])))
     record: job:k0_api_availability_by_route:ratio5m
   - expr: sum by (route) (rate(k0_kernel_http_requests_total{status=~"[23].."}[5m]))
       / sum by (route) (rate(k0_kernel_http_requests_total[5m]))

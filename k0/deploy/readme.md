@@ -122,21 +122,100 @@ k0/deploy/
 │   ├── signing_key.pem
 │   └── public_key.pem
 │
-├── generated/
-│   ├── manifests/                        # (NEW) Policy manifest JSON files
-│   │   └── allow_all.json               # Default development manifest
-│   ├── rules/                           # Prometheus recording rules
-│   └── dashboards/                      # Grafana dashboards
-│
-├── telemetry/                           # Prometheus/Grafana/Tempo/AlertManager configs
+├── telemetry/                            # Static observability configs (NOT generated)
 │   ├── prometheus.yml
 │   ├── tempo.yaml
 │   ├── alertmanager.yml
 │   └── grafana/
 │       └── provisioning/
 │
+├── generated/                            # AUTO-SYNCED from k0/telemetry/generated/
+│   ├── manifests/                        # (NEW) Policy manifest JSON files
+│   │   └── allow_all.json               # Default development manifest
+│   ├── rules/                           # Prometheus recording rules (synced from k0/telemetry/generated/rules/)
+│   │   └── slo_alerts.yaml
+│   └── dashboards/                      # Grafana dashboards (synced from k0/telemetry/generated/dashboards/)
+│       ├── kernel_overview.json
+│       ├── command_latency.json
+│       ├── query_latency.json
+│       ├── sse_health.json
+│       └── replay_throughput.json
+│
 └── logs/                                # (Auto-created) Service logs
 ```
+
+### Telemetry Artifact Sync Strategy
+
+**Single Source of Truth**: All telemetry rendering happens in `k0/telemetry/`:
+1. `k0/telemetry/slo_definitions.yaml` — SLO definitions (source of truth)
+2. `k0/telemetry/render.py` — Generates dashboards + rules to `k0/telemetry/generated/`
+3. `k0/deploy/k0.ps1` **→ `Sync-Telemetry-Artifacts` function** — Auto-syncs artifacts on `up`: `k0/telemetry/generated/* → k0/deploy/generated/`
+
+**Workflow**:
+```
+┌─────────────────────────────────────────────────────┐
+│ Edit SLO definitions                                │
+│ k0/telemetry/slo_definitions.yaml                   │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│ Render dashboards & alert rules                     │
+│ python -m k0.telemetry.render --verbose            │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼ (outputs to)
+┌─────────────────────────────────────────────────────┐
+│ k0/telemetry/generated/                            │
+│ ├── dashboards/*.json                              │
+│ └── rules/slo_alerts.yaml                          │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼ (auto-sync on deploy start)
+┌─────────────────────────────────────────────────────┐
+│ k0/deploy/k0.ps1 up                                │
+│ → Sync-Telemetry-Artifacts                         │
+│ → k0/deploy/generated/                             │
+│ ├── dashboards/*.json (for Grafana)               │
+│ ├── rules/*.yaml (for Prometheus)                 │
+│ └── checksums_*.json (for validation)             │
+└─────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│ Docker Compose mounts                              │
+│ - ./generated/dashboards → /mnt/grafana/dashboards │
+│ - ./generated/rules → /etc/prometheus/rules        │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key Points**:
+- ✅ `k0/telemetry/generated/` is the single source of truth
+- ✅ `k0/deploy/generated/` is auto-synced on **every** `k0.ps1 up` command (via `Sync-Telemetry-Artifacts`)
+- ✅ Changes only flow through: SLO definitions → render → sync → deploy
+- ✅ `k0/deploy/telemetry/` contains static configs (prometheus.yml, alertmanager.yml, grafana provisioning)
+- ✅ Checksums automatically copied for drift detection in CI
+
+### Implementation Details: Sync Function
+
+The `Sync-Telemetry-Artifacts` function in `k0.ps1` handles:
+1. **Source validation**: Checks `k0/telemetry/generated/` exists
+2. **Directory creation**: Creates `k0/deploy/generated/dashboards` and `rules` if needed
+3. **Dashboard sync**: Copies all `*.json` files from source to deploy (preserves modification times)
+4. **Rule sync**: Copies all `*.yaml` files from source to deploy (Prometheus reads these)
+5. **Checksum sync**: Copies validation checksums for CI drift detection
+6. **Logging**: Reports what was synced with green success messages
+
+**Example output** (when running `k0.ps1 up`):
+```
+[k0] Syncing telemetry artifacts from source to deployment
+[k0] Syncing dashboards: D:\familyos\k0\telemetry\generated/dashboards -> D:\familyos\k0\deploy\generated\dashboards
+[k0] Dashboards synced
+[k0] Syncing alert rules: D:\familyos\k0\telemetry\generated/rules -> D:\familyos\k0\deploy\generated\rules
+[k0] Alert rules synced
+```
+
+---
 
 ### Key Mount Points in Docker Compose
 

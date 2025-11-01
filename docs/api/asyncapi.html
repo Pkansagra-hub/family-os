@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>K0 AsyncAPI Reference</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      line-height: 1.6;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: #1e293b;
+      border-radius: 8px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      padding: 2rem;
+      border-bottom: 2px solid #3b82f6;
+    }
+    .header h1 {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      color: #60a5fa;
+    }
+    .header p {
+      color: #cbd5e1;
+      font-size: 0.95rem;
+    }
+    .metadata {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+    .content {
+      padding: 2rem;
+    }
+    .section {
+      margin-bottom: 3rem;
+    }
+    .section h2 {
+      font-size: 1.5rem;
+      color: #60a5fa;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #334155;
+    }
+    .section h3 {
+      font-size: 1.1rem;
+      color: #93c5fd;
+      margin-top: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .channel-item {
+      background: #0f172a;
+      border-left: 3px solid #3b82f6;
+      padding: 1rem;
+      margin-bottom: 1rem;
+      border-radius: 4px;
+    }
+    .channel-name {
+      font-family: 'Courier New', monospace;
+      color: #60a5fa;
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+    }
+    .channel-desc {
+      color: #cbd5e1;
+      font-size: 0.95rem;
+      margin-bottom: 0.5rem;
+    }
+    .message-ref {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      font-family: 'Courier New', monospace;
+    }
+    .schema-block {
+      background: #0f172a;
+      padding: 1rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      overflow-x: auto;
+    }
+    .schema-block pre {
+      font-family: 'Courier New', monospace;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.85rem;
+    }
+    .footer {
+      background: #0f172a;
+      padding: 1.5rem;
+      border-top: 1px solid #334155;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>K0 AsyncAPI Reference</h1>
+      <p id="desc"></p>
+      <div class="metadata">
+        <div><strong>Title:</strong> <span id="title"></span></div>
+        <div><strong>Version:</strong> <span id="version"></span></div>
+      </div>
+    </div>
+    <div class="content">
+      <div class="section" id="channels-section"></div>
+      <div class="section" id="messages-section"></div>
+    </div>
+    <div class="footer">
+      K0 Event Topics Specification | Generated from asyncapi.events.yaml
+    </div>
+  </div>
+
+  <script>
+    const spec = {"asyncapi": "2.6.0", "info": {"title": "K0 Event Topics", "version": "1.0.0", "description": "AsyncAPI contract for K0 kernel topics covering memory, policy, infra, and advisory streams."}, "defaultContentType": "application/json", "channels": {"memory.*": {"description": "Primary episodic/semantic writes persisted in WAL and snapshots.", "publish": {"message": {"oneOf": [{"$ref": "#/components/messages/GenericMemoryEvent"}]}}}, "events.*": {"description": "Infrastructure auditing and observability events sourced from kernel internals.", "publish": {"message": {"$ref": "#/components/messages/GenericEvent"}}}, "ui.*": {"description": "UI oriented fan-out topics with short retention and fanout limits.", "publish": {"message": {"$ref": "#/components/messages/GenericUiEvent"}}}, "policy.*": {"description": "Security/operator topics including obligations and redaction outcomes.", "publish": {"message": {"$ref": "#/components/messages/GenericPolicyEvent"}}}, "infra.sanitized.*": {"description": "Sanitized infrastructure metrics suitable for operations consumption.", "publish": {"message": {"$ref": "#/components/messages/GenericInfraEvent"}}}, "infra.snapshot.*": {"description": "Announces snapshot lifecycle markers for retention stewards.", "publish": {"message": {"$ref": "#/components/messages/InfraSnapshotEvent"}}}, "privacy.*": {"description": "Privacy/compliance topics carrying consent updates and redaction receipts.", "publish": {"message": {"$ref": "#/components/messages/GenericPrivacyEvent"}}}, "intelligence.advisory.*": {"description": "Advisory signals consumed by downstream intelligence services.", "publish": {"message": {"$ref": "#/components/messages/GenericAdvisoryEvent"}}}}, "components": {"messages": {"GenericMemoryEvent": {"name": "GenericMemoryEvent", "title": "Generic memory event", "payload": {"type": "object", "additionalProperties": true}}, "GenericEvent": {"name": "GenericEvent", "title": "Generic infrastructure event", "payload": {"type": "object", "additionalProperties": true}}, "GenericUiEvent": {"name": "GenericUiEvent", "title": "Generic UI event payload", "payload": {"type": "object", "additionalProperties": true}}, "GenericPolicyEvent": {"name": "GenericPolicyEvent", "title": "Generic policy event payload", "payload": {"type": "object", "additionalProperties": true}}, "GenericInfraEvent": {"name": "GenericInfraEvent", "title": "Generic sanitized infra metric", "payload": {"type": "object", "additionalProperties": true}}, "InfraSnapshotEvent": {"name": "InfraSnapshotEvent", "title": "Snapshot lifecycle marker", "payload": {"$ref": "./jsonschema/infra.snapshot.event.json"}}, "GenericPrivacyEvent": {"name": "GenericPrivacyEvent", "title": "Generic privacy/compliance event", "payload": {"type": "object", "additionalProperties": true}}, "GenericAdvisoryEvent": {"name": "GenericAdvisoryEvent", "title": "Advisory read-only signal", "payload": {"type": "object", "additionalProperties": true}}}}};
+
+    // Populate metadata
+    document.getElementById('title').textContent = spec.info.title || 'N/A';
+    document.getElementById('version').textContent = spec.info.version || 'N/A';
+    document.getElementById('desc').textContent = spec.info.description || '';
+
+    // Render channels
+    const channelsSection = document.getElementById('channels-section');
+    const channels = spec.channels || {};
+    if (Object.keys(channels).length > 0) {
+      const h2 = document.createElement('h2');
+      h2.textContent = 'Channels';
+      channelsSection.appendChild(h2);
+
+      Object.entries(channels).forEach(([name, channel]) => {
+        const item = document.createElement('div');
+        item.className = 'channel-item';
+        const channelName = document.createElement('div');
+        channelName.className = 'channel-name';
+        channelName.textContent = name;
+        item.appendChild(channelName);
+
+        if (channel.description) {
+          const desc = document.createElement('div');
+          desc.className = 'channel-desc';
+          desc.textContent = channel.description;
+          item.appendChild(desc);
+        }
+
+        if (channel.publish) {
+          const pubMsg = document.createElement('div');
+          pubMsg.className = 'message-ref';
+          pubMsg.textContent = 'publishes: ' + JSON.stringify(channel.publish.message, null, 0).substring(0, 100);
+          item.appendChild(pubMsg);
+        }
+        channelsSection.appendChild(item);
+      });
+    }
+
+    // Render messages
+    const messagesSection = document.getElementById('messages-section');
+    const messages = spec.components?.messages || {};
+    if (Object.keys(messages).length > 0) {
+      const h2 = document.createElement('h2');
+      h2.textContent = 'Messages';
+      messagesSection.appendChild(h2);
+
+      Object.entries(messages).forEach(([name, message]) => {
+        const h3 = document.createElement('h3');
+        h3.textContent = name;
+        messagesSection.appendChild(h3);
+
+        if (message.description) {
+          const p = document.createElement('p');
+          p.style.color = '#cbd5e1';
+          p.textContent = message.description;
+          messagesSection.appendChild(p);
+        }
+
+        const schemaBlock = document.createElement('div');
+        schemaBlock.className = 'schema-block';
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(message, null, 2);
+        schemaBlock.appendChild(pre);
+        messagesSection.appendChild(schemaBlock);
+      });
+    }
+  </script>
+</body>
+</html>

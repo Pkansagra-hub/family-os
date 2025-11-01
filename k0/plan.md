@@ -4,6 +4,12 @@
 
 ---
 
+## 🔗 Related Plans
+
+- **[Automation Enhancement Plan](./automation/AUTOMATION_ENHANCEMENT_PLAN.md)** — Milestones 10-12 covering automation cleanup, developer productivity, performance/chaos engineering (6 weeks, 2025-11-01 to 2025-12-15)
+
+---
+
 ## Delivery Status Snapshot
 
 - **Baseline artifacts (Milestones 1–3)** — ✅ complete and gated in CI.

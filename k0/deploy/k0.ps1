@@ -215,12 +215,57 @@ function Ensure-Database {
     }
 }
 
+function Sync-Telemetry-Artifacts {
+    Write-Info "Syncing telemetry artifacts from source to deployment"
+
+    $SourceTelemetryDir = "$RepoRoot\k0\telemetry\generated"
+    $DeployDashboardsDir = "$GeneratedDir\dashboards"
+    $DeployRulesDir = "$GeneratedDir\rules"
+
+    # Create deploy directories if they don't exist
+    New-Item -ItemType Directory -Path $DeployDashboardsDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $DeployRulesDir -Force | Out-Null
+
+    # Sync dashboards from source to deploy
+    if (Test-Path "$SourceTelemetryDir\dashboards") {
+        Write-Info "Syncing dashboards: $SourceTelemetryDir/dashboards -> $DeployDashboardsDir"
+        Get-ChildItem -Path "$SourceTelemetryDir\dashboards" -Filter "*.json" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $DeployDashboardsDir -Force
+        }
+        Write-Ok "Dashboards synced"
+    }
+    else {
+        Write-Warn "Source dashboards not found at $SourceTelemetryDir/dashboards (run 'python -m k0.automation.telemetry_renderer' first)"
+    }
+
+    # Sync alert rules from source to deploy
+    if (Test-Path "$SourceTelemetryDir\rules") {
+        Write-Info "Syncing alert rules: $SourceTelemetryDir/rules -> $DeployRulesDir"
+        Get-ChildItem -Path "$SourceTelemetryDir\rules" -Filter "*.yaml" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $DeployRulesDir -Force
+        }
+        Write-Ok "Alert rules synced"
+    }
+    else {
+        Write-Warn "Source alert rules not found at $SourceTelemetryDir/rules (run 'python -m k0.automation.telemetry_renderer' first)"
+    }
+
+    # Sync checksum files for validation
+    if (Test-Path "$SourceTelemetryDir\checksums_dashboards.json") {
+        Copy-Item -Path "$SourceTelemetryDir\checksums_dashboards.json" -Destination $GeneratedDir -Force
+    }
+    if (Test-Path "$SourceTelemetryDir\checksums_rules.json") {
+        Copy-Item -Path "$SourceTelemetryDir\checksums_rules.json" -Destination $GeneratedDir -Force
+    }
+}
+
 function Compose-Args {
     "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
 }
 
 function Do-Up {
     Ensure-Compose-Prereqs
+    Sync-Telemetry-Artifacts
     Ensure-Image
     Ensure-Database
     Write-Info "Starting services (kernel + telemetry)"

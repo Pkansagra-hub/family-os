@@ -1,0 +1,709 @@
+{
+  "dashboard": {
+    "description": "Grafana dashboard auto-generated from SLO definitions",
+    "panels": [
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.995
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.99
+                }
+              ]
+            },
+            "unit": "percent"
+          },
+          "overrides": []
+        },
+        "id": 1,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_kernel_http_requests_total{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "A"
+          }
+        ],
+        "title": "Api Availability",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.15
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.25
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 2,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_command_submit_duration_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "B"
+          }
+        ],
+        "title": "Command Submit Latency",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.1
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.2
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 3,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_uow_commit_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "C"
+          }
+        ],
+        "title": "Uow Commit Latency",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.075
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.15
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 4,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_query_execute_duration_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "D"
+          }
+        ],
+        "title": "Query Execute Latency",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 120.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 300.0
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 5,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_wal_apply_lag_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "E"
+          }
+        ],
+        "title": "Wal Lag",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 20.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 30.0
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 6,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_wal_replica_lag_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "F"
+          }
+        ],
+        "title": "Wal Replica Lag",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 50000.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 100000.0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "id": 7,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_outbox_pending_total{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "G"
+          }
+        ],
+        "title": "Outbox Backlog",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 500.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 100.0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "id": 8,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_outbox_apply_total{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "H"
+          }
+        ],
+        "title": "Replay Throughput",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 3.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 2.0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "id": 9,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_scheduler_members_total{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "I"
+          }
+        ],
+        "title": "Scheduler Quorum",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.5
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.0
+                }
+              ]
+            },
+            "unit": "percentunit"
+          },
+          "overrides": []
+        },
+        "id": 10,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_zone_healthy_ratio{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "J"
+          }
+        ],
+        "title": "Zone Health",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 800.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 1000.0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "id": 11,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_sse_subscriptions_active{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "K"
+          }
+        ],
+        "title": "Sse Active Subscriptions",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 50.0
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 200.0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "id": 12,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_sse_subscribe_total{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "L"
+          }
+        ],
+        "title": "Sse Subscribe Rate",
+        "type": "stat"
+      },
+      {
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "#34C759",
+                  "value": null
+                },
+                {
+                  "color": "#FF9F0A",
+                  "value": 0.025
+                },
+                {
+                  "color": "#FF3B30",
+                  "value": 0.05
+                }
+              ]
+            },
+            "unit": "s"
+          },
+          "overrides": []
+        },
+        "id": 13,
+        "options": {
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "showPercentage": false,
+          "text": {}
+        },
+        "targets": [
+          {
+            "expr": "k0_bus_dispatch_latency_seconds{job=\"k0-kernel\"}",
+            "format": "time_series",
+            "refId": "M"
+          }
+        ],
+        "title": "Bus Dispatch Latency",
+        "type": "stat"
+      }
+    ],
+    "refresh": "30s",
+    "tags": [
+      "k0",
+      "slo",
+      "auto-generated"
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": [
+        "10s",
+        "30s",
+        "1m",
+        "5m",
+        "15m",
+        "30m",
+        "1h"
+      ]
+    },
+    "timezone": "browser",
+    "title": "K0 SLO Dashboard",
+    "uid": "k0-slo-dashboard",
+    "version": 1
+  },
+  "overwrite": true
+}
