@@ -266,10 +266,7 @@ class TestRegressionDetector:
         regressions = detector.detect_regressions(baseline, current, threshold=0.10)
 
         # P95 should be flagged as regression
-        p95_regression = next(
-            (r for r in regressions if r.metric_name == "p95_latency_ms"),
-            None
-        )
+        p95_regression = next((r for r in regressions if r.metric_name == "p95_latency_ms"), None)
         assert p95_regression is not None
         assert p95_regression.is_regression
         assert abs(p95_regression.change_percent - 20.0) < 0.1
@@ -296,10 +293,7 @@ class TestRegressionDetector:
         regressions = detector.detect_regressions(baseline, current, threshold=0.10)
 
         # Throughput should be flagged as regression
-        tp_regression = next(
-            (r for r in regressions if r.metric_name == "throughput_rps"),
-            None
-        )
+        tp_regression = next((r for r in regressions if r.metric_name == "throughput_rps"), None)
         assert tp_regression is not None
         assert tp_regression.is_regression
 

@@ -24,8 +24,26 @@ def run_small_profile() -> dict[str, Any]:
     # Simulated metrics (in production, these would come from actual kernel instrumentation)
     # For now, return realistic baseline values
     latencies_ms = [
-        8.5, 9.2, 8.8, 10.1, 9.5, 11.2, 8.9, 9.7, 10.3, 9.1,
-        8.6, 9.3, 8.7, 10.2, 9.6, 11.3, 8.8, 9.8, 10.4, 9.0,
+        8.5,
+        9.2,
+        8.8,
+        10.1,
+        9.5,
+        11.2,
+        8.9,
+        9.7,
+        10.3,
+        9.1,
+        8.6,
+        9.3,
+        8.7,
+        10.2,
+        9.6,
+        11.3,
+        8.8,
+        9.8,
+        10.4,
+        9.0,
     ]
 
     latencies_ms.sort()
