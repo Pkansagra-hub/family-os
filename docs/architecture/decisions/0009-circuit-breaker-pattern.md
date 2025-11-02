@@ -9,7 +9,7 @@
 **Related ADRs:**
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Circuit breakers use Actor Model state machines
 - [ADR-0005 (Agent Lifecycle)](0005-agent-lifecycle-fsm.md) - Agent blacklist uses circuit breaker pattern
-- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestrator uses circuit breakers for tool calls
+- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestrator uses circuit breakers for tool calls
 - [ADR-0008 (Saga Pattern)](0008-saga-pattern-error-recovery.md) - Circuit breaker prevents compensation retry storms
 - [ADR-0034 (Tool Runner)](0034-tool-runner-architecture.md) - Tool Runner wraps each tool with circuit breaker
 - [ADR-0075 (Layer 5 Extensibility - **NEW M2**)](0075-layer5-extensibility-framework.md)
@@ -1268,4 +1268,3 @@ k1_circuit_breaker_success_rate = Gauge(
 - `docs/whiteboard.md` L6812-7112 (Error Recovery section - Circuit breaker cascading failure prevention)
 - `docs/whiteboard.md` L910 (Netflix Hystrix reference - 3-state FSM design)
 - `architecture_diagrams/k1_orchestrator_3phase.mmd` (Orchestrator uses circuit breaker for tool calls)
-

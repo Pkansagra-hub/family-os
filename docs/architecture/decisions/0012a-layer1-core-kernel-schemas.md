@@ -8,7 +8,7 @@
 - [ADR-0011c: Serialization Performance & Zero-Copy](0011c-serialization-performance-zero-copy.md)
 - [ADR-0002: Actor Model Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
-- [ADR-0006: 3-Phase Orchestration Contract Net](0006-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration Contract Net](0006f-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0003: MPST Protocol Validation](0003-mpst-protocol-validation.md)
 
@@ -1207,7 +1207,7 @@ Turn 2: User asks similar query
 - [ADR-0011c: Serialization Performance & Zero-Copy](0011c-serialization-performance-zero-copy.md)
 - [ADR-0002: Actor Model Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
-- [ADR-0006: 3-Phase Orchestration Contract Net](0006-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration Contract Net](0006f-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0003: MPST Protocol Validation](0003-mpst-protocol-validation.md)
 - Architecture Diagrams: `architecture_diagrams/k1_agent_lifecycle_fsm.mmd`, `k1_orchestrator_3phase.mmd`, `k1_planner_pipeline.mmd`, `k1_protocol_monitor_fsms.mmd`, `k1_learning_loop_detail.mmd`

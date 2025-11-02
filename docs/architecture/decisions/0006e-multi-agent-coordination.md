@@ -1,7 +1,7 @@
 # ADR-0006e: Multi-Agent Parallel Coordination (Q2 2025 Post-MVP)
 
 **Status:** Accepted ✅
-**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)
+**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)
 **Last Updated:** 2025-01-30
 **Deciders:** K1 Architecture Team
 **Impact:** Core Kernel (Layer 1)
@@ -71,7 +71,7 @@ Optimized: Concierge (Step 1) + Planner (Step 2) parallel, then Tool Runner (Ste
 
 ### Parent ADR Context
 
-From [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
+From [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
 
 **Current Model (Single Agent):**
 
@@ -592,7 +592,7 @@ Total: 1200ms (43% speedup)
 
 ### Parent ADR
 
-- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
+- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
 
 ### Dependencies (Architecture)
 

@@ -1,7 +1,7 @@
 # ADR-0006c: Parallel DAG Execution Engine
 
 **Status:** Accepted ✅
-**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)
+**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)
 **Last Updated:** 2025-01-30
 **Deciders:** K1 Architecture Team
 **Impact:** Core Kernel (Layer 1)
@@ -76,7 +76,7 @@ Traditional execution approaches fail:
 
 ### Parent ADR Context
 
-From [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md):
+From [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md):
 
 **3 Phases:**
 
@@ -995,7 +995,7 @@ parallelism_speedup = Histogram(
 
 ### Parent ADR
 
-- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
+- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
 
 ### Dependencies (Architecture)
 

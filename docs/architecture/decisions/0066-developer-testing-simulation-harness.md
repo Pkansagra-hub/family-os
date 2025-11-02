@@ -9,7 +9,7 @@
 - [ADR-0007 (4-Stage Planning Pipeline)](0007-4stage-planning-pipeline.md) - Planner stage being tested
 - [ADR-0004 (52-Module 5-Layer Architecture)](0004-52-module-5-layer-architecture.md) - Module structure for testing
 - [ADR-0005 (Agent Lifecycle FSM)](0005-agent-lifecycle-fsm.md) - Agent states being simulated
-- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestration workflow testing
+- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestration workflow testing
 - [ADR-0011 (FlatBuffers Serialization)](0011-flatbuffers-serialization.md) - Message mocking
 - [ADR-0014 (JSON REST API)](0014-json-rest-api-dual-format.md) - API contract testing
 - [ADR-0015 (WebSocket Binary Protocol)](0015-websocket-binary-protocol.md) - WebSocket client simulation
@@ -1090,4 +1090,3 @@ testing:
 ---
 
 **ADR-0066 END**
-

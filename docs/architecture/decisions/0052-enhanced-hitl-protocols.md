@@ -10,7 +10,7 @@
 
 **Related ADRs:**
 - [ADR-0003b: 6 Core Protocol Implementations](0003b-6-core-protocol-implementations.md) - Protocol 3 (Clarification) foundation
-- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) - Multi-agent coordination
+- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) - Multi-agent coordination
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md) - Plan validation and approval
 - [ADR-0008: Saga Pattern](0008-saga-pattern-error-recovery.md) - Rollback for step-by-step workflows
 - [ADR-0032-0038: Privacy Band System](0032-band-based-egress-rules.md) - RED band approval requirements
@@ -1017,7 +1017,7 @@ step_by_step_workflow_completion_rate:
 
 **ADRs:**
 - [ADR-0003b: 6 Core Protocol Implementations](0003b-6-core-protocol-implementations.md)
-- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0008: Saga Pattern](0008-saga-pattern-error-recovery.md)
 - [ADR-0017: SessionState 6-Section Design](0017-sessionstate-6-section-design.md)

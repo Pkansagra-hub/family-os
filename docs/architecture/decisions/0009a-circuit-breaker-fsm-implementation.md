@@ -1186,7 +1186,7 @@ async def _(cb=circuit):
 - Polly (.NET, 2013): https://github.com/App-vNext/Polly
 
 ### Related ADRs
-- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) - Circuit breakers protect orchestration
+- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) - Circuit breakers protect orchestration
 - [ADR-0008: Saga Pattern Error Recovery](0008-saga-pattern-error-recovery.md) - Circuit breakers prevent retry storms
 - [ADR-0009b: Per-Service Circuit Configuration](0009b-per-service-circuit-configuration.md) - Configuration schema
 - [ADR-0009c: Circuit Breaker Metrics](0009c-circuit-breaker-metrics-observability.md) - Observability

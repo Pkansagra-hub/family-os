@@ -10,7 +10,7 @@
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Planner agent uses Actor Model mailbox
 - [ADR-0003 (MPST Protocol)](0003-mpst-protocol-validation.md) - Plan validation protocol messages
 - [ADR-0005 (Agent Lifecycle FSM)](0005-agent-lifecycle-fsm.md) - Planner agent lifecycle (WARMING loads Model Hub prompts)
-- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestrator executes plans via Contract Net
+- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestrator executes plans via Contract Net
 - [ADR-0010 (Capability Security)](0010-capability-based-security.md) - Stage 3 validates capability constraints
 - [ADR-0011 (FlatBuffers)](0011-flatbuffers-serialization.md) - Stage 4 serializes to FlowDef
 

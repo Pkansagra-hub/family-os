@@ -7,7 +7,7 @@
 **Deciders:** K1 Architecture Team
 **Related ADRs:**
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Saga Coordinator uses Actor Model mailbox
-- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Phase 3 execution uses Saga pattern
+- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Phase 3 execution uses Saga pattern
 - [ADR-0007 (4-Stage Planning)](0007-4stage-planning-pipeline.md) - Plans include compensation definitions
 - [ADR-0009 (Circuit Breaker)](0009-circuit-breaker-pattern.md) - Circuit breaker prevents saga retry storms
 - [ADR-0020 (Multi-Tier Storage)](0020-multi-tier-storage.md) - K0 WAL stores compensation logs

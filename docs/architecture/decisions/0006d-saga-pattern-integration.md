@@ -1,7 +1,7 @@
 # ADR-0006d: Saga Pattern Integration for Phase 3 Error Recovery
 
 **Status:** Accepted ✅
-**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)
+**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)
 **Last Updated:** 2025-01-30
 **Deciders:** K1 Architecture Team
 **Impact:** Core Kernel (Layer 1)
@@ -73,7 +73,7 @@ If Step 3 fails:
 
 ### Parent ADR Context
 
-From [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
+From [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
 
 **Phase 3 (Execution):**
 
@@ -664,7 +664,7 @@ compensation_retries = Counter(
 
 ### Parent ADR
 
-- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
+- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
 
 ### Dependencies (Architecture)
 

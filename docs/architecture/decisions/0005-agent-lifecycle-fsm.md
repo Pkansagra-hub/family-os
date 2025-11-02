@@ -11,7 +11,7 @@
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Foundation for ALL 58 agents
 - [ADR-0003 (MPST Protocol Validation)](0003-mpst-protocol-validation.md) - Protocol Monitor supervision
 - [ADR-0004 (58-Module Architecture)](0004-52-module-5-layer-architecture.md) - Layer 3 Model Hub integration
-- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Agent hiring via Contract Net
+- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Agent hiring via Contract Net
 - [ADR-0008 (Saga Pattern)](0008-saga-pattern-error-recovery.md) - DRAINING state rollback coordination
 - [ADR-0010 (Capability Security)](0010-capability-based-security.md) - Capability revocation on TERMINATED
 - [ADR-0030 (Model Hub Details)](0030-model-hub-architecture.md) - AI agent WARMING/ACTIVE integration
