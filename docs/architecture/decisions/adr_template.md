@@ -1,3 +1,4 @@
+
 # ADR-XXX: [Decision Title]
 
 **Status:** Proposed | Accepted | Deprecated | Superseded

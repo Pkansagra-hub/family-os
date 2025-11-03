@@ -1,3 +1,57 @@
+---
+adr_number: 0039c
+title: Recovery & Gradual Resume
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0039
+- ADR-0039a
+- ADR-0039b
+- ADR-0039c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0039
+  - ADR-0039a
+  - ADR-0039b
+  - ADR-0039c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0039c: Recovery & Gradual Resume
 
 **Status:** ✅ Accepted

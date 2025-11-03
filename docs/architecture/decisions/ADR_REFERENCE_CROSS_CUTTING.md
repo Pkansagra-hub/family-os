@@ -1,3 +1,4 @@
+
 # ADR Reference Guide: Cross-Cutting Concerns
 
 **Generated:** Auto-generated from ADR family map

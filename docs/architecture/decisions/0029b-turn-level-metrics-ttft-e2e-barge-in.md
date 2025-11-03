@@ -1,3 +1,69 @@
+---
+adr_number: 0029b
+title: Turn-Level Metrics (TTFT, E2E, Barge-In)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0029
+- ADR-0029a
+- ADR-0029b
+- ADR-0029c
+- ADR-0029d
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0029
+  - ADR-0029a
+  - ADR-0029b
+  - ADR-0029c
+  - ADR-0029d
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0029b: Turn-Level Metrics (TTFT, E2E, Barge-In)
 
 **Status:** ✅ Accepted

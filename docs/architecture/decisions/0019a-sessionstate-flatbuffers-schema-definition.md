@@ -1,3 +1,97 @@
+---
+adr_number: 0019a
+title: SessionState FlatBuffers Schema Definition
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0002
+- ADR-0002d
+- ADR-0006
+- ADR-0011
+- ADR-0012
+- ADR-0013
+- ADR-0017
+- ADR-0017a
+- ADR-0017b
+- ADR-0017c
+- ADR-0017d
+- ADR-0017e
+- ADR-0017f
+- ADR-0018
+- ADR-0019
+- ADR-0019a
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer1_kernel/agent_state.fbs
+- k1/contracts/flatbuffers/layer2_state/beliefs_section.fbs
+- k1/contracts/flatbuffers/layer2_state/control_section.fbs
+- k1/contracts/flatbuffers/layer2_state/multimodal_section.fbs
+- k1/contracts/flatbuffers/layer2_state/persona_section.fbs
+- k1/contracts/flatbuffers/layer2_state/scoreboard_section.fbs
+- k1/contracts/flatbuffers/layer2_state/session_state_root.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0002
+  - ADR-0002d
+  - ADR-0006
+  - ADR-0011
+  - ADR-0012
+  - ADR-0013
+  - ADR-0017
+  - ADR-0017a
+  - ADR-0017b
+  - ADR-0017c
+  - ADR-0017d
+  - ADR-0017e
+  - ADR-0017f
+  - ADR-0018
+  - ADR-0019
+  - ADR-0019a
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0019a: SessionState FlatBuffers Schema Definition
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

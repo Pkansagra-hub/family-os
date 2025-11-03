@@ -1,3 +1,79 @@
+---
+adr_number: 0059
+title: Learning Loop (K1 Advisory-Only, K0 Persistence)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0001f
+- ADR-0007
+- ADR-0017
+- ADR-0031
+- ADR-0038
+- ADR-0058a
+- ADR-0059
+- ADR-0059a
+- ADR-0059b
+- ADR-0059c
+- ADR-0059d
+- ADR-0059e
+- ADR-0079
+- ADR-0080
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0001f
+  - ADR-0007
+  - ADR-0017
+  - ADR-0031
+  - ADR-0038
+  - ADR-0058a
+  - ADR-0059
+  - ADR-0059a
+  - ADR-0059b
+  - ADR-0059c
+  - ADR-0059d
+  - ADR-0059e
+  - ADR-0079
+  - ADR-0080
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  affected_tests: []
+---
+
+
 # ADR-0059: Learning Loop (K1 Advisory-Only, K0 Persistence)
 
 **Status:** Accepted

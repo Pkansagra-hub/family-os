@@ -1,7 +1,69 @@
+---
+adr_number: 0006e
+title: Multi-Agent Parallel Coordination (Q2 2025 Post-MVP)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0006
+- ADR-0006a
+- ADR-0006b
+- ADR-0006c
+- ADR-0006d
+- ADR-0006e
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0006
+  - ADR-0006a
+  - ADR-0006b
+  - ADR-0006c
+  - ADR-0006d
+  - ADR-0006e
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0006e: Multi-Agent Parallel Coordination (Q2 2025 Post-MVP)
 
 **Status:** Accepted ✅
-**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)
+**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)
 **Last Updated:** 2025-01-30
 **Deciders:** K1 Architecture Team
 **Impact:** Core Kernel (Layer 1)
@@ -71,7 +133,7 @@ Optimized: Concierge (Step 1) + Planner (Step 2) parallel, then Tool Runner (Ste
 
 ### Parent ADR Context
 
-From [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
+From [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) and [ADR-0006c: Parallel DAG Execution](0006c-parallel-dag-execution.md):
 
 **Current Model (Single Agent):**
 
@@ -592,7 +654,7 @@ Total: 1200ms (43% speedup)
 
 ### Parent ADR
 
-- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
+- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
 
 ### Dependencies (Architecture)
 

@@ -1,3 +1,77 @@
+---
+adr_number: 0029c
+title: Component Metrics (Agent, Orchestrator, Planner, Tool)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0004
+- ADR-0005
+- ADR-0006
+- ADR-0007
+- ADR-0029
+- ADR-0029a
+- ADR-0029c
+- ADR-0029d
+- ADR-0029e
+- ADR-0033
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
+  - ADR-0007
+  - ADR-0029
+  - ADR-0029a
+  - ADR-0029c
+  - ADR-0029d
+  - ADR-0029e
+  - ADR-0033
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0029c: Component Metrics (Agent, Orchestrator, Planner, Tool)
 
 **Status:** ✅ Accepted

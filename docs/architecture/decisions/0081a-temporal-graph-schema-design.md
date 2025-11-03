@@ -1,3 +1,56 @@
+---
+adr_number: 0081a
+title: 0081A Temporal Graph Schema Design
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- modularity
+- performance
+- privacy
+- reliability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0081
+- ADR-0081a
+- ADR-0081b
+- ADR-0081c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams:
+- architecture_diagrams/k0/project_architecture_part4.mmd
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0081
+  - ADR-0081a
+  - ADR-0081b
+  - ADR-0081c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0081a: Temporal Graph Schema Design
 
 **Status:** Proposed
@@ -466,4 +519,3 @@ async def test_relationship_query_performance():
 2. Create Pydantic models for validation
 3. Write schema validation tests
 4. Write performance tests
-

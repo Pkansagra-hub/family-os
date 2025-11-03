@@ -1,3 +1,53 @@
+---
+adr_number: 0085c
+title: Cross-Device Context Sharing & Presence-Aware Features
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0017
+- ADR-0032
+- ADR-0050
+- ADR-0085
+- ADR-0085a
+- ADR-0085b
+implementation_status: PLANNED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0017
+  - ADR-0032
+  - ADR-0050
+  - ADR-0085
+  - ADR-0085a
+  - ADR-0085b
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0085c: Cross-Device Context Sharing & Presence-Aware Features
 
 **Status:** Proposed 🔄

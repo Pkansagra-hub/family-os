@@ -1,0 +1,9 @@
+# Auto-generated index for 08-security-privacy
+# Cross-layer: Security, Privacy, Capabilities
+
+category: security_privacy
+layer: cross-cutting
+description: "Security controls, privacy protections, capability-based security"
+
+adrs:
+  # Populated by build_adr_index.py script

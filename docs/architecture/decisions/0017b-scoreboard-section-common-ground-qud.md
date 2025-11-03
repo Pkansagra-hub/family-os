@@ -1,3 +1,53 @@
+---
+adr_number: 0017b
+title: Scoreboard Section - Common Ground & QUD
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0017
+- ADR-0017a
+- ADR-0017b
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer2_state/scoreboard_section.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0011
+  - ADR-0017
+  - ADR-0017a
+  - ADR-0017b
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0017b: Scoreboard Section - Common Ground & QUD
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

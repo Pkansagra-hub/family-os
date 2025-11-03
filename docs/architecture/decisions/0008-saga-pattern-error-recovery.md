@@ -1,3 +1,75 @@
+---
+adr_number: 0008
+title: Saga Pattern for Error Recovery with Compensating Transactions
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0002
+- ADR-0004
+- ADR-0006
+- ADR-0007
+- ADR-0008
+- ADR-0009
+- ADR-0020
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Company (1991)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0002
+  - ADR-0004
+  - ADR-0006
+  - ADR-0007
+  - ADR-0008
+  - ADR-0009
+  - ADR-0020
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0008: Saga Pattern for Error Recovery with Compensating Transactions
 
 **Status:** ✅ Accepted (Implementation 60% Complete - Core Functional)
@@ -7,7 +79,7 @@
 **Deciders:** K1 Architecture Team
 **Related ADRs:**
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Saga Coordinator uses Actor Model mailbox
-- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Phase 3 execution uses Saga pattern
+- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Phase 3 execution uses Saga pattern
 - [ADR-0007 (4-Stage Planning)](0007-4stage-planning-pipeline.md) - Plans include compensation definitions
 - [ADR-0009 (Circuit Breaker)](0009-circuit-breaker-pattern.md) - Circuit breaker prevents saga retry storms
 - [ADR-0020 (Multi-Tier Storage)](0020-multi-tier-storage.md) - K0 WAL stores compensation logs

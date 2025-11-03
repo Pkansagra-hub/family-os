@@ -1,0 +1,9 @@
+# Auto-generated index for 05-layer4-runtime
+# Layer 4: Runtime Core (8 modules - Leases, SessionState, Flow Engine, Learning)
+
+category: layer4_runtime
+layer: layer4
+description: "State management, flow execution, learning loop"
+
+adrs:
+  # Populated by build_adr_index.py script

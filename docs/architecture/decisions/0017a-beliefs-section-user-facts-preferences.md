@@ -1,3 +1,61 @@
+---
+adr_number: 0017a
+title: Beliefs Section - User Facts & Preferences
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0012
+- ADR-0017
+- ADR-0017a
+- ADR-0018
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer2_state/beliefs_section.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0011
+  - ADR-0012
+  - ADR-0017
+  - ADR-0017a
+  - ADR-0018
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0017a: Beliefs Section - User Facts & Preferences
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

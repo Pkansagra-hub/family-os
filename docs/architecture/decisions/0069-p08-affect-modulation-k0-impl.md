@@ -1,3 +1,83 @@
+---
+adr_number: 0069
+title: P08 AffectModulation (K0 Implementation Spec)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0001f
+- ADR-0017
+- ADR-0017b
+- ADR-0017d
+- ADR-0019
+- ADR-0029
+- ADR-0032
+- ADR-0059
+- ADR-0064
+- ADR-0069
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0001f
+  - ADR-0017
+  - ADR-0017b
+  - ADR-0017d
+  - ADR-0019
+  - ADR-0029
+  - ADR-0032
+  - ADR-0059
+  - ADR-0064
+  - ADR-0069
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0069: P08 AffectModulation (K0 Implementation Spec)
 
 **Status:** Proposed 🔄 (Requirements Gathering - Ready for Detailed Design)
@@ -7,7 +87,7 @@
 **Category:** K0 Memory Pipeline (P08) - Emotion & Social Intelligence
 **Related ADRs:**
 - [ADR-0001 (K0-K1 Kernel Split)](0001-k0-k1-kernel-split.md) - K0/K1 boundary (P08 lives in K0)
-- [ADR-0001f (K0/K1 Boundary Enforcement)](0001f-k0-k1-pipeline-boundary-enforcement.md) - **CRITICAL: NO K1 pipelines**
+- [ADR-0001f (K0/K1 Boundary Enforcement)](0001c-k0-k1-pipeline-boundary-enforcement.md) - **CRITICAL: NO K1 pipelines**
 - [ADR-0017 (SessionState 6-Section Design)](0017-sessionstate-6-section-design.md) - Scoreboard section (affect storage)
 - [ADR-0017b (Scoreboard Section)](0017b-scoreboard-section-common-ground-qud.md) - Affect state in scoreboard
 - [ADR-0017d (Persona Section)](0017d-persona-section-personality-style.md) - Emotional preferences storage

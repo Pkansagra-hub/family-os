@@ -1,3 +1,80 @@
+---
+adr_number: 0012a
+title: Layer 1 Core Kernel Schemas (15 Schemas)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0005
+- ADR-0006
+- ADR-0007
+- ADR-0011a
+- ADR-0011c
+- ADR-0012
+- ADR-0012a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0002
+  - ADR-0003
+  - ADR-0005
+  - ADR-0006
+  - ADR-0007
+  - ADR-0011a
+  - ADR-0011c
+  - ADR-0012
+  - ADR-0012a
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0012a: Layer 1 Core Kernel Schemas (15 Schemas)
 
 **Status:** Accepted
@@ -8,7 +85,7 @@
 - [ADR-0011c: Serialization Performance & Zero-Copy](0011c-serialization-performance-zero-copy.md)
 - [ADR-0002: Actor Model Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
-- [ADR-0006: 3-Phase Orchestration Contract Net](0006f-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration Contract Net](0006-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0003: MPST Protocol Validation](0003-mpst-protocol-validation.md)
 
@@ -1207,7 +1284,7 @@ Turn 2: User asks similar query
 - [ADR-0011c: Serialization Performance & Zero-Copy](0011c-serialization-performance-zero-copy.md)
 - [ADR-0002: Actor Model Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0005: Agent Lifecycle FSM](0005-agent-lifecycle-fsm.md)
-- [ADR-0006: 3-Phase Orchestration Contract Net](0006f-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration Contract Net](0006-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0003: MPST Protocol Validation](0003-mpst-protocol-validation.md)
 - Architecture Diagrams: `architecture_diagrams/k1_agent_lifecycle_fsm.mmd`, `k1_orchestrator_3phase.mmd`, `k1_planner_pipeline.mmd`, `k1_protocol_monitor_fsms.mmd`, `k1_learning_loop_detail.mmd`

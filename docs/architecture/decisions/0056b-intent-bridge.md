@@ -1,3 +1,48 @@
+---
+adr_number: 0056b
+title: Intent Bridge (Voice→DM Contract)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0003b
+- ADR-0021
+- ADR-0055a
+- ADR-0056
+- ADR-0056b
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0003b
+  - ADR-0021
+  - ADR-0055a
+  - ADR-0056
+  - ADR-0056b
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0056b: Intent Bridge (Voice→DM Contract)
 
 **Status:** Accepted

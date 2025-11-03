@@ -1,3 +1,76 @@
+---
+adr_number: 0089
+title: K0 Bridge Policy Enforcement and Obligations
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0001a
+- ADR-0001f
+- ADR-0050
+- ADR-0050b
+- ADR-0050c
+- ADR-0050d
+- ADR-0089
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- contracts/policy/bridge_policy.yml
+- k0/contracts/policy/bridge_policy.yml
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0001a
+  - ADR-0001f
+  - ADR-0050
+  - ADR-0050b
+  - ADR-0050c
+  - ADR-0050d
+  - ADR-0089
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0089: K0 Bridge Policy Enforcement and Obligations
 
 **Status**: Accepted – Implementation Pending

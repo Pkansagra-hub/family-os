@@ -1,3 +1,61 @@
+---
+adr_number: 0023a
+title: Cursor Encoding & Opaque Token Design
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0020
+- ADR-0021
+- ADR-0023
+- ADR-0023a
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- GraphQL (2015)
+- IETF (1997)
+- IETF (2006)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0020
+  - ADR-0021
+  - ADR-0023
+  - ADR-0023a
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0023a: Cursor Encoding & Opaque Token Design
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

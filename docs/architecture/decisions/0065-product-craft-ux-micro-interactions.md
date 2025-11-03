@@ -1,3 +1,87 @@
+---
+adr_number: '0065'
+title: Product Craft & UX Micro-Interactions
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0015
+- ADR-0015d
+- ADR-0017
+- ADR-0021
+- ADR-0026
+- ADR-0052b
+- ADR-0056
+- ADR-0065
+- ADR-0065a
+- ADR-0065b
+- ADR-0065c
+- ADR-0065d
+- ADR-0066
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0015
+  - ADR-0015d
+  - ADR-0017
+  - ADR-0021
+  - ADR-0026
+  - ADR-0052b
+  - ADR-0056
+  - ADR-0065
+  - ADR-0065a
+  - ADR-0065b
+  - ADR-0065c
+  - ADR-0065d
+  - ADR-0066
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0065: Product Craft & UX Micro-Interactions
 
 **Status:** Proposed

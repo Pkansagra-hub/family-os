@@ -1,10 +1,76 @@
+---
+adr_number: '0033'
+title: Three-Tier Tool Sandboxing Strategy
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0010
+- ADR-0032
+- ADR-0033
+- ADR-0034
+implementation_status: REJECTED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0010
+  - ADR-0032
+  - ADR-0033
+  - ADR-0034
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0033: Three-Tier Tool Sandboxing Strategy
 
-**Status:** ✅ Approved  
-**Date:** 2025-10-13  
-**Decision Owner:** Security Lead  
-**Authors:** K1 Architecture Team  
-**Category:** Security & Privacy  
+**Status:** ✅ Approved
+**Date:** 2025-10-13
+**Decision Owner:** Security Lead
+**Authors:** K1 Architecture Team
+**Category:** Security & Privacy
 **Related ADRs:** ADR-0010 (Capability-Based Security), ADR-0032 (Band-Based Egress Rules), ADR-0034 (MCP Protocol)
 
 ---
@@ -33,30 +99,30 @@
 
 ### Tier A: WASM/WASI Sandbox (Default for AMBER tools)
 
-**When:** Tool is WASM-compiled OR has minimal I/O needs  
-**Runtime:** Wasmtime (or equivalent WASM runtime)  
-**Isolation:** Capability-based I/O (preopened directories, explicit host APIs)  
-**Overhead:** <10ms startup, near-native execution speed  
+**When:** Tool is WASM-compiled OR has minimal I/O needs
+**Runtime:** Wasmtime (or equivalent WASM runtime)
+**Isolation:** Capability-based I/O (preopened directories, explicit host APIs)
+**Overhead:** <10ms startup, near-native execution speed
 **Best For:** 80% of tools (calculators, data transformers, simple APIs)
 
 **Example:** weather_api tool compiled to WASM with WASI sockets for HTTP
 
 ### Tier B: gVisor Sandboxed Process (Native binaries with POSIX needs)
 
-**When:** Tool requires native binary OR broad POSIX syscalls not available in WASI  
-**Runtime:** gVisor (user-space kernel with syscall interception)  
-**Isolation:** Syscall filtering, separate process namespace, resource limits (cgroups)  
-**Overhead:** ~50ms startup, syscall mediation adds ~10% CPU  
+**When:** Tool requires native binary OR broad POSIX syscalls not available in WASI
+**Runtime:** gVisor (user-space kernel with syscall interception)
+**Isolation:** Syscall filtering, separate process namespace, resource limits (cgroups)
+**Overhead:** ~50ms startup, syscall mediation adds ~10% CPU
 **Best For:** 15% of tools (native binaries, legacy tools, complex filesystem operations)
 
 **Example:** ffmpeg for video transcoding, imagemagick for image processing
 
 ### Tier C: Firecracker MicroVM (RED band / high-risk / untrusted)
 
-**When:** Tool handles sensitive data OR is untrusted third-party code OR requires kernel-level isolation  
-**Runtime:** Firecracker microVM with minimal device model  
-**Isolation:** Hardware-level VM isolation, separate kernel, no shared memory  
-**Overhead:** ~125ms cold start (keep hot pools for <50ms)  
+**When:** Tool handles sensitive data OR is untrusted third-party code OR requires kernel-level isolation
+**Runtime:** Firecracker microVM with minimal device model
+**Isolation:** Hardware-level VM isolation, separate kernel, no shared memory
+**Overhead:** ~125ms cold start (keep hot pools for <50ms)
 **Best For:** 5% of tools (user-submitted plugins, RED band operations, multi-tenant scenarios)
 
 **Example:** User-submitted data analysis plugin with unknown provenance
@@ -79,12 +145,12 @@ Routing Logic:
      - AMBER → Tier A (WASM) if available, else Tier B
      - RED → Tier C (Firecracker) mandatory
      - BLACK → No execution (isolated compute only)
-  
+
   2. Check capabilities:
      - Minimal I/O (preopened dirs, HTTP only) → Tier A
      - Broad POSIX (fork, exec, raw sockets) → Tier B
      - Kernel access or untrusted → Tier C
-  
+
   3. Select lowest tier that satisfies risk (A < B < C)
 ```
 
@@ -288,6 +354,6 @@ let vm = VirtualMachine::new()
 
 ---
 
-**Status:** ✅ Ready for implementation  
-**Timeline:** 12 weeks (4 weeks per tier)  
+**Status:** ✅ Ready for implementation
+**Timeline:** 12 weeks (4 weeks per tier)
 **Priority:** ⭐⭐⭐ Critical (Security foundation)

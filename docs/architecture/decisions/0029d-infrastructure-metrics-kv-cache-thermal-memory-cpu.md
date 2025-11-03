@@ -1,3 +1,59 @@
+---
+adr_number: 0029d
+title: Infrastructure Metrics (KV Cache, Thermal, Memory, CPU)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0017
+- ADR-0025
+- ADR-0026
+- ADR-0027
+- ADR-0029
+- ADR-0029a
+- ADR-0029d
+- ADR-0029e
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0017
+  - ADR-0025
+  - ADR-0026
+  - ADR-0027
+  - ADR-0029
+  - ADR-0029a
+  - ADR-0029d
+  - ADR-0029e
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0029d: Infrastructure Metrics (KV Cache, Thermal, Memory, CPU)
 
 **Status:** ✅ Accepted

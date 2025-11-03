@@ -1,3 +1,67 @@
+---
+adr_number: 0013c
+title: 0013C 90 Day Deprecation Workflow Notifications
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0012
+- ADR-0013a
+- ADR-0013b
+- ADR-0013d
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - '**Affected Clients:** {client_count} clients'
+  - '**Current Usage:** {usage_percentage}% of requests'
+  - '**Migration Effort:** {LOW/MEDIUM/HIGH}'
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0012
+  - ADR-0013a
+  - ADR-0013b
+  - ADR-0013d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0013c: 90-Day Deprecation Workflow & Notifications
 
 **Status:** âœ… Accepted (In Progress - 70% Complete)
@@ -1004,4 +1068,3 @@ def test_slack_notification():
 2. Configure email SMTP server (k1-dev@example.com)
 3. Deploy Grafana dashboard to production
 4. Test full workflow (deprecation â†’ notification â†’ removal)
-

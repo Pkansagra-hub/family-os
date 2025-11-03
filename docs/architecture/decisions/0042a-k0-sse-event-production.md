@@ -1,3 +1,48 @@
+---
+adr_number: 0042a
+title: K0 SSE Event Production & WAL Integration
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0042
+- ADR-0042a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0042
+  - ADR-0042a
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0042a: K0 SSE Event Production & WAL Integration
 
 **Status:** ✅ Approved

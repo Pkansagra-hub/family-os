@@ -1,3 +1,54 @@
+---
+adr_number: 0022b
+title: 0022B Http2 Multiplexing Connection Management
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- privacy
+- reliability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0022
+- ADR-0022a
+- ADR-0022b
+- ADR-0022d
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- IETF (2015)
+- IETF (2018)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0022
+  - ADR-0022a
+  - ADR-0022b
+  - ADR-0022d
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0022b: HTTP/2 Multiplexing & Connection Management
 
 **Status:** â³ In Progress (0% - Initial Draft)
@@ -689,4 +740,3 @@ k0_connection_unhealthy_total = Counter(
 ---
 
 **END OF ADR-0022b**
-

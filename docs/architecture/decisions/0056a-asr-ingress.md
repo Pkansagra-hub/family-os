@@ -1,3 +1,52 @@
+---
+adr_number: 0056a
+title: ASR Ingress (Frame Size, VAD, Partials)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0015
+- ADR-0039
+- ADR-0054a
+- ADR-0056
+- ADR-0056a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0015
+  - ADR-0039
+  - ADR-0054a
+  - ADR-0056
+  - ADR-0056a
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0056a: ASR Ingress (Frame Size, VAD, Partials)
 
 **Status:** Accepted

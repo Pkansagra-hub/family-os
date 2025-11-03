@@ -1,3 +1,64 @@
+---
+adr_number: 0022d
+title: FlatBuffers Batch Schema & Zero-Copy Serialization
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0019
+- ADR-0022
+- ADR-0022a
+- ADR-0022b
+- ADR-0022d
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Google (2014)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0019
+  - ADR-0022
+  - ADR-0022a
+  - ADR-0022b
+  - ADR-0022d
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0022d: FlatBuffers Batch Schema & Zero-Copy Serialization
 
 **Status:** ✅ Accepted (Implementation Authorized)

@@ -1,3 +1,67 @@
+---
+adr_number: 0013d
+title: 0013D Contract Testing Compatibility Validation
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0012
+- ADR-0013a
+- ADR-0013b
+- ADR-0013c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/testing/consumer_contracts/recall_request_v2.1.0.yaml
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0011
+  - ADR-0012
+  - ADR-0013a
+  - ADR-0013b
+  - ADR-0013c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0013d: Contract Testing & Compatibility Validation
 
 **Status:** âœ… Accepted (In Progress - 65% Complete)
@@ -878,4 +942,3 @@ def test_ci_cd_contract_pipeline():
 2. Implement breaking change detection for nested unions
 3. Add semantic change detection (field meaning changed)
 4. Deploy to staging CI/CD (test with real PRs)
-

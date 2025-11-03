@@ -1,3 +1,84 @@
+---
+adr_number: '0074'
+title: Pluggable Module System (Registry, Loader, Extensions)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0004
+- ADR-0004b
+- ADR-0004c
+- ADR-0008
+- ADR-0008b
+- ADR-0010
+- ADR-0013a
+- ADR-0072
+- ADR-0073
+- ADR-0074
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/architecture/layer_dependencies.yml
+- k1/contracts/architecture/module_manifest.yml
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0004
+  - ADR-0004b
+  - ADR-0004c
+  - ADR-0008
+  - ADR-0008b
+  - ADR-0010
+  - ADR-0013a
+  - ADR-0072
+  - ADR-0073
+  - ADR-0074
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0074: Pluggable Module System (Registry, Loader, Extensions)
 
 **Status:** ✅ Accepted

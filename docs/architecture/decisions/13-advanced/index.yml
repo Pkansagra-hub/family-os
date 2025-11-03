@@ -1,0 +1,9 @@
+# Auto-generated index for 13-advanced
+# Advanced capabilities (Ambient, Embodied, Multi-Party)
+
+category: advanced_capabilities
+layer: cross-cutting
+description: "Ambient sensing, embodied awareness, multi-party coordination"
+
+adrs:
+  # Populated by build_adr_index.py script

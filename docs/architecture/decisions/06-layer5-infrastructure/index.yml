@@ -1,0 +1,9 @@
+# Auto-generated index for 06-layer5-infrastructure
+# Layer 5: Infrastructure (19 modules - Scheduler, Backpressure, Thermal, Observability)
+
+category: layer5_infrastructure
+layer: layer5
+description: "Scheduling, backpressure, observability, configuration"
+
+adrs:
+  # Populated by build_adr_index.py script

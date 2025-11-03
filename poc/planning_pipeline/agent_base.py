@@ -71,6 +71,7 @@ class Agent(ABC):
         self.llm_provider = llm_provider
         self.context: Optional[AgentContext] = None
         self.prompt_template: str = ""
+        self.question_queue = None  # Set by DAG executor for parallel question handling
 
     @abstractmethod
     async def execute(self, context: AgentContext) -> AgentResponse:
@@ -94,19 +95,45 @@ class Agent(ABC):
         """Set the prompt template for this agent."""
         self.prompt_template = prompt
 
-    async def ask_user(self, question: str) -> str:
+    async def ask_user(self, question: str, required_data: Optional[List[str]] = None) -> str:
         """
         Ask user a question directly.
         In circular model, user is at center - agents can ask directly.
 
+        With question queue (M7): Question is submitted to queue, agent waits
+        for answer without blocking other agents.
+
+        Without question queue: Falls back to NotImplementedError (orchestrator handles)
+
         Args:
             question: Question to ask user
+            required_data: Optional list of data fields needed (e.g., ["date", "time"])
 
         Returns:
             User's answer
         """
-        # This will be implemented by orchestrator to route back to user
-        raise NotImplementedError("ask_user must be implemented by orchestrator")
+        # M7: Use question queue if available (parallel agent execution)
+        if self.question_queue:
+            question_obj = await self.question_queue.add_question(
+                node_id=self.agent_id,
+                agent_type=self.agent_type,
+                question=question,
+                required_data=required_data or [],
+            )
+
+            # Wait for answer (blocks this agent, not others)
+            answer = await self.question_queue.wait_for_answer(self.agent_id)
+
+            if answer is None:
+                # Question was skipped or expired
+                return ""
+
+            return answer
+
+        # Fallback: This will be implemented by orchestrator to route back to user
+        raise NotImplementedError(
+            "ask_user must be implemented by orchestrator or provide question_queue"
+        )
 
     async def get_from_agent(self, agent_type: str, query: str) -> Optional[Dict[str, Any]]:
         """

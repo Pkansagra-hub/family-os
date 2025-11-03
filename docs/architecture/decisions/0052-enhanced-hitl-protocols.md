@@ -1,3 +1,103 @@
+---
+adr_number: '0052'
+title: Enhanced Human-in-the-Loop (HITL) Protocols
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0003b
+- ADR-0006
+- ADR-0007
+- ADR-0007c
+- ADR-0007d
+- ADR-0008
+- ADR-0017
+- ADR-0017b
+- ADR-0032
+- ADR-0036
+- ADR-0038
+- ADR-0040
+- ADR-0052
+- ADR-0052a
+- ADR-0052b
+- ADR-0052c
+- ADR-0052d
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Addlesee et al. (2024)
+- Brennan (1991)
+- Clark & Brennan (1991)
+- Honda et al. (2008)
+- Norman (1988)
+- Reason (1990)
+- Shaikh et al. (2024)
+- Smith (1980)
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0003b
+  - ADR-0006
+  - ADR-0007
+  - ADR-0007c
+  - ADR-0007d
+  - ADR-0008
+  - ADR-0017
+  - ADR-0017b
+  - ADR-0032
+  - ADR-0036
+  - ADR-0038
+  - ADR-0040
+  - ADR-0052
+  - ADR-0052a
+  - ADR-0052b
+  - ADR-0052c
+  - ADR-0052d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0052: Enhanced Human-in-the-Loop (HITL) Protocols
 
 **Status:** ✅ **ACCEPTED** (2025-10-14)
@@ -10,7 +110,7 @@
 
 **Related ADRs:**
 - [ADR-0003b: 6 Core Protocol Implementations](0003b-6-core-protocol-implementations.md) - Protocol 3 (Clarification) foundation
-- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) - Multi-agent coordination
+- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) - Multi-agent coordination
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md) - Plan validation and approval
 - [ADR-0008: Saga Pattern](0008-saga-pattern-error-recovery.md) - Rollback for step-by-step workflows
 - [ADR-0032-0038: Privacy Band System](0032-band-based-egress-rules.md) - RED band approval requirements
@@ -1017,7 +1117,7 @@ step_by_step_workflow_completion_rate:
 
 **ADRs:**
 - [ADR-0003b: 6 Core Protocol Implementations](0003b-6-core-protocol-implementations.md)
-- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md)
+- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md)
 - [ADR-0007: 4-Stage Planning Pipeline](0007-4stage-planning-pipeline.md)
 - [ADR-0008: Saga Pattern](0008-saga-pattern-error-recovery.md)
 - [ADR-0017: SessionState 6-Section Design](0017-sessionstate-6-section-design.md)

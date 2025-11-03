@@ -1,0 +1,9 @@
+# Auto-generated index for 07-contracts-serialization
+# Cross-layer: Contracts, FlatBuffers, API specs
+
+category: contracts_serialization
+layer: cross-cutting
+description: "Data formats, serialization, and API contracts"
+
+adrs:
+  # Populated by build_adr_index.py script

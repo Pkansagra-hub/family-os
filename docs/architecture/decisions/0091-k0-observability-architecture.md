@@ -1,3 +1,66 @@
+---
+adr_number: 0091
+title: K0 Observability Architecture
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0024
+- ADR-0029
+- ADR-0030
+- ADR-0038
+- ADR-0044
+- ADR-0089
+- ADR-0091
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k0/contracts/observability/dashboard_catalog.yml
+- k0/contracts/observability/log_batch.yml
+- k0/contracts/observability/metrics_payload.yml
+- k0/contracts/observability/trace_batch.yml
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0024
+  - ADR-0029
+  - ADR-0030
+  - ADR-0038
+  - ADR-0044
+  - ADR-0089
+  - ADR-0091
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0091: K0 Observability Architecture
 
 **Status**: Proposed  \

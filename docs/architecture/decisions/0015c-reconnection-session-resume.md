@@ -1,3 +1,56 @@
+---
+adr_number: 0015c
+title: Reconnection & Session Resume
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0015
+- ADR-0015a
+- ADR-0015b
+- ADR-0015c
+- ADR-0017
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0015
+  - ADR-0015a
+  - ADR-0015b
+  - ADR-0015c
+  - ADR-0017
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  affected_tests: []
+---
+
+
 # ADR-0015c: Reconnection & Session Resume
 
 **Status:** ✅ Accepted (70% Implementation Complete)

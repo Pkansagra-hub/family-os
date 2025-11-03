@@ -1,3 +1,85 @@
+---
+adr_number: '0066'
+title: Developer Testing Simulation Harness
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0003b
+- ADR-0004
+- ADR-0005
+- ADR-0006
+- ADR-0007
+- ADR-0011
+- ADR-0014
+- ADR-0015
+- ADR-0024
+- ADR-0029
+- ADR-0051
+- ADR-0066
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0003b
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
+  - ADR-0007
+  - ADR-0011
+  - ADR-0014
+  - ADR-0015
+  - ADR-0024
+  - ADR-0029
+  - ADR-0051
+  - ADR-0066
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0066: Developer Testing & Simulation Harness
 
 **Status:** Proposed ðŸ”„ (Requirements Gathering - Ready for Detailed Design)
@@ -9,7 +91,7 @@
 - [ADR-0007 (4-Stage Planning Pipeline)](0007-4stage-planning-pipeline.md) - Planner stage being tested
 - [ADR-0004 (52-Module 5-Layer Architecture)](0004-52-module-5-layer-architecture.md) - Module structure for testing
 - [ADR-0005 (Agent Lifecycle FSM)](0005-agent-lifecycle-fsm.md) - Agent states being simulated
-- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestration workflow testing
+- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestration workflow testing
 - [ADR-0011 (FlatBuffers Serialization)](0011-flatbuffers-serialization.md) - Message mocking
 - [ADR-0014 (JSON REST API)](0014-json-rest-api-dual-format.md) - API contract testing
 - [ADR-0015 (WebSocket Binary Protocol)](0015-websocket-binary-protocol.md) - WebSocket client simulation

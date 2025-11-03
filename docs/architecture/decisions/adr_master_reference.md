@@ -1,3 +1,4 @@
+
 # K1 Intelligence Module - ADR Master Reference
 
 **Last Updated:** 2025-10-23

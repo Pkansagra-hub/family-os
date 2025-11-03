@@ -93,6 +93,14 @@ class ConciergeAgent:
         llm_provider,
         planning_pipeline=None,
         max_history: int = 20,
+        # DAG components (optional, for parallel execution)
+        agent_spawn_wrapper=None,
+        question_queue=None,
+        question_batcher=None,
+        dag_visualizer=None,
+        plan_aggregator=None,
+        commit_handler=None,
+        use_dag_workflow: bool = False,
     ):
         """
         Initialize Concierge Agent
@@ -101,9 +109,25 @@ class ConciergeAgent:
             llm_provider: LLM provider for chat and intent detection
             planning_pipeline: Planning pipeline instance (optional, for dependency injection)
             max_history: Maximum chat messages to retain
+            agent_spawn_wrapper: Agent spawner for DAG execution
+            question_queue: Question queue for batching
+            question_batcher: Question batcher for parallel agents
+            dag_visualizer: DAG visualizer for rendering
+            plan_aggregator: Plan aggregator for results
+            commit_handler: Commit handler for storage
+            use_dag_workflow: If True, use DAG workflow instead of old pipeline
         """
         self.llm_provider = llm_provider
         self.planning_pipeline = planning_pipeline
+
+        # DAG components
+        self.agent_spawn_wrapper = agent_spawn_wrapper
+        self.question_queue = question_queue
+        self.question_batcher = question_batcher
+        self.dag_visualizer = dag_visualizer
+        self.plan_aggregator = plan_aggregator
+        self.commit_handler = commit_handler
+        self.use_dag_workflow = use_dag_workflow
 
         # Chat history (user ↔ concierge)
         self.chat_history: List[ChatMessage] = []
@@ -117,7 +141,7 @@ class ConciergeAgent:
         self.active_planning = False  # Currently in planning mode
         self.pending_clarification = None  # Waiting for clarification response
 
-        logger.info("ConciergeAgent initialized")
+        logger.info(f"ConciergeAgent initialized (DAG workflow: {use_dag_workflow})")
 
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None):
         """
@@ -280,6 +304,101 @@ Generate a natural response:"""
             logger.error(f"Chat generation failed: {e}")
             return "I'm here to help! What would you like to do?"
 
+    def _has_dag_components(self) -> bool:
+        """Check if all required DAG components are configured"""
+        return all(
+            [
+                self.agent_spawn_wrapper is not None,
+                self.question_queue is not None,
+                self.question_batcher is not None,
+                self.plan_aggregator is not None,
+                self.commit_handler is not None,
+            ]
+        )
+
+    async def _invoke_dag_workflow(
+        self, user_message: str, session=None, trace_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Invoke DAG workflow for parallel agent execution
+
+        Args:
+            user_message: User's actionable request
+            session: Optional database session
+            trace_id: Optional trace ID
+
+        Returns:
+            Planning result dict with status, flow_id, aggregated_plan
+        """
+        # Import DAG components (lazy import to avoid circular dependencies)
+        from dag_builder import DAGBuilder
+        from dag_executor import DAGExecutor
+
+        try:
+            # Step 1: Generate expanded plan
+            expanded_plan = await self.planning_pipeline.run_with_clarifications(user_message)
+
+            if expanded_plan.get("needs_clarification"):
+                # Return clarification request
+                return {
+                    "status": "NEEDS_CLARIFICATION",
+                    "question": expanded_plan.get("questions", ["Can you provide more details?"])[
+                        0
+                    ],
+                    "questions": expanded_plan.get("questions", []),
+                    "context": expanded_plan.get("context", {}),
+                }
+
+            sketch = expanded_plan.get("sketch", {})
+            expanded_steps = expanded_plan.get("expanded_steps", [])
+
+            # Step 2: Build DAG
+            builder = DAGBuilder()
+            dag = builder.build_from_expanded_plan(sketch, expanded_steps)
+
+            # Step 3: Execute DAG with question batching
+            # Start question batcher in background
+            batcher_task = asyncio.create_task(
+                self.question_batcher.start_batching(self.question_queue)
+            )
+
+            # Execute DAG
+            executor = DAGExecutor(self.agent_spawn_wrapper, self.question_queue)
+            results = await executor.execute(dag)
+
+            # Stop batcher
+            self.question_batcher.stop()
+            await batcher_task
+
+            # Step 4: Aggregate results
+            aggregated_plan = self.plan_aggregator.aggregate(
+                dag=dag,
+                results=results,
+                intent=user_message,
+                flow_id=None,  # Will be generated
+            )
+
+            # Step 5: Commit to storage
+            flow_id = self.commit_handler.commit(aggregated_plan)
+
+            # Return result in old pipeline format for compatibility
+            return {
+                "status": "COMMITTED" if aggregated_plan.status == "completed" else "PARTIAL",
+                "flow_id": flow_id,
+                "intent": aggregated_plan.intent,
+                "summary": f"Completed {len(aggregated_plan.successful_steps)} steps",
+                "latency_ms": aggregated_plan.total_latency_ms,
+                "dag": dag,
+                "aggregated_plan": aggregated_plan,
+            }
+
+        except Exception as e:
+            logger.error(f"DAG workflow failed: {e}")
+            return {
+                "status": "ERROR",
+                "message": f"Planning failed: {str(e)}",
+            }
+
     async def handle_planning(
         self, user_message: str, session=None, trace_id: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -303,6 +422,40 @@ Generate a natural response:"""
 
         try:
             self.active_planning = True
+
+            # Check if DAG workflow should be used
+            if self.use_dag_workflow and self._has_dag_components():
+                logger.info("Using DAG workflow for planning")
+                result = await self._invoke_dag_workflow(user_message, session, trace_id)
+                self.active_planning = False
+
+                # Handle result based on status
+                if result.get("status") == "NEEDS_CLARIFICATION":
+                    # Store clarification context
+                    self.pending_clarification = {
+                        "original_message": user_message,
+                        "question": result.get("question", "Can you provide more details?"),
+                        "context": result.get("context", {}),
+                        "session": session,
+                    }
+                elif result.get("status") in ["COMMITTED", "PARTIAL"]:
+                    # Track successful plan
+                    plan_record = PlanRecord(
+                        flow_id=result.get("flow_id", "unknown"),
+                        intent=result.get("intent", user_message),
+                        summary=result.get("summary", user_message[:100]),
+                        status=result.get("status", "UNKNOWN"),
+                    )
+                    self.plan_history.append(plan_record)
+
+                    # Trim plan history
+                    if len(self.plan_history) > self.max_plan_history:
+                        self.plan_history = self.plan_history[-self.max_plan_history :]
+
+                return result
+
+            # Otherwise, use old sequential pipeline
+            logger.info("Using sequential pipeline for planning")
 
             # Create default session if not provided
             if session is None:

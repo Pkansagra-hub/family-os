@@ -1,3 +1,85 @@
+---
+adr_number: 0013a
+title: 0013A Schema Version Registry Compatibility Matrix
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-10-12'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- maintainability
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0012
+- ADR-0013b
+- ADR-0013c
+- ADR-0013d
+- ADR-0014
+- ADR-0015
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer1_kernel/agent_state.fbs
+- k1/contracts/flatbuffers/layer1_kernel/task_announcement.fbs
+- k1/contracts/flatbuffers/layer2_state/session_state_root.fbs
+- k1/contracts/flatbuffers/layer3_execution/tool_call_request.fbs
+- k1/contracts/flatbuffers/layer4_ingress/http_request.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  - "â\x9DŒ **No database queries:** Limited query capabilities (no SQL, in-memory\
+    \ only)"
+  - "â\x9DŒ **YAML size growth:** Registry grows over time (760+ entries, ~50KB file)"
+  affected_adrs:
+  - ADR-0011
+  - ADR-0012
+  - ADR-0013b
+  - ADR-0013c
+  - ADR-0013d
+  - ADR-0014
+  - ADR-0015
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0013a: Schema Version Registry & Compatibility Matrix
 
 **Status:** âœ… Accepted (In Progress - 80% Complete)
@@ -1205,4 +1287,3 @@ Results:
 3. Deploy REST API endpoint (`/schemas/version`) (Week 2)
 4. Integrate with CI/CD (GitHub Actions workflow) (Week 2)
 5. Populate registry with all 76 schemas (Week 3)
-

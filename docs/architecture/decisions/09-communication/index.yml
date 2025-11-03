@@ -1,0 +1,9 @@
+# Auto-generated index for 09-communication
+# Cross-layer: K0↔K1 Bridge, WebSocket, SSE, REST
+
+category: communication
+layer: cross-cutting
+description: "Inter-kernel communication, real-time protocols, REST APIs"
+
+adrs:
+  # Populated by build_adr_index.py script

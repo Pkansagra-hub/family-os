@@ -1,3 +1,58 @@
+---
+adr_number: 0014c
+title: 0014C Request Response Serialization Pipeline
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011c
+- ADR-0012
+- ADR-0014a
+- ADR-0014b
+- ADR-0014d
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0011c
+  - ADR-0012
+  - ADR-0014a
+  - ADR-0014b
+  - ADR-0014d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  affected_tests: []
+---
+
+
 ﻿# ADR-0014c: Request/Response Serialization Pipeline
 
 **Status:** âœ… Accepted (In Progress - 75% Complete)
@@ -861,4 +916,3 @@ def test_end_to_end_flatbuffers_request_flatbuffers_response():
 2. Test nested union round-trip (union within union)
 3. Benchmark large payloads (100KB+)
 4. Deploy to staging
-

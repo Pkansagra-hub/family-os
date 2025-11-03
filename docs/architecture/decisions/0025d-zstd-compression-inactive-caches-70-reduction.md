@@ -1,3 +1,63 @@
+---
+adr_number: 0025d
+title: zstd Compression for Inactive Caches (70% Reduction)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0019
+- ADR-0025
+- ADR-0025a
+- ADR-0025b
+- ADR-0025c
+- ADR-0025d
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/k0_bridge/compression.yml
+related_diagrams: []
+research_citations:
+- Redis (2020)
+- zstd (2016)
+- zstd (2018)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0019
+  - ADR-0025
+  - ADR-0025a
+  - ADR-0025b
+  - ADR-0025c
+  - ADR-0025d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0025d: zstd Compression for Inactive Caches (70% Reduction)
 
 **Status:** ✅ Accepted (Implementation Authorized)

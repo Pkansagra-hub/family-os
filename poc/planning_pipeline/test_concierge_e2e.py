@@ -29,10 +29,19 @@ from agent_spawn_wrapper import AgentSpawnWrapper
 
 # Import components
 from concierge_agent import ConciergeAgent
+
+# Import DAG components
+from dag_builder import DAGBuilder
+from dag_executor import DAGExecutor
+from dag_visualizer import DAGVisualizer
+from plan_aggregator import PlanAggregator
 from poc_planning_pipeline import PlanningPipeline
+from question_batcher import ConciergeQuestionBatcher
+from question_queue import QuestionQueue
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
+from simple_commit import SimpleCommitHandler
 
 # Add grandparent for llm_provider
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -71,9 +80,10 @@ def print_scenarios():
         ("1. 💬 Free Conversation", "Chat naturally with the concierge"),
         ("2. 🎯 Planning Mode", "Give actionable task to invoke planner"),
         ("3. 🔀 Mixed Mode", "Start with chat, transition to planning"),
-        ("4. 📊 Concierge Stats", "Show chat/plan statistics"),
-        ("5. 🔄 Reset Chat", "Clear chat history"),
-        ("6. ❌ Exit", "Exit test harness"),
+        ("4. ⚡ DAG Workflow Test", "Test parallel DAG execution directly"),
+        ("5. 📊 Concierge Stats", "Show chat/plan statistics"),
+        ("6. 🔄 Reset Chat", "Clear chat history"),
+        ("7. ❌ Exit", "Exit test harness"),
     ]
 
     for label, desc in scenarios:
@@ -233,6 +243,87 @@ async def scenario_mixed_mode(concierge: ConciergeAgent):
     await scenario_free_conversation(concierge)
 
 
+async def scenario_dag_workflow(
+    pipeline: PlanningPipeline,
+    agent_spawn_wrapper: AgentSpawnWrapper,
+    question_queue: QuestionQueue,
+    question_batcher: ConciergeQuestionBatcher,
+    visualizer: DAGVisualizer,
+    aggregator: PlanAggregator,
+    commit_handler: SimpleCommitHandler,
+):
+    """Scenario 4: Test DAG workflow directly"""
+    console.print("\n" + "▶" * 35, style="bold green")
+    console.print("⚡ SCENARIO 4: DAG Workflow Test", style="bold green")
+    console.print("Test parallel DAG execution with question batching", style="green")
+    console.print("▶" * 35 + "\n", style="bold green")
+
+    examples = [
+        "Book dinner at 7pm and notify family",
+        "Schedule meeting, send invites, and reserve room",
+        "Order supplies and update inventory",
+    ]
+
+    console.print("[dim]Examples (multi-step tasks for parallel execution):[/dim]")
+    for ex in examples:
+        console.print(f"  • {ex}", style="dim")
+    console.print()
+
+    while True:
+        intent = Prompt.ask("\n[bold cyan]Task (or 'back' to return)[/bold cyan]")
+
+        if not intent or intent.lower() in ["exit", "quit", "back"]:
+            console.print("↩️  Returning to main menu...\n", style="yellow")
+            break
+
+        # Run DAG workflow
+        try:
+            result = await run_dag_workflow(
+                intent=intent,
+                pipeline=pipeline,
+                agent_spawn_wrapper=agent_spawn_wrapper,
+                question_queue=question_queue,
+                question_batcher=question_batcher,
+                visualizer=visualizer,
+                aggregator=aggregator,
+                commit_handler=commit_handler,
+            )
+
+            if result["status"] == "completed":
+                console.print(
+                    Panel(
+                        f"""✅ Task Completed Successfully!
+
+Flow ID: {result['flow_id']}
+Total Latency: {result['latency_ms']:.1f}ms
+
+You can retrieve this plan later using:
+    commit_handler.retrieve('{result['flow_id']}')
+""",
+                        title="⚡ DAG Workflow Complete",
+                        border_style="green",
+                    )
+                )
+            elif result["status"] == "needs_clarification":
+                console.print(
+                    Panel(
+                        "Clarification handling not yet implemented in DAG workflow.\n"
+                        "Use Planning Mode (Scenario 2) for clarification support.",
+                        title="⚠️ Clarification Needed",
+                        border_style="yellow",
+                    )
+                )
+
+        except Exception as e:
+            console.print(
+                Panel(
+                    f"Error: {e}\n\nStack trace:\n{e.__traceback__}",
+                    title="❌ Execution Failed",
+                    border_style="red",
+                )
+            )
+
+
 def scenario_stats(concierge: ConciergeAgent):
     """Scenario 4: Show concierge statistics"""
     console.print("\n" + "▶" * 35, style="bold green")
@@ -287,6 +378,138 @@ def scenario_reset(concierge: ConciergeAgent):
         console.print("↩️  Reset cancelled\n", style="yellow")
 
 
+async def run_dag_workflow(
+    intent: str,
+    pipeline: PlanningPipeline,
+    agent_spawn_wrapper: AgentSpawnWrapper,
+    question_queue: QuestionQueue,
+    question_batcher: ConciergeQuestionBatcher,
+    visualizer: DAGVisualizer,
+    aggregator: PlanAggregator,
+    commit_handler: SimpleCommitHandler,
+) -> dict:
+    """
+    Run complete DAG workflow: Plan → Build → Execute → Aggregate → Commit
+
+    Returns:
+        dict with keys: flow_id, status, dag, aggregated_plan, latency_ms
+    """
+    import time
+
+    start_time = time.time()
+
+    # Step 1: Generate expanded plan (sketch → expand)
+    console.print("\n[bold cyan]📝 Step 1: Generating Plan...[/bold cyan]")
+    expanded_plan = await pipeline.run_with_clarifications(intent)
+
+    if expanded_plan.get("needs_clarification"):
+        # Return early if clarification needed
+        return {
+            "status": "needs_clarification",
+            "questions": expanded_plan.get("questions", []),
+            "latency_ms": (time.time() - start_time) * 1000,
+        }
+
+    sketch = expanded_plan.get("sketch", {})
+    expanded_steps = expanded_plan.get("expanded_steps", [])
+
+    console.print(f"✅ Plan generated: {len(expanded_steps)} steps")
+
+    # Step 2: Build DAG from expanded plan
+    console.print("\n[bold cyan]🔨 Step 2: Building DAG...[/bold cyan]")
+    builder = DAGBuilder()
+    dag = builder.build_from_expanded_plan(sketch, expanded_steps)
+
+    console.print(f"✅ DAG built: {len(dag.nodes)} nodes, {len(dag.edges)} edges")
+
+    # Step 3: Visualize DAG (ASCII)
+    console.print("\n[bold cyan]📊 Step 3: DAG Structure[/bold cyan]")
+    ascii_dag = visualizer.render_ascii(dag)
+    console.print(ascii_dag)
+
+    # Step 4: Execute DAG with question batching
+    console.print("\n[bold cyan]⚡ Step 4: Executing DAG (Parallel)...[/bold cyan]")
+
+    # Start question batcher in background
+    batcher_task = asyncio.create_task(question_batcher.start_batching(question_queue))
+
+    # Execute DAG
+    executor = DAGExecutor(agent_spawn_wrapper, question_queue)
+    results = await executor.execute(dag)
+
+    # Stop batcher
+    question_batcher.stop()
+    await batcher_task
+
+    console.print(f"✅ Execution complete: {len(results)} results")
+
+    # Step 5: Aggregate results
+    console.print("\n[bold cyan]📦 Step 5: Aggregating Results...[/bold cyan]")
+    aggregated_plan = aggregator.aggregate(
+        dag=dag,
+        results=results,
+        intent=intent,
+        flow_id=None,  # Will be generated
+    )
+
+    console.print(f"✅ Status: {aggregated_plan.status}")
+    console.print(f"   Successful: {len(aggregated_plan.successful_steps)}")
+    console.print(f"   Failed: {len(aggregated_plan.failed_steps)}")
+    console.print(f"   Blocked: {len(aggregated_plan.blocked_steps)}")
+
+    # Step 6: Commit to storage
+    console.print("\n[bold cyan]💾 Step 6: Committing Plan...[/bold cyan]")
+    flow_id = commit_handler.commit(aggregated_plan)
+    console.print(f"✅ Committed: {flow_id}")
+
+    # Step 7: Display metrics
+    console.print("\n[bold cyan]📈 Step 7: Performance Metrics[/bold cyan]")
+    metrics = aggregated_plan.dag_metrics
+
+    if metrics:
+        metrics_dict = metrics.to_dict() if hasattr(metrics, "to_dict") else {}
+        max_parallelism = metrics_dict.get("max_parallelism", 1)
+        per_agent_latencies = metrics_dict.get("per_agent_latencies", {})
+
+        latency_lines = "\n".join(
+            [f"  • {agent}: {latency:.1f}ms" for agent, latency in per_agent_latencies.items()]
+        )
+
+        console.print(
+            Panel(
+                f"""Total Latency: {aggregated_plan.total_latency_ms:.1f}ms
+Max Parallelism: {max_parallelism}
+Agents Used: {', '.join(aggregated_plan.agents_used)}
+
+Per-Agent Latencies:
+{latency_lines or '  (No agent latencies recorded)'}""",
+                title="⚡ DAG Execution Metrics",
+                border_style="green",
+            )
+        )
+    else:
+        console.print(
+            Panel(
+                f"""Total Latency: {aggregated_plan.total_latency_ms:.1f}ms
+Agents Used: {', '.join(aggregated_plan.agents_used)}
+
+(Detailed metrics not available)""",
+                title="⚡ DAG Execution Metrics",
+                border_style="green",
+            )
+        )
+
+    total_latency = (time.time() - start_time) * 1000
+
+    return {
+        "status": "completed",
+        "flow_id": flow_id,
+        "dag": dag,
+        "aggregated_plan": aggregated_plan,
+        "latency_ms": total_latency,
+    }
+
+
 async def main():
     """Main test harness"""
     print_header()
@@ -313,7 +536,7 @@ async def main():
         max_history=20,
     )
 
-    console.print("✅ Concierge Agent initialized!\n", style="green")
+    console.print("✅ Concierge Agent initialized!", style="green")
 
     # Initialize Agent Spawn Wrapper
     console.print("[*] Initializing Agent Spawn Wrapper...", style="dim")
@@ -324,12 +547,27 @@ async def main():
         style="dim",
     )
 
+    # Initialize DAG components
+    console.print("[*] Initializing DAG components...", style="dim")
+    question_queue = QuestionQueue()
+    question_batcher = ConciergeQuestionBatcher(
+        question_queue=question_queue,
+        batch_timeout=2.0,
+        max_batch_size=3,
+    )
+    visualizer = DAGVisualizer()
+    aggregator = PlanAggregator()
+    commit_handler = SimpleCommitHandler(storage_dir="poc_commits")
+    console.print("✅ DAG components initialized!\n", style="green")
+
     # Main test loop
     while True:
         print_scenarios()
 
         choice = Prompt.ask(
-            "Select scenario [1/2/3/4/5/6]", choices=["1", "2", "3", "4", "5", "6"], default="1"
+            "Select scenario [1/2/3/4/5/6/7]",
+            choices=["1", "2", "3", "4", "5", "6", "7"],
+            default="1",
         )
 
         if choice == "1":
@@ -339,15 +577,25 @@ async def main():
         elif choice == "3":
             await scenario_mixed_mode(concierge)
         elif choice == "4":
-            scenario_stats(concierge)
+            await scenario_dag_workflow(
+                pipeline=pipeline,
+                agent_spawn_wrapper=agent_spawn_wrapper,
+                question_queue=question_queue,
+                question_batcher=question_batcher,
+                visualizer=visualizer,
+                aggregator=aggregator,
+                commit_handler=commit_handler,
+            )
         elif choice == "5":
-            scenario_reset(concierge)
+            scenario_stats(concierge)
         elif choice == "6":
+            scenario_reset(concierge)
+        elif choice == "7":
             console.print("\n👋 Exiting test harness. Thanks for testing!\n", style="bold green")
             break
 
         # Ask to continue
-        if choice not in ["4", "5"]:
+        if choice not in ["5", "6"]:
             continue_test = Prompt.ask("\nContinue testing?", choices=["y", "n"], default="y")
             if continue_test == "n":
                 console.print(

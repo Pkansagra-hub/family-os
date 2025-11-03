@@ -1,3 +1,53 @@
+---
+adr_number: 0057a
+title: ASR Frame Drop/Downsample Policy
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0039
+- ADR-0056a
+- ADR-0057
+- ADR-0057a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  affected_adrs:
+  - ADR-0039
+  - ADR-0056a
+  - ADR-0057
+  - ADR-0057a
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0057a: ASR Frame Drop/Downsample Policy
 
 **Status:** Accepted

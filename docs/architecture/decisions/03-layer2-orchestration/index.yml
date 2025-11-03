@@ -1,0 +1,9 @@
+# Auto-generated index for 03-layer2-orchestration
+# Layer 2: Orchestration (3 modules)
+
+category: layer2_orchestration
+layer: layer2
+description: "Multi-agent coordination and plan generation"
+
+adrs:
+  # Populated by build_adr_index.py script

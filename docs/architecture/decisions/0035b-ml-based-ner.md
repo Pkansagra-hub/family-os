@@ -1,3 +1,49 @@
+---
+adr_number: 0035b
+title: ML-based NER for Unstructured PII Detection
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0035
+- ADR-0035a
+- ADR-0035b
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0035
+  - ADR-0035a
+  - ADR-0035b
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0035b: ML-based NER for Unstructured PII Detection
 
 **Status:** ⏳ Pending Implementation

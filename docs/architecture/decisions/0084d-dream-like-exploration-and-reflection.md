@@ -1,3 +1,64 @@
+---
+adr_number: 0084d
+title: Dream-Like Exploration & Reflection — Creative Insight Generation
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- modularity
+- observability
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0059
+- ADR-0084
+- ADR-0084a
+- ADR-0084b
+- ADR-0084c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0059
+  - ADR-0084
+  - ADR-0084a
+  - ADR-0084b
+  - ADR-0084c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0084d: Dream-Like Exploration & Reflection — Creative Insight Generation
 
 **Status:** Proposed 🔄

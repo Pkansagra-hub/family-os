@@ -1,3 +1,65 @@
+---
+adr_number: 0027b
+title: Automatic Failover (<100ms Migration)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0025
+- ADR-0025d
+- ADR-0026c
+- ADR-0027
+- ADR-0027a
+- ADR-0027b
+- ADR-0027c
+- ADR-0027d
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0025
+  - ADR-0025d
+  - ADR-0026c
+  - ADR-0027
+  - ADR-0027a
+  - ADR-0027b
+  - ADR-0027c
+  - ADR-0027d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0027b: Automatic Failover (<100ms Migration)
 
 **Status:** ✅ Accepted (Lower Priority for Remote-First Implementation)

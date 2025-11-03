@@ -1,3 +1,65 @@
+---
+adr_number: 0058b
+title: Safety Hooks (Privacy Band Gates, Refusal Carry-Over)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- privacy
+- reliability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0032
+- ADR-0040
+- ADR-0041
+- ADR-0052
+- ADR-0058
+- ADR-0058b
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  affected_adrs:
+  - ADR-0032
+  - ADR-0040
+  - ADR-0041
+  - ADR-0052
+  - ADR-0058
+  - ADR-0058b
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0058b: Safety Hooks (Privacy Band Gates, Refusal Carry-Over)
 
 **Status:** Accepted

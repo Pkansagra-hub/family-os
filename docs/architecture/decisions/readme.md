@@ -239,7 +239,7 @@ Decisions about APIs and system integration
 ### Phase 8: Governance & Production (M6-M7) - 10 ADRs
 
 #### Boundary Enforcement & Traceability
-- [ADR-0001f](0001f-k0-k1-pipeline-boundary-enforcement.md) - K0/K1 Boundary Enforcement — No Pipelines in K1 🚨 ⏳ *Not Started*
+- [ADR-0001f](0001c-k0-k1-pipeline-boundary-enforcement.md) - K0/K1 Boundary Enforcement — No Pipelines in K1 🚨 ⏳ *Not Started*
 - [ADR-0062](0062-adr-diagram-code-traceability.md) - ADR ↔ Diagram ↔ Code Traceability Policy ⏳ *Not Started*
 - [ADR-0063](0063-evidence-packs-in-adrs.md) - Evidence Packs in ADRs (Chat/Bench/Logs) ⏳ *Not Started*
 

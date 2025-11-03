@@ -1,7 +1,71 @@
+---
+adr_number: 0006b
+title: Multi-Criteria Proposal Scoring Engine
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0006
+- ADR-0006a
+- ADR-0006b
+- ADR-0006c
+- ADR-0040
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0006
+  - ADR-0006a
+  - ADR-0006b
+  - ADR-0006c
+  - ADR-0040
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+  - k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+  affected_tests: []
+---
+
+
 # ADR-0006b: Multi-Criteria Proposal Scoring Engine
 
 **Status:** Accepted ✅
-**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)
+**Parent ADR:** [ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)
 **Last Updated:** 2025-01-30
 **Deciders:** K1 Architecture Team
 **Impact:** Core Kernel (Layer 1)
@@ -67,7 +131,7 @@ Traditional selection approaches fail:
 
 ### Parent ADR Context
 
-From [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md):
+From [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md):
 
 **3 Phases:**
 
@@ -824,7 +888,7 @@ selection_duration_ms = Histogram(
 
 ### Parent ADR
 
-- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006f-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
+- **[ADR-0006: 3-Phase Orchestration with Contract Net Protocol](0006-3phase-orchestration-contract-net.md)** — Parent ADR defining 3 phases (Negotiation, Selection, Execution)
 
 ### Dependencies (Architecture)
 

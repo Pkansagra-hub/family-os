@@ -1,3 +1,52 @@
+---
+adr_number: 0028c
+title: Starvation Prevention (Max Wait 5s)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0028
+- ADR-0028a
+- ADR-0028b
+- ADR-0028c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0028
+  - ADR-0028a
+  - ADR-0028b
+  - ADR-0028c
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0028c: Starvation Prevention (Max Wait 5s)
 
 **Status:** Accepted

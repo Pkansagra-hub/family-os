@@ -1,4 +1,87 @@
-﻿# ADR-0009: Circuit Breaker Pattern for Cascading Failure Prevention
+---
+adr_number: 0009
+title: Circuit Breaker Pattern for Cascading Failure Prevention
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0002
+- ADR-0004
+- ADR-0005
+- ADR-0006
+- ADR-0008
+- ADR-0009
+- ADR-0010
+- ADR-0034
+- ADR-0075
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Breaker (2015)
+- Hystrix (2012)
+- Microsoft (2014)
+- Resilience4j (2019)
+- Services (2019)
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0002
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
+  - ADR-0008
+  - ADR-0009
+  - ADR-0010
+  - ADR-0034
+  - ADR-0075
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
+# ADR-0009: Circuit Breaker Pattern for Cascading Failure Prevention
 
 **Status:** âœ… Accepted (Implementation 75% Complete - Production Ready)
 **Decision Date:** 2025-01-26
@@ -9,7 +92,7 @@
 **Related ADRs:**
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Circuit breakers use Actor Model state machines
 - [ADR-0005 (Agent Lifecycle)](0005-agent-lifecycle-fsm.md) - Agent blacklist uses circuit breaker pattern
-- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestrator uses circuit breakers for tool calls
+- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestrator uses circuit breakers for tool calls
 - [ADR-0008 (Saga Pattern)](0008-saga-pattern-error-recovery.md) - Circuit breaker prevents compensation retry storms
 - [ADR-0034 (Tool Runner)](0034-tool-runner-architecture.md) - Tool Runner wraps each tool with circuit breaker
 - [ADR-0075 (Layer 5 Extensibility - **NEW M2**)](0075-layer5-extensibility-framework.md)

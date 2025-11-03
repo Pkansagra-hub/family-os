@@ -1,10 +1,71 @@
+---
+adr_number: '0034'
+title: Adopt MCP as Default Tool Communication Protocol
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer3_execution
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- modularity
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0010
+- ADR-0032
+- ADR-0033
+- ADR-0034
+implementation_status: REJECTED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0010
+  - ADR-0032
+  - ADR-0033
+  - ADR-0034
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0034: Adopt MCP as Default Tool Communication Protocol
 
-**Status:** ✅ Approved  
-**Date:** 2025-10-13  
-**Decision Owner:** Platform Lead  
-**Authors:** K1 Architecture Team  
-**Category:** Integration & Protocols  
+**Status:** ✅ Approved
+**Date:** 2025-10-13
+**Decision Owner:** Platform Lead
+**Authors:** K1 Architecture Team
+**Category:** Integration & Protocols
 **Related ADRs:** ADR-0033 (Three-Tier Sandboxing), ADR-0010 (Capability-Based Security), ADR-0032 (Egress Rules)
 
 ---
@@ -41,8 +102,8 @@
 
 ### Protocol Details
 
-**Transport:** JSON-RPC 2.0 over stdio (preferred) or HTTP  
-**Specification:** [modelcontextprotocol.io/specification/2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18)  
+**Transport:** JSON-RPC 2.0 over stdio (preferred) or HTTP
+**Specification:** [modelcontextprotocol.io/specification/2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18)
 **Version Pinning:** Lock to spec version `2025-06-18`, migrate explicitly on updates
 
 **Core Operations:**
@@ -171,11 +232,11 @@ impl MCPClient {
                 "capabilities": {}
             }
         });
-        
+
         let response = self.send_request(request).await?;
         Ok(serde_json::from_value(response)?)
     }
-    
+
     pub async fn list_tools(&mut self) -> Result<Vec<Tool>> {
         let request = json!({
             "jsonrpc": "2.0",
@@ -183,11 +244,11 @@ impl MCPClient {
             "method": "tools/list",
             "params": {}
         });
-        
+
         let response = self.send_request(request).await?;
         Ok(serde_json::from_value(response["tools"].clone())?)
     }
-    
+
     pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<Value> {
         let request = json!({
             "jsonrpc": "2.0",
@@ -198,12 +259,12 @@ impl MCPClient {
                 "arguments": arguments
             }
         });
-        
+
         let response = tokio::time::timeout(
             self.timeout,
             self.send_request(request)
         ).await??;
-        
+
         Ok(response)
     }
 }
@@ -223,7 +284,7 @@ tools:
     sandbox_tier: "wasm"  # From ADR-0033
     capabilities:
       - network_http: ["api.openweathermap.org"]
-  
+
   - name: "calendar_sync"
     protocol: "mcp"
     transport: "http"
@@ -307,14 +368,14 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     pub fn allow_request(&mut self, tool_name: &str) -> bool {
         let failures = self.failures.entry(tool_name.to_string()).or_default();
-        
+
         // Remove failures outside time window
         failures.retain(|t| t.elapsed() < self.time_window);
-        
+
         // Check if threshold exceeded
         failures.len() < self.failure_threshold
     }
-    
+
     pub fn record_failure(&mut self, tool_name: &str) {
         self.failures.entry(tool_name.to_string())
             .or_default()
@@ -346,6 +407,6 @@ impl CircuitBreaker {
 
 ---
 
-**Status:** ✅ Ready for implementation  
-**Timeline:** 8 weeks  
+**Status:** ✅ Ready for implementation
+**Timeline:** 8 weeks
 **Priority:** ⭐⭐⭐ Critical (Protocol foundation)

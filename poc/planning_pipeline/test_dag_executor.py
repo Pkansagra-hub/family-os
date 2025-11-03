@@ -3,6 +3,7 @@ Test suite for DAG Executor
 
 Tests parallel execution, failure handling, and metrics tracking.
 Part of M6 Epic 6.2: Parallel Executor
+Part of M6 Epic 6.3: DAG Visualization
 """
 
 import asyncio
@@ -16,6 +17,7 @@ from dag_executor import DAGExecutor
 
 # Import DAG structures
 from dag_node import NodeStatus
+from dag_visualizer import export_dag_mermaid, render_dag_ascii
 
 # ============================================================================
 # MOCK AGENT INFRASTRUCTURE FOR TESTING
@@ -383,6 +385,82 @@ async def test_performance_metrics():
     assert len(metrics["node_latencies"]) == 3
 
 
+async def test_ascii_visualization():
+    """Test ASCII DAG rendering"""
+    print("\n=== Test 5: ASCII Visualization ===")
+
+    # Create simple DAG
+    plan = {
+        "steps": [
+            {"id": "s1", "agent": "agent_a", "description": "S1", "needs": [], "tools": []},
+            {"id": "s2", "agent": "agent_b", "description": "S2", "needs": ["s1"], "tools": []},
+        ]
+    }
+
+    builder = DAGBuilder()
+    dag = builder.build_from_expanded_plan(plan)
+
+    # Execute DAG
+    spawn_wrapper = MockAgentSpawnWrapper()
+    executor = DAGExecutor(spawn_wrapper, max_concurrent_nodes=5)
+    await executor.execute(dag)
+
+    # Render ASCII
+    ascii_output = render_dag_ascii(dag, use_color=False)
+
+    print("ASCII Output:")
+    print(ascii_output)
+
+    # Validate output contains expected elements
+    assert dag.dag_id in ascii_output
+    assert "s1" in ascii_output
+    assert "s2" in ascii_output
+    assert "✓" in ascii_output  # Completed symbol
+    assert "Layer" in ascii_output
+
+    print("✅ ASCII visualization working")
+
+
+async def test_mermaid_export():
+    """Test Mermaid diagram export"""
+    print("\n=== Test 6: Mermaid Export ===")
+
+    # Create diamond DAG
+    plan = {
+        "steps": [
+            {"id": "s1", "agent": "agent_a", "description": "S1", "needs": [], "tools": []},
+            {"id": "s2", "agent": "agent_b", "description": "S2", "needs": [], "tools": []},
+            {
+                "id": "s3",
+                "agent": "agent_c",
+                "description": "S3",
+                "needs": ["s1", "s2"],
+                "tools": [],
+            },
+        ]
+    }
+
+    builder = DAGBuilder()
+    dag = builder.build_from_expanded_plan(plan)
+
+    # Export Mermaid
+    mermaid_output = export_dag_mermaid(dag, include_styling=True)
+
+    print("Mermaid Output:")
+    print(mermaid_output)
+
+    # Validate output
+    assert "```mermaid" in mermaid_output
+    assert "flowchart TD" in mermaid_output
+    assert "s1" in mermaid_output
+    assert "s2" in mermaid_output
+    assert "s3" in mermaid_output
+    assert "-->" in mermaid_output  # Edge syntax
+    assert "classDef" in mermaid_output  # Styling
+
+    print("✅ Mermaid export working")
+
+
 # ============================================================================
 # RUN ALL TESTS
 # ============================================================================
@@ -399,6 +477,43 @@ async def run_all_tests():
         await test_parallel_execution()
         await test_failure_handling()
         await test_performance_metrics()
+        await test_ascii_visualization()
+        await test_mermaid_export()
+
+        print("\n" + "=" * 60)
+        print("✅ ALL TESTS PASSED")
+        print("=" * 60)
+
+    except AssertionError as e:
+        print(f"\n❌ TEST FAILED: {e}")
+        raise
+    except Exception as e:
+        print(f"\n❌ UNEXPECTED ERROR: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    asyncio.run(run_all_tests())
+
+
+# ============================================================================
+# RUN ALL TESTS
+# ============================================================================
+
+
+async def run_all_tests():
+    """Run all test cases"""
+    print("=" * 60)
+    print("DAG EXECUTOR TEST SUITE")
+    print("=" * 60)
+
+    try:
+        await test_sequential_execution()
+        await test_parallel_execution()
+        await test_failure_handling()
+        await test_performance_metrics()
+        await test_ascii_visualization()
+        await test_mermaid_export()
 
         print("\n" + "=" * 60)
         print("✅ ALL TESTS PASSED")

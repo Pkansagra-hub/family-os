@@ -1,3 +1,53 @@
+---
+adr_number: 0054b
+title: Explicit Submit & UX Contracts
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- modularity
+- observability
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0015
+- ADR-0054
+- ADR-0054a
+- ADR-0054b
+- ADR-0065
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0015
+  - ADR-0054
+  - ADR-0054a
+  - ADR-0054b
+  - ADR-0065
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0054b: Explicit Submit & UX Contracts
 
 **Status:** Accepted

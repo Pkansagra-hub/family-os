@@ -1,9 +1,71 @@
+---
+adr_number: 0031a
+title: Streaming ASR Integration (80ms Latency, Whisper/Deepgram)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0015b
+- ADR-0031
+- ADR-0031a
+- ADR-0031b
+- ADR-0031c
+- ADR-0031d
+- ADR-0036
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0015b
+  - ADR-0031
+  - ADR-0031a
+  - ADR-0031b
+  - ADR-0031c
+  - ADR-0031d
+  - ADR-0036
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0031a: Streaming ASR Integration (80ms Latency, Whisper/Deepgram)
 
-**Status:** ✅ Accepted  
-**Deciders:** K1 Architecture Team, Voice Engineering Team, ML Team  
-**Date:** 2025-10-13  
-**Parent ADR:** [ADR-0031: Voice Pipeline Integration](0031-voice-pipeline-integration.md)  
+**Status:** ✅ Accepted
+**Deciders:** K1 Architecture Team, Voice Engineering Team, ML Team
+**Date:** 2025-10-13
+**Parent ADR:** [ADR-0031: Voice Pipeline Integration](0031-voice-pipeline-integration.md)
 **Depends On:** [ADR-0015b: WebSocket Streaming Protocol](0015b-websocket-streaming-protocol.md), [ADR-0031c: VAD Detection](0031c-vad-detection-speech-segmentation-50ms-threshold.md)
 
 ---
@@ -166,12 +228,12 @@ class Transcript:
 
 class ASRProvider(ABC):
     """Abstract ASR provider interface"""
-    
+
     @abstractmethod
     async def initialize(self):
         """Initialize ASR provider (load models, connect to API)"""
         pass
-    
+
     @abstractmethod
     async def stream_transcribe(
         self,
@@ -179,15 +241,15 @@ class ASRProvider(ABC):
     ) -> AsyncIterator[Transcript]:
         """
         Stream audio chunks and yield transcripts.
-        
+
         Args:
             audio_chunks: Iterator of audio chunks (16kHz, 16-bit PCM, mono)
-        
+
         Yields:
             Transcript objects (partial + final)
         """
         pass
-    
+
     @abstractmethod
     async def shutdown(self):
         """Shutdown ASR provider (cleanup resources)"""
@@ -208,11 +270,11 @@ from k1.voice.asr.provider_interface import ASRProvider, Transcript, TranscriptT
 class WhisperASRProvider(ASRProvider):
     """
     Local Whisper ASR provider using faster-whisper.
-    
+
     Uses CTranslate2 for fast inference (2-4x faster than original Whisper).
     Supports streaming with incremental decoding.
     """
-    
+
     def __init__(
         self,
         model_size: str = "base.en",  # base.en, small.en, medium.en
@@ -223,11 +285,11 @@ class WhisperASRProvider(ASRProvider):
         self.device = device
         self.compute_type = compute_type
         self.model: Optional[WhisperModel] = None
-        
+
         # Audio buffer for incremental decoding
         self.audio_buffer = np.array([], dtype=np.float32)
         self.buffer_duration_ms = 0
-    
+
     async def initialize(self):
         """Load Whisper model"""
         logger.info(
@@ -236,7 +298,7 @@ class WhisperASRProvider(ASRProvider):
             device=self.device,
             compute_type=self.compute_type
         )
-        
+
         # Load model (CPU-bound, run in executor)
         loop = asyncio.get_event_loop()
         self.model = await loop.run_in_executor(
@@ -247,9 +309,9 @@ class WhisperASRProvider(ASRProvider):
                 compute_type=self.compute_type
             )
         )
-        
+
         logger.info("whisper_model_loaded", model_size=self.model_size)
-    
+
     async def stream_transcribe(
         self,
         audio_chunks: AsyncIterator[bytes]
@@ -257,29 +319,29 @@ class WhisperASRProvider(ASRProvider):
         """Stream audio and yield transcripts"""
         chunk_count = 0
         last_partial_length = 0
-        
+
         async for audio_chunk in audio_chunks:
             # Convert bytes to float32 array
             audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32) / 32768.0
-            
+
             # Append to buffer
             self.audio_buffer = np.concatenate([self.audio_buffer, audio_array])
             self.buffer_duration_ms += 100  # 100ms per chunk
             chunk_count += 1
-            
+
             # Process every 2 chunks (200ms) for partial results
             if chunk_count % 2 == 0:
                 partial_transcript = await self._transcribe_buffer(is_final=False)
-                
+
                 # Only yield if transcript changed
                 if len(partial_transcript.text) > last_partial_length:
                     last_partial_length = len(partial_transcript.text)
                     yield partial_transcript
-        
+
         # Final transcript after stream ends
         final_transcript = await self._transcribe_buffer(is_final=True)
         yield final_transcript
-    
+
     async def _transcribe_buffer(self, is_final: bool) -> Transcript:
         """Transcribe current audio buffer"""
         if len(self.audio_buffer) == 0:
@@ -291,7 +353,7 @@ class WhisperASRProvider(ASRProvider):
                 timestamp_ms=0,
                 duration_ms=0
             )
-        
+
         # Run transcription (CPU-bound, use executor)
         loop = asyncio.get_event_loop()
         segments, info = await loop.run_in_executor(
@@ -306,11 +368,11 @@ class WhisperASRProvider(ASRProvider):
                 )
             )
         )
-        
+
         # Aggregate segments
         text = " ".join([segment.text.strip() for segment in segments])
         avg_confidence = np.mean([segment.avg_logprob for segment in segments]) if segments else 0.0
-        
+
         transcript = Transcript(
             text=text,
             confidence=float(np.exp(avg_confidence)),  # Convert log prob to probability
@@ -319,7 +381,7 @@ class WhisperASRProvider(ASRProvider):
             timestamp_ms=0,
             duration_ms=self.buffer_duration_ms
         )
-        
+
         logger.debug(
             "whisper_transcript",
             text=text,
@@ -327,9 +389,9 @@ class WhisperASRProvider(ASRProvider):
             is_final=is_final,
             duration_ms=self.buffer_duration_ms
         )
-        
+
         return transcript
-    
+
     async def shutdown(self):
         """Cleanup resources"""
         self.audio_buffer = np.array([], dtype=np.float32)
@@ -354,11 +416,11 @@ logger = structlog.get_logger()
 class DeepgramASRProvider(ASRProvider):
     """
     Deepgram cloud ASR provider.
-    
+
     Uses WebSocket streaming API for real-time transcription.
     Supports interim results and final transcripts.
     """
-    
+
     def __init__(
         self,
         api_key: str,
@@ -369,7 +431,7 @@ class DeepgramASRProvider(ASRProvider):
         self.model = model
         self.language = language
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
-    
+
     async def initialize(self):
         """Connect to Deepgram WebSocket API"""
         url = (
@@ -383,21 +445,21 @@ class DeepgramASRProvider(ASRProvider):
             f"punctuate=true&"
             f"endpointing=300"  # 300ms silence = utterance end
         )
-        
+
         headers = {
             "Authorization": f"Token {self.api_key}"
         }
-        
+
         logger.info(
             "deepgram_connecting",
             model=self.model,
             language=self.language
         )
-        
+
         self.websocket = await websockets.connect(url, extra_headers=headers)
-        
+
         logger.info("deepgram_connected")
-    
+
     async def stream_transcribe(
         self,
         audio_chunks: AsyncIterator[bytes]
@@ -405,19 +467,19 @@ class DeepgramASRProvider(ASRProvider):
         """Stream audio and yield transcripts"""
         if not self.websocket:
             raise RuntimeError("Deepgram not initialized")
-        
+
         # Start audio sender task
         sender_task = asyncio.create_task(self._send_audio(audio_chunks))
-        
+
         # Receive transcripts
         try:
             async for message in self.websocket:
                 data = json.loads(message)
-                
+
                 # Parse Deepgram response
                 if data.get("type") == "Results":
                     channel = data["channel"]["alternatives"][0]
-                    
+
                     transcript = Transcript(
                         text=channel["transcript"],
                         confidence=channel["confidence"],
@@ -427,33 +489,33 @@ class DeepgramASRProvider(ASRProvider):
                         duration_ms=int(data["duration"] * 1000),
                         words=channel.get("words")
                     )
-                    
+
                     # Only yield non-empty transcripts
                     if transcript.text.strip():
                         yield transcript
-                        
+
                         logger.debug(
                             "deepgram_transcript",
                             text=transcript.text,
                             confidence=transcript.confidence,
                             is_final=transcript.is_final
                         )
-        
+
         finally:
             sender_task.cancel()
-    
+
     async def _send_audio(self, audio_chunks: AsyncIterator[bytes]):
         """Send audio chunks to Deepgram"""
         try:
             async for chunk in audio_chunks:
                 await self.websocket.send(chunk)
-            
+
             # Send close message after stream ends
             await self.websocket.send(json.dumps({"type": "CloseStream"}))
-        
+
         except asyncio.CancelledError:
             pass
-    
+
     async def shutdown(self):
         """Close WebSocket connection"""
         if self.websocket:
@@ -477,42 +539,42 @@ logger = structlog.get_logger()
 class ASRService:
     """
     ASR service with provider abstraction.
-    
+
     Supports multiple ASR providers (Whisper, Deepgram) with unified interface.
     """
-    
+
     def __init__(self, config: dict):
         self.config = config
         self.provider: Optional[ASRProvider] = None
-    
+
     async def initialize(self):
         """Initialize ASR provider based on config"""
         provider_type = self.config.get("asr_provider", "whisper")
-        
+
         if provider_type == "whisper":
             self.provider = WhisperASRProvider(
                 model_size=self.config.get("whisper_model", "base.en"),
                 device=self.config.get("device", "cuda"),
                 compute_type=self.config.get("compute_type", "float16")
             )
-        
+
         elif provider_type == "deepgram":
             self.provider = DeepgramASRProvider(
                 api_key=self.config["deepgram_api_key"],
                 model=self.config.get("deepgram_model", "nova-2"),
                 language=self.config.get("language", "en-US")
             )
-        
+
         else:
             raise ValueError(f"Unknown ASR provider: {provider_type}")
-        
+
         await self.provider.initialize()
-        
+
         logger.info(
             "asr_service_initialized",
             provider=provider_type
         )
-    
+
     async def transcribe_stream(
         self,
         audio_chunks: AsyncIterator[bytes],
@@ -525,24 +587,24 @@ class ASRService:
             session_id=session_id,
             trace_id=trace_id
         )
-        
+
         async for transcript in self.provider.stream_transcribe(audio_chunks):
             # Emit metrics
             asr_transcripts_total.labels(
                 type=transcript.type.value,
                 provider=self.config.get("asr_provider", "whisper")
             ).inc()
-            
+
             asr_latency_ms.observe(transcript.duration_ms)
-            
+
             yield transcript
-        
+
         logger.info(
             "asr_stream_completed",
             session_id=session_id,
             trace_id=trace_id
         )
-    
+
     async def shutdown(self):
         """Shutdown ASR provider"""
         if self.provider:
@@ -590,11 +652,11 @@ async def generate_audio_chunks(text: str, num_chunks: int = 10):
 async def _(provider=whisper_provider):
     """Test Whisper streaming transcription"""
     audio_chunks = generate_audio_chunks("Hello world", num_chunks=10)
-    
+
     transcripts = []
     async for transcript in provider.stream_transcribe(audio_chunks):
         transcripts.append(transcript)
-    
+
     # Assert at least one final transcript
     final_transcripts = [t for t in transcripts if t.is_final]
     assert len(final_transcripts) > 0
@@ -603,12 +665,12 @@ async def _(provider=whisper_provider):
 async def _(provider=whisper_provider):
     """Test partial transcripts"""
     audio_chunks = generate_audio_chunks("Test partial results", num_chunks=20)
-    
+
     partial_count = 0
     async for transcript in provider.stream_transcribe(audio_chunks):
         if transcript.type == TranscriptType.PARTIAL:
             partial_count += 1
-    
+
     # Expect ~10 partials (20 chunks / 2 chunks per partial)
     assert 8 <= partial_count <= 12
 
@@ -616,9 +678,9 @@ async def _(provider=whisper_provider):
 async def _(provider=whisper_provider):
     """Test ASR latency target"""
     import time
-    
+
     audio_chunks = generate_audio_chunks("Latency test", num_chunks=5)
-    
+
     latencies = []
     async for transcript in provider.stream_transcribe(audio_chunks):
         # Measure processing time
@@ -627,7 +689,7 @@ async def _(provider=whisper_provider):
             # RTF = processing_time / audio_duration
             rtf = transcript.duration_ms / 1000  # Simplified
             latencies.append(rtf)
-    
+
     # Assert RTF <0.8 (80ms to process 100ms)
     avg_rtf = sum(latencies) / len(latencies) if latencies else 0
     assert avg_rtf < 0.8, f"RTF {avg_rtf:.2f} exceeds 0.8 target"
@@ -636,7 +698,7 @@ async def _(provider=whisper_provider):
 async def _(provider=whisper_provider):
     """Test confidence scores"""
     audio_chunks = generate_audio_chunks("Confidence test", num_chunks=5)
-    
+
     async for transcript in provider.stream_transcribe(audio_chunks):
         # Confidence should be 0.0-1.0
         assert 0.0 <= transcript.confidence <= 1.0
@@ -647,11 +709,11 @@ async def _(provider=whisper_provider):
     async def empty_chunks():
         for _ in range(5):
             yield np.zeros(1600, dtype=np.int16).tobytes()
-    
+
     transcripts = []
     async for transcript in provider.stream_transcribe(empty_chunks()):
         transcripts.append(transcript)
-    
+
     # Empty audio should produce empty or minimal transcripts
     final_transcript = [t for t in transcripts if t.is_final][0]
     assert len(final_transcript.text.strip()) < 5  # Minimal text
@@ -665,14 +727,14 @@ async def _(provider=whisper_provider):
         async for _ in provider.stream_transcribe(audio_chunks):
             count += 1
         return count
-    
+
     # Run 3 streams concurrently
     results = await asyncio.gather(
         transcribe_stream(1),
         transcribe_stream(2),
         transcribe_stream(3)
     )
-    
+
     # All streams should produce transcripts
     assert all(r > 0 for r in results)
 ```
@@ -856,6 +918,6 @@ asr_active_streams = Gauge(
 
 ---
 
-**Decision Status:** ✅ Accepted  
-**Implementation Status:** Phase 1 Complete (ASR provider interface, Whisper local, Deepgram cloud, streaming transcription)  
+**Decision Status:** ✅ Accepted
+**Implementation Status:** Phase 1 Complete (ASR provider interface, Whisper local, Deepgram cloud, streaming transcription)
 **Next Steps:** Implement TTS synthesis (ADR-0031b), VAD detection (ADR-0031c), audio buffering (ADR-0031d)

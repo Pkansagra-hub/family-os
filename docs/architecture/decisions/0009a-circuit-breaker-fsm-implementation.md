@@ -1,3 +1,78 @@
+---
+adr_number: 0009a
+title: Circuit Breaker 3-State FSM Implementation
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0006
+- ADR-0008
+- ADR-0009b
+- ADR-0009c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - '**Verdict:** ✅ Within budget (150ms)'
+  - '**Verdict:** ✅ Within budget (2000ms), improves latency when service fails'
+  - '**Verdict:** ✅ Within budget (3000ms), massive improvement when service fails'
+  - '- Without circuit breaker: 140ms (baseline)'
+  - '- Without circuit breaker: 1850ms (baseline)'
+  - '- Without circuit breaker: 2800ms (baseline)'
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  - 'With circuit breaker (CLOSED): 142ms (+2ms, 1.4% overhead)'
+  - 'With circuit breaker (CLOSED): 1860ms (+10ms, 0.5% overhead)'
+  - 'With circuit breaker (CLOSED): 2810ms (+10ms, 0.4% overhead)'
+  - 'With circuit breaker (OPEN, cached fallback): 150ms (+10ms, 7.1% overhead)'
+  - 'With circuit breaker (OPEN, fail-fast): 10ms (-2790ms, 99.6% faster!)'
+  - 'With circuit breaker (OPEN, fail-fast): 1200ms (-650ms, 35% faster!)'
+  affected_adrs:
+  - ADR-0006
+  - ADR-0008
+  - ADR-0009b
+  - ADR-0009c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0009a: Circuit Breaker 3-State FSM Implementation
 
 **Status:** ✅ Accepted
@@ -1186,7 +1261,7 @@ async def _(cb=circuit):
 - Polly (.NET, 2013): https://github.com/App-vNext/Polly
 
 ### Related ADRs
-- [ADR-0006: 3-Phase Orchestration](0006f-3phase-orchestration-contract-net.md) - Circuit breakers protect orchestration
+- [ADR-0006: 3-Phase Orchestration](0006-3phase-orchestration-contract-net.md) - Circuit breakers protect orchestration
 - [ADR-0008: Saga Pattern Error Recovery](0008-saga-pattern-error-recovery.md) - Circuit breakers prevent retry storms
 - [ADR-0009b: Per-Service Circuit Configuration](0009b-per-service-circuit-configuration.md) - Configuration schema
 - [ADR-0009c: Circuit Breaker Metrics](0009c-circuit-breaker-metrics-observability.md) - Observability

@@ -1,3 +1,58 @@
+---
+adr_number: 0025c
+title: Cache Warming & Prefetch on Session Resume
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0022
+- ADR-0025
+- ADR-0025a
+- ADR-0025b
+- ADR-0025c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Chrome (2018)
+- Edge (2020)
+- Netflix (2019)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0022
+  - ADR-0025
+  - ADR-0025a
+  - ADR-0025b
+  - ADR-0025c
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0025c: Cache Warming & Prefetch on Session Resume
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

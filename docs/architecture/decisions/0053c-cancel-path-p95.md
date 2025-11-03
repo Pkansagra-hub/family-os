@@ -1,3 +1,68 @@
+---
+adr_number: 0053c
+title: 0053C Cancel Path P95
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001a
+- ADR-0015d
+- ADR-0025
+- ADR-0053
+- ADR-0057c
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001a
+  - ADR-0015d
+  - ADR-0025
+  - ADR-0053
+  - ADR-0057c
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 ﻿# ADR-0053c: Cancel Path P95 â‰¤120ms
 
 **Status:** Accepted
@@ -1019,4 +1084,3 @@ logger.info(
 - [ ] Safety guarantees (no partial writes) confirmed
 - [ ] Test coverage complete (edge cases, race conditions)
 - [ ] Monitoring plan approved
-

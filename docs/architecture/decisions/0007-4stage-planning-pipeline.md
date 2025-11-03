@@ -1,3 +1,83 @@
+---
+adr_number: '0007'
+title: 4-Stage Planning Pipeline (Sketch → Expand → Validate → Commit)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- maintainability
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0000
+- ADR-0001
+- ADR-0002
+- ADR-0003
+- ADR-0004
+- ADR-0005
+- ADR-0006
+- ADR-0007
+- ADR-0010
+- ADR-0011
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0000
+  - ADR-0001
+  - ADR-0002
+  - ADR-0003
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
+  - ADR-0007
+  - ADR-0010
+  - ADR-0011
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0007: 4-Stage Planning Pipeline (Sketch → Expand → Validate → Commit)
 
 **Status:** Accepted ✅ (Implementation 70% Complete - Production Ready)
@@ -10,7 +90,7 @@
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Planner agent uses Actor Model mailbox
 - [ADR-0003 (MPST Protocol)](0003-mpst-protocol-validation.md) - Plan validation protocol messages
 - [ADR-0005 (Agent Lifecycle FSM)](0005-agent-lifecycle-fsm.md) - Planner agent lifecycle (WARMING loads Model Hub prompts)
-- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Orchestrator executes plans via Contract Net
+- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Orchestrator executes plans via Contract Net
 - [ADR-0010 (Capability Security)](0010-capability-based-security.md) - Stage 3 validates capability constraints
 - [ADR-0011 (FlatBuffers)](0011-flatbuffers-serialization.md) - Stage 4 serializes to FlowDef
 

@@ -1,0 +1,9 @@
+# Auto-generated index for 14-deployment-ops
+# Deployment, Operations, Configuration
+
+category: deployment_ops
+layer: cross-cutting
+description: "Deployment strategies, operational procedures, configuration management"
+
+adrs:
+  # Populated by build_adr_index.py script

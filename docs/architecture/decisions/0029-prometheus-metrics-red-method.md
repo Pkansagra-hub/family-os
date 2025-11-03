@@ -1,3 +1,92 @@
+---
+adr_number: 0029
+title: Prometheus Metrics (RED Method)
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0024
+- ADR-0028
+- ADR-0029
+- ADR-0030
+- ADR-0075
+- ADR-0079
+- ADR-0080
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k0/contracts/api/rest/idempotency/observability.yml
+- k0/contracts/api/rest/sessions/observability.yml
+- k0/contracts/api/websocket/backpressure/observability.yml
+- k0/contracts/api/websocket/reconnection/observability.yml
+- k1/contracts/api/rest/documentation/observability.yml
+- k1/contracts/api/rest/pagination/observability.yml
+- k1/contracts/api/rest/sessions/observability.yml
+- k1/contracts/api/websocket/connection/observability.yml
+- k1/contracts/api/websocket/protocol/observability.yml
+- k1/contracts/infrastructure/backpressure/observability.yml
+- k1/contracts/infrastructure/backpressure/propagation/observability.yml
+- k1/contracts/infrastructure/backpressure/recovery/observability.yml
+- k1/contracts/observability/receipts/schema/observability.yml
+- k1/contracts/observability/receipts/wal/observability.yml
+- k1/contracts/privacy/retention_overrides/observability.yml
+- k1/contracts/security/jwt/generation/observability.yml
+- k1/contracts/security/jwt/validation/observability.yml
+related_diagrams: []
+research_citations:
+- Metrics (2021)
+- Practices (2014)
+- Signals (2016)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0024
+  - ADR-0028
+  - ADR-0029
+  - ADR-0030
+  - ADR-0075
+  - ADR-0079
+  - ADR-0080
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0029: Prometheus Metrics (RED Method)
 
 **Status:** ✅ Approved

@@ -1,3 +1,80 @@
+---
+adr_number: 0011a
+title: FlatBuffers Schema Design Principles
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- maintainability
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0011
+- ADR-0011a
+- ADR-0011b
+- ADR-0017
+- ADR-0019
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer1_kernel/agent_capability.fbs
+- k1/contracts/flatbuffers/layer1_kernel/agent_state.fbs
+- k1/contracts/flatbuffers/layer1_kernel/proposal.fbs
+- k1/contracts/flatbuffers/layer1_kernel/selection.fbs
+- k1/contracts/flatbuffers/layer1_kernel/task_announcement.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0011
+  - ADR-0011a
+  - ADR-0011b
+  - ADR-0017
+  - ADR-0019
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0011a: FlatBuffers Schema Design Principles
 
 **Status:** Accepted

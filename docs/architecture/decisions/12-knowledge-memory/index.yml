@@ -1,0 +1,9 @@
+# Auto-generated index for 12-knowledge-memory
+# Cross-cutting: Knowledge Graph, Memory, Episodic Consolidation
+
+category: knowledge_memory
+layer: cross-cutting
+description: "Knowledge representation, memory consolidation, episodic learning"
+
+adrs:
+  # Populated by build_adr_index.py script

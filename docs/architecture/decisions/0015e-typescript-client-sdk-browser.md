@@ -1,3 +1,61 @@
+---
+adr_number: 0015e
+title: TypeScript Client SDK & Browser Integration
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- modularity
+- observability
+- performance
+- reliability
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0015
+- ADR-0015a
+- ADR-0015b
+- ADR-0015c
+- ADR-0015d
+- ADR-0015e
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0011
+  - ADR-0015
+  - ADR-0015a
+  - ADR-0015b
+  - ADR-0015c
+  - ADR-0015d
+  - ADR-0015e
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  affected_tests: []
+---
+
+
 # ADR-0015e: TypeScript Client SDK & Browser Integration
 
 **Status:** ✅ Accepted (85% Implementation Complete)

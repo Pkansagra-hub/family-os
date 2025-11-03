@@ -1,3 +1,47 @@
+---
+adr_number: 0057b
+title: TTS Degradation Ladder (Bitrate, Prosody)
+status: ACCEPTED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0027
+- ADR-0056d
+- ADR-0057
+- ADR-0057b
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  affected_adrs:
+  - ADR-0027
+  - ADR-0056d
+  - ADR-0057
+  - ADR-0057b
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0057b: TTS Degradation Ladder (Bitrate, Prosody)
 
 **Status:** Accepted

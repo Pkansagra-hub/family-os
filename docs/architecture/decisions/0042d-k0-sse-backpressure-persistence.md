@@ -1,3 +1,52 @@
+---
+adr_number: 0042d
+title: K0 SSE Backpressure & Event Persistence
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- observability
+- performance
+- privacy
+- reliability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0042
+- ADR-0042c
+- ADR-0042d
+- ADR-0042e
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0042
+  - ADR-0042c
+  - ADR-0042d
+  - ADR-0042e
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0042d: K0 SSE Backpressure & Event Persistence
 
 **Status:** ✅ Approved (Updated 2025-10-13 - Cloud Tier Only)

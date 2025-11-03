@@ -1,0 +1,9 @@
+# Auto-generated index for 04-layer3-execution
+# Layer 3: Execution (22 modules - Agent Fabric, Model Hub, Tools, Dialogue)
+
+category: layer3_execution
+layer: layer3
+description: "Agent lifecycle, AI integration (Model Hub), tool execution"
+
+adrs:
+  # Populated by build_adr_index.py script

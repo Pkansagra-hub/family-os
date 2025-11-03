@@ -1,3 +1,58 @@
+---
+adr_number: 0050b
+title: CRDT Device-to-Device Merge Protocol
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- observability
+- performance
+- privacy
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0050
+- ADR-0050a
+- ADR-0050b
+- ADR-0050c
+- ADR-0050d
+implementation_status: UNKNOWN
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Lamport (1978)
+- Shapiro et al. (2011)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0050
+  - ADR-0050a
+  - ADR-0050b
+  - ADR-0050c
+  - ADR-0050d
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0050b: CRDT Device-to-Device Merge Protocol
 
 **Status:** ✅ Accepted

@@ -1,3 +1,53 @@
+---
+adr_number: 0035a
+title: Regex Pattern Library for Structured PII Detection
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- maintainability
+- modularity
+- observability
+- performance
+- privacy
+- scalability
+- security
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0035
+- ADR-0035a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0035
+  - ADR-0035a
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  affected_tests: []
+---
+
+
 # ADR-0035a: Regex Pattern Library for Structured PII Detection
 
 **Status:** ⏳ Pending Implementation

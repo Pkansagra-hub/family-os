@@ -1,0 +1,9 @@
+# Auto-generated index for 11-ux-product
+# Cross-cutting: UX, Product Craft, Conversational Delight
+
+category: ux_product
+layer: cross-cutting
+description: "User experience, micro-interactions, conversational quality"
+
+adrs:
+  # Populated by build_adr_index.py script

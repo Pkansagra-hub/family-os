@@ -1,3 +1,93 @@
+---
+adr_number: '0005'
+title: Agent Lifecycle FSM with 6 States
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0001
+- ADR-0002
+- ADR-0003
+- ADR-0004
+- ADR-0005
+- ADR-0006
+- ADR-0008
+- ADR-0010
+- ADR-0030
+- ADR-0072
+- ADR-0073
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Carl (1973)
+- Documentation (2024)
+- Joe (2003)
+- Kenneth (1987)
+- Lightbend (2013)
+- Matt et al. (2001)
+- Philipp et al. (2018)
+- Research (2011)
+- Woosuk et al. (2023)
+propagation:
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0001
+  - ADR-0002
+  - ADR-0003
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
+  - ADR-0008
+  - ADR-0010
+  - ADR-0030
+  - ADR-0072
+  - ADR-0073
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
 # ADR-0005: Agent Lifecycle FSM with 6 States
 
 **Status:** Accepted ✅ (Implementation 70% Complete - Production Ready)
@@ -11,7 +101,7 @@
 - [ADR-0002 (Actor Model)](0002-actor-model-agent-isolation.md) - Foundation for ALL 58 agents
 - [ADR-0003 (MPST Protocol Validation)](0003-mpst-protocol-validation.md) - Protocol Monitor supervision
 - [ADR-0004 (58-Module Architecture)](0004-52-module-5-layer-architecture.md) - Layer 3 Model Hub integration
-- [ADR-0006 (3-Phase Orchestration)](0006f-3phase-orchestration-contract-net.md) - Agent hiring via Contract Net
+- [ADR-0006 (3-Phase Orchestration)](0006-3phase-orchestration-contract-net.md) - Agent hiring via Contract Net
 - [ADR-0008 (Saga Pattern)](0008-saga-pattern-error-recovery.md) - DRAINING state rollback coordination
 - [ADR-0010 (Capability Security)](0010-capability-based-security.md) - Capability revocation on TERMINATED
 - [ADR-0030 (Model Hub Details)](0030-model-hub-architecture.md) - AI agent WARMING/ACTIVE integration

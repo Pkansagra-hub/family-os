@@ -1,0 +1,9 @@
+# Auto-generated index for 02-layer1-input
+# Layer 1: Input Processing (4 modules)
+
+category: layer1_input
+layer: layer1
+description: "Multi-modal input perception and intent routing"
+
+adrs:
+  # Populated by build_adr_index.py script

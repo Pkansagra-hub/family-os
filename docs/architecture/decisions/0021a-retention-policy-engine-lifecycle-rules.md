@@ -1,3 +1,58 @@
+---
+adr_number: 0021a
+title: Retention Policy Engine & Lifecycle Rules
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0020
+- ADR-0020a
+- ADR-0020b
+- ADR-0020c
+- ADR-0021
+- ADR-0021a
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Union (2018)
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0020
+  - ADR-0020a
+  - ADR-0020b
+  - ADR-0020c
+  - ADR-0021
+  - ADR-0021a
+  affected_contracts:
+  - k1/contracts/flatbuffers/layer5_infrastructure/message_envelope.fbs
+  affected_tests: []
+---
+
+
 # ADR-0021a: Retention Policy Engine & Lifecycle Rules
 
 **Status:** ⏳ In Progress (0% - Initial Draft)

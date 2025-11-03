@@ -1,4 +1,110 @@
-﻿# ADR-0010: Capability-Based Security with Unforgeable Tokens and Least Privilege
+---
+adr_number: '0010'
+title: Capability-Based Security with Unforgeable Tokens and Least Privilege
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer2_orchestration
+- layer3_execution
+- layer4_runtime
+- layer5_infrastructure
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- modularity
+- observability
+- performance
+- privacy
+- reliability
+- scalability
+- security
+- testing
+- ux
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0002
+- ADR-0005
+- ADR-0006
+- ADR-0007
+- ADR-0008
+- ADR-0009
+- ADR-0010
+- ADR-0072
+- ADR-0074
+implementation_status: COMPLETED
+implementation_date: null
+implementation_phase: null
+related_contracts: []
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - "Access Control Lists (ACL)** | 3/10 | Simple (list of allowed subjects per resource)<br/>Widely\
+    \ understood | â\x9DŒ Ambient authority (ACL check at action time)<br/>â\x9DŒ\
+    \ Confused deputy problem (agent can be tricked)<br/>â\x9DŒ No delegation (ACL\
+    \ doesn't transfer authority)<br/>â\x9DŒ Revocation slow (must update ACL for\
+    \ each resource) | Ambient authority (agent can still call tool if it knows resource\
+    \ ID, no unforgeable token), confused deputy problem unsolved |"
+  - Adding new module to any layer
+  - "Attribute-Based Access Control (ABAC)** | 5/10 | Fine-grained (policies based\
+    \ on attributes like cost, time, location)<br/>Flexible (dynamic policies) | â\x9D\
+    Œ Complex policy evaluation (>10ms latency per check)<br/>â\x9DŒ No delegation\
+    \ (attribute checks don't transfer authority)<br/>â\x9DŒ Policy explosion (100+\
+    \ attributes = 1000+ policies) | Too slow (>10ms policy evaluation unacceptable\
+    \ for hot path <1ms budget), complex to maintain (policy explosion) |"
+  - "Capability-Based Security** âœ… | **9/10** | âœ… **Unforgeable tokens** (HMAC-SHA256\
+    \ signed)<br/>âœ… **No ambient authority** (possession of token = only way to\
+    \ access)<br/>âœ… **Delegation & attenuation** (pass capability to sub-agent with\
+    \ reduced rights)<br/>âœ… **Fine-grained constraints** (max_cost, max_invocations,\
+    \ privacy_band)<br/>âœ… **Fast validation** (<1ms HMAC check + constraint validation)<br/>âœ…\
+    \ **Revocation** (mark token revoked, no system restart)<br/>âœ… **Audit trail**\
+    \ (every capability issuance/usage/revocation logged) | âš ï¸\x8F Token management\
+    \ overhead (must issue, store, revoke tokens)<br/>âš ï¸\x8F Delegation complexity\
+    \ (attenuated capabilities must preserve constraints) | Selected despite token\
+    \ overhead (overhead <2ms issuance, <1ms validation acceptable for security benefits)\
+    \ |"
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - "OAuth2 Scopes** | 6/10 | Token-based (unforgeable tokens like capabilities)<br/>Delegation\
+    \ support (refresh tokens) | â\x9DŒ Coarse scopes (scope = \"tool:*\" not \"tool:book_reservation\"\
+    )<br/>â\x9DŒ No attenuation (can't reduce scope on delegation)<br/>â\x9DŒ No constraints\
+    \ (can't encode max_cost, max_invocations) | Not expressive enough (can't encode\
+    \ fine-grained constraints like \"max_cost_usd: 100.0\" or \"requires_approval:\
+    \ true\") |"
+  - Performance requirement changes
+  - Updating API contracts or schemas
+  affected_adrs:
+  - ADR-0002
+  - ADR-0005
+  - ADR-0006
+  - ADR-0007
+  - ADR-0008
+  - ADR-0009
+  - ADR-0010
+  - ADR-0072
+  - ADR-0074
+  affected_contracts:
+  - k0/contracts/api/rest/idempotency/24h_retention.yml
+  - k0/contracts/asyncapi.events.yaml
+  - k0/contracts/openapi.k0.yaml
+  - k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+  - k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+  - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  affected_tests: []
+---
+
+
+# ADR-0010: Capability-Based Security with Unforgeable Tokens and Least Privilege
 
 **Status:** âœ… Accepted
 **Deciders:** K1 Architecture Team
@@ -1511,4 +1617,3 @@ k1_active_capabilities = Gauge(
 - `docs/whiteboard.md` L1404 (Capability-based Security section - unforgeable tokens design)
 - `docs/whiteboard.md` L16097 (Capability research citation - Dennis & Van Horn 1966)
 - `architecture_diagrams/k1_orchestrator_3phase.mmd` (Orchestrator checks capabilities before tool delegation)
-

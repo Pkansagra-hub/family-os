@@ -1,3 +1,62 @@
+---
+adr_number: 0017e
+title: Multimodal Section - Audio/Vision State
+status: PROPOSED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
+authors:
+- K1 Architecture Team
+affected_layers:
+- layer1_input
+- layer4_runtime
+affected_modules: []
+concerns:
+- architecture
+- compliance
+- cost
+- observability
+- performance
+- privacy
+- reliability
+- testing
+supersedes: []
+superseded_by: []
+related_adrs:
+- ADR-0011
+- ADR-0017
+- ADR-0017a
+- ADR-0017e
+- ADR-0050
+- ADR-0085
+- ADR-0085a
+- ADR-0085b
+- ADR-0085c
+implementation_status: IN_PROGRESS
+implementation_date: null
+implementation_phase: null
+related_contracts:
+- k1/contracts/flatbuffers/layer2_state/multimodal_section.fbs
+related_diagrams: []
+research_citations: []
+propagation:
+  triggers:
+  - Modifying system architecture
+  - Performance requirement changes
+  affected_adrs:
+  - ADR-0011
+  - ADR-0017
+  - ADR-0017a
+  - ADR-0017e
+  - ADR-0050
+  - ADR-0085
+  - ADR-0085a
+  - ADR-0085b
+  - ADR-0085c
+  affected_contracts: []
+  affected_tests: []
+---
+
+
 # ADR-0017e: Multimodal Section - Audio/Vision State
 
 **Status:** ⏳ In Progress (0% - Initial Draft)
