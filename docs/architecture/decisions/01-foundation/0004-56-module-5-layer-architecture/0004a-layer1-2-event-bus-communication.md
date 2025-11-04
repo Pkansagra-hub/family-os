@@ -1,11 +1,5 @@
 ---
-adr_number: '0004a'
-title: Layer 1-2 Event Bus Communication Pattern
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
+adr_number: 0004a
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -14,54 +8,20 @@ affected_modules:
 - k1.l1_input.orchestration.intent_router
 - k1.l2_orchestration.orchestrator
 - k1.l5_infrastructure.event_bus
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
 - modularity
+- observability
 - performance
 - reliability
-- observability
-supersedes:
-- ADR-0002
-- ADR-0003
-superseded_by: []
-related_adrs:
-- ADR-0001
-- ADR-0002
-- ADR-0003
-- ADR-0004
-- ADR-0015
-- ADR-0016
-- ADR-0040
-- ADR-0045
-- ADR-0048
-- ADR-0061
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
-- k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
-- k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
-related_diagrams:
-- architecture_diagrams/k1_architecture_diagram.mmd
-- architecture_diagrams/k1_kernel_complete_adr_architecture.mmd
-research_citations:
-- Hohpe, G., Woolf, B. (2003). Enterprise Integration Patterns. Addison-Wesley
-- Hewitt, C. (1973). A Universal Modular Actor Formalism for Artificial Intelligence. IJCAI
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Changing event bus transport protocol
-  - Modifying Layer 1 → Layer 5 → Layer 2 message routing constraints
-  - Altering FlatBuffers event schema contracts for cross-layer messages
-  - Adding new Layer 1 event types that Layer 2 must handle
-  - Tightening event delivery latency budgets below 5ms P95
   affected_adrs:
   - ADR-0002
   - ADR-0003
@@ -80,6 +40,45 @@ propagation:
   - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
   affected_tests: []
+  triggers:
+  - Changing event bus transport protocol
+  - Modifying Layer 1 → Layer 5 → Layer 2 message routing constraints
+  - Altering FlatBuffers event schema contracts for cross-layer messages
+  - Adding new Layer 1 event types that Layer 2 must handle
+  - Tightening event delivery latency budgets below 5ms P95
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0004
+- ADR-0004a
+- ADR-0004b
+- ADR-0004c
+- ADR-0004d
+- ADR-0004f
+related_contracts:
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+- k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+- k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+related_diagrams:
+- architecture_diagrams/k1_architecture_diagram.mmd
+- architecture_diagrams/k1_kernel_complete_adr_architecture.mmd
+research_citations:
+- Hohpe, G., Woolf, B. (2003). Enterprise Integration Patterns. Addison-Wesley
+- Hewitt, C. (1973). A Universal Modular Actor Formalism for Artificial Intelligence.
+  IJCAI
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0003
+title: Layer 1-2 Event Bus Communication Pattern
 ---
 
 # ADR-0004a: Layer 1-2 Event Bus Communication Pattern

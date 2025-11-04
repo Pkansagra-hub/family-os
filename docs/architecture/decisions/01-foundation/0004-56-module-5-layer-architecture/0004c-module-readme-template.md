@@ -1,11 +1,5 @@
 ---
-adr_number: '0004c'
-title: Module Readme Template & Auto-Generation
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-17'
-authors:
-- K1 Architecture Team
+adr_number: 0004c
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -16,53 +10,24 @@ affected_modules:
 - k1.l1_input.orchestration.intent_router
 - k1.l2_orchestration.orchestrator
 - k1.l5_infrastructure.event_bus
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- modularity
+- compatibility
 - maintainability
-- developer_experience
+- modularity
 - observability
-- testing
-- scalability
 - reliability
-- interoperability
-supersedes: []
-superseded_by: []
-related_adrs:
-- ADR-0004
-- ADR-0004a
-- ADR-0004b
-- ADR-0011
-- ADR-0011b
-- ADR-0012
-- ADR-0014a
-- ADR-0024
-- ADR-0029
-- ADR-0066
-- ADR-0074
-implementation_status: COMPLETED
+- scalability
+- testing
+- usability
+date_created: '2025-10-12'
+date_updated: '2025-10-17'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams: []
-research_citations: []
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Renaming module interfaces or API surfaces that READMEs auto-document
-  - Adding new mandatory README sections to the template
-  - Changing the code annotation format used for docstring extraction
-  - Updating module dependency declaration syntax
-  - Modifying CI checks that enforce README freshness rules
   affected_adrs:
   - ADR-0004
   - ADR-0004b
@@ -81,6 +46,39 @@ propagation:
   - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
   affected_tests: []
+  triggers:
+  - Renaming module interfaces or API surfaces that READMEs auto-document
+  - Adding new mandatory README sections to the template
+  - Changing the code annotation format used for docstring extraction
+  - Updating module dependency declaration syntax
+  - Modifying CI checks that enforce README freshness rules
+related_adrs:
+- ADR-0002
+- ADR-0004
+- ADR-0004a
+- ADR-0004b
+- ADR-0004c
+- ADR-0004d
+- ADR-0004f
+- ADR-0005
+- ADR-0074
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams: []
+research_citations: []
+status: IMPLEMENTED
+superseded_by: []
+supersedes: []
+title: Module Readme Template & Auto-Generation
 ---
 
 ﻿# ADR-0004c: Module README Template & Auto-Generation

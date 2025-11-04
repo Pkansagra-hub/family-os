@@ -1,11 +1,5 @@
 ---
 adr_number: 0002b
-title: Supervisor Monitoring & Crash Recovery
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -23,56 +17,24 @@ affected_modules:
 - k1.l3_execution
 - k1.l4_runtime
 - k1.l5_infrastructure
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- compliance
 - modularity
 - observability
 - performance
 - privacy
 - reliability
 - scalability
+- security
 - testing
-supersedes:
-- ADR-0002
-- ADR-0005
-- ADR-0008
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0005
-- ADR-0008
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- k1_supervision_tree.mmd
-- k1_agent_lifecycle.mmd
-- k1_crash_recovery.mmd
-- k1_blacklist_management.mmd
-- k1_restart_strategies.mmd
-research_citations:
-- Erlang/OTP Supervisor Pattern
-- Let it Crash Philosophy (Ferd.ca)
-- Actor Model (Hewitt 1973)
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding new agent types or personas
-  - Modifying the actor model or concurrency strategy
-  - Changing the resource allocation or limits for agents
-  - Updating the communication protocols between agents
-  - Introducing new fault tolerance or recovery mechanisms
   affected_adrs:
   - ADR-0002
   - ADR-0005
@@ -99,6 +61,51 @@ propagation:
   - tests/k1/test_blacklist_management.py
   - tests/k1/test_restart_strategies.py
   - tests/k1/test_supervision_trees.py
+  triggers:
+  - Adding new agent types or personas
+  - Modifying the actor model or concurrency strategy
+  - Changing the resource allocation or limits for agents
+  - Updating the communication protocols between agents
+  - Introducing new fault tolerance or recovery mechanisms
+related_adrs:
+- ADR-0002
+- ADR-0002b
+- ADR-0002d
+- ADR-0005
+- ADR-0005a
+- ADR-0005b
+- ADR-0005c
+- ADR-0008
+- ADR-0034b
+- ADR-0073
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- k1_supervision_tree.mmd
+- k1_agent_lifecycle.mmd
+- k1_crash_recovery.mmd
+- k1_blacklist_management.mmd
+- k1_restart_strategies.mmd
+research_citations:
+- Erlang/OTP Supervisor Pattern
+- Let it Crash Philosophy (Ferd.ca)
+- Actor Model (Hewitt 1973)
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0005
+- ADR-0008
+title: Supervisor Monitoring & Crash Recovery
 ---
 
 # ADR-0002b: Supervisor Monitoring & Crash Recovery

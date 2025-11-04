@@ -1,11 +1,5 @@
 ---
 adr_number: 0001b
-title: Model Hub Architecture & LLM Integration
-status: IN_PROGRESS
-date_created: '2025-10-12'
-date_updated: '2025-10-27'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -16,59 +10,23 @@ affected_modules:
 - k1.l3_execution.agent_fabric
 - k1.l5_infrastructure
 - k0_bridge
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- modularity
-- performance
-- scalability
-- reliability
-- security
 - cost
+- modularity
 - observability
-supersedes: []
-superseded_by: []
-related_adrs:
-- ADR-0001
-- ADR-0001a
-- ADR-0005
-- ADR-0007
-- ADR-0027
-- ADR-0027c
-- ADR-0027d
-- ADR-0034
-- ADR-0059
-- ADR-0075
-- ADR-0081
-- ADR-0086
-implementation_status: NOT_STARTED
+- performance
+- reliability
+- scalability
+- security
+date_created: '2025-10-12'
+date_updated: '2025-10-27'
 implementation_date: null
 implementation_phase: Phase 2 (Runtime)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- architecture_diagrams/k1/k1_model_hub_architecture.mmd
-- architecture_diagrams/k1/k1_agent_model_integration.mmd
-research_citations:
-- 'OpenAI API Documentation: https://platform.openai.com/docs'
-- 'Anthropic API Documentation: https://docs.anthropic.com'
-- 'vLLM Documentation: https://docs.vllm.ai'
-- 'Ollama Documentation: https://ollama.ai/docs'
+implementation_status: NOT_STARTED
 propagation:
-  triggers:
-  - Changes to K0 memory architecture
-  - Updates to LLM integration protocols
-  - Addition of new model providers
-  - Changes in agent lifecycle management
-  - Performance requirement updates
   affected_adrs:
   - ADR-0001
   - ADR-0005
@@ -98,6 +56,52 @@ propagation:
   - tests/k1/l5_infrastructure/test_provider_adapters.py
   - tests/integration/test_k0_k1_model_integration.py
   - tests/k1/l3_execution/test_prompt_library.py
+  triggers:
+  - Changes to K0 memory architecture
+  - Updates to LLM integration protocols
+  - Addition of new model providers
+  - Changes in agent lifecycle management
+  - Performance requirement updates
+related_adrs:
+- ADR-0001
+- ADR-0001a
+- ADR-0001b
+- ADR-0005
+- ADR-0005a
+- ADR-0005b
+- ADR-0005c
+- ADR-0005e
+- ADR-0007
+- ADR-0026c
+- ADR-0027
+- ADR-0027a
+- ADR-0027c
+- ADR-0027d
+- ADR-0056d
+- ADR-0086e
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- architecture_diagrams/k1/k1_model_hub_architecture.mmd
+- architecture_diagrams/k1/k1_agent_model_integration.mmd
+research_citations:
+- 'OpenAI API Documentation: https://platform.openai.com/docs'
+- 'Anthropic API Documentation: https://docs.anthropic.com'
+- 'vLLM Documentation: https://docs.vllm.ai'
+- 'Ollama Documentation: https://ollama.ai/docs'
+status: DRAFT
+superseded_by: []
+supersedes: []
+title: Model Hub Architecture & LLM Integration
 ---
 
 # ADR-0001b: Model Hub Architecture & LLM Integration

@@ -1,11 +1,5 @@
 ---
 adr_number: 0002c
-title: Actor Router & Admission Control
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -18,61 +12,23 @@ affected_modules:
 - k1.l3_execution.orchestrator
 - k1.l3_execution.agent_fabric
 - k1.l5_infrastructure.capability_manager
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- compatibility
+- maintainability
 - modularity
 - performance
-- security
 - scalability
+- security
 - testing
-- maintainability
-- interoperability
-supersedes:
-- ADR-0002
-- ADR-0002a
-- ADR-0010
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0002a
-- ADR-0002b
-- ADR-0002d
-- ADR-0010
-- ADR-0033
-- ADR-0034
-- ADR-0039
-- ADR-0045
-- ADR-0086
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 2 (Runtime)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- architecture_diagrams/k1/k1_actor_router_architecture.mmd
-- architecture_diagrams/k1/k1_admission_control_pipeline.mmd
-- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
-- docs/architecture/diagrams/k1/k1_supervision_tree.mmd
-research_citations:
-- Hewitt, Carl. "Viewing Control Structures as Patterns of Passing Messages." Journal of Artificial Intelligence, 1973.
-- Token Bucket Algorithm - Wikipedia
-- Role-Based Access Control (RBAC) - Wikipedia
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding new agent types
-  - Changing actor messaging protocols
-  - Modifying capability-based security policies
-  - Updating admission control checks
-  - Introducing new message types
   affected_adrs:
   - ADR-0002
   - ADR-0002a
@@ -95,6 +51,46 @@ propagation:
   - tests/k1/l5_infrastructure/test_admission_control.py
   - tests/k1/l4_runtime/test_mailbox.py
   - tests/k1/l3_execution/test_orchestrator_admission.py
+  triggers:
+  - Adding new agent types
+  - Changing actor messaging protocols
+  - Modifying capability-based security policies
+  - Updating admission control checks
+  - Introducing new message types
+related_adrs:
+- ADR-0002
+- ADR-0002a
+- ADR-0002c
+- ADR-0002d
+- ADR-0010
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- architecture_diagrams/k1/k1_actor_router_architecture.mmd
+- architecture_diagrams/k1/k1_admission_control_pipeline.mmd
+- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
+- docs/architecture/diagrams/k1/k1_supervision_tree.mmd
+research_citations:
+- Hewitt, Carl. "Viewing Control Structures as Patterns of Passing Messages." Journal
+  of Artificial Intelligence, 1973.
+- Token Bucket Algorithm - Wikipedia
+- Role-Based Access Control (RBAC) - Wikipedia
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0002a
+- ADR-0010
+title: Actor Router & Admission Control
 ---
 
 # ADR-0002c: Actor Router & Admission Control

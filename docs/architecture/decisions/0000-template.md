@@ -1,32 +1,32 @@
 ---
 adr_number: '0000'
-title: ADR Template and Decision Framework
-status: TEMPLATE
-date_created: '2025-10-01'
-date_updated: '2025-10-01'
-authors:
-- K1 Architecture Team
 affected_layers: []
 affected_modules: []
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- documentation
-supersedes: []
-superseded_by: []
-related_adrs: []
-implementation_status: TEMPLATE
+- maintainability
+date_created: '2025-10-01'
+date_updated: '2025-10-01'
 implementation_date: null
 implementation_phase: null
-related_contracts: []
-related_diagrams: []
-research_citations: []
+implementation_status: TEMPLATE
 propagation:
-  triggers:
-  - Creating new ADRs for architectural decisions
-  - Updating ADR templates or processes
   affected_adrs: []
   affected_contracts: []
   affected_tests: []
+  triggers:
+  - Creating new ADRs for architectural decisions
+  - Updating ADR templates or processes
+related_adrs: []
+related_contracts: []
+related_diagrams: []
+research_citations: []
+status: PROPOSED
+superseded_by: []
+supersedes: []
+title: ADR Template and Decision Framework
 ---
 
 # ADR-NNNN: Title of Decision

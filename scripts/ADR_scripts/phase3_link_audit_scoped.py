@@ -1,22 +1,40 @@
 #!/usr/bin/env python3
 """
-Phase 3: Link Audit (Scoped to ADRs 0001-0004)
-Finds all references TO and FROM ADRs 0001-0004 before file migration.
+Phase 3: Link Audit (Scoped to specified ADRs)
+Finds all references TO and FROM specified ADRs before file migration.
 """
 
+import argparse
 import json
 import re
 import subprocess
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 WORKSPACE_ROOT = Path(__file__).parent.parent.parent
 DOCS_ROOT = WORKSPACE_ROOT / "docs"
 ADR_DIR = DOCS_ROOT / "architecture" / "decisions"
 
-# Scope: Only ADRs 0001-0004
-TARGET_ADRS = ["0001", "0002", "0003", "0004"]
+# Default scope: ADRs 0001-0004 (can be overridden via command line)
+DEFAULT_TARGET_ADRS = ["0001", "0002", "0003", "0004"]
+
+
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Link audit for specified ADRs")
+    parser.add_argument(
+        "--adrs",
+        nargs="+",
+        default=DEFAULT_TARGET_ADRS,
+        help="ADR numbers to audit (e.g., 0005 0006 0007)",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output report filename (default: LINK_AUDIT_REPORT_<first>-<last>.md)",
+    )
+    return parser.parse_args()
 
 
 def run_ripgrep(pattern: str, path: str, extra_args: List[str] | None = None) -> List[str]:
@@ -71,14 +89,14 @@ def search_files_python(pattern: str, root_path: Path, file_pattern: str = "**/*
     return results
 
 
-def find_references_to_adrs() -> Dict[str, List[Dict]]:
+def find_references_to_adrs(target_adrs: List[str]) -> Dict[str, List[Dict]]:
     """Find all references TO target ADRs from anywhere in docs/."""
-    print("\n🔍 Finding references TO ADRs 0001-0004...")
+    print(f"\n🔍 Finding references TO ADRs {', '.join(target_adrs)}...")
 
     references = defaultdict(list)
 
     # Pattern: ADR-0001, ADR-0002, ADR-0003, ADR-0004
-    for adr_num in TARGET_ADRS:
+    for adr_num in target_adrs:
         pattern = f"ADR-{adr_num}"
         results = run_ripgrep(pattern, str(DOCS_ROOT), ["--json"])
 
@@ -101,15 +119,15 @@ def find_references_to_adrs() -> Dict[str, List[Dict]]:
     return references
 
 
-def find_references_from_adrs() -> Dict[str, List[Dict]]:
+def find_references_from_adrs(target_adrs: List[str]) -> Dict[str, List[Dict]]:
     """Find all references FROM target ADRs (relative links, absolute links)."""
-    print("\n🔍 Finding references FROM ADRs 0001-0004...")
+    print(f"\n🔍 Finding references FROM ADRs {', '.join(target_adrs)}...")
 
     references = defaultdict(list)
 
-    # Find all 0001-0004 ADR files (including sub-ADRs)
+    # Find all target ADR files (including sub-ADRs)
     adr_files = []
-    for adr_num in TARGET_ADRS:
+    for adr_num in target_adrs:
         adr_files.extend(ADR_DIR.glob(f"{adr_num}*.md"))
 
     # Pattern: Markdown links [text](path)
@@ -154,14 +172,14 @@ def find_references_from_adrs() -> Dict[str, List[Dict]]:
     return references
 
 
-def find_diagram_references() -> Dict[str, List[Dict]]:
+def find_diagram_references(target_adrs: List[str]) -> Dict[str, List[Dict]]:
     """Find all diagram references in target ADRs."""
-    print("\n🔍 Finding diagram references in ADRs 0001-0004...")
+    print(f"\n🔍 Finding diagram references in ADRs {', '.join(target_adrs)}...")
 
     references = defaultdict(list)
     pattern = "architecture_diagrams/"
 
-    for adr_num in TARGET_ADRS:
+    for adr_num in target_adrs:
         results = run_ripgrep(pattern, str(ADR_DIR), [f"--glob", f"{adr_num}*.md"])
 
         for line in results:
@@ -181,13 +199,20 @@ def find_diagram_references() -> Dict[str, List[Dict]]:
 
 
 def generate_report(
+    target_adrs: List[str],
     refs_to: Dict[str, List[Dict]],
     refs_from: Dict[str, List[Dict]],
     diagram_refs: Dict[str, List[Dict]],
+    output_filename: Optional[str] = None,
 ):
     """Generate comprehensive link audit report."""
 
-    report_path = WORKSPACE_ROOT / "LINK_AUDIT_REPORT_0001-0004.md"
+    if output_filename is None:
+        first_adr = min(target_adrs)
+        last_adr = max(target_adrs)
+        output_filename = f"LINK_AUDIT_REPORT_{first_adr}-{last_adr}.md"
+
+    report_path = WORKSPACE_ROOT / output_filename
 
     # Count totals
     total_refs_to = sum(len(refs) for refs in refs_to.values())
@@ -196,9 +221,9 @@ def generate_report(
     unique_files_referencing = len(set(ref["file"] for refs in refs_to.values() for ref in refs))
 
     with open(report_path, "w", encoding="utf-8") as f:
-        f.write("# Link Audit Report - ADRs 0001-0004\n\n")
+        f.write(f"# Link Audit Report - ADRs {', '.join(target_adrs)}\n\n")
         f.write("**Date:** November 3, 2025\n")
-        f.write("**Scope:** ADRs 0001, 0002, 0003, 0004 (including sub-ADRs)\n")
+        f.write(f"**Scope:** ADRs {', '.join(target_adrs)} (including sub-ADRs)\n")
         f.write("**Purpose:** Identify all links before Phase 4 file migration\n\n")
 
         f.write("---\n\n")
@@ -210,7 +235,7 @@ def generate_report(
 
         f.write("---\n\n")
         f.write("## 🔗 References TO Target ADRs (Incoming Links)\n\n")
-        f.write("These are all places in `docs/` that reference ADRs 0001-0004.\n")
+        f.write(f"These are all places in `docs/` that reference ADRs {', '.join(target_adrs)}.\n")
         f.write("**Action needed:** Update these after moving ADR files.\n\n")
 
         for adr_num in sorted(refs_to.keys()):
@@ -233,7 +258,7 @@ def generate_report(
 
         f.write("---\n\n")
         f.write("## 🔗 References FROM Target ADRs (Outgoing Links)\n\n")
-        f.write("These are all links inside ADRs 0001-0004 pointing elsewhere.\n")
+        f.write(f"These are all links inside ADRs {', '.join(target_adrs)} pointing elsewhere.\n")
         f.write("**Action needed:** Update relative paths after moving files.\n\n")
 
         for adr_file in sorted(refs_from.keys()):
@@ -276,47 +301,53 @@ def generate_report(
         f.write("1. **Create link update script:**\n")
         f.write("   - Update all incoming references (TO ADRs)\n")
         f.write("   - Update all outgoing references (FROM ADRs)\n\n")
-        f.write("2. **Test on pilot ADR family (0001):**\n")
-        f.write("   - Move 0001*.md files to new structure\n")
+        f.write("2. **Test on pilot ADR family:**\n")
+        f.write(f"   - Move {target_adrs[0]}*.md files to new structure\n")
         f.write("   - Run link update script\n")
         f.write("   - Validate all links resolve\n\n")
         f.write("3. **Generate dry-run report:**\n")
         f.write("   - Show what would change without modifying files\n\n")
         f.write("4. **Proceed with migration:**\n")
-        f.write("   - Apply to 0002, 0003, 0004 families\n\n")
+        f.write(f"   - Apply to remaining ADR families\n\n")
 
     print(f"\n✅ Report generated: {report_path}")
     return report_path
 
 
 def main():
+    args = parse_args()
+    target_adrs = args.adrs
+
     print("=" * 70)
-    print("  PHASE 3: LINK AUDIT (Scoped to ADRs 0001-0004)")
+    print(f"  PHASE 3: LINK AUDIT (Scoped to ADRs {', '.join(target_adrs)})")
     print("=" * 70)
 
     # Step 1: Find references TO target ADRs
-    refs_to = find_references_to_adrs()
+    refs_to = find_references_to_adrs(target_adrs)
     total_to = sum(len(refs) for refs in refs_to.values())
     print(f"✅ Found {total_to} references TO target ADRs")
 
     # Step 2: Find references FROM target ADRs
-    refs_from = find_references_from_adrs()
+    refs_from = find_references_from_adrs(target_adrs)
     total_from = sum(len(refs) for refs in refs_from.values())
     print(f"✅ Found {total_from} references FROM target ADRs")
 
     # Step 3: Find diagram references
-    diagram_refs = find_diagram_references()
+    diagram_refs = find_diagram_references(target_adrs)
     total_diagrams = sum(len(refs) for refs in diagram_refs.values())
     print(f"✅ Found {total_diagrams} diagram references")
 
     # Step 4: Generate report
-    report_path = generate_report(refs_to, refs_from, diagram_refs)
+    report_path = generate_report(target_adrs, refs_to, refs_from, diagram_refs, args.output)
 
     # Step 5: Save JSON data for automation
-    json_path = WORKSPACE_ROOT / "adr_references_0001-0004.json"
+    first_adr = min(target_adrs)
+    last_adr = max(target_adrs)
+    json_path = WORKSPACE_ROOT / f"adr_references_{first_adr}-{last_adr}.json"
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(
             {
+                "target_adrs": target_adrs,
                 "references_to": refs_to,
                 "references_from": refs_from,
                 "diagram_references": diagram_refs,
@@ -334,7 +365,7 @@ def main():
     print(f"   - References FROM ADRs: {total_from}")
     print(f"   - Diagram references: {total_diagrams}")
     print(f"\n📄 Full report: {report_path.name}")
-    print(f"📄 JSON data: {json_path.name}")
+    print(f"📄 JSON data: {report_path.name.replace('.md', '.json')}")
     print("\n🚀 Ready for Phase 4: File Migration")
 
 

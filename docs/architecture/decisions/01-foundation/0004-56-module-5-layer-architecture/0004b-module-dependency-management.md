@@ -1,11 +1,5 @@
 ---
-adr_number: '0004b'
-title: Module Dependency Management & Import Linting
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-17'
-authors:
-- K1 Architecture Team
+adr_number: 0004b
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -16,55 +10,23 @@ affected_modules:
 - k1.l1_input.orchestration.intent_router
 - k1.l2_orchestration.orchestrator
 - k1.l5_infrastructure.event_bus
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- compatibility
 - maintainability
 - modularity
 - performance
-- testing
-- scalability
 - reliability
-- interoperability
-supersedes:
-- ADR-0002
-- ADR-0004
-- ADR-0004a
-- ADR-0074
-superseded_by: []
-related_adrs:
-- ADR-0001
-- ADR-0002
-- ADR-0003
-- ADR-0004
-- ADR-0004a
-- ADR-0045
-- ADR-0074
-implementation_status: COMPLETED
+- scalability
+- testing
+date_created: '2025-10-12'
+date_updated: '2025-10-17'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
-- k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
-- k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
-related_diagrams:
-- architecture_diagrams/k1_architecture_diagram.mmd
-- architecture_diagrams/k1_kernel_complete_adr_architecture.mmd
-research_citations:
-- Hohpe, G., Woolf, B. (2003). Enterprise Integration Patterns. Addison-Wesley
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding a new layer to the architecture
-  - Changing the dependency rules between layers
-  - Introducing a new module that crosses layer boundaries
-  - Updating the import-linter configuration
-  - Modifying the CI/CD pipeline to enforce layering contracts
   affected_adrs:
   - ADR-0074
   - ADR-0002
@@ -81,6 +43,44 @@ propagation:
   - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
   affected_tests: []
+  triggers:
+  - Adding a new layer to the architecture
+  - Changing the dependency rules between layers
+  - Introducing a new module that crosses layer boundaries
+  - Updating the import-linter configuration
+  - Modifying the CI/CD pipeline to enforce layering contracts
+related_adrs:
+- ADR-0002
+- ADR-0004
+- ADR-0004a
+- ADR-0004b
+- ADR-0004c
+- ADR-0004d
+- ADR-0074
+related_contracts:
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_stream_chunk.fbs
+- k1/contracts/flatbuffers/layer3_execution/stream_chunk.fbs
+- k1/contracts/flatbuffers/layer3_execution/stream_config.fbs
+related_diagrams:
+- architecture_diagrams/k1_architecture_diagram.mmd
+- architecture_diagrams/k1_kernel_complete_adr_architecture.mmd
+research_citations:
+- Hohpe, G., Woolf, B. (2003). Enterprise Integration Patterns. Addison-Wesley
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0004
+- ADR-0004a
+- ADR-0074
+title: Module Dependency Management & Import Linting
 ---
 
 ﻿# ADR-0004b: Module Dependency Management & Import Linting

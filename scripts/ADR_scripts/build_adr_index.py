@@ -14,14 +14,15 @@ Output:
     docs/architecture/decisions/00-meta/adr_index.json
 """
 
-import json
-import yaml
 import argparse
+import json
+import sys
+from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import datetime, date
+
 import frontmatter
-import sys
+import yaml
 
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -256,37 +257,39 @@ class ADRIndexBuilder:
             # Get category folder from file_path (e.g., "01-foundation")
             file_path = Path(adr["file_path"])
             parts = file_path.parts
-            
+
             # Skip if not in a category folder structure
             if len(parts) < 2:
                 continue
-            
+
             category_folder = parts[0]
-            
+
             # Only process numbered category folders (01-foundation, 02-coordination, etc.)
             if not category_folder[0:2].isdigit():
                 continue
-            
+
             if category_folder not in folders:
                 folders[category_folder] = []
-            
-            folders[category_folder].append({
-                "adr_number": adr.get("adr_number", ""),
-                "title": adr.get("title", ""),
-                "status": adr.get("status", "UNKNOWN"),
-                "summary": adr.get("summary", ""),
-                "file_path": adr.get("file_path", ""),
-                "affected_layers": adr.get("affected_layers", []),
-                "affected_modules": adr.get("affected_modules", []),
-                "concerns": adr.get("concerns", [])
-            })
+
+            folders[category_folder].append(
+                {
+                    "adr_number": adr.get("adr_number", ""),
+                    "title": adr.get("title", ""),
+                    "status": adr.get("status", "UNKNOWN"),
+                    "summary": adr.get("summary", ""),
+                    "file_path": adr.get("file_path", ""),
+                    "affected_layers": adr.get("affected_layers", []),
+                    "affected_modules": adr.get("affected_modules", []),
+                    "concerns": adr.get("concerns", []),
+                }
+            )
 
         # Update each folder's index.yml
         updated_count = 0
         for folder_name, folder_adrs in sorted(folders.items()):
             folder_path = self.decisions_path / folder_name
             index_file = folder_path / "index.yml"
-            
+
             if not folder_path.exists():
                 print(f"  ⚠️  Skipping {folder_name}: folder not found")
                 continue

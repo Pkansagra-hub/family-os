@@ -1,11 +1,5 @@
 ---
 adr_number: 0003b
-title: 6 Core Protocol Implementations
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -22,67 +16,22 @@ affected_modules:
 - k1.l5_infrastructure.tool_runner
 - k1.l5_infrastructure.tool_sandbox
 - k1.l4_runtime.state_manager
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- performance
-- reliability
 - modularity
 - observability
+- performance
+- reliability
 - security
 - testing
-supersedes:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0003d
-- ADR-0006
-- ADR-0007
-- ADR-0008
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0005
-- ADR-0006
-- ADR-0008
-- ADR-0011
-- ADR-0015
-- ADR-0045
-- ADR-0054
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-- k1/contracts/protocols/definitions/barge_in.pdl.yml
-- k1/contracts/protocols/definitions/clarification.pdl.yml
-related_diagrams:
-- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
-- architecture_diagrams/k1/k1_orchestrator_3phase.mmd
-- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
-research_citations:
-- Smith, R. G. (1980). The Contract Net Protocol: High-Level Communication and Control in a Distributed Problem Solver. IEEE Transactions on Computers, Vol. C-29, No. 12.
-- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types. Journal of the ACM, Vol. 63, No. 1.
-- Garcia-Molina, H., Salem, K. (1987). Sagas. ACM SIGMOD Record, Vol. 16, No. 3.
-- Purver, M. (2004). The Theory and Use of Clarification Requests in Dialogue. PhD Thesis, King's College London.
-- Schick, T., et al. (2023). Toolformer: Language Models Can Teach Themselves to Use Tools. arXiv:2302.04761.
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding new protocol beyond the 6 core protocols
-  - Modifying PDL syntax or semantics
-  - Changing FlatBuffers schema compilation for protocols
-  - Updating agent communication MPST validation logic
-  - Modifying protocol state machine transition rules
   affected_adrs:
   - ADR-0003
   - ADR-0003a
@@ -107,6 +56,77 @@ propagation:
   - tests/k1/l2_orchestration/test_orchestrator.py
   - tests/k1/l3_execution/test_agent_fabric.py
   - tests/k1/l4_runtime/test_mailbox.py
+  triggers:
+  - Adding new protocol beyond the 6 core protocols
+  - Modifying PDL syntax or semantics
+  - Changing FlatBuffers schema compilation for protocols
+  - Updating agent communication MPST validation logic
+  - Modifying protocol state machine transition rules
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0003c
+- ADR-0003d
+- ADR-0006
+- ADR-0007
+- ADR-0008
+- ADR-0052
+- ADR-0052a
+- ADR-0052b
+- ADR-0052c
+- ADR-0052d
+- ADR-0052e
+- ADR-0054c
+- ADR-0055
+- ADR-0055b
+- ADR-0056
+- ADR-0056b
+- ADR-0057
+- ADR-0057c
+- ADR-0058
+- ADR-0058a
+- ADR-0066
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+- k1/contracts/protocols/definitions/barge_in.pdl.yml
+- k1/contracts/protocols/definitions/clarification.pdl.yml
+related_diagrams:
+- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
+- architecture_diagrams/k1/k1_orchestrator_3phase.mmd
+- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
+research_citations:
+- Smith, R. G. (1980). The Contract Net Protocol: High-Level Communication and Control
+    in a Distributed Problem Solver. IEEE Transactions on Computers, Vol. C-29, No.
+    12.
+- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types.
+  Journal of the ACM, Vol. 63, No. 1.
+- Garcia-Molina, H., Salem, K. (1987). Sagas. ACM SIGMOD Record, Vol. 16, No. 3.
+- Purver, M. (2004). The Theory and Use of Clarification Requests in Dialogue. PhD
+  Thesis, King's College London.
+- Schick, T., et al. (2023). Toolformer: Language Models Can Teach Themselves to Use
+    Tools. arXiv:2302.04761.
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003d
+- ADR-0006
+- ADR-0007
+- ADR-0008
+title: 6 Core Protocol Implementations
 ---
 
 # ADR-0003b: 6 Core Protocol Implementations

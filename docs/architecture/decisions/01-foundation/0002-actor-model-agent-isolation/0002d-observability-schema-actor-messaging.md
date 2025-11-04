@@ -1,11 +1,5 @@
 ---
 adr_number: 0002d
-title: Observability Schema for Actor Messaging
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -19,60 +13,21 @@ affected_modules:
 - k1.l5_infrastructure.observability
 - k1.l5_infrastructure.metrics_exporter
 - k1.l5_infrastructure.logging
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- modularity
 - observability
 - performance
-- modularity
 - reliability
 - scalability
-supersedes:
-- ADR-0002
-- ADR-0002a
-- ADR-0002b
-- ADR-0002c
-superseded_by: []
-related_adrs:
-- ADR-0002a
-- ADR-0002b
-- ADR-0002c
-- ADR-0016
-- ADR-0024
-- ADR-0025
-- ADR-0029
-- ADR-0030
-- ADR-0045
-- ADR-0048
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- architecture_diagrams/k1/k1_observability_architecture.mmd
-- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
-- docs/architecture/diagrams/k1/k1_supervision_tree.mmd
-- docs/architecture/diagrams/k1/k1_mailbox_backpressure.mmd
-research_citations:
-- Prometheus Best Practices - prometheus.io/docs/practices/naming/
-- OpenTelemetry Semantic Conventions - opentelemetry.io/docs/specs/semconv/
-- Grafana Dashboard Best Practices - grafana.com/docs/grafana/latest/dashboards/build-dashboards/best-practices/
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Actor mailbox implementation changes requiring metric schema updates
-  - OpenTelemetry instrumentation version or protocol updates
-  - Message routing or admission control logic modifications
-  - Performance budget refinements for telemetry overhead
-  - Grafana dashboard or alerting rule architecture changes
   affected_adrs:
   - ADR-0029
   - ADR-0030
@@ -96,6 +51,47 @@ propagation:
   - tests/k1/l3_execution/test_agent_fabric_observability.py
   - tests/k1/l5_infrastructure/test_metrics_exporter.py
   - tests/k1/l5_infrastructure/test_structured_logging.py
+  triggers:
+  - Actor mailbox implementation changes requiring metric schema updates
+  - OpenTelemetry instrumentation version or protocol updates
+  - Message routing or admission control logic modifications
+  - Performance budget refinements for telemetry overhead
+  - Grafana dashboard or alerting rule architecture changes
+related_adrs:
+- ADR-0002
+- ADR-0002a
+- ADR-0002b
+- ADR-0002c
+- ADR-0002d
+- ADR-0019a
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- architecture_diagrams/k1/k1_observability_architecture.mmd
+- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
+- docs/architecture/diagrams/k1/k1_supervision_tree.mmd
+- docs/architecture/diagrams/k1/k1_mailbox_backpressure.mmd
+research_citations:
+- Prometheus Best Practices - prometheus.io/docs/practices/naming/
+- OpenTelemetry Semantic Conventions - opentelemetry.io/docs/specs/semconv/
+- Grafana Dashboard Best Practices - grafana.com/docs/grafana/latest/dashboards/build-dashboards/best-practices/
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0002a
+- ADR-0002b
+- ADR-0002c
+title: Observability Schema for Actor Messaging
 ---
 
 # ADR-0002d: Observability Schema for Actor Messaging

@@ -1,11 +1,5 @@
 ---
 adr_number: 0003c
-title: Protocol Monitor Runtime Implementation
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -19,61 +13,23 @@ affected_modules:
 - k1.l5_infrastructure.violation_handler
 - k1.l5_infrastructure.timeout_enforcer
 - k1.l5_infrastructure.composition_manager
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- performance
-- scalability
-- reliability
 - maintainability
-- testing
 - observability
+- performance
+- reliability
+- scalability
 - security
-supersedes:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0003b
-- ADR-0006
-- ADR-0011
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0003b
-- ADR-0011
-- ADR-0045
-- ADR-0048
-- ADR-0053
-- ADR-0060
-implementation_status: COMPLETED
+- testing
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 2 (Runtime)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
-- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
-research_citations:
-- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types. Journal of the ACM, Vol. 63, No. 1.
-- Yoshida, N., et al. (2013). The Scribble Protocol Language. POPL.
-- Hewitt, C., Bishop, P., Steiger, R. (1973). A Universal Modular Actor Formalism for Artificial Intelligence. IJCAI.
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Changing protocol definitions or PDL schemas
-  - Adding new actor types with custom protocol validation
-  - Modifying FSM executor or receive-side validation hooks
-  - Updating timeout enforcement or violation handling policies
-  - Introducing new message types or communication patterns
   affected_adrs:
   - ADR-0002
   - ADR-0006
@@ -99,6 +55,51 @@ propagation:
   - tests/k1/l5_infrastructure/test_violation_handler.py
   - tests/k1/l5_infrastructure/test_timeout_enforcer.py
   - tests/k1/l5_infrastructure/test_composition_manager.py
+  triggers:
+  - Changing protocol definitions or PDL schemas
+  - Adding new actor types with custom protocol validation
+  - Modifying FSM executor or receive-side validation hooks
+  - Updating timeout enforcement or violation handling policies
+  - Introducing new message types or communication patterns
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0003c
+- ADR-0003d
+- ADR-0006
+- ADR-0011
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
+- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
+research_citations:
+- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types.
+  Journal of the ACM, Vol. 63, No. 1.
+- Yoshida, N., et al. (2013). The Scribble Protocol Language. POPL.
+- Hewitt, C., Bishop, P., Steiger, R. (1973). A Universal Modular Actor Formalism
+  for Artificial Intelligence. IJCAI.
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0006
+- ADR-0011
+title: Protocol Monitor Runtime Implementation
 ---
 
 # ADR-0003c: Protocol Monitor Runtime Implementation

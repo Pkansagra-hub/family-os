@@ -1,11 +1,5 @@
 ---
 adr_number: 0001a
-title: 0001A K0 Bridge Communication Protocol
-status: APPROVED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -17,51 +11,21 @@ affected_modules:
 - k1.l5_infrastructure
 - k0.bus
 - k0.ports
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- performance
-- security
-- reliability
 - observability
+- performance
+- reliability
 - scalability
-supersedes: []
-superseded_by: []
-related_adrs:
-- ADR-0001
-- ADR-0011
-- ADR-0017
-- ADR-0018
-- ADR-0022
-- ADR-0044
-- ADR-0045
-- ADR-0048
-implementation_status: NOT_STARTED
+- security
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- architecture_diagrams/k0_k1_integration_architecture.mmd
-research_citations:
-- 'HTTP/2 RFC 7540: https://tools.ietf.org/html/rfc7540'
-- 'FlatBuffers Documentation: https://google.github.io/flatbuffers/'
-- 'Zstd Compression: https://facebook.github.io/zstd/'
+implementation_status: NOT_STARTED
 propagation:
-  triggers:
-  - Changing dual-format protocol requirements
-  - Modifying Fast/Smart lane routing logic
-  - Updating session state serialization contracts
-  - Changing K1 to K0 bandwidth allocation limits
-  - Altering privacy band encryption policies
   affected_adrs:
   - ADR-0011
   - ADR-0017
@@ -86,6 +50,52 @@ propagation:
   - tests/k0/ports/test_command_port.py
   - tests/k0/ports/test_query_port.py
   - tests/integration/test_k0_k1_bridge_integration.py
+  triggers:
+  - Changing dual-format protocol requirements
+  - Modifying Fast/Smart lane routing logic
+  - Updating session state serialization contracts
+  - Changing K1 to K0 bandwidth allocation limits
+  - Altering privacy band encryption policies
+related_adrs:
+- ADR-0001
+- ADR-0001a
+- ADR-0001b
+- ADR-0001c
+- ADR-0001d
+- ADR-0001e
+- ADR-0011
+- ADR-0017
+- ADR-0019c
+- ADR-0049
+- ADR-0050
+- ADR-0050c
+- ADR-0050d
+- ADR-0053c
+- ADR-0059d
+- ADR-0070
+- ADR-0084
+- ADR-0089
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- architecture_diagrams/k0_k1_integration_architecture.mmd
+research_citations:
+- 'HTTP/2 RFC 7540: https://tools.ietf.org/html/rfc7540'
+- 'FlatBuffers Documentation: https://google.github.io/flatbuffers/'
+- 'Zstd Compression: https://facebook.github.io/zstd/'
+status: ACCEPTED
+superseded_by: []
+supersedes: []
+title: 0001A K0 Bridge Communication Protocol
 ---
 
 ﻿# ADR-0001a: K0 Bridge Communication Protocol (K1 â†” K0)

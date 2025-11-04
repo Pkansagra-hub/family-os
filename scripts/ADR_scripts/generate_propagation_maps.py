@@ -41,10 +41,7 @@ class PropagationMapGenerator:
 
     def get_layer_adrs(self, layer: str) -> List[Dict]:
         """Get all ADRs affecting a specific layer."""
-        return [
-            adr for adr in self.index_data["adrs"]
-            if layer in adr.get("affected_layers", [])
-        ]
+        return [adr for adr in self.index_data["adrs"] if layer in adr.get("affected_layers", [])]
 
     def get_layer_modules(self, layer: str) -> Set[str]:
         """Extract unique modules for a layer from ADRs."""
@@ -69,7 +66,7 @@ class PropagationMapGenerator:
             "layer2_orchestration": "Layer 2: Orchestration",
             "layer3_execution": "Layer 3: Execution",
             "layer4_runtime": "Layer 4: Runtime Core",
-            "layer5_infrastructure": "Layer 5: Infrastructure"
+            "layer5_infrastructure": "Layer 5: Infrastructure",
         }
 
         layer_description_map = {
@@ -77,7 +74,7 @@ class PropagationMapGenerator:
             "layer2_orchestration": "Planner, Orchestrator, Agent Lifecycle FSM",
             "layer3_execution": "Agent Fabric, Model Hub, Tools, Dialogue Management",
             "layer4_runtime": "SessionState, Leases, Flow Engine, Learning Loop",
-            "layer5_infrastructure": "Scheduler, Backpressure, Thermal Management, Observability"
+            "layer5_infrastructure": "Scheduler, Backpressure, Thermal Management, Observability",
         }
 
         yaml_content = f"""# {layer_name_map.get(layer, layer)} - Propagation Map
@@ -221,7 +218,7 @@ cross_cutting:
             "layer2_orchestration",
             "layer3_execution",
             "layer4_runtime",
-            "layer5_infrastructure"
+            "layer5_infrastructure",
         ]
 
         print(f"\n🔄 Generating propagation maps...")
@@ -255,7 +252,7 @@ cross_cutting:
             "layer2_orchestration",
             "layer3_execution",
             "layer4_runtime",
-            "layer5_infrastructure"
+            "layer5_infrastructure",
         ]
 
         all_valid = True
@@ -269,6 +266,7 @@ cross_cutting:
 
             # Check if file is recent (modified within last 7 days)
             import time
+
             file_age_days = (time.time() - map_file.stat().st_mtime) / 86400
 
             if file_age_days > 7:
@@ -293,19 +291,22 @@ def main():
     parser.add_argument(
         "--layer",
         help="Generate map for specific layer only",
-        choices=["layer1_input", "layer2_orchestration", "layer3_execution",
-                 "layer4_runtime", "layer5_infrastructure"]
+        choices=[
+            "layer1_input",
+            "layer2_orchestration",
+            "layer3_execution",
+            "layer4_runtime",
+            "layer5_infrastructure",
+        ],
     )
     parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate existing maps (no regeneration)"
+        "--validate", action="store_true", help="Validate existing maps (no regeneration)"
     )
     parser.add_argument(
         "--base-path",
         type=Path,
         default=Path.cwd(),
-        help="Base repository path (default: current directory)"
+        help="Base repository path (default: current directory)",
     )
 
     args = parser.parse_args()

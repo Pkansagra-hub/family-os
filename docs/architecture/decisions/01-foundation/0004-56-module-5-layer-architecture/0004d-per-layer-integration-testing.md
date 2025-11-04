@@ -1,11 +1,5 @@
 ---
-adr_number: '0004d'
-title: Per-Layer Integration Testing Strategy
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
+adr_number: 0004d
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -13,49 +7,23 @@ affected_layers:
 - layer4_runtime
 - layer5_infrastructure
 affected_modules: []
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- compatibility
+- maintainability
 - modularity
 - performance
 - reliability
 - scalability
 - testing
-- maintainability
-- interoperability
-supersedes: []
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0004
-- ADR-0004a
-- ADR-0004b
-- ADR-0004c
-- ADR-0006
-- ADR-0007
-- ADR-0012
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams: []
-research_citations: []
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding a new layer
-  - Changing existing layer dependency rules
-  - Introduction of new module in any layer
-  - Updating performance budgets for any layer
-  - Modifying API contracts between layers
   affected_adrs:
   - ADR-0001c
   - ADR-0002c
@@ -74,6 +42,35 @@ propagation:
   - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
   affected_tests: []
+  triggers:
+  - Adding a new layer
+  - Changing existing layer dependency rules
+  - Introduction of new module in any layer
+  - Updating performance budgets for any layer
+  - Modifying API contracts between layers
+related_adrs:
+- ADR-0004
+- ADR-0004a
+- ADR-0004b
+- ADR-0004c
+- ADR-0004d
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams: []
+research_citations: []
+status: IMPLEMENTED
+superseded_by: []
+supersedes: []
+title: Per-Layer Integration Testing Strategy
 ---
 
 # ADR-0004d: Per-Layer Integration Testing Strategy

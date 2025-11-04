@@ -1,17 +1,13 @@
 ---
-adr_number: '0004f'
-title: Stream Switch Multi-Modal Bus
-status: PROPOSED
-date_created: '2025-10-22'
-date_updated: '2025-10-22'
-authors:
-- K1 Architecture Team
+adr_number: 0004f
 affected_layers:
 - layer1_input
 - layer2_orchestration
 - layer4_runtime
 affected_modules:
 - k1.l1_input.streams.stream_switch
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
 - cost
@@ -22,34 +18,13 @@ concerns:
 - scalability
 - security
 - testing
-- ux
-supersedes: []
-superseded_by: []
-related_adrs:
-- ADR-0001f
-- ADR-0004
-- ADR-0004a
-- ADR-0004c
-- ADR-0054d
-implementation_status: PLANNED
+- usability
+date_created: '2025-10-22'
+date_updated: '2025-10-22'
 implementation_date: null
 implementation_phase: null
-related_contracts: []
-related_diagrams: []
-research_citations:
-- Baltrusaitis, T., et al. (2018). "Multimodal Machine Learning: A Survey and Taxonomy." IEEE TPAMI
-- Ngiam, J., et al. (2011). "Multimodal Deep Learning." ICML
-- Dey, A. K. (2001). "Understanding and Using Context." Personal and Ubiquitous Computing
-- Schilit, B., et al. (1994). "Context-Aware Computing Applications." Mobile Computing Systems and Applications
-- Brewer, E. A. (2000). "Lessons from Giant-Scale Services." IEEE Internet Computing
-- Hohpe, G., & Woolf, B. (2003). "Enterprise Integration Patterns"
+implementation_status: PLANNED
 propagation:
-  triggers:
-  - Adding new module to any layer
-  - Changing layer dependency rules
-  - Modifying system architecture
-  - Performance requirement changes
-  - Updating API contracts or schemas
   affected_adrs:
   - ADR-0001f
   - ADR-0004
@@ -61,8 +36,35 @@ propagation:
   - k0/contracts/asyncapi.events.yaml
   - k0/contracts/openapi.k0.yaml
   affected_tests: []
+  triggers:
+  - Adding new module to any layer
+  - Changing layer dependency rules
+  - Modifying system architecture
+  - Performance requirement changes
+  - Updating API contracts or schemas
+related_adrs:
+- ADR-0001f
+- ADR-0004
+- ADR-0004a
+- ADR-0004c
+- ADR-0004f
+- ADR-0054d
+related_contracts: []
+related_diagrams: []
+research_citations:
+- Baltrusaitis, T., et al. (2018). "Multimodal Machine Learning: A Survey and Taxonomy."
+    IEEE TPAMI
+- Ngiam, J., et al. (2011). "Multimodal Deep Learning." ICML
+- Dey, A. K. (2001). "Understanding and Using Context." Personal and Ubiquitous Computing
+- Schilit, B., et al. (1994). "Context-Aware Computing Applications." Mobile Computing
+  Systems and Applications
+- Brewer, E. A. (2000). "Lessons from Giant-Scale Services." IEEE Internet Computing
+- Hohpe, G., & Woolf, B. (2003). "Enterprise Integration Patterns"
+status: PROPOSED
+superseded_by: []
+supersedes: []
+title: Stream Switch Multi-Modal Bus
 ---
-
 
 # ADR-0004f: Stream Switch Multi-Modal Bus
 

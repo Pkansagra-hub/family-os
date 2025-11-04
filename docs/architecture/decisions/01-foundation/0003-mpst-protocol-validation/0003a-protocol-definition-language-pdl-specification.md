@@ -1,11 +1,5 @@
 ---
 adr_number: 0003a
-title: Protocol Definition Language (PDL) Specification
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -17,64 +11,23 @@ affected_modules:
 - k1.l4_runtime.protocol_monitor
 - k1.l5_infrastructure.fsm_executor
 - k1.l5_infrastructure.contracts.protocols
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- compatibility
 - modularity
 - performance
 - scalability
 - security
 - testing
-- interoperability
-- developer_experience
-supersedes:
-- ADR-0002
-- ADR-0003
-- ADR-0003d
-- ADR-0006
-- ADR-0010
-- ADR-0011
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0003
-- ADR-0006
-- ADR-0010
-- ADR-0011
-- ADR-0033
-- ADR-0034
-- ADR-0035
-- ADR-0036
-- ADR-0037
-implementation_status: COMPLETED
+- usability
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 2 (Runtime)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-- k1/contracts/protocols/definitions/clarification.pdl.yml
-related_diagrams:
-- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
-- architecture_diagrams/k1/k1_orchestrator_3phase.mmd
-- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
-research_citations:
-- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types. Journal of the ACM, Vol. 63, No. 1.
-- Yoshida, N., Hu, R., Neykova, R., Ng, N. (2013). The Scribble Protocol Language. TOOLS 2013.
-- Smith, R. G. (1980). The Contract Net Protocol: High-Level Communication and Control in a Distributed Problem Solver. IEEE Transactions on Computers, Vol. C-29, No. 12.
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Modifying protocol definitions
-  - Changing conversation primitives
-  - Updating API contracts or schemas
-  - Introducing new agent communication patterns
-  - Refactoring state machine semantics
   affected_adrs:
   - ADR-0002
   - ADR-0003
@@ -97,6 +50,56 @@ propagation:
   - tests/k1/l5_infrastructure/test_pdl_compiler.py
   - tests/k1/l4_runtime/test_protocol_monitor.py
   - tests/k1/l5_infrastructure/test_fsm_executor.py
+  triggers:
+  - Modifying protocol definitions
+  - Changing conversation primitives
+  - Updating API contracts or schemas
+  - Introducing new agent communication patterns
+  - Refactoring state machine semantics
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0003c
+- ADR-0003d
+- ADR-0006
+- ADR-0010
+- ADR-0011
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+- k1/contracts/protocols/definitions/clarification.pdl.yml
+related_diagrams:
+- architecture_diagrams/k1/k1_protocol_monitor_fsms.mmd
+- architecture_diagrams/k1/k1_orchestrator_3phase.mmd
+- docs/architecture/diagrams/k1/k1_actor_model_messaging.mmd
+research_citations:
+- Honda, K., Yoshida, N., Carbone, M. (2008). Multiparty Asynchronous Session Types.
+  Journal of the ACM, Vol. 63, No. 1.
+- Yoshida, N., Hu, R., Neykova, R., Ng, N. (2013). The Scribble Protocol Language.
+  TOOLS 2013.
+- Smith, R. G. (1980). The Contract Net Protocol: High-Level Communication and Control
+    in a Distributed Problem Solver. IEEE Transactions on Computers, Vol. C-29, No.
+    12.
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0003
+- ADR-0003d
+- ADR-0006
+- ADR-0010
+- ADR-0011
+title: Protocol Definition Language (PDL) Specification
 ---
 
 # ADR-0003a: Protocol Definition Language (PDL) Specification

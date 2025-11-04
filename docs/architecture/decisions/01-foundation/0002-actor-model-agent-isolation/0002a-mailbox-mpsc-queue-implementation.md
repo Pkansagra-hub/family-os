@@ -1,11 +1,5 @@
 ---
 adr_number: 0002a
-title: Mailbox MPSC Queue Implementation
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer2_orchestration
 - layer3_execution
@@ -23,60 +17,22 @@ affected_modules:
 - k1.l3_execution
 - k1.l4_runtime
 - k1.l5_infrastructure
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
+- observability
 - performance
-- scalability
 - privacy
 - reliability
-- observability
+- scalability
 - testing
-supersedes:
-- ADR-0002
-- ADR-0005
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0003
-- ADR-0015
-- ADR-0028
-- ADR-0029
-- ADR-0040
-- ADR-0041
-- ADR-0045
-- ADR-0048
-- ADR-0073
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- k1_actor_model_messaging.mmd
-- k1_supervision_tree.mmd
-- k1_mailbox_backpressure.mmd
-- k1_wfq_scheduler.mmd
-- k1_dlq_architecture.mmd
-research_citations:
-- Hewitt, C., Bishop, P., Steiger, R. (1973) - A Universal Modular ACTOR Formalism for Artificial Intelligence
-- Lock-Free Data Structures (Preshing)
-- Weighted Fair Queueing (Demers et al. 1989)
-- Actor Model (Wikipedia)
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - MPSC queue size limits or watermark thresholds modified
-  - Priority tiers or WFQ scheduling algorithm changed
-  - Mailbox overflow handling policies updated
-  - Message TTL or DLQ retention rules adjusted
   affected_adrs:
   - ADR-0002
   - ADR-0002b
@@ -107,6 +63,48 @@ propagation:
   - tests/k1/test_backpressure.py
   - tests/k1/test_wfq_scheduler.py
   - tests/k1/test_dlq.py
+  triggers:
+  - MPSC queue size limits or watermark thresholds modified
+  - Priority tiers or WFQ scheduling algorithm changed
+  - Mailbox overflow handling policies updated
+  - Message TTL or DLQ retention rules adjusted
+related_adrs:
+- ADR-0002
+- ADR-0002a
+- ADR-0002c
+- ADR-0002d
+- ADR-0005
+- ADR-0006a
+- ADR-0073
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- k1_actor_model_messaging.mmd
+- k1_supervision_tree.mmd
+- k1_mailbox_backpressure.mmd
+- k1_wfq_scheduler.mmd
+- k1_dlq_architecture.mmd
+research_citations:
+- Hewitt, C., Bishop, P., Steiger, R. (1973) - A Universal Modular ACTOR Formalism
+  for Artificial Intelligence
+- Lock-Free Data Structures (Preshing)
+- Weighted Fair Queueing (Demers et al. 1989)
+- Actor Model (Wikipedia)
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0005
+title: Mailbox MPSC Queue Implementation
 ---
 
 # ADR-0002a: Mailbox MPSC Queue Implementation

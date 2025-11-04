@@ -1,11 +1,5 @@
 ---
 adr_number: 0001e
-title: P21+ Integration Pipeline Layer
-status: COMPLETED
-date_created: '2025-10-12'
-date_updated: '2025-10-12'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -23,64 +17,23 @@ affected_modules:
 - k1.l3_execution.agent_fabric
 - k0.bus
 - k0.ports
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
 - modularity
+- observability
 - performance
-- security
 - reliability
 - scalability
+- security
 - testing
-- observability
-supersedes:
-- ADR-0001
-- ADR-0001a
-- ADR-0002
-- ADR-0010
-superseded_by: []
-related_adrs:
-- ADR-0001
-- ADR-0001a
-- ADR-0002
-- ADR-0004
-- ADR-0005
-- ADR-0006
-- ADR-0010
-- ADR-0033
-- ADR-0086
-implementation_status: COMPLETED
+date_created: '2025-10-12'
+date_updated: '2025-10-12'
 implementation_date: '2025-10-12'
 implementation_phase: Phase 2 (Runtime)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams:
-- k0_k1_integration_architecture.mmd
-- k1_model_hub_architecture.mmd
-- k1_agent_model_integration.mmd
-- k0_k1_boundary_architecture.mmd
-- k1_sessionstate_k0_memory_architecture.mmd
-research_citations:
-- Model Context Protocol (MCP) Specification
-- WebAssembly System Interface (WASI)
-- HTTP/2 RFC
-- FlatBuffers
-- Zstd
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Adding new P21+ integration pipeline
-  - Updating MCP protocol or WASM sandbox
-  - Changing capability-based security rules
-  - Modifying K0/K1 bridge communication
-  - Introducing new third-party service
   affected_adrs:
   - ADR-0001
   - ADR-0002
@@ -109,6 +62,50 @@ propagation:
   - tests/k1/l3_execution/test_agent_fabric.py
   - tests/k0/test_bus.py
   - tests/k0/test_ports.py
+  triggers:
+  - Adding new P21+ integration pipeline
+  - Updating MCP protocol or WASM sandbox
+  - Changing capability-based security rules
+  - Modifying K0/K1 bridge communication
+  - Introducing new third-party service
+related_adrs:
+- ADR-0001
+- ADR-0001a
+- ADR-0001e
+- ADR-0002
+- ADR-0010
+- ADR-0084
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams:
+- k0_k1_integration_architecture.mmd
+- k1_model_hub_architecture.mmd
+- k1_agent_model_integration.mmd
+- k0_k1_boundary_architecture.mmd
+- k1_sessionstate_k0_memory_architecture.mmd
+research_citations:
+- Model Context Protocol (MCP) Specification
+- WebAssembly System Interface (WASI)
+- HTTP/2 RFC
+- FlatBuffers
+- Zstd
+status: IMPLEMENTED
+superseded_by: []
+supersedes:
+- ADR-0001
+- ADR-0001a
+- ADR-0002
+- ADR-0010
+title: P21+ Integration Pipeline Layer
 ---
 
 # ADR-0001e: P21+ Integration Pipeline Layer

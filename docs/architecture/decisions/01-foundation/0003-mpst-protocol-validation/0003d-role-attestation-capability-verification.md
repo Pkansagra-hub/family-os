@@ -1,11 +1,5 @@
 ---
 adr_number: 0003d
-title: Role Attestation & Capability Verification
-status: PROPOSED
-date_created: '2025-11-03'
-date_updated: '2025-11-03'
-authors:
-- K1 Architecture Team
 affected_layers:
 - layer1_input
 - layer2_orchestration
@@ -13,60 +7,21 @@ affected_layers:
 - layer4_runtime
 - layer5_infrastructure
 affected_modules: []
+authors:
+- K1 Architecture Team
 concerns:
 - architecture
-- compliance
 - cost
 - observability
 - performance
 - security
 - testing
-supersedes:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0003b
-- ADR-0003c
-- ADR-0003d
-- ADR-0005
-- ADR-0006
-- ADR-0010
-- ADR-0074
-superseded_by: []
-related_adrs:
-- ADR-0002
-- ADR-0003
-- ADR-0003a
-- ADR-0003b
-- ADR-0003c
-- ADR-0005
-- ADR-0010
-- ADR-002
-- ADR-003
-- ADR-0074
-implementation_status: COMPLETED
+date_created: '2025-11-03'
+date_updated: '2025-11-03'
 implementation_date: null
 implementation_phase: Phase 1 (Foundation)
-related_contracts:
-- k0/contracts/api/rest/idempotency/24h_retention.yml
-- k0/contracts/asyncapi.events.yaml
-- k0/contracts/openapi.k0.yaml
-- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
-- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
-- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
-related_diagrams: []
-research_citations: []
+implementation_status: COMPLETED
 propagation:
-  triggers:
-  - Attestation key rotation
-  - Capability token format change
-  - Protocol schema evolution affecting signatures
-  - Runtime enforcement policy updates
-  - Privacy band boundary changes
   affected_adrs:
   - ADR-0003
   - ADR-0003a
@@ -84,6 +39,50 @@ propagation:
   - k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_request.fbs
   - k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+  triggers:
+  - Attestation key rotation
+  - Capability token format change
+  - Protocol schema evolution affecting signatures
+  - Runtime enforcement policy updates
+  - Privacy band boundary changes
+related_adrs:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0003c
+- ADR-0003d
+- ADR-0005
+- ADR-0006
+- ADR-0010
+- ADR-0074
+related_contracts:
+- k0/contracts/api/rest/idempotency/24h_retention.yml
+- k0/contracts/asyncapi.events.yaml
+- k0/contracts/openapi.k0.yaml
+- k1/contracts/flatbuffers/layer3_execution/mcp_message.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_resource_response.fbs
+- k1/contracts/flatbuffers/layer3_execution/mcp_tool_discovery.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_cache_entry.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_request.fbs
+- k1/contracts/flatbuffers/layer3_execution/model_response.fbs
+related_diagrams: []
+research_citations: []
+status: PROPOSED
+superseded_by: []
+supersedes:
+- ADR-0002
+- ADR-0003
+- ADR-0003a
+- ADR-0003b
+- ADR-0003c
+- ADR-0003d
+- ADR-0005
+- ADR-0006
+- ADR-0010
+- ADR-0074
+title: Role Attestation & Capability Verification
 ---
 
 # ADR-0003d: Role Attestation & Capability Verification
