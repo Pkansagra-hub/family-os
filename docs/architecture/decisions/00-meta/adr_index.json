@@ -1,12 +1,12 @@
 {
   "version": "1.0.0",
-  "generated_at": "2025-11-03T20:35:32.723481",
-  "total_adrs": 305,
+  "generated_at": "2025-11-03T22:23:52.378949",
+  "total_adrs": 306,
   "statistics": {
     "by_status": {
       "PROPOSED": 127,
       "ACCEPTED": 158,
-      "DRAFT": 2,
+      "DRAFT": 3,
       "IMPLEMENTED": 13,
       "REJECTED": 1,
       " COMPLETE CATALOG OF ALL ARCHITECTURAL DECISIONS WITH LAYER 5 EXTENSIBILITY": 1,
@@ -18,7 +18,7 @@
       "0000-template.md": 1,
       "01-foundation": 22,
       "02-layer1-input": 18,
-      "03-layer2-orchestration": 46,
+      "03-layer2-orchestration": 47,
       "04-layer3-execution": 18,
       "05-layer4-runtime": 26,
       "06-layer5-infrastructure": 58,
@@ -34,25 +34,25 @@
     },
     "by_layer": {
       "layer1_input": 168,
-      "layer2_orchestration": 152,
-      "layer3_execution": 226,
+      "layer2_orchestration": 153,
+      "layer3_execution": 227,
       "layer4_runtime": 293,
       "layer5_infrastructure": 212
     },
     "by_concern": {
-      "architecture": 300,
-      "maintainability": 26,
+      "architecture": 301,
+      "maintainability": 27,
       "modularity": 166,
-      "performance": 293,
+      "performance": 294,
       "reliability": 240,
-      "scalability": 241,
+      "scalability": 242,
       "security": 221,
-      "observability": 281,
+      "observability": 282,
       "cost": 203,
       "privacy": 273,
       "testing": 279,
       "compatibility": 5,
-      "usability": 120
+      "usability": 121
     },
     "missing_frontmatter": 4
   },
@@ -151,7 +151,8 @@
         "0086e",
         "0086f",
         "0086g",
-        "0086h"
+        "0086h",
+        "0093"
       ],
       "04-layer3-execution": [
         "0027a",
@@ -629,6 +630,7 @@
         "0086e",
         "0086f",
         "0086g",
+        "0093",
         "0033",
         "0033a",
         "0058",
@@ -788,6 +790,7 @@
         "0086f",
         "0086g",
         "0086h",
+        "0093",
         "0027a",
         "0033",
         "0033a",
@@ -1751,7 +1754,8 @@
       ],
       "DRAFT": [
         "0001b",
-        "0049"
+        "0049",
+        "0093"
       ],
       "IMPLEMENTED": [
         "0001e",
@@ -1873,6 +1877,7 @@
         "0086f",
         "0086g",
         "0086h",
+        "0093",
         "0027a",
         "0027b",
         "0027c",
@@ -2105,6 +2110,7 @@
         "0086b",
         "0086e",
         "0086g",
+        "0093",
         "0087",
         "0011a",
         "0013a",
@@ -2369,6 +2375,7 @@
         "0086f",
         "0086g",
         "0086h",
+        "0093",
         "0027a",
         "0027b",
         "0027c",
@@ -2890,6 +2897,7 @@
         "0086f",
         "0086g",
         "0086h",
+        "0093",
         "0027a",
         "0027b",
         "0027c",
@@ -3366,6 +3374,7 @@
         "0086f",
         "0086g",
         "0086h",
+        "0093",
         "0027a",
         "0027b",
         "0027c",
@@ -4369,6 +4378,7 @@
         "0082b",
         "0082c",
         "0086d",
+        "0093",
         "0027a",
         "0027b",
         "0027c",
@@ -27891,6 +27901,55 @@
       "title": "Remediation Service Separation & Microkernel Purity",
       "file_path": "06-layer5-infrastructure\\0092-remediation-service-separation\\0092.md",
       "file_name": "0092.md",
+      "summary": "---"
+    },
+    {
+      "adr_number": "0093",
+      "title": "ConciergeAgent Pattern (Master Coordinator with 11 Meta-Intents)",
+      "status": "DRAFT",
+      "date_created": "2025-11-03",
+      "date_updated": "2025-11-03",
+      "authors": [
+        "K1 Architecture Team"
+      ],
+      "affected_layers": [
+        "layer2_orchestration",
+        "layer3_execution"
+      ],
+      "affected_modules": [
+        "k1.l2_orchestration.concierge",
+        "k1.l2_orchestration.orchestrator",
+        "k1.l3_execution.agents"
+      ],
+      "concerns": [
+        "architecture",
+        "maintainability",
+        "scalability",
+        "usability",
+        "performance",
+        "observability"
+      ],
+      "related_adrs": [
+        "ADR-0006f",
+        "ADR-0017",
+        "ADR-0086",
+        "ADR-0007",
+        "ADR-0001"
+      ],
+      "related_contracts": [
+        "k1/contracts/flatbuffers/layer2_orchestration/concierge_message.fbs",
+        "k1/contracts/flatbuffers/layer2_orchestration/meta_intent.fbs",
+        "k1/contracts/flatbuffers/layer2_orchestration/task_envelope.fbs"
+      ],
+      "research_citations": [
+        "Contract Net Protocol by Reid Smith (1980)",
+        "Multi-Agent Systems by Gerhard Weiss (1999)",
+        "Dialogue Management in AI by Allen, Byron, Dzikovska et al. (2001)",
+        "Intent Classification in Conversational AI by Liu & Lane (2016)"
+      ],
+      "implementation_status": "NOT_STARTED",
+      "file_path": "03-layer2-orchestration\\0093-conciergeagent-pattern-(master-coordinator-with-11-meta-intents)\\0093.md",
+      "file_name": "0093.md",
       "summary": "---"
     },
     {
