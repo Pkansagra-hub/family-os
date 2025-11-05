@@ -9,141 +9,18 @@ config:
 ---
 flowchart TB
 
-%% ====== VERSION & CHANGELOG ======
-%% Version: 1.3-sealed (2025-11-04)
-%% Previous: 1.2-cleanup → 1.1-aligned → 1.0-drifted (baseline: diagram1_drifted.mmd)
-%% Status: K0/K1/Bridge boundaries SEALED - zero boundary leaks
-%%
-%% CHANGELOG (Milestones 0-10 + Cleanup + Final Leak Fixes):
-%%
-%% Milestone 0: Baseline & Guardrails
-%%   ✅ 0.1: Created diagram1_drifted.mmd baseline snapshot
-%%   ✅ 0.2: Added structural rules R1-R5 and visual legend keys
-%%
-%% Milestone 1: K0_BRIDGE Insertion
-%%   ✅ 1.1: Created K0_BRIDGE subgraph with all required nodes
-%%   ✅ 1.2: Rewired ALL ingress through Bridge (ING → Bridge → K0 Ports)
-%%   ❌ REMOVED: Direct ING→CMD/QRY/SSE/OBS edges
-%%
-%% Milestone 2: Pipeline Ownership
-%%   ✅ 2.1: Moved PIPELINES (P01-P20) INSIDE K0_KERNEL
-%%   ✅ 2.2: Wired K0_BUS → Pipelines → Drivers (all in-kernel)
-%%   ❌ REMOVED: User-space PIPELINES subgraph
-%%   ❌ REMOVED: pip_bus "Facade→K0 Bus" pattern
-%%
-%% Milestone 3: Storage/Driver Decoupling
-%%   ✅ 3.1: REMOVED all user-space → st_* edges
-%%   ✅ 3.2: Documented correct flow: module → Bridge → CMD/QRY
-%%   ❌ REMOVED: hipp_encoder→st_*, ret_*→st_*, emb_index→st_*, wf_store→st_ws
-%%
-%% Milestone 4: Policy Authority
-%%   ✅ 4.1: Emphasized K0_PEP as ONLY authority (Rule R4)
-%%   ✅ 4.2: Marked user-space MW_PEP as HINTS ONLY
-%%
-%% Milestone 5: SSE Termination
-%%   ✅ 5.1: Routed ALL SSE consumption through bridge_sse_client (Rule R5)
-%%   ❌ REMOVED: Direct SSE_ACL<-->Topic edges
-%%
-%% Milestone 6-7: Identity & Cognition
-%%   ✅ Identity/device management nodes added to Bridge
-%%   ✅ Cognition rewiring: storage access via Bridge (implicit in M3)
-%%
-%% Milestone 8: Cosmetics
-%%   ✅ Applied bridge classDef to all Bridge nodes
-%%   ✅ Visual grammar: Bridge (blue, thick) vs Kernel (red dashed, thick)
-%%
-%% Milestone 9: Consistency Validation
-%%   ✅ Rule R1: All ingress → Bridge ✓
-%%   ✅ Rule R2: P01-P20 inside K0 ✓
-%%   ✅ Rule R3: No user-space → st_* ✓
-%%   ✅ Rule R4: K0_PEP authority ✓
-%%   ✅ Rule R5: SSE via Bridge ✓
-%%
-%% Milestone 10: Deliverables
-%%   ✅ Changelog embedded (this section)
-%%   ✅ Drift resolution table (see below)
-%%
-%% CLEANUP PHASE (Drift Elimination):
-%%   ❌ REMOVED: QUERY_PATH subgraph (st_read, direct storage access)
-%%   ❌ REMOVED: STORE_ADAPTERS (ret_*_adapter nodes)
-%%   ❌ REMOVED: Alias nodes in K0_DRIVERS (st_fts, st_vec, st_epi, etc.)
-%%   ❌ REMOVED: evt_bus<-->K0_BUS bidirectional coupling
-%%   ❌ REMOVED: evt_write_h-->st_receipts (user-space→kernel receipts)
-%%   ❌ REMOVED: PIPE_IMPL_MODULES (file inventory noise)
-%%   ❌ REMOVED: PIPE_COLORS legend (color reference noise)
-%%   ❌ REWIRED: P01-P20 outputs via SSE (dashed), not hard edges
-%%   ✅ RESULT: Zero user-space→kernel coupling except via Bridge
-%%
-%% FINAL LEAK FIXES (v1.3-sealed):
-%%   ❌ LEAK #1 (Idempotency): Deleted SHARED_IDEMPOTENCY→K0_IDEMP edge
-%%      REASON: User-space must not target kernel-internal K0_IDEMP directly
-%%      FIX: Idempotency keys attach on command envelope at Bridge layer
-%%   ❌ LEAK #2 (Stray Pipeline): Deleted P02_PIPELINE node in INTEGRATION_LAYER
-%%      REASON: All P01-P20 must live inside K0_KERNEL only
-%%      FIX: Removed P02_PIPELINE→HIPPO_API and P02_PIPELINE→evt_bus edges
-%%   ❌ LEAK #3 (Planes/Devices): Deleted 7 direct edges from TIER/device nodes
-%%      DELETED: TIER1→MEMORY_ENGINE, TIER2→MEMORY_SPACES, TIER3→MEMORY_PERMISSIONS
-%%      DELETED: PERSONAL_FULL→DEVICE_STORAGE, FAMILY_HUB→MEMORY_SYNC,
-%%               WORK_DEVICE→DEVICE_STORAGE, GUEST_DEVICE→MEMORY_PERMISSIONS
-%%      REASON: These bypass Bridge contract choke-point
-%%      FIX: All access flows via Plane→Gateway→Ingress→Bridge→Ports
-%%   ❌ LEAK #4 (Bus-to-Kernel): Deleted evt_bus<-->MEMORY_ENGINE bidirectional edges
-%%      REASON: User-space evt_bus must not couple to kernel components
-%%      FIX: Kernel emits events via SSE→bridge_sse_client→topics
-%%
-%% DRIFT HEATMAP → SEALED:
-%% | Issue Area          | Before (Drifted) | After (v1.3-sealed) | Status |
-%% |---------------------|------------------|---------------------|--------|
-%% | Boundary            | Ingress → K0     | Ingress → Bridge → K0 | ✅ SEALED |
-%% | Ownership           | Pipelines user-space | Pipelines in K0 | ✅ SEALED |
-%% | Wiring              | Direct st_* access | Bridge routing | ✅ SEALED |
-%% | Storage References  | st_read, st_* outside K0 | Zero user-space st_* | ✅ SEALED |
-%% | Bus Coupling        | evt_bus<-->K0_BUS | SSE/CMD via Bridge | ✅ SEALED |
-%% | Kernel Opacity      | Aliases exposed | Opaque drivers only | ✅ SEALED |
-%% | Pipeline Outputs    | Hard edges to user-space | Dashed SSE edges | ✅ SEALED |
-%% | Policy Authority    | Ambiguous PEP    | K0_PEP only    | ✅ SEALED |
-%% | SSE Consumption     | Direct K0.SSE    | Via Bridge     | ✅ SEALED |
-%% | Identity Management | Mixed            | In Bridge      | ✅ SEALED |
-%% | Idempotency Leak    | SHARED→K0_IDEMP  | Bridge-attached keys | ✅ SEALED |
-%% | Stray Pipelines     | P02 in user-space | All P01-P20 in K0 | ✅ SEALED |
-%% | Planes Direct Access | 7 edges bypassing Bridge | Zero leaks | ✅ SEALED |
-%% | Bus-Kernel Coupling | evt_bus↔MEMORY_ENGINE | SSE via Bridge | ✅ SEALED |
+%% ====== BASELINE SNAPSHOT - DRIFTED VERSION ======
+%% Version: 1.0-drifted
+%% Date: 2025-11-04
+%% Status: K0 ready / Bridge+Pipelines not aligned
+%% Purpose: Baseline reference BEFORE diagram enhancement plan implementation
+%% DO NOT MODIFY - Use as reference for drift comparison
 
 %% ====== MEMORY-CENTRIC FAMILY AI ARCHITECTURE (K0 UPDATED + COGNITIVE DETAIL MERGED) ======
 %% PRODUCTION: Kernelized durability & ports; cognition/policy in user space
 %% Merge notes:
 %% • Added Enhanced Hippocampus/Attention/Workspace/Affect/Retrieval/Services/Perception blocks
 %% • All durability (WAL/Offsets/DLQ/Outbox/Receipts) remains in K0; new storage names are DRIVER ALIASES in K0_DRIVERS
-
-%% ====== DIAGRAM RULES (STRUCTURAL GUARDRAILS) ======
-%% These rules MUST be followed to maintain K0/K1/Bridge boundary integrity:
-%%
-%% R1: ALL EXTERNAL INGRESS MUST TERMINATE AT K0_BRIDGE
-%%     ❌ NO direct ING→CMD/QRY/SSE/OBS edges allowed
-%%     ✅ Clients → K0_BRIDGE → K0 Ports
-%%
-%% R2: P01–P20 PIPELINES MUST BE INSIDE K0_KERNEL
-%%     ❌ NO external "Facade→K0 Bus" in user-space
-%%     ✅ K0_BUS → P01-P20 → K0_DRIVERS (all within kernel)
-%%
-%% R3: NO USER-SPACE EDGES TO st_* DRIVERS/ALIASES
-%%     ❌ NO cognition → st_sem/st_vec/st_fts direct access
-%%     ✅ Writes: module → K0_BRIDGE → CMD
-%%     ✅ Reads: module → K0_BRIDGE → QRY
-%%
-%% R4: K0_PEP@SYSCALL = ONLY AUTHORITY
-%%     ❌ User-space PEP/QoS/Safety are HINTS only
-%%     ✅ K0_PEP at syscall boundary is enforcement point
-%%
-%% R5: SSE SUBSCRIPTIONS TERMINATE AT BRIDGE
-%%     ❌ NO direct app subscriptions to K0.SSE
-%%     ✅ Apps → K0_BRIDGE → SSE Port
-%%
-%% ====== VISUAL LEGEND KEYS ======
-%% 🔵 BRIDGE BOUNDARY: User-space contract choke-point (light blue, thick border)
-%% 🔴 KERNEL BOUNDARY: K0 privileged space (red dashed, thick)
-%% ⚡ FAST LANE: GREEN ∧ obligations=∅ → direct fast path
-%% 🧠 SMART LANE: AMBER/RED ∨ obligations≠∅ → cognitive processing
 
 %% ====== VISUAL STYLE DEFINITIONS ======
 classDef plane fill:#eef7ff,stroke:#2a6ebb,stroke-width:1px,rx:8,ry:8
@@ -161,9 +38,6 @@ classDef realtime fill:#e6ffe6,stroke:#00cc00,stroke-width:2px,rx:8,ry:8
 classDef kernel_space fill:#fff9e6,stroke:#ff6b35,stroke-width:3px,stroke-dasharray:5 5,rx:8,ry:8
 classDef user_space fill:#f0f5ff,stroke:#2f54eb,stroke-width:2px,rx:8,ry:8
 classDef privileged_boundary stroke:#d9534f,stroke-width:3px,stroke-dasharray:8 4
-
-%% Bridge Styling (NEW for Milestone 0.2)
-classDef bridge fill:#eef7ff,stroke:#2f54eb,stroke-width:3px,rx:8,ry:8
 
 %% ====== COGNITIVE REGION STYLES ======
 classDef cognitive fill:#fff7e6,stroke:#d48806,stroke-width:2px,rx:8,ry:8
@@ -229,9 +103,29 @@ class K0_KERNEL card
 class K0_KERNEL kernel_space
 
 %% ====== KERNEL-SPACE BOUNDARY ======
-%% DELETED: PIPE_COLORS legend (Milestone Cleanup Task 4)
-%% REASON: Color keys are noise; keep behavioral topology only
-%% NOTE: P01-P20 inside K0_KERNEL with color styling at diagram end
+subgraph PIPE_COLORS["🚦 Pipeline Colors Reference"]
+  L01["P01 Recall/Read — teal"]
+  L02["P02 Write/Ingest — red"]
+  L03["P03 Consolidation/Forgetting — green"]
+  L04["P04 Arbitration/Action — blue"]
+  L05["P05 Prospective/Triggers — orange"]
+  L06["P06 Learning/Neuromod — purple"]
+  L07["P07 Sync/CRDT — darkturquoise"]
+  L08["P08 Embedding Lifecycle — gold"]
+  L09["P09 Connector Ingestion — brown"]
+  L10["P10 PII/Minimization — deeppink"]
+  L11["P11 DSAR/GDPR — royalblue"]
+  L12["P12 Device/E2EE — seagreen"]
+  L13["P13 Index Rebuild — firebrick"]
+  L14["P14 Near-Duplicate/Canon — orchid"]
+  L15["P15 Rollups/Summaries — steelblue"]
+  L16["P16 Feature Flags/A-B — olive"]
+  L17["P17 QoS/Cost Governance — saddlebrown"]
+  L18["P18 Safety/Abuse — orangered"]
+  L19["P19 Personalization/Reco — DarkOrchid"]
+  L20["P20 Procedure/Habits — dimgray"]
+end
+class PIPE_COLORS card
 
 %% ====== CLIENTS & DEVICES ======
 subgraph FAMILY_DEVICES["🧠 Device-Local Memory Ecosystem"]
@@ -274,7 +168,7 @@ subgraph API_INGRESS["🧠 API Ingress → K0 Ports (USER-SPACE)"]
   APP["api/routers/memory_family_app.py"]:::plane
   CTRL["api/routers/memory_control.py"]:::plane
   MW_AUTH["api/memory_auth.py (SecurityContext)"]:::fast
-  MW_PEP["policy/memory_decision.py<br/>(User-space PEP HINTS ONLY)"]:::smart
+  MW_PEP["policy/memory_decision.py (User-space PEP hints)"]:::smart
   MW_SEC["security/* (mls_group/keys/ratchet)"]:::mid
   MW_QOS["retrieval/memory_qos_gate.py (QoS hints)"]:::smart
   MW_SAF["policy/memory_safety.py"]:::smart
@@ -282,50 +176,6 @@ subgraph API_INGRESS["🧠 API Ingress → K0 Ports (USER-SPACE)"]
   ING["ingress/memory_adapter.py (HTTP→Ports)"]:::fast
 end
 class API_INGRESS card
-
-%% ====== K0 BRIDGE (CONTRACT CHOKE-POINT) ======
-%% Milestone 1: First-class Bridge between user-space and K0 kernel
-%% All external ingress MUST flow through this bridge (Rule R1)
-subgraph K0_BRIDGE["🔵 K0 Bridge (Contract Choke-Point) - USER SPACE"]
-  direction TB
-
-  %% Core Bridge Clients (diagram only, not code)
-  bridge_command_client["bridge/command_client.py<br/>(diagram only)"]:::bridge
-  bridge_query_client["bridge/query_client.py<br/>(diagram only)"]:::bridge
-  bridge_sse_client["bridge/sse_client.py<br/>(diagram only)"]:::bridge
-  bridge_obs_client["bridge/observability_client.py<br/>(diagram only)"]:::bridge
-
-  %% Plane Adapters
-  bridge_planes_agent["bridge/planes/agent_adapter.py<br/>(diagram only)"]:::bridge
-  bridge_planes_family["bridge/planes/family_adapter.py<br/>(diagram only)"]:::bridge
-  bridge_planes_control["bridge/planes/control_adapter.py<br/>(diagram only)"]:::bridge
-
-  %% Identity & Device Management (moved from elsewhere)
-  bridge_identity_user_device["bridge/identity/user_device_manager.py<br/>(diagram only)"]:::bridge
-
-  %% Contract & Protocol Handling
-  bridge_contracts_flatbuffers["bridge/contracts/flatbuffer_serializer.py<br/>(diagram only)"]:::bridge
-  bridge_batching_compress["bridge/optimization/batching_compressor.py<br/>(diagram only)"]:::bridge
-  bridge_retry_cb["bridge/resilience/retry_circuit_breaker.py<br/>(diagram only)"]:::bridge
-  bridge_idempotency_keying["bridge/idempotency/key_generator.py<br/>(diagram only)"]:::bridge
-
-  %% Internal Bridge Flow
-  bridge_planes_agent-->bridge_command_client
-  bridge_planes_family-->bridge_command_client
-  bridge_planes_control-->bridge_command_client
-  bridge_planes_agent-->bridge_query_client
-  bridge_planes_family-->bridge_query_client
-  bridge_planes_control-->bridge_query_client
-
-  bridge_contracts_flatbuffers-->bridge_command_client
-  bridge_contracts_flatbuffers-->bridge_query_client
-  bridge_batching_compress-->bridge_command_client
-  bridge_retry_cb-->bridge_command_client
-  bridge_retry_cb-->bridge_query_client
-  bridge_idempotency_keying-->bridge_command_client
-end
-class K0_BRIDGE card
-class K0_BRIDGE user_space
 
 %% ====== K0 HYBRID MICROKERNEL ======
 subgraph K0["🟡 K0 Hybrid Microkernel (privileged boundary)"]
@@ -338,7 +188,7 @@ subgraph K0["🟡 K0 Hybrid Microkernel (privileged boundary)"]
     OBS["Observability Port: metrics/spans/logs"]:::mid
   end
 
-  K0_PEP["🛡️ PEP@syscall (AUTHORITY)<br/>caps/bands/ABAC<br/>Rule R4: ONLY enforcement point"]:::gate
+  K0_PEP["PEP@syscall (caps/bands/ABAC)"]:::gate
   K0_SCHED["QoS Scheduler (W-DRR · P17 budgets)"]:::mid
   K0_IDEMP["Idempotency Ledger"]:::mid
   K0_RCPT["Receipts (device-signed)"]:::mid
@@ -363,10 +213,15 @@ subgraph K0["🟡 K0 Hybrid Microkernel (privileged boundary)"]
     evt_offsets["Offsets (in‑kernel)"]:::storage
     evt_dlq["DLQ (in‑kernel)"]:::storage
 
-    %% ALIAS NODES REMOVED (Milestone Cleanup Task 2)
-    %% DELETED: st_fts, st_vec, st_epi, st_sem, st_kg_dom, st_hipp_store, st_emb, st_ws
-    %% REASON: Aliases invite accidental edges from user-space
-    %% Keep only real driver nodes - K0 internals are OPAQUE
+    %% Aliases so cognitive detail can target kernel drivers (no user-space storage)
+    st_fts["st_fts (alias)"]:::storage
+    st_vec["st_vec (alias)"]:::storage
+    st_epi["st_episodic (alias)"]:::storage
+    st_sem["st_semantic (alias)"]:::storage
+    st_kg_dom["st_kg_domain (alias)"]:::storage
+    st_hipp_store["st_hipp_store (alias)"]:::storage
+    st_emb["st_embeddings (alias)"]:::storage
+    st_ws["st_workspace (alias)"]:::storage
   end
 
   %% core data path inside kernel
@@ -381,79 +236,75 @@ subgraph K0["🟡 K0 Hybrid Microkernel (privileged boundary)"]
   K0_REPLAY-->evt_dlq
   K0_REPLAY-->evt_offsets
 
-  %% LEAK FIX 1: Idempotency key routing (user-space → Bridge only)
-  %% DELETED: SHARED_IDEMPOTENCY-->K0_IDEMP (user-space → kernel leak)
-  %% REASON: K0_IDEMP is kernel-internal; user-space sets key on command envelope
-  %% User-space idempotency wiring happens outside K0 (see below at Bridge section)
+  %% idempotency wiring - explicit link to kernel
+  SHARED_IDEMPOTENCY-->K0_IDEMP
 
-  %% ALIAS WIRING REMOVED (no longer needed without alias nodes)
-
-  %% ====== PIPELINES (Milestone 2: Moved inside K0_KERNEL per Rule R2) ======
-  subgraph K0_PIPELINES["🧠 Pipelines P01–P20 (IN-KERNEL)"]
-    direction TB
-    P01["P01 Recall/Read"]:::card
-    P02["P02 Write/Ingest"]:::card
-    P03["P03 Consolidation"]:::card
-    P04["P04 Arbitration/Action"]:::brain
-    P05["P05 Triggers"]:::card
-    P06["P06 Learning"]:::card
-    P07["P07 Sync/CRDT"]:::card
-    P08["P08 Embedding"]:::card
-    P09["P09 Ingestion"]:::card
-    P10["P10 Privacy/PII"]:::card
-    P11["P11 DSAR/GDPR"]:::card
-    P12["P12 Device/E2EE"]:::card
-    P13["P13 Index Rebuild"]:::card
-    P14["P14 Dedup/Canon"]:::card
-    P15["P15 Summaries"]:::card
-    P16["P16 Feature Flags/A-B"]:::card
-    P17["P17 QoS/Cost"]:::card
-    P18["P18 Safety"]:::card
-    P19["P19 Personalization"]:::card
-    P20["P20 Procedures/Habits"]:::card
-  end
-
-  %% K0_BUS to Pipelines wiring (fan-out with backpressure)
-  K0_BUS-->P01
-  K0_BUS-->P02
-  K0_BUS-->P03
-  K0_BUS-->P04
-  K0_BUS-->P05
-  K0_BUS-->P06
-  K0_BUS-->P07
-  K0_BUS-->P08
-  K0_BUS-->P09
-  K0_BUS-->P10
-  K0_BUS-->P11
-  K0_BUS-->P12
-  K0_BUS-->P13
-  K0_BUS-->P14
-  K0_BUS-->P15
-  K0_BUS-->P16
-  K0_BUS-->P17
-  K0_BUS-->P18
-  K0_BUS-->P19
-  K0_BUS-->P20
-
-  %% Pipelines to Drivers (within kernel)
-  P01-->K0_FTS
-  P01-->K0_VEC
-  P02-->K0_SQL
-  P03-->K0_SQL
-  P04-->K0_SQL
-  P07-->K0_SYNC
-  P08-->K0_VEC
-  P09-->K0_SQL
-  P10-->K0_SQL
-  P12-->K0_MLS
-  P13-->K0_FTS
-  P13-->K0_VEC
+  %% alias wiring to drivers (dashed = alias)
+  st_fts-.alias.->K0_FTS
+  st_vec-.alias.->K0_VEC
+  st_epi-.alias.->K0_SQL
+  st_sem-.alias.->K0_SQL
+  st_kg_dom-.alias.->K0_KG
+  st_hipp_store-.alias.->K0_SQL
+  st_emb-.alias.->K0_VEC
+  st_ws-.alias.->K0_SQL
 end
 
-%% ====== PIPELINE INFRA (Milestone Cleanup Task 4) ======
-%% DELETED: PIPE_IMPL_MODULES subgraph (file inventory for P01-P20)
-%% REASON: Code indexes belong in docs; diagram shows behavioral topology
-%% NOTE: Pipelines P01-P20 are inside K0_KERNEL (see above section)
+%% ====== PIPELINES ======
+subgraph PIPELINES["🧠 Pipelines P01–P20 (serve Memory)"]
+  direction TB
+  P01["P01 Recall/Read"]:::card
+  P02["P02 Write/Ingest"]:::card
+  P03["P03 Consolidation"]:::card
+  P04["P04 Arbitration/Action"]:::brain
+  P05["P05 Triggers"]:::card
+  P06["P06 Learning"]:::card
+  P07["P07 Sync/CRDT"]:::card
+  P08["P08 Embedding"]:::card
+  P09["P09 Ingestion"]:::card
+  P10["P10 Privacy/PII"]:::card
+  P11["P11 DSAR/GDPR"]:::card
+  P12["P12 Device/E2EE"]:::card
+  P13["P13 Index Rebuild"]:::card
+  P14["P14 Dedup/Canon"]:::card
+  P15["P15 Summaries"]:::card
+  P16["P16 Feature Flags/A-B"]:::card
+  P17["P17 QoS/Cost"]:::card
+  P18["P18 Safety"]:::card
+  P19["P19 Personalization"]:::card
+  P20["P20 Procedures/Habits"]:::card
+end
+class PIPELINES card
+
+%% ====== PIPELINE INFRA (Facade → K0 Bus) ======
+subgraph PIPE_SYS["🧩 Pipeline Infrastructure"]
+  pip_bus["pipelines/memory_bus.py (Facade→K0 Bus)"]:::bus
+  pip_mgr["pipelines/memory_manager.py"]
+  pip_reg["pipelines/memory_registry.py"]
+  pip_stages["pipelines/memory_stages.py"]
+  pip_events_shim["pipelines/memory_events_shim.py"]
+  p01_mod["pipelines/memory_p01.py"]
+  p02_mod["pipelines/p02.py"]
+  p03_mod["pipelines/memory_p03.py"]
+  p04_mod["pipelines/memory_p04.py"]
+  p05_mod["pipelines/p05.py"]
+  p06_mod["pipelines/p06.py"]
+  p07_mod["pipelines/p07.py"]
+  p08_mod["pipelines/p08.py"]
+  p09_mod["pipelines/p09.py"]
+  p10_mod["pipelines/p10.py"]
+  p11_mod["pipelines/p11.py"]
+  p12_mod["pipelines/p12.py"]
+  p13_mod["pipelines/p13.py"]
+  p14_mod["pipelines/p14.py"]
+  p15_mod["pipelines/p15.py"]
+  p16_mod["pipelines/p16.py"]
+  p17_mod["pipelines/p17.py"]
+  p18_mod["pipelines/p18.py"]
+  p19_mod["pipelines/p19.py"]
+  p20_mod["pipelines/p20.py"]
+end
+class PIPE_SYS card
 
 %% ====== EVENTS BUS (Facade → K0 Bus) ======
 subgraph EVENTS_BUS["📡 Events Bus (Facade → K0 Bus)"]
@@ -543,26 +394,24 @@ MW_QOS-->MW_SAF
 MW_SAF-->MW_OBS
 MW_OBS-->ING
 
-%% ====== INGRESS → BRIDGE → K0 PORTS (Milestone 1: Rule R1) ======
-%% ALL external ingress flows through Bridge (no direct ING→CMD/QRY/SSE/OBS)
-ING-->bridge_planes_agent
-ING-->bridge_planes_family
-ING-->bridge_planes_control
-
-%% Bridge → K0 Ports (ONLY path from user-space to kernel)
-bridge_command_client-->CMD
-bridge_query_client-->QRY
-bridge_sse_client<-->SSE
-bridge_obs_client-->OBS
+%% Direct to kernel ports (no duplicate idempotency hop)
+ING-->CMD
+ING-->QRY
+ING<-->SSE
+ING-->OBS
 
 %% ====== FAST vs SMART LANES ======
 CMD-- "GREEN ∧ obligations=∅ → fast lane" -->evt_types
 CMD-- "AMBER/RED ∨ obligations≠∅ → smart lane" --> INTENT_RT
 
-%% ====== QUERY PATH (REMOVED - Milestone Cleanup) ======
-%% DELETED: QUERY_PATH subgraph with st_read["storage/* (read indices)"]
-%% REASON: User-space must not reference storage directly
-%% CORRECT: ret_context_adapter → bridge_query_client → QRY (results return via Bridge)
+%% ====== QUERY PATH ======
+subgraph QUERY_PATH["🔍 Query (wired through QRY)"]
+  q_broker["retrieval/query_broker.py"]:::mid
+  q_services["retrieval/services.py"]:::mid
+  st_read["storage/* (read indices)"]:::storage
+end
+QRY-->q_broker-->q_services-->st_read
+q_broker-. optional evented read .->P01
 
 %% ====== ACTIONS ======
 subgraph ACTIONS["⚡ Action Runner (safe effects)"]
@@ -658,7 +507,7 @@ subgraph COGNITIVE_ORCHESTRATION["🧠 Cognitive Orchestration Layer"]
 
   %% Integration (existing)
   subgraph INTEGRATION_LAYER["⚙️ Integration & Pipelines"]
-    %% P02_PIPELINE DELETED - all pipelines P01-P20 live inside K0_KERNEL only
+    P02_PIPELINE["pipelines/p02.py"]:::bus
     MS_EVENTS["cognitive.memory.write.*"]:::bus
   end
 
@@ -815,10 +664,12 @@ subgraph COGNITIVE_DETAILS["🧠 Cognitive Detail (Merged from secondary diagram
       ret_trace_builder["retrieval/trace_builder.py"]:::mid
     end
 
-    %% STORE_ADAPTERS REMOVED (Milestone Cleanup)
-    %% DELETED: ret_fts_adapter, ret_vec_adapter, ret_kg_adapter, ret_episodic_adapter
-    %% REASON: Adapters implying store access belong inside K0 or are invisible
-    %% CORRECT: ret_context_adapter → bridge_query_client → QRY
+    subgraph STORE_ADAPTERS["Store Adapters"]
+      ret_fts_adapter["stores/fts_adapter.py"]:::fast
+      ret_vec_adapter["stores/vector_adapter.py"]:::fast
+      ret_kg_adapter["stores/kg_adapter.py"]:::smart
+      ret_episodic_adapter["stores/episodic_adapter.py"]:::mid
+    end
   end
 
   %% Episodic & Cortex shells (for links)
@@ -952,7 +803,7 @@ INTENT_ANALYZER-->OBJECT_ATT
 GATE-- "ADMIT WriteIntent" -->MS_STEWARD
 MS_STEWARD-->HIPPO_API
 HIPPO_API-->HIPPO_DG-->HIPPO_CA3-->HIPPO_CA1
-%% P02_PIPELINE-->HIPPO_API DELETED (leak #2: pipeline in user-space)
+P02_PIPELINE-->HIPPO_API
 MS_STEWARD-->MS_EVENTS
 
 GATE-- "ADMIT RecallIntent" -->CB_ORCH
@@ -1028,56 +879,42 @@ evt_bus-->ev_ws_b
 evt_bus-->ev_mcg
 evt_bus-->ev_hipp_enc
 GW_CONSCIOUSNESS-->ev_ws_b
-
-%% DELETED: evt_write_h-->st_receipts (Milestone Cleanup Task 3)
-%% REASON: User-space handler must not write kernel receipts directly
-%% Receipts originate in K0; user-space observes via bridge_sse_client topics
-
+evt_write_h-->st_receipts
 wf_recall-->ret_broker_enhanced
 wf_seq-->epi_seq
+wf_store-->st_ws
 
-%% ====== MILESTONE 3: STORAGE/DRIVER DECOUPLING (Rule R3) ======
-%% ALL user-space storage access MUST go through K0_BRIDGE → CMD/QRY
-%% NO direct edges from cognition/retrieval/services to st_* drivers
-%%
-%% REMOVED (replaced with Bridge routing):
-%% ❌ hipp_encoder-->st_hipp_store, st_epi, st_sem
-%% ❌ CA1_BRIDGE-->st_sem, st_kg_dom
-%% ❌ ret_fusion_engine-->st_fts, st_vec, st_sem, st_epi
-%% ❌ ret_*_adapter-->st_*
-%% ❌ emb_index<-->st_emb, st_vec
-%% ❌ wf_store-->st_ws
-%%
-%% CORRECT FLOW:
-%% ✅ Writes: module → K0_BRIDGE → CMD → K0_BUS → Pipelines → Drivers
-%% ✅ Reads: module → K0_BRIDGE → QRY → Drivers
-%%
-%% Implementation notes (for code, not diagram):
-%% - hipp_encoder writes via bridge_command_client
-%% - ret_fusion_engine reads via bridge_query_client
-%% - emb_index operations via bridge_command_client/bridge_query_client
-%% - All st_* aliases remain in K0_DRIVERS (kernel-only access)
-
-%% Cognitive service coordination (no storage edges)
+%% Storage mapping to K0 drivers (no user-space durability)
+hipp_encoder-->st_hipp_store
+hipp_encoder-->st_epi
+hipp_encoder-->st_sem
+CA1_BRIDGE-->st_sem
+CA1_BRIDGE-->st_kg_dom
+ret_fusion_engine-->st_fts
+ret_fusion_engine-->st_vec
+ret_fusion_engine-->st_sem
+ret_fusion_engine-->st_epi
+ret_fts_adapter-->st_fts
+ret_vec_adapter-->st_vec
+ret_kg_adapter-->st_kg_dom
+ret_episodic_adapter-->st_epi
 emb_svc<-->hipp_encoder
 emb_svc<-->ret_context_adapter
 emb_impl-->emb_index
 emb_impl-->emb_store
 emb_impl-->emb_types
+emb_index<-->st_emb
+emb_index<-->st_vec
 svc_index<-->emb_svc
 svc_index<-->hipp_consolidation
 
-%% ====== BUS BRIDGES & FLOWS (Milestone Cleanup Task 3) ======
-%% DELETED: evt_bus<-->K0_BUS (bidirectional coupling)
-%% REASON: User-space bus cannot couple to in-kernel bus
-%% CORRECT: Cross-boundary eventing via SSE (bridge_sse_client) or Command (bridge_command_client)
-
-%% User-space modules emit to user-space bus only
+%% ====== BUS BRIDGES & FLOWS (Kernelized) ======
+evt_bus<-->K0_BUS
 MS_STEWARD-->evt_bus
 HIPPO_API-->evt_bus
 CB_ORCH-->evt_bus
 WM_MGR-->evt_bus
-%% P02_PIPELINE-->evt_bus DELETED (leak #2: pipeline in user-space)
+P02_PIPELINE-->evt_bus
 GATE-->evt_bus
 
 evt_types-->evt_validation
@@ -1094,18 +931,27 @@ evt_bus<-->evt_sub
 evt_dispatch<-->evt_handlers
 evt_handlers<-->evt_middleware
 evt_sub<-->evt_filters
-
-%% ====== PIPELINES EMIT VIA SSE (Milestone Cleanup Task 5) ======
-%% DELETED: Hard P01-P20 → TO_* edges
-%% REASON: Kernel never pushes into user-space objects directly
-%% CORRECT: Pipelines emit via SSE Port → bridge_sse_client (dashed documentation edges)
-
-P01-. "emits via SSE" .->bridge_sse_client
-P02-. "emits via SSE" .->bridge_sse_client
-P04-. "emits via SSE" .->bridge_sse_client
-
-%% Pipeline results flow: K0_BUS → P01-P20 → SSE → bridge_sse_client → user-space topics
-%% See diagram connections: TO_COGNITIVE, TO_INFRASTRUCTURE, TO_INTELLIGENCE are conceptual only
+evt_handlers-->pip_bus
+pip_bus-->P01-->TO_COGNITIVE
+pip_bus-->P02-->TO_COGNITIVE
+pip_bus-->P03-->TO_INFRASTRUCTURE
+pip_bus-->P04-->TO_INTELLIGENCE
+pip_bus-->P05-->TO_INFRASTRUCTURE
+pip_bus-->P06-->TO_INTELLIGENCE
+pip_bus-->P07-->TO_INFRASTRUCTURE
+pip_bus-->P08-->TO_INFRASTRUCTURE
+pip_bus-->P09-->TO_COGNITIVE
+pip_bus-->P10-->TO_INFRASTRUCTURE
+pip_bus-->P11-->TO_INFRASTRUCTURE
+pip_bus-->P12-->TO_INFRASTRUCTURE
+pip_bus-->P13-->TO_INFRASTRUCTURE
+pip_bus-->P14-->TO_INFRASTRUCTURE
+pip_bus-->P15-->TO_INFRASTRUCTURE
+pip_bus-->P16-->TO_INFRASTRUCTURE
+pip_bus-->P17-->TO_COGNITIVE
+pip_bus-->P18-->TO_INFRASTRUCTURE
+pip_bus-->P19-->TO_COGNITIVE
+pip_bus-->P20-->TO_INTELLIGENCE
 
 %% ====== CONTRACTS & POLICY LINKS ======
 contract_api-->APL
@@ -1128,25 +974,20 @@ pol_cognitive-->pol_attention
 pol_attention-->GATE
 pol_memory_lifecycle-->MS_REDACT
 
-%% ====== SSE STREAMING (Milestone 5: via K0_BRIDGE → K0.SSE per Rule R5) ======
-SSE_ACL["sse/family_acl (topic filters)<br/>IN-KERNEL"]:::gate
-
-%% SSE ACL remains in K0 (kernel-side filtering)
+%% ====== SSE STREAMING (via K0.SSE) ======
+SSE_ACL["sse/family_acl (topic filters)"]:::gate
 SSE<-->SSE_ACL
-
-%% All user-space SSE consumption goes through Bridge (Rule R5)
-%% Topics connect to bridge_sse_client, which connects to SSE Port
-bridge_sse_client-->UI_T
-bridge_sse_client-->JOB_T
-bridge_sse_client-->PROS_T
-bridge_sse_client-->MEM_T
-bridge_sse_client-->WS_T
-bridge_sse_client-->PRES_T
-bridge_sse_client-->INT_T
-bridge_sse_client-->SAF_T
-bridge_sse_client-->EVT_T
-bridge_sse_client-- "[ADMIN-only]" ---POL_T
-bridge_sse_client-- "[ADMIN-only]" ---CONTRACT_T
+SSE_ACL<-->UI_T
+SSE_ACL<-->JOB_T
+SSE_ACL<-->PROS_T
+SSE_ACL<-->MEM_T
+SSE_ACL<-->WS_T
+SSE_ACL<-->PRES_T
+SSE_ACL<-->INT_T
+SSE_ACL<-->SAF_T
+SSE_ACL<-->EVT_T
+SSE_ACL-- "[ADMIN-only]" ---POL_T
+SSE_ACL-- "[ADMIN-only]" ---CONTRACT_T
 
 %% ====== TOPIC ALIASES ======
 FAM_MEM_T["family.memory.*"]
@@ -1161,29 +1002,23 @@ COG_FAM_ARB_T["cognitive.family.arbitration.*"]
 COG_FAM_LRN_T["cognitive.family.learning.*"]
 COG_FAM_ATT_T["cognitive.family.attention.*"]
 COG_FAM_WM_T["cognitive.family.working_memory.*"]
-bridge_sse_client-->FAM_MEM_T
-bridge_sse_client-->FAM_SYNC_T
-bridge_sse_client-->FAM_REL_T
-bridge_sse_client-->FAM_SUB_T
-bridge_sse_client-->FAM_EMG_T
-bridge_sse_client-->FAM_DEV_T
-bridge_sse_client-->COG_FAM_MEM_T
-bridge_sse_client-->COG_FAM_REC_T
-bridge_sse_client-->COG_FAM_ARB_T
-bridge_sse_client-->COG_FAM_LRN_T
-bridge_sse_client-->COG_FAM_ATT_T
-bridge_sse_client-->COG_FAM_WM_T
+SSE_ACL<-->FAM_MEM_T
+SSE_ACL<-->FAM_SYNC_T
+SSE_ACL<-->FAM_REL_T
+SSE_ACL<-->FAM_SUB_T
+SSE_ACL<-->FAM_EMG_T
+SSE_ACL<-->FAM_DEV_T
+SSE_ACL<-->COG_FAM_MEM_T
+SSE_ACL<-->COG_FAM_REC_T
+SSE_ACL<-->COG_FAM_ARB_T
+SSE_ACL<-->COG_FAM_LRN_T
+SSE_ACL<-->COG_FAM_ATT_T
+SSE_ACL<-->COG_FAM_WM_T
 
 %% ====== MEMORY HIERARCHY CONNECTIONS ======
-%% LEAK FIX #3: Deleted 7 direct edges from TIER/device nodes to MEMORY_*/DEVICE_* components
-%% DELETED: TIER1-- "Read/Write" -->MEMORY_ENGINE
-%% DELETED: TIER2-- "Family Coordination" -->MEMORY_SPACES
-%% DELETED: TIER3-- "Administration" -->MEMORY_PERMISSIONS
-%% DELETED: PERSONAL_FULL-- "Device-Local" -->DEVICE_STORAGE
-%% DELETED: FAMILY_HUB-- "Shared Hub" -->MEMORY_SYNC
-%% DELETED: WORK_DEVICE-- "Contextual Memory" -->DEVICE_STORAGE
-%% DELETED: GUEST_DEVICE-- "Limited Access" -->MEMORY_PERMISSIONS
-%% REASON: These bypass Bridge contract choke-point. All access flows: Plane→Gateway→Ingress→Bridge→Ports
+TIER1-- "Read/Write" -->MEMORY_ENGINE
+TIER2-- "Family Coordination" -->MEMORY_SPACES
+TIER3-- "Administration" -->MEMORY_PERMISSIONS
 
 P01-- "TO Recall" -->MEMORY_INDEX
 P02-- "TO Formation" -->MEMORY_ENGINE
@@ -1196,29 +1031,29 @@ P08-- "TO Embeddings" -->MEMORY_INDEX
 P09-- "TO Ingestion" -->MEMORY_ENGINE
 P10-- "Protection" -->MEMORY_PERMISSIONS
 
-%% LEAK FIX #3: Device edges deleted (covered above)
+PERSONAL_FULL-- "Device-Local" -->DEVICE_STORAGE
+FAMILY_HUB-- "Shared Hub" -->MEMORY_SYNC
+WORK_DEVICE-- "Contextual Memory" -->DEVICE_STORAGE
+GUEST_DEVICE-- "Limited Access" -->MEMORY_PERMISSIONS
 
 MEMORY_ENGINE-- "Intelligence" -->pol_cognitive
 MEMORY_SPACES-- "Family Intelligence" -->pol_relationship
 MEMORY_INDEX-- "Experience Decisions" -->pol_memory_lifecycle
 MEMORY_SYNC-- "Coordinated Intelligence" -->pol_memory_coordination
 
-%% LEAK FIX #4: Deleted evt_bus<-->MEMORY_ENGINE coupling
-%% DELETED: evt_bus-- "Memory Events" -->MEMORY_ENGINE
-%% DELETED: MEMORY_ENGINE-- "State Changes" -->evt_bus
-%% REASON: User-space evt_bus must not couple to kernel components
-%% Kernel emits events via SSE→bridge_sse_client→topics, user-space consumes from there
+%% Memory events loop
+evt_bus-- "Memory Events" -->MEMORY_ENGINE
+MEMORY_ENGINE-- "State Changes" -->evt_bus
 
-%% ====== FLOW SUMMARY (Updated for Bridge-Centric Architecture) ======
-subgraph FLOW_SUMMARY["🔄 End-to-End Flow - Bridge-Aligned"]
+%% ====== FLOW SUMMARY ======
+subgraph FLOW_SUMMARY["🔄 End-to-End Flow"]
   direction TB
-  FLOW1["1️⃣ Device → Gateway → Planes → Ingress → **K0_BRIDGE** → K0 Ports"]:::bridge
-  FLOW2["2️⃣ User-space hints (PEP/QoS/Safety) → **K0_PEP@syscall (AUTHORITY)**"]:::gate
+  FLOW1["1️⃣ Device → Gateway → Planes → Ingress → **K0 Ports**"]:::plane
+  FLOW2["2️⃣ Security/QoS/Safety (user-space hints) → **PEP@K0 syscall is authority**"]:::gate
   FLOW3["3️⃣ **Single durable commit** in K0 (Idempotency → WAL → Outbox → Receipts)"]:::mid
-  FLOW4["4️⃣ **K0_BUS → Pipelines P01–P20 (IN-KERNEL)** → Drivers"]:::bus
-  FLOW5["5️⃣ Cognition via Bridge: Writes → CMD, Reads → QRY (NO direct st_* access)"]:::brain
-  FLOW6["6️⃣ Real-time SSE via **Bridge → K0.SSE** with ACL by role/age/device"]:::realtime
-  FLOW7["7️⃣ **All user-space → K0 via Bridge** (Rules R1-R5 enforced)"]:::bridge
+  FLOW4["4️⃣ Facade→K0 Bus → Pipelines P01–P20"]:::bus
+  FLOW5["5️⃣ Cognition: Attention · Steward · Hippocampus · Context · Workspace · Affect · Retrieval"]:::brain
+  FLOW6["6️⃣ Real-time SSE via **K0.SSE** with ACL by role/age/device"]:::realtime
 end
 class FLOW_SUMMARY card
 
@@ -1273,19 +1108,20 @@ class WM_L1,WM_L2,WM_L3,WM_STORE,WM_MGR,WM_ADMISSION,WM_LOAD_MON,WM_BUFFER,WM_AT
 
 class affect_threat,affect_salience,affect_memory_mod,affect_classifier,affect_state,affect_regulation,affect_contagion,affect_attention,affect_memory,affect_decision,affect_learning affect_system
 class CER_DISPATCH,CER_CONSUMER,CER_BACKPRESSURE,CER_DLQ,SHARED_IDEMPOTENCY bus
-class pol_cognitive,pol_attention,pol_memory_lifecycle cognitive
+%% Cognitive class group: links to Policy Framework and Cognitive Orchestration for architectural traceability.
+%% - pol_cognitive, pol_attention, pol_memory_lifecycle are core cognitive policy modules.
+%% - See: policy framework section for integration points.
+%% - See: cognitive orchestration for runtime coordination.
 
-%% ====== MILESTONE 8: BRIDGE STYLING ======
-%% Apply bridge classDef to all Bridge nodes
-class bridge_command_client,bridge_query_client,bridge_sse_client,bridge_obs_client bridge
-class bridge_planes_agent,bridge_planes_family,bridge_planes_control bridge
-class bridge_identity_user_device bridge
-class bridge_contracts_flatbuffers,bridge_batching_compress,bridge_retry_cb,bridge_idempotency_keying bridge
+class pol_cognitive,pol_attention,pol_memory_lifecycle cognitive
 
 %% Visual links for clarity:
 pol_cognitive---POLICY_FRAMEWORK
 pol_attention---COGNITIVE_ORCHESTRATION
 pol_memory_lifecycle---COGNITIVE_ORCHESTRATION
+class CC_MONITOR,CC_CONTROL,CC_ADAPTATION cognitive_control
+class CER_DISPATCH,CER_CONSUMER,CER_BACKPRESSURE,CER_DLQ,SHARED_IDEMPOTENCY bus
+class pol_cognitive,pol_attention,pol_memory_lifecycle cognitive
 
 style P01 fill:#e6f5f5,stroke:#008080,stroke-width:2px
 style P02 fill:#ffecec,stroke:#FF0000,stroke-width:2px

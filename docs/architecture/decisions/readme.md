@@ -432,7 +432,7 @@ cp docs/architecture/decisions/ADR_TEMPLATE.md \
 
 ### Related Documentation
 - [Architecture Overview](../../README.md) - High-level system architecture
-- [Whiteboard](../../whiteboard.md) - Complete design specification (26,902 lines)
+- [Whiteboard](../../whiteboard/whiteboard.md) - Complete design specification (26,902 lines)
 - [Architecture Diagrams](../../../architecture_diagrams/) - Visual architecture documentation
 
 ### External Resources

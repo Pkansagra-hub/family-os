@@ -439,7 +439,7 @@ Every component should emit:
 ### Documentation
 - **Layer 2 ADR Map:** [layer2_adr_map.md](./layer2_adr_map.md) (127 ADRs)
 - **ADR Reference:** [ADR_REFERENCE.md](./ADR_REFERENCE.md) (Quick lookup)
-- **Whiteboard Spec:** [docs/whiteboard.md](../../docs/whiteboard.md) (21K lines)
+- **Whiteboard Spec:** [docs/whiteboard.md](../../docs/whiteboard/whiteboard.md) (21K lines)
 - **Module Analysis:** [docs/k1_module_analysis.md](../../docs/k1_module_analysis.md) (52 modules)
 
 ### Architecture Diagrams

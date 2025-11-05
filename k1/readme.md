@@ -630,7 +630,7 @@ ward test --path tests/
 
 ### Architecture Documentation
 
-- **Whiteboard:** [docs/whiteboard_architecture.md](../docs/whiteboard_architecture.md) — 3K-line complete design spec
+- **Whiteboard:** [docs/whiteboard_architecture.md](../docs/whiteboard/whiteboard_architecture.md) — 3K-line complete design spec
 - **ADR Index:** [docs/architecture/tables/adr_family_map.md](../docs/architecture/tables/adr_family_map.md) — 228+ ADR entries
 - **Architecture README:** [docs/architecture/README.md](../docs/architecture/README.md) — Overview and guidelines
 
@@ -710,7 +710,7 @@ ward test --path tests/
 
 ## 🆘 Getting Help
 
-- **Architecture questions:** Read [docs/whiteboard_architecture.md](../docs/whiteboard_architecture.md) (3K lines)
+- **Architecture questions:** Read [docs/whiteboard_architecture.md](../docs/whiteboard/whiteboard_architecture.md) (3K lines)
 - **Module-specific questions:** Check layer ADR maps (linked above)
 - **ADR missing:** Create one using [docs/architecture/decisions/0000-template.md](../docs/architecture/decisions/0000-template.md)
 - **Unclear requirements:** ASK for clarification (never assume)
