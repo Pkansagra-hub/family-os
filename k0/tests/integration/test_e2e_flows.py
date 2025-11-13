@@ -43,7 +43,7 @@ from k0.security import canonical_envelope, canonical_json
 from k0.security.crypto import encode_base64url
 from k0.storage.provisioning import DeviceKey, ProvisionedDevice
 from k0.uow.connection_pool import connection_scope, shutdown_pool
-from tests.sdk.k0_client import CommandReceipt, K0Client
+from k0.tests.sdk.k0_client import CommandReceipt, K0Client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
@@ -638,3 +638,4 @@ def _(env: E2ETestEnv = e2e_env) -> None:
         # Empty or minimal results expected
     else:
         assert response.status_code in (403, 404)
+

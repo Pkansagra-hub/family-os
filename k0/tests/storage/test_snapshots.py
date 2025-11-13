@@ -9,7 +9,7 @@ from ward import test  # type: ignore[attr-defined]
 
 from k0.obs import MetricsExporter, ObservabilityEmitter
 from k0.storage.snapshots import SNAPSHOT_TOPIC, SnapshotScheduler
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 @test("snapshot scheduler writes artifacts, manifest, and WAL markers")
@@ -98,3 +98,4 @@ def _(sqlite_db: Path = sqlite_runtime) -> None:  # type: ignore[assignment]
 
     events = emitter.snapshot()
     assert any(event.get("event") == "snapshot_complete" for event in events)
+

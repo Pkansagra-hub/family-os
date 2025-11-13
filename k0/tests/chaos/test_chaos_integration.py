@@ -15,7 +15,7 @@ from k0.kernel.config import ChaosSettings
 from k0.obs.metrics import MetricsExporter
 from k0.qos.scheduler import Scheduler, SchedulerCapacityError, SchedulerProfile
 from k0.storage.wal import WalEntry, WriteAheadLog
-from tests.chaos.fixtures import (
+from k0.tests.chaos.fixtures import (
     chaos_test_db,
     metric_value,
     metrics_exporter,
@@ -201,3 +201,4 @@ def _(
         assert total_successes + total_failures == num_ops
 
     runner()
+

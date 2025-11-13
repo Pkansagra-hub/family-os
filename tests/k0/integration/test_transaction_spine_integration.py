@@ -17,18 +17,13 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from k0.automation.migrate import apply_migrations
 from k0.storage.offsets import Offset, OffsetStore
 from k0.storage.outbox import OutboxEntry, OutboxStore
 from k0.storage.receipts import Receipt, ReceiptStore
 from k0.storage.wal import WalEntry, WriteAheadLog
 from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
 from k0.uow.unit_of_work import UnitOfWork
-
-# Calculate REPO_ROOT by going to parents until we reach the root with k0/ directory
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]  # tests/k0/integration/ -> tests/ -> k0/ -> (root)
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
 
 
 @pytest.fixture
@@ -37,9 +32,8 @@ def sqlite_runtime() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as connection:
-        connection.executescript(STORAGE_SQL_PATH.read_text())
-        connection.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:

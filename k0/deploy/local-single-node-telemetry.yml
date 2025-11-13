@@ -48,3 +48,7 @@ services:
 
 volumes:
   tempo-data:
+
+networks:
+  k0-local:
+    driver: bridge

@@ -1,0 +1,29 @@
+# K0 Development & Testing Dependencies
+# Used for: local development, testing, infrastructure automation
+# NOT included in production containers
+
+# Testing Frameworks
+hypothesis>=6.98.0                 # Property-based testing (generate test cases automatically)
+
+# Infrastructure-as-Code
+# Used by deployment scripts and provisioning (not in runtime containers)
+pulumi>=3.115.0                    # IaC framework for infrastructure orchestration
+ansible-core>=2.16.0               # Configuration management and automation
+ansible-runner>=2.3.5              # Ansible orchestration library
+
+# Documentation
+fpdf2>=2.7.9                       # PDF generation (for doc exports)
+
+# HTTP Client (optional, used by tests)
+httpx>=0.27.0                      # Async HTTP client (used in integration tests)
+httpx-sse>=0.4.0                   # Server-Sent Events support for httpx
+
+# Advanced NLP (optional, research only - NOT in production)
+# Note: sentence-transformers is preferred in embedding-worker
+# spacy is kept here for experimentation but not used in current stack
+spacy>=3.7.0                       # Advanced NLP (optional for future use)
+
+# Vector Search (optional, research only - NOT in production)
+# Note: faiss-cpu kept for research but not actively used
+# Consider removing if not needed in 6 months
+faiss-cpu>=1.8.0                   # Vector similarity search (optional for future)

@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/k0/acl.schema.json",
+  "title": "K0 Access Control List Entry",
+  "description": "Schema for normalized access control entries in st_acl table",
+  "type": "object",
+  "required": [
+    "acl_id",
+    "resource_type",
+    "resource_id",
+    "principal_type",
+    "principal_id",
+    "permission",
+    "granted_at",
+    "granted_by"
+  ],
+  "properties": {
+    "acl_id": {
+      "type": "string",
+      "description": "Unique identifier for ACL entry (ULID or UUID)",
+      "pattern": "^[A-Z0-9]{26}$|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    },
+    "resource_type": {
+      "type": "string",
+      "description": "Type of resource being protected",
+      "enum": ["st_epi", "st_sem", "st_proc", "st_hipp_store", "st_ws", "st_social"]
+    },
+    "resource_id": {
+      "type": "string",
+      "description": "ID of the specific resource (event_id, fact_id, etc)",
+      "minLength": 1
+    },
+    "principal_type": {
+      "type": "string",
+      "description": "Type of entity being granted permission",
+      "enum": ["user", "device", "service"]
+    },
+    "principal_id": {
+      "type": "string",
+      "description": "ID of the principal (Neo4j Person ID, device_id, service name)",
+      "minLength": 1
+    },
+    "permission": {
+      "type": "string",
+      "description": "Type of permission granted",
+      "enum": ["read", "write", "delete", "share"]
+    },
+    "privacy_band": {
+      "type": ["string", "null"],
+      "description": "Privacy classification (GREEN=shareable, AMBER=sensitive, RED=private)",
+      "enum": ["GREEN", "AMBER", "RED", null]
+    },
+    "granted_at": {
+      "type": "string",
+      "description": "ISO8601 timestamp when permission was granted",
+      "format": "date-time"
+    },
+    "granted_by": {
+      "type": "string",
+      "description": "ID of entity that granted permission",
+      "minLength": 1
+    },
+    "expires_at": {
+      "type": ["string", "null"],
+      "description": "ISO8601 timestamp when permission expires (null = never)",
+      "format": "date-time"
+    },
+    "revoked_at": {
+      "type": ["string", "null"],
+      "description": "ISO8601 timestamp when permission was revoked (null = active)",
+      "format": "date-time"
+    }
+  },
+  "examples": [
+    {
+      "acl_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "resource_type": "st_epi",
+      "resource_id": "evt_abc123",
+      "principal_type": "user",
+      "principal_id": "usr_alice",
+      "permission": "read",
+      "privacy_band": "GREEN",
+      "granted_at": "2025-11-10T19:00:00Z",
+      "granted_by": "usr_alice",
+      "expires_at": null,
+      "revoked_at": null
+    }
+  ]
+}

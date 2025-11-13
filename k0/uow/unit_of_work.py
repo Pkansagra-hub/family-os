@@ -53,23 +53,15 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
     offset_store: OffsetStore | None = None
     metrics_emitter: MetricsEmitter | None = None
     metrics_exporter: "MetricsExporter | None" = None  # For histogram observations
-    snapshot_watermark_gauge: "Callable[[float], None] | None" = (
-        None  # For updating WAL watermark
-    )
+    snapshot_watermark_gauge: "Callable[[float], None] | None" = None  # For updating WAL watermark
     on_commit: list[Callable[[], None]] = field(default_factory=_default_hook_list)
     on_rollback: list[Callable[[], None]] = field(default_factory=_default_hook_list)
     wal_fsync_mode: Literal["strict", "wal_only", "disabled"] = "strict"
-    _scope: AbstractContextManager[sqlite3.Connection] | None = field(
-        init=False, default=None
-    )
+    _scope: AbstractContextManager[sqlite3.Connection] | None = field(init=False, default=None)
     _connection: sqlite3.Connection | None = field(init=False, default=None)
     _entered: bool = field(init=False, default=False)
-    _staged_outbox: list[OutboxEntry] = field(
-        init=False, default_factory=_default_outbox_list
-    )
-    _wal_positions: list[int] = field(
-        init=False, default_factory=_default_position_list
-    )
+    _staged_outbox: list[OutboxEntry] = field(init=False, default_factory=_default_outbox_list)
+    _wal_positions: list[int] = field(init=False, default_factory=_default_position_list)
     _start_time: float = field(init=False, default=0.0)
     _token: Token["UnitOfWork | None"] | None = field(init=False, default=None)
 
@@ -81,6 +73,19 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         connection = self._scope.__enter__()
         assert isinstance(connection, sqlite3.Connection)  # runtime safety
         self._connection = connection
+
+        # V1 DURABILITY SETTINGS (Issue 1.7)
+        # WAL mode: Better concurrency, crash recovery
+        # FULL sync: Guarantees durability (fsync after each transaction)
+        # Foreign keys: Enforce referential integrity
+        # Temp store MEMORY: Faster temp tables
+        # Busy timeout: Retry up to 5 seconds on lock contention
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA synchronous=FULL")
+        self._connection.execute("PRAGMA foreign_keys=ON")
+        self._connection.execute("PRAGMA temp_store=MEMORY")
+        self._connection.execute("PRAGMA busy_timeout=5000")
+
         self._connection.execute("BEGIN IMMEDIATE")
         self._start_time = time.perf_counter()
         self._token = _ACTIVE_UOW.set(self)
@@ -121,21 +126,15 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
 
     def stage_outbox(self, entry: OutboxEntry) -> None:
         if not self._entered or self._connection is None:
-            raise RuntimeError(
-                "Outbox entries can only be staged within an active UnitOfWork"
-            )
+            raise RuntimeError("Outbox entries can only be staged within an active UnitOfWork")
         staged_entry = replace(entry, id=None)
         self._staged_outbox.append(staged_entry)
 
     def append_wal(self, entry: WalEntry) -> int:
         if not self._entered or self._connection is None:
-            raise RuntimeError(
-                "WAL entries can only be appended within an active UnitOfWork"
-            )
+            raise RuntimeError("WAL entries can only be appended within an active UnitOfWork")
         if self.write_ahead_log is None:
-            raise RuntimeError(
-                "WriteAheadLog has not been configured for this UnitOfWork"
-            )
+            raise RuntimeError("WriteAheadLog has not been configured for this UnitOfWork")
         position = self.write_ahead_log.append(entry, connection=self.connection)
         self._wal_positions.append(position)
         return position
@@ -144,20 +143,14 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         if not self._entered or self._connection is None:
             raise RuntimeError("Receipts can only be saved within an active UnitOfWork")
         if self.receipt_store is None:
-            raise RuntimeError(
-                "Receipt store has not been configured for this UnitOfWork"
-            )
+            raise RuntimeError("Receipt store has not been configured for this UnitOfWork")
         self.receipt_store.save(receipt, connection=self.connection)
 
     def upsert_offset(self, record: Offset) -> None:
         if not self._entered or self._connection is None:
-            raise RuntimeError(
-                "Offsets can only be upserted within an active UnitOfWork"
-            )
+            raise RuntimeError("Offsets can only be upserted within an active UnitOfWork")
         if self.offset_store is None:
-            raise RuntimeError(
-                "Offset store has not been configured for this UnitOfWork"
-            )
+            raise RuntimeError("Offset store has not been configured for this UnitOfWork")
         self.offset_store.upsert(record, connection=self.connection)
 
     def _commit(self) -> None:
@@ -168,7 +161,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
             self._connection.commit()
         except BaseException as error:
             self._emit_metric(
-                "k0_uow_commit_total",
+                "uow_commit_total",
                 1.0,
                 outcome="failure",
                 error=error.__class__.__name__,
@@ -188,13 +181,13 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
                     outcome="failure",
                 )
                 self._emit_metric(
-                    "k0_uow_commit_total",
+                    "uow_commit_total",
                     1.0,
                     outcome="failure",
                     error=fsync_error.__class__.__name__,
                 )
                 self._emit_metric(
-                    "k0_uow_wal_fsync_total",
+                    "uow_wal_fsync_total",
                     1.0,
                     outcome="failure",
                     error=fsync_error.__class__.__name__,
@@ -214,11 +207,11 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
                         outcome="success",
                     )
                     self._emit_metric(
-                        "k0_uow_wal_fsync_total",
+                        "uow_wal_fsync_total",
                         1.0,
                         outcome="success",
                     )
-                self._emit_metric("k0_uow_commit_total", 1.0, outcome="success")
+                self._emit_metric("uow_commit_total", 1.0, outcome="success")
                 self._run_hooks(self.on_commit)
 
                 # Update snapshot watermark to current time on successful commit
@@ -235,7 +228,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
             except sqlite3.Error:  # pragma: no cover - defensive guard
                 pass
         self._emit_metric(
-            "k0_uow_rollback_total",
+            "uow_rollback_total",
             1.0,
             outcome="error",
             reason=reason,
@@ -247,9 +240,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         if not self._staged_outbox:
             return
         if self.outbox_store is None:
-            raise RuntimeError(
-                "Outbox store has not been configured for this UnitOfWork"
-            )
+            raise RuntimeError("Outbox store has not been configured for this UnitOfWork")
         for entry in self._staged_outbox:
             self.outbox_store.enqueue(entry, connection=self.connection)
 
@@ -295,13 +286,29 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        if self._scope is not None:
-            self._scope.__exit__(exc_type, exc, tb)
-        self._scope = None
+        # CRITICAL FIX: Do NOT explicitly close the connection!
+        # The pool's release() method performs proper cleanup (rollback, etc.)
+        # and keeps the connection open for reuse. Closing it here causes
+        # "Cannot operate on a closed database" errors in subsequent requests.
         self._connection = None
+
+        # Exit scope (handles pool release with proper cleanup)
+        if self._scope is not None:
+            try:
+                self._scope.__exit__(exc_type, exc, tb)
+            except Exception:  # pragma: no cover - prevent double-exception
+                pass  # Scope exit already attempted connection cleanup
+            finally:
+                self._scope = None
+
+        # Reset state flags
         self._entered = False
+
+        # Reset context var (Gap 28 fix: single assignment, not triple)
         if self._token is not None:
-            _ACTIVE_UOW.reset(self._token)
-            self._token = None
-            self._token = None
-            self._token = None
+            try:
+                _ACTIVE_UOW.reset(self._token)
+            except Exception:  # pragma: no cover - defensive guard
+                pass  # Context cleanup is best-effort
+            finally:
+                self._token = None  # ✅ Single assignment (was 3x before)

@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/affect/calibration_params.json",
+  "title": "CalibrationParams",
+  "description": "Per-person calibration parameters for affect fusion (ADR-0012d).",
+  "type": "object",
+  "required": [
+    "person_id",
+    "valence_bias",
+    "arousal_bias",
+    "valence_temp",
+    "arousal_temp",
+    "alpha_fast",
+    "n_feedback_samples",
+    "last_updated"
+  ],
+  "properties": {
+    "person_id": {
+      "type": "string",
+      "description": "Unique person identifier",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "valence_bias": {
+      "type": "number",
+      "description": "Bias term for valence",
+      "minimum": -0.3,
+      "maximum": 0.3
+    },
+    "arousal_bias": {
+      "type": "number",
+      "description": "Bias term for arousal",
+      "minimum": -0.2,
+      "maximum": 0.2
+    },
+    "valence_temp": {
+      "type": "number",
+      "description": "Temperature scaling for valence",
+      "minimum": 0.5,
+      "maximum": 2.0
+    },
+    "arousal_temp": {
+      "type": "number",
+      "description": "Temperature scaling for arousal",
+      "minimum": 0.5,
+      "maximum": 2.0
+    },
+    "alpha_fast": {
+      "type": "number",
+      "description": "Fast EMA smoothing parameter",
+      "minimum": 0.3,
+      "maximum": 0.7
+    },
+    "n_feedback_samples": {
+      "type": "integer",
+      "description": "Number of feedback samples incorporated",
+      "minimum": 0
+    },
+    "last_updated": {
+      "type": "number",
+      "description": "Unix timestamp of last calibration update",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false
+}

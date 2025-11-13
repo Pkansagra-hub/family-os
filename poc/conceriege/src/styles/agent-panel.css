@@ -1,0 +1,380 @@
+/* ============================================================================
+   AGENT ACTIVITY PANEL STYLES
+   ============================================================================ */
+
+#agentActivityPanel {
+    background: var(--bg-primary);
+    border-top: 2px solid var(--border-default);
+    padding: 16px;
+    max-height: 300px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.agent-panel-header {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+    padding: 4px 8px;
+    border-bottom: 2px solid var(--primary-600);
+    margin-bottom: 8px;
+}
+
+.agent-panel-empty {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 14px;
+}
+
+/* ============================================================================
+   AGENT CARD
+   ============================================================================ */
+
+.agent-card {
+    background: var(--surface);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    padding: 12px;
+    transition: all 0.2s;
+    animation: slideInPanel 0.3s ease-out;
+}
+
+@keyframes slideInPanel {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.agent-card.Running {
+    border-left: 4px solid var(--primary-600);
+    border-left-color: #667eea;
+}
+
+.agent-card.Completed {
+    border-left: 4px solid var(--success);
+    opacity: 0.8;
+    animation: fadeOutPanel 1s ease-in-out forwards 1.5s;
+}
+
+@keyframes fadeOutPanel {
+    to {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+}
+
+/* Agent Header */
+.agent-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+}
+
+.agent-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scale(1.1);
+    }
+}
+
+.agent-card.Completed .agent-icon {
+    animation: none;
+    opacity: 0.6;
+}
+
+.agent-details {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.agent-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 13px;
+    text-transform: capitalize;
+}
+
+.agent-status {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.agent-expand-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-secondary);
+    padding: 4px 8px;
+    transition: color 0.2s;
+    flex-shrink: 0;
+}
+
+.agent-expand-btn:hover {
+    color: var(--text-primary);
+}
+
+/* Agent Body (Expanded) */
+.agent-body {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-default);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.agent-task {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    font-style: italic;
+}
+
+/* Progress Bar */
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-secondary);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary-600), var(--primary-500));
+    border-radius: 3px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(102, 126, 234, 0.3);
+}
+
+.progress-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--primary-600);
+    min-width: 35px;
+    text-align: right;
+}
+
+/* Agent Timing */
+.agent-timing {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Loading Spinner for ETA */
+.agent-timing::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    background: var(--primary-600);
+    border-radius: 50%;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.3;
+    }
+}
+
+/* Specialists Section */
+.agent-specialists {
+    margin-top: 8px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+}
+
+.specialists-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.specialists-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.specialist-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 4px 6px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    border-left: 2px solid var(--primary-600);
+}
+
+.specialist-icon {
+    font-size: 14px;
+}
+
+.specialist-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    flex: 1;
+    text-transform: capitalize;
+}
+
+.specialist-status {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
+}
+
+/* ============================================================================
+   PANEL COLLAPSIBILITY
+   ============================================================================ */
+
+@media (max-width: 1400px) {
+    #agentActivityPanel {
+        max-height: 250px;
+    }
+}
+
+@media (max-width: 1000px) {
+    #agentActivityPanel {
+        max-height: 200px;
+        max-width: 100%;
+    }
+}
+
+/* Scrollbar styling */
+#agentActivityPanel::-webkit-scrollbar {
+    width: 6px;
+}
+
+#agentActivityPanel::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#agentActivityPanel::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 3px;
+}
+
+#agentActivityPanel::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);
+}
+
+/* ============================================================================
+   ANIMATION STATES
+   ============================================================================ */
+
+/* Loading spinner variant */
+.spinner {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--border-default);
+    border-top-color: var(--primary-600);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Pulse effect for active agents */
+.agent-card.Running::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 8px;
+    border: 1px solid var(--primary-600);
+    pointer-events: none;
+    animation: borderPulse 2s ease-in-out infinite;
+}
+
+@keyframes borderPulse {
+    0%, 100% {
+        opacity: 0;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* ============================================================================
+   ACCESSIBILITY
+   ============================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+    .agent-card,
+    .progress-fill,
+    .agent-expand-btn,
+    .agent-icon {
+        animation: none !important;
+        transition: none !important;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: more) {
+    .agent-card {
+        border-width: 2px;
+    }
+
+    .progress-bar {
+        border: 1px solid var(--text-primary);
+    }
+}

@@ -61,6 +61,9 @@ class SSEServer:
     database_connection: sqlite3.Connection | None = None
     max_batch: int = 128
 
+    # Gap 25: Configurable SSE backpressure thresholds
+    max_pending_events: int = 1_000
+    disconnect_threshold: int = 10_000
     WARNING_LAG_MS: int = 2_000
     WARNING_PENDING: int = 5_000
     THROTTLE_LAG_MS: int = 5_000
@@ -90,21 +93,12 @@ class SSEServer:
         last_position = 0
         if cursor_token:
             cursor_state = self._decode_cursor(cursor_token)
-            if (
-                cursor_state.subscriber_id
-                and cursor_state.subscriber_id != subscriber_id
-            ):
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "CURSOR_SUBSCRIBER_MISMATCH"
-                )
+            if cursor_state.subscriber_id and cursor_state.subscriber_id != subscriber_id:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_SUBSCRIBER_MISMATCH")
             if cursor_state.space_id and cursor_state.space_id != space_id:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "CURSOR_SCOPE_MISMATCH"
-                )
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_SCOPE_MISMATCH")
             if cursor_state.tenant_id and cursor_state.tenant_id != tenant_id:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST, "CURSOR_SCOPE_MISMATCH"
-                )
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_SCOPE_MISMATCH")
             last_position = cursor_state.last_position
 
         rows = self.wal.read_from(
@@ -235,26 +229,18 @@ class SSEServer:
         roles: Sequence[str],
     ) -> list[str]:
         try:
-            document_obj: Any = (
-                yaml.safe_load(self.acl_path.read_text(encoding="utf-8")) or {}
-            )
+            document_obj: Any = yaml.safe_load(self.acl_path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_PARSE_ERROR"
-            ) from exc
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_PARSE_ERROR") from exc
 
         if not isinstance(document_obj, dict):
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_INVALID_SHAPE"
-            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_INVALID_SHAPE")
 
         document = cast(dict[str, Any], document_obj)
 
         roles_map_obj = document.get("roles", {})
         if not isinstance(roles_map_obj, dict):
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_INVALID_ROLES"
-            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ACL_INVALID_ROLES")
         roles_map = cast(dict[str, Any], roles_map_obj)
         allowed_patterns: set[str] = set()
         for role in roles:
@@ -270,9 +256,7 @@ class SSEServer:
                 if isinstance(pattern, str):
                     allowed_patterns.add(pattern)
         permitted = [
-            topic
-            for topic in requested_topics
-            if self._topic_allowed(topic, allowed_patterns)
+            topic for topic in requested_topics if self._topic_allowed(topic, allowed_patterns)
         ]
         return permitted
 
@@ -283,24 +267,35 @@ class SSEServer:
         return False
 
     def _decode_cursor(self, token: str) -> CursorState:
+        import time
+
+        validation_start = time.perf_counter()
+
         try:
             payload = json.loads(token)
         except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "CURSOR_DECODE_ERROR"
-            ) from exc
+            # Gap 48: Track invalid cursor with MALFORMED reason
+            self.observability.emit_metric("sse_invalid_cursor_total", 1.0, reason="MALFORMED")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_DECODE_ERROR") from exc
 
         try:
             position = int(payload.get("offset", payload.get("pos")))
             ts_raw = payload["ts"]
             ts = self._parse_iso8601(ts_raw)
         except (KeyError, ValueError, TypeError) as exc:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, "CURSOR_FIELDS_MISSING"
-            ) from exc
+            # Gap 48: Track invalid cursor with MALFORMED reason
+            self.observability.emit_metric("sse_invalid_cursor_total", 1.0, reason="MALFORMED")
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_FIELDS_MISSING") from exc
 
         if position < 0:
+            # Gap 48: Track invalid cursor with NEGATIVE reason
+            self.observability.emit_metric("sse_invalid_cursor_total", 1.0, reason="NEGATIVE")
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_NEGATIVE_POSITION")
+
+        # Gap 48: Track successful cursor validation latency
+        validation_duration = time.perf_counter() - validation_start
+        self.observability.emit_metric("sse_cursor_validation_seconds", validation_duration)
+
         subscriber_id = payload.get("subscriber_id")
         topic = payload.get("topic")
         space_id = payload.get("space_id")

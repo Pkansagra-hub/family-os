@@ -21,18 +21,13 @@ from typing import Iterator
 
 import pytest
 
+from k0.automation.migrate import apply_migrations
 from k0.gate.schema_registry import SchemaRegistry
 from k0.obs.metrics import MetricsExporter
 from k0.storage.replayer import Replayer
 from k0.storage.snapshots import SnapshotScheduler
 from k0.storage.wal import WalEntry, WriteAheadLog
 from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
-
-# Calculate REPO_ROOT
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
 
 
 @pytest.fixture
@@ -41,9 +36,8 @@ def temp_db() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as conn:
-        conn.executescript(STORAGE_SQL_PATH.read_text())
-        conn.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:
@@ -401,10 +395,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Copy primary data to secondary
         with sqlite3.connect(temp_db) as src_conn:
@@ -427,10 +424,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Copy primary to secondary
         with sqlite3.connect(temp_db) as src_conn:
@@ -466,10 +466,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Backup primary to secondary
         with sqlite3.connect(temp_db) as src_conn:

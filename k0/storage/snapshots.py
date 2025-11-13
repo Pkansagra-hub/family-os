@@ -71,9 +71,7 @@ class SnapshotScheduler:
         """Capture a snapshot and emit WAL watermark markers."""
 
         if not self._database_path.exists():
-            raise SnapshotError(
-                f"Database not found at {self._database_path.as_posix()}"
-            )
+            raise SnapshotError(f"Database not found at {self._database_path.as_posix()}")
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -159,6 +157,9 @@ class SnapshotScheduler:
                 outcome="success",
                 dry_run=str(dry_run).lower(),
             )
+            # Issue #044: Emit snapshot_watermark gauge
+            self._set_watermark_gauge(float(watermark))
+
             return SnapshotManifest(
                 snapshot_id=resolved_snapshot_id,
                 created_at=created_at,
@@ -283,6 +284,15 @@ class SnapshotScheduler:
             )
         except Exception:  # noqa: BLE001
             LOGGER.exception("Failed to update snapshot gauge", extra={"snapshot_id": snapshot_id})
+
+    def _set_watermark_gauge(self, value: float) -> None:
+        """Issue #044: Emit snapshot_watermark gauge metric."""
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.set_gauge("snapshot_watermark", value)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Failed to update snapshot watermark gauge")
 
     def _emit_metric(self, metric_name: str, value: float, **labels: str) -> None:
         if self._metrics is None:

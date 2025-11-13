@@ -1,0 +1,60 @@
+# K0 FTS Worker - Async Background Worker for V1.4
+# Builds full-text search indexes asynchronously to reduce commit latency
+
+FROM python:3.11-slim
+
+# Metadata
+LABEL org.opencontainers.image.title="K0 FTS Worker"
+LABEL org.opencontainers.image.description="FamilyOS K0 FTS Worker - Async full-text search indexing"
+LABEL org.opencontainers.image.vendor="FamilyOS"
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    sqlite3 \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy minimal requirements (FTS worker only needs NLTK)
+# Note: requirements.fts-worker.txt includes -r requirements.base.txt, so both files needed
+COPY k0/deploy/requirements.base.txt k0/deploy/requirements.fts-worker.txt ./
+RUN pip install --no-cache-dir -r requirements.fts-worker.txt
+
+# Download NLTK data to system-wide location (as root, before user switch)
+# This ensures the data is readable by the non-root k0worker user
+RUN mkdir -p /usr/local/share/nltk_data && \
+    python -c "import nltk; nltk.download('punkt', download_dir='/usr/local/share/nltk_data', quiet=True)" && \
+    python -c "import nltk; nltk.download('punkt_tab', download_dir='/usr/local/share/nltk_data', quiet=True)" && \
+    python -c "import nltk; nltk.download('stopwords', download_dir='/usr/local/share/nltk_data', quiet=True)" && \
+    chmod -R 755 /usr/local/share/nltk_data
+
+# Copy application code
+COPY k0/ k0/
+
+# Create non-root user and set permissions
+RUN groupadd -r k0worker -g 1002 && \
+    useradd -r -u 1002 -g k0worker k0worker && \
+    mkdir -p /data /logs /home/k0worker && \
+    chown -R k0worker:k0worker /app /data /logs /home/k0worker
+
+# Switch to non-root user
+USER k0worker
+
+# Environment defaults
+ENV K0_LOG_LEVEL=INFO \
+    K0_DB_PATH=/data/k0_kernel.db \
+    FTS_BATCH_SIZE=50 \
+    FTS_POLL_INTERVAL_SEC=1.0 \
+    PYTHONUNBUFFERED=1 \
+    NLTK_DATA=/usr/local/share/nltk_data
+
+# Health check (worker doesn't expose HTTP, check process alive)
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
+    CMD ps aux | grep -q "[p]ython.*fts_worker" || exit 1
+
+# Run the FTS worker
+CMD ["python", "-m", "k0.workers.fts_worker"]

@@ -6,7 +6,7 @@ aliases:
   st_fts: fts5
   st_vector: faiss
   st_emb: faiss
-  st_kg_dom: sqlite_kg
+  st_kg_dom: neo4j_driver  # Neo4j native graph database (ADR-0081)
   st_blob: blob_localfs
   # Traffic generator test drivers (burn-in/load testing)
   traffic-gen: sqlite

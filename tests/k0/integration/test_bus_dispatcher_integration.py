@@ -23,16 +23,16 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from k0.bus.core import BusDispatchContext, BusDispatcher, BusMessage, current_dispatch_context
+from k0.automation.migrate import apply_migrations
+from k0.bus.core import (
+    BusDispatchContext,
+    BusDispatcher,
+    BusMessage,
+    current_dispatch_context,
+)
 from k0.bus.middleware import timestamp_middleware
 from k0.qos import Scheduler
-from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
-
-# Calculate REPO_ROOT
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
+from k0.uow.connection_pool import configure_pool, shutdown_pool
 
 
 @pytest.fixture
@@ -41,9 +41,8 @@ def sqlite_runtime() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as connection:
-        connection.executescript(STORAGE_SQL_PATH.read_text())
-        connection.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:

@@ -2575,7 +2575,7 @@ All coordinated by **MAILBOX** (nervous system) with **cognitive_trace_id** (cau
 
 ## Section 6: SessionState — 6-Section Shared Memory
 
-**Reference ADRs:** [ADR-0017](../architecture/decisions/03-layer2-orchestration/0017-sessionstate-6-section-design/0017.md) (parent), [ADR-0017a-f](../architecture/decisions/03-layer2-orchestration/0017-sessionstate-6-section-design/) (sections), [ADR-0018](../architecture/decisions/03-layer2-orchestration/0018-sessionstate-eviction-strategy.md) (eviction), [ADR-0019](../architecture/decisions/03-layer2-orchestration/0019-sessionstate-serialization.md) (FlatBuffers)
+**Reference ADRs:** [ADR-0017](../architecture/decisions-K1/03-layer2-orchestration/0017-sessionstate-6-section-design/0017.md) (parent), [ADR-0017a-f](../architecture/decisions-K1/03-layer2-orchestration/0017-sessionstate-6-section-design) (sections), [ADR-0018](../architecture/decisions-K1/03-layer2-orchestration/0018-sessionstate-eviction-strategy.md) (eviction), [ADR-0019](../architecture/decisions-K1/03-layer2-orchestration/0019-sessionstate-serialization.md) (FlatBuffers)
 
 ### What It Is
 

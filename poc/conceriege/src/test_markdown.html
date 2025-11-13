@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Markdown Rendering Test</title>
+    <link rel="stylesheet" href="styles/markdown.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 40px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .test-container {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .test-header {
+            font-size: 18px;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        .message-bubble {
+            display: inline-block;
+            max-width: 100%;
+            padding: 16px;
+            border-radius: 12px;
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+        }
+
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        button:hover {
+            background: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button onclick="runTests()">🧪 Run All Tests</button>
+    </div>
+
+    <h1>🧪 Markdown Rendering Tests</h1>
+    <p>Testing markdown rendering with syntax highlighting, XSS prevention, and styling.</p>
+
+    <div id="test-results"></div>
+
+    <script type="module">
+        import { renderMarkdown, hasMarkdown, stripMarkdown } from './services/markdown.js';
+
+        const testCases = [
+            {
+                name: "Bold and Italic",
+                markdown: "This is **bold text** and this is *italic text*. You can also use ***bold italic***."
+            },
+            {
+                name: "Inline Code",
+                markdown: "Use `console.log()` for debugging or try `npm install` to install packages."
+            },
+            {
+                name: "Code Block (Python)",
+                markdown: `Here's a Python function:
+
+\`\`\`python
+def greet(name):
+    print(f"Hello, {name}!")
+    return True
+
+greet("World")
+\`\`\`
+
+Pretty cool, right?`
+            },
+            {
+                name: "Code Block (JavaScript)",
+                markdown: `Here's a JavaScript example:
+
+\`\`\`javascript
+const fetchData = async () => {
+    const response = await fetch('/api/data');
+    const data = await response.json();
+    return data;
+};
+\`\`\``
+            },
+            {
+                name: "Unordered Lists",
+                markdown: `I found these recipes:
+
+- **Pasta Carbonara**
+  - Spaghetti
+  - Eggs
+  - Bacon
+  - Parmesan
+- **Caesar Salad**
+  - Romaine lettuce
+  - Croutons
+  - Caesar dressing
+- **Tiramisu**`
+            },
+            {
+                name: "Ordered Lists",
+                markdown: `Here's how to make coffee:
+
+1. Boil water
+2. Grind coffee beans
+3. Add coffee to filter
+4. Pour hot water over grounds
+5. Wait 3-4 minutes
+6. Enjoy!`
+            },
+            {
+                name: "Links",
+                markdown: "Check out [OpenAI](https://openai.com) for more info, or visit [Google](https://google.com) to search."
+            },
+            {
+                name: "Headings",
+                markdown: `# Main Title
+
+## Subtitle
+
+### Section
+
+Here's some content under the section.
+
+#### Subsection
+
+More detailed content here.`
+            },
+            {
+                name: "Mixed Content",
+                markdown: `## Family Schedule Analysis 📅
+
+I found **3 conflicts** in your calendar:
+
+1. **Soccer practice** at 3pm overlaps with **dentist appointment**
+2. Mom's meeting runs until \`5:30pm\`, conflicts with dinner at \`5:00pm\`
+
+### Recommendations:
+
+- Reschedule dentist to Thursday 2pm
+- Move dinner to 6pm
+- Add \`30min\` buffer between events
+
+Here's a code snippet to automate this:
+
+\`\`\`python
+def resolve_conflicts(events):
+    for e1, e2 in find_overlaps(events):
+        suggest_alternative(e1, e2)
+\`\`\`
+
+Does this help? Let me know if you need more details!`
+            },
+            {
+                name: "Special Characters",
+                markdown: "Testing special chars: <tag>, &amp;, \"quotes\", 'apostrophe', @mention, #hashtag, $100, 50%"
+            },
+            {
+                name: "XSS Prevention (SHOULD BE SAFE)",
+                markdown: "Testing XSS: <script>alert('xss')<\/script> and <img src=x onerror=alert('xss')>"
+            },
+            {
+                name: "Blockquote",
+                markdown: `As the saying goes:
+
+> The only way to do great work is to love what you do.
+> - Steve Jobs
+
+Wise words indeed!`
+            }
+        ];
+
+        function runTests() {
+            const resultsDiv = document.getElementById('test-results');
+            resultsDiv.innerHTML = '';
+
+            testCases.forEach((test, index) => {
+                const container = document.createElement('div');
+                container.className = 'test-container';
+
+                const header = document.createElement('div');
+                header.className = 'test-header';
+                header.textContent = `Test ${index + 1}: ${test.name}`;
+
+                const bubble = document.createElement('div');
+                bubble.className = 'message-bubble';
+
+                // Render markdown
+                const rendered = renderMarkdown(test.markdown);
+                bubble.innerHTML = rendered;
+
+                container.appendChild(header);
+                container.appendChild(bubble);
+                resultsDiv.appendChild(container);
+            });
+
+            console.log('✅ All tests rendered');
+        }
+
+        // Auto-run tests on load
+        window.addEventListener('DOMContentLoaded', () => {
+            runTests();
+        });
+
+        // Make runTests available globally
+        window.runTests = runTests;
+    </script>
+</body>
+</html>

@@ -28,15 +28,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from k0.automation.migrate import apply_migrations
 from k0.kernel.app import create_app
 from k0.kernel.config import KernelSettings
 from k0.query.common import DriverContext, DriverExecution
-from k0.query.drivers import AliasDriver, DriverRegistry, WalDriver, build_default_registry
+from k0.query.drivers import (
+    AliasDriver,
+    DriverRegistry,
+    WalDriver,
+    build_default_registry,
+)
 from k0.storage.wal import WalEntry
 from k0.uow.connection_pool import connection_scope, shutdown_pool
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
 
 
 class QueryTestEnv(SimpleNamespace):
@@ -64,11 +67,35 @@ def query_test_env() -> Iterator[QueryTestEnv]:
     )
     app: FastAPI = create_app(settings=settings)
 
-    storage_sql = STORAGE_SQL_PATH.read_text(encoding="utf-8")
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
 
+    # Ensure FTS table exists (workaround for connection pool issue)
     with connection_scope() as conn:
-        conn.executescript(storage_sql)
-        conn.commit()
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='st_fts'"
+        ).fetchall()
+        if not tables:
+            # Create FTS table if migration didn't propagate to connection pool
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS st_fts USING fts5(
+                  wal_pos UNINDEXED,
+                  tenant_id UNINDEXED,
+                  space_id UNINDEXED,
+                  topic UNINDEXED,
+                  content,
+                  envelope_json UNINDEXED,
+                  body UNINDEXED,
+                  payload_sha256 UNINDEXED,
+                  schema_uri UNINDEXED,
+                  schema_version UNINDEXED,
+                  device_id UNINDEXED,
+                  commit_ts UNINDEXED
+                )
+            """
+            )
+            conn.commit()
 
     app.state.observability_emitter.clear()
 
@@ -147,6 +174,35 @@ def _append_wal(
 
     with connection_scope() as conn:
         position = env.app.state.write_ahead_log.append(wal_entry, connection=conn)
+
+        # Also index in FTS for semantic/fulltext queries
+        text_content = json.dumps(payload)
+        conn.execute(
+            """
+            INSERT INTO st_fts (
+                wal_pos, tenant_id, space_id, topic, content,
+                envelope_json, body, payload_sha256, schema_uri,
+                schema_version, device_id, commit_ts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position,
+                envelope["tenant_id"],
+                envelope["space_id"],
+                topic,
+                text_content,
+                envelope_json,
+                (
+                    body_bytes.decode("utf-8") if isinstance(body_bytes, bytes) else body_bytes
+                ),  # FTS needs text
+                payload_sha256,
+                envelope["schema_uri"],
+                envelope["schema_version"],
+                envelope["device_id"],
+                commit_ts,
+            ),
+        )
+
         conn.commit()
     return position
 

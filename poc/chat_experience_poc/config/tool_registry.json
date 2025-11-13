@@ -1,0 +1,312 @@
+{
+  "version": "1.0",
+  "last_updated": "2025-11-05T00:00:00Z",
+  "tools": [
+    {
+      "id": "web_search",
+      "name": "web_search",
+      "description": "Search the web for current information, news, and general knowledge",
+      "category": "research",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query string"
+        },
+        "num_results": {
+          "type": "integer",
+          "required": false,
+          "default": 5,
+          "description": "Number of results to return (1-10)"
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "List of search results with titles, URLs, and snippets"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "GREEN",
+      "endpoint": "mock_mcp://web_search",
+      "timeout_ms": 2000,
+      "enabled": true
+    },
+    {
+      "id": "get_health_context",
+      "name": "get_health_context",
+      "description": "Query User KG for health-related context (PT sessions, medications, symptoms)",
+      "category": "health",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "query_type": {
+          "type": "string",
+          "required": true,
+          "enum": ["pt_sessions", "medications", "symptoms", "all"],
+          "description": "Type of health context to retrieve"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Health context data from User KG"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "AMBER",
+      "endpoint": "k0://user_kg/health",
+      "timeout_ms": 100,
+      "enabled": true
+    },
+    {
+      "id": "get_financial_context",
+      "name": "get_financial_context",
+      "description": "Query User KG for financial data (budget, expenses, transactions)",
+      "category": "finance",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "time_range": {
+          "type": "string",
+          "required": false,
+          "default": "current_month",
+          "enum": ["current_month", "last_month", "last_3_months", "year_to_date"],
+          "description": "Time range for financial data"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Financial context data from User KG"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "RED",
+      "endpoint": "k0://user_kg/finance",
+      "timeout_ms": 100,
+      "enabled": true
+    },
+    {
+      "id": "query_k0_finance",
+      "name": "query_k0_finance",
+      "description": "Query episodic finance data (transactions, category totals) for current month",
+      "category": "finance",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Natural language finance query"
+        },
+        "month": {
+          "type": "string",
+          "required": false,
+          "description": "YYYY-MM for time scoping (optional)"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Finance data including transactions, totals, and category aggregates"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "RED",
+      "endpoint": "mock_mcp://query_k0_finance",
+      "timeout_ms": 150,
+      "enabled": true
+    },
+    {
+      "id": "create_reminder",
+      "name": "create_reminder",
+      "description": "Create a prospective reminder/trigger for future notification",
+      "category": "planning",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "message": {
+          "type": "string",
+          "required": true,
+          "description": "Reminder message to display"
+        },
+        "fire_time": {
+          "type": "string",
+          "required": true,
+          "description": "ISO 8601 timestamp when reminder should fire"
+        },
+        "recurrence": {
+          "type": "string",
+          "required": false,
+          "enum": ["once", "daily", "weekly", "monthly"],
+          "default": "once",
+          "description": "Recurrence pattern"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Created reminder with trigger_id"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "GREEN",
+      "endpoint": "k0://temporal/create_trigger",
+      "timeout_ms": 50,
+      "enabled": true
+    },
+    {
+      "id": "book_appointment",
+      "name": "book_appointment",
+      "description": "Book appointments (PT sessions, doctor visits, etc.)",
+      "category": "planning",
+      "parameters": {
+        "appointment_type": {
+          "type": "string",
+          "required": true,
+          "enum": ["pt_session", "doctor", "dentist", "other"],
+          "description": "Type of appointment"
+        },
+        "date_time": {
+          "type": "string",
+          "required": true,
+          "description": "ISO 8601 timestamp for appointment"
+        },
+        "provider": {
+          "type": "string",
+          "required": false,
+          "description": "Provider name or location"
+        },
+        "notes": {
+          "type": "string",
+          "required": false,
+          "description": "Additional notes"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Booking confirmation with appointment_id"
+      },
+      "usage_tier": "tier2",
+      "privacy_band": "AMBER",
+      "endpoint": "mock_mcp://booking_service",
+      "timeout_ms": 3000,
+      "enabled": true
+    },
+    {
+      "id": "calculate",
+      "name": "calculate",
+      "description": "Perform mathematical calculations and unit conversions",
+      "category": "utility",
+      "parameters": {
+        "expression": {
+          "type": "string",
+          "required": true,
+          "description": "Mathematical expression to evaluate"
+        }
+      },
+      "returns": {
+        "type": "number",
+        "description": "Calculation result"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "GREEN",
+      "endpoint": "local://calculator",
+      "timeout_ms": 10,
+      "enabled": true
+    },
+    {
+      "id": "get_user_preferences",
+      "name": "get_user_preferences",
+      "description": "Retrieve user preferences and settings from User KG",
+      "category": "personalization",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "preference_category": {
+          "type": "string",
+          "required": false,
+          "enum": ["all", "communication", "privacy", "health", "finance"],
+          "default": "all",
+          "description": "Category of preferences"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "User preferences object"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "GREEN",
+      "endpoint": "k0://user_kg/preferences",
+      "timeout_ms": 50,
+      "enabled": true
+    },
+    {
+      "id": "query_conversation_history",
+      "name": "query_conversation_history",
+      "description": "Search past conversation history for context",
+      "category": "memory",
+      "parameters": {
+        "user_id": {
+          "type": "string",
+          "required": true,
+          "description": "User identifier"
+        },
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Semantic search query"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "default": 5,
+          "description": "Max results to return"
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Relevant conversation excerpts"
+      },
+      "usage_tier": "tier1",
+      "privacy_band": "AMBER",
+      "endpoint": "k0://query/p01_semantic",
+      "timeout_ms": 100,
+      "enabled": true
+    }
+  ],
+  "tool_categories": [
+    "research",
+    "health",
+    "finance",
+    "planning",
+    "utility",
+    "personalization",
+    "memory"
+  ],
+  "usage_tiers": {
+    "tier1": {
+      "description": "Core tools - always available",
+      "max_concurrent": 10
+    },
+    "tier2": {
+      "description": "Extended tools - spawned on demand",
+      "max_concurrent": 3
+    },
+    "tier3": {
+      "description": "Background tools - batch processing",
+      "max_concurrent": 5
+    }
+  },
+  "privacy_bands": {
+    "GREEN": "Public/non-sensitive data",
+    "AMBER": "Personal but non-critical data",
+    "RED": "Highly sensitive data (financial, medical)"
+  }
+}

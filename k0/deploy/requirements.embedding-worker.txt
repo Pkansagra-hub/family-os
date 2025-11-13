@@ -1,0 +1,20 @@
+# K0 Embedding Worker - Minimal Dependencies
+# Only what's needed for async embedding computation
+# Includes: k0/deploy/requirements.base.txt (observability, hashing, logging)
+
+# Base dependencies (shared with all containers)
+-r requirements.base.txt
+
+# Core NLP & Embeddings (heavy - includes PyTorch)
+nltk>=3.8.1                      # Tokenization, stop words
+sentence-transformers>=2.2.0     # Embedding models (includes torch, ~1.2GB)
+
+# Optional: OpenAI backend support
+openai>=1.12.0                   # OpenAI embeddings API (optional)
+tiktoken>=0.5.0                  # OpenAI tokenizer (optional)
+
+# Optional: Ollama backend support
+httpx>=0.24.0                    # HTTP client for Ollama API
+
+# Note: No FastAPI, no spacy, no validation libraries
+# Total size: ~1.3GB (PyTorch + observability)

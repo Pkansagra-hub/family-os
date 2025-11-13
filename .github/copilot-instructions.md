@@ -1,7 +1,8 @@
 # 🧭 K1 Intelligence Module — Copilot Rules of Engagement
 
 **K1 is the core agentic orchestrator kernel: production-ready, research-grounded, zero-tolerance for mediocrity.**
-
+**All things in POC folder are proof of concept and it doesnt requrie to follow 5 step process.**
+**No emojis in code files or commit messages.**
 ---
 
 ## 🚫 Zero-Tolerance Rules (Non-Negotiable)

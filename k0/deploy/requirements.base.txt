@@ -1,0 +1,20 @@
+# K0 Shared Base Dependencies
+# Used by ALL containers: kernel, embedding-worker, fts-worker
+# Total size: ~50MB (excludes heavy libraries like sentence-transformers, torch)
+
+# Logging
+loguru>=0.7.0                      # Structured logging (1-liner setup, context injection)
+
+# Serialization & Hashing
+orjson>=3.9.0                      # Fast JSON serialization (50x faster than stdlib json)
+blake3>=0.3.0                      # BLAKE3 hashing (used by k0.outbox for content addressing)
+
+# Cryptography & Security
+PyNaCl>=1.5.0                      # Cryptographic signing (nacl module, used by k0.security)
+
+# Observability (Prometheus + OpenTelemetry)
+# These 4 packages form the observability foundation used by ALL components
+prometheus-client>=0.18.0          # Prometheus metrics export (counters, histograms, gauges)
+opentelemetry-api>=1.24.0          # OpenTelemetry tracing API (vendor-neutral)
+opentelemetry-sdk>=1.24.0          # OpenTelemetry tracing SDK (local trace collection)
+opentelemetry-exporter-otlp-proto-http>=1.24.0  # OTLP HTTP exporter (send traces to collector)

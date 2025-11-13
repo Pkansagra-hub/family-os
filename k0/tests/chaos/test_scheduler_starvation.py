@@ -10,7 +10,7 @@ from k0.chaos.toggles import apply_scheduler_starvation
 from k0.kernel.config import ChaosSettings
 from k0.obs.metrics import MetricsExporter
 from k0.qos.scheduler import Scheduler, SchedulerCapacityError, SchedulerProfile
-from tests.chaos.fixtures import (
+from k0.tests.chaos.fixtures import (
     base_scheduler_profile,
     chaos_enabled_config,
     high_failure_config,
@@ -166,3 +166,4 @@ def _(
         assert scheduler.active_tokens("command") == 0
 
     runner()
+

@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/k0/archive_manifest.schema.json",
+  "title": "K0 Archive Manifest",
+  "description": "Schema for archived data tracking in st_archive_manifest table",
+  "type": "object",
+  "required": [
+    "manifest_id",
+    "resource_type",
+    "resource_id",
+    "archive_location",
+    "archived_at"
+  ],
+  "properties": {
+    "manifest_id": {
+      "type": "string",
+      "description": "Unique identifier for archive manifest entry",
+      "pattern": "^[A-Z0-9]{26}$|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    },
+    "resource_type": {
+      "type": "string",
+      "description": "Type of archived resource",
+      "enum": ["st_epi", "st_sem", "st_proc", "st_hipp_store", "st_ws", "st_social"]
+    },
+    "resource_id": {
+      "type": "string",
+      "description": "ID of archived resource",
+      "minLength": 1
+    },
+    "archive_location": {
+      "type": "string",
+      "description": "Path or URI to archived data in blob storage",
+      "minLength": 1
+    },
+    "checksum": {
+      "type": ["string", "null"],
+      "description": "BLAKE3 checksum of archived data for integrity verification",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "compressed_size_bytes": {
+      "type": ["integer", "null"],
+      "description": "Size of compressed archive in bytes",
+      "minimum": 0
+    },
+    "archived_at": {
+      "type": "string",
+      "description": "ISO8601 timestamp when data was archived",
+      "format": "date-time"
+    },
+    "delete_after": {
+      "type": ["string", "null"],
+      "description": "ISO8601 timestamp when archive should be deleted (null = never)",
+      "format": "date-time"
+    },
+    "tenant_id": {
+      "type": ["string", "null"],
+      "description": "Tenant ID for multi-tenancy tracking",
+      "minLength": 1
+    }
+  },
+  "examples": [
+    {
+      "manifest_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "resource_type": "st_epi",
+      "resource_id": "evt_abc123",
+      "archive_location": "s3://familyos-archives/2025/11/evt_abc123.zst",
+      "checksum": "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
+      "compressed_size_bytes": 4096,
+      "archived_at": "2025-11-10T19:00:00Z",
+      "delete_after": "2030-11-10T19:00:00Z",
+      "tenant_id": "tenant_001"
+    }
+  ]
+}

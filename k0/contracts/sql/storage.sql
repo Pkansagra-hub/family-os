@@ -1,6 +1,14 @@
 -- K0 Kernel storage contract (baseline schema)
 -- This file mirrors the authoritative DDL defined in k0/README.md §6.1.
 -- Any changes here MUST be reflected in the narrative spec and migration manifests.
+--
+-- MIGRATION HISTORY:
+-- 0001_baseline.sql - Core K0 infrastructure (WAL, receipts, outbox, DLQ, devices, schemas)
+-- 0002_pem_obligations.sql - PEM obligation persistence (st_obligation_log, redacted_body_json)
+-- 0003_fts_table.sql - FTS5 virtual table for WAL content search (st_fts)
+-- 0004_future_proof_enhancements.sql - ACL, retention policies, FTS5 memory tables, backoff state
+--
+-- To apply migrations: python -m k0.automation.migrate <db_path>
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=OFF; -- Invariants enforced via Ward harness per CORRECTNESS.md

@@ -9,7 +9,7 @@ providers:
     updateIntervalSeconds: 10
     allowUiUpdates: true
     options:
-      path: /var/lib/grafana/dashboards/slo
+      path: /var/lib/grafana/dashboards
 
   # Operations Dashboards - Real-time operational monitoring
   - name: 'K0 Operations'

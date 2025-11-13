@@ -14,13 +14,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from k0.kernel.dependencies import qos_context_dependency
-from k0.obs import (
-    MetricsExporter,
-    ObservabilityEmitter,
-    TracerFactory,
-    update_log_context,
-)
+from k0.obs import MetricsExporter, ObservabilityEmitter, TracerFactory, update_log_context
 from k0.policy import evaluate_envelope
+from k0.policy.pep_syscall import create_policy_stamp
 from k0.ports.errors import (
     KERNEL_COMPONENT_POLICY,
     KERNEL_COMPONENT_QOS,
@@ -51,9 +47,7 @@ class RecallSelector(BaseModel):
         default=None,
         description="Logical selector type (episodic, semantic, etc).",
     )
-    topic: str | None = Field(
-        default=None, description="Topic filter applied during recall."
-    )
+    topic: str | None = Field(default=None, description="Topic filter applied during recall.")
     tenant_id: str | None = Field(
         default=None, description="Optional tenant override for the selector."
     )
@@ -180,6 +174,47 @@ async def query_recall(
                 hint="Selector space_id must match the request space_id.",
             )
 
+        # Gap 24: Validate cursor boundaries
+        if selector.cursor is not None:
+            if selector.cursor < 0:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    code="QUERY_BAD_REQUEST",
+                    reason="CURSOR_NEGATIVE",
+                    hint=f"Cursor must be >= 0, got {selector.cursor}",
+                )
+
+        # Gap 24: Validate after position boundaries
+        if selector.after is not None:
+            if selector.after < 0:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    code="QUERY_BAD_REQUEST",
+                    reason="AFTER_NEGATIVE",
+                    hint=f"After position must be >= 0, got {selector.after}",
+                )
+
+        # Gap 24: Validate limit boundaries (beyond Pydantic validation)
+        if selector.limit is not None:
+            if selector.limit <= 0:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    code="QUERY_BAD_REQUEST",
+                    reason="LIMIT_INVALID",
+                    hint=f"Limit must be > 0, got {selector.limit}",
+                )
+            if selector.limit > MAX_SELECTOR_LIMIT:
+                return _error_response(
+                    request,
+                    status.HTTP_400_BAD_REQUEST,
+                    code="QUERY_BAD_REQUEST",
+                    reason="LIMIT_EXCEEDED",
+                    hint=f"Limit must be <= {MAX_SELECTOR_LIMIT}, got {selector.limit}",
+                )
+
     topics = sorted(
         {
             selector.topic
@@ -219,16 +254,18 @@ async def query_recall(
             code="PEP_DENY",
             component=KERNEL_COMPONENT_POLICY,
             reason=decision.deny_reason or "POLICY_DENIED",
-            hint=(
-                None
-                if decision.deny_reason
-                else "Policy enforcement denied the request."
-            ),
+            hint=(None if decision.deny_reason else "Policy enforcement denied the request."),
         )
 
     tightening = apply_qos_obligations(qos, decision.obligations)
     if tightening.time_slice_ms is not None:
         time_budget_ms = max(1, min(time_budget_ms, tightening.time_slice_ms))
+
+    # Gap 20: Create policy_stamp for audit trail in query responses
+    policy_stamp = create_policy_stamp(
+        decision=decision,
+        band=band,
+    )
 
     policy_extras = _build_policy_metadata(decision, tightening)
 
@@ -311,9 +348,7 @@ async def query_recall(
                 labels={"port": "query"},
             )
 
-        if observability_emitter and isinstance(
-            observability_emitter, ObservabilityEmitter
-        ):
+        if observability_emitter and isinstance(observability_emitter, ObservabilityEmitter):
             observability_emitter.emit(
                 {
                     "event": "query_recall_completed",
@@ -345,9 +380,7 @@ async def query_recall(
                 extras=policy_extras,
             )
 
-        time_remaining_ms = max(
-            0, int(math.floor(time_budget_ms - execution_result.elapsed_ms))
-        )
+        time_remaining_ms = max(0, int(math.floor(time_budget_ms - execution_result.elapsed_ms)))
 
         bundle_payload = execution_result.bundle_payload()
         trace_nodes = list(execution_result.trace_nodes)
@@ -365,9 +398,7 @@ async def query_recall(
             "exhausted_time_budget": execution_result.exhausted_time_budget,
         }
         if policy_extras and "policy" in policy_extras:
-            trace_payload["policy"] = dict(
-                cast(Mapping[str, Any], policy_extras["policy"])
-            )
+            trace_payload["policy"] = dict(cast(Mapping[str, Any], policy_extras["policy"]))
         if execution_result.exhausted_time_budget:
             trace_payload["fallback"] = {
                 "mode": "sse",
@@ -384,9 +415,11 @@ async def query_recall(
             policy_payload = cast(Mapping[str, Any], policy_extras["policy"])
             tightening_payload = policy_payload.get("tightening")
             if isinstance(tightening_payload, Mapping):
-                budgets_payload["tightening"] = dict(
-                    cast(Mapping[str, Any], tightening_payload)
-                )
+                budgets_payload["tightening"] = dict(cast(Mapping[str, Any], tightening_payload))
+
+        # Gap 20: Include policy_stamp in response for audit trail
+        if policy_stamp:
+            budgets_payload["policy_stamp"] = policy_stamp
 
         if stream_mode:
             return StreamingResponse(

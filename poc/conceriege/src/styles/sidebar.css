@@ -1,0 +1,375 @@
+/* ============================================================================
+   SIDEBAR STYLES - Conversation History & Management
+   ============================================================================ */
+
+.sidebar {
+    width: 280px;
+    background: var(--bg-primary);
+    border-right: 1px solid var(--border-default);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.sidebar.closed {
+    width: 60px;
+    overflow: visible;
+}
+
+.sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.sidebar-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    opacity: 1;
+    transition: opacity 0.3s;
+}
+
+.sidebar.closed .sidebar-title {
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
+}
+
+#newChatBtn {
+    padding: 8px 12px;
+    background: var(--primary-600);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+    transition: all 0.2s;
+}
+
+#newChatBtn:hover {
+    transform: scale(1.05);
+    background: var(--primary-700);
+}
+
+#sidebarToggle {
+    padding: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--text-secondary);
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+#sidebarToggle:hover {
+    color: var(--text-primary);
+    background: var(--surface);
+    border-radius: 6px;
+}
+
+.sidebar-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+
+/* Scrollbar styling */
+.sidebar-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 3px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+    background: var(--border-default, #ccc);
+}
+
+/* Conversation List */
+#conversationsList {
+    display: flex;
+    flex-direction: column;
+}
+
+.conversation-date-header {
+    padding: 12px 16px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+
+.conversation-item {
+    padding: 8px 8px;
+    margin: 0 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+}
+
+.conversation-item:hover {
+    background: var(--surface);
+}
+
+.conversation-item.active {
+    background: var(--primary-600, #667eea);
+    color: white;
+}
+
+.conversation-item.active .conversation-title,
+.conversation-item.active .conversation-timestamp {
+    color: white;
+}
+
+.conversation-item-content {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 12px;
+}
+
+.conversation-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+    transition: color 0.2s;
+}
+
+.conversation-timestamp {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    transition: color 0.2s;
+}
+
+.conversation-item.active .conversation-timestamp {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.conversation-actions {
+    display: none;
+    gap: 4px;
+    padding-right: 4px;
+}
+
+.conversation-item:hover .conversation-actions {
+    display: flex;
+}
+
+.conversation-delete-btn {
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: all 0.2s;
+    border-radius: 4px;
+}
+
+.conversation-delete-btn:hover {
+    opacity: 1;
+    background: var(--danger-light);
+}
+
+/* Inline title editing */
+.conversation-title-edit {
+    padding: 4px 8px;
+    border: 2px solid var(--primary-600);
+    border-radius: 4px;
+    font-size: 14px;
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    outline: none;
+}
+
+.conversation-title-edit:focus {
+    border-color: var(--primary-700);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* ============================================================================
+   MODAL STYLES - Delete Confirmation
+   ============================================================================ */
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(2px);
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 400px;
+    width: 90%;
+    box-shadow: var(--shadow-xl);
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.modal-content h3 {
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    font-size: 18px;
+}
+
+.modal-content p {
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+
+.modal-content p.warning {
+    color: var(--danger);
+    font-weight: 600;
+    margin-bottom: 16px;
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.btn-cancel,
+.btn-delete {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 14px;
+}
+
+.btn-cancel {
+    background: var(--surface);
+    color: var(--text-primary);
+}
+
+.btn-cancel:hover {
+    background: var(--border-default);
+}
+
+.btn-delete {
+    background: var(--danger);
+    color: white;
+}
+
+.btn-delete:hover {
+    background: var(--danger-dark);
+    transform: scale(1.02);
+}
+
+/* ============================================================================
+   RESPONSIVE - Closed Sidebar State
+   ============================================================================ */
+
+.sidebar.closed .sidebar-header {
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+}
+
+.sidebar.closed #newChatBtn {
+    width: 100%;
+    padding: 8px;
+    font-size: 18px;
+}
+
+.sidebar.closed .sidebar-content {
+    padding: 0;
+}
+
+.sidebar.closed .conversation-date-header,
+.sidebar.closed .conversation-item-content {
+    display: none;
+}
+
+.sidebar.closed .conversation-item {
+    justify-content: center;
+    padding: 12px;
+    margin: 4px;
+}
+
+.sidebar.closed .conversation-item:hover {
+    background: var(--surface);
+}
+
+.sidebar.closed .conversation-actions {
+    display: none !important;
+}
+
+/* Show tooltip on hover when closed */
+.sidebar.closed .conversation-item::after {
+    content: attr(data-title);
+    position: absolute;
+    left: 100%;
+    margin-left: 8px;
+    padding: 8px 12px;
+    background: var(--surface);
+    color: var(--text-primary);
+    border-radius: 6px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 100;
+}
+
+.sidebar.closed .conversation-item:hover::after {
+    opacity: 1;
+}

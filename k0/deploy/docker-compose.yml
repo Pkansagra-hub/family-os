@@ -37,6 +37,44 @@ services:
     networks:
       - k0-local
 
+  # Neo4j Knowledge Graph database for family relationships and temporal entities
+  # Used by k0/drivers/neo4j_driver.py (ADR-0081: K0 Knowledge Graph Architecture)
+  # Schema migrations handled by k0/automation/migrate_neo4j.py (via k0.ps1 -Migrate flag)
+  neo4j:
+    image: neo4j:5.20.0
+    container_name: familyos-neo4j
+    environment:
+      # Authentication (change password in production)
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-test-password}
+      # Memory settings (512M-2G heap, 1G pagecache for optimal performance)
+      NEO4J_dbms_memory_heap_initial__size: 512M
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 1G
+      # Performance tuning
+      NEO4J_dbms_tx__log_rotation_retention__policy: "3 days"
+      NEO4J_dbms_checkpoint_interval_time: 15m
+      # Accept license (required for enterprise features, optional for community)
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    ports:
+      - "7474:7474" # HTTP (Neo4j Browser)
+      - "7687:7687" # Bolt protocol (driver connection)
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - k0-local
+
   # Scheduler worker is optional and will be added in future milestones
   # scheduler-worker:
   #   image: ghcr.io/familyos/k0-scheduler:latest
@@ -46,6 +84,73 @@ services:
   #     K0_KERNEL_ENDPOINT: http://k0-kernel:8080
   #   networks:
   #     - k0-local
+
+  # Embedding Worker - Async background worker for V1.4 performance optimization
+  # Computes embeddings asynchronously to reduce commit latency (150ms → 80-100ms)
+  # See: k0/workers/embedding_worker.py, ADR-V1.4
+  embedding-worker:
+    build:
+      context: ../..
+      dockerfile: k0/deploy/Dockerfile.embedding-worker
+    image: k0-embedding-worker:latest
+    container_name: k0-embedding-worker
+    depends_on:
+      k0-kernel:
+        condition: service_healthy
+    environment:
+      K0_DB_PATH: /data/k0_kernel.db
+      K0_LOG_LEVEL: INFO
+      EMBEDDING_BACKEND: sentence-transformers
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      EMBEDDING_BATCH_SIZE: 10
+      EMBEDDING_POLL_INTERVAL_SEC: 1.0
+      NLTK_DATA: /usr/local/share/nltk_data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    networks:
+      - k0-local
+    healthcheck:
+      test:
+        ["CMD", "ps", "aux", "|", "grep", "-q", "[p]ython.*embedding_worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # FTS Worker - Async background worker for V1.4 performance optimization
+  # Builds full-text search indexes asynchronously to reduce commit latency
+  # See: k0/workers/fts_worker.py, ADR-V1.4
+  fts-worker:
+    build:
+      context: ../..
+      dockerfile: k0/deploy/Dockerfile.fts-worker
+    image: k0-fts-worker:latest
+    container_name: k0-fts-worker
+    depends_on:
+      k0-kernel:
+        condition: service_healthy
+    environment:
+      K0_DB_PATH: /data/k0_kernel.db
+      K0_LOG_LEVEL: INFO
+      FTS_BATCH_SIZE: 50
+      FTS_POLL_INTERVAL_SEC: 1.0
+      NLTK_DATA: /usr/local/share/nltk_data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    networks:
+      - k0-local
+    healthcheck:
+      test: ["CMD", "ps", "aux", "|", "grep", "-q", "[p]ython.*fts_worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
 
 networks:
   k0-local:

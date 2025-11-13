@@ -9,7 +9,7 @@ from ward import fixture, test  # type: ignore[attr-defined]
 
 from k0.cli.k0ctl import main
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 STORAGE_SQL = (REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql").read_text()
 
 

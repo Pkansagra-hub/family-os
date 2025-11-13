@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/affect/modality_score.json",
+  "title": "ModalityScore",
+  "description": "Per-modality affect scores for multi-modal fusion (ADR-0012d).",
+  "type": "object",
+  "required": [
+    "valence",
+    "arousal",
+    "confidence",
+    "source"
+  ],
+  "properties": {
+    "valence": {
+      "type": "number",
+      "description": "Valence contribution from modality",
+      "minimum": -1.0,
+      "maximum": 1.0
+    },
+    "arousal": {
+      "type": "number",
+      "description": "Arousal contribution from modality",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "confidence": {
+      "type": "number",
+      "description": "Confidence weight for modality",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "source": {
+      "type": "string",
+      "description": "Origin of the modality score",
+      "enum": [
+        "tier0",
+        "tier1",
+        "behavior"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

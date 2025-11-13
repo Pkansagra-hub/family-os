@@ -15,7 +15,7 @@ from k0.uow.connection_pool import connection_scope
 
 @dataclass(slots=True)
 class WalEntry:
-    """Domain representation of a WAL row."""
+    """Domain representation of a WAL row (V1 with full envelope integrity)."""
 
     tenant_id: str
     space_id: str
@@ -30,6 +30,26 @@ class WalEntry:
     idem_key: str | None = None
     redacted_body_json: str | None = None
     position: int | None = None
+
+    # V1 NEW: Envelope integrity tracking
+    envelope_sha256: str | None = None
+
+    # V1 NEW: Time tracking
+    ingested_at: str | None = None
+    clock_skew_ms: int | None = None
+
+    # V1.3 NEW: Policy stamp (attached by PolicyEvaluator)
+    policy_stamp_json: str | None = None
+
+    # V1.3 NEW: Location privacy fields
+    location_geohash: str | None = None
+    location_precision_m: int | None = None
+
+    # V1.4 NEW: Async worker status tracking
+    embedding_status: str | None = None  # PENDING, IN_PROGRESS, COMPLETE, FAILED
+    embedding_id: str | None = None
+    fts_status: str | None = None  # PENDING, IN_PROGRESS, COMPLETE, FAILED
+    fts_entry_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -94,16 +114,21 @@ def _fsync_path(
 class WriteAheadLog:
     """Abstraction over the `st_wal` SQLite table."""
 
-    def append(
-        self, entry: WalEntry, *, connection: sqlite3.Connection | None = None
-    ) -> int:
+    def __init__(self, *, metrics: Any | None = None) -> None:
+        """Issue #044: Initialize with optional metrics exporter."""
+        self._metrics = metrics
+
+    def append(self, entry: WalEntry, *, connection: sqlite3.Connection | None = None) -> int:
         insert_entry = replace(entry)
         with _resolve_connection(connection) as conn:
             cursor = conn.execute(
                 (
                     "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
-                    "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                    "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                    "location_geohash, location_precision_m, "
+                    "embedding_status, embedding_id, fts_status, fts_entry_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 ),
                 (
                     insert_entry.tenant_id,
@@ -118,16 +143,36 @@ class WriteAheadLog:
                     insert_entry.idem_key,
                     insert_entry.device_id,
                     insert_entry.commit_ts,
+                    # V1 NEW: Envelope integrity tracking
+                    insert_entry.envelope_sha256,
+                    insert_entry.ingested_at,
+                    insert_entry.clock_skew_ms,
+                    # V1.3 NEW: Policy stamp (attached by PolicyEvaluator)
+                    insert_entry.policy_stamp_json,
+                    # V1.3 NEW: Location privacy fields
+                    insert_entry.location_geohash,
+                    insert_entry.location_precision_m,
+                    # V1.4 NEW: Async worker status tracking
+                    insert_entry.embedding_status,
+                    insert_entry.embedding_id,
+                    insert_entry.fts_status,
+                    insert_entry.fts_entry_id,
                 ),
             )
             row_id = cursor.lastrowid
-            if (
-                row_id is None
-            ):  # pragma: no cover - defensive guard, SQLite always returns rowid
+            if row_id is None:  # pragma: no cover - defensive guard, SQLite always returns rowid
                 msg = "Failed to determine WAL position"
                 raise RuntimeError(msg)
             position = int(row_id)
             insert_entry.position = position
+
+            # Issue #044: Emit wal_current_position gauge
+            if self._metrics is not None:
+                try:
+                    self._metrics.set_gauge("wal_current_position", float(position))
+                except Exception:  # noqa: BLE001
+                    pass  # Don't fail WAL append on metrics error
+
             return position
 
     def read_from(
@@ -141,7 +186,10 @@ class WriteAheadLog:
             rows = conn.execute(
                 (
                     "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, "
-                    "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts "
+                    "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                    "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                    "location_geohash, location_precision_m, "
+                    "embedding_status, embedding_id, fts_status, fts_entry_id "
                     "FROM st_wal WHERE pos > ? ORDER BY pos ASC LIMIT ?"
                 ),
                 (position, limit),
@@ -161,6 +209,20 @@ class WriteAheadLog:
                     payload_sha256=row["payload_sha256"],
                     idem_key=row["idem_key"],
                     position=row["pos"],
+                    # V1 NEW: Envelope integrity tracking
+                    envelope_sha256=row["envelope_sha256"],
+                    ingested_at=row["ingested_at"],
+                    clock_skew_ms=row["clock_skew_ms"],
+                    # V1.3 NEW: Policy stamp
+                    policy_stamp_json=row["policy_stamp_json"],
+                    # V1.3 NEW: Location privacy fields
+                    location_geohash=row["location_geohash"],
+                    location_precision_m=row["location_precision_m"],
+                    # V1.4 NEW: Async worker status tracking
+                    embedding_status=row["embedding_status"],
+                    embedding_id=row["embedding_id"],
+                    fts_status=row["fts_status"],
+                    fts_entry_id=row["fts_entry_id"],
                 )
                 for row in rows
             ]

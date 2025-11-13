@@ -216,6 +216,41 @@ function Ensure-Database {
     }
 }
 
+function Ensure-Neo4j-Schema {
+    if ($Migrate) {
+        Write-Info "Bootstrapping Neo4j schema"
+        $env:PYTHONPATH = $RepoRoot
+
+        # Load Neo4j environment variables from k0.env
+        $envFile = Join-Path $EnvDir "k0.env"
+        if (Test-Path $envFile) {
+            Get-Content $envFile | ForEach-Object {
+                if ($_ -match '^([^=]+)=(.*)$') {
+                    $key = $matches[1].Trim()
+                    $value = $matches[2].Trim()
+                    if ($key -match '^NEO4J_') {
+                        [System.Environment]::SetEnvironmentVariable($key, $value, [System.EnvironmentVariableTarget]::Process)
+                    }
+                }
+            }
+        }
+
+        # Use localhost for host-side migration (not container name)
+        $neo4jUri = "neo4j://localhost:7687"
+        $neo4jUser = $env:NEO4J_USERNAME
+        $neo4jPass = $env:NEO4J_PASSWORD
+        $neo4jDb = $env:NEO4J_DATABASE
+
+        if (-not $neo4jUser) {
+            Write-Warn "NEO4J_USERNAME not set, skipping Neo4j migrations"
+            return
+        }
+
+        $neo4jPy = "from k0.automation.migrate_neo4j import apply_cypher_migrations; r=apply_cypher_migrations('$neo4jUri', '$neo4jUser', '$neo4jPass', '$neo4jDb'); print('Applied:', sum(1 for x in r if x.action=='applied'), 'Skipped:', sum(1 for x in r if x.action=='skipped'))"
+        python -c $neo4jPy | Write-Host
+    }
+}
+
 function Sync-Telemetry-Artifacts {
     Write-Info "Syncing telemetry artifacts from source to deployment"
 
@@ -333,8 +368,46 @@ function Do-Up {
     Sync-Telemetry-Artifacts
     Ensure-Image
     Ensure-Database
+
+    # Build worker images if they don't exist
+    $embeddingWorkerPresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-embedding-worker:latest")
+    $ftsWorkerPresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-fts-worker:latest")
+
+    if (-not $embeddingWorkerPresent -or -not $ftsWorkerPresent) {
+        Write-Info "Building worker images (embedding-worker, fts-worker)"
+        docker compose @(Compose-Args) build embedding-worker fts-worker | Write-Host
+    }
+
     Write-Info "Starting services (kernel + telemetry)"
     docker compose @(Compose-Args) up -d | Write-Host
+
+    # Wait for Neo4j to be ready before running migrations
+    if ($Migrate) {
+        Write-Info "Waiting for Neo4j to be ready..."
+        $maxRetries = 30
+        $retryCount = 0
+        $neo4jReady = $false
+
+        while (-not $neo4jReady -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            $healthCheck = docker compose @(Compose-Args) ps neo4j --format json | ConvertFrom-Json
+            if ($healthCheck.Health -eq "healthy") {
+                $neo4jReady = $true
+                Write-Ok "Neo4j is healthy"
+            }
+            else {
+                Write-Host "." -NoNewline
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if (-not $neo4jReady) {
+            Write-Warn "Neo4j did not become healthy in time, but continuing anyway"
+        }
+
+        Ensure-Neo4j-Schema
+    }
+
     if ($Verify) {
         if ($WaitSeconds -gt 0) {
             Write-Info "Waiting $WaitSeconds seconds before verification"

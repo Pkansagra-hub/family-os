@@ -1,0 +1,12 @@
+# K0 FTS Worker - Minimal Dependencies
+# Only what's needed for async FTS indexing
+# Includes: k0/deploy/requirements.base.txt (observability, hashing, logging)
+
+# Base dependencies (shared with all containers)
+-r requirements.base.txt
+
+# Core NLP Dependencies
+nltk>=3.8.1                      # Tokenization, stemming, stop words
+
+# Note: No sentence-transformers, no spacy, no FastAPI
+# Total size: ~550MB (NLTK data + observability)

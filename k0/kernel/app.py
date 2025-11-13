@@ -22,6 +22,7 @@ from starlette.responses import Response
 from ..automation.migrate import MigrationError, apply_migrations
 from ..bus import (
     BusDispatcher,
+    BusMessage,
     BusMiddleware,
     latency_metrics_middleware,
     timestamp_middleware,
@@ -63,6 +64,9 @@ from .readiness import ReadinessState
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+# Issue #046: Global counter for active HTTP connections
+_active_connections = 0
 
 
 def _classify_operation(route_path: str, method: str) -> str:
@@ -205,12 +209,20 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     )
 
     alias_map = AliasMap.from_file()
+
+    # Gap 38: Read DLQ max retry attempts from config
+    dlq_settings = getattr(settings, "dlq", None)
+    max_retry_attempts = (
+        int(getattr(dlq_settings, "max_retry_attempts", 10)) if dlq_settings is not None else 10
+    )
+
     driver_worker_pool = DriverWorkerPool(
         alias_map=alias_map,
         outbox_store=outbox_store,
         dead_letter_queue=dead_letter_queue,
         retry_scheduler_factory=lambda: RetryScheduler(),
         metrics_emitter=metrics_exporter.emit,
+        max_retry_attempts=max_retry_attempts,
     )
 
     bus_settings = getattr(settings, "bus", None)
@@ -279,6 +291,65 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
 
+    # Register BusDispatcher sinks (Gap 1: Wire BusDispatcher Sinks)
+    # M1 R1.2: Migrated from register_sink() to tap() / subscribe()
+
+    # Sink 1: Observability - emit bus_dispatch events with trace_id
+    async def observability_sink(message: BusMessage) -> None:
+        """Emit observability events for bus dispatches with trace_id."""
+        try:
+            observability_emitter.emit(
+                {
+                    "event_type": "bus_dispatch",
+                    "topic": message.topic,
+                    "offset": message.offset,
+                    "trace_id": message.trace_id,
+                    "payload_size": len(message.payload),
+                }
+            )
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to emit observability event for bus dispatch")
+
+    # Sink 2: DriverWorkerPool trigger - trigger outbox processing
+    async def driver_worker_pool_sink(message: BusMessage) -> None:
+        """Trigger outbox processing when WAL commits occur."""
+        # Note: This sink notifies the worker pool that new entries may be available.
+        # Actual processing happens in background loop (Gap 19)
+        try:
+            # For now, this is a no-op placeholder. The background worker loop
+            # will handle periodic processing. Future enhancement could add
+            # event-driven triggers here if needed.
+            pass
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to trigger driver worker pool")
+
+    # Sink 3: SSE fan-out (placeholder for future SSE streaming implementation)
+    # Note: SSE fan-out requires SSE server state management which is not yet
+    # fully implemented. This sink will be completed when SSE streaming is ready.
+    async def sse_fan_out_sink(message: BusMessage) -> None:
+        """Fan out WAL events to SSE subscribers."""
+        try:
+            # TODO: Implement SSE fan-out when SSE streaming is ready
+            # This will involve:
+            # 1. Query SSE subscribers for this topic/tenant/space
+            # 2. Send event to matching subscriptions
+            # 3. Track delivery and backpressure
+            pass
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to fan out to SSE subscribers")
+
+    # M1 R1.2: Use tap() for observability (gets ALL messages)
+    bus_dispatcher.tap(observability_sink)
+
+    # M1 R1.2: Use subscribe("*") for driver worker pool (wildcard for all topics)
+    bus_dispatcher.subscribe("*", driver_worker_pool_sink)
+
+    # M1 R1.2: Use subscribe("*") for SSE fan-out (wildcard for all topics)
+    bus_dispatcher.subscribe("*", sse_fan_out_sink)
+
+    # M2 R2.3: Initialize pipelines state (will be populated during lifespan startup)
+    app.state.pipelines = {}
+
     def _unit_of_work_factory() -> UnitOfWork:
         return UnitOfWork(
             outbox_store=outbox_store,
@@ -334,10 +405,14 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         if readiness is not None:
             readiness.mark_wal_replay_complete()
 
+    # Gap 21: Only shutdown pool on bootstrap exception
+    # If bootstrap succeeds, pool stays open for runtime
     try:
         _bootstrap_runtime()
-    finally:
+    except Exception:
+        # Bootstrap failed - cleanup pool before re-raising
         shutdown_pool()
+        raise
 
     configure_pool(database_path)
 
@@ -356,19 +431,127 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to report SSE metrics")
 
+    async def _outbox_worker_loop() -> None:
+        """Background task to process outbox with exponential backoff (Gap 19)."""
+        worker_pool = getattr(app.state, "driver_worker_pool", None)
+        alias_map = getattr(app.state, "alias_map", None)
+
+        if worker_pool is None or alias_map is None:
+            logger.warning("Outbox worker loop cannot start: missing worker_pool or alias_map")
+            return
+
+        logger.info("Starting outbox worker loop (processing interval: 5s)")
+
+        while True:
+            try:
+                await asyncio.sleep(5)  # Process every 5 seconds
+
+                # Get all registered driver aliases from alias_map
+                driver_aliases = list(alias_map.bindings.keys())
+
+                if not driver_aliases:
+                    logger.debug("No driver aliases registered, skipping outbox processing")
+                    continue
+
+                # Process each registered driver
+                for alias in driver_aliases:
+                    try:
+                        worker_pool.process_driver(alias)
+                        logger.debug(f"Processed outbox for driver: {alias}")
+                    except RuntimeError as e:  # noqa: BLE001
+                        # Gracefully skip drivers that aren't implemented yet
+                        error_msg = str(e)
+                        if (
+                            "does not expose a known factory" in error_msg
+                            or "must expose an 'apply' method" in error_msg
+                        ):
+                            logger.debug(f"Skipping unimplemented driver: {alias} ({error_msg})")
+                        else:
+                            logger.exception(f"Failed to process outbox for driver: {alias}")
+                    except Exception:  # noqa: BLE001
+                        logger.exception(f"Failed to process outbox for driver: {alias}")
+
+            except asyncio.CancelledError:
+                logger.info("Outbox worker loop cancelled")
+                break
+            except Exception:  # noqa: BLE001
+                logger.exception("Outbox worker loop encountered error, backing off 30s")
+                try:
+                    await asyncio.sleep(30)  # 30s backoff on loop exceptions
+                except asyncio.CancelledError:
+                    logger.info("Outbox worker loop cancelled during backoff")
+                    break
+
     @asynccontextmanager
     async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-        # Start background task for SSE metrics reporting
+        # M2 R2.3: Boot user-space pipelines BEFORE starting background tasks
+        from ..pipelines.loader import discover_and_boot_pipelines
+
+        try:
+            logger.info("Discovering and booting pipelines...")
+            # Get pipeline-specific config from settings (if available)
+            pipeline_config = getattr(settings, "pipelines", {})
+            if isinstance(pipeline_config, dict):
+                pipeline_config_dict = pipeline_config
+            else:
+                pipeline_config_dict = {}
+
+            pipelines = await discover_and_boot_pipelines(
+                bus_dispatcher=bus_dispatcher,
+                uow_factory=_unit_of_work_factory,
+                config=pipeline_config_dict,
+                logger=logger,
+            )
+            app.state.pipelines = pipelines
+            logger.info(f"Successfully booted {len(pipelines)} pipelines: {list(pipelines.keys())}")
+        except Exception:
+            logger.exception("Failed to boot pipelines during startup")
+            # Don't prevent kernel from starting if no pipelines exist
+            app.state.pipelines = {}
+
+        # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
+        outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+
         try:
             yield
         finally:
-            # Cancel background task
+            # M2 R2.3: Graceful shutdown - call on_shutdown for all pipelines
+            logger.info("Shutting down pipelines...")
+            pipelines = getattr(app.state, "pipelines", {})
+            for pipeline_id, pipeline in pipelines.items():
+                try:
+                    await pipeline.on_shutdown()
+                    logger.info(f"Shutdown pipeline: {pipeline_id}")
+                except Exception:
+                    logger.exception(f"Error shutting down {pipeline_id}")
+
+            # M2 R2.3: Record clean shutdown timestamp (for crash fencing)
+            import time
+
+            try:
+                with open("k0_runtime.shutdown_ts", "w") as f:
+                    f.write(str(int(time.time())))
+                logger.info("Recorded clean shutdown timestamp")
+            except Exception:
+                logger.exception("Failed to record shutdown timestamp")
+
+            # Cancel background tasks
+            logger.info("Shutting down background tasks")
             sse_metrics_task.cancel()
+            outbox_worker_task.cancel()
+
+            # Wait for tasks to complete cancellation
             try:
                 await sse_metrics_task
             except asyncio.CancelledError:
                 pass
+
+            try:
+                await outbox_worker_task
+            except asyncio.CancelledError:
+                pass
+
             shutdown_pool()
 
     app.router.lifespan_context = _lifespan
@@ -396,6 +579,17 @@ def _install_middlewares(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        global _active_connections
+
+        # Issue #046: Track active connections
+        _active_connections += 1
+        metrics_exporter = getattr(app.state, "metrics_exporter", None)
+        if isinstance(metrics_exporter, MetricsExporter):
+            try:
+                metrics_exporter.set_gauge("active_connections", float(_active_connections))
+            except Exception:  # noqa: BLE001
+                pass  # Don't fail request on metrics error
+
         incoming_trace_id = request.headers.get("X-Cognitive-Trace-Id")
         trace_id = incoming_trace_id.strip() if incoming_trace_id else tracer_factory.new_trace_id()
         request.state.cognitive_trace_id = trace_id
@@ -468,6 +662,14 @@ def _install_middlewares(
             response.headers.setdefault("X-Cognitive-Trace-Id", trace_id)
             return response
         finally:
+            # Issue #046: Decrement active connections
+            _active_connections -= 1
+            if isinstance(metrics_exporter, MetricsExporter):
+                try:
+                    metrics_exporter.set_gauge("active_connections", float(_active_connections))
+                except Exception:  # noqa: BLE001
+                    pass
+
             tracer_factory.detach(baggage_token)
             if isinstance(metrics_exporter, MetricsExporter):
                 duration = max(perf_counter() - start_time, 0.0)

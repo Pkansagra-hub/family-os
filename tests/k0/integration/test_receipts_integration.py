@@ -22,6 +22,7 @@ from typing import Iterator
 import pytest
 from nacl.signing import SigningKey
 
+from k0.automation.migrate import apply_migrations
 from k0.security.crypto import (
     SignatureVerificationError,
     canonical_envelope,
@@ -33,12 +34,6 @@ from k0.storage.receipts import Receipt, ReceiptStore
 from k0.storage.wal import WalEntry, WriteAheadLog
 from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
 
-# Calculate REPO_ROOT
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
-
 
 @pytest.fixture
 def sqlite_runtime() -> Iterator[Path]:
@@ -46,9 +41,8 @@ def sqlite_runtime() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as connection:
-        connection.executescript(STORAGE_SQL_PATH.read_text())
-        connection.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:
@@ -100,7 +94,7 @@ def _create_valid_envelope(
     receipt_id: str,
     body: bytes | None = None,
 ) -> tuple[dict, str, str]:
-    """Create a valid envelope with signature.
+    """Create a valid V1 envelope with full signature (V1: body is now included).
 
     Returns: (envelope_dict, signature_b64, verify_key_b64)
     """
@@ -112,15 +106,15 @@ def _create_valid_envelope(
         "commit_ts": datetime.now(timezone.utc).isoformat(),
         "device_id": "device-001",
         "payload_sha256": hash_payload(body),
+        "body": body,  # V1: body is now INCLUDED in the canonical envelope
     }
 
-    # Sign the envelope (excluding sig and body fields)
+    # V1: Sign the full envelope (excluding sig field only, body is now included)
     message = canonical_envelope(envelope, exclude_signature=True)
     signature = signing_key.sign(message).signature
     signature_b64 = encode_base64url(signature)
 
     envelope["sig"] = signature_b64
-    envelope["body"] = body
 
     return envelope, signature_b64, verify_key_b64
 
