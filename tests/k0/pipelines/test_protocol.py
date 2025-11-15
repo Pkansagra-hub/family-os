@@ -18,11 +18,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from k0.pipelines.protocol import BusMessage, Pipeline, PipelineContext, PipelineProtocol
+from k0.bus import BusMessage
+from k0.pipelines.protocol import Pipeline, PipelineContext, PipelineProtocol
 
 # ============================================================================
 # BusMessage Tests
 # ============================================================================
+
 
 def test_bus_message_immutable():
     """Verify BusMessage is frozen (immutable)."""
@@ -30,7 +32,7 @@ def test_bus_message_immutable():
         topic="cognitive.memory.write.committed.v1",
         payload=b'{"event_id": "evt_123"}',
         offset=42,
-        trace_id="trace_abc123"
+        trace_id="trace_abc123",
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -39,23 +41,14 @@ def test_bus_message_immutable():
 
 def test_bus_message_slots():
     """Verify BusMessage uses slots (memory optimization)."""
-    msg = BusMessage(
-        topic="test.topic",
-        payload=b"test_payload",
-        offset=1,
-        trace_id=None
-    )
+    msg = BusMessage(topic="test.topic", payload=b"test_payload", offset=1, trace_id=None)
 
     assert not hasattr(msg, "__dict__"), "BusMessage should use __slots__, not __dict__"
 
 
 def test_bus_message_defaults():
     """Verify BusMessage optional fields default to None."""
-    msg = BusMessage(
-        topic="test.topic",
-        payload=b"test_payload",
-        offset=1
-    )
+    msg = BusMessage(topic="test.topic", payload=b"test_payload", offset=1)
 
     assert msg.space_id is None, "space_id should default to None"
     assert msg.trace_id is None, "trace_id should default to None"
@@ -70,7 +63,7 @@ def test_bus_message_attributes():
         offset=42,
         space_id="space_abc",
         trace_id="trace_abc123",
-        metadata={"priority": "high"}
+        metadata={"priority": "high"},
     )
 
     assert msg.topic == "cognitive.memory.write.committed.v1"
@@ -85,13 +78,13 @@ def test_bus_message_attributes():
 # PipelineContext Tests
 # ============================================================================
 
+
 def test_pipeline_context_immutable():
     """Verify PipelineContext is frozen (immutable)."""
     import logging
+
     ctx = PipelineContext(
-        syscalls=object(),
-        config={"key": "value"},
-        logger=logging.getLogger("test")
+        syscalls=object(), config={"key": "value"}, logger=logging.getLogger("test")
     )
 
     with pytest.raises(FrozenInstanceError):
@@ -101,11 +94,8 @@ def test_pipeline_context_immutable():
 def test_pipeline_context_slots():
     """Verify PipelineContext uses slots (memory optimization)."""
     import logging
-    ctx = PipelineContext(
-        syscalls=object(),
-        config={},
-        logger=logging.getLogger("test")
-    )
+
+    ctx = PipelineContext(syscalls=object(), config={}, logger=logging.getLogger("test"))
 
     assert not hasattr(ctx, "__dict__"), "PipelineContext should use __slots__, not __dict__"
 
@@ -113,15 +103,12 @@ def test_pipeline_context_slots():
 def test_pipeline_context_attributes():
     """Verify PipelineContext has all required attributes."""
     import logging
+
     syscalls = object()
     config = {"key": "value"}
     logger = logging.getLogger("test")
 
-    ctx = PipelineContext(
-        syscalls=syscalls,
-        config=config,
-        logger=logger
-    )
+    ctx = PipelineContext(syscalls=syscalls, config=config, logger=logger)
 
     assert ctx.syscalls is syscalls
     assert ctx.config == {"key": "value"}
@@ -131,6 +118,7 @@ def test_pipeline_context_attributes():
 # ============================================================================
 # PipelineProtocol Tests
 # ============================================================================
+
 
 def test_protocol_runtime_checkable():
     """Verify PipelineProtocol is runtime checkable with isinstance()."""
@@ -250,7 +238,9 @@ def test_protocol_all_properties_required():
             pass
 
     pipeline = MissingMultipleProperties()
-    assert not isinstance(pipeline, PipelineProtocol), "Pipeline missing multiple properties should fail"
+    assert not isinstance(
+        pipeline, PipelineProtocol
+    ), "Pipeline missing multiple properties should fail"
 
 
 def test_pipeline_alias():
@@ -328,12 +318,6 @@ def test_protocol_sync_methods_fail():
             pass
 
         def handle(self, msg: BusMessage) -> None:  # Sync instead of async
-            pass
-
-    pipeline = SyncMethodsPipeline()
-    # Runtime isinstance check doesn't verify async, but static type checker will catch
-    # This test documents expected behavior (runtime passes, static fails)
-    assert isinstance(pipeline, PipelineProtocol), "Runtime check passes (async is static)"
             pass
 
     pipeline = SyncMethodsPipeline()

@@ -284,10 +284,15 @@ flowchart LR
 
 1. **Owner determination**: `owner_id = actor` (person who created memory)
 2. **Co-owners**: If `shared:*` space and multiple participants → co-owners
-3. **Visibility**: Based on space policy + ABAC roles
+3. **Author + participant roles**: Map relationship context to `author_role` and `participant_roles`
+4. **Visibility**: Based on space policy + ABAC roles
+
    - `personal:alice` → visible_to = ["person-alice"]
    - `shared:household` → visible_to = ["person-alice", "person-bob", "person-emma"]
-4. **Space validation**: Ensure actor has write permission to space
+
+5. **Policy lineage**: Emit `visibility_policy_version`, `policy_overrides`, and ordered `visibility_adjustments` to explain the final audience (ADR-K004d)
+6. **Resolver observability**: Track `resolver_state`, `cache_snapshot_version`, and `latency_ms` for degraded modes + telemetry (ADR-K004e)
+7. **Space validation**: Ensure actor has write permission to space
 
 **Output:**
 
@@ -295,7 +300,17 @@ flowchart LR
 {
   "owner_id": "person-alice",
   "co_owners": ["person-emma"],
+  "author_role": "guardian",
+  "participant_roles": {"person-emma": "child"},
   "visible_to": ["person-alice", "person-bob", "person-emma"],
+  "visibility_policy_version": "space:shared:household|matrix-k004d-v1",
+  "policy_overrides": ["cache_warn"],
+  "visibility_adjustments": [
+    {"reason": "guardian_only", "subject_id": "person-emma"}
+  ],
+  "resolver_state": "CACHE_WARN",
+  "cache_snapshot_version": "spaces:v5|space_members:v8",
+  "resolution_latency_ms": 12.4,
   "space_validated": true
 }
 ```
@@ -482,14 +497,14 @@ S = θ_r × recency + θ_n × novelty + θ_a × affect_nudge + θ_t × circadian
 
 **Methods:**
 
-1. **`hipp_store_upsert()`** - Write enriched memory (80 columns)
+1. **`hipp_store_upsert()`** - Write enriched memory (78 columns)
 2. **`mark_processed()`** - Idempotency watermark
 3. **`emit_receipt()`** - Pipeline processing receipt
 
 **Process:**
 
 1. Open UnitOfWork transaction
-2. Construct 80-column `st_hipp_store` row (see Section 4)
+2. Construct 78-column `st_hipp_store` row (see Section 4)
 3. Execute INSERT with all enriched fields
 4. Mark processed in `st_pipeline_processed`:
 
@@ -586,9 +601,9 @@ CREATE TABLE IF NOT EXISTS st_hipp_store (
     location_lat REAL,                        -- Latitude (optional, NULL if redacted)
     location_lon REAL,                        -- Longitude (optional, NULL if redacted)
 
-    -- WHERE - Redaction Fields (2 columns) [ADDED FOR AMBER/RED]
-    location_geohash TEXT,                    -- Geohash for privacy (AMBER: 6 chars, RED: 4 chars)
-    location_precision_m INTEGER,             -- Precision in meters (1000 for AMBER, 20000 for RED)
+    -- WHERE - Privacy-Preserving Location (2 columns) [FROM K0 GATE via migration 0019]
+    location_geohash TEXT,                    -- Geohash for privacy (GREEN: 12 chars, AMBER: 6 chars, RED: 4 chars)
+    location_precision_m INTEGER,             -- Precision in meters (GREEN: 1m, AMBER: 5000m, RED: 25000m)
 
     -- WHEN - Temporal (3 columns)
     ts TEXT NOT NULL,                         -- Event timestamp (ISO 8601)
@@ -654,15 +669,18 @@ CREATE INDEX idx_hipp_embedding ON st_hipp_store(embedding_id) WHERE embedding_i
 CREATE INDEX idx_hipp_fts ON st_hipp_store(fts_indexed) WHERE fts_indexed = 1;
 CREATE INDEX idx_hipp_crdt_tombstone ON st_hipp_store(crdt_tombstone, tenant_id);
 CREATE INDEX idx_hipp_consolidation ON st_hipp_store(consolidation_status) WHERE consolidation_status = 'PENDING';
+CREATE INDEX idx_hipp_location_geohash ON st_hipp_store(location_geohash) WHERE location_geohash IS NOT NULL;
+CREATE INDEX idx_hipp_location_precision ON st_hipp_store(location_precision_m) WHERE location_precision_m IS NOT NULL;
 ```
 
-**Column Count:** 80 columns (enhanced from original 78)
+**Column Count:** 78 columns (enhanced from baseline 47)
 
-**Enhancements from original schema:**
+**Enhancements from baseline schema (0006_phase1_core_memory_foundation.sql):**
 
-- ✅ Added `location_geohash`, `location_precision_m` for AMBER/RED redaction
-- ✅ Added 6 affect analysis fields (`affect_valence`, `affect_arousal`, etc.)
-- ✅ Added 4 consolidation routing fields for P03 integration
+- ✅ **Migration 0013** (10 cols): Affect analysis (6) + consolidation routing (4)
+- ✅ **Migration 0014** (13 cols): Affect storage wiring + household state + relationships
+- ✅ **Migration 0015** (6 cols): Space resolver visibility + policy provenance
+- ✅ **Migration 0019** (2 cols): Location privacy fields (geohash + precision_m)
 
 ### 4.2 Field-by-Field Transformation (K1 Envelope → st_hipp_store)
 
@@ -689,6 +707,8 @@ CREATE INDEX idx_hipp_consolidation ON st_hipp_store(consolidation_status) WHERE
 | Entity extraction | Context | `mention_contexts` | `{}` |
 | `body.payload.location.name` | Direct copy (or NULL) | `location_name` | `"Lincoln Park Soccer Fields"` |
 | `body.payload.location.type` | Direct copy | `location_type` | `"sports_facility"` |
+| **From st_wal** | Direct copy from WAL | `location_geohash` | `"9q8yy6"` (6-char for AMBER) |
+| **From st_wal** | Direct copy from WAL | `location_precision_m` | `5000` (5km for AMBER) |
 | `body.payload.location.lat` | Redacted if AMBER/RED | `location_lat` | `NULL` (AMBER) |
 | `body.payload.location.lon` | Redacted if AMBER/RED | `location_lon` | `NULL` (AMBER) |
 | Redaction Coordinator | Geohash conversion | `location_geohash` | `"dp3wm7"` (AMBER) |
@@ -718,6 +738,12 @@ CREATE INDEX idx_hipp_consolidation ON st_hipp_store(consolidation_status) WHERE
 | Space Resolver | Owner determination | `owner_id` | `"person-alice"` |
 | Space Resolver | Co-owner resolution | `co_owners` | `["person-emma"]` |
 | Space Resolver | Visibility rules | `visible_to` | `["person-alice", "person-bob", "person-emma"]` |
+| Space Resolver | Policy lineage hash | `visibility_policy_version` | `"space:shared:household\|matrix-k004d-v1"` |
+| Space Resolver | Override tags | `policy_overrides` | `["cache_warn"]` |
+| Space Resolver | Adjustment audit trail | `visibility_adjustments` | `[{"reason": "guardian_only", "subject_id": "person-emma"}]` |
+| Space Resolver | Resolver degraded mode | `resolver_state` | `"CACHE_WARN"` |
+| Space Resolver | Cache lineage digest | `cache_snapshot_version` | `"spaces:v5\|space_members:v8"` |
+| Space Resolver | Resolver latency | `resolution_latency_ms` | `12.4` |
 | System timestamp | `now()` | `created_at` | `"2025-11-12T14:23:46.200Z"` |
 | `device_id` | Direct copy | `device_id` | `"device-iphone-alice"` |
 | K1 session | Session tracking | `session_id` | `"sess-2025-11-12-001"` |
@@ -730,7 +756,7 @@ CREATE INDEX idx_hipp_consolidation ON st_hipp_store(consolidation_status) WHERE
 | P02 | Not yet consolidated | `consolidated_at` | `NULL` |
 | Hippocampus | Version | `hipp_version` | `"dg-v1.2.0"` |
 
-**Total Fields:** 80 columns populated from K1 envelope + 6 enrichment services
+**Total Fields:** 78 columns populated from K1 envelope + 6 enrichment services
 
 ---
 
@@ -761,9 +787,9 @@ sequenceDiagram
     AFF->>FUSION: fuse(sources, priors, confidence)
     FUSION-->>AFF: v=0.1, a=0.4, tags=["urgent"], c=0.72
     AFF-->>P02: AffectAnnotation + PolicyRecommendation
-```
+```text
 
-### 5.2 Affect Input (from K1 envelope)
+```
 
 ```json
 {
@@ -787,9 +813,9 @@ sequenceDiagram
   },
   "trace_id": "trace-abc123"
 }
-```
+```text
 
-### 5.3 Affect Output
+```
 
 ```json
 {
@@ -809,9 +835,9 @@ sequenceDiagram
     "confidence": 0.7
   }
 }
-```
+```text
 
-### 5.4 Affect → st_hipp_store Mapping
+```
 
 | Affect Field | st_hipp_store Column | Notes |
 |--------------|---------------------|-------|
@@ -857,7 +883,7 @@ sequenceDiagram
 
 For memory *i* in `st_hipp_store`:
 
-```
+```text
 S_i = θ_r × recency_i           [0.9]
     + θ_q × query_match_i       [1.2] (N/A for writes, used in recall)
     + θ_g × goal_align_i        [0.8]
@@ -878,7 +904,7 @@ S_i = θ_r × recency_i           [0.9]
 
 **Example Calculation:**
 
-```
+```text
 S = 0.9×1.0 + 1.2×0.0 + 0.8×0.0 + 0.6×0.73 + 0.5×0.6 + 0.2×0.1 - 0.3×0.05
 S = 0.9 + 0 + 0 + 0.438 + 0.3 + 0.02 - 0.015
 S = 1.643 → normalized to 0.81 via softmax(T=0.6)
@@ -1504,7 +1530,7 @@ UnitOfWork → WAL + Outbox
 - Return 200 OK to client (TOTAL: 100ms)
 ```
 
-**CLIENT RECEIVES 200 OK - PHASE 1 COMPLETE**
+### CLIENT RECEIVES 200 OK - PHASE 1 COMPLETE
 
 ---
 
@@ -1668,7 +1694,7 @@ P02 → BusDispatcher
 - Update st_outbox: status=COMPLETED, completed_at=now()
 ```
 
-**PHASE 2 COMPLETE - TOTAL: 51ms**
+### PHASE 2 COMPLETE - TOTAL: 51ms
 
 ---
 
@@ -1876,7 +1902,7 @@ p02_consolidation_targets_total{layer="prospective"} 789
 
 ### D. SQL Queries for Common Operations
 
-**Query 1: Find all memories for a person in a date range**
+### Query 1: Find all memories for a person in a date range
 
 ```sql
 SELECT event_id, text, ts, privacy_band, novelty, affect_valence
@@ -1890,7 +1916,7 @@ ORDER BY ts DESC
 LIMIT 100;
 ```
 
-**Query 2: Find high-novelty memories awaiting consolidation**
+### Query 2: Find high-novelty memories awaiting consolidation
 
 ```sql
 SELECT event_id, text, novelty, consolidation_target, consolidation_confidence
@@ -1902,7 +1928,7 @@ ORDER BY novelty DESC
 LIMIT 50;
 ```
 
-**Query 3: Monitor P02 processing health**
+### Query 3: Monitor P02 processing health
 
 ```sql
 SELECT
@@ -1916,7 +1942,7 @@ WHERE pipeline_id = 'P02'
   AND updated_at > datetime('now', '-1 hour');
 ```
 
-**Query 4: Find memories similar to a given SimHash**
+### Query 4: Find memories similar to a given SimHash
 
 ```sql
 -- Note: Requires custom Hamming distance function

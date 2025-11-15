@@ -45,12 +45,6 @@ class WalEntry:
     location_geohash: str | None = None
     location_precision_m: int | None = None
 
-    # V1.4 NEW: Async worker status tracking
-    embedding_status: str | None = None  # PENDING, IN_PROGRESS, COMPLETE, FAILED
-    embedding_id: str | None = None
-    fts_status: str | None = None  # PENDING, IN_PROGRESS, COMPLETE, FAILED
-    fts_entry_id: str | None = None
-
 
 @dataclass(slots=True)
 class WalBacklogStats:
@@ -126,9 +120,8 @@ class WriteAheadLog:
                     "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
                     "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
                     "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
-                    "location_geohash, location_precision_m, "
-                    "embedding_status, embedding_id, fts_status, fts_entry_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "location_geohash, location_precision_m) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 ),
                 (
                     insert_entry.tenant_id,
@@ -152,11 +145,6 @@ class WriteAheadLog:
                     # V1.3 NEW: Location privacy fields
                     insert_entry.location_geohash,
                     insert_entry.location_precision_m,
-                    # V1.4 NEW: Async worker status tracking
-                    insert_entry.embedding_status,
-                    insert_entry.embedding_id,
-                    insert_entry.fts_status,
-                    insert_entry.fts_entry_id,
                 ),
             )
             row_id = cursor.lastrowid
@@ -188,8 +176,7 @@ class WriteAheadLog:
                     "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, "
                     "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts, "
                     "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
-                    "location_geohash, location_precision_m, "
-                    "embedding_status, embedding_id, fts_status, fts_entry_id "
+                    "location_geohash, location_precision_m "
                     "FROM st_wal WHERE pos > ? ORDER BY pos ASC LIMIT ?"
                 ),
                 (position, limit),
@@ -218,11 +205,6 @@ class WriteAheadLog:
                     # V1.3 NEW: Location privacy fields
                     location_geohash=row["location_geohash"],
                     location_precision_m=row["location_precision_m"],
-                    # V1.4 NEW: Async worker status tracking
-                    embedding_status=row["embedding_status"],
-                    embedding_id=row["embedding_id"],
-                    fts_status=row["fts_status"],
-                    fts_entry_id=row["fts_entry_id"],
                 )
                 for row in rows
             ]

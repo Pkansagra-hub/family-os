@@ -21,11 +21,12 @@ Usage:
 See: docs/whiteboard/k0_pipeline_architecture.md for complete design
 """
 
-from k0.pipelines.protocol import BusMessage, Pipeline, PipelineContext, PipelineProtocol
+from k0.bus import BusMessage
+from k0.pipelines.protocol import Pipeline, PipelineContext, PipelineProtocol
 
 __all__ = [
     "PipelineProtocol",
     "Pipeline",  # Alias
-    "BusMessage",
+    "BusMessage",  # Re-exported from k0.bus for convenience
     "PipelineContext",
 ]

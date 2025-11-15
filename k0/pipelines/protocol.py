@@ -22,46 +22,11 @@ from typing import TYPE_CHECKING, Any, Protocol, Sequence, runtime_checkable
 if TYPE_CHECKING:
     from logging import Logger
 
+    from k0.bus import BusMessage  # Import for type hints only
 
-@dataclass(frozen=True, slots=True)
-class BusMessage:
-    """
-    Immutable message dispatched from BusDispatcher to pipeline handlers.
-
-    This is the canonical event format delivered to pipelines after Phase-1 commit.
-    Pipelines receive messages via handle(msg) and process them asynchronously.
-
-    Attributes:
-        topic: Event topic (e.g., "cognitive.memory.write.committed.v1")
-        payload: Event payload (bytes, typically JSON or FlatBuffers)
-        offset: Monotonic WAL position (st_wal.pos)
-        space_id: Space ID for per-space ordering enforcement (optional)
-        trace_id: Cognitive trace ID for observability (optional)
-        metadata: Additional context for routing/filtering (optional)
-
-    Performance:
-        - Frozen dataclass (immutable, hashable)
-        - Slots reduce memory overhead (~40% vs dict)
-        - No validation overhead (trust kernel)
-
-    Example:
-        >>> msg = BusMessage(
-        ...     topic="cognitive.memory.write.committed.v1",
-        ...     payload=b'{"event_id": "evt_123", "content": "..."}',
-        ...     offset=42,
-        ...     space_id="space_abc",
-        ...     trace_id="trace_abc123",
-        ...     metadata={"priority": "high"}
-        ... )
-        >>> await pipeline.handle(msg)
-    """
-
-    topic: str
-    payload: bytes
-    offset: int
-    space_id: str | None = None
-    trace_id: str | None = None
-    metadata: dict[str, Any] | None = None
+# BusMessage is now defined in k0.bus.core and imported by runtime code
+# It includes: topic, payload, offset, trace_id, space_id, metadata
+# This consolidates the canonical definition in one place
 
 
 @dataclass(frozen=True, slots=True)

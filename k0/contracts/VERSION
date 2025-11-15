@@ -2,14 +2,14 @@
 # This file tracks the canonical version and checksums for all contract artifacts.
 # Changes to this file require Architecture + Security + Ops approval.
 
-version: 1.1.0
+version: 1.2.0
 release_date: '2025-11-13'
 status: active
 artifacts:
   openapi:
     file: openapi.k0.yaml
     version: 1.0.0
-    sha256: 500fed8b2b55ac87eda206db695bb9931b20d42f0cfd7a3415fa06b95178785b
+    sha256: f172d33f06fa226e36587887a3947550f3ecdc9e625792a0320862a33d0f68c5
   asyncapi:
     file: asyncapi.events.yaml
     version: 1.0.0
@@ -55,6 +55,12 @@ artifacts:
     sha256: a284e6772706d6335f6e3ea32f66a553b2b3a81deb45307c5f6dab605ca9633b
   - file: jsonschema/affect/calibration_params.json
     sha256: 7dd12f636e548ee2fe622df798aab42b1e51ab4b03774da472279fc3c76033c1
+  - file: jsonschema/affect/behavioral_signals.json
+    sha256: 394a572a463973a679e15093480b0ab6f880bb4545569caaf164cc3f76bb9c5c
+  - file: jsonschema/space/space_resolution_request.json
+    sha256: a7c310746d03bcffc38f64402cd2fbf360b290ec28efbcd996d08d983a6a82f9
+  - file: jsonschema/space/space_resolution.json
+    sha256: 781acf5583878bc7554653676cd018ee80f8cecf2fa9ad76855455eedc70c9de
   bridge_policy:
     file: policy/bridge_policy.yml
     version: 0.1.0
@@ -67,6 +73,12 @@ approvals:
   security: '2025-10-30'
   operations: '2025-10-30'
 changelog:
+- version: 1.2.0
+  date: '2025-11-13'
+  changes:
+  - Added Space Resolver request/response schemas plus RED/BLACK/caretaker examples per ADR-K004a/K004d/K004e
+  - Locked resolver response fields with cache_snapshot_version + resolver_state metadata required for Gate 2 clearance
+  - Revalidated contracts via `python k0/automation/lint_schemas.py`
 - version: 1.1.0
   date: '2025-11-13'
   changes:
@@ -81,6 +93,7 @@ changelog:
   - All schemas validated via `python k0/automation/lint_schemas.py --verbose`
   - 'jsonschema/affect/modality_score.json: Per-modality score contract for fusion (ADR-0012d)'
   - 'jsonschema/affect/calibration_params.json: Per-person calibration contract for fusion (ADR-0012d)'
+  - 'jsonschema/affect/behavioral_signals.json: Optional behavioral telemetry contract enabling Tier-0 arousal boosts (ADR-0012b)'
 - version: 1.0.1
   date: '2025-10-30'
   changes:

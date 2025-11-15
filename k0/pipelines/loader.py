@@ -132,7 +132,11 @@ async def discover_and_boot_pipelines(
     )
 
     # Scan for p*.py files (sorted for deterministic boot order)
-    pipeline_modules = sorted(pipeline_dir.glob("p*.py"))
+    # Filter to only include files starting with 'p' followed by digits (p01, p02, etc.)
+    all_p_files = pipeline_dir.glob("p*.py")
+    pipeline_modules = sorted(
+        [p for p in all_p_files if p.stem[0] == "p" and len(p.stem) > 1 and p.stem[1].isdigit()]
+    )
     logger.debug(
         f"Found {len(pipeline_modules)} pipeline modules",
         extra={"count": len(pipeline_modules), "modules": [p.name for p in pipeline_modules]},

@@ -111,17 +111,6 @@ class Envelope(BaseModel):
         default=None, description="Precision in meters (GREEN=1, AMBER=5000, RED=25000)"
     )
 
-    # V1.4 NEW: Async worker status tracking
-    embedding_status: str | None = Field(
-        default=None, description="Embedding worker status (PENDING, IN_PROGRESS, COMPLETE, FAILED)"
-    )
-    embedding_id: str | None = Field(default=None, description="ID of computed embedding vector")
-    fts_status: str | None = Field(
-        default=None,
-        description="FTS indexing worker status (PENDING, IN_PROGRESS, COMPLETE, FAILED)",
-    )
-    fts_entry_id: str | None = Field(default=None, description="ID of FTS index entry")
-
 
 class CommandResponse(BaseModel):
     """Response emitted after a successful command commit."""

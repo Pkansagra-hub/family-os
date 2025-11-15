@@ -85,69 +85,6 @@ services:
   #   networks:
   #     - k0-local
 
-  # Embedding Worker - Async background worker for V1.4 performance optimization
-  # Computes embeddings asynchronously to reduce commit latency (150ms → 80-100ms)
-  # See: k0/workers/embedding_worker.py, ADR-V1.4
-  embedding-worker:
-    build:
-      context: ../..
-      dockerfile: k0/deploy/Dockerfile.embedding-worker
-    image: k0-embedding-worker:latest
-    container_name: k0-embedding-worker
-    depends_on:
-      k0-kernel:
-        condition: service_healthy
-    environment:
-      K0_DB_PATH: /data/k0_kernel.db
-      K0_LOG_LEVEL: INFO
-      EMBEDDING_BACKEND: sentence-transformers
-      EMBEDDING_MODEL: all-MiniLM-L6-v2
-      EMBEDDING_BATCH_SIZE: 10
-      EMBEDDING_POLL_INTERVAL_SEC: 1.0
-      NLTK_DATA: /usr/local/share/nltk_data
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-    networks:
-      - k0-local
-    healthcheck:
-      test:
-        ["CMD", "ps", "aux", "|", "grep", "-q", "[p]ython.*embedding_worker"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  # FTS Worker - Async background worker for V1.4 performance optimization
-  # Builds full-text search indexes asynchronously to reduce commit latency
-  # See: k0/workers/fts_worker.py, ADR-V1.4
-  fts-worker:
-    build:
-      context: ../..
-      dockerfile: k0/deploy/Dockerfile.fts-worker
-    image: k0-fts-worker:latest
-    container_name: k0-fts-worker
-    depends_on:
-      k0-kernel:
-        condition: service_healthy
-    environment:
-      K0_DB_PATH: /data/k0_kernel.db
-      K0_LOG_LEVEL: INFO
-      FTS_BATCH_SIZE: 50
-      FTS_POLL_INTERVAL_SEC: 1.0
-      NLTK_DATA: /usr/local/share/nltk_data
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-    networks:
-      - k0-local
-    healthcheck:
-      test: ["CMD", "ps", "aux", "|", "grep", "-q", "[p]ython.*fts_worker"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
 volumes:
   neo4j-data:
   neo4j-logs:

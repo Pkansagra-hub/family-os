@@ -1,0 +1,25 @@
+{
+  "actor_id": "person-caretaker1",
+  "tenant_id": "tenant-789",
+  "space_id": "personal:person-minor",
+  "participants": [
+    {"person_id": "person-minor", "relationship_hint": "dependent"},
+    {"person_id": "person-caretaker1", "relationship_hint": "caretaker"}
+  ],
+  "delegation": {
+    "delegated_from": "person-guardianC",
+    "capability": "caretaker.write",
+    "expires_at": "2025-11-15T23:59:00Z"
+  },
+  "policy_stamp": {
+    "band": "AMBER",
+    "obligations": [
+      "require.guardian",
+      "log.caretaker"
+    ],
+    "decision_id": "dec-amber-care",
+    "version": "v2"
+  },
+  "trace_id": "trace-caretaker-amber",
+  "request_id": "req-caretaker-amber"
+}

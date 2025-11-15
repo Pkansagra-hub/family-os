@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from operator import attrgetter
 from time import perf_counter
-from typing import Awaitable, Callable, Iterable, List
+from typing import Any, Awaitable, Callable, Iterable, List
 
 from k0.qos import Scheduler, SchedulerToken
 
@@ -17,14 +17,30 @@ BusSink = Callable[["BusMessage"], Awaitable[None]]
 BandResolver = Callable[["BusMessage"], str]
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class BusMessage:
-    """Immutable view of a post-commit WAL record to dispatch."""
+    """Immutable view of a post-commit WAL record to dispatch.
+
+    This is the canonical event format used throughout K0:
+    - BusDispatcher publishes to sinks
+    - Pipelines receive via handle(msg)
+    - SSE fan-out streams to clients
+
+    Attributes:
+        topic: Event topic (e.g., "cognitive.memory.write.committed.v1")
+        payload: Event payload (bytes, typically JSON or FlatBuffers)
+        offset: Monotonic WAL position (st_wal.pos)
+        trace_id: Cognitive trace ID for observability (optional)
+        space_id: Space ID for per-space ordering enforcement (optional)
+        metadata: Additional context for routing/filtering (optional)
+    """
 
     topic: str
     payload: bytes
     offset: int
     trace_id: str | None = None
+    space_id: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

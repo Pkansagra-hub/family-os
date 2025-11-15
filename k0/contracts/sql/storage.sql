@@ -91,6 +91,50 @@ CREATE TABLE IF NOT EXISTS st_device_keys (
   FOREIGN KEY(device_id) REFERENCES st_devices(device_id)
 );
 
+-- Authoritative space metadata (ADR-K004b)
+CREATE TABLE IF NOT EXISTS st_spaces (
+  space_id TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  consent_policy TEXT,
+  coownership_policy TEXT,
+  steward_ids TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT,
+  state TEXT NOT NULL DEFAULT 'ACTIVE'
+    CHECK(state IN ('ACTIVE','FROZEN','DECOMMISSIONED')),
+  source_version TEXT NOT NULL,
+  hydrated_at TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL DEFAULT 600,
+  checksum TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_spaces_household ON st_spaces(household_id);
+CREATE INDEX IF NOT EXISTS idx_spaces_kind ON st_spaces(kind);
+
+-- Per-space membership roster with capabilities (ADR-K004b/K004c)
+CREATE TABLE IF NOT EXISTS st_space_members (
+  space_id TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  household_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '[]',
+  delegated_from TEXT,
+  membership_state TEXT NOT NULL DEFAULT 'ACTIVE'
+    CHECK(membership_state IN ('ACTIVE','SUSPENDED','REMOVED')),
+  opt_out_flags TEXT NOT NULL DEFAULT '[]',
+  source_version TEXT NOT NULL,
+  hydrated_at TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL DEFAULT 600,
+  PRIMARY KEY(space_id, person_id),
+  FOREIGN KEY(space_id) REFERENCES st_spaces(space_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_space_members_household ON st_space_members(household_id);
+CREATE INDEX IF NOT EXISTS idx_space_members_role ON st_space_members(role);
+CREATE INDEX IF NOT EXISTS idx_space_members_space_state ON st_space_members(space_id, membership_state);
+
 -- Outbox (async intents)
 CREATE TABLE IF NOT EXISTS st_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

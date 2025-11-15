@@ -369,15 +369,6 @@ function Do-Up {
     Ensure-Image
     Ensure-Database
 
-    # Build worker images if they don't exist
-    $embeddingWorkerPresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-embedding-worker:latest")
-    $ftsWorkerPresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-fts-worker:latest")
-
-    if (-not $embeddingWorkerPresent -or -not $ftsWorkerPresent) {
-        Write-Info "Building worker images (embedding-worker, fts-worker)"
-        docker compose @(Compose-Args) build embedding-worker fts-worker | Write-Host
-    }
-
     Write-Info "Starting services (kernel + telemetry)"
     docker compose @(Compose-Args) up -d | Write-Host
 

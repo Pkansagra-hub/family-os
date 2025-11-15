@@ -11,7 +11,6 @@ Issue 1.7: SQLite Durability Settings
 Issue 1.8: Update WAL Storage Model
 - V1 fields: envelope_sha256, ingested_at, clock_skew_ms
 - V1.3 fields: policy_stamp_json, location_geohash, location_precision_m
-- V1.4 fields: embedding_status, embedding_id, fts_status, fts_entry_id
 
 Issue 1.9: Database Migration Script
 - 0010_v1_hardening.sql: envelope_sha256, ingested_at, clock_skew_ms, hmac_secret
@@ -82,14 +81,10 @@ def initialized_db(temp_db: Path) -> Iterator[Path]:
     conn.execute("ALTER TABLE st_wal ADD COLUMN clock_skew_ms INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_wal_clock_skew ON st_wal(clock_skew_ms)")
 
-    # Apply 0011_v1_privacy_and_async.sql migration
+    # Apply 0011_v1_privacy_and_async.sql migration (partial - privacy fields only)
     conn.execute("ALTER TABLE st_wal ADD COLUMN policy_stamp_json TEXT DEFAULT NULL")
     conn.execute("ALTER TABLE st_wal ADD COLUMN location_geohash TEXT DEFAULT NULL")
     conn.execute("ALTER TABLE st_wal ADD COLUMN location_precision_m INTEGER DEFAULT NULL")
-    conn.execute("ALTER TABLE st_wal ADD COLUMN embedding_status TEXT DEFAULT NULL")
-    conn.execute("ALTER TABLE st_wal ADD COLUMN embedding_id TEXT DEFAULT NULL")
-    conn.execute("ALTER TABLE st_wal ADD COLUMN fts_status TEXT DEFAULT NULL")
-    conn.execute("ALTER TABLE st_wal ADD COLUMN fts_entry_id TEXT DEFAULT NULL")
 
     conn.commit()
     conn.close()
@@ -217,28 +212,6 @@ class TestIssue18WalStorageModel:
         assert entry.location_geohash == "9q8yy"
         assert entry.location_precision_m == 5000
 
-    def test_wal_entry_has_v14_async_worker_fields(self) -> None:
-        """Test WalEntry dataclass has V1.4 async worker status tracking fields."""
-        entry = WalEntry(
-            tenant_id="tenant-001",
-            space_id="space-001",
-            topic="memory.event",
-            envelope_json='{"actor": "alice"}',
-            schema_uri="https://schema.local/memory",
-            schema_version="1.0",
-            device_id="device-001",
-            commit_ts="2025-11-10T10:00:00Z",
-            embedding_status="PENDING",
-            embedding_id="emb-evt001-abc123",
-            fts_status="COMPLETE",
-            fts_entry_id="fts-evt001-05",
-        )
-
-        assert entry.embedding_status == "PENDING"
-        assert entry.embedding_id == "emb-evt001-abc123"
-        assert entry.fts_status == "COMPLETE"
-        assert entry.fts_entry_id == "fts-evt001-05"
-
     def test_wal_append_persists_v1_integrity_fields(self, initialized_db: Path) -> None:
         """Test WriteAheadLog.append() persists V1 envelope integrity fields to database."""
         configure_pool(initialized_db)
@@ -312,43 +285,6 @@ class TestIssue18WalStorageModel:
         assert row["location_precision_m"] == 5000
         conn.close()
 
-    def test_wal_append_persists_v14_async_worker_fields(self, initialized_db: Path) -> None:
-        """Test WriteAheadLog.append() persists V1.4 async worker status fields."""
-        configure_pool(initialized_db)
-
-        wal = WriteAheadLog()
-        entry = WalEntry(
-            tenant_id="tenant-001",
-            space_id="space-001",
-            topic="memory.event",
-            envelope_json='{"actor": "alice"}',
-            schema_uri="https://schema.local/memory",
-            schema_version="1.0",
-            device_id="device-001",
-            commit_ts="2025-11-10T10:00:00Z",
-            embedding_status="PENDING",
-            embedding_id="emb-evt001-abc123",
-            fts_status="COMPLETE",
-            fts_entry_id="fts-evt001-05",
-        )
-
-        with UnitOfWork() as uow:
-            position = wal.append(entry, connection=uow.connection)
-
-        # Verify persisted
-        conn = sqlite3.connect(str(initialized_db))
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT embedding_status, embedding_id, fts_status, fts_entry_id FROM st_wal WHERE pos = ?",
-            (position,),
-        ).fetchone()
-
-        assert row["embedding_status"] == "PENDING"
-        assert row["embedding_id"] == "emb-evt001-abc123"
-        assert row["fts_status"] == "COMPLETE"
-        assert row["fts_entry_id"] == "fts-evt001-05"
-        conn.close()
-
     def test_wal_read_from_includes_v1_fields(self, initialized_db: Path) -> None:
         """Test WriteAheadLog.read_from() includes V1 fields in returned WalEntry."""
         configure_pool(initialized_db)
@@ -369,8 +305,6 @@ class TestIssue18WalStorageModel:
             policy_stamp_json='{"band": "AMBER"}',
             location_geohash="9q8yy",
             location_precision_m=5000,
-            embedding_status="PENDING",
-            fts_status="COMPLETE",
         )
 
         with UnitOfWork() as uow:
@@ -392,10 +326,6 @@ class TestIssue18WalStorageModel:
         assert read_entry.policy_stamp_json == '{"band": "AMBER"}'
         assert read_entry.location_geohash == "9q8yy"
         assert read_entry.location_precision_m == 5000
-
-        # Verify V1.4 async worker fields
-        assert read_entry.embedding_status == "PENDING"
-        assert read_entry.fts_status == "COMPLETE"
 
 
 class TestIssue19DatabaseMigration:
@@ -483,24 +413,6 @@ class TestIssue19DatabaseMigration:
         assert "location_precision_m" in columns
         conn.close()
 
-    def test_migration_0011_adds_async_worker_fields(self, temp_db: Path) -> None:
-        """Test 0011_v1_privacy_and_async.sql adds async worker status fields."""
-        conn = sqlite3.connect(str(temp_db))
-        conn.execute("CREATE TABLE st_wal (pos INTEGER PRIMARY KEY)")
-        conn.execute("ALTER TABLE st_wal ADD COLUMN embedding_status TEXT DEFAULT NULL")
-        conn.execute("ALTER TABLE st_wal ADD COLUMN embedding_id TEXT DEFAULT NULL")
-        conn.execute("ALTER TABLE st_wal ADD COLUMN fts_status TEXT DEFAULT NULL")
-        conn.execute("ALTER TABLE st_wal ADD COLUMN fts_entry_id TEXT DEFAULT NULL")
-        conn.commit()
-
-        cursor = conn.execute("PRAGMA table_info(st_wal)")
-        columns = {row[1] for row in cursor.fetchall()}
-        assert "embedding_status" in columns
-        assert "embedding_id" in columns
-        assert "fts_status" in columns
-        assert "fts_entry_id" in columns
-        conn.close()
-
     def test_migration_backward_compat_null_values(self, initialized_db: Path) -> None:
         """Test V1 migrations allow NULL for new columns (backward compatibility)."""
         configure_pool(initialized_db)
@@ -559,11 +471,6 @@ class TestIssue1789Integration:
             policy_stamp_json=json.dumps(policy_stamp),
             location_geohash="9q8yy9",
             location_precision_m=5000,
-            # V1.4 async worker fields
-            embedding_status="PENDING",
-            embedding_id=None,
-            fts_status="PENDING",
-            fts_entry_id=None,
         )
 
         # Write with durability guarantees
@@ -594,8 +501,6 @@ class TestIssue1789Integration:
         assert read_entry.policy_stamp_json == json.dumps(policy_stamp)
         assert read_entry.location_geohash == "9q8yy9"
         assert read_entry.location_precision_m == 5000
-        assert read_entry.embedding_status == "PENDING"
-        assert read_entry.fts_status == "PENDING"
 
     def test_v1_envelope_replay_detection_application_level(self, initialized_db: Path) -> None:
         """Test envelope_sha256 enables application-level replay detection.
