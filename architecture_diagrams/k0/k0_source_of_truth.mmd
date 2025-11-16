@@ -1,11 +1,13 @@
 %% ======================================================================================
 %% K0 MICROKERNEL - SINGLE SOURCE OF TRUTH ARCHITECTURE DIAGRAM
 %% ======================================================================================
-%% Generated: 2025-11-11
-%% Scope: Complete kernel architecture with ALL components from repo index
-%% Files: 147 Python modules | Classes: 218 | Functions: 417
-%% Layers: 7 architectural layers with full component detail
-%% Purpose: Definitive reference for K0 development - all modules, classes, data flows
+%% Generated: 2025-11-16
+%% Scope: Updated kernel architecture - removed embedding/FTS workers, modules are stubs, no pipelines implemented, added pipelines subsystem showing how 20 pipelines attach and run
+%% Modules: 7 (affect, builders, context, hippocampus, salience, social, space - all stubs)
+%% Runtime: Phase 2+ infrastructure complete (PipelineRunner, ModuleRegistry, DAG builder)
+%% Pipelines: None implemented yet, but diagram shows how 20 pipelines (P01-P20) will load and execute via BusDispatcher
+%% Layers: 10 architectural layers with current component detail
+%% Purpose: Definitive reference for K0 development - reflects current source of truth
 %% ======================================================================================
 
 graph TB
@@ -562,6 +564,36 @@ graph TB
                 SSE_BP_SHED["shed: > 10000 events"]:::sse
             end
         end
+
+        subgraph PIPELINES_CORE["Pipelines Subsystem (k0/pipelines/ & k0/runtime/)"]
+            subgraph PIPELINE_LOADER["Pipeline Loader (k0/pipelines/loader.py)"]
+                LOADER_DISCOVER["discover_and_boot_pipelines()"]:::core
+                LOADER_LOAD_PY["_load_python_pipeline()"]:::core
+                LOADER_LOAD_YAML["_load_yaml_pipeline() (future)"]:::core
+            end
+
+            subgraph PIPELINE_REGISTRY["Pipeline Registry"]
+                PIPELINE_P01["P01: Ingress Discovery"]:::core
+                PIPELINE_P02["P02: Episodic Write"]:::core
+                PIPELINE_P03["P03: Consolidation"]:::core
+                PIPELINE_P04["P04: Attention Router"]:::core
+                PIPELINE_P05_TO_P20["P05-P20: 16 Additional Pipelines"]:::core
+            end
+
+            subgraph PIPELINE_EXECUTION["Pipeline Execution"]
+                PIPELINE_HANDLE["handle(BusMessage)"]:::core
+                PIPELINE_PHASE1["Phase 1: Class.handle()"]:::core
+                PIPELINE_PHASE2["Phase 2+: Runner.execute_dag()"]:::core
+                PIPELINE_EMIT["emit(exit_topic)"]:::core
+            end
+
+            subgraph PIPELINE_PROTOCOL["PipelineProtocol Interface"]
+                PROTOCOL_STARTUP["on_startup(ctx)"]:::core
+                PROTOCOL_HANDLE["handle(msg)"]:::core
+                PROTOCOL_SHUTDOWN["on_shutdown()"]:::core
+                PROTOCOL_PROPS["pipeline_id, concurrency, topics"]:::core
+            end
+        end
     end
 
     %% ======================================================================================
@@ -612,65 +644,7 @@ graph TB
         end
 
         subgraph WORKER_SUBSYS["Background Workers (k0/workers/)"]
-            subgraph EMB_WORKER_CORE["Embedding Worker (k0/workers/embedding_worker.py)"]
-                subgraph EMB_WORKER_CLASSES["Embedding Classes"]
-                    EMB_REQUEST["EmbeddingRequest"]:::worker
-                    EMB_RESULT["EmbeddingResult"]:::worker
-                    EMB_WORKER_CLASS["EmbeddingWorker"]:::worker
-                end
-
-                subgraph EMB_WORKER_METHODS["Embedding Methods"]
-                    EMB_RUN_ONCE["run_once()"]:::worker
-                    EMB_RUN_FOREVER["run_forever()"]:::worker
-                    EMB_PROCESS_BATCH["process_batch()"]:::worker
-                    EMB_PROCESS_REQUEST["process_embedding_request()"]:::worker
-                    EMB_COMPUTE["compute_embedding()"]:::worker
-                end
-
-                subgraph EMB_BACKENDS["Embedding Backends"]
-                    EMB_SENTENCE_TRANS["sentence-transformers"]:::worker
-                    EMB_OPENAI["openai"]:::worker
-                    EMB_OLLAMA["ollama"]:::worker
-                    EMB_FAKE["fake (testing)"]:::worker
-                end
-
-                subgraph EMB_FLOW["Embedding Flow"]
-                    EMB_FLOW_1["1. Dequeue outbox"]:::worker
-                    EMB_FLOW_2["2. Compute embedding"]:::worker
-                    EMB_FLOW_3["3. Update WAL (embedding_id)"]:::worker
-                    EMB_FLOW_4["4. Mark outbox applied"]:::worker
-                end
-            end
-
-            subgraph FTS_WORKER_CORE["FTS Indexing Worker (k0/workers/fts_worker.py)"]
-                subgraph FTS_WORKER_CLASSES["FTS Worker Classes"]
-                    FTS_INDEX_REQ["FtsIndexRequest"]:::worker
-                    FTS_INDEX_RESULT["FtsIndexResult"]:::worker
-                    FTS_WORKER_CLASS["FtsIndexingWorker"]:::worker
-                end
-
-                subgraph FTS_WORKER_METHODS["FTS Worker Methods"]
-                    FTS_RUN_ONCE["run_once()"]:::worker
-                    FTS_RUN_FOREVER["run_forever()"]:::worker
-                    FTS_PROCESS_BATCH["process_batch()"]:::worker
-                    FTS_PROCESS_REQUEST["process_fts_request()"]:::worker
-                    FTS_EXTRACT_KW["extract_keywords()"]:::worker
-                end
-
-                subgraph FTS_NLTK_PIPELINE["NLTK Pipeline"]
-                    FTS_NLTK_1["1. Tokenization"]:::worker
-                    FTS_NLTK_2["2. Stopword removal"]:::worker
-                    FTS_NLTK_3["3. Stemming"]:::worker
-                    FTS_NLTK_4["4. FTS5 indexing"]:::worker
-                end
-
-                subgraph FTS_FLOW["FTS Flow"]
-                    FTS_FLOW_1["1. Dequeue outbox"]:::worker
-                    FTS_FLOW_2["2. Extract keywords"]:::worker
-                    FTS_FLOW_3["3. Update WAL (fts_entry_id)"]:::worker
-                    FTS_FLOW_4["4. Mark outbox applied"]:::worker
-                end
-            end
+            %% Workers removed: Embedding and FTS workers no longer exist
         end
     end
 
@@ -692,12 +666,9 @@ graph TB
 
             subgraph ALIAS_MAP_CONFIG["Alias Configuration"]
                 ALIAS_CFG_FILE["alias_map.yaml"]:::driver
-                ALIAS_CFG_EMB["embedding → EmbeddingWorker"]:::driver
-                ALIAS_CFG_FTS["fts → FtsIndexingWorker"]:::driver
                 ALIAS_CFG_EPI["st_epi → EpisodicDriver"]:::driver
                 ALIAS_CFG_VECTOR["st_vector → FaissDriver"]:::driver
                 ALIAS_CFG_KG["st_kg → Neo4jKGDriver"]:::driver
-                ALIAS_CFG_FTS5["st_fts → FTS5Driver"]:::driver
             end
         end
 
@@ -713,20 +684,6 @@ graph TB
 
                 subgraph FAISS_BACKEND["FAISS Backend"]
                     FAISS_INDEX["FAISS vector index"]:::driver_impl
-                end
-            end
-
-            subgraph FTS5_DRV_CORE["FTS5 Driver (k0/drivers/fts5.py)"]
-                subgraph FTS5_CLASSES["FTS5 Classes"]
-                    FTS5_DRV_CLASS["FTS5Driver"]:::driver_impl
-                end
-
-                subgraph FTS5_METHODS["FTS5 Methods"]
-                    FTS5_CONFIGURE["configure()"]:::driver_impl
-                end
-
-                subgraph FTS5_BACKEND["FTS5 Backend"]
-                    FTS5_VIRTUAL_TABLE["SQLite FTS5 virtual table"]:::driver_impl
                 end
             end
 
@@ -950,7 +907,6 @@ graph TB
                 DB_ACL["st_acl"]:::infra
                 DB_OBLIGATIONS["st_obligations"]:::infra
                 DB_TRACES["st_cognitive_traces"]:::infra
-                DB_FTS["st_fts (FTS5)"]:::infra
             end
 
             subgraph MIGRATIONS_DETAIL["Migrations (k0/automation/migrate.py)"]
@@ -1029,7 +985,10 @@ graph TB
     UOW_EXIT -->|"22 Commit hooks"| BUS_DISPATCH
     BUS_DISPATCH -->|"23 Fan-out SSE"| SSE_SUBSCRIBE
     BUS_DISPATCH -->|"24 Trigger outbox"| WORKER_PROCESS
-    RECEIPT_ISSUE -->|"25 Return receipt"| CMD_SUBMIT_FN
+    BUS_DISPATCH -->|"25 Route to Pipelines"| PIPELINE_HANDLE
+    PIPELINE_HANDLE -->|"26 Execute pipeline logic"| PIPELINE_PHASE1
+    PIPELINE_HANDLE -->|"27 Emit completion"| PIPELINE_EMIT
+    RECEIPT_ISSUE -->|"28 Return receipt"| CMD_SUBMIT_FN
 
     %% Flow 2: Query Recall
     HTTP_CLIENT -->|"1 POST selector"| QRY_RECALL_FN
@@ -1038,7 +997,6 @@ graph TB
     QRY_RECALL_FN -->|"4 Execute query"| QUERY_EXECUTE
     QUERY_EXECUTE -->|"5 Resolve driver"| QUERY_BUILD_DEFAULT
     QUERY_BUILD_DEFAULT -->|"6 Query WAL"| WAL_READ_FROM
-    QUERY_BUILD_DEFAULT -->|"7 Query FTS"| FTS_SEARCH
 
     %% Flow 3: SSE Subscribe
     SSE_CLIENT -->|"1 GET subscribe"| SSE_SUBSCRIBE_FN
@@ -1052,21 +1010,9 @@ graph TB
     WORKER_PROCESS -->|"1 Dequeue batch"| OUTBOX_DEQUEUE
     WORKER_PROCESS -->|"2 Resolve alias"| ALIAS_RESOLVE
     ALIAS_RESOLVE -->|"3 Load driver"| FAISS_APPLY
-    ALIAS_RESOLVE -->|"4 Load driver"| FTS5_CONFIGURE
-    ALIAS_RESOLVE -->|"5 Load driver"| NEO4J_APPLY
-    WORKER_PROCESS -->|"6 On failure"| RETRY_DECIDE
-    RETRY_DECIDE -->|"7 Requeue DLQ"| DLQ_RECORD
-
-    %% Flow 5: Background Workers
-    EMB_WORKER_CLASS -->|"1 Dequeue"| OUTBOX_DEQUEUE
-    EMB_COMPUTE -->|"2 Compute embedding"| EMB_COMPUTE
-    EMB_PROCESS_REQUEST -->|"3 Update WAL"| WAL_APPEND
-    EMB_PROCESS_BATCH -->|"4 Mark applied"| OUTBOX_MARK_APPLIED
-    FTS_WORKER_CLASS -->|"1 Dequeue"| OUTBOX_DEQUEUE
-    FTS_EXTRACT_KW -->|"2 Extract keywords"| FTS_EXTRACT_KW
-    FTS_PROCESS_REQUEST -->|"3 Index FTS"| FTS_INDEX_WAL
-    FTS_PROCESS_REQUEST -->|"4 Update WAL"| WAL_APPEND
-    FTS_PROCESS_BATCH -->|"5 Mark applied"| OUTBOX_MARK_APPLIED
+    ALIAS_RESOLVE -->|"4 Load driver"| NEO4J_APPLY
+    WORKER_PROCESS -->|"5 On failure"| RETRY_DECIDE
+    RETRY_DECIDE -->|"6 Requeue DLQ"| DLQ_RECORD
 
     %% Flow 6: Driver Handshake
     DRIVER_CLIENT -->|"1 POST handshake"| DRV_HANDSHAKE_FN
@@ -1078,7 +1024,6 @@ graph TB
     %% Flow 7: Observability
     CMD_SUBMIT_FN -->|"Emit events"| OBS_EMIT
     SSE_SUBSCRIBE_FN -->|"Log traces"| TRACER_SPAN
-    WORKER_PROCESS -->|"Record metrics"| METRICS_COUNTER
     RECEIPT_ISSUE -->|"Emit observability"| OBS_EMIT
     BUS_DISPATCH -->|"Middleware traces"| TRACER_SPAN
 
@@ -1087,6 +1032,8 @@ graph TB
     APP_CREATE -->|"Register routers"| CMD_SUBMIT_FN
     APP_CREATE -->|"Apply migrations"| MIG_APPLY
     APP_CREATE -->|"Replay WAL"| REPLAY_RUN
+    APP_CREATE -->|"Load pipelines"| LOADER_DISCOVER
+    LOADER_DISCOVER -->|"Register pipelines"| PIPELINE_REGISTRY
     CLI_SERVE -->|"CLI commands"| APP_CREATE
 
     %% ======================================================================================
@@ -1103,7 +1050,6 @@ graph TB
     ACL_GRANT -.->|"Persists to"| DB_ACL
     OBLIG_SAVE -.->|"Persists to"| DB_OBLIGATIONS
     OBS_EMIT -.->|"Persists to"| DB_TRACES
-    FTS_INDEX_WAL -.->|"Persists to"| DB_FTS
 
     %% ======================================================================================
     %% STYLE DEFINITIONS

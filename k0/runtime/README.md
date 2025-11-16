@@ -30,12 +30,14 @@ k0/runtime/
 ### Integration with Pipelines
 
 **Current State:** Core runtime infrastructure complete ✅
+
 - `ModuleRegistry` loads contracts from `k0/contracts/modules/*.yaml`
 - `PipelineRunner` implements `PipelineProtocol` for kernel compatibility
 - `DAG` builder validates dependencies and computes execution order
 - Pydantic schemas validate YAML specs at startup
 
 **Loader Integration** (Phase 3-5): 🚧 In Progress
+
 - Loader extended to discover YAML specs in `k0/contracts/pipelines/`
 - Both Python and YAML pipelines coexist
 - Modules implemented in `k0/modules/<domain>/<action>.py`
@@ -49,6 +51,7 @@ k0/runtime/
 **Purpose:** Central switchboard for module discovery and lookup
 
 **Responsibilities:**
+
 1. Load module contracts from `k0/contracts/modules/*.yaml`
 2. Validate contract schemas (Pydantic)
 3. Provide lookup by `module_id:version`
@@ -56,6 +59,7 @@ k0/runtime/
 5. Track module metadata for observability
 
 **Usage:**
+
 ```python
 from k0.runtime import ModuleRegistry
 from k0.bus import BusMessage
@@ -81,6 +85,7 @@ print(f"Latency budget: {contract.latency_budget_ms}ms")
 ```
 
 **Module Lookup Convention:**
+
 - Module ID: `hippocampus.pattern_separate:v1`
 - Import path: `k0.modules.hippocampus.pattern_separate`
 - Function: `pattern_separate.run()`
@@ -92,6 +97,7 @@ print(f"Latency budget: {contract.latency_budget_ms}ms")
 **Implements:** `PipelineProtocol` (for kernel compatibility)
 
 **Execution Model:**
+
 1. Load `PipelineSpec` from YAML
 2. Build DAG using `dag_builder.build_dag()`
 3. On message arrival: Execute stages in topological order
@@ -100,6 +106,7 @@ print(f"Latency budget: {contract.latency_budget_ms}ms")
 6. Track completion state, emit receipts, log telemetry
 
 **Usage:**
+
 ```python
 from k0.runtime import PipelineRunner, ModuleRegistry
 
@@ -122,15 +129,18 @@ await runner.on_shutdown()
 **Purpose:** Construct topologically sorted execution graph from pipeline specs
 
 **Validation:**
+
 - All dependencies exist
 - No cycles (raises `DAGCycleError`)
 - Deterministic ordering
 
 **Execution Modes:**
+
 - **Sequential:** `dag.topological_order()` → list of stages
 - **Parallel:** `dag.get_level_groups()` → list of stage groups per level
 
 **Usage:**
+
 ```python
 from k0.runtime import build_dag
 
@@ -151,12 +161,14 @@ for level_group in dag.get_level_groups():
 **Purpose:** Validate YAML specs at load time
 
 **Models:**
+
 - `ModuleContract` - Module metadata (latency budget, side effects, idempotency)
 - `PipelineSpec` - Pipeline DAG specification
 - `StageSpec` - Individual DAG stage (module invocation)
 - `PipelineExecutionState` - Runtime execution tracking
 
 **Validation:**
+
 - Pattern matching (e.g., `module_id` must be `domain.action`)
 - Dependency checks (all `stage.after` references exist)
 - Cycle detection (topological sort simulation)
@@ -193,12 +205,14 @@ description: |
 ```
 
 **Required Fields:**
+
 - `module_id` - Pattern: `domain.action` (e.g., `hippocampus.pattern_separate`)
 - `version` - Pattern: `v[0-9]+` (e.g., `v1`, `v2`)
 - `latency_budget_ms` - P95 latency budget (1-10000ms)
 - `idempotent` - Can module be safely retried?
 
 **Optional Fields:**
+
 - `input_event_types` - Input schemas
 - `output_event_types` - Output schemas
 - `side_effects` - Storage operations (`read:table`, `write:table`, `emit:topic`)
@@ -210,6 +224,7 @@ description: |
 **Location:** `k0/modules/<domain>/<action>.py`
 
 **Convention:**
+
 - Module ID: `hippocampus.pattern_separate:v1`
 - Import path: `k0.modules.hippocampus.pattern_separate`
 - Function name: `run()`
@@ -310,6 +325,7 @@ def _compute_novelty(envelope: dict, similar_memories: list) -> float:
 ```
 
 **Module Function Signature:**
+
 ```python
 async def run(
     message: BusMessage,      # Incoming event
@@ -319,6 +335,7 @@ async def run(
 ```
 
 **Module Characteristics:**
+
 - **Pure function** - No side state, no cross-module dependencies
 - **Idempotent** - Can be called multiple times safely
 - **Fast** - Respects latency budget from contract
@@ -333,6 +350,7 @@ touch k0/modules/hippocampus/__init__.py
 ```
 
 **Module Library Structure:**
+
 ```
 k0/modules/
 ├── __init__.py
@@ -400,18 +418,21 @@ dag:
 ```
 
 **Required Fields:**
+
 - `pipeline_id` - Pattern: `P[0-9]{2}_[A-Z_]+` (e.g., `P02_WRITE`)
 - `version` - Pattern: `v[0-9]+` (e.g., `v1`)
 - `entry_topic` - Event topic that triggers pipeline
 - `dag` - List of stages (at least 1)
 
 **Optional Fields:**
+
 - `exit_topic` - Event emitted on successful completion
 - `concurrency` - Max concurrent executions (default: 1)
 - `max_queue` - Backpressure threshold (default: 512)
 - `description` - Human-readable description
 
 **Stage Fields:**
+
 - `id` - Unique stage identifier (pattern: `[a-z0-9_]+`)
 - `module` - Module reference (`module_id:version` or `module_id` → defaults to `:v1`)
 - `after` - List of stage IDs that must complete first
@@ -452,6 +473,7 @@ async def discover_and_boot_pipelines(...):
 ### Topological Ordering
 
 **Sequential Execution:**
+
 ```python
 # DAG enforces dependencies
 dag = build_dag(pipeline_spec)
@@ -461,6 +483,7 @@ for stage in dag.topological_order():
 ```
 
 **Example DAG:**
+
 ```yaml
 dag:
   - id: A
@@ -478,6 +501,7 @@ dag:
 ### Level-Based Parallelism (Future)
 
 **Parallel Execution:**
+
 ```python
 # Execute stages at same level in parallel
 for level_group in dag.get_level_groups():
@@ -485,10 +509,12 @@ for level_group in dag.get_level_groups():
 ```
 
 **Level Assignment:**
+
 - Level 0: Stages with no dependencies
 - Level N: Stages whose dependencies are all in levels < N
 
 **Example Levels:**
+
 ```
 Level 0: [A]
 Level 1: [B, C]  ← Can run in parallel
@@ -498,12 +524,14 @@ Level 2: [D]
 ### Cycle Detection
 
 **DAG Builder validates:**
+
 ```python
 # Raises DAGCycleError if cycle detected
 dag = build_dag(spec)
 ```
 
 **Example Cycle (Invalid):**
+
 ```yaml
 # ❌ Invalid - cycle detected
 dag:
@@ -520,6 +548,7 @@ dag:
 ### Loading Contracts
 
 **Startup:**
+
 ```python
 registry = ModuleRegistry()
 await registry.load_contracts("k0/contracts/modules")
@@ -528,11 +557,13 @@ await registry.load_contracts("k0/contracts/modules")
 **Scans for:** `*.yaml` or `*.yml` files matching `<module_id>.v<version>.yaml`
 
 **Example Files:**
+
 - `hippocampus.pattern_separate.v1.yaml` → `hippocampus.pattern_separate:v1`
 - `affect.analyze.v1.yaml` → `affect.analyze:v1`
 - `space.resolve_visibility.v2.yaml` → `space.resolve_visibility:v2`
 
 **Validation:**
+
 - Pydantic schema validation
 - Side effect format check (`operation:resource`)
 - Latency budget range (1-10000ms)
@@ -540,6 +571,7 @@ await registry.load_contracts("k0/contracts/modules")
 ### Lazy Loading Implementations
 
 **On First Get:**
+
 ```python
 # First call loads implementation
 module_fn = registry.get("hippocampus.pattern_separate:v1")
@@ -552,6 +584,7 @@ module_fn = registry.get("hippocampus.pattern_separate:v1")
 ```
 
 **Error Handling:**
+
 - `ModuleNotFoundError` - Contract not registered
 - `ModuleLoadError` - Import failed or missing `run()` function
 
@@ -602,6 +635,7 @@ await runner.handle(msg)
 ### Execution Flow
 
 **On Message Arrival:**
+
 1. Check topic matches `declared_topics`
 2. Reset per-execution state (`_completed_stages`, `_failed_stages`)
 3. Execute stages in topological order:
@@ -613,6 +647,7 @@ await runner.handle(msg)
 5. Raise exception on failure (kernel handles DLQ)
 
 **State Tracking:**
+
 ```python
 # Per-execution state
 self._completed_stages: set[str]  # {"stage_10_affect", "stage_20_space"}
@@ -623,6 +658,7 @@ self._execution_count: int        # 42 (total executions)
 ### Error Handling
 
 **Stage Failure:**
+
 ```python
 try:
     result = await module_fn(**args)
@@ -634,6 +670,7 @@ except Exception as e:
 ```
 
 **Kernel Behavior:**
+
 - Exception raised → Driver pool retries with exponential backoff (default: 10 attempts, configurable via `dlq.max_retry_attempts`)
 - After max retries → Move to DLQ (`st_dlq`)
 
@@ -644,6 +681,7 @@ except Exception as e:
 ### ModuleContract Validation
 
 **Pattern Checks:**
+
 ```python
 module_id: str = Field(pattern=r"^[a-z_]+\.[a-z_]+$")
 # ✅ Valid: "hippocampus.pattern_separate"
@@ -655,6 +693,7 @@ version: str = Field(pattern=r"^v\d+$")
 ```
 
 **Side Effect Validation:**
+
 ```python
 side_effects: list[str]
 # ✅ Valid: ["read:st_hipp_store", "write:st_wal", "emit:memory.delta"]
@@ -664,6 +703,7 @@ side_effects: list[str]
 ```
 
 **Latency Budget Range:**
+
 ```python
 latency_budget_ms: int = Field(ge=1, le=10000)
 # ✅ Valid: 5, 100, 5000
@@ -673,6 +713,7 @@ latency_budget_ms: int = Field(ge=1, le=10000)
 ### PipelineSpec Validation
 
 **Pattern Checks:**
+
 ```python
 pipeline_id: str = Field(pattern=r"^P[0-9]{2}_[A-Z_]+$")
 # ✅ Valid: "P02_WRITE", "P10_CONSOLIDATION"
@@ -680,6 +721,7 @@ pipeline_id: str = Field(pattern=r"^P[0-9]{2}_[A-Z_]+$")
 ```
 
 **DAG Validation:**
+
 ```python
 @field_validator("dag")
 def validate_dag_structure(cls, v: list[StageSpec]) -> list[StageSpec]:
@@ -697,6 +739,7 @@ def validate_dag_structure(cls, v: list[StageSpec]) -> list[StageSpec]:
 ### StageSpec Validation
 
 **Pattern Checks:**
+
 ```python
 id: str = Field(pattern=r"^[a-z0-9_]+$")
 # ✅ Valid: "stage_10_affect", "stage01"
@@ -708,6 +751,7 @@ module: str = Field(pattern=r"^[a-z_]+\.[a-z_]+(:[a-z0-9]+)?$")
 ```
 
 **Version Defaulting:**
+
 ```python
 @field_validator("module")
 def validate_module_ref(cls, v: str) -> str:
@@ -830,6 +874,7 @@ def test_dag_cycle_detection():
 **Error:** `ModuleNotFoundError: Module not found: hippocampus.pattern_separate:v1`
 
 **Checklist:**
+
 - [ ] Contract file exists: `k0/contracts/modules/hippocampus.pattern_separate.v1.yaml`
 - [ ] Registry loaded: `await registry.load_contracts("k0/contracts/modules")`
 - [ ] Module ID matches filename
@@ -839,6 +884,7 @@ def test_dag_cycle_detection():
 **Error:** `ModuleLoadError: Cannot import module k0.modules.hippocampus.pattern_separate`
 
 **Checklist:**
+
 - [ ] Implementation file exists: `k0/modules/hippocampus/pattern_separate.py`
 - [ ] Directory has `__init__.py`: `k0/modules/hippocampus/__init__.py`
 - [ ] Module has `run()` function: `async def run(...) -> dict`
@@ -850,6 +896,7 @@ def test_dag_cycle_detection():
 **Fix:** Review `stage.after` dependencies, ensure no circular references
 
 **Example:**
+
 ```yaml
 # ❌ Invalid
 - id: A
@@ -867,6 +914,7 @@ def test_dag_cycle_detection():
 ### Pipeline Not Receiving Messages
 
 **Checklist:**
+
 - [ ] `entry_topic` matches published topic exactly
 - [ ] Runner implements `PipelineProtocol` correctly
 - [ ] Loader extended to discover YAML specs (Phase 5)
@@ -876,26 +924,31 @@ def test_dag_cycle_detection():
 ## Design Principles
 
 ### 1. Pure Functions Over Classes
+
 - Modules are stateless functions
 - No cross-module dependencies
 - Easy to test, compose, and reuse
 
 ### 2. Data Over Code
+
 - Pipelines defined in YAML, not Python
 - Module contracts are data (YAML), not code
 - Easier to version, review, and generate docs
 
 ### 3. Lazy Loading
+
 - Module implementations loaded on first use
 - Reduces startup time
 - Supports hot-reloading (future)
 
 ### 4. Strong Validation
+
 - Pydantic validates all YAML at load time
 - DAG builder detects cycles before execution
 - Fail-fast on invalid specs
 
 ### 5. Backward Compatibility
+
 - `PipelineRunner` implements `PipelineProtocol`
 - Both Python and YAML pipelines coexist
 - Incremental migration path
@@ -905,12 +958,14 @@ def test_dag_cycle_detection():
 ## Status
 
 **Current State:** Core runtime infrastructure complete ✅
+
 - `ModuleRegistry` - Contract loading, lazy implementation loading
 - `PipelineRunner` - DAG execution, PipelineProtocol implementation
 - `DAG` - Topological sort, cycle detection, level computation
 - Pydantic schemas - YAML validation
 
 **Next Phase:** Loader integration + first declarative pipelines (Phase 3-5) 🚧
+
 - Extend loader to discover YAML specs in `k0/contracts/pipelines/`
 - Implement 5-7 modules in `k0/modules/`
 - Create P02 YAML spec

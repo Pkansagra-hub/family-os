@@ -1,0 +1,85 @@
+# Hippocampus Module Configuration
+# Version: 0.1.0
+# Tunable parameters for memory formation subsystem
+
+module:
+  version: "0.1.0"
+  enabled: true
+  log_level: "INFO"
+
+# DG (Dentate Gyrus) - Pattern Separation
+dg:
+  simhash:
+    bits: 64
+    algorithm: "default"  # Options: default, weighted
+    weight_text: 0.6      # Weight for text content
+    weight_metadata: 0.4  # Weight for participants/place/time
+
+  minhash:
+    permutations: 32      # Number of hash functions (16-128)
+    seed: 42
+    adaptive: false       # Future: adjust based on content length
+
+  performance:
+    target_p95_ms: 15
+    target_p99_ms: 25
+    max_memory_mb: 10
+    enable_cache: true
+    cache_ttl_seconds: 300
+
+# CA1 (Semantic Bridge) - Entity Extraction
+ca1:
+  external_service:
+    enabled: true
+    endpoint: "${CA1_SERVICE_ENDPOINT}"  # env var
+    timeout_ms: 40
+    retry_count: 2
+    retry_backoff_ms: 100
+
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 5
+    recovery_timeout_ms: 30000
+
+  fallback:
+    enabled: true
+    mode: "skip_entities"  # Options: skip_entities, basic_ner
+
+  performance:
+    target_p95_ms: 40
+    target_p99_ms: 60
+    max_memory_mb: 50
+
+# CA3 (Clustering) - Deduplication
+ca3:
+  similarity:
+    hamming_threshold: 4     # Max bit difference for SimHash
+    jaccard_threshold: 0.8   # Min Jaccard for MinHash
+    time_window_hours: 24    # Only compare within window
+
+  clustering:
+    algorithm: "greedy"      # Options: greedy, dbscan, hierarchical
+    min_cluster_size: 2
+    max_cluster_size: 100
+
+  novelty:
+    enabled: false           # P03 handles this
+    threshold: 0.7
+
+  performance:
+    batch_size: 1000
+    max_memory_mb: 500
+
+# Feature Flags
+features:
+  adaptive_minhash: false
+  lsh_indexing: false
+  multimodal_fingerprints: false
+  incremental_clustering: false
+
+# Observability
+observability:
+  emit_metrics: true
+  emit_traces: true
+  log_fingerprints: false  # High volume, disable in prod
+  performance_tracking: true

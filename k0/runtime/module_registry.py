@@ -21,7 +21,7 @@ from __future__ import annotations
 import importlib
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict
+from typing import Any, Awaitable, Callable, Dict
 
 import yaml
 
@@ -42,9 +42,26 @@ class ModuleLoadError(Exception):
     pass
 
 
-ModuleCallable = Callable[
-    [dict, Any, Any, dict], Any
-]  # (envelope, syscalls, logger, config) -> envelope
+ModuleCallable = Callable[..., Awaitable[Any]]
+"""
+Module function signature.
+
+Expected signature:
+    async def run(
+        message: BusMessage,
+        context: PipelineContext,
+        **config: Any,
+    ) -> dict[str, Any]:
+        ...
+
+Args:
+    message: Incoming BusMessage event
+    context: PipelineContext with syscalls, logger, config
+    **config: Stage-specific configuration overrides
+
+Returns:
+    Enriched envelope (dict) with module outputs
+"""
 
 
 class ModuleRegistry:
