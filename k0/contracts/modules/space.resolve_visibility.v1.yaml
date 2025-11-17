@@ -1,0 +1,82 @@
+module_id: space.resolve_visibility
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.space.visibility_resolved.v1
+
+latency_budget_ms: 3
+
+side_effects:
+  - read:spaces
+
+idempotent: true
+
+failure_modes:
+  - code: SPACE_NOT_FOUND
+    policy: use_default
+    max_retries: 0
+  - code: ACL_LOOKUP_FAILED
+    policy: retry
+    max_retries: 2
+  - code: CACHE_MISS_TIMEOUT
+    policy: use_default
+    max_retries: 0
+
+description: |
+  Space Resolution & Visibility Module (Prefrontal Context/ACL System)
+
+  Resolves space ownership and visibility policies for episodic memories:
+  - Identifies space owner (person who controls the space)
+  - Resolves co-owners (people with elevated permissions)
+  - Determines author role in space (owner/co-owner/visitor)
+  - Computes visible_to list (intersection of envelope + space policy)
+
+  Performance target: ≤3ms P95 (cache-optimized lookup)
+
+  Key Operations:
+  1. Lookup space_id metadata (owner, co-owners, default policy)
+  2. Determine author's role in space
+  3. Compute visibility intersection:
+     - Start with envelope's visible_to list
+     - Intersect with space's allowed viewers
+     - Never expand visibility beyond space policy
+
+  Output:
+  - owner_id: TEXT (person_id of space owner)
+  - co_owners: JSON array of person_ids with co-owner permissions
+  - author_role: TEXT (owner/co_owner/visitor)
+  - visible_to: JSON array of person_ids (final visibility list)
+  - space_policy_version: TEXT (version of space policy applied)
+
+  Safety Guarantees:
+  - Never expands visibility beyond space policy
+  - Defaults to author-only visibility on lookup failure
+  - Audit log for all visibility computations
+
+  Examples:
+  - Home space: owner=dad, co_owners=[mom], visitor writes → visible_to=[dad, mom]
+  - Private journal space: owner=teen, co_owners=[], visitor writes → visible_to=[teen only]
+  - Shared calendar space: owner=mom, co_owners=[dad, teen], default_policy=all_family
+
+config_schema:
+  type: object
+  properties:
+    cache_ttl_seconds:
+      type: integer
+      default: 300
+      description: TTL for space metadata cache (5 minutes)
+    default_visibility_on_failure:
+      type: string
+      default: "author_only"
+      description: Fallback visibility policy if lookup fails
+    audit_all_resolutions:
+      type: boolean
+      default: true
+      description: Whether to audit log all visibility computations
+    strict_intersection_mode:
+      type: boolean
+      default: true
+      description: If true, never expand visibility beyond space policy

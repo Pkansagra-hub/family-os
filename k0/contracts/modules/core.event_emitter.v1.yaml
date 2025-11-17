@@ -1,0 +1,110 @@
+module_id: core.event_emitter
+version: v1
+
+input_event_types:
+  - p02.storage.committed.v1
+
+output_event_types:
+  - workspace.wm.updated.v1
+  - core.affect.analyzed.v1
+  - space.resolution.complete.v1
+  - embedding.enqueue.v1
+  - p02.hippocampus.pattern_separated.v1
+  - p02.write.complete.v1
+
+latency_budget_ms: 10
+
+side_effects:
+  - write:st_outbox
+
+idempotent: true
+
+failure_modes:
+  - code: OUTBOX_WRITE_FAILED
+    policy: retry
+    max_retries: 3
+  - code: EVENT_SERIALIZATION_FAILED
+    policy: drop
+    max_retries: 0
+  - code: TOPIC_NOT_REGISTERED
+    policy: alert_and_drop
+    max_retries: 0
+
+description: |
+  Core Event Emitter Module
+
+  Emits downstream events after successful P02 storage commit.
+  Uses BusDispatcher to write events to st_outbox for async propagation.
+
+  Events Emitted (6 types):
+  1. workspace.wm.updated.v1 → P04 (Working Memory update)
+     - Payload: event_id, space_id, salience_score, affect_band, timestamp
+     - Purpose: Update working memory state with new episodic event
+
+  2. core.affect.analyzed.v1 → P06 (Learning Pipeline)
+     - Payload: event_id, affect_valence, affect_arousal, affect_band, tags
+     - Purpose: Feed affect data into learning/adaptation pipelines
+
+  3. space.resolution.complete.v1 → P07 (Access Control)
+     - Payload: event_id, space_id, visible_to, owner_id, co_owners
+     - Purpose: Sync ACL updates with space management system
+
+  4. embedding.enqueue.v1 → P08 (Vector Generation)
+     - Payload: embedding_id, event_id, vector_kind, model_id, priority
+     - Purpose: Trigger vector generation for semantic search
+
+  5. p02.hippocampus.pattern_separated.v1 → P03 (Consolidation)
+     - Payload: event_id, simhash_hex, minhash32, fingerprints
+     - Purpose: Provide DG fingerprints for P03 clustering/novelty analysis
+
+  6. p02.write.complete.v1 → Observability
+     - Payload: event_id, wal_pos, latency_ms, module_timings
+     - Purpose: Pipeline completion telemetry for monitoring/alerting
+
+  BusDispatcher Integration:
+  - Calls syscalls.outbox_emit(topic, payload, cognitive_trace_id)
+  - Writes to st_outbox with status=PENDING
+  - Downstream workers poll st_outbox and route by topic
+  - Transactional guarantee: Events written in same UoW as st_pipeline_processed update
+
+  Event Ordering:
+  - All 6 events written to st_outbox atomically (single transaction)
+  - Order preserved by wal_pos sequencing
+  - Downstream pipelines may process in parallel (topics are independent)
+
+  Capability Requirements:
+  - st_outbox.write (INSERT permission for event emission)
+
+  Performance:
+  - Target: <10ms P95 for 6-event batch write
+  - Minimal serialization overhead (JSON pre-computed in previous stages)
+  - No external API calls (purely local st_outbox writes)
+
+  Error Handling:
+  - Outbox write failures: Retry with backoff (max 3 attempts)
+  - Serialization errors: Drop event and log (indicates upstream bug)
+  - Topic not registered: Alert ops (misconfigured topic registry)
+
+config_schema:
+  type: object
+  properties:
+    retry_backoff_ms:
+      type: integer
+      default: 50
+      description: Initial backoff delay for outbox write retry (exponential)
+    max_retry_attempts:
+      type: integer
+      default: 3
+      description: Maximum retry attempts for transient outbox write failures
+    enable_telemetry_event:
+      type: boolean
+      default: true
+      description: Emit p02.write.complete.v1 telemetry event
+    batch_emit_enabled:
+      type: boolean
+      default: true
+      description: Batch all 6 events in single st_outbox transaction
+    alert_on_topic_not_found:
+      type: boolean
+      default: true
+      description: Send ops alert if topic not registered in BusDispatcher

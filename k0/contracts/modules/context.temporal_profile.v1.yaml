@@ -1,0 +1,80 @@
+module_id: context.temporal_profile
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.temporal_profiled.v1
+
+latency_budget_ms: 4
+
+side_effects:
+  - read:tenant_config
+
+idempotent: true
+
+failure_modes:
+  - code: TIMEZONE_LOOKUP_FAILED
+    policy: use_default
+    max_retries: 1
+  - code: TIMESTAMP_PARSE_FAILED
+    policy: drop
+  - code: INVALID_EVENT_TIME
+    policy: drop
+
+description: |
+  Temporal & Circadian Profiler Module (Circadian Clock System)
+
+  Enriches episodic memories with temporal context and circadian rhythm data:
+  - Normalizes event timestamps to UTC
+  - Converts to tenant's local timezone
+  - Computes temporal buckets (time_of_day, day_of_week, circadian_slot)
+  - Calculates write lag metrics (ingested_at → event_time → write_time)
+  - Detects backdated events (write_lag > threshold)
+
+  Performance target: ≤4ms P95 (timezone lookup + date math)
+
+  Key Temporal Fields:
+  - event_time_utc: Normalized timestamp from body.event_time or envelope.ts
+  - write_time_utc: Actual UnitOfWork commit timestamp (DB write time)
+  - ingested_at: When envelope hit K0 ingress (pre-PEP)
+  - write_lag_ms: write_time_utc - event_time_utc (latency to DB commit)
+  - local_date/local_time: Event time in tenant's timezone
+  - day_of_week: 0-6 (Monday=0)
+  - is_weekend: BOOLEAN
+  - time_of_day_bucket: morning/afternoon/evening/night
+  - circadian_slot: Named time windows (e.g., "breakfast_window", "dinner_window")
+  - is_backdated: TRUE if write_lag_ms > 24 hours
+
+  Circadian Slot Examples:
+  - breakfast_window: 06:00-09:00 local
+  - lunch_window: 11:30-13:30 local
+  - dinner_window: 17:30-20:30 local
+  - sleep_window: 22:00-06:00 local
+
+  Use Cases:
+  - Memory retention (recent vs. backdated events)
+  - Circadian pattern analysis (meal times, sleep patterns)
+  - Write lag monitoring (system performance)
+  - Timezone-aware queries and display
+
+config_schema:
+  type: object
+  properties:
+    default_timezone:
+      type: string
+      default: "America/Los_Angeles"
+      description: Fallback timezone if tenant config lookup fails
+    backdate_threshold_hours:
+      type: integer
+      default: 24
+      description: Write lag threshold for is_backdated flag
+    circadian_slots:
+      type: object
+      description: Named time windows for circadian rhythm tracking
+      default:
+        breakfast_window: ["06:00", "09:00"]
+        lunch_window: ["11:30", "13:30"]
+        dinner_window: ["17:30", "20:30"]
+        sleep_window: ["22:00", "06:00"]

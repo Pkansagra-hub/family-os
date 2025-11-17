@@ -532,7 +532,8 @@ This document grows in fidelity as the system matures:
 
 | ID | Name | Status | Design Phase | README Location | Modules Used | Priority | Version | Last Updated |
 |----|------|--------|--------------|-----------------|--------------|----------|---------|--------------|
-| P02 | Write / Hippocampus | 🎯 Planning | ✅ Design Complete | `docs/pipelines/P02_write_dossier.md` | DGService, AffectService, SpaceResolver, EmbeddingQueueWriter | P0 | 0.1.0 | 2025-11-15 |
+| P02 | Write / Hippocampus | ⚠️ Implementation | ✅ Spec Complete | `docs/pipelines/P02_write_dossier.md` | 16 modules (M01-M02, M04-M17) | P0 | 0.1.0 | 2025-11-16 |
+| | | | Pipeline YAML: `k0/contracts/pipelines/p02_write.v1.yaml` | 18 stages, 171ms P95 | | | | |
 | | | | | | | | | |
 | | | | | | | | | |
 
@@ -1236,25 +1237,26 @@ If any fail, revisit scope or write ADR explaining exception.
 
 | ID | Name | Brain Analog | Status | README Location | Used By Pipelines | Depends On | Stability | Version | Last Updated |
 |----|------|--------------|--------|-----------------|-------------------|------------|-----------|---------|--------------|
-| M01 | DGService | Dentate Gyrus (DG) | 🎯 Planning | `k0/modules/hippocampus/dg_service.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M02 | CA1Bridge | CA1 (Semantic) | 🎯 Planning | `k0/modules/hippocampus/ca1_bridge.py` | P02, P03 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M03 | CA3Service | CA3 (Clustering) | 📝 Design | `k0/modules/hippocampus/ca3_service.py` | P03 | M01 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M04 | AffectService | Amygdala/Affect | 🎯 Planning | `k0/modules/affect/affect_service.py` | P02, P06 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M05 | SpaceResolver | Prefrontal Ctx (Space) | 🎯 Planning | `k0/modules/space/space_resolver.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M06 | SalienceScorer | Attention Network | 🎯 Planning | `k0/modules/salience/salience_scorer.py` | P02, P03, P04 | M04, M07 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M07 | FamilyGraphResolver | Social Brain Network | 🎯 Planning | `k0/modules/social/family_graph_resolver.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M08 | TemporalProfiler | Circadian Clock | 🎯 Planning | `k0/modules/context/temporal_profiler.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M09 | DeviceProfiler | Context Awareness | 🎯 Planning | `k0/modules/context/device_profiler.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M10 | IngressClassifier | Sensory Input Classifier | 🎯 Planning | `k0/modules/context/ingress_classifier.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M11 | RetentionLookup | Memory Decay Scheduler | 🎯 Planning | `k0/modules/context/retention_lookup.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M12 | GeoMetadataLookup | Spatial Context Processor | 🎯 Planning | `k0/modules/context/geo_metadata.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M13 | HippEventsRowBuilder | Memory Consolidation Builder | 🎯 Planning | `k0/modules/builders/hipp_events_row_builder.py` | P02 | M01-M12 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
-| M14 | EmbeddingQueueWriter | Vector Encoding Scheduler | 🎯 Planning | `k0/modules/builders/embedding_queue_writer.py` | P02 | - | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M01 | DGService | Dentate Gyrus (DG) | 📋 ADR Complete | `k0/modules/hippocampus/dg_service.py` | P02 | Contract: ✅, ADR: k003.1 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M02 | CA1Bridge | CA1 (Semantic) | 📋 ADR Complete | `k0/modules/hippocampus/ca1_bridge.py` | P02, P03 | Contract: ✅, ADR: k003.2 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M03 | CA3Service | CA3 (Clustering) | 📋 ADR Complete | `k0/modules/hippocampus/ca3_service.py` | P03 | M01, ADR: k003.3 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M04 | AffectService | Amygdala/Affect | 📋 ADR Complete | `k0/modules/affect/affect_service.py` | P02, P06 | Contract: ✅, ADR: k004, k004.1, k004.2 | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M05 | SpaceResolver | Prefrontal Ctx (Space) | 🎯 Planning | `k0/modules/space/space_resolver.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M06 | SalienceScorer | Attention Network | 🎯 Planning | `k0/modules/salience/salience_scorer.py` | P02, P03, P04 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M07 | FamilyGraphResolver | Social Brain Network | 🎯 Planning | `k0/modules/social/family_graph_resolver.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M08 | TemporalProfiler | Circadian Clock | 🎯 Planning | `k0/modules/context/temporal_profiler.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M09 | DeviceProfiler | Context Awareness | 🎯 Planning | `k0/modules/context/device_profiler.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M10 | IngressClassifier | Sensory Input Classifier | 🎯 Planning | `k0/modules/context/ingress_classifier.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M11 | RetentionLookup | Memory Decay Scheduler | 🎯 Planning | `k0/modules/context/retention_lookup.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M12 | GeoMetadataLookup | Spatial Context Processor | 🎯 Planning | `k0/modules/context/geo_metadata.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M13 | HippEventsRowBuilder | Memory Consolidation Builder | 🎯 Planning | `k0/modules/builders/hipp_events_row_builder.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
+| M14 | EmbeddingQueueWriter | Vector Encoding Scheduler | 🎯 Planning | `k0/modules/builders/embedding_queue_writer.py` | P02 | Contract: ✅ | 🧪 Experimental | 0.1.0 | 2025-11-16 |
 
 **Status Legend**:
 
 - 📝 Design: Initial concept, requirements gathering
 - 🎯 Planning: ADRs written, API defined, contracts specified
+- 📋 ADR Complete: Architecture decisions finalized, ready for implementation
 - ⚠️ Implementation: Code being written, tests in progress
 - ✅ Production: Deployed, stable, monitored
 - ❌ Deprecated: Replaced or scheduled for removal
@@ -2244,7 +2246,13 @@ def validate_protocol():
 
 | Topic Pattern | Schema Location | Producers | Consumers | QoS Band | Retention (days) | Version | Status |
 |---------------|-----------------|-----------|-----------|----------|------------------|---------|--------|
-| | | | | | | | |
+| `cognitive.memory.write.committed.v1` | `contracts/schemas/write_committed.json` | P01 | P02, P03, P06 | AMBER | 7 | v1 | ✅ Active |
+| `p02.write.complete.v1` | `contracts/schemas/p02_complete.json` | P02 (M17) | P03, P06 | AMBER | 7 | v1 | ✅ Active |
+| `memory.formed.v1` | `contracts/schemas/memory_formed.json` | P02 (M17) | P03, P09 | AMBER | 7 | v1 | ✅ Active |
+| `embedding.queued.v1` | `contracts/schemas/embedding_queued.json` | P02 (M17) | P08 | GREEN | 3 | v1 | ✅ Active |
+| `salience.computed.v1` | `contracts/schemas/salience_computed.json` | P02 (M17) | P03, P04 | AMBER | 7 | v1 | ✅ Active |
+| `social.enriched.v1` | `contracts/schemas/social_enriched.json` | P02 (M17) | P03, P04 | AMBER | 7 | v1 | ✅ Active |
+| `privacy.masked.v1` | `contracts/schemas/privacy_masked.json` | P02 (M17) | P03, Audit | RED | 30 | v1 | ✅ Active |
 | | | | | | | | |
 
 **QoS Bands**:
@@ -2455,9 +2463,12 @@ graph TD
     K1 --> P02
     K1 --> P01
 
-    P02 -->|write.committed| P03
-    P02 -->|write.committed| P08
-    P02 -->|write.committed| P06
+    P02 -->|p02.write.complete.v1| P03
+    P02 -->|memory.formed.v1| P03
+    P02 -->|embedding.queued.v1| P08
+    P02 -->|salience.computed.v1| P04
+    P02 -->|social.enriched.v1| P04
+    P02 -->|p02.write.complete.v1| P06
 
     P03 -->|consolidated| P15[P15: Context Rollup]
     P08 -->|embedded| P09
@@ -2794,8 +2805,23 @@ When adding a new pipeline/module that uses events:
 
 | Contract Name | Type | Location | Used By | Version | Status | Last Updated |
 |---------------|------|----------|---------|---------|--------|--------------|
-| | | | | | | |
-| | | | | | | |
+| `hippocampus.pattern_separate:v1` | Module Contract | `k0/contracts/modules/hippocampus.pattern_separate.v1.yaml` | M01, P02 | v1 | ✅ Active | 2025-01-19 |
+| `hippocampus.semantic_project:v1` | Module Contract | `k0/contracts/modules/hippocampus.semantic_project.v1.yaml` | M02, P02 | v1 | ✅ Active | 2025-11-16 |
+| `affect.analyze:v1` | Module Contract | `k0/contracts/modules/affect.analyze.v1.yaml` | M04, P02 | v1 | ✅ Active | 2025-11-16 |
+| `space.resolve_visibility:v1` | Module Contract | `k0/contracts/modules/space.resolve_visibility.v1.yaml` | M05, P02 | v1 | ✅ Active | 2025-11-16 |
+| `salience.score:v1` | Module Contract | `k0/contracts/modules/salience.score.v1.yaml` | M06, P02 | v1 | ✅ Active | 2025-11-16 |
+| `social.family_graph_resolve:v1` | Module Contract | `k0/contracts/modules/social.family_graph_resolve.v1.yaml` | M07, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.temporal_profile:v1` | Module Contract | `k0/contracts/modules/context.temporal_profile.v1.yaml` | M08, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.device_profile:v1` | Module Contract | `k0/contracts/modules/context.device_profile.v1.yaml` | M09, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.ingress_classify:v1` | Module Contract | `k0/contracts/modules/context.ingress_classify.v1.yaml` | M10, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.retention_lookup:v1` | Module Contract | `k0/contracts/modules/context.retention_lookup.v1.yaml` | M11, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.geo_metadata:v1` | Module Contract | `k0/contracts/modules/context.geo_metadata.v1.yaml` | M12, P02 | v1 | ✅ Active | 2025-11-16 |
+| `builders.hipp_events_row:v1` | Module Contract | `k0/contracts/modules/builders.hipp_events_row.v1.yaml` | M13, P02 | v1 | ✅ Active | 2025-11-16 |
+| `builders.embedding_queue_write:v1` | Module Contract | `k0/contracts/modules/builders.embedding_queue_write.v1.yaml` | M14, P02 | v1 | ✅ Active | 2025-11-16 |
+| `context.spatial_minimal:v1` | Module Contract | `k0/contracts/modules/context.spatial_minimal.v1.yaml` | M15, P02 | v1 | ✅ Active | 2025-11-16 |
+| `core.hipp_events_writer:v1` | Module Contract | `k0/contracts/modules/core.hipp_events_writer.v1.yaml` | M16, P02 | v1 | ✅ Active | 2025-11-16 |
+| `core.event_emitter:v1` | Module Contract | `k0/contracts/modules/core.event_emitter.v1.yaml` | M17, P02 | v1 | ✅ Active | 2025-11-16 |
+| `P02_WRITE:v1` | Pipeline Contract | `k0/contracts/pipelines/p02_write.v1.yaml` | P02 | v1 | ✅ Active | 2025-11-16 |
 | | | | | | | |
 
 **Contract Types**:
@@ -4120,9 +4146,25 @@ Phase X: [Phase Name]
 
 | ADR ID | Title | Status | Affects | Date Created | Date Decided | Author | Link |
 |--------|-------|--------|---------|--------------|--------------|--------|------|
-| | | | | | | | |
-| | | | | | | | |
-| | | | | | | | |
+| k003 | Hippocampus Architecture - Episodic Memory Encoding System | ✅ Accepted | M01, M02, M03, P02, P03 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k003-hippocampus-architecture.md` |
+| k003.1 | DG Pattern Separation - SimHash + MinHash Fingerprinting | ✅ Accepted | M01, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k003.1-dg-pattern-separation.md` |
+| k003.2 | CA1 Semantic Bridge - spaCy NER + KG Templates | ✅ Accepted | M02, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k003.2-ca1-semantic-bridge.md` |
+| k003.3 | CA3 Clustering Service - Episode Deduplication and Pattern Discovery | ✅ Accepted | M03, P03 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k003.3-ca3-clustering-service.md` |
+| k004 | Affect Service Architecture - Emotional Classification System | ✅ Accepted | M04, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k004-affect-service.md` |
+| k004.1 | Tier-0 Fast Affect Classification - Lexicon-Based Sentiment | ✅ Accepted | M04, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k004.1-tier0-fast-affect.md` |
+| k004.2 | Multi-Modal Affect Classification - Future Extension | 📝 Proposed | M04, P08 (future) | 2025-11-16 | TBD | TBD | `docs/architecture/decisions-K0/modules/k004.2-multimodal-affect.md` |
+| k005.1 | ACL Resolution - Visibility Intersection and Space Ownership | ✅ Accepted | M05, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k005.1-acl-resolution.md` |
+| k006.1 | Write-Path Salience - Social + Affect + Recency Formula | ✅ Accepted | M06, P02, P06, P08 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k006.1-write-path-salience.md` |
+| k007.1 | Temporal Profiler - 11-Dimension Time Indexing | ✅ Accepted | M08, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k007.1-temporal-profiler.md` |
+| k007.2 | Device Profiler - Multi-Device Family Support | ✅ Accepted | M09, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k007.2-device-profiler.md` |
+| k007.3 | Ingress Classifier - Channel and Activity Type Attribution | ✅ Accepted | M10, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k007.3-ingress-classifier.md` |
+| k007.4 | Retention Lookup - Lifecycle Policy Resolution and GDPR Compliance | ✅ Accepted | M11, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k007.4-retention-lookup.md` |
+| k007.5 | Geo Metadata Lookup - Privacy-Preserving Location Context | ✅ Accepted | M12, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k007.5-geo-metadata.md` |
+| k008.1 | Family Graph Resolver - Social Context and Relationship Attribution | ✅ Accepted | M07, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k008.1-family-graph-resolver.md` |
+| k009.1 | HippEvents Row Builder - st_hipp_events Assembly and Validation | ✅ Accepted | M13, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k009.1-hipp-events-builder.md` |
+| k009.2 | Embedding Queue Writer - st_embedding_queue Job Scheduling | ✅ Accepted | M14, P02 | 2025-11-16 | 2025-11-16 | TBD | `docs/architecture/decisions-K0/modules/k009.2-embedding-queue-writer.md` |
+| k010.1 | Atomic UnitOfWork Writer - P02 Three-Table Transaction Commit | ✅ Accepted | M16, P02 | 2025-11-16 | 2025-11-16 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k010.1-atomic-uow-writer.md` |
+| k011.1 | Outbox Event Emitter - P02 Downstream Event Propagation via st_outbox | ✅ Accepted | M17, P02 | 2025-11-16 | 2025-11-16 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k011.1-outbox-emitter.md` |
 
 **ADR Status**:
 

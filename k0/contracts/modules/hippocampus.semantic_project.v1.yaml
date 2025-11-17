@@ -1,0 +1,69 @@
+module_id: hippocampus.semantic_project
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.hippocampus.semantic_projected.v1
+  - p02.embedding.enqueued.v1
+
+latency_budget_ms: 20
+
+side_effects:
+  - write:st_embedding_queue
+
+idempotent: true
+
+failure_modes:
+  - code: ENTITY_EXTRACTION_FAILED
+    policy: retry
+    max_retries: 3
+  - code: KG_TRIPLE_GENERATION_FAILED
+    policy: retry
+    max_retries: 3
+  - code: EMBEDDING_QUEUE_WRITE_FAILED
+    policy: retry
+    max_retries: 5
+  - code: INVALID_INPUT_TEXT
+    policy: drop
+
+description: |
+  CA1 (Semantic Projection) Module
+
+  Bridges episodic memory encoding to semantic knowledge structures:
+  - Extracts named entities (people, places, organizations, concepts)
+  - Generates knowledge graph triples (subject, predicate, object)
+  - Allocates embedding_id (UUID) for vector generation
+  - Enqueues embedding job to st_embedding_queue for P08 processing
+
+  Does NOT generate embeddings in P02 - only prepares the job payload.
+  P08 (Vector Generation) will consume the queue and compute embeddings.
+
+  Performance target: ≤20ms P95 per event
+  Input: Envelope with text, participants, place, activity_type
+  Output: entities_json, kg_triples_json, embedding_id
+
+  Entity Extraction Examples:
+  - "Dinner with mom at Olive Garden" → entities: [Olive_Garden_Market_St, person_mom]
+  - KG triples: [(person_dad, had_dinner_with, person_mom), (event, occurred_at, Olive_Garden_Market_St)]
+
+config_schema:
+  type: object
+  properties:
+    entity_extraction_model:
+      type: string
+      default: "spacy_en_core_web_sm"
+      description: NER model for entity extraction
+    kg_confidence_threshold:
+      type: number
+      default: 0.6
+      description: Minimum confidence for KG triple inclusion
+    max_triples_per_event:
+      type: integer
+      default: 10
+      description: Maximum number of KG triples to extract per event
+    embedding_queue_batch_size:
+      type: integer
+      default: 1
+      description: Number of embedding jobs to batch (future optimization)

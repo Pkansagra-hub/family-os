@@ -1,0 +1,88 @@
+module_id: context.retention_lookup
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.retention_resolved.v1
+
+latency_budget_ms: 3
+
+side_effects:
+  - read:st_retention_policy
+
+idempotent: true
+
+failure_modes:
+  - code: RETENTION_POLICY_NOT_FOUND
+    policy: use_default
+    max_retries: 1
+  - code: POLICY_LOOKUP_TIMEOUT
+    policy: use_default
+    max_retries: 0
+
+description: |
+  Retention Policy Lookup Module (Memory Decay Scheduler)
+
+  Resolves retention policy for episodic memories based on:
+  - Privacy band (GREEN/AMBER/RED)
+  - Ingress topic (write/photo/voice/import)
+  - Device kind (phone/tablet/watch/web/api)
+
+  Performance target: ≤3ms P95 (cache-optimized lookup)
+
+  Key Retention Fields:
+  - retention_policy_id: TEXT (FK to st_retention_policy)
+  - retention_bucket: TEXT (STANDARD/SENSITIVE)
+  - retention_days: INTEGER (how long to keep before archival)
+  - archival_eligible: BOOLEAN (can be moved to cold storage)
+  - deletion_eligible_at: TIMESTAMP (computed from retention_days)
+
+  Retention Policy Lookup:
+  1. Lookup st_retention_policy by (band, topic, device_kind)
+  2. If not found, fallback to (band, topic, "*")
+  3. If still not found, use default policy for band
+
+  Retention Buckets:
+  - STANDARD: Normal retention (GREEN band, routine content)
+  - SENSITIVE: Extended retention (AMBER/RED band, requires audit)
+
+  Policy Resolution Examples:
+  - GREEN band + write + phone → STANDARD bucket, 365 days retention
+  - AMBER band + photo + phone → SENSITIVE bucket, 730 days retention
+  - RED band + voice + phone → SENSITIVE bucket, 90 days retention + audit
+
+  Use Cases:
+  - Retention worker scheduling (st_retention_policy_id stored at write time)
+  - Archival eligibility (move to cold storage after retention_days)
+  - Deletion scheduling (compliance with data retention policies)
+  - Audit requirements (SENSITIVE bucket requires retention audit logs)
+
+  Note: P02 resolves retention_policy_id at write time.
+  Retention workers use the stored retention_policy_id (no recomputation).
+
+config_schema:
+  type: object
+  properties:
+    default_retention_bucket:
+      type: string
+      default: "STANDARD"
+      description: Fallback retention_bucket if policy lookup fails
+    default_retention_days:
+      type: integer
+      default: 365
+      description: Default retention period in days
+    cache_ttl_seconds:
+      type: integer
+      default: 600
+      description: TTL for retention policy cache (10 minutes)
+    fallback_policy_chain:
+      type: array
+      items:
+        type: string
+      default:
+        - "(band, topic, device_kind)"
+        - "(band, topic, *)"
+        - "(band, *, *)"
+      description: Lookup chain for policy resolution

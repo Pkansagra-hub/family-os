@@ -1,0 +1,96 @@
+module_id: core.hipp_events_writer
+version: v1
+
+input_event_types:
+  - p02.hippocampus.row_built.v1
+
+output_event_types:
+  - p02.storage.committed.v1
+
+latency_budget_ms: 30
+
+side_effects:
+  - write:st_hipp_events
+  - write:st_embedding_queue
+  - write:st_pipeline_processed
+
+idempotent: true
+
+failure_modes:
+  - code: DATABASE_WRITE_FAILED
+    policy: retry
+    max_retries: 3
+  - code: CONSTRAINT_VIOLATION
+    policy: drop
+    max_retries: 0
+  - code: DISK_FULL
+    policy: alert_and_retry
+    max_retries: 5
+  - code: IDEMPOTENCY_CHECK_FAILED
+    policy: skip_write
+    max_retries: 0
+
+description: |
+  Core Hippocampus Events Writer Module
+
+  Commits P02-enriched events to persistent storage in a single UnitOfWork:
+  1. INSERT into st_hipp_events (enriched episodic memory row)
+  2. INSERT into st_embedding_queue (P08 vector generation job)
+  3. UPSERT into st_pipeline_processed (P02 offset tracking for idempotency)
+
+  UnitOfWork Atomicity:
+  - All 3 writes succeed or all rollback (transaction boundary)
+  - Prevents partial writes (e.g., event without embedding job)
+  - Ensures idempotency tracking consistency
+
+  Capability Requirements:
+  - st_hipp_events.write (INSERT permission)
+  - st_embedding_queue.write (INSERT permission)
+  - st_pipeline_processed.write (UPSERT permission)
+
+  Idempotency Strategy:
+  - Check st_pipeline_processed BEFORE write: (pipeline_id='P02_WRITE', space_id, wal_pos)
+  - If exists: Skip INSERT (already processed), mark outbox entry complete
+  - If not exists: Execute 3-table UnitOfWork, record (pipeline_id, space_id, wal_pos)
+
+  Performance:
+  - Target: <30ms P95 per event
+  - Batch writes possible (128 events per UnitOfWork for throughput)
+  - Deferred index updates for performance (batch REINDEX daily)
+
+  Error Handling:
+  - Constraint violations (duplicate event_id): Drop and log
+  - Database connection failures: Retry with exponential backoff (max 3 attempts)
+  - Disk full: Alert ops, retry after cleanup (max 5 attempts)
+
+  Output:
+  - Success: Emit p02.storage.committed.v1 event with event_id, wal_pos
+  - Failure (after retries): Emit p02.storage.failed.v1 with error details
+
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 128
+      description: Number of events to batch in single UnitOfWork for throughput
+    retry_backoff_ms:
+      type: integer
+      default: 100
+      description: Initial backoff delay for database retry with exponential backoff
+    max_retry_attempts:
+      type: integer
+      default: 3
+      description: Maximum retry attempts for transient database failures
+    enable_batch_reindex:
+      type: boolean
+      default: true
+      description: Defer index updates to daily batch REINDEX for performance
+    idempotency_check_enabled:
+      type: boolean
+      default: true
+      description: Enable st_pipeline_processed idempotency check before write
+    alert_on_disk_full:
+      type: boolean
+      default: true
+      description: Send ops alert on disk full errors (ENOSPC)

@@ -1,0 +1,109 @@
+module_id: builders.hipp_events_row
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.hippocampus.pattern_separated.v1
+  - p02.hippocampus.semantic_projected.v1
+  - p02.affect.analyzed.v1
+  - p02.space.visibility_resolved.v1
+  - p02.salience.scored.v1
+  - p02.context.temporal_profiled.v1
+  - p02.context.device_profiled.v1
+  - p02.context.ingress_classified.v1
+  - p02.context.retention_resolved.v1
+  - p02.context.geo_enriched.v1
+  - p02.social.family_resolved.v1
+
+output_event_types:
+  - p02.builders.hipp_row_built.v1
+
+latency_budget_ms: 10
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: ROW_ASSEMBLY_FAILED
+    policy: retry
+    max_retries: 3
+  - code: MISSING_REQUIRED_FIELD
+    policy: drop
+  - code: JSON_SERIALIZATION_FAILED
+    policy: retry
+    max_retries: 2
+
+description: |
+  Hippocampus Events Row Builder Module (Memory Consolidation Builder)
+
+  Assembles complete st_hipp_events row from all module outputs:
+  - Combines raw envelope headers + policy_stamp
+  - Merges hippocampus DG/CA1 outputs (fingerprints, entities, KG)
+  - Integrates temporal, device, social, privacy, affect, salience enrichments
+  - Maps to st_hipp_events schema (60-70 columns)
+  - Serializes JSON columns (obligations, participants, entities, KG triples, etc.)
+  - Leaves dedup/cluster columns NULL (CA3 outputs populated by P03)
+
+  Performance target: ≤10ms P95 (pure assembly, no I/O)
+
+  Input Sources (from previous stages):
+  - Original envelope: actor_id, space_id, tenant_id, wal_pos, policy_stamp, body
+  - M01 (DG): simhash_hex, minhash32
+  - M02 (CA1): entities_json, kg_triples_json, embedding_id
+  - M04 (Affect): affect_valence, affect_arousal, affect_band, dominant_emotions
+  - M05 (Space): owner_id, co_owners, author_role, visible_to
+  - M06 (Salience): salience_score, salience_reasons, salience_band
+  - M08 (Temporal): event_time_utc, write_time_utc, write_lag_ms, local_date, time_of_day_bucket, is_backdated
+  - M09 (Device): device_kind, device_platform, client_version
+  - M10 (Ingress): ingress_topic, activity_type, content_type
+  - M11 (Retention): retention_policy_id, retention_bucket
+  - M12 (Geo): geohash_6, location_name, geo_precision_external
+  - M07 (Social): num_participants, participant_roles_json, social_context, social_intimacy
+
+  Output Row Structure (st_hipp_events):
+  - Identity: event_id (UUID), tenant_id, space_id, actor_id
+  - Provenance: wal_pos (FK to st_wal), ingressed_at, event_time_utc, write_time_utc
+  - Hippocampus: simhash_hex, minhash32, embedding_id, entities_json, kg_triples_json
+  - Dedup/Cluster: is_near_duplicate (NULL), episode_cluster_id (NULL), cluster_confidence (NULL)
+  - Affect: affect_valence, affect_arousal, dominant_emotions_json, affect_band
+  - Salience: salience_score, salience_reasons_json, salience_band
+  - Privacy: visible_to_json, obligations_json, geo_precision_external, retention_policy_id
+  - Temporal: local_date, local_time, day_of_week, time_of_day_bucket, circadian_slot, is_backdated
+  - Social: num_participants, participant_roles_json, social_context, social_intimacy
+  - Spatial: geohash_6, location_name, location_type
+  - Device: device_kind, device_platform, client_version
+  - Metadata: schema_uri, hippocampus_api_version, updated_at
+
+  JSON Column Examples:
+  - obligations_json: ["mask.location.precision", "retention.sensitive"]
+  - participants_json: ["person_dad", "person_mom", "person_teen"]
+  - entities_json: ["Olive_Garden_Market_St", "person_mom"]
+  - kg_triples_json: [["person_dad", "had_dinner_with", "person_mom"]]
+  - salience_reasons_json: ["social_family", "positive_affect", "meal_outside_home"]
+
+  Notes:
+  - Replaces deprecated st_hipp_store (migration 0024)
+  - No syscall usage (pure assembly module)
+  - Builder validates all required fields present
+  - Missing optional fields use NULL/default values
+
+config_schema:
+  type: object
+  properties:
+    schema_uri:
+      type: string
+      default: "familyos://schema/hipp_events/v1"
+      description: Schema URI for st_hipp_events rows
+    api_version:
+      type: string
+      default: "1.0.0"
+      description: Hippocampus API version identifier
+    validate_required_fields:
+      type: boolean
+      default: true
+      description: Whether to validate all required fields are present
+    null_cluster_fields:
+      type: boolean
+      default: true
+      description: Ensure dedup/cluster fields are NULL (populated by P03)
