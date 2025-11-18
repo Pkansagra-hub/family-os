@@ -1,53 +1,52 @@
-# Hippocampus Module
+# Hippocampus Module - Phase 2 Declarative Modules
 
-**Version**: 0.1.0
-**Status**: Planning (Step 3 - Module List Frozen)
+**Version**: 1.0.0
+**Status**: ✅ M01 Implemented | 📋 M02-M03 ADR Complete
+**Architecture**: Phase 2 (Declarative YAML-driven pipelines)
 **ADR**: [K003](../../../docs/architecture/decisions-K0/modules/k003-hippocampus-architecture.md)
 
 ## Purpose
 
-Episodic memory formation subsystem implementing DG (pattern separation), CA1 (semantic projection), and CA3 (clustering).
+Episodic memory formation subsystem implementing:
+- **DG (Dentate Gyrus)**: Pattern separation via SimHash/MinHash
+- **CA1**: Semantic projection and entity extraction
+- **CA3**: Episode clustering and consolidation (P03 scope)
 
-## Modules
+## Phase 2 Modules (Implemented)
 
-| Module | ID | Purpose | Performance | ADR |
-|--------|-----|---------|-------------|-----|
-| **DGService** | M01 | Pattern separation via SimHash/MinHash | <15ms P95 | [K003.1](../../../docs/architecture/decisions-K0/modules/k003.1-dg-pattern-separation.md) |
-| **CA1Bridge** | M02 | Entity extraction & knowledge graph | <40ms P95 | [K003.2](../../../docs/architecture/decisions-K0/modules/k003.2-ca1-semantic-bridge.md) |
-| **CA3Service** | M03 | Episode clustering & deduplication | Background | [K003.3](../../../docs/architecture/decisions-K0/modules/k003.3-ca3-clustering-service.md) |
+| Module | ID | File | Status | Performance | Tests | ADR |
+|--------|-----|------|--------|-------------|-------|-----|
+| **pattern_separate** | M01 | `pattern_separate.py` | ✅ Implemented | 0.88ms P95 | 16/16 ✅ | [K003.1](../../../docs/architecture/decisions-K0/modules/k003.1-dg-pattern-separation.md) |
+| **semantic_project** | M02 | `semantic_project.py` | 📋 ADR Complete | <20ms P95 | Pending | [K003.2](../../../docs/architecture/decisions-K0/modules/k003.2-ca1-semantic-bridge.md) |
+| **ca3_consolidation** | M03 | *(P03 scope)* | 📋 ADR Complete | Background | N/A | [K003.3](../../../docs/architecture/decisions-K0/modules/k003.3-ca3-clustering-service.md) |
+
+## Usage (Phase 2 Pattern)
+
+Modules are invoked by PipelineRunner, not directly instantiated:
+
+```python
+# In pipeline YAML (k0/contracts/pipelines/p02_write.v1.yaml):
+- id: stage_10_dg_pattern_separate
+  module: hippocampus.pattern_separate:v1
+  after: []
+  config:
+    hash_seed: 42
+    minhash_permutations: 32
+```
+
+Module signature:
+```python
+async def run(message: BusMessage, context: PipelineContext, **config) -> dict:
+    # Pure function, no shared state
+    # Access storage via context.syscalls (capability-gated)
+    pass
+```
 
 ## Configuration
 
-All tunable parameters are externalized in **`config.yml`**:
+Module-specific config is declared in contracts and overridden per-stage in pipeline YAML.
 
-```yaml
-# DG configuration
-dg:
-  simhash:
-    bits: 64
-    weight_text: 0.6
-    weight_metadata: 0.4
-  minhash:
-    permutations: 32
-    adaptive: false
-
-# CA1 configuration
-ca1:
-  external_service:
-    endpoint: "${CA1_SERVICE_ENDPOINT}"
-    timeout_ms: 40
-  circuit_breaker:
-    enabled: true
-    failure_threshold: 5
-
-# CA3 configuration
-ca3:
-  similarity:
-    hamming_threshold: 4
-    jaccard_threshold: 0.8
-  clustering:
-    algorithm: "greedy"
-```
+Contract location: `k0/contracts/modules/hippocampus.pattern_separate.v1.yaml`
 
 **Environment Variables**:
 - `CA1_SERVICE_ENDPOINT` - External CA1 service URL

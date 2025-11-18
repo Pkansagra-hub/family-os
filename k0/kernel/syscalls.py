@@ -265,6 +265,329 @@ class Syscalls:
             },
         )
 
+    async def hipp_events_upsert(
+        self,
+        event_id: str,
+        wal_pos: int,
+        tenant_id: str,
+        space_id: str,
+        embedding_id: str,
+        text: str,
+        text_hash: str,
+        valence: float | None,
+        arousal: float | None,
+        privacy_band: str,
+        cognitive_trace_id: str,
+        created_at: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Insert/update st_hipp_events (requires st_hipp_events.write cap).
+
+        Hippocampus events table for enriched episodic memory. Written by M16
+        (core.hipp_events_writer) after P02 enrichment pipeline completes.
+
+        Capability Required: "st_hipp_events.write"
+
+        Storage Table: st_hipp_events
+        - Purpose: Enriched episodic memory events (post-pipeline processing)
+        - Lifecycle: Permanent storage (no TTL)
+        - Primary Key: event_id (unique across all spaces)
+        - Indexes: (tenant_id, space_id, created_at), (embedding_id)
+
+        Args:
+            event_id: Unique event identifier (from envelope header)
+            wal_pos: WAL position for traceability
+            tenant_id: Tenant isolation boundary
+            space_id: Memory space identifier
+            embedding_id: Reference to embedding vector (st_embeddings FK)
+            text: Event text content
+            text_hash: SHA256 hash of text for deduplication
+            valence: Affective valence (-1.0 to 1.0, from M11)
+            arousal: Affective arousal (0.0 to 1.0, from M11)
+            privacy_band: GREEN/AMBER/RED privacy classification
+            cognitive_trace_id: End-to-end observability trace ID
+            created_at: Unix timestamp (defaults to current time)
+
+        Returns:
+            Dictionary with:
+            - inserted: bool (True if inserted, False if duplicate skipped)
+            - event_id: str
+            - status: str ('INSERTED' or 'SKIPPED_DUPLICATE')
+
+        Raises:
+            PermissionError: If pipeline lacks "st_hipp_events.write" capability
+            ValueError: If required fields missing or invalid
+
+        Example:
+            >>> result = await syscalls.hipp_events_upsert(
+            ...     event_id="evt_123",
+            ...     wal_pos=42,
+            ...     tenant_id="tenant_abc",
+            ...     space_id="space_xyz",
+            ...     embedding_id="emb_456",
+            ...     text="Had doctor appointment",
+            ...     text_hash="abc123...",
+            ...     valence=-0.2,
+            ...     arousal=0.6,
+            ...     privacy_band="AMBER",
+            ...     cognitive_trace_id="trace_789"
+            ... )
+            >>> result["inserted"]
+            True
+
+        Performance:
+            - Target: <15ms P95 (single INSERT with B-tree indexes)
+            - Uses INSERT OR IGNORE for idempotency
+            - Connection pooling via UnitOfWork
+
+        Related:
+            - M16 (core.hipp_events_writer): Primary user of this syscall
+            - P02 pipeline: Orchestrates enrichment and M16 invocation
+            - docs/pipelines/P02_data_schema.md: Schema definition (lines 96-185)
+        """
+        self._require_cap("st_hipp_events.write")
+
+        # Validation
+        if not event_id:
+            raise ValueError("event_id required for hipp_events_upsert")
+        if not embedding_id:
+            raise ValueError("embedding_id required for hipp_events_upsert")
+        if privacy_band not in ("GREEN", "AMBER", "RED"):
+            raise ValueError(f"Invalid privacy_band: {privacy_band}")
+
+        # Audit: Log storage operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"hipp_events_upsert: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "event_id": event_id,
+                "wal_pos": wal_pos,
+                "space_id": space_id,
+                "trace_id": cognitive_trace_id,
+                "operation": "hipp_events_upsert",
+            },
+        )
+
+        # Execute storage operation in UnitOfWork transaction
+        with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Use INSERT OR IGNORE for idempotency
+            created_at = created_at or int(time.time())
+
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO st_hipp_events (
+                        event_id, wal_pos, tenant_id, space_id,
+                        embedding_id, text, text_hash,
+                        valence, arousal, privacy_band,
+                        cognitive_trace_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        wal_pos,
+                        tenant_id,
+                        space_id,
+                        embedding_id,
+                        text,
+                        text_hash,
+                        valence,
+                        arousal,
+                        privacy_band,
+                        cognitive_trace_id,
+                        created_at,
+                    ),
+                )
+
+                inserted = cursor.rowcount > 0
+
+                # UnitOfWork context manager will auto-commit on successful exit
+
+                # Audit: Log operation completion
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    f"hipp_events_upsert complete: {event_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_id": event_id,
+                        "inserted": inserted,
+                        "duration_ms": duration_ms,
+                        "trace_id": cognitive_trace_id,
+                    },
+                )
+
+                return {
+                    "inserted": inserted,
+                    "event_id": event_id,
+                    "status": "INSERTED" if inserted else "SKIPPED_DUPLICATE",
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"hipp_events_upsert failed: {event_id}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_id": event_id,
+                        "error": str(e),
+                        "trace_id": cognitive_trace_id,
+                    },
+                )
+                raise
+
+    async def pipeline_processed_upsert(
+        self,
+        pipeline_id: str,
+        wal_pos: int,
+        tenant_id: str,
+        space_id: str,
+        status: str,
+        processed_at: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Record pipeline processing completion (requires st_pipeline_processed.write cap).
+
+        Idempotency tracking table for pipeline execution. Used by all P02 modules
+        to prevent duplicate processing of same WAL position.
+
+        Capability Required: "st_pipeline_processed.write"
+
+        Storage Table: st_pipeline_processed
+        - Purpose: Pipeline execution tracking for idempotency
+        - Lifecycle: Permanent (audit trail)
+        - Primary Key: (pipeline_id, tenant_id, space_id, wal_pos)
+        - Index: (pipeline_id, space_id, processed_at)
+
+        Args:
+            pipeline_id: Pipeline identifier (e.g., "P02_WRITE")
+            wal_pos: WAL position that was processed
+            tenant_id: Tenant isolation boundary
+            space_id: Memory space identifier
+            status: Processing status ("OK", "ERROR", "SKIPPED")
+            processed_at: Unix timestamp (defaults to current time)
+
+        Returns:
+            Dictionary with:
+            - inserted: bool (True if inserted, False if duplicate skipped)
+            - pipeline_id: str
+            - wal_pos: int
+            - status: str
+
+        Raises:
+            PermissionError: If pipeline lacks "st_pipeline_processed.write" capability
+            ValueError: If required fields missing or invalid
+
+        Example:
+            >>> result = await syscalls.pipeline_processed_upsert(
+            ...     pipeline_id="P02_WRITE",
+            ...     wal_pos=42,
+            ...     tenant_id="tenant_abc",
+            ...     space_id="space_xyz",
+            ...     status="OK"
+            ... )
+            >>> result["inserted"]
+            True
+
+        Performance:
+            - Target: <10ms P95 (single INSERT with composite index)
+            - Uses INSERT OR REPLACE for upsert semantics
+            - Connection pooling via UnitOfWork
+
+        Related:
+            - M16 (core.hipp_events_writer): Records P02_WRITE completion
+            - All P02 modules: Check this table for idempotency before processing
+            - docs/pipelines/P02_data_schema.md: Schema definition (lines 511-569)
+        """
+        self._require_cap("st_pipeline_processed.write")
+
+        # Validation
+        if not pipeline_id:
+            raise ValueError("pipeline_id required for pipeline_processed_upsert")
+        if status not in ("OK", "ERROR", "SKIPPED"):
+            raise ValueError(f"Invalid status: {status} (expected OK/ERROR/SKIPPED)")
+
+        # Audit: Log storage operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"pipeline_processed_upsert: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "target_pipeline": pipeline_id,
+                "wal_pos": wal_pos,
+                "space_id": space_id,
+                "status": status,
+                "operation": "pipeline_processed_upsert",
+            },
+        )
+
+        # Execute storage operation in UnitOfWork transaction
+        with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            processed_at = processed_at or int(time.time())
+
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT OR REPLACE INTO st_pipeline_processed (
+                        pipeline_id, wal_pos, tenant_id, space_id,
+                        status, processed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pipeline_id,
+                        wal_pos,
+                        tenant_id,
+                        space_id,
+                        status,
+                        processed_at,
+                    ),
+                )
+
+                inserted = cursor.rowcount > 0
+
+                # UnitOfWork context manager will auto-commit on successful exit
+
+                # Audit: Log operation completion
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    f"pipeline_processed_upsert complete: {pipeline_id}@{wal_pos}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "target_pipeline": pipeline_id,
+                        "wal_pos": wal_pos,
+                        "inserted": inserted,
+                        "duration_ms": duration_ms,
+                    },
+                )
+
+                return {
+                    "inserted": inserted,
+                    "pipeline_id": pipeline_id,
+                    "wal_pos": wal_pos,
+                    "status": status,
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"pipeline_processed_upsert failed: {pipeline_id}@{wal_pos}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "target_pipeline": pipeline_id,
+                        "wal_pos": wal_pos,
+                        "error": str(e),
+                    },
+                )
+                raise
+
     async def working_memory_write(
         self,
         space_id: str,
@@ -423,6 +746,405 @@ class Syscalls:
         raise NotImplementedError(
             "query_embeddings not yet implemented - " "vector index pending M2 R2.1 completion"
         )
+
+    async def embedding_enqueue(
+        self,
+        embedding_id: str,
+        event_id: str,
+        wal_pos: int,
+        tenant_id: str,
+        space_id: str,
+        vector_kind: str = "memory.body.text",
+        model_id: str = "embed-mini-001",
+        priority: str = "NORMAL",
+        cognitive_trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Enqueue embedding job to st_embedding_queue (requires st_embedding_queue.write cap).
+
+        Used by M14 (builders.embedding_queue_write) to create background jobs for
+        P08 vector generation pipeline. Decouples fast memory writes (P02) from
+        slow vector computation (P08).
+
+        Capability Required: "st_embedding_queue.write"
+
+        Storage Table: st_embedding_queue
+        - Purpose: Job queue for background vector embedding generation
+        - Lifecycle: PENDING → IN_PROGRESS → READY (or FAILED)
+        - Primary Key: embedding_id (unique, idempotent)
+        - Indexes: (status, priority, created_at) for P08 claim queries
+
+        Status Lifecycle (P08 updates):
+        1. PENDING: Initial state (written by P02 via M14)
+        2. IN_PROGRESS: Claimed by P08 worker
+        3. READY: Vector computed and stored in st_embeddings
+        4. FAILED_RETRYABLE: Computation failed, will retry
+        5. FAILED_PERMANENT: Max retries exceeded (5 attempts)
+
+        Args:
+            embedding_id: Unique embedding identifier (UUID, idempotency key)
+            event_id: Source event identifier (FK to st_hipp_events)
+            wal_pos: WAL position for traceability
+            tenant_id: Tenant isolation boundary
+            space_id: Memory space identifier
+            vector_kind: Type of embedding (default: "memory.body.text")
+            model_id: Embedding model to use (default: "embed-mini-001")
+            priority: Job priority (NORMAL, HIGH, LOW)
+            cognitive_trace_id: Optional trace ID for observability
+
+        Returns:
+            Dictionary with:
+            - inserted: bool (True if inserted, False if duplicate skipped)
+            - embedding_id: str
+            - status: str ('INSERTED' or 'SKIPPED_DUPLICATE')
+
+        Raises:
+            PermissionError: If pipeline lacks "st_embedding_queue.write" capability
+            ValueError: If required fields missing or invalid
+
+        Example:
+            >>> result = await syscalls.embedding_enqueue(
+            ...     embedding_id="emb_uuid_abc123",
+            ...     event_id="evt_123",
+            ...     wal_pos=1001,
+            ...     tenant_id="tenant_abc",
+            ...     space_id="space_xyz",
+            ...     vector_kind="memory.body.text",
+            ...     model_id="embed-mini-001",
+            ...     priority="NORMAL"
+            ... )
+            >>> result["inserted"]
+            True
+
+        Performance:
+            - Target: <5ms P95 (single INSERT with B-tree index)
+            - Uses INSERT OR IGNORE for idempotency
+            - Connection pooling via UnitOfWork
+
+        Related:
+            - M14 (builders.embedding_queue_write): Primary user of this syscall
+            - P08 pipeline: Processes jobs from this queue
+            - docs/pipelines/P02_data_schema.md: Schema definition (lines 275-355)
+        """
+        self._require_cap("st_embedding_queue.write")
+
+        # Validation
+        if not embedding_id:
+            raise ValueError("embedding_id required for embedding_enqueue")
+        if not event_id:
+            raise ValueError("event_id required for embedding_enqueue")
+        if priority not in ("NORMAL", "HIGH", "LOW"):
+            raise ValueError(f"Invalid priority: {priority} (expected NORMAL/HIGH/LOW)")
+
+        # Audit: Log storage operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"embedding_enqueue: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_id": embedding_id,
+                "event_id": event_id,
+                "wal_pos": wal_pos,
+                "space_id": space_id,
+                "trace_id": cognitive_trace_id,
+                "operation": "embedding_enqueue",
+            },
+        )
+
+        # Execute storage operation in UnitOfWork transaction
+        with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            created_at = int(time.time())
+
+            try:
+                # Use INSERT OR IGNORE for idempotency
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO st_embedding_queue (
+                        embedding_id, event_id, wal_pos,
+                        tenant_id, space_id, vector_kind,
+                        model_id, priority, status,
+                        attempt_count, max_attempts,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        embedding_id,
+                        event_id,
+                        wal_pos,
+                        tenant_id,
+                        space_id,
+                        vector_kind,
+                        model_id,
+                        priority,
+                        "PENDING",  # Initial status
+                        0,  # Initial attempt_count
+                        5,  # max_attempts (default retry limit)
+                        created_at,
+                        created_at,  # updated_at = created_at initially
+                    ),
+                )
+
+                inserted = cursor.rowcount > 0
+
+                # UnitOfWork context manager will auto-commit on successful exit
+
+                # Audit: Log operation completion
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    f"embedding_enqueue complete: {embedding_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "event_id": event_id,
+                        "inserted": inserted,
+                        "duration_ms": duration_ms,
+                        "trace_id": cognitive_trace_id,
+                    },
+                )
+
+                return {
+                    "inserted": inserted,
+                    "embedding_id": embedding_id,
+                    "status": "INSERTED" if inserted else "SKIPPED_DUPLICATE",
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"embedding_enqueue failed: {embedding_id}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "event_id": event_id,
+                        "error": str(e),
+                        "trace_id": cognitive_trace_id,
+                    },
+                )
+                raise
+
+    async def outbox_emit_batch(
+        self,
+        events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """
+        Emit batch of events to st_outbox (requires st_outbox.write cap).
+
+        **Transactional Outbox Pattern**
+
+        Writes events to st_outbox within a single transaction for atomic
+        batch processing. Used by P02 (Write) pipeline to emit completion
+        events after storage commit (M17: core.event_emitter).
+
+        Capability Required: "st_outbox.write"
+
+        Storage Table: st_outbox
+        - Purpose: Transactional outbox for async event delivery
+        - Idempotency: fingerprint + requeue_seq uniqueness constraint
+        - Typical Usage: P02 event emission, cross-pipeline communication
+
+        Args:
+            events: List of event dicts, each containing:
+                - tenant_id: Tenant identifier (isolation boundary)
+                - space_id: Space identifier (routing key)
+                - driver: Event topic (e.g., "workspace.wm.updated")
+                - op_kind: Operation type (e.g., "EVENT_EMIT")
+                - payload: Event data (JSON-serializable dict)
+                - fingerprint: Idempotency key (unique per event)
+                - wal_pos: Optional WAL position reference (0 if not applicable)
+
+        Returns:
+            Dict with operation summary:
+                {
+                    "events_inserted": <count>,
+                    "batch_size": <count>,
+                    "operation": "outbox_emit_batch",
+                    "status": "success"
+                }
+
+        Raises:
+            PermissionError: If capability not granted
+            sqlite3.IntegrityError: If fingerprint collision (idempotency violation)
+            ValueError: If event structure invalid
+
+        Performance Characteristics:
+            - Latency Budget: <5ms P95 for 6-event batch (M17 requirement)
+            - Single transaction: All events succeed or all rollback
+            - Bulk INSERT: Uses executemany for efficiency
+
+        Audit Logging:
+            - All operations logged at DEBUG level
+            - Errors logged at ERROR level with pipeline_id
+            - Includes event count, topics, space_id for observability
+
+        Example:
+            >>> events = [
+            ...     {
+            ...         "tenant_id": "tenant_123",
+            ...         "space_id": "space_456",
+            ...         "driver": "workspace.wm.updated",
+            ...         "op_kind": "EVENT_EMIT",
+            ...         "payload": {"working_memory": {...}},
+            ...         "fingerprint": "wm_update_abc123",
+            ...         "wal_pos": 0,
+            ...     },
+            ...     # ... more events
+            ... ]
+            >>> result = await syscalls.outbox_emit_batch(events)
+            >>> print(result["events_inserted"])  # 6
+
+        Security Implications:
+            - Capability enforcement: Prevents unauthorized event emission
+            - Tenant/space isolation: Events routed per authorization
+            - Fingerprint uniqueness: Prevents duplicate processing
+            - Audit trail: All emissions logged
+
+        Related:
+            - M17 (core.event_emitter): Primary consumer
+            - k0/contracts/modules/core.event_emitter.v1.yaml: Event schema
+            - Section 7.3 of P02_write_dossier.md: Transactional outbox pattern
+            - ADR-022: Event-driven architecture
+        """
+        self._require_cap("st_outbox.write")
+
+        # Validate input
+        if not events:
+            logger.warning(
+                f"outbox_emit_batch called with empty event list: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "operation": "outbox_emit_batch",
+                    "status": "skipped",
+                },
+            )
+            return {
+                "events_inserted": 0,
+                "batch_size": 0,
+                "operation": "outbox_emit_batch",
+                "status": "skipped_empty",
+            }
+
+        # Validate event structure
+        required_fields = ["tenant_id", "space_id", "driver", "op_kind", "payload", "fingerprint"]
+        for idx, event in enumerate(events):
+            missing = [f for f in required_fields if f not in event]
+            if missing:
+                logger.error(
+                    f"outbox_emit_batch: Invalid event structure at index {idx}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_index": idx,
+                        "missing_fields": missing,
+                        "operation": "outbox_emit_batch",
+                        "status": "validation_failed",
+                    },
+                )
+                raise ValueError(
+                    f"Event at index {idx} missing required fields: {missing}. "
+                    f"Required: {required_fields}"
+                )
+
+        # Extract topics for logging
+        topics = [e["driver"] for e in events]
+        space_ids = list(set(e["space_id"] for e in events))
+
+        # Audit: Log operation start
+        logger.debug(
+            f"outbox_emit_batch starting: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "event_count": len(events),
+                "topics": topics,
+                "space_ids": space_ids,
+                "operation": "outbox_emit_batch",
+                "status": "starting",
+            },
+        )
+
+        # Begin transaction
+        async with self._uow_factory() as uow:
+            try:
+                # Prepare INSERT statements
+                insert_sql = """
+                    INSERT INTO st_outbox (
+                        wal_pos, tenant_id, space_id, driver, op_kind,
+                        payload, fingerprint, requeue_seq, retries
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+
+                # Build parameter tuples
+                records = []
+                for event in events:
+                    import json
+
+                    # Serialize payload
+                    payload_blob = json.dumps(event["payload"]).encode("utf-8")
+
+                    # Get optional fields
+                    wal_pos = event.get("wal_pos", 0)
+                    requeue_seq = event.get("requeue_seq", 0)
+                    retries = event.get("retries", 0)
+
+                    records.append(
+                        (
+                            wal_pos,
+                            event["tenant_id"],
+                            event["space_id"],
+                            event["driver"],
+                            event["op_kind"],
+                            payload_blob,
+                            event["fingerprint"],
+                            requeue_seq,
+                            retries,
+                        )
+                    )
+
+                # Execute batch insert
+                uow.conn.executemany(insert_sql, records)
+
+                # Commit transaction
+                await uow.commit()
+
+                # Audit: Log success
+                logger.debug(
+                    f"outbox_emit_batch success: {self._pipeline_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "events_inserted": len(events),
+                        "topics": topics,
+                        "space_ids": space_ids,
+                        "operation": "outbox_emit_batch",
+                        "status": "success",
+                    },
+                )
+
+                return {
+                    "events_inserted": len(events),
+                    "batch_size": len(events),
+                    "operation": "outbox_emit_batch",
+                    "status": "success",
+                }
+
+            except Exception as e:
+                # Audit: Log failure
+                logger.error(
+                    f"outbox_emit_batch failed: {self._pipeline_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "event_count": len(events),
+                        "topics": topics,
+                        "space_ids": space_ids,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "operation": "outbox_emit_batch",
+                        "status": "failed",
+                    },
+                    exc_info=True,
+                )
+                raise
 
     def _require_cap(self, capability: str) -> None:
         """

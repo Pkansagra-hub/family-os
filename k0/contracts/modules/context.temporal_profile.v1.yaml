@@ -26,38 +26,63 @@ failure_modes:
 description: |
   Temporal & Circadian Profiler Module (Circadian Clock System)
 
+  **Schema Authority**: M08 is the SINGLE SOURCE OF TRUTH for all 11 temporal dimensions
+  in `st_hipp_events`. No other P02 stage should recompute or mutate these fields.
+
+  **11-Dimensional Output (maps 1:1 to st_hipp_events temporal columns)**:
+  1. event_time_utc (INT) - Canonical event timestamp (Unix seconds)
+  2. write_time_utc (INT) - Database commit timestamp (Unix seconds)
+  3. write_lag_ms (INT) - Write latency: write_time - event_time (milliseconds)
+  4. local_date (TEXT) - Event date in tenant timezone (YYYY-MM-DD)
+  5. local_time (TEXT) - Event time in tenant timezone (HH:MM:SS)
+  6. day_of_week (TEXT) - Day name (Monday-Sunday)
+  7. is_weekend (BOOLEAN) - Saturday/Sunday flag
+  8. time_of_day_bucket (TEXT) - morning/afternoon/evening/night
+  9. circadian_slot (TEXT) - breakfast_window/lunch_window/dinner_window/sleep_window/NULL
+  10. is_backdated (BOOLEAN) - write_lag_ms > 24 hours
+  11. created_at (INT) - Row creation timestamp (always = write_time_utc)
+
+  **Schema Alignment**: See migration 0024_p02_episodic_write_tables.sql lines 78-88
+  (st_hipp_events temporal columns). Output types match SQL schema exactly.
+
   Enriches episodic memories with temporal context and circadian rhythm data:
-  - Normalizes event timestamps to UTC
-  - Converts to tenant's local timezone
+  - Normalizes event timestamps to UTC (deterministic, no drift)
+  - Converts to tenant's local timezone (cached, O(1) lookup)
   - Computes temporal buckets (time_of_day, day_of_week, circadian_slot)
-  - Calculates write lag metrics (ingested_at → event_time → write_time)
+  - Calculates write lag metrics with QoS bands (realtime/delayed/backdated)
   - Detects backdated events (write_lag > threshold)
 
   Performance target: ≤4ms P95 (timezone lookup + date math)
 
-  Key Temporal Fields:
+  Key Temporal Fields (detailed):
   - event_time_utc: Normalized timestamp from body.event_time or envelope.ts
   - write_time_utc: Actual UnitOfWork commit timestamp (DB write time)
-  - ingested_at: When envelope hit K0 ingress (pre-PEP)
+  - ingested_at: When envelope hit K0 ingress (NOT computed by M08, set by P02 ingress)
   - write_lag_ms: write_time_utc - event_time_utc (latency to DB commit)
   - local_date/local_time: Event time in tenant's timezone
-  - day_of_week: 0-6 (Monday=0)
+  - day_of_week: Monday-Sunday (ISO 8601: Monday=0)
   - is_weekend: BOOLEAN
   - time_of_day_bucket: morning/afternoon/evening/night
   - circadian_slot: Named time windows (e.g., "breakfast_window", "dinner_window")
   - is_backdated: TRUE if write_lag_ms > 24 hours
 
+  Write Lag QoS Bands (for P06/P17 analytics):
+  - realtime: <5 seconds (live capture, high quality signal)
+  - delayed: 5 seconds to 24 hours (async processing, medium quality)
+  - backdated: >24 hours (bulk import, low quality signal for learning)
+
   Circadian Slot Examples:
   - breakfast_window: 06:00-09:00 local
   - lunch_window: 11:30-13:30 local
   - dinner_window: 17:30-20:30 local
-  - sleep_window: 22:00-06:00 local
+  - sleep_window: 22:00-06:00 local (wraps around midnight)
 
   Use Cases:
   - Memory retention (recent vs. backdated events)
   - Circadian pattern analysis (meal times, sleep patterns)
-  - Write lag monitoring (system performance)
+  - QoS monitoring (realtime vs delayed vs bulk import)
   - Timezone-aware queries and display
+  - Learning loop quality signals (P06 uses write_lag_band)
 
 config_schema:
   type: object

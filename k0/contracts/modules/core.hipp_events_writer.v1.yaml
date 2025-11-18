@@ -1,96 +1,101 @@
+# =============================================================================
+# M16: Hippocampus Events Writer Module Contract
+# =============================================================================
+# Module: core.hipp_events_writer
+# Version: v1
+# Epic: 4.5.1
+# Status: Active
+# Created: 2025-11-17
+#
+# Purpose:
+#   Write episodic memory events to st_hipp_events after enrichment pipeline.
+#   Performs 2-table atomic transaction (st_hipp_events + st_pipeline_processed).
+#
+# Transaction Scope (CORRECTED per Sketchboard Phase 9 Q2):
+#   - st_hipp_events (core memory event)
+#   - st_pipeline_processed (pipeline completion tracking)
+#
+#   NOTE: st_embedding_queue is written by M14 (builders.embedding_queue_write)
+#   in a SEPARATE transaction. This contract previously incorrectly included
+#   st_embedding_queue - corrected 2025-11-17.
+#
+# Performance:
+#   - Latency Budget: 25ms P95 (2-table INSERT with indexes)
+#   - Throughput: 40-50 ops/sec single-threaded
+#   - Memory: <5MB per operation
+#
+# Related:
+#   - ADR: docs/architecture/decisions-K0/modules/k010.1-hipp-events-writer.md
+#   - Schema: docs/pipelines/P02_data_schema.md (lines 96-185, 511-569)
+#   - Sketchboard: docs/pipelines/p02_sketchboard.md (Phase 9 Q2)
+#   - M14: builders.embedding_queue_write (writes st_embedding_queue separately)
+# =============================================================================
+
 module_id: core.hipp_events_writer
 version: v1
 
 input_event_types:
-  - p02.hippocampus.row_built.v1
+  - p02.enrichment.complete.v1
+  - cognitive.memory.write.committed.v1
 
 output_event_types:
-  - p02.storage.committed.v1
+  - p02.hipp_events.written.v1
 
-latency_budget_ms: 30
+latency_budget_ms: 25
 
+# CORRECTED: Removed st_embedding_queue (handled by M14 in separate transaction)
 side_effects:
   - write:st_hipp_events
-  - write:st_embedding_queue
   - write:st_pipeline_processed
 
 idempotent: true
 
 failure_modes:
-  - code: DATABASE_WRITE_FAILED
-    policy: retry
-    max_retries: 3
-  - code: CONSTRAINT_VIOLATION
+  - code: MISSING_EVENT_ID
     policy: drop
-    max_retries: 0
-  - code: DISK_FULL
-    policy: alert_and_retry
-    max_retries: 5
-  - code: IDEMPOTENCY_CHECK_FAILED
-    policy: skip_write
-    max_retries: 0
+  - code: MISSING_WAL_POS
+    policy: drop
+  - code: MISSING_EMBEDDING_ID
+    policy: drop
+  - code: DUPLICATE_EVENT_ID
+    policy: drop
+  - code: TRANSACTION_TIMEOUT
+    policy: retry
+  - code: INTEGRITY_VIOLATION
+    policy: dlq
 
 description: |
-  Core Hippocampus Events Writer Module
+  Hippocampus Events Writer (M16)
 
-  Commits P02-enriched events to persistent storage in a single UnitOfWork:
-  1. INSERT into st_hipp_events (enriched episodic memory row)
-  2. INSERT into st_embedding_queue (P08 vector generation job)
-  3. UPSERT into st_pipeline_processed (P02 offset tracking for idempotency)
+  Writes enriched episodic memory events to st_hipp_events after P02 enrichment
+  pipeline completes. Performs 2-table atomic transaction:
 
-  UnitOfWork Atomicity:
-  - All 3 writes succeed or all rollback (transaction boundary)
-  - Prevents partial writes (e.g., event without embedding job)
-  - Ensures idempotency tracking consistency
+  1. st_hipp_events: Core memory event with enrichments (text, embeddings, affect, etc.)
+  2. st_pipeline_processed: Pipeline completion tracking for idempotency
 
-  Capability Requirements:
-  - st_hipp_events.write (INSERT permission)
-  - st_embedding_queue.write (INSERT permission)
-  - st_pipeline_processed.write (UPSERT permission)
+  Transaction Boundary (CORRECTED):
+  - Previously included st_embedding_queue (3-table transaction)
+  - Corrected to 2-table transaction per Sketchboard Phase 9 Q2
+  - M14 (builders.embedding_queue_write) handles st_embedding_queue separately
 
-  Idempotency Strategy:
-  - Check st_pipeline_processed BEFORE write: (pipeline_id='P02_WRITE', space_id, wal_pos)
-  - If exists: Skip INSERT (already processed), mark outbox entry complete
-  - If not exists: Execute 3-table UnitOfWork, record (pipeline_id, space_id, wal_pos)
+  Idempotency:
+  - Uses event_id as PRIMARY KEY with INSERT OR IGNORE
+  - Checks st_pipeline_processed before writing (skip if already processed)
+  - Duplicate event_id triggers skip (no error, returns status=SKIPPED_DUPLICATE)
 
   Performance:
-  - Target: <30ms P95 per event
-  - Batch writes possible (128 events per UnitOfWork for throughput)
-  - Deferred index updates for performance (batch REINDEX daily)
+  - Target: <25ms P95 (2-table INSERT with B-tree indexes)
+  - Uses prepared statements and connection pooling
+  - Batching NOT supported (single event per call for transactional atomicity)
 
-  Error Handling:
-  - Constraint violations (duplicate event_id): Drop and log
-  - Database connection failures: Retry with exponential backoff (max 3 attempts)
-  - Disk full: Alert ops, retry after cleanup (max 5 attempts)
+  Security:
+  - Requires capability: st_hipp_events.write
+  - Requires capability: st_pipeline_processed.write
+  - Enforces tenant_id and space_id isolation
+  - Validates privacy_band (GREEN/AMBER/RED)
 
-  Output:
-  - Success: Emit p02.storage.committed.v1 event with event_id, wal_pos
-  - Failure (after retries): Emit p02.storage.failed.v1 with error details
-
-config_schema:
-  type: object
-  properties:
-    batch_size:
-      type: integer
-      default: 128
-      description: Number of events to batch in single UnitOfWork for throughput
-    retry_backoff_ms:
-      type: integer
-      default: 100
-      description: Initial backoff delay for database retry with exponential backoff
-    max_retry_attempts:
-      type: integer
-      default: 3
-      description: Maximum retry attempts for transient database failures
-    enable_batch_reindex:
-      type: boolean
-      default: true
-      description: Defer index updates to daily batch REINDEX for performance
-    idempotency_check_enabled:
-      type: boolean
-      default: true
-      description: Enable st_pipeline_processed idempotency check before write
-    alert_on_disk_full:
-      type: boolean
-      default: true
-      description: Send ops alert on disk full errors (ENOSPC)
+  Related Modules:
+  - M02 (semantic.project): Provides embedding_id
+  - M11 (affect.analyze): Provides valence/arousal
+  - M14 (builders.embedding_queue_write): Writes st_embedding_queue separately
+  - M17 (core.event_emitter): Emits completion events to bus

@@ -1,20 +1,15 @@
 """
-Affect Module - Emotional Classification System
+Affect Module - Emotional Classification System (M04)
 
 Provides fast affect classification for episodic memories.
-Version: 0.1.0
+Version: 1.0.0
 
-ADRs: K004, K004.1, K004.2, K004.3
+Module: affect.analyze
+ADRs: K004, K004.1
+Contract: k0/contracts/modules/affect.analyze.v1.yaml
 """
 
-from .affect_service import AffectService
-from .affect_types import AffectAnnotation, AffectBand, AffectConfig, EmotionTag
+from . import analyze
 
-__version__ = "0.1.0"
-__all__ = [
-    "AffectService",
-    "AffectAnnotation",
-    "AffectConfig",
-    "AffectBand",
-    "EmotionTag",
-]
+__version__ = "1.0.0"
+__all__ = ["analyze"]
