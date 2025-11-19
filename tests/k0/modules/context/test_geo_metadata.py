@@ -14,8 +14,10 @@ Test Coverage:
 """
 
 import asyncio
+import json
 import time
 from datetime import datetime
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,6 +30,36 @@ from k0.modules.context.geo_metadata import (
     reset_metrics,
     run,
 )
+
+# ===========================
+# MOCK CLASSES FOR PHASE 2 SIGNATURE
+# ===========================
+
+
+class MockMessage:
+    """Mock BusMessage for testing Phase 2 signature."""
+
+    def __init__(self, payload: dict, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing Phase 2 signature."""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict, **config) -> tuple:
+    """Helper to create message, context, and config for test calls."""
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    context = MockContext()
+    return message, context, config
+
 
 # ===========================
 # Fixtures
@@ -310,7 +342,8 @@ async def test_run_green_band_full_envelope():
         obligations=["mask.location.precision"],
     )
 
-    result = await run(envelope)
+    message, context, config = make_test_call(envelope)
+    result = await run(message, context, **config)
 
     assert result["geohash_6"] == "9q8yyw"
     assert result["location_name"] == "Olive Garden, Market St"
@@ -331,7 +364,8 @@ async def test_run_red_band_minimal():
         obligations=["mask.location.precision"],
     )
 
-    result = await run(envelope)
+    message, context, config = make_test_call(envelope)
+    result = await run(message, context, **config)
 
     assert result["geohash_6"] == "9q8y"
     assert result["location_name"] is None
@@ -345,7 +379,8 @@ async def test_run_empty_envelope():
     """End-to-end: Empty envelope returns defaults."""
     envelope = {"body": {}, "policy_stamp": {}}
 
-    result = await run(envelope)
+    message, context, config = make_test_call(envelope)
+    result = await run(message, context, **config)
 
     assert result["geohash_6"] is None
     assert result["location_name"] is None
@@ -359,8 +394,10 @@ async def test_idempotency():
     """Multiple runs return same results."""
     envelope = create_envelope()
 
-    result1 = await run(envelope)
-    result2 = await run(envelope)
+    message1, context1, config1 = make_test_call(envelope)
+    result1 = await run(message1, context1, **config1)
+    message2, context2, config2 = make_test_call(envelope)
+    result2 = await run(message2, context2, **config2)
 
     # Timestamps may differ, so compare other fields
     assert result1["geohash_6"] == result2["geohash_6"]
@@ -380,8 +417,9 @@ async def test_performance_under_2ms():
 
     latencies = []
     for _ in range(1000):
+        message, context, config = make_test_call(envelope)
         start = time.perf_counter()
-        await run(envelope)
+        await run(message, context, **config)
         latency_ms = (time.perf_counter() - start) * 1000
         latencies.append(latency_ms)
 
@@ -524,7 +562,11 @@ async def test_concurrent_extraction():
     """Concurrent extractions work correctly."""
     envelope = create_envelope()
 
-    tasks = [run(envelope) for _ in range(10)]
+    tasks = []
+    for _ in range(10):
+        message, context, config = make_test_call(envelope)
+        tasks.append(run(message, context, **config))
+
     results = await asyncio.gather(*tasks)
 
     # All should succeed

@@ -52,6 +52,7 @@ ADR: docs/architecture/decisions-K0/modules/k007.2-device-profiler.md
 Migration: k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql (line 70)
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -321,23 +322,51 @@ def profile_device_context(
     )
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
-    Module entry point (async for pipeline compatibility).
+    Module entry point (Phase 2 signature for pipeline compatibility).
 
-    Extracts device metadata from envelope and returns profile.
+    Extracts device metadata from envelope and returns enriched envelope with profile.
 
     Args:
-        envelope: Event envelope with device metadata
+        message: BusMessage with .payload, .trace_id, .offset
+        context: PipelineContext with .syscalls, .logger, .config
+        **config: Stage-specific configuration
+            - default_device_kind (str): Fallback device kind (default: "phone")
+            - supported_platforms (list): Allowed platforms (default: ["iOS", "Android", "web", "unknown"])
+            - minimum_client_version (str): Minimum required version (default: None)
 
     Returns:
-        Device profile dict (7 fields)
+        Enriched envelope with device profile fields (7 fields)
 
     Raises:
         ValueError: If envelope is missing required fields
 
     Performance: <2ms P95
+    Contract: k0/contracts/modules/context.device_profile.v1.yaml
     """
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters (with defaults)
+    default_device_kind = config.get("default_device_kind", DEFAULT_DEVICE_KIND)
+    supported_platforms = config.get("supported_platforms", SUPPORTED_PLATFORMS)
+    minimum_client_version = config.get("minimum_client_version")
+
+    # Log module start
+    context.logger.debug(
+        "M09 device_profile starting",
+        extra={
+            "module": "context.device_profile",
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+        },
+    )
+
     # Extract device metadata from envelope
     device_id = envelope.get("device_id", "")
     metadata = envelope.get("metadata", {})
@@ -353,8 +382,8 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         input_source=input_source,
     )
 
-    # Return as dict for pipeline integration
-    return {
+    # Convert to dict for enriched envelope
+    device_fields = {
         "device_id": profile.device_id,
         "device_kind": profile.device_kind,
         "device_platform": profile.device_platform,
@@ -363,6 +392,20 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "input_method": profile.input_method,
         "device_profiled_at_utc": profile.device_profiled_at_utc,
     }
+
+    # Log module completion
+    context.logger.debug(
+        "M09 device_profile completed",
+        extra={
+            "module": "context.device_profile",
+            "trace_id": message.trace_id,
+            "device_kind": profile.device_kind,
+            "device_platform": profile.device_platform,
+        },
+    )
+
+    # Return enriched envelope
+    return {**envelope, **device_fields}
 
 
 def get_metrics() -> Dict[str, Any]:

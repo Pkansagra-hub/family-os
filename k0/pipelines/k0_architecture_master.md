@@ -1201,10 +1201,12 @@ If any fail, revisit scope or write ADR explaining exception.
 | M17 | EventEmitter | Event Emission via Outbox | ✅ Implemented | `k0/modules/core/event_emitter.py` | P02 | Contract: ✅, ADR: k010.2, Syscalls: `outbox_emit_batch`, Tests: ✅ (32/32), P95: <10ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
 
 **Test Result Notes**:
+
 - `*` M02: 4 tests failed due to spaCy model loading issues (NER functionality), not core logic failures
 - `**` M05: Tests blocked by import error in `__init__.py` (module exists, tests verified separately)
 
 **Comprehensive Test Summary** (as of 2025-11-17):
+
 - **Total Modules Tested**: 17 modules (M01-M02, M04-M17 excluding M03)
 - **Total Tests Executed**: 543 tests
 - **Tests Passed**: 539/543 (99.3% pass rate)
@@ -1242,12 +1244,14 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 1: Creating a New Module
 
 **Prerequisites**:
+
 1. At least one pipeline needs this module
 2. No existing module provides this functionality
 3. Brain analog identified and validated
 4. Architectural approval obtained
 
 **Steps**:
+
 1. Claim next available module ID (M01-M20) in Master Registry
 2. Create folder: `k0/modules/mXX_name/`
 3. Copy README template into the folder
@@ -1261,12 +1265,14 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 2: Moving from Design to Planning
 
 **Prerequisites**:
+
 1. Design dossier complete
 2. Protocol interface defined
 3. Dependencies identified
 4. At least 1 ADR drafted
 
 **Steps**:
+
 1. Write all necessary ADRs
 2. Define complete protocol interface with type signatures
 3. Specify all input/output contracts (schemas)
@@ -1279,12 +1285,14 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 3: Moving from Planning to Implementation
 
 **Prerequisites**:
+
 1. All ADRs accepted
 2. Protocol defined and validated
 3. Calling pipelines identified
 4. Storage requirements specified
 
 **Steps**:
+
 1. Create protocol class in `__init__.py`
 2. Implement module components
 3. Update module README: Status = ⚠️ Implementation
@@ -1296,6 +1304,7 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 4: Moving from Implementation to Production
 
 **Prerequisites**:
+
 1. All checklist items complete
 2. All tests passing (unit, component, integration, contract, performance)
 3. Protocol compliance validated
@@ -1304,6 +1313,7 @@ If any fail, revisit scope or write ADR explaining exception.
 6. Performance targets met
 
 **Steps**:
+
 1. Deploy to production
 2. Monitor module usage in production pipelines
 3. Collect performance metrics
@@ -1317,21 +1327,25 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 5: Stability Level Progression
 
 **🧪 Experimental → 🔄 Evolving**:
+
 - Criteria: In production, API used by 1+ pipelines, no major issues for 30 days
 - Changes allowed: Any (breaking or non-breaking)
 - Version impact: Any version bump
 
 **🔄 Evolving → 🔒 Stable**:
+
 - Criteria: In production 90+ days, API unchanged 60+ days, used by 3+ pipelines
 - Changes allowed: Non-breaking additions only, breaking changes require MAJOR bump
 - Version impact: MINOR for additions, MAJOR for breaking
 
 **🔒 Stable → ❄️ Frozen**:
+
 - Criteria: Critical system component, cannot tolerate any API changes
 - Changes allowed: Security patches and bug fixes only
 - Version impact: PATCH only
 
 **Downgrading Stability**:
+
 - If major refactor needed, downgrade: ❄️/🔒 → 🔄 → 🧪
 - Requires ADR explaining necessity
 - Create migration guide for consumers
@@ -1339,11 +1353,13 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 6: Module Versioning
 
 **When to bump versions** (in module README):
+
 - **MAJOR (X.0.0)**: Breaking changes to protocol interface, event contracts, or storage requirements
 - **MINOR (0.X.0)**: New methods added to protocol, new capabilities, new events published
 - **PATCH (0.0.X)**: Bug fixes, performance improvements, documentation updates
 
 **Version Constraints by Stability**:
+
 | Stability | Allowed Version Bumps | Breaking Changes |
 |-----------|----------------------|------------------|
 | 🧪 Experimental | Any | Anytime |
@@ -1354,6 +1370,7 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 7: Extending Module APIs
 
 **Adding New Methods** (Non-Breaking):
+
 1. Add method to protocol interface
 2. Implement in module
 3. Write tests
@@ -1362,6 +1379,7 @@ If any fail, revisit scope or write ADR explaining exception.
 6. Commit: `feat(k0/mXX): add [method] to API`
 
 **Changing Existing Methods** (Breaking):
+
 1. Create ADR justifying change
 2. Mark old method as deprecated (add deprecation decorator)
 3. Implement new method alongside old
@@ -1375,6 +1393,7 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 8: Module Dependencies
 
 **Adding Dependency on Another Module**:
+
 1. Check circular dependency (if exists, STOP ❌)
 2. Verify dependency module stability (prefer 🔒 Stable or 🔄 Evolving)
 3. Document in README "Modules This Depends On"
@@ -1383,6 +1402,7 @@ If any fail, revisit scope or write ADR explaining exception.
 6. If dependency is 🧪 Experimental, add risk note
 
 **Module Used By Tracking**:
+
 1. When pipeline starts using module, update:
    - Module README "Modules That Depend On This"
    - Master Registry "Used By Pipelines" column
@@ -1392,6 +1412,7 @@ If any fail, revisit scope or write ADR explaining exception.
 ### Rule 9: Protocol Compliance Validation
 
 **Before Production**:
+
 - [ ] Module class implements protocol correctly
 - [ ] `@runtime_checkable` decorator on protocol
 - [ ] All protocol methods implemented
@@ -1399,6 +1420,7 @@ If any fail, revisit scope or write ADR explaining exception.
 - [ ] No protocol violations in integration tests
 
 **Enforcement**:
+
 ```python
 # Example protocol validation
 from k0.modules.mXX_name import MXXProtocol, MXXModule
@@ -2117,6 +2139,7 @@ When adding a new pipeline/module that uses events:
 | `st_embedding_queue.write` | INSERT OR IGNORE | st_embedding_queue | P02 (M14) | Enqueue vector embedding jobs | ⚠️ Selective | `k0/kernel/syscalls.py:embedding_enqueue` | ✅ Implemented |
 
 **Milestone 5 Completion Status** (as of 2025-11-17):
+
 - ✅ All 4 P02 syscalls implemented in `k0/kernel/syscalls.py`
 - ✅ Capability-gated security enforced for all operations
 - ✅ Audit logging enabled for all storage operations
@@ -2125,6 +2148,7 @@ When adding a new pipeline/module that uses events:
 - ✅ Performance validated: All syscalls <15ms P95
 
 **Syscall Performance Summary**:
+
 - `hipp_events_upsert`: <15ms P95 (single INSERT with indexes)
 - `pipeline_processed_upsert`: <10ms P95 (composite PK upsert)
 - `outbox_emit_batch`: <5ms P95 for 6-event batch (bulk INSERT)
@@ -3875,6 +3899,7 @@ stateDiagram-v2
 | M17 (EventEmitter) | 6-event batch emission | <10ms | <15ms | >100 batches/sec | <1MB | Low | ✅ Met |
 
 **Performance Notes**:
+
 - All P95/P99 values are **ACTUAL MEASURED** from performance test runs (2025-11-17)
 - M02: No longer has P99 outlier after test optimization (was spaCy cold start, now warmed up)
 - M04: P99 outlier (10.51ms) due to safety keyword detection (acceptable for rare case)

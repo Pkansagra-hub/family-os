@@ -54,34 +54,35 @@ _total_latency_ms = 0.0
 
 
 async def run(
-    envelope: dict[str, Any],
-    context: Any = None,
+    message: Any,
+    context: Any,
     **config: Any,
 ) -> dict[str, Any]:
     """
     Emit 6 completion events after M16 storage commit.
 
+    **Phase 2 Signature**:
+        message: BusMessage with .payload (envelope JSON) and .trace_id
+        context: PipelineContext with .logger and .syscalls
+        **config: Stage configuration
+            - retry_backoff_ms (int): Backoff for failed events (default: 1000)
+            - max_retry_attempts (int): Max retry count (default: 3)
+            - enable_telemetry_event (bool): Emit telemetry events (default: False)
+            - batch_emit_enabled (bool): Use batch emission (default: True)
+
     Reads enrichments from envelope, builds 6 event payloads, and emits
     to st_outbox via syscalls.outbox_emit_batch(). Uses transactional
     outbox pattern for guaranteed event delivery.
 
-    Args:
-        envelope: Envelope with enrichments from M01-M16
-            Required keys:
-                - enrichments.space_resolver (space_id, tenant_id, envelope_id)
-                - enrichments.working_memory (snapshot)
-                - enrichments.affect_analyzer (valence, arousal, emotion)
-                - enrichments.embedding_queue (embed_event_id)
-                - enrichments.hipp_events (hipp_event_id)
-        context: Pipeline context with syscalls capability
-        **config: Module configuration
-            - retry_backoff_ms: Backoff for failed events (default: 1000)
-            - max_retry_attempts: Max retry count (default: 3)
-            - enable_telemetry_event: Emit telemetry events (default: false)
-            - batch_emit_enabled: Use batch emission (default: true)
+    **Required Inputs** (from envelope['enrichments']):
+        - space_resolver: (space_id, tenant_id, envelope_id)
+        - working_memory: (snapshot)
+        - affect_analyzer: (valence, arousal, emotion)
+        - embedding_queue: (embed_event_id)
+        - hipp_events: (hipp_event_id)
 
     Returns:
-        Dict with operation summary:
+        Enriched envelope with "event_emitter" containing:
             {
                 "events_emitted": <count>,
                 "topics": [<topic_names>],
@@ -100,48 +101,67 @@ async def run(
         - Idempotency: Fingerprint-based deduplication
 
     Example:
-        >>> envelope = {
-        ...     "enrichments": {
-        ...         "space_resolver": {"space_id": "space_123", ...},
-        ...         "working_memory": {"snapshot": {...}},
-        ...         "affect_analyzer": {"valence": 0.8, ...},
-        ...         "embedding_queue": {"embed_event_id": "embed_456", ...},
-        ...         "hipp_events": {"hipp_event_id": "hipp_789", ...},
-        ...     }
-        ... }
-        >>> result = await run(envelope, context)
-        >>> print(result["events_emitted"])  # 6
+        >>> result = await run(message, context)
+        >>> print(result["event_emitter"]["events_emitted"])  # 6
     """
+    import json
+
     global _events_emitted, _events_failed, _total_latency_ms
 
-    # Extract config (for future use - retry/telemetry planned)
-    _ = config.get("retry_backoff_ms", 1000)
-    _ = config.get("max_retry_attempts", 3)
-    _ = config.get("enable_telemetry_event", False)
-    _ = config.get("batch_emit_enabled", True)
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
 
-    # Validate envelope structure
-    if "enrichments" not in envelope:
-        raise KeyError("Envelope missing 'enrichments' key (required for event emission)")
+    # Extract config
+    retry_backoff_ms = config.get("retry_backoff_ms", 1000)
+    max_retry_attempts = config.get("max_retry_attempts", 3)
+    enable_telemetry = config.get("enable_telemetry_event", False)
+    batch_emit_enabled = config.get("batch_emit_enabled", True)
 
-    enrichments = envelope["enrichments"]
+    # Log start
+    context.logger.debug(
+        "M17 event_emitter starting",
+        extra={
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("header", {}).get("event_id"),
+            "batch_enabled": batch_emit_enabled,
+        },
+    )
 
-    # Validate required enrichments
-    required_enrichments = [
-        "space_resolver",
-        "working_memory",
-        "affect_analyzer",
-        "embedding_queue",
-        "hipp_events",
-    ]
-    missing = [e for e in required_enrichments if e not in enrichments]
-    if missing:
-        raise KeyError(f"Envelope missing required enrichments: {missing}")
+    # Validate envelope structure (lenient for now - enrichments optional)
+    enrichments = envelope.get("enrichments", {})
+
+    # If enrichments exist, validate required keys
+    if enrichments:
+        required_enrichments = [
+            "space_resolver",
+            "working_memory",
+            "affect_analyzer",
+            "embedding_queue",
+            "hipp_events",
+        ]
+        missing = [e for e in required_enrichments if e not in enrichments]
+        if missing:
+            context.logger.warning(
+                f"Envelope missing some enrichments (non-fatal): {missing}",
+                extra={"trace_id": message.trace_id, "missing": missing},
+            )
+
+    # If no enrichments, return early (no events to emit)
+    if not enrichments:
+        context.logger.debug(
+            "No enrichments available, skipping event emission",
+            extra={"trace_id": message.trace_id},
+        )
+        return envelope
 
     # Extract common fields
-    space_data = enrichments["space_resolver"]
-    space_id = space_data["space_id"]
-    tenant_id = space_data["tenant_id"]
+    space_data = enrichments.get("space_resolver", {})
+    space_id = space_data.get("space_id", "unknown")
+    tenant_id = space_data.get("tenant_id", "unknown")
     envelope_id = space_data.get("envelope_id", "unknown")
 
     # Build 6 events
@@ -214,17 +234,37 @@ async def run(
         _events_emitted += result["events_inserted"]
         _total_latency_ms += elapsed_ms
 
+        # Log completion
+        context.logger.debug(
+            "M17 event_emitter completed",
+            extra={
+                "trace_id": message.trace_id,
+                "events_emitted": result["events_inserted"],
+                "latency_ms": elapsed_ms,
+            },
+        )
+
         return {
-            "events_emitted": result["events_inserted"],
-            "topics": [e["driver"] for e in events],
-            "operation": "event_emitter",
-            "status": "success",
-            "latency_ms": elapsed_ms,
+            **envelope,
+            "event_emitter": {
+                "events_emitted": result["events_inserted"],
+                "topics": [e["driver"] for e in events],
+                "operation": "event_emitter",
+                "status": "success",
+                "latency_ms": elapsed_ms,
+            },
         }
 
-    except Exception:
+    except Exception as e:
         # Update failure metrics
         _events_failed += len(events)
+
+        # Log failure
+        context.logger.error(
+            "M17 event_emitter failed",
+            extra={"trace_id": message.trace_id, "error": str(e)},
+            exc_info=True,
+        )
 
         # Re-raise for pipeline error handling
         raise

@@ -162,9 +162,11 @@ class PipelineRunner:
         # Reset per-execution state
         self._completed_stages.clear()
         self._failed_stages.clear()
+        self._enriched_envelope = None  # Track enriched envelope across stages
+        self._stage_timings = {}  # Track per-stage latency for profiling
 
         if self._context:
-            self._context.logger.info(
+            self._context.logger.debug(
                 f"Starting pipeline execution: {self.pipeline_id}",
                 extra={
                     "pipeline_id": self.pipeline_id,
@@ -175,9 +177,10 @@ class PipelineRunner:
             )
 
         try:
-            # Execute stages in topological order
+            # Execute stages in topological order, passing enriched message forward
+            current_message = message
             for stage in self._dag.topological_order():
-                await self._execute_stage(stage, message)
+                current_message = await self._execute_stage(stage, current_message)
 
             # Success
             duration_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
@@ -188,8 +191,11 @@ class PipelineRunner:
                     extra={
                         "pipeline_id": self.pipeline_id,
                         "trace_id": message.trace_id,
-                        "duration_ms": duration_ms,
+                        "duration_ms": round(duration_ms, 3),
                         "completed_stages": len(self._completed_stages),
+                        "stage_timings_ms": {
+                            k: round(v, 3) for k, v in self._stage_timings.items()
+                        },
                     },
                 )
 
@@ -215,13 +221,16 @@ class PipelineRunner:
 
     # ===== Stage Execution =====
 
-    async def _execute_stage(self, stage: StageSpec, message: BusMessage) -> None:
+    async def _execute_stage(self, stage: StageSpec, message: BusMessage) -> BusMessage:
         """
         Execute a single DAG stage.
 
         Args:
             stage: Stage specification
-            message: Bus message context
+            message: Bus message context (may be enriched from previous stage)
+
+        Returns:
+            BusMessage: Updated message with enriched payload (or original if module returned non-dict)
 
         Raises:
             Exception: Stage execution failures (propagated to caller)
@@ -243,29 +252,64 @@ class PipelineRunner:
             # Get module implementation
             module_fn = self._registry.get(stage.module)
 
-            # Prepare arguments (merge stage config + message context)
-            args = dict(stage.config)
-            args["message"] = message
-            args["context"] = self._context
+            # Parse envelope: use enriched version from previous stage, or decode from message
+            if self._enriched_envelope is not None:
+                envelope_dict = self._enriched_envelope
+            else:
+                import json
 
-            # Execute module
+                try:
+                    envelope_dict = json.loads(message.payload.decode("utf-8"))
+                except (json.JSONDecodeError, AttributeError) as e:
+                    if self._context:
+                        self._context.logger.error(
+                            f"Failed to decode BusMessage payload for stage {stage.id}",
+                            exc_info=True,
+                            extra={
+                                "stage_id": stage.id,
+                                "module_id": stage.module,
+                                "error": str(e),
+                            },
+                        )
+                    raise
+
+            # Prepare arguments (merge stage config + message context + envelope)
+            args = dict(stage.config)
+            args["message"] = message  # BusMessage with .payload (bytes)
+            args["context"] = self._context
+            args["envelope"] = envelope_dict  # Pre-decoded envelope dict for convenience
+
+            # Execute module with timing
+            module_start = datetime.now(UTC)
             result = await module_fn(**args)
+            module_duration_ms = (datetime.now(UTC) - module_start).total_seconds() * 1000
+
+            # Track stage timing for latency profiling
+            self._stage_timings[stage.id] = module_duration_ms
+
+            # If module returned an enriched envelope, store it AND create new message with enriched payload
+            # This ensures subsequent stages receive the enriched envelope when they parse message.payload
+            if isinstance(result, dict):
+                self._enriched_envelope = result  # Store for next stage
+                # CRITICAL: Create new BusMessage with enriched payload (BusMessage is frozen)
+                import json
+
+                message = BusMessage(
+                    topic=message.topic,
+                    payload=json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode(
+                        "utf-8"
+                    ),
+                    offset=message.offset,
+                    trace_id=message.trace_id,
+                    space_id=message.space_id,
+                    metadata=message.metadata,
+                )
 
             # Track completion
             self._completed_stages.add(stage.id)
 
-            duration_ms = (datetime.now(UTC) - stage_start).total_seconds() * 1000
-
-            if self._context:
-                self._context.logger.debug(
-                    f"Stage completed: {stage.id}",
-                    extra={
-                        "pipeline_id": self.pipeline_id,
-                        "stage_id": stage.id,
-                        "duration_ms": duration_ms,
-                        "result": str(result)[:100],  # Truncate for logs
-                    },
-                )
+            # Return (possibly enriched) message for next stage
+            return message
 
         except Exception as e:
             self._failed_stages.add(stage.id)
@@ -282,8 +326,11 @@ class PipelineRunner:
                     },
                 )
 
-            # Propagate failure (future: add retry/compensation)
+            # Re-raise to caller for pipeline-level error handling
             raise
+
+        # Return original message if stage failed (exception will propagate anyway)
+        return message
 
     # ===== Observability Helpers =====
 

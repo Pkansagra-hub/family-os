@@ -291,6 +291,12 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
 
+    # Inject bus dispatcher into SQLite driver for outbox-to-bus bridging
+    from ..drivers.sqlite import set_bus_dispatcher
+
+    set_bus_dispatcher(bus_dispatcher)
+    logger.info("Injected bus dispatcher into SQLite driver for P02 pipeline integration")
+
     # Register BusDispatcher sinks (Gap 1: Wire BusDispatcher Sinks)
     # M1 R1.2: Migrated from register_sink() to tap() / subscribe()
 
@@ -482,28 +488,171 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Outbox worker loop cancelled during backoff")
                     break
 
-    @asynccontextmanager
-    async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-        # M2 R2.3: Boot user-space pipelines BEFORE starting background tasks
-        from ..pipelines.loader import discover_and_boot_pipelines
+    async def _preload_models() -> dict[str, any]:
+        """Preload NLP models at kernel startup to avoid cold start penalty.
+
+        Returns:
+            dict: Preloaded models with keys 'spacy_nlp' and 'vader_analyzer'
+        """
+        models = {}
 
         try:
-            logger.info("Discovering and booting pipelines...")
-            # Get pipeline-specific config from settings (if available)
-            pipeline_config = getattr(settings, "pipelines", {})
-            if isinstance(pipeline_config, dict):
-                pipeline_config_dict = pipeline_config
-            else:
-                pipeline_config_dict = {}
+            import spacy
 
-            pipelines = await discover_and_boot_pipelines(
-                bus_dispatcher=bus_dispatcher,
-                uow_factory=_unit_of_work_factory,
-                config=pipeline_config_dict,
-                logger=logger,
+            logger.info("Preloading spaCy model (en_core_web_sm)...")
+            models["spacy_nlp"] = spacy.load("en_core_web_sm")
+            logger.info("✓ spaCy model preloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to preload spaCy model: {e}")
+            models["spacy_nlp"] = None
+
+        try:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+            logger.info("Preloading VADER sentiment analyzer...")
+            models["vader_analyzer"] = SentimentIntensityAnalyzer()
+            logger.info("✓ VADER sentiment analyzer preloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to preload VADER analyzer: {e}")
+            models["vader_analyzer"] = None
+
+        return models
+
+    @asynccontextmanager
+    async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Phase 1: Preload NLP models to avoid cold start penalty
+        logger.info("Preloading NLP models...")
+        preloaded_models = await _preload_models()
+        app.state.preloaded_models = preloaded_models
+        logger.info(
+            "NLP model preloading complete",
+            extra={
+                "spacy_loaded": preloaded_models.get("spacy_nlp") is not None,
+                "vader_loaded": preloaded_models.get("vader_analyzer") is not None,
+            },
+        )
+
+        # Phase 2: Boot YAML-based declarative pipelines via runtime system
+        from pathlib import Path
+
+        from ..pipelines.protocol import PipelineContext
+        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec
+
+        try:
+            logger.info("Loading declarative pipelines from YAML specifications...")
+
+            # Initialize module registry
+            registry = ModuleRegistry()
+            contracts_dir = Path(__file__).parent.parent.parent / "k0" / "contracts" / "modules"
+            await registry.load_contracts(contracts_dir)
+            logger.info(
+                f"Loaded {len(registry)} module contracts",
+                extra={"module_count": len(registry), "modules": registry.list_modules()},
             )
+
+            # Load pipeline specifications from YAML
+            pipelines_contract_dir = (
+                Path(__file__).parent.parent.parent / "k0" / "contracts" / "pipelines"
+            )
+            pipeline_specs = list(pipelines_contract_dir.glob("p*.yaml")) + list(
+                pipelines_contract_dir.glob("p*.yml")
+            )
+            logger.info(
+                f"Found {len(pipeline_specs)} pipeline specifications",
+                extra={
+                    "spec_count": len(pipeline_specs),
+                    "specs": [p.name for p in pipeline_specs],
+                },
+            )
+
+            pipelines = {}
+            for spec_path in sorted(pipeline_specs):
+                try:
+                    # Load and validate spec
+                    spec = PipelineSpec.load(spec_path)
+                    logger.info(
+                        f"Loading pipeline: {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "version": spec.version,
+                            "spec_path": str(spec_path),
+                        },
+                    )
+
+                    # Create pipeline runner
+                    runner = PipelineRunner(spec, registry)
+
+                    # Create syscalls adapter with required capabilities
+                    from ..kernel.syscalls import Syscalls
+
+                    granted_caps = set(spec.required_caps) if spec.required_caps else set()
+                    # Grant default capabilities for all pipelines
+                    granted_caps.update(
+                        [
+                            "st_hipp_events.write",
+                            "st_embedding_queue.write",
+                            "st_pipeline_processed.write",
+                            "st_outbox.write",
+                        ]
+                    )
+                    syscalls = Syscalls(spec.pipeline_id, granted_caps, _unit_of_work_factory)
+                    logger.info(
+                        f"Syscalls initialized for {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "granted_caps": list(granted_caps),
+                            "capability_count": len(granted_caps),
+                        },
+                    )
+
+                    # Create pipeline context
+                    ctx = PipelineContext(
+                        syscalls=syscalls,
+                        config=spec.config,
+                        logger=logger.getChild(spec.pipeline_id),
+                        preloaded_models=preloaded_models,  # Pass preloaded models to pipeline
+                    )
+
+                    # Call on_startup
+                    await runner.on_startup(ctx)
+                    logger.info(
+                        f"Called on_startup() for {spec.pipeline_id}",
+                        extra={"pipeline_id": spec.pipeline_id},
+                    )
+
+                    # Subscribe to declared topics
+                    for topic in spec.declared_topics:
+                        bus_dispatcher.subscribe(topic, runner.handle)
+                        logger.info(
+                            f"Subscribed {spec.pipeline_id} to {topic}",
+                            extra={"pipeline_id": spec.pipeline_id, "topic": topic},
+                        )
+
+                    pipelines[spec.pipeline_id] = runner
+                    logger.info(
+                        f"Booted pipeline: {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "topics": list(spec.declared_topics),
+                            "concurrency": spec.concurrency,
+                            "max_queue": spec.max_queue,
+                        },
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        f"Failed to load pipeline from {spec_path.name}: {e}",
+                        extra={"spec_path": str(spec_path), "error": str(e)},
+                        exc_info=True,
+                    )
+                    # Continue loading other pipelines
+                    continue
+
             app.state.pipelines = pipelines
-            logger.info(f"Successfully booted {len(pipelines)} pipelines: {list(pipelines.keys())}")
+            logger.info(
+                f"Booted {len(pipelines)} pipelines: {list(pipelines.keys())}",
+                extra={"count": len(pipelines), "pipeline_ids": list(pipelines.keys())},
+            )
         except Exception:
             logger.exception("Failed to boot pipelines during startup")
             # Don't prevent kernel from starting if no pipelines exist

@@ -182,9 +182,12 @@ class Replayer:
                         connection.commit()
 
                         # Issue #043: Emit replay_processed_total per event
+                        # Note: Use tenant/space labels to match summary metric (line 235)
                         self._emit_metric(
                             "replay_processed_total",
                             1.0,
+                            tenant=str(row["tenant_id"]),
+                            space=str(row["space_id"]),
                             driver=driver,
                             outcome=outcome,
                         )
@@ -195,6 +198,8 @@ class Replayer:
                         self._emit_metric(
                             "replay_processed_total",
                             1.0,
+                            tenant=str(row["tenant_id"]),
+                            space=str(row["space_id"]),
                             driver=driver,
                             outcome="error",
                         )
@@ -209,6 +214,8 @@ class Replayer:
                         self._emit_metric(
                             "replay_processed_total",
                             1.0,
+                            tenant=str(row["tenant_id"]),
+                            space=str(row["space_id"]),
                             driver=driver,
                             outcome="error",
                         )
@@ -232,8 +239,11 @@ class Replayer:
                 outcome="success",
                 dry_run=str(dry_run).lower(),
             )
+            # Note: replay_processed_total uses individual per-event emissions above
+            # This summary is for backward compatibility or aggregation
+            # Keep labels consistent: tenant, space, driver, outcome
             self._emit_metric(
-                "replay_processed_total",
+                "replay_summary_total",
                 float(processed),
                 tenant=tenant_id or "*",
                 space=space_id or "*",

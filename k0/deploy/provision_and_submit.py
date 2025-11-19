@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Add project root to Python path
-project_root = Path(__file__).resolve().parent.parent
+project_root = (
+    Path(__file__).resolve().parent.parent.parent
+)  # k0/deploy/provision_and_submit.py -> k0/deploy -> k0 -> familyos
 sys.path.insert(0, str(project_root))
 
 import uuid
@@ -46,6 +48,8 @@ def provision_device(signing_key: SigningKey):
     print(f"  Tenant ID: {TENANT_ID}")
     print(f"  Space ID: {SPACE_ID}")
     print(f"  Verify Key: {verify_key_b64[:32]}...")
+    print(f"  Database Path: {DB_PATH}")
+    print(f"  Database exists: {DB_PATH.exists()}")
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -143,11 +147,9 @@ def submit_envelope(signing_key: SigningKey):
     # Build body
     body = {
         "operation": "UPSERT",
-        "payload": {
-            "value": 42,
-            "text": "Hello from K0!",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        },
+        "text": "Hello from K0!",  # Moved to top level for affect.analyze
+        "value": 42,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     # Canonicalize body

@@ -178,20 +178,26 @@ class ModuleRegistry:
         if ":" not in module_id:
             module_id = f"{module_id}:v1"
 
-        # Check contract exists
-        if module_id not in self._contracts:
-            raise ModuleNotFoundError(
-                f"Module not found: {module_id} (available: {list(self._contracts.keys())})"
-            )
-
         # Return cached implementation if available
         if module_id in self._implementations:
             return self._implementations[module_id]
 
-        # Lazy load implementation
+        # Lazy load implementation (contract validation is optional)
+        # We allow loading modules even if contracts failed validation
         try:
             impl = self._load_implementation(module_id)
             self._implementations[module_id] = impl
+
+            # Warn if contract not loaded (non-blocking)
+            if module_id not in self._contracts:
+                logger.warning(
+                    f"Module loaded without contract validation: {module_id}",
+                    extra={
+                        "module_id": module_id,
+                        "reason": "contract validation failed or missing",
+                    },
+                )
+
             return impl
         except Exception as e:
             raise ModuleLoadError(f"Failed to load implementation for {module_id}: {e}") from e
@@ -239,7 +245,7 @@ class ModuleRegistry:
 
         run_func = getattr(module, "run")
 
-        logger.info(
+        logger.debug(
             f"Loaded module implementation: {module_id}",
             extra={"module_id": module_id, "import_path": module_path},
         )

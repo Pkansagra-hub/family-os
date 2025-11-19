@@ -24,7 +24,6 @@ import pytest
 
 from k0.modules.social import family_graph_resolve
 
-
 # ============================================================================
 # Mock Classes for Phase 2 Signature Testing
 # ============================================================================
@@ -52,6 +51,7 @@ class MockContext:
         self.logger.error = Mock()
         self.syscalls = Mock()
         self.config = {}
+
 
 # ============================================================================
 # Fixtures
@@ -156,7 +156,8 @@ async def test_solo_event_actor_only_in_participants():
         },
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     assert result["is_solo_event"] is True
     assert result["social_context"] == "solo"
@@ -168,7 +169,8 @@ async def test_solo_event_no_body():
     """Test solo event with missing body."""
     envelope = {"actor_id": "person_dad"}  # No body at all
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     assert result["is_solo_event"] is True
     assert result["social_context"] == "solo"
@@ -260,7 +262,8 @@ async def test_extended_family_caretaker():
         },
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     assert result["social_context"] == "extended_family"
     assert result["social_intimacy"] == "MED"
@@ -287,7 +290,8 @@ async def test_extended_family_sibling():
         },
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     assert result["social_context"] == "extended_family"
     assert result["social_intimacy"] == "MED"
@@ -304,7 +308,8 @@ async def test_extended_family_sibling():
 @pytest.mark.asyncio
 async def test_friends_no_relationships(sample_envelope_friends):
     """Test friends context (no family relationships found)."""
-    message, context = make_test_call(sample_envelope_friends); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(sample_envelope_friends)
+    result = await family_graph_resolve.run(message, context)
 
     assert result["social_context"] == "friends"
     assert result["social_intimacy"] == "LOW"
@@ -468,13 +473,15 @@ async def test_cache_hit_performance():
     }
 
     # First call (cache miss)
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
     metrics1 = family_graph_resolve.get_metrics()
     assert metrics1["cache_misses"] == 1
     assert metrics1["db_queries"] == 1
 
     # Second call (cache hit)
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
     metrics2 = family_graph_resolve.get_metrics()
     assert metrics2["cache_hits"] == 1
     assert metrics2["db_queries"] == 1  # No additional DB query
@@ -488,7 +495,8 @@ async def test_cache_miss_fallback():
         "body": {"participants": ["person_new_user", "person_unknown"]},
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Should still work (fallback to friends context)
     assert result["social_context"] == "friends"
@@ -508,13 +516,15 @@ async def test_performance_under_8ms():
     }
 
     # Warm up cache
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Measure cached performance
     latencies = []
     for _ in range(100):
         start = time.perf_counter()
-        message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+        message, context = make_test_call(envelope)
+        result = await family_graph_resolve.run(message, context)
         latencies.append((time.perf_counter() - start) * 1000)  # ms
 
     # Check P95 latency
@@ -534,7 +544,8 @@ async def test_missing_actor_id():
     """Test handling of missing actor_id (fallback to unknown_actor)."""
     envelope = {"body": {"participants": ["person_someone"]}}  # No actor_id
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Should not crash, use default context
     assert result["social_context"] in ["solo", "friends"]
@@ -615,7 +626,8 @@ async def test_malformed_participants_not_list():
         "body": {"participants": "not_a_list"},  # Wrong type
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Should handle gracefully (fallback to default)
     assert "social_context" in result
@@ -629,7 +641,8 @@ async def test_json_serialization_valid():
         "body": {"participants": ["person_dad", "person_mom"]},
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Should be valid JSON
     roles = json.loads(result["participant_roles_json"])
@@ -642,7 +655,8 @@ async def test_timestamp_format():
     """Test that social_resolved_at_utc is valid ISO 8601."""
     envelope = {"actor_id": "person_dad", "body": {"participants": []}}
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Should be valid ISO 8601 timestamp
     timestamp = result["social_resolved_at_utc"]
@@ -669,7 +683,8 @@ async def test_full_envelope_social_resolution():
         },
     }
 
-    message, context = make_test_call(envelope); result = await family_graph_resolve.run(message, context)
+    message, context = make_test_call(envelope)
+    result = await family_graph_resolve.run(message, context)
 
     # Verify complete output schema
     assert result["num_participants"] == 3

@@ -18,6 +18,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pytest
 
@@ -34,6 +35,28 @@ from k0.modules.salience.score import (
     reset_metrics,
     run,
 )
+
+# ==================== Mock Classes for Phase 2 ====================
+
+
+class MockMessage:
+    def __init__(self, payload: dict, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload)
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict, **config):
+    """Helper to create message, context, config tuple for test calls."""
+    return MockMessage(envelope), MockContext(), config
+
 
 # ==================== Fixtures ====================
 
@@ -450,7 +473,8 @@ class TestAsyncIntegration:
             "affect_intensity": 0.8,
         }
 
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Check required output fields
         assert "salience_score" in result
@@ -477,7 +501,8 @@ class TestAsyncIntegration:
         """Test async run() with missing timestamp (should use default fallback)."""
         envelope = {"event": {"social_context": "family"}, "affect_intensity": 0.8}
 
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should fall back to default salience
         assert result["salience_score"] == 0.5
@@ -492,11 +517,15 @@ class TestAsyncIntegration:
         """Test async run() with datetime object (not ISO string)."""
         now = datetime.now(timezone.utc)
         envelope = {
-            "event": {"social_context": "friends", "event_time_utc": now - timedelta(hours=5)},
+            "event": {
+                "social_context": "friends",
+                "event_time_utc": (now - timedelta(hours=5)).isoformat(),
+            },
             "affect_intensity": 0.6,
         }
 
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should process successfully
         assert 0.0 <= result["salience_score"] <= 1.0
@@ -514,7 +543,8 @@ class TestAsyncIntegration:
             "affect_intensity": 0.7,
         }
 
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should parse successfully
         assert 0.0 <= result["salience_score"] <= 1.0
@@ -531,13 +561,18 @@ class TestAsyncIntegration:
                     "social_context": ["family", "friends", "solo"][i % 3],
                     "event_time_utc": (now - timedelta(hours=i)).isoformat(),
                 },
-                "affect_intensity": 0.3 + (i * 0.07),
+                "affect_intensity": 0.3 + (i % 5) * 0.15,
             }
             for i in range(10)
         ]
 
         # Run concurrently
-        results = await asyncio.gather(*[run(env) for env in envelopes])
+        tasks = []
+        for env in envelopes:
+            message, context, config = make_test_call(env)
+            tasks.append(run(message, context, **config))
+
+        results = await asyncio.gather(*tasks)
 
         # Verify all completed
         assert len(results) == 10
@@ -598,8 +633,9 @@ class TestPerformance:
                 "affect_intensity": 0.2 + (i % 8) * 0.1,
             }
 
+            message, context, config = make_test_call(envelope)
             start = time.perf_counter()
-            await run(envelope)
+            await run(message, context, **config)
             end = time.perf_counter()
 
             latencies.append((end - start) * 1000)

@@ -49,7 +49,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 # Module logger (use instead of print)
@@ -498,11 +498,7 @@ def profile_temporal(
     )
 
 
-async def run(
-    message: Any,
-    context: Any,
-    **config: Any
-) -> dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     """
     M08 temporal_profile module entry point (Phase 2).
 
@@ -543,6 +539,7 @@ async def run(
     """
     # Parse envelope from message payload
     import json
+
     envelope = (
         json.loads(message.payload)
         if isinstance(message.payload, (str, bytes))

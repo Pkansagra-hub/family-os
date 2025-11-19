@@ -22,7 +22,8 @@ WORKDIR /app
 # Copy minimal kernel requirements (no ML/NLP libraries)
 # Note: requirements.kernel.txt includes -r requirements.base.txt, so both files needed
 COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
-RUN pip install --no-cache-dir -r requirements.kernel.txt
+RUN pip install --no-cache-dir -r requirements.kernel.txt && \
+    python -m spacy download en_core_web_sm
 
 # Copy application code
 COPY k0/ k0/

@@ -23,13 +23,34 @@ Tests for core.hipp_events_writer module (M16).
 """
 
 import hashlib
+import json
 import time
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
 from k0.modules.core import hipp_events_writer  # noqa: F401
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing"""
+
+    def __init__(self, payload: Any, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+def make_test_call(envelope: dict[str, Any], mock_context: Any, **config: Any):
+    """Create test call with Phase 2 signature"""
+    message = MockMessage(envelope)
+    return message, mock_context, config
+
 
 # =============================================================================
 # Test Fixtures
@@ -91,6 +112,14 @@ def enriched_envelope() -> dict[str, Any]:
 def mock_context() -> MagicMock:
     """Mock PipelineContext with syscalls"""
     context = MagicMock()
+    context.syscalls = MagicMock()
+
+
+@pytest.fixture
+def mock_context() -> MagicMock:
+    """Mock PipelineContext with syscalls"""
+    context = MagicMock()
+    context.logger = Mock()
     context.syscalls = MagicMock()
     context.syscalls.hipp_events_upsert = AsyncMock(
         return_value={"inserted": True, "event_id": "evt_test_123", "status": "INSERTED"}
@@ -256,14 +285,16 @@ def test_assemble_pipeline_processed_record_defaults_for_missing_header_fields()
 @pytest.mark.asyncio
 async def test_run_successful_write_minimal_envelope(minimal_envelope, mock_context):
     """Test successful write with minimal envelope"""
-    result = await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    result = await hipp_events_writer.run(message, context, **config)
+    write_result = result["hipp_events_write"]
 
     # Verify result structure
-    assert result["hipp_events_inserted"] is True
-    assert result["hipp_events_status"] == "INSERTED"
-    assert result["pipeline_tracked"] is True
-    assert result["event_id"] == "evt_test_123"
-    assert result["wal_pos"] == 42
+    assert write_result["hipp_events_inserted"] is True
+    assert write_result["hipp_events_status"] == "INSERTED"
+    assert write_result["pipeline_tracked"] is True
+    assert result["header"]["event_id"] == "evt_test_123"
+    assert result["header"]["wal_pos"] == 42
 
     # Verify syscalls invoked
     mock_context.syscalls.hipp_events_upsert.assert_called_once()
@@ -279,12 +310,14 @@ async def test_run_successful_write_minimal_envelope(minimal_envelope, mock_cont
 
 @pytest.mark.asyncio
 async def test_run_successful_write_enriched_envelope(enriched_envelope, mock_context):
-    """Test successful write with fully enriched envelope"""
-    result = await hipp_events_writer.run(enriched_envelope, mock_context)
+    """Test successful write with enriched envelope"""
+    message, context, config = make_test_call(enriched_envelope, mock_context)
+    result = await hipp_events_writer.run(message, context, **config)
+    write_result = result["hipp_events_write"]
 
-    assert result["hipp_events_inserted"] is True
-    assert result["event_id"] == "evt_enriched_456"
-    assert result["wal_pos"] == 100
+    assert write_result["hipp_events_inserted"] is True
+    assert result["header"]["event_id"] == "evt_enriched_456"
+    assert result["header"]["wal_pos"] == 100
 
     # Verify enriched fields passed to syscalls
     call_kwargs = mock_context.syscalls.hipp_events_upsert.call_args[1]
@@ -303,10 +336,12 @@ async def test_run_duplicate_event_skipped(minimal_envelope, mock_context):
         "status": "SKIPPED_DUPLICATE",
     }
 
-    result = await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    result = await hipp_events_writer.run(message, context, **config)
+    write_result = result["hipp_events_write"]
 
-    assert result["hipp_events_inserted"] is False
-    assert result["hipp_events_status"] == "SKIPPED_DUPLICATE"
+    assert write_result["hipp_events_inserted"] is False
+    assert write_result["hipp_events_status"] == "SKIPPED_DUPLICATE"
 
     # Verify metrics
     metrics = hipp_events_writer.get_metrics()
@@ -317,9 +352,10 @@ async def test_run_duplicate_event_skipped(minimal_envelope, mock_context):
 @pytest.mark.asyncio
 async def test_run_custom_pipeline_id_in_config(minimal_envelope, mock_context):
     """Test custom pipeline_id passed via config"""
-    result = await hipp_events_writer.run(
+    message, context, config = make_test_call(
         minimal_envelope, mock_context, pipeline_id="P03_TEST", status="SKIPPED"
     )
+    result = await hipp_events_writer.run(message, context, **config)
 
     # Verify pipeline_processed called with custom config
     call_kwargs = mock_context.syscalls.pipeline_processed_upsert.call_args[1]
@@ -330,15 +366,17 @@ async def test_run_custom_pipeline_id_in_config(minimal_envelope, mock_context):
 @pytest.mark.asyncio
 async def test_run_both_tables_written_atomically(minimal_envelope, mock_context):
     """Test both st_hipp_events and st_pipeline_processed written"""
-    result = await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    result = await hipp_events_writer.run(message, context, **config)
+    write_result = result["hipp_events_write"]
 
     # Verify both syscalls invoked
     assert mock_context.syscalls.hipp_events_upsert.call_count == 1
     assert mock_context.syscalls.pipeline_processed_upsert.call_count == 1
 
     # Verify result includes both operations
-    assert "hipp_events_inserted" in result
-    assert "pipeline_tracked" in result
+    assert write_result["hipp_events_inserted"] in [True, False]
+    assert write_result["pipeline_tracked"] is True
 
 
 # =============================================================================
@@ -402,11 +440,18 @@ def test_assemble_pipeline_processed_record_missing_wal_pos_raises():
 
 @pytest.mark.asyncio
 async def test_run_missing_context_raises():
-    """Test ValueError raised when PipelineContext not provided"""
+    """Test that context is required in Phase 2 signature (positional parameter)"""
     envelope = {"header": {}, "body": {}, "outputs": {}}
+    message = MockMessage(envelope)
 
-    with pytest.raises(ValueError, match="PipelineContext required"):
-        await hipp_events_writer.run(envelope, context=None)
+    # In Phase 2, context is a required positional parameter
+    # This test verifies the signature requires it
+    import inspect
+
+    sig = inspect.signature(hipp_events_writer.run)
+    params = list(sig.parameters.values())
+    assert params[1].name == "context"
+    assert params[1].default == inspect.Parameter.empty  # No default value
 
 
 @pytest.mark.asyncio
@@ -415,8 +460,9 @@ async def test_run_storage_failure_raises_runtime_error(minimal_envelope, mock_c
     # Mock syscalls to raise exception
     mock_context.syscalls.hipp_events_upsert.side_effect = Exception("Database connection failed")
 
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     with pytest.raises(RuntimeError, match="Failed to write hipp events"):
-        await hipp_events_writer.run(minimal_envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
     # Verify metrics
     metrics = hipp_events_writer.get_metrics()
@@ -438,8 +484,9 @@ async def test_run_capability_check_hipp_events_write(minimal_envelope, mock_con
         "Missing capability: st_hipp_events.write"
     )
 
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     with pytest.raises(PermissionError):
-        await hipp_events_writer.run(minimal_envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -452,14 +499,16 @@ async def test_run_capability_check_pipeline_processed_write(minimal_envelope, m
         "Missing capability: st_pipeline_processed.write"
     )
 
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     with pytest.raises(PermissionError):
-        await hipp_events_writer.run(minimal_envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
 
 @pytest.mark.asyncio
 async def test_run_syscalls_called_with_correct_arguments(minimal_envelope, mock_context):
     """Test syscalls invoked with correct argument structure"""
-    await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    await hipp_events_writer.run(message, context, **config)
 
     # Verify hipp_events_upsert arguments
     hipp_call = mock_context.syscalls.hipp_events_upsert.call_args[1]
@@ -481,9 +530,11 @@ async def test_run_no_ambient_authority_requires_syscalls(minimal_envelope):
     # Create context without syscalls
     bad_context = MagicMock()
     bad_context.syscalls = None
+    bad_context.logger = Mock()
 
+    message, context, config = make_test_call(minimal_envelope, bad_context)
     with pytest.raises(AttributeError):
-        await hipp_events_writer.run(minimal_envelope, bad_context)
+        await hipp_events_writer.run(message, context, **config)
 
 
 # =============================================================================
@@ -507,7 +558,8 @@ def test_metrics_initial_state_all_zeros():
 @pytest.mark.asyncio
 async def test_metrics_events_written_incremented(minimal_envelope, mock_context):
     """Test events_written counter incremented on successful write"""
-    await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    await hipp_events_writer.run(message, context, **config)
 
     metrics = hipp_events_writer.get_metrics()
     assert metrics["events_written"] == 1
@@ -522,7 +574,8 @@ async def test_metrics_duplicates_skipped_incremented(minimal_envelope, mock_con
         "status": "SKIPPED_DUPLICATE",
     }
 
-    await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    await hipp_events_writer.run(message, context, **config)
 
     metrics = hipp_events_writer.get_metrics()
     assert metrics["duplicates_skipped"] == 1
@@ -534,8 +587,9 @@ async def test_metrics_write_failures_incremented_on_error(minimal_envelope, moc
     """Test write_failures counter incremented on storage failure"""
     mock_context.syscalls.hipp_events_upsert.side_effect = Exception("Storage error")
 
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     with pytest.raises(RuntimeError):
-        await hipp_events_writer.run(minimal_envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
     metrics = hipp_events_writer.get_metrics()
     assert metrics["write_failures"] == 1
@@ -571,11 +625,13 @@ def test_reset_metrics_clears_all_counters():
 @pytest.mark.asyncio
 async def test_integration_full_write_flow(minimal_envelope, mock_context):
     """Test complete write flow from envelope to storage"""
-    result = await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    result = await hipp_events_writer.run(message, context, **config)
+    write_result = result["hipp_events_write"]
 
     # Verify end-to-end flow
-    assert result["hipp_events_inserted"] is True
-    assert result["pipeline_tracked"] is True
+    assert write_result["hipp_events_inserted"] is True
+    assert write_result["pipeline_tracked"] is True
     assert mock_context.syscalls.hipp_events_upsert.called
     assert mock_context.syscalls.pipeline_processed_upsert.called
 
@@ -601,7 +657,8 @@ async def test_integration_syscalls_invocation_order(minimal_envelope, mock_cont
     mock_context.syscalls.hipp_events_upsert = track_hipp_call
     mock_context.syscalls.pipeline_processed_upsert = track_pipeline_call
 
-    await hipp_events_writer.run(minimal_envelope, mock_context)
+    message, context, config = make_test_call(minimal_envelope, mock_context)
+    await hipp_events_writer.run(message, context, **config)
 
     assert call_order == ["hipp_events", "pipeline_processed"]
 
@@ -619,7 +676,8 @@ async def test_integration_multiple_writes_increment_metrics(mock_context):
     ]
 
     for envelope in envelopes:
-        await hipp_events_writer.run(envelope, mock_context)
+        message, context, config = make_test_call(envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
     metrics = hipp_events_writer.get_metrics()
     assert metrics["events_written"] == 5
@@ -641,8 +699,9 @@ async def test_integration_partial_failure_rollback_semantics(minimal_envelope, 
         "Pipeline tracking failed"
     )
 
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     with pytest.raises(RuntimeError):
-        await hipp_events_writer.run(minimal_envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
 
     # Verify first call succeeded (separate transaction)
     assert mock_context.syscalls.hipp_events_upsert.called
@@ -656,8 +715,9 @@ async def test_integration_partial_failure_rollback_semantics(minimal_envelope, 
 @pytest.mark.asyncio
 async def test_performance_single_write_under_25ms(minimal_envelope, mock_context):
     """Test single write completes under 25ms P95 target"""
+    message, context, config = make_test_call(minimal_envelope, mock_context)
     start = time.perf_counter()
-    await hipp_events_writer.run(minimal_envelope, mock_context)
+    await hipp_events_writer.run(message, context, **config)
     duration_ms = (time.perf_counter() - start) * 1000
 
     # Should be well under 25ms with mocked syscalls
@@ -678,7 +738,8 @@ async def test_performance_batch_writes_throughput(mock_context):
 
     start = time.perf_counter()
     for envelope in envelopes:
-        await hipp_events_writer.run(envelope, mock_context)
+        message, context, config = make_test_call(envelope, mock_context)
+        await hipp_events_writer.run(message, context, **config)
     duration_sec = time.perf_counter() - start
 
     ops_per_sec = 50 / duration_sec

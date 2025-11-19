@@ -144,11 +144,12 @@ CREATE TABLE IF NOT EXISTS st_hipp_events (
   hippocampus_api_version TEXT,
   space_resolver_version TEXT,
   schema_uri TEXT,                    -- Schema contract URI (persisted for convenience; can also be retrieved from st_wal)
-  updated_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 
-  -- Foreign Keys
-  FOREIGN KEY (wal_pos) REFERENCES st_wal(wal_pos),
-  FOREIGN KEY (retention_policy_id) REFERENCES st_retention_policy(policy_id)
+  -- Foreign Keys REMOVED due to circular transaction dependency
+  -- WAL write and pipeline write happen in same transaction, causing deadlock
+  -- FOREIGN KEY (wal_pos) REFERENCES st_wal(pos),
+  -- FOREIGN KEY (retention_policy_id) REFERENCES st_retention_policy(policy_id)
 );
 
 -- Indexes for st_hipp_events
@@ -200,7 +201,7 @@ CREATE TABLE IF NOT EXISTS st_embedding_queue (
   updated_at INTEGER NOT NULL,
 
   -- Foreign keys
-  FOREIGN KEY (wal_pos) REFERENCES st_wal(wal_pos),
+  FOREIGN KEY (wal_pos) REFERENCES st_wal(pos),
   FOREIGN KEY (event_id) REFERENCES st_hipp_events(event_id),
   FOREIGN KEY (embedding_id) REFERENCES st_hipp_events(embedding_id)
 );

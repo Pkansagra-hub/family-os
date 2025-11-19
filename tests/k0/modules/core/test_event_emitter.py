@@ -16,12 +16,33 @@ Contract: k0/contracts/modules/core.event_emitter.v1.yaml
 Module: k0/modules/core/event_emitter.py
 """
 
+import json
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
 from k0.modules.core import event_emitter
+
+# ============================================================================
+# TEST HELPERS
+# ============================================================================
+
+
+class MockMessage:
+    """Mock message object with payload for Phase 2 testing"""
+
+    def __init__(self, payload, trace_id="test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+def make_test_call(envelope, mock_context, **config):
+    """Helper to create Phase 2 test call parameters"""
+    message = MockMessage(envelope)
+    return message, mock_context, config
+
 
 # ============================================================================
 # FIXTURES
@@ -81,6 +102,7 @@ def mock_context():
             "status": "success",
         }
     )
+    context.logger = Mock()
     return context
 
 
@@ -104,10 +126,11 @@ async def test_workspace_wm_event_structure(sample_envelope, mock_context):
     """
     Verify workspace.wm.updated event has correct structure.
     """
-    result = await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
 
-    assert result["events_emitted"] == 6
-    assert "workspace.wm.updated" in result["topics"]
+    assert result["event_emitter"]["events_emitted"] == 6
+    assert "workspace.wm.updated" in result["event_emitter"]["topics"]
 
     # Get emitted events
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
@@ -128,7 +151,8 @@ async def test_affect_analyzed_event_structure(sample_envelope, mock_context):
     """
     Verify affect.analyzed event has correct structure.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -146,7 +170,8 @@ async def test_space_resolution_event_structure(sample_envelope, mock_context):
     """
     Verify space.resolution event has correct structure.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -163,7 +188,8 @@ async def test_embedding_enqueue_event_structure(sample_envelope, mock_context):
     """
     Verify embedding.enqueue event has correct structure.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -180,7 +206,8 @@ async def test_hippocampus_pattern_separated_event_structure(sample_envelope, mo
     """
     Verify hippocampus.pattern_separated event has correct structure.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -197,7 +224,8 @@ async def test_write_complete_event_structure(sample_envelope, mock_context):
     """
     Verify write.complete event has correct structure.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -220,11 +248,12 @@ async def test_successful_6_event_emission(sample_envelope, mock_context):
     """
     Verify all 6 events emitted successfully.
     """
-    result = await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
 
-    assert result["status"] == "success"
-    assert result["events_emitted"] == 6
-    assert len(result["topics"]) == 6
+    assert result["event_emitter"]["status"] == "success"
+    assert result["event_emitter"]["events_emitted"] == 6
+    assert len(result["event_emitter"]["topics"]) == 6
 
     expected_topics = [
         "workspace.wm.updated",
@@ -236,7 +265,7 @@ async def test_successful_6_event_emission(sample_envelope, mock_context):
     ]
 
     for topic in expected_topics:
-        assert topic in result["topics"]
+        assert topic in result["event_emitter"]["topics"]
 
 
 @pytest.mark.asyncio
@@ -244,7 +273,8 @@ async def test_batch_emission_single_syscall(sample_envelope, mock_context):
     """
     Verify all events emitted in single batch syscall.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     # Should call outbox_emit_batch exactly once
     assert mock_context.syscalls.outbox_emit_batch.call_count == 1
@@ -260,7 +290,8 @@ async def test_idempotency_fingerprints_unique(sample_envelope, mock_context):
     """
     Verify each event has unique fingerprint.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -282,7 +313,8 @@ async def test_same_envelope_produces_same_fingerprints(sample_envelope, mock_co
     Verify idempotency: same envelope produces same fingerprints.
     """
     # First run
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
     call_args_1 = mock_context.syscalls.outbox_emit_batch.call_args
     events_1 = call_args_1[0][0]
     fingerprints_1 = {e["driver"]: e["fingerprint"] for e in events_1}
@@ -297,7 +329,8 @@ async def test_same_envelope_produces_same_fingerprints(sample_envelope, mock_co
     }
 
     # Second run with same envelope
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
     call_args_2 = mock_context.syscalls.outbox_emit_batch.call_args
     events_2 = call_args_2[0][0]
     fingerprints_2 = {e["driver"]: e["fingerprint"] for e in events_2}
@@ -311,11 +344,12 @@ async def test_latency_tracking(sample_envelope, mock_context):
     """
     Verify latency_ms tracked in result.
     """
-    result = await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
 
-    assert "latency_ms" in result
-    assert result["latency_ms"] >= 0
-    assert result["latency_ms"] < 1000  # Should be <1s for 6 events
+    assert "latency_ms" in result["event_emitter"]
+    assert result["event_emitter"]["latency_ms"] >= 0
+    assert result["event_emitter"]["latency_ms"] < 1000  # Should be <1s for 6 events
 
 
 # ============================================================================
@@ -331,7 +365,8 @@ async def test_missing_enrichments_key(mock_context):
     envelope = {"no_enrichments": {}}
 
     with pytest.raises(KeyError, match="Envelope missing 'enrichments' key"):
-        await event_emitter.run(envelope, mock_context)
+        message, context, config = make_test_call(envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -351,7 +386,8 @@ async def test_missing_required_enrichment(mock_context):
     }
 
     with pytest.raises(KeyError, match="missing required enrichments"):
-        await event_emitter.run(envelope, mock_context)
+        message, context, config = make_test_call(envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -363,7 +399,8 @@ async def test_syscall_failure_propagates(sample_envelope, mock_context):
     mock_context.syscalls.outbox_emit_batch.side_effect = RuntimeError("Outbox write failed")
 
     with pytest.raises(RuntimeError, match="Outbox write failed"):
-        await event_emitter.run(sample_envelope, mock_context)
+        message, context, config = make_test_call(sample_envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -375,7 +412,8 @@ async def test_failure_updates_metrics(sample_envelope, mock_context):
     mock_context.syscalls.outbox_emit_batch.side_effect = RuntimeError("Outbox failure")
 
     with pytest.raises(RuntimeError):
-        await event_emitter.run(sample_envelope, mock_context)
+        message, context, config = make_test_call(sample_envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["events_failed"] == 6  # All 6 events failed
@@ -405,9 +443,10 @@ async def test_missing_envelope_id_uses_default(mock_context):
         }
     }
 
-    result = await event_emitter.run(envelope, mock_context)
+    message, context, config = make_test_call(envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
 
-    assert result["status"] == "success"
+    assert result["event_emitter"]["status"] == "success"
 
     # Check event payloads have envelope_id = "unknown"
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
@@ -439,9 +478,10 @@ async def test_partial_enrichment_data_uses_defaults(mock_context):
         }
     }
 
-    result = await event_emitter.run(envelope, mock_context)
+    message, context, config = make_test_call(envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
 
-    assert result["status"] == "success"
+    assert result["event_emitter"]["status"] == "success"
 
     # Verify defaults applied
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
@@ -470,7 +510,8 @@ async def test_capability_check_enforced(sample_envelope):
     )
 
     with pytest.raises(PermissionError, match="st_outbox.write"):
-        await event_emitter.run(sample_envelope, context)
+        message, context, config = make_test_call(sample_envelope, context)
+        await event_emitter.run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -479,7 +520,8 @@ async def test_no_capability_bypass(sample_envelope, mock_context):
     Verify module cannot bypass capability check.
     """
     # Module should call syscalls.outbox_emit_batch (capability-gated)
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     # Verify syscall was called (capability check enforced)
     assert mock_context.syscalls.outbox_emit_batch.called
@@ -495,7 +537,8 @@ async def test_capability_failure_no_events_emitted(sample_envelope):
     context.syscalls.outbox_emit_batch = AsyncMock(side_effect=PermissionError("No capability"))
 
     with pytest.raises(PermissionError):
-        await event_emitter.run(sample_envelope, context)
+        message, context, config = make_test_call(sample_envelope, context)
+        await event_emitter.run(message, context, **config)
 
     # Metrics should show failure (6 events failed)
     metrics = event_emitter.get_metrics()
@@ -513,7 +556,8 @@ async def test_metrics_events_emitted_increments(sample_envelope, mock_context):
     """
     Verify events_emitted counter increments.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["events_emitted"] == 6
@@ -524,9 +568,12 @@ async def test_metrics_multiple_runs_accumulate(sample_envelope, mock_context):
     """
     Verify metrics accumulate across multiple runs.
     """
-    await event_emitter.run(sample_envelope, mock_context)
-    await event_emitter.run(sample_envelope, mock_context)
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["events_emitted"] == 18  # 3 runs * 6 events
@@ -537,7 +584,8 @@ async def test_metrics_latency_tracking(sample_envelope, mock_context):
     """
     Verify latency metrics tracked correctly.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["total_latency_ms"] > 0
@@ -549,7 +597,8 @@ async def test_metrics_reset_clears_counters(sample_envelope, mock_context):
     """
     Verify reset_metrics() clears all counters.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["events_emitted"] > 0
@@ -571,7 +620,8 @@ async def test_metrics_failure_tracking(sample_envelope, mock_context):
     mock_context.syscalls.outbox_emit_batch.side_effect = RuntimeError("Outbox failure")
 
     with pytest.raises(RuntimeError):
-        await event_emitter.run(sample_envelope, mock_context)
+        message, context, config = make_test_call(sample_envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
     assert metrics["events_failed"] == 6
@@ -588,7 +638,8 @@ async def test_integration_batch_emission_ordering(sample_envelope, mock_context
     """
     Verify events emitted in deterministic order.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -612,7 +663,8 @@ async def test_integration_all_events_same_tenant_space(sample_envelope, mock_co
     """
     Verify all events share same tenant_id and space_id.
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -632,7 +684,8 @@ async def test_integration_fingerprints_deterministic(sample_envelope, mock_cont
     Verify fingerprints deterministic based on space_id + topic + envelope_id.
     """
     # Run twice with same envelope
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
     call_args_1 = mock_context.syscalls.outbox_emit_batch.call_args
     events_1 = call_args_1[0][0]
 
@@ -644,7 +697,8 @@ async def test_integration_fingerprints_deterministic(sample_envelope, mock_cont
         "status": "success",
     }
 
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
     call_args_2 = mock_context.syscalls.outbox_emit_batch.call_args
     events_2 = call_args_2[0][0]
 
@@ -658,7 +712,8 @@ async def test_integration_all_events_op_kind_event_emit(sample_envelope, mock_c
     """
     Verify all events have op_kind = "EVENT_EMIT".
     """
-    await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    await event_emitter.run(message, context, **config)
 
     call_args = mock_context.syscalls.outbox_emit_batch.call_args
     events = call_args[0][0]
@@ -680,12 +735,13 @@ async def test_performance_batch_emission_under_10ms(sample_envelope, mock_conte
     Verify 6-event batch emitted in <10ms (contract requirement).
     """
     start = time.perf_counter()
-    result = await event_emitter.run(sample_envelope, mock_context)
+    message, context, config = make_test_call(sample_envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     # Should be well under 10ms for in-memory mock
     assert elapsed_ms < 10
-    assert result["latency_ms"] < 10
+    assert result["event_emitter"]["latency_ms"] < 10
 
 
 @pytest.mark.asyncio
@@ -697,7 +753,8 @@ async def test_performance_throughput_over_100_batches_per_second(sample_envelop
 
     start = time.perf_counter()
     for _ in range(iterations):
-        await event_emitter.run(sample_envelope, mock_context)
+        message, context, config = make_test_call(sample_envelope, mock_context)
+        await event_emitter.run(message, context, **config)
     elapsed = time.perf_counter() - start
 
     batches_per_sec = iterations / elapsed
@@ -716,7 +773,8 @@ async def test_performance_avg_latency_tracking_accurate(sample_envelope, mock_c
     """
     # Run 10 times
     for _ in range(10):
-        await event_emitter.run(sample_envelope, mock_context)
+        message, context, config = make_test_call(sample_envelope, mock_context)
+        await event_emitter.run(message, context, **config)
 
     metrics = event_emitter.get_metrics()
 

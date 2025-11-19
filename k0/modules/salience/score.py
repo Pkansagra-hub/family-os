@@ -444,9 +444,19 @@ def generate_salience_reasons(
 # ==================== Module Entry Point ====================
 
 
-async def run(envelope: dict) -> dict:
+async def run(message: any, context: any, **config: any) -> dict:
     """
     Async entry point for salience scoring module (P02 Stage 15).
+
+    Phase 2 Signature:
+    - message: BusMessage with .payload, .trace_id, .offset
+    - context: PipelineContext with .syscalls, .logger, .config
+    - **config: Stage-specific configuration from pipeline YAML
+
+    Config Parameters:
+    - social_weight (float): Social importance weight (default: 0.5)
+    - affect_weight (float): Affect intensity weight (default: 0.4)
+    - recency_weight (float): Recency weight (default: 0.1)
 
     Contract: salience.score.v1.yaml
 
@@ -463,14 +473,40 @@ async def run(envelope: dict) -> dict:
     - salience_computed_at_utc (TEXT: ISO 8601 timestamp)
 
     Args:
-        envelope: Event envelope dict
+        message: BusMessage with envelope payload
+        context: PipelineContext with logger and syscalls
+        **config: Configuration parameters
 
     Returns:
-        Dict with salience scoring fields
+        Dict with salience scoring fields (enriched envelope)
 
     Raises:
         ValueError: If required fields missing
     """
+    import json as json_module
+
+    # Parse envelope from message
+    envelope = (
+        json_module.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters
+    social_weight = config.get("social_weight", WEIGHT_SOCIAL)
+    affect_weight = config.get("affect_weight", WEIGHT_AFFECT)
+    recency_weight = config.get("recency_weight", WEIGHT_RECENCY)
+
+    # Log module start
+    context.logger.debug(
+        "M06 salience.score starting",
+        extra={
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+            "weights": f"social={social_weight}, affect={affect_weight}, recency={recency_weight}",
+        },
+    )
+
     try:
         # Extract inputs from envelope
         event_data = envelope.get("event", {})
@@ -481,25 +517,38 @@ async def run(envelope: dict) -> dict:
         # Affect intensity from M04 (may be None if M04 failed)
         affect_intensity = envelope.get("affect_intensity")
 
-        # Event timestamp (required)
-        event_time_str = event_data.get("event_time_utc")
-        if not event_time_str:
-            raise ValueError("Missing required field: event.event_time_utc")
+        # Event timestamp (required) - check both event.event_time_utc and top-level event_time_utc
+        # (temporal_profile module sets event_time_utc at top level as integer Unix timestamp)
+        event_time_value = event_data.get("event_time_utc") or envelope.get("event_time_utc")
+        if not event_time_value:
+            raise ValueError(
+                "Missing required field: event_time_utc (checked both event.event_time_utc and top-level)"
+            )
 
-        # Parse timestamp (handle both string and datetime)
-        if isinstance(event_time_str, str):
-            # Remove 'Z' if present and parse
-            event_time_str = event_time_str.replace("Z", "+00:00")
-            timestamp = datetime.fromisoformat(event_time_str)
-        elif isinstance(event_time_str, datetime):
-            timestamp = event_time_str
+        # Parse timestamp (handle string, datetime, or integer Unix timestamp)
+        if isinstance(event_time_value, str):
+            # Remove 'Z' if present and parse ISO format
+            event_time_value = event_time_value.replace("Z", "+00:00")
+            timestamp = datetime.fromisoformat(event_time_value)
+        elif isinstance(event_time_value, datetime):
+            timestamp = event_time_value
+        elif isinstance(event_time_value, (int, float)):
+            # Unix timestamp (seconds since epoch) - convert to datetime
+            timestamp = datetime.fromtimestamp(event_time_value, tz=timezone.utc)
         else:
-            raise ValueError(f"Invalid timestamp format: {event_time_str}")
+            raise ValueError(
+                f"Invalid timestamp format: {type(event_time_value).__name__} = {event_time_value}"
+            )
 
-    except Exception:
+    except Exception as e:
         # Graceful fallback: Use default salience on error
         _metrics["default_fallback_count"] += 1
+        context.logger.warning(
+            "M06 salience.score fallback to default",
+            extra={"trace_id": message.trace_id, "error": str(e)},
+        )
         return {
+            **envelope,
             "salience_score": DEFAULT_SALIENCE_ON_FAILURE,
             "salience_band": "MED",
             "salience_reasons_json": json.dumps(["Scoring failed, using default"]),
@@ -512,8 +561,19 @@ async def run(envelope: dict) -> dict:
         social_context=social_context, affect_intensity=affect_intensity, timestamp=timestamp
     )
 
-    # Convert dataclass to dict for output
+    # Log completion
+    context.logger.debug(
+        "M06 salience.score completed",
+        extra={
+            "trace_id": message.trace_id,
+            "salience_score": result.salience_score,
+            "salience_band": result.salience_band,
+        },
+    )
+
+    # Return enriched envelope
     return {
+        **envelope,
         "salience_score": result.salience_score,
         "salience_band": result.salience_band,
         "salience_reasons_json": json.dumps(list(result.salience_reasons)),

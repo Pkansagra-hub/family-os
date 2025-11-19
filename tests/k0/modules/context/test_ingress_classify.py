@@ -14,7 +14,9 @@ Test Categories:
 Total: 50 tests
 """
 
+import json
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -43,6 +45,36 @@ class ic:
     run = staticmethod(run)
     get_metrics = staticmethod(get_metrics)
     reset_metrics = staticmethod(reset_metrics)
+
+
+# =============================================================================
+# MOCK CLASSES FOR PHASE 2 SIGNATURE
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing Phase 2 signature."""
+
+    def __init__(self, payload: dict, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing Phase 2 signature."""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict, **config) -> tuple:
+    """Helper to create message, context, and config for test calls."""
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    context = MockContext()
+    return message, context, config
 
 
 # =============================================================================
@@ -300,7 +332,8 @@ class TestEndToEndClassification:
     @pytest.mark.asyncio
     async def test_run_with_write_envelope(self, sample_envelope_write):
         """Test complete classification with write envelope."""
-        result = await ic.run(sample_envelope_write)
+        message, context, config = make_test_call(sample_envelope_write)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "write"
         assert result["activity_type"] == "meal"  # "breakfast" keyword
@@ -313,7 +346,8 @@ class TestEndToEndClassification:
     @pytest.mark.asyncio
     async def test_run_with_photo_envelope(self, sample_envelope_photo):
         """Test complete classification with photo envelope."""
-        result = await ic.run(sample_envelope_photo)
+        message, context, config = make_test_call(sample_envelope_photo)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "photo"
         assert result["activity_type"] == "meal"  # "dinner" keyword
@@ -322,7 +356,8 @@ class TestEndToEndClassification:
     @pytest.mark.asyncio
     async def test_run_with_voice_envelope(self, sample_envelope_voice):
         """Test complete classification with voice envelope."""
-        result = await ic.run(sample_envelope_voice)
+        message, context, config = make_test_call(sample_envelope_voice)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "voice"
         assert result["activity_type"] == "work"  # "meeting" keyword
@@ -331,7 +366,8 @@ class TestEndToEndClassification:
     @pytest.mark.asyncio
     async def test_run_with_import_envelope(self, sample_envelope_import):
         """Test complete classification with import envelope."""
-        result = await ic.run(sample_envelope_import)
+        message, context, config = make_test_call(sample_envelope_import)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "import"
         assert result["ingress_source"] == "connector"
@@ -341,8 +377,10 @@ class TestEndToEndClassification:
     @pytest.mark.asyncio
     async def test_run_idempotency(self, sample_envelope_write):
         """Test idempotency: same envelope → same result."""
-        result1 = await ic.run(sample_envelope_write)
-        result2 = await ic.run(sample_envelope_write)
+        message, context, config = make_test_call(sample_envelope_write)
+        result1 = await ic.run(message, context, **config)
+        message2, context2, config2 = make_test_call(sample_envelope_write)
+        result2 = await ic.run(message2, context2, **config2)
 
         # Timestamps will differ, so exclude them
         for key in ["ingress_topic", "activity_type", "content_type", "ingress_source"]:
@@ -352,7 +390,8 @@ class TestEndToEndClassification:
     async def test_run_with_minimal_envelope(self):
         """Test classification with minimal envelope (all defaults)."""
         envelope = {"topic": "unknown.topic", "body": {}, "metadata": {}}
-        result = await ic.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "write"  # Default
         assert result["activity_type"] == "unknown"  # No keywords
@@ -374,8 +413,9 @@ class TestPerformance:
         latencies = []
 
         for _ in range(1000):
+            message, context, config = make_test_call(sample_envelope_write)
             start = time.perf_counter()
-            await ic.run(sample_envelope_write)
+            await ic.run(message, context, **config)
             end = time.perf_counter()
             latencies.append((end - start) * 1000)  # Convert to milliseconds
 
@@ -399,7 +439,8 @@ class TestPerformance:
         start = time.perf_counter()
 
         for _ in range(num_ops):
-            await ic.run(sample_envelope_write)
+            message, context, config = make_test_call(sample_envelope_write)
+            await ic.run(message, context, **config)
 
         elapsed = time.perf_counter() - start
         throughput = num_ops / elapsed
@@ -450,10 +491,13 @@ class TestMetrics:
 
         # Classify 3 writes, 2 photos, 1 voice
         for _ in range(3):
-            await ic.run(sample_envelope_write)
+            message, context, config = make_test_call(sample_envelope_write)
+            await ic.run(message, context, **config)
         for _ in range(2):
-            await ic.run(sample_envelope_photo)
-        await ic.run(sample_envelope_voice)
+            message, context, config = make_test_call(sample_envelope_photo)
+            await ic.run(message, context, **config)
+        message, context, config = make_test_call(sample_envelope_voice)
+        await ic.run(message, context, **config)
 
         metrics = ic.get_metrics()
 
@@ -493,7 +537,8 @@ class TestEdgeCases:
     async def test_run_with_missing_topic(self):
         """Test handling of missing topic (should default to write)."""
         envelope = {"body": {"text": "Test"}, "metadata": {}}
-        result = await ic.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await ic.run(message, context, **config)
 
         assert result["ingress_topic"] == "write"
 
@@ -501,7 +546,8 @@ class TestEdgeCases:
     async def test_run_with_empty_body(self):
         """Test handling of empty body (should use defaults)."""
         envelope = {"topic": "cognitive.memory.write.v1", "body": {}, "metadata": {}}
-        result = await ic.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await ic.run(message, context, **config)
 
         assert result["activity_type"] == "unknown"  # No text to classify
         assert result["content_type"] == "episodic"  # Default
@@ -516,7 +562,8 @@ class TestEdgeCases:
             },
             "metadata": {},
         }
-        result = await ic.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await ic.run(message, context, **config)
 
         # Should classify as "meal" (highest priority keyword: breakfast)
         assert result["activity_type"] == "meal"
@@ -534,8 +581,10 @@ class TestEdgeCases:
 
         tasks = []
         for _ in range(50):
-            tasks.append(ic.run(sample_envelope_write))
-            tasks.append(ic.run(sample_envelope_photo))
+            message_w, context_w, config_w = make_test_call(sample_envelope_write)
+            tasks.append(ic.run(message_w, context_w, **config_w))
+            message_p, context_p, config_p = make_test_call(sample_envelope_photo)
+            tasks.append(ic.run(message_p, context_p, **config_p))
 
         results = await asyncio.gather(*tasks)
 

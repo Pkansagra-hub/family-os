@@ -15,16 +15,48 @@ Total: 48 tests
 """
 
 import asyncio
+import json
 
 # Import module under test
 import sys
 import time
+from unittest.mock import Mock
 
 import pytest
 
 sys.path.insert(0, "d:/familyos")
 
 from k0.modules.context import device_profile as dp
+
+# =============================================================================
+# MOCK CLASSES FOR PHASE 2 SIGNATURE
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing Phase 2 signature."""
+
+    def __init__(self, payload: dict, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing Phase 2 signature."""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict, **config) -> tuple:
+    """Helper to create message, context, and config for test calls."""
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    context = MockContext()
+    return message, context, config
+
 
 # =============================================================================
 # FIXTURES
@@ -293,7 +325,8 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_with_phone_envelope(self, sample_envelope_phone):
         """Test complete profiling with phone envelope."""
-        result = await dp.run(sample_envelope_phone)
+        message, context, config = make_test_call(sample_envelope_phone)
+        result = await dp.run(message, context, **config)
 
         assert result["device_id"] == "device-dad-phone"
         assert result["device_kind"] == "phone"
@@ -306,7 +339,8 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_with_tablet_envelope(self, sample_envelope_tablet):
         """Test complete profiling with tablet envelope."""
-        result = await dp.run(sample_envelope_tablet)
+        message, context, config = make_test_call(sample_envelope_tablet)
+        result = await dp.run(message, context, **config)
 
         assert result["device_kind"] == "tablet"
         assert result["device_platform"] == "iOS"
@@ -315,7 +349,8 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_with_watch_envelope(self, sample_envelope_watch):
         """Test complete profiling with watch envelope."""
-        result = await dp.run(sample_envelope_watch)
+        message, context, config = make_test_call(sample_envelope_watch)
+        result = await dp.run(message, context, **config)
 
         assert result["device_kind"] == "watch"
         assert result["device_platform"] == "iOS"
@@ -324,7 +359,8 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_with_web_envelope(self, sample_envelope_web):
         """Test complete profiling with web envelope."""
-        result = await dp.run(sample_envelope_web)
+        message, context, config = make_test_call(sample_envelope_web)
+        result = await dp.run(message, context, **config)
 
         assert result["device_kind"] == "web"
         assert result["device_platform"] == "web"
@@ -333,7 +369,8 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_with_api_envelope(self, sample_envelope_api):
         """Test complete profiling with API envelope."""
-        result = await dp.run(sample_envelope_api)
+        message, context, config = make_test_call(sample_envelope_api)
+        result = await dp.run(message, context, **config)
 
         assert result["device_kind"] == "api"
         assert result["device_platform"] == "unknown"
@@ -342,8 +379,10 @@ class TestEndToEndProfiling:
     @pytest.mark.asyncio
     async def test_run_idempotency(self, sample_envelope_phone):
         """Test idempotency: same envelope → same result."""
-        result1 = await dp.run(sample_envelope_phone)
-        result2 = await dp.run(sample_envelope_phone)
+        message, context, config = make_test_call(sample_envelope_phone)
+        result1 = await dp.run(message, context, **config)
+        message2, context2, config2 = make_test_call(sample_envelope_phone)
+        result2 = await dp.run(message2, context2, **config2)
 
         # Timestamps will differ, so exclude them
         for key in [
@@ -370,8 +409,9 @@ class TestPerformance:
         latencies = []
 
         for _ in range(1000):
+            message, context, config = make_test_call(sample_envelope_phone)
             start = time.perf_counter()
-            await dp.run(sample_envelope_phone)
+            await dp.run(message, context, **config)
             end = time.perf_counter()
             latencies.append((end - start) * 1000)  # Convert to milliseconds
 
@@ -395,7 +435,8 @@ class TestPerformance:
         start = time.perf_counter()
 
         for _ in range(num_ops):
-            await dp.run(sample_envelope_phone)
+            message, context, config = make_test_call(sample_envelope_phone)
+            await dp.run(message, context, **config)
 
         elapsed = time.perf_counter() - start
         throughput = num_ops / elapsed
@@ -446,10 +487,13 @@ class TestMetrics:
 
         # Profile 3 phones, 2 tablets, 1 watch
         for _ in range(3):
-            await dp.run(sample_envelope_phone)
+            message, context, config = make_test_call(sample_envelope_phone)
+            await dp.run(message, context, **config)
         for _ in range(2):
-            await dp.run(sample_envelope_tablet)
-        await dp.run(sample_envelope_watch)
+            message, context, config = make_test_call(sample_envelope_tablet)
+            await dp.run(message, context, **config)
+        message, context, config = make_test_call(sample_envelope_watch)
+        await dp.run(message, context, **config)
 
         metrics = dp.get_metrics()
 
@@ -489,7 +533,8 @@ class TestEdgeCases:
     async def test_run_with_missing_device_id(self):
         """Test handling of missing device_id (should default to 'unknown')."""
         envelope = {"metadata": {}}
-        result = await dp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await dp.run(message, context, **config)
 
         assert result["device_id"] == "unknown"
         assert result["device_kind"] == "phone"  # Default fallback
@@ -498,7 +543,8 @@ class TestEdgeCases:
     async def test_run_with_missing_metadata(self):
         """Test handling of missing metadata (should use defaults)."""
         envelope = {"device_id": "device-dad-phone"}
-        result = await dp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await dp.run(message, context, **config)
 
         assert result["device_id"] == "device-dad-phone"
         assert result["device_kind"] == "phone"
@@ -510,7 +556,8 @@ class TestEdgeCases:
     async def test_run_with_empty_envelope(self):
         """Test handling of empty envelope (should use all defaults)."""
         envelope = {}
-        result = await dp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await dp.run(message, context, **config)
 
         assert result["device_id"] == "unknown"
         assert result["device_kind"] == "phone"
@@ -527,8 +574,10 @@ class TestEdgeCases:
         """Test concurrent profiling (thread-safety check)."""
         tasks = []
         for _ in range(50):
-            tasks.append(dp.run(sample_envelope_phone))
-            tasks.append(dp.run(sample_envelope_tablet))
+            message_p, context_p, config_p = make_test_call(sample_envelope_phone)
+            tasks.append(dp.run(message_p, context_p, **config_p))
+            message_t, context_t, config_t = make_test_call(sample_envelope_tablet)
+            tasks.append(dp.run(message_t, context_t, **config_t))
 
         results = await asyncio.gather(*tasks)
 

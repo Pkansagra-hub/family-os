@@ -41,16 +41,26 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 
     # Parse envelope
     try:
-        envelope = (
-            json.loads(message.payload) if isinstance(message.payload, str) else message.payload
-        )
+        # PipelineRunner provides pre-decoded envelope as message.envelope
+        envelope = getattr(message, "envelope", None)
+        if envelope is None:
+            # Fallback: decode payload directly (for standalone testing)
+            envelope = (
+                json.loads(message.payload.decode("utf-8"))
+                if isinstance(message.payload, bytes)
+                else (
+                    json.loads(message.payload)
+                    if isinstance(message.payload, str)
+                    else message.payload
+                )
+            )
     except (json.JSONDecodeError, AttributeError) as e:
         context.logger.error(
             "Failed to parse envelope payload",
             extra={
-                "module": "hippocampus.pattern_separate",
+                "module_id": "hippocampus.pattern_separate",
                 "error": str(e),
-                "trace_id": message.trace_id,
+                "trace_id": getattr(message, "trace_id", None),
             },
         )
         raise ValueError(f"Invalid envelope payload: {e}")
@@ -62,13 +72,14 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
         context.logger.warning(
             "Empty text content for fingerprinting",
             extra={
-                "module": "hippocampus.pattern_separate",
+                "module_id": "hippocampus.pattern_separate",
                 "event_id": envelope.get("cognitive_trace_id"),
                 "trace_id": message.trace_id,
             },
         )
-        # Return default fingerprint for empty content
+        # Return enriched envelope with default fingerprint for empty content
         return {
+            **envelope,
             "simhash_hex": "0000000000000000",
             "minhash32": json.dumps([0] * minhash_permutations),
             "fingerprint_computed_at_utc": _now_utc_iso(),
@@ -81,10 +92,10 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
     minhash_signature = _compute_minhash(text_content, hash_seed, minhash_permutations)
 
     # Log completion
-    context.logger.info(
+    context.logger.debug(
         "DG pattern separation complete",
         extra={
-            "module": "hippocampus.pattern_separate",
+            "module_id": "hippocampus.pattern_separate",
             "simhash_hex": simhash_hex,
             "minhash_perms": len(minhash_signature),
             "trace_id": message.trace_id,
@@ -92,7 +103,9 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
         },
     )
 
+    # Return enriched envelope (preserve all original fields + add fingerprints)
     return {
+        **envelope,
         "simhash_hex": simhash_hex,
         "minhash32": json.dumps(minhash_signature),  # JSON array for database storage
         "fingerprint_computed_at_utc": _now_utc_iso(),

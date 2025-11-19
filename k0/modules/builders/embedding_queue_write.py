@@ -67,7 +67,10 @@ _metrics = QueueMetrics()
 
 
 def assemble_embedding_queue_record(
-    envelope: Dict[str, Any], ca1_output: Dict[str, Any]
+    envelope: Dict[str, Any],
+    ca1_output: Dict[str, Any],
+    priority: str = "NORMAL",
+    model_id: str = "embed-mini-001",
 ) -> Dict[str, Any]:
     """
     Assemble st_embedding_queue record from CA1 output and envelope.
@@ -75,6 +78,8 @@ def assemble_embedding_queue_record(
     Args:
         envelope: Envelope with header and body
         ca1_output: M02 semantic_project output (contains embedding_id)
+        priority: Job priority ('LOW'|'NORMAL'|'HIGH', default: 'NORMAL')
+        model_id: Embedding model ID (default: 'embed-mini-001')
 
     Returns:
         Dictionary with embedding queue fields
@@ -99,8 +104,8 @@ def assemble_embedding_queue_record(
         "tenant_id": header.get("tenant_id"),
         "space_id": header.get("space_id"),
         "vector_kind": "memory.body.text",  # Default for P02 (text embeddings)
-        "model_id": "embed-mini-001",  # Default model for P02
-        "priority": "NORMAL",  # Default priority (may be derived from salience in P06+)
+        "model_id": model_id,  # Configurable model
+        "priority": priority,  # Configurable priority
         "status": "PENDING",  # Initial status for P02
         "attempt_count": 0,  # No attempts yet
         "max_attempts": 5,  # Default max retries
@@ -168,18 +173,22 @@ async def write_to_embedding_queue(record: Dict[str, Any]) -> Dict[str, Any]:
 # =============================================================================
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     Enqueue embedding generation job for P08 background processing.
+
+    **Phase 2 Signature**:
+        message: BusMessage with .payload (envelope JSON) and .trace_id
+        context: PipelineContext with .logger and .syscalls
+        **config: Stage configuration
+            - priority (str): Job priority ('LOW'|'NORMAL'|'HIGH', default: 'NORMAL')
+            - model_id (str): Embedding model ID (default: 'embed-mini-001')
 
     **Required Inputs** (from envelope['outputs']):
     - semantic_project (M02): embedding_id
 
-    Args:
-        envelope: Envelope with header, body, and module outputs
-
     Returns:
-        Dictionary with:
+        Enriched envelope with "embedding_queue_write" containing:
         - inserted: bool (True if enqueued, False if duplicate skipped)
         - embedding_id: str
         - status: str ('PENDING' or 'SKIPPED_DUPLICATE')
@@ -188,21 +197,70 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         ValueError: If embedding_id missing from M02 output
         RuntimeError: If database write fails
     """
-    # Extract CA1 output (M02 semantic projection)
-    outputs = envelope.get("outputs", {})
-    ca1_output = outputs.get("semantic_project", {})
+    import json
 
-    if not ca1_output.get("embedding_id"):
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract configuration
+    priority = config.get("priority", "NORMAL")
+    model_id = config.get("model_id", "embed-mini-001")
+
+    # Log start
+    context.logger.debug(
+        "M14 embedding_queue_write starting",
+        extra={
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("header", {}).get("event_id"),
+            "priority": priority,
+        },
+    )
+
+    # Extract embedding_id from envelope (M02 adds it to top level per Phase 2 pattern)
+    embedding_id = envelope.get("embedding_id")
+
+    if not embedding_id:
         _metrics.missing_embedding_id += 1
-        return {"inserted": False, "status": "SKIPPED", "reason": "missing_embedding_id_from_ca1"}
+        context.logger.warning(
+            "M14 skipping - missing embedding_id from CA1", extra={"trace_id": message.trace_id}
+        )
+        return {
+            **envelope,
+            "embedding_queue_write": {
+                "inserted": False,
+                "status": "SKIPPED",
+                "reason": "missing_embedding_id_from_ca1",
+            },
+        }
 
-    # Assemble embedding queue record
-    record = assemble_embedding_queue_record(envelope, ca1_output)
+    # Build CA1 output dict from top-level envelope fields
+    ca1_output = {
+        "embedding_id": embedding_id,
+        "entities_json": envelope.get("entities_json", "[]"),
+        "kg_triples_json": envelope.get("kg_triples_json", "[]"),
+    }
+
+    # Assemble embedding queue record (using config values)
+    record = assemble_embedding_queue_record(envelope, ca1_output, priority, model_id)
 
     # Write to st_embedding_queue (idempotent)
     result = await write_to_embedding_queue(record)
 
-    return result
+    # Log completion
+    context.logger.debug(
+        "M14 embedding_queue_write completed",
+        extra={
+            "trace_id": message.trace_id,
+            "embedding_id": result.get("embedding_id"),
+            "inserted": result.get("inserted"),
+        },
+    )
+
+    return {**envelope, "embedding_queue_write": result}
 
 
 # =============================================================================

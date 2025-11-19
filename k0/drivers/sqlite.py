@@ -28,6 +28,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Global bus dispatcher reference (injected during app startup)
+_bus_dispatcher_ref: Any | None = None
+
+
+def set_bus_dispatcher(dispatcher: Any) -> None:
+    """
+    Inject bus dispatcher reference for outbox-to-bus bridging.
+
+    Called during kernel startup (k0/kernel/app.py) to enable outbox worker
+    to publish events to the bus for pipeline processing.
+
+    Args:
+        dispatcher: BusDispatcher instance from kernel app state
+    """
+    global _bus_dispatcher_ref
+    _bus_dispatcher_ref = dispatcher
+
 
 class SQLiteDriver:
     """SQLite driver for ACID operations (K0 infrastructure + memory tables).
@@ -427,25 +444,107 @@ class SQLiteDriver:
         """Apply outbox entry to SQLite (Driver SPI requirement).
 
         This method is called by the outbox worker to process async operations.
-        Currently a placeholder - full implementation pending.
+        For st_epi driver, this publishes events to the bus for pipeline processing.
 
         Args:
             entry: Outbox entry containing wal_pos, tenant_id, space_id, payload, etc.
 
-        Raises:
-            NotImplementedError: Full outbox integration not yet implemented
+        Flow:
+            1. Parse payload (JSON envelope from WAL)
+            2. Create BusMessage with topic routing
+            3. Publish to bus dispatcher → triggers P02 pipeline
+            4. P02 executes 14 modules → writes to st_hipp_events
         """
-        logger.warning(
-            "SQLite driver outbox apply called but not yet implemented",
-            extra={
-                "driver": entry.driver,
-                "op_kind": entry.op_kind,
-                "wal_pos": entry.wal_pos,
-                "cognitive_trace_id": self.cognitive_trace_id,
-            },
-        )
-        # TODO: Parse entry.payload and route to appropriate operation
-        # For now, no-op to avoid crashing the outbox worker
+        import json
+
+        # Only handle st_epi driver (episodic memory write path)
+        if entry.driver != "st_epi":
+            logger.debug(
+                f"Skipping non-st_epi driver: {entry.driver}",
+                extra={"driver": entry.driver, "wal_pos": entry.wal_pos},
+            )
+            return
+
+        try:
+            # Parse envelope from payload
+            envelope = json.loads(entry.payload.decode("utf-8"))
+
+            # Get bus dispatcher from global reference (set during app startup)
+            bus_dispatcher = _bus_dispatcher_ref
+            if bus_dispatcher is None:
+                logger.error(
+                    "Bus dispatcher not available - cannot publish envelope",
+                    extra={
+                        "wal_pos": entry.wal_pos,
+                        "driver": entry.driver,
+                        "cognitive_trace_id": envelope.get("cognitive_trace_id"),
+                    },
+                )
+                return
+
+            # Import BusMessage here to avoid circular imports
+            from k0.bus.core import BusMessage
+
+            # Create bus message with proper topic routing
+            # Map entry topic to P02's expected topic
+            topic = envelope.get("topic", "memory.delta")
+            if topic == "memory.delta":
+                # Transform to P02's expected topic
+                topic = "cognitive.memory.write.committed.v1"
+
+            bus_message = BusMessage(
+                topic=topic,
+                payload=json.dumps(envelope).encode("utf-8"),
+                offset=entry.wal_pos,
+                trace_id=envelope.get("cognitive_trace_id"),
+                space_id=entry.space_id,
+                metadata={
+                    "driver": entry.driver,
+                    "tenant_id": entry.tenant_id,
+                    "band": envelope.get("band", "GREEN"),
+                },
+            )
+
+            # Publish to bus (this will trigger P02 pipeline asynchronously)
+            # Note: dispatch() is async, so we need to run it in the event loop
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No event loop running - create one for this operation
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # Schedule the dispatch
+            loop.create_task(bus_dispatcher.dispatch([bus_message]))
+
+            logger.debug(
+                "Published envelope to bus for P02 processing",
+                extra={
+                    "wal_pos": entry.wal_pos,
+                    "topic": topic,
+                    "cognitive_trace_id": envelope.get("cognitive_trace_id"),
+                },
+            )
+
+        except json.JSONDecodeError:
+            logger.error(
+                "Failed to decode outbox payload as JSON",
+                extra={
+                    "wal_pos": entry.wal_pos,
+                    "driver": entry.driver,
+                },
+                exc_info=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to apply outbox entry",
+                extra={
+                    "wal_pos": entry.wal_pos,
+                    "driver": entry.driver,
+                },
+            )
 
 
 # Factory function for outbox worker compatibility

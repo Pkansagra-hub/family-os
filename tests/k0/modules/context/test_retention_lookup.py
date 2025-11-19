@@ -14,7 +14,9 @@ Test Categories:
 Total: 38 tests
 """
 
+import json
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -28,6 +30,36 @@ from k0.modules.context.retention_lookup import (
     reset_metrics,
     run,
 )
+
+# =============================================================================
+# MOCK CLASSES FOR PHASE 2 SIGNATURE
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing Phase 2 signature."""
+
+    def __init__(self, payload: dict, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing Phase 2 signature."""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict, **config) -> tuple:
+    """Helper to create message, context, and config for test calls."""
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    context = MockContext()
+    return message, context, config
+
 
 # =============================================================================
 # FIXTURES
@@ -306,7 +338,8 @@ class TestEndToEndResolution:
     @pytest.mark.asyncio
     async def test_run_red_phone_envelope(self, sample_envelope_red_phone):
         """Test complete resolution with RED band phone envelope."""
-        result = await run(sample_envelope_red_phone)
+        message, context, config = make_test_call(sample_envelope_red_phone)
+        result = await run(message, context, **config)
 
         assert result["retention_policy_id"] == "pol-red-write-phone"
         assert result["retention_bucket"] == "STANDARD"
@@ -315,7 +348,8 @@ class TestEndToEndResolution:
     @pytest.mark.asyncio
     async def test_run_amber_photo_envelope(self, sample_envelope_amber_photo):
         """Test complete resolution with AMBER band photo envelope."""
-        result = await run(sample_envelope_amber_photo)
+        message, context, config = make_test_call(sample_envelope_amber_photo)
+        result = await run(message, context, **config)
 
         assert result["retention_policy_id"] == "pol-amber-photo-all"
         assert result["retention_bucket"] == "STANDARD"
@@ -323,7 +357,8 @@ class TestEndToEndResolution:
     @pytest.mark.asyncio
     async def test_run_green_write_envelope(self, sample_envelope_green_write):
         """Test complete resolution with GREEN band write envelope."""
-        result = await run(sample_envelope_green_write)
+        message, context, config = make_test_call(sample_envelope_green_write)
+        result = await run(message, context, **config)
 
         assert result["retention_policy_id"] == "pol-green-write-all"
         assert result["retention_bucket"] == "STANDARD"
@@ -336,7 +371,8 @@ class TestEndToEndResolution:
             "policy_stamp": {},  # No band
             "metadata": {"device_kind": "phone"},
         }
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should use GREEN default
         assert result["retention_policy_id"] == "pol-green-write-all"
@@ -349,7 +385,8 @@ class TestEndToEndResolution:
             "policy_stamp": {"band": "RED"},
             "metadata": {},  # No device_kind
         }
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should use phone default
         assert result["retention_policy_id"] == "pol-red-write-phone"
@@ -357,8 +394,10 @@ class TestEndToEndResolution:
     @pytest.mark.asyncio
     async def test_run_idempotency(self, sample_envelope_red_phone):
         """Test idempotency: same envelope → same result."""
-        result1 = await run(sample_envelope_red_phone)
-        result2 = await run(sample_envelope_red_phone)
+        message, context, config = make_test_call(sample_envelope_red_phone)
+        result1 = await run(message, context, **config)
+        message2, context2, config2 = make_test_call(sample_envelope_red_phone)
+        result2 = await run(message2, context2, **config2)
 
         # Policy ID should be identical
         assert result1["retention_policy_id"] == result2["retention_policy_id"]
@@ -379,8 +418,9 @@ class TestPerformance:
         latencies = []
 
         for _ in range(1000):
+            message, context, config = make_test_call(sample_envelope_red_phone)
             start = time.perf_counter()
-            await run(sample_envelope_red_phone)
+            await run(message, context, **config)
             end = time.perf_counter()
             latencies.append((end - start) * 1000)  # Convert to milliseconds
 
@@ -404,7 +444,8 @@ class TestPerformance:
         start = time.perf_counter()
 
         for _ in range(num_ops):
-            await run(sample_envelope_red_phone)
+            message, context, config = make_test_call(sample_envelope_red_phone)
+            await run(message, context, **config)
 
         elapsed = time.perf_counter() - start
         throughput = num_ops / elapsed
@@ -449,9 +490,11 @@ class TestMetrics:
 
         # Perform 3 RED lookups, 2 AMBER lookups
         for _ in range(3):
-            await run(sample_envelope_red_phone)
+            message, context, config = make_test_call(sample_envelope_red_phone)
+            await run(message, context, **config)
         for _ in range(2):
-            await run(sample_envelope_amber_photo)
+            message, context, config = make_test_call(sample_envelope_amber_photo)
+            await run(message, context, **config)
 
         metrics = get_metrics()
 
@@ -488,7 +531,8 @@ class TestEdgeCases:
     async def test_run_with_empty_envelope(self):
         """Test handling of empty envelope (should use defaults)."""
         envelope = {}
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should use GREEN + empty topic + phone defaults
         assert result["retention_policy_id"] == "pol-green-default"
@@ -501,7 +545,8 @@ class TestEdgeCases:
             "topic": "cognitive.memory.write.v1",
             "metadata": {"device_kind": "phone"},
         }
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should default to GREEN band
         assert result["retention_policy_id"] == "pol-green-write-all"
@@ -513,7 +558,8 @@ class TestEdgeCases:
             "topic": "cognitive.memory.write.v1",
             "policy_stamp": {"band": "RED"},
         }
-        result = await run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await run(message, context, **config)
 
         # Should default to phone device
         assert result["retention_policy_id"] == "pol-red-write-phone"
@@ -541,8 +587,10 @@ class TestEdgeCases:
 
         tasks = []
         for _ in range(50):
-            tasks.append(run(sample_envelope_red_phone))
-            tasks.append(run(sample_envelope_amber_photo))
+            msg1, ctx1, cfg1 = make_test_call(sample_envelope_red_phone)
+            tasks.append(run(msg1, ctx1, **cfg1))
+            msg2, ctx2, cfg2 = make_test_call(sample_envelope_amber_photo)
+            tasks.append(run(msg2, ctx2, **cfg2))
 
         results = await asyncio.gather(*tasks)
 

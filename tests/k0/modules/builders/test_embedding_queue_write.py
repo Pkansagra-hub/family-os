@@ -17,8 +17,10 @@ Total: ~28 tests
 **ADR**: docs/architecture/decisions-K0/modules/k009.2-embedding-queue-writer.md
 """
 
+import json
 import time
 from typing import Any, Dict
+from unittest.mock import Mock
 
 import pytest
 
@@ -33,6 +35,34 @@ from k0.modules.builders.embedding_queue_write import (
     run,
     write_to_embedding_queue,
 )
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing"""
+
+    def __init__(self, payload: Any, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing"""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: Dict[str, Any], **config: Any):
+    """Create test call with Phase 2 signature"""
+    return MockMessage(envelope), MockContext(), config
+
 
 # =============================================================================
 # Fixtures
@@ -238,12 +268,18 @@ async def test_idempotency_same_envelope(base_envelope, ca1_output):
     base_envelope["outputs"]["semantic_project"] = ca1_output
 
     # First run succeeds
-    result1 = await run(base_envelope)
-    assert result1["inserted"] is True
+    message1, context1, config1 = make_test_call(
+        base_envelope, priority="NORMAL", model_id="embed-mini-001"
+    )
+    result1 = await run(message1, context1, **config1)
+    assert result1["embedding_queue_write"]["inserted"] is True
 
     # Second run skipped (duplicate)
-    result2 = await run(base_envelope)
-    assert result2["inserted"] is False
+    message2, context2, config2 = make_test_call(
+        base_envelope, priority="NORMAL", model_id="embed-mini-001"
+    )
+    result2 = await run(message2, context2, **config2)
+    assert result2["embedding_queue_write"]["inserted"] is False
 
 
 @pytest.mark.asyncio
@@ -430,11 +466,13 @@ async def test_error_missing_ca1_output(base_envelope):
     reset_metrics()
     base_envelope["outputs"] = {}  # No M02 output
 
-    result = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    result = await run(message, context, **config)
+    queue_result = result["embedding_queue_write"]
 
-    assert result["inserted"] is False
-    assert result["status"] == "SKIPPED"
-    assert "missing_embedding_id" in result["reason"]
+    assert queue_result["inserted"] is False
+    assert queue_result["status"] == "SKIPPED"
+    assert "missing_embedding_id" in queue_result["reason"]
 
     metrics = get_metrics()
     assert metrics["missing_embedding_id"] == 1
@@ -449,10 +487,12 @@ async def test_error_missing_embedding_id_in_output(base_envelope):
         "kg_triples": [],
     }  # No embedding_id
 
-    result = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    result = await run(message, context, **config)
+    queue_result = result["embedding_queue_write"]
 
-    assert result["inserted"] is False
-    assert result["status"] == "SKIPPED"
+    assert queue_result["inserted"] is False
+    assert queue_result["status"] == "SKIPPED"
 
 
 @pytest.mark.asyncio
@@ -476,8 +516,10 @@ async def test_full_pipeline_p02_to_p08(base_envelope, ca1_output):
     base_envelope["outputs"]["semantic_project"] = ca1_output
 
     # P02: Enqueue job
-    result = await run(base_envelope)
-    assert result["inserted"] is True
+    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    result = await run(message, context, **config)
+    queue_result = result["embedding_queue_write"]
+    assert queue_result["inserted"] is True
 
     # P08: Claim job
     job = await claim_embedding_job()
@@ -501,7 +543,8 @@ async def test_multiple_jobs_fifo_order(base_envelope, ca1_output):
     for i in range(3):
         ca1_output["embedding_id"] = f"emb_job_{i}"
         base_envelope["outputs"]["semantic_project"] = ca1_output
-        await run(base_envelope)
+        message, context, config = make_test_call(base_envelope, priority="NORMAL")
+        await run(message, context, **config)
         time.sleep(0.01)  # Ensure different created_at
 
     # P08 claims in FIFO order
@@ -521,7 +564,8 @@ async def test_retry_after_failure(base_envelope, ca1_output):
     base_envelope["outputs"]["semantic_project"] = ca1_output
 
     # P02: Enqueue
-    await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    await run(message, context, **config)
 
     # P08: Claim and fail
     job1 = await claim_embedding_job()
@@ -554,8 +598,9 @@ async def test_performance_under_5ms(base_envelope, ca1_output):
     latencies = []
     for i in range(100):
         ca1_output["embedding_id"] = f"emb_perf_{i}"
+        message, context, config = make_test_call(base_envelope, priority="NORMAL")
         start = time.perf_counter()
-        await run(base_envelope)
+        await run(message, context, **config)
         elapsed_ms = (time.perf_counter() - start) * 1000
         latencies.append(elapsed_ms)
 
@@ -589,7 +634,8 @@ async def test_performance_batch_enqueue():
     # Enqueue all jobs
     start = time.perf_counter()
     for envelope in jobs:
-        await run(envelope)
+        message, context, config = make_test_call(envelope, priority="NORMAL")
+        await run(message, context, **config)
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     avg_ms = elapsed_ms / 100
@@ -614,11 +660,13 @@ async def test_metrics_tracking(base_envelope, ca1_output):
     for i in range(3):
         ca1_output["embedding_id"] = f"emb_metric_{i}"
         base_envelope["outputs"]["semantic_project"] = ca1_output
-        await run(base_envelope)
+        message, context, config = make_test_call(base_envelope, priority="NORMAL")
+        await run(message, context, **config)
 
     # Try duplicate (should skip)
     ca1_output["embedding_id"] = "emb_metric_0"
-    await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    await run(message, context, **config)
 
     # Claim 2 jobs
     await claim_embedding_job()

@@ -31,7 +31,6 @@ Checks st_pipeline_processed before writing (skip if already processed).
 **Last Updated**: 2025-11-17
 """
 
-import hashlib
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -64,64 +63,41 @@ _metrics = HippEventsMetrics()
 
 def assemble_hipp_events_record(envelope: dict[str, Any]) -> dict[str, Any]:
     """
-    Assemble st_hipp_events record from enriched envelope.
+    Extract complete st_hipp_events row from M13 enrichment.
+
+    M13 (builders.hipp_events_row) assembles ALL 70+ columns from pipeline enrichments
+    and returns {**envelope, "hipp_events_row": row}. This function extracts that pre-built row.
 
     Args:
-        envelope: Envelope with header, body, and enrichment outputs
+        envelope: Envelope with hipp_events_row key from M13
 
     Returns:
-        Dictionary with st_hipp_events fields
+        Complete dictionary with 70+ st_hipp_events columns
 
     Raises:
-        ValueError: If required fields missing (event_id, embedding_id, wal_pos)
+        ValueError: If hipp_events_row missing or required fields invalid
     """
-    header = envelope.get("header", {})
-    body = envelope.get("body", {})
-    outputs = envelope.get("outputs", {})
-
-    # Extract required fields with validation
-    event_id = header.get("event_id")
-    if not event_id:
+    # Extract complete row assembled by M13
+    row = envelope.get("hipp_events_row")
+    if not row:
         _metrics.missing_event_id += 1
-        raise ValueError("Missing event_id from envelope header")
+        raise ValueError("Missing hipp_events_row from M13 enrichment")
 
-    wal_pos = header.get("wal_pos")
-    if wal_pos is None:
+    # Validate required fields exist in row
+    if not row.get("event_id"):
+        _metrics.missing_event_id += 1
+        raise ValueError("Missing event_id in hipp_events_row")
+
+    if row.get("wal_pos") is None:
         _metrics.missing_wal_pos += 1
-        raise ValueError("Missing wal_pos from envelope header")
+        raise ValueError("Missing wal_pos in hipp_events_row")
 
-    # Extract enrichment outputs
-    semantic_output = outputs.get("semantic_project", {})
-    embedding_id = semantic_output.get("embedding_id")
-    if not embedding_id:
+    if not row.get("embedding_id"):
         _metrics.missing_embedding_id += 1
-        raise ValueError("Missing embedding_id from M02 semantic_project output")
+        raise ValueError("Missing embedding_id in hipp_events_row")
 
-    affect_output = outputs.get("affect_analyze", {})
-    hipp_row_output = outputs.get("hipp_events_row", {})
-
-    # Extract text and compute hash if not provided
-    text = body.get("text", "")
-    text_hash = hipp_row_output.get("text_hash")
-    if not text_hash and text:
-        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-    now = int(time.time())
-
-    return {
-        "event_id": event_id,
-        "wal_pos": wal_pos,
-        "tenant_id": header.get("tenant_id", "default"),
-        "space_id": header.get("space_id", "unknown"),
-        "embedding_id": embedding_id,
-        "text": text,
-        "text_hash": text_hash,
-        "valence": affect_output.get("valence"),
-        "arousal": affect_output.get("arousal"),
-        "privacy_band": header.get("privacy_band", "GREEN"),
-        "cognitive_trace_id": header.get("cognitive_trace_id", "unknown"),
-        "created_at": header.get("timestamp", now),
-    }
+    # Return complete row (70+ columns) for syscall
+    return row
 
 
 def assemble_pipeline_processed_record(
@@ -141,20 +117,19 @@ def assemble_pipeline_processed_record(
     Raises:
         ValueError: If wal_pos missing from header
     """
-    header = envelope.get("header", {})
-
-    wal_pos = header.get("wal_pos")
+    # Phase 2: Envelope is flat structure
+    wal_pos = envelope.get("wal_pos")
     if wal_pos is None:
         _metrics.missing_wal_pos += 1
-        raise ValueError("Missing wal_pos from envelope header")
+        raise ValueError("Missing wal_pos from envelope")
 
     now = int(time.time())
 
     return {
         "pipeline_id": pipeline_id,
         "wal_pos": wal_pos,
-        "tenant_id": header.get("tenant_id", "default"),
-        "space_id": header.get("space_id", "unknown"),
+        "tenant_id": envelope.get("tenant_id", "default"),
+        "space_id": envelope.get("space_id", "unknown"),
         "status": status,
         "processed_at": now,
     }
@@ -165,9 +140,16 @@ def assemble_pipeline_processed_record(
 # =============================================================================
 
 
-async def run(envelope: dict[str, Any], context: Any = None, **config: Any) -> dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     """
     Write enriched event to st_hipp_events and track in st_pipeline_processed.
+
+    **Phase 2 Signature**:
+        message: BusMessage with .payload (envelope JSON) and .trace_id
+        context: PipelineContext with .logger and .syscalls
+        **config: Stage configuration
+            - pipeline_id (str): Pipeline identifier (default: 'P02_WRITE')
+            - status (str): Processing status (default: 'OK')
 
     This is a Phase 2 declarative module that uses syscalls for storage operations.
     Performs 2-table transaction via separate syscall invocations (each creates
@@ -183,13 +165,8 @@ async def run(envelope: dict[str, Any], context: Any = None, **config: Any) -> d
     - context.syscalls: Must have st_hipp_events.write capability
     - context.syscalls: Must have st_pipeline_processed.write capability
 
-    Args:
-        envelope: Enriched envelope with header, body, and module outputs
-        context: PipelineContext with syscalls (capability-gated storage)
-        **config: Module configuration (pipeline_id override, status override)
-
     Returns:
-        Dictionary with:
+        Enriched envelope with "hipp_events_write" containing:
         - hipp_events_inserted: bool
         - hipp_events_status: str
         - pipeline_tracked: bool
@@ -202,18 +179,24 @@ async def run(envelope: dict[str, Any], context: Any = None, **config: Any) -> d
         RuntimeError: If storage operations fail
 
     Example:
-        >>> result = await run(envelope, context)
-        >>> result["hipp_events_inserted"]
-        True
-        >>> result["pipeline_tracked"]
+        >>> result = await run(message, context)
+        >>> result["hipp_events_write"]["hipp_events_inserted"]
         True
     """
-    if context is None:
-        raise ValueError("PipelineContext required (must provide context with syscalls)")
+    import json
+
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
 
     # Extract configuration
     pipeline_id = config.get("pipeline_id", "P02_WRITE")
     status = config.get("status", "OK")
+
+    # Skip debug logging on hot path for performance
 
     try:
         # Assemble records from envelope
@@ -223,20 +206,8 @@ async def run(envelope: dict[str, Any], context: Any = None, **config: Any) -> d
         )
 
         # Write to st_hipp_events via syscalls (creates UnitOfWork transaction)
-        hipp_result = await context.syscalls.hipp_events_upsert(
-            event_id=hipp_events_record["event_id"],
-            wal_pos=hipp_events_record["wal_pos"],
-            tenant_id=hipp_events_record["tenant_id"],
-            space_id=hipp_events_record["space_id"],
-            embedding_id=hipp_events_record["embedding_id"],
-            text=hipp_events_record["text"],
-            text_hash=hipp_events_record["text_hash"],
-            valence=hipp_events_record["valence"],
-            arousal=hipp_events_record["arousal"],
-            privacy_band=hipp_events_record["privacy_band"],
-            cognitive_trace_id=hipp_events_record["cognitive_trace_id"],
-            created_at=hipp_events_record["created_at"],
-        )
+        # Pass complete row with all 70+ columns from M13 to syscall
+        hipp_result = await context.syscalls.hipp_events_upsert(**hipp_events_record)
 
         # Track in st_pipeline_processed via syscalls (separate UnitOfWork)
         pipeline_result = await context.syscalls.pipeline_processed_upsert(
@@ -257,13 +228,17 @@ async def run(envelope: dict[str, Any], context: Any = None, **config: Any) -> d
         if pipeline_result["inserted"]:
             _metrics.pipeline_tracked += 1
 
+        # Return enriched envelope with write results
         return {
-            "hipp_events_inserted": hipp_result["inserted"],
-            "hipp_events_status": hipp_result["status"],
-            "pipeline_tracked": pipeline_result["inserted"],
-            "pipeline_status": pipeline_result["status"],
-            "event_id": hipp_events_record["event_id"],
-            "wal_pos": hipp_events_record["wal_pos"],
+            **envelope,
+            "hipp_events_write": {
+                "hipp_events_inserted": hipp_result["inserted"],
+                "hipp_events_status": hipp_result["status"],
+                "pipeline_tracked": pipeline_result["inserted"],
+                "pipeline_status": pipeline_result["status"],
+                "event_id": hipp_events_record["event_id"],
+                "wal_pos": hipp_events_record["wal_pos"],
+            },
         }
 
     except ValueError:

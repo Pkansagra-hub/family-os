@@ -231,7 +231,116 @@ else:
 }
 ```
 
-### 6. `main.py` - Server Entry Point
+### 6. `syscalls.py` - Capability-Gated Storage Access
+
+Provides least-privilege storage adapter for pipelines with capability enforcement.
+
+**Class: `Syscalls`**
+
+Enforces `required_caps` before allowing storage operations. Each pipeline receives a `Syscalls` instance with only declared capabilities. All storage access is audited.
+
+**Architecture Pattern:**
+
+
+- Object-capability model (no ambient authority)
+- Fail-closed (deny by default)
+- Audit-all (log every storage operation)
+- Revocable (capabilities can be changed at runtime)
+
+**Capability Format:** `<table>.<operation>` (e.g., `st_hipp_events.write`, `embeddings.read`)
+
+**Example:**
+
+```python
+# In loader (during pipeline boot)
+granted_caps = set(pipeline_class.required_caps)
+syscalls = Syscalls("P02_WRITE", granted_caps, uow_factory)
+ctx = PipelineContext(syscalls=syscalls, config={}, logger=logger)
+await pipeline.on_startup(ctx)
+
+# In pipeline module
+await context.syscalls.hipp_events_upsert(
+    event_id="evt-123",
+    wal_pos=42,
+    text="Meeting with doctor",
+    **row  # 70+ columns dynamically inserted
+)
+```
+
+**Core Methods:**
+
+- **`hipp_events_upsert(**row)`** - Insert/replace episodic memory event (70+ columns)
+  - Capability: `st_hipp_events.write`
+  - Dynamic INSERT with all non-NULL columns
+  - Used by M16 (core.hipp_events_writer)
+
+- **`pipeline_processed_upsert(pipeline_id, wal_pos, space_id)`** - Track pipeline completion
+  - Capability: `st_pipeline_processed.write`
+  - Idempotency check before stage execution
+
+- **`embedding_queue_upsert(embedding_id, event_id, text, priority)`** - Queue vector job
+  - Capability: `st_embedding_queue.write`
+  - Used by M14 (builders.embedding_queue_write)
+
+- **`outbox_emit(topic, payload, trace_id)`** - Emit event to outbox
+  - Capability: `st_outbox.write`
+  - Used by M17 (core.event_emitter)
+
+**Security Properties:**
+
+1. **Least Privilege** - Pipelines only get declared capabilities
+2. **Fail-Closed** - Missing capability raises `PermissionError`
+3. **Audit Trail** - All operations logged with `trace_id`, `pipeline_id`, `duration_ms`
+4. **No Ambient Authority** - Can't access storage without `Syscalls` instance
+5. **Immutable Capabilities** - `granted_caps` stored as `frozenset`
+
+**Error Handling:**
+
+```python
+try:
+    await syscalls.hipp_events_upsert(**row)
+except PermissionError:
+    # Capability violation - log and move to DLQ
+    logger.error("Unauthorized storage access attempt")
+except sqlite3.IntegrityError as e:
+    # Constraint violation (UNIQUE, NOT NULL, FOREIGN KEY)
+    logger.error(f"Database constraint failed: {e}")
+```
+
+**Capability Enforcement Example:**
+
+```python
+# Pipeline declares required capabilities
+class P02EpisodicWrite:
+    required_caps = ["st_hipp_events.write", "st_pipeline_processed.write"]
+
+# Loader grants only declared capabilities
+syscalls = Syscalls("P02_WRITE", {"st_hipp_events.write", "st_pipeline_processed.write"}, uow_factory)
+
+# Pipeline can write to st_hipp_events (granted)
+await syscalls.hipp_events_upsert(**row)  # ✅ Allowed
+
+# Pipeline CANNOT write to st_embeddings (not granted)
+await syscalls.embeddings_upsert(...)  # ❌ Raises PermissionError
+```
+
+**Current Implementation (P02_WRITE):**
+
+- Dynamic INSERT with 70+ columns via `**row` unpacking
+- Uses `INSERT OR REPLACE` (see `docs/implement_before_production/CRITICAL_SECURITY_FIXES.md` Issue #2)
+- Validates required fields: `event_id`, `wal_pos`, `policy_band`
+- Filters NULL values before INSERT
+- Returns `{"inserted": bool, "event_id": str, "duration_ms": float}`
+
+
+**Related:**
+
+- `k0/modules/README.md` - Modules use `context.syscalls` for storage
+- `k0/pipelines/protocol.py` - `PipelineContext` contains syscalls
+- `k0/runtime/pipeline_runner.py` - Passes syscalls to modules
+- `docs/implement_before_production/CRITICAL_SECURITY_FIXES.md` - Security issues
+
+### 7. `main.py` - Server Entry Point
 
 Uvicorn server launcher with graceful shutdown handling.
 

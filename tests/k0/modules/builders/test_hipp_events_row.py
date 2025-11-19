@@ -19,6 +19,7 @@ Total: ~50 tests
 import json
 import time
 from typing import Any, Dict
+from unittest.mock import Mock
 
 import pytest
 
@@ -42,6 +43,34 @@ from k0.modules.builders.hipp_events_row import (
     validate_required_fields,
     validate_value_ranges,
 )
+
+# =============================================================================
+# Test Helpers
+# =============================================================================
+
+
+class MockMessage:
+    """Mock BusMessage for testing"""
+
+    def __init__(self, payload: Any, trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload) if isinstance(payload, dict) else payload
+        self.trace_id = trace_id
+        self.offset = 0
+
+
+class MockContext:
+    """Mock PipelineContext for testing"""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: Dict[str, Any], **config: Any):
+    """Create test call with Phase 2 signature"""
+    return MockMessage(envelope), MockContext(), config
+
 
 # =============================================================================
 # Fixtures
@@ -414,7 +443,9 @@ async def test_json_serialization_none():
 async def test_validation_required_fields_success(base_envelope, complete_module_outputs):
     """Test validation passes with all required fields"""
     base_envelope["outputs"] = complete_module_outputs
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     # Should not raise
     validate_required_fields(row)
@@ -481,7 +512,9 @@ async def test_full_row_assembly(base_envelope, complete_module_outputs):
     reset_metrics()
     base_envelope["outputs"] = complete_module_outputs
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     # Verify all major column groups present
     assert "event_id" in row
@@ -532,7 +565,9 @@ async def test_row_assembly_with_missing_optional_outputs(base_envelope):
         "spatial_minimal": {},
     }
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     # Should succeed with defaults
     assert row["event_id"] == "evt_123456"
@@ -545,8 +580,13 @@ async def test_row_assembly_idempotency(base_envelope, complete_module_outputs):
     reset_metrics()
     base_envelope["outputs"] = complete_module_outputs
 
-    row1 = await run(base_envelope)
-    row2 = await run(base_envelope)
+    message1, context1, config1 = make_test_call(base_envelope, validate_required_fields=True)
+    result1 = await run(message1, context1, **config1)
+    row1 = result1["hipp_events_row"]
+
+    message2, context2, config2 = make_test_call(base_envelope, validate_required_fields=True)
+    result2 = await run(message2, context2, **config2)
+    row2 = result2["hipp_events_row"]
 
     # Ignore created_at (timestamp varies)
     row1_copy = {k: v for k, v in row1.items() if k != "created_at"}
@@ -566,8 +606,9 @@ async def test_error_missing_module_output(base_envelope):
     reset_metrics()
     base_envelope["outputs"] = {}  # No module outputs
 
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
-        await run(base_envelope)
+        await run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -588,8 +629,9 @@ async def test_error_missing_envelope_header(complete_module_outputs):
     reset_metrics()
     bad_envelope = {"body": {}, "outputs": complete_module_outputs}
 
+    message, context, config = make_test_call(bad_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
-        await run(bad_envelope)
+        await run(message, context, **config)
 
 
 @pytest.mark.asyncio
@@ -600,8 +642,9 @@ async def test_error_malformed_module_output(base_envelope, complete_module_outp
     # Break temporal output
     base_envelope["outputs"]["temporal_profile"] = {}
 
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
-        await run(base_envelope)
+        await run(message, context, **config)
 
 
 # =============================================================================
@@ -617,8 +660,9 @@ async def test_performance_under_10ms(base_envelope, complete_module_outputs):
 
     latencies = []
     for _ in range(100):
+        message, context, config = make_test_call(base_envelope, validate_required_fields=True)
         start = time.perf_counter()
-        await run(base_envelope)
+        await run(message, context, **config)
         elapsed_ms = (time.perf_counter() - start) * 1000
         latencies.append(elapsed_ms)
 
@@ -666,8 +710,11 @@ async def test_metrics_tracking(base_envelope, complete_module_outputs):
     reset_metrics()
     base_envelope["outputs"] = complete_module_outputs
 
-    await run(base_envelope)
-    await run(base_envelope)
+    message1, context1, config1 = make_test_call(base_envelope, validate_required_fields=True)
+    await run(message1, context1, **config1)
+
+    message2, context2, config2 = make_test_call(base_envelope, validate_required_fields=True)
+    await run(message2, context2, **config2)
 
     metrics = get_metrics()
     assert metrics["rows_built"] == 2
@@ -707,7 +754,9 @@ async def test_edge_case_solo_event(base_envelope, complete_module_outputs):
         "has_parent_present": False,
     }
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     assert row["num_participants"] == 0
     assert row["is_solo_event"] is True
@@ -722,7 +771,9 @@ async def test_edge_case_red_band_event(base_envelope, complete_module_outputs):
     base_envelope["outputs"] = complete_module_outputs
     base_envelope["outputs"]["policy_stamp"]["effective_band"] = "RED"
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     assert row["policy_band"] == "RED"
 
@@ -734,7 +785,9 @@ async def test_edge_case_empty_text(base_envelope, complete_module_outputs):
     base_envelope["body"]["text"] = ""
     base_envelope["outputs"] = complete_module_outputs
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     assert row["text"] == ""
     assert row["char_count"] == 0
@@ -749,7 +802,9 @@ async def test_edge_case_missing_geohash(base_envelope, complete_module_outputs)
     base_envelope["outputs"]["geo_metadata"] = {"geo_masking_reason": "band_policy"}
     base_envelope["outputs"]["spatial_minimal"] = {}
 
-    row = await run(base_envelope)
+    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    result = await run(message, context, **config)
+    row = result["hipp_events_row"]
 
     assert row["geohash_6"] is None
     assert row["geo_masking_reason"] == "band_policy"

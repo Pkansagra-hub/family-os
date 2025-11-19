@@ -14,6 +14,10 @@ starlette>=0.32.0
 neo4j>=5.20.0                      # Knowledge graph driver (Bolt protocol)
 numpy>=1.26.0                      # Basic array operations (minimal)
 
+# NLP Dependencies
+spacy>=3.7.0                       # Entity extraction and NLP
+vaderSentiment>=3.3.2              # Sentiment analysis
+
 # JWT and Authentication
 PyJWT>=2.8.0
 cryptography>=41.0.0

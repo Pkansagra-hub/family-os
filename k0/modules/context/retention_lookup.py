@@ -40,6 +40,7 @@ ADR: docs/architecture/decisions-K0/modules/k007.4-retention-lookup.md
 Migration: k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql
 """
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -232,20 +233,49 @@ def lookup_retention_policy(band: str, topic: str, device_kind: str) -> Retentio
     return policy
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
-    Module entry point: Resolve retention policy from envelope.
+    Module entry point (Phase 2 signature): Resolve retention policy from envelope.
 
     Extracts (band, topic, device_kind) from envelope and performs lookup.
 
     Args:
-        envelope: Event envelope with policy_stamp, topic, and device_kind
+        message: BusMessage with .payload, .trace_id, .offset
+        context: PipelineContext with .syscalls, .logger, .config
+        **config: Stage-specific configuration
+            - default_retention_bucket (str): Fallback bucket (default: "STANDARD")
+            - default_retention_days (int): Fallback days (default: 365)
+            - cache_ttl_seconds (int): Cache TTL (default: 600)
+            - fallback_policy_chain (list): Policy chain order
 
     Returns:
-        Dict with retention_policy_id, retention_bucket, retention_resolved_at_utc
+        Enriched envelope with retention_policy_id, retention_bucket, retention_resolved_at_utc
 
     Performance: <3ms P95 (cache-optimized)
+    Contract: k0/contracts/modules/context.retention_lookup.v1.yaml
     """
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters (with defaults)
+    default_retention_bucket = config.get("default_retention_bucket", DEFAULT_RETENTION_BUCKET)
+    default_retention_days = config.get("default_retention_days", DEFAULT_RETENTION_DAYS)
+    cache_ttl_seconds = config.get("cache_ttl_seconds", CACHE_TTL_SECONDS)
+
+    # Log module start
+    context.logger.debug(
+        "M11 retention_lookup starting",
+        extra={
+            "module": "context.retention_lookup",
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+        },
+    )
+
     # Extract band from policy_stamp
     policy_stamp = envelope.get("policy_stamp", {})
     band = policy_stamp.get("band", "GREEN")  # Default to GREEN if missing
@@ -261,13 +291,27 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
     # Perform policy lookup
     policy = lookup_retention_policy(band, topic, device_kind)
 
-    # Return contract-compliant output
-    return {
+    # Convert to dict for enriched envelope
+    retention_fields = {
         "retention_policy_id": policy.retention_policy_id,
         "retention_bucket": policy.retention_bucket,
         "retention_resolved_at_utc": policy.resolved_at_utc,
         # Note: retention_days not included in output (internal field for deletion workers)
     }
+
+    # Log module completion
+    context.logger.debug(
+        "M11 retention_lookup completed",
+        extra={
+            "module": "context.retention_lookup",
+            "trace_id": message.trace_id,
+            "retention_policy_id": policy.retention_policy_id,
+            "retention_bucket": policy.retention_bucket,
+        },
+    )
+
+    # Return enriched envelope
+    return {**envelope, **retention_fields}
 
 
 def get_metrics() -> Dict[str, int]:

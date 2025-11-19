@@ -32,6 +32,43 @@ class FailurePolicy(str, Enum):
     DLQ = "dlq"  # Send to dead letter queue
 
 
+class FailureMode(BaseModel):
+    """
+    Specification for a known failure mode and its handling policy.
+
+    Example:
+        code: GEO_LOOKUP_FAILED
+        policy: retry
+        max_retries: 3
+    """
+
+    code: str = Field(
+        ...,
+        description="Unique failure code identifier",
+    )
+
+    policy: str = Field(
+        ...,
+        description="Handling policy (retry, drop, dead_letter, alert)",
+    )
+
+    max_retries: int | None = Field(
+        default=None,
+        description="Maximum number of retry attempts (for retry policy)",
+    )
+
+    @field_validator("max_retries", mode="before")
+    @classmethod
+    def parse_max_retries(cls, v):
+        """Parse max_retries from int or string for backward compatibility."""
+        if v is None:
+            return None
+        if isinstance(v, int):
+            return v
+        # Allow "3" → 3 for backward compatibility
+        return int(v)
+
+
 class ModuleContract(BaseModel):
     """
     Contract specification for a reusable module.
@@ -95,7 +132,7 @@ class ModuleContract(BaseModel):
         description="Whether module can be safely retried",
     )
 
-    failure_modes: list[dict[str, str]] = Field(
+    failure_modes: list[FailureMode] = Field(
         default_factory=list,
         description="Known failure codes and handling policies",
     )

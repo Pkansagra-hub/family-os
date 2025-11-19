@@ -715,6 +715,19 @@ async def submit_command(
                 "payload_bytes": body_bytes_length,
                 "payload_inline_mode": ("embedded" if inline_body_allowed else "omitted"),
                 "policy_stamp": envelope_dict.get("policy_stamp"),  # V1.3: Include policy context
+                # Include ALL envelope fields for pipeline consumption
+                "cognitive_trace_id": envelope_dict["cognitive_trace_id"],
+                "actor": envelope_dict["actor"],
+                "device_id": envelope_dict["device_id"],
+                "band": envelope_dict["band"],
+                "policy_version": envelope_dict["policy_version"],
+                "ts": envelope_dict["ts"],
+                "sig_alg": envelope_dict["sig_alg"],
+                "sig_kid": envelope_dict["sig_kid"],
+                "envelope_sha256": envelope_dict["envelope_sha256"],
+                "sig": envelope_dict["sig"],
+                "ingested_at": envelope_dict.get("ingested_at"),
+                "clock_skew_ms": envelope_dict.get("clock_skew_ms"),
             }
             if inline_body_allowed:
                 body_for_outbox = sanitized_body if sanitized_body is not None else body_snapshot

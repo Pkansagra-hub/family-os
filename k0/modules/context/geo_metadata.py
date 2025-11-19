@@ -13,6 +13,7 @@ Contract: k0/contracts/modules/context.geo_metadata.v1.yaml
 ADR: k007.5 (Geo Metadata Lookup - Privacy-Preserving Location)
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -242,19 +243,51 @@ def extract_geo_metadata(envelope: Dict[str, Any]) -> GeoMetadata:
 # ===========================
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
-    M12 entry point: Extract geo metadata from envelope.
+    M12 entry point (Phase 2 signature): Extract geo metadata from envelope.
 
     Args:
-        envelope: WAL envelope with location data
+        message: BusMessage with .payload, .trace_id, .offset
+        context: PipelineContext with .syscalls, .logger, .config
+        **config: Stage-specific configuration
+            - default_location_type (str): Fallback location type (default: "unknown")
+            - default_geo_precision (str): Fallback precision (default: "full")
+            - validate_geohash_format (bool): Enable validation (default: True)
 
     Returns:
-        Dict with geo metadata fields
+        Enriched envelope with geo metadata fields
+
+    Performance: <2ms P95
+    Contract: k0/contracts/modules/context.geo_metadata.v1.yaml
     """
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters (with defaults)
+    default_location_type = config.get("default_location_type", "unknown")
+    default_geo_precision = config.get("default_geo_precision", "full")
+    validate_geohash_format = config.get("validate_geohash_format", True)
+
+    # Log module start
+    context.logger.debug(
+        "M12 geo_metadata starting",
+        extra={
+            "module": "context.geo_metadata",
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+        },
+    )
+
+    # Extract geo metadata
     geo_metadata = extract_geo_metadata(envelope)
 
-    return {
+    # Convert to dict for enriched envelope
+    geo_fields = {
         "geohash_6": geo_metadata.geohash_6,
         "location_name": geo_metadata.location_name,
         "location_type": geo_metadata.location_type,
@@ -262,6 +295,20 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "geo_masking_reason": geo_metadata.geo_masking_reason,
         "geo_metadata_extracted_at_utc": geo_metadata.geo_metadata_extracted_at_utc,
     }
+
+    # Log module completion
+    context.logger.debug(
+        "M12 geo_metadata completed",
+        extra={
+            "module": "context.geo_metadata",
+            "trace_id": message.trace_id,
+            "geohash_present": geo_metadata.geohash_6 is not None,
+            "geo_precision": geo_metadata.geo_precision_external,
+        },
+    )
+
+    # Return enriched envelope
+    return {**envelope, **geo_fields}
 
 
 # ===========================

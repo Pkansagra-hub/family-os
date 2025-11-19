@@ -14,12 +14,49 @@ Coverage:
 - Contract compliance (schema 1:1 mapping)
 """
 
+import json
 import time
 from datetime import datetime, timezone
+from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 import k0.modules.context.temporal_profile as tp
+
+# ==================== Mock Classes for Phase 2 ====================
+
+
+class MockMessage:
+    """Mock BusMessage for testing Phase 2 signature."""
+
+    def __init__(self, payload: dict[str, Any], trace_id: str = "test_trace"):
+        self.payload = json.dumps(payload)
+        self.trace_id = trace_id
+        self.offset = 0
+        self.topic = "cognitive.memory.write.committed.v1"
+        self.space_id = "test_space"
+
+
+class MockContext:
+    """Mock PipelineContext for testing Phase 2 signature."""
+
+    def __init__(self):
+        self.logger = Mock()
+        self.logger.debug = Mock()
+        self.logger.info = Mock()
+        self.logger.warning = Mock()
+        self.logger.error = Mock()
+        self.syscalls = Mock()
+        self.config = {}
+
+
+def make_test_call(envelope: dict[str, Any], **config) -> tuple[MockMessage, MockContext, dict]:
+    """Helper to create message, context, and config for test calls."""
+    message = MockMessage(payload=envelope, trace_id="test_trace")
+    context = MockContext()
+    return message, context, config
+
 
 # ==================== Fixtures ====================
 
@@ -56,7 +93,8 @@ class TestEndToEnd:
     @pytest.mark.asyncio
     async def test_complete_temporal_profile(self, sample_envelope):
         """Generate complete 11-dimensional temporal profile."""
-        result = await tp.run(sample_envelope)
+        message, context, config = make_test_call(sample_envelope)
+        result = await tp.run(message, context, **config)
 
         # Validate all 11 dimensions present
         assert "event_time_utc" in result
@@ -101,7 +139,8 @@ class TestEndToEnd:
             "tenant_id": "test",
         }
 
-        result = await tp.run(envelope, write_time_utc=now_timestamp)
+        message, context, config = make_test_call(envelope, write_time_utc=now_timestamp)
+        result = await tp.run(message, context, **config)
 
         assert result["write_lag_ms"] < 5000  # <5 seconds
         assert result["is_backdated"] is False
@@ -119,7 +158,8 @@ class TestEndToEnd:
             "tenant_id": "test",
         }
 
-        result = await tp.run(envelope, write_time_utc=now_timestamp)
+        message, context, config = make_test_call(envelope, write_time_utc=now_timestamp)
+        result = await tp.run(message, context, **config)
 
         assert 5000 <= result["write_lag_ms"] < 86_400_000  # 5s to 24h
         assert result["is_backdated"] is False
@@ -139,7 +179,8 @@ class TestEndToEnd:
             "tenant_id": "test",
         }
 
-        result = await tp.run(envelope, write_time_utc=now_timestamp)
+        message, context, config = make_test_call(envelope, write_time_utc=now_timestamp)
+        result = await tp.run(message, context, **config)
 
         assert result["write_lag_ms"] > 86_400_000  # >24 hours
         assert result["is_backdated"] is True
@@ -159,21 +200,23 @@ class TestEndToEnd:
         }
 
         # Valid: ingested_at < write_time_utc
-        result = await tp.run(
+        message, context, config = make_test_call(
             envelope,
             write_time_utc=now_timestamp,
             ingested_at=now_timestamp - 5,
         )
+        result = await tp.run(message, context, **config)
         metrics = tp.get_metrics()
         assert metrics["invariant_violations"] == 0
 
         # Invalid: ingested_at > write_time_utc (should log warning)
         tp.reset_metrics()
-        result = await tp.run(
+        message, context, config = make_test_call(
             envelope,
             write_time_utc=now_timestamp,
             ingested_at=now_timestamp + 10,  # Future ingested_at (invalid)
         )
+        result = await tp.run(message, context, **config)
         metrics = tp.get_metrics()
         assert metrics["invariant_violations"] == 1
 
@@ -183,8 +226,10 @@ class TestEndToEnd:
         # Use fixed write_time_utc for determinism
         write_time = int(datetime.now(timezone.utc).timestamp())
 
-        result1 = await tp.run(sample_envelope, write_time_utc=write_time)
-        result2 = await tp.run(sample_envelope, write_time_utc=write_time)
+        message, context, config = make_test_call(sample_envelope, write_time_utc=write_time)
+        result1 = await tp.run(message, context, **config)
+        message, context, config = make_test_call(sample_envelope, write_time_utc=write_time)
+        result2 = await tp.run(message, context, **config)
 
         # Core temporal fields should match
         assert result1["event_time_utc"] == result2["event_time_utc"]
@@ -497,14 +542,16 @@ class TestPerformance:
         }
 
         # Warm up (prime cache)
+        message, context, config = make_test_call(envelope)
         for _ in range(10):
-            await tp.run(envelope)
+            await tp.run(message, context, **config)
 
         # Measure 100 iterations
         latencies = []
         for _ in range(100):
+            message, context, config = make_test_call(envelope)
             start = time.perf_counter()
-            await tp.run(envelope)
+            await tp.run(message, context, **config)
             end = time.perf_counter()
             latencies.append((end - start) * 1000)  # Convert to ms
 
@@ -532,15 +579,17 @@ class TestPerformance:
         }
 
         # Warm up
+        message, context, config = make_test_call(envelope)
         for _ in range(10):
-            await tp.run(envelope)
+            await tp.run(message, context, **config)
 
         # Measure throughput over 1 second
         iterations = 0
         start = time.perf_counter()
 
         while time.perf_counter() - start < 1.0:
-            await tp.run(envelope)
+            message, context, config = make_test_call(envelope)
+            await tp.run(message, context, **config)
             iterations += 1
 
         elapsed = time.perf_counter() - start
@@ -563,7 +612,8 @@ class TestPerformance:
 
         start = time.perf_counter()
         for envelope in envelopes:
-            await tp.run(envelope)
+            message, context, config = make_test_call(envelope)
+            await tp.run(message, context, **config)
         elapsed = time.perf_counter() - start
 
         throughput = len(envelopes) / elapsed
@@ -597,7 +647,8 @@ class TestMetrics:
                 "body": {"event_time": "2025-11-10T18:00:00Z"},
                 "tenant_id": f"tenant-metrics-{i}",
             }
-            await tp.run(envelope)
+            message, context, config = make_test_call(envelope)
+            await tp.run(message, context, **config)
 
         metrics = tp.get_metrics()
 
@@ -640,7 +691,8 @@ class TestEdgeCases:
             "tenant_id": "test",
         }
 
-        result = await tp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await tp.run(message, context, **config)
 
         # Should fall back to current time
         assert abs(result["event_time_utc"] - now_timestamp) < 10  # Within 10 seconds
@@ -650,7 +702,8 @@ class TestEdgeCases:
         """Empty envelope → Use current time."""
         envelope = {}
 
-        result = await tp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await tp.run(message, context, **config)
 
         # Should use current time
         assert abs(result["event_time_utc"] - now_timestamp) < 10
@@ -664,7 +717,8 @@ class TestEdgeCases:
             "tenant_id": "test",
         }
 
-        result = await tp.run(envelope)
+        message, context, config = make_test_call(envelope)
+        result = await tp.run(message, context, **config)
 
         # Should handle DST correctly (no crashes)
         assert result["local_date"] == "2025-03-09"
@@ -684,7 +738,11 @@ class TestEdgeCases:
         # Process concurrently
         import asyncio
 
-        results = await asyncio.gather(*[tp.run(env) for env in envelopes])
+        async def run_test(env):
+            message, context, config = make_test_call(env)
+            return await tp.run(message, context, **config)
+
+        results = await asyncio.gather(*[run_test(env) for env in envelopes])
 
         # All should succeed
         assert len(results) == 10
@@ -702,7 +760,8 @@ class TestContractCompliance:
     @pytest.mark.asyncio
     async def test_schema_alignment_with_st_hipp_events(self, sample_envelope):
         """Output fields match st_hipp_events temporal columns exactly."""
-        result = await tp.run(sample_envelope)
+        message, context, config = make_test_call(sample_envelope)
+        result = await tp.run(message, context, **config)
 
         # Expected 11 temporal columns from migration 0024
         expected_columns = {
@@ -735,14 +794,16 @@ class TestContractCompliance:
         }
 
         # Warm up
+        message, context, config = make_test_call(envelope)
         for _ in range(10):
-            await tp.run(envelope)
+            await tp.run(message, context, **config)
 
         # Measure
         latencies = []
         for _ in range(100):
+            message, context, config = make_test_call(envelope)
             start = time.perf_counter()
-            await tp.run(envelope)
+            await tp.run(message, context, **config)
             latencies.append((time.perf_counter() - start) * 1000)
 
         p95 = sorted(latencies)[95]
@@ -753,8 +814,10 @@ class TestContractCompliance:
         """Contract requirement: idempotent (same input → same output)."""
         write_time = int(datetime.now(timezone.utc).timestamp())
 
-        result1 = await tp.run(sample_envelope, write_time_utc=write_time)
-        result2 = await tp.run(sample_envelope, write_time_utc=write_time)
+        message, context, config = make_test_call(sample_envelope, write_time_utc=write_time)
+        result1 = await tp.run(message, context, **config)
+        message, context, config = make_test_call(sample_envelope, write_time_utc=write_time)
+        result2 = await tp.run(message, context, **config)
 
         # Temporal dimensions should be identical
         assert result1["event_time_utc"] == result2["event_time_utc"]

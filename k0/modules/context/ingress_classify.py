@@ -59,6 +59,7 @@ ADR: docs/architecture/decisions-K0/modules/k007.3-ingress-classifier.md
 Migration: k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql
 """
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -450,23 +451,53 @@ def classify_ingress(
     )
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
-    Module entry point (async for pipeline compatibility).
+    Module entry point (Phase 2 signature for pipeline compatibility).
 
-    Extracts ingress metadata from envelope and returns classification.
+    Extracts ingress metadata from envelope and returns enriched envelope with classification.
 
     Args:
-        envelope: Event envelope with topic, body, metadata
+        message: BusMessage with .payload, .trace_id, .offset
+        context: PipelineContext with .syscalls, .logger, .config
+        **config: Stage-specific configuration
+            - default_activity_type (str): Fallback activity type (default: "routine")
+            - default_content_type (str): Fallback content type (default: "episodic")
+            - supported_ingress_topics (list): Allowed ingress topics (default: all)
 
     Returns:
-        Ingress classification dict (7 fields)
+        Enriched envelope with ingress classification fields (7 fields)
 
     Raises:
         ValueError: If envelope is missing required fields
 
     Performance: <3ms P95
+    Contract: k0/contracts/modules/context.ingress_classify.v1.yaml
     """
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters (with defaults)
+    default_activity_type = config.get("default_activity_type", DEFAULT_ACTIVITY_TYPE)
+    default_content_type = config.get("default_content_type", DEFAULT_CONTENT_TYPE)
+    supported_ingress_topics = config.get(
+        "supported_ingress_topics", list(INGRESS_TOPIC_MAP.keys())
+    )
+
+    # Log module start
+    context.logger.debug(
+        "M10 ingress_classify starting",
+        extra={
+            "module": "context.ingress_classify",
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+        },
+    )
+
     # Extract ingress metadata from envelope
     topic = envelope.get("topic", "")
     body = envelope.get("body", {})
@@ -481,8 +512,8 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         device_id=device_id,
     )
 
-    # Return as dict for pipeline integration
-    return {
+    # Convert to dict for enriched envelope
+    ingress_fields = {
         "ingress_topic": classification.ingress_topic,
         "activity_type": classification.activity_type,
         "content_type": classification.content_type,
@@ -491,6 +522,20 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         "is_user_initiated": classification.is_user_initiated,
         "ingress_classified_at_utc": classification.ingress_classified_at_utc,
     }
+
+    # Log module completion
+    context.logger.debug(
+        "M10 ingress_classify completed",
+        extra={
+            "module": "context.ingress_classify",
+            "trace_id": message.trace_id,
+            "activity_type": classification.activity_type,
+            "ingress_topic": classification.ingress_topic,
+        },
+    )
+
+    # Return enriched envelope
+    return {**envelope, **ingress_fields}
 
 
 def get_metrics() -> Dict[str, Any]:

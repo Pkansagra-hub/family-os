@@ -265,26 +265,12 @@ class Syscalls:
             },
         )
 
-    async def hipp_events_upsert(
-        self,
-        event_id: str,
-        wal_pos: int,
-        tenant_id: str,
-        space_id: str,
-        embedding_id: str,
-        text: str,
-        text_hash: str,
-        valence: float | None,
-        arousal: float | None,
-        privacy_band: str,
-        cognitive_trace_id: str,
-        created_at: int | None = None,
-    ) -> dict[str, Any]:
+    async def hipp_events_upsert(self, **row: Any) -> dict[str, Any]:
         """
         Insert/update st_hipp_events (requires st_hipp_events.write cap).
 
-        Hippocampus events table for enriched episodic memory. Written by M16
-        (core.hipp_events_writer) after P02 enrichment pipeline completes.
+        Accepts complete row with all 70+ columns from M13 (builders.hipp_events_row).
+        See migration 0024_p02_episodic_write_tables.sql for full schema.
 
         Capability Required: "st_hipp_events.write"
 
@@ -292,21 +278,22 @@ class Syscalls:
         - Purpose: Enriched episodic memory events (post-pipeline processing)
         - Lifecycle: Permanent storage (no TTL)
         - Primary Key: event_id (unique across all spaces)
-        - Indexes: (tenant_id, space_id, created_at), (embedding_id)
+        - Indexes: 6 (tenant_time, space_time, simhash, embedding_id, band_time, cluster_id)
 
         Args:
-            event_id: Unique event identifier (from envelope header)
-            wal_pos: WAL position for traceability
-            tenant_id: Tenant isolation boundary
-            space_id: Memory space identifier
-            embedding_id: Reference to embedding vector (st_embeddings FK)
-            text: Event text content
-            text_hash: SHA256 hash of text for deduplication
-            valence: Affective valence (-1.0 to 1.0, from M11)
-            arousal: Affective arousal (0.0 to 1.0, from M11)
-            privacy_band: GREEN/AMBER/RED privacy classification
-            cognitive_trace_id: End-to-end observability trace ID
-            created_at: Unix timestamp (defaults to current time)
+            **row: Complete row dict from M13 with all st_hipp_events columns:
+                - Identity & Trace (9): event_id, wal_pos, cognitive_trace_id, tenant_id, space_id, etc.
+                - Integrity & Audit (6): envelope_sha256, sig_alg, sig_kid, idem_key, ingested_at, clock_skew_ms
+                - Policy & Visibility (10): policy_decision, policy_band, owner_id, retention_policy_id, etc.
+                - Actor & Device (6): actor_id, actor_role, device_id, device_kind, device_os, ingress_channel
+                - Temporal (11): event_time_utc, write_time_utc, local_date, day_of_week, circadian_slot, etc.
+                - Spatial & Place (5): location_name, location_type, geohash_6, geo_precision_external, etc.
+                - Social & Relationships (8): participants_json, num_participants, has_partner_present, etc.
+                - Semantic & Activity (10): text, text_normalized, char_count, activity_type, language, etc.
+                - Hippocampus (8): simhash_hex, minhash32, novelty_score, episode_cluster_id, etc.
+                - Embeddings & KG (4): embedding_id, embedding_status, entities_json, kg_triples_json
+                - Affect & Salience (9): sentiment_score, affect_valence, affect_arousal, salience_score, etc.
+                - Metadata (4): hippocampus_api_version, space_resolver_version, schema_uri, updated_at
 
         Returns:
             Dictionary with:
@@ -319,55 +306,42 @@ class Syscalls:
             ValueError: If required fields missing or invalid
 
         Example:
-            >>> result = await syscalls.hipp_events_upsert(
-            ...     event_id="evt_123",
-            ...     wal_pos=42,
-            ...     tenant_id="tenant_abc",
-            ...     space_id="space_xyz",
-            ...     embedding_id="emb_456",
-            ...     text="Had doctor appointment",
-            ...     text_hash="abc123...",
-            ...     valence=-0.2,
-            ...     arousal=0.6,
-            ...     privacy_band="AMBER",
-            ...     cognitive_trace_id="trace_789"
-            ... )
+            >>> row = {"event_id": "evt_123", "wal_pos": 42, ...}  # All 70+ columns from M13
+            >>> result = await syscalls.hipp_events_upsert(**row)
             >>> result["inserted"]
             True
 
         Performance:
-            - Target: <15ms P95 (single INSERT with B-tree indexes)
+            - Target: <15ms P95 (single INSERT with 6 B-tree indexes)
             - Uses INSERT OR IGNORE for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
-            - M16 (core.hipp_events_writer): Primary user of this syscall
-            - P02 pipeline: Orchestrates enrichment and M16 invocation
-            - docs/pipelines/P02_data_schema.md: Schema definition (lines 96-185)
+            - M13 (builders.hipp_events_row): Assembles complete row
+            - M16 (core.hipp_events_writer): Invokes this syscall
+            - P02 pipeline: Orchestrates enrichment flow
+            - Migration 0024: Defines st_hipp_events schema
         """
         self._require_cap("st_hipp_events.write")
 
-        # Validation
+        # Extract and validate required fields
+        event_id = row.get("event_id")
+        embedding_id = row.get("embedding_id")
+        wal_pos = row.get("wal_pos")
+        policy_band = row.get("policy_band")
+        cognitive_trace_id = row.get("cognitive_trace_id")
+
         if not event_id:
             raise ValueError("event_id required for hipp_events_upsert")
         if not embedding_id:
             raise ValueError("embedding_id required for hipp_events_upsert")
-        if privacy_band not in ("GREEN", "AMBER", "RED"):
-            raise ValueError(f"Invalid privacy_band: {privacy_band}")
+        if wal_pos is None:
+            raise ValueError("wal_pos required for hipp_events_upsert")
+        if policy_band not in ("GREEN", "AMBER", "RED"):
+            raise ValueError(f"Invalid policy_band: {policy_band}")
 
-        # Audit: Log storage operation
+        # Audit: Log storage operation (only on errors or debug level)
         start_time = time.perf_counter()
-        logger.debug(
-            f"hipp_events_upsert: {self._pipeline_id}",
-            extra={
-                "pipeline_id": self._pipeline_id,
-                "event_id": event_id,
-                "wal_pos": wal_pos,
-                "space_id": space_id,
-                "trace_id": cognitive_trace_id,
-                "operation": "hipp_events_upsert",
-            },
-        )
 
         # Execute storage operation in UnitOfWork transaction
         with self._uow_factory() as uow:
@@ -375,51 +349,26 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            # Use INSERT OR IGNORE for idempotency
-            created_at = created_at or int(time.time())
+            # Use all columns from row (database will handle NULLs with DEFAULT constraints)
+            columns = list(row.keys())
+            placeholders = ", ".join(["?"] * len(columns))
+            column_names = ", ".join(columns)
+            values = tuple(row[k] for k in columns)
 
             try:
+                # Use INSERT OR IGNORE for idempotency (faster than INSERT OR REPLACE)
+                # event_id is PRIMARY KEY, so duplicates will be silently skipped
                 cursor = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO st_hipp_events (
-                        event_id, wal_pos, tenant_id, space_id,
-                        embedding_id, text, text_hash,
-                        valence, arousal, privacy_band,
-                        cognitive_trace_id, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    f"""
+                    INSERT OR IGNORE INTO st_hipp_events ({column_names})
+                    VALUES ({placeholders})
                     """,
-                    (
-                        event_id,
-                        wal_pos,
-                        tenant_id,
-                        space_id,
-                        embedding_id,
-                        text,
-                        text_hash,
-                        valence,
-                        arousal,
-                        privacy_band,
-                        cognitive_trace_id,
-                        created_at,
-                    ),
+                    values,
                 )
 
                 inserted = cursor.rowcount > 0
 
                 # UnitOfWork context manager will auto-commit on successful exit
-
-                # Audit: Log operation completion
-                duration_ms = (time.perf_counter() - start_time) * 1000
-                logger.info(
-                    f"hipp_events_upsert complete: {event_id}",
-                    extra={
-                        "pipeline_id": self._pipeline_id,
-                        "event_id": event_id,
-                        "inserted": inserted,
-                        "duration_ms": duration_ms,
-                        "trace_id": cognitive_trace_id,
-                    },
-                )
 
                 return {
                     "inserted": inserted,
@@ -537,16 +486,13 @@ class Syscalls:
                 cursor = conn.execute(
                     """
                     INSERT OR REPLACE INTO st_pipeline_processed (
-                        pipeline_id, wal_pos, tenant_id, space_id,
-                        status, processed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        pipeline_id, space_id, wal_pos, processed_at
+                    ) VALUES (?, ?, ?, ?)
                     """,
                     (
                         pipeline_id,
-                        wal_pos,
-                        tenant_id,
                         space_id,
-                        status,
+                        wal_pos,
                         processed_at,
                     ),
                 )
@@ -557,7 +503,7 @@ class Syscalls:
 
                 # Audit: Log operation completion
                 duration_ms = (time.perf_counter() - start_time) * 1000
-                logger.info(
+                logger.debug(
                     f"pipeline_processed_upsert complete: {pipeline_id}@{wal_pos}",
                     extra={
                         "pipeline_id": self._pipeline_id,

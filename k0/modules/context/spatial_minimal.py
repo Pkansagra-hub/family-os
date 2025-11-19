@@ -177,19 +177,72 @@ def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
 # ===========================
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     M15 entry point: Minimize spatial fields with band-based truncation.
 
+    Phase 2 Signature:
+    - message: BusMessage with .payload, .trace_id, .offset
+    - context: PipelineContext with .syscalls, .logger, .config
+    - **config: Stage-specific configuration from pipeline YAML
+
+    Config Parameters:
+    - green_band_precision (int): Geohash precision for GREEN band (default: 6)
+    - amber_band_precision (int): Geohash precision for AMBER band (default: 4)
+    - red_band_precision (int): Geohash precision for RED band (default: 0)
+    - allow_null_location (bool): Allow NULL location fields (default: True)
+
     Args:
-        envelope: WAL envelope with location data
+        message: BusMessage with envelope payload
+        context: PipelineContext with logger and syscalls
+        **config: Configuration parameters
 
     Returns:
-        Dict with minimized spatial fields
+        Dict with minimized spatial fields (enriched envelope)
+
+    Contract: k0/contracts/modules/context.spatial_minimal.v1.yaml
     """
+    import json
+
+    # Parse envelope from message
+    envelope = (
+        json.loads(message.payload)
+        if isinstance(message.payload, (str, bytes))
+        else message.payload
+    )
+
+    # Extract config parameters (currently unused, but available for tuning)
+    green_band_precision = config.get("green_band_precision", 6)
+    amber_band_precision = config.get("amber_band_precision", 4)
+    red_band_precision = config.get("red_band_precision", 0)
+    allow_null_location = config.get("allow_null_location", True)
+
+    # Log module start
+    context.logger.debug(
+        "M15 spatial_minimal starting",
+        extra={
+            "trace_id": message.trace_id,
+            "event_id": envelope.get("event_id"),
+            "band": envelope.get("policy_stamp", {}).get("band"),
+        },
+    )
+
+    # Execute minimization logic
     spatial = minimize_spatial_fields(envelope)
 
+    # Log completion
+    context.logger.debug(
+        "M15 spatial_minimal completed",
+        extra={
+            "trace_id": message.trace_id,
+            "geohash_present": spatial.geohash_6 is not None,
+            "location_name_present": spatial.location_name is not None,
+        },
+    )
+
+    # Return enriched envelope
     return {
+        **envelope,
         "geohash_6": spatial.geohash_6,
         "location_name": spatial.location_name,
         "location_type": spatial.location_type,

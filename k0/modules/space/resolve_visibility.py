@@ -348,18 +348,20 @@ def resolve_visibility(
 # ==================== Module Entry Point ====================
 
 
-async def run(envelope: dict) -> dict:
+async def run(message: any, context: any, **config: any) -> dict:
     """
     Async entry point for space resolution module (P02 Stage 30).
 
+    Phase 2 Signature: (message, context, **config)
+
     Contract: space.resolve_visibility.v1.yaml
 
-    Input: Envelope from P02 with:
+    Input: Message with envelope payload containing:
     - event.actor_id (person who created the event)
     - event.space_id (space where event occurred)
     - policy_stamp.visible_to (policy-allowed viewers)
 
-    Output: Dict with space resolution fields for st_hipp_events:
+    Output: Enriched envelope with space_resolve fields:
     - owner_id
     - co_owners_json
     - author_role
@@ -369,29 +371,51 @@ async def run(envelope: dict) -> dict:
     - space_resolved_at_utc
 
     Args:
-        envelope: Event envelope dict
+        message: Message object with .payload (envelope)
+        context: PipelineContext with .syscalls and .logger
+        **config: Module configuration (unused for M05)
 
     Returns:
-        Dict with space resolution fields
+        Enriched envelope dict with space_resolve output
 
     Raises:
         ValueError: If required fields missing
     """
-    # Extract inputs from envelope
-    try:
-        event_data = envelope.get("event", {})
-        policy_stamp = envelope.get("policy_stamp", {})
+    # Get envelope from config (passed by pipeline_runner)
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
-        actor_id = event_data.get("actor_id")
-        space_id = event_data.get("space_id")
+    # Log start
+    trace_id = getattr(message, "trace_id", "unknown")
+    context.logger.debug(
+        "M05 space.resolve_visibility starting",
+        extra={"trace_id": trace_id, "space_id": envelope.get("space_id")},
+    )
+
+    # Extract inputs from envelope (flat P02 dossier structure)
+    try:
+        actor_id = envelope.get("actor")  # Aligned with Envelope schema field name
+        space_id = envelope.get("space_id")
+        policy_stamp = envelope.get("policy_stamp", {})
         policy_visible_to = policy_stamp.get("visible_to", [])
 
         if not actor_id:
-            raise ValueError("Missing required field: event.actor_id")
+            raise ValueError("Missing required field: actor")
         if not space_id:
-            raise ValueError("Missing required field: event.space_id")
+            raise ValueError("Missing required field: space_id")
 
     except Exception as e:
+        context.logger.error(
+            "M05 space.resolve_visibility failed - invalid envelope",
+            extra={"trace_id": trace_id, "error": str(e)},
+            exc_info=True,
+        )
         raise ValueError(f"Invalid envelope structure: {e}")
 
     # Run space resolution
@@ -399,9 +423,20 @@ async def run(envelope: dict) -> dict:
         actor_id=actor_id, space_id=space_id, policy_visible_to=policy_visible_to
     )
 
-    # Convert dataclass to dict
-    return {
-        "owner_id": resolution.owner_id,
+    # Log completion
+    context.logger.debug(
+        "M05 space.resolve_visibility completed",
+        extra={
+            "trace_id": trace_id,
+            "space_id": space_id,
+            "author_role": resolution.author_role,
+            "visibility_scope": resolution.visibility_scope,
+        },
+    )
+
+    enriched = {
+        **envelope,
+        "owner_id": resolution.owner_id,  # Flattened for builders
         "co_owners_json": resolution.co_owners_json,
         "author_role": resolution.author_role,
         "visible_to_json": resolution.visible_to_json,
@@ -409,6 +444,9 @@ async def run(envelope: dict) -> dict:
         "space_policy_version": resolution.space_policy_version,
         "space_resolved_at_utc": resolution.space_resolved_at_utc,
     }
+
+    # Return enriched envelope (flatten space_resolve fields to top level for downstream modules)
+    return enriched
 
 
 # ==================== Observability ====================

@@ -47,12 +47,21 @@ _SPACY_LOAD_ERROR = None
 logger = logging.getLogger(__name__)
 
 
-def _ensure_spacy_loaded():
-    """Lazy-load spaCy model on first use (not at module import time)."""
+def _ensure_spacy_loaded(preloaded_models: dict[str, Any] | None = None):
+    """Lazy-load spaCy model on first use, or use preloaded model from app.state."""
     global _SPACY_AVAILABLE, _nlp, _SPACY_LOAD_ERROR
 
     if _SPACY_AVAILABLE is not None:
         return _SPACY_AVAILABLE  # Already tried loading
+
+    # Check for preloaded model first (from kernel startup)
+    if preloaded_models and "spacy_nlp" in preloaded_models:
+        preloaded_nlp = preloaded_models["spacy_nlp"]
+        if preloaded_nlp is not None:
+            _nlp = preloaded_nlp
+            _SPACY_AVAILABLE = True
+            logger.debug("Using preloaded spaCy model from kernel startup")
+            return _SPACY_AVAILABLE
 
     try:
         import spacy
@@ -101,6 +110,7 @@ class Entity:
 def _extract_entities(
     text: str,
     confidence_threshold: float = 0.6,
+    preloaded_models: dict[str, Any] | None = None,
 ) -> list[Entity]:
     """
     Extract named entities using spaCy NER.
@@ -108,6 +118,7 @@ def _extract_entities(
     Args:
         text: Input text to analyze
         confidence_threshold: Minimum confidence for entity inclusion (default 0.6)
+        preloaded_models: Optional dict with preloaded spaCy model
 
     Returns:
         List of Entity objects with text, label, confidence
@@ -126,7 +137,7 @@ def _extract_entities(
         >>> [(e.text, e.label) for e in entities]
         [("mom", "PERSON"), ("Olive Garden", "ORG")]
     """
-    if not _ensure_spacy_loaded():
+    if not _ensure_spacy_loaded(preloaded_models):
         logger.warning("spaCy not available, returning empty entity list")
         return []
 
@@ -491,29 +502,42 @@ async def run(
 
     Contract: k0/contracts/modules/hippocampus.semantic_project.v1.yaml
     """
-    trace_id = context.trace_id
-    logger.info(
-        "M02 semantic_project starting",
-        extra={"trace_id": trace_id, "event_type": message.event_type},
-    )
+    # Get trace_id from message, envelope should be passed as kwarg by pipeline_runner
+    trace_id = message.trace_id or "unknown"
+
+    # Try to get envelope from kwargs (passed by pipeline_runner)
+    envelope = config.get("envelope")
+    if envelope is None:
+        logger.warning(f"envelope not in config, config keys: {list(config.keys())}")
+        # Fallback: decode from message.payload
+        try:
+            envelope = json.loads(message.payload.decode("utf-8"))
+        except Exception as e:
+            raise ValueError(f"Failed to decode envelope from message payload: {e}")
 
     # Extract configuration
     confidence_threshold = config.get("kg_confidence_threshold", 0.6)
     max_triples = config.get("max_triples_per_event", 10)
     entity_confidence = config.get("entity_confidence_threshold", 0.6)
 
+    # Get preloaded models from context (if available from kernel startup)
+    preloaded_models = getattr(context, "preloaded_models", None)
+
     # Validate input message
     if not message.payload:
         raise ValueError("Message payload is empty")
 
-    envelope = message.payload
+    # envelope should already be set from kwargs (passed by pipeline_runner)
+    # If not, it was decoded earlier in this function
     if not isinstance(envelope, dict):
         raise ValueError(f"Envelope must be dict, got {type(envelope)}")
 
-    # Extract required fields
-    event_id = envelope.get("event_id")
+    # Extract required fields (cognitive_trace_id is primary identifier per P02 dossier)
+    event_id = envelope.get("cognitive_trace_id") or envelope.get("event_id")
     if not event_id:
-        raise ValueError("Envelope missing event_id")
+        raise ValueError(
+            f"Envelope missing cognitive_trace_id or event_id. Keys: {list(envelope.keys())}"
+        )
 
     # Extract text for entity extraction
     text = _extract_text_for_entities(envelope)
@@ -522,16 +546,21 @@ async def run(
             "Empty text for entity extraction, returning empty results",
             extra={"trace_id": trace_id, "event_id": event_id},
         )
-        # Return minimal output for empty text
+        # Return enriched envelope with minimal output for empty text
         return {
+            **envelope,
             "embedding_id": str(uuid.uuid4()),
             "entities_json": "[]",
             "kg_triples_json": "[]",
             "semantic_projected_at_utc": datetime.now(UTC).isoformat(),
         }
 
-    # Phase 1: Entity extraction (spaCy NER)
-    entities = _extract_entities(text, confidence_threshold=entity_confidence)
+    # Phase 1: Entity extraction (spaCy NER) - with preloaded models
+    entities = _extract_entities(
+        text,
+        confidence_threshold=entity_confidence,
+        preloaded_models=preloaded_models,
+    )
 
     # Phase 2: Entity resolution (canonical IDs)
     participants = envelope.get("participants", [])
@@ -553,7 +582,7 @@ async def run(
     entities_json = json.dumps(resolved_entities)
     kg_triples_json = json.dumps(kg_triples)
 
-    logger.info(
+    logger.debug(
         "M02 semantic_project complete",
         extra={
             "trace_id": trace_id,
@@ -564,7 +593,9 @@ async def run(
         },
     )
 
+    # Return enriched envelope (preserve all original fields + add semantic projection)
     return {
+        **envelope,
         "embedding_id": embedding_id,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,

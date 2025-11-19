@@ -148,12 +148,21 @@ _metrics = {
 }
 
 
-def _ensure_vader_loaded():
-    """Lazy-load VADER sentiment analyzer on first use (not at module import time)."""
+def _ensure_vader_loaded(preloaded_models: dict[str, Any] | None = None):
+    """Lazy-load VADER sentiment analyzer on first use, or use preloaded model from app.state."""
     global _VADER_AVAILABLE, _vader_analyzer, _VADER_LOAD_ERROR
 
     if _VADER_AVAILABLE is not None:
         return _VADER_AVAILABLE  # Already tried loading
+
+    # Check for preloaded model first (from kernel startup)
+    if preloaded_models and "vader_analyzer" in preloaded_models:
+        preloaded_vader = preloaded_models["vader_analyzer"]
+        if preloaded_vader is not None:
+            _vader_analyzer = preloaded_vader
+            _VADER_AVAILABLE = True
+            logger.debug("Using preloaded VADER analyzer from kernel startup")
+            return _VADER_AVAILABLE
 
     try:
         from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -455,7 +464,11 @@ def calculate_confidence(
 # ============================================================================
 
 
-def tier0_classify(text: str, allow_low_confidence: bool = False) -> AffectAnnotation | None:
+def tier0_classify(
+    text: str,
+    allow_low_confidence: bool = False,
+    preloaded_models: dict[str, Any] | None = None,
+) -> AffectAnnotation | None:
     """
     Tier-0 fast path: VADER lexicon-based classification.
     Returns None if text too complex (triggers Tier-1 fallback), unless allow_low_confidence=True.
@@ -487,6 +500,7 @@ def tier0_classify(text: str, allow_low_confidence: bool = False) -> AffectAnnot
     Args:
         text: Event description text
         allow_low_confidence: If True, classify even complex text with low confidence tier
+        preloaded_models: Optional dict with preloaded VADER analyzer
 
     Returns:
         AffectAnnotation if classified, None if Tier-1 fallback needed
@@ -525,8 +539,8 @@ def tier0_classify(text: str, allow_low_confidence: bool = False) -> AffectAnnot
     if is_complex and not allow_low_confidence:
         return None  # Use Tier-1 ML model
 
-    # Step 4: Ensure VADER loaded
-    if not _ensure_vader_loaded():
+    # Step 4: Ensure VADER loaded (with preloaded models)
+    if not _ensure_vader_loaded(preloaded_models):
         logger.warning(
             "VADER not available, using default affect values "
             f"(valence={DEFAULT_VALENCE}, arousal={DEFAULT_AROUSAL}, band=GREEN)"
@@ -654,11 +668,14 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     # Extract configuration
     confidence_threshold = config.get("confidence_threshold", 0.8)
 
+    # Get preloaded models from context (if available from kernel startup)
+    preloaded_models = getattr(context, "preloaded_models", None)
+
     # Log module start
     context.logger.debug(
         "M04 affect.analyze starting",
         extra={
-            "module": "affect.analyze",
+            "module_id": "affect.analyze",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
             "confidence_threshold": confidence_threshold,
@@ -672,7 +689,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         context.logger.error(
             "Missing or invalid text field",
             extra={
-                "module": "affect.analyze",
+                "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
                 "text_type": type(text).__name__,
             },
@@ -682,14 +699,14 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     context.logger.debug(
         f"Analyzing affect for text (len={len(text)})",
         extra={
-            "module": "affect.analyze",
+            "module_id": "affect.analyze",
             "trace_id": message.trace_id,
             "text_length": len(text),
         },
     )
 
-    # Tier-0 classification
-    annotation = tier0_classify(text, allow_low_confidence=False)
+    # Tier-0 classification (with preloaded models)
+    annotation = tier0_classify(text, allow_low_confidence=False, preloaded_models=preloaded_models)
 
     if annotation is None:
         # Tier-1 fallback: For now, use low-confidence Tier-0
@@ -697,11 +714,13 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         context.logger.warning(
             "Tier-1 not implemented, using low-confidence Tier-0",
             extra={
-                "module": "affect.analyze",
+                "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
             },
         )
-        annotation = tier0_classify(text, allow_low_confidence=True)
+        annotation = tier0_classify(
+            text, allow_low_confidence=True, preloaded_models=preloaded_models
+        )
 
         if annotation is None:
             # Ultimate fallback (should never happen unless VADER fails)
@@ -741,7 +760,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     context.logger.debug(
         "M04 affect.analyze completed",
         extra={
-            "module": "affect.analyze",
+            "module_id": "affect.analyze",
             "trace_id": message.trace_id,
             "valence": annotation.valence,
             "arousal": annotation.arousal,

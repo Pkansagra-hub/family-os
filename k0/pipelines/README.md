@@ -629,11 +629,13 @@ A: Set `max_queue` appropriately. When queue full, dispatcher returns `DEFERRED`
 - Capability-gated execution working
 - Kernel integration stable
 
-**Next Phase:** Runtime Layer (Phase 2) 🚧
-- Create `k0/runtime/` infrastructure
-- Implement `ModuleRegistry`, `PipelineRunner`, DAG builder
-- Support YAML-based pipeline specs
-- Maintain backward compatibility
+**Current Phase:** Declarative YAML Pipelines Operational ✅
+- `k0/runtime/` infrastructure complete
+- `ModuleRegistry`, `PipelineRunner`, DAG builder implemented
+- YAML-based pipeline specs supported (`p02_write.v1.yaml`)
+- 16 modules operational in `k0/modules/` (M01-M17)
+- P02_WRITE pipeline: 16 stages, 70+ column enrichment, atomic 2-table writes
+- Backward compatibility maintained (both Python and YAML pipelines coexist)
 
 ---
 

@@ -1,7 +1,6 @@
 """Space Module - ACL and Ownership Resolution | Version: 0.1.0 | ADR: K005"""
 
-from .space_resolver import SpaceResolver
-from .space_types import SpaceConfig, SpaceResolution, VisibilityScope
+from . import resolve_visibility
 
 __version__ = "0.1.0"
-__all__ = ["SpaceResolver", "SpaceResolution", "SpaceConfig", "VisibilityScope"]
+__all__ = ["resolve_visibility"]

@@ -105,19 +105,20 @@ def map_identity_group(envelope: Dict[str, Any], space_output: Dict[str, Any]) -
     """
     Identity & Trace columns (9 columns)
 
-    From: envelope header + M05 space resolution
+    From: envelope (flat P02 dossier structure) + M05 space resolution
+
+    Note: event_id in st_hipp_events is populated with cognitive_trace_id per P02 dossier.
     """
-    header = envelope.get("header", {})
     return {
-        "event_id": header.get("event_id"),
-        "wal_pos": header.get("wal_pos"),
-        "cognitive_trace_id": header.get("trace_id"),
-        "tenant_id": header.get("tenant_id"),
-        "space_id": header.get("space_id"),
+        "event_id": envelope.get("cognitive_trace_id"),  # cognitive_trace_id IS the event_id
+        "wal_pos": envelope.get("wal_pos"),
+        "cognitive_trace_id": envelope.get("cognitive_trace_id"),
+        "tenant_id": envelope.get("tenant_id"),
+        "space_id": envelope.get("space_id"),
         "effective_space_id": space_output.get("effective_space_id"),
-        "topic": header.get("topic"),
-        "uow_id": header.get("uow_id"),
-        "schema_version": "1.0.0",
+        "topic": envelope.get("topic"),
+        "uow_id": envelope.get("uow_id"),
+        "schema_version": envelope.get("schema_version", "1.0.0"),
     }
 
 
@@ -125,16 +126,15 @@ def map_integrity_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
     """
     Integrity & Audit columns (6 columns)
 
-    From: envelope header (audit trail)
+    From: envelope (flat P02 dossier structure - audit trail)
     """
-    header = envelope.get("header", {})
     return {
-        "envelope_sha256": header.get("envelope_sha256"),
-        "sig_alg": header.get("sig_alg", "NONE"),
-        "sig_kid": header.get("sig_kid", "unsigned"),
-        "idem_key": header.get("idem_key"),
-        "ingested_at": header.get("ingressed_at"),
-        "clock_skew_ms": header.get("clock_skew_ms", 0),
+        "envelope_sha256": envelope.get("envelope_sha256"),
+        "sig_alg": envelope.get("sig_alg", "NONE"),
+        "sig_kid": envelope.get("sig_kid", "unsigned"),
+        "idem_key": envelope.get("idem_key"),
+        "ingested_at": envelope.get("ingested_at") or int(time.time()),
+        "clock_skew_ms": envelope.get("clock_skew_ms", 0),
     }
 
 
@@ -153,8 +153,8 @@ def map_policy_group(
 
     return {
         "policy_decision": policy_stamp.get("decision", "ALLOW"),
-        "policy_band": policy_output.get("effective_band", "GREEN"),
-        "policy_version": policy_stamp.get("version", "1.0.0"),
+        "policy_band": envelope.get("band", "GREEN"),  # band is at envelope root level
+        "policy_version": policy_stamp.get("version", envelope.get("policy_version", "1.0.0")),
         "obligations_json": serialize_to_json(
             policy_output.get("obligations", []), "obligations_json"
         ),
@@ -173,15 +173,12 @@ def map_actor_device_group(
     """
     Actor & Device columns (6 columns)
 
-    From: envelope body + M09 device profile + M10 ingress classify
+    From: envelope (flat structure per P02 dossier) + M09 device profile + M10 ingress classify
     """
-    body = envelope.get("body", {})
-    header = envelope.get("header", {})
-
     return {
-        "actor_id": body.get("actor_id") or header.get("actor_id"),
-        "actor_role": body.get("actor_role", "SELF"),
-        "device_id": body.get("device_id") or header.get("device_id"),
+        "actor_id": envelope.get("actor"),  # Aligned with Envelope schema
+        "actor_role": envelope.get("actor_role", "SELF"),
+        "device_id": envelope.get("device_id"),
         "device_kind": device_output.get("device_kind", "unknown"),
         "device_os": device_output.get("device_os"),
         "ingress_channel": ingress_output.get("ingress_topic", "write"),
@@ -206,6 +203,7 @@ def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
         "circadian_slot": temporal_output.get("circadian_slot"),
         "is_backdated": temporal_output.get("is_backdated"),
         "created_at": int(time.time()),
+        "updated_at": int(time.time()),
     }
 
 
@@ -430,9 +428,15 @@ def validate_enum_values(row: Dict[str, Any]) -> None:
 # =============================================================================
 
 
-async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     Assemble complete st_hipp_events row from all enrichment module outputs.
+
+    **Phase 2 Signature**:
+        message: BusMessage with .payload (envelope JSON) and .trace_id
+        context: PipelineContext with .logger and .syscalls
+        **config: Stage configuration
+            - validate_required_fields (bool): Enable validation (default: True)
 
     **Required Inputs** (from envelope['outputs'] or envelope['body']):
     - pattern_separate (M01): simhash_hex, minhash32
@@ -449,30 +453,103 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
     - geo_metadata (M12): geohash_6, location_name
     - spatial_minimal (M15): truncated geohash
 
-    Args:
-        envelope: Envelope with header, body, policy_stamp, and module outputs
-
     Returns:
-        Dictionary with 60-70 columns ready for st_hipp_events INSERT
+        Enriched envelope with "hipp_events_row" containing 60-70 columns
 
     Raises:
         ValueError: If validation fails or required fields missing
     """
-    # Extract module outputs from envelope
-    outputs = envelope.get("outputs", {})
-    dg_output = outputs.get("pattern_separate", {})
-    ca1_output = outputs.get("semantic_project", {})
-    policy_output = outputs.get("policy_stamp", {})
-    affect_output = outputs.get("affect_analyze", {})
-    space_output = outputs.get("space_resolve", {})
-    salience_output = outputs.get("salience_score", {})
-    social_output = outputs.get("family_graph_resolve", {})
-    temporal_output = outputs.get("temporal_profile", {})
-    device_output = outputs.get("device_profile", {})
-    ingress_output = outputs.get("ingress_classify", {})
-    retention_output = outputs.get("retention_lookup", {})
-    geo_output = outputs.get("geo_metadata", {})
-    spatial_output = outputs.get("spatial_minimal", {})
+    import json
+
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
+
+    # Extract configuration
+    validate_fields = config.get("validate_required_fields", True)
+
+    # Log start
+    context.logger.debug(
+        "M13 hipp_events_row starting",
+        extra={
+            "trace_id": message.trace_id,
+            "cognitive_trace_id": envelope.get("cognitive_trace_id"),
+        },
+    )
+
+    # Extract module outputs from envelope (flat P02 structure - enrichments at top level)
+    dg_output = {
+        "simhash_hex": envelope.get("simhash_hex"),
+        "minhash32": envelope.get("minhash32"),
+    }
+    ca1_output = {
+        "embedding_id": envelope.get("embedding_id"),
+        "entities_json": envelope.get("entities_json"),
+        "kg_triples_json": envelope.get("kg_triples_json"),
+    }
+    policy_output = envelope.get("policy_stamp", {})
+    affect_output = {
+        "valence": envelope.get("affect_valence"),
+        "arousal": envelope.get("affect_arousal"),
+        "dominant_emotions": envelope.get("dominant_emotions"),
+        "affect_band": envelope.get("affect_band"),
+        "band_reasons": envelope.get("band_reasons"),
+        "model_version": envelope.get("model_version"),
+        "confidence": envelope.get("confidence"),
+    }
+    # M05 space.resolve_visibility returns flattened fields at envelope top level
+    space_output = {
+        "owner_id": envelope.get("owner_id"),
+        "co_owners": envelope.get("co_owners_json"),
+        "visible_to": envelope.get("visible_to_json"),
+        "visibility_scope": envelope.get("visibility_scope"),
+        "effective_space_id": envelope.get("space_id"),  # May be enriched later
+    }
+
+    salience_output = {"salience_score": envelope.get("salience_score")}
+    social_output = {
+        "num_participants": envelope.get("num_participants"),
+        "social_context": envelope.get("social_context"),
+        "participant_roles_json": envelope.get("participant_roles_json"),
+    }
+    temporal_output = {
+        k: envelope.get(k)
+        for k in [
+            "event_time_utc",
+            "write_time_utc",
+            "write_lag_ms",
+            "local_date",
+            "local_time",
+            "day_of_week",
+            "is_weekend",
+            "time_of_day_bucket",
+            "circadian_slot",
+            "is_backdated",
+        ]
+    }
+    device_output = {
+        "device_kind": envelope.get("device_kind"),
+        "device_os": envelope.get("device_os"),
+    }
+    ingress_output = {"ingress_channel": envelope.get("ingress_channel")}
+    retention_output = {
+        "retention_policy_id": envelope.get("retention_policy_id"),
+        "retention_bucket": envelope.get("retention_bucket"),
+    }
+    geo_output = {
+        "geo_precision_external": envelope.get("geo_precision_external"),
+        "geo_masking_reason": envelope.get("geo_masking_reason"),
+    }
+    spatial_output = {
+        "geohash_6": envelope.get("geohash_6"),
+        "location_name": envelope.get("location_name"),
+    }
 
     # Assemble row by column groups (9 groups)
     row = {}
@@ -531,14 +608,21 @@ async def run(envelope: Dict[str, Any]) -> Dict[str, Any]:
         _metrics.column_group_counts.get("affect_salience", 0) + 1
     )
 
-    # Validation
-    validate_required_fields(row)
-    validate_value_ranges(row)
-    validate_enum_values(row)
+    # Conditional validation based on config
+    if validate_fields:
+        validate_required_fields(row)
+        validate_value_ranges(row)
+        validate_enum_values(row)
 
     _metrics.rows_built += 1
 
-    return row
+    # Log completion
+    context.logger.debug(
+        "M13 hipp_events_row completed",
+        extra={"trace_id": message.trace_id, "columns": len(row), "validated": validate_fields},
+    )
+
+    return {**envelope, "hipp_events_row": row}
 
 
 # =============================================================================

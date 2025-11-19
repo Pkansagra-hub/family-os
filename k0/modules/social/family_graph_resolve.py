@@ -272,11 +272,7 @@ def _check_parent_present(participant_roles: Dict[str, str]) -> bool:
 # ============================================================================
 
 
-async def run(
-    message: Any,
-    context: Any,
-    **config: Any
-) -> Dict[str, Any]:
+async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     M07: Family Graph Resolver - Resolve social context from family relationships.
 

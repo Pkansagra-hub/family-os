@@ -41,12 +41,14 @@ class PipelineContext:
         syscalls: Capability-gated storage adapter (M2 R2.1)
         config: Pipeline-specific configuration (from k0/config/pipelines.yml)
         logger: Structured logger with cognitive_trace_id support
+        preloaded_models: Optional dict of preloaded NLP models (spaCy, VADER) from kernel startup
 
     Usage:
         async def on_startup(self, ctx: PipelineContext) -> None:
             self.syscalls = ctx.syscalls  # Store for later use
             self.logger = ctx.logger
             self.config = ctx.config
+            self.preloaded_models = ctx.preloaded_models  # Access preloaded models
             # ... initialize resources
 
     Security:
@@ -58,6 +60,7 @@ class PipelineContext:
     syscalls: Any  # Type: Syscalls (defined in M2 R2.1)
     config: dict[str, Any]
     logger: Logger
+    preloaded_models: dict[str, Any] | None = None  # Optional preloaded NLP models
 
 
 @runtime_checkable
