@@ -6,11 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from k0.policy.retention_enforcer import (
-    ArchiveManifest,
-    RetentionEnforcer,
-    RetentionPolicy,
-)
+from k0.policy.retention_enforcer import ArchiveManifest, RetentionEnforcer, RetentionPolicy
 
 
 @pytest.fixture
@@ -21,7 +17,8 @@ def in_memory_db():
     cursor = conn.cursor()
 
     # Create retention policy table
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE st_retention_policy (
             policy_id TEXT PRIMARY KEY,
             resource_type TEXT NOT NULL,
@@ -33,10 +30,12 @@ def in_memory_db():
             created_at TEXT NOT NULL,
             updated_at TEXT
         )
-    """)
+    """
+    )
 
     # Create archive manifest table
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE st_archive_manifest (
             manifest_id TEXT PRIMARY KEY,
             resource_type TEXT NOT NULL,
@@ -48,15 +47,19 @@ def in_memory_db():
             delete_after TEXT,
             tenant_id TEXT
         )
-    """)
+    """
+    )
 
     # Insert test data
     now = datetime.now(timezone.utc).isoformat()
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO st_retention_policy VALUES
         ('policy1', 'st_epi', 30, 1, 'GREEN', 'tenant1', 1, ?, NULL),
         ('policy2', 'st_sem', 7, 0, NULL, NULL, 1, ?, NULL)
-    """, (now, now))
+    """,
+        (now, now),
+    )
 
     conn.commit()
     return conn
@@ -73,7 +76,7 @@ def sample_policy():
         privacy_band_filter="GREEN",
         tenant_id_filter="tenant1",
         enabled=True,
-        created_at=datetime.now(timezone.utc).isoformat()
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -89,7 +92,7 @@ def sample_manifest():
         compressed_size_bytes=1024,
         archived_at=datetime.now(timezone.utc).isoformat(),
         delete_after=(datetime.now(timezone.utc) + timedelta(days=365)).isoformat(),
-        tenant_id="tenant1"
+        tenant_id="tenant1",
     )
 
 
@@ -99,10 +102,7 @@ class TestRetentionPolicy:
     def test_retention_policy_creation(self):
         """Test creating a retention policy."""
         policy = RetentionPolicy(
-            policy_id="test",
-            resource_type="st_epi",
-            retention_days=30,
-            archive_enabled=True
+            policy_id="test", resource_type="st_epi", retention_days=30, archive_enabled=True
         )
         assert policy.policy_id == "test"
         assert policy.retention_days == 30
@@ -118,7 +118,7 @@ class TestArchiveManifest:
             manifest_id="test",
             resource_type="st_epi",
             resource_id="res123",
-            archive_location="s3://bucket/file"
+            archive_location="s3://bucket/file",
         )
         assert manifest.manifest_id == "test"
         assert manifest.resource_id == "res123"
@@ -137,7 +137,7 @@ class TestRetentionEnforcer:
         enforcer = RetentionEnforcer()
 
         # Mock get_expired_resources to return empty
-        with patch.object(enforcer, 'get_expired_resources', return_value=[]):
+        with patch.object(enforcer, "get_expired_resources", return_value=[]):
             result = enforcer.apply_policies(connection=in_memory_db)
             assert result == {"archived": 0, "deleted": 0, "errors": 0}
 
@@ -151,17 +151,21 @@ class TestRetentionEnforcer:
 
         # Create the table that _archive_resource expects
         cursor = in_memory_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE st_epi (
                 id TEXT PRIMARY KEY,
                 data TEXT
             )
-        """)
+        """
+        )
         cursor.execute("INSERT INTO st_epi VALUES ('res1', 'test data')")
         in_memory_db.commit()
 
-        with patch.object(enforcer, '_load_policies', return_value=[sample_policy]), \
-             patch.object(enforcer, '_get_expired_resources_for_policy', return_value=expired):
+        with (
+            patch.object(enforcer, "_load_policies", return_value=[sample_policy]),
+            patch.object(enforcer, "_get_expired_resources_for_policy", return_value=expired),
+        ):
             result = enforcer.apply_policies(connection=in_memory_db)
             assert result["archived"] == 1
 
@@ -170,10 +174,7 @@ class TestRetentionEnforcer:
         enforcer = RetentionEnforcer()
 
         policy_no_archive = RetentionPolicy(
-            policy_id="no-archive",
-            resource_type="st_sem",
-            retention_days=7,
-            archive_enabled=False
+            policy_id="no-archive", resource_type="st_sem", retention_days=7, archive_enabled=False
         )
 
         expired = [
@@ -182,17 +183,21 @@ class TestRetentionEnforcer:
 
         # Create the table that _delete_resource expects
         cursor = in_memory_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE st_sem (
                 id TEXT PRIMARY KEY,
                 data TEXT
             )
-        """)
+        """
+        )
         cursor.execute("INSERT INTO st_sem VALUES ('res2', 'test data')")
         in_memory_db.commit()
 
-        with patch.object(enforcer, '_load_policies', return_value=[policy_no_archive]), \
-             patch.object(enforcer, '_get_expired_resources_for_policy', return_value=expired):
+        with (
+            patch.object(enforcer, "_load_policies", return_value=[policy_no_archive]),
+            patch.object(enforcer, "_get_expired_resources_for_policy", return_value=expired),
+        ):
             result = enforcer.apply_policies(connection=in_memory_db)
             assert result["deleted"] == 1
 
@@ -219,20 +224,25 @@ class TestRetentionEnforcer:
 
         # Create a test table for resources
         cursor = in_memory_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE st_epi (
                 id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
                 privacy_band TEXT,
                 tenant_id TEXT
             )
-        """)
+        """
+        )
 
         # Insert expired resource (created 60 days ago)
         expired_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO st_epi VALUES ('res1', ?, 'GREEN', 'tenant1')
-        """, (expired_date,))
+        """,
+            (expired_date,),
+        )
         in_memory_db.commit()
 
         expired = enforcer._get_expired_resources_for_policy(in_memory_db, sample_policy)
@@ -245,12 +255,14 @@ class TestRetentionEnforcer:
 
         # Create test table
         cursor = in_memory_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE st_epi (
                 id TEXT PRIMARY KEY,
                 data TEXT
             )
-        """)
+        """
+        )
         cursor.execute("INSERT INTO st_epi VALUES ('res1', 'test data')")
         in_memory_db.commit()
 
@@ -274,12 +286,14 @@ class TestRetentionEnforcer:
 
         # Create test table
         cursor = in_memory_db.cursor()
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE st_epi (
                 id TEXT PRIMARY KEY,
                 data TEXT
             )
-        """)
+        """
+        )
         cursor.execute("INSERT INTO st_epi VALUES ('res1', 'test data')")
         in_memory_db.commit()
 

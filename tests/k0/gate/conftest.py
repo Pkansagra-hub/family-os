@@ -40,7 +40,7 @@ def provisioning_ledger(in_memory_db):
         tenant_id="test-tenant",
         space_id="test-space",
         mls_group_id="mls-group-123",
-        provisioned_ts="2025-01-15T10:00:00Z"
+        provisioned_ts="2025-01-15T10:00:00Z",
     )
 
     ledger.lookup.return_value = device_record
@@ -134,7 +134,9 @@ def observability_emitter():
 
 
 @pytest.fixture
-def gate_with_fixtures(provisioning_ledger, schema_registry, metrics_exporter, observability_emitter):
+def gate_with_fixtures(
+    provisioning_ledger, schema_registry, metrics_exporter, observability_emitter
+):
     """MinimalGate instance with all dependencies configured."""
     return MinimalGate(
         registry=schema_registry,
@@ -160,7 +162,7 @@ def valid_envelope(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "band": "GREEN",
@@ -187,7 +189,7 @@ def envelope_with_location(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "band": "AMBER",
@@ -209,7 +211,7 @@ def envelope_with_policy_stamp(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "band": "GREEN",
@@ -233,7 +235,7 @@ def invalid_envelope_missing_bindings(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
     }
@@ -285,7 +287,7 @@ def invalid_envelope_no_body():
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
         "sig": "test_signature_b64",
     }
@@ -305,7 +307,7 @@ def invalid_envelope_oversized(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "large_field": "x" * 100000,  # Make envelope oversized
@@ -325,7 +327,7 @@ def invalid_envelope_bad_hash():
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": "invalid_hash_not_64_chars",
         "sig": "test_signature_b64",
     }
@@ -345,7 +347,7 @@ def invalid_envelope_missing_sig(valid_body):
         "topic": "test.topic",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         # Missing sig field
     }
@@ -363,7 +365,7 @@ def invalid_envelope_replay(valid_body):
         "device_id": "test-device-001",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
     }
@@ -381,7 +383,7 @@ def invalid_envelope_bad_schema(valid_body):
         "device_id": "test-device-001",
         "schema_uri": "https://example.com/schemas/blocked",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
     }
@@ -399,7 +401,7 @@ def invalid_envelope_location_missing(valid_body):
         "device_id": "test-device-001",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "band": "AMBER",
@@ -419,7 +421,7 @@ def invalid_envelope_bad_policy_stamp(valid_body):
         "device_id": "test-device-001",
         "schema_uri": "https://example.com/schemas/test",
         "schema_version": "1.0.0",
-        "ts": current_time.isoformat().replace('+00:00', 'Z'),
+        "ts": current_time.isoformat().replace("+00:00", "Z"),
         "payload_sha256": payload_hash,
         "sig": "test_signature_b64",
         "band": "GREEN",

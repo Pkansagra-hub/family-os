@@ -1,6 +1,6 @@
 """Tests for k0/ports/drivers.py"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import Request
@@ -48,6 +48,7 @@ class TestDriverHandshakeRequest:
     def test_invalid_empty_alias(self):
         """Test validation with empty alias."""
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError) as exc_info:
             DriverHandshakeRequest(
                 alias="",
@@ -60,6 +61,7 @@ class TestDriverHandshakeRequest:
     def test_invalid_empty_endpoint(self):
         """Test validation with empty endpoint."""
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError) as exc_info:
             DriverHandshakeRequest(
                 alias="test",
@@ -149,6 +151,7 @@ class TestUtilityFunctions:
     def test_format_timestamp(self):
         """Test timestamp formatting."""
         from datetime import datetime, timezone
+
         dt = datetime(2023, 1, 1, 12, 30, 45, 123456, tzinfo=timezone.utc)
         formatted = _format_timestamp(dt)
         assert formatted == "2023-01-01T12:30:45Z"
@@ -206,6 +209,7 @@ class TestDriverHandshakeEndpoint:
     def mock_session(self):
         """Create a mock session."""
         from datetime import datetime, timezone
+
         session = MagicMock()
         session.session_id = "1234567890abcdef1234567890abcdef"
         session.alias = "test-driver"

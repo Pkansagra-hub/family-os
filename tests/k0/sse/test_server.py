@@ -10,12 +10,7 @@ from fastapi import HTTPException
 
 from k0.obs import ObservabilityEmitter
 from k0.qos import QoSContext
-from k0.sse.server import (
-    BackpressureMetrics,
-    BackpressureTopicMetrics,
-    CursorState,
-    SSEServer,
-)
+from k0.sse.server import BackpressureMetrics, BackpressureTopicMetrics, CursorState, SSEServer
 from k0.storage.offsets import Offset, OffsetStore
 from k0.storage.wal import WalEntry, WriteAheadLog
 
@@ -206,7 +201,7 @@ class TestSSEServer:
         """Test subscription with cursor token."""
         mock_wal.read_from.return_value = []
 
-        with patch('k0.sse.server.SSEServer._decode_cursor') as mock_decode:
+        with patch("k0.sse.server.SSEServer._decode_cursor") as mock_decode:
             mock_decode.return_value = CursorState(
                 last_position=50,
                 last_ts=datetime(2023, 1, 1, tzinfo=timezone.utc),
@@ -228,9 +223,10 @@ class TestSSEServer:
             mock_wal.read_from.assert_called_once()
             call_args = mock_wal.read_from.call_args
             assert call_args[0][0] == 50  # last_position    @pytest.mark.asyncio
+
     async def test_subscribe_cursor_mismatch(self, sse_server):
         """Test subscription with mismatched cursor."""
-        with patch('k0.sse.server.SSEServer._decode_cursor') as mock_decode:
+        with patch("k0.sse.server.SSEServer._decode_cursor") as mock_decode:
             mock_decode.return_value = CursorState(
                 last_position=50,
                 last_ts=datetime(2023, 1, 1, tzinfo=timezone.utc),

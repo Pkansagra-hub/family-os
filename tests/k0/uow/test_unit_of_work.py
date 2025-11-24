@@ -519,17 +519,19 @@ class TestUnitOfWork:
             )
 
             async with uow_disabled:
-                await uow_disabled.append_wal(WalEntry(
-                    tenant_id="t",
-                    space_id="s",
-                    topic="test",
-                    envelope_json='{"test": "data"}',
-                    schema_uri="test://schema",
-                    schema_version="1.0",
-                    device_id="device123",
-                    commit_ts="2023-01-01T00:00:00Z",
-                    body=b"test",
-                ))
+                await uow_disabled.append_wal(
+                    WalEntry(
+                        tenant_id="t",
+                        space_id="s",
+                        topic="test",
+                        envelope_json='{"test": "data"}',
+                        schema_uri="test://schema",
+                        schema_version="1.0",
+                        device_id="device123",
+                        commit_ts="2023-01-01T00:00:00Z",
+                        body=b"test",
+                    )
+                )
 
             # Should not call fsync
             mock_stores["wal"].fsync.assert_not_called()
@@ -541,17 +543,19 @@ class TestUnitOfWork:
             )
 
             async with uow_strict:
-                await uow_strict.append_wal(WalEntry(
-                    tenant_id="t",
-                    space_id="s",
-                    topic="test",
-                    envelope_json='{"test": "data"}',
-                    schema_uri="test://schema",
-                    schema_version="1.0",
-                    device_id="device123",
-                    commit_ts="2023-01-01T00:00:00Z",
-                    body=b"test",
-                ))
+                await uow_strict.append_wal(
+                    WalEntry(
+                        tenant_id="t",
+                        space_id="s",
+                        topic="test",
+                        envelope_json='{"test": "data"}',
+                        schema_uri="test://schema",
+                        schema_version="1.0",
+                        device_id="device123",
+                        commit_ts="2023-01-01T00:00:00Z",
+                        body=b"test",
+                    )
+                )
 
             # Should call fsync
             mock_stores["wal"].fsync.assert_called()

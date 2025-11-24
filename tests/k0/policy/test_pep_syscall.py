@@ -29,50 +29,61 @@ def sample_policy_manifest():
                 "max_fanout": 16,
                 "max_throughput_pps": 512,
                 "max_payload_bytes": 262144,
-                "violation_obligation": {"name": "kernel.qos.tighten"}
+                "violation_obligation": {"name": "kernel.qos.tighten"},
             },
             "AMBER": {
                 "max_fanout": 8,
                 "max_throughput_pps": 256,
                 "max_payload_bytes": 131072,
                 "obligations": [{"name": "kernel.audit.log", "details": {"level": "amber"}}],
-                "violation_obligation": {"name": "kernel.qos.tighten", "details": {"band": "AMBER"}}
+                "violation_obligation": {
+                    "name": "kernel.qos.tighten",
+                    "details": {"band": "AMBER"},
+                },
             },
-            "RED": {"deny": True, "obligations": [{"name": "kernel.security.notify", "details": {"severity": "critical"}}]}
+            "RED": {
+                "deny": True,
+                "obligations": [
+                    {"name": "kernel.security.notify", "details": {"severity": "critical"}}
+                ],
+            },
         },
         "roles": [
             {
                 "name": "coordinator",
                 "allow_topics": ["memory.*", "events.*", "policy.*"],
                 "max_band": "AMBER",
-                "obligations": [{"name": "kernel.audit.trace", "details": {"role": "coordinator"}}]
+                "obligations": [{"name": "kernel.audit.trace", "details": {"role": "coordinator"}}],
             },
             {
                 "name": "guest",
                 "allow_topics": ["ui.*"],
                 "max_band": "GREEN",
-                "obligations": [{"name": "kernel.redact.enforce", "details": {"scope": "PII"}}]
-            }
+                "obligations": [{"name": "kernel.redact.enforce", "details": {"scope": "PII"}}],
+            },
         ],
         "device_postures": {
-            "revoked": {"deny": True, "obligations": [{"name": "kernel.device.reauth", "details": {"reason": "revoked"}}]}
+            "revoked": {
+                "deny": True,
+                "obligations": [{"name": "kernel.device.reauth", "details": {"reason": "revoked"}}],
+            }
         },
         "sunset_windows": {
             "schema://test/1.0": {
                 "warn_after": "2025-12-01T00:00:00Z",
                 "deny_after": "2026-01-01T00:00:00Z",
-                "obligation": {"name": "kernel.schema.upgrade", "details": {"target": ">=1.1"}}
+                "obligation": {"name": "kernel.schema.upgrade", "details": {"target": ">=1.1"}},
             }
         },
         "role_violation_obligation": {"name": "kernel.policy.review"},
-        "default_obligations": [{"name": "kernel.audit.basic"}]
+        "default_obligations": [{"name": "kernel.audit.basic"}],
     }
 
 
 @pytest.fixture
 def temp_policy_file(sample_policy_manifest):
     """Create a temporary policy manifest file."""
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         json.dump(sample_policy_manifest, f)
         temp_path = f.name
 
@@ -95,10 +106,7 @@ def valid_envelope():
         "schema_version": "1.0",
         "ts": "2025-11-23T12:00:00Z",
         "payload_bytes": 1024,
-        "policy": {
-            "abac": {"roles": ["coordinator"]},
-            "caps": {"fanout": 4}
-        }
+        "policy": {"abac": {"roles": ["coordinator"]}, "caps": {"fanout": 4}},
     }
 
 
@@ -108,26 +116,22 @@ class TestCreatePolicyStamp:
     def test_create_policy_stamp_allow_basic(self):
         """Test creating policy stamp for allow decision."""
         decision = PolicyDecision(admit=True, obligations=[Obligation("test.obligation")])
-        with patch('k0.policy.pep_syscall.get_manifest_fingerprint', return_value=None):
+        with patch("k0.policy.pep_syscall.get_manifest_fingerprint", return_value=None):
             stamp = create_policy_stamp(decision, "GREEN")
 
-        assert stamp == {
-            "band": "GREEN",
-            "obligations": ["test.obligation"],
-            "decision": "ALLOW"
-        }
+        assert stamp == {"band": "GREEN", "obligations": ["test.obligation"], "decision": "ALLOW"}
 
     def test_create_policy_stamp_deny_with_reason(self):
         """Test creating policy stamp for deny decision with reason."""
         decision = PolicyDecision(admit=False, obligations=[], deny_reason="TEST_DENY")
-        with patch('k0.policy.pep_syscall.get_manifest_fingerprint', return_value=None):
+        with patch("k0.policy.pep_syscall.get_manifest_fingerprint", return_value=None):
             stamp = create_policy_stamp(decision, "RED")
 
         assert stamp == {
             "band": "RED",
             "obligations": [],
             "decision": "DENY",
-            "deny_reason": "TEST_DENY"
+            "deny_reason": "TEST_DENY",
         }
 
     def test_create_policy_stamp_with_visible_to(self):
@@ -140,7 +144,7 @@ class TestCreatePolicyStamp:
     def test_create_policy_stamp_with_policy_version(self):
         """Test creating policy stamp with explicit policy version."""
         decision = PolicyDecision(admit=True, obligations=[])
-        with patch('k0.policy.pep_syscall.get_manifest_fingerprint', return_value=None):
+        with patch("k0.policy.pep_syscall.get_manifest_fingerprint", return_value=None):
             stamp = create_policy_stamp(decision, "GREEN", policy_version="test-version")
 
         assert stamp["policy_version"] == "test-version"
@@ -238,7 +242,9 @@ class TestEvaluateEnvelope:
         envelope = {"band": "INVALID"}
 
         with patch.dict(os.environ, {"K0_POLICY_MANIFEST_PATH": temp_policy_file}):
-            with pytest.raises(PolicyConfigurationError, match="No policy configured for band 'INVALID'"):
+            with pytest.raises(
+                PolicyConfigurationError, match="No policy configured for band 'INVALID'"
+            ):
                 evaluate_envelope(envelope)
 
     def test_evaluate_envelope_throughput_exceeded(self, temp_policy_file, valid_envelope):
@@ -307,7 +313,7 @@ class TestBuildObligations:
         """Test building obligations from dict list."""
         entries = [
             {"name": "test.obligation", "details": {"key": "value"}},
-            {"name": "test.obligation2", "details": {"key2": "value2"}}
+            {"name": "test.obligation2", "details": {"key2": "value2"}},
         ]
         obligations = _build_obligations(entries)
         assert len(obligations) == 2
@@ -329,7 +335,7 @@ class TestDeduplicateObligations:
         obligations = [
             Obligation("test", {"a": "1", "b": "2"}),
             Obligation("test", {"a": "1", "b": "2"}),
-            Obligation("other", {"c": "3"})
+            Obligation("other", {"c": "3"}),
         ]
         deduped = _deduplicate_obligations(obligations)
         assert len(deduped) == 2
@@ -340,7 +346,7 @@ class TestDeduplicateObligations:
         """Test deduplicating obligations with complex details."""
         obligations = [
             Obligation("test", {"list": "[1, 2]", "dict": "{'nested': 'value'}"}),
-            Obligation("test", {"list": "[1, 2]", "dict": "{'nested': 'value'}"})
+            Obligation("test", {"list": "[1, 2]", "dict": "{'nested': 'value'}"}),
         ]
         deduped = _deduplicate_obligations(obligations)
         assert len(deduped) == 1
