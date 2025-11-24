@@ -188,6 +188,16 @@ class OutboxWorker:
         # until DLQ requeue succeeds. Premature deletion prevents recovery
         # if DLQ replay fails.
         # Old code (BUG): self._outbox_store.mark_applied(entry.id)
+        # However, we DO need to update the status to DEAD to prevent re-processing
+        self._outbox_store.record_failure(
+            entry,
+            retries=decision.retries,
+            requeue_seq=entry.requeue_seq,
+            last_error=message,
+            next_attempt_ts=None,
+            backoff_exp=0,
+            status="DEAD",
+        )
         self._emit_metric("outbox_apply_total", 1.0, outcome="quarantine", driver=alias)
 
     def _emit_metric(self, metric_name: str, value: float, **labels: str) -> None:

@@ -274,7 +274,7 @@ async def subscribe(
     roles = _resolve_roles(request)
 
     try:
-        rows, permitted_topics = server.subscribe(
+        rows, permitted_topics = await server.subscribe(
             tenant_id=tenant_id,
             space_id=space_id,
             subscriber_id=subscriber_id,
@@ -300,7 +300,7 @@ async def subscribe(
         )
 
     trace_id = _resolve_trace_id(request)
-    metrics = server.evaluate_backpressure(
+    metrics = await server.evaluate_backpressure(
         subscriber_id=subscriber_id,
         tenant_id=tenant_id,
         space_id=space_id,
@@ -574,7 +574,7 @@ async def acknowledge(
             acl_path=request.app.state.settings.sse_acl_path,
             qos=qos,
         )
-        server.acknowledge(
+        await server.acknowledge(
             subscriber_id=payload.subscriber_id,
             tenant_id=payload.tenant_id,
             space_id=payload.space_id,

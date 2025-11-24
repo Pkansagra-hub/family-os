@@ -228,7 +228,42 @@ class SnapshotScheduler:
             payload_sha256=payload_hash,
             idem_key=None,
         )
-        position = self._wal.append(entry, connection=connection)
+        # Insert directly using synchronous connection to avoid async/sync mismatch
+        # This is a workaround for snapshot creation being synchronous while WAL.append is async
+        cursor = connection.execute(
+            (
+                "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
+                "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                "location_geohash, location_precision_m) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                entry.tenant_id,
+                entry.space_id,
+                entry.topic,
+                entry.envelope_json,
+                entry.body,
+                entry.redacted_body_json,
+                entry.payload_sha256,
+                entry.schema_uri,
+                entry.schema_version,
+                entry.idem_key,
+                entry.device_id,
+                entry.commit_ts,
+                entry.envelope_sha256,
+                entry.ingested_at,
+                entry.clock_skew_ms,
+                entry.policy_stamp_json,
+                entry.location_geohash,
+                entry.location_precision_m,
+            ),
+        )
+        position = cursor.lastrowid
+        if position is None:
+            msg = "Failed to determine WAL position"
+            raise RuntimeError(msg)
+        position = int(position)
         LOGGER.info(
             "Appended snapshot marker %s at WAL position %s (snapshot_id=%s, watermark=%s)",
             marker_type,

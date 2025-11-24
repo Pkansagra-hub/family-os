@@ -4,10 +4,12 @@ services:
   k0-kernel:
     image: k0-kernel-local:latest
     container_name: k0-kernel
+    user: "0:0" # Run as root to fix Windows volume permission issues
     env_file:
       - ./env/k0.env
     volumes:
-      - ./data:/data
+      - ../:/app/k0 # Mount source code for hot reloading
+      - k0-data:/data # Use Docker volume instead of bind mount for SQLite WAL compatibility
       - ./secrets:/secrets:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
@@ -86,6 +88,7 @@ services:
   #     - k0-local
 
 volumes:
+  k0-data: # Docker-managed volume for SQLite database (better Windows compatibility)
   neo4j-data:
   neo4j-logs:
 

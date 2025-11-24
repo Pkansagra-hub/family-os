@@ -71,7 +71,7 @@ class SSEServer:
     SHED_LAG_MS: int = 15_000
     SHED_PENDING: int = 50_000
 
-    def subscribe(
+    async def subscribe(
         self,
         *,
         tenant_id: str,
@@ -101,7 +101,7 @@ class SSEServer:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "CURSOR_SCOPE_MISMATCH")
             last_position = cursor_state.last_position
 
-        rows = self.wal.read_from(
+        rows = await self.wal.read_from(
             last_position,
             min(fanout_limit, self.max_batch),
             connection=self.database_connection,
@@ -116,7 +116,7 @@ class SSEServer:
 
         return filtered_rows, permitted_topics
 
-    def evaluate_backpressure(
+    async def evaluate_backpressure(
         self,
         *,
         subscriber_id: str,
@@ -131,7 +131,7 @@ class SSEServer:
         now = datetime.now(tz=timezone.utc)
 
         for topic in topics:
-            offset_record = self.offset_store.fetch(
+            offset_record = await self.offset_store.fetch(
                 subscriber_id,
                 topic,
                 space_id,
@@ -143,7 +143,7 @@ class SSEServer:
             ack_ts_raw = offset_record.updated_ts if offset_record else None
             ack_ts = self._parse_iso8601(ack_ts_raw) if ack_ts_raw else None
 
-            stats = self.wal.backlog_stats(
+            stats = await self.wal.backlog_stats(
                 tenant_id=tenant_id,
                 space_id=space_id,
                 topic=topic,
@@ -200,7 +200,7 @@ class SSEServer:
             ack_offsets=ack_offsets,
         )
 
-    def acknowledge(
+    async def acknowledge(
         self,
         *,
         subscriber_id: str,
@@ -221,7 +221,7 @@ class SSEServer:
             offset=offset,
             updated_ts=ack_ts.isoformat(),
         )
-        self.offset_store.upsert(record, connection=self.database_connection)
+        await self.offset_store.upsert(record, connection=self.database_connection)
 
     def _load_acl(
         self,

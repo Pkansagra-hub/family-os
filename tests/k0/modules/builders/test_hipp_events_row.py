@@ -79,128 +79,123 @@ def make_test_call(envelope: Dict[str, Any], **config: Any):
 
 @pytest.fixture
 def base_envelope() -> Dict[str, Any]:
-    """Base envelope with all required fields"""
+    """Base envelope with P02 hybrid structure (identity flat, body/policy nested)"""
     return {
-        "header": {
-            "event_id": "evt_123456",
-            "wal_pos": 1001,
-            "trace_id": "trace_abc123",
-            "tenant_id": "tenant_family123",
-            "space_id": "space_personal_dad",
-            "topic": "cognitive.memory.write.v1",
-            "uow_id": "uow_xyz789",
-            "envelope_sha256": "sha256_hash_here",
-            "sig_alg": "ECDSA_P256_SHA256",
-            "sig_kid": "key_2025_01",
-            "idem_key": "idem_123",
-            "ingressed_at": 1700000000,
-            "clock_skew_ms": 50,
-            "device_id": "device_iphone_dad",
-            "actor_id": "person_dad",
-        },
+        # Identity & Trace (flat at top level)
+        "cognitive_trace_id": "trace_abc123",
+        "wal_pos": 1001,
+        "tenant_id": "tenant_family123",
+        "space_id": "space_personal_dad",
+        "topic": "cognitive.memory.write.v1",
+        "uow_id": "uow_xyz789",
+        "schema_version": "1.0.0",
+        # Integrity & Audit (flat at top level)
+        "envelope_sha256": "sha256_hash_here",
+        "sig_alg": "ECDSA_P256_SHA256",
+        "sig_kid": "key_2025_01",
+        "idem_key": "idem_123",
+        "ingested_at": 1700000000,
+        "clock_skew_ms": 50,
+        # Device and actor at top level (used by map_actor_device_group)
+        "device_id": "device_iphone_dad",
+        "actor": "person_dad",  # Note: field is 'actor' not 'actor_id'
+        "actor_role": "SELF",
+        # Body fields (NESTED structure still used by social/semantic modules)
         "body": {
-            "actor_id": "person_dad",
+            "actor": "person_dad",
             "actor_role": "SELF",
-            "device_id": "device_iphone_dad",
             "text": "Had dinner with family at Olive Garden",
             "language": "en",
             "participants": ["person_dad", "person_mom", "person_sharvi"],
             "is_meal": True,
             "is_outing": True,
         },
+        # Policy stamp (NESTED structure still used by module)
         "policy_stamp": {
             "decision": "ALLOW",
             "band": "GREEN",
             "version": "1.0.0",
             "obligations": ["mask.location.precision"],
         },
-        "outputs": {},
     }
 
 
 @pytest.fixture
-def complete_module_outputs() -> Dict[str, Dict[str, Any]]:
-    """Complete outputs from all 13 enrichment modules"""
+def complete_module_outputs() -> Dict[str, Any]:
+    """Complete outputs from all 13 enrichment modules - flat fields to merge into envelope"""
     return {
-        "pattern_separate": {
-            "simhash_hex": "a1b2c3d4e5f60708",
-            "minhash32": json.dumps([1234, 5678, 9012, 3456] * 8),
-        },
-        "semantic_project": {
-            "embedding_id": "emb_uuid_123",
-            "entities": ["Olive_Garden", "person_mom", "person_sharvi"],
-            "kg_triples": [
+        # M01 pattern_separate outputs (flat)
+        "simhash_hex": "a1b2c3d4e5f60708",
+        "minhash32": json.dumps([1234, 5678, 9012, 3456] * 8),
+        # M02 semantic_project outputs (flat)
+        "embedding_id": "emb_uuid_123",
+        "entities_json": json.dumps(["Olive_Garden", "person_mom", "person_sharvi"]),
+        "kg_triples_json": json.dumps(
+            [
                 ["person_dad", "had_dinner_with", "person_mom"],
                 ["person_dad", "dined_at", "Olive_Garden"],
-            ],
-        },
-        "policy_stamp": {"effective_band": "GREEN", "obligations": ["mask.location.precision"]},
-        "affect_analyze": {
-            "valence": 0.8,
-            "arousal": 0.6,
-            "sentiment_score": 0.75,
-            "sentiment_label": "positive",
-            "dominant_emotions": ["joy", "contentment"],
-            "affect_band": "GREEN",
-        },
-        "space_resolve": {
-            "owner_id": "person_dad",
-            "effective_space_id": "space_personal_dad",
-            "visible_to": ["person_dad", "person_mom"],
-            "visibility_scope": "SPACE_DEFAULT",
-            "co_owners": ["person_mom"],
-        },
-        "salience_score": {
-            "salience_score": 0.85,
-            "salience_reasons": ["social_family", "positive_affect", "meal_outside_home"],
-            "salience_band": "HIGH",
-        },
-        "family_graph_resolve": {
-            "num_participants": 3,
-            "participant_roles_json": json.dumps(
-                {"person_dad": "SELF", "person_mom": "SPOUSE", "person_sharvi": "CHILD"}
-            ),
-            "has_partner_present": True,
-            "has_parent_present": False,
-            "is_solo_event": False,
-            "social_context": "nuclear_family",
-            "social_intimacy": "HIGH",
-        },
-        "temporal_profile": {
-            "event_time_utc": 1700000000,
-            "write_time_utc": 1700000100,
-            "write_lag_ms": 100,
-            "local_date": "2023-11-15",
-            "local_time": "18:30:00",
-            "day_of_week": "wednesday",
-            "is_weekend": False,
-            "time_of_day_bucket": "evening",
-            "circadian_slot": "dinner",
-            "is_backdated": False,
-        },
-        "device_profile": {"device_kind": "phone", "device_os": "iOS"},
-        "ingress_classify": {
-            "ingress_topic": "write",
-            "activity_type": "meal",
-            "activity_category": "episodic",
-            "ingress_source": "mobile_app",
-        },
-        "retention_lookup": {
-            "retention_policy_id": "policy_green_7y",
-            "retention_bucket": "STANDARD",
-        },
-        "geo_metadata": {
-            "geohash_6": "9q8yy9",
-            "location_name": "Olive Garden, Market St",
-            "location_type": "restaurant",
-            "geo_precision_external": "full",
-            "geo_masking_reason": "none",
-        },
-        "spatial_minimal": {
-            "geohash_6": "9q8yy9",
-            "location_name": "Olive Garden, Market St",
-            "location_type": "restaurant",
-        },
+            ]
+        ),
+        # M03 policy_stamp outputs (flat)
+        "effective_band": "GREEN",
+        "policy_obligations": ["mask.location.precision"],
+        # M04 affect_analyze outputs (flat)
+        "valence": 0.8,
+        "arousal": 0.6,
+        "sentiment_score": 0.8,
+        "sentiment_label": "positive",
+        "dominant_emotions_json": json.dumps(["joy", "contentment"]),
+        "affect_band": "GREEN",
+        # M05 space_resolve outputs (flat)
+        "owner_id": "person_dad",
+        "effective_space_id": "space_personal_dad",
+        "visible_to_json": json.dumps(["person_dad", "person_mom"]),
+        "visibility_scope": "SPACE_DEFAULT",
+        "co_owners_json": json.dumps(["person_mom"]),
+        # M06 salience_score outputs (flat)
+        "salience_score": 0.85,
+        "salience_reasons_json": json.dumps(
+            ["social_family", "positive_affect", "meal_outside_home"]
+        ),
+        "salience_band": "HIGH",
+        # M07 family_graph_resolve outputs (flat)
+        "num_participants": 3,
+        "participant_roles_json": json.dumps(
+            {"person_dad": "SELF", "person_mom": "SPOUSE", "person_sharvi": "CHILD"}
+        ),
+        "has_partner_present": True,
+        "has_parent_present": False,
+        "is_solo_event": False,
+        "social_context": "nuclear_family",
+        "social_intimacy": "HIGH",
+        # M08 temporal_profile outputs (flat)
+        "event_time_utc": 1700000000,
+        "write_time_utc": 1700000100,
+        "write_lag_ms": 100,
+        "local_date": "2023-11-15",
+        "local_time": "18:30:00",
+        "day_of_week": "wednesday",
+        "is_weekend": False,
+        "time_of_day_bucket": "evening",
+        "circadian_slot": "dinner",
+        "is_backdated": False,
+        # M09 device_profile outputs (flat)
+        "device_kind": "phone",
+        "device_os": "iOS",
+        # M10 ingress_classify outputs (flat)
+        "ingress_topic": "write",
+        "activity_type": "meal",
+        "activity_category": "episodic",
+        "ingress_source": "mobile_app",
+        # M11 retention_lookup outputs (flat)
+        "retention_policy_id": "policy_green_7y",
+        "retention_bucket": "STANDARD",
+        # M12 geo_metadata outputs (flat)
+        "geohash_6": "9q8yy9",
+        "location_name": "Olive Garden, Market St",
+        "location_type": "restaurant",
+        "geo_precision_external": "full",
+        "geo_masking_reason": "none",
     }
 
 
@@ -212,10 +207,15 @@ def complete_module_outputs() -> Dict[str, Dict[str, Any]]:
 @pytest.mark.asyncio
 async def test_identity_group_assembly(base_envelope, complete_module_outputs):
     """Test identity & trace column group (9 columns)"""
-    space_output = complete_module_outputs["space_resolve"]
-    result = map_identity_group(base_envelope, space_output)
+    # Merge outputs into envelope (P02 flat format)
+    envelope = {**base_envelope, **complete_module_outputs}
+    # Extract space output from flat envelope
+    space_output = {
+        "effective_space_id": envelope.get("effective_space_id"),
+    }
+    result = map_identity_group(envelope, space_output)
 
-    assert result["event_id"] == "evt_123456"
+    assert result["event_id"] == "trace_abc123"  # event_id is cognitive_trace_id
     assert result["wal_pos"] == 1001
     assert result["cognitive_trace_id"] == "trace_abc123"
     assert result["tenant_id"] == "tenant_family123"
@@ -242,11 +242,22 @@ async def test_integrity_group_assembly(base_envelope):
 @pytest.mark.asyncio
 async def test_policy_group_assembly(base_envelope, complete_module_outputs):
     """Test policy & visibility column group (10 columns)"""
-    policy_output = complete_module_outputs["policy_stamp"]
-    space_output = complete_module_outputs["space_resolve"]
-    retention_output = complete_module_outputs["retention_lookup"]
+    # Merge outputs into envelope (P02 flat format)
+    envelope = {**base_envelope, **complete_module_outputs}
+    # Extract structured outputs from flat envelope
+    policy_output = {"obligations": envelope.get("policy_obligations", [])}
+    space_output = {
+        "visible_to": json.loads(envelope.get("visible_to_json", "[]")),
+        "visibility_scope": envelope.get("visibility_scope"),
+        "owner_id": envelope.get("owner_id"),
+        "co_owners": json.loads(envelope.get("co_owners_json", "[]")),
+    }
+    retention_output = {
+        "retention_policy_id": envelope.get("retention_policy_id"),
+        "retention_bucket": envelope.get("retention_bucket"),
+    }
 
-    result = map_policy_group(base_envelope, policy_output, space_output, retention_output)
+    result = map_policy_group(envelope, policy_output, space_output, retention_output)
 
     assert result["policy_decision"] == "ALLOW"
     assert result["policy_band"] == "GREEN"
@@ -263,10 +274,16 @@ async def test_policy_group_assembly(base_envelope, complete_module_outputs):
 @pytest.mark.asyncio
 async def test_actor_device_group_assembly(base_envelope, complete_module_outputs):
     """Test actor & device column group (6 columns)"""
-    device_output = complete_module_outputs["device_profile"]
-    ingress_output = complete_module_outputs["ingress_classify"]
+    # Merge outputs into envelope (P02 flat format)
+    envelope = {**base_envelope, **complete_module_outputs}
+    # Extract structured outputs from flat envelope
+    device_output = {
+        "device_kind": envelope.get("device_kind"),
+        "device_os": envelope.get("device_os"),
+    }
+    ingress_output = {"ingress_topic": envelope.get("ingress_topic")}
 
-    result = map_actor_device_group(base_envelope, device_output, ingress_output)
+    result = map_actor_device_group(envelope, device_output, ingress_output)
 
     assert result["actor_id"] == "person_dad"
     assert result["actor_role"] == "SELF"
@@ -279,7 +296,22 @@ async def test_actor_device_group_assembly(base_envelope, complete_module_output
 @pytest.mark.asyncio
 async def test_temporal_group_assembly(complete_module_outputs):
     """Test temporal column group (11 columns)"""
-    temporal_output = complete_module_outputs["temporal_profile"]
+    # Extract temporal fields from flat envelope
+    temporal_output = {
+        k: complete_module_outputs.get(k)
+        for k in [
+            "event_time_utc",
+            "write_time_utc",
+            "write_lag_ms",
+            "local_date",
+            "local_time",
+            "day_of_week",
+            "is_weekend",
+            "time_of_day_bucket",
+            "circadian_slot",
+            "is_backdated",
+        ]
+    }
 
     result = map_temporal_group(temporal_output)
 
@@ -299,8 +331,19 @@ async def test_temporal_group_assembly(complete_module_outputs):
 @pytest.mark.asyncio
 async def test_spatial_group_assembly(complete_module_outputs):
     """Test spatial & place column group (5 columns)"""
-    geo_output = complete_module_outputs["geo_metadata"]
-    spatial_output = complete_module_outputs["spatial_minimal"]
+    # Extract spatial fields from flat envelope
+    geo_output = {
+        "geo_precision_external": complete_module_outputs.get("geo_precision_external"),
+        "geo_masking_reason": complete_module_outputs.get("geo_masking_reason"),
+        "location_name": complete_module_outputs.get("location_name"),
+        "location_type": complete_module_outputs.get("location_type"),
+        "geohash_6": complete_module_outputs.get("geohash_6"),
+    }
+    spatial_output = {
+        "geohash_6": complete_module_outputs.get("geohash_6"),
+        "location_name": complete_module_outputs.get("location_name"),
+        "location_type": complete_module_outputs.get("location_type"),
+    }
 
     result = map_spatial_group(geo_output, spatial_output)
 
@@ -314,9 +357,20 @@ async def test_spatial_group_assembly(complete_module_outputs):
 @pytest.mark.asyncio
 async def test_social_group_assembly(base_envelope, complete_module_outputs):
     """Test social & relationships column group (7 columns)"""
-    social_output = complete_module_outputs["family_graph_resolve"]
+    # Merge outputs into envelope
+    envelope = {**base_envelope, **complete_module_outputs}
+    # Extract social fields from flat envelope
+    social_output = {
+        "num_participants": envelope.get("num_participants"),
+        "has_partner_present": envelope.get("has_partner_present"),
+        "has_parent_present": envelope.get("has_parent_present"),
+        "is_solo_event": envelope.get("is_solo_event"),
+        "social_context": envelope.get("social_context"),
+        "social_intimacy": envelope.get("social_intimacy"),
+        "participant_roles_json": envelope.get("participant_roles_json"),
+    }
 
-    result = map_social_group(base_envelope, social_output)
+    result = map_social_group(envelope, social_output)
 
     participants = json.loads(result["participants_json"])
     assert participants == ["person_dad", "person_mom", "person_sharvi"]
@@ -331,13 +385,20 @@ async def test_social_group_assembly(base_envelope, complete_module_outputs):
 @pytest.mark.asyncio
 async def test_semantic_activity_group_assembly(base_envelope, complete_module_outputs):
     """Test semantic & activity column group (9 columns)"""
-    ingress_output = complete_module_outputs["ingress_classify"]
+    # Merge outputs into envelope
+    envelope = {**base_envelope, **complete_module_outputs}
+    # Extract ingress fields from flat envelope
+    ingress_output = {
+        "activity_type": envelope.get("activity_type"),
+        "activity_category": envelope.get("activity_category"),
+        "ingress_source": envelope.get("ingress_source"),
+    }
 
-    result = map_semantic_activity_group(base_envelope, ingress_output)
+    result = map_semantic_activity_group(envelope, ingress_output)
 
     assert result["text"] == "Had dinner with family at Olive Garden"
     assert result["text_normalized"] == "had dinner with family at olive garden"
-    assert result["char_count"] == 38  # Actual length of "Had dinner with family at Olive Garden"
+    assert result["char_count"] == 38  # Actual length counted by module
     assert result["token_count"] == 7
     assert result["language"] == "en"
     assert result["activity_type"] == "meal"
@@ -350,8 +411,14 @@ async def test_semantic_activity_group_assembly(base_envelope, complete_module_o
 @pytest.mark.asyncio
 async def test_hippocampus_group_assembly(complete_module_outputs):
     """Test hippocampus column group (8 columns) - CA3 deferred"""
-    dg_output = complete_module_outputs["pattern_separate"]
-    ca1_output = complete_module_outputs["semantic_project"]
+    # Extract DG and CA1 fields from flat envelope
+    dg_output = {
+        "simhash_hex": complete_module_outputs.get("simhash_hex"),
+        "minhash32": complete_module_outputs.get("minhash32"),
+    }
+    ca1_output = {
+        "embedding_id": complete_module_outputs.get("embedding_id"),
+    }
 
     result = map_hippocampus_group(dg_output, ca1_output)
 
@@ -369,7 +436,12 @@ async def test_hippocampus_group_assembly(complete_module_outputs):
 @pytest.mark.asyncio
 async def test_embeddings_kg_group_assembly(complete_module_outputs):
     """Test embeddings & KG column group (4 columns)"""
-    ca1_output = complete_module_outputs["semantic_project"]
+    # Extract CA1 fields from flat envelope
+    ca1_output = {
+        "embedding_id": complete_module_outputs.get("embedding_id"),
+        "entities": json.loads(complete_module_outputs.get("entities_json", "[]")),
+        "kg_triples": json.loads(complete_module_outputs.get("kg_triples_json", "[]")),
+    }
 
     result = map_embeddings_kg_group(ca1_output)
 
@@ -384,12 +456,26 @@ async def test_embeddings_kg_group_assembly(complete_module_outputs):
 @pytest.mark.asyncio
 async def test_affect_salience_group_assembly(complete_module_outputs):
     """Test affect & salience column group (9 columns)"""
-    affect_output = complete_module_outputs["affect_analyze"]
-    salience_output = complete_module_outputs["salience_score"]
+    # Extract affect and salience fields from flat envelope
+    affect_output = {
+        "sentiment_score": complete_module_outputs.get("sentiment_score"),
+        "sentiment_label": complete_module_outputs.get("sentiment_label"),
+        "dominant_emotions": json.loads(
+            complete_module_outputs.get("dominant_emotions_json", "[]")
+        ),
+        "valence": complete_module_outputs.get("valence"),
+        "arousal": complete_module_outputs.get("arousal"),
+        "affect_band": complete_module_outputs.get("affect_band"),
+    }
+    salience_output = {
+        "salience_score": complete_module_outputs.get("salience_score"),
+        "salience_reasons": json.loads(complete_module_outputs.get("salience_reasons_json", "[]")),
+        "salience_band": complete_module_outputs.get("salience_band"),
+    }
 
     result = map_affect_salience_group(affect_output, salience_output)
 
-    assert result["sentiment_score"] == 0.75
+    assert result["sentiment_score"] == 0.8
     assert result["sentiment_label"] == "positive"
     emotions = json.loads(result["dominant_emotions_json"])
     assert emotions == ["joy", "contentment"]
@@ -442,8 +528,8 @@ async def test_json_serialization_none():
 @pytest.mark.asyncio
 async def test_validation_required_fields_success(base_envelope, complete_module_outputs):
     """Test validation passes with all required fields"""
-    base_envelope["outputs"] = complete_module_outputs
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
@@ -510,9 +596,9 @@ async def test_validation_enum_values_invalid():
 async def test_full_row_assembly(base_envelope, complete_module_outputs):
     """Test complete row assembly from all modules"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
@@ -541,36 +627,44 @@ async def test_row_assembly_with_missing_optional_outputs(base_envelope):
     """Test row assembly handles missing optional module outputs"""
     reset_metrics()
 
-    # Only provide required outputs
-    base_envelope["outputs"] = {
-        "pattern_separate": {"simhash_hex": "abc123", "minhash32": "[]"},
-        "semantic_project": {"embedding_id": "emb_123", "entities": [], "kg_triples": []},
-        "policy_stamp": {"effective_band": "GREEN", "obligations": []},
-        "affect_analyze": {"valence": 0.5, "arousal": 0.5, "affect_band": "GREEN"},
-        "space_resolve": {
-            "owner_id": "person_dad",
-            "visible_to": [],
-            "visibility_scope": "OWNER_ONLY",
-        },
-        "salience_score": {"salience_score": 0.5, "salience_reasons": [], "salience_band": "MED"},
-        "family_graph_resolve": {"social_context": "solo", "is_solo_event": True},
-        "temporal_profile": {"event_time_utc": 1700000000, "write_time_utc": 1700000000},
-        "device_profile": {"device_kind": "unknown"},
-        "ingress_classify": {"ingress_topic": "write", "activity_type": "unknown"},
-        "retention_lookup": {
-            "retention_policy_id": "policy_default",
-            "retention_bucket": "STANDARD",
-        },
+    # Only provide required outputs (flat structure)
+    minimal_outputs = {
+        "simhash_hex": "abc123",
+        "minhash32": "[]",
+        "embedding_id": "emb_123",
+        "entities_json": "[]",
+        "kg_triples_json": "[]",
+        "effective_band": "GREEN",
+        "policy_obligations": [],
+        "valence": 0.5,
+        "arousal": 0.5,
+        "affect_band": "GREEN",
+        "owner_id": "person_dad",
+        "visible_to_json": "[]",
+        "visibility_scope": "OWNER_ONLY",
+        "salience_score": 0.5,
+        "salience_reasons_json": "[]",
+        "salience_band": "MED",
+        "social_context": "solo",
+        "is_solo_event": True,
+        "event_time_utc": 1700000000,
+        "write_time_utc": 1700000000,
+        "device_kind": "unknown",
+        "ingress_topic": "write",
+        "activity_type": "unknown",
+        "retention_policy_id": "policy_default",
+        "retention_bucket": "STANDARD",
         "geo_metadata": {},
         "spatial_minimal": {},
     }
+    enriched_envelope = {**base_envelope, **minimal_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
     # Should succeed with defaults
-    assert row["event_id"] == "evt_123456"
+    assert row["event_id"] == "trace_abc123"  # Module uses cognitive_trace_id as event_id
     assert row["salience_score"] == 0.5
 
 
@@ -578,13 +672,13 @@ async def test_row_assembly_with_missing_optional_outputs(base_envelope):
 async def test_row_assembly_idempotency(base_envelope, complete_module_outputs):
     """Test row assembly is idempotent"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
-    message1, context1, config1 = make_test_call(base_envelope, validate_required_fields=True)
+    message1, context1, config1 = make_test_call(enriched_envelope, validate_required_fields=True)
     result1 = await run(message1, context1, **config1)
     row1 = result1["hipp_events_row"]
 
-    message2, context2, config2 = make_test_call(base_envelope, validate_required_fields=True)
+    message2, context2, config2 = make_test_call(enriched_envelope, validate_required_fields=True)
     result2 = await run(message2, context2, **config2)
     row2 = result2["hipp_events_row"]
 
@@ -604,7 +698,7 @@ async def test_row_assembly_idempotency(base_envelope, complete_module_outputs):
 async def test_error_missing_module_output(base_envelope):
     """Test error handling when critical module output missing"""
     reset_metrics()
-    base_envelope["outputs"] = {}  # No module outputs
+    # No module outputs merged - base_envelope alone is incomplete
 
     message, context, config = make_test_call(base_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
@@ -627,7 +721,10 @@ async def test_error_invalid_json_data():
 async def test_error_missing_envelope_header(complete_module_outputs):
     """Test error handling when envelope header missing"""
     reset_metrics()
-    bad_envelope = {"body": {}, "outputs": complete_module_outputs}
+    bad_envelope = {
+        **{"body": {}},
+        **complete_module_outputs,
+    }  # Missing cognitive_trace_id, wal_pos, etc.
 
     message, context, config = make_test_call(bad_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
@@ -638,11 +735,12 @@ async def test_error_missing_envelope_header(complete_module_outputs):
 async def test_error_malformed_module_output(base_envelope, complete_module_outputs):
     """Test error handling with malformed module output"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
-    # Break temporal output
-    base_envelope["outputs"]["temporal_profile"] = {}
+    # Break temporal output by removing required field
+    broken_outputs = {**complete_module_outputs}
+    del broken_outputs["event_time_utc"]  # Remove required temporal field
+    enriched_envelope = {**base_envelope, **broken_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     with pytest.raises(ValueError, match="Missing required field"):
         await run(message, context, **config)
 
@@ -656,11 +754,11 @@ async def test_error_malformed_module_output(base_envelope, complete_module_outp
 async def test_performance_under_10ms(base_envelope, complete_module_outputs):
     """Test row assembly meets <10ms P95 budget"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
     latencies = []
     for _ in range(100):
-        message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+        message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
         start = time.perf_counter()
         await run(message, context, **config)
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -706,14 +804,14 @@ async def test_performance_json_serialization():
 
 @pytest.mark.asyncio
 async def test_metrics_tracking(base_envelope, complete_module_outputs):
-    """Test metrics are tracked correctly"""
+    """Test that metrics are tracked correctly"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
-    message1, context1, config1 = make_test_call(base_envelope, validate_required_fields=True)
+    message1, context1, config1 = make_test_call(enriched_envelope, validate_required_fields=True)
     await run(message1, context1, **config1)
 
-    message2, context2, config2 = make_test_call(base_envelope, validate_required_fields=True)
+    message2, context2, config2 = make_test_call(enriched_envelope, validate_required_fields=True)
     await run(message2, context2, **config2)
 
     metrics = get_metrics()
@@ -744,8 +842,8 @@ async def test_edge_case_solo_event(base_envelope, complete_module_outputs):
     """Test row assembly for solo event (no participants)"""
     reset_metrics()
     base_envelope["body"]["participants"] = []
-    base_envelope["outputs"] = complete_module_outputs
-    base_envelope["outputs"]["family_graph_resolve"] = {
+    # Override family_graph_resolve outputs for solo event
+    solo_outputs = {
         "num_participants": 0,
         "is_solo_event": True,
         "social_context": "solo",
@@ -753,8 +851,9 @@ async def test_edge_case_solo_event(base_envelope, complete_module_outputs):
         "has_partner_present": False,
         "has_parent_present": False,
     }
+    enriched_envelope = {**base_envelope, **complete_module_outputs, **solo_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
@@ -768,10 +867,10 @@ async def test_edge_case_red_band_event(base_envelope, complete_module_outputs):
     """Test row assembly for RED band event"""
     reset_metrics()
     base_envelope["policy_stamp"]["band"] = "RED"
-    base_envelope["outputs"] = complete_module_outputs
-    base_envelope["outputs"]["policy_stamp"]["effective_band"] = "RED"
+    base_envelope["band"] = "RED"  # Module reads 'band' from envelope root level
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
@@ -783,9 +882,9 @@ async def test_edge_case_empty_text(base_envelope, complete_module_outputs):
     """Test row assembly with empty text"""
     reset_metrics()
     base_envelope["body"]["text"] = ""
-    base_envelope["outputs"] = complete_module_outputs
+    enriched_envelope = {**base_envelope, **complete_module_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
@@ -798,13 +897,18 @@ async def test_edge_case_empty_text(base_envelope, complete_module_outputs):
 async def test_edge_case_missing_geohash(base_envelope, complete_module_outputs):
     """Test row assembly with missing geohash (privacy)"""
     reset_metrics()
-    base_envelope["outputs"] = complete_module_outputs
-    base_envelope["outputs"]["geo_metadata"] = {"geo_masking_reason": "band_policy"}
-    base_envelope["outputs"]["spatial_minimal"] = {}
+    # Override geo outputs with masked values and remove geohash fields
+    masked_outputs = {**complete_module_outputs}
+    # Remove geohash fields to test missing location scenario
+    masked_outputs.pop("geohash_6", None)
+    masked_outputs.pop("geohash_9", None)
+    masked_outputs["geo_masking_reason"] = "band_policy"  # Module reads from envelope root
+    enriched_envelope = {**base_envelope, **masked_outputs}
 
-    message, context, config = make_test_call(base_envelope, validate_required_fields=True)
+    message, context, config = make_test_call(enriched_envelope, validate_required_fields=True)
     result = await run(message, context, **config)
     row = result["hipp_events_row"]
 
     assert row["geohash_6"] is None
+    assert row["geo_masking_reason"] == "band_policy"
     assert row["geo_masking_reason"] == "band_policy"

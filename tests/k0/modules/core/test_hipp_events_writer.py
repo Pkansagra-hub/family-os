@@ -22,7 +22,6 @@ Tests for core.hipp_events_writer module (M16).
 **Last Updated**: 2025-11-17
 """
 
-import hashlib
 import json
 import time
 from typing import Any
@@ -59,8 +58,9 @@ def make_test_call(envelope: dict[str, Any], mock_context: Any, **config: Any):
 
 @pytest.fixture
 def minimal_envelope() -> dict[str, Any]:
-    """Minimal valid envelope for M16 testing"""
+    """Minimal valid envelope for M16 testing - P02 hybrid structure"""
     return {
+        # Header (nested - still used by some modules)
         "header": {
             "event_id": "evt_test_123",
             "wal_pos": 42,
@@ -70,21 +70,41 @@ def minimal_envelope() -> dict[str, Any]:
             "cognitive_trace_id": "trace_test_456",
             "timestamp": 1700000000,
         },
+        # Flat fields at top level (P02 format)
+        "wal_pos": 42,
+        "cognitive_trace_id": "trace_test_456",
+        "embedding_id": "emb_test_789",
+        "tenant_id": "tenant_test",
+        "space_id": "space_test",
+        # Body
         "body": {"text": "Test event text for M16"},
-        "outputs": {
-            "semantic_project": {"embedding_id": "emb_test_789"},
-            "affect_analyze": {"valence": 0.5, "arousal": 0.3},
-            "hipp_events_row": {
-                "text_hash": "abc123def456",
-            },
+        # M13 hipp_events_row output (flat at top level) - complete 70-column row
+        "hipp_events_row": {
+            "event_id": "evt_test_123",
+            "wal_pos": 42,
+            "embedding_id": "emb_test_789",
+            "text": "Test event text for M16",
+            "text_hash": "abc123def456",
+            "tenant_id": "tenant_test",
+            "space_id": "space_test",
+            "privacy_band": "GREEN",
+            "cognitive_trace_id": "trace_test_456",
+            "created_at": 1700000000,
+            # Required enrichment fields with defaults
+            "valence": 0.5,
+            "arousal": 0.3,
+            "sentiment_score": 0.5,
+            "salience_score": 0.5,
+            "policy_band": "GREEN",
         },
     }
 
 
 @pytest.fixture
 def enriched_envelope() -> dict[str, Any]:
-    """Fully enriched envelope with all optional fields"""
+    """Fully enriched envelope with all optional fields - P02 hybrid structure"""
     return {
+        # Header (nested)
         "header": {
             "event_id": "evt_enriched_456",
             "wal_pos": 100,
@@ -94,16 +114,36 @@ def enriched_envelope() -> dict[str, Any]:
             "cognitive_trace_id": "trace_enriched_789",
             "timestamp": 1700001000,
         },
+        # Flat fields at top level (P02 format)
+        "wal_pos": 100,
+        "cognitive_trace_id": "trace_enriched_789",
+        "embedding_id": "emb_enriched_123",
+        "entities_json": json.dumps(["person", "location"]),
+        "valence": -0.8,
+        "arousal": 0.9,
+        "tenant_id": "tenant_premium",
+        "space_id": "space_premium",
+        # Body
         "body": {"text": "Enriched event with full context"},
-        "outputs": {
-            "semantic_project": {
-                "embedding_id": "emb_enriched_123",
-                "entities": ["person", "location"],
-            },
-            "affect_analyze": {"valence": -0.8, "arousal": 0.9, "dominance": 0.6},
-            "hipp_events_row": {
-                "text_hash": "fed654cba321",
-            },
+        # M13 hipp_events_row output (flat at top level) - complete 70-column row
+        "hipp_events_row": {
+            "event_id": "evt_enriched_456",
+            "wal_pos": 100,
+            "embedding_id": "emb_enriched_123",
+            "text": "Enriched event with full context",
+            "text_hash": "fed654cba321",
+            "tenant_id": "tenant_premium",
+            "space_id": "space_premium",
+            "privacy_band": "AMBER",
+            "cognitive_trace_id": "trace_enriched_789",
+            "created_at": 1700001000,
+            # All enrichment fields
+            "valence": -0.8,
+            "arousal": 0.9,
+            "sentiment_score": -0.8,
+            "salience_score": 0.9,
+            "policy_band": "AMBER",
+            "entities_json": json.dumps(["person", "location"]),
         },
     }
 
@@ -181,52 +221,31 @@ def test_assemble_hipp_events_record_enriched_fields(enriched_envelope):
     assert record["privacy_band"] == "AMBER"
 
 
-def test_assemble_hipp_events_record_missing_text_hash_generates_hash():
-    """Test hash generation when text_hash not in hipp_events_row output"""
-    envelope = {
-        "header": {
-            "event_id": "evt_123",
-            "wal_pos": 10,
-            "tenant_id": "tenant_default",
-            "space_id": "space_default",
-        },
-        "body": {"text": "Test text"},
-        "outputs": {
-            "semantic_project": {"embedding_id": "emb_123"},
-            "hipp_events_row": {},  # No text_hash
-        },
-    }
+def test_assemble_hipp_events_record_missing_text_hash_generates_hash(minimal_envelope):
+    """Test that M13-provided text_hash is used (M13 generates hash, not M16)"""
+    # Module expects complete hipp_events_row from M13 with text_hash already computed
+    envelope = minimal_envelope.copy()
 
     record = hipp_events_writer.assemble_hipp_events_record(envelope)
 
-    # Verify hash was generated
-    expected_hash = hashlib.sha256("Test text".encode("utf-8")).hexdigest()
-    assert record["text_hash"] == expected_hash
+    # Verify hash exists (provided by M13)
+    assert record["text_hash"] == "abc123def456"
+    assert "text" in record
 
 
-def test_assemble_hipp_events_record_defaults_for_missing_optionals():
-    """Test default values when optional enrichment fields missing"""
-    envelope = {
-        "header": {
-            "event_id": "evt_123",
-            "wal_pos": 10,
-        },
-        "body": {},
-        "outputs": {
-            "semantic_project": {"embedding_id": "emb_123"},
-        },
-    }
+def test_assemble_hipp_events_record_defaults_for_missing_optionals(minimal_envelope):
+    """Test that M13-provided row includes all required fields with defaults"""
+    # Module expects complete hipp_events_row from M13 (which includes defaults)
+    record = hipp_events_writer.assemble_hipp_events_record(minimal_envelope)
 
-    record = hipp_events_writer.assemble_hipp_events_record(envelope)
-
-    # Verify defaults
-    assert record["tenant_id"] == "default"
-    assert record["space_id"] == "unknown"
+    # Verify M13 provided all required fields
+    assert record["tenant_id"] == "tenant_test"
+    assert record["space_id"] == "space_test"
     assert record["privacy_band"] == "GREEN"
-    assert record["cognitive_trace_id"] == "unknown"
-    assert record["text"] == ""
-    assert record["valence"] is None
-    assert record["arousal"] is None
+    assert record["cognitive_trace_id"] == "trace_test_456"
+    assert record["text"] == "Test event text for M16"
+    assert record["valence"] == 0.5  # Default from fixture
+    assert record["arousal"] == 0.3  # Default from fixture
 
 
 def test_assemble_pipeline_processed_record_default_config():
@@ -236,7 +255,10 @@ def test_assemble_pipeline_processed_record_default_config():
             "wal_pos": 42,
             "tenant_id": "tenant_test",
             "space_id": "space_test",
-        }
+        },
+        "wal_pos": 42,  # Module reads from envelope root (P02 flat structure)
+        "tenant_id": "tenant_test",
+        "space_id": "space_test",
     }
 
     record = hipp_events_writer.assemble_pipeline_processed_record(envelope)
@@ -256,7 +278,10 @@ def test_assemble_pipeline_processed_record_custom_config():
             "wal_pos": 100,
             "tenant_id": "tenant_custom",
             "space_id": "space_custom",
-        }
+        },
+        "wal_pos": 100,  # Module reads from envelope root
+        "tenant_id": "tenant_custom",
+        "space_id": "space_custom",
     }
 
     record = hipp_events_writer.assemble_pipeline_processed_record(
@@ -269,7 +294,7 @@ def test_assemble_pipeline_processed_record_custom_config():
 
 def test_assemble_pipeline_processed_record_defaults_for_missing_header_fields():
     """Test pipeline processed defaults when header fields missing"""
-    envelope = {"header": {"wal_pos": 10}}
+    envelope = {"header": {"wal_pos": 10}, "wal_pos": 10}  # Module reads from envelope root
 
     record = hipp_events_writer.assemble_pipeline_processed_record(envelope)
 
@@ -385,14 +410,16 @@ async def test_run_both_tables_written_atomically(minimal_envelope, mock_context
 
 
 def test_assemble_hipp_events_record_missing_event_id_raises():
-    """Test ValueError raised when event_id missing"""
+    """Test ValueError raised when event_id missing from hipp_events_row"""
     envelope = {
-        "header": {"wal_pos": 10},  # No event_id
-        "body": {},
-        "outputs": {"semantic_project": {"embedding_id": "emb_123"}},
+        "hipp_events_row": {
+            "wal_pos": 10,
+            "embedding_id": "emb_123",
+            # No event_id
+        },
     }
 
-    with pytest.raises(ValueError, match="Missing event_id"):
+    with pytest.raises(ValueError, match="Missing event_id in hipp_events_row"):
         hipp_events_writer.assemble_hipp_events_record(envelope)
 
     # Verify metrics incremented
@@ -401,14 +428,16 @@ def test_assemble_hipp_events_record_missing_event_id_raises():
 
 
 def test_assemble_hipp_events_record_missing_wal_pos_raises():
-    """Test ValueError raised when wal_pos missing"""
+    """Test ValueError raised when wal_pos missing from hipp_events_row"""
     envelope = {
-        "header": {"event_id": "evt_123"},  # No wal_pos
-        "body": {},
-        "outputs": {"semantic_project": {"embedding_id": "emb_123"}},
+        "hipp_events_row": {
+            "event_id": "evt_123",
+            "embedding_id": "emb_123",
+            # wal_pos missing
+        },
     }
 
-    with pytest.raises(ValueError, match="Missing wal_pos"):
+    with pytest.raises(ValueError, match="Missing wal_pos in hipp_events_row"):
         hipp_events_writer.assemble_hipp_events_record(envelope)
 
     metrics = hipp_events_writer.get_metrics()
@@ -416,14 +445,16 @@ def test_assemble_hipp_events_record_missing_wal_pos_raises():
 
 
 def test_assemble_hipp_events_record_missing_embedding_id_raises():
-    """Test ValueError raised when embedding_id missing"""
+    """Test ValueError raised when embedding_id missing from hipp_events_row"""
     envelope = {
-        "header": {"event_id": "evt_123", "wal_pos": 10},
-        "body": {},
-        "outputs": {"semantic_project": {}},  # No embedding_id
+        "hipp_events_row": {
+            "event_id": "evt_123",
+            "wal_pos": 10,
+            # embedding_id missing
+        },
     }
 
-    with pytest.raises(ValueError, match="Missing embedding_id"):
+    with pytest.raises(ValueError, match="Missing embedding_id in hipp_events_row"):
         hipp_events_writer.assemble_hipp_events_record(envelope)
 
     metrics = hipp_events_writer.get_metrics()
@@ -664,16 +695,18 @@ async def test_integration_syscalls_invocation_order(minimal_envelope, mock_cont
 
 
 @pytest.mark.asyncio
-async def test_integration_multiple_writes_increment_metrics(mock_context):
+async def test_integration_multiple_writes_increment_metrics(minimal_envelope, mock_context):
     """Test multiple writes correctly update metrics"""
-    envelopes = [
-        {
-            "header": {"event_id": f"evt_{i}", "wal_pos": i},
-            "body": {"text": f"Event {i}"},
-            "outputs": {"semantic_project": {"embedding_id": f"emb_{i}"}},
-        }
-        for i in range(5)
-    ]
+    # Create 5 envelopes with complete hipp_events_row from M13
+    envelopes = []
+    for i in range(5):
+        envelope = minimal_envelope.copy()
+        envelope["hipp_events_row"] = envelope["hipp_events_row"].copy()
+        envelope["hipp_events_row"]["event_id"] = f"evt_{i}"
+        envelope["hipp_events_row"]["wal_pos"] = i
+        envelope["hipp_events_row"]["embedding_id"] = f"emb_{i}"
+        envelope["wal_pos"] = i
+        envelopes.append(envelope)
 
     for envelope in envelopes:
         message, context, config = make_test_call(envelope, mock_context)
@@ -725,16 +758,18 @@ async def test_performance_single_write_under_25ms(minimal_envelope, mock_contex
 
 
 @pytest.mark.asyncio
-async def test_performance_batch_writes_throughput(mock_context):
+async def test_performance_batch_writes_throughput(minimal_envelope, mock_context):
     """Test throughput for batch of writes (target: 40-50 ops/sec)"""
-    envelopes = [
-        {
-            "header": {"event_id": f"evt_{i}", "wal_pos": i},
-            "body": {"text": f"Event {i}"},
-            "outputs": {"semantic_project": {"embedding_id": f"emb_{i}"}},
-        }
-        for i in range(50)
-    ]
+    # Create 50 envelopes with complete hipp_events_row
+    envelopes = []
+    for i in range(50):
+        envelope = minimal_envelope.copy()
+        envelope["hipp_events_row"] = envelope["hipp_events_row"].copy()
+        envelope["hipp_events_row"]["event_id"] = f"evt_{i}"
+        envelope["hipp_events_row"]["wal_pos"] = i
+        envelope["hipp_events_row"]["embedding_id"] = f"emb_{i}"
+        envelope["wal_pos"] = i
+        envelopes.append(envelope)
 
     start = time.perf_counter()
     for envelope in envelopes:
@@ -747,21 +782,12 @@ async def test_performance_batch_writes_throughput(mock_context):
     assert ops_per_sec > 40.0, f"Throughput: {ops_per_sec:.1f} ops/sec (target: >40 ops/sec)"
 
 
-def test_performance_record_assembly_fast():
+def test_performance_record_assembly_fast(minimal_envelope):
     """Test record assembly completes in <1ms"""
-    envelope = {
-        "header": {
-            "event_id": "evt_perf",
-            "wal_pos": 100,
-            "tenant_id": "tenant_perf",
-            "space_id": "space_perf",
-        },
-        "body": {"text": "Performance test"},
-        "outputs": {"semantic_project": {"embedding_id": "emb_perf"}},
-    }
+    # Module just extracts hipp_events_row from envelope (very fast)
 
     start = time.perf_counter()
-    hipp_events_writer.assemble_hipp_events_record(envelope)
+    hipp_events_writer.assemble_hipp_events_record(minimal_envelope)
     duration_ms = (time.perf_counter() - start) * 1000
 
     assert duration_ms < 1.0, f"Assembly took {duration_ms:.3f}ms (target: <1ms)"

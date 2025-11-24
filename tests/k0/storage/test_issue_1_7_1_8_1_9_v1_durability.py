@@ -98,53 +98,53 @@ def initialized_db(temp_db: Path) -> Iterator[Path]:
 class TestIssue17SqliteDurability:
     """Test SQLite durability settings (Issue 1.7)."""
 
-    def test_wal_mode_enabled(self, initialized_db: Path) -> None:
+    async def test_wal_mode_enabled(self, initialized_db: Path) -> None:
         """Test PRAGMA journal_mode=WAL is set."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             result = uow.connection.execute("PRAGMA journal_mode").fetchone()
             assert result[0].upper() == "WAL"
 
-    def test_synchronous_full_enabled(self, initialized_db: Path) -> None:
+    async def test_synchronous_full_enabled(self, initialized_db: Path) -> None:
         """Test PRAGMA synchronous=FULL is set."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             result = uow.connection.execute("PRAGMA synchronous").fetchone()
             # synchronous=FULL returns 2
             assert result[0] == 2
 
-    def test_foreign_keys_enabled(self, initialized_db: Path) -> None:
+    async def test_foreign_keys_enabled(self, initialized_db: Path) -> None:
         """Test PRAGMA foreign_keys=ON is set."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             result = uow.connection.execute("PRAGMA foreign_keys").fetchone()
             assert result[0] == 1  # 1 = ON
 
-    def test_temp_store_memory(self, initialized_db: Path) -> None:
+    async def test_temp_store_memory(self, initialized_db: Path) -> None:
         """Test PRAGMA temp_store=MEMORY is set."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             result = uow.connection.execute("PRAGMA temp_store").fetchone()
             # temp_store=MEMORY returns 2
             assert result[0] == 2
 
-    def test_busy_timeout_set(self, initialized_db: Path) -> None:
-        """Test PRAGMA busy_timeout=5000 is set."""
+    async def test_busy_timeout_set(self, initialized_db: Path) -> None:
+        """Test PRAGMA busy_timeout is set (configured as 30000ms)."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             result = uow.connection.execute("PRAGMA busy_timeout").fetchone()
-            assert result[0] == 5000  # milliseconds
+            assert result[0] == 30000  # milliseconds
 
-    def test_all_pragmas_set_in_uow(self, initialized_db: Path) -> None:
+    async def test_all_pragmas_set_in_uow(self, initialized_db: Path) -> None:
         """Test all V1 durability pragmas are set in UnitOfWork.__enter__."""
         configure_pool(initialized_db)
 
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             # Check all pragmas at once
             pragmas = {
                 "journal_mode": uow.connection.execute("PRAGMA journal_mode").fetchone()[0].upper(),
@@ -158,7 +158,7 @@ class TestIssue17SqliteDurability:
             assert pragmas["synchronous"] == 2  # FULL
             assert pragmas["foreign_keys"] == 1  # ON
             assert pragmas["temp_store"] == 2  # MEMORY
-            assert pragmas["busy_timeout"] == 5000
+            assert pragmas["busy_timeout"] == 30000
 
 
 class TestIssue18WalStorageModel:
@@ -212,7 +212,7 @@ class TestIssue18WalStorageModel:
         assert entry.location_geohash == "9q8yy"
         assert entry.location_precision_m == 5000
 
-    def test_wal_append_persists_v1_integrity_fields(self, initialized_db: Path) -> None:
+    async def test_wal_append_persists_v1_integrity_fields(self, initialized_db: Path) -> None:
         """Test WriteAheadLog.append() persists V1 envelope integrity fields to database."""
         configure_pool(initialized_db)
 
@@ -231,8 +231,8 @@ class TestIssue18WalStorageModel:
             clock_skew_ms=50,
         )
 
-        with UnitOfWork() as uow:
-            position = wal.append(entry, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            position = await wal.append(entry, connection=uow.connection)
             assert position > 0
 
         # Verify persisted
@@ -248,7 +248,7 @@ class TestIssue18WalStorageModel:
         assert row["clock_skew_ms"] == 50
         conn.close()
 
-    def test_wal_append_persists_v13_privacy_fields(self, initialized_db: Path) -> None:
+    async def test_wal_append_persists_v13_privacy_fields(self, initialized_db: Path) -> None:
         """Test WriteAheadLog.append() persists V1.3 policy stamp and location fields."""
         configure_pool(initialized_db)
 
@@ -269,8 +269,8 @@ class TestIssue18WalStorageModel:
             location_precision_m=5000,
         )
 
-        with UnitOfWork() as uow:
-            position = wal.append(entry, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            position = await wal.append(entry, connection=uow.connection)
 
         # Verify persisted
         conn = sqlite3.connect(str(initialized_db))
@@ -285,7 +285,7 @@ class TestIssue18WalStorageModel:
         assert row["location_precision_m"] == 5000
         conn.close()
 
-    def test_wal_read_from_includes_v1_fields(self, initialized_db: Path) -> None:
+    async def test_wal_read_from_includes_v1_fields(self, initialized_db: Path) -> None:
         """Test WriteAheadLog.read_from() includes V1 fields in returned WalEntry."""
         configure_pool(initialized_db)
 
@@ -307,12 +307,12 @@ class TestIssue18WalStorageModel:
             location_precision_m=5000,
         )
 
-        with UnitOfWork() as uow:
-            position = wal.append(entry, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            position = await wal.append(entry, connection=uow.connection)
 
         # Read back
-        with UnitOfWork() as uow:
-            entries = wal.read_from(position - 1, limit=10, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            entries = await wal.read_from(position - 1, limit=10, connection=uow.connection)
 
         assert len(entries) == 1
         read_entry = entries[0]
@@ -441,7 +441,7 @@ class TestIssue19DatabaseMigration:
 class TestIssue1789Integration:
     """Integration tests for Issues 1.7, 1.8, 1.9 together."""
 
-    def test_full_v1_wal_entry_with_durability(self, initialized_db: Path) -> None:
+    async def test_full_v1_wal_entry_with_durability(self, initialized_db: Path) -> None:
         """Test complete V1 WAL entry with durability settings enabled."""
         configure_pool(initialized_db)
 
@@ -474,7 +474,7 @@ class TestIssue1789Integration:
         )
 
         # Write with durability guarantees
-        with UnitOfWork() as uow:
+        async with UnitOfWork() as uow:
             # Verify WAL mode
             journal_mode = uow.connection.execute("PRAGMA journal_mode").fetchone()[0]
             assert journal_mode.upper() == "WAL"
@@ -484,12 +484,12 @@ class TestIssue1789Integration:
             assert synchronous == 2  # FULL
 
             # Append entry
-            position = wal.append(entry, connection=uow.connection)
+            position = await wal.append(entry, connection=uow.connection)
             assert position > 0
 
         # Read back and verify all fields
-        with UnitOfWork() as uow:
-            entries = wal.read_from(position - 1, limit=1, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            entries = await wal.read_from(position - 1, limit=1, connection=uow.connection)
 
         assert len(entries) == 1
         read_entry = entries[0]
@@ -502,7 +502,9 @@ class TestIssue1789Integration:
         assert read_entry.location_geohash == "9q8yy9"
         assert read_entry.location_precision_m == 5000
 
-    def test_v1_envelope_replay_detection_application_level(self, initialized_db: Path) -> None:
+    async def test_v1_envelope_replay_detection_application_level(
+        self, initialized_db: Path
+    ) -> None:
         """Test envelope_sha256 enables application-level replay detection.
 
         Note: UNIQUE constraint can't be added with ALTER TABLE in SQLite.
@@ -525,8 +527,8 @@ class TestIssue1789Integration:
         )
 
         # First insert succeeds
-        with UnitOfWork() as uow:
-            position1 = wal.append(entry, connection=uow.connection)
+        async with UnitOfWork() as uow:
+            position1 = await wal.append(entry, connection=uow.connection)
             assert position1 > 0
 
         # Application-level check: Query before insert to detect replay

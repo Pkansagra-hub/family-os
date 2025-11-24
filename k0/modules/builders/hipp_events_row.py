@@ -312,14 +312,26 @@ def map_affect_salience_group(
 
     From: M04 affect.analyze + M06 salience.score
     """
+    # Map affect_valence to sentiment_score for backward compat
+    valence = affect_output.get("valence")  # Key is "valence" not "affect_valence"
+    arousal = affect_output.get("arousal")  # Key is "arousal" not "affect_arousal"
+    sentiment_label = None
+    if valence is not None:
+        if valence >= 0.2:
+            sentiment_label = "positive"
+        elif valence <= -0.2:
+            sentiment_label = "negative"
+        else:
+            sentiment_label = "neutral"
+
     return {
-        "sentiment_score": affect_output.get("sentiment_score"),
-        "sentiment_label": affect_output.get("sentiment_label"),
+        "sentiment_score": valence,  # affect_valence IS sentiment_score
+        "sentiment_label": sentiment_label,
         "dominant_emotions_json": serialize_to_json(
             affect_output.get("dominant_emotions", []), "dominant_emotions_json"
         ),
-        "affect_valence": affect_output.get("valence"),
-        "affect_arousal": affect_output.get("arousal"),
+        "affect_valence": valence,
+        "affect_arousal": arousal,
         "affect_band": affect_output.get("affect_band", "GREEN"),
         "salience_score": salience_output.get("salience_score", 0.0),
         "salience_reasons_json": serialize_to_json(
@@ -494,6 +506,18 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "kg_triples_json": envelope.get("kg_triples_json"),
     }
     policy_output = envelope.get("policy_stamp", {})
+
+    # Debug: Check if affect fields are in envelope
+    affect_keys_present = [
+        k
+        for k in ["affect_valence", "affect_arousal", "dominant_emotions", "affect_band"]
+        if k in envelope
+    ]
+    if not affect_keys_present:
+        context.logger.warning(
+            f"M13 builder: NO AFFECT FIELDS in envelope! Keys present: {list(envelope.keys())[:30]}"
+        )
+
     affect_output = {
         "valence": envelope.get("affect_valence"),
         "arousal": envelope.get("affect_arousal"),
@@ -622,7 +646,9 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         extra={"trace_id": message.trace_id, "columns": len(row), "validated": validate_fields},
     )
 
-    return {**envelope, "hipp_events_row": row}
+    # Return ONLY the new enrichment (hipp_events_row key)
+    # Pipeline runner will merge this into shared envelope
+    return {"hipp_events_row": row}
 
 
 # =============================================================================

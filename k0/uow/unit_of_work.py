@@ -65,7 +65,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
     _start_time: float = field(init=False, default=0.0)
     _token: Token["UnitOfWork | None"] | None = field(init=False, default=None)
 
-    def __enter__(self) -> "UnitOfWork":
+    async def __aenter__(self) -> "UnitOfWork":
         if self._entered:
             raise RuntimeError("UnitOfWork instances are not reentrant")
         self._entered = True
@@ -79,13 +79,53 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         # FULL sync: Guarantees durability (fsync after each transaction)
         # Foreign keys: Enforce referential integrity
         # Temp store MEMORY: Faster temp tables
-        # Busy timeout: Retry up to 5 seconds on lock contention
+        # Busy timeout: Retry up to 30 seconds on lock contention (increased from 5s for slow transactions)
+        self._connection.execute("PRAGMA journal_mode=WAL")
+        self._connection.execute("PRAGMA synchronous=FULL")
+        self._connection.execute("PRAGMA foreign_keys=ON")
+        self._connection.execute("PRAGMA temp_store=MEMORY")
+        self._connection.execute("PRAGMA busy_timeout=30000")
+
+        self._connection.execute("BEGIN IMMEDIATE")
+        self._start_time = time.perf_counter()
+        self._token = _ACTIVE_UOW.set(self)
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool:
+        try:
+            if exc_type is None:
+                await self._commit()
+            else:
+                self._rollback(reason=exc_type.__name__)
+                self._run_hooks(self.on_rollback)
+        finally:
+            self._cleanup(exc_type, exc, tb)
+        # Do not suppress exceptions
+        return False
+
+    def __enter__(self) -> "UnitOfWork":
+        """Deprecated: Use async with UnitOfWork() instead."""
+        # For backward compatibility during migration, we can try to support sync enter
+        # but commit/append will fail if they need to be async.
+        # Ideally we should raise an error or warn.
+        # For now, let's implement it similar to aenter but warn.
+        logger.warning("Synchronous UnitOfWork context is deprecated. Use 'async with'.")
+        if self._entered:
+            raise RuntimeError("UnitOfWork instances are not reentrant")
+        self._entered = True
+        self._scope = connection_scope()
+        connection = self._scope.__enter__()
+        self._connection = connection
         self._connection.execute("PRAGMA journal_mode=WAL")
         self._connection.execute("PRAGMA synchronous=FULL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.execute("PRAGMA temp_store=MEMORY")
         self._connection.execute("PRAGMA busy_timeout=5000")
-
         self._connection.execute("BEGIN IMMEDIATE")
         self._start_time = time.perf_counter()
         self._token = _ACTIVE_UOW.set(self)
@@ -97,16 +137,15 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> bool:
-        try:
-            if exc_type is None:
-                self._commit()
-            else:
-                self._rollback(reason=exc_type.__name__)
-                self._run_hooks(self.on_rollback)
-        finally:
-            self._cleanup(exc_type, exc, tb)
-        # Do not suppress exceptions
-        return False
+        # Sync exit cannot await commit. This is a problem if commit is async.
+        # We'll have to run commit synchronously here, which blocks.
+        # But _commit calls _fsync_wal which is now async.
+        # We can use asyncio.run() but that fails if loop is running.
+        # We can use loop.run_until_complete() if we have access to loop? No.
+        # This confirms sync usage is broken with async WAL.
+        # But we still need to clean up properly
+        self._cleanup(exc_type, exc, tb)
+        raise RuntimeError("Synchronous exit not supported with async WAL. Use 'async with'.")
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -130,34 +169,34 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         staged_entry = replace(entry, id=None)
         self._staged_outbox.append(staged_entry)
 
-    def append_wal(self, entry: WalEntry) -> int:
+    async def append_wal(self, entry: WalEntry) -> int:
         if not self._entered or self._connection is None:
             raise RuntimeError("WAL entries can only be appended within an active UnitOfWork")
         if self.write_ahead_log is None:
             raise RuntimeError("WriteAheadLog has not been configured for this UnitOfWork")
-        position = self.write_ahead_log.append(entry, connection=self.connection)
+        position = await self.write_ahead_log.append(entry, connection=self.connection)
         self._wal_positions.append(position)
         return position
 
-    def save_receipt(self, receipt: Receipt) -> None:
+    async def save_receipt(self, receipt: Receipt) -> None:
         if not self._entered or self._connection is None:
             raise RuntimeError("Receipts can only be saved within an active UnitOfWork")
         if self.receipt_store is None:
             raise RuntimeError("Receipt store has not been configured for this UnitOfWork")
-        self.receipt_store.save(receipt, connection=self.connection)
+        await self.receipt_store.save_async(receipt, connection=self.connection)
 
-    def upsert_offset(self, record: Offset) -> None:
+    async def upsert_offset(self, record: Offset) -> None:
         if not self._entered or self._connection is None:
             raise RuntimeError("Offsets can only be upserted within an active UnitOfWork")
         if self.offset_store is None:
             raise RuntimeError("Offset store has not been configured for this UnitOfWork")
-        self.offset_store.upsert(record, connection=self.connection)
+        await self.offset_store.upsert(record, connection=self.connection)
 
-    def _commit(self) -> None:
+    async def _commit(self) -> None:
         if self._connection is None:
             return
         try:
-            self._flush_outbox()
+            await self._flush_outbox()
             self._connection.commit()
         except BaseException as error:
             self._emit_metric(
@@ -172,7 +211,7 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         else:
             elapsed = time.perf_counter() - self._start_time
             try:
-                fsync_elapsed = self._fsync_wal()
+                fsync_elapsed = await self._fsync_wal()
             except BaseException as fsync_error:
                 # Use histogram observe for duration metrics
                 self._observe_histogram(
@@ -236,13 +275,13 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         self._staged_outbox.clear()
         self._wal_positions.clear()
 
-    def _flush_outbox(self) -> None:
+    async def _flush_outbox(self) -> None:
         if not self._staged_outbox:
             return
         if self.outbox_store is None:
             raise RuntimeError("Outbox store has not been configured for this UnitOfWork")
         for entry in self._staged_outbox:
-            self.outbox_store.enqueue(entry, connection=self.connection)
+            await self.outbox_store.enqueue_async(entry, connection=self.connection)
 
     def _run_hooks(self, hooks: Iterable[Callable[[], None]]) -> None:
         for hook in hooks:
@@ -267,13 +306,13 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
             prefixed_name = f"k0_{metric_name}"
             self.metrics_emitter(prefixed_name, value, **labels)
 
-    def _fsync_wal(self) -> float | None:
+    async def _fsync_wal(self) -> float | None:
         if self.write_ahead_log is None or self._connection is None:
             return None
         if self.wal_fsync_mode == "disabled":
             return None
         start = time.perf_counter()
-        self.write_ahead_log.fsync(
+        await self.write_ahead_log.fsync(
             connection=self._connection,
             mode=self.wal_fsync_mode,
             metrics_exporter=self.metrics_exporter,

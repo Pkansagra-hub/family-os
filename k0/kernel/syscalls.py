@@ -19,6 +19,7 @@ Related:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -204,7 +205,7 @@ class Syscalls:
         )
 
         # Execute storage operation in UnitOfWork transaction
-        with self._uow_factory() as uow:
+        async with self._uow_factory() as uow:
             # Build UPSERT SQL (INSERT OR REPLACE for idempotency)
             conn = uow._connection
             if conn is None:
@@ -222,32 +223,36 @@ class Syscalls:
             created_at = int(time.time())
 
             # UPSERT into st_hipp_store
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO st_hipp_store (
-                    event_id, cognitive_trace_id, text, length,
-                    simhash_hex, minhash32, novelty,
-                    topics, categories, activity_type,
-                    author_id, tenant_id, space_id, privacy_band,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event_id,
-                    cognitive_trace_id,
-                    text,
-                    length,
-                    simhash_hex,
-                    minhash32,
-                    novelty,
-                    topics,
-                    categories,
-                    activity_type,
-                    payload.get("author_id", "unknown"),
-                    payload.get("tenant_id", "default"),
-                    space_id,
-                    payload.get("privacy_band", "GREEN"),
-                    created_at,
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: conn.execute(
+                    """
+                    INSERT OR REPLACE INTO st_hipp_store (
+                        event_id, cognitive_trace_id, text, length,
+                        simhash_hex, minhash32, novelty,
+                        topics, categories, activity_type,
+                        author_id, tenant_id, space_id, privacy_band,
+                        created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        cognitive_trace_id,
+                        text,
+                        length,
+                        simhash_hex,
+                        minhash32,
+                        novelty,
+                        topics,
+                        categories,
+                        activity_type,
+                        payload.get("author_id", "unknown"),
+                        payload.get("tenant_id", "default"),
+                        space_id,
+                        payload.get("privacy_band", "GREEN"),
+                        created_at,
+                    ),
                 ),
             )
 
@@ -344,7 +349,7 @@ class Syscalls:
         start_time = time.perf_counter()
 
         # Execute storage operation in UnitOfWork transaction
-        with self._uow_factory() as uow:
+        async with self._uow_factory() as uow:
             conn = uow._connection
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
@@ -358,12 +363,16 @@ class Syscalls:
             try:
                 # Use INSERT OR IGNORE for idempotency (faster than INSERT OR REPLACE)
                 # event_id is PRIMARY KEY, so duplicates will be silently skipped
-                cursor = conn.execute(
-                    f"""
-                    INSERT OR IGNORE INTO st_hipp_events ({column_names})
-                    VALUES ({placeholders})
-                    """,
-                    values,
+                loop = asyncio.get_running_loop()
+                cursor = await loop.run_in_executor(
+                    None,
+                    lambda: conn.execute(
+                        f"""
+                        INSERT OR IGNORE INTO st_hipp_events ({column_names})
+                        VALUES ({placeholders})
+                        """,
+                        values,
+                    ),
                 )
 
                 inserted = cursor.rowcount > 0
@@ -475,7 +484,7 @@ class Syscalls:
         )
 
         # Execute storage operation in UnitOfWork transaction
-        with self._uow_factory() as uow:
+        async with self._uow_factory() as uow:
             conn = uow._connection
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
@@ -483,17 +492,21 @@ class Syscalls:
             processed_at = processed_at or int(time.time())
 
             try:
-                cursor = conn.execute(
-                    """
-                    INSERT OR REPLACE INTO st_pipeline_processed (
-                        pipeline_id, space_id, wal_pos, processed_at
-                    ) VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        pipeline_id,
-                        space_id,
-                        wal_pos,
-                        processed_at,
+                loop = asyncio.get_running_loop()
+                cursor = await loop.run_in_executor(
+                    None,
+                    lambda: conn.execute(
+                        """
+                        INSERT OR REPLACE INTO st_pipeline_processed (
+                            pipeline_id, space_id, wal_pos, processed_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            pipeline_id,
+                            space_id,
+                            wal_pos,
+                            processed_at,
+                        ),
                     ),
                 )
 
@@ -798,7 +811,7 @@ class Syscalls:
         )
 
         # Execute storage operation in UnitOfWork transaction
-        with self._uow_factory() as uow:
+        async with self._uow_factory() as uow:
             conn = uow._connection
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
@@ -807,30 +820,34 @@ class Syscalls:
 
             try:
                 # Use INSERT OR IGNORE for idempotency
-                cursor = conn.execute(
-                    """
-                    INSERT OR IGNORE INTO st_embedding_queue (
-                        embedding_id, event_id, wal_pos,
-                        tenant_id, space_id, vector_kind,
-                        model_id, priority, status,
-                        attempt_count, max_attempts,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        embedding_id,
-                        event_id,
-                        wal_pos,
-                        tenant_id,
-                        space_id,
-                        vector_kind,
-                        model_id,
-                        priority,
-                        "PENDING",  # Initial status
-                        0,  # Initial attempt_count
-                        5,  # max_attempts (default retry limit)
-                        created_at,
-                        created_at,  # updated_at = created_at initially
+                loop = asyncio.get_running_loop()
+                cursor = await loop.run_in_executor(
+                    None,
+                    lambda: conn.execute(
+                        """
+                        INSERT OR IGNORE INTO st_embedding_queue (
+                            embedding_id, event_id, wal_pos,
+                            tenant_id, space_id, vector_kind,
+                            model_id, priority, status,
+                            attempt_count, max_attempts,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            embedding_id,
+                            event_id,
+                            wal_pos,
+                            tenant_id,
+                            space_id,
+                            vector_kind,
+                            model_id,
+                            priority,
+                            "PENDING",  # Initial status
+                            0,  # Initial attempt_count
+                            5,  # max_attempts (default retry limit)
+                            created_at,
+                            created_at,  # updated_at = created_at initially
+                        ),
                     ),
                 )
 
@@ -1049,10 +1066,10 @@ class Syscalls:
                     )
 
                 # Execute batch insert
-                uow.conn.executemany(insert_sql, records)
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, uow.connection.executemany, insert_sql, records)
 
-                # Commit transaction
-                await uow.commit()
+                # Transaction will be committed automatically by __aexit__
 
                 # Audit: Log success
                 logger.debug(

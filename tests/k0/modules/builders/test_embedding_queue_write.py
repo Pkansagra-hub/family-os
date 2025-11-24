@@ -71,27 +71,34 @@ def make_test_call(envelope: Dict[str, Any], **config: Any):
 
 @pytest.fixture
 def base_envelope() -> Dict[str, Any]:
-    """Base envelope with all required fields"""
+    """Base envelope with P02 hybrid structure (header nested, enrichments flat)"""
     return {
+        # Header fields (NESTED - still used by assemble_embedding_queue_record)
         "header": {
             "event_id": "evt_123456",
             "wal_pos": 1001,
             "tenant_id": "tenant_family123",
             "space_id": "space_personal_dad",
-            "trace_id": "trace_abc123",
         },
-        "body": {"actor_id": "person_dad", "text": "Had dinner with family"},
-        "outputs": {},
+        # Identity fields (FLAT - used by run())
+        "cognitive_trace_id": "trace_abc123",
+        "wal_pos": 1001,
+        "tenant_id": "tenant_family123",
+        "space_id": "space_personal_dad",
+        "topic": "cognitive.memory.write.v1",
+        # Body fields (flat at top level)
+        "actor_id": "person_dad",
+        "text": "Had dinner with family",
     }
 
 
 @pytest.fixture
 def ca1_output() -> Dict[str, Any]:
-    """M02 semantic_project output"""
+    """M02 semantic_project output - flat fields to merge into envelope"""
     return {
         "embedding_id": "emb_uuid_abc123",
-        "entities": ["person_mom", "Olive_Garden"],
-        "kg_triples": [["person_dad", "had_dinner_with", "person_mom"]],
+        "entities_json": json.dumps(["person_mom", "Olive_Garden"]),
+        "kg_triples_json": json.dumps([["person_dad", "had_dinner_with", "person_mom"]]),
     }
 
 
@@ -265,18 +272,19 @@ async def test_get_queue_record(base_envelope, ca1_output):
 async def test_idempotency_same_envelope(base_envelope, ca1_output):
     """Test idempotency with same envelope run twice"""
     reset_metrics()
-    base_envelope["outputs"]["semantic_project"] = ca1_output
+    # Merge ca1_output into envelope (P02 flat format)
+    enriched_envelope = {**base_envelope, **ca1_output}
 
     # First run succeeds
     message1, context1, config1 = make_test_call(
-        base_envelope, priority="NORMAL", model_id="embed-mini-001"
+        enriched_envelope, priority="NORMAL", model_id="embed-mini-001"
     )
     result1 = await run(message1, context1, **config1)
     assert result1["embedding_queue_write"]["inserted"] is True
 
     # Second run skipped (duplicate)
     message2, context2, config2 = make_test_call(
-        base_envelope, priority="NORMAL", model_id="embed-mini-001"
+        enriched_envelope, priority="NORMAL", model_id="embed-mini-001"
     )
     result2 = await run(message2, context2, **config2)
     assert result2["embedding_queue_write"]["inserted"] is False
@@ -464,7 +472,7 @@ async def test_p08_exponential_backoff(base_envelope, ca1_output):
 async def test_error_missing_ca1_output(base_envelope):
     """Test error handling when M02 output missing"""
     reset_metrics()
-    base_envelope["outputs"] = {}  # No M02 output
+    # No ca1_output fields in envelope (missing embedding_id)
 
     message, context, config = make_test_call(base_envelope, priority="NORMAL")
     result = await run(message, context, **config)
@@ -482,12 +490,10 @@ async def test_error_missing_ca1_output(base_envelope):
 async def test_error_missing_embedding_id_in_output(base_envelope):
     """Test error handling when embedding_id missing from M02"""
     reset_metrics()
-    base_envelope["outputs"]["semantic_project"] = {
-        "entities": [],
-        "kg_triples": [],
-    }  # No embedding_id
+    # Merge partial ca1_output without embedding_id
+    partial_envelope = {**base_envelope, "entities_json": "[]", "kg_triples_json": "[]"}
 
-    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    message, context, config = make_test_call(partial_envelope, priority="NORMAL")
     result = await run(message, context, **config)
     queue_result = result["embedding_queue_write"]
 
@@ -513,10 +519,11 @@ async def test_error_mark_nonexistent_ready():
 async def test_full_pipeline_p02_to_p08(base_envelope, ca1_output):
     """Test complete P02 → P08 flow"""
     reset_metrics()
-    base_envelope["outputs"]["semantic_project"] = ca1_output
+    # Merge ca1_output into envelope (P02 flat format)
+    enriched_envelope = {**base_envelope, **ca1_output}
 
     # P02: Enqueue job
-    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
     result = await run(message, context, **config)
     queue_result = result["embedding_queue_write"]
     assert queue_result["inserted"] is True
@@ -541,9 +548,9 @@ async def test_multiple_jobs_fifo_order(base_envelope, ca1_output):
 
     # Enqueue 3 jobs
     for i in range(3):
-        ca1_output["embedding_id"] = f"emb_job_{i}"
-        base_envelope["outputs"]["semantic_project"] = ca1_output
-        message, context, config = make_test_call(base_envelope, priority="NORMAL")
+        ca1_modified = {**ca1_output, "embedding_id": f"emb_job_{i}"}
+        enriched_envelope = {**base_envelope, **ca1_modified}
+        message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
         await run(message, context, **config)
         time.sleep(0.01)  # Ensure different created_at
 
@@ -561,10 +568,11 @@ async def test_multiple_jobs_fifo_order(base_envelope, ca1_output):
 async def test_retry_after_failure(base_envelope, ca1_output):
     """Test job can be retried after failure"""
     reset_metrics()
-    base_envelope["outputs"]["semantic_project"] = ca1_output
+    # Merge ca1_output into envelope (P02 flat format)
+    enriched_envelope = {**base_envelope, **ca1_output}
 
     # P02: Enqueue
-    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
     await run(message, context, **config)
 
     # P08: Claim and fail
@@ -593,12 +601,12 @@ async def test_retry_after_failure(base_envelope, ca1_output):
 async def test_performance_under_5ms(base_envelope, ca1_output):
     """Test embedding queue write meets <5ms P95 budget"""
     reset_metrics()
-    base_envelope["outputs"]["semantic_project"] = ca1_output
 
     latencies = []
     for i in range(100):
-        ca1_output["embedding_id"] = f"emb_perf_{i}"
-        message, context, config = make_test_call(base_envelope, priority="NORMAL")
+        ca1_modified = {**ca1_output, "embedding_id": f"emb_perf_{i}"}
+        enriched_envelope = {**base_envelope, **ca1_modified}
+        message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
         start = time.perf_counter()
         await run(message, context, **config)
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -658,14 +666,15 @@ async def test_metrics_tracking(base_envelope, ca1_output):
 
     # Enqueue 3 unique jobs
     for i in range(3):
-        ca1_output["embedding_id"] = f"emb_metric_{i}"
-        base_envelope["outputs"]["semantic_project"] = ca1_output
-        message, context, config = make_test_call(base_envelope, priority="NORMAL")
+        ca1_modified = {**ca1_output, "embedding_id": f"emb_metric_{i}"}
+        enriched_envelope = {**base_envelope, **ca1_modified}
+        message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
         await run(message, context, **config)
 
     # Try duplicate (should skip)
-    ca1_output["embedding_id"] = "emb_metric_0"
-    message, context, config = make_test_call(base_envelope, priority="NORMAL")
+    ca1_modified = {**ca1_output, "embedding_id": "emb_metric_0"}
+    enriched_envelope = {**base_envelope, **ca1_modified}
+    message, context, config = make_test_call(enriched_envelope, priority="NORMAL")
     await run(message, context, **config)
 
     # Claim 2 jobs

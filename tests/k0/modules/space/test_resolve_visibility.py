@@ -393,14 +393,24 @@ async def test_run_with_valid_envelope(home_space_metadata):
         envelope = {
             "event": {
                 "event_id": "evt_123",
-                "actor_id": "person_dad",
-                "space_id": "space_home",
                 "text": "Family dinner tonight!",
             },
+            # P02 hybrid structure: actor and space_id at top level (flat)
+            "actor": "person_dad",
+            "space_id": "space_home",
             "policy_stamp": {"visible_to": ["person_dad", "person_mom", "person_teen"]},
         }
 
-        result = await run(envelope)
+        # Phase 2 signature: run(message, context, **config)
+        from unittest.mock import MagicMock
+
+        message = MagicMock()
+        message.payload = json.dumps(envelope)
+        message.trace_id = "test_trace"
+        context = MagicMock()
+        context.logger = MagicMock()
+
+        result = await run(message, context, envelope=envelope)
 
         # Validate output schema
         assert result["owner_id"] == "person_dad"
@@ -415,19 +425,43 @@ async def test_run_with_valid_envelope(home_space_metadata):
 @pytest.mark.asyncio
 async def test_run_with_missing_actor_id():
     """Integration test: Invalid envelope (missing actor_id)."""
-    envelope = {"event": {"space_id": "space_home"}, "policy_stamp": {"visible_to": ["person_dad"]}}
+    envelope = {
+        "event": {"event_id": "evt_123"},
+        "space_id": "space_home",  # space_id present, actor missing
+        "policy_stamp": {"visible_to": ["person_dad"]},
+    }
 
-    with pytest.raises(ValueError, match="Missing required field: event.actor_id"):
-        await run(envelope)
+    from unittest.mock import MagicMock
+
+    message = MagicMock()
+    message.payload = json.dumps(envelope)
+    message.trace_id = "test_trace"
+    context = MagicMock()
+    context.logger = MagicMock()
+
+    with pytest.raises(ValueError, match="Missing required field: actor"):
+        await run(message, context, envelope=envelope)
 
 
 @pytest.mark.asyncio
 async def test_run_with_missing_space_id():
     """Integration test: Invalid envelope (missing space_id)."""
-    envelope = {"event": {"actor_id": "person_dad"}, "policy_stamp": {"visible_to": ["person_dad"]}}
+    envelope = {
+        "event": {"event_id": "evt_123"},
+        "actor": "person_dad",  # actor present, space_id missing
+        "policy_stamp": {"visible_to": ["person_dad"]},
+    }
 
-    with pytest.raises(ValueError, match="Missing required field: event.space_id"):
-        await run(envelope)
+    from unittest.mock import MagicMock
+
+    message = MagicMock()
+    message.payload = json.dumps(envelope)
+    message.trace_id = "test_trace"
+    context = MagicMock()
+    context.logger = MagicMock()
+
+    with pytest.raises(ValueError, match="Missing required field: space_id"):
+        await run(message, context, envelope=envelope)
 
 
 @pytest.mark.asyncio
@@ -439,15 +473,25 @@ async def test_run_preserves_context():
         envelope = {
             "event": {
                 "event_id": "evt_123",
-                "actor_id": "person_teen",
-                "space_id": "space_unknown",
             },
+            # P02 hybrid structure: actor and space_id at top level
+            "actor": "person_teen",
+            "space_id": "space_unknown",
             "policy_stamp": {"visible_to": ["person_teen"]},
         }
 
+        # Phase 2 signature
+        from unittest.mock import MagicMock
+
+        message = MagicMock()
+        message.payload = json.dumps(envelope)
+        message.trace_id = "test_trace"
+        context = MagicMock()
+        context.logger = MagicMock()
+
         # Run twice (idempotency check)
-        result1 = await run(envelope)
-        result2 = await run(envelope)
+        result1 = await run(message, context, envelope=envelope)
+        result2 = await run(message, context, envelope=envelope)
 
         # Results should be identical (except timestamp)
         assert result1["owner_id"] == result2["owner_id"]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import uuid
@@ -306,12 +307,16 @@ async def query_recall(
             )
 
         aggregator = QueryAggregator()
-        execution_result = aggregator.execute(
-            payload.selectors,
-            space_id=payload.space_id,
-            tenant_id=payload.tenant_id,
-            time_budget_ms=time_budget_ms,
-            top_k_budget=initial_top_k,
+        loop = asyncio.get_running_loop()
+        execution_result = await loop.run_in_executor(
+            None,
+            lambda: aggregator.execute(
+                payload.selectors,
+                space_id=payload.space_id,
+                tenant_id=payload.tenant_id,
+                time_budget_ms=time_budget_ms,
+                top_k_budget=initial_top_k,
+            ),
         )
 
         consumed_top_k = execution_result.consumed_top_k

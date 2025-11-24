@@ -5,7 +5,7 @@ Provisions a test device and submits an envelope to K0 kernel.
 Usage: python k0/provision_and_submit.py
 """
 
-import sqlite3
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,92 +35,71 @@ SCHEMA_URI = "schema://memory.delta"
 SCHEMA_VERSION = "1.0"
 
 
+def execute_sql_in_docker(sql_statements):
+    """Execute SQL statements inside the docker container."""
+    # Join statements with semicolons
+    full_sql = "; ".join(sql_statements)
+
+    cmd = ["docker", "exec", "-i", "k0-kernel", "sqlite3", "/data/k0_kernel.db"]
+
+    try:
+        process = subprocess.run(
+            cmd, input=full_sql.encode("utf-8"), capture_output=True, check=True
+        )
+        return process.stdout.decode("utf-8")
+    except subprocess.CalledProcessError as e:
+        raise Exception(f"Docker SQL execution failed: {e.stderr.decode('utf-8')}")
+
+
 def provision_device(signing_key: SigningKey):
-    """Provision device and register its public key in K0."""
+    """Provision device and register its public key in K0 via Docker."""
     print("\n" + "=" * 60)
-    print("Step 1: Provisioning Device")
+    print("Step 1: Provisioning Device (via Docker)")
     print("=" * 60)
 
     verify_key_b64 = encode_base64url(signing_key.verify_key.encode())
+    now = datetime.now(timezone.utc).isoformat()
 
     print("\nDevice Configuration:")
     print(f"  Device ID: {DEVICE_ID}")
     print(f"  Tenant ID: {TENANT_ID}")
     print(f"  Space ID: {SPACE_ID}")
     print(f"  Verify Key: {verify_key_b64[:32]}...")
-    print(f"  Database Path: {DB_PATH}")
-    print(f"  Database exists: {DB_PATH.exists()}")
+    print("  Target: Docker container 'k0-kernel'")
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
+        sql_statements = []
 
         # CRITICAL: Delete existing device keys and device to force cache invalidation
-        # (Kernel caches device keys in memory; updating without delete leaves stale cached entries)
-        cursor.execute("DELETE FROM st_device_keys WHERE device_id = ?", (DEVICE_ID,))
-        cursor.execute("DELETE FROM st_devices WHERE device_id = ?", (DEVICE_ID,))
+        sql_statements.append(f"DELETE FROM st_device_keys WHERE device_id = '{DEVICE_ID}'")
+        sql_statements.append(f"DELETE FROM st_devices WHERE device_id = '{DEVICE_ID}'")
 
         # Insert fresh device
-        cursor.execute(
-            """
-            INSERT INTO st_devices (
-                device_id, tenant_id, space_id, mls_group_id, provisioned_ts
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-            (
-                DEVICE_ID,
-                TENANT_ID,
-                SPACE_ID,
-                "mls-group-1",
-                datetime.now(timezone.utc).isoformat(),
-            ),
+        sql_statements.append(
+            f"INSERT INTO st_devices (device_id, tenant_id, space_id, mls_group_id, provisioned_ts) VALUES ('{DEVICE_ID}', '{TENANT_ID}', '{SPACE_ID}', 'mls-group-1', '{now}')"
         )
+
+        # Insert fresh device key
+        sql_statements.append(
+            f"INSERT INTO st_device_keys (device_id, key_version, verify_key, key_state, registered_ts, activated_ts) VALUES ('{DEVICE_ID}', '1', '{verify_key_b64}', 'ACTIVE', '{now}', '{now}')"
+        )
+
+        # Schema registration
+        import hashlib
+
+        schema_sha = hashlib.sha256(f"{SCHEMA_URI}@{SCHEMA_VERSION}".encode("utf-8")).hexdigest()
+
+        # Use INSERT OR IGNORE for schema
+        sql_statements.append(
+            f"INSERT OR IGNORE INTO schema_registry (schema_uri, version, sha256, status) VALUES ('{SCHEMA_URI}', '{SCHEMA_VERSION}', '{schema_sha}', 'ACTIVE')"
+        )
+
+        print("\nExecuting SQL in Docker container...")
+        execute_sql_in_docker(sql_statements)
+
         print("\n✓ Device provisioned")
-
-        # Insert fresh device key (we deleted existing ones above)
-        now = datetime.now(timezone.utc).isoformat()
-        cursor.execute(
-            """
-            INSERT INTO st_device_keys (
-                device_id, key_version, verify_key, key_state,
-                registered_ts, activated_ts
-            ) VALUES (?, ?, ?, ?, ?, ?)
-        """,
-            (DEVICE_ID, "1", verify_key_b64, "ACTIVE", now, now),
-        )
         print("✓ Device key registered")
-
-        # Ensure schema is registered
-        cursor.execute(
-            "SELECT schema_uri FROM schema_registry WHERE schema_uri = ? AND version = ?",
-            (SCHEMA_URI, SCHEMA_VERSION),
-        )
-        existing_schema = cursor.fetchone()
-
-        if not existing_schema:
-            import hashlib
-
-            schema_sha = hashlib.sha256(
-                f"{SCHEMA_URI}@{SCHEMA_VERSION}".encode("utf-8")
-            ).hexdigest()
-            cursor.execute(
-                """
-                INSERT INTO schema_registry (schema_uri, version, sha256, status)
-                VALUES (?, ?, ?, ?)
-            """,
-                (SCHEMA_URI, SCHEMA_VERSION, schema_sha, "ACTIVE"),
-            )
-            print("✓ Schema registered")
-        else:
-            print("✓ Schema already registered")
-
-        conn.commit()
-
-        # Force WAL checkpoint to ensure kernel sees updates
-        # (WAL mode requires explicit sync with readers)
-        cursor.execute("PRAGMA wal_checkpoint(RESTART)")
-        conn.close()
+        print("✓ Schema registered (if not exists)")
 
         # Small delay to ensure kernel has seen the update
         import time
@@ -145,11 +124,13 @@ def submit_envelope(signing_key: SigningKey):
     print("=" * 60)
 
     # Build body
+    now_utc = datetime.now(timezone.utc)
     body = {
         "operation": "UPSERT",
         "text": "Hello from K0!",  # Moved to top level for affect.analyze
         "value": 42,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": now_utc.isoformat(),
+        "event_time_utc": now_utc.isoformat(),  # For M06 salience scorer
     }
 
     # Canonicalize body

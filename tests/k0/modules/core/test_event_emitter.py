@@ -360,19 +360,21 @@ async def test_latency_tracking(sample_envelope, mock_context):
 @pytest.mark.asyncio
 async def test_missing_enrichments_key(mock_context):
     """
-    Verify KeyError raised when enrichments missing.
+    Verify module handles missing enrichments gracefully (returns envelope unchanged).
     """
     envelope = {"no_enrichments": {}}
 
-    with pytest.raises(KeyError, match="Envelope missing 'enrichments' key"):
-        message, context, config = make_test_call(envelope, mock_context)
-        await event_emitter.run(message, context, **config)
+    message, context, config = make_test_call(envelope, mock_context)
+    result = await event_emitter.run(message, context, **config)
+
+    # Should return envelope unchanged (no events emitted)
+    assert result == envelope
 
 
 @pytest.mark.asyncio
 async def test_missing_required_enrichment(mock_context):
     """
-    Verify KeyError raised when required enrichment missing.
+    Verify KeyError raised when required enrichments missing during event building.
     """
     envelope = {
         "enrichments": {
@@ -385,8 +387,10 @@ async def test_missing_required_enrichment(mock_context):
         }
     }
 
-    with pytest.raises(KeyError, match="missing required enrichments"):
-        message, context, config = make_test_call(envelope, mock_context)
+    message, context, config = make_test_call(envelope, mock_context)
+
+    # Module raises KeyError when accessing missing enrichments during event building
+    with pytest.raises(KeyError, match="working_memory"):
         await event_emitter.run(message, context, **config)
 
 

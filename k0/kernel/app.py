@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -382,7 +383,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.include_router(observe.router)
     app.include_router(drivers.router)
 
-    database_path = Path(getattr(settings.database, "path"))
+    database_path = Path(getattr(settings.database, "path")).resolve()
     configure_pool(database_path)
 
     def _bootstrap_runtime() -> None:
@@ -419,8 +420,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # Bootstrap failed - cleanup pool before re-raising
         shutdown_pool()
         raise
-
-    configure_pool(database_path)
 
     async def _report_sse_metrics_periodically() -> None:
         """Background task to periodically report SSE connection metrics."""
@@ -460,9 +459,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     continue
 
                 # Process each registered driver
+                loop = asyncio.get_running_loop()
                 for alias in driver_aliases:
                     try:
-                        worker_pool.process_driver(alias)
+                        await loop.run_in_executor(None, worker_pool.process_driver, alias)
                         logger.debug(f"Processed outbox for driver: {alias}")
                     except RuntimeError as e:  # noqa: BLE001
                         # Gracefully skip drivers that aren't implemented yet
@@ -474,6 +474,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                             logger.debug(f"Skipping unimplemented driver: {alias} ({error_msg})")
                         else:
                             logger.exception(f"Failed to process outbox for driver: {alias}")
+                    except sqlite3.OperationalError as e:  # noqa: BLE001
+                        # Gracefully handle database connection issues (e.g., Docker volume mount issues)
+                        # These are typically transient or configuration issues
+                        if "unable to open database file" in str(e):
+                            logger.debug(
+                                f"Skipping driver {alias} due to database connection issue (likely Docker volume mount): {e}"
+                            )
+                        else:
+                            logger.exception(
+                                f"Database error processing outbox for driver: {alias}"
+                            )
                     except Exception:  # noqa: BLE001
                         logger.exception(f"Failed to process outbox for driver: {alias}")
 
@@ -520,6 +531,11 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Ensure bus dispatcher has the running loop
+        from ..drivers.sqlite import set_bus_dispatcher
+
+        set_bus_dispatcher(bus_dispatcher)
+
         # Phase 1: Preload NLP models to avoid cold start penalty
         logger.info("Preloading NLP models...")
         preloaded_models = await _preload_models()

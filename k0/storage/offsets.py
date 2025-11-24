@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -41,7 +42,12 @@ class OffsetStore:
         # Gap 32: RLock protects concurrent offset read/write operations
         self._lock = threading.RLock()
 
-    def upsert(self, record: Offset, *, connection: sqlite3.Connection | None = None) -> None:
+    async def upsert(self, record: Offset, *, connection: sqlite3.Connection | None = None) -> None:
+        """Async wrapper for upserting offsets."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._upsert_sync, record, connection)
+
+    def _upsert_sync(self, record: Offset, connection: sqlite3.Connection | None = None) -> None:
         # Gap 32: Serialize concurrent offset updates with RLock
         with self._lock:
             with _resolve_connection(connection) as conn:
@@ -62,13 +68,27 @@ class OffsetStore:
                     ),
                 )
 
-    def fetch(
+    async def fetch(
         self,
         subscriber_id: str,
         topic: str,
         space_id: str,
         tenant_id: str,
         *,
+        connection: sqlite3.Connection | None = None,
+    ) -> Offset | None:
+        """Async wrapper for fetching offsets."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._fetch_sync, subscriber_id, topic, space_id, tenant_id, connection
+        )
+
+    def _fetch_sync(
+        self,
+        subscriber_id: str,
+        topic: str,
+        space_id: str,
+        tenant_id: str,
         connection: sqlite3.Connection | None = None,
     ) -> Offset | None:
         # Gap 32: Serialize concurrent offset reads with RLock

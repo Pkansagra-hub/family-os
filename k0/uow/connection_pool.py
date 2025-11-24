@@ -32,14 +32,14 @@ class SQLiteConnectionPool:
         *,
         max_size: int = 8,
         pragmas: Mapping[str, str | int] | None = None,
-        busy_timeout_ms: int = 5_000,
+        busy_timeout_ms: int = 30_000,
         metrics_exporter: "MetricsExporter | None" = None,
     ) -> None:
         if max_size <= 0:
             msg = "max_size must be greater than zero"
             raise ValueError(msg)
 
-        self._path = Path(database_path)
+        self._path = Path(database_path).resolve()
         if self._path.parent:
             self._path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -157,19 +157,123 @@ class SQLiteConnectionPool:
             )
 
     def _create_connection(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            self._path,
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            check_same_thread=False,
+        # Gap 45: Enhanced diagnostics and retry logic for connection creation
+        import logging
+        import os
+
+        logger = logging.getLogger(__name__)
+
+        # Pre-flight checks before attempting connection
+        db_dir = self._path.parent
+        if not db_dir.exists():
+            logger.error(
+                f"Database directory does not exist: {db_dir}",
+                extra={
+                    "database_path": str(self._path),
+                    "directory": str(db_dir),
+                    "cwd": os.getcwd(),
+                },
+            )
+            # Attempt to create directory (may fail due to permissions)
+            try:
+                db_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created database directory: {db_dir}")
+            except Exception as mkdir_error:
+                logger.error(f"Failed to create database directory: {mkdir_error}", exc_info=True)
+                raise RuntimeError(
+                    f"Database directory {db_dir} does not exist and cannot be created: {mkdir_error}"
+                ) from mkdir_error
+
+        # Check write permissions
+        if not os.access(db_dir, os.W_OK):
+            logger.error(
+                f"No write permission for database directory: {db_dir}",
+                extra={
+                    "database_path": str(self._path),
+                    "directory": str(db_dir),
+                    "uid": os.getuid() if hasattr(os, "getuid") else "N/A",
+                    "gid": os.getgid() if hasattr(os, "getgid") else "N/A",
+                },
+            )
+            raise PermissionError(f"No write permission for database directory: {db_dir}")
+
+        # Check if path points to a directory (common Docker misconfiguration)
+        if self._path.exists() and self._path.is_dir():
+            logger.error(
+                f"Database path is a directory, not a file: {self._path}",
+                extra={"database_path": str(self._path)},
+            )
+            raise RuntimeError(f"Database path {self._path} is a directory, expected a file")
+
+        # Log connection attempt details
+        logger.debug(
+            "Attempting SQLite connection",
+            extra={
+                "database_path": str(self._path),
+                "db_exists": self._path.exists(),
+                "db_dir": str(db_dir),
+                "cwd": os.getcwd(),
+            },
         )
-        cursor = connection.cursor()
-        for pragma, value in self._pragmas.items():
-            cursor.execute(f"PRAGMA {pragma}={value}")
-        cursor.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
-        cursor.close()
-        connection.row_factory = sqlite3.Row
-        self._created += 1
-        return connection
+
+        # Retry logic for transient errors
+        last_error = None
+        for attempt in range(3):
+            connection = None
+            try:
+                # Use URI mode to bypass potential path resolution issues
+                # URI mode: file:/path/to/db.db?mode=rwc (read-write-create)
+                db_uri = f"file:{self._path}?mode=rwc"
+
+                connection = sqlite3.connect(
+                    db_uri,
+                    detect_types=sqlite3.PARSE_DECLTYPES,
+                    check_same_thread=False,
+                    uri=True,
+                )
+                cursor = connection.cursor()
+                for pragma, value in self._pragmas.items():
+                    cursor.execute(f"PRAGMA {pragma}={value}")
+                cursor.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+                cursor.close()
+                connection.row_factory = sqlite3.Row
+                self._created += 1
+
+                logger.debug(
+                    f"Successfully created SQLite connection to {self._path}",
+                    extra={"attempt": attempt + 1, "database_path": str(self._path)},
+                )
+                return connection
+            except sqlite3.OperationalError as e:
+                if connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+
+                last_error = e
+                # Only retry on transient errors
+                if "unable to open database file" in str(e) or "database is locked" in str(e):
+                    logger.warning(
+                        f"Attempt {attempt + 1}/3 failed for {self._path}: {e}",
+                        extra={"attempt": attempt + 1, "error": str(e)},
+                    )
+                    time.sleep(0.1 * (attempt + 1))
+                    continue
+                raise
+
+        # All retries exhausted
+        logger.error(
+            "Failed to create SQLite connection after 3 attempts",
+            extra={
+                "database_path": str(self._path),
+                "last_error": str(last_error),
+                "cwd": os.getcwd(),
+            },
+        )
+        if last_error:
+            raise last_error
+        raise RuntimeError("Failed to create connection (unknown error)")
 
     def _emit_pool_metrics(self) -> None:
         """Emit pool saturation metrics (Gap 45).
@@ -212,7 +316,7 @@ def configure_pool(
     *,
     max_size: int = 8,
     pragmas: Mapping[str, str | int] | None = None,
-    busy_timeout_ms: int = 5_000,
+    busy_timeout_ms: int = 30_000,
     metrics_exporter: "MetricsExporter | None" = None,
 ) -> None:
     """Initialise the global SQLite connection pool."""

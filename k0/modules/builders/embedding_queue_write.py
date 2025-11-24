@@ -199,12 +199,15 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     import json
 
-    # Parse envelope from message
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from config (passed by pipeline runner)
+    # Falls back to parsing from message.payload if not available (for backward compat)
+    envelope = config.get("envelope")
+    if envelope is None:
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract configuration
     priority = config.get("priority", "NORMAL")

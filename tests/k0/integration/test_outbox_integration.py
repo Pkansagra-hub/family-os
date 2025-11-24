@@ -337,10 +337,14 @@ class TestOutboxRetryPaths:
         assert "Invalid configuration" in dlq_entry.reason
         assert dlq_entry.retries == 3  # Max attempts reached
 
-        # Verify: Entry removed from outbox
+        # Verify: Entry remains in outbox with DEAD status (Gap 37: Prevents premature deletion)
         with sqlite3.connect(str(temp_db)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[0]
-            assert count == 0
+            assert count == 1  # Entry still in outbox
+            status = conn.execute(
+                "SELECT status FROM st_outbox WHERE driver = 'test_driver'"
+            ).fetchone()[0]
+            assert status == "DEAD"  # Status changed to DEAD
 
 
 class TestOutboxIdempotency:
@@ -487,10 +491,14 @@ class TestOutboxPoisonPill:
         assert "Poison pill detected" in dlq_entry.reason
         assert dlq_entry.driver == "test_driver"
 
-        # Verify: Outbox entry removed
+        # Verify: Outbox entry remains with DEAD status (Gap 37: Prevents premature deletion)
         with sqlite3.connect(str(temp_db)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[0]
-            assert count == 0
+            assert count == 1  # Entry still in outbox
+            status = conn.execute(
+                "SELECT status FROM st_outbox WHERE driver = 'test_driver'"
+            ).fetchone()[0]
+            assert status == "DEAD"  # Status changed to DEAD
 
 
 class TestOutboxMetrics:

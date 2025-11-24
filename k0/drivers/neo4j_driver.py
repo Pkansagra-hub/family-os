@@ -156,8 +156,8 @@ class Neo4jKGDriver:
                 )
                 raise
 
-    def apply(self, entry: OutboxEntry) -> None:
-        """Apply graph operations from K0 outbox entry.
+    def apply(self, payload: bytes | OutboxEntry) -> None:
+        """Apply graph operations from K0 outbox entry or raw bytes.
 
         Payload format (JSON):
         {
@@ -178,7 +178,7 @@ class Neo4jKGDriver:
         - delete_relationship: Delete relationship
 
         Args:
-            entry: Outbox entry containing wal_pos, tenant_id, space_id, and JSON payload
+            payload: Either OutboxEntry object or raw bytes containing JSON payload
 
         Raises:
             RuntimeError: If connection not established
@@ -189,7 +189,9 @@ class Neo4jKGDriver:
             raise RuntimeError("Connection not established")
 
         try:
-            data = json.loads(entry.payload)
+            # Handle both OutboxEntry and raw bytes for test compatibility
+            payload_bytes = payload.payload if hasattr(payload, "payload") else payload
+            data = json.loads(payload_bytes)
             operation = data.get("operation")
             params = data.get("params", {})
 
@@ -229,7 +231,11 @@ class Neo4jKGDriver:
                 "Failed to apply operation",
                 extra={
                     "error": str(e),
-                    "payload": payload[:100],  # Log first 100 bytes
+                    "payload": (
+                        str(payload_bytes[:100])
+                        if isinstance(payload_bytes, bytes)
+                        else str(payload_bytes)[:100]
+                    ),
                     "cognitive_trace_id": self.cognitive_trace_id,
                 },
             )

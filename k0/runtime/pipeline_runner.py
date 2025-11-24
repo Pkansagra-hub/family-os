@@ -13,6 +13,7 @@ Related:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -64,12 +65,20 @@ class PipelineRunner:
         self._failed_stages: set[str] = set()
         self._execution_count = 0
 
+        # Compute parallel execution plan
+        self._level_groups = self._dag.get_level_groups()
+        self._max_parallelism = (
+            max(len(group) for group in self._level_groups) if self._level_groups else 0
+        )
+
         logger.info(
             f"Initialized pipeline runner: {spec.pipeline_id}",
             extra={
                 "pipeline_id": spec.pipeline_id,
                 "version": spec.version,
                 "stage_count": len(self._dag),
+                "execution_levels": len(self._level_groups),
+                "max_parallelism": self._max_parallelism,
                 "subscribed_topics": list(spec.declared_topics),
             },
         )
@@ -177,10 +186,46 @@ class PipelineRunner:
             )
 
         try:
-            # Execute stages in topological order, passing enriched message forward
-            current_message = message
-            for stage in self._dag.topological_order():
-                current_message = await self._execute_stage(stage, current_message)
+            # Execute DAG levels: stages within each level run in parallel
+            for level_idx, level_stages in enumerate(self._level_groups):
+                level_start = datetime.now(UTC)
+
+                if self._context:
+                    self._context.logger.debug(
+                        f"Executing level {level_idx}: {len(level_stages)} stages in parallel",
+                        extra={
+                            "pipeline_id": self.pipeline_id,
+                            "level": level_idx,
+                            "stage_count": len(level_stages),
+                            "stage_ids": [s.id for s in level_stages],
+                            "trace_id": message.trace_id,
+                        },
+                    )
+
+                # Execute all stages in this level concurrently
+                if len(level_stages) == 1:
+                    # Optimization: single stage, no need for gather overhead
+                    await self._execute_stage(level_stages[0], message)
+                else:
+                    # Parallel execution within level
+                    await asyncio.gather(
+                        *[self._execute_stage(stage, message) for stage in level_stages],
+                        return_exceptions=False,  # Propagate first exception immediately
+                    )
+
+                level_duration_ms = (datetime.now(UTC) - level_start).total_seconds() * 1000
+
+                if self._context:
+                    self._context.logger.debug(
+                        f"Level {level_idx} completed",
+                        extra={
+                            "pipeline_id": self.pipeline_id,
+                            "level": level_idx,
+                            "duration_ms": round(level_duration_ms, 3),
+                            "completed_stages": [s.id for s in level_stages],
+                            "trace_id": message.trace_id,
+                        },
+                    )
 
             # Success
             duration_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
@@ -193,6 +238,7 @@ class PipelineRunner:
                         "trace_id": message.trace_id,
                         "duration_ms": round(duration_ms, 3),
                         "completed_stages": len(self._completed_stages),
+                        "execution_levels": len(self._level_groups),
                         "stage_timings_ms": {
                             k: round(v, 3) for k, v in self._stage_timings.items()
                         },
@@ -221,16 +267,16 @@ class PipelineRunner:
 
     # ===== Stage Execution =====
 
-    async def _execute_stage(self, stage: StageSpec, message: BusMessage) -> BusMessage:
+    async def _execute_stage(self, stage: StageSpec, message: BusMessage) -> None:
         """
         Execute a single DAG stage.
 
+        Parallel-safe: Multiple stages can execute concurrently, each reading from
+        the shared enriched envelope and writing their outputs back atomically.
+
         Args:
             stage: Stage specification
-            message: Bus message context (may be enriched from previous stage)
-
-        Returns:
-            BusMessage: Updated message with enriched payload (or original if module returned non-dict)
+            message: Bus message context (original message from bus)
 
         Raises:
             Exception: Stage execution failures (propagated to caller)
@@ -252,7 +298,7 @@ class PipelineRunner:
             # Get module implementation
             module_fn = self._registry.get(stage.module)
 
-            # Parse envelope: use enriched version from previous stage, or decode from message
+            # Parse envelope: use enriched version (shared across parallel stages)
             if self._enriched_envelope is not None:
                 envelope_dict = self._enriched_envelope
             else:
@@ -277,7 +323,22 @@ class PipelineRunner:
             args = dict(stage.config)
             args["message"] = message  # BusMessage with .payload (bytes)
             args["context"] = self._context
-            args["envelope"] = envelope_dict  # Pre-decoded envelope dict for convenience
+            # Pass the enriched envelope if available, otherwise use original
+            args["envelope"] = (
+                self._enriched_envelope if self._enriched_envelope is not None else envelope_dict
+            )
+
+            # Debug: log what envelope is being passed
+            if self._context and stage.id == "stage_70_atomic_writer":
+                has_hipp_row = "hipp_events_row" in args["envelope"]
+                self._context.logger.debug(
+                    f"Stage_70 receiving envelope: has_hipp_events_row={has_hipp_row}, total_keys={len(args['envelope'])}, enriched_envelope_id={id(self._enriched_envelope)}, args_envelope_id={id(args['envelope'])}",
+                    extra={
+                        "stage_id": stage.id,
+                        "has_hipp_events_row": has_hipp_row,
+                        "envelope_keys": list(args["envelope"].keys())[:20],
+                    },
+                )
 
             # Execute module with timing
             module_start = datetime.now(UTC)
@@ -287,29 +348,27 @@ class PipelineRunner:
             # Track stage timing for latency profiling
             self._stage_timings[stage.id] = module_duration_ms
 
-            # If module returned an enriched envelope, store it AND create new message with enriched payload
-            # This ensures subsequent stages receive the enriched envelope when they parse message.payload
+            # Merge module result back into shared enriched envelope
+            # This allows parallel stages to contribute independently
             if isinstance(result, dict):
-                self._enriched_envelope = result  # Store for next stage
-                # CRITICAL: Create new BusMessage with enriched payload (BusMessage is frozen)
-                import json
+                if self._enriched_envelope is None:
+                    self._enriched_envelope = envelope_dict.copy()
+                # Deep merge: module outputs are overlaid onto enriched envelope
+                self._enriched_envelope.update(result)
 
-                message = BusMessage(
-                    topic=message.topic,
-                    payload=json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode(
-                        "utf-8"
-                    ),
-                    offset=message.offset,
-                    trace_id=message.trace_id,
-                    space_id=message.space_id,
-                    metadata=message.metadata,
-                )
+                # Debug logging for enrichment tracking
+                if self._context:
+                    self._context.logger.debug(
+                        f"Stage {stage.id} enriched envelope with {len(result)} keys: {list(result.keys())}",
+                        extra={
+                            "stage_id": stage.id,
+                            "enrichment_keys": list(result.keys()),
+                            "total_envelope_keys": len(self._enriched_envelope),
+                        },
+                    )
 
             # Track completion
             self._completed_stages.add(stage.id)
-
-            # Return (possibly enriched) message for next stage
-            return message
 
         except Exception as e:
             self._failed_stages.add(stage.id)
@@ -329,9 +388,6 @@ class PipelineRunner:
             # Re-raise to caller for pipeline-level error handling
             raise
 
-        # Return original message if stage failed (exception will propagate anyway)
-        return message
-
     # ===== Observability Helpers =====
 
     def get_metrics(self) -> Dict[str, Any]:
@@ -341,6 +397,8 @@ class PipelineRunner:
             "version": self._spec.version,
             "total_executions": self._execution_count,
             "stage_count": len(self._dag),
+            "execution_levels": len(self._level_groups),
+            "max_parallelism": self._max_parallelism,
             "last_completed_stages": len(self._completed_stages),
             "last_failed_stages": len(self._failed_stages),
         }

@@ -552,7 +552,7 @@ async def run(
             "embedding_id": str(uuid.uuid4()),
             "entities_json": "[]",
             "kg_triples_json": "[]",
-            "semantic_projected_at_utc": datetime.now(UTC).isoformat(),
+            "semantic_projected_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         }
 
     # Phase 1: Entity extraction (spaCy NER) - with preloaded models
@@ -599,7 +599,7 @@ async def run(
         "embedding_id": embedding_id,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
-        "semantic_projected_at_utc": datetime.now(UTC).isoformat(),
+        "semantic_projected_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
 

@@ -95,6 +95,13 @@ class MinimalGate:
         self._metrics = metrics
         self._observability = observability
 
+        # Step 2: Gate Caching (The "Fast Reflexes")
+        # Simple in-memory cache for provisioning and schema lookups
+        # Since this is a single-device kernel, the working set is small.
+        self._provisioning_cache: dict[str, Any] = {}
+        self._schema_cache: dict[str, Any] = {}
+        self._cache_max_size = 1000
+
     def validate(
         self,
         envelope: dict[str, object],
@@ -215,7 +222,7 @@ class MinimalGate:
                 # Invalid timestamp format - continue without clock skew check
                 pass
 
-        record = self._provisioning.lookup(tenant, space, device, connection=connection)
+        record = self._cached_provisioning_lookup(tenant, space, device, connection=connection)
         if record is None:
             # Gap 47: Track gate rejections by reason
             if self._metrics is not None:
@@ -719,7 +726,7 @@ class MinimalGate:
         connection: sqlite3.Connection | None = None,
     ) -> GateOutcome | None:
         try:
-            record = self._registry.get(schema_uri, schema_version, connection=connection)
+            record = self._cached_schema_get(schema_uri, schema_version, connection=connection)
         except KeyError:
             self._emit_schema_failure(
                 reason=SCHEMA_NOT_ACTIVE,
@@ -947,6 +954,41 @@ class MinimalGate:
                     "Failed to emit replay detection event",
                     extra={"envelope_sha256": envelope_sha256},
                 )
+
+    def _cached_provisioning_lookup(
+        self,
+        tenant: str,
+        space: str,
+        device: str,
+        connection: sqlite3.Connection | None,
+    ) -> Any | None:
+        key = f"{tenant}:{space}:{device}"
+        if key in self._provisioning_cache:
+            return self._provisioning_cache[key]
+
+        result = self._provisioning.lookup(tenant, space, device, connection=connection)
+
+        if len(self._provisioning_cache) >= self._cache_max_size:
+            self._provisioning_cache.clear()
+        self._provisioning_cache[key] = result
+        return result
+
+    def _cached_schema_get(
+        self,
+        schema_uri: str,
+        schema_version: str,
+        connection: sqlite3.Connection | None,
+    ) -> Any:
+        key = f"{schema_uri}:{schema_version}"
+        if key in self._schema_cache:
+            return self._schema_cache[key]
+
+        result = self._registry.get(schema_uri, schema_version, connection=connection)
+
+        if len(self._schema_cache) >= self._cache_max_size:
+            self._schema_cache.clear()
+        self._schema_cache[key] = result
+        return result
 
 
 __all__ = [

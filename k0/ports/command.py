@@ -636,7 +636,7 @@ async def submit_command(
             request, "obligation_store", ObligationStore
         )
 
-        with unit_of_work_factory() as uow:
+        async with unit_of_work_factory() as uow:
             # ADR-K002: Check idempotency INSIDE transaction to prevent TOCTOU race
             # This ensures atomic CHECK+USE within single SQLite BEGIN IMMEDIATE...COMMIT
             # Gap 41: Track check-commit window and detect races
@@ -695,7 +695,7 @@ async def submit_command(
                     },
                 )
 
-            wal_pos = uow.append_wal(wal_entry)
+            wal_pos = await uow.append_wal(wal_entry)
 
             if obligation_store is not None and obligation_records:
                 for record in obligation_records:

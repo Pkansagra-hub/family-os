@@ -291,4 +291,3 @@ def temp_db_path():
         conn.close()
 
         yield str(db_path)
-        yield str(db_path)

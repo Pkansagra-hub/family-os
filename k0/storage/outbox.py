@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -52,6 +53,16 @@ class OutboxStore:
         """Attach or replace the metrics exporter used for gauges."""
 
         self._metrics = metrics
+
+    async def enqueue_async(
+        self,
+        entry: OutboxEntry,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Async wrapper for enqueue."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.enqueue(entry, connection=connection))
 
     def enqueue(
         self,

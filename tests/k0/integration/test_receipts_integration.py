@@ -194,7 +194,7 @@ class TestReceiptPersistence:
 class TestReceiptWalLinking:
     """Tests for Receipt ↔ WAL position linking."""
 
-    def test_receipt_links_to_wal_position(self, temp_db: Path) -> None:
+    async def test_receipt_links_to_wal_position(self, temp_db: Path) -> None:
         """Test: Receipt wal_pos correctly links to WAL position."""
         wal = WriteAheadLog()
         store = ReceiptStore()
@@ -210,7 +210,7 @@ class TestReceiptWalLinking:
             device_id="device",
             commit_ts=datetime.now(timezone.utc).isoformat(),
         )
-        wal_pos = wal.append(entry)
+        wal_pos = await wal.append(entry)
 
         # Create receipt pointing to WAL position
         receipt = _create_receipt(wal_pos=wal_pos)
@@ -220,7 +220,7 @@ class TestReceiptWalLinking:
         assert retrieved is not None
         assert retrieved.wal_pos == wal_pos
 
-    def test_receipt_wal_pos_resolvable(self, temp_db: Path) -> None:
+    async def test_receipt_wal_pos_resolvable(self, temp_db: Path) -> None:
         """Test: Receipt's WAL position can be resolved to WAL entry."""
         wal = WriteAheadLog()
         store = ReceiptStore()
@@ -238,7 +238,7 @@ class TestReceiptWalLinking:
                 device_id="device",
                 commit_ts=datetime.now(timezone.utc).isoformat(),
             )
-            positions.append(wal.append(entry))
+            positions.append(await wal.append(entry))
 
         # Create receipts pointing to different WAL positions
         for i, pos in enumerate(positions):

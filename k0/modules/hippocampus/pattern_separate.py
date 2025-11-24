@@ -285,4 +285,4 @@ def _generate_shingles(text: str, k: int = 3) -> set[str]:
 
 def _now_utc_iso() -> str:
     """Return current UTC timestamp in ISO 8601 format."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

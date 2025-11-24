@@ -18,6 +18,7 @@ Related ADRs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from pathlib import Path
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Global bus dispatcher reference (injected during app startup)
 _bus_dispatcher_ref: Any | None = None
+_bus_loop_ref: asyncio.AbstractEventLoop | None = None
 
 
 def set_bus_dispatcher(dispatcher: Any) -> None:
@@ -42,8 +44,12 @@ def set_bus_dispatcher(dispatcher: Any) -> None:
     Args:
         dispatcher: BusDispatcher instance from kernel app state
     """
-    global _bus_dispatcher_ref
+    global _bus_dispatcher_ref, _bus_loop_ref
     _bus_dispatcher_ref = dispatcher
+    try:
+        _bus_loop_ref = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
 
 
 class SQLiteDriver:
@@ -507,17 +513,18 @@ class SQLiteDriver:
 
             # Publish to bus (this will trigger P02 pipeline asynchronously)
             # Note: dispatch() is async, so we need to run it in the event loop
-            import asyncio
-
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # No event loop running - create one for this operation
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-            # Schedule the dispatch
-            loop.create_task(bus_dispatcher.dispatch([bus_message]))
+            if _bus_loop_ref is not None:
+                asyncio.run_coroutine_threadsafe(
+                    bus_dispatcher.dispatch([bus_message]), _bus_loop_ref
+                )
+            else:
+                logger.warning(
+                    "Bus loop not available - cannot publish envelope",
+                    extra={
+                        "wal_pos": entry.wal_pos,
+                        "driver": entry.driver,
+                    },
+                )
 
             logger.debug(
                 "Published envelope to bus for P02 processing",

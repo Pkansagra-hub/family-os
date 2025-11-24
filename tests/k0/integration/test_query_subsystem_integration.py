@@ -32,12 +32,7 @@ from k0.automation.migrate import apply_migrations
 from k0.kernel.app import create_app
 from k0.kernel.config import KernelSettings
 from k0.query.common import DriverContext, DriverExecution
-from k0.query.drivers import (
-    AliasDriver,
-    DriverRegistry,
-    WalDriver,
-    build_default_registry,
-)
+from k0.query.drivers import AliasDriver, DriverRegistry, WalDriver, build_default_registry
 from k0.storage.wal import WalEntry
 from k0.uow.connection_pool import connection_scope, shutdown_pool
 
@@ -173,7 +168,37 @@ def _append_wal(
     )
 
     with connection_scope() as conn:
-        position = env.app.state.write_ahead_log.append(wal_entry, connection=conn)
+        # Use direct SQL INSERT instead of async wal.append() to avoid async/await in synchronous helper
+        cursor = conn.execute(
+            (
+                "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
+                "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                "location_geohash, location_precision_m) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                wal_entry.tenant_id,
+                wal_entry.space_id,
+                wal_entry.topic,
+                wal_entry.envelope_json,
+                wal_entry.body,
+                wal_entry.redacted_body_json,
+                wal_entry.payload_sha256,
+                wal_entry.schema_uri,
+                wal_entry.schema_version,
+                wal_entry.idem_key,
+                wal_entry.device_id,
+                wal_entry.commit_ts,
+                wal_entry.envelope_sha256,
+                wal_entry.ingested_at,
+                wal_entry.clock_skew_ms,
+                wal_entry.policy_stamp_json,
+                wal_entry.location_geohash,
+                wal_entry.location_precision_m,
+            ),
+        )
+        position = int(cursor.lastrowid)
 
         # Also index in FTS for semantic/fulltext queries
         text_content = json.dumps(payload)
@@ -751,7 +776,36 @@ def test_binary_body_base64_encoded(
     )
 
     with connection_scope() as conn:
-        query_test_env.app.state.write_ahead_log.append(wal_entry, connection=conn)
+        # Use direct SQL INSERT instead of async wal.append()
+        cursor = conn.execute(
+            (
+                "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
+                "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                "location_geohash, location_precision_m) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                wal_entry.tenant_id,
+                wal_entry.space_id,
+                wal_entry.topic,
+                wal_entry.envelope_json,
+                wal_entry.body,
+                wal_entry.redacted_body_json,
+                wal_entry.payload_sha256,
+                wal_entry.schema_uri,
+                wal_entry.schema_version,
+                wal_entry.idem_key,
+                wal_entry.device_id,
+                wal_entry.commit_ts,
+                wal_entry.envelope_sha256,
+                wal_entry.ingested_at,
+                wal_entry.clock_skew_ms,
+                wal_entry.policy_stamp_json,
+                wal_entry.location_geohash,
+                wal_entry.location_precision_m,
+            ),
+        )
         conn.commit()
 
     response = query_test_env.client.post(

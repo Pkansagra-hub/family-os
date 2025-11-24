@@ -21,7 +21,9 @@ from k0.storage.wal import WalBacklogStats, WalEntry, WriteAheadLog
 @pytest.fixture
 def mock_observability() -> ObservabilityEmitter:
     """Create a mock observability emitter."""
-    return MagicMock(spec=ObservabilityEmitter)
+    mock = MagicMock(spec=ObservabilityEmitter)
+    mock.emit_metric = MagicMock()
+    return mock
 
 
 @pytest.fixture
@@ -84,7 +86,9 @@ def sse_server(
 class TestSSESubscribe:
     """Tests for SSEServer.subscribe() method."""
 
-    def test_subscribe_basic_topics(self, sse_server: SSEServer, wal_mock: WriteAheadLog) -> None:
+    async def test_subscribe_basic_topics(
+        self, sse_server: SSEServer, wal_mock: WriteAheadLog
+    ) -> None:
         """Test basic subscription with permitted topics."""
         wal_mock.read_from.return_value = [
             WalEntry(
@@ -111,7 +115,7 @@ class TestSSESubscribe:
             ),
         ]
 
-        rows, permitted = sse_server.subscribe(
+        rows, permitted = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub1",
@@ -128,7 +132,7 @@ class TestSSESubscribe:
         assert "events/updated" in permitted
         wal_mock.read_from.assert_called_once()
 
-    def test_subscribe_with_cursor_token(
+    async def test_subscribe_with_cursor_token(
         self, sse_server: SSEServer, wal_mock: WriteAheadLog
     ) -> None:
         """Test subscription with cursor token resuming from position."""
@@ -157,7 +161,7 @@ class TestSSESubscribe:
             ),
         ]
 
-        rows, _ = sse_server.subscribe(
+        rows, _ = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub1",
@@ -171,7 +175,7 @@ class TestSSESubscribe:
         assert call_args[0][0] == 5  # last_position
         assert len(rows) == 1
 
-    def test_subscribe_cursor_subscriber_id_mismatch(
+    async def test_subscribe_cursor_subscriber_id_mismatch(
         self, sse_server: SSEServer, wal_mock: WriteAheadLog
     ) -> None:
         """Test cursor validation with mismatched subscriber ID."""
@@ -185,7 +189,7 @@ class TestSSESubscribe:
         wal_mock.read_from.return_value = []
 
         with pytest.raises(Exception) as exc_info:
-            sse_server.subscribe(
+            await sse_server.subscribe(
                 tenant_id="tenant1",
                 space_id="space1",
                 subscriber_id="sub1",
@@ -195,7 +199,7 @@ class TestSSESubscribe:
             )
         assert "CURSOR_SUBSCRIBER_MISMATCH" in str(exc_info.value)
 
-    def test_subscribe_cursor_tenant_id_mismatch(
+    async def test_subscribe_cursor_tenant_id_mismatch(
         self, sse_server: SSEServer, wal_mock: WriteAheadLog
     ) -> None:
         """Test cursor validation with mismatched tenant ID."""
@@ -210,7 +214,7 @@ class TestSSESubscribe:
         wal_mock.read_from.return_value = []
 
         with pytest.raises(Exception) as exc_info:
-            sse_server.subscribe(
+            await sse_server.subscribe(
                 tenant_id="tenant1",
                 space_id="space1",
                 subscriber_id="sub1",
@@ -220,7 +224,7 @@ class TestSSESubscribe:
             )
         assert "CURSOR_SCOPE_MISMATCH" in str(exc_info.value)
 
-    def test_subscribe_cursor_space_id_mismatch(
+    async def test_subscribe_cursor_space_id_mismatch(
         self, sse_server: SSEServer, wal_mock: WriteAheadLog
     ) -> None:
         """Test cursor validation with mismatched space ID."""
@@ -234,7 +238,7 @@ class TestSSESubscribe:
         wal_mock.read_from.return_value = []
 
         with pytest.raises(Exception) as exc_info:
-            sse_server.subscribe(
+            await sse_server.subscribe(
                 tenant_id="tenant1",
                 space_id="space1",
                 subscriber_id="sub1",
@@ -244,10 +248,10 @@ class TestSSESubscribe:
             )
         assert "CURSOR_SCOPE_MISMATCH" in str(exc_info.value)
 
-    def test_subscribe_acl_denies_topics(self, sse_server: SSEServer) -> None:
+    async def test_subscribe_acl_denies_topics(self, sse_server: SSEServer) -> None:
         """Test subscription blocked by ACL (no permitted topics)."""
         with pytest.raises(Exception) as exc_info:
-            sse_server.subscribe(
+            await sse_server.subscribe(
                 tenant_id="tenant1",
                 space_id="space1",
                 subscriber_id="sub1",
@@ -257,10 +261,10 @@ class TestSSESubscribe:
             )
         assert "TOPIC_ACCESS_DENIED" in str(exc_info.value)
 
-    def test_subscribe_invalid_fanout_limit(self, sse_server: SSEServer) -> None:
+    async def test_subscribe_invalid_fanout_limit(self, sse_server: SSEServer) -> None:
         """Test subscription with invalid fanout limit."""
         with pytest.raises(Exception) as exc_info:
-            sse_server.subscribe(
+            await sse_server.subscribe(
                 tenant_id="tenant1",
                 space_id="space1",
                 subscriber_id="sub1",
@@ -271,7 +275,7 @@ class TestSSESubscribe:
             )
         assert "INVALID_FANOUT_LIMIT" in str(exc_info.value)
 
-    def test_subscribe_filters_by_scope(
+    async def test_subscribe_filters_by_scope(
         self, sse_server: SSEServer, wal_mock: WriteAheadLog
     ) -> None:
         """Test that subscribe filters WAL entries by tenant/space."""
@@ -311,7 +315,7 @@ class TestSSESubscribe:
             ),
         ]
 
-        rows, _ = sse_server.subscribe(
+        rows, _ = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub1",
@@ -328,11 +332,11 @@ class TestSSESubscribe:
 class TestSSEAcknowledge:
     """Tests for SSEServer.acknowledge() method."""
 
-    def test_acknowledge_valid_offset(
+    async def test_acknowledge_valid_offset(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore
     ) -> None:
         """Test successful acknowledge with valid offset."""
-        sse_server.acknowledge(
+        await sse_server.acknowledge(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -347,10 +351,10 @@ class TestSSEAcknowledge:
         assert call_arg.topic == "events"
         assert call_arg.offset == 42
 
-    def test_acknowledge_negative_offset_rejected(self, sse_server: SSEServer) -> None:
+    async def test_acknowledge_negative_offset_rejected(self, sse_server: SSEServer) -> None:
         """Test acknowledge rejection with negative offset."""
         with pytest.raises(Exception) as exc_info:
-            sse_server.acknowledge(
+            await sse_server.acknowledge(
                 subscriber_id="sub1",
                 tenant_id="tenant1",
                 space_id="space1",
@@ -359,12 +363,12 @@ class TestSSEAcknowledge:
             )
         assert "NEGATIVE_OFFSET" in str(exc_info.value)
 
-    def test_acknowledge_with_custom_timestamp(
+    async def test_acknowledge_with_custom_timestamp(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore
     ) -> None:
         """Test acknowledge with custom timestamp."""
         custom_ts = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
-        sse_server.acknowledge(
+        await sse_server.acknowledge(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -376,11 +380,11 @@ class TestSSEAcknowledge:
         call_arg = offset_store_mock.upsert.call_args[0][0]
         assert call_arg.updated_ts == "2025-01-15T12:00:00+00:00"
 
-    def test_acknowledge_zero_offset(
+    async def test_acknowledge_zero_offset(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore
     ) -> None:
         """Test acknowledge with offset of 0 (valid)."""
-        sse_server.acknowledge(
+        await sse_server.acknowledge(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -394,7 +398,7 @@ class TestSSEAcknowledge:
 class TestSSEBackpressure:
     """Tests for SSEServer.evaluate_backpressure() method."""
 
-    def test_backpressure_normal_level(
+    async def test_backpressure_normal_level(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure evaluation at normal level."""
@@ -412,7 +416,7 @@ class TestSSEBackpressure:
             latest_commit_ts="2025-01-15T12:00:01+00:00",
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -423,7 +427,7 @@ class TestSSEBackpressure:
         assert metrics.pending_events == 100
         assert metrics.lag_ms >= 0
 
-    def test_backpressure_warning_level_by_lag(
+    async def test_backpressure_warning_level_by_lag(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure warning level triggered by high lag."""
@@ -444,7 +448,7 @@ class TestSSEBackpressure:
             latest_commit_ts=latest_ts.isoformat(),
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -454,7 +458,7 @@ class TestSSEBackpressure:
         assert metrics.level == "warning"
         assert metrics.lag_ms >= 2000
 
-    def test_backpressure_throttle_level_by_pending(
+    async def test_backpressure_throttle_level_by_pending(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure throttle level triggered by high pending events."""
@@ -472,7 +476,7 @@ class TestSSEBackpressure:
             latest_commit_ts="2025-01-15T12:00:01+00:00",
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -482,7 +486,7 @@ class TestSSEBackpressure:
         assert metrics.level == "throttle"
         assert metrics.pending_events == 25000
 
-    def test_backpressure_shed_level_by_lag(
+    async def test_backpressure_shed_level_by_lag(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure shed level triggered by extreme lag."""
@@ -503,7 +507,7 @@ class TestSSEBackpressure:
             latest_commit_ts=latest_ts.isoformat(),
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -513,7 +517,7 @@ class TestSSEBackpressure:
         assert metrics.level == "shed"
         assert metrics.lag_ms >= 15000
 
-    def test_backpressure_shed_level_by_pending(
+    async def test_backpressure_shed_level_by_pending(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure shed level triggered by extreme pending events."""
@@ -531,7 +535,7 @@ class TestSSEBackpressure:
             latest_commit_ts="2025-01-15T12:00:01+00:00",
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -541,7 +545,7 @@ class TestSSEBackpressure:
         assert metrics.level == "shed"
         assert metrics.pending_events == 60000
 
-    def test_backpressure_multiple_topics(
+    async def test_backpressure_multiple_topics(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test backpressure evaluation across multiple topics."""
@@ -576,7 +580,7 @@ class TestSSEBackpressure:
             ),
         ]
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -588,7 +592,7 @@ class TestSSEBackpressure:
         assert metrics.ack_offsets["events"] == 100
         assert metrics.ack_offsets["notifications"] == 50
 
-    def test_backpressure_cursor_generation(
+    async def test_backpressure_cursor_generation(
         self, sse_server: SSEServer, offset_store_mock: OffsetStore, wal_mock: WriteAheadLog
     ) -> None:
         """Test that backpressure metrics include cursor tokens for ack'd offsets."""
@@ -606,7 +610,7 @@ class TestSSEBackpressure:
             latest_commit_ts="2025-01-15T12:00:01+00:00",
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -643,7 +647,7 @@ class TestSSECursorHandling:
         assert decoded["offset"] == 42
         assert "nonce" in decoded
 
-    def test_decode_cursor_valid_iso8601_with_z(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_valid_iso8601_with_z(self, sse_server: SSEServer) -> None:
         """Test cursor decoding with ISO8601 Z suffix."""
         cursor = json.dumps(
             {
@@ -658,7 +662,7 @@ class TestSSECursorHandling:
         assert decoded.last_position == 42
         assert decoded.last_ts.tzinfo is not None
 
-    def test_decode_cursor_valid_iso8601_with_offset(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_valid_iso8601_with_offset(self, sse_server: SSEServer) -> None:
         """Test cursor decoding with ISO8601 +HH:MM offset."""
         cursor = json.dumps(
             {
@@ -670,7 +674,7 @@ class TestSSECursorHandling:
         decoded = sse_server._decode_cursor(cursor)
         assert decoded.last_position == 42
 
-    def test_decode_cursor_with_pos_fallback(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_with_pos_fallback(self, sse_server: SSEServer) -> None:
         """Test cursor decoding with 'pos' fallback (backward compat)."""
         cursor = json.dumps(
             {
@@ -682,7 +686,7 @@ class TestSSECursorHandling:
         decoded = sse_server._decode_cursor(cursor)
         assert decoded.last_position == 42
 
-    def test_decode_cursor_missing_offset_and_ts(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_missing_offset_and_ts(self, sse_server: SSEServer) -> None:
         """Test cursor decode error with missing offset/ts."""
         cursor = json.dumps({"subscriber_id": "sub1"})
 
@@ -690,7 +694,7 @@ class TestSSECursorHandling:
             sse_server._decode_cursor(cursor)
         assert "CURSOR_FIELDS_MISSING" in str(exc_info.value)
 
-    def test_decode_cursor_negative_position(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_negative_position(self, sse_server: SSEServer) -> None:
         """Test cursor decode rejection with negative position."""
         cursor = json.dumps(
             {
@@ -703,13 +707,13 @@ class TestSSECursorHandling:
             sse_server._decode_cursor(cursor)
         assert "CURSOR_NEGATIVE_POSITION" in str(exc_info.value)
 
-    def test_decode_cursor_invalid_json(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_invalid_json(self, sse_server: SSEServer) -> None:
         """Test cursor decode error with invalid JSON."""
         with pytest.raises(Exception) as exc_info:
             sse_server._decode_cursor("{invalid json")
         assert "CURSOR_DECODE_ERROR" in str(exc_info.value)
 
-    def test_decode_cursor_preserves_optional_fields(self, sse_server: SSEServer) -> None:
+    async def test_decode_cursor_preserves_optional_fields(self, sse_server: SSEServer) -> None:
         """Test that cursor decode preserves optional subscriber context."""
         cursor = json.dumps(
             {
@@ -808,7 +812,7 @@ class TestSSEACLHandling:
 class TestSSECompleteIntegration:
     """End-to-end integration tests for SSE workflows."""
 
-    def test_complete_subscribe_acknowledge_cycle(
+    async def test_complete_subscribe_acknowledge_cycle(
         self,
         sse_server: SSEServer,
         wal_mock: WriteAheadLog,
@@ -843,7 +847,7 @@ class TestSSECompleteIntegration:
         wal_mock.read_from.return_value = entries
 
         # Step 1: Subscribe
-        rows, permitted = sse_server.subscribe(
+        rows, permitted = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub1",
@@ -854,7 +858,7 @@ class TestSSECompleteIntegration:
         assert len(rows) == 2
 
         # Step 2: Acknowledge last processed entry
-        sse_server.acknowledge(
+        await sse_server.acknowledge(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -878,7 +882,7 @@ class TestSSECompleteIntegration:
             latest_commit_ts="2025-01-15T12:00:01Z",
         )
 
-        metrics = sse_server.evaluate_backpressure(
+        metrics = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -886,7 +890,7 @@ class TestSSECompleteIntegration:
         )
         assert metrics.level == "normal"
 
-    def test_multiple_subscribers_same_topic(
+    async def test_multiple_subscribers_same_topic(
         self,
         sse_server: SSEServer,
         wal_mock: WriteAheadLog,
@@ -907,7 +911,7 @@ class TestSSECompleteIntegration:
         wal_mock.read_from.return_value = [wal_entry]
 
         # Subscriber 1 subscribes
-        rows1, _ = sse_server.subscribe(
+        rows1, _ = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub1",
@@ -918,7 +922,7 @@ class TestSSECompleteIntegration:
         assert len(rows1) == 1
 
         # Subscriber 1 acknowledges
-        sse_server.acknowledge(
+        await sse_server.acknowledge(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
@@ -927,7 +931,7 @@ class TestSSECompleteIntegration:
         )
 
         # Subscriber 2 subscribes (no acks yet)
-        rows2, _ = sse_server.subscribe(
+        rows2, _ = await sse_server.subscribe(
             tenant_id="tenant1",
             space_id="space1",
             subscriber_id="sub2",
@@ -961,13 +965,13 @@ class TestSSECompleteIntegration:
             WalBacklogStats(1, 1, "2025-01-15T12:00:00Z"),
         ]
 
-        metrics1 = sse_server.evaluate_backpressure(
+        metrics1 = await sse_server.evaluate_backpressure(
             subscriber_id="sub1",
             tenant_id="tenant1",
             space_id="space1",
             topics=["events/created"],
         )
-        metrics2 = sse_server.evaluate_backpressure(
+        metrics2 = await sse_server.evaluate_backpressure(
             subscriber_id="sub2",
             tenant_id="tenant1",
             space_id="space1",
@@ -977,7 +981,7 @@ class TestSSECompleteIntegration:
         assert metrics1.ack_offsets["events/created"] == 1
         assert metrics2.ack_offsets["events/created"] == 0
 
-    def test_backpressure_levels_progression(
+    async def test_backpressure_levels_progression(
         self,
         sse_server: SSEServer,
         offset_store_mock: OffsetStore,
@@ -1005,7 +1009,7 @@ class TestSSECompleteIntegration:
                 latest_commit_ts=latest_ts.isoformat(),
             )
 
-            metrics = sse_server.evaluate_backpressure(
+            metrics = await sse_server.evaluate_backpressure(
                 subscriber_id="sub1",
                 tenant_id="tenant1",
                 space_id="space1",

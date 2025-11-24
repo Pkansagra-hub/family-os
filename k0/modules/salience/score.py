@@ -485,12 +485,15 @@ async def run(message: any, context: any, **config: any) -> dict:
     """
     import json as json_module
 
-    # Parse envelope from message
-    envelope = (
-        json_module.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from config (passed by pipeline runner)
+    # Falls back to parsing from message.payload if not available (for backward compat)
+    envelope = config.get("envelope")
+    if envelope is None:
+        envelope = (
+            json_module.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config parameters
     social_weight = config.get("social_weight", WEIGHT_SOCIAL)
