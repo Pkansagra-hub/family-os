@@ -499,8 +499,85 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Outbox worker loop cancelled during backoff")
                     break
 
+    async def _init_model_registry() -> "ModelRegistry":
+        """Initialize the centralized model registry at kernel startup.
+
+        The ModelRegistry provides:
+        - Lazy loading of ML models on first use
+        - GPU memory management with CPU fallback
+        - Thread-safe model access
+        - Model versioning
+
+        Returns:
+            ModelRegistry: Initialized model registry
+        """
+        from pathlib import Path
+
+        from ..runtime.model_registry import init_model_registry
+
+        config_path = Path(__file__).parent.parent / "config" / "models.yaml"
+
+        logger.info("Initializing model registry...")
+        registry = await init_model_registry(
+            config_path=config_path if config_path.exists() else None,
+            gpu_memory_limit_mb=4096,
+            cpu_memory_limit_mb=8192,
+        )
+
+        # Preload essential models for hot path performance
+        preload_models = ["spacy_nlp", "vader_analyzer"]
+        results = await registry.preload(preload_models)
+
+        for model_name, success in results.items():
+            if success:
+                logger.info(f"Preloaded model: {model_name}")
+            else:
+                logger.warning(f"Failed to preload model: {model_name}")
+
+        logger.info(
+            "Model registry initialized",
+            extra={"stats": registry.get_stats()},
+        )
+
+        return registry
+
+    async def _init_feature_flags() -> "FeatureFlags":
+        """Initialize the feature flags system for ML tier selection.
+
+        The FeatureFlags system provides:
+        - Module-level ML tier selection
+        - Percentage-based rollouts
+        - Automatic fallback on failures
+        - A/B testing metrics
+
+        Returns:
+            FeatureFlags: Initialized feature flags
+        """
+        from pathlib import Path
+
+        from ..config.feature_flags import init_feature_flags
+
+        config_path = Path(__file__).parent.parent / "config" / "feature_flags.yaml"
+
+        logger.info("Initializing feature flags...")
+        flags = await init_feature_flags(
+            config_path=config_path if config_path.exists() else None
+        )
+
+        logger.info(
+            "Feature flags initialized",
+            extra={
+                "modules": flags.list_modules(),
+                "flags": flags.get_all_flags(),
+            },
+        )
+
+        return flags
+
     async def _preload_models() -> dict[str, any]:
-        """Preload NLP models at kernel startup to avoid cold start penalty.
+        """Legacy function for backward compatibility.
+
+        DEPRECATED: Use _init_model_registry() instead.
 
         Returns:
             dict: Preloaded models with keys 'spacy_nlp' and 'vader_analyzer'
@@ -512,7 +589,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
             logger.info("Preloading spaCy model (en_core_web_sm)...")
             models["spacy_nlp"] = spacy.load("en_core_web_sm")
-            logger.info("✓ spaCy model preloaded successfully")
+            logger.info("spaCy model preloaded successfully")
         except Exception as e:
             logger.warning(f"Failed to preload spaCy model: {e}")
             models["spacy_nlp"] = None
@@ -522,7 +599,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
             logger.info("Preloading VADER sentiment analyzer...")
             models["vader_analyzer"] = SentimentIntensityAnalyzer()
-            logger.info("✓ VADER sentiment analyzer preloaded successfully")
+            logger.info("VADER sentiment analyzer preloaded successfully")
         except Exception as e:
             logger.warning(f"Failed to preload VADER analyzer: {e}")
             models["vader_analyzer"] = None
@@ -536,15 +613,28 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
         set_bus_dispatcher(bus_dispatcher)
 
-        # Phase 1: Preload NLP models to avoid cold start penalty
-        logger.info("Preloading NLP models...")
-        preloaded_models = await _preload_models()
+        # Phase 0: Initialize Feature Flags system
+        logger.info("Initializing feature flags system...")
+        feature_flags = await _init_feature_flags()
+        app.state.feature_flags = feature_flags
+
+        # Phase 1: Initialize Model Registry (replaces legacy _preload_models)
+        logger.info("Initializing model registry...")
+        model_registry = await _init_model_registry()
+        app.state.model_registry = model_registry
+
+        # Build legacy-compatible preloaded_models dict for backward compatibility
+        preloaded_models = {
+            "spacy_nlp": model_registry.get_sync("spacy_nlp"),
+            "vader_analyzer": model_registry.get_sync("vader_analyzer"),
+        }
         app.state.preloaded_models = preloaded_models
         logger.info(
-            "NLP model preloading complete",
+            "Model initialization complete",
             extra={
                 "spacy_loaded": preloaded_models.get("spacy_nlp") is not None,
                 "vader_loaded": preloaded_models.get("vader_analyzer") is not None,
+                "registry_stats": model_registry.get_stats(),
             },
         )
 
@@ -690,6 +780,16 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info(f"Shutdown pipeline: {pipeline_id}")
                 except Exception:
                     logger.exception(f"Error shutting down {pipeline_id}")
+
+            # Shutdown model registry
+            model_registry = getattr(app.state, "model_registry", None)
+            if model_registry:
+                logger.info("Shutting down model registry...")
+                try:
+                    await model_registry.shutdown()
+                    logger.info("Model registry shutdown complete")
+                except Exception:
+                    logger.exception("Error shutting down model registry")
 
             # M2 R2.3: Record clean shutdown timestamp (for crash fencing)
             import time
@@ -1169,5 +1269,7 @@ def _compose_error(
     if hint:
         error["hint"] = hint
     if budgets:
+        error["budgets"] = budgets
+    return {"error": error}
         error["budgets"] = budgets
     return {"error": error}

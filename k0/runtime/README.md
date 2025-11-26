@@ -19,9 +19,11 @@ The `k0/runtime/` directory contains the **execution engine** for declarative YA
 
 ```
 k0/runtime/
-├── __init__.py          # Public API: ModuleRegistry, PipelineRunner, schemas, DAG
+├── __init__.py          # Public API: ModuleRegistry, PipelineRunner, ModelRegistry, schemas, DAG
 ├── schemas.py           # Pydantic models (ModuleContract, PipelineSpec, StageSpec)
 ├── module_registry.py   # Load & lookup modules by ID (switchboard)
+├── model_registry.py    # ML model loading, GPU memory management, lazy loading
+├── model_loaders.py     # Factory functions for spaCy, VADER, transformers models
 ├── pipeline_runner.py   # Generic DAG executor (implements PipelineProtocol)
 ├── dag_builder.py       # Build topologically sorted execution graph
 └── README.md            # This file - authoritative guide
@@ -90,7 +92,82 @@ print(f"Latency budget: {contract.latency_budget_ms}ms")
 - Import path: `k0.modules.hippocampus.pattern_separate`
 - Function: `pattern_separate.run()`
 
-### 2. Pipeline Runner
+### 2. Model Registry
+
+**Purpose:** Centralized ML model management with lazy loading and GPU memory awareness
+
+**Responsibilities:**
+
+1. Load model specifications from `k0/config/models.yaml`
+2. Lazy-load models on first request (not at startup)
+3. Manage GPU memory with configurable limits
+4. Automatic CPU fallback on GPU OOM or failures
+5. Thread-safe model access across pipelines
+6. Model versioning and warm-up
+
+**Usage:**
+
+```python
+from k0.runtime import ModelRegistry, init_model_registry, get_model_registry
+
+# Initialize registry (typically done in kernel startup)
+registry = await init_model_registry(
+    config_path="k0/config/models.yaml",
+    gpu_memory_limit_mb=4096,
+    cpu_memory_limit_mb=8192,
+)
+
+# Get model (lazy loads if not already loaded)
+spacy_nlp = await registry.get("spacy_nlp")
+doc = spacy_nlp("Hello world")
+
+# Get cached model synchronously (returns None if not loaded)
+vader = registry.get_sync("vader_analyzer")
+if vader:
+    scores = vader.polarity_scores("I love this!")
+
+# Check model status
+if registry.is_loaded("sentence_transformer"):
+    embeddings = await registry.get("sentence_transformer")
+
+# Get registry statistics
+stats = registry.get_stats()
+print(f"GPU memory used: {stats['gpu_memory_used_mb']}MB")
+print(f"Models loaded: {stats['loaded_count']}")
+
+# Preload multiple models
+results = await registry.preload(["spacy_nlp", "vader_analyzer"])
+
+# Unload model to free memory
+await registry.unload("sentence_transformer")
+```
+
+**Available Models (Default):**
+
+| Model Name | Tier | Memory | Description |
+|------------|------|--------|-------------|
+| `spacy_nlp` | spacy_small | 100MB | spaCy en_core_web_sm |
+| `spacy_nlp_lg` | spacy_large | 800MB | spaCy en_core_web_lg |
+| `vader_analyzer` | rule_based | 50MB | VADER sentiment |
+| `sentence_transformer` | transformer_small | 500MB | all-MiniLM-L6-v2 |
+| `sentiment_transformer` | transformer_small | 400MB | DistilBERT sentiment |
+| `zero_shot_classifier` | transformer_large | 1500MB | BART MNLI |
+
+**Model Tiers:**
+
+- `RULE_BASED` - Lexicon/rule-based (VADER, regex)
+- `SPACY_SMALL` - spaCy small models (~100MB)
+- `SPACY_LARGE` - spaCy large models (~800MB)
+- `TRANSFORMER_SMALL` - Small transformers (~500MB)
+- `TRANSFORMER_LARGE` - Large transformers (>1GB)
+
+**Related:**
+
+- `k0/runtime/model_loaders.py` - Model factory functions
+- `k0/config/models.yaml` - Model specifications
+- `k0/config/feature_flags.py` - ML tier selection
+
+### 3. Pipeline Runner
 
 **Purpose:** Generic executor for declarative YAML-based pipelines
 

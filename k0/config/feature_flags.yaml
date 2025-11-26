@@ -1,0 +1,134 @@
+# Feature Flags Configuration
+# Controls ML tier selection and gradual rollout for modules
+#
+# Related:
+# - k0/config/feature_flags.py: FeatureFlags class
+# - k0/runtime/model_registry.py: ModelRegistry class
+# - k0/modules/MODULE_ENHANCEMENT_PLAN.md: Upgrade roadmap
+#
+# Issue: 1.1.2 - Feature Flag System
+
+version: "1.0.0"
+
+# Global configuration
+global:
+  enabled: true
+  default_tier: rule_based
+  default_rollout_percentage: 100.0
+  metrics_enabled: true
+  auto_fallback_enabled: true
+
+# Module-specific flags
+# Each module has:
+# - enabled_tier: Current ML tier to use
+# - fallback_tier: Tier to use on failure
+# - rollout_percentage: Percentage of requests to use enabled_tier (0-100)
+# - max_failures_before_fallback: Number of failures before auto-fallback
+# - description: Human-readable description
+# - metrics_enabled: Whether to collect comparison metrics
+
+modules:
+  # ============================================
+  # M02 - Semantic Project (Entity/KG Extraction)
+  # ============================================
+  # Current: Rule-based entity extraction
+  # Target: Transformer NER + KG completion
+  hippocampus.semantic_project:
+    enabled_tier: rule_based
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Entity extraction and knowledge graph triple generation"
+    metrics_enabled: true
+
+  # ============================================
+  # M04 - Affect Analyze (Sentiment Analysis)
+  # ============================================
+  # Current: VADER lexicon-based
+  # Target: Transformer sentiment with emotion detection
+  affect.analyze:
+    enabled_tier: rule_based  # VADER
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Sentiment and emotion analysis"
+    metrics_enabled: true
+
+  # ============================================
+  # M06 - Salience Score
+  # ============================================
+  # Current: Hardcoded formula weights
+  # Target: Learned salience model
+  salience.score:
+    enabled_tier: rule_based
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Memory salience scoring"
+    metrics_enabled: true
+
+  # ============================================
+  # M07 - Family Graph Resolve
+  # ============================================
+  # Current: Hardcoded relationship dictionary
+  # Target: Graph database with NER
+  social.family_graph_resolve:
+    enabled_tier: rule_based
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Family relationship and social context resolution"
+    metrics_enabled: true
+
+  # ============================================
+  # M10 - Ingress Classify (Activity Type)
+  # ============================================
+  # Current: Keyword-based classification
+  # Target: Zero-shot transformer classifier
+  context.ingress_classify:
+    enabled_tier: rule_based
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Activity type classification"
+    metrics_enabled: true
+
+# Tier progression schedule
+# Defines when to enable higher tiers for each module
+# Used by ops team for gradual rollout planning
+rollout_schedule:
+  # Phase 1: Enable spaCy large for NER-dependent modules
+  phase_1:
+    modules:
+      - hippocampus.semantic_project
+      - social.family_graph_resolve
+    target_tier: spacy_large
+    target_rollout: 10.0
+    notes: "A/B test spaCy large vs small for entity extraction"
+
+  # Phase 2: Enable transformer sentiment
+  phase_2:
+    modules:
+      - affect.analyze
+    target_tier: transformer_small
+    target_rollout: 25.0
+    notes: "Compare transformer vs VADER sentiment accuracy"
+
+  # Phase 3: Enable zero-shot classification
+  phase_3:
+    modules:
+      - context.ingress_classify
+    target_tier: transformer_large
+    target_rollout: 50.0
+    notes: "Zero-shot activity classification test"
+
+# Metrics configuration
+metrics:
+  # Collect accuracy metrics for A/B comparison
+  collect_accuracy: true
+  # Collect latency metrics per tier
+  collect_latency: true
+  # Sample rate for detailed metrics (0.0-1.0)
+  sample_rate: 1.0
+  # Export metrics to telemetry
+  export_to_telemetry: true

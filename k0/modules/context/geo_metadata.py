@@ -277,7 +277,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M12 geo_metadata starting",
         extra={
-            "module": "context.geo_metadata",
+            "module_id": "context.geo_metadata",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
         },
@@ -300,7 +300,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M12 geo_metadata completed",
         extra={
-            "module": "context.geo_metadata",
+            "module_id": "context.geo_metadata",
             "trace_id": message.trace_id,
             "geohash_present": geo_metadata.geohash_6 is not None,
             "geo_precision": geo_metadata.geo_precision_external,

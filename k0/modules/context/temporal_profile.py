@@ -555,7 +555,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     context.logger.debug(
         "M08 temporal_profile starting",
         extra={
-            "module": "context.temporal_profile",
+            "module_id": "context.temporal_profile",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
             "timezone_source": timezone_source,
@@ -582,7 +582,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         context.logger.warning(
             "Invariant violation: ingested_at > write_time_utc",
             extra={
-                "module": "context.temporal_profile",
+                "module_id": "context.temporal_profile",
                 "trace_id": message.trace_id,
                 "ingested_at": ingested_at,
                 "write_time_utc": write_time_utc,
@@ -601,7 +601,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     context.logger.debug(
         "M08 temporal_profile completed",
         extra={
-            "module": "context.temporal_profile",
+            "module_id": "context.temporal_profile",
             "trace_id": message.trace_id,
             "local_date": profile.local_date,
             "time_of_day_bucket": profile.time_of_day_bucket,

@@ -311,7 +311,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M07 social.family_graph_resolve starting",
         extra={
-            "module": "social.family_graph_resolve",
+            "module_id": "social.family_graph_resolve",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
         },
@@ -341,7 +341,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         context.logger.debug(
             "M07 social.family_graph_resolve completed (solo)",
             extra={
-                "module": "social.family_graph_resolve",
+                "module_id": "social.family_graph_resolve",
                 "trace_id": message.trace_id,
                 "social_context": "solo",
             },
@@ -358,7 +358,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         context.logger.debug(
             "M07 social.family_graph_resolve completed (solo)",
             extra={
-                "module": "social.family_graph_resolve",
+                "module_id": "social.family_graph_resolve",
                 "trace_id": message.trace_id,
                 "social_context": "solo",
             },
@@ -402,7 +402,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         context.logger.debug(
             "M07 social.family_graph_resolve completed",
             extra={
-                "module": "social.family_graph_resolve",
+                "module_id": "social.family_graph_resolve",
                 "trace_id": message.trace_id,
                 "social_context": social_context,
                 "social_intimacy": social_intimacy,
@@ -419,7 +419,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         context.logger.error(
             "M07 social.family_graph_resolve error",
             extra={
-                "module": "social.family_graph_resolve",
+                "module_id": "social.family_graph_resolve",
                 "trace_id": message.trace_id,
                 "error": str(e),
             },

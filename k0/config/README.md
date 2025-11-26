@@ -11,6 +11,8 @@ The **config** module contains static YAML configuration files shipped with the 
 - **Environment Management**: Support development, staging, and production configurations
 - **Observability**: Define logging, metrics, tracing, and telemetry parameters
 - **Performance Budgets**: Codify latency targets and QoS policies
+- **ML Model Management**: Configure model loading, memory limits, and tiers
+- **Feature Flags**: Control ML tier selection and gradual rollouts
 
 ## Configuration Files
 
@@ -197,6 +199,223 @@ backends:
 worker:
   batch_size: 10
   poll_interval_sec: 1.0
+```
+
+### 5. `models.yaml` - ML Model Registry Configuration
+
+Configuration for the centralized Model Registry (`k0/runtime/model_registry.py`).
+
+**Sections:**
+
+- **`version`** - Config schema version
+- **`settings`** - Global model loading settings
+  - `gpu_memory_limit_mb` - Maximum GPU memory budget (default: 4096MB)
+  - `cpu_memory_limit_mb` - Maximum CPU memory budget (default: 8192MB)
+  - `default_load_timeout_sec` - Default model load timeout (default: 30s)
+
+- **`models`** - Model definitions
+  - `name` - Human-readable model name
+  - `model_id` - Model identifier (library-specific)
+  - `tier` - ML complexity tier (rule_based, spacy_small, spacy_large, transformer_small, transformer_large)
+  - `loader` - Python path to loader function (e.g., `k0.runtime.model_loaders.load_spacy`)
+  - `memory_mb` - Expected memory usage
+  - `version` - Model version
+  - `device_preference` - Preferred device (cpu, cuda, mps)
+  - `fallback_to_cpu` - Enable CPU fallback on GPU failure
+  - `load_timeout_sec` - Model-specific load timeout
+  - `warmup_input` - Sample input for model warm-up
+
+- **`preload`** - Startup preload configuration
+  - `essential` - Models always preloaded at kernel startup
+  - `optional` - Models preloaded if memory allows
+
+- **`tier_budgets`** - Memory budget per tier for planning
+
+**Example:**
+
+```yaml
+version: "1.0.0"
+settings:
+  gpu_memory_limit_mb: 4096
+  cpu_memory_limit_mb: 8192
+
+models:
+  spacy_nlp:
+    name: "spaCy English Small"
+    model_id: "en_core_web_sm"
+    tier: spacy_small
+    loader: "k0.runtime.model_loaders.load_spacy"
+    memory_mb: 100
+    device_preference: cpu
+    warmup_input: "Hello world"
+
+  vader_analyzer:
+    name: "VADER Sentiment Analyzer"
+    model_id: "vaderSentiment"
+    tier: rule_based
+    loader: "k0.runtime.model_loaders.load_vader"
+    memory_mb: 50
+
+  sentence_transformer:
+    name: "Sentence Transformer MiniLM"
+    model_id: "all-MiniLM-L6-v2"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_sentence_transformer"
+    memory_mb: 500
+    device_preference: cuda
+    fallback_to_cpu: true
+
+preload:
+  essential:
+    - spacy_nlp
+    - vader_analyzer
+```
+
+**Related:**
+
+- `k0/runtime/model_registry.py` - ModelRegistry implementation
+- `k0/runtime/model_loaders.py` - Model factory functions
+- `k0/kernel/app.py` - Kernel integration
+
+### 6. `feature_flags.yaml` - ML Tier Selection & Rollout
+
+Configuration for the Feature Flags system (`k0/config/feature_flags.py`).
+
+**Sections:**
+
+- **`version`** - Config schema version
+- **`global`** - Global feature flag settings
+  - `enabled` - Master switch for feature flags (default: true)
+  - `default_tier` - Default ML tier for unregistered modules (default: rule_based)
+  - `default_rollout_percentage` - Default rollout percentage (default: 100.0)
+  - `metrics_enabled` - Enable A/B comparison metrics (default: true)
+  - `auto_fallback_enabled` - Enable automatic fallback on failures (default: true)
+
+- **`modules`** - Module-specific flag configurations
+  - `enabled_tier` - Current ML tier to use
+  - `fallback_tier` - Tier to use on failure
+  - `rollout_percentage` - Percentage of requests using enabled_tier (0-100)
+  - `max_failures_before_fallback` - Failure threshold for auto-fallback
+  - `description` - Human-readable description
+  - `metrics_enabled` - Enable metrics for this module
+
+- **`rollout_schedule`** - Planned tier progression (for ops planning)
+- **`metrics`** - Metrics collection configuration
+
+**Example:**
+
+```yaml
+version: "1.0.0"
+
+global:
+  enabled: true
+  default_tier: rule_based
+  metrics_enabled: true
+  auto_fallback_enabled: true
+
+modules:
+  # Sentiment analysis - start with VADER, roll out transformer
+  affect.analyze:
+    enabled_tier: rule_based
+    fallback_tier: rule_based
+    rollout_percentage: 100.0
+    max_failures_before_fallback: 3
+    description: "Sentiment and emotion analysis"
+
+  # Entity extraction - use spaCy large for better NER
+  hippocampus.semantic_project:
+    enabled_tier: spacy_large
+    fallback_tier: spacy_small
+    rollout_percentage: 50.0  # A/B test
+    description: "Entity extraction and KG triple generation"
+
+  # Activity classification - test zero-shot
+  context.ingress_classify:
+    enabled_tier: transformer_large
+    fallback_tier: rule_based
+    rollout_percentage: 10.0  # Gradual rollout
+    description: "Activity type classification"
+
+rollout_schedule:
+  phase_1:
+    modules: [hippocampus.semantic_project]
+    target_tier: spacy_large
+    target_rollout: 100.0
+    notes: "Full rollout after A/B validation"
+```
+
+**Related:**
+
+- `k0/config/feature_flags.py` - FeatureFlags implementation
+- `k0/modules/MODULE_ENHANCEMENT_PLAN.md` - ML upgrade roadmap
+- `k0/kernel/app.py` - Kernel integration
+
+### 7. `feature_flags.py` - Feature Flags Module
+
+Python module providing ML tier selection and gradual rollout capabilities.
+
+**Classes:**
+
+- **`MLTier`** - Enum of ML complexity tiers
+  - `DISABLED`, `RULE_BASED`, `SPACY_SMALL`, `SPACY_LARGE`, `TRANSFORMER_SMALL`, `TRANSFORMER_LARGE`
+
+- **`ModuleFlag`** - Flag for a single module
+  - Tracks enabled_tier, fallback_tier, rollout_percentage, failure_count
+
+- **`FeatureFlags`** - Main feature flags manager
+  - Load/save YAML configuration
+  - Get tier for module with consistent hashing
+  - Record failures and auto-fallback
+  - Collect A/B metrics
+
+**Usage:**
+
+```python
+from k0.config.feature_flags import (
+    get_feature_flags,
+    init_feature_flags,
+    MLTier,
+    with_ml_tier,
+)
+
+# Initialize (done in kernel startup)
+flags = await init_feature_flags("k0/config/feature_flags.yaml")
+
+# Get tier for a module
+tier = flags.get_tier("affect.analyze", request_id="req-123")
+
+if tier == MLTier.TRANSFORMER_SMALL:
+    result = await transformer_sentiment(text)
+else:
+    result = vader_sentiment(text)
+
+# Record success/failure for auto-fallback
+flags.record_success("affect.analyze")
+flags.record_failure("affect.analyze")
+
+# Set tier at runtime
+flags.set_tier("affect.analyze", MLTier.TRANSFORMER_SMALL, rollout_percentage=25.0)
+
+# Get metrics for A/B comparison
+metrics = flags.get_metrics("affect.analyze")
+print(f"Advanced calls: {metrics['affect.analyze']['advanced_calls']}")
+print(f"Fallback calls: {metrics['affect.analyze']['fallback_calls']}")
+```
+
+**Decorator Usage:**
+
+```python
+from k0.config.feature_flags import with_ml_tier, MLTier
+
+@with_ml_tier("affect.analyze")
+async def analyze_sentiment(text: str, tier: MLTier = None) -> dict:
+    """Tier is automatically injected by decorator."""
+    if tier == MLTier.TRANSFORMER_SMALL:
+        return await transformer_sentiment(text)
+    return vader_sentiment(text)
+
+# Usage - tier is automatically selected based on flags
+result = await analyze_sentiment("I love this!", request_id="req-123")
 ```
 
 ## Loading Configurations

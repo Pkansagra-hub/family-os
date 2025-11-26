@@ -1,0 +1,150 @@
+# Model Registry Configuration
+# Defines ML models available for K0 kernel modules
+#
+# Related:
+# - k0/runtime/model_registry.py: ModelRegistry class
+# - k0/config/feature_flags.yaml: ML tier selection
+# - k0/modules/MODULE_ENHANCEMENT_PLAN.md: Upgrade roadmap
+#
+# Issue: 1.1.1 - Unified Model Registry
+
+version: "1.0.0"
+
+# Global settings
+settings:
+  gpu_memory_limit_mb: 4096
+  cpu_memory_limit_mb: 8192
+  default_load_timeout_sec: 30
+
+# Model definitions
+# Each model has:
+# - name: Human-readable name
+# - model_id: Model identifier (library-specific)
+# - tier: ML complexity tier (rule_based, spacy_small, spacy_large, transformer_small, transformer_large)
+# - loader: Python path to loader function
+# - memory_mb: Expected memory usage
+# - version: Model version
+# - device_preference: Preferred device (cpu, cuda, mps)
+# - fallback_to_cpu: Whether to fall back to CPU on GPU failure
+# - load_timeout_sec: Max time to wait for model load
+# - warmup_input: Sample input for model warmup (optional)
+
+models:
+  # ============================================
+  # Tier 1: Rule-Based (Always Available)
+  # ============================================
+  vader_analyzer:
+    name: "VADER Sentiment Analyzer"
+    model_id: "vaderSentiment"
+    tier: rule_based
+    loader: "k0.runtime.model_loaders.load_vader"
+    memory_mb: 50
+    version: "3.3.2"
+    device_preference: cpu
+    fallback_to_cpu: true
+    load_timeout_sec: 5
+    warmup_input: "I love this product!"
+
+  # ============================================
+  # Tier 2: spaCy Small (Default NLP)
+  # ============================================
+  spacy_nlp:
+    name: "spaCy English Small"
+    model_id: "en_core_web_sm"
+    tier: spacy_small
+    loader: "k0.runtime.model_loaders.load_spacy"
+    memory_mb: 100
+    version: "3.7.0"
+    device_preference: cpu
+    fallback_to_cpu: true
+    load_timeout_sec: 15
+    warmup_input: "Hello world"
+
+  # ============================================
+  # Tier 3: spaCy Large (Enhanced NLP)
+  # ============================================
+  spacy_nlp_lg:
+    name: "spaCy English Large"
+    model_id: "en_core_web_lg"
+    tier: spacy_large
+    loader: "k0.runtime.model_loaders.load_spacy"
+    memory_mb: 800
+    version: "3.7.0"
+    device_preference: cpu
+    fallback_to_cpu: true
+    load_timeout_sec: 30
+    warmup_input: "The quick brown fox jumps over the lazy dog."
+
+  # ============================================
+  # Tier 4: Transformer Small (Enhanced ML)
+  # ============================================
+  sentence_transformer:
+    name: "Sentence Transformer MiniLM"
+    model_id: "all-MiniLM-L6-v2"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_sentence_transformer"
+    memory_mb: 500
+    version: "2.2.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 60
+    warmup_input: "This is a sample sentence for embedding."
+
+  sentiment_transformer:
+    name: "DistilBERT Sentiment"
+    model_id: "distilbert-base-uncased-finetuned-sst-2-english"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_transformers_pipeline"
+    memory_mb: 400
+    version: "4.30.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 60
+    warmup_input: "I really enjoyed this experience."
+
+  # ============================================
+  # Tier 5: Transformer Large (Best Quality)
+  # ============================================
+  zero_shot_classifier:
+    name: "BART Zero-Shot Classifier"
+    model_id: "facebook/bart-large-mnli"
+    tier: transformer_large
+    loader: "k0.runtime.model_loaders.load_zero_shot_classifier"
+    memory_mb: 1500
+    version: "4.30.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 120
+    warmup_input: "I went to the park with my family."
+
+  ner_transformer:
+    name: "BERT NER Model"
+    model_id: "dslim/bert-base-NER"
+    tier: transformer_large
+    loader: "k0.runtime.model_loaders.load_ner_model"
+    memory_mb: 500
+    version: "4.30.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 90
+    warmup_input: "John Smith lives in New York City."
+
+# Preload configuration
+# Models to load at kernel startup for hot-path performance
+preload:
+  # Essential models always loaded
+  essential:
+    - spacy_nlp
+    - vader_analyzer
+  # Optional models loaded if memory allows
+  optional:
+    - sentence_transformer
+
+# Memory budget per tier (MB)
+# Used for planning which models can be loaded simultaneously
+tier_budgets:
+  rule_based: 100
+  spacy_small: 200
+  spacy_large: 1000
+  transformer_small: 1500
+  transformer_large: 3000

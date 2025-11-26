@@ -381,6 +381,117 @@ k0ctl serve --host 0.0.0.0 --port 8080 --log-level debug
 python -m k0.kernel.main
 ```
 
+### 8. Model Registry Integration
+
+The kernel initializes the **Model Registry** at startup for centralized ML model management.
+
+**Purpose:**
+
+- Lazy loading of ML models (spaCy, VADER, transformers)
+- GPU memory management with automatic CPU fallback
+- Thread-safe model access across pipelines
+- Model versioning and warm-up
+
+**Initialization (in `app.py` lifespan):**
+
+```python
+# During kernel startup
+model_registry = await _init_model_registry()
+app.state.model_registry = model_registry
+
+# Models preloaded for hot-path performance
+# - spacy_nlp (en_core_web_sm)
+# - vader_analyzer
+```
+
+**Access from Modules:**
+
+```python
+# In a module's run() function
+async def run(message: BusMessage, context: PipelineContext, **config):
+    # Get model from registry (already preloaded)
+    spacy_nlp = context.preloaded_models.get("spacy_nlp")
+    if spacy_nlp:
+        doc = spacy_nlp(text)
+        entities = [(ent.text, ent.label_) for ent in doc.ents]
+```
+
+**Direct Registry Access:**
+
+```python
+from k0.runtime import get_model_registry
+
+# Get singleton registry
+registry = get_model_registry()
+
+# Get model (lazy loads if needed)
+model = await registry.get("spacy_nlp_lg")
+
+# Check if model loaded
+if registry.is_loaded("sentence_transformer"):
+    embeddings = await registry.get("sentence_transformer")
+```
+
+**Related:**
+
+- `k0/runtime/model_registry.py` - ModelRegistry implementation
+- `k0/config/models.yaml` - Model definitions and memory budgets
+- `k0/modules/MODULE_ENHANCEMENT_PLAN.md` - ML upgrade roadmap
+
+### 9. Feature Flags Integration
+
+The kernel initializes **Feature Flags** at startup for ML tier selection and gradual rollout.
+
+**Purpose:**
+
+- Module-level ML tier selection (RULE_BASED, SPACY_LARGE, TRANSFORMER)
+- Percentage-based rollouts for A/B testing
+- Automatic fallback on model failures
+- Metrics collection for comparison
+
+**Initialization (in `app.py` lifespan):**
+
+```python
+# During kernel startup (before model registry)
+feature_flags = await _init_feature_flags()
+app.state.feature_flags = feature_flags
+```
+
+**Access from Modules:**
+
+```python
+from k0.config.feature_flags import get_feature_flags, MLTier
+
+async def run(message: BusMessage, context: PipelineContext, **config):
+    flags = get_feature_flags()
+    tier = flags.get_tier("affect.analyze", request_id=message.trace_id)
+
+    if tier == MLTier.TRANSFORMER_SMALL:
+        # Use transformer-based sentiment
+        result = await transformer_sentiment(text)
+    else:
+        # Use VADER (rule-based)
+        result = vader_sentiment(text)
+```
+
+**Using the Decorator:**
+
+```python
+from k0.config.feature_flags import with_ml_tier, MLTier
+
+@with_ml_tier("affect.analyze")
+async def analyze_sentiment(text: str, tier: MLTier = None) -> dict:
+    if tier == MLTier.TRANSFORMER_SMALL:
+        return await transformer_sentiment(text)
+    return vader_sentiment(text)
+```
+
+**Related:**
+
+- `k0/config/feature_flags.py` - FeatureFlags implementation
+- `k0/config/feature_flags.yaml` - Flag definitions and rollout schedule
+- `k0/modules/MODULE_ENHANCEMENT_PLAN.md` - ML upgrade roadmap
+
 ## API Endpoints
 
 ### POST /v1/envelopes

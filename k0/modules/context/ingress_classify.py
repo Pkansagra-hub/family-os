@@ -492,7 +492,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M10 ingress_classify starting",
         extra={
-            "module": "context.ingress_classify",
+            "module_id": "context.ingress_classify",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
         },
@@ -527,7 +527,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M10 ingress_classify completed",
         extra={
-            "module": "context.ingress_classify",
+            "module_id": "context.ingress_classify",
             "trace_id": message.trace_id,
             "activity_type": classification.activity_type,
             "ingress_topic": classification.ingress_topic,

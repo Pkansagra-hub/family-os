@@ -361,7 +361,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M09 device_profile starting",
         extra={
-            "module": "context.device_profile",
+            "module_id": "context.device_profile",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
         },
@@ -397,7 +397,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M09 device_profile completed",
         extra={
-            "module": "context.device_profile",
+            "module_id": "context.device_profile",
             "trace_id": message.trace_id,
             "device_kind": profile.device_kind,
             "device_platform": profile.device_platform,

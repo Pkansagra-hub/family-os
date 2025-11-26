@@ -270,7 +270,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M11 retention_lookup starting",
         extra={
-            "module": "context.retention_lookup",
+            "module_id": "context.retention_lookup",
             "trace_id": message.trace_id,
             "event_id": envelope.get("event_id"),
         },
@@ -303,7 +303,7 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     context.logger.debug(
         "M11 retention_lookup completed",
         extra={
-            "module": "context.retention_lookup",
+            "module_id": "context.retention_lookup",
             "trace_id": message.trace_id,
             "retention_policy_id": policy.retention_policy_id,
             "retention_bucket": policy.retention_bucket,
