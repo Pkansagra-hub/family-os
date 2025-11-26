@@ -25,6 +25,7 @@ from k0.policy.redaction import (
     apply_redactions,
     directives_from_obligations,
 )
+from k0.policy.spatial_enrich import strip_internal_fields
 from k0.ports.errors import (
     KERNEL_COMPONENT_GATE,
     KERNEL_COMPONENT_POLICY,
@@ -572,6 +573,11 @@ async def submit_command(
             if envelope_dict.get("policy_stamp")
             else None
         )
+
+        # Strip internal spatial fields before WAL write
+        # Internal fields (_internal_geohash_12, _internal_city, _internal_region)
+        # are ephemeral - used only for P03 consolidation, never persisted
+        envelope_dict = strip_internal_fields(envelope_dict)
 
         wal_entry = WalEntry(
             tenant_id=envelope_dict["tenant_id"],

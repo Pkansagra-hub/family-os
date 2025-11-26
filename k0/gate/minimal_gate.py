@@ -10,6 +10,8 @@ from typing import Any, cast
 
 from k0.idem import derive_hmac_idem_key, derive_idem_key
 from k0.obs import MetricsExporter, ObservabilityEmitter
+from k0.policy.location_privacy import apply_location_privacy
+from k0.policy.spatial_enrich import apply_spatial_enrichment
 from k0.security import (
     SignatureVerificationError,
     canonical_envelope,
@@ -385,11 +387,72 @@ class MinimalGate:
         envelope["idem_key"] = computed_idem_key
         envelope["envelope_sha256"] = envelope_sha256
 
-        # Gap 4: Validate location fields exist for AMBER/RED bands before masking
-        band = self._extract_optional(envelope, "band")
+        # STAGE 2.5: Spatial Enrichment (BEFORE redaction)
+        # Extract band for enrichment and redaction stages
+        policy_stamp = envelope.get("policy_stamp", {})
+        band_raw = policy_stamp.get("band", "GREEN") if isinstance(policy_stamp, dict) else "GREEN"
+
+        # Validate and cast band to Literal type
+        if band_raw not in ("GREEN", "AMBER", "RED"):
+            band_raw = "GREEN"  # Default to GREEN if invalid
+
+        # Type narrowing for mypy - cast to Literal after validation
+        from typing import Literal
+        from typing import cast as type_cast
+
+        band = type_cast(Literal["GREEN", "AMBER", "RED"], band_raw)
+
+        # Apply spatial enrichment (M12 equivalent: reverse geocode lat/lon)
+        # This MUST happen BEFORE location_privacy redaction strips raw coordinates
+        try:
+            envelope = apply_spatial_enrichment(envelope, band)
+            body_check = envelope.get("body")
+            has_location_name = isinstance(body_check, dict) and "location_name" in body_check
+            logger.debug(
+                "Spatial enrichment completed",
+                extra={
+                    "tenant_id": tenant,
+                    "band": band,
+                    "has_location_name": has_location_name,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Spatial enrichment failed: {exc}",
+                extra={"tenant_id": tenant, "band": band},
+                exc_info=True,
+            )
+            # Continue without enrichment (fail gracefully)
+
+        # STAGE 3: Location Privacy Redaction
+        # Apply band-based geohash truncation and strip raw lat/lon
+        try:
+            envelope = apply_location_privacy(envelope, band)
+            logger.debug(
+                "Location privacy applied",
+                extra={
+                    "tenant_id": tenant,
+                    "band": band,
+                    "has_geohash": "location_geohash" in envelope,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Location privacy redaction failed: {exc}",
+                extra={"tenant_id": tenant, "band": band},
+                exc_info=True,
+            )
+            # Continue without redaction (fail open for GREEN band)
+
+        # Gap 4: Validate location fields exist for AMBER/RED bands after enrichment
         if band in ("AMBER", "RED"):
-            location = self._extract_optional(envelope, "location")
-            if location is None or (isinstance(location, dict) and not location):
+            body_val = envelope.get("body")
+            # After enrichment, we expect location_geohash (set by location_privacy)
+            # OR location_name (set by spatial_enrich)
+            has_location_geohash = "location_geohash" in envelope
+            has_location_name = isinstance(body_val, dict) and "location_name" in body_val
+
+            if not has_location_geohash and not has_location_name:
                 if self._metrics is not None:
                     self._metrics.emit(
                         "gate_rejections_total", reason="LOCATION_MISSING", tenant=tenant

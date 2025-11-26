@@ -127,7 +127,7 @@ def submit_envelope(signing_key: SigningKey):
     now_utc = datetime.now(timezone.utc)
     body = {
         "operation": "UPSERT",
-        "text": "Hello from K0!",  # Moved to top level for affect.analyze
+        "text": "Hello from GROK! my brother in hand!",  # Moved to top level for affect.analyze
         "value": 42,
         "timestamp": now_utc.isoformat(),
         "event_time_utc": now_utc.isoformat(),  # For M06 salience scorer

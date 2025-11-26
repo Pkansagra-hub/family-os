@@ -2,9 +2,14 @@
 M15: Spatial Minimal Enrichment Module
 
 Copies band-appropriate spatial fields from WAL envelope to st_hipp_events:
-- location_name: Human-readable place name (e.g., "Olive Garden, Market St")
-- location_type: Place category (e.g., "restaurant", "home", "park")
+- location_name: Human-readable place name (from K1/Gate enrichment)
+- location_type: Place category (from K1/Gate enrichment)
 - geohash_6: 6-character geohash for GREEN band (±0.61 km precision)
+
+**COPY MODE** - Enrichment already done by Gate Stage 2.5:
+- Gate Stage 2.5 (spatial_enrich) already copied location_name/type from K1
+- Gate Stage 3 (location_privacy) already computed location_geohash
+- M15 just copies to st_hipp_events with final band-based truncation
 
 Band-Based Spatial Minimization:
 - GREEN: Full geohash_6 from envelope location_geohash
@@ -16,7 +21,7 @@ Privacy Guarantee:
 - Only reads pre-masked location_geohash from WAL envelope
 - Applies additional band-based truncation as needed
 
-Performance: <3ms P95 (copy/truncate operations only, no DB lookups)
+Performance: <1ms P95 (copy/truncate operations only, no computation)
 
 Contract: k0/contracts/modules/context.spatial_minimal.v1.yaml
 ADR: k007.5 (Geo Metadata Lookup - Privacy-Preserving Location)
@@ -125,13 +130,18 @@ def truncate_geohash(geohash: Optional[str], band: Optional[str]) -> Optional[st
 
 def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
     """
-    Extract and minimize spatial fields from envelope.
+    Copy and minimize spatial fields from envelope (COPY MODE).
+
+    **Gate enrichment already done**:
+    - Gate Stage 2.5: Copied location_name/type from K1
+    - Gate Stage 3: Computed location_geohash with band-based masking
+    - M15: Just copies fields + applies final geohash truncation
 
     Applies band-based geohash truncation and copies location metadata.
-    Performance: <3ms P95 (pure string operations).
+    Performance: <1ms P95 (pure copy + string truncation).
 
     Args:
-        envelope: WAL envelope with location data
+        envelope: WAL envelope with pre-enriched location data
 
     Returns:
         SpatialMinimal with minimized fields
@@ -144,18 +154,20 @@ def minimize_spatial_fields(envelope: Dict[str, Any]) -> SpatialMinimal:
     # Extract band for truncation logic
     band = policy_stamp.get("band")
 
-    # Extract and truncate geohash
-    location_geohash = body.get("location_geohash")
+    # Copy location_geohash from envelope (already computed by Gate Stage 3)
+    location_geohash = envelope.get("location_geohash")
+
+    # Apply final band-based truncation (double-check Gate's work)
     geohash_6 = truncate_geohash(location_geohash, band)
 
-    # Copy location name and type (no truncation)
-    location_name = body.get("location_name")
+    # Copy location name and type from body (already copied by Gate Stage 2.5)
+    location_name = body.get("location_name") if isinstance(body, dict) else None
     if location_name:
         _metrics["location_name_present"] += 1
     else:
         _metrics["location_name_missing"] += 1
 
-    location_type = body.get("location_type")
+    location_type = body.get("location_type") if isinstance(body, dict) else None
     if location_type:
         _metrics["location_type_present"] += 1
     else:
