@@ -15,8 +15,13 @@ neo4j>=5.20.0                      # Knowledge graph driver (Bolt protocol)
 numpy>=1.26.0                      # Basic array operations (minimal)
 
 # NLP Dependencies
-spacy>=3.7.0                       # Entity extraction and NLP
-vaderSentiment>=3.3.2              # Sentiment analysis
+spacy>=3.7.0                       # Entity extraction and NLP (Tier 2)
+vaderSentiment>=3.3.2              # Sentiment analysis (Tier 1)
+
+# Transformer NER Dependencies (Tier 4)
+transformers>=4.30.0               # HuggingFace transformers (NER pipeline)
+torch>=2.0.0                       # PyTorch backend
+sentence-transformers>=2.2.0       # Sentence embeddings
 
 # JWT and Authentication
 PyJWT>=2.8.0
@@ -36,5 +41,4 @@ geohash2>=1.1                      # Location hashing (GDPR compliance)
 # HTTP & Async
 httpx>=0.27.0                      # Async HTTP client
 
-# Note: NO ML/NLP libraries (sentence-transformers, spacy, nltk, openai)
-# Total size: ~500-800MB (down from 12.84GB)
+# Note: Includes transformer models for NER - container size ~3-4GB

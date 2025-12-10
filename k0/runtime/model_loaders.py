@@ -20,6 +20,52 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def load_ultrabert(model_id: str, device: str = "cpu") -> Any:
+    """
+    Load FamilyOS UltraBERT unified model.
+
+    UltraBERT v2.0.3 provides 12 capabilities in a single model:
+    - sentiment, emotions, safety_familyos, safety_generic
+    - ner_family, ner_general, temporal, intent
+    - ingress, relation, nli, embedding
+
+    This replaces 9 separate models previously used:
+    - spaCy NER, VADER, GoEmotions, clinical_safety
+    - sentence_transformer, zero_shot_classifier, etc.
+
+    Args:
+        model_id: Model identifier (ignored, UltraBERT is singleton)
+        device: Device to load on (cpu/cuda)
+
+    Returns:
+        UltraBERT Client instance
+
+    Issue: UltraBERT Migration - Single Unified Model
+    """
+    try:
+        from familyos_ultrabert import Client
+    except ImportError:
+        raise ImportError(
+            "familyos_ultrabert not installed. Install with: "
+            "pip install familyos_ultrabert-2.0.3-py3-none-any.whl"
+        )
+
+    logger.debug(f"Loading UltraBERT model (device={device})")
+
+    # Get client - it handles device selection internally
+    client = Client()
+
+    # Ensure model is ready (is_ready is a property)
+    if not client.is_ready:
+        raise RuntimeError("UltraBERT model failed to load")
+
+    logger.info(
+        f"UltraBERT loaded: version={client.VERSION}, " f"capabilities={client.capabilities}"
+    )
+
+    return client
+
+
 def load_spacy(model_id: str, device: str = "cpu") -> Any:
     """
     Load a spaCy model.
@@ -191,3 +237,76 @@ def load_embedding_model(model_id: str, device: str = "cpu") -> Any:
     """
     # Prefer sentence-transformers for embeddings
     return load_sentence_transformer(model_id, device)
+
+
+def load_go_emotions(model_id: str, device: str = "cpu") -> Any:
+    """
+    Load GoEmotions multi-label emotion classifier.
+
+    This model is trained on the GoEmotions dataset (Demszky et al., 2020)
+    and supports 27 emotion categories + neutral.
+
+    Args:
+        model_id: Model name (e.g., "SamLowe/roberta-base-go_emotions")
+        device: Device to load on (cpu/cuda)
+
+    Returns:
+        HuggingFace text-classification pipeline with top_k=5
+
+    Issue: 3.1.1 - Upgrade to Transformer-Based Emotion Detection
+    """
+    try:
+        from transformers import pipeline
+    except ImportError:
+        raise ImportError("transformers not installed. Install with: pip install transformers")
+
+    logger.debug(f"Loading GoEmotions model: {model_id}")
+
+    device_arg = -1 if device == "cpu" else 0
+
+    classifier = pipeline(
+        "text-classification",
+        model=model_id,
+        top_k=5,  # Return top 5 emotions for multi-label analysis
+        device=device_arg,
+    )
+
+    return classifier
+
+
+def load_clinical_safety(model_id: str, device: str = "cpu") -> Any:
+    """
+    Load clinical safety detection model for mental health risk assessment.
+
+    This model is used for sentiment analysis as a component of the
+    clinical safety detection pipeline. Combined with rule-based
+    indicator extraction for comprehensive risk assessment.
+
+    Research: Coppersmith et al. (2018) - CLPsych shared task
+              Zirikly et al. (2019) - Suicide risk assessment
+
+    Args:
+        model_id: Model name (e.g., "distilbert-base-uncased-finetuned-sst-2-english")
+        device: Device to load on (cpu/cuda)
+
+    Returns:
+        HuggingFace text-classification pipeline
+
+    Issue: 3.1.2 - Add Safety Detection with Clinical NLP
+    """
+    try:
+        from transformers import pipeline
+    except ImportError:
+        raise ImportError("transformers not installed. Install with: pip install transformers")
+
+    logger.debug(f"Loading clinical safety model: {model_id}")
+
+    device_arg = -1 if device == "cpu" else 0
+
+    classifier = pipeline(
+        "text-classification",
+        model=model_id,
+        device=device_arg,
+    )
+
+    return classifier

@@ -364,6 +364,8 @@ def submit_sample_envelopes(signing_key: SigningKey, bodies: list[dict]):
     """
     Submit a batch of envelopes. Uses minimal logging per event.
     """
+    import time
+
     print("\n" + "=" * 60)
     print(f"Step 2: Submitting {len(bodies)} Envelopes (batch)")
     print("=" * 60)
@@ -379,6 +381,8 @@ def submit_sample_envelopes(signing_key: SigningKey, bodies: list[dict]):
         else:
             fail += 1
             print(f"✗ [{idx}/{len(bodies)}] Failed envelope")
+        # Delay to avoid SQLite DB lock contention - pipeline takes ~100ms per envelope
+        time.sleep(0.5)
 
     print("\n" + "=" * 60)
     print(f"Batch complete: {success} succeeded, {fail} failed")

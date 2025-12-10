@@ -175,12 +175,20 @@ def map_actor_device_group(
 
     From: envelope (flat structure per P02 dossier) + M09 device profile + M10 ingress classify
     """
+    # device_os can come from device_output.device_os or device_output.device_platform
+    # or fallback to envelope.device.os
+    device_os = (
+        device_output.get("device_os")
+        or device_output.get("device_platform")
+        or envelope.get("device", {}).get("os")
+    )
+
     return {
         "actor_id": envelope.get("actor"),  # Aligned with Envelope schema
         "actor_role": envelope.get("actor_role", "SELF"),
         "device_id": envelope.get("device_id"),
         "device_kind": device_output.get("device_kind", "unknown"),
-        "device_os": device_output.get("device_os"),
+        "device_os": device_os,
         "ingress_channel": ingress_output.get("ingress_topic", "write"),
     }
 
@@ -296,11 +304,21 @@ def map_embeddings_kg_group(ca1_output: Dict[str, Any]) -> Dict[str, Any]:
 
     From: M02 semantic_project
     """
+    # entities_json and kg_triples_json are already JSON strings from semantic_project
+    entities_json = ca1_output.get("entities_json")
+    kg_triples_json = ca1_output.get("kg_triples_json")
+
+    # If they're None, use empty array string
+    if entities_json is None:
+        entities_json = "[]"
+    if kg_triples_json is None:
+        kg_triples_json = "[]"
+
     return {
         "embedding_id": ca1_output.get("embedding_id"),
         "embedding_status": "PENDING",  # P08 will update to IN_PROGRESS/READY
-        "entities_json": serialize_to_json(ca1_output.get("entities", []), "entities_json"),
-        "kg_triples_json": serialize_to_json(ca1_output.get("kg_triples", []), "kg_triples_json"),
+        "entities_json": entities_json,
+        "kg_triples_json": kg_triples_json,
     }
 
 
@@ -311,33 +329,73 @@ def map_affect_salience_group(
     Affect & Salience columns (9 columns)
 
     From: M04 affect.analyze + M06 salience.score
+
+    Clinical Safety Integration (Issue 3.1.2):
+    - affect_band: Overridden to RED/AMBER by M04 if clinical risk detected
+    - salience_score: Boosted when clinical safety risk present
+    - salience_reasons_json: Includes clinical_safety_* reasons
+    - dominant_emotions_json: May include crisis-related emotions
     """
     # Map affect_valence to sentiment_score for backward compat
+    # Note: Valence is on 0-1 scale where 0=negative, 0.5=neutral, 1=positive
     valence = affect_output.get("valence")  # Key is "valence" not "affect_valence"
     arousal = affect_output.get("arousal")  # Key is "arousal" not "affect_arousal"
     sentiment_label = None
     if valence is not None:
-        if valence >= 0.2:
+        if valence >= 0.6:
             sentiment_label = "positive"
-        elif valence <= -0.2:
+        elif valence <= 0.4:
             sentiment_label = "negative"
         else:
             sentiment_label = "neutral"
 
+    # Get base salience from M06
+    base_salience = salience_output.get("salience_score", 0.0)
+    salience_reasons = list(salience_output.get("salience_reasons", []))
+    salience_band = salience_output.get("salience_band", "LOW")
+
+    # Clinical safety integration: boost salience for safety-critical content
+    clinical_safety_risk = affect_output.get("clinical_safety_risk", False)
+    clinical_safety_severity = affect_output.get("clinical_safety_severity")
+
+    if clinical_safety_risk and clinical_safety_severity:
+        # Add clinical safety to salience reasons
+        salience_reasons.append(f"clinical_safety_{clinical_safety_severity.lower()}")
+
+        # Boost salience score based on severity (safety = high importance)
+        # CRITICAL: force to 1.0, HIGH: min 0.9, MEDIUM: min 0.7, LOW: min 0.5
+        severity_boost = {
+            "CRITICAL": 1.0,
+            "HIGH": 0.9,
+            "MEDIUM": 0.7,
+            "LOW": 0.5,
+        }
+        min_salience = severity_boost.get(clinical_safety_severity, base_salience)
+        base_salience = max(base_salience, min_salience)
+
+        # Upgrade salience band for clinical safety
+        if clinical_safety_severity in ("CRITICAL", "HIGH"):
+            salience_band = "HIGH"
+        elif clinical_safety_severity == "MEDIUM" and salience_band == "LOW":
+            salience_band = "MED"
+
+    # Get dominant emotions, potentially enriched with crisis indicators
+    dominant_emotions = affect_output.get("dominant_emotions", [])
+    if clinical_safety_risk and clinical_safety_severity in ("CRITICAL", "HIGH"):
+        # Add crisis emotion if not already present
+        if "crisis" not in dominant_emotions and "distress" not in dominant_emotions:
+            dominant_emotions = list(dominant_emotions) + ["distress"]
+
     return {
         "sentiment_score": valence,  # affect_valence IS sentiment_score
         "sentiment_label": sentiment_label,
-        "dominant_emotions_json": serialize_to_json(
-            affect_output.get("dominant_emotions", []), "dominant_emotions_json"
-        ),
+        "dominant_emotions_json": serialize_to_json(dominant_emotions, "dominant_emotions_json"),
         "affect_valence": valence,
         "affect_arousal": arousal,
-        "affect_band": affect_output.get("affect_band", "GREEN"),
-        "salience_score": salience_output.get("salience_score", 0.0),
-        "salience_reasons_json": serialize_to_json(
-            salience_output.get("salience_reasons", []), "salience_reasons_json"
-        ),
-        "salience_band": salience_output.get("salience_band", "LOW"),
+        "affect_band": affect_output.get("affect_band", "GREEN"),  # Already overridden by M04
+        "salience_score": base_salience,
+        "salience_reasons_json": serialize_to_json(salience_reasons, "salience_reasons_json"),
+        "salience_band": salience_band,
     }
 
 
@@ -561,7 +619,14 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "device_kind": envelope.get("device_kind"),
         "device_os": envelope.get("device_os"),
     }
-    ingress_output = {"ingress_channel": envelope.get("ingress_channel")}
+    # Extract ingress classification fields from M10 ingress_classify module
+    ingress_output = {
+        "ingress_channel": envelope.get("ingress_topic", envelope.get("ingress_channel")),
+        "ingress_topic": envelope.get("ingress_topic"),
+        "activity_type": envelope.get("activity_type", "unknown"),
+        "activity_category": envelope.get("content_type", "episodic"),
+        "ingress_source": envelope.get("ingress_source", "mobile_app"),
+    }
     retention_output = {
         "retention_policy_id": envelope.get("retention_policy_id"),
         "retention_bucket": envelope.get("retention_bucket"),

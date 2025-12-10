@@ -28,7 +28,7 @@ from k0.uow.unit_of_work import UnitOfWork
 
 @pytest.fixture
 def temp_db() -> Iterator[Path]:
-    """Create temporary database with st_hipp_store table."""
+    """Create temporary database with st_hipp_store and st_relationships tables."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = Path(tmp.name)
 
@@ -60,6 +60,41 @@ def temp_db() -> Iterator[Path]:
         )
         """
     )
+
+    # Create st_relationships table for family graph testing
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS st_relationships (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            household_id TEXT NOT NULL,
+            person_id TEXT NOT NULL,
+            related_person_id TEXT NOT NULL,
+            relationship_type TEXT NOT NULL CHECK(relationship_type IN ('SPOUSE_OF', 'PARENT_OF', 'CHILD_OF', 'CARETAKER_OF', 'SIBLING_OF')),
+            properties_json TEXT,
+            source_version TEXT NOT NULL,
+            hydrated_at TEXT NOT NULL,
+            ttl_seconds INTEGER NOT NULL
+        )
+        """
+    )
+
+    # Seed test relationships
+    conn.execute(
+        """
+        INSERT INTO st_relationships (household_id, person_id, related_person_id, relationship_type, source_version, hydrated_at, ttl_seconds)
+        VALUES
+            ('test-household', 'person_prince_001', 'person_jeel_001', 'SPOUSE_OF', 'test', datetime('now'), 3600),
+            ('test-household', 'person_jeel_001', 'person_prince_001', 'SPOUSE_OF', 'test', datetime('now'), 3600),
+            ('test-household', 'person_prince_001', 'person_sharvi_001', 'PARENT_OF', 'test', datetime('now'), 3600),
+            ('test-household', 'person_jeel_001', 'person_sharvi_001', 'PARENT_OF', 'test', datetime('now'), 3600)
+        """
+    )
+
+    # Create index on person_id for efficient lookups
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_relationships_person ON st_relationships(person_id)"
+    )
+
     conn.commit()
     conn.close()
 
@@ -429,6 +464,88 @@ class TestQueryEmbeddings:
                 space_id="space_abc",
                 vector=[0.1] * 384,
             )
+
+
+class TestRelationshipsQuery:
+    """Test relationships_query syscall for family graph lookups."""
+
+    @pytest.mark.asyncio
+    async def test_relationships_query_returns_relationships(self, uow_factory):
+        """Test: relationships_query returns relationships for actor."""
+        syscalls = Syscalls(
+            pipeline_id="P02",
+            granted_caps={"st_relationships.read"},
+            uow_factory=uow_factory,
+        )
+
+        relationships = await syscalls.relationships_query(
+            actor_id="person_prince_001",
+            cognitive_trace_id="test_trace",
+        )
+
+        # Should return 2 relationships (spouse + child)
+        assert len(relationships) == 2
+        relationship_types = {rel[1] for rel in relationships}
+        assert "SPOUSE_OF" in relationship_types
+        assert "PARENT_OF" in relationship_types
+
+    @pytest.mark.asyncio
+    async def test_relationships_query_returns_empty_for_unknown_actor(self, uow_factory):
+        """Test: relationships_query returns empty list for unknown actor."""
+        syscalls = Syscalls(
+            pipeline_id="P02",
+            granted_caps={"st_relationships.read"},
+            uow_factory=uow_factory,
+        )
+
+        relationships = await syscalls.relationships_query(
+            actor_id="person_unknown_999",
+            cognitive_trace_id="test_trace",
+        )
+
+        # Should return empty list
+        assert relationships == []
+
+    @pytest.mark.asyncio
+    async def test_relationships_query_without_cap_raises_permission_error(self, uow_factory):
+        """Test: relationships_query checks capability."""
+        syscalls = Syscalls(
+            pipeline_id="P02",
+            granted_caps=set(),  # No capabilities
+            uow_factory=uow_factory,
+        )
+
+        with pytest.raises(PermissionError) as exc_info:
+            await syscalls.relationships_query(
+                actor_id="person_prince_001",
+            )
+
+        assert "st_relationships.read" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_relationships_query_returns_tuples(self, uow_factory):
+        """Test: relationships_query returns list of (related_person_id, relationship_type) tuples."""
+        syscalls = Syscalls(
+            pipeline_id="P02",
+            granted_caps={"st_relationships.read"},
+            uow_factory=uow_factory,
+        )
+
+        relationships = await syscalls.relationships_query(
+            actor_id="person_prince_001",
+        )
+
+        # Verify structure
+        for rel in relationships:
+            assert isinstance(rel, tuple)
+            assert len(rel) == 2
+            assert isinstance(rel[0], str)  # related_person_id
+            assert isinstance(rel[1], str)  # relationship_type
+
+        # Check specific relationships
+        related_ids = {rel[0] for rel in relationships}
+        assert "person_jeel_001" in related_ids
+        assert "person_sharvi_001" in related_ids
 
 
 class TestAuditLogging:

@@ -706,6 +706,113 @@ class Syscalls:
             "query_embeddings not yet implemented - " "vector index pending M2 R2.1 completion"
         )
 
+    async def relationships_query(
+        self,
+        actor_id: str,
+        cognitive_trace_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """
+        Query st_relationships for actor's family relationships (requires st_relationships.read cap).
+
+        Used by M07 (social.family_graph_resolve) to resolve family context for episodic
+        memories. Returns all relationships where person_id = actor_id.
+
+        Capability Required: "st_relationships.read"
+
+        Storage Table: st_relationships
+        - Purpose: Family graph cache (5 relationship types)
+        - Lifecycle: Seeded in migration 0018/0024, TTL-based refresh
+        - Columns: person_id, related_person_id, relationship_type
+
+        Relationship Types:
+        - SPOUSE_OF: Married/partner relationship (bidirectional)
+        - PARENT_OF: Parent-child relationship (actor is parent)
+        - CHILD_OF: Child-parent relationship (actor is child)
+        - CARETAKER_OF: Guardian/caregiver relationship
+        - SIBLING_OF: Brother/sister relationship
+
+        Args:
+            actor_id: Person identifier to lookup relationships for
+            cognitive_trace_id: Optional trace ID for observability
+
+        Returns:
+            List of (related_person_id, relationship_type) tuples.
+            Empty list if actor has no relationships.
+
+        Raises:
+            PermissionError: If pipeline lacks "st_relationships.read" capability
+
+        Example:
+            >>> relationships = await syscalls.relationships_query(
+            ...     actor_id="person_prince_001",
+            ...     cognitive_trace_id="trace_xyz"
+            ... )
+            >>> relationships
+            [("person_jeel_001", "SPOUSE_OF"), ("person_sharvi_001", "PARENT_OF")]
+
+        Performance:
+            - Target: <5ms P95 (indexed query on person_id)
+            - Uses idx_relationships_person index
+            - Connection pooling via UnitOfWork
+
+        Related:
+            - M07 (social.family_graph_resolve): Primary user of this syscall
+            - P02 pipeline: Stage 20 calls M07 for social context
+            - Migration 0024: Table schema and seed data
+            - ADR K008.1: Family Graph Resolver architecture
+        """
+        self._require_cap("st_relationships.read")
+
+        # Audit: Log storage operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"relationships_query: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "actor_id": actor_id,
+                "cognitive_trace_id": cognitive_trace_id,
+                "operation": "relationships_query",
+            },
+        )
+
+        # Execute storage operation in UnitOfWork transaction
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            # Query st_relationships for actor's relationships
+            query = """
+                SELECT related_person_id, relationship_type
+                FROM st_relationships
+                WHERE person_id = ?
+            """
+
+            result = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: conn.execute(query, (actor_id,)).fetchall(),
+            )
+
+            # Convert rows to list of tuples
+            relationships = [(row[0], row[1]) for row in result]
+
+            # Audit: Log completion
+            elapsed_ms = (time.perf_counter() - start_time) * 1000
+            logger.debug(
+                f"relationships_query completed: {self._pipeline_id}",
+                extra={
+                    "pipeline_id": self._pipeline_id,
+                    "actor_id": actor_id,
+                    "relationship_count": len(relationships),
+                    "elapsed_ms": elapsed_ms,
+                    "cognitive_trace_id": cognitive_trace_id,
+                    "operation": "relationships_query",
+                    "status": "success",
+                },
+            )
+
+            return relationships
+
     async def embedding_enqueue(
         self,
         embedding_id: str,

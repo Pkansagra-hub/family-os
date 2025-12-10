@@ -108,12 +108,15 @@ async def run(
 
     global _events_emitted, _events_failed, _total_latency_ms
 
-    # Parse envelope from message
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config
     retry_backoff_ms = config.get("retry_backoff_ms", 1000)

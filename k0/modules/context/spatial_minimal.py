@@ -216,12 +216,15 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     import json
 
-    # Parse envelope from message
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config parameters (currently unused, but available for tuning)
     green_band_precision = config.get("green_band_precision", 6)

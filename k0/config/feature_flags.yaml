@@ -33,9 +33,10 @@ modules:
   # ============================================
   # Current: Rule-based entity extraction
   # Target: Transformer NER + KG completion
+  # Tiers: rule_based → spacy_small → spacy_large → transformer_small
   hippocampus.semantic_project:
-    enabled_tier: rule_based
-    fallback_tier: rule_based
+    enabled_tier: transformer_small  # Issue 2.1.1: Upgraded to transformer
+    fallback_tier: spacy_small
     rollout_percentage: 100.0
     max_failures_before_fallback: 3
     description: "Entity extraction and knowledge graph triple generation"

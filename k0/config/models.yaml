@@ -120,7 +120,7 @@ models:
   ner_transformer:
     name: "BERT NER Model"
     model_id: "dslim/bert-base-NER"
-    tier: transformer_large
+    tier: transformer_small
     loader: "k0.runtime.model_loaders.load_ner_model"
     memory_mb: 500
     version: "4.30.0"
@@ -129,6 +129,45 @@ models:
     load_timeout_sec: 90
     warmup_input: "John Smith lives in New York City."
 
+  # Issue 2.1.1: Family-optimized NER for M02 semantic_project
+  ner_family:
+    name: "BERT NER for Family Memories"
+    model_id: "dslim/bert-base-NER"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_ner_model"
+    memory_mb: 500
+    version: "4.30.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 90
+    warmup_input: "Had dinner with mom and dad at Olive Garden for Emma's birthday."
+
+  # Issue 3.1.1: GoEmotions transformer for affect.analyze
+  go_emotions:
+    name: "RoBERTa GoEmotions Classifier"
+    model_id: "SamLowe/roberta-base-go_emotions"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_go_emotions"
+    memory_mb: 500
+    version: "1.0.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 90
+    warmup_input: "Had a wonderful dinner with my family, feeling so grateful and happy."
+
+  # Issue 3.1.2: Clinical safety detection for mental health risk assessment
+  clinical_safety:
+    name: "Clinical Safety Detector"
+    model_id: "distilbert-base-uncased-finetuned-sst-2-english"
+    tier: transformer_small
+    loader: "k0.runtime.model_loaders.load_clinical_safety"
+    memory_mb: 300
+    version: "1.0.0"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 60
+    warmup_input: "I have been feeling very down lately and nothing seems to matter anymore."
+
 # Preload configuration
 # Models to load at kernel startup for hot-path performance
 preload:
@@ -136,9 +175,16 @@ preload:
   essential:
     - spacy_nlp
     - vader_analyzer
+    - ner_transformer
   # Optional models loaded if memory allows
   optional:
     - sentence_transformer
+    - sentiment_transformer
+    - ner_family
+    - go_emotions  # Issue 3.1.1: GoEmotions for Tier-1 affect classification
+    - clinical_safety  # Issue 3.1.2: Clinical safety detection
+    - zero_shot_classifier
+    # - spacy_nlp_lg  # Requires en_core_web_lg to be installed (~800MB)
 
 # Memory budget per tier (MB)
 # Used for planning which models can be loaded simultaneously

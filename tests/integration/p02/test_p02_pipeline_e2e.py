@@ -1387,10 +1387,17 @@ async def test_p02_full_output_inspection(
     test_db,
 ):
     """
-    COMPREHENSIVE OUTPUT INSPECTION: Print ALL columns from st_hipp_events.
+    STRICT OUTPUT VALIDATION: ALL columns MUST be populated EXCEPT CA3 deferred columns.
 
-    This test runs the pipeline and prints every single column value
-    for manual inspection and verification.
+    CA3 columns (deferred to P03 consolidation pipeline):
+    - novelty_score
+    - near_duplicates_json
+    - is_near_duplicate
+    - episode_cluster_id
+    - cluster_confidence
+    - clustering_version
+
+    ALL other columns MUST have non-null values or this test FAILS.
     """
     runner = PipelineRunner(p02_spec, module_registry)
     await runner.on_startup(mock_context)
@@ -1406,134 +1413,220 @@ async def test_p02_full_output_inspection(
     await runner.handle(message)
     enriched = runner._enriched_envelope
 
-    assert enriched is not None
+    assert enriched is not None, "Pipeline must produce enriched envelope"
     hipp_row = enriched.get("hipp_events_row", {})
+    assert hipp_row, "Pipeline must produce hipp_events_row"
 
     print("\n" + "=" * 80)
-    print("FULL st_hipp_events OUTPUT INSPECTION")
+    print("STRICT st_hipp_events COLUMN VALIDATION")
     print("=" * 80)
     print(f"Memory: {sample_envelope['body']['text'][:60]}...")
     print("=" * 80)
 
-    # Group columns by category for readability
-    column_groups = {
-        "IDENTITY & TRACE": [
-            "event_id",
-            "wal_pos",
-            "cognitive_trace_id",
-            "tenant_id",
-            "space_id",
-            "effective_space_id",
-            "topic",
-            "schema_version",
-        ],
-        "INTEGRITY & AUDIT": [
-            "envelope_sha256",
-            "sig_alg",
-            "sig_kid",
-            "idem_key",
-            "ingested_at",
-            "clock_skew_ms",
-        ],
-        "POLICY & VISIBILITY": [
-            "policy_decision",
-            "policy_band",
-            "policy_version",
-            "owner_id",
-            "co_owners_json",
-            "visible_to_json",
-            "visibility_scope",
-            "retention_policy_id",
-            "retention_bucket",
-        ],
-        "ACTOR & DEVICE": ["actor_id", "device_id", "device_kind", "device_os", "ingress_channel"],
-        "TEMPORAL": [
-            "event_time_utc",
-            "write_time_utc",
-            "write_lag_ms",
-            "local_date",
-            "local_time",
-            "day_of_week",
-            "is_weekend",
-            "time_of_day_bucket",
-            "circadian_slot",
-            "is_backdated",
-            "created_at",
-        ],
-        "SPATIAL": [
-            "location_name",
-            "location_type",
-            "geohash_6",
-            "geo_precision_external",
-            "geo_masking_reason",
-        ],
-        "SOCIAL": [
-            "num_participants",
-            "participant_roles_json",
-            "has_partner_present",
-            "has_parent_present",
-            "is_solo_event",
-            "social_context",
-            "social_intimacy",
-        ],
-        "SEMANTIC": ["text", "activity_type", "activity_category", "ingress_source"],
-        "HIPPOCAMPUS (Fingerprints)": [
-            "simhash_hex",
-            "minhash32",
-            "novelty_score",
-            "episode_cluster_id",
-            "cluster_confidence",
-        ],
-        "EMBEDDINGS & KG": ["embedding_id", "embedding_status", "entities_json", "kg_triples_json"],
-        "AFFECT & SALIENCE": [
-            "affect_valence",
-            "affect_arousal",
-            "affect_band",
-            "sentiment_score",
-            "sentiment_label",
-            "dominant_emotions_json",
-            "salience_score",
-            "salience_band",
-            "salience_reasons_json",
-        ],
+    # CA3 columns that ARE ALLOWED to be NULL (deferred to P03)
+    ca3_deferred_columns = {
+        "novelty_score",
+        "near_duplicates_json",
+        "is_near_duplicate",
+        "episode_cluster_id",
+        "cluster_confidence",
+        "clustering_version",
     }
 
-    for group_name, columns in column_groups.items():
-        print(f"\n--- {group_name} ---")
-        for col in columns:
-            value = hipp_row.get(col, enriched.get(col, "N/A"))
-            # Truncate long values
-            if isinstance(value, str) and len(value) > 60:
-                value = value[:57] + "..."
-            print(f"  {col:30} = {value}")
+    # Optional columns that may legitimately be null based on input data
+    # These are columns where null is a valid business value
+    optional_columns = {
+        "uow_id",  # Only set for unit-of-work grouped operations
+        "circadian_slot",  # Requires circadian rhythm model
+        "geohash_6",  # Only if location has lat/lon
+        "location_type",  # May not always be classifiable
+        "co_owners_json",  # Only for shared memories
+        "actor_role",  # Defaults handled elsewhere
+    }
 
-    # Summary stats
+    # ALL columns that MUST be populated (non-null)
+    required_columns = {
+        # IDENTITY & TRACE (9 columns)
+        "event_id": "M13 row builder",
+        "wal_pos": "envelope",
+        "cognitive_trace_id": "envelope",
+        "tenant_id": "envelope",
+        "space_id": "envelope",
+        "effective_space_id": "M06 space.resolve_visibility",
+        "topic": "envelope",
+        "schema_version": "envelope",
+        # INTEGRITY & AUDIT (6 columns)
+        "envelope_sha256": "envelope",
+        "sig_alg": "envelope",
+        "sig_kid": "envelope",
+        "idem_key": "envelope",
+        "ingested_at": "envelope",
+        "clock_skew_ms": "envelope",
+        # POLICY & VISIBILITY (10 columns)
+        "policy_decision": "envelope.policy_stamp",
+        "policy_band": "envelope.band",
+        "policy_version": "envelope.policy_stamp",
+        "obligations_json": "M03 policy (empty array OK)",
+        "visible_to_json": "M06 space.resolve_visibility",
+        "visibility_scope": "M06 space.resolve_visibility",
+        "owner_id": "M06 space.resolve_visibility",
+        "retention_policy_id": "M11 context.retention_lookup",
+        "retention_bucket": "M11 context.retention_lookup",
+        # ACTOR & DEVICE (6 columns)
+        "actor_id": "envelope.actor",
+        "device_id": "envelope.device_id",
+        "device_kind": "M09 context.device_profile",
+        "device_os": "M09 context.device_profile",
+        "ingress_channel": "M10 context.ingress_classify",
+        # TEMPORAL (11 columns)
+        "event_time_utc": "M08 context.temporal_profile",
+        "write_time_utc": "M08 context.temporal_profile",
+        "write_lag_ms": "M08 context.temporal_profile",
+        "local_date": "M08 context.temporal_profile",
+        "local_time": "M08 context.temporal_profile",
+        "day_of_week": "M08 context.temporal_profile",
+        "is_weekend": "M08 context.temporal_profile",
+        "time_of_day_bucket": "M08 context.temporal_profile",
+        "is_backdated": "M08 context.temporal_profile",
+        "created_at": "M13 row builder",
+        "updated_at": "M13 row builder",
+        # SPATIAL (5 columns)
+        "location_name": "M12 context.geo_metadata / M15 spatial_minimal",
+        "geo_precision_external": "M12 context.geo_metadata",
+        "geo_masking_reason": "M12 context.geo_metadata",
+        # SOCIAL (8 columns)
+        "participants_json": "M07 social.family_graph_resolve",
+        "num_participants": "M07 social.family_graph_resolve",
+        "has_partner_present": "M07 social.family_graph_resolve",
+        "has_parent_present": "M07 social.family_graph_resolve",
+        "is_solo_event": "M07 social.family_graph_resolve",
+        "participant_roles_json": "M07 social.family_graph_resolve",
+        "social_context": "M07 social.family_graph_resolve",
+        "social_intimacy": "M07 social.family_graph_resolve",
+        # SEMANTIC (10 columns)
+        "text": "envelope.body.text",
+        "text_normalized": "M13 row builder",
+        "char_count": "M13 row builder",
+        "token_count": "M13 row builder",
+        "language": "envelope.body.language",
+        "activity_type": "M10 context.ingress_classify",
+        "activity_category": "M10 context.ingress_classify",
+        "is_meal": "envelope.body or M10",
+        "is_outing": "envelope.body or M10",
+        "ingress_source": "M10 context.ingress_classify",
+        # HIPPOCAMPUS (2 columns - CA3 deferred separately)
+        "simhash_hex": "M01 hippocampus.pattern_separate",
+        "minhash32": "M01 hippocampus.pattern_separate",
+        # EMBEDDINGS & KG (4 columns)
+        "embedding_id": "M02 hippocampus.semantic_project",
+        "embedding_status": "M13 row builder (default PENDING)",
+        "entities_json": "M02 hippocampus.semantic_project",
+        "kg_triples_json": "M02 hippocampus.semantic_project",
+        # AFFECT & SALIENCE (9 columns)
+        "sentiment_score": "M05 affect.analyze",
+        "sentiment_label": "M05 affect.analyze",
+        "dominant_emotions_json": "M05 affect.analyze",
+        "affect_valence": "M05 affect.analyze",
+        "affect_arousal": "M05 affect.analyze",
+        "affect_band": "M05 affect.analyze",
+        "salience_score": "M12 salience.score",
+        "salience_reasons_json": "M12 salience.score",
+        "salience_band": "M12 salience.score",
+    }
+
+    # Track failures
+    missing_columns = []
+    null_columns = []
+    populated_columns = []
+    ca3_null_columns = []
+
+    print("\n--- COLUMN VALIDATION ---\n")
+
+    for col, source in required_columns.items():
+        value = hipp_row.get(col)
+
+        if col not in hipp_row:
+            missing_columns.append((col, source))
+            print(f"  MISSING: {col:35} (source: {source})")
+        elif value is None:
+            if col in optional_columns:
+                print(f"  OPTIONAL NULL: {col:35} = None (allowed)")
+                populated_columns.append(col)
+            else:
+                null_columns.append((col, source))
+                print(f"  NULL: {col:35} = None (source: {source})")
+        else:
+            # Truncate long values for display
+            display_val = str(value)
+            if len(display_val) > 50:
+                display_val = display_val[:47] + "..."
+            print(f"  OK: {col:35} = {display_val}")
+            populated_columns.append(col)
+
+    print("\n--- CA3 DEFERRED COLUMNS (expected NULL) ---\n")
+
+    for col in ca3_deferred_columns:
+        value = hipp_row.get(col)
+        if value is None:
+            ca3_null_columns.append(col)
+            print(f"  CA3 NULL (OK): {col:35} = None")
+        else:
+            print(f"  CA3 UNEXPECTED: {col:35} = {value} (should be None)")
+
+    # Summary
     print("\n" + "=" * 80)
-    print("SUMMARY")
+    print("VALIDATION SUMMARY")
     print("=" * 80)
-    print(f"  Total columns in hipp_row:  {len(hipp_row)}")
-    print(f"  Total enriched keys:        {len(enriched)}")
-    print(f"  Entities extracted:         {len(json.loads(enriched.get('entities_json', '[]')))}")
-    print(f"  KG triples generated:       {len(json.loads(enriched.get('kg_triples_json', '[]')))}")
-    print(f"  Pipeline stages completed:  {len(runner._completed_stages)}")
-    print("=" * 80)
+    print(f"  Total columns in hipp_row:     {len(hipp_row)}")
+    print(f"  Required columns checked:      {len(required_columns)}")
+    print(f"  Populated correctly:           {len(populated_columns)}")
+    print(f"  MISSING columns:               {len(missing_columns)}")
+    print(f"  NULL columns (ERROR):          {len(null_columns)}")
+    print(f"  CA3 deferred (NULL OK):        {len(ca3_null_columns)}")
 
-    # Verify critical fields are populated
-    critical_fields = [
-        "event_id",
-        "embedding_id",
-        "simhash_hex",
-        "policy_band",
-        "salience_score",
-        "affect_valence",
-        "owner_id",
-    ]
-
-    missing = [f for f in critical_fields if not hipp_row.get(f)]
-    if missing:
-        print(f"\nWARNING: Missing critical fields: {missing}")
+    # Entity and KG check
+    entities = hipp_row.get("entities_json", "[]")
+    kg_triples = hipp_row.get("kg_triples_json", "[]")
+    if isinstance(entities, str):
+        entities_list = json.loads(entities)
     else:
-        print("\nAll critical fields populated.")
+        entities_list = entities or []
+    if isinstance(kg_triples, str):
+        kg_list = json.loads(kg_triples)
+    else:
+        kg_list = kg_triples or []
+
+    print(f"\n  Entities extracted:            {len(entities_list)}")
+    print(f"  KG triples generated:          {len(kg_list)}")
+    print("=" * 80)
+
+    # FAIL if any required columns are missing or null
+    if missing_columns:
+        print("\n*** MISSING COLUMNS ***")
+        for col, source in missing_columns:
+            print(f"  - {col} (should come from: {source})")
+
+    if null_columns:
+        print("\n*** NULL COLUMNS (ERRORS) ***")
+        for col, source in null_columns:
+            print(f"  - {col} (should come from: {source})")
+
+    # The actual assertions that make the test fail
+    assert len(missing_columns) == 0, (
+        f"MISSING {len(missing_columns)} required columns: " f"{[c[0] for c in missing_columns]}"
+    )
+
+    assert len(null_columns) == 0, (
+        f"NULL {len(null_columns)} required columns: " f"{[c[0] for c in null_columns]}"
+    )
+
+    # Verify CA3 columns ARE null (they should be deferred to P03)
+    for col in ca3_deferred_columns:
+        assert (
+            hipp_row.get(col) is None
+        ), f"CA3 column {col} should be NULL (deferred to P03), got: {hipp_row.get(col)}"
+
+    print("\n*** ALL VALIDATIONS PASSED ***")
 
 
 # =============================================================================

@@ -4,20 +4,21 @@ M04: affect.analyze (Amygdala/Affect System)
 Phase 2 Declarative Module - Emotional content and risk level analysis
 
 Architecture:
-- Two-tier latency strategy: Tier-0 (lexicon, <2ms) for 90% events, Tier-1 (ML, <60ms) for 10%
-- VADER lexicon-based sentiment analysis (7,500 words)
-- Valence/arousal mapping from compound scores
+- Primary: UltraBERT unified model (sentiment, emotions, safety in one model)
+- Fallback: Two-tier latency strategy - Tier-0 (VADER, <2ms) and Tier-1 (GoEmotions, <100ms)
+- UltraBERT provides: sentiment, emotions, safety_familyos, safety_generic
+- Valence/arousal mapping from model outputs
 - Affect band classification (GREEN/AMBER/RED) for risk assessment
-- Russell's circumplex model for emotion tag mapping
 
 Performance:
-- Tier-0: <2ms P99 (CPU-only, no GPU)
-- Tier-1: <60ms P99 (ML inference - deferred to future implementation)
-- Overall P95: ≤70ms
-- 73% accuracy target for Tier-0 (sufficient for salience scoring)
+- UltraBERT: <30ms P95 (primary path)
+- Tier-0 (VADER): <2ms P99 (fallback if UltraBERT unavailable)
+- Tier-1 (GoEmotions): <100ms P95 (deprecated)
+- Safety accuracy: 96.2% (UltraBERT), vs ~70% (keyword-based)
 
 Contract: k0/contracts/modules/affect.analyze.v1.yaml
 ADR: docs/architecture/decisions-K0/modules/k004.1-tier0-fast-affect.md
+     docs/architecture/decisions-K0/modules/k004.2-transformer-affect.md
 
 Related Modules:
 - M02 (semantic_project): Parallel module
@@ -27,6 +28,8 @@ Input: cognitive.memory.write.committed.v1 event
 Output: p02.affect.analyzed.v1 event
 Side Effects: None (pure computation)
 
+Issue: 3.1.1 - Upgrade to Transformer-Based Emotion Detection
+Issue: UltraBERT Migration - Single Unified Model
 Author: K0 Architecture Team
 Date: 2025-11-17
 """
@@ -137,9 +140,15 @@ _VADER_LOAD_ERROR = None
 
 # Module-level metrics counters (for observability)
 _metrics = {
+    "ultrabert_calls": 0,
+    "ultrabert_unavailable": 0,
     "tier0_calls": 0,
+    "tier1_calls": 0,
     "tier1_fallback_requests": 0,
     "vader_unavailable": 0,
+    "transformer_unavailable": 0,
+    "clinical_safety_calls": 0,
+    "clinical_safety_detections": 0,
     "band_green": 0,
     "band_amber": 0,
     "band_red": 0,
@@ -394,6 +403,52 @@ def check_safety_keywords(text_lower: str) -> bool:
     return any(keyword in text_lower for keyword in SAFETY_KEYWORDS)
 
 
+def check_clinical_safety(text: str) -> tuple[bool, str | None, str | None]:
+    """
+    Check for mental health risks using clinical NLP detector.
+
+    This is an upgraded safety check that uses transformer-based detection
+    combined with clinically validated risk indicators.
+
+    Research: Coppersmith et al. (2018) - CLPsych shared task
+              Zirikly et al. (2019) - Suicide risk assessment
+
+    Args:
+        text: Input text to assess
+
+    Returns:
+        Tuple of (is_concern, severity, summary)
+        - is_concern: True if any risk detected
+        - severity: NONE/LOW/MEDIUM/HIGH/CRITICAL or None if unavailable
+        - summary: Human-readable summary or None
+
+    Issue: 3.1.2 - Add Safety Detection with Clinical NLP
+    """
+    _metrics["clinical_safety_calls"] += 1
+
+    try:
+        from k0.modules.affect.clinical_safety import assess_safety
+    except ImportError:
+        logger.debug("clinical_safety module not available")
+        return False, None, None
+
+    try:
+        assessment = assess_safety(text)
+
+        if assessment.risk_detected:
+            _metrics["clinical_safety_detections"] += 1
+
+        return (
+            assessment.risk_detected,
+            assessment.severity.value if assessment.severity else None,
+            assessment.indicator_summary,
+        )
+
+    except Exception as e:
+        logger.warning(f"Clinical safety assessment failed: {e}")
+        return False, None, None
+
+
 def apply_domain_lexicon_adjustments(text_lower: str, valence: float) -> float:
     """Apply FamilyOS domain-specific lexicon adjustments to valence."""
     adjustment = 0.0
@@ -515,7 +570,40 @@ def tier0_classify(
     # Precompute lowercased text (used for all keyword checks)
     text_lower = text.lower()
 
-    # Step 2: Safety keyword detection (force RED regardless of VADER)
+    # Step 2: Safety detection (clinical NLP + keyword fallback)
+    # First try clinical safety detector for better accuracy
+    clinical_concern, clinical_severity, clinical_summary = check_clinical_safety(text)
+
+    if clinical_concern and clinical_severity in ("HIGH", "CRITICAL"):
+        # Clinical NLP detected high/critical risk - force RED band
+        _metrics["band_red"] += 1
+        return AffectAnnotation(
+            valence=0.1,  # Very negative
+            arousal=0.85,  # High intensity
+            dominant_emotions=("anxiety", "fear", "distress"),
+            affect_band="RED",
+            band_reasons=(
+                "clinical_safety_detected",
+                (
+                    f"severity_{clinical_severity.lower()}"
+                    if clinical_severity
+                    else "unknown_severity"
+                ),
+            ),
+            model_version="tier0_clinical_safety_v1.0",
+            tier="TIER_0",
+            confidence=1.0,  # High confidence in clinical safety detection
+            raw_compound=None,
+            raw_pos=None,
+            raw_neg=None,
+            raw_neu=None,
+        )
+    elif clinical_concern and clinical_severity == "MEDIUM":
+        # Medium severity - force AMBER band but continue processing
+        # Will override final band to AMBER if not already RED
+        pass  # Handled in band classification
+
+    # Fallback to keyword detection for backwards compatibility
     if check_safety_keywords(text_lower):
         _metrics["safety_keyword_detections"] += 1
         _metrics["band_red"] += 1
@@ -615,6 +703,184 @@ def tier0_classify(
 
 
 # ============================================================================
+# Tier-1 Transformer Classification (GoEmotions)
+# ============================================================================
+
+
+def tier1_classify(
+    text: str,
+    preloaded_models: dict[str, Any] | None = None,
+) -> AffectAnnotation | None:
+    """
+    Tier-1 transformer-based classification using GoEmotions model.
+
+    Model: SamLowe/roberta-base-go_emotions (27 emotions + neutral)
+    Research: Demszky et al. (2020) - GoEmotions dataset
+
+    Algorithm:
+    1. Import and initialize TransformerAffect (lazy loading)
+    2. Run multi-label emotion classification
+    3. Map emotions to valence/arousal via Russell's circumplex
+    4. Classify affect band with safety detection
+    5. Return AffectAnnotation compatible with Tier-0 output
+
+    Performance: <30ms P95 (GPU), <100ms P95 (CPU)
+    Accuracy: >85% on GoEmotions test set
+
+    Issue: 3.1.1 - Upgrade to Transformer-Based Emotion Detection
+
+    Args:
+        text: Event description text
+        preloaded_models: Optional dict with preloaded GoEmotions model
+
+    Returns:
+        AffectAnnotation if classified, None if transformer unavailable
+    """
+    _metrics["tier1_calls"] += 1
+
+    try:
+        from k0.modules.affect.transformer_affect import (
+            analyze_affect_transformer,
+            transformer_to_legacy_annotation,
+        )
+    except ImportError:
+        logger.warning("transformer_affect module not available for Tier-1")
+        _metrics["transformer_unavailable"] += 1
+        return None
+
+    # Run transformer-based analysis
+    result = analyze_affect_transformer(text)
+
+    if result is None:
+        logger.warning("GoEmotions model not available, falling back to Tier-0")
+        _metrics["transformer_unavailable"] += 1
+        return None
+
+    # Convert to AffectAnnotation for compatibility
+    legacy = transformer_to_legacy_annotation(result)
+
+    # Update metrics based on band
+    if result.affect_band == "GREEN":
+        _metrics["band_green"] += 1
+    elif result.affect_band == "AMBER":
+        _metrics["band_amber"] += 1
+    else:
+        _metrics["band_red"] += 1
+
+    return AffectAnnotation(
+        valence=legacy["valence"],
+        arousal=legacy["arousal"],
+        dominant_emotions=tuple(legacy["dominant_emotions"]),
+        affect_band=legacy["affect_band"],
+        band_reasons=tuple(legacy["band_reasons"]),
+        model_version=legacy["model_version"],
+        tier="TIER_1",
+        confidence=legacy["confidence"],
+        raw_compound=None,  # Not applicable for transformer
+        raw_pos=None,
+        raw_neg=None,
+        raw_neu=None,
+    )
+
+
+# ============================================================================
+# UltraBERT Classification (Primary Path)
+# ============================================================================
+
+
+def ultrabert_classify(text: str) -> AffectAnnotation | None:
+    """
+    Primary classification path using FamilyOS UltraBERT unified model.
+
+    UltraBERT provides sentiment, emotions, and safety in a single model:
+    - sentiment: very_positive/positive/neutral/negative/very_negative
+    - emotions: top 3 from 28 emotion categories
+    - safety_familyos: family-context safety classification
+    - safety_generic: general safety flags
+
+    Performance: <30ms P95 (single model vs 9 separate models)
+    Accuracy: 89.6% weighted avg, 96.2% safety accuracy
+
+    Issue: UltraBERT Migration - Single Unified Model
+
+    Args:
+        text: Event description text
+
+    Returns:
+        AffectAnnotation if classified, None if UltraBERT unavailable
+    """
+    _metrics["ultrabert_calls"] += 1
+
+    try:
+        from k0.runtime.ultrabert_adapter import analyze_affect, is_ultrabert_available
+    except ImportError:
+        logger.debug("ultrabert_adapter module not available")
+        _metrics["ultrabert_unavailable"] += 1
+        return None
+
+    if not is_ultrabert_available():
+        logger.debug("UltraBERT not available, falling back to legacy path")
+        _metrics["ultrabert_unavailable"] += 1
+        return None
+
+    try:
+        result = analyze_affect(text)
+
+        if result is None:
+            _metrics["ultrabert_unavailable"] += 1
+            return None
+
+        # Map sentiment to valence (0-1 scale)
+        sentiment_to_valence = {
+            "very_positive": 0.9,
+            "positive": 0.7,
+            "neutral": 0.5,
+            "negative": 0.3,
+            "very_negative": 0.1,
+        }
+        valence = sentiment_to_valence.get(result.sentiment, 0.5)
+
+        # Calculate arousal from emotion intensity
+        # High-arousal emotions: joy, excitement, anger, fear
+        # Low-arousal emotions: contentment, sadness, boredom
+        high_arousal_emotions = {"joy", "excitement", "anger", "fear", "anxiety", "surprise"}
+        arousal = 0.5
+        if result.dominant_emotions:
+            arousal_sum = sum(
+                0.8 if e in high_arousal_emotions else 0.3 for e in result.dominant_emotions[:3]
+            )
+            arousal = min(1.0, arousal_sum / 3)
+
+        # Update band metrics
+        if result.affect_band == "GREEN":
+            _metrics["band_green"] += 1
+        elif result.affect_band == "AMBER":
+            _metrics["band_amber"] += 1
+        else:
+            _metrics["band_red"] += 1
+
+        return AffectAnnotation(
+            valence=valence,
+            arousal=arousal,
+            dominant_emotions=result.dominant_emotions,
+            affect_band=result.affect_band,
+            band_reasons=result.band_reasons,
+            model_version="ultrabert_v2.0.3",
+            tier="ULTRABERT",
+            confidence=result.confidence,
+            raw_compound=None,  # Not applicable for UltraBERT
+            raw_pos=None,
+            raw_neg=None,
+            raw_neu=None,
+        )
+
+    except Exception as e:
+        logger.warning(f"UltraBERT classification failed: {e}")
+        _metrics["ultrabert_unavailable"] += 1
+        return None
+
+
+# ============================================================================
 # Module Entry Point (Phase 2 Signature)
 # ============================================================================
 
@@ -625,13 +891,14 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
     Process:
     1. Extract text from cognitive.memory.write.committed.v1 event
-    2. Tier-0 classification (VADER)
-    3. If Tier-0 returns None → Try low-confidence Tier-0 (future: Tier-1 ML)
+    2. Primary: UltraBERT classification (sentiment, emotions, safety in one model)
+    3. Fallback: Tier-1 GoEmotions or Tier-0 VADER if UltraBERT unavailable
     4. Emit p02.affect.analyzed.v1 event with rich output
 
     Optimizations:
+    - Single UltraBERT model replaces 9 separate models
     - Conditional logging to avoid string formatting overhead
-    - Preserve raw VADER scores for downstream learning
+    - Preserve raw scores for downstream learning
     - Metrics counters for observability
 
     Contract: k0/contracts/modules/affect.analyze.v1.yaml
@@ -656,14 +923,17 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         ValueError: Invalid input format
         RuntimeError: Classification failed
     """
-    # Parse envelope from message payload
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
     import json
 
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract configuration
     confidence_threshold = config.get("confidence_threshold", 0.8)
@@ -705,14 +975,24 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         },
     )
 
-    # Tier-0 classification (with preloaded models)
-    annotation = tier0_classify(text, allow_low_confidence=False, preloaded_models=preloaded_models)
+    # PRIMARY: Try UltraBERT unified model (sentiment, emotions, safety in one model)
+    annotation = ultrabert_classify(text)
 
     if annotation is None:
-        # Tier-1 fallback: For now, use low-confidence Tier-0
-        # Future: Call Tier-1 ML model here (k004.2)
-        context.logger.warning(
-            "Tier-1 not implemented, using low-confidence Tier-0",
+        # UltraBERT not available, try legacy Tier-1 transformer (GoEmotions)
+        context.logger.debug(
+            "UltraBERT unavailable, trying Tier-1 GoEmotions",
+            extra={
+                "module_id": "affect.analyze",
+                "trace_id": message.trace_id,
+            },
+        )
+        annotation = tier1_classify(text, preloaded_models=preloaded_models)
+
+    if annotation is None:
+        # Tier-1 not available, use Tier-0 VADER
+        context.logger.debug(
+            "Tier-1 transformer unavailable, using Tier-0 VADER",
             extra={
                 "module_id": "affect.analyze",
                 "trace_id": message.trace_id,
@@ -724,14 +1004,21 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
         if annotation is None:
             # Ultimate fallback (should never happen unless VADER fails)
+            context.logger.warning(
+                "All classifiers failed, using defaults",
+                extra={
+                    "module_id": "affect.analyze",
+                    "trace_id": message.trace_id,
+                },
+            )
             annotation = AffectAnnotation(
                 valence=DEFAULT_VALENCE,  # Neutral (default from contract)
                 arousal=DEFAULT_AROUSAL,  # Low-moderate (default from contract)
                 dominant_emotions=("neutral",),
                 affect_band="GREEN",
-                band_reasons=("tier1_not_implemented_ultimate_fallback",),
-                model_version="tier0_vader_v1.2",
-                tier="TIER_1_PLACEHOLDER",
+                band_reasons=("all_classifiers_unavailable_fallback",),
+                model_version="fallback_v1.0",
+                tier="FALLBACK",
                 confidence=0.2,  # Very low confidence
                 raw_compound=None,
                 raw_pos=None,
@@ -739,21 +1026,46 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
                 raw_neu=None,
             )
 
+    # Run clinical safety assessment (Issue 3.1.2)
+    # Results are used to override affect_band and boost salience
+    safety_risk, safety_severity, safety_summary = check_clinical_safety(text)
+
+    # Override affect_band based on clinical safety severity
+    final_affect_band = annotation.affect_band
+    final_band_reasons = list(annotation.band_reasons)
+
+    if safety_risk and safety_severity:
+        # Map clinical safety severity to affect_band
+        # CRITICAL/HIGH → RED, MEDIUM → AMBER, LOW → keep existing
+        if safety_severity in ("CRITICAL", "HIGH"):
+            final_affect_band = "RED"
+            final_band_reasons.append(f"clinical_safety_{safety_severity.lower()}")
+        elif safety_severity == "MEDIUM":
+            # Only upgrade to AMBER if currently GREEN
+            if final_affect_band == "GREEN":
+                final_affect_band = "AMBER"
+            final_band_reasons.append("clinical_safety_medium")
+
     # Return enriched envelope (merge affect fields into original envelope)
     enriched_envelope = {
         **envelope,
         "affect_valence": annotation.valence,
         "affect_arousal": annotation.arousal,
         "dominant_emotions": list(annotation.dominant_emotions),  # Convert tuple → list
-        "affect_band": annotation.affect_band,
-        "band_reasons": list(annotation.band_reasons),  # Convert tuple → list
+        "affect_band": final_affect_band,
+        "band_reasons": final_band_reasons,
         "model_version": annotation.model_version,
+        "affect_tier": annotation.tier,  # TIER_0, TIER_0_LOW_CONF, or TIER_1
         "confidence": annotation.confidence,
         # Raw VADER scores for downstream learning/calibration
         "raw_vader_compound": annotation.raw_compound,
         "raw_vader_pos": annotation.raw_pos,
         "raw_vader_neg": annotation.raw_neg,
         "raw_vader_neu": annotation.raw_neu,
+        # Clinical safety fields (for downstream salience boost)
+        "clinical_safety_risk": safety_risk,
+        "clinical_safety_severity": safety_severity,
+        "clinical_safety_summary": safety_summary,
     }
 
     # Log module completion
@@ -764,8 +1076,10 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
             "trace_id": message.trace_id,
             "valence": annotation.valence,
             "arousal": annotation.arousal,
-            "affect_band": annotation.affect_band,
+            "affect_band": final_affect_band,
             "confidence": annotation.confidence,
+            "clinical_safety_risk": safety_risk,
+            "clinical_safety_severity": safety_severity,
         },
     )
 

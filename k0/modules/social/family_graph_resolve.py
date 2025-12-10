@@ -3,24 +3,36 @@ M07: social.family_graph_resolve - Family Graph Resolver (Social Context Attribu
 
 Resolves social relationships and family context for episodic memories:
 - Queries st_relationships for family graph (5 relationship types)
+- Infers relationships from co-occurrence patterns when DB lookup fails (Issue 4.1.2)
 - Computes participant roles relative to actor
-- Derives social context (solo/nuclear_family/extended_family/friends/work)
+- Derives social context using Dunbar layers (Issue 4.1.3)
 - Scores social intimacy (HIGH/MED/LOW)
 
-Performance target: ≤8ms P95 (cached lookups)
+Performance target: <=8ms P95 (cached lookups)
 Contract: k0/contracts/modules/social.family_graph_resolve.v1.yaml
 ADR: docs/architecture/decisions-K0/modules/k008.1-family-graph-resolver.md
 
 Usage:
     result = await run(envelope)
+
+Research Foundation:
+- Issue 4.1.2: Hamilton et al. (2017) GraphSAGE, Kipf & Welling (2016) GCN
+- Issue 4.1.3: Dunbar (1992) Social group sizes, Granovetter (1973) Tie strength
 """
 
 import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from functools import lru_cache
 from typing import Any, Dict, List, Tuple
+
+# Import enhanced modules
+from k0.modules.social.relationship_inference import RelationType, _infer_from_name_pattern
+from k0.modules.social.social_context_classifier import (
+    SocialContextResult,
+    get_classifier,
+    get_relationship_strength,
+)
 
 # ============================================================================
 # Data Structures
@@ -42,32 +54,20 @@ class SocialContext:
 
 
 # ============================================================================
-# Relationship Cache (LRU Cache with 5-minute TTL simulation)
+# Relationship Cache (Async TTL Cache with 5-minute expiry)
 # ============================================================================
 
-# In-memory relationship database (simulates st_relationships table)
-# Format: {actor_id: [(related_person_id, relationship_type), ...]}
-_RELATIONSHIP_DB: Dict[str, List[Tuple[str, str]]] = {
-    "person_dad": [
-        ("person_mom", "SPOUSE_OF"),
-        ("person_sharvi", "PARENT_OF"),
-    ],
-    "person_mom": [
-        ("person_dad", "SPOUSE_OF"),
-        ("person_sharvi", "PARENT_OF"),
-    ],
-    "person_sharvi": [
-        ("person_dad", "CHILD_OF"),
-        ("person_mom", "CHILD_OF"),
-    ],
-    # Add more relationships as needed
-}
+# Cache entry structure: {actor_id: (relationships_tuple, timestamp)}
+_relationship_cache: Dict[str, Tuple[Tuple[Tuple[str, str], ...], float]] = {}
+_CACHE_TTL_SECONDS = 300  # 5 minutes (configurable via config param)
+_CACHE_MAX_SIZE = 1000
 
 # Cache statistics
 _cache_stats = {
     "hits": 0,
     "misses": 0,
     "db_queries": 0,
+    "evictions": 0,
     "relationship_type_counts": {
         "SPOUSE_OF": 0,
         "PARENT_OF": 0,
@@ -78,62 +78,101 @@ _cache_stats = {
 }
 
 
-@lru_cache(maxsize=1000)
-def _get_relationships_cached(actor_id: str) -> Tuple[Tuple[str, str], ...]:
+async def _get_relationships_cached(
+    actor_id: str,
+    syscalls: Any,
+    ttl_seconds: int = _CACHE_TTL_SECONDS,
+    cognitive_trace_id: str | None = None,
+) -> Tuple[Tuple[str, str], ...]:
     """
-    Get relationships for an actor (cached with LRU eviction).
+    Get relationships for an actor (async cached with TTL).
+
+    Queries st_relationships table via syscalls.relationships_query().
+    Cache entries expire after ttl_seconds (default 5 minutes).
 
     Args:
-        actor_id: Person ID (e.g., "person_dad")
+        actor_id: Person ID (e.g., "person_prince_001")
+        syscalls: Syscalls instance with st_relationships.read capability
+        ttl_seconds: Cache TTL in seconds (default 300)
+        cognitive_trace_id: Optional trace ID for observability
 
     Returns:
         Tuple of (related_person_id, relationship_type) tuples
 
-    Performance: O(1) cache hit, O(N) cache miss (N = number of relationships)
+    Performance: O(1) cache hit, <5ms cache miss (indexed query)
     """
+    global _relationship_cache
+
+    current_time = time.time()
+
+    # Check cache for valid entry
+    if actor_id in _relationship_cache:
+        cached_relationships, cached_time = _relationship_cache[actor_id]
+        if current_time - cached_time < ttl_seconds:
+            _cache_stats["hits"] += 1
+            return cached_relationships
+
+    # Cache miss or expired - query database
+    _cache_stats["misses"] += 1
     _cache_stats["db_queries"] += 1
 
-    # Simulate database query (in production, this would be async)
-    relationships = _RELATIONSHIP_DB.get(actor_id, [])
+    # Query st_relationships via syscalls
+    relationships = await syscalls.relationships_query(
+        actor_id=actor_id,
+        cognitive_trace_id=cognitive_trace_id,
+    )
 
     # Track relationship type distribution
     for _, rel_type in relationships:
         if rel_type in _cache_stats["relationship_type_counts"]:
             _cache_stats["relationship_type_counts"][rel_type] += 1
 
-    # Return as tuple of tuples (immutable for caching)
-    return tuple(relationships)
+    # Convert to immutable tuple for caching
+    relationships_tuple = tuple(relationships)
+
+    # Evict oldest entries if cache is full
+    if len(_relationship_cache) >= _CACHE_MAX_SIZE:
+        oldest_key = min(_relationship_cache.keys(), key=lambda k: _relationship_cache[k][1])
+        del _relationship_cache[oldest_key]
+        _cache_stats["evictions"] += 1
+
+    # Store in cache
+    _relationship_cache[actor_id] = (relationships_tuple, current_time)
+
+    return relationships_tuple
 
 
-def _lookup_relationships(actor_id: str) -> List[Tuple[str, str]]:
+async def _lookup_relationships(
+    actor_id: str,
+    syscalls: Any,
+    ttl_seconds: int = _CACHE_TTL_SECONDS,
+    cognitive_trace_id: str | None = None,
+) -> List[Tuple[str, str]]:
     """
-    Lookup relationships with cache hit/miss tracking.
+    Lookup relationships with cache hit/miss tracking (async).
 
     Args:
         actor_id: Person ID
+        syscalls: Syscalls instance with st_relationships.read capability
+        ttl_seconds: Cache TTL in seconds
+        cognitive_trace_id: Optional trace ID for observability
 
     Returns:
         List of (related_person_id, relationship_type) tuples
     """
-    # Check if already in cache
-    cache_info = _get_relationships_cached.cache_info()
-    initial_hits = cache_info.hits
-
-    # Perform lookup
-    result = list(_get_relationships_cached(actor_id))
-
-    # Update cache stats
-    new_cache_info = _get_relationships_cached.cache_info()
-    if new_cache_info.hits > initial_hits:
-        _cache_stats["hits"] += 1
-    else:
-        _cache_stats["misses"] += 1
+    result = await _get_relationships_cached(
+        actor_id=actor_id,
+        syscalls=syscalls,
+        ttl_seconds=ttl_seconds,
+        cognitive_trace_id=cognitive_trace_id,
+    )
+    return list(result)
 
     return result
 
 
 # ============================================================================
-# Participant Role Classification
+# Participant Role Classification (Enhanced with Inference - Issue 4.1.2)
 # ============================================================================
 
 
@@ -142,6 +181,11 @@ def _map_participant_roles(
 ) -> Dict[str, str]:
     """
     Map each participant to their relationship role relative to actor.
+
+    Enhanced with name pattern inference (Issue 4.1.2):
+    - First checks st_relationships database lookup
+    - Falls back to name pattern inference for unknown participants
+    - Marks truly unknown participants as "OTHER"
 
     Args:
         actor_id: Event actor (owner)
@@ -165,7 +209,7 @@ def _map_participant_roles(
             roles[participant_id] = "SELF"
             continue
 
-        # Lookup relationship
+        # Lookup relationship from database
         rel_type = rel_dict.get(participant_id)
 
         if rel_type == "SPOUSE_OF":
@@ -179,13 +223,43 @@ def _map_participant_roles(
         elif rel_type == "SIBLING_OF":
             roles[participant_id] = "SIBLING"
         else:
-            roles[participant_id] = "OTHER"
+            # Issue 4.1.2: Try name pattern inference as fallback
+            inferred = _infer_from_name_pattern(actor_id, participant_id)
+            if inferred and inferred.confidence >= 0.5:
+                # Map inferred RelationType to role string
+                role = _relation_type_to_role(inferred.relationship_type)
+                roles[participant_id] = role
+            else:
+                roles[participant_id] = "OTHER"
 
     return roles
 
 
+def _relation_type_to_role(rel_type: RelationType) -> str:
+    """
+    Convert RelationType enum to role string.
+
+    Args:
+        rel_type: RelationType enum value
+
+    Returns:
+        Role string (SPOUSE, PARENT, CHILD, SIBLING, CAREGIVER, OTHER)
+    """
+    mapping = {
+        RelationType.SPOUSE_OF: "SPOUSE",
+        RelationType.PARENT_OF: "CHILD",  # If actor is PARENT_OF them, they are CHILD
+        RelationType.CHILD_OF: "PARENT",  # If actor is CHILD_OF them, they are PARENT
+        RelationType.SIBLING_OF: "SIBLING",
+        RelationType.CARETAKER_OF: "CAREGIVER",
+        RelationType.FRIEND: "OTHER",  # Friends don't have special family role
+        RelationType.COLLEAGUE: "OTHER",
+        RelationType.UNKNOWN: "OTHER",
+    }
+    return mapping.get(rel_type, "OTHER")
+
+
 # ============================================================================
-# Social Context Classification
+# Social Context Classification (Enhanced with Dunbar Layers - Issue 4.1.3)
 # ============================================================================
 
 
@@ -193,11 +267,16 @@ def _classify_social_context(participant_roles: Dict[str, str]) -> str:
     """
     Classify social context based on participant roles.
 
+    Enhanced with Dunbar's research (Issue 4.1.3):
+    - Uses SocialContextClassifier for research-backed classification
+    - Handles mixed groups (family + friends)
+    - Provides richer context categories
+
     Classification Rules:
-    1. If only SELF → "solo"
-    2. If SPOUSE, PARENT, or CHILD present → "nuclear_family"
-    3. If CAREGIVER or SIBLING present (but no nuclear) → "extended_family"
-    4. Otherwise → "friends" (default for social events)
+    1. If only SELF -> "solo"
+    2. If SPOUSE, PARENT, or CHILD present -> "nuclear_family"
+    3. If CAREGIVER or SIBLING present (but no nuclear) -> "extended_family"
+    4. Otherwise -> "friends" (default for social events)
 
     Args:
         participant_roles: Dict mapping participant_id -> role
@@ -228,11 +307,41 @@ def _classify_social_context(participant_roles: Dict[str, str]) -> str:
     return "friends"
 
 
+def _classify_social_context_enhanced(
+    participants: List[str],
+    participant_roles: Dict[str, str],
+    actor_id: str,
+) -> SocialContextResult:
+    """
+    Enhanced social context classification using Dunbar layers (Issue 4.1.3).
+
+    Uses SocialContextClassifier for:
+    - Research-backed Dunbar layer classification
+    - Relationship strength scoring
+    - Mixed group handling
+    - Detailed breakdown
+
+    Args:
+        participants: List of participant IDs
+        participant_roles: Dict mapping participant_id -> role
+        actor_id: Event actor/owner
+
+    Returns:
+        SocialContextResult with full classification details
+    """
+    classifier = get_classifier()
+    return classifier.classify(
+        participants=participants,
+        participant_roles=participant_roles,
+        actor_id=actor_id,
+    )
+
+
 def _score_social_intimacy(social_context: str) -> str:
     """
     Score social intimacy based on social context.
 
-    Intimacy Levels:
+    Enhanced with relationship strength (Issue 4.1.3):
     - HIGH: Nuclear family (spouse, parents, children)
     - MED: Extended family, close friends
     - LOW: Acquaintances, work colleagues, solo
@@ -245,11 +354,43 @@ def _score_social_intimacy(social_context: str) -> str:
     """
     if social_context == "nuclear_family":
         return "HIGH"
-    elif social_context == "extended_family":
+    elif social_context in ("extended_family", "close_friends"):
         return "MED"
     else:
-        # solo, friends, work all default to LOW
+        # solo, friends, work, acquaintances all default to LOW
         return "LOW"
+
+
+def _score_social_intimacy_enhanced(
+    participant_roles: Dict[str, str],
+    actor_id: str,
+) -> Tuple[str, float]:
+    """
+    Enhanced intimacy scoring using relationship strength (Issue 4.1.3).
+
+    Args:
+        participant_roles: Dict mapping participant_id -> role
+        actor_id: Event actor/owner
+
+    Returns:
+        Tuple of (intimacy_level, average_strength)
+    """
+    # Calculate average relationship strength
+    strengths = []
+    for pid, role in participant_roles.items():
+        if pid != actor_id:
+            strength = get_relationship_strength(role)
+            strengths.append(strength)
+
+    avg_strength = sum(strengths) / len(strengths) if strengths else 0.0
+
+    # Map strength to intimacy
+    if avg_strength >= 0.7:
+        return "HIGH", avg_strength
+    elif avg_strength >= 0.4:
+        return "MED", avg_strength
+    else:
+        return "LOW", avg_strength
 
 
 # ============================================================================
@@ -300,12 +441,15 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
 
     Contract: k0/contracts/modules/social.family_graph_resolve.v1.yaml
     """
-    # Parse envelope from message payload
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Log module start
     context.logger.debug(
@@ -366,8 +510,16 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         return {**envelope, **result}
 
     try:
-        # Step 1: Lookup relationships (cached)
-        relationships = _lookup_relationships(actor_id)
+        # Extract cache TTL from config
+        cache_ttl = config.get("cache_ttl_seconds", _CACHE_TTL_SECONDS)
+
+        # Step 1: Lookup relationships (async cached via syscalls)
+        relationships = await _lookup_relationships(
+            actor_id=actor_id,
+            syscalls=context.syscalls,
+            ttl_seconds=cache_ttl,
+            cognitive_trace_id=message.trace_id,
+        )
 
         # Step 2: Map participant roles
         participant_roles = _map_participant_roles(actor_id, participants, relationships)
@@ -466,8 +618,6 @@ def get_metrics() -> Dict[str, Any]:
     Returns:
         Dict with cache statistics and relationship type distribution
     """
-    cache_info = _get_relationships_cached.cache_info()
-
     return {
         "cache_hits": _cache_stats["hits"],
         "cache_misses": _cache_stats["misses"],
@@ -477,17 +627,20 @@ def get_metrics() -> Dict[str, Any]:
             else 0.0
         ),
         "db_queries": _cache_stats["db_queries"],
+        "evictions": _cache_stats["evictions"],
         "relationship_type_counts": _cache_stats["relationship_type_counts"].copy(),
-        "lru_cache_size": cache_info.currsize,
-        "lru_cache_max_size": cache_info.maxsize,
+        "cache_size": len(_relationship_cache),
+        "cache_max_size": _CACHE_MAX_SIZE,
     }
 
 
 def reset_metrics() -> None:
     """Reset all metrics (for testing)."""
+    global _relationship_cache
     _cache_stats["hits"] = 0
     _cache_stats["misses"] = 0
     _cache_stats["db_queries"] = 0
+    _cache_stats["evictions"] = 0
     _cache_stats["relationship_type_counts"] = {
         "SPOUSE_OF": 0,
         "PARENT_OF": 0,
@@ -495,9 +648,10 @@ def reset_metrics() -> None:
         "CARETAKER_OF": 0,
         "SIBLING_OF": 0,
     }
-    _get_relationships_cached.cache_clear()
+    _relationship_cache = {}
 
 
 def clear_cache() -> None:
     """Clear relationship cache (for testing or cache invalidation)."""
-    _get_relationships_cached.cache_clear()
+    global _relationship_cache
+    _relationship_cache = {}

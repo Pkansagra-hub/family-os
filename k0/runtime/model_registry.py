@@ -47,6 +47,7 @@ class ModelTier(str, Enum):
     SPACY_LARGE = "spacy_large"
     TRANSFORMER_SMALL = "transformer_small"
     TRANSFORMER_LARGE = "transformer_large"
+    ULTRABERT = "ultrabert"  # Unified FamilyOS UltraBERT model
 
 
 class DeviceType(str, Enum):
@@ -129,6 +130,20 @@ class ModelRegistry:
 
     # Default model specifications (used if no config file)
     _DEFAULT_SPECS: Dict[str, Dict[str, Any]] = {
+        # PRIMARY: UltraBERT unified model (replaces 9 separate models)
+        "ultrabert": {
+            "name": "FamilyOS UltraBERT v2.0.3",
+            "model_id": "familyos-ultrabert-2.0.3",
+            "tier": "ultrabert",
+            "loader": "k0.runtime.model_loaders.load_ultrabert",
+            "memory_mb": 500,
+            "version": "2.0.3",
+            "device_preference": "cuda",
+            "fallback_to_cpu": True,
+            "load_timeout_sec": 60.0,
+            "warmup_input": "Hello world",
+        },
+        # LEGACY: Keep spaCy for tokenization/parsing (not replaced by UltraBERT)
         "spacy_nlp": {
             "name": "spaCy English Small",
             "model_id": "en_core_web_sm",
@@ -153,8 +168,9 @@ class ModelRegistry:
             "load_timeout_sec": 30.0,
             "warmup_input": "Hello world",
         },
+        # DEPRECATED: vader - replaced by UltraBERT sentiment
         "vader_analyzer": {
-            "name": "VADER Sentiment Analyzer",
+            "name": "VADER Sentiment Analyzer (DEPRECATED - use ultrabert)",
             "model_id": "vaderSentiment",
             "tier": "rule_based",
             "loader": "k0.runtime.model_loaders.load_vader",
@@ -165,8 +181,9 @@ class ModelRegistry:
             "load_timeout_sec": 5.0,
             "warmup_input": "I love this!",
         },
+        # DEPRECATED: sentence_transformer - replaced by UltraBERT embedding
         "sentence_transformer": {
-            "name": "Sentence Transformer all-MiniLM-L6-v2",
+            "name": "Sentence Transformer (DEPRECATED - use ultrabert)",
             "model_id": "all-MiniLM-L6-v2",
             "tier": "transformer_small",
             "loader": "k0.runtime.model_loaders.load_sentence_transformer",
@@ -200,6 +217,9 @@ class ModelRegistry:
         self._lock = threading.RLock()
         self._async_lock = asyncio.Lock()
         self._loaded = False
+        # UltraBERT is the primary model, spaCy for tokenization
+        self._preload_essential: list[str] = ["ultrabert", "spacy_nlp"]
+        self._preload_optional: list[str] = []
 
         # Initialize default specs
         self._init_default_specs()
@@ -262,11 +282,31 @@ class ModelRegistry:
             except Exception as e:
                 logger.error(f"Failed to load model spec {name}: {e}")
 
+        # Load preload configuration
+        preload_config = config.get("preload", {})
+        self._preload_essential = preload_config.get("essential", ["spacy_nlp", "vader_analyzer"])
+        self._preload_optional = preload_config.get("optional", [])
+
         self._loaded = True
         logger.info(
             f"Loaded {len(self._specs)} model specifications",
             extra={"count": len(self._specs), "models": list(self._specs.keys())},
         )
+
+    def get_preload_models(self, include_optional: bool = True) -> list[str]:
+        """
+        Get list of models to preload at startup.
+
+        Args:
+            include_optional: Whether to include optional models (default True)
+
+        Returns:
+            List of model names to preload
+        """
+        models = list(self._preload_essential)
+        if include_optional:
+            models.extend(self._preload_optional)
+        return models
 
     async def get(self, model_name: str) -> Any:
         """
@@ -391,10 +431,22 @@ class ModelRegistry:
             else:
                 self._cpu_memory_used_mb += spec.memory_mb
 
-        # Optional warmup
-        if spec.warmup_input and hasattr(model, "__call__"):
+        # Optional warmup - run a sample inference to warm up model caches
+        if spec.warmup_input:
             try:
-                _ = model(spec.warmup_input)
+                # Handle different model types based on model characteristics
+                if hasattr(model, "encode"):
+                    # SentenceTransformer - use encode() method
+                    _ = model.encode(spec.warmup_input)
+                elif hasattr(model, "polarity_scores"):
+                    # VADER - use polarity_scores() method
+                    _ = model.polarity_scores(spec.warmup_input)
+                elif model_name == "zero_shot_classifier":
+                    # Zero-shot classifier needs candidate_labels
+                    _ = model(spec.warmup_input, candidate_labels=["family", "work", "health"])
+                elif hasattr(model, "__call__"):
+                    # Generic callable (spaCy, HF pipelines)
+                    _ = model(spec.warmup_input)
                 logger.debug(f"Model warmup complete: {model_name}")
             except Exception as e:
                 logger.warning(f"Model warmup failed for {model_name}: {e}")

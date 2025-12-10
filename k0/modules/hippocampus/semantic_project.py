@@ -5,14 +5,20 @@ Phase 2 Declarative Module - Entity extraction, KG triple generation, embedding 
 
 Architecture:
 - Bridges episodic memory (DG) to semantic knowledge structures (CA1)
-- Uses spaCy NER for lightweight entity extraction (80% accuracy, 10ms latency)
+- Multi-tier NER: Rule-based → spaCy → Transformer (feature flag controlled)
 - Template-based KG triple generation (subject-predicate-object)
 - Allocates embedding_id for P08 vector generation (deferred to async pipeline)
 
-Performance:
-- Target: ≤20ms P95, ≤35ms P99
-- spaCy model: en_core_web_sm (50MB, loaded once at startup)
-- No external API calls (local-first, privacy-preserving)
+Performance (Tier-dependent):
+- RULE_BASED: ~5ms P95 (family terms only, 70% accuracy)
+- SPACY_SMALL: ~15ms P95 (en_core_web_sm, 85% accuracy)
+- SPACY_LARGE: ~30ms P95 (en_core_web_lg, 90% accuracy)
+- TRANSFORMER: ~50ms GPU / ~200ms CPU P95 (BERT-NER, 94% accuracy)
+
+Feature Flags:
+- hippocampus.semantic_project controls which tier is used
+- Automatic fallback on model failures
+- Metrics collection for A/B comparison
 
 Contract: k0/contracts/modules/hippocampus.semantic_project.v1.yaml
 ADR: docs/architecture/decisions-K0/modules/k003.2-ca1-semantic-bridge.md
@@ -26,8 +32,10 @@ Input: cognitive.memory.write.committed.v1 event
 Output: p02.hippocampus.semantic_projected.v1 event
 Side Effects: Prepares payload for st_embedding_queue (via M14)
 
+Issue: 2.1.1 - Upgrade NER to Transformer Model
 Author: K0 Architecture Team
 Date: 2025-11-17
+Updated: 2025-11-26
 """
 
 from __future__ import annotations
@@ -39,39 +47,85 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+# Feature flags for ML tier selection
+from k0.config.feature_flags import MLTier, get_feature_flags
+
+# Neural KG Extractor (Issue 2.1.2)
+from k0.modules.hippocampus.neural_kg_extractor import extract_kg_triples
+
+# Transformer NER (Issue 2.1.1)
+from k0.modules.hippocampus.transformer_ner import Entity, TransformerNER, extract_entities_sync
+
 # spaCy will be loaded lazily on first use (not at module import time)
 _SPACY_AVAILABLE = None  # Will be set on first call to _ensure_spacy_loaded()
 _nlp = None
+_nlp_lg = None  # Large model for SPACY_LARGE tier
 _SPACY_LOAD_ERROR = None
+
+# Global transformer NER instance
+_transformer_ner: TransformerNER | None = None
 
 logger = logging.getLogger(__name__)
 
 
-def _ensure_spacy_loaded(preloaded_models: dict[str, Any] | None = None):
-    """Lazy-load spaCy model on first use, or use preloaded model from app.state."""
-    global _SPACY_AVAILABLE, _nlp, _SPACY_LOAD_ERROR
+def _get_current_tier(request_id: str | None = None) -> MLTier:
+    """Get the current ML tier for semantic project based on feature flags."""
+    flags = get_feature_flags()
+    return flags.get_tier("hippocampus.semantic_project", request_id)
 
-    if _SPACY_AVAILABLE is not None:
-        return _SPACY_AVAILABLE  # Already tried loading
+
+def _ensure_spacy_loaded(
+    preloaded_models: dict[str, Any] | None = None,
+    use_large: bool = False,
+):
+    """
+    Lazy-load spaCy model on first use, or use preloaded model from app.state.
+
+    Args:
+        preloaded_models: Optional dict with preloaded spaCy model
+        use_large: If True, load en_core_web_lg instead of en_core_web_sm
+    """
+    global _SPACY_AVAILABLE, _nlp, _nlp_lg, _SPACY_LOAD_ERROR
+
+    # Select which model to use
+    if use_large:
+        if _nlp_lg is not None:
+            return True
+        model_name = "en_core_web_lg"
+    else:
+        if _SPACY_AVAILABLE is not None and _nlp is not None:
+            return _SPACY_AVAILABLE
+        model_name = "en_core_web_sm"
 
     # Check for preloaded model first (from kernel startup)
-    if preloaded_models and "spacy_nlp" in preloaded_models:
-        preloaded_nlp = preloaded_models["spacy_nlp"]
-        if preloaded_nlp is not None:
-            _nlp = preloaded_nlp
-            _SPACY_AVAILABLE = True
-            logger.debug("Using preloaded spaCy model from kernel startup")
-            return _SPACY_AVAILABLE
+    if preloaded_models:
+        preloaded_key = "spacy_nlp_lg" if use_large else "spacy_nlp"
+        if preloaded_key in preloaded_models:
+            preloaded_nlp = preloaded_models[preloaded_key]
+            if preloaded_nlp is not None:
+                if use_large:
+                    _nlp_lg = preloaded_nlp
+                else:
+                    _nlp = preloaded_nlp
+                    _SPACY_AVAILABLE = True
+                logger.debug(f"Using preloaded spaCy model ({model_name}) from kernel startup")
+                return True
 
     try:
         import spacy
 
-        _nlp = spacy.load("en_core_web_sm")
-        _SPACY_AVAILABLE = True
-        logger.info("spaCy model loaded successfully")
+        loaded_nlp = spacy.load(model_name)
+        if use_large:
+            _nlp_lg = loaded_nlp
+        else:
+            _nlp = loaded_nlp
+            _SPACY_AVAILABLE = True
+        logger.info(f"spaCy model {model_name} loaded successfully")
+        return True
     except ImportError as e:
         _SPACY_LOAD_ERROR = f"ImportError: {e}"
-        _SPACY_AVAILABLE = False
+        if not use_large:
+            _SPACY_AVAILABLE = False
         logger.warning(
             f"spaCy initialization failed: {_SPACY_LOAD_ERROR}. "
             "Entity extraction will return empty lists."
@@ -79,54 +133,58 @@ def _ensure_spacy_loaded(preloaded_models: dict[str, Any] | None = None):
     except OSError as e:
         # Model not installed: python -m spacy download en_core_web_sm
         _SPACY_LOAD_ERROR = f"OSError (model not found): {e}"
-        _SPACY_AVAILABLE = False
+        if not use_large:
+            _SPACY_AVAILABLE = False
         logger.warning(
-            f"spaCy model not found: {_SPACY_LOAD_ERROR}. "
-            "Run: python -m spacy download en_core_web_sm"
+            f"spaCy model {model_name} not found: {_SPACY_LOAD_ERROR}. "
+            f"Run: python -m spacy download {model_name}"
         )
     except Exception as e:
         _SPACY_LOAD_ERROR = f"Unexpected error: {type(e).__name__}: {e}"
-        _SPACY_AVAILABLE = False
+        if not use_large:
+            _SPACY_AVAILABLE = False
         logger.error(f"spaCy loading failed unexpectedly: {_SPACY_LOAD_ERROR}")
 
-    return _SPACY_AVAILABLE
+    return False if not use_large else (_nlp_lg is not None)
 
 
 # ============================================================================
-# Entity Extraction (spaCy NER)
+# Entity Extraction (Multi-Tier: Rule-Based, spaCy, Transformer)
 # ============================================================================
 
 
-@dataclass
-class Entity:
-    """Extracted named entity with metadata."""
-
-    text: str  # Original text ("mom", "Olive Garden")
-    label: str  # spaCy label (PERSON, ORG, GPE, DATE, TIME)
-    confidence: float  # NER confidence score (0.0-1.0)
-    canonical_id: str | None = None  # Resolved ID ("person_mom", "Olive_Garden_Market_St")
+# Note: Entity dataclass is now imported from transformer_ner module
+# This provides a unified entity representation across all tiers
 
 
 def _extract_entities(
     text: str,
     confidence_threshold: float = 0.6,
     preloaded_models: dict[str, Any] | None = None,
+    request_id: str | None = None,
 ) -> list[Entity]:
     """
-    Extract named entities using spaCy NER.
+    Extract named entities using the appropriate tier based on feature flags.
+
+    Tier Selection (via feature flags):
+    - RULE_BASED: Family term detection only (~5ms, 70% accuracy)
+    - SPACY_SMALL: spaCy en_core_web_sm (~15ms, 85% accuracy)
+    - SPACY_LARGE: spaCy en_core_web_lg (~30ms, 90% accuracy)
+    - TRANSFORMER_SMALL/LARGE: BERT-NER (~50ms GPU, 94% accuracy)
 
     Args:
         text: Input text to analyze
         confidence_threshold: Minimum confidence for entity inclusion (default 0.6)
         preloaded_models: Optional dict with preloaded spaCy model
+        request_id: Optional request ID for feature flag consistent hashing
 
     Returns:
         List of Entity objects with text, label, confidence
 
-    Performance: ~10ms for 500-word text
+    Performance varies by tier (see docstring above)
 
     Supported entity types:
-    - PERSON: People, including fictional
+    - PERSON: People, including fictional and family terms
     - ORG: Companies, agencies, institutions
     - GPE: Countries, cities, states (geopolitical entities)
     - DATE: Absolute or relative dates
@@ -137,20 +195,88 @@ def _extract_entities(
         >>> [(e.text, e.label) for e in entities]
         [("mom", "PERSON"), ("Olive Garden", "ORG")]
     """
-    if not _ensure_spacy_loaded(preloaded_models):
-        logger.warning("spaCy not available, returning empty entity list")
-        return []
-
     if not text or not text.strip():
         return []
 
-    # Run NER tagging (main computation: 10ms for 500 words)
-    doc = _nlp(text)  # Type: spacy.tokens.Doc
+    # Get current tier from feature flags
+    tier = _get_current_tier(request_id)
+    flags = get_feature_flags()
+
+    try:
+        if tier in (MLTier.TRANSFORMER_SMALL, MLTier.TRANSFORMER_LARGE):
+            # Use transformer NER
+            entities = _extract_with_transformer(text, confidence_threshold)
+            flags.record_success("hippocampus.semantic_project")
+            return entities
+
+        elif tier == MLTier.SPACY_LARGE:
+            # Use spaCy large model
+            entities = _extract_with_spacy(
+                text, confidence_threshold, preloaded_models, use_large=True
+            )
+            flags.record_success("hippocampus.semantic_project")
+            return entities
+
+        elif tier == MLTier.SPACY_SMALL:
+            # Use spaCy small model
+            entities = _extract_with_spacy(
+                text, confidence_threshold, preloaded_models, use_large=False
+            )
+            flags.record_success("hippocampus.semantic_project")
+            return entities
+
+        else:
+            # RULE_BASED or fallback
+            entities = _extract_family_terms_only(text)
+            return entities
+
+    except Exception as e:
+        # Record failure and fall back to rule-based
+        logger.error(f"Entity extraction failed for tier {tier}: {e}")
+        flags.record_failure("hippocampus.semantic_project")
+
+        # Fallback to rule-based extraction
+        return _extract_family_terms_only(text)
+
+
+def _extract_with_transformer(
+    text: str,
+    confidence_threshold: float,
+) -> list[Entity]:
+    """Extract entities using TransformerNER."""
+    global _transformer_ner
+
+    # Use sync extraction if transformer not initialized
+    if _transformer_ner is None:
+        return extract_entities_sync(text, confidence_threshold)
+
+    result = _transformer_ner.extract(text, confidence_threshold)
+    return result.entities
+
+
+def _extract_with_spacy(
+    text: str,
+    confidence_threshold: float,
+    preloaded_models: dict[str, Any] | None = None,
+    use_large: bool = False,
+) -> list[Entity]:
+    """Extract entities using spaCy (small or large model)."""
+    if not _ensure_spacy_loaded(preloaded_models, use_large=use_large):
+        logger.warning("spaCy not available, falling back to family terms only")
+        return _extract_family_terms_only(text)
+
+    # Select the appropriate model
+    nlp = _nlp_lg if use_large else _nlp
+    if nlp is None:
+        return _extract_family_terms_only(text)
+
+    # Run NER tagging
+    doc = nlp(text)
 
     # Extract entities with confidence filtering
     entities: list[Entity] = []
     for ent in doc.ents:
-        # spaCy doesn't provide confidence scores by default, estimate from context
+        # Estimate confidence (spaCy doesn't provide it directly)
         confidence = _estimate_entity_confidence(ent, doc)
 
         if confidence < confidence_threshold:
@@ -163,10 +289,122 @@ def _extract_entities(
                     text=ent.text,
                     label=ent.label_,
                     confidence=confidence,
+                    start=ent.start_char,
+                    end=ent.end_char,
+                    source="spacy_lg" if use_large else "spacy_sm",
                 )
             )
 
+    # Also add family terms that spaCy might have missed
+    family_entities = _extract_family_terms_only(text)
+    entities = _merge_entity_lists(entities, family_entities)
+
     return entities
+
+
+def _extract_family_terms_only(text: str) -> list[Entity]:
+    """
+    Extract family relationship terms as PERSON entities.
+
+    This is the RULE_BASED tier - fast but limited coverage.
+    """
+
+    entities: list[Entity] = []
+    text_lower = text.lower()
+
+    # Common family terms
+    family_terms = {
+        "mom",
+        "mother",
+        "mama",
+        "mum",
+        "mommy",
+        "ma",
+        "dad",
+        "father",
+        "papa",
+        "daddy",
+        "pa",
+        "pop",
+        "grandma",
+        "grandmother",
+        "granny",
+        "nana",
+        "gran",
+        "grandpa",
+        "grandfather",
+        "gramps",
+        "grandad",
+        "brother",
+        "bro",
+        "sis",
+        "sister",
+        "son",
+        "daughter",
+        "kiddo",
+        "kid",
+        "aunt",
+        "auntie",
+        "uncle",
+        "cousin",
+        "husband",
+        "wife",
+        "hubby",
+        "spouse",
+        "partner",
+    }
+
+    for term in family_terms:
+        # Find all occurrences
+        start = 0
+        while True:
+            idx = text_lower.find(term.lower(), start)
+            if idx == -1:
+                break
+
+            # Check word boundaries
+            before_ok = idx == 0 or not text_lower[idx - 1].isalnum()
+            after_idx = idx + len(term)
+            after_ok = after_idx >= len(text_lower) or not text_lower[after_idx].isalnum()
+
+            if before_ok and after_ok:
+                original_text = text[idx:after_idx]
+                entities.append(
+                    Entity(
+                        text=original_text,
+                        label="PERSON",
+                        confidence=0.85,
+                        start=idx,
+                        end=after_idx,
+                        source="rule",
+                    )
+                )
+
+            start = idx + 1
+
+    return entities
+
+
+def _merge_entity_lists(
+    primary: list[Entity],
+    secondary: list[Entity],
+) -> list[Entity]:
+    """Merge entity lists, avoiding overlaps."""
+    # Build set of covered character ranges
+    covered = set()
+    for ent in primary:
+        for i in range(ent.start, ent.end):
+            covered.add(i)
+
+    # Add non-overlapping secondary entities
+    result = list(primary)
+    for ent in secondary:
+        if not any(i in covered for i in range(ent.start, ent.end)):
+            result.append(ent)
+            for i in range(ent.start, ent.end):
+                covered.add(i)
+
+    return result
 
 
 def _estimate_entity_confidence(ent, doc) -> float:
@@ -234,12 +472,24 @@ def _resolve_entities(
 
         if entity.label == "PERSON":
             canonical_id = _resolve_person(entity.text, participants)
+        elif entity.label == "FAMILY":
+            # Family term - resolve like PERSON
+            canonical_id = _resolve_person(entity.text, participants)
         elif entity.label == "GPE":
             canonical_id = _resolve_place(entity.text, place)
         elif entity.label == "ORG":
             canonical_id = f"org_{_normalize_text(entity.text)}"
         elif entity.label in {"DATE", "TIME"}:
             canonical_id = _resolve_temporal(entity.text, entity.label)
+        elif entity.label == "FAM":
+            # Family term - resolve like PERSON
+            canonical_id = _resolve_person(entity.text, participants)
+        elif entity.label == "LOC":
+            # Location - resolve like GPE
+            canonical_id = _resolve_place(entity.text, place)
+        else:
+            # Unknown label - log and skip
+            logger.debug(f"Skipping entity with unhandled label: {entity.label}")
 
         if canonical_id:
             resolved.append(canonical_id)
@@ -567,10 +817,12 @@ async def run(
     place = envelope.get("location_name") or envelope.get("place")
     resolved_entities = _resolve_entities(entities, participants, place)
 
-    # Phase 3: KG triple generation (template-based)
-    kg_triples = _generate_kg_triples(
-        resolved_entities,
-        envelope,
+    # Phase 3: KG triple generation (Neural - Issue 2.1.2)
+    # Uses NeuralKGExtractor with pattern-based extraction (REBEL optional)
+    kg_triples = extract_kg_triples(
+        text=text,
+        entities=[{"text": e, "canonical_id": e} for e in resolved_entities],
+        envelope=envelope,
         confidence_threshold=confidence_threshold,
         max_triples=max_triples,
     )

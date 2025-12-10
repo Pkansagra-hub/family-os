@@ -66,7 +66,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 # Module version (semantic versioning)
-__version__ = "1.0.0"
+__version__ = "1.1.0"  # Updated for Issue 5.1.1 zero-shot classification
+
+# Feature flag for enhanced classification (default: disabled)
+# Set to True to use new ZeroShotActivityClassifier
+FEATURE_ENHANCED_CLASSIFICATION = True
 
 # Configuration constants (aligned with contract)
 DEFAULT_ACTIVITY_TYPE = "routine"  # Fallback for unclassifiable activities
@@ -317,6 +321,132 @@ def classify_activity_type(text: Optional[str]) -> str:
     return "unknown"
 
 
+def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
+    """
+    Enhanced activity classification using ZeroShotActivityClassifier.
+
+    Research Foundation:
+    - Yin et al. (2019) - Benchmarking Zero-shot Text Classification
+    - Lewis et al. (2020) - BART: Denoising Sequence-to-Sequence Pre-training
+
+    Features vs legacy classify_activity_type():
+    - 20+ activity types (vs 7)
+    - Multi-label support (e.g., "birthday dinner" = celebration + meal)
+    - Confidence scores
+    - Hierarchy path (e.g., "sustenance.meal.dinner")
+    - ML-ready interface (BART-MNLI zero-shot)
+
+    Args:
+        text: Event text content
+
+    Returns:
+        Dict with activity_type, confidence, secondary_activities, hierarchy_path
+
+    Performance: <5ms P95 (rule-based), <50ms P95 (ML)
+    """
+    if not text:
+        return {
+            "activity_type": "routine",
+            "confidence": 0.3,
+            "secondary_activities": [],
+            "is_multi_activity": False,
+            "hierarchy_path": "routine",
+            "parent_category": "routine",
+        }
+
+    try:
+        from k0.modules.activity.zero_shot_classifier import ClassificationTier, classify_activity
+
+        # Use HYBRID tier - rule-based with ML fallback for better accuracy
+        # This allows fast classification with ML improvement for ambiguous cases
+        result = classify_activity(text, tier=ClassificationTier.HYBRID)
+
+        # Map to legacy activity type for backward compatibility
+        legacy_activity = _map_to_legacy_activity(result.primary_activity)
+
+        return {
+            "activity_type": legacy_activity,
+            "activity_type_enhanced": result.primary_activity,
+            "confidence": result.confidence,
+            "secondary_activities": list(result.secondary_activities),
+            "is_multi_activity": result.is_multi_activity,
+            "hierarchy_path": result.hierarchy_path,
+            "parent_category": result.parent_category,
+        }
+    except ImportError:
+        # Fallback to legacy if activity module not available
+        activity_type = classify_activity_type(text)
+        return {
+            "activity_type": activity_type,
+            "confidence": 0.7 if activity_type != "unknown" else 0.3,
+            "secondary_activities": [],
+            "is_multi_activity": False,
+            "hierarchy_path": activity_type,
+            "parent_category": None,
+        }
+
+
+def _map_to_legacy_activity(enhanced_activity: str) -> str:
+    """
+    Map enhanced activity type to legacy 7-type system.
+
+    Maintains backward compatibility with existing code expecting:
+    meal, milestone, work, social, conversation, routine, unknown
+
+    Args:
+        enhanced_activity: Activity from enhanced classifier
+
+    Returns:
+        Legacy activity type
+    """
+    legacy_map = {
+        # Sustenance
+        "meal": "meal",
+        "cooking": "meal",
+        "dining_out": "meal",
+        # Celebration/Milestone
+        "celebration": "milestone",
+        "birthday": "milestone",
+        "anniversary": "milestone",
+        "graduation": "milestone",
+        "wedding": "milestone",
+        "religious_activity": "milestone",
+        # Work
+        "work_meeting": "work",
+        "project_work": "work",
+        "commute": "work",
+        "networking": "work",
+        # Social
+        "family_gathering": "social",
+        "social_event": "social",
+        "party": "social",
+        "hangout": "social",
+        "date": "social",
+        # Conversation
+        "conversation": "conversation",
+        "phone_call": "conversation",
+        "video_call": "conversation",
+        # Wellness
+        "exercise": "routine",
+        "medical_appointment": "routine",
+        "personal_care": "routine",
+        # Other
+        "entertainment": "social",
+        "outdoor_recreation": "routine",
+        "travel": "social",
+        "shopping": "routine",
+        "household_chore": "routine",
+        "education": "routine",
+        "creative_activity": "routine",
+        "sports": "routine",
+        "pet_care": "routine",
+        "routine": "routine",
+        "reading": "routine",
+        "relaxation": "routine",
+    }
+    return legacy_map.get(enhanced_activity, "unknown")
+
+
 def determine_content_type(body: Dict[str, Any]) -> str:
     """
     Determine content type (episodic/semantic/procedural).
@@ -413,7 +543,13 @@ def classify_ingress(
 
     # Step 2: Classify activity type
     text = body.get("text", "")
-    activity_type = classify_activity_type(text)
+
+    # Use enhanced classifier if feature flag enabled
+    if FEATURE_ENHANCED_CLASSIFICATION:
+        enhanced = classify_activity_type_enhanced(text)
+        activity_type = enhanced["activity_type"]
+    else:
+        activity_type = classify_activity_type(text)
 
     # Step 3: Determine content type
     content_type = determine_content_type(body)
@@ -451,6 +587,60 @@ def classify_ingress(
     )
 
 
+def classify_ingress_enhanced(
+    topic: str,
+    body: Dict[str, Any],
+    metadata: Dict[str, Any],
+    device_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Enhanced ingress classification with multi-label activity support.
+
+    Same as classify_ingress() but returns enhanced activity metadata:
+    - 20+ activity types (vs 7)
+    - Multi-label support
+    - Confidence scores
+    - Hierarchy path
+
+    Args:
+        topic: Event topic string
+        body: Event body dict
+        metadata: Event metadata dict
+        device_id: Optional device identifier
+
+    Returns:
+        Dict with all IngressClassification fields plus enhanced activity metadata
+
+    Performance: <5ms P95 (rule-based), <50ms P95 (ML)
+    """
+    # Get base classification
+    base = classify_ingress(topic, body, metadata, device_id)
+
+    # Get enhanced activity classification
+    text = body.get("text", "")
+    enhanced_activity = classify_activity_type_enhanced(text)
+
+    return {
+        # Base classification fields
+        "ingress_topic": base.ingress_topic,
+        "activity_type": base.activity_type,
+        "content_type": base.content_type,
+        "ingress_source": base.ingress_source,
+        "is_structured": base.is_structured,
+        "is_user_initiated": base.is_user_initiated,
+        "ingress_classified_at_utc": base.ingress_classified_at_utc,
+        # Enhanced activity fields
+        "activity_type_enhanced": enhanced_activity.get(
+            "activity_type_enhanced", base.activity_type
+        ),
+        "activity_confidence": enhanced_activity.get("confidence", 0.7),
+        "secondary_activities": enhanced_activity.get("secondary_activities", []),
+        "is_multi_activity": enhanced_activity.get("is_multi_activity", False),
+        "activity_hierarchy_path": enhanced_activity.get("hierarchy_path"),
+        "activity_parent_category": enhanced_activity.get("parent_category"),
+    }
+
+
 async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     """
     Module entry point (Phase 2 signature for pipeline compatibility).
@@ -474,12 +664,14 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     Performance: <3ms P95
     Contract: k0/contracts/modules/context.ingress_classify.v1.yaml
     """
-    # Parse envelope from message
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from pipeline runner if available, otherwise parse from message
+    envelope = config.get("envelope")
+    if envelope is None:
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config parameters (with defaults)
     default_activity_type = config.get("default_activity_type", DEFAULT_ACTIVITY_TYPE)
@@ -533,6 +725,26 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             "ingress_topic": classification.ingress_topic,
         },
     )
+
+    # Check if enhanced classification is requested
+    use_enhanced = config.get("use_enhanced_classification", FEATURE_ENHANCED_CLASSIFICATION)
+
+    if use_enhanced:
+        # Add enhanced activity fields
+        text = body.get("text", "")
+        enhanced = classify_activity_type_enhanced(text)
+        ingress_fields.update(
+            {
+                "activity_type_enhanced": enhanced.get(
+                    "activity_type_enhanced", classification.activity_type
+                ),
+                "activity_confidence": enhanced.get("confidence", 0.7),
+                "secondary_activities": enhanced.get("secondary_activities", []),
+                "is_multi_activity": enhanced.get("is_multi_activity", False),
+                "activity_hierarchy_path": enhanced.get("hierarchy_path"),
+                "activity_parent_category": enhanced.get("parent_category"),
+            }
+        )
 
     # Return enriched envelope
     return {**envelope, **ingress_fields}

@@ -525,7 +525,8 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         )
 
         # Preload essential models for hot path performance
-        preload_models = ["spacy_nlp", "vader_analyzer"]
+        preload_models = registry.get_preload_models(include_optional=True)
+        logger.info(f"Preloading {len(preload_models)} models: {preload_models}")
         results = await registry.preload(preload_models)
 
         for model_name, success in results.items():
@@ -560,9 +561,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         config_path = Path(__file__).parent.parent / "config" / "feature_flags.yaml"
 
         logger.info("Initializing feature flags...")
-        flags = await init_feature_flags(
-            config_path=config_path if config_path.exists() else None
-        )
+        flags = await init_feature_flags(config_path=config_path if config_path.exists() else None)
 
         logger.info(
             "Feature flags initialized",
@@ -638,6 +637,61 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             },
         )
 
+        # Phase 1.5: Initialize TransformerNER for semantic_project module
+        # This ensures the transformer NER model is available for entity extraction
+        from ..modules.hippocampus import semantic_project as sp_module
+        from ..modules.hippocampus.transformer_ner import get_transformer_ner
+
+        try:
+            logger.info("Initializing TransformerNER for semantic_project...")
+            transformer_ner = await get_transformer_ner(device="cpu")
+            # Inject the initialized instance into semantic_project module
+            sp_module._transformer_ner = transformer_ner
+            logger.info(
+                "TransformerNER initialized",
+                extra={
+                    "model": transformer_ner.model_name,
+                    "device": transformer_ner.device,
+                    "initialized": transformer_ner._initialized,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"TransformerNER initialization failed, falling back to spaCy: {e}")
+
+        # Phase 1.6: Initialize TransformerAffect with preloaded GoEmotions model
+        from ..modules.affect.transformer_affect import (
+            init_transformer_affect_from_registry,
+        )
+
+        try:
+            logger.info("Initializing TransformerAffect with preloaded GoEmotions...")
+            transformer_affect = init_transformer_affect_from_registry(model_registry)
+            logger.info(
+                "TransformerAffect initialized",
+                extra={
+                    "available": transformer_affect._available,
+                    "preloaded": transformer_affect._pipeline is not None,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"TransformerAffect initialization failed: {e}")
+
+        # Phase 1.7: Initialize ClinicalSafetyDetector with preloaded model
+        from ..modules.affect.clinical_safety import init_clinical_safety_from_registry
+
+        try:
+            logger.info("Initializing ClinicalSafetyDetector with preloaded model...")
+            clinical_safety = init_clinical_safety_from_registry(model_registry)
+            logger.info(
+                "ClinicalSafetyDetector initialized",
+                extra={
+                    "available": clinical_safety._available,
+                    "preloaded": clinical_safety._pipeline is not None,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"ClinicalSafetyDetector initialization failed: {e}")
+
         # Phase 2: Boot YAML-based declarative pipelines via runtime system
         from pathlib import Path
 
@@ -699,6 +753,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                             "st_embedding_queue.write",
                             "st_pipeline_processed.write",
                             "st_outbox.write",
+                            "st_relationships.read",  # M07 social.family_graph_resolve
                         ]
                     )
                     syscalls = Syscalls(spec.pipeline_id, granted_caps, _unit_of_work_factory)
@@ -1269,7 +1324,5 @@ def _compose_error(
     if hint:
         error["hint"] = hint
     if budgets:
-        error["budgets"] = budgets
-    return {"error": error}
         error["budgets"] = budgets
     return {"error": error}

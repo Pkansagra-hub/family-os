@@ -39,12 +39,11 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
     minhash_permutations = config.get("minhash_permutations", 32)
     # Note: novelty_threshold in config is not used in P02 (deferred to P03 for neighbor queries)
 
-    # Parse envelope
-    try:
-        # PipelineRunner provides pre-decoded envelope as message.envelope
-        envelope = getattr(message, "envelope", None)
-        if envelope is None:
-            # Fallback: decode payload directly (for standalone testing)
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        try:
             envelope = (
                 json.loads(message.payload.decode("utf-8"))
                 if isinstance(message.payload, bytes)
@@ -54,16 +53,16 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
                     else message.payload
                 )
             )
-    except (json.JSONDecodeError, AttributeError) as e:
-        context.logger.error(
-            "Failed to parse envelope payload",
-            extra={
-                "module_id": "hippocampus.pattern_separate",
-                "error": str(e),
-                "trace_id": getattr(message, "trace_id", None),
-            },
-        )
-        raise ValueError(f"Invalid envelope payload: {e}")
+        except (json.JSONDecodeError, AttributeError) as e:
+            context.logger.error(
+                "Failed to parse envelope payload",
+                extra={
+                    "module_id": "hippocampus.pattern_separate",
+                    "error": str(e),
+                    "trace_id": getattr(message, "trace_id", None),
+                },
+            )
+            raise ValueError(f"Invalid envelope payload: {e}")
 
     # Extract text components for fingerprinting
     text_content = _extract_text_for_fingerprinting(envelope)

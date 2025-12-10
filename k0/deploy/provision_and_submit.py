@@ -127,10 +127,13 @@ def submit_envelope(signing_key: SigningKey):
     now_utc = datetime.now(timezone.utc)
     body = {
         "operation": "UPSERT",
-        "text": "Hello from GROK! my brother in hand!",  # Moved to top level for affect.analyze
+        "text": "Had dinner with mom and dad at Olive Garden to celebrate Emma's birthday. We had a great time!",
         "value": 42,
         "timestamp": now_utc.isoformat(),
         "event_time_utc": now_utc.isoformat(),  # For M06 salience scorer
+        "participants": ["person_mom", "person_dad", "person_emma"],
+        "location_name": "Olive Garden",
+        "activity_type": "MEAL",
     }
 
     # Canonicalize body

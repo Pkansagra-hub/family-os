@@ -164,9 +164,10 @@ class FeatureFlags:
     # Default module flags (used if no config file)
     _DEFAULT_FLAGS: Dict[str, Dict[str, Any]] = {
         # M02 - Semantic Project (Entity/KG extraction)
+        # Issue 2.1.1: Upgraded to transformer NER
         "hippocampus.semantic_project": {
-            "enabled_tier": "rule_based",
-            "fallback_tier": "rule_based",
+            "enabled_tier": "transformer_small",  # BERT-NER for higher accuracy
+            "fallback_tier": "spacy_small",
             "rollout_percentage": 100.0,
             "description": "Entity extraction and KG triple generation",
         },

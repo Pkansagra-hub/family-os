@@ -25,6 +25,26 @@ import pytest
 from k0.modules.social import family_graph_resolve
 
 # ============================================================================
+# Mock Relationship Database (simulates st_relationships query results)
+# ============================================================================
+
+MOCK_RELATIONSHIPS = {
+    "person_dad": [
+        ("person_mom", "SPOUSE_OF"),
+        ("person_sharvi", "PARENT_OF"),
+    ],
+    "person_mom": [
+        ("person_dad", "SPOUSE_OF"),
+        ("person_sharvi", "PARENT_OF"),
+    ],
+    "person_sharvi": [
+        ("person_dad", "CHILD_OF"),
+        ("person_mom", "CHILD_OF"),
+    ],
+}
+
+
+# ============================================================================
 # Mock Classes for Phase 2 Signature Testing
 # ============================================================================
 
@@ -40,16 +60,31 @@ class MockMessage:
         self.space_id = "test_space"
 
 
+class MockSyscalls:
+    """Mock Syscalls with relationships_query that returns mock data."""
+
+    def __init__(self, relationships: dict[str, list[tuple[str, str]]] | None = None):
+        self._relationships = relationships if relationships is not None else MOCK_RELATIONSHIPS
+
+    async def relationships_query(
+        self,
+        actor_id: str,
+        cognitive_trace_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Return mock relationships for actor."""
+        return self._relationships.get(actor_id, [])
+
+
 class MockContext:
     """Mock PipelineContext for testing Phase 2 signature."""
 
-    def __init__(self):
+    def __init__(self, relationships: dict[str, list[tuple[str, str]]] | None = None):
         self.logger = Mock()
         self.logger.debug = Mock()
         self.logger.info = Mock()
         self.logger.warning = Mock()
         self.logger.error = Mock()
-        self.syscalls = Mock()
+        self.syscalls = MockSyscalls(relationships)
         self.config = {}
 
 
@@ -62,14 +97,19 @@ class MockContext:
 def reset_module_state():
     """Reset metrics and cache before each test."""
     family_graph_resolve.reset_metrics()
+    family_graph_resolve.clear_cache()
     yield
     family_graph_resolve.reset_metrics()
+    family_graph_resolve.clear_cache()
 
 
-def make_test_call(envelope: dict[str, Any], **config) -> tuple[MockMessage, MockContext]:
+def make_test_call(
+    envelope: dict[str, Any],
+    relationships: dict[str, list[tuple[str, str]]] | None = None,
+) -> tuple[MockMessage, MockContext]:
     """Helper to create message and context objects for test calls."""
     message = MockMessage(payload=envelope, trace_id="test_trace")
-    context = MockContext()
+    context = MockContext(relationships=relationships)
     return message, context
 
 
@@ -251,8 +291,10 @@ async def test_nuclear_family_child_perspective():
 @pytest.mark.asyncio
 async def test_extended_family_caretaker():
     """Test extended family context with caretaker."""
-    # Add caretaker relationship to database for this test
-    family_graph_resolve._RELATIONSHIP_DB["person_grandpa"] = [("person_sharvi", "CARETAKER_OF")]
+    # Create relationships with caretaker
+    relationships = {
+        "person_grandpa": [("person_sharvi", "CARETAKER_OF")],
+    }
 
     envelope = {
         "actor_id": "person_grandpa",
@@ -262,7 +304,7 @@ async def test_extended_family_caretaker():
         },
     }
 
-    message, context = make_test_call(envelope)
+    message, context = make_test_call(envelope, relationships=relationships)
     result = await family_graph_resolve.run(message, context)
 
     assert result["social_context"] == "extended_family"
@@ -272,15 +314,14 @@ async def test_extended_family_caretaker():
     roles = json.loads(result["participant_roles_json"])
     assert roles["person_sharvi"] == "CAREGIVER"
 
-    # Cleanup
-    del family_graph_resolve._RELATIONSHIP_DB["person_grandpa"]
-
 
 @pytest.mark.asyncio
 async def test_extended_family_sibling():
     """Test extended family context with sibling."""
-    # Add sibling relationship
-    family_graph_resolve._RELATIONSHIP_DB["person_alice"] = [("person_bob", "SIBLING_OF")]
+    # Create relationships with sibling
+    relationships = {
+        "person_alice": [("person_bob", "SIBLING_OF")],
+    }
 
     envelope = {
         "actor_id": "person_alice",
@@ -290,14 +331,11 @@ async def test_extended_family_sibling():
         },
     }
 
-    message, context = make_test_call(envelope)
+    message, context = make_test_call(envelope, relationships=relationships)
     result = await family_graph_resolve.run(message, context)
 
     assert result["social_context"] == "extended_family"
     assert result["social_intimacy"] == "MED"
-
-    # Cleanup
-    del family_graph_resolve._RELATIONSHIP_DB["person_alice"]
 
 
 # ============================================================================
@@ -584,15 +622,13 @@ def test_get_metrics():
     assert "cache_hit_rate" in metrics
     assert "db_queries" in metrics
     assert "relationship_type_counts" in metrics
-    assert "lru_cache_size" in metrics
+    assert "cache_size" in metrics
+    assert "cache_max_size" in metrics
 
 
 def test_reset_metrics():
     """Test metrics reset."""
-    # Perform some operations
-    family_graph_resolve._lookup_relationships("person_dad")
-
-    # Reset
+    # Reset and check metrics are zero
     family_graph_resolve.reset_metrics()
 
     # Check all metrics reset to 0

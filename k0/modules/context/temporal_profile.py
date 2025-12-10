@@ -537,14 +537,17 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
 
     Contract: k0/contracts/modules/context.temporal_profile.v1.yaml
     """
-    # Parse envelope from message payload
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
     import json
 
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config parameters
     write_time_utc_override = config.get("write_time_utc")

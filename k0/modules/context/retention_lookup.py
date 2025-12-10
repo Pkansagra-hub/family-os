@@ -254,12 +254,15 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     Performance: <3ms P95 (cache-optimized)
     Contract: k0/contracts/modules/context.retention_lookup.v1.yaml
     """
-    # Parse envelope from message
-    envelope = (
-        json.loads(message.payload)
-        if isinstance(message.payload, (str, bytes))
-        else message.payload
-    )
+    # Use enriched envelope from pipeline_runner, with fallback to message.payload
+    envelope = config.get("envelope")
+    if envelope is None:
+        # Fallback: parse from message.payload (only for first stage or if enrichment fails)
+        envelope = (
+            json.loads(message.payload)
+            if isinstance(message.payload, (str, bytes))
+            else message.payload
+        )
 
     # Extract config parameters (with defaults)
     default_retention_bucket = config.get("default_retention_bucket", DEFAULT_RETENTION_BUCKET)
