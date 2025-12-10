@@ -5,11 +5,13 @@ Phase 2 Declarative Module - Entity extraction, KG triple generation, embedding 
 
 Architecture:
 - Bridges episodic memory (DG) to semantic knowledge structures (CA1)
-- Multi-tier NER: Rule-based → spaCy → Transformer (feature flag controlled)
+- Primary: UltraBERT unified model (ner_family, ner_general, temporal)
+- Fallback: Multi-tier NER - Rule-based, spaCy, Transformer
 - Template-based KG triple generation (subject-predicate-object)
 - Allocates embedding_id for P08 vector generation (deferred to async pipeline)
 
-Performance (Tier-dependent):
+Performance:
+- ULTRABERT: ~30ms P95 (primary, replaces all NER models)
 - RULE_BASED: ~5ms P95 (family terms only, 70% accuracy)
 - SPACY_SMALL: ~15ms P95 (en_core_web_sm, 85% accuracy)
 - SPACY_LARGE: ~30ms P95 (en_core_web_lg, 90% accuracy)
@@ -33,6 +35,7 @@ Output: p02.hippocampus.semantic_projected.v1 event
 Side Effects: Prepares payload for st_embedding_queue (via M14)
 
 Issue: 2.1.1 - Upgrade NER to Transformer Model
+Issue: UltraBERT Migration - Single Unified Model
 Author: K0 Architecture Team
 Date: 2025-11-17
 Updated: 2025-11-26
@@ -53,17 +56,28 @@ from k0.config.feature_flags import MLTier, get_feature_flags
 # Neural KG Extractor (Issue 2.1.2)
 from k0.modules.hippocampus.neural_kg_extractor import extract_kg_triples
 
-# Transformer NER (Issue 2.1.1)
-from k0.modules.hippocampus.transformer_ner import Entity, TransformerNER, extract_entities_sync
-
 # spaCy will be loaded lazily on first use (not at module import time)
 _SPACY_AVAILABLE = None  # Will be set on first call to _ensure_spacy_loaded()
 _nlp = None
 _nlp_lg = None  # Large model for SPACY_LARGE tier
 _SPACY_LOAD_ERROR = None
 
-# Global transformer NER instance
-_transformer_ner: TransformerNER | None = None
+
+@dataclass
+class Entity:
+    """Named entity extracted from text.
+
+    UltraBERT provides unified NER (ner_family, ner_general).
+    This dataclass is compatible with all extraction tiers.
+    """
+
+    text: str
+    label: str
+    confidence: float
+    start: int
+    end: int
+    source: str = "ultrabert"  # ultrabert, spacy_sm, spacy_lg, rule_based
+
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +167,7 @@ def _ensure_spacy_loaded(
 # ============================================================================
 
 
-# Note: Entity dataclass is now imported from transformer_ner module
-# This provides a unified entity representation across all tiers
+# Entity dataclass defined locally - compatible with UltraBERT and legacy tiers
 
 
 def _extract_entities(
@@ -166,7 +179,8 @@ def _extract_entities(
     """
     Extract named entities using the appropriate tier based on feature flags.
 
-    Tier Selection (via feature flags):
+    Primary: UltraBERT unified model (ner_family, ner_general)
+    Fallback Tier Selection (via feature flags):
     - RULE_BASED: Family term detection only (~5ms, 70% accuracy)
     - SPACY_SMALL: spaCy en_core_web_sm (~15ms, 85% accuracy)
     - SPACY_LARGE: spaCy en_core_web_lg (~30ms, 90% accuracy)
@@ -198,7 +212,14 @@ def _extract_entities(
     if not text or not text.strip():
         return []
 
-    # Get current tier from feature flags
+    # PRIMARY: Try UltraBERT unified model first
+    ultrabert_entities = _extract_with_ultrabert(text, confidence_threshold)
+    if ultrabert_entities is not None:
+        logger.debug(f"UltraBERT extracted {len(ultrabert_entities)} entities")
+        return ultrabert_entities
+
+    # FALLBACK: Use feature flag-controlled tier selection
+    logger.debug("UltraBERT unavailable, using legacy tier selection")
     tier = _get_current_tier(request_id)
     flags = get_feature_flags()
 
@@ -239,19 +260,88 @@ def _extract_entities(
         return _extract_family_terms_only(text)
 
 
+def _extract_with_ultrabert(
+    text: str,
+    confidence_threshold: float,
+) -> list[Entity] | None:
+    """
+    Extract entities using FamilyOS UltraBERT unified model.
+
+    UltraBERT provides ner_family and ner_general capabilities:
+    - Family entities: KINSHIP (mom, dad), FAMILY_EVENT (birthday, anniversary)
+    - General entities: PER (persons), ORG (organizations), LOC (locations), DATE, TIME
+
+    Returns None if UltraBERT is not available (triggers fallback).
+
+    Issue: UltraBERT Migration - Single Unified Model
+    """
+    try:
+        from k0.runtime.ultrabert_adapter import extract_entities, is_ultrabert_available
+    except ImportError:
+        logger.debug("ultrabert_adapter module not available")
+        return None
+
+    if not is_ultrabert_available():
+        logger.debug("UltraBERT not available for entity extraction")
+        return None
+
+    try:
+        # Get entities from UltraBERT
+        ultrabert_entities = extract_entities(text)
+
+        # Convert to Entity objects
+        entities = []
+        for ent in ultrabert_entities:
+            if ent.confidence >= confidence_threshold:
+                # Map UltraBERT labels to standard NER labels
+                label = _map_ultrabert_label(ent.label)
+                entities.append(
+                    Entity(
+                        text=ent.text,
+                        label=label,
+                        confidence=ent.confidence,
+                        start=ent.start if hasattr(ent, "start") else 0,
+                        end=ent.end if hasattr(ent, "end") else len(ent.text),
+                        source="ultrabert",
+                    )
+                )
+        return entities
+
+    except Exception as e:
+        logger.warning(f"UltraBERT entity extraction failed: {e}")
+        return None
+
+
+def _map_ultrabert_label(label: str) -> str:
+    """Map UltraBERT entity labels to standard NER labels."""
+    label_map = {
+        # Family-specific
+        "KINSHIP": "PERSON",
+        "FAMILY_EVENT": "EVENT",
+        # General NER
+        "PER": "PERSON",
+        "ORG": "ORG",
+        "LOC": "GPE",
+        "DATE": "DATE",
+        "TIME": "TIME",
+        "DATE_REL": "DATE",  # Relative dates like "yesterday"
+        "DATE_ABS": "DATE",  # Absolute dates
+    }
+    return label_map.get(label, label)
+
+
 def _extract_with_transformer(
     text: str,
     confidence_threshold: float,
+    preloaded_models: dict[str, Any] | None = None,
 ) -> list[Entity]:
-    """Extract entities using TransformerNER."""
-    global _transformer_ner
+    """DEPRECATED: TransformerNER replaced by UltraBERT.
 
-    # Use sync extraction if transformer not initialized
-    if _transformer_ner is None:
-        return extract_entities_sync(text, confidence_threshold)
-
-    result = _transformer_ner.extract(text, confidence_threshold)
-    return result.entities
+    Falls back to spaCy for backward compatibility.
+    Use _extract_with_ultrabert() as primary extraction method.
+    """
+    logger.warning("_extract_with_transformer() is DEPRECATED. Use UltraBERT.")
+    return _extract_with_spacy(text, confidence_threshold, preloaded_models)
 
 
 def _extract_with_spacy(

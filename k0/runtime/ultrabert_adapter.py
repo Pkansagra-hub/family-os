@@ -154,6 +154,7 @@ INGRESS_TO_ACTIVITY = {
     "EXERCISE": "exercise",
     "ENTERTAINMENT": "entertainment",
     "FAMILY": "social",
+    "MEMORY": "routine",  # Memory logging is typically routine activity
     "OTHER": "routine",
 }
 

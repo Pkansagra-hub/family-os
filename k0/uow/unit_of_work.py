@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 import time
@@ -22,6 +23,21 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from k0.obs.metrics import MetricsExporter
+
+
+# KERNEL DESIGN: Global write semaphore for SQLite single-writer constraint
+# Semaphore(1) allows exactly one concurrent write transaction
+# This is required because SQLite busy_timeout doesn't work reliably on Docker volumes
+_WRITE_SEMAPHORE: asyncio.Semaphore | None = None
+_WRITE_SEMAPHORE_TIMEOUT = 30.0  # 30 second max wait for write slot
+
+
+def _get_write_semaphore() -> asyncio.Semaphore:
+    """Get or create the global write semaphore (lazy init for event loop compatibility)."""
+    global _WRITE_SEMAPHORE
+    if _WRITE_SEMAPHORE is None:
+        _WRITE_SEMAPHORE = asyncio.Semaphore(1)
+    return _WRITE_SEMAPHORE
 
 
 class MetricsEmitter(Protocol):
@@ -64,28 +80,40 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
     _wal_positions: list[int] = field(init=False, default_factory=_default_position_list)
     _start_time: float = field(init=False, default=0.0)
     _token: Token["UnitOfWork | None"] | None = field(init=False, default=None)
+    _holds_semaphore: bool = field(init=False, default=False)
 
     async def __aenter__(self) -> "UnitOfWork":
         if self._entered:
             raise RuntimeError("UnitOfWork instances are not reentrant")
         self._entered = True
+
+        # KERNEL DESIGN: Acquire write semaphore with timeout
+        # SQLite allows only one writer; semaphore enforces this at application level
+        # This is required because busy_timeout doesn't work reliably on Docker volumes
+        semaphore = _get_write_semaphore()
+        try:
+            await asyncio.wait_for(semaphore.acquire(), timeout=_WRITE_SEMAPHORE_TIMEOUT)
+            self._holds_semaphore = True
+        except asyncio.TimeoutError:
+            self._entered = False
+            raise sqlite3.OperationalError(
+                f"database is locked: timeout waiting for write slot ({_WRITE_SEMAPHORE_TIMEOUT}s)"
+            )
+
         self._scope = connection_scope()
         connection = self._scope.__enter__()
         assert isinstance(connection, sqlite3.Connection)  # runtime safety
         self._connection = connection
 
-        # V1 DURABILITY SETTINGS (Issue 1.7)
-        # WAL mode: Better concurrency, crash recovery
-        # FULL sync: Guarantees durability (fsync after each transaction)
-        # Foreign keys: Enforce referential integrity
-        # Temp store MEMORY: Faster temp tables
-        # Busy timeout: Retry up to 30 seconds on lock contention (increased from 5s for slow transactions)
+        # SQLite WAL mode configuration
         self._connection.execute("PRAGMA journal_mode=WAL")
-        self._connection.execute("PRAGMA synchronous=FULL")
+        self._connection.execute("PRAGMA synchronous=NORMAL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.execute("PRAGMA temp_store=MEMORY")
-        self._connection.execute("PRAGMA busy_timeout=30000")
+        self._connection.execute("PRAGMA busy_timeout=5000")  # 5s fallback
+        self._connection.execute("PRAGMA wal_autocheckpoint=1000")
 
+        # BEGIN IMMEDIATE - safe because semaphore ensures exclusive write access
         self._connection.execute("BEGIN IMMEDIATE")
         self._start_time = time.perf_counter()
         self._token = _ACTIVE_UOW.set(self)
@@ -105,6 +133,11 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
                 self._run_hooks(self.on_rollback)
         finally:
             self._cleanup(exc_type, exc, tb)
+            # KERNEL DESIGN: Release write semaphore after transaction completes
+            if self._holds_semaphore:
+                semaphore = _get_write_semaphore()
+                semaphore.release()
+                self._holds_semaphore = False
         # Do not suppress exceptions
         return False
 
@@ -122,10 +155,11 @@ class UnitOfWork(AbstractContextManager["UnitOfWork"]):
         connection = self._scope.__enter__()
         self._connection = connection
         self._connection.execute("PRAGMA journal_mode=WAL")
-        self._connection.execute("PRAGMA synchronous=FULL")
+        self._connection.execute("PRAGMA synchronous=NORMAL")
         self._connection.execute("PRAGMA foreign_keys=ON")
         self._connection.execute("PRAGMA temp_store=MEMORY")
-        self._connection.execute("PRAGMA busy_timeout=5000")
+        self._connection.execute("PRAGMA busy_timeout=60000")
+        self._connection.execute("PRAGMA wal_autocheckpoint=1000")
         self._connection.execute("BEGIN IMMEDIATE")
         self._start_time = time.perf_counter()
         self._token = _ACTIVE_UOW.set(self)

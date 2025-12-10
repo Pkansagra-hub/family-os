@@ -622,75 +622,44 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         model_registry = await _init_model_registry()
         app.state.model_registry = model_registry
 
-        # Build legacy-compatible preloaded_models dict for backward compatibility
+        # Phase 1.5: Initialize UltraBERT (primary unified model)
+        # UltraBERT self-warms on init (warmup=True default), no manual warmup needed
+        # This replaces 9 separate models (4.6GB) with one unified 500MB model:
+        # - VADER, GoEmotions, clinical_safety, sentence_transformer
+        # - TransformerNER, ZeroShotClassifier, etc.
+        try:
+            from ..runtime.ultrabert_adapter import get_ultrabert_client, is_ultrabert_available
+
+            logger.info("Initializing UltraBERT unified model...")
+            ultrabert_client = get_ultrabert_client()
+            if ultrabert_client is not None and is_ultrabert_available():
+                logger.info(
+                    f"UltraBERT ready: version={ultrabert_client.VERSION}, "
+                    f"capabilities={len(ultrabert_client.capabilities)}, "
+                    f"backend={ultrabert_client.backend}"
+                )
+                app.state.ultrabert_client = ultrabert_client
+            else:
+                logger.error("UltraBERT not available - kernel cannot function without it")
+                app.state.ultrabert_client = None
+        except Exception as e:
+            logger.error(f"Failed to initialize UltraBERT: {e}")
+            app.state.ultrabert_client = None
+
+        # Build minimal preloaded_models dict for backward compatibility
+        # Only spaCy is kept for tokenization - all ML is via UltraBERT
         preloaded_models = {
             "spacy_nlp": model_registry.get_sync("spacy_nlp"),
-            "vader_analyzer": model_registry.get_sync("vader_analyzer"),
         }
         app.state.preloaded_models = preloaded_models
         logger.info(
             "Model initialization complete",
             extra={
                 "spacy_loaded": preloaded_models.get("spacy_nlp") is not None,
-                "vader_loaded": preloaded_models.get("vader_analyzer") is not None,
+                "ultrabert_ready": app.state.ultrabert_client is not None,
                 "registry_stats": model_registry.get_stats(),
             },
         )
-
-        # Phase 1.5: Initialize TransformerNER for semantic_project module
-        # This ensures the transformer NER model is available for entity extraction
-        from ..modules.hippocampus import semantic_project as sp_module
-        from ..modules.hippocampus.transformer_ner import get_transformer_ner
-
-        try:
-            logger.info("Initializing TransformerNER for semantic_project...")
-            transformer_ner = await get_transformer_ner(device="cpu")
-            # Inject the initialized instance into semantic_project module
-            sp_module._transformer_ner = transformer_ner
-            logger.info(
-                "TransformerNER initialized",
-                extra={
-                    "model": transformer_ner.model_name,
-                    "device": transformer_ner.device,
-                    "initialized": transformer_ner._initialized,
-                },
-            )
-        except Exception as e:
-            logger.warning(f"TransformerNER initialization failed, falling back to spaCy: {e}")
-
-        # Phase 1.6: Initialize TransformerAffect with preloaded GoEmotions model
-        from ..modules.affect.transformer_affect import (
-            init_transformer_affect_from_registry,
-        )
-
-        try:
-            logger.info("Initializing TransformerAffect with preloaded GoEmotions...")
-            transformer_affect = init_transformer_affect_from_registry(model_registry)
-            logger.info(
-                "TransformerAffect initialized",
-                extra={
-                    "available": transformer_affect._available,
-                    "preloaded": transformer_affect._pipeline is not None,
-                },
-            )
-        except Exception as e:
-            logger.warning(f"TransformerAffect initialization failed: {e}")
-
-        # Phase 1.7: Initialize ClinicalSafetyDetector with preloaded model
-        from ..modules.affect.clinical_safety import init_clinical_safety_from_registry
-
-        try:
-            logger.info("Initializing ClinicalSafetyDetector with preloaded model...")
-            clinical_safety = init_clinical_safety_from_registry(model_registry)
-            logger.info(
-                "ClinicalSafetyDetector initialized",
-                extra={
-                    "available": clinical_safety._available,
-                    "preloaded": clinical_safety._pipeline is not None,
-                },
-            )
-        except Exception as e:
-            logger.warning(f"ClinicalSafetyDetector initialization failed: {e}")
 
         # Phase 2: Boot YAML-based declarative pipelines via runtime system
         from pathlib import Path

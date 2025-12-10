@@ -9,7 +9,7 @@ services:
       - ./env/k0.env
     volumes:
       - ../:/app/k0 # Mount source code for hot reloading
-      - k0-data:/data # Use Docker volume instead of bind mount for SQLite WAL compatibility
+      - k0-data:/data # Docker volume for SQLite database
       - ./secrets:/secrets:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
@@ -88,7 +88,8 @@ services:
   #     - k0-local
 
 volumes:
-  k0-data: # Docker-managed volume for SQLite database (better Windows compatibility)
+  k0-data: # Docker-managed volume for SQLite database (legacy, fallback only)
+  postgres-data: # PostgreSQL data volume
   neo4j-data:
   neo4j-logs:
 

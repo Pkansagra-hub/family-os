@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import threading
 import time
@@ -12,6 +13,22 @@ from typing import TYPE_CHECKING, Iterator, Mapping
 
 if TYPE_CHECKING:
     from k0.obs.metrics import MetricsExporter
+
+
+# Global async write lock for SQLite write serialization
+# SQLite allows only one writer at a time; this prevents lock contention at kernel level
+_WRITE_LOCK: asyncio.Lock | None = None
+_WRITE_LOCK_INIT: threading.Lock = threading.Lock()
+
+
+def get_write_lock() -> asyncio.Lock:
+    """Get or create the global async write lock for SQLite writes."""
+    global _WRITE_LOCK
+    if _WRITE_LOCK is None:
+        with _WRITE_LOCK_INIT:
+            if _WRITE_LOCK is None:
+                _WRITE_LOCK = asyncio.Lock()
+    return _WRITE_LOCK
 
 
 @dataclass(frozen=True)

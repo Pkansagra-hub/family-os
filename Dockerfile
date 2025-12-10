@@ -19,10 +19,15 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
+# Copy UltraBERT wheel (unified model replaces 9 separate models)
+# Download from: https://github.com/Pkansagra-hub/memory_kernel/releases/tag/v2.0.3
+COPY wheels/familyos_ultrabert-2.0.3-py3-none-any.whl ./wheels/
+
 # Copy minimal kernel requirements (no ML/NLP libraries)
 # Note: requirements.kernel.txt includes -r requirements.base.txt, so both files needed
 COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
 RUN pip install --no-cache-dir -r requirements.kernel.txt && \
+    pip install --no-cache-dir wheels/familyos_ultrabert-2.0.3-py3-none-any.whl && \
     python -m spacy download en_core_web_sm
 
 # Copy application code

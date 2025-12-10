@@ -4,7 +4,7 @@ Ingress Classification Module (M10) - Channel and Activity Attribution
 Classifies episodic memory input type and activity context for provenance tracking,
 retention policy selection, and analytics.
 
-Performance: ≤3ms P95 (rule-based classification, no ML)
+Performance: ≤3ms P95 (rule-based classification), ≤30ms P95 (UltraBERT)
 
 Schema Authority (Single Source of Truth):
 - Maps to st_hipp_events ingress/activity columns (migration 0024):
@@ -48,7 +48,8 @@ Use Cases:
 4. Query optimization: "Show me meals last week"
 
 Architecture Principles (World-Class Design):
-- Rule-based keywords (no ML, <3ms latency)
+- Primary: UltraBERT unified model (ingress, intent classification)
+- Fallback: Rule-based keywords (no ML, <3ms latency)
 - Priority-ordered classification (high-specificity first)
 - Deterministic output (same text → same classification)
 - Fail-safe defaults (unknown → routine → episodic)
@@ -57,6 +58,7 @@ Architecture Principles (World-Class Design):
 Contract: k0/contracts/modules/context.ingress_classify.v1.yaml
 ADR: docs/architecture/decisions-K0/modules/k007.3-ingress-classifier.md
 Migration: k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql
+Issue: UltraBERT Migration - Single Unified Model
 """
 
 import json
@@ -282,6 +284,90 @@ def classify_ingress_topic(topic: str) -> str:
         return "write"  # Default
 
 
+def classify_activity_ultrabert(text: Optional[str]) -> Dict[str, Any] | None:
+    """
+    Classify activity using FamilyOS UltraBERT unified model.
+
+    UltraBERT provides ingress and intent classification capabilities:
+    - ingress: MEAL, CELEBRATION, SOCIAL, WORK, ROUTINE, etc.
+    - intent: log_memory, share_moment, ask_question, etc.
+
+    Returns None if UltraBERT is not available (triggers fallback).
+
+    Issue: UltraBERT Migration - Single Unified Model
+
+    Args:
+        text: Event text content
+
+    Returns:
+        Dict with activity_type, intent, confidence or None if unavailable
+    """
+    if not text:
+        return None
+
+    try:
+        from k0.runtime.ultrabert_adapter import classify_activity, is_ultrabert_available
+    except ImportError:
+        return None
+
+    if not is_ultrabert_available():
+        return None
+
+    try:
+        result = classify_activity(text)
+        if result is None:
+            return None
+
+        # Map UltraBERT activity type to legacy activity type
+        legacy_activity = _map_ultrabert_activity(result.activity_type)
+
+        return {
+            "activity_type": legacy_activity,
+            "activity_type_enhanced": result.activity_type,
+            "intent": result.intent,
+            "ingress_category": result.ingress_category,
+            "confidence": result.confidence,
+            "secondary_activities": [],
+            "is_multi_activity": False,
+            "hierarchy_path": result.activity_type,
+            "parent_category": None,
+            "source": "ultrabert",
+        }
+
+    except Exception:
+        return None
+
+
+def _map_ultrabert_activity(ultrabert_activity: str) -> str:
+    """Map UltraBERT activity types to legacy 7-type system."""
+    activity_map = {
+        "meal": "meal",
+        "dining": "meal",
+        "cooking": "meal",
+        "celebration": "milestone",
+        "birthday": "milestone",
+        "anniversary": "milestone",
+        "graduation": "milestone",
+        "wedding": "milestone",
+        "work": "work",
+        "meeting": "work",
+        "office": "work",
+        "social": "social",
+        "party": "social",
+        "gathering": "social",
+        "travel": "social",
+        "conversation": "conversation",
+        "call": "conversation",
+        "chat": "conversation",
+        "routine": "routine",
+        "exercise": "routine",
+        "health": "routine",
+        "shopping": "routine",
+        "errand": "routine",
+    }
+    return activity_map.get(ultrabert_activity.lower(), "unknown")
+
+
 def classify_activity_type(text: Optional[str]) -> str:
     """
     Rule-based activity classification from keywords.
@@ -323,7 +409,10 @@ def classify_activity_type(text: Optional[str]) -> str:
 
 def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
     """
-    Enhanced activity classification using ZeroShotActivityClassifier.
+    Enhanced activity classification.
+
+    Primary: UltraBERT unified model (ingress, intent classification)
+    Fallback: ZeroShotActivityClassifier (BART-MNLI)
 
     Research Foundation:
     - Yin et al. (2019) - Benchmarking Zero-shot Text Classification
@@ -342,7 +431,7 @@ def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
     Returns:
         Dict with activity_type, confidence, secondary_activities, hierarchy_path
 
-    Performance: <5ms P95 (rule-based), <50ms P95 (ML)
+    Performance: <30ms P95 (UltraBERT), <50ms P95 (ML fallback)
     """
     if not text:
         return {
@@ -354,6 +443,12 @@ def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
             "parent_category": "routine",
         }
 
+    # PRIMARY: Try UltraBERT unified model first
+    ultrabert_result = classify_activity_ultrabert(text)
+    if ultrabert_result is not None:
+        return ultrabert_result
+
+    # FALLBACK: ZeroShotActivityClassifier
     try:
         from k0.modules.activity.zero_shot_classifier import ClassificationTier, classify_activity
 

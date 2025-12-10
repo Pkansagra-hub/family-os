@@ -1,14 +1,19 @@
 # Model Registry Configuration
-# Defines ML models available for K0 kernel modules
+# FamilyOS UltraBERT Migration - Single Unified Model
+#
+# UltraBERT v2.0.3 replaces 9 separate models (4.6GB -> 500MB):
+# - VADER, GoEmotions, clinical_safety, sentence_transformer
+# - zero_shot_classifier, transformer_ner, ner_family, temporal_extractor
 #
 # Related:
 # - k0/runtime/model_registry.py: ModelRegistry class
-# - k0/config/feature_flags.yaml: ML tier selection
-# - k0/modules/MODULE_ENHANCEMENT_PLAN.md: Upgrade roadmap
+# - k0/runtime/ultrabert_adapter.py: UltraBERT adapter
+# - wheels/README.md: UltraBERT installation
 #
-# Issue: 1.1.1 - Unified Model Registry
+# Issue: UltraBERT Migration - Single Unified Model
+# Status: IMPLEMENTED
 
-version: "1.0.0"
+version: "2.0.0"
 
 # Global settings
 settings:
@@ -17,39 +22,31 @@ settings:
   default_load_timeout_sec: 30
 
 # Model definitions
-# Each model has:
-# - name: Human-readable name
-# - model_id: Model identifier (library-specific)
-# - tier: ML complexity tier (rule_based, spacy_small, spacy_large, transformer_small, transformer_large)
-# - loader: Python path to loader function
-# - memory_mb: Expected memory usage
-# - version: Model version
-# - device_preference: Preferred device (cpu, cuda, mps)
-# - fallback_to_cpu: Whether to fall back to CPU on GPU failure
-# - load_timeout_sec: Max time to wait for model load
-# - warmup_input: Sample input for model warmup (optional)
+# UltraBERT is the ONLY ML model needed
+# spaCy kept only for tokenization/parsing (not NER - UltraBERT does that)
 
 models:
   # ============================================
-  # Tier 1: Rule-Based (Always Available)
+  # UltraBERT - Unified Model (Replaces ALL ML)
   # ============================================
-  vader_analyzer:
-    name: "VADER Sentiment Analyzer"
-    model_id: "vaderSentiment"
-    tier: rule_based
-    loader: "k0.runtime.model_loaders.load_vader"
-    memory_mb: 50
-    version: "3.3.2"
-    device_preference: cpu
+  ultrabert:
+    name: "FamilyOS UltraBERT v2.0.3"
+    model_id: "familyos-ultrabert-2.0.3"
+    tier: ultrabert
+    loader: "k0.runtime.model_loaders.load_ultrabert"
+    memory_mb: 500
+    version: "2.0.3"
+    device_preference: cuda
     fallback_to_cpu: true
-    load_timeout_sec: 5
-    warmup_input: "I love this product!"
+    load_timeout_sec: 60
+    # UltraBERT handles its own warmup (warmup=True default)
+    warmup_input: null
 
   # ============================================
-  # Tier 2: spaCy Small (Default NLP)
+  # spaCy - Tokenization Only (NOT for ML)
   # ============================================
   spacy_nlp:
-    name: "spaCy English Small"
+    name: "spaCy English Small (Tokenization)"
     model_id: "en_core_web_sm"
     tier: spacy_small
     loader: "k0.runtime.model_loaders.load_spacy"
@@ -60,137 +57,19 @@ models:
     load_timeout_sec: 15
     warmup_input: "Hello world"
 
-  # ============================================
-  # Tier 3: spaCy Large (Enhanced NLP)
-  # ============================================
-  spacy_nlp_lg:
-    name: "spaCy English Large"
-    model_id: "en_core_web_lg"
-    tier: spacy_large
-    loader: "k0.runtime.model_loaders.load_spacy"
-    memory_mb: 800
-    version: "3.7.0"
-    device_preference: cpu
-    fallback_to_cpu: true
-    load_timeout_sec: 30
-    warmup_input: "The quick brown fox jumps over the lazy dog."
-
-  # ============================================
-  # Tier 4: Transformer Small (Enhanced ML)
-  # ============================================
-  sentence_transformer:
-    name: "Sentence Transformer MiniLM"
-    model_id: "all-MiniLM-L6-v2"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_sentence_transformer"
-    memory_mb: 500
-    version: "2.2.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 60
-    warmup_input: "This is a sample sentence for embedding."
-
-  sentiment_transformer:
-    name: "DistilBERT Sentiment"
-    model_id: "distilbert-base-uncased-finetuned-sst-2-english"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_transformers_pipeline"
-    memory_mb: 400
-    version: "4.30.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 60
-    warmup_input: "I really enjoyed this experience."
-
-  # ============================================
-  # Tier 5: Transformer Large (Best Quality)
-  # ============================================
-  zero_shot_classifier:
-    name: "BART Zero-Shot Classifier"
-    model_id: "facebook/bart-large-mnli"
-    tier: transformer_large
-    loader: "k0.runtime.model_loaders.load_zero_shot_classifier"
-    memory_mb: 1500
-    version: "4.30.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 120
-    warmup_input: "I went to the park with my family."
-
-  ner_transformer:
-    name: "BERT NER Model"
-    model_id: "dslim/bert-base-NER"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_ner_model"
-    memory_mb: 500
-    version: "4.30.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 90
-    warmup_input: "John Smith lives in New York City."
-
-  # Issue 2.1.1: Family-optimized NER for M02 semantic_project
-  ner_family:
-    name: "BERT NER for Family Memories"
-    model_id: "dslim/bert-base-NER"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_ner_model"
-    memory_mb: 500
-    version: "4.30.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 90
-    warmup_input: "Had dinner with mom and dad at Olive Garden for Emma's birthday."
-
-  # Issue 3.1.1: GoEmotions transformer for affect.analyze
-  go_emotions:
-    name: "RoBERTa GoEmotions Classifier"
-    model_id: "SamLowe/roberta-base-go_emotions"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_go_emotions"
-    memory_mb: 500
-    version: "1.0.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 90
-    warmup_input: "Had a wonderful dinner with my family, feeling so grateful and happy."
-
-  # Issue 3.1.2: Clinical safety detection for mental health risk assessment
-  clinical_safety:
-    name: "Clinical Safety Detector"
-    model_id: "distilbert-base-uncased-finetuned-sst-2-english"
-    tier: transformer_small
-    loader: "k0.runtime.model_loaders.load_clinical_safety"
-    memory_mb: 300
-    version: "1.0.0"
-    device_preference: cuda
-    fallback_to_cpu: true
-    load_timeout_sec: 60
-    warmup_input: "I have been feeling very down lately and nothing seems to matter anymore."
-
 # Preload configuration
-# Models to load at kernel startup for hot-path performance
+# UltraBERT is the ONLY model needed at startup
 preload:
-  # Essential models always loaded
   essential:
+    - ultrabert
     - spacy_nlp
-    - vader_analyzer
-    - ner_transformer
-  # Optional models loaded if memory allows
-  optional:
-    - sentence_transformer
-    - sentiment_transformer
-    - ner_family
-    - go_emotions  # Issue 3.1.1: GoEmotions for Tier-1 affect classification
-    - clinical_safety  # Issue 3.1.2: Clinical safety detection
-    - zero_shot_classifier
-    # - spacy_nlp_lg  # Requires en_core_web_lg to be installed (~800MB)
+  optional: []
 
 # Memory budget per tier (MB)
-# Used for planning which models can be loaded simultaneously
 tier_budgets:
   rule_based: 100
   spacy_small: 200
   spacy_large: 1000
+  ultrabert: 600
   transformer_small: 1500
   transformer_large: 3000

@@ -129,8 +129,10 @@ class ModelRegistry:
     """
 
     # Default model specifications (used if no config file)
+    # UltraBERT is the ONLY model needed - it replaces 9 separate models:
+    # - spaCy NER, VADER, GoEmotions, clinical_safety, sentence_transformer,
+    # - zero_shot_classifier, transformer_ner, ner_family, temporal_extractor
     _DEFAULT_SPECS: Dict[str, Dict[str, Any]] = {
-        # PRIMARY: UltraBERT unified model (replaces 9 separate models)
         "ultrabert": {
             "name": "FamilyOS UltraBERT v2.0.3",
             "model_id": "familyos-ultrabert-2.0.3",
@@ -141,58 +143,7 @@ class ModelRegistry:
             "device_preference": "cuda",
             "fallback_to_cpu": True,
             "load_timeout_sec": 60.0,
-            "warmup_input": "Hello world",
-        },
-        # LEGACY: Keep spaCy for tokenization/parsing (not replaced by UltraBERT)
-        "spacy_nlp": {
-            "name": "spaCy English Small",
-            "model_id": "en_core_web_sm",
-            "tier": "spacy_small",
-            "loader": "k0.runtime.model_loaders.load_spacy",
-            "memory_mb": 100,
-            "version": "3.7.0",
-            "device_preference": "cpu",
-            "fallback_to_cpu": True,
-            "load_timeout_sec": 15.0,
-            "warmup_input": "Hello world",
-        },
-        "spacy_nlp_lg": {
-            "name": "spaCy English Large",
-            "model_id": "en_core_web_lg",
-            "tier": "spacy_large",
-            "loader": "k0.runtime.model_loaders.load_spacy",
-            "memory_mb": 800,
-            "version": "3.7.0",
-            "device_preference": "cpu",
-            "fallback_to_cpu": True,
-            "load_timeout_sec": 30.0,
-            "warmup_input": "Hello world",
-        },
-        # DEPRECATED: vader - replaced by UltraBERT sentiment
-        "vader_analyzer": {
-            "name": "VADER Sentiment Analyzer (DEPRECATED - use ultrabert)",
-            "model_id": "vaderSentiment",
-            "tier": "rule_based",
-            "loader": "k0.runtime.model_loaders.load_vader",
-            "memory_mb": 50,
-            "version": "3.3.2",
-            "device_preference": "cpu",
-            "fallback_to_cpu": True,
-            "load_timeout_sec": 5.0,
-            "warmup_input": "I love this!",
-        },
-        # DEPRECATED: sentence_transformer - replaced by UltraBERT embedding
-        "sentence_transformer": {
-            "name": "Sentence Transformer (DEPRECATED - use ultrabert)",
-            "model_id": "all-MiniLM-L6-v2",
-            "tier": "transformer_small",
-            "loader": "k0.runtime.model_loaders.load_sentence_transformer",
-            "memory_mb": 500,
-            "version": "2.2.0",
-            "device_preference": "cuda",
-            "fallback_to_cpu": True,
-            "load_timeout_sec": 60.0,
-            "warmup_input": "Hello world",
+            "warmup_input": None,  # UltraBERT handles its own warmup
         },
     }
 
@@ -217,8 +168,8 @@ class ModelRegistry:
         self._lock = threading.RLock()
         self._async_lock = asyncio.Lock()
         self._loaded = False
-        # UltraBERT is the primary model, spaCy for tokenization
-        self._preload_essential: list[str] = ["ultrabert", "spacy_nlp"]
+        # UltraBERT is the ONLY model needed (500MB vs 4.6GB)
+        self._preload_essential: list[str] = ["ultrabert"]
         self._preload_optional: list[str] = []
 
         # Initialize default specs

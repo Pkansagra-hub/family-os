@@ -1,5 +1,5 @@
 # K0 Kernel - Minimal Dependencies
-# Only what's needed for the core kernel (no ML/NLP)
+# UltraBERT replaces 9 separate models (4.6GB -> 500MB)
 # Includes: k0/deploy/requirements.base.txt (observability, hashing, logging)
 
 # Base dependencies (shared with all containers)
@@ -14,14 +14,29 @@ starlette>=0.32.0
 neo4j>=5.20.0                      # Knowledge graph driver (Bolt protocol)
 numpy>=1.26.0                      # Basic array operations (minimal)
 
-# NLP Dependencies
-spacy>=3.7.0                       # Entity extraction and NLP (Tier 2)
-vaderSentiment>=3.3.2              # Sentiment analysis (Tier 1)
+# =============================================================================
+# UltraBERT Unified Model (replaces ALL ML dependencies below)
+# =============================================================================
+# Install from wheel: pip install familyos_ultrabert-2.0.3-py3-none-any.whl
+# Capabilities: sentiment, emotions, safety, NER, temporal, intent, embedding
+# Size: 155M params, ~500MB memory
+# See: wheels/README.md for installation instructions
 
-# Transformer NER Dependencies (Tier 4)
-transformers>=4.30.0               # HuggingFace transformers (NER pipeline)
-torch>=2.0.0                       # PyTorch backend
-sentence-transformers>=2.2.0       # Sentence embeddings
+# UltraBERT runtime dependencies
+onnxruntime>=1.17.0                # ONNX Runtime backend for UltraBERT
+tokenizers>=0.15.0                 # Fast tokenization for UltraBERT
+transformers>=4.30.0               # HuggingFace transformers (tokenizer config)
+
+# Minimal NLP for tokenization only (UltraBERT handles all ML)
+spacy>=3.7.0                       # Tokenization and parsing only
+
+# =============================================================================
+# DEPRECATED - Replaced by UltraBERT
+# =============================================================================
+# vaderSentiment -> UltraBERT sentiment
+# transformers -> UltraBERT (includes all pipelines)
+# torch -> UltraBERT (includes ONNX runtime)
+# sentence-transformers -> UltraBERT embedding
 
 # JWT and Authentication
 PyJWT>=2.8.0
@@ -41,4 +56,8 @@ geohash2>=1.1                      # Location hashing (GDPR compliance)
 # HTTP & Async
 httpx>=0.27.0                      # Async HTTP client
 
-# Note: Includes transformer models for NER - container size ~3-4GB
+# PostgreSQL (high-throughput concurrent writes)
+asyncpg>=0.29.0                    # Async PostgreSQL driver
+psycopg[binary]>=3.1.0             # Sync PostgreSQL driver (migration scripts)
+
+# Note: UltraBERT wheel installed separately - container size ~600MB (was 4GB)
