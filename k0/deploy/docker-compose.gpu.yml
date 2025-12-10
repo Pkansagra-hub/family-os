@@ -11,6 +11,8 @@ services:
       - ../:/app/k0 # Mount source code for hot reloading
       - k0-data:/data # Docker volume for SQLite database
       - ./secrets:/secrets:ro
+      # Mount modeling_studio for PyTorch UltraBERT backend
+      - D:/Modeling_studio/src:/app/modeling_studio:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
         source: ../contracts/policy/pep.schema.json
@@ -48,7 +50,7 @@ services:
               capabilities: [gpu]
     environment:
       - CUDA_VISIBLE_DEVICES=0
-      - ONNX_PROVIDERS=CUDAExecutionProvider
+      - PYTHONPATH=/app/modeling_studio
 
   # Neo4j Knowledge Graph database for family relationships and temporal entities
   # Used by k0/drivers/neo4j_driver.py (ADR-0081: K0 Knowledge Graph Architecture)

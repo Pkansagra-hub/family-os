@@ -179,15 +179,33 @@ def _load_ultrabert_client() -> Any:
     _initialization_attempted = True
 
     try:
+        import torch
         from familyos_ultrabert import Client
 
-        logger.info("Loading FamilyOS UltraBERT client...")
-        client = Client(warmup=True, warmup_rounds=2, verbose=False)
+        # Use the Client class from v2.1.0 - it handles warmup and provides
+        # clean attribute access (result.sentiment, result.safety, etc.)
+        # PyTorch nightly cu128 supports Blackwell (sm_100, sm_120)
+        backend = "auto"  # Let it auto-detect: PyTorch+CUDA if available, else ONNX
+        if torch.cuda.is_available():
+            arch_list = torch.cuda.get_arch_list()
+            logger.info(f"CUDA available, arch_list: {arch_list}")
+            if "sm_120" in arch_list or "sm_100" in arch_list:
+                backend = "pytorch"  # Force PyTorch for Blackwell GPUs
+                logger.info("Blackwell GPU detected, using PyTorch backend")
+
+        logger.info(f"Loading FamilyOS UltraBERT Client with backend={backend}...")
+        client = Client(
+            backend=backend,
+            warmup=True,
+            warmup_rounds=2,
+            verbose=False,
+        )
         logger.info(
-            "UltraBERT client loaded successfully",
+            "UltraBERT loaded successfully",
             extra={
-                "version": getattr(client, "VERSION", "unknown"),
-                "backend": "auto",
+                "version": client.VERSION,
+                "backend": client.backend,
+                "capabilities": len(client.capabilities),
             },
         )
         return client
@@ -196,8 +214,14 @@ def _load_ultrabert_client() -> Any:
         logger.warning(f"familyos_ultrabert not installed: {e}")
         return None
     except Exception as e:
-        logger.error(f"Failed to load UltraBERT client: {e}")
+        logger.error(f"Failed to load UltraBERT: {e}")
         return None
+
+
+# NOTE: _UltraBERTClientWrapper and _AnalysisResultWrapper classes removed
+# The familyos_ultrabert.Client class (v2.1.0) provides all the attribute-style
+# access we need (result.sentiment, result.safety, result.emotions, etc.)
+# See client.py in the wheel for the full API.
 
 
 def get_ultrabert_client() -> Any:
