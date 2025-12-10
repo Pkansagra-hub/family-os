@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   k0-kernel:
-    image: k0-kernel-local:latest
+    image: k0-kernel-gpu:latest
     container_name: k0-kernel
     user: "0:0" # Run as root to fix Windows volume permission issues
     env_file:
@@ -34,10 +34,21 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s # GPU init takes longer
     restart: unless-stopped
     networks:
       - k0-local
+    # GPU PASSTHROUGH CONFIGURATION
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - ONNX_PROVIDERS=CUDAExecutionProvider
 
   # Neo4j Knowledge Graph database for family relationships and temporal entities
   # Used by k0/drivers/neo4j_driver.py (ADR-0081: K0 Knowledge Graph Architecture)

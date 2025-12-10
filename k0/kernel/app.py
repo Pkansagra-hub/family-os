@@ -1022,14 +1022,11 @@ def _install_middlewares(
                 admission_decision=decision_label,
             )
 
-            if record.receipt and callable(receipt_saver):
-                try:
-                    receipt_saver(record.receipt)
-                except Exception:  # pragma: no cover - logging guard
-                    logger.exception(
-                        "Failed to persist receipt for admission decision",
-                        extra={"receipt_id": record.receipt.receipt_id},
-                    )
+            # NOTE: Receipt is already saved inside UnitOfWork transaction (command.py)
+            # The receipt_issuer.issue() call saves to st_receipts within the semaphore-protected
+            # transaction. Attempting to save again here would bypass the write semaphore
+            # and cause "database is locked" errors under concurrent load.
+            # See: k0/ports/command.py:769 - receipt_issuer.issue(connection=uow.connection)
 
             event_payload: dict[str, Any] = {
                 "trace_id": trace_id,

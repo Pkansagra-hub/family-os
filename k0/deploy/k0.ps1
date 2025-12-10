@@ -9,7 +9,8 @@ param(
     [int]$WaitSeconds = 10,
 
     [string]$Service,
-    [switch]$HotReload
+    [switch]$HotReload,
+    [switch]$GPU
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +20,7 @@ $ProgressPreference = "SilentlyContinue"
 $DeployRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $DeployRoot)
 $ComposeKernel = Join-Path $DeployRoot "docker-compose.yml"
+$ComposeGPU = Join-Path $DeployRoot "docker-compose.gpu.yml"
 $ComposeTelemetry = Join-Path $DeployRoot "local-single-node-telemetry.yml"
 $EnvDir = Join-Path $DeployRoot "env"
 $DataDir = Join-Path $DeployRoot "data"
@@ -200,10 +202,18 @@ function Ensure-Compose-Prereqs {
 }
 
 function Ensure-Image {
-    $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-kernel-local:latest")
+    if ($GPU) {
+        $imageName = "k0-kernel-gpu:latest"
+        $dockerFile = Join-Path $RepoRoot "Dockerfile.gpu"
+    }
+    else {
+        $imageName = "k0-kernel-local:latest"
+        $dockerFile = Join-Path $RepoRoot "Dockerfile"
+    }
+    $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch $imageName)
     if ($Rebuild -or -not $imagePresent) {
-        Write-Info "Building image k0-kernel-local:latest"
-        docker build -t k0-kernel-local:latest -f (Join-Path $RepoRoot "Dockerfile") $RepoRoot | Write-Host
+        Write-Info "Building image $imageName"
+        docker build -t $imageName -f $dockerFile $RepoRoot | Write-Host
     }
 }
 
@@ -296,7 +306,12 @@ function Sync-Telemetry-Artifacts {
 }
 
 function Compose-Args {
-    "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
+    if ($GPU) {
+        "-p", $ProjectName, "-f", $ComposeGPU, "-f", $ComposeTelemetry
+    }
+    else {
+        "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
+    }
 }
 
 function Start-HotReloadWatcher {

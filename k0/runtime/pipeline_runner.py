@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from k0.bus.core import BusMessage
@@ -166,7 +166,7 @@ class PipelineRunner:
             return
 
         self._execution_count += 1
-        start_time = datetime.now(UTC)
+        start_time = datetime.now(timezone.utc)
 
         # Reset per-execution state
         self._completed_stages.clear()
@@ -188,7 +188,7 @@ class PipelineRunner:
         try:
             # Execute DAG levels: stages within each level run in parallel
             for level_idx, level_stages in enumerate(self._level_groups):
-                level_start = datetime.now(UTC)
+                level_start = datetime.now(timezone.utc)
 
                 if self._context:
                     self._context.logger.debug(
@@ -213,7 +213,9 @@ class PipelineRunner:
                         return_exceptions=False,  # Propagate first exception immediately
                     )
 
-                level_duration_ms = (datetime.now(UTC) - level_start).total_seconds() * 1000
+                level_duration_ms = (
+                    datetime.now(timezone.utc) - level_start
+                ).total_seconds() * 1000
 
                 if self._context:
                     self._context.logger.debug(
@@ -228,7 +230,7 @@ class PipelineRunner:
                     )
 
             # Success
-            duration_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
 
             if self._context:
                 self._context.logger.info(
@@ -246,7 +248,7 @@ class PipelineRunner:
                 )
 
         except Exception as e:
-            duration_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
+            duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
 
             if self._context:
                 self._context.logger.error(
@@ -281,7 +283,7 @@ class PipelineRunner:
         Raises:
             Exception: Stage execution failures (propagated to caller)
         """
-        stage_start = datetime.now(UTC)
+        stage_start = datetime.now(timezone.utc)
 
         if self._context:
             self._context.logger.debug(
@@ -341,9 +343,9 @@ class PipelineRunner:
                 )
 
             # Execute module with timing
-            module_start = datetime.now(UTC)
+            module_start = datetime.now(timezone.utc)
             result = await module_fn(**args)
-            module_duration_ms = (datetime.now(UTC) - module_start).total_seconds() * 1000
+            module_duration_ms = (datetime.now(timezone.utc) - module_start).total_seconds() * 1000
 
             # Track stage timing for latency profiling
             self._stage_timings[stage.id] = module_duration_ms
