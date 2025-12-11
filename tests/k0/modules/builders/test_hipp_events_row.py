@@ -436,11 +436,11 @@ async def test_hippocampus_group_assembly(complete_module_outputs):
 @pytest.mark.asyncio
 async def test_embeddings_kg_group_assembly(complete_module_outputs):
     """Test embeddings & KG column group (4 columns)"""
-    # Extract CA1 fields from flat envelope
+    # Extract CA1 fields from flat envelope - keep as JSON strings (not parsed)
     ca1_output = {
         "embedding_id": complete_module_outputs.get("embedding_id"),
-        "entities": json.loads(complete_module_outputs.get("entities_json", "[]")),
-        "kg_triples": json.loads(complete_module_outputs.get("kg_triples_json", "[]")),
+        "entities_json": complete_module_outputs.get("entities_json", "[]"),
+        "kg_triples_json": complete_module_outputs.get("kg_triples_json", "[]"),
     }
 
     result = map_embeddings_kg_group(ca1_output)

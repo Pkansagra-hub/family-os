@@ -148,8 +148,33 @@ def map_policy_group(
     Policy & Visibility columns (10 columns)
 
     From: M03 policy_stamp + M05 space visibility + M11 retention
+
+    Note: visible_to_json and co_owners_json from space module are already JSON strings.
+    We must NOT double-encode them.
     """
     policy_stamp = envelope.get("policy_stamp", {})
+
+    # Handle visible_to_json - may already be JSON string from M05 space.resolve_visibility
+    visible_to = space_output.get("visible_to_json") or space_output.get("visible_to")
+    if visible_to is None:
+        visible_to_json = "[]"
+    elif isinstance(visible_to, str):
+        # Already a JSON string - use as-is
+        visible_to_json = visible_to
+    else:
+        # List/tuple - serialize it
+        visible_to_json = serialize_to_json(visible_to, "visible_to_json")
+
+    # Handle co_owners_json - may already be JSON string from M05 space.resolve_visibility
+    co_owners = space_output.get("co_owners_json") or space_output.get("co_owners")
+    if co_owners is None:
+        co_owners_json = "[]"
+    elif isinstance(co_owners, str):
+        # Already a JSON string - use as-is
+        co_owners_json = co_owners
+    else:
+        # List/tuple - serialize it
+        co_owners_json = serialize_to_json(co_owners, "co_owners_json")
 
     return {
         "policy_decision": policy_stamp.get("decision", "ALLOW"),
@@ -158,10 +183,10 @@ def map_policy_group(
         "obligations_json": serialize_to_json(
             policy_output.get("obligations", []), "obligations_json"
         ),
-        "visible_to_json": serialize_to_json(space_output.get("visible_to", []), "visible_to_json"),
+        "visible_to_json": visible_to_json,
         "visibility_scope": space_output.get("visibility_scope", "SPACE_DEFAULT"),
         "owner_id": space_output.get("owner_id"),
-        "co_owners_json": serialize_to_json(space_output.get("co_owners", []), "co_owners_json"),
+        "co_owners_json": co_owners_json,
         "retention_policy_id": retention_output.get("retention_policy_id"),
         "retention_bucket": retention_output.get("retention_bucket", "STANDARD"),
     }
@@ -235,17 +260,40 @@ def map_social_group(envelope: Dict[str, Any], social_output: Dict[str, Any]) ->
     Social & Relationships columns (7 columns)
 
     From: envelope body + M07 family_graph_resolve
+
+    Note: participants_json and participant_roles_json may already be JSON strings
+    from M07 family_graph_resolve. We must NOT double-encode them.
     """
     body = envelope.get("body", {})
     participants = body.get("participants", [])
 
+    # Handle participants_json - may already be JSON string from M07
+    participants_json_raw = social_output.get("participants_json")
+    if participants_json_raw is not None and isinstance(participants_json_raw, str):
+        # Already a JSON string - use as-is
+        participants_json = participants_json_raw
+    elif participants:
+        # Have participants list from body - serialize it
+        participants_json = serialize_to_json(participants, "participants_json")
+    else:
+        participants_json = "[]"
+
+    # Handle participant_roles_json - may already be JSON string from M07
+    participant_roles_json = social_output.get("participant_roles_json")
+    if participant_roles_json is None:
+        participant_roles_json = "{}"
+    elif not isinstance(participant_roles_json, str):
+        # Not a string - serialize it
+        participant_roles_json = serialize_to_json(participant_roles_json, "participant_roles_json")
+    # else: already a JSON string - use as-is
+
     return {
-        "participants_json": serialize_to_json(participants, "participants_json"),
+        "participants_json": participants_json,
         "num_participants": social_output.get("num_participants", len(participants)),
         "has_partner_present": social_output.get("has_partner_present", False),
         "has_parent_present": social_output.get("has_parent_present", False),
         "is_solo_event": social_output.get("is_solo_event", len(participants) <= 1),
-        "participant_roles_json": social_output.get("participant_roles_json"),
+        "participant_roles_json": participant_roles_json,
         "social_context": social_output.get("social_context", "solo"),
         "social_intimacy": social_output.get("social_intimacy", "LOW"),
     }
@@ -594,11 +642,33 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "effective_space_id": envelope.get("space_id"),  # May be enriched later
     }
 
-    salience_output = {"salience_score": envelope.get("salience_score")}
+    # M06 salience.score outputs salience_score, salience_band, and salience_reasons_json
+    # Note: salience_reasons_json is already a JSON string from M06
+    salience_reasons_json = envelope.get("salience_reasons_json", "[]")
+    # Parse JSON string to list for map_affect_salience_group (it expects a list)
+    try:
+        if isinstance(salience_reasons_json, str):
+            salience_reasons = json.loads(salience_reasons_json)
+        else:
+            salience_reasons = salience_reasons_json or []
+    except (json.JSONDecodeError, TypeError):
+        salience_reasons = []
+
+    salience_output = {
+        "salience_score": envelope.get("salience_score"),
+        "salience_band": envelope.get("salience_band", "LOW"),
+        "salience_reasons": salience_reasons,
+    }
+
+    # M07 family_graph_resolve outputs social context fields
     social_output = {
         "num_participants": envelope.get("num_participants"),
         "social_context": envelope.get("social_context"),
         "participant_roles_json": envelope.get("participant_roles_json"),
+        "has_partner_present": envelope.get("has_partner_present", False),
+        "has_parent_present": envelope.get("has_parent_present", False),
+        "is_solo_event": envelope.get("is_solo_event", True),
+        "social_intimacy": envelope.get("social_intimacy", "LOW"),
     }
     temporal_output = {
         k: envelope.get(k)

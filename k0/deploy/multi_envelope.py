@@ -268,94 +268,204 @@ def generate_sample_bodies(n: int = 60) -> list[dict]:
     """
     Generate n sample bodies that look like real FamilyOS memories.
 
-    Body schema kept simple to match current memory.delta:
+    Body schema includes all fields for proper enrichment:
       - operation: "UPSERT"
       - text: natural language description
       - value: small int (e.g., rating or importance)
       - timestamp: ISO-8601 (UTC)
+      - participants: list of person IDs (for social context)
+      - location_name: place name (for entity extraction)
+      - activity_type: activity category (for KG triples)
     """
     now = datetime.now(timezone.utc)
 
-    # Base templates representing different "kinds" of memories
+    # Rich templates with metadata for proper enrichment
+    # Each template is: (text, participants, location_name, activity_type)
     templates = [
-        # Morning / routine
-        "Morning log: Woke up at 7:10, made coffee, feeling focused.",
-        "Breakfast with family: pancakes and fruit, everyone at the table.",
-        "Quick meditation: 10 minutes breathing exercise before work.",
-        "Workout session: 25-minute home workout, light cardio.",
-        "Took dog for a walk around the block, sunny weather.",
-        # Work / productivity
-        "Started deep work block on K0 pipeline P02 design.",
-        "Finished debugging WAL dispatcher bug in bus.core.",
-        "Quick standup with team: discussed release timeline and blockers.",
-        "Reviewed PR for security policy enforcement in K0.",
-        "Sketched architecture for FamilyOS device hub and sync.",
-        # Relationships / social
-        "Called mom to check in, talked for 25 minutes about weekend plans.",
-        "Video call with fiancee, planned next month’s visit.",
-        "Sent birthday message to close friend with photo and voice note.",
-        "Helped sibling debug a resume and job application.",
-        "Chatted with neighbor about HOA meeting and parking issues.",
-        # Errands / tasks
-        "Grocery run: bought vegetables, milk, oats, and snacks.",
-        "Refilled car gas tank, checked tire pressure.",
-        "Paid electricity and internet bills online.",
-        "Scheduled dentist appointment for next month.",
-        "Cleaned kitchen and living room after dinner.",
-        # Learning / media
-        "Watched a talk about memory-augmented neural networks.",
-        "Read 3 pages of a book about personal finance and compounding.",
-        "Listened to podcast episode on startup founder journeys.",
-        "Skimmed article about energy-efficient home design.",
-        "Watched highlights of today’s football game.",
-        # Health / mood
-        "Afternoon slump: felt tired around 3pm, took a short break.",
-        "Logged headache after long screen time, drank water and stretched.",
-        "Felt proud after shipping a stable build of K0.",
-        "Evening walk to clear mind, listened to calm music.",
-        "Noted mild anxiety about future but also strong motivation.",
-        # Planning / future
-        "Added goal: finish K0 P02 pipeline end-to-end this week.",
-        "Brainstormed ideas for FamilyOS device form factor.",
-        "Drafted outline for investor narrative for 2027.",
-        "Planned weekend schedule: cleaning, coding, movie night.",
-        "Made list of people to reconnect with over next month.",
-        # Home / environment
-        "Reorganized desk and cable management around workstation.",
-        "Adjusted fan setup for laptop cooling during long training runs.",
-        "Tested backup power strip and surge protector.",
-        "Did quick inspection of smoke detector and batteries.",
-        "Watered indoor plants and balcony planters.",
-        # Finance / admin
-        "Reviewed monthly spending and updated budget tracker.",
-        "Checked stock portfolio performance for the week.",
-        "Updated spreadsheet for FamilyOS runway and funding plan.",
-        "Paid credit card bill and verified transactions.",
-        "Saved new paycheck breakdown for future reference.",
-        # Reflection / gratitude
-        "Grateful moment: parents’ health is stable this month.",
-        "Reflection: progress on FamilyOS feels slow but steady.",
-        "Noted that consistent 8–12 hour workdays are paying off.",
-        "Wrote down affirmation about staying patient and persistent.",
-        "Captured idea: home as sanctuary with 24/7 kitchen for guests.",
+        # Morning / routine (solo)
+        ("Morning log: Woke up at 7:10, made coffee, feeling focused.", [], None, "routine"),
+        (
+            "Breakfast with family: pancakes and fruit, everyone at the table.",
+            ["person_mom", "person_dad"],
+            "Home Kitchen",
+            "MEAL",
+        ),
+        ("Quick meditation: 10 minutes breathing exercise before work.", [], "Home", "wellness"),
+        ("Workout session: 25-minute home workout, light cardio.", [], "Home Gym", "exercise"),
+        ("Took dog for a walk around the block, sunny weather.", [], "Neighborhood", "exercise"),
+        # Work / productivity (solo)
+        ("Started deep work block on K0 pipeline P02 design.", [], "Home Office", "work"),
+        ("Finished debugging WAL dispatcher bug in bus.core.", [], "Home Office", "work"),
+        (
+            "Quick standup with team: discussed release timeline and blockers.",
+            ["person_teammate1", "person_teammate2"],
+            None,
+            "SOCIAL_EVENT",
+        ),
+        ("Reviewed PR for security policy enforcement in K0.", [], "Home Office", "work"),
+        ("Sketched architecture for FamilyOS device hub and sync.", [], "Home Office", "work"),
+        # Relationships / social (with participants)
+        (
+            "Called mom to check in, talked for 25 minutes about weekend plans.",
+            ["person_mom"],
+            None,
+            "SOCIAL_EVENT",
+        ),
+        (
+            "Video call with fiancee, planned next month's visit.",
+            ["person_fiancee"],
+            None,
+            "SOCIAL_EVENT",
+        ),
+        (
+            "Sent birthday message to close friend with photo and voice note.",
+            ["person_friend_alex"],
+            None,
+            "SOCIAL_EVENT",
+        ),
+        (
+            "Helped sibling debug a resume and job application.",
+            ["person_sibling"],
+            None,
+            "SOCIAL_EVENT",
+        ),
+        (
+            "Chatted with neighbor about HOA meeting and parking issues.",
+            ["person_neighbor"],
+            "Front Yard",
+            "SOCIAL_EVENT",
+        ),
+        # Errands / tasks (with locations)
+        ("Grocery run: bought vegetables, milk, oats, and snacks.", [], "Whole Foods", "errand"),
+        ("Refilled car gas tank, checked tire pressure.", [], "Shell Gas Station", "errand"),
+        ("Paid electricity and internet bills online.", [], "Home", "admin"),
+        ("Scheduled dentist appointment for next month.", [], None, "admin"),
+        ("Cleaned kitchen and living room after dinner.", [], "Home", "chore"),
+        # Learning / media (solo)
+        ("Watched a talk about memory-augmented neural networks.", [], "Home", "learning"),
+        ("Read 3 pages of a book about personal finance and compounding.", [], "Home", "learning"),
+        ("Listened to podcast episode on startup founder journeys.", [], None, "learning"),
+        ("Skimmed article about energy-efficient home design.", [], "Home", "learning"),
+        ("Watched highlights of today's football game.", [], "Home", "entertainment"),
+        # Health / mood (solo)
+        (
+            "Afternoon slump: felt tired around 3pm, took a short break.",
+            [],
+            "Home Office",
+            "wellness",
+        ),
+        (
+            "Logged headache after long screen time, drank water and stretched.",
+            [],
+            "Home",
+            "wellness",
+        ),
+        ("Felt proud after shipping a stable build of K0.", [], "Home Office", "reflection"),
+        (
+            "Evening walk to clear mind, listened to calm music.",
+            [],
+            "Neighborhood Park",
+            "exercise",
+        ),
+        ("Noted mild anxiety about future but also strong motivation.", [], None, "reflection"),
+        # Planning / future (solo)
+        ("Added goal: finish K0 P02 pipeline end-to-end this week.", [], "Home Office", "planning"),
+        ("Brainstormed ideas for FamilyOS device form factor.", [], "Home Office", "planning"),
+        ("Drafted outline for investor narrative for 2027.", [], "Home Office", "work"),
+        ("Planned weekend schedule: cleaning, coding, movie night.", [], "Home", "planning"),
+        ("Made list of people to reconnect with over next month.", [], "Home", "planning"),
+        # Home / environment (solo)
+        ("Reorganized desk and cable management around workstation.", [], "Home Office", "chore"),
+        (
+            "Adjusted fan setup for laptop cooling during long training runs.",
+            [],
+            "Home Office",
+            "chore",
+        ),
+        ("Tested backup power strip and surge protector.", [], "Home", "chore"),
+        ("Did quick inspection of smoke detector and batteries.", [], "Home", "chore"),
+        ("Watered indoor plants and balcony planters.", [], "Home", "chore"),
+        # Finance / admin (solo)
+        ("Reviewed monthly spending and updated budget tracker.", [], "Home", "admin"),
+        ("Checked stock portfolio performance for the week.", [], "Home", "admin"),
+        ("Updated spreadsheet for FamilyOS runway and funding plan.", [], "Home Office", "admin"),
+        ("Paid credit card bill and verified transactions.", [], "Home", "admin"),
+        ("Saved new paycheck breakdown for future reference.", [], "Home", "admin"),
+        # Reflection / gratitude (solo or with family)
+        (
+            "Grateful moment: parents' health is stable this month.",
+            ["person_mom", "person_dad"],
+            None,
+            "reflection",
+        ),
+        ("Reflection: progress on FamilyOS feels slow but steady.", [], "Home", "reflection"),
+        (
+            "Noted that consistent 8-12 hour workdays are paying off.",
+            [],
+            "Home Office",
+            "reflection",
+        ),
+        ("Wrote down affirmation about staying patient and persistent.", [], "Home", "reflection"),
+        ("Captured idea: home as sanctuary with 24/7 kitchen for guests.", [], "Home", "planning"),
+        # Family meals (with participants and locations)
+        (
+            "Dinner with mom and dad at Olive Garden, celebrated dad's promotion.",
+            ["person_mom", "person_dad"],
+            "Olive Garden",
+            "MEAL",
+        ),
+        (
+            "Sunday brunch with the whole family at Grandma's house.",
+            ["person_mom", "person_dad", "person_grandma", "person_sibling"],
+            "Grandma's House",
+            "MEAL",
+        ),
+        (
+            "Quick lunch with fiancee at the new ramen place downtown.",
+            ["person_fiancee"],
+            "Ichiraku Ramen",
+            "MEAL",
+        ),
+        (
+            "Birthday dinner for sister at her favorite Italian restaurant.",
+            ["person_sibling", "person_mom", "person_dad"],
+            "Carrabba's",
+            "milestone",
+        ),
+        (
+            "Coffee catch-up with college friend at Starbucks.",
+            ["person_friend_sam"],
+            "Starbucks Downtown",
+            "SOCIAL_EVENT",
+        ),
     ]
 
     bodies: list[dict] = []
     num_templates = len(templates)
 
     for i in range(n):
-        text = templates[i % num_templates]
+        text, participants, location_name, activity_type = templates[i % num_templates]
         # Spread timestamps over the last 3 days, 30-minute spacing
         delta_minutes = i * 30
         ts = now - timedelta(minutes=delta_minutes)
-        bodies.append(
-            {
-                "operation": "UPSERT",
-                "text": text,
-                "value": (i % 5) + 1,  # simple importance / rating 1–5
-                "timestamp": ts.isoformat(),
-            }
-        )
+
+        body = {
+            "operation": "UPSERT",
+            "text": text,
+            "value": (i % 5) + 1,  # simple importance / rating 1-5
+            "timestamp": ts.isoformat(),
+            "event_time_utc": ts.isoformat(),  # For M06 salience scorer
+        }
+
+        # Only add non-empty fields to keep envelope clean
+        if participants:
+            body["participants"] = participants
+        if location_name:
+            body["location_name"] = location_name
+        if activity_type:
+            body["activity_type"] = activity_type
+
+        bodies.append(body)
 
     return bodies
 
