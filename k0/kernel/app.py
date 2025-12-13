@@ -628,7 +628,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # - VADER, GoEmotions, clinical_safety, sentence_transformer
         # - TransformerNER, ZeroShotClassifier, etc.
         try:
-            from ..runtime.ultrabert_adapter import get_ultrabert_client, is_ultrabert_available
+            from ..runtime.ultrabert_adapter import (
+                get_ultrabert_client,
+                is_ultrabert_available,
+            )
 
             logger.info("Initializing UltraBERT unified model...")
             ultrabert_client = get_ultrabert_client()
@@ -714,17 +717,19 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     # Create syscalls adapter with required capabilities
                     from ..kernel.syscalls import Syscalls
 
+                    # SECURITY: Only grant capabilities explicitly declared in pipeline spec
                     granted_caps = set(spec.required_caps) if spec.required_caps else set()
-                    # Grant default capabilities for all pipelines
-                    granted_caps.update(
-                        [
-                            "st_hipp_events.write",
-                            "st_embedding_queue.write",
-                            "st_pipeline_processed.write",
-                            "st_outbox.write",
-                            "st_relationships.read",  # M07 social.family_graph_resolve
-                        ]
-                    )
+
+                    # Fail-fast: Pipelines MUST declare required_caps (no default grants)
+                    if not granted_caps:
+                        logger.warning(
+                            f"Pipeline {spec.pipeline_id} has empty required_caps - this may indicate misconfiguration",
+                            extra={
+                                "pipeline_id": spec.pipeline_id,
+                                "spec_path": str(spec_path),
+                            },
+                        )
+
                     syscalls = Syscalls(spec.pipeline_id, granted_caps, _unit_of_work_factory)
                     logger.info(
                         f"Syscalls initialized for {spec.pipeline_id}",

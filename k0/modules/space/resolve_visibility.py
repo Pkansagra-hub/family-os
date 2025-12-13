@@ -436,6 +436,7 @@ async def run(message: any, context: any, **config: any) -> dict:
 
     enriched = {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 2)
         "owner_id": resolution.owner_id,  # Flattened for builders
         "co_owners_json": resolution.co_owners_json,
         "author_role": resolution.author_role,
@@ -443,9 +444,24 @@ async def run(message: any, context: any, **config: any) -> dict:
         "visibility_scope": resolution.visibility_scope,
         "space_policy_version": resolution.space_policy_version,
         "space_resolved_at_utc": resolution.space_resolved_at_utc,
+        # NEW: Nested enrichments structure (Phase 2)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "space_resolver": {
+                "owner_id": resolution.owner_id,
+                "co_owners": json.loads(resolution.co_owners_json),
+                "author_role": resolution.author_role,
+                "visible_to": json.loads(resolution.visible_to_json),
+                "visibility_scope": resolution.visibility_scope,
+                "space_policy_version": resolution.space_policy_version,
+                "resolved_at_utc": resolution.space_resolved_at_utc,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
-    # Return enriched envelope (flatten space_resolve fields to top level for downstream modules)
+    # Return enriched envelope with nested enrichments
     return enriched
 
 

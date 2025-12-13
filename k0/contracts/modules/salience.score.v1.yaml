@@ -49,11 +49,19 @@ description: |
      - Events within 1 day: 0.5
      - Older events: 0.1
 
-  Output:
-  - salience_score: REAL (0-1 weighted sum)
-  - salience_reasons: JSON array (e.g., ["social_family", "positive_affect", "meal_outside_home"])
-  - salience_band: TEXT (HIGH/MED/LOW)
-  - computation_metadata: JSON with component scores
+  Output (Nested Enrichments - Phase 2):
+  - enrichments.salience_scorer.score: REAL (0-1 weighted sum)
+  - enrichments.salience_scorer.band: TEXT (HIGH/MED/LOW)
+  - enrichments.salience_scorer.reasons: Array of strings
+  - enrichments.salience_scorer.component_scores: Object {social, affect, recency}
+  - enrichments.salience_scorer.computed_at_utc: ISO8601 timestamp
+  - enrichments.salience_scorer.module_version: TEXT ("v1")
+
+  Legacy Flat Output (Backward Compat - Phase 2):
+  - salience_score: REAL [DEPRECATED]
+  - salience_band: TEXT [DEPRECATED]
+  - salience_reasons_json: JSON string [DEPRECATED]
+  - component_scores_json: JSON string [DEPRECATED]
 
   Salience Bands:
   - HIGH: score ≥ 0.7 (critical memories, prioritize for quick recall)

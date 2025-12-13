@@ -10,3 +10,5 @@ aliases:
   st_blob: blob_localfs
   # Traffic generator test drivers (burn-in/load testing)
   traffic-gen: sqlite
+  # Event bus drivers (outbox → external systems)
+  outbox_sse: sse_outbox_driver  # Publishes outbox events to SSE subscribers (telemetry, monitoring)

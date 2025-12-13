@@ -615,6 +615,7 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
     # Return enriched envelope (merge temporal fields into original envelope)
     return {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
         "event_time_utc": profile.event_time_utc,
         "write_time_utc": profile.write_time_utc,
         "write_lag_ms": profile.write_lag_ms,
@@ -627,6 +628,26 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         "is_backdated": profile.is_backdated,
         "created_at": profile.created_at,
         "timezone_used": profile.timezone_used,
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "temporal_profiler": {
+                "event_time_utc": profile.event_time_utc,
+                "write_time_utc": profile.write_time_utc,
+                "write_lag_ms": profile.write_lag_ms,
+                "local_date": profile.local_date,
+                "local_time": profile.local_time,
+                "day_of_week": profile.day_of_week,
+                "is_weekend": profile.is_weekend,
+                "time_of_day_bucket": profile.time_of_day_bucket,
+                "circadian_slot": profile.circadian_slot,
+                "is_backdated": profile.is_backdated,
+                "created_at": profile.created_at,
+                "timezone_used": profile.timezone_used,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
 

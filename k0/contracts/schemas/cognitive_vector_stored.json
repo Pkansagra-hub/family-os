@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cognitive.vector.stored.v1",
+  "title": "Cognitive Vector Stored Event",
+  "description": "Emitted when a 768-dim embedding is written to st_vec table (P02 M23)",
+  "type": "object",
+  "required": [
+    "embedding_id",
+    "event_id",
+    "tenant_id",
+    "space_id",
+    "model_id",
+    "vector_dim"
+  ],
+  "properties": {
+    "embedding_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the embedding record"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Hippocampus event ID (FK to st_hipp_events)"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier for multi-tenancy"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier within tenant"
+    },
+    "model_id": {
+      "type": "string",
+      "default": "ultrabert_v2.1.0",
+      "description": "Embedding model identifier"
+    },
+    "vector_dim": {
+      "type": "integer",
+      "default": 768,
+      "description": "Dimensionality of the embedding vector"
+    },
+    "stored_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds since epoch) when embedding was stored"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["READY", "INDEXED", "FAILED"],
+      "default": "READY",
+      "description": "Embedding status after storage"
+    }
+  },
+  "additionalProperties": false
+}

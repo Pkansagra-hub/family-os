@@ -88,7 +88,7 @@ class PipelineProtocol(Protocol):
         ...     declared_topics = ["cognitive.memory.write.committed.v1"]
         ...     concurrency = 1
         ...     max_queue = 512
-        ...     required_caps = ["st_hipp_store.write"]
+        ...     required_caps = ["st_hipp_events.write"]
         ...
         ...     async def on_startup(self, ctx: PipelineContext) -> None:
         ...         self.syscalls = ctx.syscalls
@@ -186,17 +186,17 @@ class PipelineProtocol(Protocol):
     """
     Capability requirements (least-privilege security).
 
-    Format: "<table>.<operation>" (e.g., "st_hipp_store.write")
+    Format: "<table>.<operation>" (e.g., "st_hipp_events.write")
     Syscalls adapter enforces these before allowing storage access.
 
     Common Capabilities:
-        - "st_hipp_store.write": Write to episodic memory
-        - "st_hipp_store.read": Read episodic memory
+        - "st_hipp_events.write": Write episodic events
+        - "st_hipp_events.read": Read episodic events
         - "working_memory.write": Write to working memory
         - "embeddings.read": Query vector index
         - "embeddings.write": Insert embeddings
 
-    Example: ["st_hipp_store.write"]
+    Example: ["st_hipp_events.write"]
     """
 
     # ========================================================================
@@ -309,11 +309,16 @@ class PipelineProtocol(Protocol):
                 event = json.loads(msg.payload)
 
                 # 3. Core work
-                await self.syscalls.hipp_store_upsert(
-                    space_id=event["space_id"],
+                # (st_hipp_events is the canonical episodic events table)
+                await self.syscalls.hipp_events_upsert(
                     event_id=event["event_id"],
-                    payload=event,
-                    cognitive_trace_id=msg.trace_id
+                    wal_pos=msg.offset,
+                    cognitive_trace_id=msg.trace_id,
+                    tenant_id=event["tenant_id"],
+                    space_id=event["space_id"],
+                    embedding_id=event["embedding_id"],
+                    policy_band=event.get("policy_band", "GREEN"),
+                    text=event.get("text"),
                 )
 
                 # 4. Emit receipt

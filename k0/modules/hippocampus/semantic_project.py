@@ -276,7 +276,10 @@ def _extract_with_ultrabert(
     Issue: UltraBERT Migration - Single Unified Model
     """
     try:
-        from k0.runtime.ultrabert_adapter import extract_entities, is_ultrabert_available
+        from k0.runtime.ultrabert_adapter import (
+            extract_entities,
+            is_ultrabert_available,
+        )
     except ImportError:
         logger.debug("ultrabert_adapter module not available")
         return None
@@ -940,10 +943,25 @@ async def run(
     # Return enriched envelope (preserve all original fields + add semantic projection)
     return {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
         "embedding_id": embedding_id,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
         "semantic_projected_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "hippocampus_semantic_project": {
+                "embedding_id": embedding_id,
+                "entities_json": entities_json,
+                "kg_triples_json": kg_triples_json,
+                "semantic_projected_at_utc": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
 

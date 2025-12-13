@@ -92,6 +92,45 @@ This plan implements P03 (Memory Consolidation Pipeline) using the declarative Y
 
 ---
 
+## Capability-Based Security Requirements
+
+**CRITICAL**: P03 must follow the K0 capability-based security model established for P02.
+
+### Key Principles
+
+1. **Explicit Declaration**: All storage capabilities must be declared in `p03_consolidation.v1.yaml`
+2. **Least Privilege**: Request only capabilities actually needed by P03 modules
+3. **Fail-Closed**: Operations without declared capabilities raise `PermissionError`
+4. **Audit Trail**: All capability checks logged with pipeline_id and trace_id
+
+### Required Capabilities Matrix
+
+P03 requires **28 capabilities** (11 read, 17 write) across:
+
+- **8 Core Memory Layers**: st_epi, st_sem, st_procedural, st_social, st_prospective, st_kg_dom, st_kg_edges, st_vec
+- **9 Infrastructure Tables**: st_hipp_events, st_archives, st_consolidation_logs, st_event_canon_map, st_event_cluster_history, st_kg_snapshots, deletion_audit, st_outbox, st_pipeline_processed
+- **7 Tombstone Tables**: st_*_tombstones for soft delete
+- **2 P08 Coordination**: st_embedding_queue (read + write)
+
+See P03 dossier "Required Capabilities" section for complete list.
+
+### Implementation Requirements
+
+1. **Pipeline YAML**: Add `required_capabilities` field to `p03_consolidation.v1.yaml`
+2. **Module Contracts**: Each module declares `side_effects: [read:table, write:table]`
+3. **Syscalls Usage**: All storage operations use `context.syscalls.*()` methods
+4. **Testing**: Verify `PermissionError` raised when capabilities missing
+
+### Security Verification Checklist
+
+- [ ] All 28 capabilities declared in pipeline YAML
+- [ ] No universal capability grants in app.py (removed for P02, apply to P03)
+- [ ] All P03 modules use syscalls adapter (not direct DB access)
+- [ ] Unit tests verify PermissionError for missing capabilities
+- [ ] ADR documents capability rationale (why each capability is needed)
+
+---
+
 ## Milestone 0: Pre-Implementation (Blockers & Architecture)
 
 **Goal**: Resolve all architectural blockers before writing any code.
@@ -116,6 +155,7 @@ This MUST be done before any ADRs, contracts, or code are created.
 **K0 Architecture Master Updates Required**:
 
 1. **Part 2.1: Pipeline Master Registry** - Add row:
+
    | ID | Name | Status | Design Phase | README Location | Modules Used | Priority | Version | Last Updated |
    |----|------|--------|--------------|-----------------|--------------|----------|---------|--------------|
    | P03 | Consolidation | 📝 Design | 📝 Initial | `docs/pipelines/P03_consolidation_dossier.md` | M20 (Consolidation) | P0 | 0.1.0 | 2025-11-25 |
@@ -218,6 +258,7 @@ Create the parent ADR documenting overall P03 architecture including:
 **K0 Architecture Master Updates**:
 
 - **Part 7.1: ADR Index** - Add entry:
+
   | ADR | Title | Status | Affects | Date | Owner |
   |-----|-------|--------|---------|------|-------|
   | ADR-k010 | P03 Consolidation Architecture | 🎯 Draft | P03 | 2025-11-25 | Tech Lead |
@@ -270,6 +311,7 @@ Document the 4 trigger mechanisms and sleep cycle state machine:
 
 **Description**:
 Document the importance scoring formula from R1.1:
+
 ```
 importance = 0.35*emotional + 0.25*recency + 0.20*access + 0.20*social
 ```
@@ -296,18 +338,21 @@ importance = 0.35*emotional + 0.25*recency + 0.20*access + 0.20*social
 
 **Description**:
 Document clustering approach for R2.1:
+
 - DBSCAN on semantic embeddings
 - SimHash Hamming distance ≤5 for candidate filtering
 - Jaccard similarity >0.8 for confirmation
 - Composite distance: 60% semantic + 20% temporal + 10% location + 10% participant
 
 **Acceptance Criteria**:
+
 - [ ] Algorithm pseudocode
 - [ ] Complexity analysis (O(n) with LSH vs O(n²) brute force)
 - [ ] Threshold justification
 - [ ] Scalability at 10k events
 
 **Files to Create**:
+
 - `docs/architecture/decisions-K0/k010.3_episodic_clustering.md`
 
 ---
@@ -321,17 +366,20 @@ Document clustering approach for R2.1:
 
 **Description**:
 Document the CA1 bridge decision logic from R2.3:
+
 - MERGE: similarity >0.85 → update existing semantic
 - EVOLVE: similarity 0.6-0.85 → create new version, supersede old
 - CREATE: similarity <0.6 → create new semantic
 
 **Acceptance Criteria**:
+
 - [ ] Decision tree diagram
 - [ ] Similarity computation method (cosine on embeddings)
 - [ ] Version management strategy
 - [ ] Conflict resolution for concurrent modifications
 
 **Files to Create**:
+
 - `docs/architecture/decisions-K0/k010.4_ca1_bridge.md`
 
 ---
@@ -453,6 +501,70 @@ Document P03→P08 coordination from R7.7:
 
 ---
 
+#### Issue 0.1.9A: Create ADR k010.9 - Capability-Based Security Model
+
+**Type**: ADR
+**Priority**: Critical
+**Assignee**: Tech Lead
+**Labels**: `architecture`, `adr`, `p03`, `security`
+
+**Description**:
+Document P03's capability-based security model following the pattern established in P02.
+
+**Context**:
+P03 requires access to 28 storage tables (8 core memory layers + 9 infrastructure + 7 tombstones + 2 P08 coordination). Without capability enforcement, P03 could:
+
+- Access tables outside its responsibility
+- Modify data owned by other pipelines
+- Bypass audit trails
+- Violate tenant isolation
+
+**Decision**:
+P03 follows K0 capability-based security model:
+
+1. Declare all 28 capabilities in `p03_consolidation.v1.yaml`
+2. Use `syscalls` adapter for ALL storage operations (no direct DB access)
+3. Syscalls enforces capability checks before operations
+4. PermissionError raised + logged for unauthorized access
+
+**Alternatives Considered**:
+
+1. ❌ Universal grant (like P02 before fix) - Security theater
+2. ❌ Role-based access (pipeline = admin) - Too coarse-grained
+3. ✅ Capability-based (chosen) - Least privilege, auditable
+
+**Consequences**:
+
+- ✅ Security: Prevents privilege escalation
+- ✅ Audit: Every storage operation logged
+- ✅ Testing: Can simulate missing capabilities
+- ⚠️ Complexity: 28 capabilities to maintain
+
+**Implementation Requirements**:
+
+- Pipeline YAML must declare `required_capabilities: [...]`
+- Module contracts must declare `side_effects: [read:table, write:table]`
+- Syscalls adapter must check capabilities before operations
+- Tests must verify PermissionError for unauthorized access
+
+**Acceptance Criteria**:
+
+- [ ] ADR documents capability model
+- [ ] Complete list of 28 capabilities with rationale
+- [ ] Security threat model (what attacks does this prevent?)
+- [ ] Comparison with P02 capability list (similar patterns)
+- [ ] **K0 MASTER**: ADR added to Part 7.1 ADR Index
+
+**Files to Create**:
+
+- `docs/architecture/decisions-K0/k010.9_capability_based_security.md`
+
+**Files to Update**:
+
+- `k0/pipelines/k0_architecture_master.md` (Part 7.1 - ADR Index)
+
+---
+
 #### Issue 0.1.10: Update K0 Architecture Master - Complete ADR Index for P03
 
 **Type**: Governance
@@ -476,14 +588,15 @@ After all P03 ADRs (k010.x series) are created, ensure the K0 Architecture Maste
 | ADR-k010.4 | CA1 Bridge Logic | 🎯 Draft | P03/R2 | 2025-11-25 | Tech Lead |
 | ADR-k010.5 | SimHash Deduplication | 🎯 Draft | P03/R3 | 2025-11-25 | ML Engineer |
 | ADR-k010.6 | Entity Extraction | 🎯 Draft | P03/R4 | 2025-11-25 | ML Engineer |
-| ADR-k010.7 | Checkpoint/Resume | 🎯 Draft | P03 | 2025-11-25 | Backend Engineer |
+| ADR-k010.7 | 8-Layer Memory Write Coordination | 🎯 Draft | P03 | 2025-11-25 | Tech Lead |
 | ADR-k010.8 | P08 Coordination | 🎯 Draft | P03/P08 | 2025-11-25 | Tech Lead |
+| ADR-k010.9 | Capability-Based Security | 🎯 Draft | P03 | 2025-11-25 | Tech Lead |
 
 - **Part 2.1: Pipeline Master Registry** - Update P03 status to 🎯 Planning
 
 **Acceptance Criteria**:
 
-- [ ] All 9 ADRs listed in Part 7.1 ADR Index
+- [ ] All 10 ADRs listed in Part 7.1 ADR Index (k010 through k010.9)
 - [ ] P03 status updated to 🎯 Planning
 - [ ] Cross-references from ADRs to P03 validated
 - [ ] K0 Architecture Master version bumped
@@ -523,6 +636,7 @@ Without locks, if scheduled trigger (2AM) + threshold trigger (1000 events) fire
 4. Stale lock detection (>2 hours = stale)
 
 **Proposed Solution**:
+
 ```sql
 CREATE TABLE consolidation_locks (
     lock_id TEXT PRIMARY KEY,
@@ -632,6 +746,7 @@ Without backpressure, if P08 is slow/down:
 4. Circuit breaker for P08 unavailability
 
 **Proposed Solution**:
+
 ```python
 async def check_embedding_backpressure():
     queue_depth = await get_embedding_queue_depth()
@@ -6713,6 +6828,7 @@ async def test_10000_event_batch_stress(db_session):
 Create Docker configuration for P03 worker.
 
 **Deliverables**:
+
 ```dockerfile
 # k0/deploy/p03/Dockerfile
 
@@ -6739,6 +6855,7 @@ CMD ["python", "-m", "consolidation.worker"]
 ```
 
 **Acceptance Criteria**:
+
 - [ ] Dockerfile created
 - [ ] Multi-stage build for size optimization
 - [ ] spaCy model included
@@ -6746,6 +6863,7 @@ CMD ["python", "-m", "consolidation.worker"]
 - [ ] Resource limits documented
 
 **Files to Create**:
+
 - `k0/deploy/p03/Dockerfile`
 - `k0/deploy/p03/docker-compose.yml`
 - `k0/deploy/p03/requirements.txt`
@@ -6763,6 +6881,7 @@ CMD ["python", "-m", "consolidation.worker"]
 Create Kubernetes deployment manifests.
 
 **Deliverables**:
+
 ```yaml
 # k0/deploy/p03/k8s/deployment.yaml
 
@@ -7448,3 +7567,268 @@ croniter = ">=1.3.0"  # Cron expression parsing
 *Document Version: 2.0.0*
 *Last Updated: 2025-01-XX*
 *Status: Ready for Implementation*
+
+
+
+I'll read both the P03 dossier and implementation plan in full to provide a comprehensive analysis.
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#1-1), lines 1 to 300
+
+Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#1-1), lines 1 to 300
+
+Let me continue reading both documents to get the complete picture:
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#300-300), lines 300 to 800
+
+Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#300-300), lines 300 to 800
+
+Let me continue reading to get the complete picture, especially the phases and P08 coordination sections:
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#800-800), lines 800 to 1400
+
+Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#800-800), lines 800 to 2000
+
+Let me continue reading to get the P08 coordination and embedding details:
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#1400-1400), lines 1400 to 2000
+
+Searched for regex `P08|embedding|st_vec|PENDING|without embeddings|embedding.*required` (`**/d:\familyos\docs\pipelines\P03_consolidation_dossier.md`), no results
+
+Searched for regex `P08|embedding|st_vec|PENDING|without.*embedding|embedding.*required`, 20 results
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#2000-2000), lines 2000 to 2700
+
+Now let me read the section that discusses the embedding requirements and P08 coordination more specifically:
+
+Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#3200-3200), lines 3200 to 4000
+
+Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#6500-6500), lines 6500 to 7570
+
+Now I have a comprehensive understanding of both documents. Let me create a detailed analysis.
+
+Created 4 todos
+
+Based on my comprehensive analysis of both the P03 Consolidation Dossier (~16,000 lines) and Implementation Plan v2 (~7,500 lines), here's my detailed assessment:
+
+---
+
+## Executive Summary
+
+The P03 documentation is **impressively comprehensive** - among the most detailed I've seen. However, there are some **gaps and areas needing clarification** to make it production-robust.
+
+---
+
+## Critical Question: Are Embeddings Required for P03 to Work?
+
+### **Answer: NO - Embeddings are NOT a hard blocker for P03 core functionality**
+
+Here's why:
+
+| P03 Function | Embedding Required? | Fallback Available |
+|--------------|--------------------|--------------------|
+| **Deduplication (R3.1)** | ❌ NO | Uses SimHash/MinHash from P02 - already computed |
+| **Novelty Scoring (R3.2)** | ❌ NO | Uses SimHash Hamming distance + metadata |
+| **Pattern Extraction (R2.2)** | ⚠️ OPTIONAL | Uses text invariants, not embeddings |
+| **Episodic Clustering (R2.1)** | ⚠️ PARTIALLY | Can use SimHash LSH bucketing without embeddings |
+| **CA1 Bridge (R2.3)** | ✅ YES (for similarity) | Needs embedding similarity for merge/evolve/create |
+| **KG Construction (R4)** | ❌ NO | Uses entity extraction from P02 + co-occurrence |
+| **Memory Layer Writers (R7)** | ❌ NO | Direct writes to st_* tables |
+
+### Key Insight from Dossier:
+
+From P03_consolidation_dossier.md:
+> "❌ **Does NOT generate embeddings directly**
+> - P02 enqueues embedding jobs to `st_embedding_queue`
+> - **P08 (Embedding Lifecycle) handles vector generation**
+> - P03 coordinates with P08 for `st_vec` population"
+
+And from the st_vec schema:
+> "**Note**: P03 writes placeholder, P08 generates actual embeddings"
+> "**Durability: REGENERATABLE** (Rule 6) - Treat as cached compute, not ground truth"
+
+### P03 ↔ P08 Coordination Model:
+
+```
+P03 (R7.7) → writes placeholder to st_vec (status='PENDING')
+          → writes job to st_embedding_queue
+          → emits cognitive.embedding.queued.v1
+
+P08 (async) → picks up job from queue
+            → generates embedding
+            → updates st_vec (status='READY', vector_data=BLOB)
+```
+
+**Conclusion**: P03 can run **WITHOUT P08 being operational** - it will just leave `st_vec` entries in PENDING status. Query operations that need embeddings would fail gracefully or use fallback similarity methods.
+
+---
+
+## What's Missing & Needs Improvement
+
+### 1. **Critical Blockers Not Fully Resolved**
+
+| Blocker | Status | Gap |
+|---------|--------|-----|
+| P02 Production Ready | ⚠️ UNCLEAR | No verification criteria defined |
+| Migration 0024 Applied | ⚠️ UNCLEAR | Need to verify st_hipp_events exists |
+| Budget Mismatch (182 → 90 min) | ⚠️ ONLY PROPOSED | R5 optional + R3/R4 parallel only in Issue 0.2.2, not final ADR |
+| Consolidation Lock Table | ⚠️ DESIGNED | Migration 0040 specified but unclear if exists |
+| P08 Backpressure | ⚠️ DESIGNED | backpressure.py specified but no integration test |
+
+**Missing**: Verification scripts to check blockers are resolved before starting M1.
+
+### 2. **Missing ADR Details**
+
+The plan references 10 ADRs (k010 through k010.9) but from the ADR decisions folder search, these don't appear to exist yet:
+
+| ADR | Status | Notes |
+|-----|--------|-------|
+| k010 - P03 Architecture | ❌ NOT CREATED | Parent ADR missing |
+| k010.1 - Sleep Cycle | ❌ NOT CREATED | |
+| k010.2 - Importance Scoring | ❌ NOT CREATED | |
+| k010.3 - Episodic Clustering | ❌ NOT CREATED | Critical algorithm |
+| k010.4 - CA1 Bridge | ❌ NOT CREATED | Needs embedding strategy |
+| k010.5 - SimHash Dedup | ❌ NOT CREATED | |
+| k010.6 - Entity Normalization | ❌ NOT CREATED | |
+| k010.7 - 8-Layer Write Coordination | ❌ NOT CREATED | |
+| k010.8 - P08 Coordination | ❌ NOT CREATED | Critical for embedding handoff |
+| k010.9 - Capability Security | ❌ NOT CREATED | |
+
+### 3. **Schema/Migration Gaps**
+
+The plan references migrations 0040-0050 but:
+
+- **0040_consolidation_locks.sql** - Lock table design complete, file not created
+- **0041-0050** - Memory layer tables designed but actual SQL migrations missing
+- **st_embedding_queue** - Mentioned but no explicit migration for P08 coordination table
+- **FTS5 table (st_fts)** - Migration 0049 mentioned but unclear if P08 owns this
+
+### 4. **R5 (Dream Phase) Gap**
+
+The plan says "Make R5 optional - saves 30 min" to meet budget, but:
+
+- R5 modules are NOT stubbed or documented
+- No configuration flag to enable/disable R5
+- Future enablement path not defined
+
+**Recommendation**: Add explicit skip logic with feature flag.
+
+### 5. **Fallback Strategy for Embeddings Missing**
+
+The CA1 bridge (R2.3) requires embeddings for similarity, but:
+
+- No fallback if embeddings are PENDING
+- No timeout/retry for embedding completion
+- Query behavior with PENDING embeddings not specified
+
+**From Issue 0.1.9**:
+> "- [ ] Query Port behavior with PENDING embeddings"
+
+This is listed as acceptance criteria but no solution provided.
+
+### 6. **Performance Validation Gap**
+
+The revised 90-minute budget assumes:
+
+| Phase | Budget | Risk |
+|-------|--------|------|
+| R3 + R4 parallel | 20 min combined | ⚠️ No proof they CAN run parallel |
+| R2 reduced | 35 → 25 min | ⚠️ No benchmark to validate |
+| R1 reduced | 35 → 25 min | ⚠️ Just assumed |
+
+**Missing**: Actual benchmarks proving the revised budget is achievable.
+
+### 7. **Multi-Tenant Isolation Not Fully Defined**
+
+- Lock is per `(tenant_id, space_id)` - good
+- But batch selection query doesn't show tenant isolation
+- No explicit tenant_id filter in R0.4 batch selection code
+
+### 8. **Error Handling Gaps**
+
+| Scenario | Coverage |
+|----------|----------|
+| Lock acquisition fails | ✅ Documented |
+| DB transaction fails | ⚠️ Generic "retry" |
+| Embedding queue full | ✅ Backpressure documented |
+| spaCy model load fails | ❌ NOT covered |
+| Memory layer write fails | ⚠️ "Retry with backoff" - no DLQ |
+| Cycle exceeds 90 min | ❌ No circuit breaker |
+
+### 9. **Testing Coverage Gaps**
+
+The plan has excellent test coverage for happy paths but:
+
+- **No chaos engineering tests** (kill mid-cycle, DB connection drop)
+- **No multi-tenant contention tests**
+- **No embedding queue starvation tests**
+- **No boundary condition tests** (0 events, 100k events)
+
+### 10. **K0 Architecture Master Not Updated**
+
+The plan references updating k0_architecture_master.md but this hasn't been done:
+
+- P03 not in Pipeline Registry (Part 2.1)
+- No ADRs in ADR Index (Part 7.1)
+- No P03 events in Event Topics (Part 4.1)
+- No consolidation modules in Module Registry (Part 3.1)
+
+---
+
+## Recommendations to Make Plan Robust
+
+### Immediate Actions (Before Starting M1)
+
+1. **Create verification script** for all blockers:
+   ```bash
+   k0ctl p03 verify-prerequisites --check-p02 --check-migrations --check-schema
+   ```
+
+2. **Add R5 feature flag**:
+   ```yaml
+   # p03_consolidation.v1.yaml
+   phases:
+     r5_dream:
+       enabled: false  # Disabled for v1, enable in v2
+   ```
+
+3. **Define embedding fallback for CA1**:
+   ```python
+   # When embedding PENDING, use text-based Jaccard similarity
+   if embedding_status == 'PENDING':
+       similarity = jaccard_similarity(text_a, text_b)
+   else:
+       similarity = cosine_similarity(vec_a, vec_b)
+   ```
+
+### Medium-Term Actions (During M0)
+
+4. **Create all 10 ADRs** before any implementation
+5. **Run performance benchmark** on sample 1000 events to validate 90-min budget
+6. **Add explicit tenant_id** to all batch selection queries
+7. **Create DLQ strategy** for failed memory writes
+
+### Documentation Improvements
+
+8. **Add sequence diagram** for P03 → P08 embedding flow
+9. **Add decision tree** for "what happens if P08 is down?"
+10. **Add rollback procedures** for partial cycle failures
+
+---
+
+## Summary Scorecard
+
+| Dimension | Score | Notes |
+|-----------|-------|-------|
+| **Completeness** | 8/10 | Excellent detail, minor gaps |
+| **Architectural Clarity** | 9/10 | Very clear phases, modules |
+| **Performance Planning** | 6/10 | Budget math questionable |
+| **Error Handling** | 6/10 | Happy path focus |
+| **Testing Strategy** | 7/10 | Good unit, weak chaos |
+| **Embedding Independence** | 9/10 | Correctly decoupled from P08 |
+| **Production Readiness** | 5/10 | ADRs missing, K0 not updated |
+
+**Overall Assessment**: The plan is **80% production-ready** but needs the above gaps addressed before implementation starts.
+
+---
+
+Shall I create specific missing artifacts (ADR templates, verification scripts, or fallback code patterns)?

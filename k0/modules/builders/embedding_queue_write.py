@@ -223,8 +223,11 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         },
     )
 
-    # Extract embedding_id from envelope (M02 adds it to top level per Phase 2 pattern)
-    embedding_id = envelope.get("embedding_id")
+    # Phase 3: Extract from nested enrichments, fallback to flat
+    enrichments = envelope.get("enrichments", {})
+    ca1_enrichment = enrichments.get("hippocampus_semantic_project", {})
+
+    embedding_id = ca1_enrichment.get("embedding_id") or envelope.get("embedding_id")
 
     if not embedding_id:
         _metrics.missing_embedding_id += 1
@@ -240,11 +243,12 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             },
         }
 
-    # Build CA1 output dict from top-level envelope fields
+    # Build CA1 output dict (prefer nested, fallback to flat)
     ca1_output = {
         "embedding_id": embedding_id,
-        "entities_json": envelope.get("entities_json", "[]"),
-        "kg_triples_json": envelope.get("kg_triples_json", "[]"),
+        "entities_json": ca1_enrichment.get("entities_json") or envelope.get("entities_json", "[]"),
+        "kg_triples_json": ca1_enrichment.get("kg_triples_json")
+        or envelope.get("kg_triples_json", "[]"),
     }
 
     # Assemble embedding queue record (using config values)

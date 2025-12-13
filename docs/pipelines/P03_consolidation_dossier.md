@@ -171,6 +171,102 @@ P03 runs **AFTER P02 has written to st_hipp_events staging table**:
 
 ---
 
+## Required Capabilities (Capability-Based Security)
+
+P03 must explicitly declare all storage capabilities it requires. This follows the K0 capability-based security model where pipelines receive **only** the permissions they explicitly declare.
+
+### Storage Read Capabilities
+
+```yaml
+required_capabilities:
+  # Input: Read from staging table
+  - st_hipp_events.read          # Read enriched events from P02
+
+  # Deduplication: Check for existing duplicates
+  - st_event_canon_map.read      # Query canonical event mappings
+  - st_event_cluster_history.read # Check cluster membership history
+
+  # Pattern Extraction: Query existing patterns
+  - st_sem.read                  # Check for existing semantic patterns
+  - st_kg_dom.read               # Query knowledge graph nodes
+  - st_kg_edges.read             # Query knowledge graph relationships
+
+  # Entity Resolution: Fuzzy matching
+  - st_kg_dom.read               # Lookup entities for normalization
+```
+
+### Storage Write Capabilities
+
+```yaml
+  # Core Memory Layers: Write consolidated memories
+  - st_epi.write                 # Episodic memory (permanent)
+  - st_sem.write                 # Semantic knowledge (patterns)
+  - st_procedural.write          # Habits and routines
+  - st_social.write              # Relationship dynamics
+  - st_prospective.write         # Future intentions/reminders
+  - st_kg_dom.write              # Knowledge graph nodes
+  - st_kg_edges.write            # Knowledge graph relationships
+  - st_vec.write                 # Vector embeddings (placeholders)
+
+  # Infrastructure Tables: State management
+  - st_hipp_events.write         # Update consolidation metadata
+  - st_archives.write            # Archive low-priority memories
+  - st_consolidation_logs.write  # Audit trail for consolidation runs
+  - st_event_canon_map.write     # Canonical event mappings
+  - st_event_cluster_history.write # Cluster membership tracking
+  - st_kg_snapshots.write        # Knowledge graph versioning
+  - deletion_audit.write         # GDPR compliance logging
+
+  # Tombstones: Soft delete support
+  - st_epi_tombstones.write
+  - st_sem_tombstones.write
+  - st_procedural_tombstones.write
+  - st_social_tombstones.write
+  - st_prospective_tombstones.write
+  - st_kg_dom_tombstones.write
+  - st_kg_edges_tombstones.write
+
+  # Event Bus: Emit consolidation events
+  - st_outbox.write              # Transactional event emission
+
+  # Tracking: Pipeline state
+  - st_pipeline_processed.write  # Idempotency tracking
+```
+
+### P08 Coordination Capabilities
+
+```yaml
+  # Embedding Queue: Coordinate with P08 for vector generation
+  - st_embedding_queue.write     # Queue semantic embedding requests
+  - st_embedding_queue.read      # Check queue depth for backpressure
+```
+
+**Total Capabilities Required**: 28 capabilities (11 read, 17 write)
+
+**Security Enforcement**:
+- Every storage operation in P03 modules must call `syscalls.<operation>()`
+- Syscalls adapter checks `required_capabilities` before allowing access
+- Missing capability → `PermissionError` with audit log entry
+- This prevents privilege escalation and enables least-privilege architecture
+
+**Example Usage in Modules**:
+```python
+# Module: consolidation.dedup.v1
+async def run(message, context, **config):
+    # This requires st_hipp_events.read capability
+    existing = await context.syscalls.hipp_events_query(
+        simhash=message.simhash_hex
+    )
+
+    # This requires st_event_canon_map.write capability
+    await context.syscalls.event_canon_map_upsert(
+        duplicate_id=message.event_id,
+        canonical_id=existing[0].event_id
+    )
+```
+
+---
+
 ## Architectural Boundaries
 
 **P02 → P03 Handoff**:

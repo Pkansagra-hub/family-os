@@ -330,6 +330,32 @@ class PipelineRunner:
                 self._enriched_envelope if self._enriched_envelope is not None else envelope_dict
             )
 
+            # IMPORTANT: Avoid passing a shared mutable dict reference into modules.
+            # Modules should treat envelope as read-only and return a new dict, but defensive
+            # copying here prevents accidental in-place mutation from impacting other stages.
+            args_envelope = args.get("envelope")
+            if isinstance(args_envelope, dict):
+                args["envelope"] = dict(args_envelope)
+
+            # Optional debug logging (gated via PipelineContext.config)
+            # Example: ctx.config["debug_pipeline_runner_args"] = True
+            if self._context and self._context.config.get("debug_pipeline_runner_args") is True:
+                env = args.get("envelope")
+                env_keys = list(env.keys()) if isinstance(env, dict) else []
+                self._context.logger.debug(
+                    "PipelineRunner invoking module",
+                    extra={
+                        "pipeline_id": self.pipeline_id,
+                        "stage_id": stage.id,
+                        "module_id": stage.module,
+                        "trace_id": message.trace_id,
+                        "arg_keys": list(args.keys()),
+                        "has_envelope": isinstance(env, dict),
+                        "envelope_key_count": len(env_keys),
+                        "envelope_keys_preview": env_keys[:20],
+                    },
+                )
+
             # Debug: log what envelope is being passed
             if self._context and stage.id == "stage_70_atomic_writer":
                 has_hipp_row = "hipp_events_row" in args["envelope"]

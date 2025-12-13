@@ -57,10 +57,44 @@ Use this gated process:
 
 ## 🚦 GATE 1 — Architectural Decision Validation
 
+## 🚦 GATE 1 — Architectural Decision & Dossier Validation
+
 * Identify all architectural decisions relevant to the proposed change.
 * If any are missing, unclear, or outdated → STOP and clarify or create new decisions.
 * Verify that the change aligns with accepted and active decisions.
-* Do not proceed without validated architectural grounding.
+
+* For any change that touches a K0 pipeline:
+  * Determine the target pipeline ID (e.g., P02).
+  * Open and read the **pipeline dossier** from
+    `D:\familyos\docs\pipelines\` (for example: `D:\familyos\docs\pipelines\P02_write_dossier.md`).
+  * Use the dossier as the **single source of truth** for:
+    * pipeline purpose and scope
+    * involved modules
+    * events and topics
+    * contracts and schemas
+    * syscalls and storage tables
+    * related ADRs
+
+* Before proceeding, ensure there is a clear plan for bringing **code ↔ architecture docs** into sync:
+  * Every **pipeline** involved must have an accurate row in the **Pipeline Master Registry**.
+  * Every **module** touched must have an accurate row in the **Module Master Registry**.
+  * Every **event** emitted or consumed must be registered in the **Event Topics Registry**.
+  * Every **contract** (module, pipeline, event schema) must have an entry in the **Global Contract Registry**.
+  * Every **syscall** / capability must have an entry in the **Syscall Matrix**.
+  * Every **storage table** used or created must have an entry in the **Storage Tables Registry**.
+  * Every **architectural decision** must be present and current in the **ADR Index**.
+
+* Do not proceed to GATE 2 unless:
+  * The relevant ADRs are known and accepted (or new ones are explicitly required), **and**
+  * The pipeline dossier and the intended changes can be cleanly mapped into updates to `k0_architecture_master.md` for:
+    * pipeline row
+    * module rows
+    * event topics
+    * contracts
+    * syscalls
+    * storage tables
+    * ADR index entries.
+
 
 ---
 
@@ -102,8 +136,25 @@ Use this gated process:
   * Files changed
   * Tests added
   * Performance characteristics
+
 * Link change records with architectural decisions.
+
+* Update **K0 architecture documentation** to reflect what was actually coded:
+
+  * Apply the planned updates to `k0_architecture_master.md`, including:
+    * Pipeline row(s) in **Pipeline Master Registry** (2.1)
+    * Module row(s) in **Module Master Registry** (3.1)
+    * Event topics in **Event Topics Registry** (4.1)
+    * Contracts in **Global Contract Registry** (5.1)
+    * Syscalls / capabilities in **Syscall Matrix** (5.2)
+    * Storage tables in **Storage Tables Registry** (5.3)
+    * ADR entries in **ADR Index & Cross-Links** (7.1)
+
+  * Ensure these updates are consistent with the pipeline dossier in
+    `D:\familyos\docs\pipelines\<pipeline>_...md`.
+
 * Update architecture diagrams and module overviews when the change affects structure.
+
 
 ---
 

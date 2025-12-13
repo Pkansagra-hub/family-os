@@ -105,9 +105,21 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
     # Return enriched envelope (preserve all original fields + add fingerprints)
     return {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
         "simhash_hex": simhash_hex,
         "minhash32": json.dumps(minhash_signature),  # JSON array for database storage
         "fingerprint_computed_at_utc": _now_utc_iso(),
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "hippocampus_pattern_separate": {
+                "simhash_hex": simhash_hex,
+                "minhash32": minhash_signature,  # Array, not JSON string
+                "fingerprint_computed_at_utc": _now_utc_iso(),
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
 

@@ -13,13 +13,14 @@ LABEL org.opencontainers.image.vendor="FamilyOS"
 # Install Python 3.10 and system dependencies (Ubuntu 22.04 ships with Python 3.10)
 # gcc + libc6-dev + python3-dev required for PyTorch Triton JIT compilation on GPU
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
     python3-dev \
     curl \
     sqlite3 \
+    tzdata \
     gcc \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/* \

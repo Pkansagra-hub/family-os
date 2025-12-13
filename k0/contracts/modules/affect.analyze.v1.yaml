@@ -45,13 +45,22 @@ description: |
   - Tier-0: Cache hit for common patterns (meal, conversation, routine)
   - Tier-1: Fallback for complex emotional content requiring deep analysis
 
-  Output:
-  - affect_valence: REAL (0-1)
-  - affect_arousal: REAL (0-1)
-  - dominant_emotions: JSON array of emotion tags
-  - affect_band: TEXT (GREEN/AMBER/RED)
-  - band_reasons: JSON array explaining risk classification
-  - model_version: TEXT (e.g., "affect_v1.2")
+  Output (Nested Enrichments - Phase 2):
+  - enrichments.affect_analyzer.valence: REAL (0-1)
+  - enrichments.affect_analyzer.arousal: REAL (0-1)
+  - enrichments.affect_analyzer.dominant_emotions: JSON array of emotion tags
+  - enrichments.affect_analyzer.band: TEXT (GREEN/AMBER/RED)
+  - enrichments.affect_analyzer.band_reasons: JSON array explaining risk classification
+  - enrichments.affect_analyzer.model_version: TEXT (e.g., "affect_v1.2")
+  - enrichments.affect_analyzer.module_version: TEXT ("v1")
+
+  Legacy Flat Output (Backward Compat - Phase 2):
+  - affect_valence: REAL (0-1) [DEPRECATED]
+  - affect_arousal: REAL (0-1) [DEPRECATED]
+  - dominant_emotions: JSON array [DEPRECATED]
+  - affect_band: TEXT [DEPRECATED]
+  - band_reasons: JSON array [DEPRECATED]
+  - model_version: TEXT [DEPRECATED]
 
   Risk Band Definitions:
   - GREEN: Positive or neutral affect, no risk indicators

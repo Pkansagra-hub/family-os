@@ -12,7 +12,7 @@ Architecture:
 Related ADRs:
 - K0 README §6.1: Storage Contract
 - K0 README §7: Driver SPI & Alias Map
-- Migration 0006: Memory tables (st_epi, st_sem, st_proc, st_social, st_hipp_store, self_*)
+    - Migration 0006: Legacy memory tables (st_epi, st_sem, st_proc, st_social, st_hipp_store, self_*)
 - Migration 0007: Core directory tables (people, households)
 """
 
@@ -61,7 +61,8 @@ class SQLiteDriver:
 
     Storage responsibilities:
     - K0 infrastructure: st_wal, st_receipts, st_outbox, st_dlq, idem_ledger, st_devices, schema_registry
-    - Memory tables: st_hipp_store, st_epi, st_sem, st_ws, st_proc, st_social
+    - Memory tables (legacy): st_hipp_store, st_epi, st_sem, st_ws, st_proc, st_social
+    - Canonical episodic events: st_hipp_events
     - Self-model tables: self_traits, self_preferences, self_health, self_roles
     - Core directory: people, households
     """

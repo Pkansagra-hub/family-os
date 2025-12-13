@@ -1,0 +1,158 @@
+module_id: embedding.extract_from_cache
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.hippocampus.semantic_projected.v1
+
+output_event_types:
+  - p02.embedding.extracted.v1
+
+latency_budget_ms: 1
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: CACHE_MISS_FALLBACK
+    policy: fallback_to_direct_call
+    max_retries: 1
+  - code: ULTRABERT_UNAVAILABLE
+    policy: graceful_degradation
+    max_retries: 0
+  - code: NO_TEXT_INPUT
+    policy: skip
+    max_retries: 0
+  - code: EMBEDDING_GENERATION_FAILED
+    policy: set_pending_for_backfill
+    max_retries: 0
+
+description: |
+  M22: UltraBERT Embedding Cache Extraction Module
+
+  Extracts 768-dimensional embedding from UltraBERT's single-pass cache
+  with ZERO additional inference latency.
+
+  Architecture (ADR-K003):
+  - P02 M02 (semantic_project) calls UltraBERT for entity extraction
+  - P02 M04 (affect.analyze) calls UltraBERT for sentiment/emotions
+  - P02 M10 (ingress_classify) calls UltraBERT for intent/routing
+  - All three share ONE cached forward pass (K0_ULTRABERT_SINGLE_PASS=1)
+  - M22 extracts the 768-dim embedding from this cached result
+
+  Performance Target: <1ms P95 (cache read only, no GPU inference)
+  Cache TTL: 30 seconds (configured in ultrabert_adapter.py)
+
+  Input:
+  - envelope.body.text (TEXT, required)
+
+  Output:
+  - embedding: list[float] (768 dimensions)
+  - embedding_id: str (UUID)
+  - vector_dim: int (768)
+  - model_id: str ('ultrabert_v2.1.0')
+  - source: str ('cache_hit' | 'direct_call' | 'failed')
+
+  Fallback Behavior:
+  1. Try cache: _get_full_analysis_result(text) -> check .embedding
+  2. Cache miss: Call get_embedding(text) directly (rare, <5% cases)
+  3. Failure: Return source='failed', set embedding_status=PENDING for P08 backfill
+
+  Benefits vs Legacy P08 Async Pattern:
+  - Zero latency: embedding already computed
+  - No MiniLM model load: saves 250MB memory
+  - Immediate availability: P03 can use embeddings without PENDING fallback
+  - Higher quality: 768-dim UltraBERT vs 384-dim MiniLM
+  - Consistent model: same model for all NLP tasks
+
+  Related:
+  - ADR-K003: Inline Embedding via UltraBERT Single-Pass Cache
+  - Migration 0026: st_vec table
+  - M23 (builders.embedding_write): Writes embedding to st_vec
+  - P08 v2 M25 (embedding.backfill): Backfills PENDING embeddings
+
+config_schema:
+  type: object
+  properties:
+    fallback_to_direct_call:
+      type: boolean
+      default: true
+      description: If cache miss, call get_embedding() directly (adds ~30ms)
+    expected_vector_dim:
+      type: integer
+      default: 768
+      description: Expected embedding dimension from UltraBERT
+    model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: Model version identifier for st_vec.model_id
+
+input_schema:
+  type: object
+  required:
+    - envelope
+  properties:
+    envelope:
+      type: object
+      required:
+        - body
+      properties:
+        body:
+          type: object
+          required:
+            - text
+          properties:
+            text:
+              type: string
+              minLength: 1
+              description: Input text for embedding extraction
+
+output_schema:
+  type: object
+  required:
+    - embedding_id
+    - vector_dim
+    - model_id
+    - source
+  properties:
+    embedding:
+      type: array
+      items:
+        type: number
+      minItems: 768
+      maxItems: 768
+      description: 768-dimensional embedding vector (or null if failed)
+    embedding_id:
+      type: string
+      format: uuid
+      description: UUID for this embedding (links to st_vec.embedding_id)
+    vector_dim:
+      type: integer
+      enum: [768]
+      description: Dimension of embedding vector
+    model_id:
+      type: string
+      enum: ["ultrabert_v2.1.0"]
+      description: Model identifier
+    source:
+      type: string
+      enum: ["cache_hit", "direct_call", "failed", "no_text"]
+      description: |
+        cache_hit: Extracted from UltraBERT single-pass cache (optimal)
+        direct_call: Cache miss, called get_embedding() directly
+        failed: UltraBERT unavailable or error
+        no_text: Empty or missing input text
+
+dependencies:
+  runtime:
+    - k0.runtime.ultrabert_adapter
+  modules:
+    - hippocampus.semantic_project:v1  # M02 warms the cache
+
+performance:
+  p50_latency_ms: 0.5
+  p95_latency_ms: 1
+  p99_latency_ms: 5
+  cache_hit_rate: 0.95
+  cache_miss_latency_ms: 30

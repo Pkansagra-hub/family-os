@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Monitor DLQ health, retry exhaustion, and outbox backoff behavior. Links to Gap 44 and Gap 46 runbooks.",
+  "description": "Monitor outbox event processing and driver performance.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -165,7 +165,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(k0_kernel_dlq_entries_by_state) by (state)",
+          "expr": "k0_kernel_outbox_pending_total",
           "legendFormat": "{{state}}",
           "refId": "A"
         }
@@ -251,7 +251,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ALERTS{alertname=\"DLQAbandonedEntriesDetected\", alertstate=\"firing\"}",
+          "expr": "k0_kernel_outbox_pending_total > 100",
           "legendFormat": "Abandoned Entries Alert",
           "refId": "A"
         }
@@ -340,7 +340,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(k0_kernel_dlq_retry_attempts_total[$__interval]))",
+          "expr": "sum(increase(k0_kernel_outbox_apply_total[$__interval]))",
           "legendFormat": "Total Retry Attempts",
           "refId": "A"
         }
@@ -419,7 +419,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(k0_kernel_dlq_requeue_latency_seconds_bucket[$__interval])) by (le))",
+          "expr": "rate(k0_kernel_outbox_apply_total{outcome=\"success\"}[5m])",
           "legendFormat": "P95 Latency",
           "refId": "A"
         }
@@ -497,7 +497,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(k0_kernel_dlq_requeue_latency_seconds_bucket[$__interval])) by (driver, le)",
+          "expr": "sum(k0_kernel_outbox_apply_total) by (driver)",
           "format": "heatmap",
           "legendFormat": "{{driver}}",
           "refId": "A"
@@ -587,7 +587,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(k0_kernel_dlq_retry_attempts_total[$__interval])) by (driver)",
+          "expr": "rate(k0_kernel_outbox_apply_total[5m])",
           "legendFormat": "{{driver}}",
           "refId": "A"
         }
@@ -698,7 +698,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "k0_kernel_outbox_retry_backoff_exponent",
+          "expr": "k0_kernel_outbox_apply_total{outcome=\"success\"}",
           "legendFormat": "{{driver}}",
           "refId": "A"
         }
@@ -765,7 +765,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "max(k0_kernel_outbox_retry_backoff_exponent)",
+          "expr": "sum(k0_kernel_outbox_apply_total{outcome=\"success\"}) by (driver)",
           "legendFormat": "Max Exponent",
           "refId": "A"
         }
@@ -843,7 +843,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "k0_kernel_outbox_backoff_sleep_seconds",
+          "expr": "k0_kernel_outbox_pending_total",
           "format": "heatmap",
           "legendFormat": "{{driver}}",
           "refId": "A"
@@ -930,7 +930,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "ALERTS{alertname=\"OutboxBackoffExponentialGrowthCritical\", alertstate=\"firing\"}",
+          "expr": "k0_kernel_outbox_apply_total{outcome=\"error\"}",
           "legendFormat": "Exponential Growth Alert",
           "refId": "A"
         }

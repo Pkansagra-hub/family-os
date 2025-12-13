@@ -49,8 +49,12 @@ Date: 2025-12-09
 from __future__ import annotations
 
 import logging
+import os
 import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -59,6 +63,180 @@ logger = logging.getLogger(__name__)
 _ultrabert_client: Any = None
 _ultrabert_lock = threading.Lock()
 _initialization_attempted = False
+
+
+def _maybe_full_warmup(client: Any) -> None:
+    """Optionally run a full `analyze()` pass to avoid first-request latency spikes.
+
+    Why this exists:
+    - The UltraBERT client supports warmup on init, but that warmup may not exercise
+      the exact code-path used by K0 (especially when we call full `analyze()` to
+      reuse one forward pass for multiple module needs).
+    - On GPU/PyTorch backends, the first real `analyze()` can still pay compilation/
+      kernel initialization costs. This warmup makes that cost happen at startup.
+
+    Controlled by env:
+      - K0_ULTRABERT_FULL_WARMUP: "1" (default) / "0" disables
+      - K0_ULTRABERT_FULL_WARMUP_ROUNDS: int, default 1
+      - K0_ULTRABERT_FULL_WARMUP_TEXT: sample text, default "warmup"
+    """
+    if client is None:
+        return
+
+    if os.getenv("K0_ULTRABERT_FULL_WARMUP", "1") in {"0", "false", "False"}:
+        return
+
+    try:
+        rounds = int(os.getenv("K0_ULTRABERT_FULL_WARMUP_ROUNDS", "1"))
+    except ValueError:
+        rounds = 1
+
+    if rounds <= 0:
+        return
+
+    text = os.getenv("K0_ULTRABERT_FULL_WARMUP_TEXT", "warmup")
+    for i in range(rounds):
+        try:
+            t0 = time.perf_counter()
+            _ = client.analyze(text)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            logger.info(
+                "UltraBERT full-analysis warmup complete",
+                extra={
+                    "warmup_round": i + 1,
+                    "warmup_rounds": rounds,
+                    "backend": getattr(client, "backend", "unknown"),
+                    "latency_ms": round(elapsed_ms, 2),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"UltraBERT full-analysis warmup failed: {e}")
+            return
+
+
+# ============================================================================
+# Single-pass analysis cache
+#
+# Motivation:
+# - Multiple K0 modules call UltraBERT for different slices (affect, entities,
+#   ingress/intent). UltraBERT can return all fields in one forward pass.
+# - Enabling single-pass caching collapses repeated per-event inference.
+#
+# Behavior:
+# - When enabled, adapter performs ONE client.analyze(text) per unique text (TTL/LRU)
+#   and all helper functions read from the cached full result.
+# - When disabled, adapter keeps per-capability calls (legacy behavior).
+#
+# NOTE: This is an in-process cache (per kernel process), not cross-process.
+# ============================================================================
+
+
+def _is_single_pass_enabled() -> bool:
+    """Return True when adapter should reuse one full forward pass per text.
+
+    Reads env dynamically so tests and live configuration can toggle behavior
+    without requiring a process restart.
+    """
+    return os.getenv("K0_ULTRABERT_SINGLE_PASS", "1") not in {"0", "false", "False"}
+
+
+_ANALYSIS_CACHE_TTL_SEC = float(os.getenv("K0_ULTRABERT_ANALYSIS_CACHE_TTL_SEC", "30"))
+_ANALYSIS_CACHE_MAX_ENTRIES = int(os.getenv("K0_ULTRABERT_ANALYSIS_CACHE_MAX_ENTRIES", "64"))
+
+_analysis_cache_lock = threading.Lock()
+_analysis_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
+
+_analysis_cache_metrics: dict[str, int] = {
+    "analysis_cache_hits": 0,
+    "analysis_cache_misses": 0,
+    "analysis_cache_evictions": 0,
+    "analysis_single_pass_calls": 0,
+}
+
+
+def _analysis_cache_key(text: str) -> str:
+    normalized = (text or "").strip()
+    return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _analysis_cache_get(key: str) -> Any | None:
+    now = time.time()
+    with _analysis_cache_lock:
+        item = _analysis_cache.get(key)
+        if item is None:
+            _analysis_cache_metrics["analysis_cache_misses"] += 1
+            return None
+
+        created_at, result = item
+        if _ANALYSIS_CACHE_TTL_SEC > 0 and (now - created_at) > _ANALYSIS_CACHE_TTL_SEC:
+            # Expired
+            try:
+                del _analysis_cache[key]
+            except KeyError:
+                pass
+            _analysis_cache_metrics["analysis_cache_misses"] += 1
+            return None
+
+        # LRU refresh
+        _analysis_cache.move_to_end(key)
+        _analysis_cache_metrics["analysis_cache_hits"] += 1
+        return result
+
+
+def _analysis_cache_put(key: str, result: Any) -> None:
+    now = time.time()
+    with _analysis_cache_lock:
+        _analysis_cache[key] = (now, result)
+        _analysis_cache.move_to_end(key)
+
+        # Enforce max size
+        while (
+            _ANALYSIS_CACHE_MAX_ENTRIES > 0 and len(_analysis_cache) > _ANALYSIS_CACHE_MAX_ENTRIES
+        ):
+            _analysis_cache.popitem(last=False)
+            _analysis_cache_metrics["analysis_cache_evictions"] += 1
+
+
+def reset_analysis_cache() -> None:
+    """Clear the in-process UltraBERT analysis cache.
+
+    Intended for tests and diagnostics.
+    """
+    with _analysis_cache_lock:
+        _analysis_cache.clear()
+    for k in list(_analysis_cache_metrics.keys()):
+        _analysis_cache_metrics[k] = 0
+
+
+def get_analysis_cache_metrics() -> dict[str, int]:
+    """Return cache metrics counters (best-effort)."""
+    return dict(_analysis_cache_metrics)
+
+
+def _get_full_analysis_result(text: str) -> Any | None:
+    """Get a full UltraBERT analysis result, optionally via single-pass cache."""
+    client = get_ultrabert_client()
+    if client is None:
+        return None
+
+    if not _is_single_pass_enabled():
+        # Legacy: callers will invoke client.analyze with specific capabilities.
+        return None
+
+    key = _analysis_cache_key(text)
+    cached = _analysis_cache_get(key)
+    if cached is not None:
+        return cached
+
+    # Cache miss: run ONE full forward pass
+    try:
+        _analysis_cache_metrics["analysis_single_pass_calls"] += 1
+        result = client.analyze(text)  # all capabilities
+        _analysis_cache_put(key, result)
+        return result
+    except Exception as e:
+        logger.error(f"UltraBERT full analysis failed: {e}")
+        return None
 
 
 # ============================================================================
@@ -200,6 +378,8 @@ def _load_ultrabert_client() -> Any:
             warmup_rounds=2,
             verbose=False,
         )
+        _maybe_full_warmup(client)
+
         logger.info(
             "UltraBERT loaded successfully",
             extra={
@@ -272,18 +452,32 @@ def init_ultrabert_client(warmup: bool = True, warmup_rounds: int = 2) -> Any:
         _initialization_attempted = True
 
         try:
+            import torch
             from familyos_ultrabert import Client
+
+            backend = "auto"
+            if torch.cuda.is_available():
+                try:
+                    arch_list = torch.cuda.get_arch_list()
+                except Exception:
+                    arch_list = []
+                if "sm_120" in arch_list or "sm_100" in arch_list:
+                    backend = "pytorch"
 
             logger.info("Initializing FamilyOS UltraBERT client...")
             _ultrabert_client = Client(
+                backend=backend,
                 warmup=warmup,
                 warmup_rounds=warmup_rounds,
                 verbose=False,
             )
+
+            _maybe_full_warmup(_ultrabert_client)
             logger.info(
                 "UltraBERT client initialized",
                 extra={
                     "version": getattr(_ultrabert_client, "VERSION", "unknown"),
+                    "backend": getattr(_ultrabert_client, "backend", "unknown"),
                     "warmup": warmup,
                     "warmup_rounds": warmup_rounds,
                 },
@@ -324,10 +518,14 @@ def analyze_affect(text: str) -> AffectResult | None:
         return None
 
     try:
-        result = client.analyze(
-            text,
-            capabilities=["sentiment", "emotions", "safety_familyos"],
-        )
+        # Prefer a single full-pass result (cached) to avoid repeated inference.
+        result = _get_full_analysis_result(text)
+        if result is None:
+            # Legacy fallback: capability-scoped call
+            result = client.analyze(
+                text,
+                capabilities=["sentiment", "emotions", "safety_familyos"],
+            )
 
         # Map sentiment to valence
         valence = SENTIMENT_TO_VALENCE.get(result.sentiment, 0.5)
@@ -403,10 +601,13 @@ def extract_entities(text: str) -> list[EntityResult]:
         return []
 
     try:
-        result = client.analyze(
-            text,
-            capabilities=["ner_family", "ner_general"],
-        )
+        # Prefer cached full-pass result.
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(
+                text,
+                capabilities=["ner_family", "ner_general"],
+            )
 
         entities = []
 
@@ -461,7 +662,10 @@ def extract_temporal(text: str) -> list[TemporalResult]:
         return []
 
     try:
-        result = client.analyze(text, capabilities=["temporal"])
+        # Prefer cached full-pass result.
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(text, capabilities=["temporal"])
 
         temporals = []
         for temp in result.temporal:
@@ -501,7 +705,10 @@ def classify_activity(text: str) -> ActivityResult | None:
         return None
 
     try:
-        result = client.analyze(text, capabilities=["ingress", "intent"])
+        # Prefer cached full-pass result.
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(text, capabilities=["ingress", "intent"])
 
         ingress = result.ingress
         activity_type = INGRESS_TO_ACTIVITY.get(ingress, "routine")
@@ -565,7 +772,10 @@ def check_safety(text: str) -> tuple[bool, str, str | None]:
         return False, "GREEN", None
 
     try:
-        result = client.analyze(text, capabilities=["safety_familyos"])
+        # Prefer cached full-pass result.
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(text, capabilities=["safety_familyos"])
         is_concern = result.safety in ("AMBER", "RED", "CRISIS")
         summary = f"Safety: {result.safety}"
         if hasattr(result, "needs_attention") and result.needs_attention:
@@ -648,7 +858,9 @@ def full_analysis(text: str) -> dict[str, Any] | None:
         return None
 
     try:
-        result = client.analyze(text)  # All capabilities
+        result = _get_full_analysis_result(text)
+        if result is None:
+            result = client.analyze(text)  # All capabilities
 
         return {
             "text": text,

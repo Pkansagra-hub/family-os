@@ -601,113 +601,186 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         },
     )
 
-    # Extract module outputs from envelope (flat P02 structure - enrichments at top level)
+    # Extract module outputs from envelope (Phase 3: prefer nested, fallback to flat)
+    enrichments = envelope.get("enrichments", {})
+
+    # DG pattern separation (M01)
+    dg_enrichment = enrichments.get("hippocampus_pattern_separate", {})
+    # Nested returns array, flat returns JSON string - serialize if needed
+    minhash_value = dg_enrichment.get("minhash32") or envelope.get("minhash32")
+    if isinstance(minhash_value, list):
+        minhash_value = serialize_to_json(minhash_value, "minhash32")
     dg_output = {
-        "simhash_hex": envelope.get("simhash_hex"),
-        "minhash32": envelope.get("minhash32"),
+        "simhash_hex": dg_enrichment.get("simhash_hex") or envelope.get("simhash_hex"),
+        "minhash32": minhash_value,
     }
+
+    # CA1 semantic projection (M02)
+    ca1_enrichment = enrichments.get("hippocampus_semantic_project", {})
     ca1_output = {
-        "embedding_id": envelope.get("embedding_id"),
-        "entities_json": envelope.get("entities_json"),
-        "kg_triples_json": envelope.get("kg_triples_json"),
+        "embedding_id": ca1_enrichment.get("embedding_id") or envelope.get("embedding_id"),
+        "entities_json": ca1_enrichment.get("entities_json") or envelope.get("entities_json"),
+        "kg_triples_json": ca1_enrichment.get("kg_triples_json") or envelope.get("kg_triples_json"),
     }
+
     policy_output = envelope.get("policy_stamp", {})
 
-    # Debug: Check if affect fields are in envelope
-    affect_keys_present = [
-        k
-        for k in ["affect_valence", "affect_arousal", "dominant_emotions", "affect_band"]
-        if k in envelope
-    ]
-    if not affect_keys_present:
-        context.logger.warning(
-            f"M13 builder: NO AFFECT FIELDS in envelope! Keys present: {list(envelope.keys())[:30]}"
-        )
-
+    # Affect analysis (M04) - Phase 3: prefer nested, fallback to flat
+    affect_enrichment = enrichments.get("affect_analyzer", {})
     affect_output = {
-        "valence": envelope.get("affect_valence"),
-        "arousal": envelope.get("affect_arousal"),
-        "dominant_emotions": envelope.get("dominant_emotions"),
-        "affect_band": envelope.get("affect_band"),
-        "band_reasons": envelope.get("band_reasons"),
-        "model_version": envelope.get("model_version"),
-        "confidence": envelope.get("confidence"),
+        "valence": affect_enrichment.get("valence") or envelope.get("affect_valence"),
+        "arousal": affect_enrichment.get("arousal") or envelope.get("affect_arousal"),
+        "dominant_emotions": affect_enrichment.get("dominant_emotions")
+        or envelope.get("dominant_emotions"),
+        "affect_band": affect_enrichment.get("band") or envelope.get("affect_band"),
+        "band_reasons": affect_enrichment.get("band_reasons") or envelope.get("band_reasons"),
+        "model_version": affect_enrichment.get("model_version") or envelope.get("model_version"),
+        "confidence": affect_enrichment.get("confidence") or envelope.get("confidence"),
+        "clinical_safety_risk": affect_enrichment.get("clinical_safety_risk")
+        or envelope.get("clinical_safety_risk", False),
+        "clinical_safety_severity": affect_enrichment.get("clinical_safety_severity")
+        or envelope.get("clinical_safety_severity"),
     }
-    # M05 space.resolve_visibility returns flattened fields at envelope top level
+    # Space visibility (M05) - Phase 3: prefer nested, fallback to flat
+    space_enrichment = enrichments.get("space_resolver", {})
     space_output = {
-        "owner_id": envelope.get("owner_id"),
-        "co_owners": envelope.get("co_owners_json"),
-        "visible_to": envelope.get("visible_to_json"),
-        "visibility_scope": envelope.get("visibility_scope"),
+        "owner_id": space_enrichment.get("owner_id") or envelope.get("owner_id"),
+        "co_owners": (
+            serialize_to_json(space_enrichment.get("co_owners"), "co_owners")
+            if space_enrichment.get("co_owners")
+            else envelope.get("co_owners_json")
+        ),
+        "visible_to": (
+            serialize_to_json(space_enrichment.get("visible_to"), "visible_to")
+            if space_enrichment.get("visible_to")
+            else envelope.get("visible_to_json")
+        ),
+        "visibility_scope": space_enrichment.get("visibility_scope")
+        or envelope.get("visibility_scope"),
         "effective_space_id": envelope.get("space_id"),  # May be enriched later
     }
 
-    # M06 salience.score outputs salience_score, salience_band, and salience_reasons_json
-    # Note: salience_reasons_json is already a JSON string from M06
-    salience_reasons_json = envelope.get("salience_reasons_json", "[]")
-    # Parse JSON string to list for map_affect_salience_group (it expects a list)
-    try:
-        if isinstance(salience_reasons_json, str):
-            salience_reasons = json.loads(salience_reasons_json)
-        else:
-            salience_reasons = salience_reasons_json or []
-    except (json.JSONDecodeError, TypeError):
-        salience_reasons = []
+    # Salience scoring (M06) - Phase 3: prefer nested, fallback to flat
+    salience_enrichment = enrichments.get("salience_scorer", {})
+
+    # Handle reasons: nested gives array, flat gives JSON string
+    if salience_enrichment.get("reasons"):
+        salience_reasons = salience_enrichment.get("reasons", [])
+    else:
+        salience_reasons_json = envelope.get("salience_reasons_json", "[]")
+        try:
+            if isinstance(salience_reasons_json, str):
+                salience_reasons = json.loads(salience_reasons_json)
+            else:
+                salience_reasons = salience_reasons_json or []
+        except (json.JSONDecodeError, TypeError):
+            salience_reasons = []
 
     salience_output = {
-        "salience_score": envelope.get("salience_score"),
-        "salience_band": envelope.get("salience_band", "LOW"),
+        "salience_score": salience_enrichment.get("score") or envelope.get("salience_score"),
+        "salience_band": salience_enrichment.get("band") or envelope.get("salience_band", "LOW"),
         "salience_reasons": salience_reasons,
     }
 
-    # M07 family_graph_resolve outputs social context fields
+    # M07 family_graph_resolve (still flat - not migrated yet)
+    # M07 social.family_graph_resolve - Phase 4: prefer nested, fallback to flat
+    social_enrichment = enrichments.get("social_resolver", {})
     social_output = {
-        "num_participants": envelope.get("num_participants"),
-        "social_context": envelope.get("social_context"),
-        "participant_roles_json": envelope.get("participant_roles_json"),
-        "has_partner_present": envelope.get("has_partner_present", False),
-        "has_parent_present": envelope.get("has_parent_present", False),
-        "is_solo_event": envelope.get("is_solo_event", True),
-        "social_intimacy": envelope.get("social_intimacy", "LOW"),
+        "num_participants": social_enrichment.get("num_participants")
+        or envelope.get("num_participants"),
+        "social_context": social_enrichment.get("social_context") or envelope.get("social_context"),
+        "participant_roles_json": social_enrichment.get("participant_roles_json")
+        or envelope.get("participant_roles_json"),
+        "has_partner_present": (
+            social_enrichment.get("has_partner_present")
+            if social_enrichment.get("has_partner_present") is not None
+            else envelope.get("has_partner_present", False)
+        ),
+        "has_parent_present": (
+            social_enrichment.get("has_parent_present")
+            if social_enrichment.get("has_parent_present") is not None
+            else envelope.get("has_parent_present", False)
+        ),
+        "is_solo_event": (
+            social_enrichment.get("is_solo_event")
+            if social_enrichment.get("is_solo_event") is not None
+            else envelope.get("is_solo_event", True)
+        ),
+        "social_intimacy": social_enrichment.get("social_intimacy")
+        or envelope.get("social_intimacy", "LOW"),
     }
+
+    # M08 temporal_profile - Phase 4: prefer nested, fallback to flat
+    temporal_enrichment = enrichments.get("temporal_profiler", {})
     temporal_output = {
-        k: envelope.get(k)
-        for k in [
-            "event_time_utc",
-            "write_time_utc",
-            "write_lag_ms",
-            "local_date",
-            "local_time",
-            "day_of_week",
-            "is_weekend",
-            "time_of_day_bucket",
-            "circadian_slot",
-            "is_backdated",
-        ]
+        "event_time_utc": temporal_enrichment.get("event_time_utc")
+        or envelope.get("event_time_utc"),
+        "write_time_utc": temporal_enrichment.get("write_time_utc")
+        or envelope.get("write_time_utc"),
+        "write_lag_ms": temporal_enrichment.get("write_lag_ms") or envelope.get("write_lag_ms"),
+        "local_date": temporal_enrichment.get("local_date") or envelope.get("local_date"),
+        "local_time": temporal_enrichment.get("local_time") or envelope.get("local_time"),
+        "day_of_week": temporal_enrichment.get("day_of_week") or envelope.get("day_of_week"),
+        "is_weekend": (
+            temporal_enrichment.get("is_weekend")
+            if temporal_enrichment.get("is_weekend") is not None
+            else envelope.get("is_weekend")
+        ),
+        "time_of_day_bucket": temporal_enrichment.get("time_of_day_bucket")
+        or envelope.get("time_of_day_bucket"),
+        "circadian_slot": temporal_enrichment.get("circadian_slot")
+        or envelope.get("circadian_slot"),
+        "is_backdated": (
+            temporal_enrichment.get("is_backdated")
+            if temporal_enrichment.get("is_backdated") is not None
+            else envelope.get("is_backdated")
+        ),
     }
+
+    # M09 device_profile - Phase 4: prefer nested, fallback to flat
+    device_enrichment = enrichments.get("device_profiler", {})
     device_output = {
-        "device_kind": envelope.get("device_kind"),
-        "device_os": envelope.get("device_os"),
+        "device_kind": device_enrichment.get("device_kind") or envelope.get("device_kind"),
+        "device_os": device_enrichment.get("device_platform") or envelope.get("device_os"),
     }
-    # Extract ingress classification fields from M10 ingress_classify module
+
+    # M10 ingress_classify - Phase 4: prefer nested, fallback to flat
+    ingress_enrichment = enrichments.get("ingress_classifier", {})
     ingress_output = {
-        "ingress_channel": envelope.get("ingress_topic", envelope.get("ingress_channel")),
-        "ingress_topic": envelope.get("ingress_topic"),
-        "activity_type": envelope.get("activity_type", "unknown"),
-        "activity_category": envelope.get("content_type", "episodic"),
-        "ingress_source": envelope.get("ingress_source", "mobile_app"),
+        "ingress_channel": ingress_enrichment.get("ingress_topic")
+        or envelope.get("ingress_topic", envelope.get("ingress_channel")),
+        "ingress_topic": ingress_enrichment.get("ingress_topic") or envelope.get("ingress_topic"),
+        "activity_type": ingress_enrichment.get("activity_type")
+        or envelope.get("activity_type", "unknown"),
+        "activity_category": ingress_enrichment.get("content_type")
+        or envelope.get("content_type", "episodic"),
+        "ingress_source": ingress_enrichment.get("ingress_source")
+        or envelope.get("ingress_source", "mobile_app"),
     }
+
+    # M11 retention_lookup - Phase 4: prefer nested, fallback to flat
+    retention_enrichment = enrichments.get("retention_policy", {})
     retention_output = {
-        "retention_policy_id": envelope.get("retention_policy_id"),
-        "retention_bucket": envelope.get("retention_bucket"),
+        "retention_policy_id": retention_enrichment.get("retention_policy_id")
+        or envelope.get("retention_policy_id"),
+        "retention_bucket": retention_enrichment.get("retention_bucket")
+        or envelope.get("retention_bucket"),
     }
+
+    # M12 geo_metadata - Phase 4: prefer nested, fallback to flat
+    geo_enrichment = enrichments.get("geo_metadata", {})
     geo_output = {
-        "geo_precision_external": envelope.get("geo_precision_external"),
-        "geo_masking_reason": envelope.get("geo_masking_reason"),
+        "geo_precision_external": geo_enrichment.get("geo_precision_external")
+        or envelope.get("geo_precision_external"),
+        "geo_masking_reason": geo_enrichment.get("geo_masking_reason")
+        or envelope.get("geo_masking_reason"),
     }
+
+    # M15 spatial_minimal - Phase 4: prefer nested, fallback to flat
+    spatial_enrichment = enrichments.get("spatial_resolver", {})
     spatial_output = {
-        "geohash_6": envelope.get("geohash_6"),
-        "location_name": envelope.get("location_name"),
+        "geohash_6": spatial_enrichment.get("geohash_6") or envelope.get("geohash_6"),
+        "location_name": spatial_enrichment.get("location_name") or envelope.get("location_name"),
     }
 
     # Assemble row by column groups (9 groups)

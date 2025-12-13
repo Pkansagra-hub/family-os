@@ -20,7 +20,6 @@ Related:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -44,7 +43,7 @@ class PermissionError(Exception):
         - May indicate malicious pipeline or misconfigured contract
 
     Example:
-        >>> syscalls = Syscalls("P02", {"st_hipp_store.write"}, uow_factory)
+        >>> syscalls = Syscalls("P02", {"st_hipp_events.write"}, uow_factory)
         >>> await syscalls.query_embeddings(...)  # Raises PermissionError
     """
 
@@ -73,7 +72,7 @@ class Syscalls:
         5. **No Ambient Authority**: Can't access storage without Syscalls
 
     Capability Format:
-        "<table>.<operation>" (e.g., "st_hipp_store.write", "embeddings.read")
+        "<table>.<operation>" (e.g., "st_hipp_events.write", "embeddings.read")
 
     Example Usage:
         >>> # In loader.py (M2 R2.2)
@@ -83,12 +82,8 @@ class Syscalls:
         >>> await pipeline.on_startup(ctx)
         >>>
         >>> # In pipeline.handle()
-        >>> await ctx.syscalls.hipp_store_upsert(
-        ...     space_id="space_abc",
-        ...     event_id="evt_123",
-        ...     payload={"text": "Meeting with doctor"},
-        ...     cognitive_trace_id="trace_xyz"
-        ... )
+        >>> row = {"event_id": "evt_123", "wal_pos": 42, "embedding_id": "emb_1", "policy_band": "GREEN", "cognitive_trace_id": "trace_xyz"}
+        >>> await ctx.syscalls.hipp_events_upsert(**row)
 
     Related:
         - M2 R2.1: Syscalls implementation (this file)
@@ -113,7 +108,7 @@ class Syscalls:
         Example:
             >>> syscalls = Syscalls(
             ...     pipeline_id="P02",
-            ...     granted_caps={"st_hipp_store.write"},
+            ...     granted_caps={"st_hipp_events.write"},
             ...     uow_factory=lambda: UnitOfWork(connection_pool)
             ... )
         """
@@ -140,17 +135,11 @@ class Syscalls:
         cognitive_trace_id: str,
     ) -> None:
         """
-        Insert/update st_hipp_store (requires st_hipp_store.write cap).
+        Deprecated: legacy st_hipp_store staging write.
 
-        Hippocampus staging area for raw sensory/conversational input. Used by
-        P02 (Episodic Write) pipeline for pattern separation and novelty detection.
-
-        Capability Required: "st_hipp_store.write"
-
-        Storage Table: st_hipp_store
-        - Purpose: Short-term staging (7-30 days) before consolidation
-        - Lifecycle: TEMPORARY → P03 consolidation → DELETE
-        - Columns: event_id, cognitive_trace_id, text, simhash_hex, novelty, etc.
+        The st_hipp_store table was deprecated (migration 0021) and dropped (migration 0022).
+        The canonical staging/enriched event write path is st_hipp_events via hipp_events_upsert
+        (requires "st_hipp_events.write").
 
         Args:
             space_id: Memory space identifier (per-space isolation)
@@ -164,20 +153,11 @@ class Syscalls:
             cognitive_trace_id: End-to-end observability trace ID
 
         Raises:
-            PermissionError: If pipeline lacks "st_hipp_store.write" capability
+            RuntimeError: Always, because st_hipp_store is no longer part of the active schema
 
         Example:
-            >>> await syscalls.hipp_store_upsert(
-            ...     space_id="space_abc",
-            ...     event_id="evt_123",
-            ...     payload={
-            ...         "text": "Had doctor appointment",
-            ...         "simhash_hex": "abc123...",
-            ...         "novelty": 0.85,
-            ...         "topics": ["health", "medical"]
-            ...     },
-            ...     cognitive_trace_id="trace_xyz"
-            ... )
+            >>> row = {"event_id": "evt_123", "wal_pos": 42, "embedding_id": "emb_1", "policy_band": "GREEN", "cognitive_trace_id": "trace_xyz"}
+            >>> await syscalls.hipp_events_upsert(**row)
 
         Performance:
             - Target: <50ms P95 (single UPSERT)
@@ -185,89 +165,23 @@ class Syscalls:
             - Indexed on event_id (primary key)
 
         Related:
-            - P02 pipeline: Primary user of this syscall
-            - st_hipp_store table: Migration 0006
-            - Section 12 of k0_pipeline_architecture.md: P02 implementation
+            - hipp_events_upsert: canonical event upsert syscall
+            - st_hipp_events table: Migration 0024
         """
-        self._require_cap("st_hipp_store.write")
-
-        # Audit: Log storage operation
-        start_time = time.perf_counter()
-        logger.debug(
-            f"hipp_store_upsert: {self._pipeline_id}",
+        logger.error(
+            "hipp_store_upsert called but st_hipp_store is deprecated",
             extra={
                 "pipeline_id": self._pipeline_id,
                 "space_id": space_id,
                 "event_id": event_id,
                 "trace_id": cognitive_trace_id,
                 "operation": "hipp_store_upsert",
+                "deprecated": True,
             },
         )
-
-        # Execute storage operation in UnitOfWork transaction
-        async with self._uow_factory() as uow:
-            # Build UPSERT SQL (INSERT OR REPLACE for idempotency)
-            conn = uow._connection
-            if conn is None:
-                raise RuntimeError("UnitOfWork connection not initialized")
-
-            # Extract fields from payload
-            text = payload.get("text", "")
-            simhash_hex = payload.get("simhash_hex")
-            minhash32 = json.dumps(payload.get("minhash32", []))
-            novelty = payload.get("novelty")
-            topics = json.dumps(payload.get("topics", []))
-            categories = json.dumps(payload.get("categories", []))
-            activity_type = payload.get("activity_type")
-            length = len(text)
-            created_at = int(time.time())
-
-            # UPSERT into st_hipp_store
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: conn.execute(
-                    """
-                    INSERT OR REPLACE INTO st_hipp_store (
-                        event_id, cognitive_trace_id, text, length,
-                        simhash_hex, minhash32, novelty,
-                        topics, categories, activity_type,
-                        author_id, tenant_id, space_id, privacy_band,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        event_id,
-                        cognitive_trace_id,
-                        text,
-                        length,
-                        simhash_hex,
-                        minhash32,
-                        novelty,
-                        topics,
-                        categories,
-                        activity_type,
-                        payload.get("author_id", "unknown"),
-                        payload.get("tenant_id", "default"),
-                        space_id,
-                        payload.get("privacy_band", "GREEN"),
-                        created_at,
-                    ),
-                ),
-            )
-
-            # UnitOfWork context manager will auto-commit on successful exit
-
-        # Audit: Log operation completion
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            f"hipp_store_upsert complete: {event_id}",
-            extra={
-                "pipeline_id": self._pipeline_id,
-                "event_id": event_id,
-                "duration_ms": duration_ms,
-                "trace_id": cognitive_trace_id,
-            },
+        raise RuntimeError(
+            "hipp_store_upsert is deprecated because st_hipp_store was dropped (migrations 0021/0022). "
+            "Use hipp_events_upsert (requires st_hipp_events.write)."
         )
 
     async def hipp_events_upsert(self, **row: Any) -> dict[str, Any]:
@@ -1216,6 +1130,506 @@ class Syscalls:
                 )
                 raise
 
+    async def vec_write(
+        self,
+        embedding_id: str,
+        event_id: str,
+        tenant_id: str,
+        space_id: str,
+        vector: bytes,
+        vector_dim: int = 768,
+        model_id: str = "ultrabert_v2.1.0",
+        status: str = "READY",
+        cognitive_trace_id: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Write embedding vector to st_vec table (requires st_vec.write cap).
+
+        Used by M23 (builders.embedding_write) to store 768-dim UltraBERT embeddings
+        inline during P02 processing. Replaces async P08 queue pattern (ADR-K003).
+
+        Capability Required: "st_vec.write"
+
+        Storage Table: st_vec
+        - Purpose: Primary storage for 768-dim embeddings (inline with P02)
+        - Lifecycle: Permanent (tied to st_hipp_events via FK)
+        - Primary Key: embedding_id (unique, idempotent)
+        - Foreign Key: event_id → st_hipp_events.event_id (ON DELETE CASCADE)
+        - Indexes: 4 (event_id, tenant_space, model_id, status_created)
+
+        Status Values:
+        - READY: Embedding stored, available for use
+        - INDEXED: Also added to FAISS search index (P08 M24)
+        - FAILED: Generation failed
+
+        Args:
+            embedding_id: Unique embedding identifier (UUID, idempotency key)
+            event_id: Source event identifier (FK to st_hipp_events)
+            tenant_id: Tenant isolation boundary
+            space_id: Memory space identifier
+            vector: 768-dim float32 embedding as bytes (3072 bytes)
+            vector_dim: Dimensionality of vector (default: 768)
+            model_id: Embedding model identifier (default: "ultrabert_v2.1.0")
+            status: Embedding status (default: "READY")
+            cognitive_trace_id: Optional trace ID for observability
+
+        Returns:
+            Dictionary with:
+            - inserted: bool (True if inserted, False if duplicate skipped)
+            - embedding_id: str
+            - status: str ('INSERTED' or 'SKIPPED_DUPLICATE')
+
+        Raises:
+            PermissionError: If pipeline lacks "st_vec.write" capability
+            ValueError: If required fields missing or invalid
+
+        Example:
+            >>> import struct
+            >>> embedding = [0.1] * 768  # 768-dim vector
+            >>> vector_bytes = struct.pack('768f', *embedding)
+            >>> result = await syscalls.vec_write(
+            ...     embedding_id="emb_uuid_abc123",
+            ...     event_id="evt_123",
+            ...     tenant_id="tenant_abc",
+            ...     space_id="space_xyz",
+            ...     vector=vector_bytes,
+            ...     vector_dim=768,
+            ...     model_id="ultrabert_v2.1.0",
+            ...     status="READY"
+            ... )
+            >>> result["inserted"]
+            True
+
+        Performance:
+            - Target: <5ms P95 (single INSERT with 3KB blob + 4 indexes)
+            - Uses INSERT OR IGNORE for idempotency
+            - Connection pooling via UnitOfWork
+
+        Related:
+            - M23 (builders.embedding_write): Primary user of this syscall
+            - M22 (embedding.extract_from_cache): Extracts vector from UltraBERT cache
+            - ADR-K003: Inline embedding architecture decision
+            - Migration 0026: st_vec table definition
+        """
+        self._require_cap("st_vec.write")
+
+        # Validation
+        if not embedding_id:
+            raise ValueError("embedding_id required for vec_write")
+        if not event_id:
+            raise ValueError("event_id required for vec_write")
+        if not tenant_id:
+            raise ValueError("tenant_id required for vec_write")
+        if not space_id:
+            raise ValueError("space_id required for vec_write")
+        if not vector:
+            raise ValueError("vector required for vec_write")
+        if status not in ("READY", "INDEXED", "FAILED"):
+            raise ValueError(f"Invalid status: {status} (expected READY/INDEXED/FAILED)")
+        if vector_dim != 768:
+            raise ValueError(f"Invalid vector_dim: {vector_dim} (expected 768)")
+        if len(vector) != 3072:  # 768 floats * 4 bytes
+            raise ValueError(f"Invalid vector size: {len(vector)} bytes (expected 3072)")
+
+        # Audit: Log storage operation
+        start_time = time.perf_counter()
+        logger.debug(
+            f"vec_write: {self._pipeline_id}",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_id": embedding_id,
+                "event_id": event_id,
+                "space_id": space_id,
+                "vector_dim": vector_dim,
+                "model_id": model_id,
+                "status": status,
+                "trace_id": cognitive_trace_id,
+                "operation": "vec_write",
+            },
+        )
+
+        # Execute storage operation in UnitOfWork transaction
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            created_at = int(time.time())
+            updated_at = created_at
+
+            try:
+                # Use INSERT OR IGNORE for idempotency
+                loop = asyncio.get_running_loop()
+                cursor = await loop.run_in_executor(
+                    None,
+                    lambda: conn.execute(
+                        """
+                        INSERT OR IGNORE INTO st_vec (
+                            embedding_id, event_id, tenant_id, space_id,
+                            vector, vector_dim, model_id, status,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            embedding_id,
+                            event_id,
+                            tenant_id,
+                            space_id,
+                            vector,
+                            vector_dim,
+                            model_id,
+                            status,
+                            created_at,
+                            updated_at,
+                        ),
+                    ),
+                )
+
+                inserted = cursor.rowcount > 0
+
+                # Audit: Log performance
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    f"vec_write completed: {embedding_id}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "inserted": inserted,
+                        "latency_ms": elapsed_ms,
+                        "operation": "vec_write",
+                    },
+                )
+
+                return {
+                    "inserted": inserted,
+                    "embedding_id": embedding_id,
+                    "status": "INSERTED" if inserted else "SKIPPED_DUPLICATE",
+                }
+
+            except Exception as e:
+                logger.error(
+                    f"vec_write failed: {embedding_id}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "embedding_id": embedding_id,
+                        "event_id": event_id,
+                        "error": str(e),
+                        "trace_id": cognitive_trace_id,
+                    },
+                )
+                raise
+
+    async def faiss_add(
+        self,
+        embedding_id: str,
+        vector: list[float],
+        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+    ) -> dict[str, Any]:
+        """
+        Add single vector to FAISS similarity search index (requires faiss.write cap).
+
+        Used by P08 M24 (embedding.faiss_indexer) to add 768-dim embeddings to
+        FAISS IVF256,PQ64 index for semantic search.
+
+        Capability Required: "faiss.write"
+
+        FAISS Index Configuration:
+        - Index Type: IVF256,PQ64 (Inverted File with Product Quantization)
+        - Vector Dimension: 768
+        - Compression Ratio: 8:1 (768 * 4 bytes → 384 bytes)
+        - Search Parameter: nprobe=16 (cells to probe)
+        - Distance Metric: L2 (Euclidean distance)
+
+        Args:
+            embedding_id: Unique embedding identifier (used as FAISS ID)
+            vector: 768-dim float32 embedding
+            index_id: FAISS index identifier (default: ultrabert_v2.1.0_ivf256_pq64)
+
+        Returns:
+            Dictionary with:
+            - added: bool (True if added successfully)
+            - embedding_id: str
+            - index_id: str
+            - total_vectors: int (total vectors in index after addition)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.write" capability
+            ValueError: If vector dimension invalid
+            NotImplementedError: FAISS integration not yet implemented
+
+        Example:
+            >>> embedding = [0.1] * 768  # 768-dim vector
+            >>> result = await syscalls.faiss_add(
+            ...     embedding_id="emb_uuid_abc123",
+            ...     vector=embedding,
+            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
+            ... )
+            >>> result["added"]
+            True
+
+        Performance:
+            - Target: <50ms P95 (single vector addition)
+            - Batch operations preferred (use faiss_add_batch)
+
+        Related:
+            - M24 (embedding.faiss_indexer): Primary user of this syscall
+            - ADR-K003: FAISS indexing for P08 v2
+        """
+        self._require_cap("faiss.write")
+
+        # Validation
+        if not embedding_id:
+            raise ValueError("embedding_id required for faiss_add")
+        if not vector:
+            raise ValueError("vector required for faiss_add")
+        if len(vector) != 768:
+            raise ValueError(f"Invalid vector dimension: {len(vector)} (expected 768)")
+
+        # TODO: Implement FAISS integration
+        # This is a placeholder for M2 implementation
+        logger.warning(
+            "faiss_add not yet implemented (placeholder)",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "embedding_id": embedding_id,
+                "index_id": index_id,
+                "operation": "faiss_add",
+                "status": "not_implemented",
+            },
+        )
+
+        raise NotImplementedError(
+            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
+        )
+
+    async def faiss_add_batch(
+        self,
+        records: list[dict[str, Any]],
+        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+    ) -> dict[str, Any]:
+        """
+        Add batch of vectors to FAISS index (requires faiss.write cap).
+
+        Batch addition is ~5-10x faster than individual adds due to reduced
+        index update overhead.
+
+        Capability Required: "faiss.write"
+
+        Args:
+            records: List of dicts with:
+                - embedding_id: str (unique identifier)
+                - vector: list[float] (768-dim embedding)
+            index_id: FAISS index identifier
+
+        Returns:
+            Dictionary with:
+            - added_count: int (number of vectors added)
+            - batch_size: int (size of input batch)
+            - index_id: str
+            - total_vectors: int (total vectors in index after addition)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.write" capability
+            ValueError: If records invalid
+            NotImplementedError: FAISS integration not yet implemented
+
+        Example:
+            >>> records = [
+            ...     {"embedding_id": "emb_1", "vector": [0.1] * 768},
+            ...     {"embedding_id": "emb_2", "vector": [0.2] * 768},
+            ... ]
+            >>> result = await syscalls.faiss_add_batch(
+            ...     records=records,
+            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
+            ... )
+            >>> result["added_count"]
+            2
+
+        Performance:
+            - Target: 200 vectors/sec (5ms per vector in batch)
+            - Prefer batches of 50-200 vectors for optimal performance
+
+        Related:
+            - M24 (embedding.faiss_indexer): Uses this for batch indexing
+            - ADR-K003: FAISS batch indexing strategy
+        """
+        self._require_cap("faiss.write")
+
+        # Validation
+        if not records:
+            raise ValueError("records required for faiss_add_batch (empty list)")
+        for i, record in enumerate(records):
+            if "embedding_id" not in record:
+                raise ValueError(f"Record {i} missing embedding_id")
+            if "vector" not in record:
+                raise ValueError(f"Record {i} missing vector")
+            if len(record["vector"]) != 768:
+                raise ValueError(
+                    f"Record {i} invalid vector dimension: {len(record['vector'])} (expected 768)"
+                )
+
+        # TODO: Implement FAISS integration
+        logger.warning(
+            "faiss_add_batch not yet implemented (placeholder)",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "batch_size": len(records),
+                "index_id": index_id,
+                "operation": "faiss_add_batch",
+                "status": "not_implemented",
+            },
+        )
+
+        raise NotImplementedError(
+            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
+        )
+
+    async def faiss_search(
+        self,
+        query_vector: list[float],
+        k: int = 10,
+        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+        nprobe: int = 16,
+    ) -> dict[str, Any]:
+        """
+        Search FAISS index for k nearest neighbors (requires faiss.read cap).
+
+        Returns top-k most similar embeddings based on L2 distance.
+
+        Capability Required: "faiss.read"
+
+        Args:
+            query_vector: 768-dim query embedding
+            k: Number of nearest neighbors to return (default: 10)
+            index_id: FAISS index identifier
+            nprobe: Number of IVF cells to probe (default: 16)
+
+        Returns:
+            Dictionary with:
+            - embedding_ids: list[str] (k nearest neighbor IDs)
+            - distances: list[float] (L2 distances)
+            - k: int (number of results)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.read" capability
+            ValueError: If query_vector invalid
+            NotImplementedError: FAISS integration not yet implemented
+
+        Example:
+            >>> query = [0.1] * 768  # 768-dim query vector
+            >>> result = await syscalls.faiss_search(
+            ...     query_vector=query,
+            ...     k=10,
+            ...     nprobe=16
+            ... )
+            >>> result["embedding_ids"]
+            ['emb_1', 'emb_2', ...]
+
+        Performance:
+            - Target: <50ms P95 for k=10, nprobe=16
+            - Higher nprobe = better recall but slower search
+
+        Related:
+            - P03 consolidation: Uses this for similarity search
+            - ADR-K003: FAISS search configuration
+        """
+        self._require_cap("faiss.read")
+
+        # Validation
+        if not query_vector:
+            raise ValueError("query_vector required for faiss_search")
+        if len(query_vector) != 768:
+            raise ValueError(f"Invalid query_vector dimension: {len(query_vector)} (expected 768)")
+        if k < 1:
+            raise ValueError(f"Invalid k: {k} (must be >= 1)")
+        if nprobe < 1 or nprobe > 256:
+            raise ValueError(f"Invalid nprobe: {nprobe} (expected 1-256)")
+
+        # TODO: Implement FAISS integration
+        logger.warning(
+            "faiss_search not yet implemented (placeholder)",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "k": k,
+                "nprobe": nprobe,
+                "index_id": index_id,
+                "operation": "faiss_search",
+                "status": "not_implemented",
+            },
+        )
+
+        raise NotImplementedError(
+            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
+        )
+
+    async def faiss_remove_batch(
+        self,
+        embedding_ids: list[str],
+        index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
+    ) -> dict[str, Any]:
+        """
+        Remove batch of vectors from FAISS index (requires faiss.write cap).
+
+        Used by P08 M27 (embedding.cleanup) to remove orphaned embeddings.
+
+        Capability Required: "faiss.write"
+
+        Args:
+            embedding_ids: List of embedding IDs to remove
+            index_id: FAISS index identifier
+
+        Returns:
+            Dictionary with:
+            - removed_count: int (number of vectors removed)
+            - batch_size: int (size of input batch)
+            - index_id: str
+            - total_vectors: int (remaining vectors in index)
+
+        Raises:
+            PermissionError: If pipeline lacks "faiss.write" capability
+            ValueError: If embedding_ids invalid
+            NotImplementedError: FAISS integration not yet implemented
+
+        Example:
+            >>> ids = ["emb_1", "emb_2", "emb_3"]
+            >>> result = await syscalls.faiss_remove_batch(
+            ...     embedding_ids=ids,
+            ...     index_id="ultrabert_v2.1.0_ivf256_pq64"
+            ... )
+            >>> result["removed_count"]
+            3
+
+        Performance:
+            - Target: 2000 embeddings/sec (0.5ms per embedding in batch)
+            - Batch operations preferred for bulk cleanup
+
+        Related:
+            - M27 (embedding.cleanup): Uses this for orphan removal
+            - ADR-K003: FAISS cleanup strategy
+        """
+        self._require_cap("faiss.write")
+
+        # Validation
+        if not embedding_ids:
+            raise ValueError("embedding_ids required for faiss_remove_batch (empty list)")
+
+        # TODO: Implement FAISS integration
+        logger.warning(
+            "faiss_remove_batch not yet implemented (placeholder)",
+            extra={
+                "pipeline_id": self._pipeline_id,
+                "batch_size": len(embedding_ids),
+                "index_id": index_id,
+                "operation": "faiss_remove_batch",
+                "status": "not_implemented",
+            },
+        )
+
+        raise NotImplementedError(
+            "FAISS integration not yet implemented. " "Will be added in M2 P08 v2 implementation."
+        )
+
     def _require_cap(self, capability: str) -> None:
         """
         Check capability, raise PermissionError if not granted.
@@ -1224,7 +1638,7 @@ class Syscalls:
         operation is denied and logged as potential security violation.
 
         Args:
-            capability: Required capability (e.g., "st_hipp_store.write")
+            capability: Required capability (e.g., "st_hipp_events.write")
 
         Raises:
             PermissionError: If capability not in self._granted_caps
@@ -1235,7 +1649,7 @@ class Syscalls:
             - Can be used for security monitoring and alerting
 
         Example:
-            >>> self._require_cap("st_hipp_store.write")
+            >>> self._require_cap("st_hipp_events.write")
             >>> # Raises PermissionError if not granted
 
         Security Implications:

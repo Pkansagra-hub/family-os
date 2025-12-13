@@ -23,6 +23,14 @@ exit_topic: p02.write.complete.v1
 concurrency: 1
 max_queue_depth: 512
 
+# Required storage capabilities (capability-based security model)
+required_capabilities:
+  - st_hipp_events.write
+  - st_embedding_queue.write
+  - st_pipeline_processed.write
+  - st_outbox.write
+  - st_relationships.read
+
 dag:
   # STAGE 10: DG Pattern Separation
   - id: stage_10_dg_pattern_separate

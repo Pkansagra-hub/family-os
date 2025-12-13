@@ -589,12 +589,19 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
             "error": str(e),
         }
-        return {**envelope, **fallback_result}
+        return {
+            **envelope,
+            **fallback_result,
+            "enrichments": {
+                **envelope.get("enrichments", {}),
+                "social_resolver": fallback_result.get("_enrichment", {}),
+            },
+        }
 
 
 def _build_solo_response() -> Dict[str, Any]:
     """Build response for solo events (no participants or only actor)."""
-    return {
+    social_data = {
         "num_participants": 1,
         "participant_roles_json": json.dumps({}),  # Empty roles for solo
         "has_partner_present": False,
@@ -603,6 +610,21 @@ def _build_solo_response() -> Dict[str, Any]:
         "social_context": "solo",
         "social_intimacy": "LOW",
         "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        **social_data,
+        "_enrichment": {
+            "num_participants": 1,
+            "participant_roles": {},
+            "has_partner_present": False,
+            "has_parent_present": False,
+            "is_solo_event": True,
+            "social_context": "solo",
+            "social_intimacy": "LOW",
+            "social_resolved_at_utc": datetime.now(timezone.utc).isoformat(),
+            "module_version": "v1",
+            "execution_time_ms": 0.0,
+        },
     }
 
 

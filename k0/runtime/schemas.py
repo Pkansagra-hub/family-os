@@ -85,8 +85,8 @@ class ModuleContract(BaseModel):
               - p02.hippocampus.pattern_separated.v1
             latency_budget_ms: 15
             side_effects:
-              - read:st_hipp_store
-              - write:st_hipp_store
+                            - read:st_hipp_events
+                            - write:st_hipp_events
             idempotent: true
             failure_modes:
               - code: NOVELTY_SCORE_MISSING
@@ -124,7 +124,7 @@ class ModuleContract(BaseModel):
 
     side_effects: list[str] = Field(
         default_factory=list,
-        description="Storage operations (e.g., 'read:st_hipp_store', 'write:st_wal')",
+        description="Storage operations (e.g., 'read:st_hipp_events', 'write:st_wal')",
     )
 
     idempotent: bool = Field(
@@ -290,6 +290,11 @@ class PipelineSpec(BaseModel):
         description="Human-readable pipeline description",
     )
 
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Required storage capabilities (e.g., st_hipp_events.write)",
+    )
+
     @field_validator("dag")
     @classmethod
     def validate_dag_structure(cls, v: list[StageSpec]) -> list[StageSpec]:
@@ -332,9 +337,8 @@ class PipelineSpec(BaseModel):
 
     @property
     def required_caps(self) -> tuple[str, ...]:
-        """Return required capabilities (computed from modules)."""
-        # TODO: Aggregate from module contracts when registry is available
-        return ()
+        """Return required capabilities for PipelineProtocol compatibility."""
+        return tuple(self.required_capabilities)
 
     @property
     def contract_version(self) -> int:

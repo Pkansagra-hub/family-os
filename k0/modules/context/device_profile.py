@@ -407,8 +407,21 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         },
     )
 
-    # Return enriched envelope
-    return {**envelope, **device_fields}
+    # Return enriched envelope with nested enrichments
+    return {
+        **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
+        **device_fields,
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "device_profiler": {
+                **device_fields,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
+    }
 
 
 def get_metrics() -> Dict[str, Any]:

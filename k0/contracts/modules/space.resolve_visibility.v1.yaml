@@ -44,12 +44,23 @@ description: |
      - Intersect with space's allowed viewers
      - Never expand visibility beyond space policy
 
-  Output:
-  - owner_id: TEXT (person_id of space owner)
-  - co_owners: JSON array of person_ids with co-owner permissions
-  - author_role: TEXT (owner/co_owner/visitor)
-  - visible_to: JSON array of person_ids (final visibility list)
-  - space_policy_version: TEXT (version of space policy applied)
+  Output (Nested Enrichments - Phase 2):
+  - enrichments.space_resolver.owner_id: TEXT (person_id of space owner)
+  - enrichments.space_resolver.co_owners: Array of person_ids with co-owner permissions
+  - enrichments.space_resolver.author_role: TEXT (owner/co_owner/visitor)
+  - enrichments.space_resolver.visible_to: Array of person_ids (final visibility list)
+  - enrichments.space_resolver.visibility_scope: TEXT (OWNER_ONLY/SPACE_DEFAULT/etc)
+  - enrichments.space_resolver.space_policy_version: TEXT (version of space policy)
+  - enrichments.space_resolver.resolved_at_utc: ISO8601 timestamp
+  - enrichments.space_resolver.module_version: TEXT ("v1")
+
+  Legacy Flat Output (Backward Compat - Phase 2):
+  - owner_id: TEXT [DEPRECATED]
+  - co_owners_json: JSON string [DEPRECATED]
+  - author_role: TEXT [DEPRECATED]
+  - visible_to_json: JSON string [DEPRECATED]
+  - visibility_scope: TEXT [DEPRECATED]
+  - space_policy_version: TEXT [DEPRECATED]
 
   Safety Guarantees:
   - Never expands visibility beyond space policy

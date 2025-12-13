@@ -3,7 +3,7 @@ Tests for Syscalls - Capability-Gated Storage Access
 
 Test Coverage:
 - Capability enforcement (permission checks)
-- hipp_store_upsert operations
+- hipp_events_upsert operations
 - Audit logging for all operations
 - Security violations (missing capabilities)
 - Integration with UnitOfWork
@@ -13,7 +13,6 @@ Related:
 - k0/kernel/syscalls.py
 """
 
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -28,7 +27,7 @@ from k0.uow.unit_of_work import UnitOfWork
 
 @pytest.fixture
 def temp_db() -> Iterator[Path]:
-    """Create temporary database with st_hipp_store and st_relationships tables."""
+    """Create temporary database with minimal st_hipp_events and st_relationships tables."""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
         db_path = Path(tmp.name)
 
@@ -38,25 +37,19 @@ def temp_db() -> Iterator[Path]:
     # Initialize schema
     conn = sqlite3.connect(str(db_path))
 
-    # Create st_hipp_store table (simplified for testing)
+    # Create minimal st_hipp_events table for syscall testing.
+    # Note: production schema has many more columns (migration 0024).
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS st_hipp_store (
+        CREATE TABLE IF NOT EXISTS st_hipp_events (
             event_id TEXT PRIMARY KEY,
+            wal_pos INTEGER NOT NULL,
             cognitive_trace_id TEXT NOT NULL,
-            text TEXT NOT NULL,
-            length INTEGER,
-            simhash_hex TEXT,
-            minhash32 TEXT,
-            novelty REAL,
-            topics TEXT,
-            categories TEXT,
-            activity_type TEXT,
-            author_id TEXT NOT NULL,
             tenant_id TEXT NOT NULL,
             space_id TEXT NOT NULL,
-            privacy_band TEXT NOT NULL CHECK (privacy_band IN ('GREEN', 'AMBER', 'RED', 'BLACK')),
-            created_at INTEGER NOT NULL
+            embedding_id TEXT NOT NULL,
+            policy_band TEXT NOT NULL CHECK (policy_band IN ('GREEN', 'AMBER', 'RED')),
+            text TEXT
         )
         """
     )
@@ -129,19 +122,19 @@ class TestSyscallsCreation:
         """Test: Create Syscalls with single capability."""
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
         assert syscalls._pipeline_id == "P02"
-        assert syscalls._granted_caps == {"st_hipp_store.write"}
+        assert syscalls._granted_caps == {"st_hipp_events.write"}
         assert syscalls._uow_factory == uow_factory
 
     def test_create_syscalls_with_multiple_capabilities(self, uow_factory):
         """Test: Create Syscalls with multiple capabilities."""
         granted_caps = {
-            "st_hipp_store.write",
-            "st_hipp_store.read",
+            "st_hipp_events.write",
+            "st_hipp_events.read",
             "embeddings.read",
         }
 
@@ -176,7 +169,7 @@ class TestCapabilityEnforcement:
         """
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},  # Only write cap
+            granted_caps={"st_hipp_events.write"},  # Only write cap
             uow_factory=uow_factory,
         )
 
@@ -198,16 +191,16 @@ class TestCapabilityEnforcement:
         """
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
         # Should not raise exception
-        syscalls._require_cap("st_hipp_store.write")
+        syscalls._require_cap("st_hipp_events.write")
 
     def test_require_cap_error_includes_granted_caps_list(self, uow_factory):
         """Test: PermissionError message includes list of granted capabilities."""
-        granted_caps = {"st_hipp_store.write", "st_hipp_store.read"}
+        granted_caps = {"st_hipp_events.write", "st_hipp_events.read"}
         syscalls = Syscalls(
             pipeline_id="P02",
             granted_caps=granted_caps,
@@ -220,16 +213,16 @@ class TestCapabilityEnforcement:
         error_msg = str(exc_info.value)
         assert "Granted:" in error_msg
         # Check that granted caps are mentioned in sorted order
-        assert "st_hipp_store" in error_msg
+        assert "st_hipp_events" in error_msg
 
 
-class TestHippStoreUpsert:
-    """Test hipp_store_upsert operations."""
+class TestHippEventsUpsert:
+    """Test hipp_events_upsert operations."""
 
     @pytest.mark.asyncio
-    async def test_hipp_store_upsert_with_granted_cap(self, uow_factory, temp_db):
+    async def test_hipp_events_upsert_with_granted_cap(self, uow_factory, temp_db):
         """
-        Test: hipp_store_upsert succeeds with granted capability.
+        Test: hipp_events_upsert succeeds with granted capability.
 
         Acceptance Criteria (M2 R2.1):
         - [x] hipp_store_upsert implemented
@@ -237,30 +230,29 @@ class TestHippStoreUpsert:
         """
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
-        # Execute upsert
-        await syscalls.hipp_store_upsert(
-            space_id="space_abc",
+        result = await syscalls.hipp_events_upsert(
             event_id="evt_123",
-            payload={
-                "text": "Meeting with doctor",
-                "simhash_hex": "abc123",
-                "novelty": 0.85,
-                "topics": ["health", "medical"],
-                "author_id": "user_1",
-                "tenant_id": "tenant_1",
-                "privacy_band": "GREEN",
-            },
+            wal_pos=42,
             cognitive_trace_id="trace_xyz",
+            tenant_id="tenant_1",
+            space_id="space_abc",
+            embedding_id="emb_123",
+            policy_band="GREEN",
+            text="Meeting with doctor",
         )
+
+        assert result["inserted"] is True
+        assert result["event_id"] == "evt_123"
+        assert result["status"] == "INSERTED"
 
         # Verify data was inserted
         conn = sqlite3.connect(str(temp_db))
         cursor = conn.execute(
-            "SELECT event_id, text, space_id, cognitive_trace_id FROM st_hipp_store WHERE event_id = ?",
+            "SELECT event_id, text, space_id, cognitive_trace_id FROM st_hipp_events WHERE event_id = ?",
             ("evt_123",),
         )
         row = cursor.fetchone()
@@ -273,9 +265,9 @@ class TestHippStoreUpsert:
         assert row[3] == "trace_xyz"  # cognitive_trace_id
 
     @pytest.mark.asyncio
-    async def test_hipp_store_upsert_without_cap_raises_permission_error(self, uow_factory):
+    async def test_hipp_events_upsert_without_cap_raises_permission_error(self, uow_factory):
         """
-        Test: hipp_store_upsert raises PermissionError without capability.
+        Test: hipp_events_upsert raises PermissionError without capability.
 
         Acceptance Criteria (M2 R2.1):
         - [x] `_require_cap()` raises `PermissionError` on missing cap
@@ -288,104 +280,64 @@ class TestHippStoreUpsert:
 
         # Attempt upsert without capability
         with pytest.raises(PermissionError) as exc_info:
-            await syscalls.hipp_store_upsert(
-                space_id="space_abc",
+            await syscalls.hipp_events_upsert(
                 event_id="evt_123",
-                payload={"text": "Test"},
+                wal_pos=42,
                 cognitive_trace_id="trace_xyz",
+                tenant_id="tenant_1",
+                space_id="space_abc",
+                embedding_id="emb_123",
+                policy_band="GREEN",
+                text="Test",
             )
 
-        assert "st_hipp_store.write" in str(exc_info.value)
+        assert "st_hipp_events.write" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_hipp_store_upsert_is_idempotent(self, uow_factory, temp_db):
-        """Test: hipp_store_upsert is idempotent (INSERT OR REPLACE)."""
+    async def test_hipp_events_upsert_is_idempotent(self, uow_factory, temp_db):
+        """Test: hipp_events_upsert is idempotent (INSERT OR IGNORE)."""
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
-        # First upsert
-        await syscalls.hipp_store_upsert(
-            space_id="space_abc",
+        first = await syscalls.hipp_events_upsert(
             event_id="evt_123",
-            payload={
-                "text": "Original text",
-                "author_id": "user_1",
-                "tenant_id": "tenant_1",
-                "privacy_band": "GREEN",
-            },
+            wal_pos=42,
             cognitive_trace_id="trace_1",
-        )
-
-        # Second upsert (same event_id, different text)
-        await syscalls.hipp_store_upsert(
+            tenant_id="tenant_1",
             space_id="space_abc",
-            event_id="evt_123",
-            payload={
-                "text": "Updated text",
-                "author_id": "user_1",
-                "tenant_id": "tenant_1",
-                "privacy_band": "GREEN",
-            },
-            cognitive_trace_id="trace_2",
+            embedding_id="emb_123",
+            policy_band="GREEN",
+            text="Original text",
         )
 
-        # Verify only one row exists with updated text
+        second = await syscalls.hipp_events_upsert(
+            event_id="evt_123",
+            wal_pos=43,
+            cognitive_trace_id="trace_2",
+            tenant_id="tenant_1",
+            space_id="space_abc",
+            embedding_id="emb_123",
+            policy_band="GREEN",
+            text="Updated text",
+        )
+
+        assert first["inserted"] is True
+        assert second["inserted"] is False
+
+        # Verify only one row exists and retains original text (INSERT OR IGNORE)
         conn = sqlite3.connect(str(temp_db))
         cursor = conn.execute(
-            "SELECT COUNT(*), text FROM st_hipp_store WHERE event_id = ?",
+            "SELECT COUNT(*), text FROM st_hipp_events WHERE event_id = ?",
             ("evt_123",),
         )
         row = cursor.fetchone()
         conn.close()
 
         assert row[0] == 1  # Only one row
-        assert row[1] == "Updated text"  # Updated value
-
-    @pytest.mark.asyncio
-    async def test_hipp_store_upsert_with_complex_payload(self, uow_factory, temp_db):
-        """Test: hipp_store_upsert handles complex payload with all fields."""
-        syscalls = Syscalls(
-            pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
-            uow_factory=uow_factory,
-        )
-
-        payload = {
-            "text": "Complex event with many fields",
-            "simhash_hex": "deadbeef" * 16,  # 512-bit hash
-            "minhash32": [1, 2, 3, 4, 5],  # Jaccard sketches
-            "novelty": 0.95,
-            "topics": ["ai", "memory", "cognitive"],
-            "categories": ["technical", "research"],
-            "activity_type": "meeting",
-            "author_id": "user_1",
-            "tenant_id": "tenant_1",
-            "privacy_band": "AMBER",
-        }
-
-        await syscalls.hipp_store_upsert(
-            space_id="space_xyz",
-            event_id="evt_complex",
-            payload=payload,
-            cognitive_trace_id="trace_complex",
-        )
-
-        # Verify all fields stored correctly
-        conn = sqlite3.connect(str(temp_db))
-        cursor = conn.execute(
-            "SELECT novelty, topics, simhash_hex FROM st_hipp_store WHERE event_id = ?",
-            ("evt_complex",),
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        assert row[0] == 0.95  # novelty
-        topics = json.loads(row[1])
-        assert topics == ["ai", "memory", "cognitive"]
-        assert row[2] == "deadbeef" * 16  # simhash_hex
+        assert row[1] == "Original text"  # Original value retained
 
 
 class TestWorkingMemoryWrite:
@@ -565,7 +517,7 @@ class TestAuditLogging:
 
         Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write", "embeddings.read"},
+            granted_caps={"st_hipp_events.write", "embeddings.read"},
             uow_factory=uow_factory,
         )
 
@@ -582,7 +534,7 @@ class TestAuditLogging:
 
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
@@ -600,32 +552,27 @@ class TestAuditLogging:
         )
 
     @pytest.mark.asyncio
-    async def test_audit_log_successful_operation(self, uow_factory, temp_db, caplog):
-        """Test: Successful operations are logged."""
+    async def test_audit_log_deprecated_operation(self, uow_factory, caplog):
+        """Test: Deprecated operations are logged."""
         import logging
 
-        caplog.set_level(logging.INFO)
+        caplog.set_level(logging.ERROR)
 
         syscalls = Syscalls(
             pipeline_id="P02",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
-        await syscalls.hipp_store_upsert(
-            space_id="space_abc",
-            event_id="evt_123",
-            payload={
-                "text": "Test",
-                "author_id": "user_1",
-                "tenant_id": "tenant_1",
-                "privacy_band": "GREEN",
-            },
-            cognitive_trace_id="trace_xyz",
-        )
+        with pytest.raises(RuntimeError):
+            await syscalls.hipp_store_upsert(
+                space_id="space_abc",
+                event_id="evt_123",
+                payload={"text": "Test"},
+                cognitive_trace_id="trace_xyz",
+            )
 
-        # Verify operation completion logged
-        assert any("hipp_store_upsert complete" in record.message for record in caplog.records)
+        assert any("deprecated" in record.message.lower() for record in caplog.records)
 
 
 class TestSecurityProperties:
@@ -633,7 +580,7 @@ class TestSecurityProperties:
 
     def test_capability_set_is_immutable(self, uow_factory):
         """Test: Granted capabilities cannot be modified after initialization."""
-        granted_caps = {"st_hipp_store.write"}
+        granted_caps = {"st_hipp_events.write"}
         syscalls = Syscalls(
             pipeline_id="P02",
             granted_caps=granted_caps,
@@ -653,7 +600,7 @@ class TestSecurityProperties:
         """Test: Pipeline ID is stored for audit trail."""
         syscalls = Syscalls(
             pipeline_id="P02_SECURITY_TEST",
-            granted_caps={"st_hipp_store.write"},
+            granted_caps={"st_hipp_events.write"},
             uow_factory=uow_factory,
         )
 
@@ -670,7 +617,7 @@ class TestSecurityProperties:
 # Acceptance Criteria Summary (M2 R2.1)
 # ============================================================================
 # - [x] `Syscalls` class with capability checking
-# - [x] 3+ storage methods implemented: `hipp_store_upsert`, `working_memory_write`, `query_embeddings`
+# - [x] 3+ storage methods implemented: `hipp_events_upsert`, `working_memory_write`, `query_embeddings`
 # - [x] `_require_cap()` raises `PermissionError` on missing cap
 # - [x] Audit logging for all storage operations
 # - [x] Unit test: `test_syscalls_raises_permission_error_on_missing_cap()`

@@ -137,35 +137,50 @@ async def run(
     # Validate envelope structure (lenient for now - enrichments optional)
     enrichments = envelope.get("enrichments", {})
 
-    # If enrichments exist, validate required keys
-    if enrichments:
-        required_enrichments = [
-            "space_resolver",
-            "working_memory",
-            "affect_analyzer",
-            "embedding_queue",
-            "hipp_events",
-        ]
-        missing = [e for e in required_enrichments if e not in enrichments]
-        if missing:
-            context.logger.warning(
-                f"Envelope missing some enrichments (non-fatal): {missing}",
-                extra={"trace_id": message.trace_id, "missing": missing},
-            )
-
-    # If no enrichments, return early (no events to emit)
+    # PHASE 1 MIGRATION: Fallback to flat structure if nested not available
+    # This allows event emission to work with current P02 flat structure
+    # while we migrate modules to nested enrichments (see migration plan)
     if not enrichments:
         context.logger.debug(
-            "No enrichments available, skipping event emission",
+            "No nested enrichments found, extracting from flat structure (Phase 1 fallback)",
             extra={"trace_id": message.trace_id},
         )
-        return envelope
+        # Import helper to extract flat enrichments
+        from k0.runtime.enrichment_helpers import extract_flat_enrichments
 
-    # Extract common fields
+        enrichments = extract_flat_enrichments(envelope)
+
+        if not enrichments:
+            context.logger.warning(
+                "No enrichments available (neither nested nor flat), skipping event emission",
+                extra={"trace_id": message.trace_id},
+            )
+            return envelope
+
+    # If enrichments exist, validate required keys (lenient - log warnings only)
+    required_enrichments = [
+        "space_resolver",
+        "affect_analyzer",
+        "salience_scorer",
+        "hippocampus_semantic_project",
+    ]
+    missing = [e for e in required_enrichments if e not in enrichments]
+    if missing:
+        context.logger.debug(
+            f"Envelope missing some enrichments (non-fatal, will use partial data): {missing}",
+            extra={"trace_id": message.trace_id, "missing": missing},
+        )
+
+    # Extract common fields from space_resolver enrichment
     space_data = enrichments.get("space_resolver", {})
-    space_id = space_data.get("space_id", "unknown")
-    tenant_id = space_data.get("tenant_id", "unknown")
-    envelope_id = space_data.get("envelope_id", "unknown")
+    space_id = space_data.get("space_id", envelope.get("space_id", "unknown"))
+    tenant_id = space_data.get("tenant_id", envelope.get("tenant_id", "unknown"))
+    # envelope_id might be in enrichment or at root level
+    envelope_id = (
+        space_data.get("envelope_id")
+        or envelope.get("header", {}).get("event_id")
+        or envelope.get("cognitive_trace_id", "unknown")
+    )
 
     # Build 6 events
     events = []
@@ -307,7 +322,8 @@ def _build_workspace_wm_event(
                 "wal_pos": 0
             }
     """
-    wm_data = enrichments["working_memory"]
+    # Get working_memory enrichment (optional during Phase 1 migration)
+    wm_data = enrichments.get("working_memory", {})
 
     payload = {
         "envelope_id": envelope_id,
@@ -324,8 +340,8 @@ def _build_workspace_wm_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "workspace.wm.updated",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "WORKSPACE_WM_UPDATED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,
@@ -353,13 +369,15 @@ def _build_affect_analyzed_event(
     Returns:
         Event dict with st_outbox schema
     """
-    affect_data = enrichments["affect_analyzer"]
+    # Get affect_analyzer enrichment (should exist from flat extraction)
+    affect_data = enrichments.get("affect_analyzer", {})
 
     payload = {
         "envelope_id": envelope_id,
         "valence": affect_data.get("valence", 0.0),
         "arousal": affect_data.get("arousal", 0.0),
-        "emotion": affect_data.get("emotion", "neutral"),
+        "dominant_emotions": affect_data.get("dominant_emotions", ["neutral"]),
+        "band": affect_data.get("band", "GREEN"),
         "confidence": affect_data.get("confidence", 0.0),
     }
 
@@ -372,8 +390,8 @@ def _build_affect_analyzed_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "affect.analyzed",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "AFFECT_ANALYZED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,
@@ -401,13 +419,15 @@ def _build_space_resolution_event(
     Returns:
         Event dict with st_outbox schema
     """
-    space_data = enrichments["space_resolver"]
+    # Get space_resolver enrichment (should exist from flat extraction)
+    space_data = enrichments.get("space_resolver", {})
 
     payload = {
         "envelope_id": envelope_id,
         "space_id": space_id,
         "resolution_method": space_data.get("resolution_method", "direct"),
-        "visibility": space_data.get("visibility", "private"),
+        "visibility_scope": space_data.get("visibility_scope", "SPACE_DEFAULT"),
+        "owner_id": space_data.get("owner_id"),
     }
 
     fingerprint = _generate_fingerprint(
@@ -419,8 +439,8 @@ def _build_space_resolution_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "space.resolution",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "SPACE_RESOLVED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,
@@ -448,13 +468,13 @@ def _build_embedding_enqueue_event(
     Returns:
         Event dict with st_outbox schema
     """
-    embed_data = enrichments["embedding_queue"]
+    # Get embedding enrichment (hippocampus_semantic_project from flat extraction)
+    embed_data = enrichments.get("hippocampus_semantic_project", {})
 
     payload = {
         "envelope_id": envelope_id,
-        "embed_event_id": embed_data.get("embed_event_id", ""),
-        "text_hash": embed_data.get("text_hash", ""),
-        "priority": embed_data.get("priority", "normal"),
+        "embedding_id": embed_data.get("embedding_id"),
+        "embedding_status": embed_data.get("embedding_status", "PENDING"),
     }
 
     fingerprint = _generate_fingerprint(
@@ -466,8 +486,8 @@ def _build_embedding_enqueue_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "embedding.enqueue",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "EMBEDDING_QUEUED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,
@@ -495,13 +515,21 @@ def _build_hippocampus_pattern_separated_event(
     Returns:
         Event dict with st_outbox schema
     """
-    hipp_data = enrichments["hipp_events"]
+    # Get hippocampus enrichments (from flat extraction)
+    hipp_pattern = enrichments.get("hippocampus_pattern_separate", {})
+    hipp_semantic = enrichments.get("hippocampus_semantic_project", {})
+    hipp_row = enrichments.get("hipp_row_builder", {})
 
     payload = {
         "envelope_id": envelope_id,
-        "hipp_event_id": hipp_data.get("hipp_event_id", ""),
-        "pattern_type": hipp_data.get("pattern_type", "episodic"),
-        "encoding_timestamp": hipp_data.get("encoding_timestamp", ""),
+        "event_id": hipp_row.get("event_id") or hipp_row.get("cognitive_trace_id"),
+        "simhash_hex": hipp_pattern.get("simhash_hex"),
+        "embedding_id": hipp_semantic.get("embedding_id"),
+        "entities_count": (
+            len(hipp_semantic.get("entities_json", "[]").strip("[]").split(","))
+            if hipp_semantic.get("entities_json")
+            else 0
+        ),
     }
 
     fingerprint = _generate_fingerprint(
@@ -513,8 +541,8 @@ def _build_hippocampus_pattern_separated_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "hippocampus.pattern_separated",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "PATTERN_SEPARATED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,
@@ -558,8 +586,8 @@ def _build_write_complete_event(
     return {
         "tenant_id": tenant_id,
         "space_id": space_id,
-        "driver": "write.complete",
-        "op_kind": "EVENT_EMIT",
+        "driver": "outbox_sse",  # Driver alias from alias_map.yaml
+        "op_kind": "PIPELINE_COMPLETED",  # Event type for SSE topic mapping
         "payload": payload,
         "fingerprint": fingerprint,
         "wal_pos": 0,

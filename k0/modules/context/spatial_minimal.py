@@ -255,13 +255,26 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         },
     )
 
-    # Return enriched envelope
+    # Return enriched envelope with nested enrichments
     return {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
         "geohash_6": spatial.geohash_6,
         "location_name": spatial.location_name,
         "location_type": spatial.location_type,
         "spatial_minimized_at_utc": spatial.spatial_minimized_at_utc,
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "spatial_resolver": {
+                "geohash_6": spatial.geohash_6,
+                "location_name": spatial.location_name,
+                "location_type": spatial.location_type,
+                "spatial_minimized_at_utc": spatial.spatial_minimized_at_utc,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
 

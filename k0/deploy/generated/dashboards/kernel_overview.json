@@ -114,12 +114,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * job:k0_api_availability:ratio5m",
+          "expr": "clamp_max(clamp_min(100 * (1 - (sum(rate(k0_kernel_http_requests_total{status=~\"5..\"}[$__interval])) / clamp_min(sum(rate(k0_kernel_http_requests_total[$__interval])), 1e-6))), 0), 100) OR vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
       ],
-      "title": "API Availability",
+      "title": "HTTP Success Rate",
       "type": "stat"
     },
     {
@@ -132,26 +132,26 @@
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 1,
+          "decimals": 2,
           "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "#34C759",
+                "color": "#FF3B30",
                 "value": 0
               },
               {
                 "color": "#FF9F0A",
-                "value": 150
+                "value": 1
               },
               {
-                "color": "#FF3B30",
-                "value": 250
+                "color": "#34C759",
+                "value": 5
               }
             ]
           },
-          "unit": "ms"
+          "unit": "reqps"
         },
         "overrides": []
       },
@@ -184,12 +184,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "job:k0_command_latency_seconds:p95:5m * 1000",
+          "expr": "sum(increase(k0_kernel_http_requests_total{route=\"/k0/command.submit\"}[$__interval])) / $__interval_s OR vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
       ],
-      "title": "Command Latency (p95)",
+      "title": "Command Throughput (req/s)",
       "type": "stat"
     },
     {
@@ -254,12 +254,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "job:k0_query_latency_seconds:p95:5m * 1000",
+          "expr": "(rate(k0_kernel_bus_dispatch_latency_seconds_sum{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]) / clamp_min(rate(k0_kernel_bus_dispatch_latency_seconds_count{topic=\"cognitive.memory.write.committed.v1\"}[$__interval]), 1e-6)) * 1000 OR vector(0)",
           "legendFormat": "",
           "refId": "A"
         }
       ],
-      "title": "Query Latency (p95)",
+      "title": "Pipeline Dispatch Latency (avg)",
       "type": "stat"
     },
     {
@@ -324,12 +324,12 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(k0_kernel_replay_processed_total[$__interval]))",
-          "legendFormat": "",
+          "expr": "sum(rate(k0_kernel_bus_dispatch_latency_seconds_count{topic=\"cognitive.memory.write.committed.v1\"}[$__interval])) OR vector(0)",
+          "legendFormat": "Dispatch evt/s",
           "refId": "A"
         }
       ],
-      "title": "Replay Throughput",
+      "title": "Pipeline Dispatch Throughput",
       "type": "stat"
     },
     {
@@ -650,7 +650,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(k0_kernel_http_requests_total{status=~\"5..\"}[$__interval]) / rate(k0_kernel_http_requests_total[$__interval])",
+          "expr": "rate(k0_kernel_http_requests_total{status=~\"5..\"}[$__interval]) / clamp_min(rate(k0_kernel_http_requests_total[$__interval]), 1e-6) OR vector(0)",
           "legendFormat": "Error Rate",
           "refId": "A"
         }
@@ -743,7 +743,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(k0_kernel_uow_commit_seconds_bucket[$__interval])) by (le, outcome))",
+          "expr": "clamp_min(histogram_quantile(0.95, sum by (le, outcome) (increase(k0_kernel_uow_commit_seconds_bucket[$__interval]))), 0) OR vector(0)",
           "legendFormat": "{{outcome}}",
           "refId": "A"
         }
@@ -1022,8 +1022,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "k0_kernel_sse_pending_events",
-          "legendFormat": "Pending Events",
+          "expr": "k0_kernel_sse_active_subscriptions",
+          "legendFormat": "Active Subscriptions",
           "refId": "A"
         }
       ],

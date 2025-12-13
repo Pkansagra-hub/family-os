@@ -1046,9 +1046,10 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
                 final_affect_band = "AMBER"
             final_band_reasons.append("clinical_safety_medium")
 
-    # Return enriched envelope (merge affect fields into original envelope)
+    # Return enriched envelope with nested enrichments structure
     enriched_envelope = {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 2)
         "affect_valence": annotation.valence,
         "affect_arousal": annotation.arousal,
         "dominant_emotions": list(annotation.dominant_emotions),  # Convert tuple → list
@@ -1066,6 +1067,29 @@ async def run(message: Any, context: Any, **config: Any) -> dict[str, Any]:
         "clinical_safety_risk": safety_risk,
         "clinical_safety_severity": safety_severity,
         "clinical_safety_summary": safety_summary,
+        # NEW: Nested enrichments structure (Phase 2)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "affect_analyzer": {
+                "valence": annotation.valence,
+                "arousal": annotation.arousal,
+                "dominant_emotions": list(annotation.dominant_emotions),
+                "band": final_affect_band,
+                "band_reasons": final_band_reasons,
+                "model_version": annotation.model_version,
+                "tier": annotation.tier,
+                "confidence": annotation.confidence,
+                "raw_vader_compound": annotation.raw_compound,
+                "raw_vader_pos": annotation.raw_pos,
+                "raw_vader_neg": annotation.raw_neg,
+                "raw_vader_neu": annotation.raw_neu,
+                "clinical_safety_risk": safety_risk,
+                "clinical_safety_severity": safety_severity,
+                "clinical_safety_summary": safety_summary,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
     # Log module completion

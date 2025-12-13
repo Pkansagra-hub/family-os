@@ -64,7 +64,7 @@ async def discover_and_boot_pipelines(
     Scans k0/pipelines/ for p*.py files, validates contracts against
     PipelineProtocol, creates Syscalls adapters, calls on_startup(),
     and subscribes to declared topics.
-
+           ...     required_caps = ("st_hipp_events.write",)
     Args:
         bus_dispatcher: BusDispatcher v2 with subscribe() API
         uow_factory: Factory function returning UnitOfWork for transactions
@@ -327,7 +327,7 @@ def _validate_contract(pipeline_class: type, expected_id: str) -> None:
         ...     declared_topics = ("event.created",)
         ...     concurrency = 1
         ...     max_queue = 512
-        ...     required_caps = ("st_hipp_store.write",)
+        ...     required_caps = ("st_hipp_events.write",)
         ...     async def on_startup(self, ctx): pass
         ...     async def on_shutdown(self): pass
         ...     async def handle(self, msg): pass

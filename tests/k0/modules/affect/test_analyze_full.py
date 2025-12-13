@@ -589,9 +589,19 @@ async def test_run_preserves_original_envelope():
     assert result["body"]["text"] == "Meeting went well today"
     assert result["custom_field"] == "should_be_preserved"
 
-    # Verify affect fields added
+    # Verify affect fields added (flat - backward compat)
     assert "affect_valence" in result
     assert "affect_arousal" in result
+
+    # Verify nested enrichments structure (Phase 2)
+    assert "enrichments" in result
+    assert "affect_analyzer" in result["enrichments"]
+    affect_enrichment = result["enrichments"]["affect_analyzer"]
+    assert "valence" in affect_enrichment
+    assert "arousal" in affect_enrichment
+    assert "band" in affect_enrichment
+    assert "module_version" in affect_enrichment
+    assert affect_enrichment["module_version"] == "v1"
 
 
 # ============================================================================

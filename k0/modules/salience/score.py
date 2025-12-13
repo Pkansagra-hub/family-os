@@ -552,11 +552,25 @@ async def run(message: any, context: any, **config: any) -> dict:
         )
         return {
             **envelope,
+            # BACKWARD COMPAT: Keep flat fields during migration
             "salience_score": DEFAULT_SALIENCE_ON_FAILURE,
             "salience_band": "MED",
             "salience_reasons_json": json.dumps(["Scoring failed, using default"]),
             "component_scores_json": json.dumps({"social": 0.4, "affect": 0.5, "recency": 0.5}),
             "salience_computed_at_utc": datetime.now(timezone.utc).isoformat(),
+            # NEW: Nested enrichments structure (Phase 2)
+            "enrichments": {
+                **envelope.get("enrichments", {}),
+                "salience_scorer": {
+                    "score": DEFAULT_SALIENCE_ON_FAILURE,
+                    "band": "MED",
+                    "reasons": ["Scoring failed, using default"],
+                    "component_scores": {"social": 0.4, "affect": 0.5, "recency": 0.5},
+                    "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "module_version": "v1",
+                    "execution_time_ms": 0.0,
+                },
+            },
         }
 
     # Compute salience
@@ -574,9 +588,10 @@ async def run(message: any, context: any, **config: any) -> dict:
         },
     )
 
-    # Return enriched envelope
+    # Return enriched envelope with nested enrichments structure
     return {
         **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 2)
         "salience_score": result.salience_score,
         "salience_band": result.salience_band,
         "salience_reasons_json": json.dumps(list(result.salience_reasons)),
@@ -588,6 +603,23 @@ async def run(message: any, context: any, **config: any) -> dict:
             }
         ),
         "salience_computed_at_utc": result.salience_computed_at_utc,
+        # NEW: Nested enrichments structure (Phase 2)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "salience_scorer": {
+                "score": result.salience_score,
+                "band": result.salience_band,
+                "reasons": list(result.salience_reasons),
+                "component_scores": {
+                    "social": result.component_scores.social,
+                    "affect": result.component_scores.affect,
+                    "recency": result.component_scores.recency,
+                },
+                "computed_at_utc": result.salience_computed_at_utc,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
     }
 
 

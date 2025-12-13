@@ -306,7 +306,10 @@ def classify_activity_ultrabert(text: Optional[str]) -> Dict[str, Any] | None:
         return None
 
     try:
-        from k0.runtime.ultrabert_adapter import classify_activity, is_ultrabert_available
+        from k0.runtime.ultrabert_adapter import (
+            classify_activity,
+            is_ultrabert_available,
+        )
     except ImportError:
         return None
 
@@ -450,7 +453,10 @@ def classify_activity_type_enhanced(text: Optional[str]) -> Dict[str, Any]:
 
     # FALLBACK: ZeroShotActivityClassifier
     try:
-        from k0.modules.activity.zero_shot_classifier import ClassificationTier, classify_activity
+        from k0.modules.activity.zero_shot_classifier import (
+            ClassificationTier,
+            classify_activity,
+        )
 
         # Use HYBRID tier - rule-based with ML fallback for better accuracy
         # This allows fast classification with ML improvement for ambiguous cases
@@ -841,8 +847,21 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
             }
         )
 
-    # Return enriched envelope
-    return {**envelope, **ingress_fields}
+    # Return enriched envelope with nested enrichments
+    return {
+        **envelope,
+        # BACKWARD COMPAT: Keep flat fields during migration (Phase 4)
+        **ingress_fields,
+        # NEW: Nested enrichments structure (Phase 4)
+        "enrichments": {
+            **envelope.get("enrichments", {}),
+            "ingress_classifier": {
+                **ingress_fields,
+                "module_version": "v1",
+                "execution_time_ms": 0.0,  # Set by PipelineRunner
+            },
+        },
+    }
 
 
 def get_metrics() -> Dict[str, Any]:

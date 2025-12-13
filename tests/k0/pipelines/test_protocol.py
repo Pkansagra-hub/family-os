@@ -258,7 +258,7 @@ def test_protocol_example_pipeline_valid():
         declared_topics = ["cognitive.memory.write.committed.v1"]
         concurrency = 1
         max_queue = 512
-        required_caps = ["st_hipp_store.write"]
+        required_caps = ["st_hipp_events.write"]
 
         async def on_startup(self, ctx: PipelineContext) -> None:
             self.syscalls = ctx.syscalls

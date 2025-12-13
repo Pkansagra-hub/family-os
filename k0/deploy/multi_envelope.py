@@ -225,9 +225,13 @@ def submit_envelope(signing_key: SigningKey, body: dict, *, verbose: bool = True
         print(payload_str[:500] + "..." if len(payload_str) > 500 else payload_str)
 
     try:
+        import time
+
+        t0 = time.perf_counter()
         response = requests.post(
             url, json=request_payload, headers={"Content-Type": "application/json"}
         )
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
         if response.status_code == 200:
             result = response.json()
@@ -238,17 +242,19 @@ def submit_envelope(signing_key: SigningKey, body: dict, *, verbose: bool = True
                 print(f"  Idem Key: {idem_from_result[:32]}...")
                 print(f"  Commit TS: {result.get('commit_ts')}")
                 print(f"  Offsets: {result.get('offsets')}")
-            return True
+                print(f"  HTTP latency: {elapsed_ms:.1f} ms")
+            return True, elapsed_ms
         else:
             if verbose:
                 print(f"\n✗ FAILED: {response.status_code}")
                 print(f"  Response: {response.text}")
+                print(f"  HTTP latency: {elapsed_ms:.1f} ms")
             else:
                 print(
                     f"✗ Envelope failed (HTTP {response.status_code}) "
                     f"text={response.text[:200]}"
                 )
-            return False
+            return False, elapsed_ms
 
     except Exception as e:
         if verbose:
@@ -258,7 +264,7 @@ def submit_envelope(signing_key: SigningKey, body: dict, *, verbose: bool = True
             traceback.print_exc()
         else:
             print(f"✗ Envelope error: {e}")
-        return False
+        return False, None
 
 
 # ---------- Real-life sample bodies (50–60 envelopes) ----------
@@ -470,10 +476,11 @@ def generate_sample_bodies(n: int = 60) -> list[dict]:
     return bodies
 
 
-def submit_sample_envelopes(signing_key: SigningKey, bodies: list[dict]):
+def submit_sample_envelopes(signing_key: SigningKey, bodies: list[dict], *, sleep_sec: float = 0.2):
     """
     Submit a batch of envelopes. Uses minimal logging per event.
     """
+    import statistics
     import time
 
     print("\n" + "=" * 60)
@@ -482,20 +489,41 @@ def submit_sample_envelopes(signing_key: SigningKey, bodies: list[dict]):
 
     success = 0
     fail = 0
+    latencies_ms: list[float] = []
 
     for idx, body in enumerate(bodies, start=1):
-        ok = submit_envelope(signing_key, body, verbose=False)
+        ok, elapsed_ms = submit_envelope(signing_key, body, verbose=False)
         if ok:
             success += 1
+            if elapsed_ms is not None:
+                latencies_ms.append(elapsed_ms)
             print(f"✓ [{idx}/{len(bodies)}] Submitted envelope")
         else:
             fail += 1
             print(f"✗ [{idx}/{len(bodies)}] Failed envelope")
-        # Delay to avoid SQLite DB lock contention - pipeline takes ~100ms per envelope
-        time.sleep(0.5)
+        # Delay to avoid SQLite DB lock contention.
+        time.sleep(max(0.0, float(sleep_sec)))
 
     print("\n" + "=" * 60)
     print(f"Batch complete: {success} succeeded, {fail} failed")
+    if latencies_ms:
+        latencies_ms_sorted = sorted(latencies_ms)
+
+        def _pct(p: float) -> float:
+            if not latencies_ms_sorted:
+                return float("nan")
+            k = int(round((p / 100.0) * (len(latencies_ms_sorted) - 1)))
+            k = max(0, min(k, len(latencies_ms_sorted) - 1))
+            return latencies_ms_sorted[k]
+
+        print(
+            "HTTP latency (client-side): "
+            f"min={min(latencies_ms):.1f}ms "
+            f"p50={_pct(50):.1f}ms "
+            f"p95={_pct(95):.1f}ms "
+            f"max={max(latencies_ms):.1f}ms "
+            f"mean={statistics.mean(latencies_ms):.1f}ms"
+        )
     print("=" * 60)
 
 
@@ -526,6 +554,23 @@ def _get_or_create_persistent_key() -> SigningKey:
 
 def main():
     """Main entry point."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Provision device and submit envelopes to K0")
+    parser.add_argument(
+        "--n",
+        type=int,
+        default=4,
+        help="Number of envelopes to submit (default: 4)",
+    )
+    parser.add_argument(
+        "--sleep-sec",
+        type=float,
+        default=0.2,
+        help="Delay between submissions to avoid SQLite lock contention (default: 0.2)",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
     print("K0 Device Provisioning and Envelope Submission")
     print("=" * 60)
@@ -548,8 +593,8 @@ def main():
     # submit_envelope(signing_key, body, verbose=True)
 
     # --- Option B: Real-life batch of 50–60 envelopes ---
-    bodies = generate_sample_bodies(n=60)
-    submit_sample_envelopes(signing_key, bodies)
+    bodies = generate_sample_bodies(n=max(1, int(args.n)))
+    submit_sample_envelopes(signing_key, bodies, sleep_sec=args.sleep_sec)
 
 
 if __name__ == "__main__":

@@ -77,7 +77,7 @@ def valid_pipeline_class():
         declared_topics = ("test.topic.v1",)
         concurrency = 1
         max_queue = 512
-        required_caps = ("st_hipp_store.write",)
+        required_caps = ("st_hipp_events.write",)
 
         async def on_startup(self, ctx):
             pass
@@ -353,7 +353,7 @@ class TestPipeline:
     declared_topics = ("test.topic.v1",)
     concurrency = 1
     max_queue = 512
-    required_caps = ("st_hipp_store.write",)
+    required_caps = ("st_hipp_events.write",)
 
     async def on_startup(self, ctx):
         self._ctx = ctx
@@ -405,7 +405,7 @@ class TestPipeline:
         mock_syscalls_factory.assert_called_once()
         call_args = mock_syscalls_factory.call_args
         assert call_args[0][0] == "P99_TEST"  # pipeline_id
-        assert call_args[0][1] == {"st_hipp_store.write"}  # granted_caps
+        assert call_args[0][1] == {"st_hipp_events.write"}  # granted_caps
 
         # Verify topic subscriptions
         assert mock_bus_dispatcher.subscribe.called
@@ -632,7 +632,7 @@ class P02TestPipeline:
     declared_topics = ("event.created.v1", "event.updated.v1")
     concurrency = 2
     max_queue = 1024
-    required_caps = ("st_hipp_store.write", "working_memory.write")
+    required_caps = ("st_hipp_events.write", "working_memory.write")
 
     async def on_startup(self, ctx):
         self._ctx = ctx
@@ -654,7 +654,7 @@ class P02TestPipeline:
             declared_topics = ("event.created.v1", "event.updated.v1")
             concurrency = 2
             max_queue = 1024
-            required_caps = ("st_hipp_store.write", "working_memory.write")
+            required_caps = ("st_hipp_events.write", "working_memory.write")
 
             async def on_startup(self, ctx):
                 self._ctx = ctx
