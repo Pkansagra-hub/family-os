@@ -1,0 +1,99 @@
+module_id: social.family_graph_resolve
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.social.family_resolved.v1
+
+latency_budget_ms: 8
+
+side_effects:
+  - read:st_relationships
+  - read:people
+  - read:households
+
+idempotent: true
+
+failure_modes:
+  - code: RELATIONSHIP_LOOKUP_FAILED
+    policy: use_default
+    max_retries: 2
+  - code: PERSON_NOT_FOUND
+    policy: use_default
+    max_retries: 1
+  - code: HOUSEHOLD_LOOKUP_FAILED
+    policy: use_default
+    max_retries: 1
+
+description: |
+  Family Graph Resolver Module (Social Brain Network)
+
+  Resolves social relationships and family context for episodic memories:
+  - Queries st_relationships for family graph (5 types)
+  - Looks up people table for participant info
+  - Looks up households table for household membership
+  - Computes participant roles relative to actor
+  - Derives social context and intimacy levels
+
+  Performance target: ≤8ms P95 (indexed lookups with caching)
+
+  Relationship Types (from st_relationships):
+  - SPOUSE_OF: Married/partner relationship
+  - PARENT_OF: Parent-child relationship
+  - CHILD_OF: Inverse of PARENT_OF
+  - CARETAKER_OF: Caregiver relationship (grandparent, guardian)
+  - SIBLING_OF: Brother/sister relationship
+
+  Key Social Fields:
+  - num_participants: INTEGER (count of participants in event)
+  - participant_roles_json: JSON (e.g., {"person_dad": "OWNER", "person_mom": "SPOUSE"})
+  - has_partner_present: BOOLEAN
+  - has_parent_present: BOOLEAN
+  - is_solo_event: BOOLEAN (num_participants == 1)
+  - social_context: TEXT (nuclear_family/extended_family/friends/work/solo)
+  - social_intimacy: TEXT (HIGH/MED/LOW)
+
+  Social Context Classification:
+  - nuclear_family: Immediate family (spouse, parents, children)
+  - extended_family: Extended relatives (grandparents, aunts, uncles, cousins)
+  - friends: Non-family social relationships
+  - work: Professional/work relationships
+  - solo: No participants (individual event)
+
+  Social Intimacy Levels:
+  - HIGH: Nuclear family (spouse, parents, children)
+  - MED: Extended family, close friends
+  - LOW: Acquaintances, work colleagues
+
+  Graph Scope:
+  - Basic family relationships only (5 types from st_relationships)
+  - No complex social graph traversal (defer to P06/P19 if needed)
+  - Seeded from migration 0018, extended in 0024
+
+  Use Cases:
+  - Social importance scoring (for salience)
+  - Family event detection (meals, gatherings)
+  - Relationship-based memory filtering
+  - Social context analytics
+
+config_schema:
+  type: object
+  properties:
+    cache_ttl_seconds:
+      type: integer
+      default: 300
+      description: TTL for relationship cache (5 minutes)
+    default_social_context:
+      type: string
+      default: "solo"
+      description: Fallback social_context if lookup fails
+    default_social_intimacy:
+      type: string
+      default: "LOW"
+      description: Fallback social_intimacy if lookup fails
+    max_participants_to_resolve:
+      type: integer
+      default: 20
+      description: Maximum number of participants to resolve relationships for

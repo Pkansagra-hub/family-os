@@ -1,0 +1,9 @@
+# Auto-generated index for 10-multi-device-sync
+# Cross-cutting: Multi-device family sync
+
+category: multi_device_sync
+layer: cross-cutting
+description: "Device-to-device synchronization, CRDT-based merge, LAN-first sync"
+
+adrs:
+  # Populated by build_adr_index.py script

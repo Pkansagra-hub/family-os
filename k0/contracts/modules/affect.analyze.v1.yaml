@@ -1,0 +1,100 @@
+module_id: affect.analyze
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.affect.analyzed.v1
+
+latency_budget_ms: 70
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: AFFECT_CLASSIFICATION_FAILED
+    policy: retry
+    max_retries: 2
+  - code: TIER0_TIMEOUT
+    policy: fallback_tier1
+    max_retries: 0
+  - code: TIER1_TIMEOUT
+    policy: use_default
+    max_retries: 0
+  - code: INVALID_INPUT_TEXT
+    policy: drop
+
+description: |
+  Affect Classification Module (Amygdala/Affect System)
+
+  Analyzes emotional content and risk level of episodic memories:
+  - Valence: 0-1 scale (negative to positive sentiment)
+  - Arousal: 0-1 scale (calm to excited emotional intensity)
+  - Tags: Dominant emotions (e.g., ["joy", "contentment", "gratitude"])
+  - Affect Band: GREEN/AMBER/RED risk classification
+  - Band Reasons: Explanation for risk level (e.g., ["positive_family_event"])
+
+  Two-Tier Latency Strategy:
+  - Tier-0 (Fast Path): <2ms using cached patterns/rules (90% of events)
+  - Tier-1 (ML Path): <60ms using transformer-based classification (10% of events)
+  - Overall P95: ≤70ms
+
+  Performance targets:
+  - Tier-0: Cache hit for common patterns (meal, conversation, routine)
+  - Tier-1: Fallback for complex emotional content requiring deep analysis
+
+  Output (Nested Enrichments - Phase 2):
+  - enrichments.affect_analyzer.valence: REAL (0-1)
+  - enrichments.affect_analyzer.arousal: REAL (0-1)
+  - enrichments.affect_analyzer.dominant_emotions: JSON array of emotion tags
+  - enrichments.affect_analyzer.band: TEXT (GREEN/AMBER/RED)
+  - enrichments.affect_analyzer.band_reasons: JSON array explaining risk classification
+  - enrichments.affect_analyzer.model_version: TEXT (e.g., "affect_v1.2")
+  - enrichments.affect_analyzer.module_version: TEXT ("v1")
+
+  Legacy Flat Output (Backward Compat - Phase 2):
+  - affect_valence: REAL (0-1) [DEPRECATED]
+  - affect_arousal: REAL (0-1) [DEPRECATED]
+  - dominant_emotions: JSON array [DEPRECATED]
+  - affect_band: TEXT [DEPRECATED]
+  - band_reasons: JSON array [DEPRECATED]
+  - model_version: TEXT [DEPRECATED]
+
+  Risk Band Definitions:
+  - GREEN: Positive or neutral affect, no risk indicators
+  - AMBER: Mild negative affect, worth monitoring
+  - RED: Strong negative affect, requires attention/escalation
+
+config_schema:
+  type: object
+  properties:
+    tier0_timeout_ms:
+      type: integer
+      default: 2
+      description: Timeout for Tier-0 fast path before falling back to Tier-1
+    tier1_timeout_ms:
+      type: integer
+      default: 60
+      description: Timeout for Tier-1 ML path before using default values
+    default_valence:
+      type: number
+      default: 0.5
+      description: Default valence if classification fails (neutral)
+    default_arousal:
+      type: number
+      default: 0.3
+      description: Default arousal if classification fails (calm)
+    model_version:
+      type: string
+      default: "affect_v1.2"
+      description: Version identifier for affect classification model
+    red_band_valence_threshold:
+      type: number
+      default: 0.25
+      description: Valence below this triggers RED band consideration
+    amber_band_valence_threshold:
+      type: number
+      default: 0.4
+      description: Valence below this triggers AMBER band consideration

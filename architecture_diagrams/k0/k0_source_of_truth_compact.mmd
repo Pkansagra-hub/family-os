@@ -1,0 +1,247 @@
+%% ======================================================================================
+%% K0 MICROKERNEL - ARCHITECTURE DIAGRAM (CONDENSED)
+%% ======================================================================================
+%% Generated: 2025-11-12 | Scope: 10 layers | 147 modules | Classes: 218 | Fn: 417
+%% See LEGEND section at end for abbreviations and color meanings
+%% ======================================================================================
+
+graph TB
+
+    %% LEGEND
+    subgraph LEGEND["📋 LEGEND - Abbreviations & Colors"]
+        direction LR
+        LEG1["⚡ PORT=Port | 🛡️ GATE=Gate | 📋 POL=Policy | 💾 STG=Storage"]
+        LEG2["⚖️ QOS=QoS | 🚌 BUS=Bus | 🔍 QRY=Query | 👷 WKR=Worker"]
+        LEG3["🔌 DRV=Driver | 📊 OBS=Observability | 🏗️ CFG=Configuration | 🎲 CHO=Chaos"]
+        LEG4["🔐 SEC=Security | 📨 IDM=Idempotency | 💼 TXN=Transaction | 📝 CLI=CLI"]
+    end
+    %% ======================================================================================
+    %% LAYER 0: CLIENT INTERFACES
+    %% ======================================================================================
+    subgraph L0["🌐 L0: Clients"]
+        direction LR
+        CLI_C["k0ctl"]:::cli
+        HTTP_C["HTTP/JSON"]:::client
+        SSE_C["SSE/Sub"]:::client
+        DRV_C["Ext.Drvs"]:::client
+    end
+
+    %% ======================================================================================
+    %% LAYER 1: KERNEL PORTS
+    %% ======================================================================================
+    subgraph L1["⚡ L1: Ports (FastAPI)"]
+        direction LR
+        CMD_P["Cmd: submit()"]:::port
+        QRY_P["Query: recall()"]:::port
+        SSE_P["SSE: sub()"]:::port
+        DRV_P["Drv: hs()"]:::port
+        OBS_P["Obs: emit()"]:::port
+    end
+
+    %% ======================================================================================
+    %% LAYER 2: GATE & POLICY
+    %% ======================================================================================
+    subgraph L2["🛡️ L2: Gate & Policy"]
+        direction TB
+        subgraph GATE["Gate (validate)"]
+            GATE_V["validate()"]:::gate
+            SCHEMA["SchemaReg"]:::gate
+            PROV["ProvLedger"]:::gate
+        end
+        subgraph POLICY["Policy Engine"]
+            PEP["PEP eval()"]:::policy
+            STAMP["PolicyStamp"]:::policy
+            REDACT["Redaction"]:::policy
+            ACL["ACL check"]:::policy
+            LOC["LocPrivacy"]:::policy
+            RET["Retention"]:::policy
+        end
+        subgraph SEC["Security"]
+            CRYPTO["Crypto fns"]:::security
+        end
+        subgraph IDM["Idempotency"]
+            IDEM_D["Derive"]:::idem
+            IDEM_L["Ledger"]:::idem
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 3: TRANSACTION & RECEIPTS
+    %% ======================================================================================
+    subgraph L3["💼 L3: TXN & Receipts"]
+        direction TB
+        UOW["UnitOfWork: begin/commit"]:::core
+        RCP["Receipt: issue/save"]:::receipt
+    end
+
+    %% ======================================================================================
+    %% LAYER 4: STORAGE
+    %% ======================================================================================
+    subgraph L4["💾 L4: Storage"]
+        direction TB
+        subgraph WAL_S["WAL/Snapshot"]
+            WAL["append/read"]:::storage
+            REPLAY["replay()"]:::storage
+            SNAP["snapshots"]:::storage
+            SHARD["shard_promo"]:::storage
+        end
+        subgraph OUTBOX_S["Outbox"]
+            OB_ST["enqueue/dequeue"]:::storage
+            OB_WKR["process_driver()"]:::outbox
+            OB_POOL["DriverPool"]:::outbox
+            RETRY["RetryScheduler"]:::outbox
+        end
+        subgraph OTHER_S["Other Stores"]
+            OFFSET["Offsets"]:::storage
+            DLQ["DLQ"]:::storage
+            OBLIG["Obligations"]:::storage
+            FTS["FTS5 idx"]:::storage
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 5: QOS & SCHEDULING
+    %% ======================================================================================
+    subgraph L5["⚖️ L5: QoS/Scheduling"]
+        direction TB
+        SCHED["Scheduler: WDRR"]:::qos
+        QOS_CTX["QoSContext"]:::qos
+        QOS_POL["QoS Policy"]:::qos
+        QOS_MET["QoS Metrics"]:::qos
+    end
+
+    %% ======================================================================================
+    %% LAYER 6: EVENT BUS & SSE
+    %% ======================================================================================
+    subgraph L6["🚌 L6: Bus & SSE"]
+        direction TB
+        BUS_D["Dispatcher"]:::bus
+        BUS_MW["Middleware"]:::bus
+        SSE_S["SSE Server"]:::sse
+        SSE_BP["Backpressure"]:::sse
+    end
+
+    %% ======================================================================================
+    %% LAYER 7: QUERY & WORKERS
+    %% ======================================================================================
+    subgraph L7["🔍 L7: Query & BG Workers"]
+        direction TB
+        subgraph QUERY["Query"]
+            QRY_REG["Registry"]:::query
+            QRY_AGG["Aggregator"]:::query
+        end
+        subgraph WORKERS["Workers"]
+            EMB_W["Embedding"]:::worker
+            FTS_W["FTS Index"]:::worker
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 8: DRIVERS (SPI)
+    %% ======================================================================================
+    subgraph L8["🔌 L8: Drivers (SPI)"]
+        direction TB
+        ALIAS["AliasMap"]:::driver
+        subgraph DRVS["Driver Implementations"]
+            FAISS["FAISS"]:::driver_impl
+            FTS5_D["FTS5"]:::driver_impl
+            NEO4J["Neo4j"]:::driver_impl
+            SQLITE_D["SQLite"]:::driver_impl
+            BLOB["Blob FS"]:::driver_impl
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 9: OBSERVABILITY
+    %% ======================================================================================
+    subgraph L9["📊 L9: Observability"]
+        direction TB
+        METRICS_O["Prometheus"]:::obs
+        TRACE_O["OpenTelemetry"]:::obs
+        LOG_O["Structured Logs"]:::obs
+        EMIT_O["Emitter"]:::obs
+    end
+
+    %% ======================================================================================
+    %% LAYER 10: INFRASTRUCTURE & CONFIG
+    %% ======================================================================================
+    subgraph L10["🏗️ L10: Config & Infra"]
+        direction TB
+        APP["App Factory"]:::infra
+        CFG["Settings"]:::infra
+        DB["SQLite3"]:::infra
+        CLI_T["CLI/Auto"]:::cli_tool
+        CHAOS_T["Chaos Eng"]:::chaos
+    end
+
+    %% ======================================================================================
+    %% DATA FLOWS (SIMPLIFIED)
+    %% ======================================================================================
+
+    %% Flow 1: Command Submit
+    CLI_C -->|POST envelope| CMD_P
+    HTTP_C -->|POST envelope| CMD_P
+    CMD_P --> GATE_V
+    GATE_V --> SCHEMA
+    GATE_V --> PEP
+    CMD_P --> SCHED
+    CMD_P --> UOW
+    UOW --> WAL
+    UOW --> RCP
+    RCP --> DB
+
+    %% Flow 2: Query
+    HTTP_C -->|POST query| QRY_P
+    QRY_P --> PEP
+    QRY_P --> SCHED
+    QRY_P --> QRY_REG
+    QRY_REG --> WAL
+
+    %% Flow 3: SSE
+    SSE_C -->|subscribe| SSE_S
+    SSE_S --> ACL
+    SSE_S --> WAL
+    SSE_S --> SCHED
+
+    %% Flow 4: Outbox Worker
+    OB_WKR --> OB_ST
+    OB_ST --> OB_POOL
+    OB_POOL --> ALIAS
+    ALIAS --> DRVS
+
+    %% Flow 5: Background Workers
+    EMB_W --> OB_ST
+    EMB_W --> WAL
+    FTS_W --> OB_ST
+    FTS_W --> FTS
+
+    %% Flow 6: Observability (cross-layer)
+    CMD_P -.->|metrics| METRICS_O
+    UOW -.->|traces| TRACE_O
+    WAL -.->|logs| LOG_O
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+    classDef client fill:#e1f5ff,stroke:#01579b,stroke-width:2px,color:#000
+    classDef cli fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000
+    classDef port fill:#fff9c4,stroke:#f57f17,stroke-width:3px,color:#000,font-weight:bold
+    classDef gate fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef policy fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef security fill:#ffccbc,stroke:#d84315,stroke-width:2px,color:#000
+    classDef idem fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef receipt fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef core fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+    classDef storage fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef outbox fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+    classDef qos fill:#b2dfdb,stroke:#004d40,stroke-width:2px,color:#000
+    classDef bus fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:#000
+    classDef sse fill:#b3e5fc,stroke:#01579b,stroke-width:2px,color:#000
+    classDef query fill:#dcedc8,stroke:#33691e,stroke-width:2px,color:#000
+    classDef worker fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef driver fill:#d1c4e9,stroke:#311b92,stroke-width:2px,color:#000
+    classDef driver_impl fill:#e1bee7,stroke:#4a148c,stroke-width:1px,color:#000
+    classDef obs fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef infra fill:#cfd8dc,stroke:#263238,stroke-width:2px,color:#000
+    classDef cli_tool fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef chaos fill:#ffab91,stroke:#bf360c,stroke-width:2px,color:#000

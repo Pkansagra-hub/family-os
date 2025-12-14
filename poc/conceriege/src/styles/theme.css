@@ -1,0 +1,314 @@
+/**
+ * Theme System CSS
+ *
+ * Defines CSS custom properties for light and dark themes.
+ * Uses data-theme attribute on <html> element to switch.
+ *
+ * Usage: Add data-theme="light" or data-theme="dark" to <html>
+ */
+
+/* ============================================================================
+   ROOT - Default Light Theme Variables
+   ============================================================================ */
+
+:root {
+    /* Primary Colors */
+    --primary-50: #f5f7ff;
+    --primary-100: #ebf0ff;
+    --primary-200: #d6e0ff;
+    --primary-300: #b8c9ff;
+    --primary-400: #99b0ff;
+    --primary-500: #7a96ff;
+    --primary-600: #667eea;
+    --primary-700: #5568d3;
+    --primary-800: #4453b8;
+    --primary-900: #343f94;
+
+    /* Background Colors */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-tertiary: #fafafa;
+    --bg-elevated: #ffffff;
+
+    /* Surface Colors */
+    --surface: #f5f5f5;
+    --surface-hover: #ebebeb;
+    --surface-active: #e0e0e0;
+
+    /* Text Colors */
+    --text-primary: #1a1a1a;
+    --text-secondary: #555555;
+    --text-tertiary: #888888;
+    --text-disabled: #bbbbbb;
+    --text-inverse: #ffffff;
+
+    /* Border Colors */
+    --border-light: #f0f0f0;
+    --border-default: #e0e0e0;
+    --border-strong: #cccccc;
+
+    /* Message Bubble Colors */
+    --bubble-user-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --bubble-user-text: #ffffff;
+    --bubble-agent-bg: #ffffff;
+    --bubble-agent-text: #333333;
+    --bubble-system-bg: #fffbea;
+    --bubble-system-text: #c27803;
+    --bubble-system-border: #ffd93d;
+
+    /* Status Colors */
+    --success: #10b981;
+    --warning: #f59e0b;
+    --error: #ef4444;
+    --info: #3b82f6;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 2px 5px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.15);
+    --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.2);
+
+    /* Code Block Colors */
+    --code-bg: #1e1e1e;
+    --code-text: #d4d4d4;
+    --code-border: #333333;
+
+    /* Inline Code Colors */
+    --inline-code-bg: rgba(175, 184, 193, 0.2);
+    --inline-code-text: #e01e5a;
+    --inline-code-border: rgba(175, 184, 193, 0.3);
+}
+
+/* ============================================================================
+   DARK THEME Variables
+   ============================================================================ */
+
+[data-theme="dark"] {
+    /* Primary Colors (slightly lighter for dark mode) */
+    --primary-600: #7c94f5;
+    --primary-700: #8fa3f7;
+
+    /* Background Colors */
+    --bg-primary: #1a1a1a;
+    --bg-secondary: #2d2d2d;
+    --bg-tertiary: #252525;
+    --bg-elevated: #2d2d2d;
+
+    /* Surface Colors */
+    --surface: #2d2d2d;
+    --surface-hover: #3a3a3a;
+    --surface-active: #444444;
+
+    /* Text Colors */
+    --text-primary: #e5e5e5;
+    --text-secondary: #b0b0b0;
+    --text-tertiary: #888888;
+    --text-disabled: #555555;
+    --text-inverse: #1a1a1a;
+
+    /* Border Colors */
+    --border-light: #2d2d2d;
+    --border-default: #444444;
+    --border-strong: #555555;
+
+    /* Message Bubble Colors */
+    --bubble-user-bg: linear-gradient(135deg, #7c94f5 0%, #8e6bc2 100%);
+    --bubble-user-text: #ffffff;
+    --bubble-agent-bg: #2d2d2d;
+    --bubble-agent-text: #e5e5e5;
+    --bubble-system-bg: #3a2f1a;
+    --bubble-system-text: #ffd93d;
+    --bubble-system-border: #8b7000;
+
+    /* Status Colors (adjusted for dark mode) */
+    --success: #22c55e;
+    --warning: #fbbf24;
+    --error: #f87171;
+    --info: #60a5fa;
+
+    /* Shadows (lighter for dark mode) */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 2px 5px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.5);
+    --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+    /* Code Block Colors (same in dark mode) */
+    --code-bg: #1e1e1e;
+    --code-text: #d4d4d4;
+    --code-border: #333333;
+
+    /* Inline Code Colors */
+    --inline-code-bg: rgba(255, 255, 255, 0.1);
+    --inline-code-text: #ff6b6b;
+    --inline-code-border: rgba(255, 255, 255, 0.2);
+}
+
+/* ============================================================================
+   SMOOTH THEME TRANSITIONS
+   ============================================================================ */
+
+.theme-transition,
+.theme-transition *,
+.theme-transition *::before,
+.theme-transition *::after {
+    transition: background-color 0.3s ease,
+                color 0.3s ease,
+                border-color 0.3s ease,
+                box-shadow 0.3s ease !important;
+}
+
+/* ============================================================================
+   APPLY THEME VARIABLES TO ELEMENTS
+   ============================================================================ */
+
+body {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.container {
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-xl);
+}
+
+.header {
+    background: var(--bubble-user-bg);
+    color: var(--bubble-user-text);
+}
+
+.messages {
+    background: var(--bg-secondary);
+}
+
+.message-bubble {
+    color: var(--text-primary);
+}
+
+.message.user .message-bubble {
+    background: var(--bubble-user-bg);
+    color: var(--bubble-user-text);
+}
+
+.message.agent .message-bubble {
+    background: var(--bubble-agent-bg);
+    color: var(--bubble-agent-text);
+    box-shadow: var(--shadow-md);
+}
+
+.message.system .message-bubble {
+    background: var(--bubble-system-bg);
+    color: var(--bubble-system-text);
+    border: 1px solid var(--bubble-system-border);
+}
+
+.message.status .message-bubble {
+    background: var(--surface);
+    color: var(--info);
+}
+
+.timestamp {
+    color: var(--text-tertiary);
+}
+
+.input-area {
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-default);
+}
+
+#messageInput {
+    border: 2px solid var(--border-default);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+#messageInput:focus {
+    border-color: var(--primary-600);
+}
+
+#sendButton {
+    background: var(--bubble-user-bg);
+    color: var(--bubble-user-text);
+}
+
+/* Typing indicator dots */
+.typing-indicator span {
+    background: var(--text-tertiary);
+}
+
+/* ============================================================================
+   THEME TOGGLE BUTTON STYLES
+   ============================================================================ */
+
+.theme-toggle {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--border-default);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    transition: all 0.3s ease;
+    box-shadow: var(--shadow-md);
+    z-index: 1000;
+}
+
+.theme-toggle:hover {
+    background: var(--surface-hover);
+    transform: scale(1.1);
+    box-shadow: var(--shadow-lg);
+}
+
+.theme-toggle:active {
+    transform: scale(0.95);
+}
+
+/* Hide/show icons based on theme */
+.theme-toggle .icon-light {
+    display: none;
+}
+
+.theme-toggle .icon-dark {
+    display: block;
+}
+
+[data-theme="dark"] .theme-toggle .icon-light {
+    display: block;
+}
+
+[data-theme="dark"] .theme-toggle .icon-dark {
+    display: none;
+}
+
+/* ============================================================================
+   SCROLLBAR THEMING
+   ============================================================================ */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--surface);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) var(--surface);
+}

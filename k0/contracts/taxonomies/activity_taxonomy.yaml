@@ -1,0 +1,738 @@
+# Activity Taxonomy - Hierarchical Classification System
+#
+# Research Foundation:
+# - Yin et al. (2019) - Zero-shot text classification
+# - Lewis et al. (2020) - BART: Denoising Sequence-to-Sequence Pre-training
+# - Time Use Survey (Bureau of Labor Statistics) - Activity categories
+#
+# Design Philosophy:
+# - 3-level hierarchy: category → activity → subtype
+# - 50+ activity types in hierarchy (vs 7 hardcoded)
+# - Extensible without code changes
+# - Compatible with zero-shot classification labels
+#
+# Contract: k0/contracts/taxonomies/activity_taxonomy.yaml
+# ADR: docs/architecture/decisions-K0/modules/k007.4-activity-taxonomy.md
+
+activity_taxonomy:
+  version: "1.0.0"
+  last_updated: "2025-11-27"
+
+  # Category definitions (top-level groupings)
+  categories:
+
+    # ==============================================================================
+    # SUSTENANCE - Food & Drink Activities
+    # ==============================================================================
+    - id: "sustenance"
+      label: "Food & Drink"
+      description: "Activities related to eating, drinking, and food preparation"
+      keywords: ["food", "eat", "drink", "cook", "meal", "hungry", "appetite"]
+
+      children:
+        - id: "meal"
+          label: "Meal"
+          description: "Structured eating occasions"
+          keywords: ["breakfast", "lunch", "dinner", "supper", "brunch"]
+          children:
+            - id: "breakfast"
+              label: "Breakfast"
+              keywords: ["morning meal", "pancakes", "cereal", "eggs", "toast"]
+            - id: "lunch"
+              label: "Lunch"
+              keywords: ["midday meal", "sandwich", "salad", "noon"]
+            - id: "dinner"
+              label: "Dinner"
+              keywords: ["evening meal", "supper", "main course"]
+            - id: "brunch"
+              label: "Brunch"
+              keywords: ["late breakfast", "mimosa", "weekend morning"]
+            - id: "snack"
+              label: "Snack"
+              keywords: ["nibble", "bite", "treat", "munchies"]
+
+        - id: "cooking"
+          label: "Cooking"
+          description: "Food preparation activities"
+          keywords: ["cook", "bake", "prepare", "recipe", "kitchen", "chef"]
+          children:
+            - id: "baking"
+              label: "Baking"
+              keywords: ["oven", "cake", "cookies", "bread", "pastry"]
+            - id: "grilling"
+              label: "Grilling"
+              keywords: ["grill", "bbq", "barbeque", "charcoal", "outdoor cooking"]
+
+        - id: "dining_out"
+          label: "Dining Out"
+          description: "Restaurant and takeout experiences"
+          keywords: ["restaurant", "takeout", "delivery", "cafe", "diner"]
+          children:
+            - id: "restaurant"
+              label: "Restaurant"
+              keywords: ["waiter", "menu", "reservation", "fine dining"]
+            - id: "fast_food"
+              label: "Fast Food"
+              keywords: ["drive-through", "quick service", "takeaway"]
+            - id: "cafe"
+              label: "Cafe"
+              keywords: ["coffee shop", "bistro", "tearoom"]
+
+    # ==============================================================================
+    # WELLNESS - Health & Wellness Activities
+    # ==============================================================================
+    - id: "wellness"
+      label: "Health & Wellness"
+      description: "Activities promoting physical and mental health"
+      keywords: ["health", "fitness", "wellness", "exercise", "medical"]
+
+      children:
+        - id: "exercise"
+          label: "Exercise"
+          description: "Physical fitness activities"
+          keywords: ["workout", "fitness", "gym", "physical activity", "training"]
+          children:
+            - id: "running"
+              label: "Running"
+              keywords: ["jog", "sprint", "marathon", "treadmill", "trail run"]
+            - id: "gym"
+              label: "Gym Workout"
+              keywords: ["weights", "cardio", "fitness center", "lifting"]
+            - id: "yoga"
+              label: "Yoga"
+              keywords: ["meditation", "stretching", "pilates", "mindfulness"]
+            - id: "swimming"
+              label: "Swimming"
+              keywords: ["pool", "laps", "water exercise", "aquatic"]
+            - id: "cycling"
+              label: "Cycling"
+              keywords: ["bike", "bicycle", "spin class", "biking"]
+            - id: "hiking"
+              label: "Hiking"
+              keywords: ["trail", "hike", "mountain", "nature walk", "trek"]
+            - id: "walking"
+              label: "Walking"
+              keywords: ["stroll", "walk", "steps", "pedometer"]
+
+        - id: "medical"
+          label: "Medical"
+          description: "Healthcare appointments and procedures"
+          keywords: ["doctor", "hospital", "clinic", "appointment", "checkup"]
+          children:
+            - id: "doctor_visit"
+              label: "Doctor Visit"
+              keywords: ["physician", "checkup", "physical", "exam"]
+            - id: "dental"
+              label: "Dental"
+              keywords: ["dentist", "teeth", "cleaning", "cavity", "orthodontist"]
+            - id: "therapy"
+              label: "Therapy"
+              keywords: ["counseling", "therapist", "psychologist", "session"]
+            - id: "specialist"
+              label: "Specialist Visit"
+              keywords: ["cardiologist", "dermatologist", "optometrist"]
+            - id: "pharmacy"
+              label: "Pharmacy"
+              keywords: ["prescription", "medication", "drugstore"]
+
+        - id: "self_care"
+          label: "Self Care"
+          description: "Personal wellness and grooming"
+          keywords: ["relaxation", "spa", "grooming", "pamper", "beauty"]
+          children:
+            - id: "spa"
+              label: "Spa"
+              keywords: ["massage", "facial", "treatment", "sauna"]
+            - id: "grooming"
+              label: "Grooming"
+              keywords: ["haircut", "salon", "barber", "manicure", "pedicure"]
+            - id: "mental_health"
+              label: "Mental Health"
+              keywords: ["meditation", "journaling", "mindfulness", "relaxation"]
+
+    # ==============================================================================
+    # SOCIAL - Social Activities
+    # ==============================================================================
+    - id: "social"
+      label: "Social Activities"
+      description: "Interactions with family, friends, and community"
+      keywords: ["social", "gathering", "people", "friends", "family", "together"]
+
+      children:
+        - id: "family_event"
+          label: "Family Event"
+          description: "Family gatherings and activities"
+          keywords: ["family", "relatives", "reunion", "holiday", "gathering"]
+          children:
+            - id: "family_dinner"
+              label: "Family Dinner"
+              keywords: ["family meal", "sunday dinner", "holiday dinner"]
+            - id: "family_reunion"
+              label: "Family Reunion"
+              keywords: ["reunion", "relatives gathering", "family get-together"]
+            - id: "holiday_gathering"
+              label: "Holiday Gathering"
+              keywords: ["thanksgiving", "christmas", "easter", "holiday meal"]
+
+        - id: "party"
+          label: "Party"
+          description: "Celebratory social events"
+          keywords: ["party", "celebration", "bash", "festivity"]
+          children:
+            - id: "birthday_party"
+              label: "Birthday Party"
+              keywords: ["birthday", "cake", "presents", "candles"]
+            - id: "house_party"
+              label: "House Party"
+              keywords: ["gathering", "host", "guests", "potluck"]
+            - id: "cocktail_party"
+              label: "Cocktail Party"
+              keywords: ["drinks", "appetizers", "mingling"]
+
+        - id: "date"
+          label: "Date"
+          description: "Romantic outings"
+          keywords: ["date", "romantic", "couple", "partner", "spouse"]
+          children:
+            - id: "dinner_date"
+              label: "Dinner Date"
+              keywords: ["romantic dinner", "candlelit", "anniversary"]
+            - id: "movie_date"
+              label: "Movie Date"
+              keywords: ["cinema", "film", "theater", "popcorn"]
+
+        - id: "hangout"
+          label: "Hangout"
+          description: "Casual social time"
+          keywords: ["hangout", "chill", "hang out", "casual", "friends"]
+          children:
+            - id: "coffee_meetup"
+              label: "Coffee Meetup"
+              keywords: ["coffee", "catch up", "chat", "cafe"]
+            - id: "game_night"
+              label: "Game Night"
+              keywords: ["board games", "cards", "game", "playing"]
+
+        - id: "conversation"
+          label: "Conversation"
+          description: "Communication and discussions"
+          keywords: ["talk", "chat", "discuss", "conversation", "call"]
+          children:
+            - id: "phone_call"
+              label: "Phone Call"
+              keywords: ["phone", "call", "ring", "mobile"]
+            - id: "video_call"
+              label: "Video Call"
+              keywords: ["zoom", "facetime", "video chat", "teams"]
+            - id: "text_message"
+              label: "Text Message"
+              keywords: ["text", "message", "sms", "whatsapp"]
+
+    # ==============================================================================
+    # WORK - Professional Activities
+    # ==============================================================================
+    - id: "work"
+      label: "Work & Career"
+      description: "Professional and career-related activities"
+      keywords: ["work", "job", "career", "professional", "office", "business"]
+
+      children:
+        - id: "meeting"
+          label: "Meeting"
+          description: "Work meetings and conferences"
+          keywords: ["meeting", "conference", "call", "standup", "sync"]
+          children:
+            - id: "team_meeting"
+              label: "Team Meeting"
+              keywords: ["standup", "sync", "team call", "huddle"]
+            - id: "client_meeting"
+              label: "Client Meeting"
+              keywords: ["client", "customer", "presentation", "pitch"]
+            - id: "one_on_one"
+              label: "One-on-One"
+              keywords: ["1:1", "check-in", "manager", "direct report"]
+
+        - id: "project_work"
+          label: "Project Work"
+          description: "Focused work on projects"
+          keywords: ["project", "task", "deadline", "deliverable", "work"]
+          children:
+            - id: "coding"
+              label: "Coding"
+              keywords: ["programming", "development", "code", "software"]
+            - id: "writing"
+              label: "Writing"
+              keywords: ["document", "report", "write", "draft"]
+            - id: "design"
+              label: "Design"
+              keywords: ["design", "creative", "mockup", "prototype"]
+
+        - id: "commute"
+          label: "Commute"
+          description: "Travel to/from work"
+          keywords: ["commute", "drive to work", "bus", "train", "subway"]
+
+        - id: "networking"
+          label: "Networking"
+          description: "Professional relationship building"
+          keywords: ["networking", "conference", "seminar", "professional event"]
+
+    # ==============================================================================
+    # EDUCATION - Learning Activities
+    # ==============================================================================
+    - id: "education"
+      label: "Education & Learning"
+      description: "Educational and skill-building activities"
+      keywords: ["learn", "study", "education", "school", "class", "course"]
+
+      children:
+        - id: "class"
+          label: "Class"
+          description: "Formal educational sessions"
+          keywords: ["class", "lecture", "lesson", "course", "seminar"]
+          children:
+            - id: "school_class"
+              label: "School Class"
+              keywords: ["school", "classroom", "teacher", "student"]
+            - id: "online_course"
+              label: "Online Course"
+              keywords: ["online", "webinar", "e-learning", "mooc"]
+
+        - id: "studying"
+          label: "Studying"
+          description: "Self-directed learning"
+          keywords: ["study", "homework", "review", "reading", "research"]
+
+        - id: "tutoring"
+          label: "Tutoring"
+          description: "One-on-one learning assistance"
+          keywords: ["tutor", "help", "teaching", "assist", "mentor"]
+
+    # ==============================================================================
+    # ENTERTAINMENT - Leisure Activities
+    # ==============================================================================
+    - id: "entertainment"
+      label: "Entertainment & Leisure"
+      description: "Recreational and entertainment activities"
+      keywords: ["fun", "entertainment", "leisure", "recreation", "enjoy"]
+
+      children:
+        - id: "movies"
+          label: "Movies"
+          description: "Film viewing"
+          keywords: ["movie", "film", "cinema", "theater", "watch"]
+          children:
+            - id: "theater"
+              label: "Movie Theater"
+              keywords: ["cinema", "theater", "big screen", "popcorn"]
+            - id: "streaming"
+              label: "Streaming"
+              keywords: ["netflix", "disney", "hulu", "amazon prime", "stream"]
+
+        - id: "music"
+          label: "Music"
+          description: "Music listening and performance"
+          keywords: ["music", "concert", "song", "listen", "band"]
+          children:
+            - id: "concert"
+              label: "Concert"
+              keywords: ["live music", "show", "performance", "band"]
+            - id: "playing_music"
+              label: "Playing Music"
+              keywords: ["instrument", "practice", "piano", "guitar"]
+
+        - id: "gaming"
+          label: "Gaming"
+          description: "Video and board games"
+          keywords: ["game", "play", "video game", "gaming", "console"]
+          children:
+            - id: "video_games"
+              label: "Video Games"
+              keywords: ["playstation", "xbox", "nintendo", "pc gaming"]
+            - id: "board_games"
+              label: "Board Games"
+              keywords: ["board game", "cards", "monopoly", "chess"]
+
+        - id: "reading"
+          label: "Reading"
+          description: "Books and publications"
+          keywords: ["read", "book", "magazine", "article", "novel"]
+
+        - id: "tv"
+          label: "Watching TV"
+          description: "Television viewing"
+          keywords: ["tv", "television", "show", "series", "episode"]
+
+    # ==============================================================================
+    # OUTDOOR - Outdoor Recreation
+    # ==============================================================================
+    - id: "outdoor"
+      label: "Outdoor Recreation"
+      description: "Activities in nature and outdoors"
+      keywords: ["outdoor", "outside", "nature", "fresh air", "park"]
+
+      children:
+        - id: "park"
+          label: "Park Visit"
+          description: "Time at parks"
+          keywords: ["park", "playground", "picnic", "bench", "green space"]
+
+        - id: "beach"
+          label: "Beach"
+          description: "Beach activities"
+          keywords: ["beach", "ocean", "sand", "waves", "surf", "shore"]
+
+        - id: "camping"
+          label: "Camping"
+          description: "Outdoor overnight stays"
+          keywords: ["camping", "tent", "campfire", "outdoors", "nature"]
+
+        - id: "gardening"
+          label: "Gardening"
+          description: "Plant care and gardening"
+          keywords: ["garden", "plant", "flowers", "yard", "lawn", "landscaping"]
+
+    # ==============================================================================
+    # TRAVEL - Travel Activities
+    # ==============================================================================
+    - id: "travel"
+      label: "Travel"
+      description: "Trips and transportation"
+      keywords: ["travel", "trip", "journey", "vacation", "visit"]
+
+      children:
+        - id: "vacation"
+          label: "Vacation"
+          description: "Leisure travel"
+          keywords: ["vacation", "holiday", "getaway", "trip", "retreat"]
+          children:
+            - id: "beach_vacation"
+              label: "Beach Vacation"
+              keywords: ["beach", "resort", "tropical", "island"]
+            - id: "city_trip"
+              label: "City Trip"
+              keywords: ["city", "urban", "sightseeing", "tourism"]
+            - id: "road_trip"
+              label: "Road Trip"
+              keywords: ["drive", "car trip", "highway", "scenic"]
+
+        - id: "flight"
+          label: "Flight"
+          description: "Air travel"
+          keywords: ["flight", "airplane", "airport", "flying", "plane"]
+
+        - id: "day_trip"
+          label: "Day Trip"
+          description: "Same-day excursions"
+          keywords: ["day trip", "excursion", "outing", "day out"]
+
+    # ==============================================================================
+    # SHOPPING - Shopping Activities
+    # ==============================================================================
+    - id: "shopping"
+      label: "Shopping"
+      description: "Purchasing goods and services"
+      keywords: ["shop", "buy", "purchase", "store", "mall"]
+
+      children:
+        - id: "grocery"
+          label: "Grocery Shopping"
+          description: "Food and household items"
+          keywords: ["grocery", "supermarket", "groceries", "food shopping"]
+
+        - id: "clothes_shopping"
+          label: "Clothes Shopping"
+          description: "Apparel and accessories"
+          keywords: ["clothes", "fashion", "apparel", "wardrobe", "outfit"]
+
+        - id: "online_shopping"
+          label: "Online Shopping"
+          description: "E-commerce purchases"
+          keywords: ["amazon", "online", "order", "delivery", "e-commerce"]
+
+        - id: "errand"
+          label: "Errand"
+          description: "Quick shopping tasks"
+          keywords: ["errand", "quick stop", "pick up", "drop off"]
+
+    # ==============================================================================
+    # HOUSEHOLD - Domestic Activities
+    # ==============================================================================
+    - id: "household"
+      label: "Household & Chores"
+      description: "Home maintenance and domestic tasks"
+      keywords: ["home", "house", "chore", "clean", "organize"]
+
+      children:
+        - id: "cleaning"
+          label: "Cleaning"
+          description: "Household cleaning"
+          keywords: ["clean", "vacuum", "dust", "mop", "scrub", "tidy"]
+          children:
+            - id: "deep_cleaning"
+              label: "Deep Cleaning"
+              keywords: ["spring cleaning", "thorough", "scrub"]
+            - id: "tidying"
+              label: "Tidying"
+              keywords: ["organize", "declutter", "put away"]
+
+        - id: "laundry"
+          label: "Laundry"
+          description: "Washing and folding clothes"
+          keywords: ["laundry", "wash", "fold", "iron", "dry cleaning"]
+
+        - id: "home_repair"
+          label: "Home Repair"
+          description: "Maintenance and fixes"
+          keywords: ["repair", "fix", "maintenance", "handyman", "diy"]
+
+        - id: "yardwork"
+          label: "Yardwork"
+          description: "Outdoor home maintenance"
+          keywords: ["lawn", "mow", "rake", "trim", "hedge"]
+
+    # ==============================================================================
+    # ROUTINE - Daily Routines
+    # ==============================================================================
+    - id: "routine"
+      label: "Daily Routine"
+      description: "Regular daily activities"
+      keywords: ["routine", "daily", "regular", "usual", "everyday"]
+
+      children:
+        - id: "morning_routine"
+          label: "Morning Routine"
+          description: "Start-of-day activities"
+          keywords: ["wake", "shower", "dress", "morning", "get ready"]
+
+        - id: "evening_routine"
+          label: "Evening Routine"
+          description: "End-of-day activities"
+          keywords: ["bedtime", "sleep", "night", "evening", "wind down"]
+
+        - id: "personal_hygiene"
+          label: "Personal Hygiene"
+          description: "Self-care routines"
+          keywords: ["shower", "bath", "brush teeth", "hygiene"]
+
+        - id: "nap"
+          label: "Nap"
+          description: "Rest periods"
+          keywords: ["nap", "rest", "sleep", "doze", "siesta"]
+
+    # ==============================================================================
+    # CELEBRATION - Milestone Events
+    # ==============================================================================
+    - id: "celebration"
+      label: "Celebration & Milestone"
+      description: "Significant life events and celebrations"
+      keywords: ["celebrate", "milestone", "achievement", "special", "occasion"]
+
+      children:
+        - id: "birthday"
+          label: "Birthday"
+          description: "Birthday celebrations"
+          keywords: ["birthday", "born", "age", "year older", "candles"]
+
+        - id: "anniversary"
+          label: "Anniversary"
+          description: "Commemorative dates"
+          keywords: ["anniversary", "years together", "marriage", "dating"]
+
+        - id: "graduation"
+          label: "Graduation"
+          description: "Academic achievements"
+          keywords: ["graduation", "graduate", "diploma", "degree", "commencement"]
+
+        - id: "wedding"
+          label: "Wedding"
+          description: "Marriage ceremonies"
+          keywords: ["wedding", "marriage", "bride", "groom", "ceremony"]
+
+        - id: "baby"
+          label: "Baby"
+          description: "Birth and baby milestones"
+          keywords: ["baby", "birth", "newborn", "first steps", "first word"]
+          children:
+            - id: "birth"
+              label: "Birth"
+              keywords: ["born", "delivery", "labor", "newborn"]
+            - id: "first_milestone"
+              label: "First Milestone"
+              keywords: ["first word", "first steps", "first tooth"]
+
+        - id: "promotion"
+          label: "Promotion"
+          description: "Career achievements"
+          keywords: ["promotion", "raise", "new job", "career", "achievement"]
+
+        - id: "religious_event"
+          label: "Religious Event"
+          description: "Religious ceremonies and services"
+          keywords: ["church", "baptism", "communion", "bar mitzvah", "religious"]
+          children:
+            - id: "baptism"
+              label: "Baptism"
+              keywords: ["baptism", "christening", "dedication"]
+            - id: "service"
+              label: "Religious Service"
+              keywords: ["church", "temple", "mosque", "synagogue", "worship"]
+
+    # ==============================================================================
+    # SPORTS - Sports Activities
+    # ==============================================================================
+    - id: "sports"
+      label: "Sports"
+      description: "Athletic activities and spectating"
+      keywords: ["sport", "game", "match", "team", "athletic"]
+
+      children:
+        - id: "team_sports"
+          label: "Team Sports"
+          description: "Group athletic activities"
+          keywords: ["team", "league", "game", "match", "tournament"]
+          children:
+            - id: "soccer"
+              label: "Soccer"
+              keywords: ["soccer", "football", "goal", "pitch"]
+            - id: "basketball"
+              label: "Basketball"
+              keywords: ["basketball", "court", "hoop", "dunk"]
+            - id: "baseball"
+              label: "Baseball"
+              keywords: ["baseball", "bat", "pitch", "home run"]
+
+        - id: "individual_sports"
+          label: "Individual Sports"
+          description: "Solo athletic activities"
+          keywords: ["individual", "solo", "personal best"]
+          children:
+            - id: "tennis"
+              label: "Tennis"
+              keywords: ["tennis", "racket", "court", "serve"]
+            - id: "golf"
+              label: "Golf"
+              keywords: ["golf", "course", "club", "hole"]
+
+        - id: "watching_sports"
+          label: "Watching Sports"
+          description: "Sports spectating"
+          keywords: ["watch", "game", "match", "stadium", "fan"]
+
+    # ==============================================================================
+    # CREATIVE - Creative Activities
+    # ==============================================================================
+    - id: "creative"
+      label: "Creative Activities"
+      description: "Artistic and creative pursuits"
+      keywords: ["create", "art", "craft", "creative", "make"]
+
+      children:
+        - id: "art"
+          label: "Art"
+          description: "Visual arts"
+          keywords: ["paint", "draw", "sketch", "art", "canvas"]
+          children:
+            - id: "painting"
+              label: "Painting"
+              keywords: ["paint", "brush", "canvas", "watercolor"]
+            - id: "drawing"
+              label: "Drawing"
+              keywords: ["draw", "sketch", "pencil", "illustration"]
+
+        - id: "crafts"
+          label: "Crafts"
+          description: "Handmade creations"
+          keywords: ["craft", "diy", "handmade", "project"]
+          children:
+            - id: "knitting"
+              label: "Knitting"
+              keywords: ["knit", "yarn", "crochet", "needles"]
+            - id: "woodworking"
+              label: "Woodworking"
+              keywords: ["wood", "carpentry", "build", "workshop"]
+
+        - id: "photography"
+          label: "Photography"
+          description: "Photo taking and editing"
+          keywords: ["photo", "camera", "picture", "shoot", "photography"]
+
+        - id: "writing_creative"
+          label: "Creative Writing"
+          description: "Literary creation"
+          keywords: ["write", "story", "poem", "journal", "blog"]
+
+    # ==============================================================================
+    # PET - Pet Activities
+    # ==============================================================================
+    - id: "pet"
+      label: "Pet Care"
+      description: "Activities with pets"
+      keywords: ["pet", "dog", "cat", "animal", "fur baby"]
+
+      children:
+        - id: "dog_walk"
+          label: "Dog Walk"
+          description: "Walking the dog"
+          keywords: ["walk dog", "dog walk", "leash", "walk the dog"]
+
+        - id: "pet_care"
+          label: "Pet Care"
+          description: "General pet maintenance"
+          keywords: ["feed", "groom", "vet", "pet food"]
+
+        - id: "pet_play"
+          label: "Playing with Pet"
+          description: "Play time with animals"
+          keywords: ["play", "fetch", "toys", "cuddle", "pet"]
+
+  # ==============================================================================
+  # METADATA
+  # ==============================================================================
+  metadata:
+    total_categories: 16
+    total_activities: 50
+    total_subtypes: 80
+    coverage_target: "95%"  # Of common family activities
+
+  # ==============================================================================
+  # LEGACY MAPPING - Maps old 7 types to new taxonomy
+  # ==============================================================================
+  legacy_mapping:
+    meal: "sustenance.meal"
+    milestone: "celebration"
+    work: "work"
+    social: "social"
+    conversation: "social.conversation"
+    routine: "routine"
+    unknown: "routine"  # Default fallback
+
+  # ==============================================================================
+  # ZERO-SHOT LABELS - Flat list for BART-MNLI model
+  # ==============================================================================
+  zero_shot_labels:
+    # 20+ activity types for zero-shot classification
+    - "meal"
+    - "exercise"
+    - "work meeting"
+    - "medical appointment"
+    - "family gathering"
+    - "shopping"
+    - "travel"
+    - "entertainment"
+    - "education"
+    - "religious activity"
+    - "household chore"
+    - "outdoor recreation"
+    - "social event"
+    - "personal care"
+    - "creative activity"
+    - "sports"
+    - "celebration"
+    - "routine"
+    - "commute"
+    - "pet care"
+    - "cooking"
+    - "gaming"
+    - "reading"
+    - "relaxation"

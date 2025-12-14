@@ -1,0 +1,1078 @@
+%% ======================================================================================
+%% K0 MICROKERNEL - SINGLE SOURCE OF TRUTH ARCHITECTURE DIAGRAM
+%% ======================================================================================
+%% Generated: 2025-11-16
+%% Scope: Updated kernel architecture - removed embedding/FTS workers, modules are stubs, no pipelines implemented, added pipelines subsystem showing how 20 pipelines attach and run
+%% Modules: 7 (affect, builders, context, hippocampus, salience, social, space - all stubs)
+%% Runtime: Phase 2+ infrastructure complete (PipelineRunner, ModuleRegistry, DAG builder)
+%% Pipelines: None implemented yet, but diagram shows how 20 pipelines (P01-P20) will load and execute via BusDispatcher
+%% Layers: 10 architectural layers with current component detail
+%% Purpose: Definitive reference for K0 development - reflects current source of truth
+%% ======================================================================================
+
+graph TB
+    %% ======================================================================================
+    %% LAYER 0: CLIENT INTERFACES & EXTERNAL SYSTEMS
+    %% ======================================================================================
+    subgraph L0_CLIENTS["🌐 LAYER 0: Client Interfaces & External Systems"]
+        direction LR
+
+        subgraph CLI_CLIENT_DETAIL["k0ctl CLI Client"]
+            CLI_SERVE_CMD["serve"]:::cli
+            CLI_PROVISION_CMD["provision"]:::cli
+            CLI_SCHEMA_CMD["schema"]:::cli
+            CLI_DRIVER_CMD["driver"]:::cli
+            CLI_SNAPSHOT_CMD["snapshot"]:::cli
+            CLI_REPLAY_CMD["replay"]:::cli
+            CLI_DLQ_CMD["dlq"]:::cli
+        end
+
+        subgraph HTTP_CLIENT_DETAIL["HTTP Clients"]
+            HTTP_FASTAPI["FastAPI consumers"]:::client
+            HTTP_JSON["JSON payloads"]:::client
+            HTTP_YAML["YAML payloads"]:::client
+            HTTP_AUTH["Authorization headers"]:::client
+        end
+
+        subgraph SSE_CLIENT_DETAIL["SSE Subscribers"]
+            SSE_EVENTSOURCE["EventSource streams"]:::client
+            SSE_ACK_PROTO["Ack protocol"]:::client
+            SSE_BACKPRESSURE["Backpressure aware"]:::client
+        end
+
+        subgraph DRIVER_CLIENT_DETAIL["External Drivers"]
+            DRV_HTTP["HTTP transport"]:::client
+            DRV_GRPC["gRPC transport"]:::client
+            DRV_HANDSHAKE["Driver handshake"]:::client
+            DRV_LEASE["Lease renewal"]:::client
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 1: KERNEL PORTS (FastAPI Routers)
+    %% ======================================================================================
+    subgraph L1_PORTS["⚡ LAYER 1: Kernel Ports (FastAPI HTTP Layer)"]
+        direction TB
+
+        subgraph PORT_CMD["Command Port (k0/ports/command.py)"]
+            subgraph CMD_CLASSES["Command Classes"]
+                CMD_ENVELOPE["Envelope (Pydantic)"]:::port
+                CMD_RESPONSE["CommandResponse"]:::port
+            end
+
+            subgraph CMD_FUNCTIONS["Command Functions"]
+                CMD_SUBMIT_FN["submit_command()"]:::port
+                CMD_EXTRACT["_extract_body()"]:::port
+                CMD_NORMALISE["_normalise_body_bytes()"]:::port
+                CMD_STATE["_get_state_component()"]:::port
+                CMD_TRACE["_resolve_trace_id()"]:::port
+                CMD_ERROR["_error_response()"]:::port
+                CMD_DUP_TELEM["_emit_duplicate_telemetry()"]:::port
+                CMD_CAP["_resolve_cap_request()"]:::port
+                CMD_SCHED_COST["_compute_scheduler_cost()"]:::port
+                CMD_SER_QOS["_serialize_qos_budgets()"]:::port
+                CMD_QOS_TELEM["_emit_qos_budget_telemetry()"]:::port
+                CMD_QOS_RESP["_qos_budget_response()"]:::port
+                CMD_PEM_METRICS["_record_pem_metrics()"]:::port
+            end
+        end
+
+        subgraph PORT_QRY["Query Port (k0/ports/query.py)"]
+            subgraph QRY_CLASSES["Query Classes"]
+                QRY_SELECTOR["RecallSelector"]:::port
+                QRY_REQUEST["RecallRequest"]:::port
+                QRY_RESPONSE["RecallResponse"]:::port
+            end
+
+            subgraph QRY_FUNCTIONS["Query Functions"]
+                QRY_RECALL_FN["query_recall()"]:::port
+                QRY_BUILD_POL["_build_policy_envelope()"]:::port
+                QRY_MERGE_CAP["_merge_policy_caps()"]:::port
+                QRY_TIME_BUDGET["_resolve_time_budget()"]:::port
+                QRY_SHOULD_STREAM["_should_stream()"]:::port
+                QRY_STREAM["_stream_query_response()"]:::port
+            end
+        end
+
+        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)"]
+            subgraph SSE_CLASSES["SSE Classes"]
+                SSE_ACK_REQ["AckRequest"]:::port
+                SSE_TRACE_EVENT["SSETraceEvent"]:::port
+            end
+
+            subgraph SSE_FUNCTIONS["SSE Functions"]
+                SSE_SUBSCRIBE_FN["subscribe()"]:::port
+                SSE_ACKNOWLEDGE["acknowledge()"]:::port
+                SSE_SUBSCRIBER_ID["_resolve_subscriber_id()"]:::port
+                SSE_SER_BACKP["_serialize_backpressure_advisory()"]:::port
+                SSE_EMIT_BACKP["_emit_backpressure_event()"]:::port
+                SSE_PARSE_TOPICS["_parse_topics()"]:::port
+                SSE_RESOLVE_BAND["_resolve_band()"]:::port
+            end
+        end
+
+        subgraph PORT_DRV["Driver Port (k0/ports/drivers.py)"]
+            subgraph DRV_CLASSES["Driver Classes"]
+                DRV_HANDSHAKE_REQ["DriverHandshakeRequest"]:::port
+                DRV_HANDSHAKE_RESP["DriverHandshakeResponse"]:::port
+            end
+
+            subgraph DRV_FUNCTIONS["Driver Functions"]
+                DRV_HANDSHAKE_FN["driver_handshake()"]:::port
+                DRV_FORMAT_TS["_format_timestamp()"]:::port
+            end
+        end
+
+        subgraph PORT_OBS["Observability Port (k0/ports/observe.py)"]
+            subgraph OBS_CLASSES["Observability Classes"]
+                OBS_METRICS_BUF["ForwardedMetricsBuffer"]:::port
+                OBS_PAYLOAD["ObservabilityPayload"]:::port
+            end
+
+            subgraph OBS_FUNCTIONS["Observability Functions"]
+                OBS_EMIT_FN["emit()"]:::port
+                OBS_INGEST_LOGS["_ingest_forwarded_logs()"]:::port
+            end
+
+            subgraph OBS_ENDPOINTS["Observability Endpoints"]
+                OBS_HEALTHZ["GET /healthz"]:::port
+                OBS_READYZ["GET /readyz"]:::port
+                OBS_METRICS["GET /metrics"]:::port
+                OBS_EMIT_EP["POST /k0/obs.emit"]:::port
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 2: GATE & POLICY ENFORCEMENT
+    %% ======================================================================================
+    subgraph L2_GATE["🛡️ LAYER 2: Gate & Policy Enforcement"]
+        direction TB
+
+        subgraph GATE_CORE["Gate Core (k0/gate/)"]
+            subgraph MIN_GATE_DETAIL["MinimalGate (k0/gate/minimal_gate.py)"]
+                GATE_VALIDATE["validate()"]:::gate
+                GATE_VERIFY["_verify_with_rotation_support()"]:::gate
+                GATE_REPLAY_CHECK["_check_envelope_replay()"]:::gate
+                GATE_DEVICE_SECRET["_get_device_secret()"]:::gate
+                GATE_VALIDATE_SCHEMA["_validate_schema()"]:::gate
+                GATE_NORMALIZE_BODY["_normalize_body()"]:::gate
+                GATE_NORMALIZE_HASH["_normalize_hash()"]:::gate
+                GATE_SIG_SUCCESS["_emit_signature_success()"]:::gate
+                GATE_SIG_FAILURE["_emit_signature_failure()"]:::gate
+                GATE_PROV_FAILURE["_emit_provisioning_failure()"]:::gate
+                GATE_SCHEMA_FAILURE["_emit_schema_failure()"]:::gate
+                GATE_REPLAY_ATTEMPT["_emit_replay_attempt()"]:::gate
+            end
+
+            subgraph SCHEMA_REG_DETAIL["SchemaRegistry (k0/gate/schema_registry.py)"]
+                SCHEMA_LOAD["load()"]:::gate
+                SCHEMA_GET["get()"]:::gate
+                SCHEMA_REGISTER["register()"]:::gate
+                SCHEMA_UPSERT["upsert()"]:::gate
+                SCHEMA_PROMOTE["promote()"]:::gate
+                SCHEMA_BLOCK["block()"]:::gate
+                SCHEMA_ACTIVE_VERS["active_versions()"]:::gate
+                SCHEMA_RECORDS_URI["records_for_uri()"]:::gate
+                SCHEMA_AUDIT["get_audit_trail()"]:::gate
+                SCHEMA_CLEAR_CACHE["clear_cache()"]:::gate
+            end
+
+            subgraph PROV_LEDGER_DETAIL["ProvisioningLedger (k0/storage/provisioning.py)"]
+                PROV_REGISTER["register()"]:::gate
+                PROV_ADD_KEY["add_key()"]:::gate
+                PROV_SEED["seed()"]:::gate
+                PROV_LOOKUP["lookup()"]:::gate
+                PROV_GET_KEYS["get_keys()"]:::gate
+                PROV_LOAD_KEYS["_load_keys()"]:::gate
+                PROV_CLEAR_CACHE["clear_cache()"]:::gate
+            end
+        end
+
+        subgraph POLICY_ENGINE["Policy Engine (k0/policy/)"]
+            subgraph PEP_DETAIL["PEP Syscall (k0/policy/pep_syscall.py)"]
+                PEP_EVALUATE["evaluate_envelope()"]:::policy
+                PEP_CREATE_STAMP["create_policy_stamp()"]:::policy
+                PEP_MANIFEST_FP["get_manifest_fingerprint()"]:::policy
+                PEP_LOAD_MANIFEST["_load_policy_manifest()"]:::policy
+                PEP_LOOKUP_BAND["_lookup_band_policy()"]:::policy
+                PEP_BUILD_OBLIG["_build_obligations()"]:::policy
+                PEP_EVAL_POSTURE["_evaluate_device_posture()"]:::policy
+                PEP_EVAL_CAPS["_evaluate_caps()"]:::policy
+                PEP_EVAL_SIZE["_evaluate_payload_size()"]:::policy
+                PEP_EVAL_SUNSET["_evaluate_schema_sunsets()"]:::policy
+                PEP_EVAL_ROLES["_evaluate_roles()"]:::policy
+                PEP_DEDUP_OBLIG["_deduplicate_obligations()"]:::policy
+            end
+
+            subgraph POLICY_STAMP_DETAIL["PolicyStamp (k0/policy/policy_stamp.py)"]
+                STAMP_TO_DICT["to_dict()"]:::policy
+                STAMP_FROM_DICT["from_dict()"]:::policy
+                STAMP_TO_JSON["to_json()"]:::policy
+                STAMP_FROM_JSON["from_json()"]:::policy
+                STAMP_CREATE["create_policy_stamp()"]:::policy
+                STAMP_ATTACH["attach_policy_stamp_to_envelope()"]:::policy
+                STAMP_EXTRACT["extract_policy_stamp()"]:::policy
+            end
+
+            subgraph REDACTION_DETAIL["Redaction Engine (k0/policy/redaction.py)"]
+                REDACT_APPLY["apply_redactions()"]:::policy
+                REDACT_DIRECTIVES["directives_from_obligations()"]:::policy
+                REDACT_MASK_LOC["mask_location_for_band()"]:::policy
+                REDACT_NORMALISE["_normalise_path()"]:::policy
+                REDACT_MASK_PATH["_mask_path()"]:::policy
+            end
+
+            subgraph ACL_ENF_DETAIL["ACL Enforcer (k0/policy/acl_enforcer.py)"]
+                ACL_CHECK["check_permission()"]:::policy
+                ACL_GRANT["grant_permission()"]:::policy
+                ACL_REVOKE["revoke_permission()"]:::policy
+                ACL_LIST["list_permissions()"]:::policy
+            end
+
+            subgraph LOC_PRIV_DETAIL["Location Privacy (k0/policy/location_privacy.py)"]
+                LOC_LAT_LON["lat_lon_to_geohash()"]:::policy
+                LOC_PRECISION["get_geohash_precision_for_band()"]:::policy
+                LOC_METERS["get_precision_meters_for_band()"]:::policy
+                LOC_MASK_BAND["mask_location_for_band()"]:::policy
+                LOC_APPLY["apply_location_privacy()"]:::policy
+            end
+
+            subgraph RETENTION_DETAIL["Retention Enforcer (k0/policy/retention_enforcer.py)"]
+                RET_APPLY["apply_policies()"]:::policy
+                RET_EXPIRED["get_expired_resources()"]:::policy
+                RET_ARCHIVE["_archive_resource()"]:::policy
+                RET_DELETE["_delete_resource()"]:::policy
+            end
+        end
+
+        subgraph SECURITY_CRYPTO["Security & Crypto (k0/security/)"]
+            subgraph CRYPTO_DETAIL["Crypto Functions (k0/security/crypto.py)"]
+                CRYPTO_CANONICAL_JSON["canonical_json()"]:::security
+                CRYPTO_CANONICAL_ENV["canonical_envelope()"]:::security
+                CRYPTO_HASH_PAYLOAD["hash_payload()"]:::security
+                CRYPTO_COMPUTE_SHA["compute_envelope_sha256()"]:::security
+                CRYPTO_VERIFY_SIG["verify_signature()"]:::security
+                CRYPTO_VERIFY_FULL["verify_full_envelope_signature()"]:::security
+                CRYPTO_ENCODE_B64["encode_base64url()"]:::security
+                CRYPTO_DECODE_B64["_decode_base64url()"]:::security
+            end
+        end
+
+        subgraph IDEM_LAYER["Idempotency (k0/idem/)"]
+            subgraph IDEM_DERIVE_DETAIL["Idem Derivation (k0/idem/derive.py)"]
+                IDEM_CANONICAL["canonical_idem_components()"]:::idem
+                IDEM_DERIVE_BLAKE["derive_idem_key() BLAKE3"]:::idem
+                IDEM_DERIVE_HMAC["derive_hmac_idem_key() V1"]:::idem
+                IDEM_NORMALIZE["_normalize_hash()"]:::idem
+            end
+
+            subgraph IDEM_LEDGER_DETAIL["Idempotency Ledger (k0/idem/ledger.py)"]
+                IDEM_LOOKUP["lookup()"]:::idem
+                IDEM_UPSERT["upsert()"]:::idem
+                IDEM_TELEM_LOOKUP["_emit_lookup_telemetry()"]:::idem
+                IDEM_TELEM_UPSERT["_emit_upsert_telemetry()"]:::idem
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 3: TRANSACTION COORDINATION & RECEIPTS
+    %% ======================================================================================
+    subgraph L3_TXN["💼 LAYER 3: Transaction Coordination & Receipts"]
+        direction TB
+
+        subgraph UOW_SUBSYS["Unit of Work (k0/uow/)"]
+            subgraph UOW_DETAIL["UnitOfWork (k0/uow/unit_of_work.py)"]
+                UOW_ENTER["__enter__() BEGIN IMMEDIATE"]:::core
+                UOW_EXIT["__exit__()"]:::core
+                UOW_APPEND_WAL["append_wal()"]:::core
+                UOW_STAGE_OUTBOX["stage_outbox()"]:::core
+                UOW_SAVE_RECEIPT["save_receipt()"]:::core
+                UOW_UPSERT_OFFSET["upsert_offset()"]:::core
+                UOW_ADD_HOOK["add_commit_hook()"]:::core
+                UOW_COMMIT["_commit()"]:::core
+                UOW_ROLLBACK["_rollback()"]:::core
+                UOW_FSYNC["_fsync_wal()"]:::core
+                UOW_FLUSH["_flush_outbox()"]:::core
+            end
+        end
+
+        subgraph RECEIPT_SUBSYS["Receipt Subsystem (k0/receipts/)"]
+            subgraph RECEIPT_ISS_DETAIL["Receipt Issuer (k0/receipts/issuer.py)"]
+                RECEIPT_ISSUE["issue()"]:::receipt
+                RECEIPT_NORMALISE["_normalise_obligations()"]:::receipt
+                RECEIPT_EMIT_METRIC["_emit_metric()"]:::receipt
+                RECEIPT_EMIT_OBS["_emit_observability_event()"]:::receipt
+            end
+
+            subgraph RECEIPT_STORE_DETAIL["Receipt Store (k0/storage/receipts.py)"]
+                RECEIPT_SAVE["save()"]:::storage
+                RECEIPT_GET["get()"]:::storage
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 4: STORAGE CORE (WAL, Outbox, Offsets, DLQ)
+    %% ======================================================================================
+    subgraph L4_STORAGE["💾 LAYER 4: Storage Core"]
+        direction TB
+
+        subgraph WAL_CORE["Write-Ahead Log (k0/storage/wal.py)"]
+            subgraph WAL_DETAIL["WriteAheadLog Methods"]
+                WAL_APPEND["append()"]:::storage
+                WAL_READ_FROM["read_from()"]:::storage
+                WAL_FSYNC["fsync()"]:::storage
+                WAL_BACKLOG["backlog_stats()"]:::storage
+            end
+
+            subgraph WAL_REPLAY_DETAIL["Replayer (k0/storage/replayer.py)"]
+                REPLAY_RUN["run()"]:::storage
+                REPLAY_FETCH["_fetch_batch()"]:::storage
+                REPLAY_EXISTS["_receipt_exists()"]:::storage
+                REPLAY_METRIC["_emit_metric()"]:::storage
+                REPLAY_OBS["_emit_observability()"]:::storage
+            end
+
+            subgraph WAL_SNAPSHOT_DETAIL["Snapshot Scheduler (k0/storage/snapshots.py)"]
+                SNAP_CREATE["create_snapshot()"]:::storage
+                SNAP_APPEND["_append_marker()"]:::storage
+                SNAP_BACKUP["_write_backup()"]:::storage
+                SNAP_MANIFEST["_write_manifest()"]:::storage
+                SNAP_WATERMARK["_resolve_watermark()"]:::storage
+                SNAP_GEN_ID["_generate_snapshot_id()"]:::storage
+            end
+
+            subgraph SHARD_PROMO_DETAIL["Shard Promotion (k0/storage/shard_promotion.py)"]
+                SHARD_LAG["compute_replica_lag()"]:::storage
+                SHARD_PROMOTE["promote()"]:::storage
+                SHARD_FETCH_WAL["_fetch_wal_entries()"]:::storage
+                SHARD_FETCH_REC["_fetch_receipts()"]:::storage
+                SHARD_UPSERT_WAL["_upsert_wal_entry()"]:::storage
+                SHARD_UPSERT_REC["_upsert_receipt()"]:::storage
+            end
+        end
+
+        subgraph OUTBOX_CORE["Outbox Subsystem (k0/outbox/ & k0/storage/outbox.py)"]
+            subgraph OUTBOX_STORE_DETAIL["OutboxStore (k0/storage/outbox.py)"]
+                OUTBOX_ENQUEUE["enqueue()"]:::storage
+                OUTBOX_DEQUEUE["dequeue_batch()"]:::storage
+                OUTBOX_DEQUEUE_READY["dequeue_ready_batch()"]:::storage
+                OUTBOX_MARK_APPLIED["mark_applied()"]:::storage
+                OUTBOX_RECORD_FAIL["record_failure()"]:::storage
+                OUTBOX_UPDATE_METRICS["_update_pending_metrics()"]:::storage
+            end
+
+            subgraph OUTBOX_WORKER_DETAIL["OutboxWorker (k0/outbox/worker.py)"]
+                WORKER_PROCESS["process_driver()"]:::outbox
+                WORKER_GET_DRV["_get_driver()"]:::outbox
+                WORKER_HANDLE_FAIL["_handle_failure()"]:::outbox
+                WORKER_REGISTER["register_driver()"]:::outbox
+                WORKER_UNREGISTER["unregister_driver()"]:::outbox
+                WORKER_LOAD_ALIAS["load_driver_from_alias_map()"]:::outbox
+            end
+
+            subgraph DRIVER_POOL_DETAIL["DriverWorkerPool (k0/outbox/pool.py)"]
+                POOL_HANDSHAKE["register_handshake()"]:::outbox
+                POOL_PROCESS["process_driver()"]:::outbox
+                POOL_GET_SESSION["get_session()"]:::outbox
+                POOL_ACTIVE_SESS["active_sessions()"]:::outbox
+                POOL_ENSURE["_ensure_worker()"]:::outbox
+                POOL_RESOLVE["_resolve_driver()"]:::outbox
+                POOL_REG_HTTP["_register_http_driver()"]:::outbox
+                POOL_CLEANUP["_cleanup_expired_sessions()"]:::outbox
+            end
+
+            subgraph RETRY_SCHED_DETAIL["RetryScheduler (k0/outbox/scheduler.py)"]
+                RETRY_DECIDE["decide()"]:::outbox
+                RETRY_MAX_ATTEMPTS["max_attempts()"]:::outbox
+            end
+
+            subgraph FINGERPRINT_DETAIL["Fingerprint (k0/outbox/fingerprint.py)"]
+                FP_COMPUTE["compute_fingerprint() BLAKE3"]:::outbox
+            end
+        end
+
+        subgraph OFFSET_CORE["Offset Store (k0/storage/offsets.py)"]
+            OFFSET_UPSERT["upsert()"]:::storage
+            OFFSET_FETCH["fetch()"]:::storage
+        end
+
+        subgraph DLQ_CORE["Dead Letter Queue (k0/storage/dlq.py)"]
+            DLQ_RECORD["record()"]:::storage
+            DLQ_LIST_PENDING["list_pending()"]:::storage
+            DLQ_GET["get()"]:::storage
+            DLQ_MARK_REQUEUED["mark_requeued()"]:::storage
+            DLQ_PURGE["purge()"]:::storage
+        end
+
+        subgraph OBLIG_STORE["Obligation Store (k0/storage/obligations.py)"]
+            OBLIG_SAVE["save()"]:::storage
+            OBLIG_BULK_SAVE["bulk_save()"]:::storage
+            OBLIG_FETCH_WAL["fetch_by_wal_pos()"]:::storage
+            OBLIG_FETCH_RECENT["fetch_recent()"]:::storage
+        end
+
+        subgraph FTS_STORE["FTS Store (k0/storage/fts.py)"]
+            FTS_INDEX_WAL["index_wal_entry()"]:::storage
+            FTS_REMOVE_WAL["remove_wal_entry()"]:::storage
+            FTS_SEARCH["search()"]:::storage
+            FTS_GET_STATS["get_stats()"]:::storage
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 5: QOS & SCHEDULING
+    %% ======================================================================================
+    subgraph L5_QOS["⚖️ LAYER 5: QoS & Scheduling"]
+        direction TB
+
+        subgraph SCHED_CORE["Scheduler Core (k0/qos/scheduler.py)"]
+            subgraph SCHED_CLASSES["Scheduler Classes"]
+                SCHED_PROFILE["SchedulerProfile"]:::qos
+                SCHED_TOKEN["SchedulerToken"]:::qos
+                SCHED_CLASS["Scheduler"]:::qos
+            end
+
+            subgraph SCHED_METHODS["Scheduler Methods"]
+                SCHED_ACQUIRE["acquire()"]:::qos
+                SCHED_TIGHTEN["tighten()"]:::qos
+                SCHED_RELEASE["_release()"]:::qos
+                SCHED_ACTIVE["active_tokens()"]:::qos
+            end
+
+            subgraph SCHED_CONFIG["Scheduler Configuration"]
+                SCHED_ALGO["Algorithm: Weighted Deficit Round Robin"]:::qos
+                SCHED_BANDS["Bands: GREEN/AMBER/RED"]:::qos
+                SCHED_PORTS["Ports: command, query, sse"]:::qos
+            end
+        end
+
+        subgraph QOS_CTX_CORE["QoS Context (k0/qos/context.py)"]
+            subgraph QOS_CTX_CLASSES["QoSContext Classes"]
+                QOS_CTX_CLASS["QoSContext"]:::qos
+            end
+
+            subgraph QOS_CTX_METHODS["QoSContext Methods"]
+                QOS_CTX_TIGHTEN["tighten()"]:::qos
+                QOS_CTX_FANOUT["consume_fanout()"]:::qos
+                QOS_CTX_TOPK["consume_top_k()"]:::qos
+                QOS_CTX_ACQUIRE["acquire()"]:::qos
+                QOS_CTX_CONSUME["_consume()"]:::qos
+                QOS_CTX_ENSURE["_ensure_non_negative()"]:::qos
+            end
+
+            subgraph QOS_CTX_BUDGETS["QoS Budgets"]
+                QOS_FANOUT_BUDGET["fanout_budget"]:::qos
+                QOS_TOPK_BUDGET["top_k_budget"]:::qos
+            end
+        end
+
+        subgraph QOS_POLICY_CORE["QoS Policy (k0/qos/policy.py)"]
+            subgraph QOS_POLICY_CLASSES["QoS Policy Classes"]
+                QOS_TIGHTENING["QoSTightening"]:::qos
+            end
+
+            subgraph QOS_POLICY_FUNCTIONS["QoS Policy Functions"]
+                QOS_APPLY_OBLIG["apply_qos_obligations()"]:::qos
+                QOS_COERCE_INT["coerce_positive_int()"]:::qos
+            end
+        end
+
+        subgraph QOS_METRICS_CORE["QoS Metrics (k0/qos/metrics.py)"]
+            subgraph QOS_METRICS_CLASSES["QoS Metrics Classes"]
+                QOS_METRICS_CLASS["QoSMetrics"]:::qos
+            end
+
+            subgraph QOS_METRICS_METHODS["QoS Metrics Methods"]
+                QOS_RECORD_ACQ["record_acquisition()"]:::qos
+                QOS_RECORD_REJ_CAP["record_rejection_capacity()"]:::qos
+                QOS_RECORD_REJ_HOURS["record_rejection_outside_hours()"]:::qos
+                QOS_RECORD_REJ_RATE["record_rejection_rate_limited()"]:::qos
+                QOS_SET_ACTIVE["set_active_tokens()"]:::qos
+                QOS_SET_UTIL["set_port_utilization()"]:::qos
+                QOS_SET_LIMIT["set_port_limit()"]:::qos
+                QOS_UPDATE_PORT["update_port_metrics()"]:::qos
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 6: EVENT BUS & SSE
+    %% ======================================================================================
+    subgraph L6_BUS["🚌 LAYER 6: Event Bus & SSE Subsystem"]
+        direction TB
+
+        subgraph BUS_CORE["Bus Core (k0/bus/)"]
+            subgraph BUS_CLASSES["Bus Classes (k0/bus/core.py)"]
+                BUS_MESSAGE["BusMessage"]:::bus
+                BUS_DISPATCH_CTX["BusDispatchContext"]:::bus
+                BUS_DISPATCHER_CLASS["BusDispatcher"]:::bus
+            end
+
+            subgraph BUS_METHODS["BusDispatcher Methods"]
+                BUS_REGISTER_SINK["register_sink()"]:::bus
+                BUS_REGISTER_MW["register_middleware()"]:::bus
+                BUS_DISPATCH["dispatch()"]:::bus
+                BUS_ENSURE_MONO["_ensure_monotonic()"]:::bus
+                BUS_DISPATCH_SINGLE["_dispatch_single()"]:::bus
+                BUS_RESOLVE_BAND["_resolve_band()"]:::bus
+                BUS_EXECUTE_MW["_execute_middlewares()"]:::bus
+                BUS_FAN_OUT["_fan_out()"]:::bus
+            end
+
+            subgraph BUS_FUNCTIONS["Bus Functions"]
+                BUS_CURRENT_CTX["current_dispatch_context()"]:::bus
+            end
+
+            subgraph BUS_MW_CORE["Bus Middleware (k0/bus/middleware.py)"]
+                BUS_MW_TIMESTAMP["timestamp_middleware()"]:::bus
+                BUS_MW_LATENCY["latency_metrics_middleware()"]:::bus
+                BUS_MW_TRACING["tracing_middleware()"]:::bus
+            end
+
+            subgraph BUS_MW_CHAIN["Middleware Chain"]
+                BUS_CHAIN_1["1. Timing instrumentation"]:::bus
+                BUS_CHAIN_2["2. Trace propagation"]:::bus
+                BUS_CHAIN_3["3. Error handling"]:::bus
+            end
+        end
+
+        subgraph SSE_CORE["SSE Subsystem (k0/sse/)"]
+            subgraph SSE_CLASSES["SSE Classes (k0/sse/server.py)"]
+                SSE_CURSOR["CursorState"]:::sse
+                SSE_BP_TOPIC["BackpressureTopicMetrics"]:::sse
+                SSE_BP_METRICS["BackpressureMetrics"]:::sse
+                SSE_SERVER_CLASS["SSEServer"]:::sse
+            end
+
+            subgraph SSE_METHODS["SSEServer Methods"]
+                SSE_SUBSCRIBE["subscribe()"]:::sse
+                SSE_EVAL_BP["evaluate_backpressure()"]:::sse
+                SSE_ACK["acknowledge()"]:::sse
+                SSE_LOAD_ACL["_load_acl()"]:::sse
+                SSE_TOPIC_ALLOWED["_topic_allowed()"]:::sse
+                SSE_DECODE_CURSOR["_decode_cursor()"]:::sse
+                SSE_BUILD_CURSOR["build_cursor()"]:::sse
+            end
+
+            subgraph SSE_BP_LEVELS["Backpressure Levels"]
+                SSE_BP_NORMAL["normal: < 100 events"]:::sse
+                SSE_BP_WARNING["warning: 100-1000 events"]:::sse
+                SSE_BP_THROTTLE["throttle: 1000-10000 events"]:::sse
+                SSE_BP_SHED["shed: > 10000 events"]:::sse
+            end
+        end
+
+        subgraph PIPELINES_CORE["Pipelines Subsystem (k0/pipelines/ & k0/runtime/)"]
+            subgraph PIPELINE_LOADER["Pipeline Loader (k0/pipelines/loader.py)"]
+                LOADER_DISCOVER["discover_and_boot_pipelines()"]:::core
+                LOADER_LOAD_PY["_load_python_pipeline()"]:::core
+                LOADER_LOAD_YAML["_load_yaml_pipeline() (future)"]:::core
+            end
+
+            subgraph PIPELINE_REGISTRY["Pipeline Registry"]
+                PIPELINE_P01["P01: Ingress Discovery"]:::core
+                PIPELINE_P02["P02: Episodic Write"]:::core
+                PIPELINE_P03["P03: Consolidation"]:::core
+                PIPELINE_P04["P04: Attention Router"]:::core
+                PIPELINE_P05_TO_P20["P05-P20: 16 Additional Pipelines"]:::core
+            end
+
+            subgraph PIPELINE_EXECUTION["Pipeline Execution"]
+                PIPELINE_HANDLE["handle(BusMessage)"]:::core
+                PIPELINE_PHASE1["Phase 1: Class.handle()"]:::core
+                PIPELINE_PHASE2["Phase 2+: Runner.execute_dag()"]:::core
+                PIPELINE_EMIT["emit(exit_topic)"]:::core
+            end
+
+            subgraph PIPELINE_PROTOCOL["PipelineProtocol Interface"]
+                PROTOCOL_STARTUP["on_startup(ctx)"]:::core
+                PROTOCOL_HANDLE["handle(msg)"]:::core
+                PROTOCOL_SHUTDOWN["on_shutdown()"]:::core
+                PROTOCOL_PROPS["pipeline_id, concurrency, topics"]:::core
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 7: QUERY DRIVERS & WORKERS
+    %% ======================================================================================
+    subgraph L7_QUERY_WORKERS["🔍 LAYER 7: Query Drivers & Background Workers"]
+        direction TB
+
+        subgraph QUERY_SUBSYS["Query Subsystem (k0/query/)"]
+            subgraph QUERY_REG_CORE["Driver Registry (k0/query/drivers.py)"]
+                subgraph QUERY_REG_CLASSES["Registry Classes"]
+                    QUERY_REGISTRY_CLASS["DriverRegistry"]:::query
+                    QUERY_WAL_DRIVER["WalDriver"]:::query
+                    QUERY_ALIAS_DRIVER["AliasDriver"]:::query
+                    QUERY_FTS_DRIVER["FtsDriver"]:::query
+                end
+
+                subgraph QUERY_REG_FUNCTIONS["Registry Functions"]
+                    QUERY_BUILD_DEFAULT["build_default_registry()"]:::query
+                end
+
+                subgraph QUERY_DRIVERS["Available Drivers"]
+                    QUERY_DRV_WAL["WalDriver (primary)"]:::query
+                    QUERY_DRV_FTS["FtsDriver (full-text search)"]:::query
+                    QUERY_DRV_ALIAS["AliasDriver (placeholder)"]:::query
+                end
+            end
+
+            subgraph QUERY_AGG_CORE["Query Aggregator (k0/query/service.py)"]
+                subgraph QUERY_AGG_CLASSES["Aggregator Classes"]
+                    QUERY_SELECTOR_BUNDLE["SelectorBundle"]:::query
+                    QUERY_EXEC_RESULT["QueryExecutionResult"]:::query
+                    QUERY_AGG_CLASS["QueryAggregator"]:::query
+                end
+
+                subgraph QUERY_AGG_METHODS["Aggregator Methods"]
+                    QUERY_EXECUTE["execute()"]:::query
+                    QUERY_RESOLVE_LIMIT["_resolve_limit()"]:::query
+                end
+
+                subgraph QUERY_FLOW["Query Flow"]
+                    QUERY_FLOW_1["1. Resolve selectors"]:::query
+                    QUERY_FLOW_2["2. Driver dispatch"]:::query
+                    QUERY_FLOW_3["3. QoS budget tracking"]:::query
+                    QUERY_FLOW_4["4. Result aggregation"]:::query
+                end
+            end
+        end
+
+        subgraph WORKER_SUBSYS["Background Workers (k0/workers/)"]
+            %% Workers removed: Embedding and FTS workers no longer exist
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 8: DRIVERS (SPI Layer)
+    %% ======================================================================================
+    subgraph L8_DRIVERS["🔌 LAYER 8: Driver SPI Layer"]
+        direction TB
+
+        subgraph ALIAS_MAP_CORE["Alias Map (k0/drivers/alias_map.py)"]
+            subgraph ALIAS_MAP_CLASSES["AliasMap Classes"]
+                ALIAS_MAP_CLASS["AliasMap"]:::driver
+            end
+
+            subgraph ALIAS_MAP_METHODS["AliasMap Methods"]
+                ALIAS_FROM_FILE["from_file()"]:::driver
+                ALIAS_RESOLVE["resolve()"]:::driver
+            end
+
+            subgraph ALIAS_MAP_CONFIG["Alias Configuration"]
+                ALIAS_CFG_FILE["alias_map.yaml"]:::driver
+                ALIAS_CFG_EPI["st_epi → EpisodicDriver"]:::driver
+                ALIAS_CFG_VECTOR["st_vector → FaissDriver"]:::driver
+                ALIAS_CFG_KG["st_kg → Neo4jKGDriver"]:::driver
+            end
+        end
+
+        subgraph DRIVER_IMPL["Driver Implementations"]
+            subgraph FAISS_DRV_CORE["FAISS Driver (k0/drivers/faiss.py)"]
+                subgraph FAISS_CLASSES["FAISS Classes"]
+                    FAISS_DRV_CLASS["FaissDriver"]:::driver_impl
+                end
+
+                subgraph FAISS_METHODS["FAISS Methods"]
+                    FAISS_APPLY["apply()"]:::driver_impl
+                end
+
+                subgraph FAISS_BACKEND["FAISS Backend"]
+                    FAISS_INDEX["FAISS vector index"]:::driver_impl
+                end
+            end
+
+            subgraph NEO4J_DRV_CORE["Neo4j Driver (k0/drivers/neo4j_driver.py)"]
+                subgraph NEO4J_CLASSES["Neo4j Classes"]
+                    NEO4J_DRV_CLASS["Neo4jKGDriver"]:::driver_impl
+                end
+
+                subgraph NEO4J_METHODS["Neo4j Methods"]
+                    NEO4J_CONNECT["connect()"]:::driver_impl
+                    NEO4J_CLOSE["close()"]:::driver_impl
+                    NEO4J_APPLY["apply()"]:::driver_impl
+                    NEO4J_PERSON["_create_person_node()"]:::driver_impl
+                    NEO4J_LOCATION["_create_location_node()"]:::driver_impl
+                    NEO4J_EVENT["_create_event_node()"]:::driver_impl
+                    NEO4J_QUERY_REL["query_relationships()"]:::driver_impl
+                    NEO4J_FIND_PATH["find_path()"]:::driver_impl
+                end
+
+                subgraph NEO4J_BACKEND["Neo4j Backend"]
+                    NEO4J_GRAPH_DB["Neo4j graph database"]:::driver_impl
+                end
+            end
+
+            subgraph SQLITE_DRV_CORE["SQLite Driver (k0/drivers/sqlite.py)"]
+                subgraph SQLITE_CLASSES["SQLite Classes"]
+                    SQLITE_DRV_CLASS["SQLiteDriver"]:::driver_impl
+                end
+
+                subgraph SQLITE_METHODS["SQLite Methods"]
+                    SQLITE_CONNECT["connect()"]:::driver_impl
+                    SQLITE_BEGIN["begin()"]:::driver_impl
+                    SQLITE_COMMIT["commit()"]:::driver_impl
+                    SQLITE_ROLLBACK["rollback()"]:::driver_impl
+                    SQLITE_APPEND["append()"]:::driver_impl
+                    SQLITE_READ["read()"]:::driver_impl
+                    SQLITE_SCAN["scan()"]:::driver_impl
+                    SQLITE_EXECUTE["execute()"]:::driver_impl
+                    SQLITE_CLOSE["close()"]:::driver_impl
+                end
+
+                subgraph SQLITE_BACKEND["SQLite Backend"]
+                    SQLITE_ACID["SQLite ACID operations"]:::driver_impl
+                end
+            end
+
+            subgraph BLOB_DRV_CORE["Blob Driver (k0/drivers/blob_localfs.py)"]
+                subgraph BLOB_CLASSES["Blob Classes"]
+                    BLOB_DRV_CLASS["LocalBlobDriver"]:::driver_impl
+                end
+
+                subgraph BLOB_METHODS["Blob Methods"]
+                    BLOB_STORE["store()"]:::driver_impl
+                end
+
+                subgraph BLOB_BACKEND["Blob Backend"]
+                    BLOB_LOCALFS["Local filesystem"]:::driver_impl
+                end
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 9: OBSERVABILITY
+    %% ======================================================================================
+    subgraph L9_OBS["📊 LAYER 9: Observability & Telemetry"]
+        direction TB
+
+        subgraph METRICS_CORE["Metrics Subsystem (k0/obs/metrics.py)"]
+            subgraph METRICS_CLASSES["Metrics Classes"]
+                METRICS_EXPORTER_CLASS["MetricsExporter"]:::obs
+            end
+
+            subgraph METRICS_METHODS["Metrics Methods"]
+                METRICS_COUNTER["counter()"]:::obs
+                METRICS_GAUGE["gauge()"]:::obs
+                METRICS_HISTOGRAM["histogram()"]:::obs
+                METRICS_EMIT["emit()"]:::obs
+                METRICS_SET_GAUGE["set_gauge()"]:::obs
+                METRICS_OBSERVE["observe()"]:::obs
+                METRICS_LATEST["latest()"]:::obs
+                METRICS_EMIT_OBS["_emit_observability()"]:::obs
+            end
+
+            subgraph METRICS_BACKEND["Metrics Backend"]
+                METRICS_PROMETHEUS["Prometheus client_python"]:::obs
+            end
+        end
+
+        subgraph TRACER_CORE["Tracing Subsystem (k0/obs/tracing.py)"]
+            subgraph TRACER_CLASSES["Tracer Classes"]
+                TRACER_FACTORY_CLASS["TracerFactory"]:::obs
+            end
+
+            subgraph TRACER_METHODS["Tracer Methods"]
+                TRACER_GET["get_tracer()"]:::obs
+                TRACER_SPAN["span()"]:::obs
+                TRACER_NEW_ID["new_trace_id()"]:::obs
+                TRACER_ATTACH["attach_cognitive_trace()"]:::obs
+                TRACER_DETACH["detach()"]:::obs
+                TRACER_CURRENT["current_cognitive_trace_id()"]:::obs
+                TRACER_EXTRACT["extract()"]:::obs
+                TRACER_INJECT["inject()"]:::obs
+            end
+
+            subgraph TRACER_BACKEND["Tracing Backend"]
+                TRACER_OTEL["OpenTelemetry"]:::obs
+            end
+        end
+
+        subgraph LOGGER_CORE["Logging Subsystem (k0/obs/logging.py)"]
+            subgraph LOGGER_CLASSES["Logging Classes"]
+                LOGGER_FORMATTER["StructuredLogFormatter"]:::obs
+                LOGGER_FILTER["_StructuredContextFilter"]:::obs
+            end
+
+            subgraph LOGGER_FUNCTIONS["Logging Functions"]
+                LOGGER_CONFIGURE["configure_structured_logging()"]:::obs
+                LOGGER_BIND["bind_log_context()"]:::obs
+                LOGGER_UPDATE["update_log_context()"]:::obs
+                LOGGER_RESET["reset_log_context()"]:::obs
+                LOGGER_CURRENT["current_log_context()"]:::obs
+            end
+
+            subgraph LOGGER_FEATURES["Logging Features"]
+                LOGGER_JSON["JSON lines"]:::obs
+                LOGGER_PII["PII redaction"]:::obs
+                LOGGER_TRACE_CTX["Trace context"]:::obs
+                LOGGER_CONTEXTVARS["contextvars binding"]:::obs
+            end
+        end
+
+        subgraph OBS_EMITTER_CORE["Observability Emitter (k0/obs/events.py)"]
+            subgraph OBS_EMITTER_CLASSES["Emitter Classes"]
+                OBS_EMITTER_CLASS["ObservabilityEmitter"]:::obs
+            end
+
+            subgraph OBS_EMITTER_METHODS["Emitter Methods"]
+                OBS_EMIT["emit()"]:::obs
+                OBS_SNAPSHOT["snapshot()"]:::obs
+                OBS_CLEAR["clear()"]:::obs
+            end
+
+            subgraph OBS_EMITTER_STORAGE["Emitter Storage"]
+                OBS_TRACES_TABLE["st_cognitive_traces table"]:::obs
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 10: INFRASTRUCTURE & CONFIGURATION
+    %% ======================================================================================
+    subgraph L10_INFRA["🏗️ LAYER 10: Infrastructure & Configuration"]
+        direction TB
+
+        subgraph KERNEL_CONFIG["Kernel Configuration (k0/kernel/)"]
+            subgraph APP_FACTORY_DETAIL["App Factory (k0/kernel/app.py)"]
+                APP_CREATE["create_app()"]:::infra
+                APP_MIDDLEWARES["_install_middlewares()"]:::infra
+                APP_EXCEPTIONS["_register_exception_handlers()"]:::infra
+                APP_PROBES["_register_operational_probes()"]:::infra
+            end
+
+            subgraph APP_WIRING["Application State Wiring"]
+                WIRING_SETTINGS["settings"]:::infra
+                WIRING_TRACER["tracer_factory"]:::infra
+                WIRING_METRICS["metrics_exporter"]:::infra
+                WIRING_SCHEDULER["scheduler"]:::infra
+                WIRING_WAL["write_ahead_log"]:::infra
+                WIRING_OUTBOX["outbox_store"]:::infra
+                WIRING_GATE["minimal_gate"]:::infra
+                WIRING_BUS["bus_dispatcher"]:::infra
+                WIRING_UOW["unit_of_work_factory"]:::infra
+            end
+
+            subgraph KERNEL_CONFIG_DETAIL["Kernel Settings (k0/kernel/config.py)"]
+                CFG_TELEMETRY["TelemetrySettings"]:::infra
+                CFG_QOS["QoSSettings"]:::infra
+                CFG_RETENTION["RetentionSettings"]:::infra
+                CFG_DATABASE["DatabaseSettings"]:::infra
+                CFG_SERVER["ServerSettings"]:::infra
+                CFG_SECURITY["SecuritySettings"]:::infra
+                CFG_CHAOS["ChaosSettings"]:::infra
+                CFG_BUS["BusSettings"]:::infra
+                CFG_POLICY["PolicySettings"]:::infra
+            end
+
+            subgraph DEPENDENCIES_DETAIL["Request Dependencies (k0/kernel/dependencies.py)"]
+                DEP_POLICY["PolicyContext"]:::infra
+                DEP_PROVIDER["RequestDependencyProvider"]:::infra
+                DEP_DB["database_session()"]:::infra
+                DEP_TELEMETRY["telemetry_span_factory()"]:::infra
+                DEP_SCHEDULER["scheduler_dependency()"]:::infra
+                DEP_QOS["qos_context_dependency()"]:::infra
+            end
+
+            subgraph READINESS_DETAIL["Readiness State (k0/kernel/readiness.py)"]
+                RDY_SNAPSHOT["ReadinessSnapshot"]:::infra
+                RDY_STATE["ReadinessState"]:::infra
+                RDY_MIGRATIONS["mark_migrations_complete()"]:::infra
+                RDY_WAL_REPLAY["mark_wal_replay_complete()"]:::infra
+            end
+
+            subgraph ADMISSION_DETAIL["Admission Control (k0/kernel/admission.py)"]
+                ADM_RECORD["AdmissionRecord"]:::infra
+                ADM_DECIDE["record_admission_decision()"]:::infra
+                ADM_CONSUME["consume_admission_records()"]:::infra
+            end
+        end
+
+        subgraph SQLITE_INFRA["SQLite Infrastructure"]
+            subgraph SQLITE_DB_DETAIL["SQLite Runtime (k0_runtime.sqlite3)"]
+                DB_WAL_TABLE["st_wal table"]:::infra
+                DB_RECEIPTS["st_receipts"]:::infra
+                DB_OUTBOX["st_outbox"]:::infra
+                DB_OFFSETS["st_offsets"]:::infra
+                DB_DLQ["st_dlq"]:::infra
+                DB_IDEM["idem_ledger"]:::infra
+                DB_SCHEMA_REG["schema_registry"]:::infra
+                DB_DEVICE_KEYS["st_device_keys"]:::infra
+                DB_ACL["st_acl"]:::infra
+                DB_OBLIGATIONS["st_obligations"]:::infra
+                DB_TRACES["st_cognitive_traces"]:::infra
+            end
+
+            subgraph MIGRATIONS_DETAIL["Migrations (k0/automation/migrate.py)"]
+                MIG_APPLY["apply_migrations()"]:::infra
+                MIG_ROLLBACK["rollback_migration()"]:::infra
+                MIG_GENERATE["generate_rollback_script()"]:::infra
+                MIG_CATALOG["schema_migrations table"]:::infra
+            end
+        end
+
+        subgraph CLI_TOOLS["CLI & Automation (k0/cli/ & k0/automation/)"]
+            subgraph K0CTL_DETAIL["k0ctl CLI (k0/cli/k0ctl.py)"]
+                CLI_SERVE["serve command"]:::cli_tool
+                CLI_PROVISION["provision command"]:::cli_tool
+                CLI_SCHEMA["schema commands"]:::cli_tool
+                CLI_DRIVER["driver commands"]:::cli_tool
+                CLI_SNAPSHOT["snapshot commands"]:::cli_tool
+                CLI_REPLAY["replay commands"]:::cli_tool
+                CLI_DLQ["dlq commands"]:::cli_tool
+            end
+
+            subgraph AUTOMATION_DETAIL["Automation Scripts"]
+                AUTO_API_DOCS["generate_api_docs.py"]:::cli_tool
+                AUTO_LINT["lint_schemas.py"]:::cli_tool
+                AUTO_MIGRATE["migrate.py"]:::cli_tool
+                AUTO_CHECKSUMS["compute_contract_checksums.py"]:::cli_tool
+                AUTO_COMPAT["contract_compatibility_checker.py"]:::cli_tool
+                AUTO_DOCS_SYNC["verify_docs_sync.py"]:::cli_tool
+                AUTO_TELEMETRY["telemetry_renderer.py"]:::cli_tool
+                AUTO_HOT_RELOAD["hot_reload_watcher.py"]:::cli_tool
+                AUTO_CHAOS_SCHED["chaos_scheduler.py"]:::cli_tool
+                AUTO_PERF["performance_regression_detector.py"]:::cli_tool
+            end
+        end
+
+        subgraph CHAOS_LAYER["Chaos Engineering (k0/chaos/)"]
+            subgraph CHAOS_TOGGLES["Chaos Toggles (k0/chaos/toggles.py)"]
+                CHAOS_FSYNC["should_fail_fsync()"]:::chaos
+                CHAOS_STARVATION["apply_scheduler_starvation()"]:::chaos
+                CHAOS_NETWORK_DELAY["get_network_delay_ms()"]:::chaos
+                CHAOS_DROP_TELEMETRY["should_drop_telemetry()"]:::chaos
+            end
+
+            subgraph CHAOS_NETWORK["Chaos Network (k0/chaos/network.py)"]
+                CHAOS_TRANSPORT["ChaosTransport (httpx)"]:::chaos
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% DATA FLOW MAPPINGS
+    %% ======================================================================================
+
+    %% Flow 1: Command Submit (Full Chain)
+    HTTP_CLIENT -->|"1 POST envelope"| CMD_SUBMIT_FN
+    CMD_SUBMIT_FN -->|"2 Parse validate"| GATE_VALIDATE
+    GATE_VALIDATE -->|"3 Schema lookup"| SCHEMA_GET
+    GATE_VALIDATE -->|"4 Device verify"| PROV_LOOKUP
+    GATE_VALIDATE -->|"5 Compute hash"| CRYPTO_COMPUTE_SHA
+    GATE_VALIDATE -->|"6 Derive idem"| IDEM_CANONICAL
+    GATE_VALIDATE -->|"7 Check replay"| WAL_READ_FROM
+    CMD_SUBMIT_FN -->|"8 Check duplicate"| IDEM_LOOKUP
+    CMD_SUBMIT_FN -->|"9 Policy eval"| PEP_EVALUATE
+    PEP_EVALUATE -->|"10 Create stamp"| STAMP_CREATE
+    PEP_EVALUATE -->|"11 Build obligations"| REDACT_APPLY
+    CMD_SUBMIT_FN -->|"12 Apply QoS"| QOS_CTX_ACQUIRE
+    QOS_CTX_ACQUIRE -->|"13 Acquire token"| SCHED_ACQUIRE
+    CMD_SUBMIT_FN -->|"14 Begin txn"| UOW_ENTER
+    UOW_ENTER -->|"15 Append entry"| UOW_APPEND_WAL
+    UOW_ENTER -->|"16 Save obligations"| OBLIG_SAVE
+    UOW_ENTER -->|"17 Stage outbox"| UOW_STAGE_OUTBOX
+    UOW_ENTER -->|"18 Issue receipt"| RECEIPT_ISSUE
+    RECEIPT_ISSUE -->|"19 Sign receipt"| CRYPTO_VERIFY_SIG
+    RECEIPT_ISSUE -->|"20 Save receipt"| UOW_SAVE_RECEIPT
+    UOW_EXIT -->|"21 Upsert idem"| IDEM_UPSERT
+    UOW_EXIT -->|"22 Commit hooks"| BUS_DISPATCH
+    BUS_DISPATCH -->|"23 Fan-out SSE"| SSE_SUBSCRIBE
+    BUS_DISPATCH -->|"24 Trigger outbox"| WORKER_PROCESS
+    BUS_DISPATCH -->|"25 Route to Pipelines"| PIPELINE_HANDLE
+    PIPELINE_HANDLE -->|"26 Execute pipeline logic"| PIPELINE_PHASE1
+    PIPELINE_HANDLE -->|"27 Emit completion"| PIPELINE_EMIT
+    RECEIPT_ISSUE -->|"28 Return receipt"| CMD_SUBMIT_FN
+
+    %% Flow 2: Query Recall
+    HTTP_CLIENT -->|"1 POST selector"| QRY_RECALL_FN
+    QRY_RECALL_FN -->|"2 Policy envelope"| PEP_EVALUATE
+    QRY_RECALL_FN -->|"3 QoS token"| SCHED_ACQUIRE
+    QRY_RECALL_FN -->|"4 Execute query"| QUERY_EXECUTE
+    QUERY_EXECUTE -->|"5 Resolve driver"| QUERY_BUILD_DEFAULT
+    QUERY_BUILD_DEFAULT -->|"6 Query WAL"| WAL_READ_FROM
+
+    %% Flow 3: SSE Subscribe
+    SSE_CLIENT -->|"1 GET subscribe"| SSE_SUBSCRIBE_FN
+    SSE_SUBSCRIBE_FN -->|"2 Load ACL"| ACL_CHECK
+    SSE_SUBSCRIBE_FN -->|"3 Query offsets"| OFFSET_FETCH
+    SSE_SUBSCRIBE_FN -->|"4 Read WAL"| WAL_READ_FROM
+    SSE_SUBSCRIBE_FN -->|"5 Backpressure"| SSE_EVAL_BP
+    SSE_SUBSCRIBE_FN -->|"6 QoS token"| SCHED_ACQUIRE
+
+    %% Flow 4: Outbox Processing
+    WORKER_PROCESS -->|"1 Dequeue batch"| OUTBOX_DEQUEUE
+    WORKER_PROCESS -->|"2 Resolve alias"| ALIAS_RESOLVE
+    ALIAS_RESOLVE -->|"3 Load driver"| FAISS_APPLY
+    ALIAS_RESOLVE -->|"4 Load driver"| NEO4J_APPLY
+    WORKER_PROCESS -->|"5 On failure"| RETRY_DECIDE
+    RETRY_DECIDE -->|"6 Requeue DLQ"| DLQ_RECORD
+
+    %% Flow 6: Driver Handshake
+    DRIVER_CLIENT -->|"1 POST handshake"| DRV_HANDSHAKE_FN
+    DRV_HANDSHAKE_FN -->|"2 Validate"| POOL_HANDSHAKE
+    POOL_HANDSHAKE -->|"3 Resolve alias"| ALIAS_RESOLVE
+    POOL_HANDSHAKE -->|"4 Create session"| POOL_GET_SESSION
+    POOL_HANDSHAKE -->|"5 Register worker"| WORKER_REGISTER
+
+    %% Flow 7: Observability
+    CMD_SUBMIT_FN -->|"Emit events"| OBS_EMIT
+    SSE_SUBSCRIBE_FN -->|"Log traces"| TRACER_SPAN
+    RECEIPT_ISSUE -->|"Emit observability"| OBS_EMIT
+    BUS_DISPATCH -->|"Middleware traces"| TRACER_SPAN
+
+    %% Flow 8: Infrastructure
+    APP_CREATE -->|"Wire components"| UOW_ENTER
+    APP_CREATE -->|"Register routers"| CMD_SUBMIT_FN
+    APP_CREATE -->|"Apply migrations"| MIG_APPLY
+    APP_CREATE -->|"Replay WAL"| REPLAY_RUN
+    APP_CREATE -->|"Load pipelines"| LOADER_DISCOVER
+    LOADER_DISCOVER -->|"Register pipelines"| PIPELINE_REGISTRY
+    CLI_SERVE -->|"CLI commands"| APP_CREATE
+
+    %% ======================================================================================
+    %% STORAGE LAYER CONNECTIONS
+    %% ======================================================================================
+    WAL_APPEND -.->|"Persists to"| DB_WAL_TABLE
+    OUTBOX_ENQUEUE -.->|"Persists to"| DB_OUTBOX
+    OFFSET_UPSERT -.->|"Persists to"| DB_OFFSETS
+    DLQ_RECORD -.->|"Persists to"| DB_DLQ
+    RECEIPT_SAVE -.->|"Persists to"| DB_RECEIPTS
+    IDEM_UPSERT -.->|"Persists to"| DB_IDEM
+    SCHEMA_REGISTER -.->|"Persists to"| DB_SCHEMA_REG
+    PROV_REGISTER -.->|"Persists to"| DB_DEVICE_KEYS
+    ACL_GRANT -.->|"Persists to"| DB_ACL
+    OBLIG_SAVE -.->|"Persists to"| DB_OBLIGATIONS
+    OBS_EMIT -.->|"Persists to"| DB_TRACES
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+    classDef client fill:#e1f5ff,stroke:#01579b,stroke-width:2px,color:#000
+    classDef cli fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000
+    classDef port fill:#fff9c4,stroke:#f57f17,stroke-width:3px,color:#000,font-weight:bold
+    classDef gate fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef policy fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef security fill:#ffccbc,stroke:#d84315,stroke-width:2px,color:#000
+    classDef idem fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef receipt fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef core fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+    classDef storage fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef outbox fill:#ffe0b2,stroke:#e65100,stroke-width:2px,color:#000
+    classDef qos fill:#b2dfdb,stroke:#004d40,stroke-width:2px,color:#000
+    classDef bus fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:#000
+    classDef sse fill:#b3e5fc,stroke:#01579b,stroke-width:2px,color:#000
+    classDef query fill:#dcedc8,stroke:#33691e,stroke-width:2px,color:#000
+    classDef worker fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef driver fill:#d1c4e9,stroke:#311b92,stroke-width:2px,color:#000
+    classDef driver_impl fill:#e1bee7,stroke:#4a148c,stroke-width:1px,color:#000
+    classDef obs fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef infra fill:#cfd8dc,stroke:#263238,stroke-width:2px,color:#000
+    classDef cli_tool fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef chaos fill:#ffab91,stroke:#bf360c,stroke-width:2px,color:#000

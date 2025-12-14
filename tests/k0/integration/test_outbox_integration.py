@@ -23,20 +23,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from k0.automation.migrate import apply_migrations
 from k0.drivers.alias_map import AliasMap
 from k0.outbox.fingerprint import compute_fingerprint
 from k0.outbox.pool import DriverWorkerPool
-from k0.outbox.scheduler import RetryScheduler
+from k0.outbox.scheduler import RetryDecision, RetryScheduler
 from k0.outbox.worker import OutboxDriver
 from k0.storage.dlq import DeadLetterQueue
 from k0.storage.outbox import OutboxEntry, OutboxStore
-from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
-
-# Calculate REPO_ROOT
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
+from k0.uow.connection_pool import configure_pool, shutdown_pool
 
 
 @pytest.fixture
@@ -45,9 +40,8 @@ def sqlite_runtime() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as connection:
-        connection.executescript(STORAGE_SQL_PATH.read_text())
-        connection.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:
@@ -89,6 +83,58 @@ def dlq() -> DeadLetterQueue:
 def retry_scheduler() -> RetryScheduler:
     """Create RetryScheduler with test configuration."""
     return RetryScheduler(max_attempts=3, backoff_steps=[1, 2, 4])
+
+
+class InstantRetryScheduler(RetryScheduler):
+    """Retry scheduler that uses past timestamps for immediate retry (testing only)."""
+
+    def decide(self, entry: OutboxEntry) -> RetryDecision:
+        """Return retry decision with past timestamp for immediate processing."""
+        decision = super().decide(entry)
+        if decision.action == "retry":
+            # Use a past timestamp so entry is always ready for retry
+            from datetime import datetime, timezone
+
+            past = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+            return RetryDecision(
+                action=decision.action,
+                retries=decision.retries,
+                requeue_seq=decision.requeue_seq,
+                next_attempt_ts=past,  # Past timestamp = ready immediately
+                backoff_exp=decision.backoff_exp,
+                status=decision.status,
+            )
+        return decision
+
+
+@pytest.fixture
+def instant_retry_scheduler() -> InstantRetryScheduler:
+    """Create InstantRetryScheduler for DLQ tests (no backoff delays)."""
+    return InstantRetryScheduler(max_attempts=3, backoff_steps=[1, 2, 4])
+
+
+@pytest.fixture
+def worker_pool_instant_retry(
+    alias_map: AliasMap,
+    outbox_store: OutboxStore,
+    dlq: DeadLetterQueue,
+    instant_retry_scheduler: InstantRetryScheduler,
+    mock_metrics: MagicMock,
+) -> DriverWorkerPool:
+    """Create DriverWorkerPool with instant retry for DLQ tests."""
+
+    def scheduler_factory() -> RetryScheduler:
+        return instant_retry_scheduler
+
+    return DriverWorkerPool(
+        alias_map=alias_map,
+        outbox_store=outbox_store,
+        dead_letter_queue=dlq,
+        retry_scheduler_factory=scheduler_factory,
+        metrics_emitter=mock_metrics,
+        batch_size=10,
+        lease_seconds=60,
+    )
 
 
 @pytest.fixture
@@ -250,7 +296,7 @@ class TestOutboxRetryPaths:
     def test_permanent_fail_dlq_with_reason(
         self,
         outbox_store: OutboxStore,
-        worker_pool: DriverWorkerPool,
+        worker_pool_instant_retry: DriverWorkerPool,
         dlq: DeadLetterQueue,
         temp_db: Path,
     ) -> None:
@@ -274,11 +320,12 @@ class TestOutboxRetryPaths:
         # Setup: Mock driver that always fails
         mock_driver = MagicMock(spec=OutboxDriver)
         mock_driver.apply.side_effect = ValueError("Invalid configuration")
-        worker_pool._driver_overrides["test_driver"] = mock_driver
+        worker_pool_instant_retry._driver_overrides["test_driver"] = mock_driver
 
         # Execute: Process multiple times to exhaust retries
-        for _ in range(4):  # More than max_attempts (3)
-            worker_pool.process_driver("test_driver")
+        # With max_attempts=3, need 3 attempts to trigger quarantine
+        for _ in range(3):
+            worker_pool_instant_retry.process_driver("test_driver")
 
         # Verify: Entry moved to DLQ
         pending_dlq = dlq.list_pending()
@@ -290,10 +337,14 @@ class TestOutboxRetryPaths:
         assert "Invalid configuration" in dlq_entry.reason
         assert dlq_entry.retries == 3  # Max attempts reached
 
-        # Verify: Entry removed from outbox
+        # Verify: Entry remains in outbox with DEAD status (Gap 37: Prevents premature deletion)
         with sqlite3.connect(str(temp_db)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[0]
-            assert count == 0
+            assert count == 1  # Entry still in outbox
+            status = conn.execute(
+                "SELECT status FROM st_outbox WHERE driver = 'test_driver'"
+            ).fetchone()[0]
+            assert status == "DEAD"  # Status changed to DEAD
 
 
 class TestOutboxIdempotency:
@@ -401,7 +452,7 @@ class TestOutboxPoisonPill:
     def test_poison_pill_cap_retries_dlq_reason(
         self,
         outbox_store: OutboxStore,
-        worker_pool: DriverWorkerPool,
+        worker_pool_instant_retry: DriverWorkerPool,
         dlq: DeadLetterQueue,
         temp_db: Path,
     ) -> None:
@@ -420,16 +471,17 @@ class TestOutboxPoisonPill:
             requeue_seq=0,
             retries=0,
         )
-        entry_id = outbox_store.enqueue(entry)
+        outbox_store.enqueue(entry)
 
         # Setup: Mock driver that always fails with same error
         mock_driver = MagicMock(spec=OutboxDriver)
         mock_driver.apply.side_effect = RuntimeError("Poison pill detected")
-        worker_pool._driver_overrides["test_driver"] = mock_driver
+        worker_pool_instant_retry._driver_overrides["test_driver"] = mock_driver
 
         # Execute: Process until retries exhausted
-        for attempt in range(5):  # More than max_attempts (3)
-            worker_pool.process_driver("test_driver")
+        # With max_attempts=3, need 3 attempts to trigger quarantine
+        for _ in range(3):
+            worker_pool_instant_retry.process_driver("test_driver")
 
         # Verify: Entry moved to DLQ after max retries
         pending_dlq = dlq.list_pending()
@@ -439,10 +491,14 @@ class TestOutboxPoisonPill:
         assert "Poison pill detected" in dlq_entry.reason
         assert dlq_entry.driver == "test_driver"
 
-        # Verify: Outbox entry removed
+        # Verify: Outbox entry remains with DEAD status (Gap 37: Prevents premature deletion)
         with sqlite3.connect(str(temp_db)) as conn:
             count = conn.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[0]
-            assert count == 0
+            assert count == 1  # Entry still in outbox
+            status = conn.execute(
+                "SELECT status FROM st_outbox WHERE driver = 'test_driver'"
+            ).fetchone()[0]
+            assert status == "DEAD"  # Status changed to DEAD
 
 
 class TestOutboxMetrics:
@@ -480,7 +536,7 @@ class TestOutboxMetrics:
 
         # Verify: Success metric emitted
         mock_metrics.assert_called_with(
-            "k0_outbox_apply_total", 1.0, outcome="success", driver="test_driver"
+            "outbox_apply_total", 1.0, outcome="success", driver="test_driver"
         )
 
     def test_metrics_emitted_on_retry(
@@ -516,13 +572,13 @@ class TestOutboxMetrics:
 
         # Verify: Retry metric emitted
         mock_metrics.assert_called_with(
-            "k0_outbox_apply_total", 1.0, outcome="retry", driver="test_driver"
+            "outbox_apply_total", 1.0, outcome="retry", driver="test_driver"
         )
 
     def test_metrics_emitted_on_dlq(
         self,
         outbox_store: OutboxStore,
-        worker_pool: DriverWorkerPool,
+        worker_pool_instant_retry: DriverWorkerPool,
         mock_metrics: MagicMock,
         temp_db: Path,
     ) -> None:
@@ -545,15 +601,15 @@ class TestOutboxMetrics:
 
         mock_driver = MagicMock(spec=OutboxDriver)
         mock_driver.apply.side_effect = Exception("Permanent failure")
-        worker_pool._driver_overrides["test_driver"] = mock_driver
+        worker_pool_instant_retry._driver_overrides["test_driver"] = mock_driver
 
-        # Execute: Process until DLQ (4 attempts to exceed max_attempts=3)
-        for _ in range(4):
-            worker_pool.process_driver("test_driver")
+        # Execute: Process until DLQ (3 attempts to reach max_attempts=3)
+        for _ in range(3):
+            worker_pool_instant_retry.process_driver("test_driver")
 
         # Verify: Quarantine metric emitted
         mock_metrics.assert_called_with(
-            "k0_outbox_apply_total", 1.0, outcome="quarantine", driver="test_driver"
+            "outbox_apply_total", 1.0, outcome="quarantine", driver="test_driver"
         )
 
 

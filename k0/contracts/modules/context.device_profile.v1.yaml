@@ -1,0 +1,79 @@
+module_id: context.device_profile
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.device_profiled.v1
+
+latency_budget_ms: 2
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: DEVICE_TYPE_UNKNOWN
+    policy: use_default
+    max_retries: 0
+  - code: CLIENT_VERSION_PARSE_FAILED
+    policy: use_default
+    max_retries: 0
+
+description: |
+  Device & Client Profiler Module (Context Awareness System)
+
+  Extracts device and client metadata from episodic memory envelopes:
+  - Device type classification (phone/tablet/watch/web/api)
+  - Client version parsing and validation
+  - Platform detection (iOS/Android/Web)
+  - Input method tracking (voice/text/photo/import)
+
+  Performance target: ≤2ms P95 (pure string parsing, no I/O)
+
+  Key Device Fields:
+  - device_kind: TEXT (phone/tablet/watch/web/api)
+  - device_platform: TEXT (iOS/Android/web/unknown)
+  - client_version: TEXT (e.g., "2.3.1")
+  - client_build: TEXT (e.g., "20250115.1")
+  - input_method: TEXT (voice/text/photo/scan/import/api)
+
+  Device Kind Classification:
+  - phone: Mobile device (iOS/Android phone)
+  - tablet: Tablet device (iPad/Android tablet)
+  - watch: Wearable device (Apple Watch/Android Wear)
+  - web: Browser-based client
+  - api: Server-to-server API call
+
+  Input Method Detection:
+  - voice: Voice memo or transcription
+  - text: Manual text entry
+  - photo: Photo capture with optional caption
+  - scan: Document/receipt scanning
+  - import: Bulk import from external source
+  - api: Programmatic API call
+
+  Use Cases:
+  - Retention policy selection (device_kind affects retention_bucket)
+  - Client version compatibility tracking
+  - Input method analytics (voice vs. text usage)
+  - Platform-specific feature rollout
+
+config_schema:
+  type: object
+  properties:
+    default_device_kind:
+      type: string
+      default: "phone"
+      description: Fallback device_kind if detection fails
+    supported_platforms:
+      type: array
+      items:
+        type: string
+      default: ["iOS", "Android", "web"]
+      description: List of supported platform identifiers
+    minimum_client_version:
+      type: string
+      default: "2.0.0"
+      description: Minimum supported client version

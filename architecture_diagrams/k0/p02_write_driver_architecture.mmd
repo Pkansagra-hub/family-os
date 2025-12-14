@@ -1,0 +1,111 @@
+%% P02 Write Pipeline - Monolithic Kernel Architecture (CORRECT)
+%% ONE K0 container with all 20 pipelines + business logic
+%% External services ONLY for heavy ML/GPU workloads
+
+graph TB
+    subgraph CLIENTS["🌐 External Clients"]
+        K1["K1 Orchestrator"]
+        HTTP["HTTP Client"]
+    end
+
+    subgraph K0_KERNEL["🚀 K0 Kernel Container (~500MB with ALL 20 pipelines)"]
+        subgraph L1_PORTS["L1: Ports"]
+            CMD_PORT["command.py<br/>POST /k0/command.submit"]
+        end
+
+        subgraph L2_GATE["L2: Gate & Policy"]
+            GATE["MinimalGate<br/>validate()"]
+            PEP["PEP<br/>evaluate()"]
+        end
+
+        subgraph P02_PIPELINE["P02 Write Pipeline (IN-KERNEL)"]
+            MEM_STEWARD["Memory Steward<br/>orchestrate_write()"]
+            SPACE_RES["SpaceResolver"]
+            REDACT["RedactionCoordinator"]
+            HIPP_DG["Hippocampus DG<br/>pattern_separation()"]
+            HIPP_CA1["Hippocampus CA1<br/>semantic_bridge()"]
+            FTS_IDX["FTS Indexer<br/>extract_keywords()"]
+        end
+
+        subgraph L3_TXN["L3: Transaction"]
+            UOW["UnitOfWork<br/>BEGIN/COMMIT"]
+        end
+
+        subgraph L4_STORAGE["L4: Storage"]
+            WAL["WAL<br/>append()"]
+            OUTBOX["Outbox<br/>enqueue()"]
+            DB["SQLite3<br/>st_hipp_store"]
+        end
+
+        subgraph L4_OUTBOX["L4: Outbox Dispatch (ONLY for external ML)"]
+            OUTBOX_WORKER["OutboxWorker<br/>process_driver()"]
+            DRIVER_POOL["DriverWorkerPool<br/>HTTPDriverAdapter"]
+            ALIAS_MAP["AliasMap<br/>resolve()"]
+        end
+
+        subgraph OTHER_PIPELINES["P00-P20: All Pipelines (IN-KERNEL)"]
+            P00["P00: Ingest"]
+            P01["P01: Read"]
+            P03["P03: Consolidation"]
+            P04["P04-P20: Other Pipelines"]
+        end
+    end
+
+    subgraph EXTERNAL_ML["🎯 External ML Services (ONLY heavy ML/GPU)"]
+        subgraph EMB_SERVICE["Embedding Service (~1.3GB, optional GPU)"]
+            EMB_API["POST /apply<br/>compute_embedding()"]
+            SENTENCE_TRANS["PyTorch + sentence-transformers"]
+        end
+
+        subgraph OPTIONAL_SERVICES["Optional Heavy ML (if needed)"]
+            IMG_PROC["Image Processing<br/>(GPU, computer vision)"]
+            SPEECH["Speech-to-Text<br/>(Whisper, GPU)"]
+            VIDEO["Video Processing<br/>(GPU, ffmpeg)"]
+        end
+    end
+
+    %% P02 Write Flow (ALL IN-KERNEL except heavy ML)
+    K1 -->|"1. POST envelope<br/>(signed, policy-ready)"| CMD_PORT
+    HTTP -->|"1. POST envelope"| CMD_PORT
+
+    %% Stage 1-4: Gate & Policy (in-kernel)
+    CMD_PORT -->|"2. Validate"| GATE
+    GATE -->|"3. Policy eval"| PEP
+
+    %% Stage 5-8: Memory Steward + Hippocampus (IN-KERNEL, synchronous)
+    PEP -->|"4. Orchestrate write"| MEM_STEWARD
+    MEM_STEWARD -->|"5a. Resolve space"| SPACE_RES
+    MEM_STEWARD -->|"5b. Apply obligations"| REDACT
+    MEM_STEWARD -->|"6. Pattern separation<br/>(SimHash/MinHash)"| HIPP_DG
+    MEM_STEWARD -->|"7. Semantic extraction<br/>(Entity/Temporal)"| HIPP_CA1
+    MEM_STEWARD -->|"8. FTS keyword extraction<br/>(NLTK in-kernel)"| FTS_IDX
+
+    %% Stage 9-10: Transaction (in-kernel)
+    MEM_STEWARD -->|"9. Begin txn"| UOW
+    UOW -->|"10a. Append envelope"| WAL
+    UOW -->|"10b. Insert complete row<br/>(simhash, facts, fts)<br/>embedding_status=PENDING"| DB
+    UOW -->|"10c. Stage ONLY embedding work"| OUTBOX
+
+    OUTBOX -.->|"driver=embedding<br/>op_kind=COMPUTE_EMBEDDING<br/>(ONLY heavy ML)"| OUTBOX
+
+    UOW -->|"11. COMMIT (80-100ms)<br/>Return receipt"| CMD_PORT
+
+    %% Async Outbox Processing (ONLY for external ML services)
+    OUTBOX -->|"12. Dequeue embedding work"| OUTBOX_WORKER
+    OUTBOX_WORKER -->|"13. Resolve alias"| ALIAS_MAP
+    ALIAS_MAP -->|"14. HTTPDriverAdapter"| DRIVER_POOL
+    DRIVER_POOL -->|"15. POST /apply<br/>(ONLY embedding)"| EMB_API
+
+    %% Embedding service updates WAL
+    EMB_API -.->|"16. Update WAL<br/>(embedding_id)"| WAL
+
+    %% Styling
+    classDef k0 fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef service fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px
+    classDef storage fill:#fff9c4,stroke:#f57f17,stroke-width:2px
+    classDef async fill:#ffecb3,stroke:#ff6f00,stroke-width:2px
+
+    class CMD_PORT,GATE,PEP,UOW k0
+    class MS_API,HIPP_DG,HIPP_CA1,EMB_API,FTS_API service
+    class WAL,DB,OUTBOX storage
+    class OUTBOX_WORKER,DRIVER_POOL,ALIAS_MAP async

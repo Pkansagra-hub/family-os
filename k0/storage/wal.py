@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import os
 import sqlite3
@@ -15,7 +16,7 @@ from k0.uow.connection_pool import connection_scope
 
 @dataclass(slots=True)
 class WalEntry:
-    """Domain representation of a WAL row."""
+    """Domain representation of a WAL row (V1 with full envelope integrity)."""
 
     tenant_id: str
     space_id: str
@@ -30,6 +31,20 @@ class WalEntry:
     idem_key: str | None = None
     redacted_body_json: str | None = None
     position: int | None = None
+
+    # V1 NEW: Envelope integrity tracking
+    envelope_sha256: str | None = None
+
+    # V1 NEW: Time tracking
+    ingested_at: str | None = None
+    clock_skew_ms: int | None = None
+
+    # V1.3 NEW: Policy stamp (attached by PolicyEvaluator)
+    policy_stamp_json: str | None = None
+
+    # V1.3 NEW: Location privacy fields
+    location_geohash: str | None = None
+    location_precision_m: int | None = None
 
 
 @dataclass(slots=True)
@@ -94,54 +109,91 @@ def _fsync_path(
 class WriteAheadLog:
     """Abstraction over the `st_wal` SQLite table."""
 
-    def append(
-        self, entry: WalEntry, *, connection: sqlite3.Connection | None = None
-    ) -> int:
-        insert_entry = replace(entry)
-        with _resolve_connection(connection) as conn:
-            cursor = conn.execute(
-                (
-                    "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
-                    "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    insert_entry.tenant_id,
-                    insert_entry.space_id,
-                    insert_entry.topic,
-                    insert_entry.envelope_json,
-                    insert_entry.body,
-                    insert_entry.redacted_body_json,
-                    insert_entry.payload_sha256,
-                    insert_entry.schema_uri,
-                    insert_entry.schema_version,
-                    insert_entry.idem_key,
-                    insert_entry.device_id,
-                    insert_entry.commit_ts,
-                ),
-            )
-            row_id = cursor.lastrowid
-            if (
-                row_id is None
-            ):  # pragma: no cover - defensive guard, SQLite always returns rowid
-                msg = "Failed to determine WAL position"
-                raise RuntimeError(msg)
-            position = int(row_id)
-            insert_entry.position = position
-            return position
+    def __init__(self, *, metrics: Any | None = None) -> None:
+        """Issue #044: Initialize with optional metrics exporter."""
+        self._metrics = metrics
 
-    def read_from(
+    async def append(self, entry: WalEntry, *, connection: sqlite3.Connection | None = None) -> int:
+        insert_entry = replace(entry)
+        loop = asyncio.get_running_loop()
+
+        def _execute_append() -> int:
+            with _resolve_connection(connection) as conn:
+                cursor = conn.execute(
+                    (
+                        "INSERT INTO st_wal (tenant_id, space_id, topic, envelope_json, body, "
+                        "redacted_body_json, payload_sha256, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                        "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                        "location_geohash, location_precision_m) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    (
+                        insert_entry.tenant_id,
+                        insert_entry.space_id,
+                        insert_entry.topic,
+                        insert_entry.envelope_json,
+                        insert_entry.body,
+                        insert_entry.redacted_body_json,
+                        insert_entry.payload_sha256,
+                        insert_entry.schema_uri,
+                        insert_entry.schema_version,
+                        insert_entry.idem_key,
+                        insert_entry.device_id,
+                        insert_entry.commit_ts,
+                        # V1 NEW: Envelope integrity tracking
+                        insert_entry.envelope_sha256,
+                        insert_entry.ingested_at,
+                        insert_entry.clock_skew_ms,
+                        # V1.3 NEW: Policy stamp (attached by PolicyEvaluator)
+                        insert_entry.policy_stamp_json,
+                        # V1.3 NEW: Location privacy fields
+                        insert_entry.location_geohash,
+                        insert_entry.location_precision_m,
+                    ),
+                )
+                row_id = cursor.lastrowid
+                if (
+                    row_id is None
+                ):  # pragma: no cover - defensive guard, SQLite always returns rowid
+                    msg = "Failed to determine WAL position"
+                    raise RuntimeError(msg)
+                return int(row_id)
+
+        position = await loop.run_in_executor(None, _execute_append)
+        insert_entry.position = position
+
+        # Issue #044: Emit wal_current_position gauge
+        if self._metrics is not None:
+            try:
+                self._metrics.set_gauge("wal_current_position", float(position))
+            except Exception:  # noqa: BLE001
+                pass  # Don't fail WAL append on metrics error
+
+        return position
+
+    async def read_from(
         self,
         position: int,
         limit: int,
         *,
         connection: sqlite3.Connection | None = None,
     ) -> List[WalEntry]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._read_from_sync, position, limit, connection)
+
+    def _read_from_sync(
+        self,
+        position: int,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> List[WalEntry]:
         with _resolve_connection(connection) as conn:
             rows = conn.execute(
                 (
                     "SELECT pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, "
-                    "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts "
+                    "redacted_body_json, schema_uri, schema_version, idem_key, device_id, commit_ts, "
+                    "envelope_sha256, ingested_at, clock_skew_ms, policy_stamp_json, "
+                    "location_geohash, location_precision_m "
                     "FROM st_wal WHERE pos > ? ORDER BY pos ASC LIMIT ?"
                 ),
                 (position, limit),
@@ -161,11 +213,20 @@ class WriteAheadLog:
                     payload_sha256=row["payload_sha256"],
                     idem_key=row["idem_key"],
                     position=row["pos"],
+                    # V1 NEW: Envelope integrity tracking
+                    envelope_sha256=row["envelope_sha256"],
+                    ingested_at=row["ingested_at"],
+                    clock_skew_ms=row["clock_skew_ms"],
+                    # V1.3 NEW: Policy stamp
+                    policy_stamp_json=row["policy_stamp_json"],
+                    # V1.3 NEW: Location privacy fields
+                    location_geohash=row["location_geohash"],
+                    location_precision_m=row["location_precision_m"],
                 )
                 for row in rows
             ]
 
-    def fsync(
+    async def fsync(
         self,
         *,
         connection: sqlite3.Connection | None = None,
@@ -190,34 +251,39 @@ class WriteAheadLog:
         if mode == "disabled":
             return
 
-        with _resolve_connection(connection) as conn:
-            database_list = conn.execute("PRAGMA database_list").fetchall()
-            seen_paths: Set[Path] = set()
-            for entry in database_list:
-                file_path = entry["file"]
-                if not file_path:
-                    continue
+        loop = asyncio.get_running_loop()
 
-                db_path = Path(file_path)
-                wal_path = db_path.with_name(f"{db_path.name}-wal")
-                shm_path = db_path.with_name(f"{db_path.name}-shm")
-                if mode not in {"strict", "wal_only"}:
-                    raise ValueError(f"Unsupported fsync mode: {mode}")
-
-                if mode == "strict":
-                    candidates = (db_path, wal_path, shm_path)
-                else:  # mode == "wal_only"
-                    candidates = (wal_path, shm_path)
-
-                for candidate in candidates:
-                    if candidate in seen_paths:
+        def _execute_fsync() -> None:
+            with _resolve_connection(connection) as conn:
+                database_list = conn.execute("PRAGMA database_list").fetchall()
+                seen_paths: Set[Path] = set()
+                for entry in database_list:
+                    file_path = entry["file"]
+                    if not file_path:
                         continue
-                    if not candidate.exists():
-                        continue
-                    _fsync_path(candidate, chaos_config, metrics_exporter)
-                    seen_paths.add(candidate)
 
-    def backlog_stats(
+                    db_path = Path(file_path)
+                    wal_path = db_path.with_name(f"{db_path.name}-wal")
+                    shm_path = db_path.with_name(f"{db_path.name}-shm")
+                    if mode not in {"strict", "wal_only"}:
+                        raise ValueError(f"Unsupported fsync mode: {mode}")
+
+                    if mode == "strict":
+                        candidates = (db_path, wal_path, shm_path)
+                    else:  # mode == "wal_only"
+                        candidates = (wal_path, shm_path)
+
+                    for candidate in candidates:
+                        if candidate in seen_paths:
+                            continue
+                        if not candidate.exists():
+                            continue
+                        _fsync_path(candidate, chaos_config, metrics_exporter)
+                        seen_paths.add(candidate)
+
+        await loop.run_in_executor(None, _execute_fsync)
+
+    async def backlog_stats(
         self,
         *,
         tenant_id: str,
@@ -227,7 +293,19 @@ class WriteAheadLog:
         connection: sqlite3.Connection | None = None,
     ) -> WalBacklogStats:
         """Return backlog statistics beyond a subscriber's acknowledged offset."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._backlog_stats_sync, tenant_id, space_id, topic, offset, connection
+        )
 
+    def _backlog_stats_sync(
+        self,
+        tenant_id: str,
+        space_id: str,
+        topic: str,
+        offset: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> WalBacklogStats:
         with _resolve_connection(connection) as conn:
             row = conn.execute(
                 (

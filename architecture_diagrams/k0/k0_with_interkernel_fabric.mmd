@@ -1,0 +1,483 @@
+%% ======================================================================================
+%% K0 MICROKERNEL WITH INTERKERNEL FABRIC - ARCHITECTURE DIAGRAM
+%% ======================================================================================
+%% Generated: 2025-11-21
+%% Scope: K0 architecture extended with Interkernel Fabric Language (IFL) layer
+%% New Layer: Layer 0.5 - Interkernel Fabric (Device Protocol Adapters)
+%% Purpose: Universal language for cross-device communication (watches, phones, IoT, smart home, etc.)
+%% Architecture: Extends K0 with device protocol translation and bidirectional control
+%% Pipelines: P21-P23 reserved for device orchestration (see ADR-IFL-001)
+%% ======================================================================================
+
+flowchart TB
+    %% ======================================================================================
+    %% LAYER 0: PHYSICAL DEVICES & DOMAIN APPLICATIONS
+    %% ======================================================================================
+    subgraph L0_DEVICES["🌍 LAYER 0: Physical Devices & Domain Applications"]
+        direction LR
+
+        subgraph WEARABLES["Wearable Devices"]
+            DEV_APPLE_WATCH["Apple Watch - HealthKit"]:::device
+            DEV_FITBIT["Fitbit - Fitbit API"]:::device
+            DEV_GARMIN["Garmin - Connect IQ"]:::device
+            DEV_WHOOP["WHOOP - API"]:::device
+        end
+
+        subgraph MOBILE_DEVICES["Mobile & Computing"]
+            DEV_IPHONE["iPhone - iOS"]:::device
+            DEV_ANDROID["Android Phone"]:::device
+            DEV_IPAD["iPad"]:::device
+            DEV_LAPTOP["Laptop"]:::device
+        end
+
+        subgraph SMART_HOME["Smart Home & IoT"]
+            DEV_HOMEKIT["HomeKit Devices"]:::device
+            DEV_ALEXA["Alexa Echo"]:::device
+            DEV_NEST["Nest Thermostat"]:::device
+            DEV_HUE["Philips Hue"]:::device
+            DEV_RING["Ring Doorbell"]:::device
+        end
+
+        subgraph HEALTH_MEDICAL["Health & Medical"]
+            DEV_CGM["Continuous Glucose Monitor"]:::device
+            DEV_BP_MONITOR["Blood Pressure Monitor"]:::device
+            DEV_SCALE["Smart Scale"]:::device
+        end
+
+        subgraph VEHICLE_MOBILITY["Vehicle & Mobility"]
+            DEV_TESLA["Tesla - API"]:::device
+            DEV_CARPLAY["CarPlay"]:::device
+            DEV_BIKE["Smart Bike"]:::device
+        end
+
+        subgraph CUSTOM_SENSORS["Custom Sensors & Apps"]
+            DEV_MQTT_SENSOR["MQTT Sensors"]:::device
+            DEV_CUSTOM_APP["Custom Domain Apps"]:::device
+            DEV_WEBHOOK["Webhook Sources"]:::device
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 0.5: INTERKERNEL FABRIC (DEVICE PROTOCOL ADAPTERS)
+    %% ======================================================================================
+    subgraph L0_5_IFL["🔗 LAYER 0.5: Interkernel Fabric Language (IFL)"]
+        direction TB
+
+        subgraph IFL_CORE["IFL Core (k0/fabric/)"]
+            subgraph IFL_REGISTRY["Device Registry (k0/fabric/registry.py)"]
+                IFL_REG_DEVICE["register_device()"]:::fabric
+                IFL_UNREG_DEVICE["unregister_device()"]:::fabric
+                IFL_LIST_DEVICES["list_devices()"]:::fabric
+                IFL_GET_DEVICE["get_device()"]:::fabric
+                IFL_UPDATE_STATUS["update_device_status()"]:::fabric
+                IFL_CHECK_HEALTH["check_device_health()"]:::fabric
+            end
+
+            subgraph IFL_PARSER["IFL Parser (k0/fabric/parser.py)"]
+                IFL_PARSE["parse()"]:::fabric
+                IFL_TO_ENVELOPE["to_envelope()"]:::fabric
+                IFL_FROM_ENVELOPE["from_envelope()"]:::fabric
+                IFL_VALIDATE_SYNTAX["validate_syntax()"]:::fabric
+                IFL_NORMALIZE["normalize_payload()"]:::fabric
+            end
+
+            subgraph IFL_TRANSLATOR["Protocol Translator (k0/fabric/translator.py)"]
+                IFL_TRANSLATE["translate()"]:::fabric
+                IFL_DETECT_PROTO["detect_protocol()"]:::fabric
+                IFL_REGISTER_PROTO["register_protocol()"]:::fabric
+                IFL_GET_TRANSLATOR["get_translator()"]:::fabric
+            end
+        end
+
+        subgraph PROTOCOL_ADAPTERS["Protocol Adapters (k0/fabric/adapters/)"]
+            subgraph ADAPTER_HEALTH["Health Adapters"]
+                ADAPT_HEALTHKIT["HealthKitAdapter"]:::fabric_adapter
+                ADAPT_FITBIT["FitbitAdapter"]:::fabric_adapter
+                ADAPT_GARMIN["GarminAdapter"]:::fabric_adapter
+                ADAPT_WHOOP["WhoopAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_HOME["Smart Home Adapters"]
+                ADAPT_HOMEKIT["HomeKitAdapter"]:::fabric_adapter
+                ADAPT_MQTT["MqttAdapter"]:::fabric_adapter
+                ADAPT_ZIGBEE["ZigbeeAdapter"]:::fabric_adapter
+                ADAPT_ZWAVE["ZWaveAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_MOBILE["Mobile Adapters"]
+                ADAPT_IOS["iOSAdapter"]:::fabric_adapter
+                ADAPT_ANDROID["AndroidAdapter"]:::fabric_adapter
+                ADAPT_PUSH["PushNotificationAdapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_VEHICLE["Vehicle Adapters"]
+                ADAPT_TESLA["TeslaAdapter"]:::fabric_adapter
+                ADAPT_CARPLAY["CarPlayAdapter"]:::fabric_adapter
+                ADAPT_OBD2["OBD2Adapter"]:::fabric_adapter
+            end
+
+            subgraph ADAPTER_CUSTOM["Custom Adapters"]
+                ADAPT_WEBHOOK["WebhookAdapter"]:::fabric_adapter
+                ADAPT_REST["RestApiAdapter"]:::fabric_adapter
+                ADAPT_GRPC["GrpcAdapter"]:::fabric_adapter
+                ADAPT_WEBSOCKET["WebSocketAdapter"]:::fabric_adapter
+            end
+        end
+
+        subgraph IFL_BIDIRECTIONAL["Bidirectional Control (k0/fabric/control/)"]
+            subgraph IFL_COMMAND["Command Sender (k0/fabric/control/sender.py)"]
+                IFL_SEND_CMD["send_command()"]:::fabric
+                IFL_QUEUE_CMD["queue_command()"]:::fabric
+                IFL_BATCH_CMD["batch_commands()"]:::fabric
+                IFL_RETRY_CMD["retry_command()"]:::fabric
+            end
+
+            subgraph IFL_RESPONSE["Response Handler (k0/fabric/control/handler.py)"]
+                IFL_HANDLE_RESP["handle_response()"]:::fabric
+                IFL_CORRELATE["correlate_request_response()"]:::fabric
+                IFL_TIMEOUT["handle_timeout()"]:::fabric
+            end
+        end
+
+        subgraph IFL_SCHEMA["IFL Schema Management (k0/fabric/schemas/)"]
+            subgraph IFL_SCHEMA_CORE["Schema Core"]
+                IFL_SCHEMA_REG["register_device_schema()"]:::fabric
+                IFL_SCHEMA_VALIDATE["validate_device_payload()"]:::fabric
+                IFL_SCHEMA_VERSION["version_schema()"]:::fabric
+                IFL_SCHEMA_MIGRATE["migrate_schema()"]:::fabric
+            end
+
+            subgraph IFL_SCHEMA_CATALOG["Device Schema Catalog"]
+                SCHEMA_HEALTH["device://health-kit/v1"]:::fabric_schema
+                SCHEMA_LOCATION["device://location/v1"]:::fabric_schema
+                SCHEMA_HOME["device://smart-home/v1"]:::fabric_schema
+                SCHEMA_VEHICLE["device://vehicle/v1"]:::fabric_schema
+                SCHEMA_SENSOR["device://sensor/v1"]:::fabric_schema
+            end
+        end
+
+        subgraph IFL_CONNECTION["Connection Management (k0/fabric/connection/)"]
+            subgraph IFL_CONN_POOL["Connection Pool"]
+                IFL_ACQUIRE_CONN["acquire_connection()"]:::fabric
+                IFL_RELEASE_CONN["release_connection()"]:::fabric
+                IFL_CONN_HEALTH["connection_health_check()"]:::fabric
+                IFL_RECONNECT["reconnect()"]:::fabric
+            end
+
+            subgraph IFL_LEASE["Device Lease Manager"]
+                IFL_ACQUIRE_LEASE["acquire_lease()"]:::fabric
+                IFL_RENEW_LEASE["renew_lease()"]:::fabric
+                IFL_RELEASE_LEASE["release_lease()"]:::fabric
+                IFL_LEASE_EXPIRY["handle_lease_expiry()"]:::fabric
+            end
+        end
+
+        subgraph IFL_DISCOVERY["Device Discovery (k0/fabric/discovery/)"]
+            IFL_SCAN["scan_devices()"]:::fabric
+            IFL_AUTO_DISCOVER["auto_discover()"]:::fabric
+            IFL_ANNOUNCE["announce_device()"]:::fabric
+            IFL_MDNS["mdns_discovery()"]:::fabric
+            IFL_BLE_SCAN["ble_scan()"]:::fabric
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 1: KERNEL PORTS (FastAPI Routers)
+    %% ======================================================================================
+    subgraph L1_PORTS["⚡ LAYER 1: Kernel Ports (FastAPI HTTP Layer)"]
+        direction TB
+
+        subgraph PORT_CMD["Command Port (k0/ports/command.py)"]
+            CMD_ENVELOPE["Envelope (Pydantic)"]:::port
+            CMD_RESPONSE["CommandResponse"]:::port
+            CMD_SUBMIT_FN["submit_command()"]:::port
+        end
+
+        subgraph PORT_QRY["Query Port (k0/ports/query.py)"]
+            QRY_SELECTOR["RecallSelector"]:::port
+            QRY_RECALL_FN["query_recall()"]:::port
+        end
+
+        subgraph PORT_SSE["SSE Port (k0/ports/sse.py)"]
+            SSE_SUBSCRIBE_FN["subscribe()"]:::port
+            SSE_ACKNOWLEDGE["acknowledge()"]:::port
+        end
+
+        subgraph PORT_DRV["Driver Port (k0/ports/drivers.py)"]
+            DRV_HANDSHAKE_FN["driver_handshake()"]:::port
+        end
+
+        subgraph PORT_IFL["IFL Port - k0/ports/fabric.py"]
+            subgraph IFL_PORT_CLASSES["IFL Port Classes"]
+                IFL_PORT_REQ["DeviceEnrollmentRequest"]:::port
+                IFL_PORT_RESP["DeviceEnrollmentResponse"]:::port
+                IFL_PORT_CMD["DeviceCommandRequest"]:::port
+            end
+
+            subgraph IFL_PORT_ENDPOINTS["IFL Endpoints"]
+                IFL_ENROLL["POST /k0/fabric.enroll"]:::port
+                IFL_UNENROLL["POST /k0/fabric.unenroll"]:::port
+                IFL_DEVICE_CMD["POST /k0/fabric.command"]:::port
+                IFL_DEVICE_STATUS["GET /k0/fabric.status"]:::port
+                IFL_DEVICE_LIST["GET /k0/fabric.devices"]:::port
+            end
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 2: GATE & POLICY ENFORCEMENT
+    %% ======================================================================================
+    subgraph L2_GATE["🛡️ LAYER 2: Gate & Policy Enforcement"]
+        direction TB
+
+        subgraph GATE_CORE["Gate Core"]
+            GATE_VALIDATE["validate()"]:::gate
+            GATE_DEVICE_SECRET["_get_device_secret()"]:::gate
+        end
+
+        subgraph SCHEMA_REGISTRY["Schema Registry"]
+            SCHEMA_GET["get()"]:::gate
+            SCHEMA_REGISTER["register()"]:::gate
+        end
+
+        subgraph PROV_LEDGER["Provisioning Ledger"]
+            PROV_REGISTER["register()"]:::gate
+            PROV_LOOKUP["lookup()"]:::gate
+        end
+
+        subgraph POLICY_ENGINE["Policy Engine"]
+            PEP_EVALUATE["evaluate_envelope()"]:::policy
+            PEP_EVAL_POSTURE["_evaluate_device_posture()"]:::policy
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 3: TRANSACTION COORDINATION & RECEIPTS
+    %% ======================================================================================
+    subgraph L3_TXN["💼 LAYER 3: Transaction Coordination"]
+        UOW_ENTER["UnitOfWork __enter__()"]:::core
+        UOW_APPEND_WAL["append_wal()"]:::core
+        RECEIPT_ISSUE["issue()"]:::receipt
+    end
+
+    %% ======================================================================================
+    %% LAYER 4: STORAGE CORE
+    %% ======================================================================================
+    subgraph L4_STORAGE["💾 LAYER 4: Storage Core"]
+        WAL_APPEND["WAL append()"]:::storage
+        OUTBOX_ENQUEUE["Outbox enqueue()"]:::storage
+
+        subgraph IFL_STORAGE["IFL Storage"]
+            DB_DEVICE_REG["st_device_registry"]:::storage
+            DB_DEVICE_LEASE["st_device_leases"]:::storage
+            DB_DEVICE_COMMANDS["st_device_commands"]:::storage
+            DB_DEVICE_SCHEMAS["st_device_schemas"]:::storage
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 5: QOS & SCHEDULING
+    %% ======================================================================================
+    subgraph L5_QOS["⚖️ LAYER 5: QoS & Scheduling"]
+        SCHED_ACQUIRE["Scheduler acquire()"]:::qos
+        QOS_CTX_ACQUIRE["QoSContext acquire()"]:::qos
+    end
+
+    %% ======================================================================================
+    %% LAYER 6: EVENT BUS & PIPELINES
+    %% ======================================================================================
+    subgraph L6_BUS["🚌 LAYER 6: Event Bus & Pipelines"]
+        BUS_DISPATCH["BusDispatcher dispatch()"]:::bus
+
+        subgraph PIPELINE_REGISTRY["Pipeline Registry"]
+            PIPELINE_P01["P01: Ingress Discovery"]:::core
+            PIPELINE_P02["P02: Episodic Write"]:::core
+            PIPELINE_DEVICE["P21: Device Orchestration"]:::core
+            PIPELINE_HEALTH["P22: Health Aggregation"]:::core
+            PIPELINE_HOME["P23: Smart Home Control"]:::core
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 7: QUERY DRIVERS & WORKERS
+    %% ======================================================================================
+    subgraph L7_QUERY["🔍 LAYER 7: Query & Workers"]
+        QUERY_EXECUTE["QueryAggregator execute()"]:::query
+    end
+
+    %% ======================================================================================
+    %% LAYER 8: DRIVERS (SPI Layer)
+    %% ======================================================================================
+    subgraph L8_DRIVERS["🔌 LAYER 8: Driver SPI Layer"]
+        ALIAS_RESOLVE["AliasMap resolve()"]:::driver
+
+        subgraph DEVICE_DRIVERS["Device Drivers"]
+            DRV_HEALTH["HealthDataDriver"]:::driver_impl
+            DRV_HOME["SmartHomeDriver"]:::driver_impl
+            DRV_VEHICLE["VehicleDriver"]:::driver_impl
+            DRV_SENSOR["SensorDriver"]:::driver_impl
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 9: OBSERVABILITY
+    %% ======================================================================================
+    subgraph L9_OBS["📊 LAYER 9: Observability"]
+        OBS_EMIT["ObservabilityEmitter emit()"]:::obs
+        TRACER_SPAN["Tracer span()"]:::obs
+
+        subgraph IFL_METRICS["IFL Metrics"]
+            METRIC_DEVICE_CONN["device_connections_active"]:::obs
+            METRIC_DEVICE_MSG["device_messages_total"]:::obs
+            METRIC_DEVICE_LAT["device_message_latency"]:::obs
+            METRIC_DEVICE_ERR["device_errors_total"]:::obs
+        end
+    end
+
+    %% ======================================================================================
+    %% LAYER 10: INFRASTRUCTURE
+    %% ======================================================================================
+    subgraph L10_INFRA["🏗️ LAYER 10: Infrastructure"]
+        APP_CREATE["create_app()"]:::infra
+
+        subgraph IFL_CONFIG["IFL Configuration"]
+            CFG_FABRIC["FabricSettings"]:::infra
+            CFG_DEVICE_LIMITS["max_devices_per_user"]:::infra
+            CFG_LEASE_DURATION["device_lease_duration"]:::infra
+            CFG_RETRY_POLICY["device_retry_policy"]:::infra
+        end
+    end
+
+    %% ======================================================================================
+    %% DATA FLOW: DEVICE → K0 (INBOUND)
+    %% ======================================================================================
+
+    %% Flow 1: Device writes data to K0
+    DEV_APPLE_WATCH -->|"1. HealthKit data"| ADAPT_HEALTHKIT
+    DEV_NEST -->|"1. Temperature change"| ADAPT_HOMEKIT
+    DEV_TESLA -->|"1. Vehicle telemetry"| ADAPT_TESLA
+    DEV_MQTT_SENSOR -->|"1. Sensor reading"| ADAPT_MQTT
+
+    ADAPT_HEALTHKIT -->|"2. Parse protocol"| IFL_PARSE
+    ADAPT_HOMEKIT -->|"2. Parse protocol"| IFL_PARSE
+    ADAPT_TESLA -->|"2. Parse protocol"| IFL_PARSE
+    ADAPT_MQTT -->|"2. Parse protocol"| IFL_PARSE
+
+    IFL_PARSE -->|"3. Translate to IFL"| IFL_TRANSLATE
+    IFL_TRANSLATE -->|"4. Validate schema"| IFL_SCHEMA_VALIDATE
+    IFL_SCHEMA_VALIDATE -->|"5. Create Envelope"| IFL_TO_ENVELOPE
+
+    IFL_TO_ENVELOPE -->|"6. Submit to K0"| CMD_SUBMIT_FN
+    CMD_SUBMIT_FN -->|"7. Acquire QoS token"| QOS_CTX_ACQUIRE
+    QOS_CTX_ACQUIRE -->|"8. Acquire scheduler"| SCHED_ACQUIRE
+    SCHED_ACQUIRE -->|"9. Gate validate"| GATE_VALIDATE
+    GATE_VALIDATE -->|"10. Policy eval"| PEP_EVALUATE
+    PEP_EVALUATE -->|"11. Begin txn"| UOW_ENTER
+    UOW_ENTER -->|"12. Write WAL"| WAL_APPEND
+    WAL_APPEND -->|"13. Enqueue outbox"| OUTBOX_ENQUEUE
+    OUTBOX_ENQUEUE -->|"14. Post-commit dispatch"| BUS_DISPATCH
+    BUS_DISPATCH -->|"15. Route to pipeline"| PIPELINE_DEVICE
+    PIPELINE_DEVICE -->|"16. Process device event"| PIPELINE_HEALTH
+    PIPELINE_HEALTH -->|"17. Emit observability"| OBS_EMIT
+
+    %% Flow 2: K0 → Device (OUTBOUND CONTROL)
+    PIPELINE_HOME -->|"1. Generate command"| IFL_SEND_CMD
+    IFL_SEND_CMD -->|"2. Queue command"| IFL_QUEUE_CMD
+    IFL_QUEUE_CMD -->|"3. Enqueue outbox"| OUTBOX_ENQUEUE
+    OUTBOX_ENQUEUE -->|"4. Resolve device"| IFL_GET_DEVICE
+    IFL_GET_DEVICE -->|"5. Resolve driver alias"| ALIAS_RESOLVE
+    ALIAS_RESOLVE -->|"6. Load smart home driver"| DRV_HOME
+    DRV_HOME -->|"7. Get adapter"| ADAPT_HOMEKIT
+    ADAPT_HOMEKIT -->|"8. Send to device"| DEV_NEST
+    DEV_NEST -->|"9. Response"| IFL_HANDLE_RESP
+    IFL_HANDLE_RESP -->|"10. Trace span"| TRACER_SPAN
+
+    %% Flow 3: Device Enrollment (via command path)
+    DEV_IPHONE -->|"1. Enroll request"| IFL_ENROLL
+    IFL_ENROLL -->|"2. Create envelope"| IFL_TO_ENVELOPE
+    IFL_TO_ENVELOPE -->|"3. Submit command"| CMD_SUBMIT_FN
+    CMD_SUBMIT_FN -->|"4. Gate validate"| GATE_VALIDATE
+    GATE_VALIDATE -->|"5. Policy eval"| PEP_EVALUATE
+    PEP_EVALUATE -->|"6. Begin txn"| UOW_ENTER
+    UOW_ENTER -->|"7. Write WAL"| WAL_APPEND
+    WAL_APPEND -->|"8. Enqueue outbox"| OUTBOX_ENQUEUE
+    OUTBOX_ENQUEUE -->|"9. Post-commit dispatch"| BUS_DISPATCH
+    BUS_DISPATCH -->|"10. Route to provisioning"| PIPELINE_DEVICE
+    PIPELINE_DEVICE -->|"11. Register device"| IFL_REG_DEVICE
+    IFL_REG_DEVICE -->|"12. Provision keys"| PROV_REGISTER
+    PROV_REGISTER -->|"13. Register schema"| IFL_SCHEMA_REG
+    IFL_SCHEMA_REG -->|"14. Acquire lease"| IFL_ACQUIRE_LEASE
+    IFL_ACQUIRE_LEASE -->|"15. Persist registry"| DB_DEVICE_REG
+    IFL_REG_DEVICE -->|"16. Issue receipt"| RECEIPT_ISSUE
+
+    %% Flow 4: Cross-Device Orchestration (full IFL path)
+    DEV_APPLE_WATCH -->|"Heart rate spike"| ADAPT_HEALTHKIT
+    ADAPT_HEALTHKIT -->|"Parse protocol"| IFL_PARSE
+    IFL_PARSE -->|"Translate to IFL"| IFL_TRANSLATE
+    IFL_TRANSLATE -->|"Validate schema"| IFL_SCHEMA_VALIDATE
+    IFL_SCHEMA_VALIDATE -->|"Create envelope"| IFL_TO_ENVELOPE
+    IFL_TO_ENVELOPE -->|"Submit command"| CMD_SUBMIT_FN
+    CMD_SUBMIT_FN -->|"Gate + Policy + UoW"| UOW_ENTER
+    UOW_ENTER -->|"WAL + Outbox"| WAL_APPEND
+    WAL_APPEND -->|"Post-commit"| BUS_DISPATCH
+    BUS_DISPATCH -->|"Health pipeline"| PIPELINE_HEALTH
+    PIPELINE_HEALTH -->|"Detect anomaly"| PIPELINE_DEVICE
+    PIPELINE_DEVICE -->|"Trigger action"| IFL_SEND_CMD
+    IFL_SEND_CMD -->|"Queue command"| IFL_QUEUE_CMD
+    IFL_QUEUE_CMD -->|"Resolve adapter"| IFL_GET_TRANSLATOR
+    IFL_GET_TRANSLATOR -->|"Get HomeKit adapter"| ADAPT_HOMEKIT
+    ADAPT_HOMEKIT -->|"Send command"| DEV_NEST
+    DEV_NEST -->|"Confirmation response"| IFL_HANDLE_RESP
+    IFL_HANDLE_RESP -->|"Trace completion"| TRACER_SPAN
+
+    %% Flow 5: Device Discovery
+    DEV_CUSTOM_APP -->|"mDNS broadcast"| IFL_MDNS
+    IFL_MDNS -->|"Discover"| IFL_AUTO_DISCOVER
+    IFL_AUTO_DISCOVER -->|"Register"| IFL_REG_DEVICE
+
+    %% Flow 6: Query Path (connect query floaters)
+    QRY_RECALL_FN -->|"Execute query"| QUERY_EXECUTE
+    QUERY_EXECUTE -->|"Resolve driver"| ALIAS_RESOLVE
+    ALIAS_RESOLVE -->|"Query device data"| DRV_HEALTH
+    DRV_HEALTH -->|"Fetch health records"| DB_DEVICE_REG
+
+    %% Flow 7: Vehicle telemetry
+    ADAPT_TESLA -->|"Parse vehicle data"| IFL_PARSE
+    ALIAS_RESOLVE -->|"Route vehicle commands"| DRV_VEHICLE
+
+    %% Flow 8: Sensor data ingestion
+    ADAPT_MQTT -->|"Parse sensor payload"| IFL_PARSE
+    ALIAS_RESOLVE -->|"Store sensor data"| DRV_SENSOR
+
+    %% Storage connections
+    IFL_REG_DEVICE -.->|"Persist"| DB_DEVICE_REG
+    IFL_ACQUIRE_LEASE -.->|"Persist"| DB_DEVICE_LEASE
+    IFL_SCHEMA_REG -.->|"Persist"| DB_DEVICE_SCHEMAS
+    IFL_QUEUE_CMD -.->|"Persist"| DB_DEVICE_COMMANDS
+
+    %% Observability
+    IFL_PARSE -->|"Emit metrics"| METRIC_DEVICE_MSG
+    IFL_SEND_CMD -->|"Trace span"| TRACER_SPAN
+    IFL_ACQUIRE_CONN -->|"Connection gauge"| METRIC_DEVICE_CONN
+    ADAPT_HEALTHKIT -->|"Error counter"| METRIC_DEVICE_ERR
+
+    %% ======================================================================================
+    %% STYLE DEFINITIONS
+    %% ======================================================================================
+    classDef device fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef fabric fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000,font-weight:bold
+    classDef fabric_adapter fill:#ffe0b2,stroke:#ef6c00,stroke-width:2px,color:#000
+    classDef fabric_schema fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef port fill:#fff9c4,stroke:#f57f17,stroke-width:3px,color:#000,font-weight:bold
+    classDef gate fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef policy fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef receipt fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef core fill:#ffcdd2,stroke:#b71c1c,stroke-width:3px,color:#000,font-weight:bold
+    classDef storage fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef qos fill:#b2dfdb,stroke:#004d40,stroke-width:2px,color:#000
+    classDef bus fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:#000
+    classDef query fill:#dcedc8,stroke:#33691e,stroke-width:2px,color:#000
+    classDef driver fill:#d1c4e9,stroke:#311b92,stroke-width:2px,color:#000
+    classDef driver_impl fill:#e1bee7,stroke:#4a148c,stroke-width:1px,color:#000
+    classDef obs fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef infra fill:#cfd8dc,stroke:#263238,stroke-width:2px,color:#000

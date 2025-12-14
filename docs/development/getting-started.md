@@ -329,7 +329,7 @@ pyenv local 3.11.x
 
 ## Getting Help
 
-- **Architecture questions**: Review [docs/whiteboard.md](../whiteboard.md) (21,123 lines)
+- **Architecture questions**: Review [docs/whiteboard.md](../whiteboard/whiteboard.md) (21,123 lines)
 - **Module structure**: Check [docs/k1_module_analysis.md](../k1_module_analysis.md)
 - **Open questions**: Browse [docs/questions.md](../questions.md)
 - **GitHub Issues**: Create issue with `question` label

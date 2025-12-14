@@ -12,7 +12,7 @@ from k0.gate.schema_registry import SchemaRecord, SchemaRegistry
 from k0.obs import MetricsExporter, ObservabilityEmitter
 from k0.storage.replayer import Replayer
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 ISO_NOW = datetime.now(timezone.utc).isoformat(timespec="seconds")
 PAYLOAD_HASH = "c" * 64
@@ -195,3 +195,4 @@ def _(sqlite_db: Path = sqlite_runtime) -> None:  # type: ignore[assignment]
         {"tenant": "tenant-alpha", "space": "*"},
     )
     assert throughput_count == 1.0
+

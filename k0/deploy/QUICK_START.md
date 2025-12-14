@@ -3,6 +3,7 @@
 ## ✅ What You Have
 
 - **K0 Kernel** running locally on port 8080
+- **Neo4j** knowledge graph on ports 7474, 7687
 - **Device provisioned** with cryptographic keys
 - **Policy enforcement** working (ALLOW/DENY/REDACT)
 - **Test envelopes** ready for API testing
@@ -42,13 +43,13 @@ python setup_local_k0.py
 cd k0/deploy
 .\k0.ps1 status
 
-# All 6 services should be running:
+# All services should be running:
 # ✓ k0-kernel (policy enforcement)
+# ✓ neo4j (knowledge graph)
 # ✓ prometheus (metrics)
 # ✓ grafana (dashboards at http://localhost:3000)
 # ✓ tempo (tracing)
 # ✓ alertmanager (alerts)
-# ✓ k0-prometheus (monitoring)
 ```
 
 ## 📊 What Each Policy Does
@@ -96,7 +97,18 @@ python check_schema.py
 ✅ Policy enforcement working
 ✅ Cryptographic signing working
 ✅ Redaction pipeline working
+✅ Neo4j knowledge graph working
 ✅ Bootstrap tests: 16/16 PASSING
 ✅ Deployment automated
 
 **Next Phase:** K1 Orchestrator Integration (Phase 2 of ADR-0089)
+
+---
+
+## 📦 Required Libraries & Data Downloads
+
+### Storage Requirements
+
+- **Docker images**:
+  - `k0-kernel`: ~500MB
+  - Total: ~500MB

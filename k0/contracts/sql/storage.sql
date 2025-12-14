@@ -1,6 +1,14 @@
 -- K0 Kernel storage contract (baseline schema)
 -- This file mirrors the authoritative DDL defined in k0/README.md §6.1.
 -- Any changes here MUST be reflected in the narrative spec and migration manifests.
+--
+-- MIGRATION HISTORY:
+-- 0001_baseline.sql - Core K0 infrastructure (WAL, receipts, outbox, DLQ, devices, schemas)
+-- 0002_pem_obligations.sql - PEM obligation persistence (st_obligation_log, redacted_body_json)
+-- 0003_fts_table.sql - FTS5 virtual table for WAL content search (st_fts)
+-- 0004_future_proof_enhancements.sql - ACL, retention policies, FTS5 memory tables, backoff state
+--
+-- To apply migrations: python -m k0.automation.migrate <db_path>
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=OFF; -- Invariants enforced via Ward harness per CORRECTNESS.md
@@ -82,6 +90,50 @@ CREATE TABLE IF NOT EXISTS st_device_keys (
   PRIMARY KEY(device_id, key_version),
   FOREIGN KEY(device_id) REFERENCES st_devices(device_id)
 );
+
+-- Authoritative space metadata (ADR-K004b)
+CREATE TABLE IF NOT EXISTS st_spaces (
+  space_id TEXT PRIMARY KEY,
+  household_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  policy_version TEXT NOT NULL,
+  consent_policy TEXT,
+  coownership_policy TEXT,
+  steward_ids TEXT NOT NULL DEFAULT '[]',
+  metadata_json TEXT,
+  state TEXT NOT NULL DEFAULT 'ACTIVE'
+    CHECK(state IN ('ACTIVE','FROZEN','DECOMMISSIONED')),
+  source_version TEXT NOT NULL,
+  hydrated_at TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL DEFAULT 600,
+  checksum TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_spaces_household ON st_spaces(household_id);
+CREATE INDEX IF NOT EXISTS idx_spaces_kind ON st_spaces(kind);
+
+-- Per-space membership roster with capabilities (ADR-K004b/K004c)
+CREATE TABLE IF NOT EXISTS st_space_members (
+  space_id TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  household_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  capabilities TEXT NOT NULL DEFAULT '[]',
+  delegated_from TEXT,
+  membership_state TEXT NOT NULL DEFAULT 'ACTIVE'
+    CHECK(membership_state IN ('ACTIVE','SUSPENDED','REMOVED')),
+  opt_out_flags TEXT NOT NULL DEFAULT '[]',
+  source_version TEXT NOT NULL,
+  hydrated_at TEXT NOT NULL,
+  ttl_seconds INTEGER NOT NULL DEFAULT 600,
+  PRIMARY KEY(space_id, person_id),
+  FOREIGN KEY(space_id) REFERENCES st_spaces(space_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_space_members_household ON st_space_members(household_id);
+CREATE INDEX IF NOT EXISTS idx_space_members_role ON st_space_members(role);
+CREATE INDEX IF NOT EXISTS idx_space_members_space_state ON st_space_members(space_id, membership_state);
 
 -- Outbox (async intents)
 CREATE TABLE IF NOT EXISTS st_outbox (

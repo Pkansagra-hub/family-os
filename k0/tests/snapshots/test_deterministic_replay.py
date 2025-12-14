@@ -12,7 +12,7 @@ from k0.obs import MetricsExporter, ObservabilityEmitter
 from k0.storage.replayer import Replayer
 from k0.storage.snapshots import SnapshotScheduler
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 ISO_NOW = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -206,3 +206,4 @@ def _(sqlite_db: Path = sqlite_runtime) -> None:  # type: ignore[assignment]
         {"tenant": "*", "space": "*"},
     )
     assert parity_metric == 0.0
+

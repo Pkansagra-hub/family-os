@@ -6,7 +6,7 @@ from ward import test  # type: ignore[attr-defined]
 
 from k0.gate.schema_registry import SchemaRecord, SchemaRegistry
 from k0.uow.connection_pool import shutdown_pool
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 @test("schema registry lifecycle enforces N/N+1 policy and caches results")
@@ -51,3 +51,4 @@ def _(sqlite_runtime: Any = sqlite_runtime) -> None:
         v2.version: "BLOCKED",
         v3.version: "ACTIVE",
     }
+

@@ -1,0 +1,190 @@
+module_id: embedding.recompute
+version: v1
+
+input_event_types:
+  - cognitive.embedding.recompute.requested.v1
+
+output_event_types:
+  - cognitive.embedding.recomputed.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - write:st_vec
+  - read:st_hipp_events
+
+idempotent: true
+
+failure_modes:
+  - code: EVENT_NOT_FOUND
+    policy: skip
+    max_retries: 0
+  - code: MODEL_UNAVAILABLE
+    policy: retry
+    max_retries: 3
+  - code: EMBEDDING_GENERATION_FAILED
+    policy: mark_failed
+    max_retries: 0
+  - code: VECTOR_UPDATE_FAILED
+    policy: retry
+    max_retries: 3
+
+description: |
+  M26: Embedding Recompute Module
+
+  Recomputes embeddings when model version changes or upgrade required
+  (e.g., ultrabert_v2.1.0 → ultrabert_v3.0.0).
+
+  P08 v2 Use Case: Model Upgrade
+  - Triggered by: cognitive.embedding.recompute.requested.v1 event
+  - Queries st_vec WHERE model_id='ultrabert_v2.1.0'
+  - Regenerates embeddings using new model version
+  - Updates st_vec.vector, model_id, updated_at
+  - Emits cognitive.vector.stored.v1 (triggers M24 FAISS re-indexing)
+
+  Performance Target: ~100ms per event (includes model inference)
+  Batch Performance: ~10 events/second (limited by GPU throughput)
+
+  Input (from cognitive.embedding.recompute.requested.v1 event):
+  - embedding_id: str (UUID) OR
+  - event_id: str (FK to st_hipp_events) OR
+  - batch_criteria: object (query filters for bulk recompute)
+  - target_model_id: str (new model version)
+  - reason: str (upgrade | quality_improvement | dimension_change)
+
+  Operations:
+  1. Query st_hipp_events: SELECT text FROM st_hipp_events WHERE event_id=?
+  2. Generate new embedding: new_model.get_embedding(text) → vector
+  3. Update st_vec: UPDATE st_vec SET vector=?, model_id=?, updated_at=? WHERE embedding_id=?
+  4. Update st_hipp_events: UPDATE updated_at=? WHERE event_id=?
+  5. Emit event: cognitive.vector.stored.v1 (triggers M24 FAISS re-indexing)
+
+  Output:
+  - recomputed: bool (true if recompute succeeded)
+  - embedding_id: str
+  - old_model_id: str
+  - new_model_id: str
+  - recomputed_at: int (Unix timestamp)
+
+  Batch Recompute Mode:
+  - Query: SELECT event_id, text, embedding_id FROM st_vec JOIN st_hipp_events WHERE model_id='ultrabert_v2.1.0' LIMIT 1000
+  - Generate embeddings in batch (10x faster than sequential)
+  - Bulk update st_vec (batch transaction)
+  - Emit batch cognitive.embedding.recomputed.v1 event
+
+  Use Cases:
+  - Model upgrade: ultrabert v2.1 → v3.0
+  - Quality improvement: Recompute with better hyperparameters
+  - Dimension change: 384-dim MiniLM → 768-dim UltraBERT (migration scenario)
+  - Corruption recovery: Regenerate if vectors corrupted
+
+  Failure Handling:
+  - EVENT_NOT_FOUND: Event deleted since embedding created (skip)
+  - MODEL_UNAVAILABLE: New model not loaded (retry 3x)
+  - EMBEDDING_GENERATION_FAILED: Model error (mark FAILED)
+  - VECTOR_UPDATE_FAILED: Database error (retry 3x)
+
+  Related:
+  - ADR-K003: Inline embedding architecture
+  - M24 (faiss_indexer): Re-indexes updated embeddings
+  - Migration scripts: Bulk recompute for model upgrades
+
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 1000
+      description: Number of embeddings to recompute per batch
+    target_model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: Target model version for recomputation
+    source_model_filter:
+      type: string
+      description: Only recompute embeddings from this model version (e.g., 'ultrabert_v2.0.0')
+    preserve_old_vectors:
+      type: boolean
+      default: false
+      description: Keep old vectors in archive table before overwrite
+    emit_reindexing_event:
+      type: boolean
+      default: true
+      description: Emit cognitive.vector.stored.v1 after recompute (triggers FAISS)
+
+input_schema:
+  type: object
+  properties:
+    embedding_id:
+      type: string
+      format: uuid
+      description: Specific embedding to recompute (single mode)
+    event_id:
+      type: string
+      description: Event ID to recompute (single mode)
+    batch_criteria:
+      type: object
+      description: Query filters for bulk recompute
+      properties:
+        model_id:
+          type: string
+          description: Only recompute embeddings from this model
+        tenant_id:
+          type: string
+          description: Filter by tenant
+        space_id:
+          type: string
+          description: Filter by space
+        created_before:
+          type: integer
+          description: Unix timestamp cutoff (older embeddings)
+        created_after:
+          type: integer
+          description: Unix timestamp cutoff (newer embeddings)
+    target_model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: New model version to use
+    reason:
+      type: string
+      enum: ["upgrade", "quality_improvement", "dimension_change", "corruption_recovery"]
+      description: Reason for recomputation (for audit logging)
+
+output_schema:
+  type: object
+  required:
+    - recomputed
+    - embedding_id
+  properties:
+    recomputed:
+      type: boolean
+      description: True if recompute succeeded
+    embedding_id:
+      type: string
+      format: uuid
+    old_model_id:
+      type: string
+      description: Previous model version
+    new_model_id:
+      type: string
+      description: New model version after recompute
+    vector_dim:
+      type: integer
+      enum: [768]
+    recomputed_at:
+      type: integer
+      description: Unix timestamp when recomputed
+
+dependencies:
+  syscalls:
+    - st_vec.update
+    - st_hipp_events.read
+    - events.emit
+  runtime:
+    - k0.runtime.ultrabert_adapter
+
+performance:
+  p50_latency_ms: 50
+  p95_latency_ms: 100
+  p99_latency_ms: 200
+  batch_throughput_events_per_sec: 10

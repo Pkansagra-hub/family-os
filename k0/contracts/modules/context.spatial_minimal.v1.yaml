@@ -1,0 +1,72 @@
+module_id: context.spatial_minimal
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.spatial.enriched.v1
+
+latency_budget_ms: 3
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: INVALID_GEOHASH
+    policy: use_null
+    max_retries: 0
+  - code: BAND_MASKING_REQUIRED
+    policy: apply_masking
+    max_retries: 0
+
+description: |
+  Spatial Minimal Enrichment Module
+
+  Copies band-appropriate spatial fields from WAL envelope to st_hipp_events:
+  - location_name: Human-readable place name (e.g., "Olive Garden, Market St")
+  - location_type: Place category (e.g., "restaurant", "home", "park")
+  - geohash_6: 6-character geohash for GREEN band (±0.61 km precision)
+
+  Band-Based Spatial Minimization:
+  - GREEN: Full geohash_6 from envelope location_geohash
+  - AMBER: Truncate to geohash_4 (±20 km precision)
+  - RED: Omit geohash entirely (NULL for maximum privacy)
+
+  Privacy Guarantee:
+  - Does NOT access raw lat/lon (already stripped by Gate Stage 3)
+  - Only reads pre-masked location_geohash from WAL envelope
+  - Applies additional band-based truncation as needed
+
+  Defer to P09:
+  - City/region lookups (st_geo_city table doesn't exist)
+  - Place chain detection (brand_lexicon unavailable)
+  - Geofence matching (st_geo_geofence not implemented)
+
+  Performance: <3ms P95 (copy/truncate operations only, no DB lookups)
+
+  Output fields (st_hipp_events):
+  - location_name: TEXT (from envelope body)
+  - location_type: TEXT (from envelope body)
+  - geohash_6: TEXT (NULL for RED band, truncated for AMBER)
+
+config_schema:
+  type: object
+  properties:
+    green_band_precision:
+      type: integer
+      default: 6
+      description: Geohash precision for GREEN band (6 chars = ±0.61 km)
+    amber_band_precision:
+      type: integer
+      default: 4
+      description: Geohash precision for AMBER band (4 chars = ±20 km)
+    red_band_precision:
+      type: integer
+      default: 0
+      description: Geohash precision for RED band (0 = NULL/omit)
+    allow_null_location:
+      type: boolean
+      default: true
+      description: Allow NULL location fields if not provided in envelope

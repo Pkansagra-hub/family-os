@@ -64,15 +64,19 @@ def _normalize_sha256(value: str) -> str:
 class SchemaRegistry:
     """Cached facade backed by the schema_registry SQLite table."""
 
-    def __init__(self) -> None:
+    def __init__(self, metrics_exporter=None) -> None:
         self._cache: Dict[tuple[str, str], SchemaRecord] = {}
         self._lock = threading.RLock()
         self._loaded = False
+        self._metrics_exporter = metrics_exporter  # Issue #012 (Gap 43): Schema cache metrics
 
     def clear_cache(self) -> None:
         with self._lock:
             self._cache.clear()
             self._loaded = False
+            # Issue #012 (Gap 43): Update cache entries gauge on clear
+            if self._metrics_exporter is not None:
+                self._metrics_exporter.set_gauge("schema_cache_entries_active", 0.0)
 
     def load(self, *, connection: sqlite3.Connection | None = None) -> None:
         """Load schema metadata into the process cache."""
@@ -98,6 +102,11 @@ class SchemaRegistry:
         with self._lock:
             self._cache = records
             self._loaded = True
+            # Issue #012 (Gap 43): Update cache entries gauge on load
+            if self._metrics_exporter is not None:
+                self._metrics_exporter.set_gauge(
+                    "schema_cache_entries_active", float(len(self._cache))
+                )
 
     def get(
         self,
@@ -110,7 +119,14 @@ class SchemaRegistry:
         with self._lock:
             record = self._cache.get(key)
             if record is not None:
+                # Issue #012 (Gap 43): Schema cache hit metric
+                if self._metrics_exporter is not None:
+                    self._metrics_exporter.emit("schema_cache_hits_total")
                 return record
+
+        # Issue #012 (Gap 43): Schema cache miss metric
+        if self._metrics_exporter is not None:
+            self._metrics_exporter.emit("schema_cache_misses_total")
 
         with _resolve_connection(connection) as conn:
             _ensure_row_factory(conn)
@@ -136,6 +152,11 @@ class SchemaRegistry:
 
         with self._lock:
             self._cache[key] = record
+            # Issue #012 (Gap 43): Update cache entries gauge on insert
+            if self._metrics_exporter is not None:
+                self._metrics_exporter.set_gauge(
+                    "schema_cache_entries_active", float(len(self._cache))
+                )
         return record
 
     def register(
@@ -160,9 +181,7 @@ class SchemaRegistry:
                     ),
                 )
             except sqlite3.IntegrityError as exc:
-                msg = (
-                    f"Schema {stored_record.uri}@{stored_record.version} already exists"
-                )
+                msg = f"Schema {stored_record.uri}@{stored_record.version} already exists"
                 raise ValueError(msg) from exc
         self._store(stored_record)
         return stored_record
@@ -321,9 +340,7 @@ class SchemaRegistry:
     def records_for_uri(self, uri: str) -> Iterable[SchemaRecord]:
         with self._lock:
             return tuple(
-                record
-                for (record_uri, _), record in self._cache.items()
-                if record_uri == uri
+                record for (record_uri, _), record in self._cache.items() if record_uri == uri
             )
 
     def get_audit_trail(

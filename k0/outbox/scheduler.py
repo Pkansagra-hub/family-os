@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from k0.storage.outbox import OutboxEntry
@@ -14,7 +15,10 @@ class RetryDecision:
 
     action: str  # "retry" or "quarantine"
     retries: int
-    requeue_seq: int
+    requeue_seq: int  # DEPRECATED - kept for backward compatibility
+    next_attempt_ts: str | None  # NEW - ISO8601 timestamp for next retry
+    backoff_exp: int  # NEW - Exponent for 2^n exponential backoff
+    status: str  # NEW - PENDING/PROCESSING/FAILED/DEAD
 
 
 class RetryScheduler:
@@ -53,12 +57,27 @@ class RetryScheduler:
                 action="quarantine",
                 retries=next_retry,
                 requeue_seq=entry.requeue_seq,
+                next_attempt_ts=None,
+                backoff_exp=0,
+                status="DEAD",
             )
 
+        # Exponential backoff: 2^backoff_exp seconds (capped at 2^6 = 64 seconds)
+        backoff_exp = min(next_retry, 6)
+        backoff_seconds = 2**backoff_exp
+
+        # Calculate next attempt timestamp
+        next_attempt = datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)
+
+        # Legacy requeue_seq calculation (backward compatibility)
         backoff_index = min(next_retry - 1, len(self._backoff_steps) - 1)
         increment = self._backoff_steps[backoff_index]
+
         return RetryDecision(
             action="retry",
             retries=next_retry,
-            requeue_seq=entry.requeue_seq + increment,
+            requeue_seq=entry.requeue_seq + increment,  # DEPRECATED
+            next_attempt_ts=next_attempt.isoformat(),
+            backoff_exp=backoff_exp,
+            status="PENDING",
         )

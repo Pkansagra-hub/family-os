@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("up", "down", "restart", "status", "logs")]
+    [ValidateSet("up", "down", "restart", "status", "logs", "watch")]
     [string]$Command,
 
     [switch]$Rebuild,
@@ -8,7 +8,9 @@ param(
     [switch]$Verify,
     [int]$WaitSeconds = 10,
 
-    [string]$Service
+    [string]$Service,
+    [switch]$HotReload,
+    [switch]$GPU
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +20,7 @@ $ProgressPreference = "SilentlyContinue"
 $DeployRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent (Split-Path -Parent $DeployRoot)
 $ComposeKernel = Join-Path $DeployRoot "docker-compose.yml"
+$ComposeGPU = Join-Path $DeployRoot "docker-compose.gpu.yml"
 $ComposeTelemetry = Join-Path $DeployRoot "local-single-node-telemetry.yml"
 $EnvDir = Join-Path $DeployRoot "env"
 $DataDir = Join-Path $DeployRoot "data"
@@ -199,10 +202,18 @@ function Ensure-Compose-Prereqs {
 }
 
 function Ensure-Image {
-    $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch "k0-kernel-local:latest")
+    if ($GPU) {
+        $imageName = "k0-kernel-gpu:latest"
+        $dockerFile = Join-Path $RepoRoot "Dockerfile.gpu"
+    }
+    else {
+        $imageName = "k0-kernel-local:latest"
+        $dockerFile = Join-Path $RepoRoot "Dockerfile"
+    }
+    $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch $imageName)
     if ($Rebuild -or -not $imagePresent) {
-        Write-Info "Building image k0-kernel-local:latest"
-        docker build -t k0-kernel-local:latest -f (Join-Path $RepoRoot "Dockerfile") $RepoRoot | Write-Host
+        Write-Info "Building image $imageName"
+        docker build -t $imageName -f $dockerFile $RepoRoot | Write-Host
     }
 }
 
@@ -215,16 +226,194 @@ function Ensure-Database {
     }
 }
 
+function Ensure-Neo4j-Schema {
+    if ($Migrate) {
+        Write-Info "Bootstrapping Neo4j schema"
+        $env:PYTHONPATH = $RepoRoot
+
+        # Load Neo4j environment variables from k0.env
+        $envFile = Join-Path $EnvDir "k0.env"
+        if (Test-Path $envFile) {
+            Get-Content $envFile | ForEach-Object {
+                if ($_ -match '^([^=]+)=(.*)$') {
+                    $key = $matches[1].Trim()
+                    $value = $matches[2].Trim()
+                    if ($key -match '^NEO4J_') {
+                        [System.Environment]::SetEnvironmentVariable($key, $value, [System.EnvironmentVariableTarget]::Process)
+                    }
+                }
+            }
+        }
+
+        # Use localhost for host-side migration (not container name)
+        $neo4jUri = "neo4j://localhost:7687"
+        $neo4jUser = $env:NEO4J_USERNAME
+        $neo4jPass = $env:NEO4J_PASSWORD
+        $neo4jDb = $env:NEO4J_DATABASE
+
+        if (-not $neo4jUser) {
+            Write-Warn "NEO4J_USERNAME not set, skipping Neo4j migrations"
+            return
+        }
+
+        $neo4jPy = "from k0.automation.migrate_neo4j import apply_cypher_migrations; r=apply_cypher_migrations('$neo4jUri', '$neo4jUser', '$neo4jPass', '$neo4jDb'); print('Applied:', sum(1 for x in r if x.action=='applied'), 'Skipped:', sum(1 for x in r if x.action=='skipped'))"
+        python -c $neo4jPy | Write-Host
+    }
+}
+
+function Sync-Telemetry-Artifacts {
+    Write-Info "Syncing telemetry artifacts from source to deployment"
+
+    $SourceTelemetryDir = "$RepoRoot\k0\telemetry\generated"
+    $DeployDashboardsDir = "$GeneratedDir\dashboards"
+    $DeployRulesDir = "$GeneratedDir\rules"
+
+    # Create deploy directories if they don't exist
+    New-Item -ItemType Directory -Path $DeployDashboardsDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $DeployRulesDir -Force | Out-Null
+
+    # Sync dashboards from source to deploy
+    if (Test-Path "$SourceTelemetryDir\dashboards") {
+        Write-Info "Syncing dashboards: $SourceTelemetryDir/dashboards -> $DeployDashboardsDir"
+        Get-ChildItem -Path "$SourceTelemetryDir\dashboards" -Filter "*.json" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $DeployDashboardsDir -Force
+        }
+        Write-Ok "Dashboards synced"
+    }
+    else {
+        Write-Warn "Source dashboards not found at $SourceTelemetryDir/dashboards (run 'python -m k0.automation.telemetry_renderer' first)"
+    }
+
+    # Sync alert rules from source to deploy
+    if (Test-Path "$SourceTelemetryDir\rules") {
+        Write-Info "Syncing alert rules: $SourceTelemetryDir/rules -> $DeployRulesDir"
+        Get-ChildItem -Path "$SourceTelemetryDir\rules" -Filter "*.yaml" | ForEach-Object {
+            Copy-Item -Path $_.FullName -Destination $DeployRulesDir -Force
+        }
+        Write-Ok "Alert rules synced"
+    }
+    else {
+        Write-Warn "Source alert rules not found at $SourceTelemetryDir/rules (run 'python -m k0.automation.telemetry_renderer' first)"
+    }
+
+    # Sync checksum files for validation
+    if (Test-Path "$SourceTelemetryDir\checksums_dashboards.json") {
+        Copy-Item -Path "$SourceTelemetryDir\checksums_dashboards.json" -Destination $GeneratedDir -Force
+    }
+    if (Test-Path "$SourceTelemetryDir\checksums_rules.json") {
+        Copy-Item -Path "$SourceTelemetryDir\checksums_rules.json" -Destination $GeneratedDir -Force
+    }
+}
+
 function Compose-Args {
-    "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
+    if ($GPU) {
+        "-p", $ProjectName, "-f", $ComposeGPU, "-f", $ComposeTelemetry
+    }
+    else {
+        "-p", $ProjectName, "-f", $ComposeKernel, "-f", $ComposeTelemetry
+    }
+}
+
+function Start-HotReloadWatcher {
+    param(
+        [string]$WatchDir = $RepoRoot,
+        [string]$ContainerName = "k0-kernel",
+        [string]$HealthCheckUrl = "http://localhost:8080/readyz",
+        [int]$GracePeriod = 5,
+        [int]$RestartTimeout = 30
+    )
+
+    Write-Info "Starting hot reload watcher for development"
+    Write-Info "  Watch Directory: $WatchDir"
+    Write-Info "  Container Name: $ContainerName"
+    Write-Info "  Health Check URL: $HealthCheckUrl"
+    Write-Info "  Grace Period: $GracePeriod seconds"
+    Write-Info "  Restart Timeout: $RestartTimeout seconds"
+
+    # Verify Python environment
+    try {
+        $pythonCheck = python -c "import k0.automation.hot_reload_watcher; print('OK')" 2>&1
+        if ($pythonCheck -notmatch "OK") {
+            Write-Err "Failed to import hot_reload_watcher module"
+            Write-Err "Ensure k0.automation package is in PYTHONPATH"
+            return $false
+        }
+    }
+    catch {
+        Write-Err "Python module not found: $_"
+        Write-Info "Install dependencies: pip install -r k0/automation/requirements.txt"
+        return $false
+    }
+
+    # Launch watcher in background process
+    try {
+        $watcherCmd = @(
+            "-m", "k0.automation.hot_reload_watcher",
+            "--watch-dirs", $WatchDir,
+            "--container-name", $ContainerName,
+            "--health-check-url", $HealthCheckUrl,
+            "--grace-period", $GracePeriod,
+            "--restart-timeout", $RestartTimeout,
+            "--verbose"
+        )
+
+        Write-Ok "Launching watcher process..."
+        $process = Start-Process python -ArgumentList $watcherCmd -PassThru -WindowStyle Minimized -NoNewWindow
+
+        if ($process -and $process.Id) {
+            Write-Ok "Hot reload watcher started (PID: $($process.Id))"
+            Write-Info "Watching $WatchDir for changes..."
+            Write-Info "Press Ctrl+C to stop (in the watcher window)"
+            Write-Warn "Watcher is running in background - use 'docker compose logs -f k0-kernel' to monitor restarts"
+            return $true
+        }
+        else {
+            Write-Err "Failed to start watcher process"
+            return $false
+        }
+    }
+    catch {
+        Write-Err "Error starting hot reload watcher: $_"
+        return $false
+    }
 }
 
 function Do-Up {
     Ensure-Compose-Prereqs
+    Sync-Telemetry-Artifacts
     Ensure-Image
     Ensure-Database
+
     Write-Info "Starting services (kernel + telemetry)"
     docker compose @(Compose-Args) up -d | Write-Host
+
+    # Wait for Neo4j to be ready before running migrations
+    if ($Migrate) {
+        Write-Info "Waiting for Neo4j to be ready..."
+        $maxRetries = 30
+        $retryCount = 0
+        $neo4jReady = $false
+
+        while (-not $neo4jReady -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            $healthCheck = docker compose @(Compose-Args) ps neo4j --format json | ConvertFrom-Json
+            if ($healthCheck.Health -eq "healthy") {
+                $neo4jReady = $true
+                Write-Ok "Neo4j is healthy"
+            }
+            else {
+                Write-Host "." -NoNewline
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        if (-not $neo4jReady) {
+            Write-Warn "Neo4j did not become healthy in time, but continuing anyway"
+        }
+
+        Ensure-Neo4j-Schema
+    }
+
     if ($Verify) {
         if ($WaitSeconds -gt 0) {
             Write-Info "Waiting $WaitSeconds seconds before verification"
@@ -232,7 +421,15 @@ function Do-Up {
         }
         Do-Verify
     }
+
+    # Start hot reload watcher if -HotReload flag is set
+    if ($HotReload) {
+        Write-Info "Hot reload flag detected"
+        $watcherHealthUrl = "http://localhost:8080/readyz"
+        Start-HotReloadWatcher -WatchDir $RepoRoot -ContainerName "k0-kernel" -HealthCheckUrl $watcherHealthUrl -GracePeriod 5 -RestartTimeout 30 | Out-Null
+    }
 }
+
 
 function Do-Down {
     Write-Info "Stopping services"
@@ -289,4 +486,5 @@ switch ($Command) {
     "restart" { Do-Restart }
     "status" { Do-Status }
     "logs" { Do-Logs }
+    "watch" { Start-HotReloadWatcher -WatchDir $RepoRoot -ContainerName "k0-kernel" -HealthCheckUrl "http://localhost:8080/readyz" -GracePeriod 5 -RestartTimeout 30 }
 }

@@ -59,6 +59,41 @@ powershell -ExecutionPolicy Bypass -File .\k0.ps1 up -Verify -WaitSeconds 15
 [k0] tempo: 200
 ```
 
+### Hot Reload Development Workflow
+
+For iterative development, enable file watching and automatic container restarts:
+
+```powershell
+# Start services with hot reload watcher
+.\k0.ps1 up -HotReload -Verify -WaitSeconds 15
+
+# Or start watcher on already-running services
+.\k0.ps1 watch
+```
+
+**What hot reload does:**
+- 📁 **Watches** `k0/` directory for file changes
+- ⚡ **Config Reloads** (SIGHUP): `*.yml`, `*.yaml`, `*.json` changes trigger graceful reload (no restart)
+- 🔄 **Code Restarts** (Orchestrated): Python code changes trigger:
+  1. Send SIGTERM to container (graceful drain)
+  2. Wait for inflight requests to complete
+  3. Restart container
+  4. Poll health checks until ready
+  5. Resume watching
+
+**Terminal UI** shows real-time status:
+```
+[14:32:05] 🟢 WATCHING  - k0/ directory monitored
+[14:32:15] 📝 CONFIG RELOAD - k0/config/kernel.yml changed (SIGHUP)
+[14:32:16] ⏳ Container healthy - ready for requests
+[14:32:45] 🔄 CODE RESTART - k0/kernel/core.py changed
+[14:32:46] ⏳ Draining... waiting for requests
+[14:32:48] 🔄 Restarting container k0-kernel
+[14:33:02] ✅ Container healthy - resuming watch
+```
+
+**Full hot reload documentation:** See `k0/automation/README.md` - Milestone F.1.1 section
+
 ### Validation Test
 
 Once healthy, test the policy enforcement flow:
@@ -93,6 +128,214 @@ curl -X POST http://localhost:8080/k0/command.submit `
 
 ---
 
+## Async Workers (V1.4 Performance Optimization)
+
+### Overview
+
+K0 v1.4 introduces **2 async background workers** to reduce commit latency from ~150ms to ~80-100ms by deferring heavy computation:
+
+1. **Embedding Worker** (`embedding-worker`) - Computes text embeddings asynchronously
+2. **FTS Worker** (`fts-worker`) - Builds full-text search indexes asynchronously
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│  Commit Phase (Synchronous)             │
+│  - Write event to st_wal                │
+│  - Create outbox entries                │
+│  - embedding_status=PENDING             │
+│  - fts_status=PENDING                   │
+│  Latency: 80-100ms (down from 150ms)   │
+└──────────────┬──────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────┐
+│  Outbox (Work Queue)                    │
+│  - driver="embedding", op="COMPUTE"     │
+│  - driver="fts", op="INDEX_FTS"         │
+└──────────────┬──────────────────────────┘
+               │
+        ┌──────┴──────┐
+        ▼             ▼
+┌──────────────┐ ┌──────────────┐
+│  Embedding   │ │  FTS Worker  │
+│  Worker      │ │              │
+│  - Polls     │ │  - Polls     │
+│  - Computes  │ │  - Extracts  │
+│  - Updates   │ │  - Indexes   │
+│  WAL         │ │  WAL         │
+└──────────────┘ └──────────────┘
+```
+
+### Worker Configuration
+
+#### Embedding Worker
+- **Backend**: sentence-transformers (local), OpenAI API, Ollama (local)
+- **Default Model**: all-MiniLM-L6-v2 (384 dims, ~80MB)
+- **Batch Size**: 10 events
+- **Poll Interval**: 1.0 second
+- **Required Libraries**:
+  - `sentence-transformers>=2.2.0` (pre-installed in Docker)
+  - NLTK data: `punkt`, `punkt_tab`, `stopwords` (auto-downloaded)
+  - Model download: `all-MiniLM-L6-v2` (~80MB, cached on first run)
+
+#### FTS Worker
+- **Backend**: NLTK (tokenization, stemming, stop words)
+- **Batch Size**: 50 events (can batch more aggressively)
+- **Poll Interval**: 1.0 second
+- **Required Libraries**:
+  - `nltk>=3.8.1` (pre-installed in Docker)
+  - NLTK data: `punkt`, `punkt_tab`, `stopwords` (auto-downloaded)
+
+### Deployment
+
+Workers are automatically started with the kernel:
+
+```powershell
+# Start all services (kernel + workers + telemetry)
+.\k0.ps1 up -Verify -WaitSeconds 15
+```
+
+**Services Started:**
+- ✅ `k0-kernel` (port 8080)
+- ✅ `k0-embedding-worker` (background)
+- ✅ `k0-fts-worker` (background)
+- ✅ `neo4j` (ports 7474, 7687)
+- ✅ Telemetry stack (Prometheus, Grafana, Tempo, AlertManager)
+
+### Verification
+
+Check worker health:
+
+```powershell
+# Check all services
+.\k0.ps1 status
+
+# Expected output:
+#   k0-kernel: healthy
+#   k0-embedding-worker: healthy
+#   k0-fts-worker: healthy
+#   neo4j: healthy
+```
+
+View worker logs:
+
+```powershell
+# Embedding worker logs
+docker logs k0-embedding-worker
+
+# FTS worker logs
+docker logs k0-fts-worker
+
+# Expected: "🚀 Embedding worker started (poll_interval=1.0s)"
+# Expected: "✅ Processed embedding: wal_pos=123, embedding_id=emb-..."
+```
+
+### Worker Metrics
+
+Workers export Prometheus metrics:
+
+```
+# Embedding Worker
+k0_embedding_worker_processed_total
+k0_embedding_worker_failed_total
+k0_embedding_worker_latency_ms (histogram)
+
+# FTS Worker
+k0_fts_worker_processed_total
+k0_fts_worker_failed_total
+k0_fts_worker_latency_ms (histogram)
+```
+
+View in Grafana: `http://localhost:3000` → "K0 Workers Dashboard"
+
+### Troubleshooting Workers
+
+#### Issue: Worker container exits immediately
+
+**Solution:**
+```powershell
+# Check logs for errors
+docker logs k0-embedding-worker
+docker logs k0-fts-worker
+
+# Common causes:
+# 1. Database not ready (workers depend on k0-kernel health)
+# 2. NLTK data download failed (check network)
+# 3. sentence-transformers model download failed (check disk space)
+
+# Restart workers
+docker restart k0-embedding-worker k0-fts-worker
+```
+
+#### Issue: Embedding worker fails with "sentence-transformers not installed"
+
+**Root Cause:** requirements.txt not installed correctly
+
+**Solution:**
+```powershell
+# Rebuild worker image
+.\k0.ps1 down
+docker rmi k0-embedding-worker:latest
+.\k0.ps1 up -Rebuild -Verify
+```
+
+#### Issue: FTS worker fails with NLTK download errors
+
+**Root Cause:** Network connectivity issues downloading NLTK data
+
+**Solution:**
+```powershell
+# Manual NLTK data download
+docker exec k0-fts-worker python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
+
+# Restart worker
+docker restart k0-fts-worker
+```
+
+#### Issue: Events stay in PENDING status (not processed)
+
+**Symptoms:** `embedding_status=PENDING`, `fts_status=PENDING` in database
+
+**Solution:**
+```powershell
+# Check outbox for stuck entries
+sqlite3 k0/deploy/data/k0_kernel.db "SELECT COUNT(*) FROM st_outbox WHERE driver IN ('embedding', 'fts') AND status='PENDING';"
+
+# Check worker processing
+docker logs k0-embedding-worker | Select-String "Processed"
+docker logs k0-fts-worker | Select-String "Processed"
+
+# If no processing happening:
+# 1. Verify workers are running: .\k0.ps1 status
+# 2. Check for errors in worker logs
+# 3. Restart workers: docker restart k0-embedding-worker k0-fts-worker
+```
+
+#### Issue: High worker latency (>100ms per event)
+
+**Root Cause:**
+- Embedding: Large model or remote API latency
+- FTS: Complex text processing
+
+**Solution:**
+```powershell
+# For embedding worker: Switch to faster model
+# Edit docker-compose.yml:
+#   EMBEDDING_MODEL: all-MiniLM-L6-v2  # Faster (384 dims)
+#   # Instead of: all-mpnet-base-v2 (768 dims)
+
+# For FTS worker: Increase batch size
+# Edit docker-compose.yml:
+#   FTS_BATCH_SIZE: 100  # Process more events per batch
+
+# Restart workers
+docker-compose restart embedding-worker fts-worker
+```
+
+---
+
 ## Directory Structure
 
 ```
@@ -122,21 +365,100 @@ k0/deploy/
 │   ├── signing_key.pem
 │   └── public_key.pem
 │
-├── generated/
-│   ├── manifests/                        # (NEW) Policy manifest JSON files
-│   │   └── allow_all.json               # Default development manifest
-│   ├── rules/                           # Prometheus recording rules
-│   └── dashboards/                      # Grafana dashboards
-│
-├── telemetry/                           # Prometheus/Grafana/Tempo/AlertManager configs
+├── telemetry/                            # Static observability configs (NOT generated)
 │   ├── prometheus.yml
 │   ├── tempo.yaml
 │   ├── alertmanager.yml
 │   └── grafana/
 │       └── provisioning/
 │
+├── generated/                            # AUTO-SYNCED from k0/telemetry/generated/
+│   ├── manifests/                        # (NEW) Policy manifest JSON files
+│   │   └── allow_all.json               # Default development manifest
+│   ├── rules/                           # Prometheus recording rules (synced from k0/telemetry/generated/rules/)
+│   │   └── slo_alerts.yaml
+│   └── dashboards/                      # Grafana dashboards (synced from k0/telemetry/generated/dashboards/)
+│       ├── kernel_overview.json
+│       ├── command_latency.json
+│       ├── query_latency.json
+│       ├── sse_health.json
+│       └── replay_throughput.json
+│
 └── logs/                                # (Auto-created) Service logs
 ```
+
+### Telemetry Artifact Sync Strategy
+
+**Single Source of Truth**: All telemetry rendering happens in `k0/telemetry/`:
+1. `k0/telemetry/slo_definitions.yaml` — SLO definitions (source of truth)
+2. `k0/telemetry/render.py` — Generates dashboards + rules to `k0/telemetry/generated/`
+3. `k0/deploy/k0.ps1` **→ `Sync-Telemetry-Artifacts` function** — Auto-syncs artifacts on `up`: `k0/telemetry/generated/* → k0/deploy/generated/`
+
+**Workflow**:
+```
+┌─────────────────────────────────────────────────────┐
+│ Edit SLO definitions                                │
+│ k0/telemetry/slo_definitions.yaml                   │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│ Render dashboards & alert rules                     │
+│ python -m k0.telemetry.render --verbose            │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼ (outputs to)
+┌─────────────────────────────────────────────────────┐
+│ k0/telemetry/generated/                            │
+│ ├── dashboards/*.json                              │
+│ └── rules/slo_alerts.yaml                          │
+└──────────────────┬──────────────────────────────────┘
+                   │
+                   ▼ (auto-sync on deploy start)
+┌─────────────────────────────────────────────────────┐
+│ k0/deploy/k0.ps1 up                                │
+│ → Sync-Telemetry-Artifacts                         │
+│ → k0/deploy/generated/                             │
+│ ├── dashboards/*.json (for Grafana)               │
+│ ├── rules/*.yaml (for Prometheus)                 │
+│ └── checksums_*.json (for validation)             │
+└─────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────┐
+│ Docker Compose mounts                              │
+│ - ./generated/dashboards → /mnt/grafana/dashboards │
+│ - ./generated/rules → /etc/prometheus/rules        │
+└─────────────────────────────────────────────────────┘
+```
+
+**Key Points**:
+- ✅ `k0/telemetry/generated/` is the single source of truth
+- ✅ `k0/deploy/generated/` is auto-synced on **every** `k0.ps1 up` command (via `Sync-Telemetry-Artifacts`)
+- ✅ Changes only flow through: SLO definitions → render → sync → deploy
+- ✅ `k0/deploy/telemetry/` contains static configs (prometheus.yml, alertmanager.yml, grafana provisioning)
+- ✅ Checksums automatically copied for drift detection in CI
+
+### Implementation Details: Sync Function
+
+The `Sync-Telemetry-Artifacts` function in `k0.ps1` handles:
+1. **Source validation**: Checks `k0/telemetry/generated/` exists
+2. **Directory creation**: Creates `k0/deploy/generated/dashboards` and `rules` if needed
+3. **Dashboard sync**: Copies all `*.json` files from source to deploy (preserves modification times)
+4. **Rule sync**: Copies all `*.yaml` files from source to deploy (Prometheus reads these)
+5. **Checksum sync**: Copies validation checksums for CI drift detection
+6. **Logging**: Reports what was synced with green success messages
+
+**Example output** (when running `k0.ps1 up`):
+```
+[k0] Syncing telemetry artifacts from source to deployment
+[k0] Syncing dashboards: D:\familyos\k0\telemetry\generated/dashboards -> D:\familyos\k0\deploy\generated\dashboards
+[k0] Dashboards synced
+[k0] Syncing alert rules: D:\familyos\k0\telemetry\generated/rules -> D:\familyos\k0\deploy\generated\rules
+[k0] Alert rules synced
+```
+
+---
 
 ### Key Mount Points in Docker Compose
 
@@ -218,6 +540,9 @@ Example allow_all development manifest:
 # Up with verification (waits for health checks)
 .\k0.ps1 up -Verify -WaitSeconds 15
 
+# Up with hot reload watcher (for development iteration)
+.\k0.ps1 up -HotReload -Verify -WaitSeconds 15
+
 # Up with Docker image rebuild
 .\k0.ps1 up -Rebuild -Verify
 
@@ -226,6 +551,21 @@ Example allow_all development manifest:
 
 # Up with all validations
 .\k0.ps1 up -Rebuild -Migrate -Verify -WaitSeconds 20
+```
+
+### Hot Reload Development (Watcher Process)
+
+Start the hot reload watcher separately (useful if services already running):
+
+```powershell
+# Start watcher on already-running services
+.\k0.ps1 watch
+
+# Watcher will:
+# - Monitor k0/ directory for changes
+# - Send SIGHUP on config file changes (graceful reload)
+# - Orchestrate container restart on code changes
+# - Display real-time status in terminal
 ```
 
 ### Stop Services

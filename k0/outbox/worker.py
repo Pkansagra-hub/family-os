@@ -68,6 +68,7 @@ class OutboxWorker:
         metrics_emitter: MetricsEmitter | None = None,
         clock: Callable[[], datetime] | None = None,
         batch_size: int = 128,
+        max_retry_attempts: int = 10,
     ) -> None:
         if batch_size <= 0:
             msg = "batch_size must be greater than zero"
@@ -81,13 +82,16 @@ class OutboxWorker:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._batch_size = batch_size
         self._drivers: Dict[str, OutboxDriver] = {}
+        self._max_retry_attempts = max_retry_attempts
 
     def process_driver(self, alias: str, *, limit: Optional[int] = None) -> None:
         """Drain pending outbox entries for the given driver alias."""
 
         driver = self._get_driver(alias)
         batch_limit = limit or self._batch_size
-        entries = self._outbox_store.dequeue_batch(alias, limit=batch_limit)
+
+        # Use new backoff-aware dequeue method
+        entries = self._outbox_store.dequeue_ready_batch(alias, limit=batch_limit)
         if not entries:
             return
 
@@ -100,9 +104,7 @@ class OutboxWorker:
                 self._handle_failure(alias, entry, error)
             else:
                 self._outbox_store.mark_applied(entry.id)
-                self._emit_metric(
-                    "k0_outbox_apply_total", 1.0, outcome="success", driver=alias
-                )
+                self._emit_metric("outbox_apply_total", 1.0, outcome="success", driver=alias)
 
     def _get_driver(self, alias: str) -> OutboxDriver:
         driver = self._drivers.get(alias)
@@ -124,10 +126,25 @@ class OutboxWorker:
                 retries=decision.retries,
                 requeue_seq=decision.requeue_seq,
                 last_error=message,
+                next_attempt_ts=decision.next_attempt_ts,
+                backoff_exp=decision.backoff_exp,
+                status=decision.status,
             )
-            self._emit_metric(
-                "k0_outbox_apply_total", 1.0, outcome="retry", driver=alias
-            )
+            # Gap 46: Track exponential backoff metrics
+            if self._metrics_emitter is not None:
+                self._metrics_emitter(
+                    "outbox_retry_backoff_exponent",
+                    float(decision.backoff_exp),
+                    driver=alias,
+                )
+                # Calculate actual backoff sleep time (2^backoff_exp seconds)
+                backoff_sleep_seconds = 2**decision.backoff_exp
+                self._metrics_emitter(
+                    "outbox_backoff_sleep_seconds",
+                    float(backoff_sleep_seconds),
+                    driver=alias,
+                )
+            self._emit_metric("outbox_apply_total", 1.0, outcome="retry", driver=alias)
             return
 
         timestamp = self._clock().isoformat()
@@ -136,6 +153,19 @@ class OutboxWorker:
             reason = f"{reason}:{message}"
         if len(reason) > 512:
             reason = reason[:512]
+
+        # Gap 38: Check if max retries exceeded, set ABANDONED state
+        dlq_state = "PENDING"
+        if decision.retries >= self._max_retry_attempts:
+            dlq_state = "ABANDONED"
+            # Gap 38: Emit ABANDONED metric
+            if self._metrics_emitter is not None:
+                self._metrics_emitter(
+                    "dlq_entries_abandoned_total",
+                    1.0,
+                    driver=alias,
+                )
+
         self._dead_letter_queue.record(
             DeadLetter(
                 id=None,
@@ -151,14 +181,24 @@ class OutboxWorker:
                 requeue_seq=entry.requeue_seq,
                 first_failure_ts=timestamp,
                 last_failure_ts=timestamp,
-                state="PENDING",
+                state=dlq_state,
             )
         )
-        if entry.id is not None:
-            self._outbox_store.mark_applied(entry.id)
-        self._emit_metric(
-            "k0_outbox_apply_total", 1.0, outcome="quarantine", driver=alias
+        # Gap 37: Do NOT mark_applied here - entry must remain in outbox
+        # until DLQ requeue succeeds. Premature deletion prevents recovery
+        # if DLQ replay fails.
+        # Old code (BUG): self._outbox_store.mark_applied(entry.id)
+        # However, we DO need to update the status to DEAD to prevent re-processing
+        self._outbox_store.record_failure(
+            entry,
+            retries=decision.retries,
+            requeue_seq=entry.requeue_seq,
+            last_error=message,
+            next_attempt_ts=None,
+            backoff_exp=0,
+            status="DEAD",
         )
+        self._emit_metric("outbox_apply_total", 1.0, outcome="quarantine", driver=alias)
 
     def _emit_metric(self, metric_name: str, value: float, **labels: str) -> None:
         if self._metrics_emitter is None:

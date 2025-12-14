@@ -1,0 +1,29 @@
+{
+  "actor_id": "person-automationbridge",
+  "tenant_id": "tenant-123",
+  "space_id": "shared:household",
+  "participants": [
+    {"person_id": "person-child", "relationship_hint": "dependent"},
+    {"person_id": "person-guardianA", "relationship_hint": "guardian"}
+  ],
+  "delegation": {
+    "delegated_from": "person-guardianA",
+    "capability": "automation.safe_mode",
+    "expires_at": "2025-11-14T05:20:00Z",
+    "automation_label": "night_watch"
+  },
+  "device_capabilities": {
+    "surface": "wall-panel",
+    "supports_safe_mode": "true"
+  },
+  "policy_stamp": {
+    "band": "BLACK",
+    "obligations": [
+      "require.guardian",
+      "require.safety_officer"
+    ],
+    "decision_id": "dec-black-001"
+  },
+  "trace_id": "trace-automation-black",
+  "request_id": "req-automation-black"
+}

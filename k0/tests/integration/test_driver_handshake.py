@@ -10,7 +10,7 @@ from ward import fixture, test  # type: ignore[attr-defined]
 
 from k0.outbox import DriverWorkerPool, compute_fingerprint
 from k0.storage.outbox import OutboxEntry
-from tests.integration.sse_fixtures import sse_env  # type: ignore[misc]
+from k0.tests.integration.sse_fixtures import sse_env  # type: ignore[misc]
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
@@ -114,3 +114,4 @@ def _(
     assert body["retries"] == 0
     assert body["requeue_seq"] == 0
     assert body["payload_base64"] == base64.b64encode(b"payload").decode("ascii")
+

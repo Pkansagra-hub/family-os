@@ -1,0 +1,129 @@
+{
+  "specialists": [
+    {
+      "id": "nutritionist",
+      "name": "Nutrition Expert",
+      "domain": "Diet, Food Sensitivities, Nutrition Plans",
+      "priority": "high"
+    },
+    {
+      "id": "nutritionist_1",
+      "name": "Nutrition Expert #1",
+      "domain": "Dietary Analysis, Meal Planning",
+      "priority": "high"
+    },
+    {
+      "id": "nutritionist_2",
+      "name": "Nutrition Expert #2",
+      "domain": "Food Allergies, Lactose Intolerance",
+      "priority": "high"
+    },
+    {
+      "id": "sleep_coach",
+      "name": "Sleep Specialist",
+      "domain": "Sleep Quality, Rest Patterns, Sleep Hygiene",
+      "priority": "high"
+    },
+    {
+      "id": "sleep_coach_1",
+      "name": "Sleep Expert #1",
+      "domain": "Insomnia, Sleep Disorders",
+      "priority": "high"
+    },
+    {
+      "id": "financial_advisor",
+      "name": "Financial Expert",
+      "domain": "Budget Planning, Investments, Financial Goals",
+      "priority": "high"
+    },
+    {
+      "id": "financial_advisor_1",
+      "name": "Financial Advisor #1",
+      "domain": "Savings, Debt Management, Investment Strategy",
+      "priority": "high"
+    },
+    {
+      "id": "fitness_trainer",
+      "name": "Fitness Specialist",
+      "domain": "Exercise, Workout Plans, Physical Training",
+      "priority": "medium"
+    },
+    {
+      "id": "fitness_trainer_1",
+      "name": "Fitness Coach #1",
+      "domain": "Strength Training, Cardio, Home Workouts",
+      "priority": "medium"
+    },
+    {
+      "id": "fitness_trainer_2",
+      "name": "Fitness Coach #2",
+      "domain": "Weight Loss, Muscle Gain, Athletic Training",
+      "priority": "medium"
+    },
+    {
+      "id": "therapist",
+      "name": "Mental Health Professional",
+      "domain": "Mental Health, Stress Management, Wellness",
+      "priority": "high"
+    },
+    {
+      "id": "therapist_1",
+      "name": "Therapist #1",
+      "domain": "Anxiety, Depression, Emotional Support",
+      "priority": "high"
+    },
+    {
+      "id": "therapist_2",
+      "name": "Therapist #2",
+      "domain": "Cognitive Behavioral Therapy, Counseling",
+      "priority": "high"
+    },
+    {
+      "id": "career_coach",
+      "name": "Career Strategist",
+      "domain": "Career Planning, Job Search, Professional Development",
+      "priority": "medium"
+    },
+    {
+      "id": "stress_management_coach",
+      "name": "Stress Management Specialist",
+      "domain": "Stress Relief, Anxiety Reduction, Relaxation",
+      "priority": "high"
+    },
+    {
+      "id": "stress_management_coach_1",
+      "name": "Stress Coach #1",
+      "domain": "Mindfulness, Meditation, Breathing Techniques",
+      "priority": "high"
+    },
+    {
+      "id": "yoga_instructor",
+      "name": "Yoga Expert",
+      "domain": "Yoga, Flexibility, Mind-Body Connection",
+      "priority": "medium"
+    },
+    {
+      "id": "meditation_coach",
+      "name": "Meditation Guide",
+      "domain": "Meditation, Mindfulness, Inner Peace",
+      "priority": "medium"
+    },
+    {
+      "id": "dermatologist",
+      "name": "Skin Health Specialist",
+      "domain": "Skin Care, Acne, Dermatology",
+      "priority": "medium"
+    },
+    {
+      "id": "cardiologist",
+      "name": "Heart Health Specialist",
+      "domain": "Cardiovascular Health, Heart Disease Prevention",
+      "priority": "high"
+    }
+  ],
+  "metadata": {
+    "total_specialists": 20,
+    "last_updated": "2025-11-09",
+    "note": "Expanded specialist list for testing two-stage search. Can scale to 300+ specialists."
+  }
+}

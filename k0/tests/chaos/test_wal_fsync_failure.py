@@ -13,7 +13,7 @@ from k0.chaos.toggles import should_fail_fsync
 from k0.kernel.config import ChaosSettings
 from k0.obs.metrics import MetricsExporter
 from k0.storage.wal import WalEntry, WriteAheadLog
-from tests.chaos.fixtures import (
+from k0.tests.chaos.fixtures import (
     chaos_disabled_config,
     chaos_enabled_config,
     chaos_test_db,
@@ -237,3 +237,4 @@ def _(
         assert successes > 0, "Expected at least some successful operations"
 
     runner()
+

@@ -1,0 +1,418 @@
+# Golden Dataset Schema
+# Purpose: Define ground truth structure for module accuracy benchmarking
+# Issue: 1.2.1 - Golden Dataset for Module Accuracy
+# Version: 1.0.0
+
+# =============================================================================
+# Schema Overview
+# =============================================================================
+# This schema defines the structure for annotated family memories used to
+# benchmark the accuracy of K0 processing modules:
+#   - M02: Semantic Project (entity extraction)
+#   - M04: Affect Analyze (emotion detection)
+#   - M07: Trip Enrich (activity classification)
+#   - M10: Social Graph (relationship extraction)
+#
+# Each memory has human-annotated ground truth that modules are scored against.
+
+# =============================================================================
+# Entity Types (for NER)
+# =============================================================================
+entity_types:
+  # Core Named Entity Types (spaCy compatible)
+  - PERSON       # Named individuals: "Sarah", "Dr. Smith", "Grandma"
+  - ORG          # Organizations: "Olive Garden", "Disney", "School"
+  - GPE          # Geopolitical entities: "Paris", "Texas", "Home"
+  - LOC          # Non-GPE locations: "the beach", "backyard", "park"
+  - DATE         # Dates: "yesterday", "March 5th", "2024"
+  - TIME         # Times: "3pm", "evening", "morning"
+  - MONEY        # Monetary values: "$50", "twenty dollars"
+  - EVENT        # Named events: "Christmas", "Emma's birthday"
+  - PRODUCT      # Products: "iPhone", "Lego set", "cake"
+  - FOOD         # Food items: "pizza", "ice cream", "dinner"
+  - ACTIVITY     # Activities: "soccer game", "movie night"
+
+  # Family-Specific Extensions
+  - PET          # Family pets: "Max", "Fluffy"
+  - NICKNAME     # Informal names: "mom", "kiddo", "hubby"
+
+# =============================================================================
+# Family Role Types (for relationship extraction)
+# =============================================================================
+family_roles:
+  # Immediate family
+  - spouse        # Married partner
+  - partner       # Unmarried partner
+  - child         # Son or daughter
+  - parent        # Mother or father
+  - self          # The author/narrator
+
+  # Extended family
+  - sibling       # Brother or sister
+  - grandparent   # Grandmother or grandfather
+  - grandchild    # Grandson or granddaughter
+  - aunt_uncle    # Aunt or uncle
+  - cousin        # Cousin
+  - in_law        # In-law relatives
+
+  # Non-family
+  - friend        # Friend of family
+  - colleague     # Work colleague
+  - neighbor      # Neighbor
+  - acquaintance  # Casual acquaintance
+  - professional  # Doctor, teacher, etc.
+  - unknown       # Cannot determine relationship
+
+# =============================================================================
+# Emotion Labels (for affect analysis)
+# =============================================================================
+emotion_labels:
+  # Primary emotions (Ekman's basic emotions + extensions)
+  primary:
+    - joy           # Happiness, delight, pleasure
+    - sadness       # Grief, sorrow, melancholy
+    - anger         # Frustration, irritation, rage
+    - fear          # Anxiety, worry, terror
+    - surprise      # Astonishment, shock
+    - disgust       # Revulsion, contempt
+    - trust         # Confidence, faith
+    - anticipation  # Expectation, interest
+    - neutral       # No strong emotion
+
+  # Secondary/complex emotions
+  secondary:
+    - love          # Affection, adoration
+    - gratitude     # Thankfulness, appreciation
+    - pride         # Achievement, accomplishment
+    - nostalgia     # Fond remembrance
+    - excitement    # Enthusiasm, eagerness
+    - contentment   # Satisfaction, peace
+    - relief        # Release from worry
+    - hope          # Optimism, expectation
+    - guilt         # Remorse, regret
+    - embarrassment # Self-consciousness
+    - frustration   # Annoyance, irritation
+    - disappointment # Letdown, unmet expectations
+    - worry         # Concern, anxiety
+    - loneliness    # Isolation, missing others
+    - jealousy      # Envy, possessiveness
+    - empathy       # Understanding others' feelings
+
+# =============================================================================
+# Activity Types (for trip enrichment)
+# =============================================================================
+activity_types:
+  # Meals
+  meals:
+    type: meal
+    subtypes:
+      - breakfast
+      - brunch
+      - lunch
+      - dinner
+      - snack
+      - picnic
+      - barbecue
+
+  # Celebrations
+  celebrations:
+    type: celebration
+    subtypes:
+      - birthday
+      - anniversary
+      - holiday
+      - graduation
+      - wedding
+      - baby_shower
+      - retirement
+      - promotion
+
+  # Travel
+  travel:
+    type: travel
+    subtypes:
+      - vacation
+      - road_trip
+      - flight
+      - day_trip
+      - camping
+      - beach_trip
+      - city_visit
+
+  # Recreation
+  recreation:
+    type: recreation
+    subtypes:
+      - sports
+      - exercise
+      - hiking
+      - swimming
+      - gaming
+      - movie
+      - concert
+      - museum
+      - park_visit
+      - shopping
+
+  # Family Activities
+  family:
+    type: family
+    subtypes:
+      - family_dinner
+      - game_night
+      - movie_night
+      - playdate
+      - school_event
+      - medical_visit
+      - errand
+
+  # Social
+  social:
+    type: social
+    subtypes:
+      - party
+      - gathering
+      - visit
+      - reunion
+      - date_night
+      - meetup
+
+  # Work/School
+  work_school:
+    type: work_school
+    subtypes:
+      - work_event
+      - school_event
+      - meeting
+      - conference
+      - presentation
+
+  # Religious/Spiritual
+  religious:
+    type: religious
+    subtypes:
+      - service
+      - ceremony
+      - holiday_observance
+
+  # Daily Life
+  daily_life:
+    type: daily
+    subtypes:
+      - routine
+      - chore
+      - rest
+      - self_care
+
+# =============================================================================
+# Social Context Types (for social graph)
+# =============================================================================
+social_contexts:
+  # Family configurations
+  - nuclear_family    # Parents + children only
+  - extended_family   # Includes grandparents, aunts, etc.
+  - immediate_family  # Spouse/partner + children
+  - solo              # Just the author
+  - couple            # Just spouse/partner
+
+  # Social configurations
+  - friends           # With friends (no family)
+  - colleagues        # Work-related
+  - mixed             # Family + non-family
+  - community         # Neighbors, community members
+  - professional      # Doctor, teacher, service provider
+
+# =============================================================================
+# Memory Schema
+# =============================================================================
+memory_schema:
+  # Unique identifier
+  id:
+    type: string
+    pattern: "^mem_[0-9]{3,6}$"
+    required: true
+    description: "Unique memory identifier (e.g., mem_001)"
+
+  # Memory text
+  text:
+    type: string
+    required: true
+    min_length: 10
+    max_length: 2000
+    description: "The family memory text to analyze"
+
+  # Optional metadata
+  metadata:
+    author:
+      type: string
+      description: "Who wrote this memory (for perspective)"
+    date_written:
+      type: date
+      description: "When the memory was recorded"
+    tags:
+      type: array[string]
+      description: "Categorization tags (e.g., ['meal', 'birthday', 'restaurant'])"
+    difficulty:
+      type: string
+      enum: [easy, medium, hard]
+      description: "Expected difficulty for ML models"
+
+  # Ground truth annotations
+  ground_truth:
+    entities:
+      type: array
+      items:
+        text:
+          type: string
+          required: true
+          description: "The entity text as it appears in the memory"
+        type:
+          type: string
+          required: true
+          enum: ${entity_types}
+          description: "Entity type from entity_types list"
+        role:
+          type: string
+          enum: ${family_roles}
+          description: "Family role (optional, for PERSON entities)"
+        normalized:
+          type: string
+          description: "Normalized form (e.g., 'mom' -> 'Mother')"
+        span_start:
+          type: integer
+          description: "Character offset start (optional)"
+        span_end:
+          type: integer
+          description: "Character offset end (optional)"
+
+    emotions:
+      primary:
+        type: string
+        required: true
+        enum: ${emotion_labels.primary}
+        description: "Dominant emotion in the memory"
+      secondary:
+        type: array[string]
+        enum: ${emotion_labels.secondary}
+        description: "Additional emotions present"
+      valence:
+        type: float
+        min: -1.0
+        max: 1.0
+        required: true
+        description: "Positive (1) to negative (-1) sentiment"
+      arousal:
+        type: float
+        min: 0.0
+        max: 1.0
+        required: true
+        description: "Emotional intensity (0=calm, 1=excited)"
+      confidence:
+        type: float
+        min: 0.0
+        max: 1.0
+        description: "Annotator confidence in emotion label"
+
+    activity:
+      type:
+        type: string
+        required: true
+        description: "Activity category (meal, celebration, travel, etc.)"
+      subtype:
+        type: string
+        description: "Specific activity subtype (dinner, birthday, etc.)"
+      is_celebration:
+        type: boolean
+        default: false
+        description: "Whether this involves a celebration"
+      is_recurring:
+        type: boolean
+        default: false
+        description: "Whether this is a recurring activity"
+      location_type:
+        type: string
+        enum: [home, restaurant, outdoor, venue, travel, work, school, other]
+        description: "Type of location where activity occurred"
+
+    social:
+      context:
+        type: string
+        required: true
+        enum: ${social_contexts}
+        description: "Social context of the memory"
+      participants:
+        type: array[string]
+        enum: ${family_roles}
+        description: "Roles of participants (e.g., ['spouse', 'child', 'child'])"
+      participant_count:
+        type: integer
+        min: 1
+        description: "Total number of participants including narrator"
+      is_group_activity:
+        type: boolean
+        description: "Whether this involved 3+ people"
+
+# =============================================================================
+# Annotation Guidelines
+# =============================================================================
+annotation_guidelines:
+  entities:
+    - "Mark all named entities and significant noun phrases"
+    - "Use PERSON for any human, including nicknames like 'mom' or 'kiddo'"
+    - "Use NICKNAME type for informal family names"
+    - "Include role when relationship to narrator is clear"
+    - "Normalize informal names in the 'normalized' field"
+
+  emotions:
+    - "Primary emotion should be the dominant feeling expressed"
+    - "Secondary emotions can include up to 3 additional emotions"
+    - "Valence should reflect overall positive/negative sentiment"
+    - "Arousal reflects intensity, not positivity"
+    - "When uncertain, mark confidence < 0.7"
+
+  activity:
+    - "Choose the most specific subtype that applies"
+    - "is_celebration=true for birthdays, holidays, milestones"
+    - "is_recurring=true for routine activities (weekly dinners, etc.)"
+    - "location_type should reflect where activity primarily occurred"
+
+  social:
+    - "Context should describe the social configuration"
+    - "participants should list roles of all mentioned people"
+    - "Include narrator in participant_count"
+    - "is_group_activity=true if 3+ people involved"
+
+# =============================================================================
+# Dataset Statistics Targets
+# =============================================================================
+dataset_targets:
+  total_memories: 1000
+
+  difficulty_distribution:
+    easy: 300      # Clear entities, emotions, activities
+    medium: 500    # Some ambiguity, informal language
+    hard: 200      # Complex emotions, implicit info, coreference
+
+  activity_distribution:
+    meals: 200
+    celebrations: 150
+    travel: 100
+    recreation: 150
+    family: 200
+    social: 100
+    work_school: 50
+    religious: 25
+    daily_life: 25
+
+  emotion_distribution:
+    positive: 600  # joy, love, gratitude, etc.
+    negative: 200  # sadness, anger, fear, etc.
+    neutral: 100
+    mixed: 100     # Multiple conflicting emotions
+
+  entity_coverage:
+    with_person: 900
+    with_location: 700
+    with_organization: 400
+    with_date_time: 500
+    with_nickname: 300

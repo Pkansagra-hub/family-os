@@ -1,0 +1,165 @@
+module_id: embedding.backfill
+version: v1
+
+input_event_types:
+  - cognitive.embedding.backfill.requested.v1
+
+output_event_types:
+  - cognitive.embedding.backfilled.v1
+
+latency_budget_ms: 100
+
+side_effects:
+  - write:st_vec
+  - read:st_hipp_events
+
+idempotent: true
+
+failure_modes:
+  - code: TEXT_NOT_FOUND
+    policy: skip
+    max_retries: 0
+  - code: ULTRABERT_UNAVAILABLE
+    policy: retry
+    max_retries: 3
+  - code: EMBEDDING_GENERATION_FAILED
+    policy: mark_failed
+    max_retries: 0
+  - code: VECTOR_WRITE_FAILED
+    policy: retry
+    max_retries: 3
+
+description: |
+  M25: Embedding Backfill Module
+
+  Backfills embeddings for legacy events with embedding_status=PENDING
+  (pre-ADR-K003 events or inline generation failures).
+
+  P08 v2 Use Case: Legacy Backfill
+  - Triggered by: cognitive.embedding.backfill.requested.v1 event
+  - Queries st_hipp_events WHERE embedding_status='PENDING'
+  - Generates 768-dim embeddings using UltraBERT
+  - Writes to st_vec with status=READY
+  - Updates st_hipp_events.embedding_status = READY
+  - Emits cognitive.vector.stored.v1 (triggers M24 FAISS indexing)
+
+  Performance Target: ~100ms per event (includes UltraBERT inference)
+  Batch Performance: ~10 events/second (limited by GPU throughput)
+
+  Input (from cognitive.embedding.backfill.requested.v1 event):
+  - event_id: str (FK to st_hipp_events)
+  - tenant_id: str
+  - space_id: str
+  - priority: str (HIGH | NORMAL | LOW)
+
+  Operations:
+  1. Query st_hipp_events: SELECT text, embedding_id FROM st_hipp_events WHERE event_id=? AND embedding_status='PENDING'
+  2. Generate embedding: ultrabert.get_embedding(text) → 768-dim vector
+  3. Write st_vec: INSERT (embedding_id, event_id, tenant_id, space_id, vector, status='READY')
+  4. Update st_hipp_events: UPDATE embedding_status='READY' WHERE event_id=?
+  5. Emit event: cognitive.vector.stored.v1 (triggers M24 FAISS indexing)
+
+  Output:
+  - backfilled: bool (true if backfill succeeded)
+  - embedding_id: str
+  - event_id: str
+  - backfilled_at: int (Unix timestamp)
+
+  Batch Backfill Mode:
+  - Query: SELECT event_id, text, embedding_id FROM st_hipp_events WHERE embedding_status='PENDING' LIMIT 100
+  - Generate embeddings in batch (10x faster than sequential)
+  - Bulk insert to st_vec (batch transaction)
+  - Bulk update st_hipp_events.embedding_status
+
+  Failure Handling:
+  - TEXT_NOT_FOUND: Event deleted or no text (skip)
+  - ULTRABERT_UNAVAILABLE: Service down (retry 3x with backoff)
+  - EMBEDDING_GENERATION_FAILED: UltraBERT error (mark FAILED)
+  - VECTOR_WRITE_FAILED: Database error (retry 3x)
+
+  Use Cases:
+  - Migration from P08 v1 async pattern → ADR-K003 inline
+  - Recover from P02 inline failures (UltraBERT unavailable)
+  - Historical data enrichment (events ingested before ADR-K003)
+
+  Related:
+  - ADR-K003: Inline embedding deprecates async queue pattern
+  - M23 (builders.embedding_write): Primary inline path
+  - P08 M24 (faiss_indexer): Indexes backfilled embeddings
+
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 100
+      description: Number of events to backfill per batch
+    model_id:
+      type: string
+      default: "ultrabert_v2.1.0"
+      description: Model version for embedding generation
+    max_age_days:
+      type: integer
+      default: 90
+      description: Only backfill events within this age window
+    emit_stored_event:
+      type: boolean
+      default: true
+      description: Emit cognitive.vector.stored.v1 after backfill (triggers FAISS)
+
+input_schema:
+  type: object
+  required:
+    - event_id
+    - tenant_id
+    - space_id
+  properties:
+    event_id:
+      type: string
+      description: FK to st_hipp_events.event_id
+    tenant_id:
+      type: string
+    space_id:
+      type: string
+    priority:
+      type: string
+      enum: ["HIGH", "NORMAL", "LOW"]
+      default: "NORMAL"
+      description: Backfill priority (affects processing order)
+
+output_schema:
+  type: object
+  required:
+    - backfilled
+    - embedding_id
+    - event_id
+  properties:
+    backfilled:
+      type: boolean
+      description: True if backfill succeeded
+    embedding_id:
+      type: string
+      format: uuid
+    event_id:
+      type: string
+    vector_dim:
+      type: integer
+      enum: [768]
+    backfilled_at:
+      type: integer
+      description: Unix timestamp when backfilled
+
+dependencies:
+  syscalls:
+    - st_vec.write
+    - st_hipp_events.read
+    - st_hipp_events.update
+    - events.emit
+  runtime:
+    - k0.runtime.ultrabert_adapter
+
+performance:
+  p50_latency_ms: 50
+  p95_latency_ms: 100
+  p99_latency_ms: 200
+  batch_throughput_events_per_sec: 10

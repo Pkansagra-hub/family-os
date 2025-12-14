@@ -25,7 +25,7 @@ class MetricsRecorder(Protocol):
 
 @dataclass(slots=True)
 class ReceiptDocument:
-    """Materialised receipt returned to clients after command commits."""
+    """V1 receipt with envelope integrity and obligation proof."""
 
     receipt_id: str
     idem_key: str
@@ -34,13 +34,25 @@ class ReceiptDocument:
     tenant_id: str
     space_id: str
     device_id: str
-    payload_sha256: str
+
+    # V1 NEW FIELD: Full envelope hash for integrity verification
+    envelope_sha256: str  # SHA-256 of canonical envelope (not just body)
+
     mls_group_id: str
     key_version: str
     device_sig: str
     obligations: tuple[str, ...]
+
+    # V1 NEW FIELD: Proof of applied obligations (GDPR/CCPA compliance)
+    obligations_applied: tuple[
+        str, ...
+    ] = ()  # Specific actions taken (e.g., "kernel.mask.location.AMBER")
+
     manifest_fingerprint: str | None = None
     obligation_details: tuple[dict[str, str], ...] = ()
+
+    # Legacy field (deprecated in V1)
+    payload_sha256: str | None = None  # DEPRECATED: Use envelope_sha256 instead
 
 
 class ReceiptSigner:
@@ -81,14 +93,22 @@ class ReceiptIssuer:
         tenant_id: str,
         space_id: str,
         device_id: str,
-        payload_sha256: str,
+        envelope_sha256: str,  # V1: Full envelope hash (REQUIRED)
         mls_group_id: str,
         key_version: str,
         obligations: Sequence[Obligation | str] = (),
+        obligations_applied: Sequence[str] = (),  # V1: Specific actions taken
         manifest_fingerprint: str | None = None,
+        payload_sha256: str | None = None,  # V1: Optional (legacy, deprecated)
         connection: sqlite3.Connection | None = None,
     ) -> ReceiptDocument:
-        """Create, sign, persist, and emit observability for a receipt."""
+        """Create, sign, persist, and emit observability for a receipt.
+
+        V1 CHANGES:
+        - envelope_sha256 (REQUIRED): SHA-256 hash of full canonical envelope
+        - obligations_applied (optional): List of specific obligation actions applied
+        - payload_sha256 (optional): DEPRECATED - Use envelope_sha256 for integrity verification
+        """
 
         names, detail_payloads = self._normalise_obligations(obligations)
         signature_payload: dict[str, object] = {
@@ -99,11 +119,15 @@ class ReceiptIssuer:
             "tenant_id": tenant_id,
             "space_id": space_id,
             "device_id": device_id,
-            "payload_sha256": payload_sha256,
+            "envelope_sha256": envelope_sha256,  # V1: Full envelope hash
             "mls_group_id": mls_group_id,
             "key_version": key_version,
             "obligations": list(names),
         }
+        # V1: Include specific obligation actions if provided
+        if obligations_applied:
+            signature_payload["obligations_applied"] = list(obligations_applied)
+
         if manifest_fingerprint is not None:
             signature_payload["policy_manifest_fingerprint"] = manifest_fingerprint
         device_sig = self._signer.sign(signature_payload)
@@ -149,10 +173,11 @@ class ReceiptIssuer:
                 "tenant_id": tenant_id,
                 "space_id": space_id,
                 "device_id": device_id,
-                "payload_sha256": payload_sha256,
+                "envelope_sha256": envelope_sha256,  # V1: Full envelope hash
                 "mls_group_id": mls_group_id,
                 "key_version": key_version,
                 "obligations": list(names),
+                "obligations_applied": list(obligations_applied),  # V1: Specific actions
                 "obligation_details": detail_payloads,
                 "policy_manifest_fingerprint": manifest_fingerprint,
             }
@@ -166,13 +191,15 @@ class ReceiptIssuer:
             tenant_id=tenant_id,
             space_id=space_id,
             device_id=device_id,
-            payload_sha256=payload_sha256,
+            envelope_sha256=envelope_sha256,  # V1: Full envelope hash
             mls_group_id=mls_group_id,
             key_version=key_version,
             device_sig=device_sig,
             obligations=names,
+            obligations_applied=tuple(obligations_applied),  # V1: Specific actions
             manifest_fingerprint=manifest_fingerprint,
             obligation_details=tuple(detail_payloads),
+            payload_sha256=payload_sha256,  # V1: Optional legacy field
         )
 
     def _normalise_obligations(

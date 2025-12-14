@@ -35,7 +35,7 @@ from k0.policy import evaluate_envelope
 from k0.security import canonical_envelope, hash_payload
 from k0.storage.provisioning import DeviceKey, ProvisionedDevice, ProvisioningLedger
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 EXAMPLES_DIR = (
     Path(__file__).resolve().parents[2] / "contracts" / "jsonschema" / "examples"
@@ -989,3 +989,4 @@ def _() -> None:
 
     assert decision.admit is True
     assert len(decision.obligations) > 0  # Should have audit obligation
+

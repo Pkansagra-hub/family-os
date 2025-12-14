@@ -11,7 +11,7 @@ from ward import test
 from k0.chaos.toggles import get_network_delay_ms
 from k0.kernel.config import ChaosSettings
 from k0.obs.metrics import MetricsExporter
-from tests.chaos.fixtures import (
+from k0.tests.chaos.fixtures import (
     chaos_enabled_config,
     high_failure_config,
     metrics_exporter,
@@ -89,3 +89,4 @@ def _(exporter: MetricsExporter = metrics_exporter) -> None:
         ), f"latency_ms={latency_ms}, expected {expected_seconds}s±30%, got {elapsed}s"
 
     runner()
+

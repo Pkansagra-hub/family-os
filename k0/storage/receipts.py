@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -41,9 +42,14 @@ def _resolve_connection(
 class ReceiptStore:
     """Operations for persisting and retrieving receipts."""
 
-    def save(
+    async def save_async(
         self, receipt: Receipt, *, connection: sqlite3.Connection | None = None
     ) -> None:
+        """Async wrapper for save."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: self.save(receipt, connection=connection))
+
+    def save(self, receipt: Receipt, *, connection: sqlite3.Connection | None = None) -> None:
         with _resolve_connection(connection) as conn:
             conn.execute(
                 (

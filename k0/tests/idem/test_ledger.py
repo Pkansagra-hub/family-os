@@ -5,7 +5,7 @@ from typing import Any
 from ward import test  # type: ignore[attr-defined]
 
 from k0.idem.ledger import IdempotencyLedger, LedgerEntry
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 @test("idempotency ledger upserts and retrieves entries")
@@ -34,3 +34,4 @@ def _(sqlite_runtime: Any = sqlite_runtime) -> None:
 
     fetched_updated = ledger.lookup(entry.idem_key)
     assert fetched_updated == updated
+

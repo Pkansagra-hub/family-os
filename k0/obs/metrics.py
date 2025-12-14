@@ -40,8 +40,7 @@ class MetricsExporter:
         self.registry = registry or CollectorRegistry(auto_describe=True)
         self.namespace = namespace
         self._default_histogram_buckets = tuple(
-            default_histogram_buckets
-            or (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+            default_histogram_buckets or (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
         )
 
         self._counters: dict[tuple[str, tuple[str, ...]], Counter] = {}
@@ -51,9 +50,7 @@ class MetricsExporter:
         self._lock = threading.RLock()
         self._observability_emitter = observability_emitter
 
-    def attach_observability_emitter(
-        self, emitter: ObservabilityEmitter | None
-    ) -> None:
+    def attach_observability_emitter(self, emitter: ObservabilityEmitter | None) -> None:
         """Attach or replace the observability emitter used for metric updates."""
 
         self._observability_emitter = emitter
@@ -128,9 +125,7 @@ class MetricsExporter:
                 namespace=self.namespace,
                 registry=self.registry,
                 buckets=(
-                    tuple(buckets)
-                    if buckets is not None
-                    else self._default_histogram_buckets
+                    tuple(buckets) if buckets is not None else self._default_histogram_buckets
                 ),
             )
             self._histograms[key] = metric
@@ -145,7 +140,10 @@ class MetricsExporter:
             f"Auto-generated counter for {metric_name}",
             labelnames=labelnames,
         )
-        counter.labels(**labels).inc(value)
+        if labels:
+            counter.labels(**labels).inc(value)
+        else:
+            counter.inc(value)
         self._emit_observability(
             operation="counter",
             metric_name=metric_name,
@@ -197,7 +195,10 @@ class MetricsExporter:
             labelnames=tuple(sorted(labels.keys())),
             buckets=buckets,
         )
-        histogram.labels(**labels).observe(value)
+        if labels:
+            histogram.labels(**labels).observe(value)
+        else:
+            histogram.observe(value)
         self._emit_observability(
             operation="histogram",
             metric_name=metric_name,

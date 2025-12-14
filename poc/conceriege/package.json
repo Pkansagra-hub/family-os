@@ -1,0 +1,23 @@
+{
+  "name": "concierge-v2-webui",
+  "version": "1.0.0",
+  "description": "Concierge V2 Web UI - Professional Desktop Chat Experience",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"No tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "marked": "^11.1.0",
+    "prismjs": "^1.29.0",
+    "dexie": "^3.2.4"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "chat",
+    "concierge",
+    "websocket",
+    "markdown"
+  ],
+  "author": "FamilyOS Team",
+  "license": "MIT"
+}

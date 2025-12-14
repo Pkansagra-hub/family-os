@@ -27,7 +27,7 @@ from k0.gate.minimal_gate import (
 from k0.idem import LedgerEntry
 from k0.policy import evaluate_envelope
 from k0.qos import Scheduler, SchedulerCapacityError, SchedulerProfile
-from tests.security.fixtures import (
+from k0.tests.security.fixtures import (
     LedgerSuiteContext,
     SecuritySuiteContext,
     ledger_suite_context,
@@ -643,3 +643,4 @@ def _() -> None:
             assert scheduler.active_tokens(port) == 0
 
     runner()
+

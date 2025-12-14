@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from time import perf_counter
@@ -24,6 +25,7 @@ from k0.policy.redaction import (
     apply_redactions,
     directives_from_obligations,
 )
+from k0.policy.spatial_enrich import strip_internal_fields
 from k0.ports.errors import (
     KERNEL_COMPONENT_GATE,
     KERNEL_COMPONENT_POLICY,
@@ -49,6 +51,7 @@ from k0.uow import UnitOfWork
 from k0.uow.connection_pool import connection_scope
 
 router = APIRouter(prefix="/k0", tags=["command"])
+logger = logging.getLogger(__name__)
 
 DEFAULT_OUTBOX_DRIVER = "st_epi"
 DEFAULT_OUTBOX_OPERATION = "UPSERT"
@@ -59,7 +62,7 @@ T = TypeVar("T")
 
 
 class Envelope(BaseModel):
-    """Minimal representation of the command envelope schema."""
+    """Minimal representation of the command envelope schema (V1 with full envelope signature)."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -75,12 +78,39 @@ class Envelope(BaseModel):
     policy_version: str
     ts: str
     sig: str
+
+    # V1 NEW: Algorithm agility fields
+    sig_alg: str = Field(..., description="Signature algorithm (ECDSA_P256_SHA256, etc.)")
+    sig_kid: str = Field(..., description="Key ID (did:device:device-name#timestamp)")
+
+    # V1 NEW: Envelope integrity field
+    envelope_sha256: str = Field(..., description="SHA-256 hash of full canonical envelope")
+
+    # Optional fields
     idem_key: str | None = None
     payload_sha256: str | None = None
     payload_bytes: int | None = None
     policy: dict[str, Any] | None = None
     policy_ctx: dict[str, Any] | None = None
     pep: dict[str, Any] | None = None
+
+    # V1 NEW: Time tracking fields (added by MinimalGate)
+    ingested_at: str | None = None
+    clock_skew_ms: int | None = None
+
+    # V1.3 NEW: Policy stamp (attached by PolicyEvaluator)
+    policy_stamp: dict[str, Any] | None = Field(
+        default=None,
+        description="Policy decision stamp with band, obligations, visible_to, decision",
+    )
+
+    # V1.3 NEW: Location privacy fields (geohash for AMBER/RED)
+    location_geohash: str | None = Field(
+        default=None, description="Geohash of location (GREEN=full precision, AMBER=5km, RED=25km)"
+    )
+    location_precision_m: int | None = Field(
+        default=None, description="Precision in meters (GREEN=1, AMBER=5000, RED=25000)"
+    )
 
 
 class CommandResponse(BaseModel):
@@ -274,8 +304,26 @@ async def submit_command(
                     hint="Minimal Gate did not produce an idempotency key",
                 )
 
+            # ADR-K002: Early idempotency check for fast duplicate rejection
+            # This is an optimization to avoid expensive policy evaluation for known duplicates.
+            # The authoritative check happens inside UoW transaction (line 619+) to prevent TOCTOU race.
+            # Gap 41: Track TOCTOU metrics - record check timestamp and increment concurrent checks
+            early_check_start = perf_counter()
+            metrics_exporter = getattr(request.app.state, "metrics_exporter", None)
+            concurrent_gauge = None
+            if metrics_exporter is not None:
+                # Increment concurrent checks gauge (will be decremented after transaction)
+                concurrent_gauge = metrics_exporter.gauge(
+                    "idem_concurrent_checks_active",
+                    "Number of active concurrent idempotency checks",
+                )
+                concurrent_gauge.inc()
+
             duplicate = idem_ledger.lookup(idem_key, connection=gate_connection)
             if duplicate is not None:
+                # Decrement concurrent checks on early exit
+                if concurrent_gauge is not None:
+                    concurrent_gauge.dec()
                 _emit_duplicate_telemetry(request, envelope_dict, duplicate)
                 return JSONResponse(
                     status_code=status.HTTP_409_CONFLICT,
@@ -330,9 +378,25 @@ async def submit_command(
             )
         evaluation_duration_ms = (perf_counter() - eval_start) * 1000.0
 
-        # Check manifest fingerprint if provided in envelope
-        from k0.policy.pep_syscall import get_manifest_fingerprint
+        # V1: Create and attach policy_stamp to envelope for audit trail
+        from k0.policy.pep_syscall import create_policy_stamp, get_manifest_fingerprint
 
+        policy_stamp = create_policy_stamp(
+            decision,
+            band=str(envelope_dict.get("band", "GREEN")),
+            visible_to=None,  # Will be populated by Memory Steward based on space policy
+        )
+        envelope_dict["policy_stamp"] = policy_stamp
+
+        # Gap 42: Track policy stamp attachment in command path
+        if metrics_exporter is not None:
+            metrics_exporter.emit(
+                "policy_stamp_attached_total",
+                tenant=str(envelope_dict.get("tenant_id", "unknown")),
+                band=str(envelope_dict.get("band", "GREEN")),
+            )
+
+        # Check manifest fingerprint if provided in envelope
         envelope_fingerprint = envelope_dict.get("manifest_fingerprint")
         if envelope_fingerprint is not None:
             actual_fingerprint = get_manifest_fingerprint()
@@ -353,6 +417,7 @@ async def submit_command(
             lane="command",
         )
         if not decision.admit:
+            # V1: Include policy_stamp in denied response for audit
             record_admission_decision(
                 request,
                 decision=decision,
@@ -363,13 +428,19 @@ async def submit_command(
                 original_body=body_snapshot,
                 manifest_fingerprint=envelope_dict.get("manifest_fingerprint"),
             )
-            return _error_response(
-                request,
-                status.HTTP_403_FORBIDDEN,
-                "PEP_DENY",
-                component=KERNEL_COMPONENT_POLICY,
-                reason=decision.deny_reason or "POLICY_DENIED",
-                hint=(None if decision.deny_reason else "Policy enforcement denied the request"),
+            # Return error response with policy_stamp for audit trail
+            error_content = {
+                "error": {
+                    "code": "PEP_DENY",
+                    "component": KERNEL_COMPONENT_POLICY,
+                    "reason": decision.deny_reason or "POLICY_DENIED",
+                    "trace_id": str(envelope_dict.get("cognitive_trace_id", "")),
+                    "policy_stamp": policy_stamp,  # V1: Include policy context in denial
+                }
+            }
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=error_content,
             )
 
         apply_qos_obligations(qos, decision.obligations)
@@ -389,6 +460,24 @@ async def submit_command(
                     component=KERNEL_COMPONENT_POLICY,
                     reason=str(exc),
                 )
+
+            # V1.3: Apply location masking based on privacy band (GDPR/CCPA compliance)
+            from k0.policy.redaction import mask_location_for_band
+
+            try:
+                band = str(envelope_dict.get("band", "GREEN"))
+                # Convert sanitized_body to dict for location masking
+                body_dict = dict(sanitized_body) if isinstance(sanitized_body, Mapping) else {}
+                sanitized_body = mask_location_for_band(body_dict, band)
+            except RedactionError as exc:
+                return _error_response(
+                    request,
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "LOCATION_MASKING_ERROR",
+                    component=KERNEL_COMPONENT_POLICY,
+                    reason=str(exc),
+                )
+
         elif body_snapshot is None:
             sanitized_body = None
 
@@ -476,6 +565,20 @@ async def submit_command(
             else None
         )
 
+        # V1.3: Serialize policy_stamp for WAL persistence
+        import json
+
+        policy_stamp_json = (
+            json.dumps(envelope_dict.get("policy_stamp"))
+            if envelope_dict.get("policy_stamp")
+            else None
+        )
+
+        # Strip internal spatial fields before WAL write
+        # Internal fields (_internal_geohash_12, _internal_city, _internal_region)
+        # are ephemeral - used only for P03 consolidation, never persisted
+        envelope_dict = strip_internal_fields(envelope_dict)
+
         wal_entry = WalEntry(
             tenant_id=envelope_dict["tenant_id"],
             space_id=envelope_dict["space_id"],
@@ -489,7 +592,16 @@ async def submit_command(
             payload_sha256=payload_digest,
             idem_key=idem_key,
             redacted_body_json=redacted_body_json,
+            policy_stamp_json=policy_stamp_json,  # V1.3: Policy audit trail
         )
+
+        # Gap 42: Track policy stamp presence in WAL
+        if metrics_exporter is not None and policy_stamp_json is not None:
+            metrics_exporter.emit(
+                "wal_policy_stamp_present_total",
+                tenant=str(envelope_dict.get("tenant_id", "unknown")),
+                band=str(envelope_dict.get("band", "GREEN")),
+            )
 
         wal_pos: int | None = None
         receipt_doc: ReceiptDocument | None = None
@@ -530,8 +642,66 @@ async def submit_command(
             request, "obligation_store", ObligationStore
         )
 
-        with unit_of_work_factory() as uow:
-            wal_pos = uow.append_wal(wal_entry)
+        async with unit_of_work_factory() as uow:
+            # ADR-K002: Check idempotency INSIDE transaction to prevent TOCTOU race
+            # This ensures atomic CHECK+USE within single SQLite BEGIN IMMEDIATE...COMMIT
+            # Gap 41: Track check-commit window and detect races
+            duplicate = idem_ledger.lookup(idem_key, connection=uow.connection)
+
+            # Calculate time window between early check and commit
+            check_commit_window = perf_counter() - early_check_start
+            if metrics_exporter is not None:
+                metrics_exporter.observe(
+                    "idem_check_commit_window_seconds",
+                    check_commit_window,
+                    labels={},
+                )
+
+            if duplicate is not None:
+                # Gap 41: Detect TOCTOU race - if entry was created recently (< 1s), likely a race
+                try:
+                    duplicate_ts = datetime.fromisoformat(
+                        duplicate.first_seen_ts.replace("Z", "+00:00")
+                    )
+                    now_ts = datetime.now(timezone.utc)
+                    age_seconds = (now_ts - duplicate_ts).total_seconds()
+
+                    if age_seconds < 1.0 and metrics_exporter is not None:
+                        # Late arrival detected - increment race counter
+                        metrics_exporter.emit(
+                            "idem_toctou_race_detected_total",
+                            tenant=str(envelope_dict.get("tenant_id", "unknown")),
+                            band=str(envelope_dict.get("band", "GREEN")),
+                        )
+                        logger.warning(
+                            "TOCTOU race detected",
+                            extra={
+                                "idem_key": idem_key,
+                                "duplicate_age_seconds": age_seconds,
+                                "check_commit_window_seconds": check_commit_window,
+                            },
+                        )
+                except (ValueError, AttributeError):
+                    # Timestamp parsing failed - ignore race detection
+                    pass
+
+                # Decrement concurrent checks gauge
+                if concurrent_gauge is not None:
+                    concurrent_gauge.dec()
+
+                # Duplicate detected within transaction - emit telemetry and return 409
+                _emit_duplicate_telemetry(request, envelope_dict, duplicate)
+                # Transaction will rollback automatically on early return (no commit called)
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={
+                        "receipt_id": duplicate.receipt_id,
+                        "commit_ts": duplicate.first_seen_ts,
+                        "idem_key": duplicate.idem_key,
+                    },
+                )
+
+            wal_pos = await uow.append_wal(wal_entry)
 
             if obligation_store is not None and obligation_records:
                 for record in obligation_records:
@@ -550,6 +720,20 @@ async def submit_command(
                 "payload_sha256": payload_digest,
                 "payload_bytes": body_bytes_length,
                 "payload_inline_mode": ("embedded" if inline_body_allowed else "omitted"),
+                "policy_stamp": envelope_dict.get("policy_stamp"),  # V1.3: Include policy context
+                # Include ALL envelope fields for pipeline consumption
+                "cognitive_trace_id": envelope_dict["cognitive_trace_id"],
+                "actor": envelope_dict["actor"],
+                "device_id": envelope_dict["device_id"],
+                "band": envelope_dict["band"],
+                "policy_version": envelope_dict["policy_version"],
+                "ts": envelope_dict["ts"],
+                "sig_alg": envelope_dict["sig_alg"],
+                "sig_kid": envelope_dict["sig_kid"],
+                "envelope_sha256": envelope_dict["envelope_sha256"],
+                "sig": envelope_dict["sig"],
+                "ingested_at": envelope_dict.get("ingested_at"),
+                "clock_skew_ms": envelope_dict.get("clock_skew_ms"),
             }
             if inline_body_allowed:
                 body_for_outbox = sanitized_body if sanitized_body is not None else body_snapshot
@@ -578,6 +762,10 @@ async def submit_command(
             if outcome.key_version is None:
                 raise RuntimeError("Minimal Gate did not return a key_version for accepted command")
 
+            # V1: Extract obligations_applied from policy_stamp
+            policy_stamp = envelope_dict.get("policy_stamp", {})
+            obligations_applied_list = policy_stamp.get("obligations", [])
+
             receipt_doc = receipt_issuer.issue(
                 receipt_id=str(receipt_id),
                 idem_key=idem_key,
@@ -586,13 +774,23 @@ async def submit_command(
                 tenant_id=envelope_dict["tenant_id"],
                 space_id=envelope_dict["space_id"],
                 device_id=envelope_dict["device_id"],
-                payload_sha256=payload_digest,
+                envelope_sha256=envelope_dict["envelope_sha256"],  # V1: Full envelope hash
                 mls_group_id=device_record.mls_group_id,
                 key_version=outcome.key_version,
                 obligations=decision.obligations,
+                obligations_applied=obligations_applied_list,  # V1: Specific actions from policy_stamp
                 manifest_fingerprint=envelope_dict.get("manifest_fingerprint"),
+                payload_sha256=payload_digest,  # V1: Optional legacy field
                 connection=uow.connection,
             )
+
+            # Gap 42: Track policy stamp presence in receipts
+            if metrics_exporter is not None and obligations_applied_list:
+                metrics_exporter.emit(
+                    "receipts_policy_stamp_present_total",
+                    tenant=str(envelope_dict.get("tenant_id", "unknown")),
+                    band=str(envelope_dict.get("band", "GREEN")),
+                )
 
             ledger_entry = LedgerEntry(
                 idem_key=idem_key,
@@ -602,6 +800,10 @@ async def submit_command(
                 expiry_ts=None,
             )
             idem_ledger.upsert(ledger_entry, connection=uow.connection)
+
+        # Gap 41: Decrement concurrent checks gauge after successful commit
+        if concurrent_gauge is not None:
+            concurrent_gauge.dec()
 
         if wal_pos is None or receipt_doc is None:
             raise RuntimeError("UnitOfWork failed to commit command artefacts")

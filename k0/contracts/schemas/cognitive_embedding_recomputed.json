@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cognitive.embedding.recomputed.v1",
+  "title": "Cognitive Embedding Recomputed Event",
+  "description": "Emitted when an embedding is recomputed for model upgrade (P08 M26)",
+  "type": "object",
+  "required": [
+    "embedding_id",
+    "event_id",
+    "tenant_id",
+    "space_id",
+    "old_model_id",
+    "new_model_id",
+    "recomputed_at"
+  ],
+  "properties": {
+    "embedding_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the embedding record (same ID, updated vector)"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Hippocampus event ID (FK to st_hipp_events)"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier for multi-tenancy"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier within tenant"
+    },
+    "old_model_id": {
+      "type": "string",
+      "description": "Previous embedding model identifier (e.g., 'ultrabert_v2.0.0')"
+    },
+    "new_model_id": {
+      "type": "string",
+      "description": "New embedding model identifier (e.g., 'ultrabert_v2.1.0')"
+    },
+    "recomputed_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds since epoch) when recompute completed"
+    },
+    "vector_dim": {
+      "type": "integer",
+      "default": 768,
+      "description": "Dimensionality of the embedding vector"
+    },
+    "recompute_batch_id": {
+      "type": "string",
+      "description": "Optional batch identifier for bulk recompute operations"
+    },
+    "recompute_reason": {
+      "type": "string",
+      "enum": ["model_upgrade", "manual_request", "quality_improvement"],
+      "description": "Reason for recompute operation"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Time taken to regenerate embedding (ms)"
+    },
+    "faiss_reindexed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether FAISS index was also updated"
+    }
+  },
+  "additionalProperties": false
+}

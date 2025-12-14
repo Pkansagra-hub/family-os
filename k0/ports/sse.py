@@ -38,6 +38,7 @@ class SSETraceEvent(BaseModel):
     topic: str
     wal_pos: int
     commit_ts: str
+    policy_stamp: dict[str, Any] | None = None  # Gap 20: Include policy stamp for audit trail
 
 
 def _resolve_subscriber_id(request: Request) -> str:
@@ -66,9 +67,7 @@ def _serialize_backpressure_advisory(
         "space_id": space_id,
         "lag_ms": metrics.lag_ms,
         "pending_events": metrics.pending_events,
-        "ack_offsets": {
-            topic: int(offset) for topic, offset in metrics.ack_offsets.items()
-        },
+        "ack_offsets": {topic: int(offset) for topic, offset in metrics.ack_offsets.items()},
         "topics": [
             {
                 "topic": topic_metric.topic,
@@ -260,9 +259,7 @@ async def subscribe(
         sse_topics=",".join(topic_list),
     )
 
-    observability_emitter = cast(
-        ObservabilityEmitter, request.app.state.observability_emitter
-    )
+    observability_emitter = cast(ObservabilityEmitter, request.app.state.observability_emitter)
     wal = request.app.state.write_ahead_log
     offset_store = request.app.state.offset_store
 
@@ -277,7 +274,7 @@ async def subscribe(
     roles = _resolve_roles(request)
 
     try:
-        rows, permitted_topics = server.subscribe(
+        rows, permitted_topics = await server.subscribe(
             tenant_id=tenant_id,
             space_id=space_id,
             subscriber_id=subscriber_id,
@@ -303,7 +300,7 @@ async def subscribe(
         )
 
     trace_id = _resolve_trace_id(request)
-    metrics = server.evaluate_backpressure(
+    metrics = await server.evaluate_backpressure(
         subscriber_id=subscriber_id,
         tenant_id=tenant_id,
         space_id=space_id,
@@ -413,16 +410,18 @@ async def subscribe(
         deliver_rows = rows[:limited]
 
     async def event_stream() -> AsyncIterator[str]:
-        # Track connection start
+        # Issue #046: Track active SSE subscriptions
         sse_count_attr = "sse_connection_count"
         if hasattr(request.app.state, sse_count_attr):
             current_count = getattr(request.app.state, sse_count_attr, 0)
             setattr(request.app.state, sse_count_attr, current_count + 1)
 
-            # Immediately update gauge for real-time tracking
-            sse_gauge = getattr(request.app.state, "sse_active_subscriptions", None)
-            if sse_gauge is not None:
-                sse_gauge.set(current_count + 1)
+            # Issue #046: Emit sse_active_subscriptions metric
+            if isinstance(metrics_exporter, MetricsExporter):
+                try:
+                    metrics_exporter.set_gauge("sse_active_subscriptions", float(current_count + 1))
+                except Exception:  # noqa: BLE001
+                    pass  # Don't fail SSE on metrics error
 
         try:
             if advisory_payload is not None:
@@ -438,25 +437,37 @@ async def subscribe(
                     offset=int(entry.position or 0),
                     commit_ts=str(entry.commit_ts),
                 )
+
+                # Gap 20: Parse policy_stamp from WAL entry for audit trail
+                policy_stamp_dict = None
+                if entry.policy_stamp_json:
+                    try:
+                        policy_stamp_dict = json.loads(entry.policy_stamp_json)
+                    except json.JSONDecodeError:
+                        pass  # Skip malformed policy stamps
+
                 payload = SSETraceEvent(
                     cursor=cursor,
                     topic=entry.topic,
                     wal_pos=int(entry.position or 0),
                     commit_ts=str(entry.commit_ts),
+                    policy_stamp=policy_stamp_dict,
                 )
                 event_data = json.dumps(payload.model_dump())
                 yield f"event: trace\ndata: {event_data}\n\n"
         finally:
-            # Track connection end - always runs even if client disconnects
+            # Issue #046: Track connection end - always runs even if client disconnects
             if hasattr(request.app.state, sse_count_attr):
                 current_count = getattr(request.app.state, sse_count_attr, 0)
                 new_count = max(0, current_count - 1)
                 setattr(request.app.state, sse_count_attr, new_count)
 
-                # Immediately update gauge for real-time tracking
-                sse_gauge = getattr(request.app.state, "sse_active_subscriptions", None)
-                if sse_gauge is not None:
-                    sse_gauge.set(new_count)
+                # Issue #046: Emit sse_active_subscriptions metric
+                if isinstance(metrics_exporter, MetricsExporter):
+                    try:
+                        metrics_exporter.set_gauge("sse_active_subscriptions", float(new_count))
+                    except Exception:  # noqa: BLE001
+                        pass  # Don't fail SSE cleanup on metrics error
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -563,7 +574,7 @@ async def acknowledge(
             acl_path=request.app.state.settings.sse_acl_path,
             qos=qos,
         )
-        server.acknowledge(
+        await server.acknowledge(
             subscriber_id=payload.subscriber_id,
             tenant_id=payload.tenant_id,
             space_id=payload.space_id,
@@ -573,41 +584,6 @@ async def acknowledge(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     finally:
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
-        if scheduler_token is not None:
-            scheduler_token.release()
+        # Issue #011 (Gap 29): Ensure scheduler token released exactly once on all exit paths
         if scheduler_token is not None:
             scheduler_token.release()

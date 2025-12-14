@@ -49,10 +49,77 @@ class PolicyDecision:
     deny_reason: str | None = None
 
 
+def create_policy_stamp(
+    decision: PolicyDecision,
+    band: str,
+    visible_to: list[str] | None = None,
+    policy_version: str | None = None,
+) -> dict[str, Any]:
+    """Create policy stamp dict for embedding in envelope.
+
+    This creates an immutable audit trail of the policy decision that travels
+    with the envelope through the entire pipeline (WAL, Outbox, downstream consumers).
+
+    Parameters
+    ----------
+    decision : PolicyDecision
+        The policy decision from evaluate_envelope()
+    band : str
+        Privacy band (GREEN, AMBER, RED)
+    visible_to : list[str] | None
+        List of actor IDs who can access this envelope (optional)
+    policy_version : str | None
+        Policy manifest fingerprint/version for audit trail (optional)
+
+    Returns
+    -------
+    dict[str, Any]
+        Policy stamp dict with band, obligations, visible_to, decision
+    """
+    # Extract obligation names for compact representation
+    obligation_names = [obligation.name for obligation in decision.obligations]
+
+    stamp: dict[str, Any] = {
+        "band": band.upper(),
+        "obligations": obligation_names,
+        "decision": "ALLOW" if decision.admit else "DENY",
+    }
+
+    # Add optional fields if provided
+    if visible_to is not None:
+        stamp["visible_to"] = visible_to
+
+    if decision.deny_reason:
+        stamp["deny_reason"] = decision.deny_reason
+
+    # Use manifest fingerprint if available, fallback to provided policy_version
+    manifest_fingerprint = get_manifest_fingerprint()
+    if manifest_fingerprint:
+        stamp["policy_version"] = manifest_fingerprint
+    elif policy_version:
+        stamp["policy_version"] = policy_version
+
+    return stamp
+
+
 def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     """Evaluate the request envelope against band, caps, and ABAC policies."""
 
-    manifest = _load_policy_manifest()
+    # Gap 36: Graceful fallback if policy manifest is corrupted
+    try:
+        manifest = _load_policy_manifest()
+    except (PolicyConfigurationError, json.JSONDecodeError, ValueError, OSError) as exc:
+        LOGGER.error(
+            "Policy manifest corrupted or unreadable, denying all operations",
+            exc_info=exc,
+            extra={"envelope_id": envelope.get("envelope_id")},
+        )
+        # Return fail-safe DENY decision with manifest corruption reason
+        return PolicyDecision(
+            admit=False,
+            obligations=(),
+            deny_reason="POLICY_MANIFEST_CORRUPTED",
+        )
 
     band = str(envelope.get("band", "GREEN")).upper()
     band_policy = _lookup_band_policy(manifest, band)

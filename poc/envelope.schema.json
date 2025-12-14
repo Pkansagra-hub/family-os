@@ -1,0 +1,264 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://familyos.ai/schemas/envelope.json",
+  "title": "FamilyOS Universal Cognitive Envelope",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "envelope_id",
+    "ts",
+    "sender",
+    "kind",
+    "conversation_id",
+    "cognitive_trace_id"
+  ],
+  "properties": {
+    /* ===== Meta & Versioning ===== */
+    "schema_version": { "type": "string", "description": "Envelope schema version" },
+    "contract_version": { "type": ["string","null"], "description": "Body contract version" },
+    "envelope_id": { "type": "string", "description": "Unique id (UUIDv7 recommended)" },
+    "idempotency_key": { "type": ["string","null"], "description": "Guarantee one effect per command" },
+    "partition_key": { "type": ["string","null"], "description": "Routing key (e.g., conversation_id)" },
+
+    /* ===== Routing ===== */
+    "ts": { "type": "string", "format": "date-time" },
+    "sender": { "type": "string" },
+    "receiver": { "type": ["string","null"], "description": "Agent id, topic, or broadcast" },
+    "priority": {
+      "type": "string",
+      "enum": ["urgent","realtime","interactive","background"],
+      "default": "interactive"
+    },
+    "delivery_semantics": {
+      "type": "string",
+      "enum": ["at_most_once","at_least_once","exactly_once"],
+      "default": "at_least_once"
+    },
+
+    /* ===== Correlation, Causality, Tracing ===== */
+    "conversation_id": { "type": "string" },
+    "thread_id": { "type": ["string","null"] },
+    "trace_id": { "type": ["string","null"], "description": "Transport trace id" },
+    "cognitive_trace_id": { "type": "string", "description": "End-to-end cognitive trace id" },
+    "span_id": { "type": ["string","null"] },
+    "parent_span_id": { "type": ["string","null"] },
+    "caused_by": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Upstream envelope_ids that caused this message"
+    },
+
+    /* ===== Ordering & Watermarks ===== */
+    "lamport_clock": { "type": ["integer","null"] },
+    "vector_clock": { "type": ["object","null"] },
+    "watermark_ts": { "type": ["string","null"], "format": "date-time" },
+
+    /* ===== Task / Plan Linkage ===== */
+    "task_id": { "type": ["string","null"] },
+    "parent_task_id": { "type": ["string","null"] },
+    "plan_id": { "type": ["string","null"] },
+    "dag_run_id": { "type": ["string","null"] },
+
+    /* ===== Semantics ===== */
+    "kind": { "type": "string", "description": "Semantic type (e.g., user_utterance, plan_patch, cnp_bid …)" },
+    "domain": { "type": "string", "description": "Logical domain (health, finance, travel, iot, …)" },
+
+    /* ===== QoS & Retry ===== */
+    "deadline_ms": { "type": ["integer","null"], "minimum": 0 },
+    "ttl_ms": { "type": ["integer","null"], "minimum": 0 },
+    "expects_reply": { "type": "boolean", "default": false },
+    "reply_to": { "type": ["string","null"] },
+    "wfq_weight": { "type": ["number","null"], "minimum": 0 },
+    "ack_required": { "type": "boolean", "default": false },
+    "retry_policy": {
+      "type": "object",
+      "properties": {
+        "max_retries": { "type": "integer", "minimum": 0 },
+        "backoff_ms": { "type": "integer", "minimum": 0 },
+        "jitter_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+
+    /* ===== Policy, Safety, Privacy ===== */
+    "safety_band": { "type": "string", "enum": ["green","amber","red"], "default": "green" },
+    "privacy_band": { "type": "string", "enum": ["public","internal","secret"], "default": "internal" },
+    "policy_version": { "type": ["string","null"] },
+    "consent_receipt_id": { "type": ["string","null"] },
+    "consent_scope": { "type": "string", "enum": ["personal","household","shared"], "default": "personal" },
+    "guardrails": {
+      "type": "object",
+      "properties": {
+        "human_approval_required": { "type": "boolean" },
+        "sensitive_topics": { "type": "array", "items": { "type": "string" } },
+        "budget_ceiling": { "type": ["number","null"] }
+      },
+      "additionalProperties": false
+    },
+
+    /* ===== Model Lineage & i18n ===== */
+    "model_id": { "type": ["string","null"] },
+    "model_version": { "type": ["string","null"] },
+    "temperature": { "type": ["number","null"] },
+    "calibration_confidence": { "type": ["number","null"] },
+    "decoding_constraints": { "type": ["string","null"] },
+    "locale": { "type": "string", "default": "en-US" },
+    "timezone": { "type": ["string","null"] },
+    "units": { "type": "string", "enum": ["metric","imperial"], "default": "metric" },
+    "currency": { "type": "string", "default": "USD" },
+
+    /* ===== Input Modality & Derived Signals ===== */
+    "input_modality": { "type": "string", "enum": ["text","voice","tap","automation"], "default": "text" },
+    "device_class": { "type": "string", "enum": ["phone","desktop","tablet","watch","speaker","server"], "default": "desktop" },
+    "channel": { "type": "string", "enum": ["app","web","sms","voice","automation"], "default": "app" },
+    "signals": {
+      "type": "object",
+      "description": "Small derived signals only (no raw streams)",
+      "properties": {
+        "typing_rate_wpm": { "type": ["number","null"] },
+        "pause_count": { "type": ["integer","null"] },
+        "jitter_ms": { "type": ["number","null"] },
+        "stress_level": { "type": ["string","null"], "enum": ["low","medium","high",null] }
+      },
+      "additionalProperties": false
+    },
+    "context_ref": { "type": ["string","null"], "description": "Pointer to ContextFrame/telemetry bundle" },
+
+    /* ===== Registries & Plug-and-Play Audit ===== */
+    "registry_snapshot": {
+      "type": ["object","null"],
+      "description": "Versions of registries used for this turn (for replay/audit)",
+      "properties": {
+        "agent_reg": { "type": ["string","null"] },
+        "tool_reg": { "type": ["string","null"] },
+        "prompt_reg": { "type": ["string","null"] },
+        "persona_lib": { "type": ["string","null"] }
+      },
+      "additionalProperties": false
+    },
+
+    /* ===== Reliability, Dedup, Cooldowns ===== */
+    "dedupe_key": { "type": ["string","null"] },
+    "cooldown_key": { "type": ["string","null"] },
+    "cooldown_ms": { "type": ["integer","null"], "minimum": 0 },
+
+    /* ===== Observability & Audit ===== */
+    "stamps": {
+      "type": "array",
+      "description": "Append-only tiny stage breadcrumbs",
+      "items": {
+        "type": "object",
+        "properties": {
+          "stage": { "type": "string" },
+          "rtt_ms": { "type": ["number","null"] },
+          "intent_conf": { "type": ["number","null"], "minimum": 0, "maximum": 1 },
+          "score": { "type": ["number","null"] },
+          "host": { "type": ["string","null"] },
+          "pid": { "type": ["integer","null"] },
+          "note": { "type": ["string","null"] },
+          "persona_ref": { "type": ["string","null"] },
+          "prompt_ref": { "type": ["string","null"] },
+          "tool_refs": { "type": ["array","null"], "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "metrics": { "type": "object", "additionalProperties": true },
+    "annotations": { "type": "object", "additionalProperties": true },
+    "audit_level": { "type": "string", "enum": ["info","warn","critical"], "default": "info" },
+    "audit_category": { "type": ["string","null"] },
+
+    /* ===== Security & Integrity ===== */
+    "auth_context": {
+      "type": "object",
+      "properties": {
+        "actor": { "type": ["string","null"] },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "device_id": { "type": ["string","null"] },
+        "session_id": { "type": ["string","null"] }
+      },
+      "additionalProperties": false
+    },
+    "enc_context": { "type": ["string","null"], "description": "Encryption key/KMS id" },
+    "nonce": { "type": ["string","null"] },
+    "sig_alg": { "type": ["string","null"] },
+    "signature": { "type": ["string","null"] },
+    "hash": { "type": ["string","null"], "description": "Hash of body" },
+
+    /* ===== Compliance ===== */
+    "data_residency": { "type": "string", "enum": ["US","EU","APAC","LOCAL"], "default": "LOCAL" },
+    "retention_policy": { "type": ["string","null"], "enum": ["short","standard","extended"] },
+    "privacy_tags": { "type": "array", "items": { "type": "string" } },
+    "redaction_tags": { "type": "array", "items": { "type": "string" } },
+
+    /* ===== Body (with standardized refs) & Artifacts ===== */
+    "body": {
+      "type": "object",
+      "description": "Typed payload per `kind`",
+      "properties": {
+        "persona_ref": { "type": ["string","null"], "description": "e.g., persona.health.v3" },
+        "prompt_ref": { "type": ["string","null"], "description": "e.g., prompt.planner.v2" },
+        "tool_refs": {
+          "type": ["array","null"],
+          "items": { "type": "string" },
+          "description": "e.g., [\"tool.flight_search.v2\",\"tool.calendar_write.v1\"]"
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name","uri"],
+        "properties": {
+          "name": { "type": "string" },
+          "uri": { "type": "string" },
+          "mime": { "type": ["string","null"] },
+          "sha256": { "type": ["string","null"] },
+          "size_bytes": { "type": ["integer","null"] },
+          "retention_policy": { "type": ["string","null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+
+    /* ===== Execution, Circuit Breakers, Simulation ===== */
+    "execution_mode": { "type": "string", "enum": ["real","dry_run","shadow"], "default": "real" },
+    "cb_state": { "type": ["string","null"], "enum": ["open","half_open","closed",null] },
+    "cb_reason": { "type": ["string","null"] },
+    "cooldown_until": { "type": ["string","null"], "format": "date-time" },
+
+    /* ===== Streaming / Partial Results ===== */
+    "partial_seq": { "type": ["integer","null"] },
+    "partial_of": { "type": ["integer","null"] },
+    "is_final": { "type": "boolean", "default": true },
+
+    /* ===== Concurrency & Conflict Control ===== */
+    "precondition_etag": { "type": ["string","null"], "description": "For plan_patch concurrency control" },
+    "resolution_policy": { "type": ["string","null"], "enum": ["last_write_wins","merge","reject"] },
+
+    /* ===== Feedback & Rate Limits ===== */
+    "rate_limit": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": ["integer","null"] },
+        "remaining": { "type": ["integer","null"] },
+        "reset_ts": { "type": ["string","null"], "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "render_hints": {
+      "type": "object",
+      "properties": {
+        "severity": { "type": ["string","null"], "enum": ["info","success","warning","error"] },
+        "icon": { "type": ["string","null"] },
+        "cta_label": { "type": ["string","null"] }
+      },
+      "additionalProperties": false
+    },
+
+    /* ===== Extension Point ===== */
+    "ext": { "type": "object", "additionalProperties": true }
+  }
+}

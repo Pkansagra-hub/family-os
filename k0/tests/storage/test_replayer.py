@@ -9,7 +9,7 @@ from k0.gate.schema_registry import SchemaRegistry
 from k0.obs import MetricsExporter, ObservabilityEmitter
 from k0.storage.replayer import ReplayError, Replayer
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 ISO_NOW = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -126,3 +126,4 @@ def _(sqlite_db: Path = sqlite_runtime) -> None:  # type: ignore[assignment]
         {"component": "schema_missing", "topic": "memory.topic"},
     )
     assert failure_metric == 1.0
+

@@ -2,14 +2,14 @@
 # This file tracks the canonical version and checksums for all contract artifacts.
 # Changes to this file require Architecture + Security + Ops approval.
 
-version: 1.0.1
-release_date: '2025-10-30'
+version: 1.2.0
+release_date: '2025-11-13'
 status: active
 artifacts:
   openapi:
     file: openapi.k0.yaml
     version: 1.0.0
-    sha256: 500fed8b2b55ac87eda206db695bb9931b20d42f0cfd7a3415fa06b95178785b
+    sha256: f172d33f06fa226e36587887a3947550f3ecdc9e625792a0320862a33d0f68c5
   asyncapi:
     file: asyncapi.events.yaml
     version: 1.0.0
@@ -37,6 +37,30 @@ artifacts:
     sha256: d095b18bd3aa678138eca90db5674b440fe13fde691c4abe4b9c4ff0c97dc4ed
   - file: jsonschema/sse.ack.request.json
     sha256: e2c886fd2c790974579fcd5361d3a9895e9f6a5cd138bdc6ff3b66c63bc4b287
+  - file: jsonschema/affect/affect_annotation.json
+    sha256: 0fd7a0386614fd2299331e735b26aad9545efe366641789e6fc6114a232cecf5
+  - file: jsonschema/affect/affect_ema_state.json
+    sha256: 43a0a7e17982c58c1308e14aab128f1e3ba5b71014add09591ba587f3c08cd1f
+  - file: jsonschema/affect/affect_summary.json
+    sha256: 7154eb40c0aa3016fc931fbc0e7d5a7ff8219a3764cc401619ea5eac283fe054
+  - file: jsonschema/affect/banding_result.json
+    sha256: 0ade0cf5814c167094c806b381cf1d06cde831ee00ff8d9586c3f0c3e703943f
+  - file: jsonschema/affect/counterfactual_input.json
+    sha256: 44397ba7d809526957118a6002362f784ef33c7680c55e1b598b83d958e43fb7
+  - file: jsonschema/affect/counterfactual_result.json
+    sha256: 92a589451ae50c2f185b14efac22a5a084534f29259142d8d745a20a5e5434cd
+  - file: jsonschema/affect/household_affect_state.json
+    sha256: 1a91151ccc2c225545720c9ed2acd92f4462eb199fa3602932093e8d7480244e
+  - file: jsonschema/affect/modality_score.json
+    sha256: a284e6772706d6335f6e3ea32f66a553b2b3a81deb45307c5f6dab605ca9633b
+  - file: jsonschema/affect/calibration_params.json
+    sha256: 7dd12f636e548ee2fe622df798aab42b1e51ab4b03774da472279fc3c76033c1
+  - file: jsonschema/affect/behavioral_signals.json
+    sha256: 394a572a463973a679e15093480b0ab6f880bb4545569caaf164cc3f76bb9c5c
+  - file: jsonschema/space/space_resolution_request.json
+    sha256: a7c310746d03bcffc38f64402cd2fbf360b290ec28efbcd996d08d983a6a82f9
+  - file: jsonschema/space/space_resolution.json
+    sha256: 781acf5583878bc7554653676cd018ee80f8cecf2fa9ad76855455eedc70c9de
   bridge_policy:
     file: policy/bridge_policy.yml
     version: 0.1.0
@@ -49,6 +73,27 @@ approvals:
   security: '2025-10-30'
   operations: '2025-10-30'
 changelog:
+- version: 1.2.0
+  date: '2025-11-13'
+  changes:
+  - Added Space Resolver request/response schemas plus RED/BLACK/caretaker examples per ADR-K004a/K004d/K004e
+  - Locked resolver response fields with cache_snapshot_version + resolver_state metadata required for Gate 2 clearance
+  - Revalidated contracts via `python k0/automation/lint_schemas.py`
+- version: 1.1.0
+  date: '2025-11-13'
+  changes:
+  - Added 7 affect module JSON schemas (ADR-0012a, k003a)
+  - 'jsonschema/affect/affect_annotation.json: Core affect classification result (valence, arousal, tags, band)'
+  - 'jsonschema/affect/affect_ema_state.json: Dual EMA state for affect smoothing (fast/slow α=0.5/0.1)'
+  - 'jsonschema/affect/affect_summary.json: K1 bridge contract with mood labels and behavior modes'
+  - 'jsonschema/affect/banding_result.json: Policy band classification with 27+ rule evaluation'
+  - 'jsonschema/affect/counterfactual_input.json: Input for what-if affect simulation'
+  - 'jsonschema/affect/counterfactual_result.json: Safety simulation results with blocking decisions'
+  - 'jsonschema/affect/household_affect_state.json: Household-level aggregates and pattern detection'
+  - All schemas validated via `python k0/automation/lint_schemas.py --verbose`
+  - 'jsonschema/affect/modality_score.json: Per-modality score contract for fusion (ADR-0012d)'
+  - 'jsonschema/affect/calibration_params.json: Per-person calibration contract for fusion (ADR-0012d)'
+  - 'jsonschema/affect/behavioral_signals.json: Optional behavioral telemetry contract enabling Tier-0 arousal boosts (ADR-0012b)'
 - version: 1.0.1
   date: '2025-10-30'
   changes:

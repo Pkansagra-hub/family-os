@@ -1,0 +1,217 @@
+module_id: builders.embedding_write
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.embedding.extracted.v1
+  - p02.builders.hipp_row_built.v1
+
+output_event_types:
+  - cognitive.vector.stored.v1
+
+latency_budget_ms: 5
+
+side_effects:
+  - write:st_vec
+
+idempotent: true
+
+failure_modes:
+  - code: VECTOR_WRITE_FAILED
+    policy: retry
+    max_retries: 3
+  - code: NO_EMBEDDING_DATA
+    policy: set_pending_for_backfill
+    max_retries: 0
+  - code: INVALID_VECTOR_DIMENSION
+    policy: drop
+    max_retries: 0
+  - code: DUPLICATE_EMBEDDING_ID
+    policy: skip
+    max_retries: 0
+  - code: MISSING_EVENT_ID
+    policy: drop
+    max_retries: 0
+
+description: |
+  M23: Direct Embedding Writer Module
+
+  Writes 768-dimensional UltraBERT embeddings directly to st_vec table,
+  replacing the async P08 queue pattern with inline synchronous writes.
+
+  Architecture (ADR-K003):
+  - P02 M22 extracts embedding from UltraBERT cache (~0ms)
+  - P02 M23 writes embedding to st_vec with status=READY (immediate availability)
+  - P03 consolidation can use embeddings immediately (no PENDING fallback)
+  - P08 v2 handles FAISS indexing, backfill, and cleanup (not primary generation)
+
+  Performance Target: <5ms P95 (single row INSERT with 3KB blob)
+
+  Input (from enriched context):
+  - enriched.extract_from_cache.embedding: list[float] (768-dim, required)
+  - enriched.extract_from_cache.embedding_id: str (UUID, required)
+  - enriched.extract_from_cache.model_id: str (default: 'ultrabert_v2.1.0')
+  - envelope.header.event_id: str (FK to st_hipp_events, required)
+  - envelope.header.tenant_id: str (required)
+  - envelope.header.space_id: str (required)
+
+  Output:
+  - written: bool (true if st_vec insert succeeded)
+  - embedding_id: str (UUID written to st_vec)
+  - embedding_status: str (READY | PENDING)
+  - vector_dim: int (768)
+
+  st_vec Row Written:
+  - embedding_id: TEXT PRIMARY KEY (UUID from M22)
+  - event_id: TEXT NOT NULL (FK to st_hipp_events)
+  - tenant_id: TEXT NOT NULL
+  - space_id: TEXT NOT NULL
+  - vector: BLOB NOT NULL (768 floats × 4 bytes = 3072 bytes)
+  - vector_dim: INTEGER DEFAULT 768
+  - model_id: TEXT DEFAULT 'ultrabert_v2.1.0'
+  - status: TEXT DEFAULT 'READY' (immediate availability)
+  - created_at: INTEGER NOT NULL (Unix timestamp)
+  - updated_at: INTEGER NOT NULL (Unix timestamp)
+
+  Graceful Degradation:
+  - If embedding is None/null → set embedding_status=PENDING (P08 backfill)
+  - If embedding dimension != 768 → DROP (invalid data)
+  - If st_vec write fails → RETRY up to 3 times
+
+  Event Emission:
+  - Topic: cognitive.vector.stored.v1
+  - Triggers: P08 M24 (FAISS indexing)
+  - Payload: {embedding_id, event_id, tenant_id, space_id, model_id, vector_dim, stored_at}
+
+  Benefits vs Legacy P08 Async Pattern:
+  - Immediate availability: embeddings ready when P02 completes
+  - No queue management: no polling, retry logic, or status tracking
+  - Simpler architecture: one less async pipeline in critical path
+  - Higher throughput: no queue bottleneck
+  - P03 can use embeddings immediately (no Jaccard fallback)
+
+  Required Capabilities:
+  - st_vec.write: INSERT permission on st_vec table
+  - events.emit: Emit cognitive.vector.stored.v1 event
+
+  Related:
+  - ADR-K003: Inline Embedding via UltraBERT Single-Pass Cache
+  - Migration 0026: st_vec table creation
+  - M22 (embedding.extract_from_cache): Provides embedding data
+  - P08 M24 (embedding.faiss_indexer): FAISS indexing (subscribes to cognitive.vector.stored.v1)
+  - P08 M25 (embedding.backfill): Backfills PENDING embeddings
+
+config_schema:
+  type: object
+  properties:
+    emit_stored_event:
+      type: boolean
+      default: true
+      description: Emit cognitive.vector.stored.v1 event after write (for P08 FAISS indexing)
+    stored_event_topic:
+      type: string
+      default: "cognitive.vector.stored.v1"
+      description: Event topic for embedding stored notification
+    validate_vector_dim:
+      type: boolean
+      default: true
+      description: Validate embedding is exactly 768 dimensions before write
+    set_pending_on_missing:
+      type: boolean
+      default: true
+      description: Set embedding_status=PENDING if embedding is null (enables P08 backfill)
+
+input_schema:
+  type: object
+  required:
+    - enriched
+    - envelope
+  properties:
+    enriched:
+      type: object
+      required:
+        - extract_from_cache
+      properties:
+        extract_from_cache:
+          type: object
+          required:
+            - embedding_id
+          properties:
+            embedding:
+              type: array
+              items:
+                type: number
+              minItems: 768
+              maxItems: 768
+              description: 768-dim embedding vector (or null if extraction failed)
+            embedding_id:
+              type: string
+              format: uuid
+              description: UUID for this embedding
+            model_id:
+              type: string
+              default: "ultrabert_v2.1.0"
+              description: Model identifier
+            source:
+              type: string
+              enum: ["cache_hit", "direct_call", "failed", "no_text"]
+    envelope:
+      type: object
+      required:
+        - header
+      properties:
+        header:
+          type: object
+          required:
+            - event_id
+            - tenant_id
+            - space_id
+          properties:
+            event_id:
+              type: string
+              description: FK to st_hipp_events.event_id
+            tenant_id:
+              type: string
+            space_id:
+              type: string
+
+output_schema:
+  type: object
+  required:
+    - written
+    - embedding_id
+    - embedding_status
+  properties:
+    written:
+      type: boolean
+      description: True if st_vec insert succeeded
+    embedding_id:
+      type: string
+      format: uuid
+      description: UUID written to st_vec.embedding_id
+    embedding_status:
+      type: string
+      enum: ["READY", "PENDING"]
+      description: |
+        READY: Embedding written to st_vec, immediately available
+        PENDING: Embedding null/failed, needs P08 backfill
+    vector_dim:
+      type: integer
+      enum: [768]
+      description: Dimension of embedding vector written
+    stored_at:
+      type: integer
+      description: Unix timestamp when written
+
+dependencies:
+  syscalls:
+    - st_vec.write
+    - events.emit
+  modules:
+    - embedding.extract_from_cache:v1  # M22 provides embedding data
+
+performance:
+  p50_latency_ms: 2
+  p95_latency_ms: 5
+  p99_latency_ms: 15
+  write_size_bytes: 3072

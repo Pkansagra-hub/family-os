@@ -1,0 +1,82 @@
+module_id: context.ingress_classify
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.ingress_classified.v1
+
+latency_budget_ms: 3
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: ACTIVITY_TYPE_UNKNOWN
+    policy: use_default
+    max_retries: 0
+  - code: INGRESS_TOPIC_INVALID
+    policy: drop
+
+description: |
+  Ingress Classification Module (Sensory Input Classifier)
+
+  Classifies episodic memory input type and activity context:
+  - Ingress topic categorization (write/photo/voice/import)
+  - Activity type validation and normalization
+  - Input source tracking (mobile/web/api/connector)
+  - Content type classification (meal/conversation/routine/milestone)
+
+  Performance target: ≤3ms P95 (rule-based classification, no ML)
+
+  Key Classification Fields:
+  - ingress_topic: TEXT (cognitive.memory.write/photo/voice/import)
+  - activity_type: TEXT (meal/conversation/routine/milestone/social/work)
+  - content_type: TEXT (episodic/semantic/procedural)
+  - ingress_source: TEXT (mobile_app/web_app/api/connector)
+  - is_structured: BOOLEAN (true for API imports with schema)
+  - is_user_initiated: BOOLEAN (false for automated/scheduled imports)
+
+  Activity Type Classification:
+  - meal: Food-related events (breakfast/lunch/dinner/snack)
+  - conversation: Social interaction events
+  - routine: Daily activities (shower/bedtime/commute)
+  - milestone: Significant life events (birthday/graduation/first_time)
+  - social: Gatherings and group activities
+  - work: Professional activities
+  - unknown: Unable to classify (use default handling)
+
+  Content Type Classification:
+  - episodic: Time-bound personal experiences (most common)
+  - semantic: Facts and knowledge (rare in P02, more in P09)
+  - procedural: How-to memories (rare in P02)
+
+  Use Cases:
+  - Retention policy selection (activity_type affects retention)
+  - Analytics and reporting (activity type trends)
+  - Content routing (different pipelines for different types)
+  - Quality scoring (user-initiated vs. automated content)
+
+config_schema:
+  type: object
+  properties:
+    default_activity_type:
+      type: string
+      default: "routine"
+      description: Fallback activity_type if classification fails
+    default_content_type:
+      type: string
+      default: "episodic"
+      description: Default content_type for P02 writes
+    supported_ingress_topics:
+      type: array
+      items:
+        type: string
+      default:
+        - "cognitive.memory.write"
+        - "cognitive.memory.photo"
+        - "cognitive.memory.voice"
+        - "cognitive.memory.import"
+      description: Valid ingress topic values

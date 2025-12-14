@@ -21,18 +21,13 @@ from typing import Iterator
 
 import pytest
 
+from k0.automation.migrate import apply_migrations
 from k0.gate.schema_registry import SchemaRegistry
 from k0.obs.metrics import MetricsExporter
 from k0.storage.replayer import Replayer
 from k0.storage.snapshots import SnapshotScheduler
 from k0.storage.wal import WalEntry, WriteAheadLog
 from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
-
-# Calculate REPO_ROOT
-_FILE_PATH = Path(__file__).resolve()
-_PARENTS = _FILE_PATH.parents
-REPO_ROOT = _PARENTS[3]
-STORAGE_SQL_PATH = REPO_ROOT / "k0" / "contracts" / "sql" / "storage.sql"
 
 
 @pytest.fixture
@@ -41,9 +36,8 @@ def temp_db() -> Iterator[Path]:
     tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
     db_path = Path(tmp_dir.name) / "kernel.sqlite3"
     configure_pool(db_path)
-    with connection_scope() as conn:
-        conn.executescript(STORAGE_SQL_PATH.read_text())
-        conn.commit()
+    # Apply migrations instead of using storage.sql directly
+    apply_migrations(db_path, dry_run=False)
     try:
         yield db_path
     finally:
@@ -120,10 +114,10 @@ def _get_latest_wal_position() -> int | None:
 class TestWalAppendAndDurability:
     """Tests for basic WAL append operations and durability."""
 
-    def test_single_wal_entry_persists(self, wal: WriteAheadLog) -> None:
+    async def test_single_wal_entry_persists(self, wal: WriteAheadLog) -> None:
         """Test: Single WAL entry appends and persists."""
         entry = _create_wal_entry()
-        position = wal.append(entry)
+        position = await wal.append(entry)
         assert position is not None
         assert position > 0
 
@@ -135,12 +129,12 @@ class TestWalAppendAndDurability:
             assert result is not None
             assert result[1] == "test.topic"
 
-    def test_multiple_wal_entries_maintain_order(self, wal: WriteAheadLog) -> None:
+    async def test_multiple_wal_entries_maintain_order(self, wal: WriteAheadLog) -> None:
         """Test: Multiple WAL entries maintain insertion order."""
         positions = []
         for i in range(5):
             entry = _create_wal_entry(topic=f"test.topic.{i}")
-            positions.append(wal.append(entry))
+            positions.append(await wal.append(entry))
 
         # Verify positions are strictly increasing
         assert all(positions[i] < positions[i + 1] for i in range(len(positions) - 1))
@@ -149,15 +143,15 @@ class TestWalAppendAndDurability:
         count = _count_wal_entries()
         assert count >= 5
 
-    def test_wal_topic_scoping(self, wal: WriteAheadLog) -> None:
+    async def test_wal_topic_scoping(self, wal: WriteAheadLog) -> None:
         """Test: WAL entries are correctly scoped by topic."""
         entry1 = _create_wal_entry(topic="orders.created")
         entry2 = _create_wal_entry(topic="payments.processed")
         entry3 = _create_wal_entry(topic="orders.created")
 
-        wal.append(entry1)
-        wal.append(entry2)
-        wal.append(entry3)
+        await wal.append(entry1)
+        await wal.append(entry2)
+        await wal.append(entry3)
 
         orders_count = _count_wal_entries(topic="orders.created")
         payments_count = _count_wal_entries(topic="payments.processed")
@@ -165,22 +159,22 @@ class TestWalAppendAndDurability:
         assert orders_count >= 2
         assert payments_count >= 1
 
-    def test_wal_payload_with_binary_data(self, wal: WriteAheadLog) -> None:
+    async def test_wal_payload_with_binary_data(self, wal: WriteAheadLog) -> None:
         """Test: WAL handles binary payload data correctly."""
         binary_payload = b"\x00\x01\x02\x03\xff\xfe\xfd"
         entry = _create_wal_entry(body=binary_payload)
-        position = wal.append(entry)
+        position = await wal.append(entry)
 
         with connection_scope() as conn:
             result = conn.execute("SELECT body FROM st_wal WHERE pos = ?", (position,)).fetchone()
             assert result is not None
             assert result[0] == binary_payload
 
-    def test_wal_large_payload_handling(self, wal: WriteAheadLog) -> None:
+    async def test_wal_large_payload_handling(self, wal: WriteAheadLog) -> None:
         """Test: WAL handles large payloads (1MB+)."""
         large_payload = b"x" * (1024 * 1024 + 512)  # 1.5 MB
         entry = _create_wal_entry(body=large_payload)
-        position = wal.append(entry)
+        position = await wal.append(entry)
         assert position is not None
 
         with connection_scope() as conn:
@@ -194,14 +188,14 @@ class TestWalAppendAndDurability:
 class TestWalSnapshot:
     """Tests for WAL snapshot creation and restoration."""
 
-    def test_snapshot_creation_creates_manifest(
+    async def test_snapshot_creation_creates_manifest(
         self, temp_db: Path, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Snapshot creation produces valid manifest."""
         wal = WriteAheadLog()
         for i in range(10):
             entry = _create_wal_entry(topic=f"test.topic.{i}")
-            wal.append(entry)
+            await wal.append(entry)
 
         scheduler = SnapshotScheduler(
             database_path=temp_db,
@@ -217,7 +211,7 @@ class TestWalSnapshot:
         assert manifest.watermark > 0
         assert manifest.database_path == temp_db
 
-    def test_snapshot_captures_watermark(
+    async def test_snapshot_captures_watermark(
         self, temp_db: Path, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Snapshot watermark matches WAL position."""
@@ -225,7 +219,7 @@ class TestWalSnapshot:
         positions = []
         for i in range(5):
             entry = _create_wal_entry()
-            positions.append(wal.append(entry))
+            positions.append(await wal.append(entry))
 
         latest_position = max(positions)
 
@@ -263,7 +257,7 @@ class TestWalSnapshot:
         # In dry run, artifact_path should be None
         assert manifest.artifact_path is None or not manifest.artifact_path.exists()
 
-    def test_multiple_snapshots_with_different_watermarks(
+    async def test_multiple_snapshots_with_different_watermarks(
         self, temp_db: Path, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Multiple snapshots capture different watermarks."""
@@ -278,13 +272,13 @@ class TestWalSnapshot:
 
         # First snapshot
         for _ in range(3):
-            wal.append(_create_wal_entry())
+            await wal.append(_create_wal_entry())
 
         manifest1 = scheduler.create_snapshot(output_dir=output_dir)
 
         # Add more entries
         for _ in range(3):
-            wal.append(_create_wal_entry())
+            await wal.append(_create_wal_entry())
 
         manifest2 = scheduler.create_snapshot(output_dir=output_dir)
 
@@ -296,14 +290,14 @@ class TestWalSnapshot:
 class TestWalReplay:
     """Tests for WAL replay and deterministic reconstruction."""
 
-    def test_replay_from_start_position(
+    async def test_replay_from_start_position(
         self, temp_db: Path, schema_registry: SchemaRegistry, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Replay from position 0 reconstructs all entries."""
         wal = WriteAheadLog()
         entry_count = 5
         for i in range(entry_count):
-            wal.append(_create_wal_entry(topic=f"test.{i}"))
+            await wal.append(_create_wal_entry(topic=f"test.{i}"))
 
         replayer = Replayer(
             schema_registry=schema_registry,
@@ -401,10 +395,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Copy primary data to secondary
         with sqlite3.connect(temp_db) as src_conn:
@@ -427,10 +424,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Copy primary to secondary
         with sqlite3.connect(temp_db) as src_conn:
@@ -466,10 +466,13 @@ class TestWalPromotion:
         secondary_dir.mkdir(exist_ok=True)
         secondary_path = secondary_dir / "kernel.sqlite3"
 
-        # Initialize secondary with schema
-        with sqlite3.connect(secondary_path) as conn:
-            conn.executescript(STORAGE_SQL_PATH.read_text())
-            conn.commit()
+        # Initialize secondary with migrations (temporarily reconfigure pool)
+        shutdown_pool()
+        configure_pool(secondary_path)
+        apply_migrations(secondary_path, dry_run=False)
+        shutdown_pool()
+        # Reconfigure back to primary database
+        configure_pool(temp_db)
 
         # Backup primary to secondary
         with sqlite3.connect(temp_db) as src_conn:
@@ -490,7 +493,7 @@ class TestWalPromotion:
 class TestWalCompleteIntegration:
     """End-to-end WAL integration tests."""
 
-    def test_append_snapshot_replay_cycle(
+    async def test_append_snapshot_replay_cycle(
         self,
         temp_db: Path,
         schema_registry: SchemaRegistry,
@@ -504,7 +507,7 @@ class TestWalCompleteIntegration:
         for i in range(10):
             topic = f"test.cycle.{i}"
             topics_created.append(topic)
-            wal.append(_create_wal_entry(topic=topic))
+            await wal.append(_create_wal_entry(topic=topic))
 
         # Create snapshot
         scheduler = SnapshotScheduler(
@@ -530,13 +533,13 @@ class TestWalCompleteIntegration:
         entry_count_after = _count_wal_entries()
         assert entry_count_after >= entry_count_before
 
-    def test_concurrent_snapshots_no_interference(
+    async def test_concurrent_snapshots_no_interference(
         self, temp_db: Path, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Multiple concurrent snapshots don't interfere."""
         wal = WriteAheadLog()
         for _ in range(5):
-            wal.append(_create_wal_entry())
+            await wal.append(_create_wal_entry())
 
         scheduler = SnapshotScheduler(
             database_path=temp_db,
@@ -555,7 +558,7 @@ class TestWalCompleteIntegration:
         # IDs should be different
         assert manifest1.snapshot_id != manifest2.snapshot_id
 
-    def test_wal_backlog_stats_accuracy(self, wal: WriteAheadLog) -> None:
+    async def test_wal_backlog_stats_accuracy(self, wal: WriteAheadLog) -> None:
         """Test: WAL backlog stats reflect current state."""
         # Initially empty
         with connection_scope() as conn:
@@ -563,7 +566,7 @@ class TestWalCompleteIntegration:
 
         # Add entries
         for _ in range(3):
-            wal.append(_create_wal_entry(topic="test.backlog"))
+            await wal.append(_create_wal_entry(topic="test.backlog"))
 
         # Check count increased
         with connection_scope() as conn:
@@ -575,7 +578,7 @@ class TestWalCompleteIntegration:
 class TestWalRobustness:
     """Robustness tests for edge cases and error handling."""
 
-    def test_wal_handles_empty_envelope_json(self, wal: WriteAheadLog) -> None:
+    async def test_wal_handles_empty_envelope_json(self, wal: WriteAheadLog) -> None:
         """Test: WAL handles entries with minimal envelope."""
         entry = WalEntry(
             tenant_id="test",
@@ -587,19 +590,19 @@ class TestWalRobustness:
             device_id="device",
             commit_ts=datetime.now(timezone.utc).isoformat(),
         )
-        position = wal.append(entry)
+        position = await wal.append(entry)
         assert position is not None
 
-    def test_wal_handles_unicode_in_fields(self, wal: WriteAheadLog) -> None:
+    async def test_wal_handles_unicode_in_fields(self, wal: WriteAheadLog) -> None:
         """Test: WAL correctly handles unicode characters."""
         entry = _create_wal_entry(
             topic="测试.主题",  # Chinese characters
             body="🚀 Unicode payload 🎉".encode("utf-8"),
         )
-        position = wal.append(entry)
+        position = await wal.append(entry)
         assert position is not None
 
-    def test_snapshot_with_no_wal_entries(
+    async def test_snapshot_with_no_wal_entries(
         self, temp_db: Path, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Snapshot succeeds even with no WAL entries."""
@@ -617,14 +620,14 @@ class TestWalRobustness:
         # Watermark might be 0 or None
         assert manifest.watermark is not None or manifest.watermark is None
 
-    def test_replay_with_missing_schema(
+    async def test_replay_with_missing_schema(
         self, temp_db: Path, schema_registry: SchemaRegistry, metrics_exporter: MetricsExporter
     ) -> None:
         """Test: Replay handles missing schemas gracefully."""
         wal = WriteAheadLog()
         for _ in range(3):
             entry = _create_wal_entry()
-            wal.append(entry)
+            await wal.append(entry)
 
         replayer = Replayer(
             schema_registry=schema_registry,

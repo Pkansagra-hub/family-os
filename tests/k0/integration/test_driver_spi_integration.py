@@ -30,6 +30,33 @@ def test_db():
         # Apply migrations
         apply_migrations(str(db_path), dry_run=False)
 
+        # Verify FTS table exists after migrations
+        with connection_scope() as conn:
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='st_fts'"
+            ).fetchall()
+            if not tables:
+                # Try creating FTS table manually if migration didn't work
+                conn.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS st_fts USING fts5(
+                      wal_pos UNINDEXED,
+                      tenant_id UNINDEXED,
+                      space_id UNINDEXED,
+                      topic UNINDEXED,
+                      content,
+                      envelope_json UNINDEXED,
+                      body UNINDEXED,
+                      payload_sha256 UNINDEXED,
+                      schema_uri UNINDEXED,
+                      schema_version UNINDEXED,
+                      device_id UNINDEXED,
+                      commit_ts UNINDEXED
+                    )
+                """
+                )
+                conn.commit()
+
         # Insert test data into WAL
         with connection_scope() as conn:
             # Insert test data into WAL
@@ -54,6 +81,33 @@ def test_db():
                 ),
             )
             wal_pos = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+            # Also index in FTS table for FTS tests
+            # Note: FTS stores body as text (not bytes like WAL)
+            conn.execute(
+                """
+                INSERT INTO st_fts (
+                    wal_pos, tenant_id, space_id, topic, content,
+                    envelope_json, body, payload_sha256, schema_uri,
+                    schema_version, device_id, commit_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    wal_pos,
+                    "tenant1",
+                    "space1",
+                    "test.topic",
+                    "test content for full text search",
+                    json.dumps({"type": "test", "id": "123"}),
+                    "test content for full text search",  # Text for FTS (not bytes)
+                    "sha256_hash",
+                    "test://schema",
+                    "1.0.0",
+                    "device1",
+                    "2025-01-01T00:00:00Z",
+                ),
+            )
+            conn.commit()
 
         # Return both db_path and wal_pos for tests that need FTS indexing
         yield str(db_path), wal_pos

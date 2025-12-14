@@ -345,7 +345,7 @@ See [Testing Guide](./testing-guide.md) for details.
 
 ### Documentation Standards
 
-- **ADRs**: Use [ADR template](../architecture/decisions/0000-template.md)
+- **ADRs**: Use [ADR template](../architecture/decisions-K1/0000-template.md)
 - **API docs**: Document all public APIs
 - **Inline docs**: Docstrings for all functions/classes
 - **Examples**: Include code examples

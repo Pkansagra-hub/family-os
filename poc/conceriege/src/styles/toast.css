@@ -1,0 +1,241 @@
+/**
+ * Toast Notification Styles
+ *
+ * Professional toast notifications with smooth animations.
+ * Supports success, error, warning, and info types.
+ */
+
+/* ============================================================================
+   TOAST CONTAINER
+   ============================================================================ */
+
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 10000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+/* ============================================================================
+   TOAST BASE STYLES
+   ============================================================================ */
+
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    min-width: 250px;
+    max-width: 400px;
+    opacity: 0;
+    transform: translateX(100px);
+    transition: all 0.3s ease;
+    pointer-events: auto;
+    cursor: pointer;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.toast.hide {
+    opacity: 0;
+    transform: translateX(100px);
+}
+
+/* ============================================================================
+   TOAST ICON
+   ============================================================================ */
+
+.toast-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+/* ============================================================================
+   TOAST MESSAGE
+   ============================================================================ */
+
+.toast-message {
+    flex: 1;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+/* ============================================================================
+   TOAST TYPES
+   ============================================================================ */
+
+/* Success Toast */
+.toast-success {
+    background: #10b981;
+    color: white;
+}
+
+.toast-success .toast-icon {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Error Toast */
+.toast-error {
+    background: #ef4444;
+    color: white;
+}
+
+.toast-error .toast-icon {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Warning Toast */
+.toast-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.toast-warning .toast-icon {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Info Toast */
+.toast-info {
+    background: #3b82f6;
+    color: white;
+}
+
+.toast-info .toast-icon {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* ============================================================================
+   DARK THEME ADJUSTMENTS
+   ============================================================================ */
+
+[data-theme="dark"] .toast {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Success in dark mode */
+[data-theme="dark"] .toast-success {
+    background: #22c55e;
+}
+
+/* Error in dark mode */
+[data-theme="dark"] .toast-error {
+    background: #f87171;
+}
+
+/* Warning in dark mode */
+[data-theme="dark"] .toast-warning {
+    background: #fbbf24;
+}
+
+/* Info in dark mode */
+[data-theme="dark"] .toast-info {
+    background: #60a5fa;
+}
+
+/* ============================================================================
+   HOVER STATE
+   ============================================================================ */
+
+.toast:hover {
+    transform: translateX(-5px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="dark"] .toast:hover {
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================================================
+   RESPONSIVE (MOBILE)
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    .toast-container {
+        left: 10px;
+        right: 10px;
+        top: 10px;
+    }
+
+    .toast {
+        min-width: auto;
+        max-width: none;
+        width: 100%;
+    }
+}
+
+/* ============================================================================
+   COPY BUTTON STYLES
+   ============================================================================ */
+
+.copy-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: all 0.2s ease;
+    font-size: 16px;
+}
+
+.message:hover .copy-button {
+    opacity: 1;
+}
+
+.copy-button:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+    transform: scale(1.1);
+}
+
+.copy-button:active {
+    transform: scale(0.95);
+}
+
+.copy-button.copied {
+    background: var(--success);
+    color: white;
+}
+
+[data-theme="dark"] .copy-button {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .copy-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Position message bubble relatively for copy button */
+.message {
+    position: relative;
+}
+
+.message-bubble {
+    position: relative;
+}
