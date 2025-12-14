@@ -2196,6 +2196,103 @@ CRON and IDLE triggers are deferred to Phase 2 (see M6/M7).
 
 Core scheduler that manages trigger-based pipeline activation.
 
+#### Issue 3.1.0: Add query_count() Syscall Method
+
+**File**: `k0/kernel/syscalls.py`
+
+**Description**: Add generic table count query method for threshold triggers.
+
+**Gap Identified**: ThresholdTriggerEngine requires `syscalls.query_count(table, where)` but this method doesn't exist. Existing code has embedded COUNT queries within specific methods (e.g., `vec_query`) but no generic count capability.
+
+**Implementation**:
+
+```python
+# Add to k0/kernel/syscalls.py
+
+async def query_count(
+    self,
+    table: str,
+    where: str = "1=1",
+    params: tuple = (),
+) -> int:
+    """
+    Query row count from a table with optional WHERE clause.
+
+    Used by PipelineScheduler for threshold triggers.
+
+    Args:
+        table: Table name (must be in allowed tables)
+        where: WHERE clause (default: all rows)
+        params: Query parameters for WHERE clause
+
+    Returns:
+        Row count matching condition
+
+    Raises:
+        PermissionError: If pipeline lacks read capability for table
+
+    Example:
+        >>> count = await syscalls.query_count(
+        ...     table="st_vec",
+        ...     where="status = ?",
+        ...     params=("READY",)
+        ... )
+        >>> print(f"{count} vectors pending indexing")
+    """
+    # Validate table access
+    required_cap = f"{table}.read"
+    if required_cap not in self._granted_caps:
+        raise PermissionError(
+            f"Pipeline {self._pipeline_id} lacks capability: {required_cap}"
+        )
+
+    # Allowed tables for threshold queries
+    allowed_tables = {
+        "st_vec", "st_hipp_events", "st_wal", "st_epi",
+        "st_sem", "st_outbox", "st_pipeline_processed"
+    }
+    if table not in allowed_tables:
+        raise ValueError(f"Table not allowed for count queries: {table}")
+
+    async with self._uow_factory() as uow:
+        conn = uow._connection
+        if conn is None:
+            raise RuntimeError("UnitOfWork connection not initialized")
+
+        try:
+            loop = asyncio.get_running_loop()
+            sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+            result = await loop.run_in_executor(
+                None,
+                lambda: conn.execute(sql, params).fetchone(),
+            )
+            return result[0] if result else 0
+
+        except Exception as e:
+            logger.error(f"query_count failed for {table}: {e}")
+            raise
+```
+
+**Testing**:
+
+- File: `tests/k0/kernel/test_syscalls_query_count.py`
+- Test cases:
+  - `test_query_count_basic`
+  - `test_query_count_with_where_clause`
+  - `test_query_count_permission_denied`
+  - `test_query_count_invalid_table_raises`
+  - `test_query_count_empty_table_returns_zero`
+
+**Acceptance Criteria**:
+
+- [ ] query_count() method exists on Syscalls class
+- [ ] Validates table access via capabilities
+- [ ] Only allows approved tables
+- [ ] Returns correct count for WHERE conditions
+- [ ] All tests pass
+
+---
+
 #### Issue 3.1.1: Create TriggerEngine Base
 
 **File**: `k0/scheduler/triggers.py`
@@ -3473,6 +3570,108 @@ def get_scheduler_auditor() -> SchedulerAuditor:
 
 **Dependencies**: M2 complete
 
+### Epic 4.0: P03 Pipeline Contract (Prerequisite)
+
+Create the P03 pipeline contract (currently missing from codebase).
+
+#### Issue 4.0.1: Create P03 Pipeline Contract
+
+**File**: `k0/contracts/pipelines/p03_consolidation.v1.yaml`
+
+**Description**: Create minimal P03 pipeline contract for fabric integration.
+
+**Gap Identified**: P03 pipeline contract does not exist. Only `p02_write.v1.yaml` and `p08_embedding_management.v2.yaml` exist in `k0/contracts/pipelines/`. P03 implementation status is "NOT STARTED" per dossier.
+
+**Implementation**:
+
+```yaml
+# P03 Consolidation Pipeline Contract
+# Version: v1 (Minimal for Fabric Integration)
+# Reference: docs/pipelines/P03_consolidation_dossier.md
+
+pipeline_id: P03_CONSOLIDATION
+version: v1
+name: P03 Memory Consolidation
+
+description: |
+  Memory consolidation pipeline - transforms staged hippocampus events
+  into permanent, organized, queryable memory structures.
+
+  Runs in batch mode during system idle time (preferred: 2AM-5AM).
+  Performs 5 consolidation processes:
+  1. Hippocampal Replay
+  2. Neocortical Integration
+  3. Synaptic Homeostasis (dedup, novelty, pruning)
+  4. Knowledge Graph Consolidation
+  5. Dream-Like Exploration
+
+# P03 is scheduled, not event-driven
+entry_topic: scheduled.p03.trigger.v1
+exit_topic: p03.consolidation.complete.v1
+
+# Trigger configuration (Phase 1: INTERVAL and MANUAL only)
+triggers:
+  - id: consolidation_interval
+    type: interval
+    interval_seconds: 5400  # 90 minutes (sleep cycle)
+    batch_size: 1000
+
+  - id: consolidation_manual
+    type: manual
+
+concurrency: 1
+max_queue_depth: 100
+
+required_capabilities:
+  # Input: hippocampus staging
+  - st_hipp_events.read
+  - st_hipp_events.write
+  - st_vec.read
+  - st_vec.write
+  # Output: memory layers
+  - st_epi.write
+  - st_sem.write
+  - st_kg_dom.write
+  - st_kg_edges.write
+  # FAISS for similarity
+  - faiss.read
+
+# Fabric dependencies (capabilities P03 will invoke)
+fabric_dependencies:
+  - score_salience
+  - retrieve_similar
+
+# Minimal DAG for Phase 1 (will expand per dossier)
+dag:
+  - id: stage_10_novelty
+    module: consolidation.novelty_score:v1
+    depends_on: []
+    description: "Compute novelty scores for pending events"
+    latency_budget_ms: 100
+
+performance:
+  batch_processing_target: 1000 events in 15 minutes
+```
+
+**Testing**:
+
+- File: `tests/contracts/test_p03_contract.py`
+- Test cases:
+  - `test_p03_contract_loads_without_error`
+  - `test_p03_contract_validates_schema`
+  - `test_p03_has_triggers`
+  - `test_p03_has_fabric_dependencies`
+
+**Acceptance Criteria**:
+
+- [ ] P03 contract exists at `k0/contracts/pipelines/p03_consolidation.v1.yaml`
+- [ ] Contract validates against PipelineSpec schema
+- [ ] Has triggers field (interval + manual)
+- [ ] Documents fabric_dependencies
+- [ ] All tests pass
+
+---
+
 ### Epic 4.1: P03 Fabric Integration
 
 Update P03 to use CapabilityFabric for module invocation.
@@ -4110,15 +4309,22 @@ class IdleTriggerEngine(TriggerEngine):
 
 ## Summary
 
-### Phase 1 Total Issues: 26
+### Phase 1 Total Issues: 33
 
 | Milestone | Epics | Issues |
 |-----------|-------|--------|
 | M1: Foundation & Schemas | 3 | 7 |
-| M2: CapabilityFabric Core | 2 | 7 |
-| M3: PipelineScheduler | 2 | 5 |
-| M4: P03 Integration | 2 | 4 |
+| M2: CapabilityFabric Core | 2 | 8 |
+| M3: PipelineScheduler + Concurrency | 3 | 10 |
+| M4: P03 Integration | 3 | 5 |
 | M5: P08 Migration | 2 | 3 |
+
+### Issues Added from Gap Analysis
+
+| Issue | Description | Gap |
+|-------|-------------|-----|
+| 3.1.0 | Add query_count() syscall | ThresholdTriggerEngine requires generic count |
+| 4.0.1 | Create P03 pipeline contract | P03 contract doesn't exist in codebase |
 
 ### Phase 2 Issues (Future)
 
@@ -4126,6 +4332,21 @@ class IdleTriggerEngine(TriggerEngine):
 |-----------|-------|--------|
 | M6: CRON Trigger Engine | 1 | 2 |
 | M7: IDLE Trigger Engine | 1 | 2 |
+
+### Phase 3 Issues (Future Enhancement)
+
+Per ADR-K004 Future Considerations, these are deferred until prerequisites are met:
+
+| Feature | Description | Prerequisite | Priority |
+|---------|-------------|--------------|----------|
+| Circuit Breakers | Fail-fast for unhealthy providers | Metrics infrastructure | High |
+| Provider Health Checks | Periodic liveness probes | Background health task | Medium |
+| Version Negotiation | Semantic version matching | Version in registry | Medium |
+| Load Shedding | Provider selection by load | Real-time metrics | Low |
+| Distributed Registry | Multi-instance discovery | K1 orchestration | Low |
+| Capability ACLs | Fine-grained access control | Identity/auth | Low |
+| Event Replay/Debugging | Replay fabric call sequences | Event sourcing | Low |
+| Schema Evolution | Backward-compatible payloads | Schema registry | Low |
 
 ### Key Files Created
 
@@ -4135,10 +4356,13 @@ class IdleTriggerEngine(TriggerEngine):
 | `k0/fabric/registry.py` | CapabilityRegistry |
 | `k0/fabric/messages.py` | Request/Response types |
 | `k0/fabric/fabric.py` | CapabilityFabric core |
+| `k0/fabric/audit.py` | Fabric audit logging |
 | `k0/fabric/loader.py` | Capability auto-registration |
 | `k0/scheduler/__init__.py` | Scheduler package exports |
 | `k0/scheduler/triggers.py` | Trigger engines |
 | `k0/scheduler/scheduler.py` | PipelineScheduler |
+| `k0/scheduler/concurrency.py` | SingleFlightGate, overlap policies |
+| `k0/scheduler/audit.py` | Scheduler audit logging |
 | `contracts/schemas/capability.schema.json` | Capability JSON Schema |
 | `k0/contracts/capabilities/core.v1.yaml` | Core capability definitions |
 
@@ -4162,11 +4386,17 @@ class IdleTriggerEngine(TriggerEngine):
 | `tests/k0/runtime/test_schemas_trigger.py` | TriggerSpec validation |
 | `tests/k0/runtime/test_schemas_capability.py` | CapabilityProvider validation |
 | `tests/k0/fabric/test_registry.py` | CapabilityRegistry |
+| `tests/k0/fabric/test_registry_threadsafe.py` | Registry thread safety |
 | `tests/k0/fabric/test_messages.py` | Request/Response |
 | `tests/k0/fabric/test_fabric.py` | CapabilityFabric |
+| `tests/k0/fabric/test_fabric_policy.py` | Context policy enforcement |
+| `tests/k0/fabric/test_audit.py` | Fabric audit logging |
 | `tests/k0/fabric/test_loader.py` | Capability loading |
 | `tests/k0/scheduler/test_triggers.py` | Trigger engines |
 | `tests/k0/scheduler/test_scheduler.py` | PipelineScheduler |
+| `tests/k0/scheduler/test_concurrency.py` | SingleFlightGate |
+| `tests/k0/scheduler/test_hot_reload.py` | Hot reload |
+| `tests/k0/scheduler/test_audit.py` | Scheduler audit logging |
 | `tests/k0/kernel/test_app_boot.py` | Boot integration |
 | `tests/k0/kernel/test_app_scheduler.py` | Scheduler integration |
 | `tests/integration/test_p03_fabric.py` | P03 fabric integration |
@@ -4182,3 +4412,5 @@ class IdleTriggerEngine(TriggerEngine):
 | Date | Version | Author | Changes |
 |------|---------|--------|---------|
 | 2025-12-14 | 1.0 | AI | Initial plan creation |
+| 2025-12-14 | 1.1 | AI | Added Phase 1/2 split for triggers (CRON/IDLE deferred) |
+| 2025-12-14 | 1.2 | AI | Added concurrency controls (Epic 3.3), audit logging (Issue 2.1.6), Phase 3 roadmap |

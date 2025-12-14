@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class FailurePolicy(str, Enum):
@@ -67,6 +67,267 @@ class FailureMode(BaseModel):
             return v
         # Allow "3" → 3 for backward compatibility
         return int(v)
+
+
+# -----------------------------------------------------------------------------
+# Trigger Types (Issue 1.1.1)
+# -----------------------------------------------------------------------------
+
+
+class TriggerType(str, Enum):
+    """Types of pipeline triggers."""
+
+    # Phase 1 trigger types
+    INTERVAL = "interval"
+    THRESHOLD = "threshold"
+    MANUAL = "manual"
+    # Phase 2 trigger types (not yet implemented)
+    CRON = "cron"
+    IDLE = "idle"
+
+
+class TriggerSpec(BaseModel):
+    """
+    Specification for a pipeline trigger.
+
+    Examples:
+        # Interval trigger (every 5 minutes)
+        - id: faiss_indexer_interval
+          type: interval
+          interval_seconds: 300
+
+        # Threshold trigger (when 50+ records pending)
+        - id: faiss_indexer_threshold
+          type: threshold
+          table: st_vec
+          condition: "status = 'READY'"
+          threshold_count: 50
+    """
+
+    id: str = Field(
+        ...,
+        description="Unique trigger identifier within pipeline",
+        pattern=r"^[a-z0-9_]+$",
+    )
+
+    type: TriggerType = Field(
+        ...,
+        description="Trigger type (cron, interval, threshold, idle, manual)",
+    )
+
+    # Interval trigger fields
+    interval_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        le=86400,
+        description="Interval in seconds (for interval type)",
+    )
+
+    # Cron trigger fields
+    cron_expression: str | None = Field(
+        default=None,
+        description="Cron expression (for cron type)",
+    )
+
+    # Threshold trigger fields
+    table: str | None = Field(
+        default=None,
+        description="Table to monitor (for threshold type)",
+    )
+
+    condition: str | None = Field(
+        default=None,
+        description="SQL WHERE condition (for threshold type)",
+    )
+
+    threshold_count: int | None = Field(
+        default=None,
+        ge=1,
+        description="Threshold count to trigger (for threshold type)",
+    )
+
+    check_interval_seconds: int | None = Field(
+        default=60,
+        ge=1,
+        description="How often to check threshold (for threshold type)",
+    )
+
+    # Idle trigger fields
+    idle_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description="Idle time before trigger (for idle type)",
+    )
+
+    min_pending: int | None = Field(
+        default=1,
+        ge=1,
+        description="Minimum pending items for idle trigger",
+    )
+
+    # Common fields
+    batch_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Batch size for triggered processing",
+    )
+
+    catch_up_enabled: bool = Field(
+        default=True,
+        description="Whether to catch up on missed triggers at startup",
+    )
+
+    @model_validator(mode="after")
+    def validate_trigger_fields(self) -> "TriggerSpec":
+        """Validate that required fields are present based on trigger type."""
+        if self.type == TriggerType.INTERVAL:
+            if not self.interval_seconds:
+                raise ValueError("interval_seconds required for interval triggers")
+        elif self.type == TriggerType.CRON:
+            if not self.cron_expression:
+                raise ValueError("cron_expression required for cron triggers")
+        elif self.type == TriggerType.THRESHOLD:
+            if not self.table:
+                raise ValueError("table required for threshold triggers")
+            if not self.threshold_count:
+                raise ValueError("threshold_count required for threshold triggers")
+        elif self.type == TriggerType.IDLE:
+            if not self.idle_seconds:
+                raise ValueError("idle_seconds required for idle triggers")
+        # MANUAL type has no required fields
+        return self
+
+
+# -----------------------------------------------------------------------------
+# Capability Provider Types (Issue 1.1.2)
+# -----------------------------------------------------------------------------
+
+
+class ProviderType(str, Enum):
+    """Types of capability providers."""
+
+    MODULE = "module"
+    PIPELINE = "pipeline"
+
+
+class FabricContextPolicy(str, Enum):
+    """How fabric calls inherit caller context."""
+
+    INHERIT = "inherit"  # Inherit caller's syscalls (capability intersection)
+    ISOLATED = "isolated"  # Provider uses its own context only
+    SYNTHETIC = "synthetic"  # Fabric creates synthetic context
+
+
+class CapabilityProvider(BaseModel):
+    """
+    Configuration for a capability provider.
+
+    Example:
+        providers:
+          - type: module
+            module_id: salience.score:v1
+            priority: 1
+            condition: always
+    """
+
+    type: ProviderType = Field(
+        ...,
+        description="Provider type (module or pipeline)",
+    )
+
+    # Module provider fields
+    module_id: str | None = Field(
+        default=None,
+        description="Module ID (for module providers)",
+        pattern=r"^[a-z_]+\.[a-z_]+(:[a-z0-9]+)?$",
+    )
+
+    # Pipeline provider fields
+    pipeline_id: str | None = Field(
+        default=None,
+        description="Pipeline ID (for pipeline providers)",
+    )
+
+    request_topic: str | None = Field(
+        default=None,
+        description="Request topic (for pipeline providers)",
+    )
+
+    response_topic: str | None = Field(
+        default=None,
+        description="Response topic (for pipeline providers)",
+    )
+
+    # Common fields
+    priority: int = Field(
+        default=1,
+        ge=1,
+        le=100,
+        description="Provider priority (lower = higher priority)",
+    )
+
+    condition: str = Field(
+        default="always",
+        description="Condition for using this provider",
+    )
+
+    latency_budget_ms: int | None = Field(
+        default=None,
+        ge=1,
+        le=10000,
+        description="Latency budget for this provider",
+    )
+
+    timeout_ms: int | None = Field(
+        default=None,
+        ge=1,
+        le=60000,
+        description="Timeout for provider response",
+    )
+
+    @model_validator(mode="after")
+    def validate_provider_fields(self) -> "CapabilityProvider":
+        """Validate that required fields are present based on provider type."""
+        if self.type == ProviderType.MODULE:
+            if not self.module_id:
+                raise ValueError("module_id required for module providers")
+        elif self.type == ProviderType.PIPELINE:
+            if not self.pipeline_id:
+                raise ValueError("pipeline_id required for pipeline providers")
+            if not self.request_topic or not self.response_topic:
+                raise ValueError("request_topic and response_topic required for pipeline providers")
+        return self
+
+
+class CapabilityDefinition(BaseModel):
+    """
+    Definition of a capability with its providers.
+
+    Example:
+        score_salience:
+          description: "Compute salience score"
+          providers:
+            - type: module
+              module_id: salience.score:v1
+    """
+
+    description: str = Field(
+        ...,
+        description="Human-readable capability description",
+    )
+
+    providers: list[CapabilityProvider] = Field(
+        ...,
+        min_length=1,
+        description="Ordered list of providers for this capability",
+    )
+
+    default_timeout_ms: int = Field(
+        default=100,
+        ge=1,
+        le=60000,
+        description="Default timeout for capability requests",
+    )
 
 
 class ModuleContract(BaseModel):
@@ -140,6 +401,22 @@ class ModuleContract(BaseModel):
     description: str | None = Field(
         default=None,
         description="Human-readable module description",
+    )
+
+    # Fabric integration fields (Issue 1.1.3)
+    fabric_callable: bool = Field(
+        default=False,
+        description="Whether module can be invoked via CapabilityFabric",
+    )
+
+    fabric_capabilities: list[str] = Field(
+        default_factory=list,
+        description="Capabilities this module provides",
+    )
+
+    fabric_context_policy: FabricContextPolicy = Field(
+        default=FabricContextPolicy.INHERIT,
+        description="How fabric calls inherit caller context",
     )
 
     @field_validator("side_effects")
@@ -293,6 +570,18 @@ class PipelineSpec(BaseModel):
     required_capabilities: list[str] = Field(
         default_factory=list,
         description="Required storage capabilities (e.g., st_hipp_events.write)",
+    )
+
+    # Trigger configuration (Issue 1.1.4)
+    triggers: list[TriggerSpec] = Field(
+        default_factory=list,
+        description="Declarative triggers for scheduled activation",
+    )
+
+    # Fabric actions this pipeline provides
+    fabric_actions: list[str] = Field(
+        default_factory=list,
+        description="Fabric capabilities this pipeline exposes",
     )
 
     @field_validator("dag")

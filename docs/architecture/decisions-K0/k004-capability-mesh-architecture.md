@@ -324,6 +324,10 @@ fabric_context_policy: inherit  # inherit | isolated | synthetic
 3. **Activation via Bus** - Scheduler emits to pipeline's entry_topic
 4. **Hot-Reload Support** - Trigger changes don't require kernel restart
 
+**Dependencies**:
+
+- **ThresholdTriggerEngine** requires `Syscalls.query_count(table, where)` to check row counts against threshold conditions. This method must be added to the Syscalls class (see Issue 3.1.0 in implementation plan).
+
 #### PipelineScheduler Interface
 
 ```python
@@ -803,3 +807,5 @@ Implementation is divided into milestones:
 ## Revision History
 
 - 2025-12-14: Initial draft (@K0-Architecture-Team)
+- 2025-12-14: Added Phase 1/2 split for triggers, enforcement boundary methods
+- 2025-12-14: Added Concurrency Policy, Scope Boundaries, Audit Logging, Future Considerations
