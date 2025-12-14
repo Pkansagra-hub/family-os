@@ -1,0 +1,22 @@
+{
+  "git_sha": "feature-test",
+  "timestamp": "2025-11-01T06:46:33.251949+00:00",
+  "branch": "k0-Strengthning",
+  "metrics": {
+    "small": {
+      "p50_latency_ms": 9.3,
+      "p95_latency_ms": 11.2,
+      "p99_latency_ms": 11.2,
+      "throughput_rps": 104.71204188481676,
+      "error_rate": 0.0
+    },
+    "balanced": {
+      "p50_latency_ms": 23.1,
+      "p95_latency_ms": 27.1,
+      "p99_latency_ms": 27.8,
+      "throughput_rps": 42.999656002751976,
+      "error_rate": 0.002
+    }
+  },
+  "checksum": "7c65ba8b557d9bb7"
+}

@@ -7,7 +7,7 @@
     "idem_key",
     "wal_pos",
     "commit_ts",
-    "payload_sha256",
+    "envelope_sha256",
     "mls_group_id",
     "key_version",
     "device_sig"
@@ -15,37 +15,62 @@
   "properties": {
     "receipt_id": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "description": "Unique receipt identifier"
     },
     "idem_key": {
-      "type": "string"
+      "type": "string",
+      "description": "Canonical idempotency key"
     },
     "wal_pos": {
       "type": "integer",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Write-Ahead Log position"
     },
     "commit_ts": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "description": "ISO8601 timestamp of commit"
     },
-    "payload_sha256": {
+    "envelope_sha256": {
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "V1: SHA-256 hash of full canonical envelope (required)"
     },
     "mls_group_id": {
-      "type": "string"
+      "type": "string",
+      "description": "MLS group identifier"
     },
     "key_version": {
-      "type": "string"
+      "type": "string",
+      "description": "Key version used for signing"
     },
     "device_sig": {
-      "type": "string"
+      "type": "string",
+      "description": "Device signature (Ed25519)"
     },
     "obligations": {
       "type": "array",
       "items": {
         "type": "string"
-      }
+      },
+      "description": "Generic policy obligation names"
+    },
+    "obligations_applied": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "V1: Specific actions applied (e.g., kernel.mask.location.AMBER) for GDPR/CCPA compliance proof"
+    },
+    "payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "V1: DEPRECATED - Use envelope_sha256. Legacy body hash for backward compatibility."
+    },
+    "manifest_fingerprint": {
+      "type": "string",
+      "description": "Policy manifest fingerprint/version"
     }
   }
 }

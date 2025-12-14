@@ -1,0 +1,10 @@
+{
+  "person_id": "person_123",
+  "valence_bias": 0.1,
+  "arousal_bias": -0.05,
+  "valence_temp": 1.05,
+  "arousal_temp": 0.95,
+  "alpha_fast": 0.5,
+  "n_feedback_samples": 12,
+  "last_updated": 1699900000.0
+}

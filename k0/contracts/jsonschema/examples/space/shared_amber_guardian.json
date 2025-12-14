@@ -1,0 +1,15 @@
+{
+  "actor_id": "person-guardianA",
+  "tenant_id": "tenant-123",
+  "space_id": "shared:household",
+  "participants": [
+    {"person_id": "person-guardianA", "relationship_hint": "guardian"},
+    {"person_id": "person-child", "relationship_hint": "dependent"}
+  ],
+  "policy_stamp": {
+    "band": "AMBER",
+    "obligations": ["require.guardian"],
+    "decision_id": "dec-2"
+  },
+  "trace_id": "trace-amber"
+}

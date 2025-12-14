@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cognitive.vector.indexed.v1",
+  "title": "Cognitive Vector Indexed Event",
+  "description": "Emitted when a vector is added to FAISS similarity search index (P08 M24)",
+  "type": "object",
+  "required": [
+    "embedding_id",
+    "event_id",
+    "tenant_id",
+    "space_id",
+    "index_id",
+    "indexed_at"
+  ],
+  "properties": {
+    "embedding_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the embedding record"
+    },
+    "event_id": {
+      "type": "string",
+      "description": "Hippocampus event ID (FK to st_hipp_events)"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier for multi-tenancy"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier within tenant"
+    },
+    "index_id": {
+      "type": "string",
+      "description": "FAISS index identifier (e.g., 'ultrabert_v2.1.0_ivf256_pq64')"
+    },
+    "indexed_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds since epoch) when vector was indexed"
+    },
+    "vector_dim": {
+      "type": "integer",
+      "default": 768,
+      "description": "Dimensionality of the embedding vector"
+    },
+    "batch_size": {
+      "type": "integer",
+      "description": "Number of vectors indexed in this batch (1 for single, N for batch)"
+    },
+    "index_stats": {
+      "type": "object",
+      "description": "Optional FAISS index statistics after addition",
+      "properties": {
+        "total_vectors": {
+          "type": "integer",
+          "description": "Total number of vectors in index after addition"
+        },
+        "nprobe": {
+          "type": "integer",
+          "default": 16,
+          "description": "FAISS search parameter (IVF cells to probe)"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

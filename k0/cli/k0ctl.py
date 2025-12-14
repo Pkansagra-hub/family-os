@@ -53,10 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=None,
         metavar="KEY=VALUE",
-        help=(
-            "Override configuration values using dotted paths (e.g. --set "
-            "server.port=9090)."
-        ),
+        help=("Override configuration values using dotted paths (e.g. --set " "server.port=9090)."),
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -547,9 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="requeue_seq",
         type=int,
         default=None,
-        help=(
-            "Optional override for the requeue sequence; defaults to the DLQ entry's value + 1"
-        ),
+        help=("Optional override for the requeue sequence; defaults to the DLQ entry's value + 1"),
     )
 
     dlq_purge_parser = dlq_subparsers.add_parser(
@@ -707,9 +702,7 @@ def main(
     return 2
 
 
-def _resolve_serve_options(
-    args: argparse.Namespace, settings: KernelSettings
-) -> ServeOptions:
+def _resolve_serve_options(args: argparse.Namespace, settings: KernelSettings) -> ServeOptions:
     server_settings = settings.server
     host = args.host or server_settings.host
     port = args.port or server_settings.port
@@ -893,9 +886,7 @@ def _handle_key_command(
 
         if command == "activate":
             # Calculate grace window expiry
-            grace_hours = (
-                args.grace_hours or settings.security.key_rotation_grace_window_hours
-            )
+            grace_hours = args.grace_hours or settings.security.key_rotation_grace_window_hours
             if grace_hours > settings.security.key_rotation_max_grace_hours:
                 logger.error(
                     "Grace window %d hours exceeds maximum %d hours",
@@ -911,9 +902,7 @@ def _handle_key_command(
 
             # Get the key to activate
             keys = ledger.get_keys(args.device_id)
-            target_key = next(
-                (k for k in keys if k.key_version == args.key_version), None
-            )
+            target_key = next((k for k in keys if k.key_version == args.key_version), None)
             if target_key is None:
                 logger.error(
                     "Key version %s not found for device %s",
@@ -964,9 +953,7 @@ def _handle_key_command(
 
         if command == "revoke":
             keys = ledger.get_keys(args.device_id)
-            target_key = next(
-                (k for k in keys if k.key_version == args.key_version), None
-            )
+            target_key = next((k for k in keys if k.key_version == args.key_version), None)
             if target_key is None:
                 logger.error(
                     "Key version %s not found for device %s",
@@ -1005,13 +992,9 @@ def _handle_key_command(
             logger.info("Keys for device %s:", args.device_id)
             for key in keys:
                 grace_info = (
-                    f" grace_expires={key.grace_expires_ts}"
-                    if key.grace_expires_ts
-                    else ""
+                    f" grace_expires={key.grace_expires_ts}" if key.grace_expires_ts else ""
                 )
-                revoke_info = (
-                    f" reason={key.revocation_reason}" if key.revocation_reason else ""
-                )
+                revoke_info = f" reason={key.revocation_reason}" if key.revocation_reason else ""
                 logger.info(
                     "  • %s [%s] registered=%s activated=%s%s%s",
                     key.key_version,
@@ -1171,9 +1154,7 @@ def _handle_schema_command(
                     logger.info("")
                     logger.info("Audit Metadata:")
                     logger.info("  Operator: %s", record.operator_id)
-                    logger.info(
-                        "  Blocked At: %s", record.blocked_ts or "(not blocked)"
-                    )
+                    logger.info("  Blocked At: %s", record.blocked_ts or "(not blocked)")
                     logger.info("  Reason: %s", record.blocked_reason or "(no reason)")
                     logger.info("  Unblocked At: %s", record.unblocked_ts or "(never)")
                 else:

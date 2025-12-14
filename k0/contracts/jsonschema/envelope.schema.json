@@ -14,7 +14,10 @@
     "band",
     "policy_version",
     "ts",
-    "sig"
+    "sig",
+    "sig_alg",
+    "sig_kid",
+    "envelope_sha256"
   ],
   "properties": {
     "cognitive_trace_id": {
@@ -58,12 +61,106 @@
     "sig": {
       "type": "string"
     },
+    "sig_alg": {
+      "type": "string",
+      "enum": ["ECDSA_P256_SHA256", "Ed25519SHA512", "RSA4096SHA256"],
+      "description": "Signature algorithm for algorithm agility"
+    },
+    "sig_kid": {
+      "type": "string",
+      "description": "Key ID in format: did:device:device-name#timestamp"
+    },
+    "envelope_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 of full canonical envelope"
+    },
     "payload_sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
     "idem_key": {
       "type": "string"
+    },
+    "ingested_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server timestamp when received (V1)"
+    },
+    "clock_skew_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Clock skew in milliseconds (V1)"
+    },
+    "policy_stamp": {
+      "type": "object",
+      "description": "Policy decision stamp (V1.3) - attached after PEP evaluation",
+      "properties": {
+        "policy_version": {
+          "type": "string",
+          "description": "Policy version used for decision"
+        },
+        "band": {
+          "type": "string",
+          "enum": ["GREEN", "AMBER", "RED"],
+          "description": "Privacy band from PEP decision"
+        },
+        "obligations": {
+          "type": "array",
+          "description": "Applicable privacy/security obligations",
+          "items": {
+            "type": "string"
+          }
+        },
+        "visible_to": {
+          "type": "array",
+          "description": "Actor IDs who can access this memory",
+          "items": {
+            "type": "string"
+          }
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["ALLOW", "DENY", "CONDITIONAL"],
+          "description": "Policy decision outcome"
+        },
+        "applied_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When policy stamp was applied"
+        }
+      },
+      "required": ["policy_version", "band", "obligations", "decision", "applied_at"]
+    },
+    "location_geohash": {
+      "type": "string",
+      "description": "Geohash of location (V1.3) - precise level depends on band (GREEN=full, AMBER=5km, RED=25km)",
+      "pattern": "^[0-9a-z]{0,12}$"
+    },
+    "location_precision_m": {
+      "type": "integer",
+      "description": "Precision in meters (V1.3) - GREEN=1m, AMBER=5000m, RED=25000m",
+      "minimum": 1
+    },
+    "embedding_status": {
+      "type": "string",
+      "description": "Async embedding worker status (V1.4) - PENDING, IN_PROGRESS, COMPLETE, FAILED",
+      "enum": ["PENDING", "IN_PROGRESS", "COMPLETE", "FAILED"]
+    },
+    "embedding_id": {
+      "type": "string",
+      "description": "ID of computed embedding vector (V1.4)",
+      "pattern": "^emb-"
+    },
+    "fts_status": {
+      "type": "string",
+      "description": "Async FTS indexing worker status (V1.4) - PENDING, IN_PROGRESS, COMPLETE, FAILED",
+      "enum": ["PENDING", "IN_PROGRESS", "COMPLETE", "FAILED"]
+    },
+    "fts_entry_id": {
+      "type": "string",
+      "description": "ID of FTS index entry (V1.4)",
+      "pattern": "^fts-"
     },
     "body": {
       "description": "Domain payload matching schema_uri/schema_version",

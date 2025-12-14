@@ -18,12 +18,7 @@ from k0.storage.dlq import DeadLetterQueue
 from k0.storage.outbox import OutboxEntry, OutboxStore
 
 from .scheduler import RetryScheduler
-from .worker import (
-    MetricsEmitter,
-    OutboxDriver,
-    OutboxWorker,
-    load_driver_from_alias_map,
-)
+from .worker import MetricsEmitter, OutboxDriver, OutboxWorker, load_driver_from_alias_map
 
 
 def _serialize_entry(entry: OutboxEntry) -> dict[str, Any]:
@@ -106,9 +101,7 @@ class HTTPDriverAdapter:
                     msg = f"remote driver responded with status {response.status}"
                     raise RuntimeError(msg)
         except urllib_error.URLError as exc:  # pragma: no cover - network error guard
-            raise RuntimeError(
-                "failed to deliver outbox entry to remote driver"
-            ) from exc
+            raise RuntimeError("failed to deliver outbox entry to remote driver") from exc
 
 
 class DriverWorkerPool:
@@ -125,6 +118,7 @@ class DriverWorkerPool:
         batch_size: int = 128,
         clock: Callable[[], datetime] | None = None,
         lease_seconds: int = 300,
+        max_retry_attempts: int = 10,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero")
@@ -140,6 +134,7 @@ class DriverWorkerPool:
         self._batch_size = batch_size
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._lease_seconds = lease_seconds
+        self._max_retry_attempts = max_retry_attempts
 
         self._workers: Dict[str, OutboxWorker] = {}
         self._driver_overrides: Dict[str, OutboxDriver] = {}
@@ -284,9 +279,7 @@ class DriverWorkerPool:
 
     def active_sessions(self, alias: str) -> list[DriverSession]:
         self._cleanup_expired_sessions()
-        return [
-            session for session in self._sessions.values() if session.alias == alias
-        ]
+        return [session for session in self._sessions.values() if session.alias == alias]
 
     def _ensure_worker(self, alias: str) -> OutboxWorker:
         worker = self._workers.get(alias)
@@ -299,6 +292,7 @@ class DriverWorkerPool:
             driver_loader=self._resolve_driver,
             metrics_emitter=self._metrics_emitter,
             batch_size=self._batch_size,
+            max_retry_attempts=self._max_retry_attempts,
         )
         self._workers[alias] = worker
         return worker

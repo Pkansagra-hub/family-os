@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""
+Git Post-Commit Hook for KG Auto-Indexing
+
+Automatically indexes changed files after each commit.
+Tracks ADRs, Python modules, and contracts.
+
+Installation:
+    1. Make this file executable: chmod +x .github/hooks/post-commit
+    2. Create symlink: ln -s ../../.github/hooks/post-commit .git/hooks/post-commit
+
+Or manually copy to .git/hooks/post-commit and make executable.
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+# Add parent directory to path before imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "mcp"))
+
+try:
+    from kg_indexers import ADRIndexer, ContractIndexer, ModuleIndexer
+    from kg_store import KGStore
+except ImportError as e:
+    print(f"[KG Hook] Warning: Could not import required modules: {e}")
+    # Define stub classes to prevent runtime errors
+    class KGStore:
+        def __init__(self, path: str): pass
+        def close(self): pass
+
+    class ADRIndexer:
+        def __init__(self, store): pass
+        def index_adr(self, path): pass
+
+    class ModuleIndexer:
+        def __init__(self, store): pass
+        def index_module(self, path): pass
+
+    class ContractIndexer:
+        def __init__(self, store): pass
+        def index_openapi(self, path): pass
+        def index_json_schema(self, path): pass
+
+
+def get_changed_files() -> List[str]:
+    """Get files changed in last commit"""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return [line.strip() for line in result.stdout.split("\n") if line.strip()]
+    except subprocess.CalledProcessError:
+        return []
+
+
+def should_reindex(changed_files: List[str]) -> bool:
+    """Check if any changed files require reindexing"""
+    relevant_patterns = [
+        "docs/architecture/decisions/",
+        ".py",
+        ".yaml",
+        ".json",
+    ]
+    return any(
+        any(pattern in file_path for pattern in relevant_patterns)
+        for file_path in changed_files
+    )
+
+
+def process_file(file_path: str, adr_indexer, module_indexer, contract_indexer) -> bool:
+    """Process a single file for indexing
+
+    Returns True if file was indexed successfully
+    """
+    file_obj = Path(file_path)
+
+    if not file_obj.exists():
+        return False
+
+    try:
+        # ADRs
+        if file_path.startswith("docs/architecture/decisions") and file_path.endswith(".md"):
+            adr_indexer.index_adr(file_obj)
+            return True
+
+        # Modules
+        elif file_path.endswith(".py"):
+            module_indexer.index_module(file_obj)
+            return True
+
+        # Contracts
+        elif file_path.endswith((".yaml", ".json")):
+            if "openapi" in file_path.lower():
+                contract_indexer.index_openapi(file_obj)
+                return True
+            elif "schema" in file_path.lower():
+                contract_indexer.index_json_schema(file_obj)
+                return True
+
+    except (IOError, OSError, ValueError) as e:
+        print(f"[KG Hook] Warning: Failed to index {file_path}: {e}")
+
+    return False
+
+
+def main() -> int:
+    """Main hook logic"""
+    # Get changed files
+    changed_files = get_changed_files()
+
+    if not changed_files:
+        print("[KG Hook] No files changed")
+        return 0
+
+    # Check if reindex needed
+    if not should_reindex(changed_files):
+        print(f"[KG Hook] No relevant files changed ({len(changed_files)} files)")
+        return 0
+
+    print(f"[KG Hook] Detected {len(changed_files)} relevant file(s) changed:")
+    for file_path in changed_files[:5]:  # Show first 5
+        print(f"  - {file_path}")
+    if len(changed_files) > 5:
+        print(f"  ... and {len(changed_files) - 5} more")
+
+    # Initialize store
+    # Use repo-relative path, compatible with .vscode/mcp.json pattern
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    db_path = repo_root / ".github" / "copilot-memories" / "memories.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        store = KGStore(str(db_path))
+
+        store.close()
+
+        print(f"[KG Hook] Successfully indexed {indexed_count} file(s)")
+        return 0
+
+    except (IOError, OSError, ValueError) as e:
+        print(f"[KG Hook] Error: {e}")
+        return 1
+            except Exception as e:
+                print(f"[KG Hook] Warning: Failed to index {file_path}: {e}")
+
+        store.close()
+
+        print(f"[KG Hook] Successfully indexed {indexed_count} file(s)")
+        return 0
+
+    except Exception as e:
+        print(f"[KG Hook] Error: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

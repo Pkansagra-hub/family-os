@@ -16,7 +16,7 @@ from k0.outbox import (
 from k0.storage.dlq import DeadLetterQueue
 from k0.storage.outbox import OutboxEntry, OutboxStore
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 @fixture
@@ -240,3 +240,4 @@ def _(
     assert recorded.state == "PENDING"
     assert recorded.wal_pos == 3
     assert recorded.payload == b"payload"
+

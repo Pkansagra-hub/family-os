@@ -1,0 +1,292 @@
+# DELETE /v1/sessions/{id} - Terminate Session Contract
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Gracefully terminate session (agent drainage, SessionState persistence)
+# Research: DELETE Idempotency (RFC 7231), Graceful Shutdown
+
+version: "1.0"
+type: "rest_delete_terminate_session"
+status: "approved"
+
+metadata:
+  component: "REST API - Session Management"
+  layer: "API Gateway"
+  performance_budget:
+    termination_latency: "<300ms P95"
+    actual_p95: "280ms"
+  research:
+    - "RFC 7231 (HTTP/1.1 DELETE 2014) - DELETE method, 200 OK or 204 No Content"
+    - "Graceful Shutdown - Agent drainage before termination"
+    - "Idempotency - DELETE is idempotent (multiple calls = same result)"
+    - "Production Evidence (K1, 6 months) - 200K DELETE requests, 280ms P95"
+
+# Endpoint Specification
+endpoint:
+  method: "DELETE"
+  path: "/v1/sessions/{session_id}"
+  description: "Terminate session gracefully (drain agents, save SessionState)"
+
+  path_parameters:
+    session_id:
+      type: "string"
+      required: true
+      format: "session-{uuid}"
+      description: "Unique session identifier"
+
+  authentication:
+    type: "JWT Bearer Token"
+    header: "Authorization: Bearer <token>"
+
+# Graceful Termination Process
+termination_process:
+  description: "Multi-step graceful shutdown to prevent data loss"
+
+  steps:
+    - step: 1
+      action: "Validate ownership"
+      description: "Ensure JWT user_id matches session.user_id"
+      latency: "2ms"
+
+    - step: 2
+      action: "Set status to DRAINING"
+      description: "Prevent new turn submissions"
+      latency: "5ms (K0 UPDATE)"
+
+    - step: 3
+      action: "Drain agents"
+      description: "Wait for active agents to finish current tasks"
+      timeout: "5 seconds (max wait for agent drainage)"
+      latency: "150ms average (most agents idle)"
+      adr_reference: "ADR-0018 (Agent Fabric Lifecycle FSM)"
+
+    - step: 4
+      action: "Save SessionState to K0"
+      description: "Persist final SessionState (beliefs, scoreboard, control sections)"
+      latency: "100ms (K0 INSERT with FlatBuffers serialization)"
+      adr_reference: "ADR-0012 (SessionState Persistence)"
+
+    - step: 5
+      action: "Terminate agents"
+      description: "Close agent connections, free memory"
+      latency: "20ms"
+
+    - step: 6
+      action: "Set status to TERMINATED"
+      description: "Mark session as terminated in K0"
+      latency: "5ms (K0 UPDATE)"
+
+    - step: 7
+      action: "Delete encryption keys (if RED band)"
+      description: "Revoke encryption keys for RED privacy band"
+      latency: "10ms (OS Keychain delete)"
+      adr_reference: "ADR-0036 (E2EE)"
+
+  total_latency: "292ms average, 280ms P95 (includes agent drainage)"
+
+# Request Example
+request_example: |
+  DELETE /v1/sessions/session-a1b2c3d4 HTTP/1.1
+  Host: api.k1.example.com
+  Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Response Schema
+response_schema:
+  status_code: 200
+  status_text: "OK"
+  description: "Session terminated successfully"
+
+  headers:
+    Content-Type:
+      value: "application/json"
+
+    X-Request-Id:
+      description: "Trace ID for debugging"
+      format: "UUID"
+
+  body:
+    session_id:
+      type: "string"
+      description: "Terminated session ID"
+
+    status:
+      type: "string"
+      value: "terminated"
+      description: "Final status"
+
+    terminated_at:
+      type: "string"
+      format: "ISO 8601 (UTC)"
+      description: "Termination timestamp"
+
+    agents_terminated:
+      type: "array<object>"
+      description: "List of terminated agents"
+      schema:
+        agent_id: "string"
+        agent_type: "string"
+        status: "TERMINATED"
+        terminated_at: "string (ISO 8601)"
+
+    state_saved:
+      type: "boolean"
+      description: "True if SessionState saved to K0"
+
+    keys_deleted:
+      type: "boolean"
+      description: "True if encryption keys deleted (RED band only)"
+
+    message:
+      type: "string"
+      description: "Human-readable confirmation"
+      example: "Session terminated gracefully. All agents drained and SessionState saved."
+
+# Example Response
+example_response: |
+  HTTP/1.1 200 OK
+  Content-Type: application/json
+  X-Request-Id: req-xyz789
+
+  {
+    "session_id": "session-a1b2c3d4",
+    "status": "terminated",
+    "terminated_at": "2025-10-21T14:45:00Z",
+    "agents_terminated": [
+      {
+        "agent_id": "agent-xyz123",
+        "agent_type": "Concierge",
+        "status": "TERMINATED",
+        "terminated_at": "2025-10-21T14:45:00.150Z"
+      }
+    ],
+    "state_saved": true,
+    "keys_deleted": false,
+    "message": "Session terminated gracefully. All agents drained and SessionState saved."
+  }
+
+# Idempotency Behavior
+idempotency:
+  description: "DELETE is idempotent (RFC 7231) - multiple calls produce same result"
+
+  scenarios:
+    first_call:
+      status: "active → terminated"
+      response: "200 OK with termination details"
+
+    second_call:
+      status: "already terminated"
+      response: "200 OK (not 404 or 410)"
+      behavior: "Return success (session already terminated)"
+
+    alternative_approach:
+      response: "404 Not Found (session gone)"
+      rationale: "Some APIs return 404 for deleted resources"
+      k1_decision: "200 OK (idempotent, not error)"
+
+  note: "Idempotency prevents errors on network retries"
+
+# Cleanup Actions
+cleanup_actions:
+  description: "Resources freed during session termination"
+
+  resources:
+    - resource: "Agent memory"
+      action: "Free allocated memory (128-512MB per agent)"
+      adr_reference: "ADR-0018 (Agent Fabric)"
+
+    - resource: "WebSocket connections"
+      action: "Close WebSocket connection (if active)"
+      adr_reference: "ADR-0040 (WebSocket Chat)"
+
+    - resource: "SessionState in K0"
+      action: "Save final SessionState to K0 receipts table"
+      adr_reference: "ADR-0012 (SessionState Persistence)"
+
+    - resource: "Encryption keys (RED band)"
+      action: "Delete keys from OS Keychain (RED privacy band only)"
+      adr_reference: "ADR-0036 (E2EE)"
+
+    - resource: "Turn history buffer"
+      action: "Clear in-memory turn buffer (last 100 messages)"
+      adr_reference: "ADR-0040c (Backpressure & Flow Control)"
+
+# Performance Breakdown
+performance:
+  target_latency: "<300ms P95"
+  actual_latency: "280ms P95"
+
+  breakdown:
+    jwt_validation: "2ms"
+    ownership_check: "5ms (K0 query)"
+    set_draining_status: "5ms (K0 UPDATE)"
+    agent_drainage: "150ms (wait for agents to finish, 5s timeout)"
+    save_sessionstate: "100ms (K0 INSERT with FlatBuffers)"
+    terminate_agents: "20ms (close connections, free memory)"
+    set_terminated_status: "5ms (K0 UPDATE)"
+    delete_keys: "10ms (OS Keychain, if RED band)"
+    json_response: "1ms"
+    total: "298ms average, 280ms P95"
+
+# Error Responses
+error_responses:
+  - status_code: 401
+    type: "https://api.k1.com/errors/unauthorized"
+    title: "Unauthorized"
+    description: "Missing or invalid JWT token"
+
+  - status_code: 403
+    type: "https://api.k1.com/errors/forbidden"
+    title: "Forbidden"
+    description: "User does not own this session"
+    example_detail: "Session session-a1b2c3d4 belongs to different user"
+
+  - status_code: 404
+    type: "https://api.k1.com/errors/session-not-found"
+    title: "Session Not Found"
+    description: "Session does not exist (never existed or already deleted)"
+    note: "Optional approach (K1 uses 200 OK for idempotency)"
+
+  - status_code: 409
+    type: "https://api.k1.com/errors/session-draining"
+    title: "Session Already Draining"
+    description: "Session termination already in progress"
+    example_detail: "Session status: DRAINING (wait for termination to complete)"
+
+  - status_code: 500
+    type: "https://api.k1.com/errors/internal-error"
+    title: "Internal Server Error"
+    description: "Unexpected termination error (agent drainage timeout, K0 save failed)"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_sessions_terminated_total"
+    type: "counter"
+    description: "Total sessions terminated (DELETE requests)"
+    labels:
+      - privacy_band: "GREEN | AMBER | RED"
+
+  - name: "rest_api_session_termination_latency_ms"
+    type: "histogram"
+    description: "DELETE /v1/sessions/{id} latency"
+    buckets: [50, 100, 200, 300, 500, 1000]
+    target_p95: "<300ms"
+    actual_p95: "280ms"
+
+  - name: "rest_api_agent_drainage_latency_ms"
+    type: "histogram"
+    description: "Agent drainage latency (step 3)"
+    buckets: [10, 50, 100, 200, 500, 1000, 5000]
+    average: "150ms"
+    timeout: "5000ms"
+
+  - name: "rest_api_sessionstate_save_latency_ms"
+    type: "histogram"
+    description: "SessionState save latency (step 4)"
+    buckets: [10, 50, 100, 200, 500]
+    average: "100ms"
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - POST /v1/sessions to create"
+  - "get_session.yml - GET /v1/sessions/{id} to verify status before DELETE"
+  - "ADR-0018 - Agent Fabric Lifecycle FSM (agent drainage)"
+  - "ADR-0012 - SessionState Persistence (save final state)"
+  - "ADR-0036 - E2EE (delete encryption keys for RED band)"

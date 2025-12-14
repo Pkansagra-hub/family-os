@@ -1,0 +1,203 @@
+# K0 Kernel SLO Definitions
+# These definitions drive dashboard generation and alert rule synthesis in telemetry_renderer.py
+#
+# Structure:
+# - name: SLO identifier (used in metrics, alerts, dashboards)
+# - metric: Prometheus metric name for base measurement
+# - target_percentile: Percentile for latency-based SLOs (0.95 = P95)
+# - target_value: Numeric target (unit-dependent)
+# - unit: Measurement unit (seconds, count, percent, ratio)
+# - alert_thresholds:
+#   - warning: Threshold that triggers warning alert
+#   - critical: Threshold that triggers critical/page alert
+# - description: Human-readable description for dashboards
+# - dashboard_group: Logical grouping (kernel_overview, latency, availability, etc.)
+
+slos:
+  # API Availability SLO
+  - name: api_availability
+    metric: k0_kernel_http_requests_total
+    target_value: 0.999  # 99.9%
+    unit: percent
+    description: "HTTP API availability (successful responses / total requests)"
+    dashboard_group: kernel_overview
+    alert_thresholds:
+      warning: 0.995    # 99.5%
+      critical: 0.990   # 99.0%
+
+  # Command Submit Latency SLO
+  - name: command_submit_latency
+    metric: k0_command_submit_duration_seconds
+    target_percentile: 0.95
+    target_value: 0.100  # 100ms
+    unit: seconds
+    description: "Command submit P95 latency (target: 100ms)"
+    dashboard_group: command_latency
+    alert_thresholds:
+      warning: 0.150    # 150ms
+      critical: 0.250   # 250ms
+
+  # UoW Commit Latency SLO
+  - name: uow_commit_latency
+    metric: k0_uow_commit_seconds
+    target_percentile: 0.95
+    target_value: 0.050  # 50ms
+    unit: seconds
+    description: "UoW commit P95 latency (target: 50ms)"
+    dashboard_group: command_latency
+    alert_thresholds:
+      warning: 0.100    # 100ms
+      critical: 0.200   # 200ms
+
+  # Query Execute Latency SLO
+  - name: query_execute_latency
+    metric: k0_query_execute_duration_seconds
+    target_percentile: 0.95
+    target_value: 0.050  # 50ms
+    unit: seconds
+    description: "Query execute P95 latency (target: 50ms)"
+    dashboard_group: query_latency
+    alert_thresholds:
+      warning: 0.075    # 75ms
+      critical: 0.150   # 150ms
+
+  # WAL Lag SLO (replication distance)
+  - name: wal_lag
+    metric: k0_wal_apply_lag_seconds
+    target_percentile: 0.95
+    target_value: 60.0  # 60 seconds
+    unit: seconds
+    description: "WAL apply lag (replication staleness)"
+    dashboard_group: replay_throughput
+    alert_thresholds:
+      warning: 120.0    # 2 minutes
+      critical: 300.0   # 5 minutes
+
+  # WAL Replica Lag SLO (standby lag)
+  - name: wal_replica_lag
+    metric: k0_wal_replica_lag_seconds
+    target_percentile: 0.95
+    target_value: 10.0  # 10 seconds
+    unit: seconds
+    description: "Standby replica lag (topology replication)"
+    dashboard_group: replay_throughput
+    alert_thresholds:
+      warning: 20.0     # 20 seconds
+      critical: 30.0    # 30 seconds
+
+  # Outbox Backlog SLO
+  - name: outbox_backlog
+    metric: k0_outbox_pending_total
+    target_value: 10000  # 10k messages
+    unit: count
+    description: "Outbox pending message count (events to apply)"
+    dashboard_group: replay_throughput
+    alert_thresholds:
+      warning: 50000     # 50k messages
+      critical: 100000   # 100k messages
+
+  # Replay Throughput SLO
+  - name: replay_throughput
+    metric: k0_outbox_apply_total
+    target_value: 1000  # 1000 events/second
+    unit: count
+    description: "Outbox apply throughput (events applied per second)"
+    dashboard_group: replay_throughput
+    alert_thresholds:
+      warning: 500      # 500 events/sec (50% degradation)
+      critical: 100     # 100 events/sec (90% degradation)
+
+  # Scheduler Quorum SLO (cluster topology)
+  - name: scheduler_quorum
+    metric: k0_scheduler_members_total
+    target_value: 3.0   # >= 3 members
+    unit: count
+    description: "Scheduler cluster members (quorum = 3+)"
+    dashboard_group: kernel_overview
+    alert_thresholds:
+      warning: 3.0      # < 3 (quorum lost)
+      critical: 2.0     # < 2 (severe degradation)
+
+  # Zone Health SLO (all zones operational)
+  - name: zone_health
+    metric: k0_zone_healthy_ratio
+    target_value: 1.0   # 100% zones healthy
+    unit: ratio
+    description: "Healthy zone ratio (1.0 = all zones operational)"
+    dashboard_group: kernel_overview
+    alert_thresholds:
+      warning: 0.5      # < 50% zones healthy
+      critical: 0.0     # 0 zones healthy
+
+  # SSE Active Subscriptions (saturation indicator)
+  - name: sse_active_subscriptions
+    metric: k0_sse_subscriptions_active
+    target_value: 1000  # Target max concurrent subscriptions
+    unit: count
+    description: "Active SSE subscriptions (saturation at 80% of target)"
+    dashboard_group: sse_health
+    alert_thresholds:
+      warning: 800      # 80% of target
+      critical: 1000    # At capacity
+
+  # SSE Subscribe Rate (throughput indicator)
+  - name: sse_subscribe_rate
+    metric: k0_sse_subscribe_total
+    target_value: 100   # 100 subscriptions/sec during peak
+    unit: count
+    description: "SSE subscribe rate (subscriptions per second)"
+    dashboard_group: sse_health
+    alert_thresholds:
+      warning: 50       # Spike detection
+      critical: 200     # Excessive subscribe activity
+
+  # Bus Dispatch Latency SLO
+  - name: bus_dispatch_latency
+    metric: k0_bus_dispatch_latency_seconds
+    target_percentile: 0.95
+    target_value: 0.010  # 10ms
+    unit: seconds
+    description: "Bus dispatch P95 latency (inter-component messaging)"
+    dashboard_group: command_latency
+    alert_thresholds:
+      warning: 0.025    # 25ms
+      critical: 0.050   # 50ms
+
+# Configuration for dashboard grouping and layout
+dashboard_groups:
+  kernel_overview:
+    title: "K0 Kernel Overview"
+    description: "High-level health metrics and cluster status"
+    priority: 1
+  command_latency:
+    title: "Command Path Latency"
+    description: "Command submit, UoW commit, bus dispatch performance"
+    priority: 2
+  query_latency:
+    title: "Query Path Latency"
+    description: "Query execute performance and optimization"
+    priority: 3
+  sse_health:
+    title: "SSE Health & Subscriptions"
+    description: "Server-sent events system health and throughput"
+    priority: 4
+  replay_throughput:
+    title: "WAL Replay & Snapshots"
+    description: "Replication lag, outbox backlog, replay throughput"
+    priority: 5
+
+# Global rendering configuration
+rendering:
+  # Checksum-based drift detection
+  enable_checksums: true
+  # Reproducible builds (no timestamps in JSON/YAML)
+  deterministic: true
+  # Color scheme (macOS-inspired)
+  theme: "macos"
+  # Alert rule format (prometheus)
+  alert_format: "prometheus"
+  # Dashboard format (grafana_json)
+  dashboard_format: "grafana_json"
+  # Generated file locations
+  output_dashboards_dir: "k0/telemetry/generated/dashboards"
+  output_rules_dir: "k0/telemetry/generated/rules"

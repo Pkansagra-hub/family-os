@@ -12,7 +12,7 @@ from k0.storage.provisioning import DeviceKey, ProvisionedDevice, ProvisioningLe
 from k0.storage.receipts import Receipt, ReceiptStore
 from k0.storage.wal import WalEntry, WriteAheadLog
 from k0.uow.connection_pool import connection_scope
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 @test("write-ahead log appends entries and reads them back in order")
@@ -293,3 +293,4 @@ def _(_sqlite_runtime: Any = sqlite_runtime) -> None:
     assert ledger.lookup("tenant-X", "space-X", "device-X") is None
     assert ledger.lookup("tenant-X", "space-X", "device-X") is None
     assert ledger.lookup("tenant-X", "space-X", "device-X") is None
+

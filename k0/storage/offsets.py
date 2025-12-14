@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
@@ -36,28 +38,37 @@ def _resolve_connection(
 class OffsetStore:
     """Persistence surface for subscriber offsets."""
 
-    def upsert(
-        self, record: Offset, *, connection: sqlite3.Connection | None = None
-    ) -> None:
-        with _resolve_connection(connection) as conn:
-            conn.execute(
-                (
-                    "INSERT INTO st_offsets (subscriber_id, topic, space_id, tenant_id, offset, updated_ts) "
-                    "VALUES (?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(subscriber_id, topic, space_id, tenant_id) DO UPDATE SET "
-                    "offset=excluded.offset, updated_ts=excluded.updated_ts"
-                ),
-                (
-                    record.subscriber_id,
-                    record.topic,
-                    record.space_id,
-                    record.tenant_id,
-                    record.offset,
-                    record.updated_ts,
-                ),
-            )
+    def __init__(self) -> None:
+        # Gap 32: RLock protects concurrent offset read/write operations
+        self._lock = threading.RLock()
 
-    def fetch(
+    async def upsert(self, record: Offset, *, connection: sqlite3.Connection | None = None) -> None:
+        """Async wrapper for upserting offsets."""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._upsert_sync, record, connection)
+
+    def _upsert_sync(self, record: Offset, connection: sqlite3.Connection | None = None) -> None:
+        # Gap 32: Serialize concurrent offset updates with RLock
+        with self._lock:
+            with _resolve_connection(connection) as conn:
+                conn.execute(
+                    (
+                        "INSERT INTO st_offsets (subscriber_id, topic, space_id, tenant_id, offset, updated_ts) "
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(subscriber_id, topic, space_id, tenant_id) DO UPDATE SET "
+                        "offset=excluded.offset, updated_ts=excluded.updated_ts"
+                    ),
+                    (
+                        record.subscriber_id,
+                        record.topic,
+                        record.space_id,
+                        record.tenant_id,
+                        record.offset,
+                        record.updated_ts,
+                    ),
+                )
+
+    async def fetch(
         self,
         subscriber_id: str,
         topic: str,
@@ -66,21 +77,37 @@ class OffsetStore:
         *,
         connection: sqlite3.Connection | None = None,
     ) -> Offset | None:
-        with _resolve_connection(connection) as conn:
-            row = conn.execute(
-                (
-                    "SELECT subscriber_id, topic, space_id, tenant_id, offset, updated_ts "
-                    "FROM st_offsets WHERE subscriber_id=? AND topic=? AND space_id=? AND tenant_id=?"
-                ),
-                (subscriber_id, topic, space_id, tenant_id),
-            ).fetchone()
-            if row is None:
-                return None
-            return Offset(
-                subscriber_id=row["subscriber_id"],
-                topic=row["topic"],
-                space_id=row["space_id"],
-                tenant_id=row["tenant_id"],
-                offset=row["offset"],
-                updated_ts=row["updated_ts"],
-            )
+        """Async wrapper for fetching offsets."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._fetch_sync, subscriber_id, topic, space_id, tenant_id, connection
+        )
+
+    def _fetch_sync(
+        self,
+        subscriber_id: str,
+        topic: str,
+        space_id: str,
+        tenant_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> Offset | None:
+        # Gap 32: Serialize concurrent offset reads with RLock
+        with self._lock:
+            with _resolve_connection(connection) as conn:
+                row = conn.execute(
+                    (
+                        "SELECT subscriber_id, topic, space_id, tenant_id, offset, updated_ts "
+                        "FROM st_offsets WHERE subscriber_id=? AND topic=? AND space_id=? AND tenant_id=?"
+                    ),
+                    (subscriber_id, topic, space_id, tenant_id),
+                ).fetchone()
+                if row is None:
+                    return None
+                return Offset(
+                    subscriber_id=row["subscriber_id"],
+                    topic=row["topic"],
+                    space_id=row["space_id"],
+                    tenant_id=row["tenant_id"],
+                    offset=row["offset"],
+                    updated_ts=row["updated_ts"],
+                )

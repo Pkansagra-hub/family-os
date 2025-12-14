@@ -1,0 +1,39 @@
+# Social Module Configuration | Version: 0.1.0
+module:
+  version: "0.1.0"
+  enabled: true
+
+family_graph:
+  relationship_types:
+    - SPOUSE_OF
+    - PARENT_OF
+    - CHILD_OF
+    - CARETAKER_OF
+    - SIBLING_OF
+
+  cache_enabled: true
+  cache_ttl_seconds: 3600
+
+  social_context_rules:
+    nuclear_family: ["SPOUSE_OF", "PARENT_OF", "CHILD_OF"]
+    extended_family: ["CARETAKER_OF", "SIBLING_OF"]
+
+  intimacy_scores:
+    SPOUSE_OF: "HIGH"
+    PARENT_OF: "HIGH"
+    CHILD_OF: "HIGH"
+    SIBLING_OF: "MED"
+    CARETAKER_OF: "MED"
+
+performance:
+  target_p95_ms: 10
+  target_p99_ms: 20
+  max_memory_mb: 15
+
+features:
+  extended_social_network: false  # Future: friends, colleagues
+  interaction_tracking: false     # Future: communication patterns
+  relationship_strength: false    # Future: decay/reinforcement
+
+observability:
+  emit_metrics: true

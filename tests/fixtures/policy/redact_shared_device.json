@@ -1,0 +1,41 @@
+{
+  "version": "2025-10-30T00:00:00Z",
+  "default_obligations": [
+    {
+      "name": "kernel.audit.log",
+      "details": {
+        "scenario": "redact_shared_device",
+        "level": "info"
+      }
+    }
+  ],
+  "bands": {
+    "GREEN": {
+      "max_fanout": 4,
+      "max_throughput_pps": 64,
+      "max_payload_bytes": 65536,
+      "obligations": [
+        {
+          "name": "kernel.redact.field",
+          "details": {
+            "fields": ["payload.value"],
+            "mask": "***REDACTED***"
+          }
+        }
+      ]
+    }
+  },
+  "roles": [
+    {
+      "name": "coordinator",
+      "allow_topics": ["memory.*"],
+      "max_band": "GREEN",
+      "obligations": []
+    }
+  ],
+  "device_postures": {},
+  "sunset_windows": {},
+  "role_violation_obligation": {
+    "name": "kernel.policy.review"
+  }
+}

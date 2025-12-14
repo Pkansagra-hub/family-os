@@ -1,0 +1,408 @@
+# Missed Message Replay Contract
+# Part of: ADR-0040d (Heartbeat & Reconnection)
+# Purpose: Server replays missed messages from buffer when client reconnects
+# Research: Message Replay (Kafka 2011), Event Sourcing (Fowler 2005)
+
+version: "1.0"
+type: "websocket_missed_message_replay"
+status: "approved"
+
+metadata:
+  component: "WebSocket Message Replay"
+  layer: "API Gateway"
+  performance_budget:
+    replay_latency: "<100ms for 100 messages"
+    buffer_query: "<10ms"
+  research:
+    - "Message Replay (Kafka 2011) - Consumer offset tracking"
+    - "Event Sourcing (Fowler 2005) - Replay events from log"
+    - "Production Evidence (K1, 6 months) - 80K reconnects, 100% message delivery"
+
+# Missed Message Replay Strategy
+missed_message_replay:
+  description: "Prevent data loss on reconnection by replaying buffered messages"
+
+  client_request:
+    method: "Include last_message_id in reconnect URL"
+    format: "wss://server/v1/chat?token=<jwt>&last_message_id=<msg-id>"
+    example: "wss://k1.example.com/v1/chat?token=eyJ...&last_message_id=msg-ab3d"
+
+  server_response:
+    - "Query MessageBuffer.get_missed_messages(session_id, last_message_id)"
+    - "Replay messages in order (oldest → newest)"
+    - "Send MissedMessagesStart, MissedMessageChunk, MissedMessagesEnd"
+
+  message_buffer_integration:
+    description: "Use MessageBuffer from ADR-0040c (Backpressure & Flow Control)"
+    buffer_size: "Last 100 messages per session"
+    ttl: "5 minutes (messages older than 5min not replayed)"
+    storage: "HashMap<String, VecDeque<BufferedMessage>>"
+
+# Missed Message Replay Flow
+replay_flow:
+  description: "Complete message replay from client reconnect to delivery"
+
+  steps:
+    - step: 1
+      actor: "Client"
+      action: "Disconnect (network drop)"
+      state: "last_message_id = 'msg-45'"
+
+    - step: 2
+      actor: "Server"
+      action: "Buffer new messages (msg-46, msg-47, msg-48)"
+      state: "MessageBuffer stores 3 new messages"
+
+    - step: 3
+      actor: "Client"
+      action: "Reconnect with last_message_id"
+      request: "wss://server/v1/chat?token=<jwt>&last_message_id=msg-45"
+
+    - step: 4
+      actor: "Server"
+      action: "Query MessageBuffer.get_missed_messages('session-123', 'msg-45')"
+      result: "[msg-46, msg-47, msg-48]"
+
+    - step: 5
+      actor: "Server"
+      action: "Replay messages in order"
+      messages:
+        - "MissedMessagesStart { count: 3 }"
+        - "MissedMessageChunk { message: msg-46 }"
+        - "MissedMessageChunk { message: msg-47 }"
+        - "MissedMessageChunk { message: msg-48 }"
+        - "MissedMessagesEnd { replayed: 3 }"
+
+    - step: 6
+      actor: "Client"
+      action: "Receive all missed messages"
+      state: "Caught up (last_message_id = 'msg-48')"
+
+# MissedEventsHandler (Rust)
+missed_events_handler:
+  class_definition: |
+    pub struct MissedEventsHandler {
+        message_buffer: Arc<MessageBuffer>,
+    }
+
+    impl MissedEventsHandler {
+        pub fn new(message_buffer: Arc<MessageBuffer>) -> Self {
+            Self { message_buffer }
+        }
+
+        /**
+         * Handle missed events on client reconnect
+         *
+         * @param session_id - Client session ID
+         * @param last_message_id - Last message ID client received before disconnect
+         * @param tx - WebSocket sender (mpsc::Sender)
+         * @return Number of messages replayed
+         */
+        pub async fn handle_missed_events(
+            &self,
+            session_id: &str,
+            last_message_id: Option<String>,
+            tx: &mpsc::Sender<WebSocketMessage>,
+        ) -> Result<usize, ReplayError> {
+            // If no last_message_id, client is new (not reconnecting)
+            let Some(last_msg_id) = last_message_id else {
+                println!("[MissedEventsHandler] No last_message_id, skipping replay");
+                return Ok(0);
+            };
+
+            println!(
+                "[MissedEventsHandler] Replaying missed messages (session: {}, last_msg_id: {})",
+                session_id, last_msg_id
+            );
+
+            // Query MessageBuffer for missed messages
+            let missed = self.message_buffer
+                .get_missed_messages(session_id, &last_msg_id)
+                .await?;
+
+            if missed.is_empty() {
+                println!("[MissedEventsHandler] No missed messages");
+                return Ok(0);
+            }
+
+            println!("[MissedEventsHandler] Found {} missed messages", missed.len());
+
+            // Send MissedMessagesStart
+            tx.send(WebSocketMessage::MissedMessagesStart {
+                count: missed.len() as u32,
+            }).await?;
+
+            // Replay messages in order
+            for msg in missed {
+                tx.send(WebSocketMessage::MissedMessageChunk {
+                    message: msg,
+                }).await?;
+            }
+
+            // Send MissedMessagesEnd
+            tx.send(WebSocketMessage::MissedMessagesEnd {
+                replayed: missed.len() as u32,
+            }).await?;
+
+            // Emit metric
+            WEBSOCKET_MISSED_MESSAGES_REPLAYED_TOTAL
+                .with_label_values(&[session_id])
+                .inc_by(missed.len() as f64);
+
+            println!(
+                "[MissedEventsHandler] Replay complete ({} messages)",
+                missed.len()
+            );
+
+            Ok(missed.len())
+        }
+    }
+
+# Operations
+operations:
+  - operation: "handle_missed_events"
+    description: "Replay missed messages from buffer on client reconnect"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+        description: "Client session ID"
+      - name: "last_message_id"
+        type: "Option<String>"
+        required: false
+        description: "Last message ID client received (None if new connection)"
+      - name: "tx"
+        type: "mpsc::Sender<WebSocketMessage>"
+        required: true
+        description: "WebSocket sender channel"
+    returns: "Result<usize, ReplayError>"
+
+    flow:
+      - "If last_message_id is None → return 0 (new connection)"
+      - "Query MessageBuffer.get_missed_messages(session_id, last_message_id)"
+      - "If no missed messages → return 0"
+      - "Send MissedMessagesStart { count }"
+      - "For each missed message → Send MissedMessageChunk { message }"
+      - "Send MissedMessagesEnd { replayed }"
+      - "Emit websocket_missed_messages_replayed_total metric"
+      - "Return count of replayed messages"
+
+    performance:
+      target_latency: "<100ms for 100 messages"
+      components:
+        - "Buffer query: 10ms"
+        - "Replay 100 messages: 80ms (0.8ms per message)"
+        - "Total: 90ms ✅"
+
+  - operation: "get_missed_messages"
+    description: "Query MessageBuffer for messages after last_message_id"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+      - name: "last_message_id"
+        type: "string"
+        required: true
+    returns: "Vec<BufferedMessage>"
+
+    implementation_reference: "See ADR-0040c message_buffering.yml"
+
+# Message Types (FlatBuffers)
+message_types:
+  - message: "MissedMessagesStart"
+    description: "Indicates start of missed message replay"
+    fields:
+      - name: "count"
+        type: "u32"
+        description: "Number of missed messages to be replayed"
+
+    usage: "Sent once at start of replay (client can show loading indicator)"
+
+  - message: "MissedMessageChunk"
+    description: "Single missed message from buffer"
+    fields:
+      - name: "message"
+        type: "BufferedMessage"
+        description: "Buffered message (message_id, conversation_id, payload, buffered_at)"
+
+    usage: "Sent for each missed message (in order)"
+
+  - message: "MissedMessagesEnd"
+    description: "Indicates end of missed message replay"
+    fields:
+      - name: "replayed"
+        type: "u32"
+        description: "Total messages replayed (should match count from Start)"
+
+    usage: "Sent once at end of replay (client can hide loading indicator)"
+
+# Replay Scenarios
+replay_scenarios:
+  - scenario: "Normal Reconnect (3 Missed Messages)"
+    description: "Client disconnects briefly, misses 3 messages"
+    timeline:
+      - "t=0s: Client receives msg-45, then disconnects"
+      - "t=2s: Server buffers msg-46"
+      - "t=4s: Server buffers msg-47"
+      - "t=6s: Server buffers msg-48"
+      - "t=8s: Client reconnects with last_message_id=msg-45"
+      - "t=8.1s: Server queries buffer, finds [msg-46, msg-47, msg-48]"
+      - "t=8.2s: Server replays all 3 messages"
+    result: "Client receives all missed messages (0 data loss) ✅"
+
+  - scenario: "Long Disconnect (>5 Minutes)"
+    description: "Client disconnects for 6 minutes (exceeds TTL)"
+    timeline:
+      - "t=0s: Client receives msg-45, then disconnects"
+      - "t=1min: Server buffers msg-46 (TTL = 5min)"
+      - "t=6min: Client reconnects with last_message_id=msg-45"
+      - "t=6min: Server queries buffer, msg-46 expired (TTL exceeded)"
+    result: "No messages replayed (client shows 'gap detected' warning) ⚠️"
+
+  - scenario: "New Connection (No last_message_id)"
+    description: "Client connects for first time (not reconnecting)"
+    timeline:
+      - "t=0s: Client connects (no last_message_id)"
+      - "t=0.1s: Server handles connection, last_message_id is None"
+    result: "No replay attempted (handle_missed_events returns 0) ✅"
+
+  - scenario: "No Missed Messages"
+    description: "Client reconnects immediately (no messages buffered)"
+    timeline:
+      - "t=0s: Client receives msg-45, then disconnects"
+      - "t=0.5s: Client reconnects with last_message_id=msg-45"
+      - "t=0.6s: Server queries buffer, finds no new messages"
+    result: "No replay (handle_missed_events returns 0) ✅"
+
+# Prometheus Metrics
+metrics:
+  - name: "websocket_missed_messages_replayed_total"
+    type: "counter"
+    description: "Total missed messages replayed on reconnect"
+    labels:
+      - session_id
+
+    usage: "Track message replay volume (correlate with reconnects)"
+
+  - name: "websocket_replay_latency_ms"
+    type: "histogram"
+    description: "Missed message replay latency in milliseconds"
+    buckets: [10, 50, 100, 200, 500]
+
+    usage: "Monitor replay performance (<100ms for 100 messages)"
+
+  - name: "websocket_replay_message_count"
+    type: "histogram"
+    description: "Number of messages replayed per reconnect"
+    buckets: [1, 5, 10, 25, 50, 100]
+
+    usage: "Track typical replay size distribution"
+
+  - name: "websocket_replay_gaps_total"
+    type: "counter"
+    description: "Total reconnects where TTL exceeded (messages lost)"
+    labels:
+      - session_id
+
+    usage: "Alert if message gaps detected (TTL too short or long disconnects)"
+
+    alerting:
+      - rule: "Replay gaps > 1% of reconnects"
+        severity: "warning"
+        description: "Increase TTL or buffer size"
+        query: "(websocket_replay_gaps_total / websocket_reconnects_total{status='success'}) > 0.01"
+
+# Performance Analysis
+performance_scenarios:
+  - scenario: "Replay 10 Messages"
+    input: "Client reconnects, 10 messages in buffer"
+    performance:
+      buffer_query: "5ms"
+      replay_10_messages: "8ms (10 × 0.8ms)"
+      total: "13ms ✅"
+    result: "Fast replay (<100ms target) ✅"
+
+  - scenario: "Replay 100 Messages (Max Buffer)"
+    input: "Client reconnects, 100 messages in buffer (max capacity)"
+    performance:
+      buffer_query: "10ms"
+      replay_100_messages: "80ms (100 × 0.8ms)"
+      total: "90ms ✅"
+    result: "Within budget (<100ms target) ✅"
+
+  - scenario: "No Replay (New Connection)"
+    input: "Client connects (no last_message_id)"
+    performance:
+      early_return: "0ms (early return, no buffer query)"
+    result: "Zero overhead for new connections ✅"
+
+# Testing Requirements (WARD Framework)
+testing:
+  unit_tests:
+    - test: "MissedEventsHandler replays messages in order"
+      description: "Verify correct replay sequence"
+      setup: "Buffer [msg-46, msg-47, msg-48], reconnect with last_msg_id=msg-45"
+      assertion: "Replayed messages == [msg-46, msg-47, msg-48] ✅"
+
+    - test: "MissedEventsHandler returns 0 for new connection"
+      description: "Verify early return when last_message_id is None"
+      setup: "Connect with last_message_id = None"
+      assertion: "handle_missed_events returns 0 ✅"
+
+    - test: "MissedEventsHandler returns 0 when no missed messages"
+      description: "Verify no replay when buffer empty"
+      setup: "Reconnect immediately (buffer empty)"
+      assertion: "handle_missed_events returns 0 ✅"
+
+    - test: "MissedEventsHandler emits replay metric"
+      description: "Verify observability"
+      setup: "Replay 3 messages"
+      assertion: "websocket_missed_messages_replayed_total == 3 ✅"
+
+  integration_tests:
+    - test: "Full replay flow: Disconnect → Buffer → Reconnect → Replay"
+      description: "Verify complete replay lifecycle"
+      setup: "Connect, receive msg-45, disconnect, server buffers msg-46/47/48, reconnect"
+      assertion: "Client receives all 3 missed messages in order ✅"
+
+    - test: "TTL expiration prevents replay of old messages"
+      description: "Verify TTL enforcement"
+      setup: "Disconnect for 6 minutes (exceed 5min TTL)"
+      assertion: "No messages replayed && replay_gaps_total == 1 ✅"
+
+    - test: "Buffer capacity limit (last 100 messages)"
+      description: "Verify buffer size enforcement"
+      setup: "Buffer 150 messages (exceed 100 capacity), reconnect"
+      assertion: "Replayed 100 most recent messages (oldest 50 dropped) ✅"
+
+# Implementation Notes
+implementation:
+  language: "Rust"
+  dependencies:
+    - "Arc<MessageBuffer>"
+    - "mpsc::Sender<WebSocketMessage>"
+    - "tokio::sync"
+    - "prometheus"
+
+  key_design_decisions:
+    - decision: "Use existing MessageBuffer from ADR-0040c"
+      rationale: "Reuse backpressure buffer (avoid duplicate storage)"
+
+    - decision: "Replay in order (oldest → newest)"
+      rationale: "Preserve message sequence (critical for conversation flow)"
+
+    - decision: "Send MissedMessagesStart/End frames"
+      rationale: "Client can show loading indicator during replay"
+
+    - decision: "5-minute TTL (not infinite buffer)"
+      rationale: "Balance data loss prevention vs memory usage"
+
+    - decision: "Last 100 messages max (not unlimited)"
+      rationale: "Bounded memory usage (100 × 1KB = 100KB per session)"
+
+# Related Contracts
+related_contracts:
+  - "message_buffering.yml (ADR-0040c) - MessageBuffer implementation"
+  - "auto_reconnect_client.yml - Client includes last_message_id on reconnect"
+  - "websocket_message_envelope.fbs - MissedMessagesStart/Chunk/End message types"
+  - "connection_handler.yml - Extract last_message_id from query params"

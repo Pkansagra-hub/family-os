@@ -82,7 +82,8 @@ k0/telemetry/
     _config.py                 # Shared config (SLO targets, thresholds, colors)
     slo_dashboards.py          # Dashboard builders (Python)
     alert_rules.py             # Alert rule builder (Python)
-  generated/                   # Rendered artifacts (gitignored)
+  slo_definitions.yaml         # SLO definitions (source of truth)
+  generated/                   # Rendered artifacts (SINGLE SOURCE OF TRUTH)
     dashboards/
       kernel_overview.json
       command_latency.json
@@ -102,6 +103,20 @@ k0/telemetry/
           prometheus.yaml
         dashboards/
           dashboards.yaml
+```
+
+### Artifact Lifecycle
+
+**Single Source of Truth Pattern:**
+
+1. **Source**: `k0/telemetry/slo_definitions.yaml` (SLO definitions)
+2. **Rendering**: `k0/telemetry/render.py --verbose` generates artifacts to `k0/telemetry/generated/`
+3. **Deployment**: `k0/deploy/k0.ps1 up` automatically syncs `k0/telemetry/generated/* → k0/deploy/generated/`
+4. **Docker Compose**: Mounts `k0/deploy/generated/` for prometheus, grafana, etc.
+
+**Key Point**: Never edit `k0/deploy/generated/` directly. All changes flow through:
+```
+SLO definitions → render.py → k0/telemetry/generated/ → deploy sync → k0/deploy/generated/
 ```
 
 ---

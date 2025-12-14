@@ -1,21 +1,21 @@
-# mmd_mcp_server.py
+﻿# mmd_mcp_server.py
 # MCP server to ingest Mermaid (MMD) diagrams and expose them as LLM-digestible graphs
 # Tools provided:
-#   - mmd_list(root?, glob?) → list *.mmd files
-#   - mmd_read(path, resolve_includes=True, max_depth=4) → {content, includes}
-#   - mmd_ingest(path) → parse + store into SQLite; returns counts & diagram_id
-#   - mmd_parse_preview(content) → preview parse (no DB write)
-#   - mmd_graph(diagram) → {nodes, edges, subgraphs}
-#   - mmd_neighbors(diagram, node_id, direction="both") → adjacency
-#   - mmd_paths(diagram, src, dst, max_hops=6, max_paths=5) → simple path search
-#   - mmd_summary(diagram) → counts, top hubs, class/role breakdown
-#   - mmd_validate(diagram) → issues (dangling edges, dupes, empty subgraphs)
-#   - code_hints(diagram, node_id) → opinionated scaffolding suggestions for that node
+#   - mmd_list(root?, glob?) â†’ list *.mmd files
+#   - mmd_read(path, resolve_includes=True, max_depth=4) â†’ {content, includes}
+#   - mmd_ingest(path) â†’ parse + store into SQLite; returns counts & diagram_id
+#   - mmd_parse_preview(content) â†’ preview parse (no DB write)
+#   - mmd_graph(diagram) â†’ {nodes, edges, subgraphs}
+#   - mmd_neighbors(diagram, node_id, direction="both") â†’ adjacency
+#   - mmd_paths(diagram, src, dst, max_hops=6, max_paths=5) â†’ simple path search
+#   - mmd_summary(diagram) â†’ counts, top hubs, class/role breakdown
+#   - mmd_validate(diagram) â†’ issues (dangling edges, dupes, empty subgraphs)
+#   - code_hints(diagram, node_id) â†’ opinionated scaffolding suggestions for that node
 # Resources:
 #   - mmd://diagram/{diagram}/summary
 #   - mmd://diagram/{diagram}/adjacency
 # Prompt:
-#   - diagram.context(diagram, task?) → compact overview with flows & key modules
+#   - diagram.context(diagram, task?) â†’ compact overview with flows & key modules
 
 from __future__ import annotations
 
@@ -797,7 +797,7 @@ def code_hints(diagram: str, node_id: str) -> Dict[str, Any]:
     classes = json.loads(r["classes_json"]) or []
     role = _infer_role(classes) or "module"
 
-    # Very lightweight mapping from role → folder + stubs
+    # Very lightweight mapping from role â†’ folder + stubs
     mapping = {
         "api": {"folder": "api/", "stub": "FastAPI router with POST/GET endpoints"},
         "gateway": {"folder": "policy/", "stub": "OPA/ABAC check + request shaping"},
@@ -819,7 +819,7 @@ def code_hints(diagram: str, node_id: str) -> Dict[str, Any]:
         "classes": classes,
         "recommend": {
             "folder": hint["folder"],
-            "stubs": [hint["stub"], "logging + metrics", "unit tests (pytest)"],
+            "stubs": [hint["stub"], "logging + metrics", "unit tests (ward)"],
         },
     }
 
@@ -932,7 +932,7 @@ def diagram_flows(
         raw_paths = cast(List[List[Any]], path_info.get("paths", []))
         for candidate in raw_paths:
             segments = [str(node) for node in candidate]
-            path_lines.append(" → ".join(segments))
+            path_lines.append(" â†’ ".join(segments))
         if not path_lines:
             lines.append(
                 f"No paths found between `{src}` and `{dst}` within {max_hops} hops."
@@ -955,7 +955,7 @@ def diagram_flows(
         else:
             for edge in spotlight[:12]:
                 label = f" [{edge['label']}]" if edge.get("label") else ""
-                lines.append(f"- {edge['src']} → {edge['dst']}{label}")
+                lines.append(f"- {edge['src']} â†’ {edge['dst']}{label}")
 
     lines.append(
         "\nUse `mmd_neighbors` for adjacency details or pass `src`/`dst` to focus on a specific trace."
@@ -967,3 +967,4 @@ def diagram_flows(
 
 if __name__ == "__main__":
     mcp.run(transport="stdio")  # type: ignore[attr-defined]
+

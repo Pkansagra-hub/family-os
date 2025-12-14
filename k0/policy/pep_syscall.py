@@ -5,17 +5,23 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence, cast
 
-
 LOGGER = logging.getLogger(__name__)
 
-_POLICY_PATH = Path(__file__).resolve().parents[1] / "contracts" / "policy" / "pep.schema.json"
+_DEFAULT_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" / "policy" / "pep.schema.json"
+)
+_POLICY_ENV_VAR = "K0_POLICY_MANIFEST_PATH"
 _BAND_ORDER = ("GREEN", "AMBER", "RED")
+
+# Cache for manifest fingerprints
+_cached_manifest_fingerprint: dict[str, str] = {}
 
 
 class PolicyConfigurationError(RuntimeError):
@@ -43,10 +49,77 @@ class PolicyDecision:
     deny_reason: str | None = None
 
 
+def create_policy_stamp(
+    decision: PolicyDecision,
+    band: str,
+    visible_to: list[str] | None = None,
+    policy_version: str | None = None,
+) -> dict[str, Any]:
+    """Create policy stamp dict for embedding in envelope.
+
+    This creates an immutable audit trail of the policy decision that travels
+    with the envelope through the entire pipeline (WAL, Outbox, downstream consumers).
+
+    Parameters
+    ----------
+    decision : PolicyDecision
+        The policy decision from evaluate_envelope()
+    band : str
+        Privacy band (GREEN, AMBER, RED)
+    visible_to : list[str] | None
+        List of actor IDs who can access this envelope (optional)
+    policy_version : str | None
+        Policy manifest fingerprint/version for audit trail (optional)
+
+    Returns
+    -------
+    dict[str, Any]
+        Policy stamp dict with band, obligations, visible_to, decision
+    """
+    # Extract obligation names for compact representation
+    obligation_names = [obligation.name for obligation in decision.obligations]
+
+    stamp: dict[str, Any] = {
+        "band": band.upper(),
+        "obligations": obligation_names,
+        "decision": "ALLOW" if decision.admit else "DENY",
+    }
+
+    # Add optional fields if provided
+    if visible_to is not None:
+        stamp["visible_to"] = visible_to
+
+    if decision.deny_reason:
+        stamp["deny_reason"] = decision.deny_reason
+
+    # Use manifest fingerprint if available, fallback to provided policy_version
+    manifest_fingerprint = get_manifest_fingerprint()
+    if manifest_fingerprint:
+        stamp["policy_version"] = manifest_fingerprint
+    elif policy_version:
+        stamp["policy_version"] = policy_version
+
+    return stamp
+
+
 def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     """Evaluate the request envelope against band, caps, and ABAC policies."""
 
-    manifest = _load_policy_manifest()
+    # Gap 36: Graceful fallback if policy manifest is corrupted
+    try:
+        manifest = _load_policy_manifest()
+    except (PolicyConfigurationError, json.JSONDecodeError, ValueError, OSError) as exc:
+        LOGGER.error(
+            "Policy manifest corrupted or unreadable, denying all operations",
+            exc_info=exc,
+            extra={"envelope_id": envelope.get("envelope_id")},
+        )
+        # Return fail-safe DENY decision with manifest corruption reason
+        return PolicyDecision(
+            admit=False,
+            obligations=(),
+            deny_reason="POLICY_MANIFEST_CORRUPTED",
+        )
 
     band = str(envelope.get("band", "GREEN")).upper()
     band_policy = _lookup_band_policy(manifest, band)
@@ -56,10 +129,7 @@ def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     obligations.extend(_build_obligations(band_policy.get("obligations", [])))
 
     policy_ctx = _coerce_mapping(
-    envelope.get("policy")
-    or envelope.get("pep")
-    or envelope.get("policy_ctx")
-    or {}
+        envelope.get("policy") or envelope.get("pep") or envelope.get("policy_ctx") or {}
     )
     abac_ctx = _coerce_mapping(policy_ctx.get("abac", {}))
     caps_ctx = _coerce_mapping(policy_ctx.get("caps", {}))
@@ -98,16 +168,55 @@ def evaluate_envelope(envelope: dict[str, object]) -> PolicyDecision:
     return decision
 
 
+def _resolve_policy_manifest_path() -> Path:
+    override = os.getenv(_POLICY_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    return _DEFAULT_POLICY_PATH
+
+
 def _load_policy_manifest() -> dict[str, Any]:
+    manifest_path = _resolve_policy_manifest_path()
     try:
-        return _cached_manifest()
+        return _cached_manifest(manifest_path)
     except FileNotFoundError as exc:  # pragma: no cover - configuration bug
-        raise PolicyConfigurationError(f"Policy manifest not found at {_POLICY_PATH}") from exc
+        raise PolicyConfigurationError(f"Policy manifest not found at {manifest_path}") from exc
 
 
-@lru_cache(maxsize=1)
-def _cached_manifest() -> dict[str, Any]:
-    raw: dict[str, Any] = json.loads(_POLICY_PATH.read_text(encoding="utf-8"))
+def get_manifest_fingerprint() -> str | None:
+    """Get the fingerprint (SHA-256 hash) of the current policy manifest.
+
+    Returns None if the manifest cannot be loaded.
+    """
+    import hashlib
+
+    try:
+        manifest_path = _resolve_policy_manifest_path()
+        path_str = str(manifest_path)
+
+        # Check cache first
+        if path_str in _cached_manifest_fingerprint:
+            return _cached_manifest_fingerprint[path_str]
+
+        # Compute and cache
+        if not manifest_path.exists():
+            return None
+        manifest_bytes = manifest_path.read_bytes()
+        fingerprint = hashlib.sha256(manifest_bytes).hexdigest()
+        _cached_manifest_fingerprint[path_str] = fingerprint
+        return fingerprint
+    except Exception:  # pragma: no cover
+        return None
+
+
+def _clear_manifest_fingerprint_cache() -> None:
+    """Clear the manifest fingerprint cache. Used in tests."""
+    _cached_manifest_fingerprint.clear()
+
+
+@lru_cache(maxsize=4)
+def _cached_manifest(path: Path) -> dict[str, Any]:
+    raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if "bands" not in raw or "roles" not in raw:
         raise PolicyConfigurationError("Policy manifest missing required keys: 'bands' and 'roles'")
     return raw
@@ -154,9 +263,19 @@ def _build_obligations(
             name = mapping_entry.get("name")
             if not isinstance(name, str) or not name:
                 continue
-            detail_map = {
-                str(k): _stringify_detail(v) for k, v in _coerce_mapping(mapping_entry.get("details", {})).items()
-            }
+            # For structured obligations like kernel.redact.field, preserve complex types
+            # Otherwise stringify simple scalar values
+            detail_map = {}
+            for k, v in _coerce_mapping(mapping_entry.get("details", {})).items():
+                if name == "kernel.redact.field" and k in ("fields", "target"):
+                    # Preserve list/sequence types for redaction directives
+                    detail_map[str(k)] = v
+                elif name == "kernel.redact.field" and k == "mask":
+                    # Keep mask as-is (usually a string)
+                    detail_map[str(k)] = v
+                else:
+                    # Stringify other detail values for backward compatibility
+                    detail_map[str(k)] = _stringify_detail(v)
             details = {**detail_map, **merged_extra}
             obligations.append(Obligation(name=name, details=details))
     return obligations
@@ -407,10 +526,23 @@ def _band_rank(band: str) -> int:
 
 
 def _deduplicate_obligations(obligations: Iterable[Obligation]) -> list[Obligation]:
-    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    def _make_hashable(value: Any) -> Any:
+        """Convert a value to a hashable type for deduplication keys."""
+        if isinstance(value, list):
+            return tuple(_make_hashable(v) for v in value)
+        elif isinstance(value, dict):
+            return tuple(sorted((k, _make_hashable(v)) for k, v in value.items()))
+        else:
+            return value
+
+    seen: set[tuple[str, Any]] = set()
     deduped: list[Obligation] = []
     for obligation in obligations:
-        key = (obligation.name, tuple(sorted(obligation.details.items())))
+        # Convert details to a hashable form
+        hashable_details = tuple(
+            sorted((k, _make_hashable(v)) for k, v in obligation.details.items())
+        )
+        key = (obligation.name, hashable_details)
         if key in seen:
             continue
         deduped.append(obligation)

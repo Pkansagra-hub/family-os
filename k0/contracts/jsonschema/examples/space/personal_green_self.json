@@ -1,0 +1,14 @@
+{
+  "actor_id": "person-alice",
+  "tenant_id": "tenant-123",
+  "space_id": "personal:person-alice",
+  "participants": [
+    {"person_id": "person-alice", "relationship_hint": "self"}
+  ],
+  "policy_stamp": {
+    "band": "GREEN",
+    "obligations": [],
+    "decision_id": "dec-1"
+  },
+  "trace_id": "trace-abc"
+}

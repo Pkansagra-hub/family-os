@@ -1,0 +1,110 @@
+version: "3.8"
+
+services:
+  k0-kernel:
+    image: k0-kernel-gpu:latest
+    container_name: k0-kernel
+    user: "0:0" # Run as root to fix Windows volume permission issues
+    env_file:
+      - ./env/k0.env
+    volumes:
+      - ../:/app/k0 # Mount source code for hot reloading
+      - k0-data:/data # Docker volume for SQLite database
+      - ./secrets:/secrets:ro
+      # Mount modeling_studio for PyTorch UltraBERT backend
+      - D:/Modeling_studio/src:/app/modeling_studio:ro
+      # PEP Schema (core policy enforcement schema)
+      - type: bind
+        source: ../contracts/policy/pep.schema.json
+        target: /app/k0/contracts/policy/pep.schema.json
+        read_only: true
+      # Bridge Policy Contract (defines P00-P03 endpoints, manifest_fingerprint validation)
+      - type: bind
+        source: ../contracts/policy/bridge_policy.yml
+        target: /app/k0/contracts/policy/bridge_policy.yml
+        read_only: true
+      # Policy Manifests (mounted from generated/ subdirectory for local development)
+      # In production, these would be distributed via secure provisioning service
+      - type: bind
+        source: ./generated/manifests
+        target: /mnt/policy
+        read_only: true
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s # GPU init takes longer
+    restart: unless-stopped
+    networks:
+      - k0-local
+    # GPU PASSTHROUGH CONFIGURATION
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONPATH=/app/modeling_studio
+
+  # Neo4j Knowledge Graph database for family relationships and temporal entities
+  # Used by k0/drivers/neo4j_driver.py (ADR-0081: K0 Knowledge Graph Architecture)
+  # Schema migrations handled by k0/automation/migrate_neo4j.py (via k0.ps1 -Migrate flag)
+  neo4j:
+    image: neo4j:5.20.0
+    container_name: familyos-neo4j
+    environment:
+      # Authentication (change password in production)
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-test-password}
+      # Memory settings (512M-2G heap, 1G pagecache for optimal performance)
+      NEO4J_dbms_memory_heap_initial__size: 512M
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 1G
+      # Performance tuning
+      NEO4J_dbms_tx__log_rotation_retention__policy: "3 days"
+      NEO4J_dbms_checkpoint_interval_time: 15m
+      # Accept license (required for enterprise features, optional for community)
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+    ports:
+      - "7474:7474" # HTTP (Neo4j Browser)
+      - "7687:7687" # Bolt protocol (driver connection)
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - k0-local
+
+  # Scheduler worker is optional and will be added in future milestones
+  # scheduler-worker:
+  #   image: ghcr.io/familyos/k0-scheduler:latest
+  #   depends_on:
+  #     - k0-kernel
+  #   environment:
+  #     K0_KERNEL_ENDPOINT: http://k0-kernel:8080
+  #   networks:
+  #     - k0-local
+
+volumes:
+  k0-data: # Docker-managed volume for SQLite database
+  neo4j-data:
+  neo4j-logs:
+
+networks:
+  k0-local:
+    driver: bridge

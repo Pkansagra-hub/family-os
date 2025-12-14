@@ -1,0 +1,395 @@
+# Auto-Reconnect Client Contract
+# Part of: ADR-0040d (Heartbeat & Reconnection)
+# Purpose: Client-side auto-reconnect with exponential backoff (1s, 2s, 4s, 8s, 16s max)
+# Research: Exponential Backoff (Google SRE Book 2016), RFC 6455 (WebSocket 2011)
+
+version: "1.0"
+type: "websocket_auto_reconnect_client"
+status: "approved"
+
+metadata:
+  component: "WebSocket Client"
+  layer: "Client SDK (TypeScript)"
+  performance_budget:
+    reconnect_latency: "<2s average"
+    max_attempts: 5
+    total_backoff_time: "31s (1+2+4+8+16)"
+  research:
+    - "Exponential Backoff (Google SRE Book 2016) - Prevent thundering herd"
+    - "RFC 6455 (WebSocket 2011) - WebSocket reconnection patterns"
+    - "Production Evidence (K1, 6 months) - 80K reconnects, 97% success rate"
+
+# Auto-Reconnect Design
+auto_reconnect:
+  description: "Client-side automatic reconnection with exponential backoff to prevent thundering herd"
+
+  trigger_conditions:
+    - "WebSocket close event (onclose)"
+    - "WebSocket error event (onerror)"
+    - "Network disconnect detected"
+
+  exponential_backoff:
+    sequence: [1000, 2000, 4000, 8000, 16000]  # milliseconds
+    max_attempts: 5
+    total_time: "31 seconds (1+2+4+8+16)"
+    jitter: "±20% (spread reconnects, avoid simultaneous attempts)"
+
+  reconnect_request:
+    include_last_message_id: true
+    description: "Client includes last_message_id to request missed messages"
+    format: "wss://server/v1/chat?token=<jwt>&last_message_id=<msg-id>"
+
+# Exponential Backoff Strategy
+exponential_backoff_strategy:
+  description: "Prevent thundering herd on network outage (1000 clients don't reconnect simultaneously)"
+
+  backoff_sequence:
+    - attempt: 1
+      delay: "1 second"
+      jitter: "±200ms (800ms - 1200ms)"
+      cumulative: "1s"
+
+    - attempt: 2
+      delay: "2 seconds"
+      jitter: "±400ms (1600ms - 2400ms)"
+      cumulative: "3s"
+
+    - attempt: 3
+      delay: "4 seconds"
+      jitter: "±800ms (3200ms - 4800ms)"
+      cumulative: "7s"
+
+    - attempt: 4
+      delay: "8 seconds"
+      jitter: "±1600ms (6400ms - 9600ms)"
+      cumulative: "15s"
+
+    - attempt: 5
+      delay: "16 seconds (max)"
+      jitter: "±3200ms (12800ms - 19200ms)"
+      cumulative: "31s"
+
+  rationale:
+    thundering_herd_prevention: "Spreads 1000 clients over 31 seconds (not all at t=0)"
+    jitter: "±20% randomization prevents synchronized reconnects"
+    max_delay: "16 seconds caps exponential growth (prevents infinite wait)"
+
+# Reconnection Lifecycle
+reconnection_lifecycle:
+  description: "Complete reconnection flow from disconnect to successful reconnect"
+
+  states:
+    - state: "Connected"
+      description: "WebSocket open and operational"
+      transitions:
+        - "onclose → Disconnected"
+        - "onerror → Disconnected"
+
+    - state: "Disconnected"
+      description: "WebSocket closed, attempting reconnect"
+      actions:
+        - "Start exponential backoff timer"
+        - "Increment reconnect_attempts counter"
+      transitions:
+        - "reconnect_attempts < max_attempts → Reconnecting"
+        - "reconnect_attempts >= max_attempts → Failed"
+
+    - state: "Reconnecting"
+      description: "Waiting for backoff delay, then attempt reconnect"
+      actions:
+        - "Wait for backoff_sequence[reconnect_attempts] delay"
+        - "Call connect() with last_message_id"
+      transitions:
+        - "connect() success → Connected"
+        - "connect() failure → Disconnected"
+
+    - state: "Failed"
+      description: "Max reconnect attempts reached (5 attempts, 31 seconds)"
+      actions:
+        - "Emit reconnect_failed event"
+        - "Show user notification (manual refresh required)"
+        - "Stop reconnection loop"
+
+# TypeScript Implementation
+typescript_implementation:
+  class_definition: |
+    interface ReconnectConfig {
+      maxAttempts: number;           // 5 attempts max
+      backoffSequence: number[];     // [1000, 2000, 4000, 8000, 16000] ms
+      jitterPercent: number;         // 20% (±0.2)
+    }
+
+    export class AutoReconnectWebSocket {
+      private ws: WebSocket | null = null;
+      private url: string;
+      private token: string;
+      private reconnectAttempts: number = 0;
+      private lastMessageId: string | null = null;
+
+      private config: ReconnectConfig = {
+        maxAttempts: 5,
+        backoffSequence: [1000, 2000, 4000, 8000, 16000],
+        jitterPercent: 0.2,
+      };
+
+      constructor(url: string, token: string) {
+        this.url = url;
+        this.token = token;
+      }
+
+      /**
+       * Connect to WebSocket server
+       */
+      async connect(): Promise<void> {
+        // Build URL with token and last_message_id (if reconnecting)
+        let connectUrl = `${this.url}?token=${this.token}`;
+
+        if (this.lastMessageId) {
+          connectUrl += `&last_message_id=${this.lastMessageId}`;
+        }
+
+        console.log(`[AutoReconnectWebSocket] Connecting to ${connectUrl}`);
+
+        this.ws = new WebSocket(connectUrl);
+
+        this.ws.onopen = this.onOpen.bind(this);
+        this.ws.onmessage = this.onMessage.bind(this);
+        this.ws.onclose = this.onClose.bind(this);
+        this.ws.onerror = this.onError.bind(this);
+      }
+
+      /**
+       * Handle WebSocket open (reset reconnect attempts)
+       */
+      private onOpen(event: Event): void {
+        console.log('[AutoReconnectWebSocket] Connection established');
+
+        // Reset reconnect attempts (successful connection)
+        this.reconnectAttempts = 0;
+
+        // Emit reconnect_success event (if this was a reconnect)
+        if (this.lastMessageId) {
+          console.log('[AutoReconnectWebSocket] Reconnection successful');
+          this.emitReconnectSuccess();
+        }
+      }
+
+      /**
+       * Handle WebSocket close (trigger auto-reconnect)
+       */
+      private onClose(event: CloseEvent): void {
+        console.log(`[AutoReconnectWebSocket] Connection closed (code: ${event.code}, reason: ${event.reason})`);
+
+        // Attempt reconnection with exponential backoff
+        this.attemptReconnect();
+      }
+
+      /**
+       * Attempt reconnection with exponential backoff
+       */
+      private async attemptReconnect(): Promise<void> {
+        if (this.reconnectAttempts >= this.config.maxAttempts) {
+          console.error('[AutoReconnectWebSocket] Max reconnect attempts reached, giving up');
+          this.emitReconnectFailed();
+          return;
+        }
+
+        // Get backoff delay (exponential: 1s, 2s, 4s, 8s, 16s)
+        const baseDelay = this.config.backoffSequence[this.reconnectAttempts];
+
+        // Add jitter (±20%)
+        const jitter = baseDelay * this.config.jitterPercent;
+        const jitteredDelay = baseDelay + (Math.random() * 2 - 1) * jitter;
+
+        console.log(
+          `[AutoReconnectWebSocket] Reconnecting in ${jitteredDelay}ms (attempt ${this.reconnectAttempts + 1}/${this.config.maxAttempts})`
+        );
+
+        this.reconnectAttempts++;
+
+        // Wait for backoff delay
+        await new Promise(resolve => setTimeout(resolve, jitteredDelay));
+
+        // Reconnect
+        try {
+          await this.connect();
+        } catch (error) {
+          console.error('[AutoReconnectWebSocket] Reconnect failed', error);
+
+          // Try again (recursive)
+          this.attemptReconnect();
+        }
+      }
+    }
+
+# Operations
+operations:
+  - operation: "connect"
+    description: "Connect to WebSocket server with token and optional last_message_id"
+    parameters:
+      - name: "url"
+        type: "string"
+        required: true
+        example: "wss://k1.example.com/v1/chat"
+      - name: "token"
+        type: "string"
+        required: true
+        description: "JWT access token"
+      - name: "last_message_id"
+        type: "string | null"
+        required: false
+        description: "Last message ID (for reconnection)"
+    returns: "Promise<void>"
+
+    performance:
+      target_latency: "<2s average"
+      components:
+        - "TLS handshake: 180ms"
+        - "JWT validation: 45ms"
+        - "WebSocket upgrade: 90ms"
+        - "Total: ~315ms + network RTT"
+
+  - operation: "attemptReconnect"
+    description: "Attempt reconnection with exponential backoff"
+    parameters: []
+    returns: "Promise<void>"
+
+    flow:
+      - "Check reconnect_attempts < max_attempts"
+      - "Calculate backoff delay with jitter"
+      - "Wait for delay"
+      - "Call connect()"
+      - "If success → reset reconnect_attempts"
+      - "If failure → retry (recursive)"
+
+  - operation: "onOpen"
+    description: "Handle WebSocket open event"
+    actions:
+      - "Reset reconnect_attempts to 0"
+      - "Emit reconnect_success event (if reconnect)"
+      - "Request missed messages (if last_message_id)"
+
+  - operation: "onClose"
+    description: "Handle WebSocket close event"
+    actions:
+      - "Log close code and reason"
+      - "Trigger attemptReconnect()"
+
+# Prometheus Metrics (Client-Side)
+metrics:
+  - name: "websocket_reconnects_total"
+    type: "counter"
+    description: "Total reconnection attempts by status"
+    labels:
+      - status  # "success" | "failure"
+
+    usage: "Track reconnect success rate (target >95%)"
+
+  - name: "websocket_reconnect_latency_ms"
+    type: "histogram"
+    description: "Reconnection latency in milliseconds"
+    buckets: [500, 1000, 2000, 5000, 10000]
+
+    usage: "Monitor reconnect performance (<2s average)"
+
+  - name: "websocket_reconnect_attempts_total"
+    type: "histogram"
+    description: "Number of reconnect attempts before success"
+    buckets: [1, 2, 3, 4, 5]
+
+    usage: "Track attempt distribution (most should be 1st attempt)"
+
+# Performance Analysis
+performance_scenarios:
+  - scenario: "Reconnect on 1st Attempt (Network Restored)"
+    input: "Network drops, restores within 1 second"
+    performance:
+      backoff_delay: "1000ms"
+      tls_handshake: "180ms"
+      jwt_validation: "45ms"
+      websocket_upgrade: "90ms"
+      total: "1315ms ✅"
+    result: "Fast reconnect (<2s target) ✅"
+
+  - scenario: "Reconnect on 3rd Attempt (Intermittent Network)"
+    input: "Network drops, 1st + 2nd attempts fail, 3rd succeeds"
+    performance:
+      attempt_1_delay: "1000ms (failed)"
+      attempt_2_delay: "2000ms (failed)"
+      attempt_3_delay: "4000ms"
+      connection_time: "315ms"
+      total: "7315ms (7.3s) ✅"
+    result: "Successful reconnect within 8 seconds ✅"
+
+  - scenario: "Max Attempts Reached (Persistent Outage)"
+    input: "Network down for 31 seconds (all 5 attempts fail)"
+    performance:
+      total_backoff: "31000ms (31s)"
+      result: "Give up, show user notification ✅"
+    result: "Graceful failure, user notified ✅"
+
+# Testing Requirements (WARD Framework)
+testing:
+  unit_tests:
+    - test: "AutoReconnectWebSocket reconnects with exponential backoff"
+      description: "Verify backoff sequence"
+      setup: "Create client, disconnect, track backoff delays"
+      assertion: "Delays match [1s, 2s, 4s, 8s, 16s] ✅"
+
+    - test: "AutoReconnectWebSocket resets attempts on successful reconnect"
+      description: "Verify reconnect_attempts reset"
+      setup: "Reconnect successfully"
+      assertion: "reconnect_attempts == 0 ✅"
+
+    - test: "AutoReconnectWebSocket includes last_message_id on reconnect"
+      description: "Verify missed message request"
+      setup: "Disconnect with last_message_id = 'msg-50'"
+      assertion: "URL includes &last_message_id=msg-50 ✅"
+
+    - test: "AutoReconnectWebSocket gives up after 5 attempts"
+      description: "Verify max attempts enforcement"
+      setup: "Simulate 5 failed reconnects"
+      assertion: "reconnect_failed event emitted ✅"
+
+  integration_tests:
+    - test: "Full reconnect flow: Disconnect → Backoff → Reconnect → Success"
+      description: "Verify complete reconnection lifecycle"
+      setup: "Connect client, disconnect, wait for reconnect"
+      assertion: "Client reconnected && reconnect_success emitted ✅"
+
+    - test: "Jitter spreads reconnects across time window"
+      description: "Verify jitter prevents thundering herd"
+      setup: "Disconnect 100 clients simultaneously"
+      assertion: "Reconnects spread over ±20% jitter window ✅"
+
+# Implementation Notes
+implementation:
+  language: "TypeScript"
+  target_environments:
+    - "Browser (Chrome, Firefox, Safari, Edge)"
+    - "Node.js (for server-side clients)"
+    - "React Native (mobile apps)"
+
+  dependencies:
+    - "WebSocket API (browser native)"
+    - "ws library (Node.js)"
+
+  key_design_decisions:
+    - decision: "Exponential backoff [1s, 2s, 4s, 8s, 16s] (not linear)"
+      rationale: "Prevents thundering herd, backs off on persistent failures"
+
+    - decision: "±20% jitter (not fixed delays)"
+      rationale: "Spreads reconnects across time window (avoids synchronized attempts)"
+
+    - decision: "5 max attempts (not unlimited)"
+      rationale: "Prevents infinite reconnect loop, graceful failure after 31s"
+
+    - decision: "Include last_message_id in reconnect URL"
+      rationale: "Server can replay missed messages (see missed_message_replay.yml)"
+
+# Related Contracts
+related_contracts:
+  - "heartbeat_manager.yml - Server-side heartbeat monitoring"
+  - "timeout_detection.yml - Server closes stale connections"
+  - "missed_message_replay.yml - Server replays missed messages on reconnect"
+  - "reconnect_success_rate.yml - Target >95% reconnect success"

@@ -1,0 +1,92 @@
+module_id: builders.embedding_queue_write
+version: v1
+
+input_event_types:
+  - p02.hippocampus.semantic_projected.v1
+  - p02.builders.hipp_row_built.v1
+
+output_event_types:
+  - p02.builders.embedding_queued.v1
+
+latency_budget_ms: 5
+
+side_effects:
+  - write:st_embedding_queue
+
+idempotent: true
+
+failure_modes:
+  - code: EMBEDDING_QUEUE_INSERT_FAILED
+    policy: retry
+    max_retries: 5
+  - code: DUPLICATE_EMBEDDING_ID
+    policy: skip
+  - code: MISSING_EMBEDDING_ID
+    policy: drop
+
+description: |
+  Embedding Queue Writer Module (Vector Encoding Scheduler)
+
+  Enqueues embedding generation jobs to st_embedding_queue for P08 processing:
+  - Inserts row with embedding_id from CA1 semantic projection
+  - Links to event via event_id and wal_pos
+  - Sets initial status=PENDING
+  - Prepares payload for P08 vector generation pipeline
+
+  Performance target: ≤5ms P95 (single row insert, indexed)
+
+  Key Embedding Queue Fields:
+  - embedding_id: TEXT PRIMARY KEY (UUID from M02 CA1)
+  - event_id: TEXT (FK to st_hipp_events.event_id)
+  - wal_pos: INTEGER (FK to st_wal.wal_pos)
+  - status: TEXT (PENDING/IN_PROGRESS/READY/FAILED)
+  - attempt_count: INTEGER (default 0, incremented by P08)
+  - created_at: INTEGER (timestamp when queued)
+  - updated_at: INTEGER (last status update)
+  - error_message: TEXT (NULL unless status=FAILED)
+
+  Status Lifecycle:
+  1. PENDING: Initial state (written by P02)
+  2. IN_PROGRESS: Claimed by P08 worker
+  3. READY: Vector computed and stored (P08 complete)
+  4. FAILED: Computation failed (after max retries)
+
+  Foreign Key Relationships:
+  - embedding_id: 1:1 with st_hipp_events.embedding_id
+  - event_id: 1:1 with st_hipp_events.event_id
+  - wal_pos: N:1 with st_wal.wal_pos
+
+  P08 Processing Flow:
+  1. P02 writes: embedding_id, event_id, wal_pos, status=PENDING
+  2. P08 worker claims: UPDATE status=IN_PROGRESS WHERE status=PENDING LIMIT 1
+  3. P08 computes vector: Generate embedding from text/entities
+  4. P08 stores vector: INSERT into st_embeddings table
+  5. P08 updates queue: UPDATE status=READY
+  6. P08 emits event: embedding.ready.v1 for downstream pipelines
+
+  Idempotency:
+  - Uses embedding_id as PRIMARY KEY
+  - INSERT OR IGNORE (skip duplicates)
+  - Duplicate embedding_id triggers SKIP policy
+
+  Use Cases:
+  - Defer expensive vector computation to P08 background pipeline
+  - Decouple memory write (P02) from vector generation (P08)
+  - Enable retry/failure handling for embedding generation
+  - Track embedding generation status per event
+
+config_schema:
+  type: object
+  properties:
+    default_status:
+      type: string
+      default: "PENDING"
+      description: Initial status for new embedding queue entries
+    batch_insert:
+      type: boolean
+      default: false
+      description: Whether to batch multiple embedding queue inserts (future optimization)
+    audit_queue_writes:
+      type: boolean
+      default: true
+      description: Whether to audit log all embedding queue writes

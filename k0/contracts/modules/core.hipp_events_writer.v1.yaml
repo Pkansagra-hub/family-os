@@ -1,0 +1,101 @@
+# =============================================================================
+# M16: Hippocampus Events Writer Module Contract
+# =============================================================================
+# Module: core.hipp_events_writer
+# Version: v1
+# Epic: 4.5.1
+# Status: Active
+# Created: 2025-11-17
+#
+# Purpose:
+#   Write episodic memory events to st_hipp_events after enrichment pipeline.
+#   Performs 2-table atomic transaction (st_hipp_events + st_pipeline_processed).
+#
+# Transaction Scope (CORRECTED per Sketchboard Phase 9 Q2):
+#   - st_hipp_events (core memory event)
+#   - st_pipeline_processed (pipeline completion tracking)
+#
+#   NOTE: st_embedding_queue is written by M14 (builders.embedding_queue_write)
+#   in a SEPARATE transaction. This contract previously incorrectly included
+#   st_embedding_queue - corrected 2025-11-17.
+#
+# Performance:
+#   - Latency Budget: 25ms P95 (2-table INSERT with indexes)
+#   - Throughput: 40-50 ops/sec single-threaded
+#   - Memory: <5MB per operation
+#
+# Related:
+#   - ADR: docs/architecture/decisions-K0/modules/k010.1-hipp-events-writer.md
+#   - Schema: docs/pipelines/P02_data_schema.md (lines 96-185, 511-569)
+#   - Sketchboard: docs/pipelines/p02_sketchboard.md (Phase 9 Q2)
+#   - M14: builders.embedding_queue_write (writes st_embedding_queue separately)
+# =============================================================================
+
+module_id: core.hipp_events_writer
+version: v1
+
+input_event_types:
+  - p02.enrichment.complete.v1
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.hipp_events.written.v1
+
+latency_budget_ms: 25
+
+# CORRECTED: Removed st_embedding_queue (handled by M14 in separate transaction)
+side_effects:
+  - write:st_hipp_events
+  - write:st_pipeline_processed
+
+idempotent: true
+
+failure_modes:
+  - code: MISSING_EVENT_ID
+    policy: drop
+  - code: MISSING_WAL_POS
+    policy: drop
+  - code: MISSING_EMBEDDING_ID
+    policy: drop
+  - code: DUPLICATE_EVENT_ID
+    policy: drop
+  - code: TRANSACTION_TIMEOUT
+    policy: retry
+  - code: INTEGRITY_VIOLATION
+    policy: dlq
+
+description: |
+  Hippocampus Events Writer (M16)
+
+  Writes enriched episodic memory events to st_hipp_events after P02 enrichment
+  pipeline completes. Performs 2-table atomic transaction:
+
+  1. st_hipp_events: Core memory event with enrichments (text, embeddings, affect, etc.)
+  2. st_pipeline_processed: Pipeline completion tracking for idempotency
+
+  Transaction Boundary (CORRECTED):
+  - Previously included st_embedding_queue (3-table transaction)
+  - Corrected to 2-table transaction per Sketchboard Phase 9 Q2
+  - M14 (builders.embedding_queue_write) handles st_embedding_queue separately
+
+  Idempotency:
+  - Uses event_id as PRIMARY KEY with INSERT OR IGNORE
+  - Checks st_pipeline_processed before writing (skip if already processed)
+  - Duplicate event_id triggers skip (no error, returns status=SKIPPED_DUPLICATE)
+
+  Performance:
+  - Target: <25ms P95 (2-table INSERT with B-tree indexes)
+  - Uses prepared statements and connection pooling
+  - Batching NOT supported (single event per call for transactional atomicity)
+
+  Security:
+  - Requires capability: st_hipp_events.write
+  - Requires capability: st_pipeline_processed.write
+  - Enforces tenant_id and space_id isolation
+  - Validates privacy_band (GREEN/AMBER/RED)
+
+  Related Modules:
+  - M02 (semantic.project): Provides embedding_id
+  - M11 (affect.analyze): Provides valence/arousal
+  - M14 (builders.embedding_queue_write): Writes st_embedding_queue separately
+  - M17 (core.event_emitter): Emits completion events to bus

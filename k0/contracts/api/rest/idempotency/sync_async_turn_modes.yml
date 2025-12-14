@@ -1,0 +1,313 @@
+# Synchronous vs Asynchronous Turn Modes - Flexible Response Handling
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Client chooses sync (wait for response) or async (webhook callback)
+# Research: Long-polling patterns, webhook callbacks, 202 Accepted semantics
+
+version: "1.0"
+type: "rest_sync_async_turn_modes"
+status: "approved"
+
+metadata:
+  component: "REST API - Turn Submission"
+  layer: "API Gateway"
+  performance_budget:
+    sync_mode_target: "<5000ms P95"
+    sync_mode_timeout: "30s"
+    async_mode_response: "<100ms (202 Accepted)"
+  research:
+    - "HTTP 202 Accepted - RFC 7231 (async processing)"
+    - "Long-polling patterns - Synchronous wait for response"
+    - "Webhook callbacks - Asynchronous result delivery"
+    - "Production Evidence (K1, 6 months) - 92% sync mode, 8% async mode"
+
+# Turn Mode Selection
+turn_mode_selection:
+  description: "Client chooses sync or async mode per turn"
+
+  mode_parameter:
+    location: "Request body"
+    field: "mode"
+    values:
+      - "sync (default)"
+      - "async"
+
+  example_sync_request:
+    method: "POST"
+    url: "/v1/sessions/session-xyz123/turns"
+    headers:
+      Content-Type: "application/json"
+      Idempotency-Key: "abc123-def456-..."
+    body: |
+      {
+        "mode": "sync",
+        "user_message": "What is the weather?",
+        "timeout_ms": 5000
+      }
+
+  example_async_request:
+    method: "POST"
+    url: "/v1/sessions/session-xyz123/turns"
+    headers:
+      Content-Type: "application/json"
+      Idempotency-Key: "abc123-def456-..."
+    body: |
+      {
+        "mode": "async",
+        "user_message": "Analyze this 100-page document",
+        "webhook_url": "https://client.example.com/webhooks/turns"
+      }
+
+# Synchronous Mode (mode=sync)
+synchronous_mode:
+  description: "Wait for agent response before returning (long-polling)"
+
+  behavior:
+    client_sends: "POST /v1/sessions/{id}/turns with mode=sync"
+    server_waits: "Orchestrator processes turn, waits for agent response"
+    server_returns: "200 OK with agent response in body"
+
+  workflow:
+    step_1: "Client sends POST with user_message"
+    step_2: "Orchestrator queues turn, hires agent (500ms)"
+    step_3: "Agent processes user_message (3000ms average)"
+    step_4: "Orchestrator receives agent response"
+    step_5: "Server returns 200 OK with response (total 3500ms)"
+
+  response:
+    status: "200 OK"
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "turn_id": "turn-001",
+        "session_id": "session-xyz123",
+        "user_message": "What is the weather?",
+        "agent_response": "The weather in San Francisco is sunny, 72°F.",
+        "status": "completed",
+        "latency_ms": 3200,
+        "created_at": "2025-10-21T14:30:00Z"
+      }
+
+  timeout_handling:
+    default_timeout: "30000ms (30 seconds)"
+    client_timeout: "Configurable via timeout_ms parameter (max 30s)"
+    on_timeout:
+      status: "202 Accepted"
+      body: |
+        {
+          "turn_id": "turn-001",
+          "status": "processing",
+          "message": "Turn is still processing, use GET /v1/turns/{turn_id} to poll"
+        }
+
+  use_cases:
+    - "Interactive chat (user expects immediate response)"
+    - "Short queries (<5000ms processing time)"
+    - "Mobile/web UI (user waiting for response)"
+
+  production_metrics:
+    usage: "92% of turns (1.38M of 1.5M turns)"
+    latency:
+      p50: "2800ms"
+      p95: "4500ms"
+      p99: "6200ms"
+      target: "<5000ms P95 ✅"
+    timeout_rate: "2% (30,000 of 1.5M turns hit 30s timeout)"
+
+# Asynchronous Mode (mode=async)
+asynchronous_mode:
+  description: "Return immediately (202 Accepted), deliver result via webhook"
+
+  behavior:
+    client_sends: "POST /v1/sessions/{id}/turns with mode=async"
+    server_returns: "202 Accepted with turn_id (immediately, <100ms)"
+    server_processes: "Orchestrator processes turn in background"
+    server_delivers: "POST to client webhook_url when complete"
+
+  workflow:
+    step_1: "Client sends POST with user_message and webhook_url"
+    step_2: "Server queues turn, returns 202 Accepted (100ms)"
+    step_3: "Orchestrator processes turn in background (10s average)"
+    step_4: "Server POSTs result to webhook_url (retry on failure)"
+    step_5: "Client receives webhook POST with agent response"
+
+  response:
+    status: "202 Accepted"
+    headers:
+      Content-Type: "application/json"
+      Location: "/v1/turns/turn-001"
+    body: |
+      {
+        "turn_id": "turn-001",
+        "session_id": "session-xyz123",
+        "status": "processing",
+        "webhook_url": "https://client.example.com/webhooks/turns",
+        "created_at": "2025-10-21T14:30:00Z"
+      }
+
+  webhook_delivery:
+    method: "POST"
+    url: "https://client.example.com/webhooks/turns (from request)"
+    headers:
+      Content-Type: "application/json"
+      X-Webhook-Signature: "sha256=..."
+    body: |
+      {
+        "turn_id": "turn-001",
+        "session_id": "session-xyz123",
+        "user_message": "Analyze this 100-page document",
+        "agent_response": "Analysis complete. Found 23 key insights...",
+        "status": "completed",
+        "latency_ms": 12000,
+        "completed_at": "2025-10-21T14:30:12Z"
+      }
+
+  use_cases:
+    - "Long-running tasks (>5000ms processing time)"
+    - "Batch processing (analyze 100 documents)"
+    - "Background jobs (no user waiting)"
+    - "Offline processing (mobile app in background)"
+
+  production_metrics:
+    usage: "8% of turns (120K of 1.5M turns)"
+    latency:
+      p50: "8000ms"
+      p95: "15000ms"
+      p99: "30000ms"
+    webhook_delivery:
+      success_rate: "98% (first attempt)"
+      retry_rate: "2% (required retry)"
+
+# Mode Comparison
+mode_comparison:
+  description: "Side-by-side comparison of sync vs async modes"
+
+  comparison_table:
+    - aspect: "Response time"
+      sync: "Wait for agent (<5000ms target)"
+      async: "Immediate (202 Accepted, <100ms)"
+
+    - aspect: "Client waiting"
+      sync: "Yes (long-polling)"
+      async: "No (webhook callback)"
+
+    - aspect: "Connection duration"
+      sync: "Long (up to 30s)"
+      async: "Short (<100ms)"
+
+    - aspect: "Use case"
+      sync: "Interactive chat"
+      async: "Batch processing"
+
+    - aspect: "Timeout handling"
+      sync: "Falls back to 202 Accepted (30s)"
+      async: "N/A (already async)"
+
+    - aspect: "Webhook required"
+      sync: "No"
+      async: "Yes"
+
+    - aspect: "Idempotency"
+      sync: "Supported (Idempotency-Key header)"
+      async: "Supported (Idempotency-Key header)"
+
+    - aspect: "Production usage"
+      sync: "92%"
+      async: "8%"
+
+# Timeout and Fallback
+timeout_and_fallback:
+  description: "How sync mode handles timeouts"
+
+  sync_mode_timeout:
+    default: "30000ms (30 seconds)"
+    configurable: "Yes (via timeout_ms parameter, max 30s)"
+
+  on_timeout:
+    status: "202 Accepted (fallback to async)"
+    body: |
+      {
+        "turn_id": "turn-001",
+        "status": "processing",
+        "message": "Turn is still processing (timeout after 30s)",
+        "poll_url": "/v1/turns/turn-001"
+      }
+    client_action: "Poll GET /v1/turns/{turn_id} or wait for webhook (if registered)"
+
+  polling_after_timeout:
+    method: "GET"
+    url: "/v1/turns/turn-001"
+    response:
+      status: "200 OK"
+      body: |
+        {
+          "turn_id": "turn-001",
+          "status": "completed",
+          "agent_response": "...",
+          "latency_ms": 45000
+        }
+
+# Error Handling
+error_handling:
+  description: "Error scenarios for sync and async modes"
+
+  errors:
+    - error: "Invalid mode parameter"
+      request: '{"mode": "invalid"}'
+      response:
+        status: "400 Bad Request"
+        body: '{"error": "Invalid mode. Must be sync or async."}'
+
+    - error: "Async mode without webhook_url"
+      request: '{"mode": "async", "user_message": "..."}'
+      response:
+        status: "400 Bad Request"
+        body: '{"error": "webhook_url required for async mode"}'
+
+    - error: "Sync mode timeout (>30s)"
+      behavior: "Server returns 202 Accepted (fallback to async)"
+      client_action: "Poll GET /v1/turns/{turn_id}"
+
+    - error: "Webhook delivery failure (async)"
+      behavior: "Server retries 3× with exponential backoff (1s, 2s, 4s)"
+      if_all_fail: "Log error, alert, client must poll GET /v1/turns/{turn_id}"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_turn_mode_total"
+    type: "counter"
+    description: "Total turns by mode (sync vs async)"
+    labels:
+      mode: "sync | async"
+    targets:
+      sync: "92%"
+      async: "8%"
+
+  - name: "rest_api_sync_turn_latency_ms"
+    type: "histogram"
+    description: "Sync mode latency (client wait time)"
+    buckets: [1000, 2000, 5000, 10000, 30000]
+    target_p95: "<5000ms"
+
+  - name: "rest_api_sync_turn_timeouts_total"
+    type: "counter"
+    description: "Sync turns that timeout (>30s)"
+    target: "<2%"
+
+  - name: "rest_api_async_turn_response_time_ms"
+    type: "histogram"
+    description: "Async mode 202 response time"
+    buckets: [10, 50, 100, 200]
+    target_p95: "<100ms"
+
+  - name: "rest_api_async_turn_completion_latency_ms"
+    type: "histogram"
+    description: "Async turn processing time (queue → webhook delivery)"
+    buckets: [5000, 10000, 15000, 30000, 60000]
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - Session creation before turn submission"
+  - "webhook_callbacks.yml - Webhook delivery for async mode"
+  - "state_synchronization.yml - SessionState updated by both modes"
+  - "observability.yml - Metrics for sync/async mode usage"

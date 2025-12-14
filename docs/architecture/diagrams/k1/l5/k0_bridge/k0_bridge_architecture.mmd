@@ -1,0 +1,121 @@
+---
+title: K0 Bridge - Layer 5 Infrastructure Architecture
+description: Complete K0 Bridge architecture with HTTP/2 connection management, retry policies, and observability
+authors: [K1 Intelligence Team]
+version: 1.0.0
+date: 2025-10-26
+tags: [k1, layer5, bridge, k0, http2, architecture]
+related_adrs: [ADR-0001a, ADR-0024, ADR-0029, ADR-0044, ADR-0044a]
+research_citations:
+  - "HTTP/2 RFC 7540 (2015) - Multiplexing and connection pooling"
+  - "Circuit Breaker Pattern - Michael Nygard, Release It! (2007)"
+  - "Exponential Backoff - IEEE 802.11 (1997)"
+---
+
+graph TB
+    subgraph "K1 Intelligence - Layer 5 Infrastructure"
+        subgraph "Bridge Components"
+            CMD[K0CommandClient<br/>Command Port :8080/k0/command.submit]
+            QRY[K0QueryClient<br/>Query Port :8080/k0/query.recall]
+            SSE[K0SSEClient<br/>SSE Port :8080/k0/sse.subscribe]
+            OBS[ObservabilityClient<br/>Observability Port :8080/k0/obs.emit]
+            BATCH[BatchClient<br/>State Delta Batching 250ms]
+        end
+        
+        subgraph "Connection Management - ADR-0044a"
+            HTTP2MGR[HTTP2ConnectionManager<br/>Centralized Pool Manager]
+            POOL1[Connection Pool :8080<br/>HTTP/2 Multiplexing<br/>Max 5 concurrent streams]
+            HEALTH[Health Check Loop<br/>Interval: 30s<br/>Timeout: 5s]
+            CACHE[Client Cache<br/>TTL: 60s idle eviction]
+        end
+        
+        subgraph "Resilience - ADR-0008b"
+            RETRY[RetryPolicy<br/>Exponential Backoff<br/>Max: 3 attempts<br/>100ms → 400ms → 1600ms]
+            CB[CircuitBreaker<br/>3-State FSM<br/>CLOSED/OPEN/HALF_OPEN]
+            HOTRL[HotReload<br/>Config File Watcher<br/>5s polling]
+        end
+        
+        subgraph "Observability - ADR-0029"
+            METRICS[Prometheus Metrics<br/>Histograms: latency_ms<br/>Counters: success/error_total]
+            TRACES[OpenTelemetry Traces<br/>cognitive_trace_id propagation<br/>Span injection]
+            LOGS[Structured Logs<br/>JSON format<br/>contextual enrichment]
+        end
+    end
+    
+    subgraph "K0 Memory Kernel - Unified Port 8080"
+        K0_CMD[Command Port<br/>/k0/command.submit<br/>Fast/Smart Lane Routing]
+        K0_QRY[Query Port<br/>/k0/query.recall<br/>WAL Read Operations]
+        K0_SSE[SSE Port<br/>/k0/sse.subscribe<br/>Event Stream Pub/Sub]
+        K0_OBS[Observability Port<br/>/k0/obs.emit<br/>Metrics/Logs Push]
+        K0_DB[(SQLite WAL<br/>k0_kernel.db<br/>Position: 87)]
+    end
+    
+    %% Command Flow
+    CMD -->|HTTP/2 POST| HTTP2MGR
+    CMD -->|Apply| RETRY
+    CMD -->|Monitor| CB
+    CMD -->|Emit| METRICS
+    CMD -->|Trace| TRACES
+    
+    %% Query Flow
+    QRY -->|HTTP/2 POST| HTTP2MGR
+    QRY -->|Apply| RETRY
+    QRY -->|Emit| METRICS
+    QRY -->|Trace| TRACES
+    
+    %% SSE Flow
+    SSE -->|HTTP/2 GET| HTTP2MGR
+    SSE -->|Resume from cursor| K0_SSE
+    SSE -->|Emit| METRICS
+    SSE -->|Trace| TRACES
+    
+    %% Observability Flow
+    OBS -->|HTTP/2 POST| HTTP2MGR
+    OBS -->|Batch 10s/5s| BATCH
+    OBS -->|Emit| METRICS
+    
+    %% Batch Flow
+    BATCH -->|Coalesce deltas| HTTP2MGR
+    BATCH -->|250ms window| K0_CMD
+    
+    %% HTTP2 Manager Flow
+    HTTP2MGR -->|Get/Create| POOL1
+    HTTP2MGR -->|Run| HEALTH
+    HTTP2MGR -->|Evict idle| CACHE
+    
+    %% K0 Connections
+    POOL1 -.->|HTTP/2 Stream 1| K0_CMD
+    POOL1 -.->|HTTP/2 Stream 2| K0_QRY
+    POOL1 -.->|HTTP/2 Stream 3| K0_SSE
+    POOL1 -.->|HTTP/2 Stream 4| K0_OBS
+    
+    %% Health Check
+    HEALTH -.->|HEAD /health| K0_CMD
+    
+    %% K0 Internal
+    K0_CMD -->|Write| K0_DB
+    K0_QRY -->|Read| K0_DB
+    K0_SSE -->|Subscribe| K0_DB
+    K0_OBS -->|Store| K0_DB
+    
+    %% Resilience
+    RETRY -.->|Classify failures| CB
+    CB -.->|State transitions| HEALTH
+    HOTRL -.->|Reload| RETRY
+    HOTRL -.->|Reload| CB
+    
+    %% Observability
+    METRICS -.->|Scrape endpoint| LOGS
+    TRACES -.->|Export spans| LOGS
+    
+    classDef client fill:#4a90e2,stroke:#2e5c8a,stroke-width:2px,color:#fff
+    classDef manager fill:#50c878,stroke:#2d7a4a,stroke-width:2px,color:#fff
+    classDef resilience fill:#f39c12,stroke:#c87f0a,stroke-width:2px,color:#fff
+    classDef observability fill:#9b59b6,stroke:#6c3483,stroke-width:2px,color:#fff
+    classDef k0 fill:#e74c3c,stroke:#a93226,stroke-width:2px,color:#fff
+    
+    class CMD,QRY,SSE,OBS,BATCH client
+    class HTTP2MGR,POOL1,HEALTH,CACHE manager
+    class RETRY,CB,HOTRL resilience
+    class METRICS,TRACES,LOGS observability
+    class K0_CMD,K0_QRY,K0_SSE,K0_OBS,K0_DB k0

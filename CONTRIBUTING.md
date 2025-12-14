@@ -1,19 +1,19 @@
-# Contributing to Family AI Cognitive Architecture
+﻿# Contributing to Family AI Cognitive Architecture
 
 Contracts-first. See `contracts/` and `contracts/POLICY_VERSIONING.md`.
 
 
 Thank you for your interest in contributing to the Family AI Cognitive Architecture project! We welcome contributions from the community and are excited to collaborate with you.
 
-## 🤝 Code of Conduct
+## ðŸ¤ Code of Conduct
 
 This project adheres to the [Code of Conduct](CODE_OF_CONDUCT.md) that we expect all contributors to follow. Please be respectful, inclusive, and constructive in all interactions.
 
-## � Licensing
+## ï¿½ Licensing
 
 FamilyOS is proprietary, patent-pending software. By contributing, you agree that your submissions fall under the FamilyOS Proprietary License and that rights in those contributions are assigned to the project as described in [LICENSE](LICENSE).
 
-## �🚀 Getting Started
+## ï¿½ðŸš€ Getting Started
 
 ### Prerequisites
 
@@ -52,34 +52,34 @@ FamilyOS is proprietary, patent-pending software. By contributing, you agree tha
    pre-commit install
    ```
 
-## 📋 Types of Contributions
+## ðŸ“‹ Types of Contributions
 
 We welcome various types of contributions:
 
-### 🐛 Bug Reports
+### ðŸ› Bug Reports
 - Use GitHub Issues with the "bug" label
 - Include reproduction steps, expected vs actual behavior
 - Provide system information and error logs
 
-### ✨ Feature Requests
+### âœ¨ Feature Requests
 - Use GitHub Issues with the "enhancement" label
 - Clearly describe the feature and its benefits
 - Consider how it fits with the cognitive architecture
 
-### 🔧 Code Contributions
+### ðŸ”§ Code Contributions
 - Bug fixes
 - New features
 - Performance improvements
 - Documentation improvements
 - Test coverage improvements
 
-### 📚 Documentation
+### ðŸ“š Documentation
 - API documentation
 - Tutorials and guides
 - Architecture explanations
 - Code comments and docstrings
 
-## 💻 Development Workflow
+## ðŸ’» Development Workflow
 
 ### 1. Create a Feature Branch
 ```bash
@@ -106,10 +106,10 @@ mypy .
 flake8 .
 
 # Run tests
-pytest
+ward
 
 # Test coverage
-pytest --cov=family_ai --cov-report=html
+ward --cov=family_ai --cov-report=html
 ```
 
 ### 4. Commit Your Changes
@@ -141,7 +141,7 @@ Then create a Pull Request on GitHub with:
 - Reference to any related issues
 - Screenshots or demos if applicable
 
-## 🏗️ Architecture Guidelines
+## ðŸ—ï¸ Architecture Guidelines
 
 ### Core Principles
 
@@ -208,7 +208,7 @@ def process_memory_item(
     """
 ```
 
-## 🔍 Review Process
+## ðŸ” Review Process
 
 ### Pull Request Reviews
 
@@ -229,7 +229,7 @@ All contributions go through a review process:
 - **Security**: Are there any security implications?
 - **Privacy**: Does it respect family privacy principles?
 
-## 🏷️ Issue Labels
+## ðŸ·ï¸ Issue Labels
 
 We use the following labels to categorize issues:
 
@@ -242,7 +242,7 @@ We use the following labels to categorize issues:
 - `pipeline-*`: Issues related to specific pipelines (P01-P20)
 - `component-*`: Issues related to specific components
 
-## 📞 Getting Help
+## ðŸ“ž Getting Help
 
 - **Support Guide**: Start with [SUPPORT.md](SUPPORT.md) for contact options and response expectations
 - **GitHub Discussions**: For questions and general discussion
@@ -250,7 +250,7 @@ We use the following labels to categorize issues:
 - **Documentation**: Check the docs/ directory for detailed guides
 - **Developer Index**: See `develpoer_index.md` for module details
 
-## 🎯 Development Priorities
+## ðŸŽ¯ Development Priorities
 
 Current focus areas for contributions:
 
@@ -260,7 +260,7 @@ Current focus areas for contributions:
 4. **Testing Coverage** (unit and integration tests)
 5. **Documentation** (API docs, tutorials)
 
-## 🙏 Recognition
+## ðŸ™ Recognition
 
 Contributors will be recognized in:
 
@@ -270,3 +270,4 @@ Contributors will be recognized in:
 - Community acknowledgments
 
 Thank you for contributing to Family AI Cognitive Architecture!
+

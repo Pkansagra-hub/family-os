@@ -1,0 +1,78 @@
+%% Research Foundation:
+%% - Actor Model (Hewitt 1973)
+%% - Contract Net Protocol (Smith 1980)
+%% - Cognitive Architecture & Hippocampus Modeling (McClelland 1995)
+%% Related ADRs: ADR-0001, ADR-0006, ADR-0007, ADR-0017, ADR-0022, ADR-0049, ADR-0093
+
+flowchart TB
+	%% Client ingress and security envelope
+	subgraph Client["Client Side"]
+		C1["User App<br/>(Web or Mobile)"]
+	end
+
+	subgraph Ingress["K1 Layer 1 – Ingress"]
+		G1["API Gateway<br/>JWT Check + Privacy Band"]
+		L1["Stream Switch<br/>Normalize Text · Voice · Sensor"]
+		L2["Intent Router<br/>Rules → SLM → LLM"]
+		L3["SessionState Bootstrap<br/>Locale · Trace ID · Capability"]
+	end
+
+	subgraph K1Core["K1 Concierge Workspace"]
+		subgraph Concierge["Concierge AI Agent"]
+			C2["Concierge Admission<br/>Mailbox + Contract Net Bid"]
+			C3["Concierge Meta-Intent<br/>Resolve Fast or Escalate"]
+			EV["Internal Event Bus<br/>Planner & Orchestrator Signals"]
+		end
+
+		subgraph Planner["Planner Pipeline"]
+			P1["Stage 1<br/>Sketch Flow"]
+			P2["Stage 2<br/>Expand Tools & Tokens"]
+			P3["Stage 3<br/>Validate Safety & Budgets"]
+			P4["Stage 4<br/>Commit Plan"]
+		end
+
+		subgraph Orchestrator["Orchestrator & Specialist Agents"]
+			O1["DAG Builder<br/>Wave Scheduling"]
+			O2["Specialist Agents & Tools<br/>Execute Steps"]
+		end
+
+		SS["Shared SessionState<br/>Beliefs · Scoreboard · Persona"]
+	end
+
+	subgraph Writer["Memory Writer & Bridge Prep"]
+		W1["MemoryWriter Agent<br/>Collect Turn Deltas"]
+		W2["State Delta Emitter<br/>cognitive_trace_id · Privacy Tag"]
+		W3["Batch Client<br/>250 ms Flush · 64 KB Guard"]
+		R1["Fast/Smart Router<br/>Score = Privacy + Obligation + Payload + Time"]
+	end
+
+	subgraph K0Bridge["K0 Bridge & Kernel"]
+		K1["Policy Gate<br/>bridge_policy.yml Obligations"]
+		K2["WAL Commit<br/>CommandType.MEMORY_WRITE"]
+		subgraph P02["Port P02 – MemoryWrite Pipeline"]
+			P02_1["Stage 1<br/>Schema Check · Dedupe · Redaction"]
+			P02_2["Stage 2<br/>Persist to st_epi + st_sem"]
+			P02_3["Stage 3<br/>Fan-Out Receipts → P06 · P19 · P03"]
+		end
+		H1["Hippocampus Stack<br/>Dentate → CA3 → CA1"]
+		SSE["SSE Port<br/>Memory Write Ack + Prospective Events"]
+	end
+
+	%% Primary flow arrows
+	C1 --> G1 --> L1 --> L2 --> L3 --> C2 --> C3
+	C3 -->|Task Intent| EV --> P1 --> P2 --> P3 --> P4 --> O1 --> O2
+	C3 -->|Direct Reply| SS
+
+	O2 -->|Tool Results| SS
+	SS -->|Context Updates| W1
+	W1 --> W2 --> W3 --> R1 --> K1 --> K2 --> P02_1 --> P02_2 --> P02_3 --> H1 --> SSE
+
+	%% Shared memory access
+	SS -->|Grounding| C3
+	SS -->|Plan Inputs| P1
+	SS -->|Wave Guards| O1
+
+	%% Feedback loops for context and confirmation
+	SSE -->|Fresh Recall| L2
+	SSE -->|Meta-Intent Signals| C3
+	SSE -->|Writer Receipts| W1

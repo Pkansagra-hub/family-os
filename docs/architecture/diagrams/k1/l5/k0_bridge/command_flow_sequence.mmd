@@ -1,0 +1,244 @@
+---
+title: Command Flow Sequence - K1 to K0 Round Trip
+description: End-to-end command submission flow with retry, receipt validation, and observability
+authors: [K1 Intelligence Team]
+version: 1.0.0
+date: 2025-10-26
+tags: [k1, layer5, bridge, k0, command, sequence, flow]
+related_adrs: [ADR-0001a, ADR-0008b, ADR-0029, ADR-0044a]
+---
+
+sequenceDiagram
+    participant Agent as K1 Agent<br/>(L3 Execution)
+    participant CMD as K0CommandClient<br/>(L5 Bridge)
+    participant MGR as HTTP2ConnectionManager<br/>(L5 Infrastructure)
+    participant RETRY as RetryPolicy<br/>(Exponential Backoff)
+    participant CB as CircuitBreaker<br/>(State: CLOSED)
+    participant POOL as Connection Pool<br/>(HTTP/2 :8080)
+    participant K0 as K0 Memory Kernel<br/>(:8080)
+    participant WAL as SQLite WAL<br/>(k0_kernel.db)
+    participant METRICS as Prometheus Metrics<br/>(Observability)
+    participant TRACES as OpenTelemetry<br/>(Tracing)
+    
+    Note over Agent,TRACES: GREEN Band Command Submission (Idempotent, Receipts Enabled)
+    
+    Agent->>CMD: submit_command(envelope, band=GREEN, retries=3)
+    activate CMD
+    
+    CMD->>CMD: Generate cognitive_trace_id
+    CMD->>CMD: Compute SHA256 receipt hash
+    CMD->>TRACES: Start span "k0.command.submit"
+    
+    CMD->>CB: Check circuit state
+    activate CB
+    CB-->>CMD: State: CLOSED (allow)
+    deactivate CB
+    
+    CMD->>MGR: async with get_client(K0Port.COMMAND, trace_id)
+    activate MGR
+    
+    MGR->>POOL: Get or create HTTP/2 client
+    activate POOL
+    POOL-->>MGR: AsyncClient (reused connection)
+    deactivate POOL
+    
+    MGR-->>CMD: AsyncClient context manager
+    deactivate MGR
+    
+    rect rgb(240, 248, 255)
+        Note over CMD,K0: Attempt 1 of 3 (Delay: 0ms)
+        
+        CMD->>K0: POST /k0/command.submit<br/>Headers: X-Trace-ID, X-Receipt-Expected<br/>Body: CommandEnvelope (JSON)
+        activate K0
+        
+        K0->>K0: Validate schema (k1.contracts.envelope.schema.yaml)
+        K0->>K0: Check idempotency (duplicate receipt?)
+        K0->>WAL: BEGIN TRANSACTION
+        activate WAL
+        
+        WAL->>WAL: Append command (position 87 → 88)
+        WAL->>WAL: Store receipt SHA256
+        WAL->>WAL: COMMIT
+        
+        WAL-->>K0: Success (position=88, lag=0ms)
+        deactivate WAL
+        
+        K0-->>CMD: 200 OK<br/>Body: CommandReceipt {<br/>  receipt: "sha256:abc123...",<br/>  position: 88,<br/>  lag_ms: 0<br/>}
+        deactivate K0
+    end
+    
+    CMD->>CMD: Validate receipt matches SHA256
+    CMD->>METRICS: Increment k0_command_success_total
+    CMD->>METRICS: Record k0_command_latency_ms (140ms)
+    CMD->>TRACES: End span (status=OK)
+    
+    CMD->>CB: Record success
+    activate CB
+    CB->>CB: Reset failure count = 0
+    deactivate CB
+    
+    CMD-->>Agent: CommandReceipt (position=88)
+    deactivate CMD
+    
+    Note over Agent,TRACES: =====================================
+    Note over Agent,TRACES: ERROR SCENARIO: Transient 503 Service Unavailable
+    
+    Agent->>CMD: submit_command(envelope, band=AMBER, retries=3)
+    activate CMD
+    
+    CMD->>CMD: Generate cognitive_trace_id
+    CMD->>TRACES: Start span "k0.command.submit"
+    
+    CMD->>CB: Check circuit state
+    activate CB
+    CB-->>CMD: State: CLOSED (allow)
+    deactivate CB
+    
+    CMD->>MGR: async with get_client(K0Port.COMMAND, trace_id)
+    activate MGR
+    MGR-->>CMD: AsyncClient
+    deactivate MGR
+    
+    rect rgb(255, 240, 240)
+        Note over CMD,K0: Attempt 1 of 3 (Delay: 0ms)
+        
+        CMD->>K0: POST /k0/command.submit
+        activate K0
+        K0-->>CMD: 503 Service Unavailable<br/>Body: {"error": "WAL lock timeout"}
+        deactivate K0
+        
+        CMD->>RETRY: Classify failure (transient=True)
+        activate RETRY
+        RETRY->>RETRY: Compute backoff (100ms * 2^0 = 100ms)
+        RETRY-->>CMD: Retry after 100ms
+        deactivate RETRY
+        
+        CMD->>METRICS: Increment k0_command_retry_total
+        CMD->>CMD: await asyncio.sleep(0.1)
+    end
+    
+    rect rgb(255, 245, 230)
+        Note over CMD,K0: Attempt 2 of 3 (Delay: 100ms)
+        
+        CMD->>K0: POST /k0/command.submit (retry)
+        activate K0
+        K0-->>CMD: 503 Service Unavailable
+        deactivate K0
+        
+        CMD->>RETRY: Classify failure (transient=True)
+        activate RETRY
+        RETRY->>RETRY: Compute backoff (100ms * 2^1 = 400ms)
+        RETRY-->>CMD: Retry after 400ms
+        deactivate RETRY
+        
+        CMD->>METRICS: Increment k0_command_retry_total
+        CMD->>CMD: await asyncio.sleep(0.4)
+    end
+    
+    rect rgb(240, 255, 240)
+        Note over CMD,K0: Attempt 3 of 3 (Delay: 400ms)
+        
+        CMD->>K0: POST /k0/command.submit (final retry)
+        activate K0
+        K0->>WAL: BEGIN TRANSACTION
+        activate WAL
+        WAL-->>K0: Success (position=89)
+        deactivate WAL
+        K0-->>CMD: 200 OK (position=89)
+        deactivate K0
+    end
+    
+    CMD->>METRICS: Increment k0_command_success_total
+    CMD->>METRICS: Record k0_command_latency_ms (650ms)
+    CMD->>TRACES: End span (status=OK, attempts=3)
+    
+    CMD->>CB: Record success (after retries)
+    activate CB
+    CB->>CB: Reset failure count = 0
+    deactivate CB
+    
+    CMD-->>Agent: CommandReceipt (position=89)
+    deactivate CMD
+    
+    Note over Agent,TRACES: =====================================
+    Note over Agent,TRACES: ERROR SCENARIO: Permanent 409 Conflict (Duplicate)
+    
+    Agent->>CMD: submit_command(envelope, band=GREEN, retries=3)
+    activate CMD
+    
+    CMD->>CMD: Generate cognitive_trace_id
+    CMD->>TRACES: Start span "k0.command.submit"
+    
+    CMD->>CB: Check circuit state
+    activate CB
+    CB-->>CMD: State: CLOSED (allow)
+    deactivate CB
+    
+    CMD->>MGR: async with get_client(K0Port.COMMAND, trace_id)
+    activate MGR
+    MGR-->>CMD: AsyncClient
+    deactivate MGR
+    
+    rect rgb(255, 230, 230)
+        Note over CMD,K0: Attempt 1 of 3 (Permanent Failure)
+        
+        CMD->>K0: POST /k0/command.submit
+        activate K0
+        K0->>WAL: Check duplicate receipt
+        activate WAL
+        WAL-->>K0: Duplicate found (position=88)
+        deactivate WAL
+        K0-->>CMD: 409 Conflict<br/>Body: {"error": "Duplicate receipt", "original_position": 88}
+        deactivate K0
+        
+        CMD->>RETRY: Classify failure (transient=False, permanent=True)
+        activate RETRY
+        RETRY-->>CMD: Do NOT retry (409 is idempotency violation)
+        deactivate RETRY
+        
+        CMD->>METRICS: Increment k0_command_error_total{code=409}
+        CMD->>TRACES: End span (status=ERROR, error="409 Conflict")
+        
+        CMD->>CB: Record failure
+        activate CB
+        CB->>CB: Increment failure count = 1
+        CB->>CB: Check threshold (3 failures → OPEN)
+        CB->>CB: State: CLOSED (below threshold)
+        deactivate CB
+    end
+    
+    CMD-->>Agent: K0CommandError(status=409, message="Duplicate receipt")
+    deactivate CMD
+    
+    Note over Agent,TRACES: =====================================
+    Note over Agent,TRACES: CIRCUIT BREAKER SCENARIO: 3 Consecutive Failures → OPEN
+    
+    loop 3 consecutive 500 errors
+        Agent->>CMD: submit_command(envelope, band=GREEN, retries=1)
+        activate CMD
+        CMD->>CB: Check circuit state
+        CB-->>CMD: State: CLOSED (allow)
+        CMD->>K0: POST /k0/command.submit
+        K0-->>CMD: 500 Internal Server Error
+        CMD->>CB: Record failure
+        CB->>CB: Increment failure count (1 → 2 → 3)
+        deactivate CMD
+    end
+    
+    CB->>CB: Threshold reached (3 failures)
+    CB->>CB: Transition: CLOSED → OPEN
+    CB->>CB: Start timeout (30s)
+    
+    Note over CB: Circuit OPEN (reject all for 30s)
+    
+    Agent->>CMD: submit_command(envelope, band=GREEN, retries=3)
+    activate CMD
+    CMD->>CB: Check circuit state
+    activate CB
+    CB-->>CMD: State: OPEN (reject immediately)
+    deactivate CB
+    
+    CMD->>METRICS: Increment k0_command_circuit_open_total
+    CMD->>TRACES: End span (status=ERROR, error="Circuit OPEN")
+    CMD-->>Agent: K0CircuitOpenError("Circuit breaker OPEN, retry after 30s")
+    deactivate CMD

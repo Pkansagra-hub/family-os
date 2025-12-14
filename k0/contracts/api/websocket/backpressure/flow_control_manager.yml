@@ -1,0 +1,326 @@
+# Flow Control Manager Contract
+# Part of: ADR-0040c (Backpressure & Flow Control)
+# Purpose: Monitor queue depth, detect slow clients, trigger backpressure (drop oldest messages)
+# Research: TCP Flow Control (RFC 793 1981), Reactive Streams (2015), SEDA (Welsh 2001)
+
+version: "1.0"
+type: "websocket_flow_control"
+status: "approved"
+
+metadata:
+  component: "WebSocket Backpressure"
+  layer: "API Gateway"
+  performance_budget:
+    queue_depth_check: "<0.1ms"
+    backpressure_handling: "<2ms"
+    warning_threshold: "90%"  # 90 messages out of 100
+  research:
+    - "TCP Flow Control (RFC 793 1981) - Window-based flow control prevents fast sender overwhelming slow receiver"
+    - "Reactive Streams (2015) - Backpressure protocol for async data flow"
+    - "SEDA (Welsh et al. 2001) - Dynamic load shedding under high load"
+
+# Flow Control Manager Design
+flow_control_manager:
+  description: "Monitors queue depth per session, detects slow clients, triggers backpressure (drop oldest messages)"
+
+  state:
+    queue_depths:
+      type: "HashMap<String, usize>"  # session_id → current queue depth
+      description: "Current queue depth for each session"
+      thread_safety: "Arc<RwLock<HashMap>>"
+
+    warning_threshold:
+      value: 90
+      description: "Warning triggered at 90% capacity (90 messages out of 100)"
+
+    max_capacity:
+      value: 100
+      description: "Maximum queue capacity (bounded)"
+
+# Backpressure Status
+backpressure_status:
+  - status: "Normal"
+    description: "Queue depth < 90% (0-89 messages)"
+    action: "No action, continue normal operation"
+
+  - status: "Warning"
+    description: "Queue depth >= 90% (90-99 messages)"
+    action: "Log warning, emit metric, prepare for backpressure"
+    details:
+      - "Log: 'Queue approaching capacity (session: {session_id}, depth: {depth})'"
+      - "Metric: websocket_queue_depth gauge"
+      - "No messages dropped yet (still has capacity)"
+
+  - status: "QueueFull"
+    description: "Queue depth = 100% (100 messages)"
+    action: "Trigger backpressure, drop oldest message"
+    details:
+      - "Drop oldest message from buffer (FIFO)"
+      - "Log: 'Backpressure triggered (session: {session_id}, dropping oldest message)'"
+      - "Metric: websocket_messages_dropped_total counter"
+      - "Free 1 slot in queue for new message"
+
+# Operations
+operations:
+  - operation: "check_backpressure"
+    description: "Check if queue is approaching capacity (90%) or full (100%)"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "BackpressureStatus"
+
+    performance:
+      target_latency: "<0.1ms"
+      operation: "HashMap read (RwLock read lock)"
+
+    pseudocode: |
+      async fn check_backpressure(session_id: &str) -> BackpressureStatus {
+          let depths = self.queue_depths.read().await;
+          let depth = depths.get(session_id).copied().unwrap_or(0);
+
+          if depth >= self.max_capacity {
+              BackpressureStatus::QueueFull
+          } else if depth >= self.warning_threshold {
+              BackpressureStatus::Warning(depth)
+          } else {
+              BackpressureStatus::Normal
+          }
+      }
+
+  - operation: "increment_depth"
+    description: "Increment queue depth (message enqueued)"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<0.1ms"
+      operation: "HashMap write (RwLock write lock)"
+
+    pseudocode: |
+      async fn increment_depth(session_id: &str) {
+          let mut depths = self.queue_depths.write().await;
+          let depth = depths.entry(session_id.to_string()).or_insert(0);
+          *depth += 1;
+
+          // Emit metric
+          WEBSOCKET_QUEUE_DEPTH
+              .with_label_values(&[session_id])
+              .set(*depth as f64);
+      }
+
+  - operation: "decrement_depth"
+    description: "Decrement queue depth (message sent to WebSocket)"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<0.1ms"
+      operation: "HashMap write (RwLock write lock)"
+
+    pseudocode: |
+      async fn decrement_depth(session_id: &str) {
+          let mut depths = self.queue_depths.write().await;
+          if let Some(depth) = depths.get_mut(session_id) {
+              *depth = depth.saturating_sub(1);  // Never go below 0
+
+              // Emit metric
+              WEBSOCKET_QUEUE_DEPTH
+                  .with_label_values(&[session_id])
+                  .set(*depth as f64);
+          }
+      }
+
+  - operation: "handle_backpressure"
+    description: "Handle backpressure by dropping oldest message from buffer"
+    parameters:
+      - name: "session_id"
+        type: "string"
+        required: true
+      - name: "message_buffer"
+        type: "&mut MessageBuffer"
+        required: true
+    returns: "void"
+
+    performance:
+      target_latency: "<2ms"
+      operations:
+        - "Drop oldest message from buffer"
+        - "Emit metric"
+        - "Log warning"
+
+    pseudocode: |
+      async fn handle_backpressure(session_id: &str, message_buffer: &mut MessageBuffer) {
+          println!(
+              "[FlowControlManager] Backpressure detected (session: {}), dropping oldest message",
+              session_id
+          );
+
+          // Drop oldest message from buffer (FIFO)
+          message_buffer.drop_oldest(session_id).await;
+
+          // Emit metric
+          WEBSOCKET_MESSAGES_DROPPED_TOTAL
+              .with_label_values(&[session_id, "backpressure"])
+              .inc();
+      }
+
+# Slow Client Detection
+slow_client_detection:
+  description: "Detect slow clients based on queue depth trends"
+
+  criteria:
+    - metric: "Queue depth > 90% for 30 seconds"
+      classification: "Slow client"
+      action: "Log warning, emit metric"
+
+    - metric: "Queue depth = 100% (backpressure triggered)"
+      classification: "Very slow client"
+      action: "Drop oldest messages, prevent server OOM"
+
+  mitigation:
+    - strategy: "Drop oldest messages (FIFO)"
+      rationale: "Prioritize new messages over old messages (user cares about latest response)"
+
+    - strategy: "Warn user about slow connection"
+      rationale: "User can improve network (switch to WiFi) or reduce streaming rate"
+
+    - strategy: "Bounded memory usage"
+      rationale: "Prevents server OOM (100 messages per session = predictable memory)"
+
+# Prometheus Metrics
+metrics:
+  - name: "websocket_queue_depth"
+    type: "gauge"
+    description: "Current WebSocket message queue depth per session"
+    labels:
+      - session_id
+
+    alerting:
+      - rule: "Queue depth > 90 for 1 minute"
+        severity: "warning"
+        description: "Session queue approaching capacity (slow client detected)"
+
+  - name: "websocket_messages_dropped_total"
+    type: "counter"
+    description: "Total messages dropped due to backpressure"
+    labels:
+      - session_id
+      - reason  # "backpressure" | "timeout" | "disconnect"
+
+    alerting:
+      - rule: "Messages dropped > 10 in 5 minutes"
+        severity: "warning"
+        description: "High message drop rate (slow client or network issue)"
+
+  - name: "websocket_slow_clients_total"
+    type: "counter"
+    description: "Total slow clients detected (queue > 90% for 30 seconds)"
+    labels:
+      - session_id
+
+# Performance Analysis
+performance_scenarios:
+  - scenario: "Check Backpressure (Normal)"
+    input: "Queue depth = 50 messages (50% capacity)"
+    performance:
+      hashmap_read: "0.05ms"
+      total: "0.05ms ✅"
+    result: "BackpressureStatus::Normal ✅"
+
+  - scenario: "Check Backpressure (Warning)"
+    input: "Queue depth = 92 messages (92% capacity)"
+    performance:
+      hashmap_read: "0.05ms"
+      total: "0.05ms ✅"
+    result: "BackpressureStatus::Warning(92) ✅"
+    action: "Log warning, emit metric, no message drop"
+
+  - scenario: "Check Backpressure (Full)"
+    input: "Queue depth = 100 messages (100% capacity)"
+    performance:
+      hashmap_read: "0.05ms"
+      total: "0.05ms ✅"
+    result: "BackpressureStatus::QueueFull ✅"
+    action: "Trigger backpressure, drop oldest message"
+
+  - scenario: "Handle Backpressure (Drop Oldest)"
+    input: "Queue full, drop oldest message"
+    performance:
+      drop_oldest_message: "1.5ms"
+      emit_metric: "0.3ms"
+      log_warning: "0.2ms"
+      total: "2.0ms ✅"
+    result: "Freed 1 slot in queue ✅"
+
+# Testing Requirements (WARD Framework)
+testing:
+  unit_tests:
+    - test: "FlowControlManager detects normal status"
+      description: "Queue depth = 50, verify Normal status"
+      setup: "Set queue depth to 50"
+      assertion: "status == BackpressureStatus::Normal ✅"
+
+    - test: "FlowControlManager detects warning status"
+      description: "Queue depth = 92, verify Warning status"
+      setup: "Set queue depth to 92"
+      assertion: "status == BackpressureStatus::Warning(92) ✅"
+
+    - test: "FlowControlManager detects full status"
+      description: "Queue depth = 100, verify QueueFull status"
+      setup: "Set queue depth to 100"
+      assertion: "status == BackpressureStatus::QueueFull ✅"
+
+    - test: "FlowControlManager increments depth"
+      description: "Increment depth, verify metric emitted"
+      assertion: "depth == 1 && metric emitted ✅"
+
+    - test: "FlowControlManager decrements depth"
+      description: "Decrement depth, verify metric emitted"
+      assertion: "depth == 0 && metric emitted ✅"
+
+  integration_tests:
+    - test: "Backpressure triggered when queue full"
+      description: "Fill queue to 100, send 101st message, verify oldest dropped"
+      setup: "Fill queue with 100 messages"
+      assertion: "Oldest message dropped && metric incremented ✅"
+
+    - test: "Slow client detected after 30 seconds"
+      description: "Queue depth > 90% for 30 seconds, verify slow client metric"
+      setup: "Maintain queue depth at 92 for 30 seconds"
+      assertion: "slow_clients_total metric incremented ✅"
+
+# Implementation Notes
+implementation:
+  language: "Rust"
+  dependencies:
+    - "std::collections::HashMap"
+    - "tokio::sync::RwLock"
+    - "std::sync::Arc"
+    - "prometheus"
+
+  key_design_decisions:
+    - decision: "90% warning threshold (not 80% or 95%)"
+      rationale: "Balances early detection (avoid drops) with false positives (normal burst traffic)"
+
+    - decision: "Drop oldest messages (not newest)"
+      rationale: "User cares about latest response (newest tokens), oldest messages likely already outdated"
+
+    - decision: "Per-session queue depth tracking"
+      rationale: "Isolate slow clients (one slow client doesn't affect others)"
+
+    - decision: "RwLock for queue_depths HashMap"
+      rationale: "Multiple readers (check_backpressure), single writer (increment/decrement), efficient concurrency"
+
+# Related Contracts
+related_contracts:
+  - "message_queue.yml - Async message queue (100 capacity)"
+  - "message_buffering.yml - Buffers messages, provides drop_oldest operation"
+  - "slow_client_handling.yml - Slow client detection and mitigation"
+  - "streaming_engine.yml - Uses flow control for token-by-token streaming"

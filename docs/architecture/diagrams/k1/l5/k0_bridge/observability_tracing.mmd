@@ -1,0 +1,181 @@
+---
+title: Observability & Tracing - Metrics, Spans, and Cognitive Trace Propagation
+description: End-to-end observability with Prometheus metrics, OpenTelemetry tracing, and cognitive_trace_id propagation
+authors: [K1 Intelligence Team]
+version: 1.0.0
+date: 2025-10-26
+tags: [k1, layer5, observability, tracing, metrics, prometheus, opentelemetry]
+related_adrs: [ADR-0029, ADR-0044]
+research_citations:
+  - "OpenTelemetry Specification v1.0 (2021)"
+  - "Prometheus Best Practices - Robust Perception (2020)"
+  - "Distributed Tracing - Ben Sigelman et al., Dapper (2010)"
+---
+
+graph TB
+    subgraph "K1 Agent Request Flow"
+        AGENT[K1 Agent<br/>L3 Execution Layer]
+        TRACE_GEN[Generate cognitive_trace_id<br/>UUID v4<br/>e.g., abc123-def456-ghi789]
+        
+        CMD_CLIENT[K0CommandClient<br/>L5 Bridge]
+        
+        SPAN_START[Start OTel Span<br/>Operation: k0.command.submit<br/>Parent: agent_span_id]
+        
+        SPAN_ATTRS[Span Attributes<br/>- trace.id = cognitive_trace_id<br/>- http.method = POST<br/>- http.url = /k0/command.submit<br/>- k0.band = GREEN<br/>- k0.retries = 3]
+    end
+    
+    subgraph "HTTP/2 Connection Layer"
+        HTTP2MGR[HTTP2ConnectionManager]
+        
+        INJECT[Inject Trace Headers<br/>X-Trace-ID: cognitive_trace_id<br/>X-Parent-Span-ID: span_id<br/>traceparent: W3C format]
+        
+        HTTP_CLIENT[httpx.AsyncClient<br/>HTTP/2 Connection]
+    end
+    
+    subgraph "K0 Memory Kernel"
+        K0_RECV[Receive Request<br/>POST /k0/command.submit]
+        
+        EXTRACT[Extract Trace Context<br/>Parse X-Trace-ID header<br/>Create child span]
+        
+        K0_SPAN[K0 Span<br/>Operation: k0.process_command<br/>Parent: k1_span_id]
+        
+        K0_PROCESS[Process Command<br/>WAL Write<br/>Receipt Generation]
+        
+        K0_SPAN_END[End K0 Span<br/>Status: OK<br/>Duration: 45ms]
+    end
+    
+    subgraph "Metrics Export - Prometheus"
+        PROM_METRICS[Prometheus Metrics<br/>Endpoint: :9090/metrics]
+        
+        subgraph "Command Metrics"
+            CMD_SUCCESS[k0_command_success_total<br/>Counter<br/>Labels: band, endpoint]
+            CMD_ERROR[k0_command_error_total<br/>Counter<br/>Labels: status_code, band]
+            CMD_LATENCY[k0_command_latency_ms<br/>Histogram<br/>Buckets: 50,100,200,500,1000,2000<br/>Labels: band, endpoint]
+            CMD_RETRY[k0_command_retry_total<br/>Counter<br/>Labels: attempt, status_code]
+        end
+        
+        subgraph "Circuit Breaker Metrics"
+            CB_STATE[k0_circuit_breaker_state<br/>Gauge<br/>Values: 0=CLOSED, 1=OPEN, 2=HALF_OPEN<br/>Labels: client_type]
+            CB_OPEN[k0_circuit_open_total<br/>Counter<br/>Labels: client_type, reason]
+            CB_TRIP[k0_circuit_trip_total<br/>Counter<br/>Labels: client_type]
+        end
+        
+        subgraph "SSE Metrics"
+            SSE_EVENTS[k0_sse_event_received_total<br/>Counter<br/>Labels: event_type, filter]
+            SSE_DISCONNECT[k0_sse_disconnect_total<br/>Counter<br/>Labels: reason]
+            SSE_LATENCY[k0_sse_event_latency_ms<br/>Histogram<br/>Buckets: 10,25,50,100,250<br/>Labels: event_type]
+            SSE_SESSION[k0_sse_session_duration_seconds<br/>Histogram<br/>Buckets: 60,300,1800,3600,7200]
+        end
+        
+        subgraph "HTTP/2 Metrics"
+            HTTP2_CONN[k0_http2_connections_total<br/>Gauge<br/>Labels: port, state]
+            HTTP2_STREAMS[k0_http2_active_streams<br/>Gauge<br/>Labels: port]
+            HTTP2_EVICT[k0_http2_evictions_total<br/>Counter<br/>Labels: port, reason]
+            HTTP2_HEALTH[k0_http2_health_check_failures<br/>Counter<br/>Labels: port]
+        end
+    end
+    
+    subgraph "Tracing Export - OpenTelemetry"
+        OTEL_EXPORT[OpenTelemetry Collector<br/>OTLP/gRPC :4317]
+        
+        TRACE_TREE[Distributed Trace Tree<br/>Root: agent_request<br/>├─ k1.command.prepare (5ms)<br/>├─ k0.command.submit (140ms)<br/>│  ├─ k0.process_command (45ms)<br/>│  ├─ k0.wal.write (30ms)<br/>│  └─ k0.receipt.generate (10ms)<br/>└─ k1.command.validate (8ms)]
+        
+        TRACE_ATTRS[Trace Attributes<br/>- cognitive_trace_id<br/>- agent_id<br/>- k0.band<br/>- http.status_code<br/>- error.type (if failed)<br/>- retry.attempt<br/>- circuit.state]
+    end
+    
+    subgraph "Structured Logging"
+        LOG_CTX[Structured Log Context<br/>JSON Format<br/>contextual enrichment]
+        
+        LOG_FIELDS[Log Fields<br/>- timestamp<br/>- level (INFO/ERROR)<br/>- cognitive_trace_id<br/>- span_id<br/>- operation<br/>- duration_ms<br/>- status_code<br/>- error_message<br/>- band<br/>- position<br/>- retry_attempt]
+        
+        LOG_SAMPLE[Example Log Entry<br/>{<br/>  "timestamp": "2025-10-26T10:05:30Z",<br/>  "level": "INFO",<br/>  "cognitive_trace_id": "abc123",<br/>  "operation": "k0.command.submit",<br/>  "duration_ms": 140,<br/>  "status_code": 200,<br/>  "band": "GREEN",<br/>  "position": 88,<br/>  "retry_attempt": 0<br/>}]
+    end
+    
+    %% Flow Connections
+    AGENT -->|1. Initiate| TRACE_GEN
+    TRACE_GEN -->|2. Call| CMD_CLIENT
+    CMD_CLIENT -->|3. Start| SPAN_START
+    SPAN_START -->|4. Add| SPAN_ATTRS
+    SPAN_ATTRS -->|5. Pass to| HTTP2MGR
+    
+    HTTP2MGR -->|6. Inject| INJECT
+    INJECT -->|7. Send| HTTP_CLIENT
+    HTTP_CLIENT -.->|8. HTTP/2 POST| K0_RECV
+    
+    K0_RECV -->|9. Extract| EXTRACT
+    EXTRACT -->|10. Create| K0_SPAN
+    K0_SPAN -->|11. Process| K0_PROCESS
+    K0_PROCESS -->|12. Complete| K0_SPAN_END
+    
+    K0_SPAN_END -.->|13. Response| HTTP_CLIENT
+    HTTP_CLIENT -->|14. Return| CMD_CLIENT
+    
+    %% Metrics Export
+    CMD_CLIENT -->|Increment| CMD_SUCCESS
+    CMD_CLIENT -->|Record| CMD_LATENCY
+    CMD_CLIENT -->|Increment on error| CMD_ERROR
+    CMD_CLIENT -->|Increment on retry| CMD_RETRY
+    
+    CMD_CLIENT -->|Update| CB_STATE
+    CMD_CLIENT -->|Increment on trip| CB_TRIP
+    CMD_CLIENT -->|Increment on reject| CB_OPEN
+    
+    HTTP2MGR -->|Update| HTTP2_CONN
+    HTTP2MGR -->|Update| HTTP2_STREAMS
+    HTTP2MGR -->|Increment| HTTP2_EVICT
+    HTTP2MGR -->|Increment| HTTP2_HEALTH
+    
+    CMD_SUCCESS --> PROM_METRICS
+    CMD_ERROR --> PROM_METRICS
+    CMD_LATENCY --> PROM_METRICS
+    CMD_RETRY --> PROM_METRICS
+    CB_STATE --> PROM_METRICS
+    CB_OPEN --> PROM_METRICS
+    CB_TRIP --> PROM_METRICS
+    SSE_EVENTS --> PROM_METRICS
+    SSE_DISCONNECT --> PROM_METRICS
+    SSE_LATENCY --> PROM_METRICS
+    SSE_SESSION --> PROM_METRICS
+    HTTP2_CONN --> PROM_METRICS
+    HTTP2_STREAMS --> PROM_METRICS
+    HTTP2_EVICT --> PROM_METRICS
+    HTTP2_HEALTH --> PROM_METRICS
+    
+    %% Tracing Export
+    SPAN_START -->|Export| OTEL_EXPORT
+    K0_SPAN -->|Export| OTEL_EXPORT
+    OTEL_EXPORT -->|Build| TRACE_TREE
+    TRACE_TREE -->|Enrich| TRACE_ATTRS
+    
+    %% Logging Export
+    CMD_CLIENT -->|Emit| LOG_CTX
+    K0_PROCESS -->|Emit| LOG_CTX
+    LOG_CTX -->|Format| LOG_FIELDS
+    LOG_FIELDS -->|Example| LOG_SAMPLE
+    
+    %% Correlation
+    TRACE_GEN -.->|Correlate| LOG_CTX
+    TRACE_GEN -.->|Correlate| PROM_METRICS
+    TRACE_GEN -.->|Correlate| OTEL_EXPORT
+    
+    Note1[Cognitive Trace ID Propagation:<br/>1. Generated once at K1 Agent<br/>2. Injected into HTTP headers<br/>3. Extracted by K0 Kernel<br/>4. Used in all logs, metrics, spans<br/>5. Enables E2E correlation]
+    
+    Note2[Metrics Scraping:<br/>1. Prometheus scrapes :9090/metrics<br/>2. 15s scrape interval<br/>3. Histogram quantiles: P50, P95, P99<br/>4. Counter rates: per-second]
+    
+    Note3[Trace Sampling:<br/>1. Always sample (rate=1.0)<br/>2. Export to OTLP collector<br/>3. Spans indexed by trace_id<br/>4. Query by cognitive_trace_id]
+    
+    classDef agent fill:#4a90e2,stroke:#2e5c8a,stroke-width:2px,color:#fff
+    classDef trace fill:#50c878,stroke:#2d7a4a,stroke-width:2px,color:#fff
+    classDef metrics fill:#f39c12,stroke:#c87f0a,stroke-width:2px,color:#fff
+    classDef export fill:#9b59b6,stroke:#6c3483,stroke-width:2px,color:#fff
+    classDef k0 fill:#e74c3c,stroke:#a93226,stroke-width:2px,color:#fff
+    classDef log fill:#1abc9c,stroke:#148f77,stroke-width:2px,color:#fff
+    classDef note fill:#ecf0f1,stroke:#95a5a6,stroke-width:1px,color:#2c3e50
+    
+    class AGENT,TRACE_GEN agent
+    class SPAN_START,SPAN_ATTRS,INJECT,EXTRACT,K0_SPAN,K0_SPAN_END,TRACE_TREE,TRACE_ATTRS trace
+    class CMD_SUCCESS,CMD_ERROR,CMD_LATENCY,CMD_RETRY,CB_STATE,CB_OPEN,CB_TRIP,SSE_EVENTS,SSE_DISCONNECT,SSE_LATENCY,SSE_SESSION,HTTP2_CONN,HTTP2_STREAMS,HTTP2_EVICT,HTTP2_HEALTH metrics
+    class PROM_METRICS,OTEL_EXPORT export
+    class K0_RECV,K0_PROCESS k0
+    class LOG_CTX,LOG_FIELDS,LOG_SAMPLE log
+    class Note1,Note2,Note3 note

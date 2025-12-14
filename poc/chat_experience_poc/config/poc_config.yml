@@ -1,0 +1,39 @@
+# Chat Experience PoC Configuration
+# K1 Intelligence Module - Complete Chat Experience Architecture
+# References: docs/whiteboard/chat_experience.md
+
+environment: development
+debug: false
+
+# Session Management
+session:
+  session_timeout_seconds: 600      # 10 minute idle timeout
+  max_turns: 100                    # Max conversation turns per session
+  max_session_memory_mb: 50.0       # Memory per session
+
+# Performance Budgets (P95)
+performance:
+  ttft_budget_ms: 150               # Time To First Token
+  e2e_latency_budget_ms: 2000       # End-to-End latency
+  memory_budget_mb: 500.0           # Total system memory
+
+# Agent Management
+agent:
+  max_concurrent_agents: 3          # Max agents spawned per session
+  agent_pool_size: 5                # Max pooled agents per type
+  agent_idle_ttl_seconds: 600       # TTL for idle agents (10 min)
+  warming_timeout_seconds: 35       # WARMING state timeout
+
+# K0 Bridge Communication
+k0_bridge:
+  batch_interval_ms: 250            # Delta batch flush interval (250ms)
+  batch_size_max_deltas: 100        # Max deltas per batch
+  batch_size_max_bytes: 65536       # Max batch size (64KB)
+  k0_api_url: "http://localhost:8003"  # Mock K0 API endpoint
+  k0_timeout_seconds: 10.0          # K0 request timeout
+  k0_max_retries: 3                 # K0 API retry count
+
+# Temporal Module (Scheduling)
+temporal:
+  tick_interval_seconds: 60         # Scheduler tick interval
+  max_triggers: 1000                # Maximum active triggers

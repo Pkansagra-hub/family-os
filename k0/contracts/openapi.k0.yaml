@@ -27,6 +27,8 @@ components:
       $ref: ./jsonschema/driver.handshake.request.json
     DriverHandshakeResponse:
       $ref: ./jsonschema/driver.handshake.response.json
+    BehavioralSignals:
+      $ref: ./jsonschema/affect/behavioral_signals.json
 paths:
   /k0/command.submit:
     post:

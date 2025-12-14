@@ -1,0 +1,31 @@
+{
+  "cognitive_trace_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "tenant_id": "tenant_001",
+  "space_id": "space_001",
+  "topic": "memory.episodic.formation",
+  "schema_uri": "https://familyos.ai/schemas/memory/episodic/v1",
+  "schema_version": "1.0.0",
+  "actor": "user_alice",
+  "device_id": "device_phone_001",
+  "band": "GREEN",
+  "policy_version": "2025-11-01",
+  "ts": "1732800000",
+  "sig": "304502210098a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef123456022018fedcba9876543210fedcba9876543210fedcba9876543210fedcba987654",
+  "sig_alg": "ECDSA_P256_SHA256",
+  "sig_kid": "did:device:device_phone_001#1732800000",
+  "envelope_sha256": "d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+  "idem_key": "tenant_001:device_phone_001:1732800000:12345",
+  "payload_sha256": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "payload_bytes": 145,
+  "body": {
+    "text": "Had a great family dinner at home tonight with the kids",
+    "activity_type": "routine",
+    "content_type": "episodic",
+    "participants": ["user_alice", "child_bob", "child_charlie"],
+    "location": {
+      "type": "home",
+      "name": "Home"
+    },
+    "duration_minutes": 45
+  }
+}

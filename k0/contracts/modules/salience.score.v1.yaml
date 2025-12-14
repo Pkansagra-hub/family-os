@@ -1,0 +1,104 @@
+module_id: salience.score
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+  - p02.affect.analyzed.v1
+
+output_event_types:
+  - p02.salience.scored.v1
+
+latency_budget_ms: 5
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: SALIENCE_COMPUTATION_FAILED
+    policy: use_default
+    max_retries: 0
+  - code: MISSING_AFFECT_DATA
+    policy: use_default
+    max_retries: 0
+
+description: |
+  Salience Scoring Module (Attention Network)
+
+  Computes write-path salience score for episodic memories:
+  - Weights: 0.50 × social_importance + 0.40 × affect_intensity + 0.10 × recency
+  - Does NOT use novelty (not yet computed in P02)
+  - Fast, deterministic scoring for immediate priority ranking
+
+  Performance target: ≤5ms P95 (pure computation, no I/O)
+
+  Scoring Components:
+  1. Social Importance (0-1):
+     - Family events: 1.0
+     - Extended family: 0.7
+     - Friends: 0.5
+     - Solo: 0.2
+
+  2. Affect Intensity (0-1):
+     - HIGH arousal + positive valence: 1.0
+     - HIGH arousal + negative valence: 0.9
+     - LOW arousal: 0.3
+
+  3. Recency Bonus (0-1):
+     - Events within 1 hour: 1.0
+     - Events within 1 day: 0.5
+     - Older events: 0.1
+
+  Output (Nested Enrichments - Phase 2):
+  - enrichments.salience_scorer.score: REAL (0-1 weighted sum)
+  - enrichments.salience_scorer.band: TEXT (HIGH/MED/LOW)
+  - enrichments.salience_scorer.reasons: Array of strings
+  - enrichments.salience_scorer.component_scores: Object {social, affect, recency}
+  - enrichments.salience_scorer.computed_at_utc: ISO8601 timestamp
+  - enrichments.salience_scorer.module_version: TEXT ("v1")
+
+  Legacy Flat Output (Backward Compat - Phase 2):
+  - salience_score: REAL [DEPRECATED]
+  - salience_band: TEXT [DEPRECATED]
+  - salience_reasons_json: JSON string [DEPRECATED]
+  - component_scores_json: JSON string [DEPRECATED]
+
+  Salience Bands:
+  - HIGH: score ≥ 0.7 (critical memories, prioritize for quick recall)
+  - MED: score 0.4-0.7 (important but not urgent)
+  - LOW: score < 0.4 (routine events, background retention)
+
+  Note: P03 may refine salience using novelty for long-term importance.
+  P02 salience is immediate/cheap for write-path prioritization.
+
+config_schema:
+  type: object
+  properties:
+    weight_social:
+      type: number
+      default: 0.5
+      description: Weight for social importance component
+    weight_affect:
+      type: number
+      default: 0.4
+      description: Weight for affect intensity component
+    weight_recency:
+      type: number
+      default: 0.1
+      description: Weight for recency bonus component
+    high_band_threshold:
+      type: number
+      default: 0.7
+      description: Minimum score for HIGH salience band
+    med_band_threshold:
+      type: number
+      default: 0.4
+      description: Minimum score for MED salience band
+    default_salience_on_failure:
+      type: number
+      default: 0.5
+      description: Default salience score if computation fails
+    family_social_score:
+      type: number
+      default: 1.0
+      description: Social importance score for immediate family events

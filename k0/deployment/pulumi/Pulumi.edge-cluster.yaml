@@ -1,2 +1,0 @@
-config:
-  k0-deployment:kernel_image: ghcr.io/pkansagra-hub/k0:0.0.0-dev

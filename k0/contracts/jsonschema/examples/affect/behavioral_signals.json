@@ -1,0 +1,15 @@
+{
+  "typing_speed": 218.5,
+  "pause_duration": 0.42,
+  "backspace_rate": 0.18,
+  "inter_request_deltas": [0.8, 1.1, 0.9],
+  "keystrokes_total": 245,
+  "backspaces": 44,
+  "retries": 1,
+  "session_seconds": 68.0,
+  "active_seconds": 61.5,
+  "burstiness_index": 0.74,
+  "device_id": "device-ios-001",
+  "captured_at": "2025-11-13T16:12:05Z",
+  "schema_version": "v1"
+}

@@ -1,0 +1,59 @@
+module_id: hippocampus.pattern_separate
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.hippocampus.pattern_separated.v1
+
+latency_budget_ms: 15
+
+side_effects:
+  - read:st_hipp_events  # Future: neighbor queries for novelty (P03)
+
+idempotent: true
+
+failure_modes:
+  - code: FINGERPRINT_COMPUTATION_FAILED
+    policy: retry
+    max_retries: 3
+  - code: INVALID_INPUT_TEXT
+    policy: drop
+
+description: |
+  DG (Dentate Gyrus) Pattern Separation Module
+
+  Computes local fingerprints for episodic memory encoding:
+  - SimHash (64-bit) for coarse similarity detection
+  - MinHash (32 permutations) for LSH bucket assignment
+
+  Does NOT perform neighbor queries or novelty scoring in P02.
+  Those operations are deferred to P03 (Consolidation) for global analysis.
+
+  Performance target: ≤15ms P95 per event
+  Input: Envelope with text, participants, place, activity_type
+  Output: simhash_hex, minhash32 fingerprints
+
+  Fingerprint inputs:
+  - text (from envelope body)
+  - participants (from envelope body)
+  - place (location_name)
+  - activity_type (from envelope body)
+  - timestamp (for temporal bucketing)
+
+config_schema:
+  type: object
+  properties:
+    novelty_threshold:
+      type: number
+      default: 0.7
+      description: Threshold for novelty detection (used in P03, not P02)
+    hash_seed:
+      type: integer
+      default: 42
+      description: Seed for reproducible fingerprint generation
+    minhash_permutations:
+      type: integer
+      default: 32
+      description: Number of MinHash permutations for LSH

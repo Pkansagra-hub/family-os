@@ -1,0 +1,137 @@
+---
+description: Configuration Management System — Hot reload, validation, rollback without downtime
+primary_adrs:
+  - ADR-0080 (Config Hot-Reload - change detection, validator, rollback)
+  - ADR-0009b (Circuit Breaker Hot Reload - file watcher integration)
+related_adrs:
+  - ADR-0024 (Performance Budgets - config reload <100ms P95)
+  - ADR-0029 (Prometheus Metrics - config reload latency)
+research:
+  - "Hot Code Reload (Erlang OTP) — Zero-downtime updates"
+  - "Watchdog (Python) — File system event monitoring"
+  - "JSON Schema (Draft 7) — Configuration validation"
+file_id: "CFGM"
+performance_budgets:
+  config_load: "<50ms P95 (startup)"
+  config_reload: "<100ms P95 (hot reload)"
+  validation: "<10ms P95 (schema + semantic)"
+  rollback: "<200ms (on error)"
+integration_tests: tests/integration/layer5/test_config_management.py
+created: 2025-01-18
+---
+
+```mermaid
+graph TB
+    subgraph Config_Management["⚙️ Configuration Management System"]
+        direction TB
+
+        %% ===== CONFIG FILES =====
+        subgraph Config_Files["📁 Configuration Files"]
+            direction LR
+            KernelYAML["kernel.yaml<br/>───────────<br/>• Agent fabric config<br/>• Orchestrator settings<br/>• Learning loop params<br/>• Performance budgets<br/>───────────<br/>🔑 Core K1 config"]
+            LoggingYAML["logging.yaml<br/>───────────<br/>• Log levels<br/>• Output formats<br/>• Rotation policy<br/>• Retention days<br/>───────────<br/>📝 Observability"]
+            CircuitBreakerYAML["circuit_breaker.yaml<br/>───────────<br/>• Failure thresholds<br/>• Timeout values<br/>• Fallback strategies<br/>• Hot reload enabled<br/>───────────<br/>🔌 Resilience"]
+            ThermalYAML["thermal.yaml<br/>───────────<br/>• Temperature zones<br/>• Hysteresis bands<br/>• Placement policies<br/>• Throttling rules<br/>───────────<br/>🌡️ Device thermal"]
+        end
+
+        %% ===== CONFIG LOADER =====
+        ConfigLoader["ConfigLoader<br/>📂 YAML Parser<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Parse YAML files<br/>• Merge defaults<br/>• Environment overrides<br/>• Schema lookup<br/>───────────<br/>Performance:<br/>⏱️ <50ms P95 (startup)<br/>───────────<br/>Files:<br/>k1/l5_infrastructure/<br/>config/loader.py"]
+
+        %% ===== CONFIG VALIDATOR =====
+        ConfigValidator["ConfigValidator<br/>✅ Schema + Semantic<br/>═══════════════<br/>Validation Steps:<br/>───────────<br/>1. JSON Schema (Draft 7)<br/>   • Structure validation<br/>   • Type checking<br/>   • Required fields<br/>───────────<br/>2. Semantic Validation<br/>   • Config-specific logic<br/>   • Range checks<br/>   • Dependency validation<br/>───────────<br/>Performance:<br/>⏱️ <10ms P95<br/>───────────<br/>Files:<br/>config/schema_validator.py"]
+
+        %% ===== CONFIG WATCHER =====
+        ConfigWatcher["ConfigWatcher<br/>👀 File System Monitor<br/>═══════════════<br/>Watch Strategy:<br/>───────────<br/>• watchdog library<br/>• Async file events<br/>• Debouncing 100ms<br/>• Change detection<br/>───────────<br/>Triggers:<br/>• File modified<br/>• File created<br/>• File moved<br/>───────────<br/>Performance:<br/>⏱️ <100ms detection<br/>───────────<br/>Files:<br/>config/watcher.py"]
+
+        %% ===== CONFIG APPLICATION ENGINE =====
+        ApplicationEngine["ConfigApplicationEngine<br/>🚀 Zero-Downtime Apply<br/>═══════════════<br/>Application Steps:<br/>───────────<br/>1. Validate new config<br/>2. Drain in-flight ops<br/>3. Atomic swap<br/>4. Notify components<br/>───────────<br/>Component Updaters:<br/>• Circuit breaker config<br/>• Thermal policy config<br/>• Logging level config<br/>• Agent fabric config<br/>───────────<br/>Performance:<br/>⏱️ <100ms P95<br/>───────────<br/>Files:<br/>config/application_engine.py"]
+
+        %% ===== CONFIG ROLLBACK =====
+        ConfigRollback["ConfigRollback<br/>↩️ Automatic Recovery<br/>═══════════════<br/>Rollback Triggers:<br/>───────────<br/>• Validation failure<br/>• Application error<br/>• Component crash<br/>• Timeout (5s)<br/>───────────<br/>Rollback Steps:<br/>1. Restore previous config<br/>2. Re-apply old config<br/>3. Log rollback event<br/>4. Alert operators<br/>───────────<br/>Performance:<br/>⏱️ <200ms rollback<br/>───────────<br/>Files:<br/>config/rollback.py"]
+
+        %% ===== CONFIG METRICS =====
+        ConfigMetrics["ConfigMetrics<br/>📊 Prometheus Metrics<br/>═══════════════<br/>Metrics:<br/>───────────<br/>• config_reload_total<br/>• config_reload_latency_ms<br/>• config_validation_errors<br/>• config_rollback_total<br/>• config_watcher_events<br/>───────────<br/>Labels:<br/>• config_file<br/>• validation_result<br/>• rollback_reason<br/>───────────<br/>Files:<br/>observability/metrics/<br/>config_metrics.py"]
+    end
+
+    %% ===== K1 COMPONENTS =====
+    K1_Components["🏢 K1 Components<br/>═══════════════<br/>Config Consumers<br/>───────────<br/>• Agent Fabric<br/>• Orchestrator<br/>• Circuit Breaker<br/>• Thermal Manager<br/>• Logging<br/>───────────<br/>All layers depend"]
+
+    Prometheus["📊 Prometheus<br/>═══════════════<br/>Port :9090<br/>───────────<br/>• Scrape metrics<br/>• Config reload rate<br/>• Validation errors<br/>• Rollback events"]
+
+    %% ===== DATA FLOWS - CONFIG LOADING (STARTUP) =====
+    Config_Files -->|"1. Read YAML files"| ConfigLoader
+    ConfigLoader -->|"2. Parse + merge<br/><50ms"| ConfigValidator
+    ConfigValidator -->|"3. Validate schema<br/><10ms"| ApplicationEngine
+    ApplicationEngine -->|"4. Apply config<br/><100ms"| K1_Components
+
+    %% ===== DATA FLOWS - HOT RELOAD (RUNTIME) =====
+    Config_Files -.->|"File change event"| ConfigWatcher
+    ConfigWatcher -->|"5. Detect change<br/><100ms"| ConfigLoader
+    ConfigLoader -->|"6. Re-parse"| ConfigValidator
+    ConfigValidator -->|"7. Validate new"| ApplicationEngine
+    ApplicationEngine -->|"8. Atomic swap<br/>Zero-downtime"| K1_Components
+
+    %% ===== DATA FLOWS - ROLLBACK (ERROR) =====
+    ApplicationEngine -->|"Error detected"| ConfigRollback
+    ConfigRollback -->|"9. Restore previous<br/><200ms"| ApplicationEngine
+    ConfigRollback -->|"10. Alert"| K1_Components
+
+    %% ===== DATA FLOWS - METRICS =====
+    ConfigLoader -->|"Emit metrics"| ConfigMetrics
+    ConfigValidator -->|"Emit metrics"| ConfigMetrics
+    ConfigWatcher -->|"Emit metrics"| ConfigMetrics
+    ApplicationEngine -->|"Emit metrics"| ConfigMetrics
+    ConfigRollback -->|"Emit metrics"| ConfigMetrics
+    ConfigMetrics -->|"Scrape<br/>every 10s"| Prometheus
+
+    %% ===== STYLING =====
+    classDef configFiles fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#000
+    classDef loader fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef validator fill:#E8F5E9,stroke:#388E3C,stroke-width:2px,color:#000
+    classDef watcher fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef engine fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef rollback fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
+    classDef metrics fill:#E0F2F1,stroke:#00897B,stroke-width:2px,color:#000
+    classDef external fill:#ECEFF1,stroke:#455A64,stroke-width:3px,color:#000
+
+    class KernelYAML,LoggingYAML,CircuitBreakerYAML,ThermalYAML configFiles
+    class ConfigLoader loader
+    class ConfigValidator validator
+    class ConfigWatcher watcher
+    class ApplicationEngine engine
+    class ConfigRollback rollback
+    class ConfigMetrics metrics
+    class K1_Components,Prometheus external
+```
+
+**Diagram Purpose**: Configuration management system with hot reload, validation, and automatic rollback.
+
+**Hot Reload Lifecycle**:
+1. **File Change Detection** → ConfigWatcher detects file modification (<100ms)
+2. **Re-parse** → ConfigLoader parses updated YAML
+3. **Validation** → ConfigValidator checks schema + semantics (<10ms)
+4. **Atomic Swap** → ApplicationEngine applies config without downtime (<100ms)
+5. **Component Notification** → K1 components receive updated config
+6. **Rollback on Error** → Automatic restore if validation/application fails (<200ms)
+
+**Key Features**:
+- **Zero-downtime**: Atomic config swap with in-flight operation draining
+- **Schema validation**: JSON Schema Draft 7 + semantic checks
+- **File watching**: watchdog library with async event handling
+- **Automatic rollback**: Restore previous config on error with audit trail
+- **Prometheus metrics**: Track reload latency, validation errors, rollback events
+
+**Configuration Files**:
+- `kernel.yaml` — Core K1 config (agent fabric, orchestrator, learning loop)
+- `logging.yaml` — Observability config (log levels, formats, retention)
+- `circuit_breaker.yaml` — Resilience config (thresholds, timeouts, fallbacks)
+- `thermal.yaml` — Device thermal config (zones, hysteresis, placement)
+
+**Performance Budget**:
+- Config load: <50ms P95 (startup)
+- Config reload: <100ms P95 (hot reload)
+- Validation: <10ms P95 (schema + semantic)
+- Rollback: <200ms (on error)
+
+**Integration Tests**: `tests/integration/layer5/test_config_management.py`
+```

@@ -1,0 +1,198 @@
+module_id: embedding.cleanup
+version: v1
+
+input_event_types:
+  - cognitive.embedding.cleanup.requested.v1
+
+output_event_types:
+  - cognitive.embedding.cleaned.v1
+
+latency_budget_ms: 50
+
+side_effects:
+  - delete:st_vec
+  - read:st_hipp_events
+
+idempotent: true
+
+failure_modes:
+  - code: VECTOR_DELETE_FAILED
+    policy: retry
+    max_retries: 3
+  - code: ORPHAN_DETECTION_FAILED
+    policy: skip
+    max_retries: 0
+  - code: FAISS_REMOVE_FAILED
+    policy: log_and_continue
+    max_retries: 1
+
+description: |
+  M27: Embedding Cleanup Module
+
+  Removes orphaned or expired embeddings from st_vec and FAISS index
+  to reclaim storage and maintain data consistency.
+
+  P08 v2 Use Case: Garbage Collection
+  - Triggered by: cognitive.embedding.cleanup.requested.v1 event (cron: daily)
+  - Detects orphaned embeddings (st_vec.event_id NOT IN st_hipp_events)
+  - Detects expired embeddings (st_hipp_events deleted, st_vec remains)
+  - Removes from st_vec table
+  - Removes from FAISS index (if indexed)
+  - Emits cognitive.embedding.cleaned.v1 event
+
+  Performance Target: ~50ms per batch (100 deletes)
+  Batch Performance: ~2000 embeddings/second
+
+  Input (from cognitive.embedding.cleanup.requested.v1 event):
+  - cleanup_type: str (orphans | expired | all)
+  - max_age_days: int (delete embeddings older than N days)
+  - batch_size: int (number of embeddings to clean per batch)
+  - dry_run: bool (simulate cleanup without deletes)
+
+  Orphan Detection Query:
+  ```sql
+  SELECT embedding_id FROM st_vec
+  WHERE event_id NOT IN (
+    SELECT event_id FROM st_hipp_events
+  )
+  LIMIT ?
+  ```
+
+  Operations:
+  1. Detect orphans: Query st_vec for embeddings without parent events
+  2. Batch delete st_vec: DELETE FROM st_vec WHERE embedding_id IN (?)
+  3. Remove from FAISS: faiss_remove_batch(embedding_ids)
+  4. Log cleanup stats: Count deleted, reclaimed storage bytes
+  5. Emit event: cognitive.embedding.cleaned.v1
+
+  Output:
+  - cleaned: bool (true if cleanup succeeded)
+  - embeddings_deleted: int (count of st_vec rows deleted)
+  - faiss_removed: int (count removed from FAISS index)
+  - storage_reclaimed_bytes: int (~3KB per embedding)
+  - cleaned_at: int (Unix timestamp)
+
+  Cleanup Types:
+  - orphans: st_vec rows without parent st_hipp_events (FK violation)
+  - expired: st_vec rows for events past retention window
+  - failed: st_vec rows with status=FAILED (permanent failures)
+  - all: Combination of above
+
+  Storage Savings:
+  - st_vec row: ~3KB per embedding (768 floats × 4 bytes + metadata)
+  - FAISS quantized: ~64 bytes per vector
+  - 10,000 orphans → ~30MB st_vec + 640KB FAISS
+
+  Failure Handling:
+  - VECTOR_DELETE_FAILED: Database error (retry 3x)
+  - ORPHAN_DETECTION_FAILED: Query error (skip batch)
+  - FAISS_REMOVE_FAILED: FAISS error (log, continue cleanup)
+
+  Safety Features:
+  - Dry run mode: Preview cleanup without deletes
+  - Transaction batching: Atomic batch deletes (all or nothing)
+  - Audit logging: Record deleted embedding_ids for recovery
+  - Soft delete option: Mark deleted instead of hard delete
+
+  Related:
+  - Retention policies: Respect st_hipp_events retention_policy_id
+  - M24 (faiss_indexer): FAISS index management
+  - Migration 0026: st_vec table with ON DELETE CASCADE FK
+
+config_schema:
+  type: object
+  properties:
+    batch_size:
+      type: integer
+      default: 100
+      description: Number of embeddings to clean per batch
+    max_age_days:
+      type: integer
+      default: 90
+      description: Delete embeddings older than N days
+    cleanup_types:
+      type: array
+      items:
+        type: string
+        enum: ["orphans", "expired", "failed"]
+      default: ["orphans", "expired"]
+      description: Types of embeddings to clean
+    dry_run:
+      type: boolean
+      default: false
+      description: Preview cleanup without deletes
+    soft_delete:
+      type: boolean
+      default: false
+      description: Mark deleted instead of hard delete (adds deleted_at column)
+    remove_from_faiss:
+      type: boolean
+      default: true
+      description: Also remove from FAISS index
+    audit_log_deletes:
+      type: boolean
+      default: true
+      description: Log deleted embedding_ids to audit table
+
+input_schema:
+  type: object
+  properties:
+    cleanup_type:
+      type: string
+      enum: ["orphans", "expired", "failed", "all"]
+      default: "orphans"
+      description: Type of cleanup to perform
+    max_age_days:
+      type: integer
+      description: Override default max_age_days from config
+    batch_size:
+      type: integer
+      description: Override default batch_size from config
+    dry_run:
+      type: boolean
+      default: false
+      description: Preview cleanup without deletes
+    tenant_id:
+      type: string
+      description: Filter cleanup by tenant (optional)
+    space_id:
+      type: string
+      description: Filter cleanup by space (optional)
+
+output_schema:
+  type: object
+  required:
+    - cleaned
+    - embeddings_deleted
+  properties:
+    cleaned:
+      type: boolean
+      description: True if cleanup succeeded
+    embeddings_deleted:
+      type: integer
+      description: Count of st_vec rows deleted
+    faiss_removed:
+      type: integer
+      description: Count removed from FAISS index
+    storage_reclaimed_bytes:
+      type: integer
+      description: Approximate storage reclaimed (~3KB per embedding)
+    cleaned_at:
+      type: integer
+      description: Unix timestamp when cleanup completed
+    dry_run:
+      type: boolean
+      description: True if this was a dry run (no actual deletes)
+
+dependencies:
+  syscalls:
+    - st_vec.delete
+    - st_hipp_events.read
+    - faiss.remove_batch
+    - events.emit
+
+performance:
+  p50_latency_ms: 20
+  p95_latency_ms: 50
+  p99_latency_ms: 100
+  batch_throughput_embeddings_per_sec: 2000

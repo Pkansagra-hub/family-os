@@ -1,0 +1,75 @@
+# Model Registry Configuration
+# FamilyOS UltraBERT Migration - Single Unified Model
+#
+# UltraBERT v2.0.3 replaces 9 separate models (4.6GB -> 500MB):
+# - VADER, GoEmotions, clinical_safety, sentence_transformer
+# - zero_shot_classifier, transformer_ner, ner_family, temporal_extractor
+#
+# Related:
+# - k0/runtime/model_registry.py: ModelRegistry class
+# - k0/runtime/ultrabert_adapter.py: UltraBERT adapter
+# - wheels/README.md: UltraBERT installation
+#
+# Issue: UltraBERT Migration - Single Unified Model
+# Status: IMPLEMENTED
+
+version: "2.0.0"
+
+# Global settings
+settings:
+  gpu_memory_limit_mb: 4096
+  cpu_memory_limit_mb: 8192
+  default_load_timeout_sec: 30
+
+# Model definitions
+# UltraBERT is the ONLY ML model needed
+# spaCy kept only for tokenization/parsing (not NER - UltraBERT does that)
+
+models:
+  # ============================================
+  # UltraBERT - Unified Model (Replaces ALL ML)
+  # ============================================
+  ultrabert:
+    name: "FamilyOS UltraBERT v2.0.3"
+    model_id: "familyos-ultrabert-2.0.3"
+    tier: ultrabert
+    loader: "k0.runtime.model_loaders.load_ultrabert"
+    memory_mb: 500
+    version: "2.0.3"
+    device_preference: cuda
+    fallback_to_cpu: true
+    load_timeout_sec: 60
+    # UltraBERT handles its own warmup (warmup=True default)
+    warmup_input: null
+
+  # ============================================
+  # spaCy - Tokenization Only (NOT for ML)
+  # ============================================
+  spacy_nlp:
+    name: "spaCy English Small (Tokenization)"
+    model_id: "en_core_web_sm"
+    tier: spacy_small
+    loader: "k0.runtime.model_loaders.load_spacy"
+    memory_mb: 100
+    version: "3.7.0"
+    device_preference: cpu
+    fallback_to_cpu: true
+    load_timeout_sec: 15
+    warmup_input: "Hello world"
+
+# Preload configuration
+# UltraBERT is the ONLY model needed at startup
+preload:
+  essential:
+    - ultrabert
+    - spacy_nlp
+  optional: []
+
+# Memory budget per tier (MB)
+tier_budgets:
+  rule_based: 100
+  spacy_small: 200
+  spacy_large: 1000
+  ultrabert: 600
+  transformer_small: 1500
+  transformer_large: 3000

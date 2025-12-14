@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -24,6 +25,9 @@ class OutboxEntry:
     requeue_seq: int
     retries: int
     last_error: str | None = None
+    next_attempt_ts: str | None = None  # NEW - ISO8601 timestamp for next retry
+    backoff_exp: int = 0  # NEW - Exponent for 2^n exponential backoff
+    status: str = "PENDING"  # NEW - PENDING/PROCESSING/FAILED/DEAD
 
 
 @contextmanager
@@ -50,6 +54,16 @@ class OutboxStore:
 
         self._metrics = metrics
 
+    async def enqueue_async(
+        self,
+        entry: OutboxEntry,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> int:
+        """Async wrapper for enqueue."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: self.enqueue(entry, connection=connection))
+
     def enqueue(
         self,
         entry: OutboxEntry,
@@ -58,28 +72,56 @@ class OutboxStore:
     ) -> int:
         insert_entry = replace(entry)
         with _resolve_connection(connection) as conn:
-            cursor = conn.execute(
-                (
-                    "INSERT INTO st_outbox (wal_pos, tenant_id, space_id, driver, op_kind, payload, "
-                    "fingerprint, requeue_seq, retries, last_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    insert_entry.wal_pos,
-                    insert_entry.tenant_id,
-                    insert_entry.space_id,
-                    insert_entry.driver,
-                    insert_entry.op_kind,
-                    insert_entry.payload,
-                    insert_entry.fingerprint,
-                    insert_entry.requeue_seq,
-                    insert_entry.retries,
-                    insert_entry.last_error,
-                ),
-            )
+            # Try Migration 0004 schema first (with backoff columns)
+            try:
+                cursor = conn.execute(
+                    (
+                        "INSERT INTO st_outbox (wal_pos, tenant_id, space_id, driver, op_kind, payload, "
+                        "fingerprint, requeue_seq, retries, last_error, next_attempt_ts, backoff_exp, status) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
+                    (
+                        insert_entry.wal_pos,
+                        insert_entry.tenant_id,
+                        insert_entry.space_id,
+                        insert_entry.driver,
+                        insert_entry.op_kind,
+                        insert_entry.payload,
+                        insert_entry.fingerprint,
+                        insert_entry.requeue_seq,
+                        insert_entry.retries,
+                        insert_entry.last_error,
+                        insert_entry.next_attempt_ts,
+                        insert_entry.backoff_exp,
+                        insert_entry.status,
+                    ),
+                )
+            except sqlite3.OperationalError as e:
+                # Fallback to legacy schema (baseline without backoff columns)
+                if "no column named" in str(e) or "has no column named" in str(e):
+                    cursor = conn.execute(
+                        (
+                            "INSERT INTO st_outbox (wal_pos, tenant_id, space_id, driver, op_kind, payload, "
+                            "fingerprint, requeue_seq, retries, last_error) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        ),
+                        (
+                            insert_entry.wal_pos,
+                            insert_entry.tenant_id,
+                            insert_entry.space_id,
+                            insert_entry.driver,
+                            insert_entry.op_kind,
+                            insert_entry.payload,
+                            insert_entry.fingerprint,
+                            insert_entry.requeue_seq,
+                            insert_entry.retries,
+                            insert_entry.last_error,
+                        ),
+                    )
+                else:
+                    raise
             row_id = cursor.lastrowid
-            if (
-                row_id is None
-            ):  # pragma: no cover - SQLite guarantees rowid, defensive guard
+            if row_id is None:  # pragma: no cover - SQLite guarantees rowid, defensive guard
                 msg = "Failed to determine outbox entry id"
                 raise RuntimeError(msg)
             entry_id = int(row_id)
@@ -95,14 +137,34 @@ class OutboxStore:
         *,
         connection: sqlite3.Connection | None = None,
     ) -> List[OutboxEntry]:
+        """Dequeue batch of entries (legacy method - no backoff awareness).
+
+        For new code, use dequeue_ready_batch() which respects next_attempt_ts.
+        """
         with _resolve_connection(connection) as conn:
-            rows = conn.execute(
-                (
-                    "SELECT id, wal_pos, tenant_id, space_id, driver, op_kind, payload, fingerprint, "
-                    "requeue_seq, retries, last_error FROM st_outbox WHERE driver=? ORDER BY requeue_seq ASC, id ASC LIMIT ?"
-                ),
-                (driver, limit),
-            ).fetchall()
+            try:
+                # Try Migration 0004 schema (with backoff columns)
+                rows = conn.execute(
+                    (
+                        "SELECT id, wal_pos, tenant_id, space_id, driver, op_kind, payload, fingerprint, "
+                        "requeue_seq, retries, last_error, next_attempt_ts, backoff_exp, status "
+                        "FROM st_outbox WHERE driver=? ORDER BY requeue_seq ASC, id ASC LIMIT ?"
+                    ),
+                    (driver, limit),
+                ).fetchall()
+            except sqlite3.OperationalError as e:
+                # Fallback to legacy schema (baseline without backoff columns)
+                if "no such column" in str(e):
+                    rows = conn.execute(
+                        (
+                            "SELECT id, wal_pos, tenant_id, space_id, driver, op_kind, payload, fingerprint, "
+                            "requeue_seq, retries, last_error "
+                            "FROM st_outbox WHERE driver=? ORDER BY requeue_seq ASC, id ASC LIMIT ?"
+                        ),
+                        (driver, limit),
+                    ).fetchall()
+                else:
+                    raise
             return [
                 OutboxEntry(
                     id=row["id"],
@@ -116,6 +178,94 @@ class OutboxStore:
                     requeue_seq=row["requeue_seq"],
                     retries=row["retries"],
                     last_error=row["last_error"],
+                    next_attempt_ts=(
+                        row["next_attempt_ts"] if "next_attempt_ts" in row.keys() else None
+                    ),
+                    backoff_exp=row["backoff_exp"] if "backoff_exp" in row.keys() else 0,
+                    status=row["status"] if "status" in row.keys() else "PENDING",
+                )
+                for row in rows
+            ]
+
+    def dequeue_ready_batch(
+        self,
+        driver: str,
+        limit: int = 128,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> List[OutboxEntry]:
+        """Dequeue entries WHERE next_attempt_ts IS NULL OR next_attempt_ts <= NOW().
+
+        This method respects exponential backoff by only returning entries that are
+        ready to be retried based on their next_attempt_ts timestamp.
+
+        Falls back to legacy dequeue_batch() if schema doesn't have backoff columns.
+
+        Parameters
+        ----------
+        driver : str
+            Driver alias to filter by
+        limit : int
+            Maximum number of entries to return (default: 128)
+        connection : sqlite3.Connection, optional
+            Database connection (uses connection pool if not provided)
+
+        Returns
+        -------
+        List[OutboxEntry]
+            Entries ready for processing (respects backoff timing)
+        """
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        with _resolve_connection(connection) as conn:
+            try:
+                # Try Migration 0004 schema (with backoff columns)
+                rows = conn.execute(
+                    (
+                        "SELECT id, wal_pos, tenant_id, space_id, driver, op_kind, payload, fingerprint, "
+                        "requeue_seq, retries, last_error, next_attempt_ts, backoff_exp, status "
+                        "FROM st_outbox "
+                        "WHERE driver = ? "
+                        "  AND status = 'PENDING' "
+                        "  AND (next_attempt_ts IS NULL OR next_attempt_ts <= ?) "
+                        "ORDER BY id ASC "
+                        "LIMIT ?"
+                    ),
+                    (driver, now, limit),
+                ).fetchall()
+            except sqlite3.OperationalError as e:
+                # Fallback to legacy schema (baseline without backoff columns)
+                if "no such column" in str(e):
+                    rows = conn.execute(
+                        (
+                            "SELECT id, wal_pos, tenant_id, space_id, driver, op_kind, payload, fingerprint, "
+                            "requeue_seq, retries, last_error "
+                            "FROM st_outbox WHERE driver=? ORDER BY requeue_seq ASC, id ASC LIMIT ?"
+                        ),
+                        (driver, limit),
+                    ).fetchall()
+                else:
+                    raise
+            return [
+                OutboxEntry(
+                    id=row["id"],
+                    wal_pos=row["wal_pos"],
+                    tenant_id=row["tenant_id"],
+                    space_id=row["space_id"],
+                    driver=row["driver"],
+                    op_kind=row["op_kind"],
+                    payload=row["payload"],
+                    fingerprint=row["fingerprint"],
+                    requeue_seq=row["requeue_seq"],
+                    retries=row["retries"],
+                    last_error=row["last_error"],
+                    next_attempt_ts=(
+                        row["next_attempt_ts"] if "next_attempt_ts" in row.keys() else None
+                    ),
+                    backoff_exp=row["backoff_exp"] if "backoff_exp" in row.keys() else 0,
+                    status=row["status"] if "status" in row.keys() else "PENDING",
                 )
                 for row in rows
             ]
@@ -146,6 +296,9 @@ class OutboxStore:
         retries: int,
         requeue_seq: int,
         last_error: str,
+        next_attempt_ts: str | None = None,
+        backoff_exp: int = 0,
+        status: str = "PENDING",
         connection: sqlite3.Connection | None = None,
     ) -> None:
         if entry.id is None:
@@ -153,17 +306,43 @@ class OutboxStore:
             raise ValueError(msg)
 
         with _resolve_connection(connection) as conn:
-            conn.execute(
-                (
-                    "UPDATE st_outbox SET retries=?, requeue_seq=?, last_error=? "
-                    "WHERE id=?"
-                ),
-                (retries, requeue_seq, last_error, entry.id),
-            )
+            # Try Migration 0004 schema first (with backoff columns)
+            try:
+                conn.execute(
+                    (
+                        "UPDATE st_outbox SET retries=?, requeue_seq=?, last_error=?, "
+                        "next_attempt_ts=?, backoff_exp=?, status=? "
+                        "WHERE id=?"
+                    ),
+                    (
+                        retries,
+                        requeue_seq,
+                        last_error,
+                        next_attempt_ts,
+                        backoff_exp,
+                        status,
+                        entry.id,
+                    ),
+                )
+            except sqlite3.OperationalError as e:
+                # Fallback to legacy schema (baseline without backoff columns)
+                if "no such column" in str(e):
+                    conn.execute(
+                        (
+                            "UPDATE st_outbox SET retries=?, requeue_seq=?, last_error=? "
+                            "WHERE id=?"
+                        ),
+                        (retries, requeue_seq, last_error, entry.id),
+                    )
+                else:
+                    raise
 
         entry.retries = retries
         entry.requeue_seq = requeue_seq
         entry.last_error = last_error
+        entry.next_attempt_ts = next_attempt_ts
+        entry.backoff_exp = backoff_exp
+        entry.status = status
 
     def _update_pending_metrics(
         self,
@@ -174,9 +353,7 @@ class OutboxStore:
         if metrics is None:
             return
 
-        total_row = connection.execute(
-            "SELECT COUNT(*) AS pending FROM st_outbox"
-        ).fetchone()
+        total_row = connection.execute("SELECT COUNT(*) AS pending FROM st_outbox").fetchone()
         total = (
             int(total_row["pending"])
             if total_row is not None and total_row["pending"] is not None

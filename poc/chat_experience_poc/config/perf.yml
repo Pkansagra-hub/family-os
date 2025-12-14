@@ -1,0 +1,75 @@
+# Performance Budgets Configuration
+# Strict performance budgets enforced throughout K1 Intelligence Module
+# Fail-fast on budget violations with metrics emission
+#
+# References:
+# - ADR-0073: Agent lifecycle performance budgets
+# - docs/whiteboard/chat_experience.md: Section 3 (Performance Budgets)
+# - .github/copilot-instructions.md: Performance standards
+
+# Orchestrator Performance Budgets (3-Phase Coordination)
+orchestrator:
+  negotiation_deadline_ms: 50        # Phase 1: Negotiation (Contract Net)
+  selection_deadline_ms: 30          # Phase 2: Selection
+  execution_deadline_ms: 1920        # Phase 3: Execution (remaining from 2000ms budget)
+
+# Agent Lifecycle Performance Budgets
+agent:
+  warming_p95_ms: 35000              # WARMING state: model load, prompt fetch (P95)
+  idle_ttl_ms: 600000                # IDLE state: 10 minutes before eviction
+  draining_timeout_ms: 30000         # DRAINING state: max 30s for cleanup
+  spawn_latency_p95_ms: 35000        # Full spawn cycle (P95)
+  pool_reuse_latency_ms: 1           # Agent Pool hit latency (target <1ms)
+
+# LLM Performance Budgets
+llm:
+  ttft_ms: 150                       # Time To First Token (P95)
+  tokens_per_second: 100             # Token generation rate (target)
+  max_completion_time_ms: 5000       # Max time for full completion
+  rate_limit_budget: 60              # Max requests per minute per session
+
+# Runtime Component Performance Budgets
+runtime:
+  state_access_p95_ms: 1             # SessionState read operations
+  state_write_p95_ms: 5              # SessionState write operations
+  mailbox_op_p95_ms: 0.5             # Mailbox enqueue/dequeue
+  delta_computation_p95_ms: 5        # Delta computation time
+  deltabus_delivery_p95_ms: 1        # DeltaBus event delivery
+
+# End-to-End Performance Budgets
+e2e:
+  latency_p95_ms: 2000               # Total PATH 1 (query) latency
+  latency_planning_p95_ms: 4000      # Total PATH 2 (planning) latency
+  meta_intent_latency_ms: 200        # Concierge meta-intent handling
+  proactive_tick_latency_ms: 1000    # SSE tick to notification
+
+# K0 Bridge Performance Budgets
+k0_bridge:
+  query_p95_ms: 50                   # K0 Query Port (P01) latency
+  batch_send_p95_ms: 50              # K0 Command Port (P02) batch send
+  sse_heartbeat_interval_ms: 30000   # SSE keepalive interval
+  sse_reconnect_jitter_ms: 500       # SSE reconnect jitter (±500ms)
+
+# Mailbox Backpressure Configuration
+mailbox:
+  capacity: 64                       # Queue capacity per agent
+  wfq_weights: [4, 2, 1, 1]         # Weighted Fair Queueing: [URGENT, STANDARD, LOW, BACKGROUND]
+  backpressure_threshold: 0.8        # Block senders when 80% full
+
+# Circuit Breaker Configuration
+circuit_breaker:
+  failure_threshold: 5               # Open circuit after N consecutive failures
+  timeout_seconds: 60                # Keep circuit open for N seconds
+  half_open_max_calls: 3             # Max test calls in half-open state
+
+# Monitoring & Observability
+monitoring:
+  metrics_export_interval_ms: 1000   # Prometheus metrics export interval
+  log_sample_rate: 1.0               # Log sampling (1.0 = all, 0.1 = 10%)
+  trace_sample_rate: 0.1             # Trace sampling (0.1 = 10% of requests)
+
+# Budget Violation Behavior
+enforcement:
+  fail_fast: true                    # Raise exception on budget violation
+  emit_metric: true                  # Emit metric on budget violation
+  log_violations: true               # Log all budget violations

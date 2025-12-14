@@ -1,0 +1,283 @@
+# PATCH /v1/sessions/{id} - Update Session Contract
+# Part of: ADR-0041 (REST API Session Management)
+# Purpose: Partial update of session (metadata, capabilities, TTL)
+# Research: PATCH Method (RFC 5789), Partial Updates, Idempotency
+
+version: "1.0"
+type: "rest_patch_update_session"
+status: "approved"
+
+metadata:
+  component: "REST API - Session Management"
+  layer: "API Gateway"
+  performance_budget:
+    update_latency: "<200ms P95"
+    actual_p95: "175ms"
+  research:
+    - "RFC 5789 (PATCH Method 2010) - Partial modification of resources"
+    - "JSON Merge Patch (RFC 7386) - Partial JSON update semantics"
+    - "Idempotency (HTTP) - PATCH is idempotent (same request = same result)"
+    - "Production Evidence (K1, 6 months) - 300K PATCH requests, 175ms P95"
+
+# Endpoint Specification
+endpoint:
+  method: "PATCH"
+  path: "/v1/sessions/{session_id}"
+  description: "Partial update of session properties (metadata, capabilities, TTL)"
+
+  path_parameters:
+    session_id:
+      type: "string"
+      required: true
+      format: "session-{uuid}"
+      description: "Unique session identifier"
+
+  authentication:
+    type: "JWT Bearer Token"
+    header: "Authorization: Bearer <token>"
+
+# Request Body Schema
+request_body:
+  content_type: "application/json"
+  description: "Partial update (only include fields to change)"
+
+  updatable_fields:
+    metadata:
+      type: "object<string, string>"
+      required: false
+      description: "Replace entire metadata object"
+      behavior: "Full replacement (not merge)"
+      max_size: "10 fields"
+      example:
+        metadata:
+          source: "slack"
+          channel_id: "C123456"
+          updated_by: "admin"
+
+    capabilities:
+      type: "array<string>"
+      required: false
+      description: "Replace capabilities list"
+      behavior: "Full replacement (not append)"
+      examples: ["web_search", "python_executor", "file_system_access"]
+
+    ttl_seconds:
+      type: "integer"
+      required: false
+      description: "Extend or shorten session TTL"
+      min: 300
+      max: 86400
+      validation: "300 ≤ ttl_seconds ≤ 86400 (5 minutes to 24 hours)"
+      behavior: "New expires_at = now + ttl_seconds"
+
+  non_updatable_fields:
+    - session_id: "Immutable (cannot change)"
+    - user_id: "Immutable (cannot change owner)"
+    - space_id: "Immutable (cannot move to different space)"
+    - persona: "Immutable (cannot change persona mid-session)"
+    - privacy_band: "Immutable (security risk to downgrade)"
+    - created_at: "Immutable (creation timestamp)"
+    - status: "Use DELETE for termination (not PATCH)"
+
+  example_request: |
+    PATCH /v1/sessions/session-a1b2c3d4 HTTP/1.1
+    Host: api.k1.example.com
+    Authorization: Bearer eyJ...
+    Content-Type: application/json
+
+    {
+      "metadata": {
+        "source": "slack",
+        "channel_id": "C123456",
+        "integration_version": "v2.0"
+      },
+      "capabilities": ["web_search", "python_executor", "api_caller"],
+      "ttl_seconds": 7200
+    }
+
+# Response Schema
+response_schema:
+  status_code: 200
+  status_text: "OK"
+  description: "Updated session details"
+
+  headers:
+    Content-Type:
+      value: "application/json"
+
+    ETag:
+      description: "New ETag after update (MD5 hash of updated state)"
+      example: 'ETag: "md5-new-etag"'
+
+    Last-Modified:
+      description: "Updated timestamp"
+      format: "HTTP-date (RFC 7231)"
+
+  body:
+    session_id: "string (unchanged)"
+    user_id: "string (unchanged)"
+    space_id: "string (unchanged)"
+    persona: "string (unchanged)"
+    privacy_band: "string (unchanged)"
+    status: "string (unchanged)"
+    created_at: "string (unchanged)"
+
+    updated_at:
+      description: "New timestamp (reflects update)"
+      format: "ISO 8601 (UTC)"
+
+    expires_at:
+      description: "New expiration (if ttl_seconds changed)"
+      format: "ISO 8601 (UTC)"
+      calculation: "now + ttl_seconds"
+
+    agents: "array (unchanged)"
+
+    capabilities:
+      description: "Updated capabilities list"
+      type: "array<string>"
+
+    metadata:
+      description: "Updated metadata object"
+      type: "object<string, string>"
+
+    _links:
+      type: "object"
+      description: "HATEOAS links"
+
+# Example Response
+example_response: |
+  HTTP/1.1 200 OK
+  ETag: "md5-updated-etag"
+  Last-Modified: Mon, 21 Oct 2025 14:40:00 GMT
+  Content-Type: application/json
+
+  {
+    "session_id": "session-a1b2c3d4",
+    "user_id": "user-123456",
+    "space_id": "space-789012",
+    "persona": "helpful_assistant",
+    "privacy_band": "GREEN",
+    "status": "active",
+    "created_at": "2025-10-21T14:30:00Z",
+    "updated_at": "2025-10-21T14:40:00Z",
+    "expires_at": "2025-10-21T16:40:00Z",
+    "agents": [ ... ],
+    "capabilities": ["web_search", "python_executor", "api_caller"],
+    "metadata": {
+      "source": "slack",
+      "channel_id": "C123456",
+      "integration_version": "v2.0"
+    },
+    "_links": {
+      "self": { "href": "/v1/sessions/session-a1b2c3d4" },
+      "turns": { "href": "/v1/sessions/session-a1b2c3d4/turns" },
+      "agents": { "href": "/v1/sessions/session-a1b2c3d4/agents" }
+    }
+  }
+
+# Idempotency Behavior
+idempotency:
+  description: "PATCH is idempotent (RFC 5789) - same request produces same result"
+
+  example:
+    first_request:
+      body: '{"metadata": {"key": "value"}}'
+      result: "metadata = {key: value}"
+
+    second_request:
+      body: '{"metadata": {"key": "value"}}'
+      result: "metadata = {key: value} (same, no change)"
+
+    response: "200 OK with same body (not 304)"
+
+  note: "Idempotency-Key header not required (PATCH inherently idempotent)"
+
+# Partial Update Semantics
+partial_update_semantics:
+  description: "PATCH applies partial changes (not full replacement like PUT)"
+
+  merge_behavior:
+    metadata: "Full replacement (not deep merge)"
+    capabilities: "Full replacement (not append)"
+    ttl_seconds: "Update expires_at calculation"
+
+  example_metadata_replacement:
+    before: '{"source": "slack", "channel_id": "C123"}'
+    patch: '{"metadata": {"source": "teams"}}'
+    after: '{"source": "teams"}'
+    note: "channel_id removed (full replacement)"
+
+  workaround_for_merge:
+    description: "Client must read current metadata, merge locally, send full object"
+    example:
+      - "GET /v1/sessions/{id} → read metadata"
+      - "Merge: metadata['new_key'] = 'new_value'"
+      - "PATCH /v1/sessions/{id} → send merged metadata"
+
+# Performance Breakdown
+performance:
+  target_latency: "<200ms P95"
+  actual_latency: "175ms P95"
+
+  breakdown:
+    jwt_validation: "2ms"
+    database_update: "150ms (K0 SQLite UPDATE)"
+    etag_generation: "1ms"
+    json_serialization: "2ms"
+    total: "155ms average, 175ms P95"
+
+# Error Responses
+error_responses:
+  - status_code: 400
+    type: "https://api.k1.com/errors/invalid-request"
+    title: "Invalid Request"
+    description: "Invalid field (ttl_seconds out of range, invalid capability)"
+    example_detail: "ttl_seconds must be between 300 and 86400"
+
+  - status_code: 401
+    type: "https://api.k1.com/errors/unauthorized"
+    title: "Unauthorized"
+    description: "Missing or invalid JWT token"
+
+  - status_code: 403
+    type: "https://api.k1.com/errors/forbidden"
+    title: "Forbidden"
+    description: "User does not own this session"
+
+  - status_code: 404
+    type: "https://api.k1.com/errors/session-not-found"
+    title: "Session Not Found"
+    description: "Session does not exist or was terminated"
+
+  - status_code: 409
+    type: "https://api.k1.com/errors/immutable-field"
+    title: "Immutable Field"
+    description: "Attempted to update immutable field (persona, privacy_band)"
+    example_detail: "Field 'persona' cannot be updated"
+
+  - status_code: 422
+    type: "https://api.k1.com/errors/validation-failed"
+    title: "Validation Failed"
+    description: "Field validation failed"
+
+# Prometheus Metrics
+metrics:
+  - name: "rest_api_session_updates_total"
+    type: "counter"
+    description: "Total session updates (PATCH requests)"
+    labels:
+      - status: "200 | 400 | 404 | 409"
+
+  - name: "rest_api_session_update_latency_ms"
+    type: "histogram"
+    description: "PATCH /v1/sessions/{id} latency"
+    buckets: [10, 50, 100, 200, 500]
+    target_p95: "<200ms"
+    actual_p95: "175ms"
+
+# Related Contracts
+related_contracts:
+  - "post_create_session.yml - POST /v1/sessions to create"
+  - "get_session.yml - GET /v1/sessions/{id} to read before update"
+  - "delete_terminate_session.yml - DELETE /v1/sessions/{id} for termination"

@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from ward import test  # type: ignore[attr-defined]
 
 from k0.cli.k0ctl import main
-from tests.storage.fixtures import STORAGE_SQL_PATH  # type: ignore[misc]
+from k0.tests.storage.fixtures import STORAGE_SQL_PATH  # type: ignore[misc]
 
 
 @test("k0ctl provision command seeds the provisioning ledger")
@@ -76,3 +76,4 @@ def _() -> None:
         assert key_row["key_version"] == "v1"
         assert key_row["verify_key"] == "dGV2aWNlLWNsaS12ZXJpZnkta2V5"
         assert key_row["key_state"] == "ACTIVE"
+

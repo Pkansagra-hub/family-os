@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import string
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 from blake3 import blake3  # type: ignore[import]
@@ -85,7 +88,73 @@ def _normalize_hash(value: str) -> str:
     return normalized
 
 
+def derive_hmac_idem_key(
+    envelope_sha256: str,
+    device_id: str,
+    device_secret: bytes,
+    ts: str | None = None,
+) -> str:
+    """Derive HMAC-based idempotency key using device secret + time bucket (V1).
+
+    This derives a cryptographically secure, device-specific, time-limited
+    idempotency key that prevents replay attacks and cross-device collisions.
+
+    Parameters
+    ----------
+    envelope_sha256 : str
+        SHA-256 hash of full canonical envelope (from Issue 1.1)
+    device_id : str
+        Device identifier (from envelope)
+    device_secret : bytes
+        HMAC secret stored in provisioning ledger (32 bytes)
+    ts : str, optional
+        ISO8601 timestamp from envelope. If None, uses current time.
+
+    Returns
+    -------
+    str
+        HMAC-based idem_key in format: idem:<32-char hex>
+
+    Algorithm
+    ---------
+    1. Parse ts to datetime, bucket to 60-second intervals
+    2. Create message = envelope_sha256 || device_id || time_bucket
+    3. Compute HMAC-SHA256(device_secret, message)
+    4. Return f"idem:{digest[:32]}"
+
+    Properties
+    ----------
+    - Cryptographically secure (HMAC-SHA256)
+    - Device-specific (includes device_id + device_secret)
+    - Time-limited (60-second bucket = replay window)
+    - Non-predictable (requires device_secret)
+    """
+    # Determine timestamp to use
+    if ts is None:
+        now = datetime.now(timezone.utc)
+    else:
+        # Parse ISO8601 timestamp
+        try:
+            now = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, TypeError) as exc:
+            msg = f"Invalid timestamp format: {ts}"
+            raise ValueError(msg) from exc
+
+    # Bucket to 60-second intervals (ensures stability within window)
+    time_bucket = int(now.timestamp()) // 60
+
+    # Create message for HMAC
+    message = f"{envelope_sha256}|{device_id}|{time_bucket}".encode("utf-8")
+
+    # Compute HMAC-SHA256
+    digest = hmac.new(device_secret, message, hashlib.sha256).hexdigest()
+
+    # Return in format: idem:<32-char hex>
+    return f"idem:{digest[:32]}"
+
+
 __all__ = [
     "canonical_idem_components",
+    "derive_hmac_idem_key",
     "derive_idem_key",
 ]

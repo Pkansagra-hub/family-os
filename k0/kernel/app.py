@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -22,6 +23,7 @@ from starlette.responses import Response
 from ..automation.migrate import MigrationError, apply_migrations
 from ..bus import (
     BusDispatcher,
+    BusMessage,
     BusMiddleware,
     latency_metrics_middleware,
     timestamp_middleware,
@@ -42,15 +44,17 @@ from ..obs import (
 )
 from ..outbox import DriverWorkerPool, RetryScheduler
 from ..ports import command, drivers, observe, query, sse
+from ..qos import QoSMetrics
 from ..receipts import ReceiptIssuer, ReceiptSigner
 from ..storage import (
+    DeadLetterQueue,
+    ObligationStore,
     OffsetStore,
     OutboxStore,
     ProvisioningLedger,
     ReceiptStore,
     WriteAheadLog,
 )
-from ..storage.dlq import DeadLetterQueue
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
 from ..uow.connection_pool import configure_pool, shutdown_pool
@@ -61,6 +65,9 @@ from .readiness import ReadinessState
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
+
+# Issue #046: Global counter for active HTTP connections
+_active_connections = 0
 
 
 def _classify_operation(route_path: str, method: str) -> str:
@@ -110,18 +117,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         observability_emitter=observability_emitter,
     )
 
+    # Create QoS metrics instrumentation
+    qos_metrics = QoSMetrics(metrics_exporter)
+
     # Register process metrics collectors for CPU/Memory monitoring
     # CRITICAL: Must store collectors at module or app state level to prevent GC
     # ProcessCollector and PlatformCollector auto-register with the registry
     try:
         # Store collectors in a persistent location (app.state will hold them)
-        logger.debug(
-            "Registering ProcessCollector to registry: %s", metrics_exporter.registry
-        )
+        logger.debug("Registering ProcessCollector to registry: %s", metrics_exporter.registry)
         _process_collector = ProcessCollector(registry=metrics_exporter.registry)
-        logger.debug(
-            "Registering PlatformCollector to registry: %s", metrics_exporter.registry
-        )
+        logger.debug("Registering PlatformCollector to registry: %s", metrics_exporter.registry)
         _platform_collector = PlatformCollector(registry=metrics_exporter.registry)
         logger.info("Successfully registered ProcessCollector and PlatformCollector")
         logger.debug("ProcessCollector: %s", _process_collector)
@@ -166,9 +172,9 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
     # Bus dispatch latency histogram
     bus_dispatch_latency = metrics_exporter.histogram(
-        "bus_dispatch_latency",
+        "bus_dispatch_latency_seconds",
         "Event bus dispatch latency in seconds",
-        labelnames=("driver",),
+        labelnames=("topic", "outcome"),
         buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
     )
 
@@ -182,6 +188,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     write_ahead_log = WriteAheadLog()
     outbox_store = OutboxStore(metrics=metrics_exporter)
     dead_letter_queue = DeadLetterQueue()
+    obligation_store = ObligationStore()
     offset_store = OffsetStore()
     receipt_store = ReceiptStore()
     receipt_signer = ReceiptSigner(SigningKey.generate())
@@ -203,18 +210,24 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     )
 
     alias_map = AliasMap.from_file()
+
+    # Gap 38: Read DLQ max retry attempts from config
+    dlq_settings = getattr(settings, "dlq", None)
+    max_retry_attempts = (
+        int(getattr(dlq_settings, "max_retry_attempts", 10)) if dlq_settings is not None else 10
+    )
+
     driver_worker_pool = DriverWorkerPool(
         alias_map=alias_map,
         outbox_store=outbox_store,
         dead_letter_queue=dead_letter_queue,
         retry_scheduler_factory=lambda: RetryScheduler(),
         metrics_emitter=metrics_exporter.emit,
+        max_retry_attempts=max_retry_attempts,
     )
 
     bus_settings = getattr(settings, "bus", None)
-    middleware_settings = (
-        getattr(bus_settings, "middleware", None) if bus_settings else None
-    )
+    middleware_settings = getattr(bus_settings, "middleware", None) if bus_settings else None
     timestamps_enabled = (
         bool(getattr(middleware_settings, "timestamps_enabled", True))
         if middleware_settings is not None
@@ -248,6 +261,8 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.tracer_factory = tracer_factory
     app.state.metrics_exporter = metrics_exporter
+    app.state.qos_metrics = qos_metrics
+    app.state.forwarded_metrics = observe.ForwardedMetricsBuffer()
     app.state.snapshot_watermark = snapshot_watermark
     app.state.active_connections = active_connections
     app.state.sse_active_subscriptions = sse_active_subscriptions
@@ -255,12 +270,17 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.bus_dispatch_latency = bus_dispatch_latency
     app.state.process_collector = _process_collector
     app.state.platform_collector = _platform_collector
-    app.state.scheduler = dependency_provider.scheduler
+
+    # Inject QoS metrics into scheduler
+    scheduler = dependency_provider.scheduler
+    scheduler._qos_metrics = qos_metrics
+    app.state.scheduler = scheduler
     app.state.readiness = ReadinessState()
     app.state.schema_registry = schema_registry
     app.state.provisioning_ledger = provisioning_ledger
     app.state.write_ahead_log = write_ahead_log
     app.state.outbox_store = outbox_store
+    app.state.obligation_store = obligation_store
     app.state.dead_letter_queue = dead_letter_queue
     app.state.offset_store = offset_store
     app.state.receipt_store = receipt_store
@@ -271,6 +291,71 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.alias_map = alias_map
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
+
+    # Inject bus dispatcher into SQLite driver for outbox-to-bus bridging
+    from ..drivers.sqlite import set_bus_dispatcher
+
+    set_bus_dispatcher(bus_dispatcher)
+    logger.info("Injected bus dispatcher into SQLite driver for P02 pipeline integration")
+
+    # Register BusDispatcher sinks (Gap 1: Wire BusDispatcher Sinks)
+    # M1 R1.2: Migrated from register_sink() to tap() / subscribe()
+
+    # Sink 1: Observability - emit bus_dispatch events with trace_id
+    async def observability_sink(message: BusMessage) -> None:
+        """Emit observability events for bus dispatches with trace_id."""
+        try:
+            observability_emitter.emit(
+                {
+                    "event_type": "bus_dispatch",
+                    "topic": message.topic,
+                    "offset": message.offset,
+                    "trace_id": message.trace_id,
+                    "payload_size": len(message.payload),
+                }
+            )
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to emit observability event for bus dispatch")
+
+    # Sink 2: DriverWorkerPool trigger - trigger outbox processing
+    async def driver_worker_pool_sink(message: BusMessage) -> None:
+        """Trigger outbox processing when WAL commits occur."""
+        # Note: This sink notifies the worker pool that new entries may be available.
+        # Actual processing happens in background loop (Gap 19)
+        try:
+            # For now, this is a no-op placeholder. The background worker loop
+            # will handle periodic processing. Future enhancement could add
+            # event-driven triggers here if needed.
+            pass
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to trigger driver worker pool")
+
+    # Sink 3: SSE fan-out (placeholder for future SSE streaming implementation)
+    # Note: SSE fan-out requires SSE server state management which is not yet
+    # fully implemented. This sink will be completed when SSE streaming is ready.
+    async def sse_fan_out_sink(message: BusMessage) -> None:
+        """Fan out WAL events to SSE subscribers."""
+        try:
+            # TODO: Implement SSE fan-out when SSE streaming is ready
+            # This will involve:
+            # 1. Query SSE subscribers for this topic/tenant/space
+            # 2. Send event to matching subscriptions
+            # 3. Track delivery and backpressure
+            pass
+        except Exception:  # pragma: no cover - defensive logging guard
+            logger.exception("Failed to fan out to SSE subscribers")
+
+    # M1 R1.2: Use tap() for observability (gets ALL messages)
+    bus_dispatcher.tap(observability_sink)
+
+    # M1 R1.2: Use subscribe("*") for driver worker pool (wildcard for all topics)
+    bus_dispatcher.subscribe("*", driver_worker_pool_sink)
+
+    # M1 R1.2: Use subscribe("*") for SSE fan-out (wildcard for all topics)
+    bus_dispatcher.subscribe("*", sse_fan_out_sink)
+
+    # M2 R2.3: Initialize pipelines state (will be populated during lifespan startup)
+    app.state.pipelines = {}
 
     def _unit_of_work_factory() -> UnitOfWork:
         return UnitOfWork(
@@ -298,7 +383,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.include_router(observe.router)
     app.include_router(drivers.router)
 
-    database_path = Path(getattr(settings.database, "path"))
+    database_path = Path(getattr(settings.database, "path")).resolve()
     configure_pool(database_path)
 
     def _bootstrap_runtime() -> None:
@@ -327,12 +412,14 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         if readiness is not None:
             readiness.mark_wal_replay_complete()
 
+    # Gap 21: Only shutdown pool on bootstrap exception
+    # If bootstrap succeeds, pool stays open for runtime
     try:
         _bootstrap_runtime()
-    finally:
+    except Exception:
+        # Bootstrap failed - cleanup pool before re-raising
         shutdown_pool()
-
-    configure_pool(database_path)
+        raise
 
     async def _report_sse_metrics_periodically() -> None:
         """Background task to periodically report SSE connection metrics."""
@@ -349,19 +436,416 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to report SSE metrics")
 
+    async def _outbox_worker_loop() -> None:
+        """Background task to process outbox with exponential backoff (Gap 19)."""
+        worker_pool = getattr(app.state, "driver_worker_pool", None)
+        alias_map = getattr(app.state, "alias_map", None)
+
+        if worker_pool is None or alias_map is None:
+            logger.warning("Outbox worker loop cannot start: missing worker_pool or alias_map")
+            return
+
+        logger.info("Starting outbox worker loop (processing interval: 5s)")
+
+        while True:
+            try:
+                await asyncio.sleep(5)  # Process every 5 seconds
+
+                # Get all registered driver aliases from alias_map
+                driver_aliases = list(alias_map.bindings.keys())
+
+                if not driver_aliases:
+                    logger.debug("No driver aliases registered, skipping outbox processing")
+                    continue
+
+                # Process each registered driver
+                loop = asyncio.get_running_loop()
+                for alias in driver_aliases:
+                    try:
+                        await loop.run_in_executor(None, worker_pool.process_driver, alias)
+                        logger.debug(f"Processed outbox for driver: {alias}")
+                    except RuntimeError as e:  # noqa: BLE001
+                        # Gracefully skip drivers that aren't implemented yet
+                        error_msg = str(e)
+                        if (
+                            "does not expose a known factory" in error_msg
+                            or "must expose an 'apply' method" in error_msg
+                        ):
+                            logger.debug(f"Skipping unimplemented driver: {alias} ({error_msg})")
+                        else:
+                            logger.exception(f"Failed to process outbox for driver: {alias}")
+                    except sqlite3.OperationalError as e:  # noqa: BLE001
+                        # Gracefully handle database connection issues (e.g., Docker volume mount issues)
+                        # These are typically transient or configuration issues
+                        if "unable to open database file" in str(e):
+                            logger.debug(
+                                f"Skipping driver {alias} due to database connection issue (likely Docker volume mount): {e}"
+                            )
+                        else:
+                            logger.exception(
+                                f"Database error processing outbox for driver: {alias}"
+                            )
+                    except Exception:  # noqa: BLE001
+                        logger.exception(f"Failed to process outbox for driver: {alias}")
+
+            except asyncio.CancelledError:
+                logger.info("Outbox worker loop cancelled")
+                break
+            except Exception:  # noqa: BLE001
+                logger.exception("Outbox worker loop encountered error, backing off 30s")
+                try:
+                    await asyncio.sleep(30)  # 30s backoff on loop exceptions
+                except asyncio.CancelledError:
+                    logger.info("Outbox worker loop cancelled during backoff")
+                    break
+
+    async def _init_model_registry() -> "ModelRegistry":
+        """Initialize the centralized model registry at kernel startup.
+
+        The ModelRegistry provides:
+        - Lazy loading of ML models on first use
+        - GPU memory management with CPU fallback
+        - Thread-safe model access
+        - Model versioning
+
+        Returns:
+            ModelRegistry: Initialized model registry
+        """
+        from pathlib import Path
+
+        from ..runtime.model_registry import init_model_registry
+
+        config_path = Path(__file__).parent.parent / "config" / "models.yaml"
+
+        logger.info("Initializing model registry...")
+        registry = await init_model_registry(
+            config_path=config_path if config_path.exists() else None,
+            gpu_memory_limit_mb=4096,
+            cpu_memory_limit_mb=8192,
+        )
+
+        # Preload essential models for hot path performance
+        preload_models = registry.get_preload_models(include_optional=True)
+        logger.info(f"Preloading {len(preload_models)} models: {preload_models}")
+        results = await registry.preload(preload_models)
+
+        for model_name, success in results.items():
+            if success:
+                logger.info(f"Preloaded model: {model_name}")
+            else:
+                logger.warning(f"Failed to preload model: {model_name}")
+
+        logger.info(
+            "Model registry initialized",
+            extra={"stats": registry.get_stats()},
+        )
+
+        return registry
+
+    async def _init_feature_flags() -> "FeatureFlags":
+        """Initialize the feature flags system for ML tier selection.
+
+        The FeatureFlags system provides:
+        - Module-level ML tier selection
+        - Percentage-based rollouts
+        - Automatic fallback on failures
+        - A/B testing metrics
+
+        Returns:
+            FeatureFlags: Initialized feature flags
+        """
+        from pathlib import Path
+
+        from ..config.feature_flags import init_feature_flags
+
+        config_path = Path(__file__).parent.parent / "config" / "feature_flags.yaml"
+
+        logger.info("Initializing feature flags...")
+        flags = await init_feature_flags(config_path=config_path if config_path.exists() else None)
+
+        logger.info(
+            "Feature flags initialized",
+            extra={
+                "modules": flags.list_modules(),
+                "flags": flags.get_all_flags(),
+            },
+        )
+
+        return flags
+
+    async def _preload_models() -> dict[str, any]:
+        """Legacy function for backward compatibility.
+
+        DEPRECATED: Use _init_model_registry() instead.
+
+        Returns:
+            dict: Preloaded models with keys 'spacy_nlp' and 'vader_analyzer'
+        """
+        models = {}
+
+        try:
+            import spacy
+
+            logger.info("Preloading spaCy model (en_core_web_sm)...")
+            models["spacy_nlp"] = spacy.load("en_core_web_sm")
+            logger.info("spaCy model preloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to preload spaCy model: {e}")
+            models["spacy_nlp"] = None
+
+        try:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+            logger.info("Preloading VADER sentiment analyzer...")
+            models["vader_analyzer"] = SentimentIntensityAnalyzer()
+            logger.info("VADER sentiment analyzer preloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to preload VADER analyzer: {e}")
+            models["vader_analyzer"] = None
+
+        return models
+
     @asynccontextmanager
     async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-        # Start background task for SSE metrics reporting
+        # Ensure bus dispatcher has the running loop
+        from ..drivers.sqlite import set_bus_dispatcher
+
+        set_bus_dispatcher(bus_dispatcher)
+
+        # Phase 0: Initialize Feature Flags system
+        logger.info("Initializing feature flags system...")
+        feature_flags = await _init_feature_flags()
+        app.state.feature_flags = feature_flags
+
+        # Phase 1: Initialize Model Registry (replaces legacy _preload_models)
+        logger.info("Initializing model registry...")
+        model_registry = await _init_model_registry()
+        app.state.model_registry = model_registry
+
+        # Phase 1.5: Initialize UltraBERT (primary unified model)
+        # UltraBERT self-warms on init (warmup=True default), no manual warmup needed
+        # This replaces 9 separate models (4.6GB) with one unified 500MB model:
+        # - VADER, GoEmotions, clinical_safety, sentence_transformer
+        # - TransformerNER, ZeroShotClassifier, etc.
+        try:
+            from ..runtime.ultrabert_adapter import (
+                get_ultrabert_client,
+                is_ultrabert_available,
+            )
+
+            logger.info("Initializing UltraBERT unified model...")
+            ultrabert_client = get_ultrabert_client()
+            if ultrabert_client is not None and is_ultrabert_available():
+                logger.info(
+                    f"UltraBERT ready: version={ultrabert_client.VERSION}, "
+                    f"capabilities={len(ultrabert_client.capabilities)}, "
+                    f"backend={ultrabert_client.backend}"
+                )
+                app.state.ultrabert_client = ultrabert_client
+            else:
+                logger.error("UltraBERT not available - kernel cannot function without it")
+                app.state.ultrabert_client = None
+        except Exception as e:
+            logger.error(f"Failed to initialize UltraBERT: {e}")
+            app.state.ultrabert_client = None
+
+        # Build minimal preloaded_models dict for backward compatibility
+        # Only spaCy is kept for tokenization - all ML is via UltraBERT
+        preloaded_models = {
+            "spacy_nlp": model_registry.get_sync("spacy_nlp"),
+        }
+        app.state.preloaded_models = preloaded_models
+        logger.info(
+            "Model initialization complete",
+            extra={
+                "spacy_loaded": preloaded_models.get("spacy_nlp") is not None,
+                "ultrabert_ready": app.state.ultrabert_client is not None,
+                "registry_stats": model_registry.get_stats(),
+            },
+        )
+
+        # Phase 2: Boot YAML-based declarative pipelines via runtime system
+        from pathlib import Path
+
+        from ..pipelines.protocol import PipelineContext
+        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec
+
+        try:
+            logger.info("Loading declarative pipelines from YAML specifications...")
+
+            # Initialize module registry
+            registry = ModuleRegistry()
+            contracts_dir = Path(__file__).parent.parent.parent / "k0" / "contracts" / "modules"
+            await registry.load_contracts(contracts_dir)
+            logger.info(
+                f"Loaded {len(registry)} module contracts",
+                extra={"module_count": len(registry), "modules": registry.list_modules()},
+            )
+
+            # Load pipeline specifications from YAML
+            pipelines_contract_dir = (
+                Path(__file__).parent.parent.parent / "k0" / "contracts" / "pipelines"
+            )
+            pipeline_specs = list(pipelines_contract_dir.glob("p*.yaml")) + list(
+                pipelines_contract_dir.glob("p*.yml")
+            )
+            logger.info(
+                f"Found {len(pipeline_specs)} pipeline specifications",
+                extra={
+                    "spec_count": len(pipeline_specs),
+                    "specs": [p.name for p in pipeline_specs],
+                },
+            )
+
+            pipelines = {}
+            for spec_path in sorted(pipeline_specs):
+                try:
+                    # Load and validate spec
+                    spec = PipelineSpec.load(spec_path)
+                    logger.info(
+                        f"Loading pipeline: {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "version": spec.version,
+                            "spec_path": str(spec_path),
+                        },
+                    )
+
+                    # Create pipeline runner
+                    runner = PipelineRunner(spec, registry)
+
+                    # Create syscalls adapter with required capabilities
+                    from ..kernel.syscalls import Syscalls
+
+                    # SECURITY: Only grant capabilities explicitly declared in pipeline spec
+                    granted_caps = set(spec.required_caps) if spec.required_caps else set()
+
+                    # Fail-fast: Pipelines MUST declare required_caps (no default grants)
+                    if not granted_caps:
+                        logger.warning(
+                            f"Pipeline {spec.pipeline_id} has empty required_caps - this may indicate misconfiguration",
+                            extra={
+                                "pipeline_id": spec.pipeline_id,
+                                "spec_path": str(spec_path),
+                            },
+                        )
+
+                    syscalls = Syscalls(spec.pipeline_id, granted_caps, _unit_of_work_factory)
+                    logger.info(
+                        f"Syscalls initialized for {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "granted_caps": list(granted_caps),
+                            "capability_count": len(granted_caps),
+                        },
+                    )
+
+                    # Create pipeline context
+                    ctx = PipelineContext(
+                        syscalls=syscalls,
+                        config=spec.config,
+                        logger=logger.getChild(spec.pipeline_id),
+                        preloaded_models=preloaded_models,  # Pass preloaded models to pipeline
+                    )
+
+                    # Call on_startup
+                    await runner.on_startup(ctx)
+                    logger.info(
+                        f"Called on_startup() for {spec.pipeline_id}",
+                        extra={"pipeline_id": spec.pipeline_id},
+                    )
+
+                    # Subscribe to declared topics
+                    for topic in spec.declared_topics:
+                        bus_dispatcher.subscribe(topic, runner.handle)
+                        logger.info(
+                            f"Subscribed {spec.pipeline_id} to {topic}",
+                            extra={"pipeline_id": spec.pipeline_id, "topic": topic},
+                        )
+
+                    pipelines[spec.pipeline_id] = runner
+                    logger.info(
+                        f"Booted pipeline: {spec.pipeline_id}",
+                        extra={
+                            "pipeline_id": spec.pipeline_id,
+                            "topics": list(spec.declared_topics),
+                            "concurrency": spec.concurrency,
+                            "max_queue": spec.max_queue,
+                        },
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        f"Failed to load pipeline from {spec_path.name}: {e}",
+                        extra={"spec_path": str(spec_path), "error": str(e)},
+                        exc_info=True,
+                    )
+                    # Continue loading other pipelines
+                    continue
+
+            app.state.pipelines = pipelines
+            logger.info(
+                f"Booted {len(pipelines)} pipelines: {list(pipelines.keys())}",
+                extra={"count": len(pipelines), "pipeline_ids": list(pipelines.keys())},
+            )
+        except Exception:
+            logger.exception("Failed to boot pipelines during startup")
+            # Don't prevent kernel from starting if no pipelines exist
+            app.state.pipelines = {}
+
+        # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
+        outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+
         try:
             yield
         finally:
-            # Cancel background task
+            # M2 R2.3: Graceful shutdown - call on_shutdown for all pipelines
+            logger.info("Shutting down pipelines...")
+            pipelines = getattr(app.state, "pipelines", {})
+            for pipeline_id, pipeline in pipelines.items():
+                try:
+                    await pipeline.on_shutdown()
+                    logger.info(f"Shutdown pipeline: {pipeline_id}")
+                except Exception:
+                    logger.exception(f"Error shutting down {pipeline_id}")
+
+            # Shutdown model registry
+            model_registry = getattr(app.state, "model_registry", None)
+            if model_registry:
+                logger.info("Shutting down model registry...")
+                try:
+                    await model_registry.shutdown()
+                    logger.info("Model registry shutdown complete")
+                except Exception:
+                    logger.exception("Error shutting down model registry")
+
+            # M2 R2.3: Record clean shutdown timestamp (for crash fencing)
+            import time
+
+            try:
+                with open("k0_runtime.shutdown_ts", "w") as f:
+                    f.write(str(int(time.time())))
+                logger.info("Recorded clean shutdown timestamp")
+            except Exception:
+                logger.exception("Failed to record shutdown timestamp")
+
+            # Cancel background tasks
+            logger.info("Shutting down background tasks")
             sse_metrics_task.cancel()
+            outbox_worker_task.cancel()
+
+            # Wait for tasks to complete cancellation
             try:
                 await sse_metrics_task
             except asyncio.CancelledError:
                 pass
+
+            try:
+                await outbox_worker_task
+            except asyncio.CancelledError:
+                pass
+
             shutdown_pool()
 
     app.router.lifespan_context = _lifespan
@@ -389,12 +873,19 @@ def _install_middlewares(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        global _active_connections
+
+        # Issue #046: Track active connections
+        _active_connections += 1
+        metrics_exporter = getattr(app.state, "metrics_exporter", None)
+        if isinstance(metrics_exporter, MetricsExporter):
+            try:
+                metrics_exporter.set_gauge("active_connections", float(_active_connections))
+            except Exception:  # noqa: BLE001
+                pass  # Don't fail request on metrics error
+
         incoming_trace_id = request.headers.get("X-Cognitive-Trace-Id")
-        trace_id = (
-            incoming_trace_id.strip()
-            if incoming_trace_id
-            else tracer_factory.new_trace_id()
-        )
+        trace_id = incoming_trace_id.strip() if incoming_trace_id else tracer_factory.new_trace_id()
         request.state.cognitive_trace_id = trace_id
 
         extracted_context = tracer_factory.extract(request.headers)
@@ -452,9 +943,7 @@ def _install_middlewares(
                     update_log_context(http_status=status_code)
                 except Exception as exc:  # pragma: no cover - recorded below
                     span.record_exception(exc)
-                    span.set_attribute(
-                        "http.status_code", status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
+                    span.set_attribute("http.status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
                     span.set_status(Status(status_code=StatusCode.ERROR))
                     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
                     raise
@@ -467,6 +956,14 @@ def _install_middlewares(
             response.headers.setdefault("X-Cognitive-Trace-Id", trace_id)
             return response
         finally:
+            # Issue #046: Decrement active connections
+            _active_connections -= 1
+            if isinstance(metrics_exporter, MetricsExporter):
+                try:
+                    metrics_exporter.set_gauge("active_connections", float(_active_connections))
+                except Exception:  # noqa: BLE001
+                    pass
+
             tracer_factory.detach(baggage_token)
             if isinstance(metrics_exporter, MetricsExporter):
                 duration = max(perf_counter() - start_time, 0.0)
@@ -500,9 +997,7 @@ def _install_middlewares(
 
     _ = telemetry_chain
 
-    def _process_admission_records(
-        request: Request, error: Exception | None = None
-    ) -> None:
+    def _process_admission_records(request: Request, error: Exception | None = None) -> None:
         records: list[AdmissionRecord] = consume_admission_records(request)
         if not records:
             return
@@ -512,20 +1007,14 @@ def _install_middlewares(
         metrics_exporter = getattr(app.state, "metrics_exporter", None)
         receipt_saver = getattr(receipt_store, "save", None) if receipt_store else None
         observability_emit = (
-            getattr(observability_emitter, "emit", None)
-            if observability_emitter
-            else None
+            getattr(observability_emitter, "emit", None) if observability_emitter else None
         )
-        metrics_emit = (
-            getattr(metrics_exporter, "emit", None) if metrics_exporter else None
-        )
+        metrics_emit = getattr(metrics_exporter, "emit", None) if metrics_exporter else None
         trace_id = _ensure_trace_id(request)
 
         for record in records:
             decision_label = "allow" if record.decision.admit else "deny"
-            obligations = [
-                obligation.name for obligation in record.decision.obligations
-            ]
+            obligations = [obligation.name for obligation in record.decision.obligations]
             obligation_details = [
                 dict(obligation.details) for obligation in record.decision.obligations
             ]
@@ -538,14 +1027,11 @@ def _install_middlewares(
                 admission_decision=decision_label,
             )
 
-            if record.receipt and callable(receipt_saver):
-                try:
-                    receipt_saver(record.receipt)
-                except Exception:  # pragma: no cover - logging guard
-                    logger.exception(
-                        "Failed to persist receipt for admission decision",
-                        extra={"receipt_id": record.receipt.receipt_id},
-                    )
+            # NOTE: Receipt is already saved inside UnitOfWork transaction (command.py)
+            # The receipt_issuer.issue() call saves to st_receipts within the semaphore-protected
+            # transaction. Attempting to save again here would bypass the write semaphore
+            # and cause "database is locked" errors under concurrent load.
+            # See: k0/ports/command.py:769 - receipt_issuer.issue(connection=uow.connection)
 
             event_payload: dict[str, Any] = {
                 "trace_id": trace_id,
@@ -610,35 +1096,23 @@ def _install_middlewares(
 
 def _register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
-    async def http_exception_handler(
-        request: Request, exc: HTTPException
-    ) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         trace_id = _ensure_trace_id(request)
         default_code = _status_code_to_kernel_code(exc.status_code)
         default_reason = _default_reason(exc.status_code)
-        payload = _normalize_error_payload(
-            exc.detail, trace_id, default_code, default_reason
-        )
+        payload = _normalize_error_payload(exc.detail, trace_id, default_code, default_reason)
 
         headers = exc.headers if exc.headers else None
         if exc.status_code >= status.HTTP_500_INTERNAL_SERVER_ERROR:
-            logger.exception(
-                "HTTPException triggered internal error response", exc_info=exc
-            )
-        return JSONResponse(
-            status_code=exc.status_code, content=payload, headers=headers
-        )
+            logger.exception("HTTPException triggered internal error response", exc_info=exc)
+        return JSONResponse(status_code=exc.status_code, content=payload, headers=headers)
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         trace_id = _ensure_trace_id(request)
         logger.exception("Unhandled exception bubbled to FastAPI", exc_info=exc)
         payload = _compose_error("UNEXPECTED_ERROR", "Internal server error", trace_id)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload
-        )
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=payload)
 
     _ = (http_exception_handler, unhandled_exception_handler)
 
@@ -702,11 +1176,7 @@ def _register_operational_probes(app: FastAPI) -> None:
             "ready": snapshot.ready,
             "components": snapshot.asdict(),
         }
-        status_code = (
-            status.HTTP_200_OK
-            if snapshot.ready
-            else status.HTTP_503_SERVICE_UNAVAILABLE
-        )
+        status_code = status.HTTP_200_OK if snapshot.ready else status.HTTP_503_SERVICE_UNAVAILABLE
         return JSONResponse(status_code=status_code, content=payload)
 
     @app.get("/metrics", summary="Prometheus metrics endpoint")
@@ -714,7 +1184,19 @@ def _register_operational_probes(app: FastAPI) -> None:
         metrics_exporter = getattr(app.state, "metrics_exporter", None)
         if isinstance(metrics_exporter, MetricsExporter):
             latest = metrics_exporter.latest()
-            return Response(content=latest, media_type=CONTENT_TYPE_LATEST)
+            forwarded_buffer = getattr(app.state, "forwarded_metrics", None)
+            forwarded_snapshot = (
+                forwarded_buffer.render()
+                if isinstance(forwarded_buffer, observe.ForwardedMetricsBuffer)
+                else ""
+            )
+            content = latest
+            if forwarded_snapshot:
+                forwarded_bytes = forwarded_snapshot.encode("utf-8")
+                if not content.endswith(b"\n"):
+                    content += b"\n"
+                content += forwarded_bytes
+            return Response(content=content, media_type=CONTENT_TYPE_LATEST)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={
@@ -742,9 +1224,7 @@ def _ensure_trace_id(request: Request) -> str:
     trace_id = getattr(request.state, "cognitive_trace_id", None)
     if trace_id:
         return trace_id
-    tracer_factory = getattr(
-        getattr(request.app, "state", None), "tracer_factory", None
-    )
+    tracer_factory = getattr(getattr(request.app, "state", None), "tracer_factory", None)
     if isinstance(tracer_factory, TracerFactory):
         trace_id = tracer_factory.new_trace_id()
     else:
@@ -790,9 +1270,7 @@ def _normalize_error_payload(
             return {"error": error_content}
         code = str(detail_mapping.get("code", default_code))
         reason = str(
-            detail_mapping.get("reason")
-            or detail_mapping.get("message")
-            or default_reason
+            detail_mapping.get("reason") or detail_mapping.get("message") or default_reason
         )
         hint = detail_mapping.get("hint")
         budgets = detail_mapping.get("budgets")

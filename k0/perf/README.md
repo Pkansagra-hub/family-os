@@ -343,6 +343,6 @@ If scenarios consume excessive memory:
 
 For issues or questions:
 - Check [Troubleshooting](#troubleshooting) section
-- Review [test_scenario_validation.py](../../tests/performance/test_scenario_validation.py) for examples
+- Review [test_scenario_validation.py](../../tests.backup/performance/test_scenario_validation.py) for examples
 - File MCP memory with reproduction steps
 - See [docs/development/runbooks/](../../docs/development/runbooks/) for operational guidance

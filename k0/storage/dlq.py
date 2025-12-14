@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Iterator, List, Optional
 
+from k0.obs.metrics import MetricsExporter
 from k0.uow.connection_pool import connection_scope
 
 
@@ -44,12 +46,18 @@ def _resolve_connection(
 class DeadLetterQueue:
     """Store and replay dead-lettered outbox entries."""
 
-    def record(
-        self, letter: DeadLetter, *, connection: sqlite3.Connection | None = None
-    ) -> int:
+    def __init__(self, *, metrics: MetricsExporter | None = None) -> None:
+        """Gap 44: Initialize DLQ with optional metrics exporter."""
+        self._metrics = metrics
+
+    def record(self, letter: DeadLetter, *, connection: sqlite3.Connection | None = None) -> int:
         insert_letter = replace(letter)
         state_value = insert_letter.state.upper()
         insert_letter.state = state_value
+
+        # Gap 44: Track DLQ entry creation
+        requeue_start = time.perf_counter()
+
         with _resolve_connection(connection) as conn:
             cursor = conn.execute(
                 (
@@ -81,6 +89,30 @@ class DeadLetterQueue:
             insert_letter.id = entry_id
             letter.id = entry_id
             letter.state = state_value
+
+            # Gap 44: Emit DLQ metrics
+            if self._metrics is not None:
+                # Track entries by state
+                self._metrics.emit(
+                    "dlq_entries_by_state",
+                    1.0,
+                    state=state_value,
+                    driver=insert_letter.driver,
+                )
+                # Track retry attempts
+                self._metrics.emit(
+                    "dlq_retry_attempts_total",
+                    float(insert_letter.retries),
+                    driver=insert_letter.driver,
+                )
+                # Track requeue latency
+                requeue_latency = time.perf_counter() - requeue_start
+                self._metrics.observe(
+                    "dlq_requeue_latency_seconds",
+                    requeue_latency,
+                    labels={"driver": insert_letter.driver, "state": state_value},
+                )
+
             return entry_id
 
     def list_pending(
@@ -174,10 +206,19 @@ class DeadLetterQueue:
         self,
         letter_id: int,
         *,
-        requeue_seq: int,
+        requeue_seq: int | None = None,
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        """Mark DLQ entry as requeued with safe requeue_seq.
+
+        Gap 23: If requeue_seq not provided, compute next safe value
+        by querying MAX(requeue_seq) from outbox to prevent collisions.
+        """
         with _resolve_connection(connection) as conn:
+            # Gap 23: Prevent requeue_seq collision with outbox
+            if requeue_seq is None:
+                requeue_seq = self._get_next_requeue_seq(conn)
+
             cursor = conn.execute(
                 "UPDATE st_dlq SET state='REQUEUED', requeue_seq=? WHERE id=?",
                 (requeue_seq, letter_id),
@@ -185,6 +226,18 @@ class DeadLetterQueue:
             if cursor.rowcount == 0:
                 msg = f"Dead-letter entry {letter_id} not found"
                 raise KeyError(msg)
+
+    def _get_next_requeue_seq(self, connection: sqlite3.Connection) -> int:
+        """Gap 23: Get next safe requeue_seq value.
+
+        Query MAX(requeue_seq) from st_outbox and increment by 1
+        to ensure no collision with existing outbox entries.
+        """
+        row = connection.execute(
+            "SELECT COALESCE(MAX(requeue_seq), 0) as max_seq FROM st_outbox"
+        ).fetchone()
+        max_seq = row["max_seq"] if row else 0
+        return int(max_seq) + 1
 
     def purge(
         self,

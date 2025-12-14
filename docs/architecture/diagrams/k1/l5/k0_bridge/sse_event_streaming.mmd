@@ -1,0 +1,185 @@
+---
+title: SSE Event Streaming - Real-Time K0 to K1 Push
+description: Server-Sent Events streaming with cursor resume, exponential backoff, and event filtering
+authors: [K1 Intelligence Team]
+version: 1.0.0
+date: 2025-10-26
+tags: [k1, layer5, sse, streaming, events, pubsub]
+related_adrs: [ADR-0001a, ADR-0008b, ADR-0024]
+research_citations:
+  - "Server-Sent Events - W3C Recommendation (2015)"
+  - "Event Stream Processing - Martin Kleppmann, Designing Data-Intensive Applications (2017)"
+---
+
+sequenceDiagram
+    participant Agent as K1 Agent<br/>(L3 Execution)
+    participant SSE as K0SSEClient<br/>(L5 Bridge)
+    participant MGR as HTTP2ConnectionManager<br/>(Connection Pool)
+    participant K0 as K0 Memory Kernel<br/>(:8080)
+    participant WAL as SQLite WAL<br/>(k0_kernel.db)
+    participant BACKOFF as ExponentialBackoff<br/>(Retry Logic)
+    participant METRICS as Prometheus Metrics<br/>(Observability)
+    
+    Note over Agent,METRICS: Initial Subscription (No Cursor)
+    
+    Agent->>SSE: subscribe_to_events(filter="agent:lifecycle", cursor=None)
+    activate SSE
+    
+    SSE->>SSE: Generate cognitive_trace_id
+    SSE->>SSE: Initialize backoff state (delay=1s, max=60s)
+    SSE->>METRICS: Increment k0_sse_subscribe_total
+    
+    SSE->>MGR: async with get_client(K0Port.SSE, trace_id)
+    activate MGR
+    MGR-->>SSE: AsyncClient (HTTP/2 stream)
+    deactivate MGR
+    
+    SSE->>K0: GET /k0/sse.subscribe?filter=agent:lifecycle<br/>Headers: Accept: text/event-stream, X-Trace-ID
+    activate K0
+    
+    K0->>K0: Validate filter syntax
+    K0->>WAL: Subscribe to changes (position >= 88)
+    activate WAL
+    
+    K0-->>SSE: 200 OK<br/>Content-Type: text/event-stream<br/>Connection: keep-alive
+    
+    Note over SSE,K0: Stream Opened (HTTP/2 Long-Lived)
+    
+    loop Event Stream Processing
+        WAL->>WAL: Detect new entry (position 88 → 89)
+        WAL->>K0: Notify: CommandEnvelope at position 89
+        deactivate WAL
+        
+        K0->>K0: Apply filter "agent:lifecycle"
+        K0->>K0: Match: True (event type = agent.state_transition)
+        
+        K0->>SSE: data: {"event": "agent.state_transition", "position": 89, ...}\n\n
+        
+        SSE->>SSE: Parse SSE line (data: JSON)
+        SSE->>SSE: Store cursor = 89
+        SSE->>METRICS: Increment k0_sse_event_received_total
+        SSE->>METRICS: Record k0_sse_event_latency_ms (45ms)
+        
+        SSE->>Agent: yield CommandEnvelope (position=89)
+        deactivate SSE
+        activate Agent
+        
+        Agent->>Agent: Process state transition
+        Agent->>Agent: Update internal FSM (PENDING → WARMING)
+        
+        deactivate Agent
+        activate SSE
+        
+        WAL->>WAL: Detect new entry (position 89 → 90)
+        activate WAL
+        WAL->>K0: Notify: QueryEnvelope at position 90
+        
+        K0->>K0: Apply filter "agent:lifecycle"
+        K0->>K0: Match: False (event type = query.recall)
+        
+        Note over K0: Filtered out (does not match subscription)
+        
+        deactivate WAL
+    end
+    
+    Note over Agent,METRICS: =====================================
+    Note over Agent,METRICS: Disconnection & Resume with Cursor
+    
+    K0->>SSE: [Connection Drop - Network Timeout]
+    
+    SSE->>SSE: Detect connection closed
+    SSE->>METRICS: Increment k0_sse_disconnect_total
+    SSE->>BACKOFF: Compute retry delay (1s)
+    activate BACKOFF
+    BACKOFF-->>SSE: Delay: 1s (2^0 = 1s)
+    deactivate BACKOFF
+    
+    SSE->>SSE: await asyncio.sleep(1.0)
+    
+    SSE->>MGR: async with get_client(K0Port.SSE, trace_id)
+    activate MGR
+    MGR-->>SSE: AsyncClient (new HTTP/2 stream)
+    deactivate MGR
+    
+    SSE->>K0: GET /k0/sse.subscribe?filter=agent:lifecycle&cursor=89<br/>Headers: Accept: text/event-stream
+    activate K0
+    
+    K0->>K0: Validate cursor (position 89 exists)
+    K0->>WAL: Subscribe to changes (position > 89)
+    activate WAL
+    
+    K0-->>SSE: 200 OK<br/>Content-Type: text/event-stream
+    
+    Note over SSE,K0: Resumed from cursor (no event loss)
+    
+    WAL->>WAL: Replay events from position 90 onwards
+    WAL->>K0: Notify: position 90, 91, 92...
+    
+    loop Catch-Up Phase
+        K0->>SSE: data: {"event": "agent.state_transition", "position": 91, ...}\n\n
+        SSE->>SSE: Update cursor = 91
+        SSE->>Agent: yield CommandEnvelope (position=91)
+    end
+    
+    deactivate WAL
+    
+    Note over SSE,K0: Caught up to current position (92)
+    
+    Note over Agent,METRICS: =====================================
+    Note over Agent,METRICS: Exponential Backoff on Repeated Failures
+    
+    loop 5 consecutive reconnect failures
+        K0->>SSE: [Connection Drop]
+        SSE->>BACKOFF: Compute retry delay (attempt N)
+        
+        alt Attempt 1
+            BACKOFF-->>SSE: Delay: 1s (2^0)
+        else Attempt 2
+            BACKOFF-->>SSE: Delay: 2s (2^1)
+        else Attempt 3
+            BACKOFF-->>SSE: Delay: 4s (2^2)
+        else Attempt 4
+            BACKOFF-->>SSE: Delay: 8s (2^3)
+        else Attempt 5
+            BACKOFF-->>SSE: Delay: 16s (2^4)
+        end
+        
+        SSE->>SSE: await asyncio.sleep(delay)
+        SSE->>K0: GET /k0/sse.subscribe?cursor=92
+        K0-->>SSE: [Connection Timeout]
+        SSE->>METRICS: Increment k0_sse_reconnect_failed_total
+    end
+    
+    SSE->>BACKOFF: Compute retry delay (attempt 6)
+    BACKOFF-->>SSE: Delay: 32s (2^5)
+    SSE->>SSE: await asyncio.sleep(32.0)
+    
+    SSE->>K0: GET /k0/sse.subscribe?cursor=92
+    K0-->>SSE: 200 OK (connection restored)
+    
+    SSE->>SSE: Reset backoff state (delay=1s)
+    SSE->>METRICS: Increment k0_sse_reconnect_success_total
+    
+    Note over SSE: Backoff reset after successful connection
+    
+    deactivate K0
+    
+    Note over Agent,METRICS: =====================================
+    Note over Agent,METRICS: Graceful Shutdown
+    
+    Agent->>SSE: unsubscribe() / close()
+    activate SSE
+    
+    SSE->>K0: [Close HTTP/2 stream]
+    activate K0
+    K0->>WAL: Unsubscribe listener
+    K0-->>SSE: [Stream closed]
+    deactivate K0
+    
+    SSE->>METRICS: Increment k0_sse_unsubscribe_total
+    SSE->>METRICS: Record k0_sse_session_duration_seconds (3600s)
+    
+    SSE-->>Agent: Closed
+    deactivate SSE
+    
+    Note over Agent,METRICS: Clean shutdown (no orphaned connections)

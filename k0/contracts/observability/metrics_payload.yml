@@ -1,0 +1,208 @@
+meta:
+  adr: ADR-0091
+  version: 0.1.0
+  status: draft
+  description: Prometheus-compatible metric snapshot contract for K0 observability ingress.
+  owners:
+    - observability-wg
+  tags:
+    - metrics
+    - k0
+    - observability
+
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  title: K0MetricsSnapshot
+  type: object
+  required:
+    - snapshot_version
+    - captured_at
+    - source
+    - privacy_band
+    - metrics
+  properties:
+    snapshot_version:
+      type: string
+      pattern: "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+      description: Semantic version of the metrics snapshot payload format.
+    captured_at:
+      type: string
+      format: date-time
+      description: ISO-8601 timestamp (UTC) when the snapshot was captured.
+    source:
+      type: string
+      description: Component that produced the snapshot (e.g., "k1_bridge", "k0_internal").
+    device_id:
+      type: string
+      description: Optional stable device identifier emitting the snapshot.
+    privacy_band:
+      type: string
+      enum: [GREEN, AMBER, RED, BLACK]
+      description: Privacy band governing label redaction obligations.
+    policy_version:
+      type: string
+      description: Hash or semantic version of the active policy manifest applied to this snapshot.
+    metrics:
+      type: object
+      required:
+        - counters
+        - gauges
+        - histograms
+      properties:
+        counters:
+          type: array
+          description: Collection of counter samples.
+          items:
+            $ref: "#/definitions/metricCounter"
+        gauges:
+          type: array
+          description: Collection of gauge samples.
+          items:
+            $ref: "#/definitions/metricGauge"
+        histograms:
+          type: array
+          description: Collection of histogram samples with Prometheus-compatible buckets.
+          items:
+            $ref: "#/definitions/metricHistogram"
+    qos_budget_snapshot:
+      type: object
+      description: Optional QoS token bucket snapshot emitted alongside metrics.
+      properties:
+        lane:
+          type: string
+          description: QoS lane name.
+        available_tokens:
+          type: integer
+          minimum: 0
+        refill_rate_per_second:
+          type: number
+          minimum: 0
+    checksum:
+      type: string
+      pattern: "^[0-9a-fA-F]{64}$"
+      description: SHA-256 hash over canonicalized payload for tamper detection.
+  additionalProperties: false
+
+  definitions:
+    metricName:
+      type: string
+      pattern: "^k0\\.[a-z0-9_.:-]+$"
+      description: Metric names must follow k0.<component>.<metric> naming convention.
+
+    labelMap:
+      type: object
+      description: Prometheus label set with privacy-safe values.
+      propertyNames:
+        pattern: "^[a-zA-Z_][a-zA-Z0-9_]*$"
+      additionalProperties:
+        type: string
+        maxLength: 128
+      maxProperties: 10
+
+    metricCounter:
+      type: object
+      required: [name, value, labels]
+      properties:
+        name:
+          $ref: "#/definitions/metricName"
+        value:
+          type: number
+          minimum: 0
+        labels:
+          $ref: "#/definitions/labelMap"
+        monotonic:
+          type: boolean
+          default: true
+        band_redacted:
+          type: boolean
+          default: false
+          description: True if any label values were redacted due to privacy band obligations.
+      additionalProperties: false
+
+    metricGauge:
+      type: object
+      required: [name, value, labels]
+      properties:
+        name:
+          $ref: "#/definitions/metricName"
+        value:
+          type: number
+        labels:
+          $ref: "#/definitions/labelMap"
+        min_observed:
+          type: number
+        max_observed:
+          type: number
+        band_redacted:
+          type: boolean
+          default: false
+      additionalProperties: false
+
+    metricHistogram:
+      type: object
+      required: [name, sum, count, buckets, labels]
+      properties:
+        name:
+          $ref: "#/definitions/metricName"
+        sum:
+          type: number
+          minimum: 0
+        count:
+          type: integer
+          minimum: 0
+        buckets:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [le, cumulative_count]
+            properties:
+              le:
+                type: number
+                description: Upper bound for the bucket.
+              cumulative_count:
+                type: integer
+                minimum: 0
+        labels:
+          $ref: "#/definitions/labelMap"
+        band_redacted:
+          type: boolean
+          default: false
+      additionalProperties: false
+
+validation:
+  tooling:
+    - name: jsonschema
+      version: ">=4.21"
+      instructions: Validate payloads via jsonschema against K0MetricsSnapshot.
+    - name: k0-contract-lint
+      version: latest
+      instructions: Ensure metric names and label sets comply with ADR-0091 naming rules.
+
+testing:
+  fixtures:
+    - path: tests/contracts/observability/fixtures/metrics_snapshot_green.json
+      description: Happy-path snapshot with GREEN band metrics.
+    - path: tests/contracts/observability/fixtures/metrics_snapshot_red.json
+      description: Snapshot with RED band requiring redacted labels.
+  invariants:
+    - name: histogram_bucket_monotonic
+      description: Histogram cumulative counts must be non-decreasing.
+    - name: counter_monotonic
+      description: Counter values must never decrease across snapshots.
+
+observability:
+  metrics:
+    - name: k0.contracts.metrics_snapshot.validation_total
+      type: counter
+      labels:
+        - outcome
+        - band
+      description: Validation attempts for metrics snapshot payloads.
+  logs:
+    - event: k0.contracts.metrics_snapshot.invalid
+      level: warning
+      context:
+        - field_path
+        - error
+        - band

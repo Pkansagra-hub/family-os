@@ -22,6 +22,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+.github
+.windsurf
+
 
 # Virtual environments
 .venv
@@ -88,7 +91,8 @@ site/
 *.cert
 private_key*
 secret*
-
+adr_migration_backup
+.windsurf
 # Docker
 .docker/
 docker-compose.override.yml
@@ -97,6 +101,9 @@ docker-compose.override.yml
 .vscode/settings.json
 .vscode/extensions.json
 .vscode/launch.json
+.windsurf
+memoryOS_frozen
+
 
 # Backups
 README.backup.*
@@ -118,3 +125,4 @@ tmp/
 # Large files
 *.tar
 *.zip
+archive/

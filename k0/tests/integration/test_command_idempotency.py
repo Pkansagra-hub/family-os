@@ -38,6 +38,10 @@ BASE_ENVELOPE: dict[str, Any] = {
     "ts": "2025-09-28T12:00:00Z",
     "sig": "placeholder-signature",
     "payload_sha256": None,
+    # V1 required fields (ADR-K001)
+    "sig_alg": "ED25519",
+    "sig_kid": "did:device:device-123#1",
+    "envelope_sha256": "0" * 64,  # Will be computed by gate
 }
 
 SIGNING_KEY = SigningKey(bytes(range(32)))
@@ -126,9 +130,7 @@ def _() -> None:
         envelope = dict(BASE_ENVELOPE)
         if envelope.get("payload_sha256") is None:
             envelope.pop("payload_sha256", None)
-        idem_key = derive_idem_key(
-            envelope, payload_hash=envelope.get("payload_sha256")
-        )
+        idem_key = derive_idem_key(envelope, payload_hash=envelope.get("payload_sha256"))
         envelope["idem_key"] = idem_key
         message = canonical_envelope(envelope)
         signature = SIGNING_KEY.sign(message).signature

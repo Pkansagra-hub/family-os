@@ -1,0 +1,445 @@
+/**
+ * Markdown Styles
+ * 
+ * Professional styling for markdown-rendered content with dark theme support.
+ * Includes syntax highlighting, code blocks, inline code, lists, links, and more.
+ * 
+ * Design: Clean, modern, desktop-focused with excellent readability
+ */
+
+/* ============================================================================
+   CODE BLOCKS - Dark Theme with Syntax Highlighting
+   ============================================================================ */
+
+pre[class*="language-"] {
+    margin: 12px 0;
+    padding: 16px;
+    background: #1e1e1e;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-family: 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    border: 1px solid #333;
+}
+
+pre[class*="language-"] code {
+    background: transparent;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    color: #d4d4d4;
+}
+
+/* Syntax Highlighting Colors (VS Code Dark+ theme) */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+    color: #6a9955;
+    font-style: italic;
+}
+
+.token.punctuation {
+    color: #d4d4d4;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+    color: #b5cea8;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+    color: #ce9178;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+    color: #d4d4d4;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+    color: #c586c0;
+}
+
+.token.function,
+.token.class-name {
+    color: #dcdcaa;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+    color: #d16969;
+}
+
+.token.important,
+.token.bold {
+    font-weight: bold;
+}
+
+.token.italic {
+    font-style: italic;
+}
+
+/* ============================================================================
+   INLINE CODE - Subtle Highlight
+   ============================================================================ */
+
+code.inline-code {
+    background: rgba(175, 184, 193, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9em;
+    color: #e01e5a;
+    border: 1px solid rgba(175, 184, 193, 0.3);
+    white-space: nowrap;
+}
+
+/* Dark theme inline code */
+.message.agent .message-bubble code.inline-code {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #ff6b6b;
+}
+
+/* ============================================================================
+   LISTS - Clean Spacing and Bullets
+   ============================================================================ */
+
+.message-bubble ul,
+.message-bubble ol {
+    margin: 10px 0;
+    padding-left: 24px;
+}
+
+.message-bubble ul {
+    list-style-type: disc;
+}
+
+.message-bubble ol {
+    list-style-type: decimal;
+}
+
+.message-bubble li {
+    margin: 6px 0;
+    line-height: 1.6;
+}
+
+.message-bubble li::marker {
+    color: #667eea;
+    font-weight: 600;
+}
+
+/* Nested lists */
+.message-bubble ul ul,
+.message-bubble ol ul,
+.message-bubble ul ol,
+.message-bubble ol ol {
+    margin: 4px 0;
+}
+
+.message-bubble ul ul {
+    list-style-type: circle;
+}
+
+.message-bubble ul ul ul {
+    list-style-type: square;
+}
+
+/* ============================================================================
+   LINKS - Professional Styling
+   ============================================================================ */
+
+.message-bubble a {
+    color: #667eea;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(102, 126, 234, 0.3);
+    transition: all 0.2s ease;
+    font-weight: 500;
+}
+
+.message-bubble a:hover {
+    color: #764ba2;
+    border-bottom-color: #764ba2;
+    background: rgba(102, 126, 234, 0.1);
+    padding: 0 2px;
+}
+
+.message-bubble a:visited {
+    color: #9b59b6;
+}
+
+/* External link indicator */
+.message-bubble a[target="_blank"]::after {
+    content: " ↗";
+    font-size: 0.8em;
+    opacity: 0.6;
+    margin-left: 2px;
+}
+
+/* ============================================================================
+   HEADINGS - Clear Hierarchy
+   ============================================================================ */
+
+.message-bubble h1,
+.message-bubble h2,
+.message-bubble h3,
+.message-bubble h4,
+.message-bubble h5,
+.message-bubble h6 {
+    margin: 16px 0 10px 0;
+    font-weight: 600;
+    line-height: 1.3;
+    color: #1a1a1a;
+}
+
+.message-bubble h1 {
+    font-size: 1.8em;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 8px;
+}
+
+.message-bubble h2 {
+    font-size: 1.5em;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 6px;
+}
+
+.message-bubble h3 {
+    font-size: 1.3em;
+    color: #667eea;
+}
+
+.message-bubble h4 {
+    font-size: 1.1em;
+}
+
+.message-bubble h5,
+.message-bubble h6 {
+    font-size: 1em;
+    opacity: 0.9;
+}
+
+/* ============================================================================
+   BLOCKQUOTES - Elegant Callouts
+   ============================================================================ */
+
+.message-bubble blockquote {
+    margin: 12px 0;
+    padding: 12px 16px;
+    border-left: 4px solid #667eea;
+    background: rgba(102, 126, 234, 0.1);
+    border-radius: 4px;
+    font-style: italic;
+    color: #555;
+}
+
+.message-bubble blockquote p {
+    margin: 0;
+}
+
+/* ============================================================================
+   HORIZONTAL RULES
+   ============================================================================ */
+
+.message-bubble hr {
+    margin: 20px 0;
+    border: none;
+    border-top: 2px solid #e0e0e0;
+    opacity: 0.5;
+}
+
+/* ============================================================================
+   PARAGRAPHS - Readable Spacing
+   ============================================================================ */
+
+.message-bubble p {
+    margin: 10px 0;
+    line-height: 1.6;
+}
+
+.message-bubble p:first-child {
+    margin-top: 0;
+}
+
+.message-bubble p:last-child {
+    margin-bottom: 0;
+}
+
+/* ============================================================================
+   TABLES - Clean Data Display (if needed in future)
+   ============================================================================ */
+
+.message-bubble table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 0.9em;
+}
+
+.message-bubble table th,
+.message-bubble table td {
+    border: 1px solid #e0e0e0;
+    padding: 8px 12px;
+    text-align: left;
+}
+
+.message-bubble table th {
+    background: #f5f5f5;
+    font-weight: 600;
+    color: #667eea;
+}
+
+.message-bubble table tr:nth-child(even) {
+    background: #fafafa;
+}
+
+/* ============================================================================
+   EMPHASIS - Bold, Italic, Strikethrough
+   ============================================================================ */
+
+.message-bubble strong,
+.message-bubble b {
+    font-weight: 700;
+    color: #1a1a1a;
+}
+
+.message-bubble em,
+.message-bubble i {
+    font-style: italic;
+}
+
+.message-bubble del {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+/* ============================================================================
+   DARK THEME OVERRIDES (when dark mode is active)
+   ============================================================================ */
+
+body.dark-theme .message-bubble h1,
+body.dark-theme .message-bubble h2,
+body.dark-theme .message-bubble h3,
+body.dark-theme .message-bubble h4,
+body.dark-theme .message-bubble h5,
+body.dark-theme .message-bubble h6 {
+    color: #e5e5e5;
+}
+
+body.dark-theme .message-bubble h1 {
+    border-bottom-color: #7c94f5;
+}
+
+body.dark-theme .message-bubble h2 {
+    border-bottom-color: #444;
+}
+
+body.dark-theme .message-bubble blockquote {
+    background: rgba(124, 148, 245, 0.15);
+    color: #ccc;
+}
+
+body.dark-theme .message-bubble hr {
+    border-top-color: #444;
+}
+
+body.dark-theme .message-bubble strong,
+body.dark-theme .message-bubble b {
+    color: #f0f0f0;
+}
+
+body.dark-theme .message-bubble table th {
+    background: #2d2d2d;
+    border-color: #444;
+}
+
+body.dark-theme .message-bubble table td {
+    border-color: #444;
+}
+
+body.dark-theme .message-bubble table tr:nth-child(even) {
+    background: #252525;
+}
+
+/* ============================================================================
+   RESPONSIVE - Mobile Adjustments (future)
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    pre[class*="language-"] {
+        font-size: 12px;
+        padding: 12px;
+    }
+    
+    .message-bubble h1 {
+        font-size: 1.5em;
+    }
+    
+    .message-bubble h2 {
+        font-size: 1.3em;
+    }
+    
+    .message-bubble h3 {
+        font-size: 1.1em;
+    }
+}
+
+/* ============================================================================
+   ANIMATIONS - Smooth Reveals
+   ============================================================================ */
+
+.message-bubble pre[class*="language-"] {
+    animation: fadeInUp 0.3s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ============================================================================
+   SCROLLBAR STYLING for Code Blocks
+   ============================================================================ */
+
+pre[class*="language-"]::-webkit-scrollbar {
+    height: 8px;
+}
+
+pre[class*="language-"]::-webkit-scrollbar-track {
+    background: #2d2d2d;
+    border-radius: 4px;
+}
+
+pre[class*="language-"]::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+}
+
+pre[class*="language-"]::-webkit-scrollbar-thumb:hover {
+    background: #666;
+}

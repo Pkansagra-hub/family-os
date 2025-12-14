@@ -1,0 +1,155 @@
+---
+description: Extensions System — Plugin architecture with 10 extension points for config, metrics, tracing, thermal
+primary_adrs:
+  - ADR-0074 (Module System - dynamic import, plugin discovery)
+  - ADR-0075 (Layer 5 Extensibility - 10 extension points)
+  - ADR-0075a (Extension Discovery - file system scan, module load)
+  - ADR-0075b (Extension Lifecycle - load → validate → register → activate)
+  - ADR-0075c (Extension API Contracts - interface definitions)
+related_adrs:
+  - ADR-0024 (Performance Budgets - discovery <50ms, load <100ms)
+  - ADR-0029 (Prometheus Metrics - extension metrics)
+  - ADR-0080 (Config Hot-Reload - extension integration)
+research:
+  - "Plugin Architectures (Birsan 2005) — OSGi and Eclipse"
+  - "Python Import System (PEP 302) — Import hooks"
+  - "SOLID Principles (Martin 2000) — Open/Closed Principle"
+file_id: "EXTN"
+performance_budgets:
+  extension_discovery: "<50ms"
+  extension_load: "<100ms per extension"
+  extension_call: "<5ms overhead"
+  hot_reload: "<200ms"
+integration_tests: tests/integration/layer5/test_extensions.py
+created: 2025-01-18
+---
+
+```mermaid
+graph TB
+    subgraph Extensions_System["🔌 Extensions System (10 Extension Points)"]
+        direction TB
+
+        %% ===== EXTENSION DISCOVERY =====
+        ExtensionDiscovery["ExtensionDiscovery<br/>🔍 Plugin Scanner<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Scan extensions/<br/>• Find *.py modules<br/>• Parse entry points<br/>• Load plugin metadata<br/>• Dependency resolution<br/>───────────<br/>Discovery Locations:<br/>• k1/l5_infrastructure/<br/>  extensions/plugins/<br/>• User plugins:<br/>  ~/.k1/extensions/<br/>───────────<br/>Performance:<br/>⏱️ <50ms discovery<br/>⏱️ <100ms per load<br/>───────────<br/>Files:<br/>k1/l5_infrastructure/<br/>extensions/discovery.py"]
+
+        %% ===== EXTENSION LOADER =====
+        ExtensionLoader["ExtensionLoader<br/>📦 Module Importer<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Import Python modules<br/>• Validate interface<br/>• Instantiate plugins<br/>• Register with registry<br/>• Error handling<br/>───────────<br/>Lifecycle (4 phases):<br/>1. Load — Import module<br/>2. Validate — Check interface<br/>3. Register — Add to registry<br/>4. Activate — Initialize plugin<br/>───────────<br/>Validation Checks:<br/>• Interface compliance<br/>• Method signatures<br/>• Dependencies present<br/>• Version compatibility<br/>───────────<br/>Files:<br/>extensions/loader.py"]
+
+        %% ===== 10 EXTENSION POINTS =====
+        subgraph Extension_Points["🎯 10 Extension Points"]
+            direction LR
+            ConfigProvider["ConfigProvider<br/>⚙️<br/>───────────<br/>Custom config<br/>loaders:<br/>• Vault secrets<br/>• AWS Param Store<br/>• Environment vars"]
+            MetricsExporter["MetricsExporter<br/>📊<br/>───────────<br/>Custom metrics<br/>backends:<br/>• Datadog<br/>• New Relic<br/>• StatsD"]
+            TraceExporter["TraceExporter<br/>🔍<br/>───────────<br/>Custom tracing<br/>backends:<br/>• Zipkin<br/>• Lightstep<br/>• X-Ray"]
+            ThermalPolicy["ThermalPolicy<br/>🌡️<br/>───────────<br/>Custom thermal<br/>strategies:<br/>• Laptop mode<br/>• Server mode<br/>• Aggressive"]
+            PlacementStrategy["PlacementStrategy<br/>🎯<br/>───────────<br/>Custom model<br/>placement:<br/>• Cost-optimized<br/>• Latency-optimized<br/>• Power-optimized"]
+            CachePolicy["CachePolicy<br/>💾<br/>───────────<br/>Custom caching<br/>strategies:<br/>• LRU<br/>• LFU<br/>• TTL-based"]
+            BackpressureHandler["BackpressureHandler<br/>⚠️<br/>───────────<br/>Custom backpressure:<br/>• Drop oldest<br/>• Drop newest<br/>• Block"]
+            ErrorInterceptor["ErrorInterceptor<br/>🚨<br/>───────────<br/>Custom error<br/>handling:<br/>• Sentry capture<br/>• Slack alerts<br/>• PagerDuty"]
+            HealthCheckProvider["HealthCheckProvider<br/>❤️<br/>───────────<br/>Custom health<br/>checks:<br/>• Custom endpoints<br/>• Liveness<br/>• Readiness"]
+            LogHandler["LogHandler<br/>📝<br/>───────────<br/>Custom log<br/>destinations:<br/>• CloudWatch<br/>• Splunk<br/>• Loki"]
+        end
+
+        %% ===== EXTENSION REGISTRY =====
+        ExtensionRegistry["ExtensionRegistry<br/>📋 Plugin Inventory<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Store loaded plugins<br/>• Extension point mapping<br/>• Priority ordering<br/>• Enable/disable plugins<br/>• Query by extension point<br/>───────────<br/>Registry Structure:<br/>extension_point →<br/>  [Plugin1, Plugin2, ...]<br/>───────────<br/>Priority Handling:<br/>• Plugins ordered by priority<br/>• Default: 100<br/>• Higher = executed first<br/>───────────<br/>Files:<br/>extensions/registry.py"]
+
+        %% ===== EXTENSION LIFECYCLE =====
+        ExtensionLifecycle["ExtensionLifecycle<br/>🔄 Plugin State Manager<br/>═══════════════<br/>Plugin States (5):<br/>───────────<br/>🔵 DISCOVERED<br/>   (Metadata loaded)<br/>🟡 LOADED<br/>   (Module imported)<br/>🟢 ACTIVE<br/>   (Initialized, callable)<br/>🟠 DISABLED<br/>   (User disabled)<br/>🔴 FAILED<br/>   (Load/init error)<br/>───────────<br/>Transitions:<br/>DISCOVERED → LOADED<br/>LOADED → ACTIVE<br/>ACTIVE ⟷ DISABLED<br/>* → FAILED (on error)<br/>───────────<br/>Files:<br/>extensions/lifecycle.py"]
+
+        %% ===== HOT RELOAD =====
+        HotReload["HotReload<br/>♨️ Extension Watcher<br/>═══════════════<br/>Responsibilities:<br/>───────────<br/>• Watch extensions/<br/>• Detect file changes<br/>• Reload modified plugins<br/>• Unload removed plugins<br/>• Zero-downtime updates<br/>───────────<br/>Reload Strategy:<br/>• File modification event<br/>• Unload old plugin<br/>• Re-import module<br/>• Re-register extension<br/>• Graceful failover<br/>───────────<br/>Performance:<br/>⏱️ <200ms reload<br/>───────────<br/>Files:<br/>extensions/hot_reload.py"]
+
+        %% ===== EXTENSION METRICS =====
+        ExtensionMetrics["ExtensionMetrics<br/>📊 Prometheus Metrics<br/>═══════════════<br/>Metrics:<br/>───────────<br/>• extension_discovered_total<br/>• extension_loaded_total<br/>• extension_active_count<br/>• extension_failed_total<br/>• extension_call_latency_ms<br/>• extension_call_errors_total<br/>• extension_reload_total<br/>───────────<br/>Labels:<br/>• extension_point<br/>• plugin_name<br/>• plugin_version<br/>───────────<br/>Files:<br/>observability/metrics/<br/>extension_metrics.py"]
+    end
+
+    %% ===== K1 COMPONENTS =====
+    K1_Components["🏢 K1 Components<br/>═══════════════<br/>Extension Users<br/>───────────<br/>• Config Management<br/>  (ConfigProvider)<br/>• Observability<br/>  (Metrics/Trace/Log)<br/>• Thermal Management<br/>  (ThermalPolicy)<br/>• Model Hub<br/>  (PlacementStrategy)<br/>• Event Bus<br/>  (BackpressureHandler)<br/>───────────<br/>All use extensions"]
+
+    Prometheus["📊 Prometheus<br/>═══════════════<br/>Port :9090<br/>───────────<br/>• Extension count<br/>• Call latency<br/>• Reload events"]
+
+    %% ===== DATA FLOWS - DISCOVERY & LOADING =====
+    ExtensionDiscovery -->|"1. Scan plugins<br/><50ms"| ExtensionLoader
+    ExtensionLoader -->|"2. Load & validate<br/><100ms"| ExtensionRegistry
+    ExtensionRegistry -->|"3. Register extension"| ExtensionLifecycle
+    ExtensionLifecycle -->|"4. Activate plugin"| Extension_Points
+
+    %% ===== DATA FLOWS - USAGE =====
+    K1_Components -->|"5. Call extension point"| ExtensionRegistry
+    ExtensionRegistry -->|"6. Lookup plugins<br/><5ms"| Extension_Points
+    Extension_Points -->|"7. Execute plugin"| K1_Components
+
+    %% ===== DATA FLOWS - HOT RELOAD =====
+    HotReload -->|"8. File changed<br/><200ms"| ExtensionLoader
+    ExtensionLoader -->|"9. Re-register"| ExtensionRegistry
+
+    %% ===== DATA FLOWS - METRICS =====
+    ExtensionLoader -->|"Emit metrics"| ExtensionMetrics
+    ExtensionRegistry -->|"Emit metrics"| ExtensionMetrics
+    Extension_Points -->|"Emit metrics"| ExtensionMetrics
+    ExtensionMetrics -->|"Scrape<br/>every 10s"| Prometheus
+
+    %% ===== STYLING =====
+    classDef discovery fill:#E3F2FD,stroke:#1976D2,stroke-width:2px,color:#000
+    classDef loader fill:#E8F5E9,stroke:#388E3C,stroke-width:2px,color:#000
+    classDef points fill:#FFF3E0,stroke:#F57C00,stroke-width:2px,color:#000
+    classDef registry fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#000
+    classDef lifecycle fill:#FCE4EC,stroke:#C2185B,stroke-width:2px,color:#000
+    classDef hotReload fill:#FFF9C4,stroke:#F9A825,stroke-width:2px,color:#000
+    classDef metrics fill:#E0F2F1,stroke:#00897B,stroke-width:2px,color:#000
+    classDef external fill:#ECEFF1,stroke:#455A64,stroke-width:3px,color:#000
+
+    class ExtensionDiscovery discovery
+    class ExtensionLoader loader
+    class ConfigProvider,MetricsExporter,TraceExporter,ThermalPolicy,PlacementStrategy,CachePolicy,BackpressureHandler,ErrorInterceptor,HealthCheckProvider,LogHandler points
+    class ExtensionRegistry registry
+    class ExtensionLifecycle lifecycle
+    class HotReload hotReload
+    class ExtensionMetrics metrics
+    class K1_Components,Prometheus external
+```
+
+**Diagram Purpose**: Plugin architecture enabling customization of Layer 5 infrastructure via 10 extension points.
+
+**10 Extension Points**:
+1. **ConfigProvider** (⚙️) — Custom config loaders (Vault, AWS Param Store, env vars)
+2. **MetricsExporter** (📊) — Custom metrics backends (Datadog, New Relic, StatsD)
+3. **TraceExporter** (🔍) — Custom tracing backends (Zipkin, Lightstep, X-Ray)
+4. **ThermalPolicy** (🌡️) — Custom thermal strategies (laptop/server/aggressive mode)
+5. **PlacementStrategy** (🎯) — Custom model placement (cost/latency/power-optimized)
+6. **CachePolicy** (💾) — Custom caching strategies (LRU, LFU, TTL-based)
+7. **BackpressureHandler** (⚠️) — Custom backpressure (drop oldest/newest/block)
+8. **ErrorInterceptor** (🚨) — Custom error handling (Sentry, Slack, PagerDuty)
+9. **HealthCheckProvider** (❤️) — Custom health checks (liveness, readiness)
+10. **LogHandler** (📝) — Custom log destinations (CloudWatch, Splunk, Loki)
+
+**Extension Lifecycle (5 States)**:
+- 🔵 **DISCOVERED** — Metadata loaded from plugin file
+- 🟡 **LOADED** — Module imported, interface validated
+- 🟢 **ACTIVE** — Initialized, callable by K1 components
+- 🟠 **DISABLED** — User disabled (can re-enable)
+- 🔴 **FAILED** — Load/init error (logged, skipped)
+
+**Discovery Process**:
+1. **Scan** — Find `*.py` files in `extensions/plugins/` (<50ms)
+2. **Parse** — Extract entry points, metadata, dependencies
+3. **Load** — Import Python module (<100ms per extension)
+4. **Validate** — Check interface compliance (method signatures)
+5. **Register** — Add to registry, map to extension point
+6. **Activate** — Initialize plugin, ready for use
+
+**Hot Reload**:
+- **File watcher**: Detect changes in `extensions/plugins/` (<200ms)
+- **Unload**: Gracefully unload old plugin
+- **Re-import**: Re-import Python module (clear caches)
+- **Re-register**: Update registry with new plugin
+- **Zero-downtime**: Failover to previous version on error
+
+**Performance Budget**:
+- Extension discovery: <50ms
+- Extension load: <100ms per extension
+- Extension call overhead: <5ms
+- Hot reload: <200ms
+
+**Integration Tests**: `tests/integration/layer5/test_extensions.py`
+```

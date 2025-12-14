@@ -1,0 +1,25 @@
+{
+  "actor_id": "person-guardianB",
+  "tenant_id": "tenant-123",
+  "space_id": "shared:care-circle",
+  "participants": [
+    {"person_id": "person-guardianB", "relationship_hint": "guardian"},
+    {"person_id": "person-grandparent", "relationship_hint": "care-team"},
+    {"person_id": "person-child", "relationship_hint": "dependent"}
+  ],
+  "device_capabilities": {
+    "hardware": "tablet",
+    "supports_red_band": "true"
+  },
+  "policy_stamp": {
+    "band": "RED",
+    "obligations": [
+      "require.guardian",
+      "audit.medical"
+    ],
+    "decision_id": "dec-red-004",
+    "version": "v3"
+  },
+  "trace_id": "trace-shared-red",
+  "request_id": "req-red-care"
+}

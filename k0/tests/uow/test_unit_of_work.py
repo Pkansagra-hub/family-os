@@ -1,28 +1,52 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Dict, Iterator, Tuple
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from ward import raises, test  # type: ignore[attr-defined]
 
 from k0.storage.offsets import Offset, OffsetStore
 from k0.storage.outbox import OutboxEntry, OutboxStore
 from k0.storage.receipts import Receipt, ReceiptStore
 from k0.storage.wal import WalEntry, WriteAheadLog
-from k0.uow.connection_pool import connection_scope
+from k0.uow.connection_pool import configure_pool, connection_scope, shutdown_pool
 from k0.uow.unit_of_work import UnitOfWork
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+STORAGE_SQL_PATH = REPO_ROOT / "contracts" / "sql" / "storage.sql"
+
+
+@pytest.fixture
+def sqlite_runtime() -> Iterator[Path]:
+    """Pytest fixture for SQLite runtime with schema initialization."""
+    tmp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
+    db_path = Path(tmp_dir.name) / "kernel.sqlite3"
+    configure_pool(db_path)
+    with connection_scope() as connection:
+        connection.executescript(STORAGE_SQL_PATH.read_text())
+        connection.commit()
+    try:
+        yield db_path
+    finally:
+        shutdown_pool()
+        tmp_dir.cleanup()
 
 
 class MetricsRecorder:
+    """Mock metrics recorder for tracking metric emissions during tests."""
+
     def __init__(self) -> None:
         self.records: list[Tuple[str, float, Dict[str, str]]] = []
 
     def __call__(self, metric_name: str, value: float, **labels: str) -> None:
+        """Record a metric with name, value, and labels."""
         self.records.append((metric_name, value, dict(labels)))
 
     def metric_count(self, metric_name: str, **expected: str) -> int:
+        """Count metrics matching name and label filters."""
         count = 0
         for name, _value, labels in self.records:
             if name != metric_name:
@@ -32,7 +56,18 @@ class MetricsRecorder:
         return count
 
 
-def _run_property(outcomes: list[bool]) -> None:
+def _reset_database() -> None:
+    """Reset all transaction storage tables."""
+    with connection_scope() as connection:
+        connection.execute("DELETE FROM st_outbox")
+        connection.execute("DELETE FROM st_wal")
+        connection.execute("DELETE FROM st_receipts")
+        connection.execute("DELETE FROM st_offsets")
+        connection.commit()
+
+
+def _run_property_test(outcomes: list[bool]) -> None:
+    """Property-based test runner: execute mixed success/failure transactions."""
     _reset_database()
     wal = WriteAheadLog()
     outbox = OutboxStore()
@@ -149,59 +184,58 @@ def _run_property(outcomes: list[bool]) -> None:
             except RuntimeError:
                 pass
 
+    # Verify atomicity: only committed transactions persisted
     with connection_scope() as connection:
-        outbox_count = connection.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[
-            0
-        ]
-        receipt_count = connection.execute("SELECT COUNT(*) FROM st_receipts").fetchone()[
-            0
-        ]
-        offset_count = connection.execute("SELECT COUNT(*) FROM st_offsets").fetchone()[
-            0
-        ]
-    assert outbox_count == committed
-    assert receipt_count == committed
-    assert offset_count == committed
+        outbox_count = connection.execute("SELECT COUNT(*) FROM st_outbox").fetchone()[0]
+        receipt_count = connection.execute("SELECT COUNT(*) FROM st_receipts").fetchone()[0]
+        offset_count = connection.execute("SELECT COUNT(*) FROM st_offsets").fetchone()[0]
 
+    assert outbox_count == committed, f"outbox: expected {committed}, got {outbox_count}"
+    assert receipt_count == committed, f"receipts: expected {committed}, got {receipt_count}"
+    assert offset_count == committed, f"offsets: expected {committed}, got {offset_count}"
+
+    # Verify metrics
     total_rollbacks = len(outcomes) - committed
-    assert metrics.metric_count("k0_uow_commit_total", outcome="success") == committed
     assert (
-        metrics.metric_count("k0_uow_wal_fsync_total", outcome="success")
-        == committed
-    )
+        metrics.metric_count("k0_uow_commit_total", outcome="success") == committed
+    ), "commit_total metric mismatch"
     assert (
-        metrics.metric_count("k0_uow_wal_fsync_seconds", outcome="success")
-        == committed
-    )
-    assert metrics.metric_count("k0_uow_rollback_total") == total_rollbacks
+        metrics.metric_count("k0_uow_wal_fsync_total", outcome="success") == committed
+    ), "wal_fsync_total metric mismatch"
+    assert (
+        metrics.metric_count("k0_uow_wal_fsync_seconds", outcome="success") == committed
+    ), "wal_fsync_seconds metric mismatch"
+    assert (
+        metrics.metric_count("k0_uow_rollback_total") == total_rollbacks
+    ), f"rollback_total: expected {total_rollbacks}, got {metrics.metric_count('k0_uow_rollback_total')}"
 
 
-@given(st.lists(st.booleans(), min_size=1, max_size=5))
-@settings(max_examples=50)
-def _hypothesis_property(outcomes: list[bool]) -> None:
-    _run_property(outcomes)
+def test_uow_atomicity_property_based(sqlite_runtime: Path) -> None:
+    """Property-based test: UnitOfWork maintains atomicity across random success/failure sequences.
+
+    Uses hypothesis to generate random success/failure transaction sequences and verifies
+    that atomicity is maintained: either all stages commit together or all rollback together.
+    """
+
+    @given(st.lists(st.booleans(), min_size=1, max_size=5))
+    @settings(max_examples=50)
+    def run_property_test(outcomes: list[bool]) -> None:
+        _run_property_test(outcomes)
+
+    run_property_test()
 
 
-@test("unit of work commits successful transactions and rolls back failures")
-def _(sqlite_runtime: Any = sqlite_runtime) -> None:
-    _hypothesis_property()
+def test_uow_commits_successful_transactions(sqlite_runtime: Path) -> None:
+    """Test: UnitOfWork commits successful transactions and rolls back failures."""
+    _run_property_test([True, False, True, False, True])
 
 
-@test("unit of work rejects nested usage")
-def _(sqlite_runtime: Any = sqlite_runtime) -> None:
+def test_uow_rejects_nested_usage(sqlite_runtime: Path) -> None:
+    """Test: UnitOfWork rejects nested context manager usage."""
     outbox = OutboxStore()
     uow = UnitOfWork(outbox_store=outbox)
 
     with uow:
-        with raises(RuntimeError):
+        with pytest.raises(RuntimeError):
             with uow:
                 pass
-
-
-def _reset_database() -> None:
-    with connection_scope() as connection:
-        connection.execute("DELETE FROM st_outbox")
-        connection.execute("DELETE FROM st_wal")
-        connection.execute("DELETE FROM st_receipts")
-        connection.execute("DELETE FROM st_offsets")
-        connection.commit()

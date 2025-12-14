@@ -1,0 +1,81 @@
+module_id: context.geo_metadata
+version: v1
+
+input_event_types:
+  - cognitive.memory.write.committed.v1
+
+output_event_types:
+  - p02.context.geo_enriched.v1
+
+latency_budget_ms: 2
+
+side_effects: []
+
+idempotent: true
+
+failure_modes:
+  - code: GEOHASH_INVALID
+    policy: use_default
+    max_retries: 0
+  - code: LOCATION_NAME_MISSING
+    policy: use_default
+    max_retries: 0
+
+description: |
+  Geo Metadata Lookup Module (Spatial Context Processor)
+
+  Processes spatial and location metadata for episodic memories:
+  - Copies pre-computed geohash from WAL envelope (already masked by Gate)
+  - Extracts location name and type from envelope body
+  - Records geo precision based on privacy band
+  - Tracks geo masking reasons from policy obligations
+
+  Performance target: ≤2ms P95 (no external geo lookups, pure copy/parse)
+
+  Key Geo Fields:
+  - geohash_6: TEXT (6-character geohash from location_geohash in envelope)
+  - location_name: TEXT (from body.location_name, e.g., "Olive Garden Market St")
+  - location_type: TEXT (from body.location_type, e.g., "restaurant")
+  - geo_precision_external: TEXT (GREEN=full, AMBER=geohash-6, RED=geohash-4)
+  - geo_masking_reason: TEXT (from policy_stamp.obligations, e.g., "mask.location.precision")
+
+  Important Notes:
+  - P02 does NOT access raw lat/lon coordinates
+  - Gate Stage 3 already applied geo masking before WAL write
+  - For AMBER/RED bands, raw location_lat/location_lon are stripped from envelope
+  - P02 only reads pre-masked location_geohash and stores precision metadata
+  - NO geo city lookup, place chain detection, or geofence resolution
+    (those tables don't exist; defer to P09 if needed)
+
+  Geo Precision Levels:
+  - GREEN band: Full precision geohash (geohash-12, ~few meters)
+  - AMBER band: Coarse precision (geohash-6, ~1.2km × 0.6km)
+  - RED band: Very coarse precision (geohash-4, ~39km × 20km)
+
+  Use Cases:
+  - Spatial queries within privacy constraints
+  - Location-based memory retrieval (coarse regions)
+  - Geo precision auditing (tracking masking reasons)
+  - Location name search (human-readable place names)
+
+  Limitations:
+  - No reverse geocoding (address lookup from coordinates)
+  - No place enrichment (nearby POIs, place categories)
+  - No geofence resolution (home/work/school zones)
+  - Defer complex geo enrichment to P09 (Connector Ingestion)
+
+config_schema:
+  type: object
+  properties:
+    default_location_type:
+      type: string
+      default: "unknown"
+      description: Fallback location_type if not provided
+    default_geo_precision:
+      type: string
+      default: "geohash-6"
+      description: Default precision level if band lookup fails
+    validate_geohash_format:
+      type: boolean
+      default: true
+      description: Whether to validate geohash format (base32 characters)

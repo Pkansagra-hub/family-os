@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cognitive.embedding.cleaned.v1",
+  "title": "Cognitive Embedding Cleaned Event",
+  "description": "Emitted when orphaned/expired embeddings are removed (P08 M27)",
+  "type": "object",
+  "required": [
+    "cleanup_batch_id",
+    "cleaned_at",
+    "embeddings_removed"
+  ],
+  "properties": {
+    "cleanup_batch_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for this cleanup batch operation"
+    },
+    "cleaned_at": {
+      "type": "integer",
+      "description": "Unix timestamp (seconds since epoch) when cleanup completed"
+    },
+    "embeddings_removed": {
+      "type": "integer",
+      "description": "Total number of embeddings removed in this batch"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant identifier (if cleanup was tenant-scoped)"
+    },
+    "space_id": {
+      "type": "string",
+      "description": "Space identifier (if cleanup was space-scoped)"
+    },
+    "cleanup_reason": {
+      "type": "string",
+      "enum": ["orphaned", "expired", "manual_request", "space_deleted"],
+      "description": "Reason for cleanup operation"
+    },
+    "embedding_ids_sample": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "maxItems": 10,
+      "description": "Sample of removed embedding IDs (max 10 for logging)"
+    },
+    "faiss_removed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether FAISS index entries were also removed"
+    },
+    "st_vec_removed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether st_vec table rows were removed"
+    },
+    "bytes_freed": {
+      "type": "integer",
+      "description": "Approximate bytes freed (embeddings_removed * 3072)"
+    },
+    "latency_ms": {
+      "type": "integer",
+      "description": "Time taken for cleanup batch (ms)"
+    }
+  },
+  "additionalProperties": false
+}

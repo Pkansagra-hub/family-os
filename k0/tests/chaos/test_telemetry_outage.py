@@ -9,7 +9,7 @@ from ward import test
 from k0.chaos.toggles import should_drop_telemetry
 from k0.kernel.config import ChaosSettings
 from k0.obs.metrics import MetricsExporter
-from tests.chaos.fixtures import (
+from k0.tests.chaos.fixtures import (
     chaos_enabled_config,
     high_failure_config,
     metric_value,
@@ -104,3 +104,4 @@ def _() -> None:
         ), f"outage_rate={outage_rate}, expected {expected}±40, got {drop_count}"
 
     runner()
+

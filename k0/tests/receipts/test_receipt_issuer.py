@@ -13,7 +13,7 @@ from k0.receipts import ReceiptIssuer, ReceiptSigner
 from k0.security.crypto import canonical_json
 from k0.storage.receipts import ReceiptStore
 from k0.obs.events import ObservabilityEmitter
-from tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
+from k0.tests.storage.fixtures import sqlite_runtime  # type: ignore[misc]
 
 
 def _decode_base64url(value: str) -> bytes:
@@ -109,3 +109,4 @@ def _(
         {},
     ]
     assert event["payload_sha256"] == payload_hash
+

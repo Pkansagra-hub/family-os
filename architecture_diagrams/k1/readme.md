@@ -56,9 +56,14 @@ I'll organize these by architectural concern and layer:
    - **Covers:** User input → Intent → Plan → Execute → Response (full TTFT path)
    - **Purpose:** Trace data flow from user turn to agent response
 
-7. **`k1_k0_bridge_architecture.mmd`**
-   - **Covers:** K1↔K0 communication, P01-P20 ports, dual protocol (JSON+FlatBuffers), batching
-   - **Purpose:** Explain inter-kernel communication patterns
+7. **`k0_k1_bridge_e2e.mmd`** ✅ **IMPLEMENTED**
+   - **Covers:** Complete K0-K1 bridge end-to-end architecture - K1 Intelligence Module (Layers 1-4: Input/Orchestration/Execution/Runtime), K0 Bridge (Layer 5: Command/Query/SSE/Batch/Observability clients, HTTP/2 transport, circuit breaker), K0 Memory Microkernel (20 ports P01-P20, Gate/Router/Scheduler, Storage: WAL/Vector/KG/FTS, K0 Observability Stack: Prometheus/OTLP/Grafana)
+   - **Purpose:** Show end-to-end K1↔K0 integration with observability stack reuse - K1 pushes metrics/logs/traces to K0 observability ports (10s batch), unified Grafana dashboards, cognitive_trace_id propagation, dual protocol (JSON for K0 native, FlatBuffers for K1 optimization), 20-port architecture with specialized operations
+   - **ADRs Referenced:** ADR-0001 (K0/K1 Split), ADR-0001a (Bridge Protocol), ADR-0001f (State Boundary), ADR-0029 (Prometheus), ADR-0030 (Tracing), ADR-0044 (HTTP/2)
+   - **Companion Docs:** `K0_K1_BRIDGE_GUIDE.md` (150-page comprehensive guide: architecture overview, component details, data flow patterns, observability integration, performance budgets, use cases, implementation guide, troubleshooting)
+   - **Performance Budgets:** Bridge <10ms P95, Command <50ms GREEN/<200ms AMBER/RED, Query <100ms, SSE <5ms, Obs Push <20ms
+   - **Key Highlights:** K0 observability stack reuse (single source of truth), 50+ Prometheus metrics, RED method, circuit breaker (3-failure threshold), batching (250ms flush, 64KB, zstd compression), HTTP/2 multiplexing (100 streams)
+   - **Status:** ✅ Complete - Validated architecture with comprehensive documentation
 
 8. **`k1_external_interfaces_map.mmd`**
    - **Covers:** REST API, WebSocket, SSE, MCP tools, external LLMs
@@ -70,9 +75,13 @@ I'll organize these by architectural concern and layer:
 
 **Layer 1: Input Processing**
 
-9. **`k1_layer1_input_processing_flow.mmd`**
-   - **Covers:** Stream switch → Operators (VAD, ASR, TTS) → Intent router (3-tier classification)
-   - **Purpose:** Show multi-modal input processing pipeline
+9. **`k1_layer1_architecture.mmd`** ✅ **IMPLEMENTED**
+   - **Covers:** Complete bidirectional I/O architecture - input APIs (WebSocket/REST/Sensors), stream operators (VAD/ASR/TTS/Speaker ID/Location/Motion/BLE), orchestration (Intent Router + Meta Policy), output APIs (WebSocket TTS/tokens, SSE events, Event Bus), K0 integration, Layer 2 communication
+   - **Purpose:** Show Layer 1 as BOTH input AND output layer with full API surface, data flow paths (input path: User→Dispatcher→Operators→EventBus, output path: EventBus→TTS→WebSocket), privacy enforcement (RED/AMBER/GREEN bands), and performance critical paths (<10ms P95)
+   - **ADRs Referenced:** 0004 (5-layer), 0004a (Event Bus), 0015 (WebSocket), 0019 (FlatBuffers), 0024 (Performance), 0044 (Privacy Bands), 0056a-f (Voice Pipeline), 0073 (Speaker ID), 0083a (BLE Proximity), 0085 (Motion Awareness)
+   - **Diagram ID:** `f81e301d-1cab-4fc8-90ae-c2c5e5390942`
+   - **Companion Docs:** `LAYER1_API_SPECIFICATION.md` (detailed API schemas, SLOs), `k1_layer1_diagram_guide.md` (usage guide)
+   - **Status:** ✅ Validated (31 nodes, 44 edges, 10 subgraphs, no issues)
 
 10. **`k1_layer1_intent_classification_tiers.mmd`**
     - **Covers:** Tier 1 (regex <1ms) → Tier 2 (SLM 2-3ms) → Tier 3 (LLM <50ms) fallback cascade

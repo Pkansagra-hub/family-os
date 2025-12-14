@@ -349,6 +349,27 @@ class BusSettings(BaseModel):
     middleware: BusMiddlewareSettings = Field(default_factory=BusMiddlewareSettings)
 
 
+class PolicySettings(BaseModel):
+    """Policy manifest and contract sources for the PEM (ADR-0089)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    manifest_path: Path | None = Field(
+        default=None,
+        description=(
+            "Filesystem path to the active policy manifest. When unset, the kernel "
+            "uses the packaged default manifest embedded with the PEM."
+        ),
+    )
+    bridge_policy_contract_path: Path | None = Field(
+        default=None,
+        description=(
+            "Override path to bridge policy contract YAML used for validation and "
+            "testing overrides."
+        ),
+    )
+
+
 class KernelSettings(BaseModel):
     """Aggregate settings consumed by the FastAPI app factory."""
 
@@ -388,6 +409,10 @@ class KernelSettings(BaseModel):
     sse_acl_path: Path = Field(
         default=DEFAULT_SSE_ACL_PATH,
         description="Filesystem path to the SSE role ACL configuration.",
+    )
+    policy: PolicySettings = Field(
+        default_factory=PolicySettings,
+        description="Policy manifest overrides for the bridge PEM integration.",
     )
 
     @field_validator("environment")
@@ -431,6 +456,10 @@ class KernelSettings(BaseModel):
         if env_overrides:
             aggregate = _deep_merge(aggregate, env_overrides)
 
+        policy_env_overrides = _extract_policy_env_overrides(env_map)
+        if policy_env_overrides:
+            aggregate = _deep_merge(aggregate, policy_env_overrides)
+
         if overrides:
             aggregate = _deep_merge(aggregate, overrides)
 
@@ -438,6 +467,7 @@ class KernelSettings(BaseModel):
             aggregate.setdefault("config_file", Path(resolved_path))
 
         _normalize_legacy_keys(aggregate)
+        _normalize_policy_paths(aggregate)
 
         return cls(**aggregate)
 
@@ -507,6 +537,20 @@ def _normalize_legacy_keys(payload: MutableMapping[str, Any]) -> None:
         payload["qos"] = qos_settings
 
 
+def _normalize_policy_paths(payload: MutableMapping[str, Any]) -> None:
+    policy_settings = payload.get("policy")
+    if not isinstance(policy_settings, MutableMapping):
+        return
+
+    manifest_value = policy_settings.get("manifest_path")
+    if manifest_value is not None:
+        policy_settings["manifest_path"] = Path(str(manifest_value)).expanduser()
+
+    contract_value = policy_settings.get("bridge_policy_contract_path")
+    if contract_value is not None:
+        policy_settings["bridge_policy_contract_path"] = Path(str(contract_value)).expanduser()
+
+
 def _extract_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
     """Translate ``K0_KERNEL_*`` environment variables into overrides."""
 
@@ -522,6 +566,21 @@ def _extract_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
 
         _assign_nested(overrides, parts, _coerce_env_value(raw_value))
     return overrides
+
+
+def _extract_policy_env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
+    manifest_path = env.get("K0_POLICY_MANIFEST_PATH")
+    contract_path = env.get("K0_BRIDGE_POLICY_CONTRACT_PATH")
+
+    if manifest_path is None and contract_path is None:
+        return {}
+
+    policy_overrides: dict[str, Any] = {"policy": {}}
+    if manifest_path is not None:
+        policy_overrides["policy"]["manifest_path"] = manifest_path
+    if contract_path is not None:
+        policy_overrides["policy"]["bridge_policy_contract_path"] = contract_path
+    return policy_overrides
 
 
 def _assign_nested(

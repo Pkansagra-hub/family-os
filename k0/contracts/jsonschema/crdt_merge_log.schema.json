@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.ai/schemas/k0/crdt_merge_log.schema.json",
+  "title": "K0 CRDT Merge Log",
+  "description": "Schema for CRDT conflict resolution audit log in st_crdt_merge_log table",
+  "type": "object",
+  "required": [
+    "merge_id",
+    "resource_type",
+    "resource_id",
+    "merge_strategy",
+    "winner_device_id",
+    "loser_device_id",
+    "merged_at"
+  ],
+  "properties": {
+    "merge_id": {
+      "type": "string",
+      "description": "Unique identifier for merge event",
+      "pattern": "^[A-Z0-9]{26}$|^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+    },
+    "resource_type": {
+      "type": "string",
+      "description": "Type of resource with conflict",
+      "enum": ["st_epi", "st_sem", "st_proc", "st_hipp_store", "st_ws", "st_social"]
+    },
+    "resource_id": {
+      "type": "string",
+      "description": "ID of resource with conflict",
+      "minLength": 1
+    },
+    "merge_strategy": {
+      "type": "string",
+      "description": "Strategy used to resolve conflict",
+      "enum": ["last-write-wins", "vector-clock", "manual", "semantic-merge"]
+    },
+    "winner_device_id": {
+      "type": "string",
+      "description": "Device ID of winning version",
+      "minLength": 1
+    },
+    "loser_device_id": {
+      "type": "string",
+      "description": "Device ID of losing version",
+      "minLength": 1
+    },
+    "winner_vector_clock": {
+      "type": ["string", "null"],
+      "description": "JSON-encoded vector clock of winner",
+      "contentMediaType": "application/json"
+    },
+    "loser_vector_clock": {
+      "type": ["string", "null"],
+      "description": "JSON-encoded vector clock of loser",
+      "contentMediaType": "application/json"
+    },
+    "conflict_reason": {
+      "type": ["string", "null"],
+      "description": "Human-readable explanation of conflict",
+      "maxLength": 500
+    },
+    "merged_at": {
+      "type": "string",
+      "description": "ISO8601 timestamp when conflict was resolved",
+      "format": "date-time"
+    },
+    "tenant_id": {
+      "type": ["string", "null"],
+      "description": "Tenant ID for multi-tenancy tracking",
+      "minLength": 1
+    }
+  },
+  "examples": [
+    {
+      "merge_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "resource_type": "st_epi",
+      "resource_id": "evt_abc123",
+      "merge_strategy": "vector-clock",
+      "winner_device_id": "device_001",
+      "loser_device_id": "device_002",
+      "winner_vector_clock": "{\"device_001\": 5, \"device_002\": 3}",
+      "loser_vector_clock": "{\"device_001\": 4, \"device_002\": 4}",
+      "conflict_reason": "Concurrent edits detected on different devices",
+      "merged_at": "2025-11-10T19:00:00Z",
+      "tenant_id": "tenant_001"
+    }
+  ]
+}

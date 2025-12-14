@@ -1,0 +1,221 @@
+{
+  "info": {
+    "name": "K0 Kernel Ports",
+    "description": "K0 API Collection",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Submit a command envelope for persistence",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/command.submit",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "command.submit"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    },
+    {
+      "name": "Register or renew a driver handshake session",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/driver.handshake",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "driver.handshake"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    },
+    {
+      "name": "Emit observability payloads (metrics, spans, logs)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/obs.emit",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "obs.emit"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    },
+    {
+      "name": "Retrieve a bundle of memory/query results",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/query.recall",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "query.recall"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    },
+    {
+      "name": "Acknowledge consumption progress for an SSE subscription",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/sse.ack",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "sse.ack"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    },
+    {
+      "name": "Establish an SSE stream for one or more topics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/k0/sse.subscribe",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "k0",
+            "sse.subscribe"
+          ]
+        },
+        "description": ""
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "description": "Base URL for K0 API endpoints"
+    }
+  ]
+}
