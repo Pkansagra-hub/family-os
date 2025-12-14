@@ -250,9 +250,9 @@ class PipelineSpec(BaseModel):
         pattern=r"^v\d+$",
     )
 
-    entry_topic: str = Field(
-        ...,
-        description="Event topic that triggers this pipeline",
+    entry_topic: str | None = Field(
+        default=None,
+        description="Event topic that triggers this pipeline (None for scheduled pipelines)",
     )
 
     exit_topic: str | None = Field(

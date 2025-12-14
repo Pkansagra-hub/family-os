@@ -42,6 +42,7 @@ class PipelineContext:
         config: Pipeline-specific configuration (from k0/config/pipelines.yml)
         logger: Structured logger with cognitive_trace_id support
         preloaded_models: Optional dict of preloaded NLP models (spaCy, VADER) from kernel startup
+        bus_dispatcher: Optional BusDispatcher for internal pipeline communication
 
     Usage:
         async def on_startup(self, ctx: PipelineContext) -> None:
@@ -49,6 +50,7 @@ class PipelineContext:
             self.logger = ctx.logger
             self.config = ctx.config
             self.preloaded_models = ctx.preloaded_models  # Access preloaded models
+            self.bus_dispatcher = ctx.bus_dispatcher  # For emitting internal events
             # ... initialize resources
 
     Security:
@@ -61,6 +63,7 @@ class PipelineContext:
     config: dict[str, Any]
     logger: Logger
     preloaded_models: dict[str, Any] | None = None  # Optional preloaded NLP models
+    bus_dispatcher: Any | None = None  # Optional BusDispatcher for internal events
 
 
 @runtime_checkable

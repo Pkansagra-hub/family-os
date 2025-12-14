@@ -47,6 +47,70 @@ Use this checklist before marking any milestone complete:
 - [ ] Cross-references validated (pipeline → modules, events → consumers)
 - [ ] Version bumped in K0 Architecture Master header
 
+### K0 Architecture Master Quick Reference
+
+**Document Location**: [`k0/pipelines/k0_architecture_master.md`](../../k0/pipelines/k0_architecture_master.md)
+
+| Part | Section Name | P03 Impact | When to Update |
+|------|--------------|------------|----------------|
+| **2.1** | Pipeline Master Registry | P03 row status | M0 (Design), M1 (Planning), M2 (Implementation), M9 (Production) |
+| **3.1** | Module Master Registry | 37 consolidation modules | M2-M7 (as modules implemented) |
+| **4.1** | Event Topics Registry | 4 event types (p03.*.v1) | M1 (contract definition), M7 (event emission) |
+| **5.1** | Global Contract Registry | 28+ module contracts | M1 (all contracts) |
+| **5.2** | Syscall Matrix | 28 capabilities (st_* read/write) | M1 (capabilities), M2-M7 (validation) |
+| **5.3** | Storage Contract Definitions | 10 new tables (st_epi, st_sem, etc.) | M1 (migrations) |
+| **7.1** | ADR Index | 12 ADRs (k010-k010.11) | M0 (batch registration) |
+| **8.1** | Performance Budgets | 90-minute cycle target | M8 (testing), M9 (production) |
+| **8.2** | Test Requirements Matrix | Unit/Integration/Performance coverage | M8 (testing) |
+| **8.3** | Observability Hooks | Grafana dashboards, Prometheus alerts | M9 (deployment) |
+
+### Current P03 Entry in K0 Architecture Master (Part 2.1)
+
+```markdown
+| P03 | Memory Consolidation | 🎯 Planning | ✅ Spec Complete | `docs/pipelines/P03_consolidation_dossier.md` | 37 modules (consolidation.*) | P1 | 0.2.0 | 2025-12-14 |
+```
+
+**Target End State**:
+
+```markdown
+| P03 | Memory Consolidation | ✅ Production | ✅ Deployed | `docs/pipelines/P03_consolidation_dossier.md` | 37 modules (consolidation.*) | P1 | 1.0.0 | 2025-XX-XX |
+```
+
+### K0 Closure Requirements (MANDATORY for Every Issue)
+
+> **⚠️ CRITICAL**: No issue can be marked as closed until the K0 Architecture Master has been updated.
+> This ensures the governance document remains the single source of truth.
+
+**Issue Closure Checklist** (copy to each PR):
+
+```markdown
+## K0 Architecture Master Closure Checklist
+
+- [ ] **Part 2.1 (Pipeline Registry)**: Status updated if pipeline state changed
+- [ ] **Part 3.1 (Module Registry)**: New modules added with correct status
+- [ ] **Part 4.1 (Event Topics)**: New events registered with schema location
+- [ ] **Part 5.1 (Contract Registry)**: New contracts added with version
+- [ ] **Part 5.2 (Syscall Matrix)**: New storage operations registered
+- [ ] **Part 7.1 (ADR Index)**: ADR status updated (Draft→Accepted→Implemented)
+- [ ] **Version Header**: Document version bumped (PATCH for updates, MINOR for new items)
+- [ ] **Last Updated**: Date updated in document header
+- [ ] **Cross-References**: All affected sections link correctly
+
+**File**: `k0/pipelines/k0_architecture_master.md`
+```
+
+**Quick Reference - What Updates Apply to Each Issue Type**:
+
+| Issue Type | K0 Sections to Update |
+|------------|----------------------|
+| **Migration** | Part 5.3 (Storage Tables) |
+| **Contract** | Part 5.1 (Contract Registry) |
+| **Module Implementation** | Part 3.1 (Module Registry), Part 5.2 (Syscalls) |
+| **Event Implementation** | Part 4.1 (Event Topics) |
+| **ADR Creation** | Part 7.1 (ADR Index) |
+| **Testing Complete** | Part 8.2 (Test Requirements) |
+| **Deployment** | Part 2.1 (Pipeline Status → Production) |
+
 ---
 
 ## Executive Summary
@@ -85,10 +149,13 @@ This plan implements P03 (Memory Consolidation Pipeline) using the declarative Y
 | M3: Pattern Extraction (R2) | 5-6 days | Clustering, Patterns, CA1 Bridge |
 | M4: Synaptic Homeostasis (R3) | 4-5 days | Dedup, Novelty, Retention |
 | M5: Knowledge Graph (R4) | 5-6 days | Entities, Relationships, Causal |
+| M5A: Dream Exploration (R5) | 5-6 days | Counterfactuals, Scenarios, Insights (v2 feature) |
 | M6: Memory Writers (R6-R7) | 5-6 days | State Updates, 8 Layer Writers |
 | M7: Event Emission (R8) | 3-4 days | Events, Offsets, Metrics |
 | M8: Integration & Testing | 5-6 days | E2E Tests, Performance, Production |
-| **Total** | **~8-10 weeks** | |
+| M9: Deployment & Observability | 3-4 days | Docker, K8s, Grafana, Runbooks |
+| **Total (v1 without R5)** | **~8-10 weeks** | |
+| **Total (v2 with R5)** | **~10-11 weeks** | |
 
 ---
 
@@ -422,14 +489,15 @@ Document deduplication approach from R3.1:
 **Description**:
 Document entity resolution approach from R4.1:
 
-- spaCy NER for extraction (PERSON, ORG, GPE, LOC)
+- **READ from P02**: `st_hipp_events.entities_json` (UltraBERT NER: 9 general + 12 family entity types)
+- NO spaCy calls — entities already extracted by P02 M02 via UltraBERT
 - Levenshtein similarity >0.85 for fuzzy matching
 - Alias tracking in entity_aliases_json
 - Canonical node resolution protocol
 
 **Acceptance Criteria**:
 
-- [ ] NER model selection rationale
+- [ ] Document P02 → P03 entities_json contract
 - [ ] Fuzzy matching algorithm
 - [ ] Pre-filtering with BK-tree for scalability
 - [ ] Entity merge protocol
@@ -577,7 +645,7 @@ After all P03 ADRs (k010.x series) are created, ensure the K0 Architecture Maste
 
 **K0 Architecture Master Updates Required**:
 
-- **Part 7.1: ADR Index** - Add all 9 ADRs:
+- **Part 7.1: ADR Index** - Add all 11 ADRs:
 
 | ADR | Title | Status | Affects | Date | Owner |
 |-----|-------|--------|---------|------|-------|
@@ -587,16 +655,22 @@ After all P03 ADRs (k010.x series) are created, ensure the K0 Architecture Maste
 | ADR-k010.3 | Episodic Clustering | 🎯 Draft | P03/R2 | 2025-11-25 | ML Engineer |
 | ADR-k010.4 | CA1 Bridge Logic | 🎯 Draft | P03/R2 | 2025-11-25 | Tech Lead |
 | ADR-k010.5 | SimHash Deduplication | 🎯 Draft | P03/R3 | 2025-11-25 | ML Engineer |
-| ADR-k010.6 | Entity Extraction | 🎯 Draft | P03/R4 | 2025-11-25 | ML Engineer |
+| ADR-k010.6 | Entity Normalization (P02 Data) | 🎯 Draft | P03/R4 | 2025-11-25 | ML Engineer |
 | ADR-k010.7 | 8-Layer Memory Write Coordination | 🎯 Draft | P03 | 2025-11-25 | Tech Lead |
 | ADR-k010.8 | P08 Coordination | 🎯 Draft | P03/P08 | 2025-11-25 | Tech Lead |
 | ADR-k010.9 | Capability-Based Security | 🎯 Draft | P03 | 2025-11-25 | Tech Lead |
+| ADR-k010.10 | Dream Phase Algorithms | 🎯 Draft | P03/R5 | 2025-12-14 | ML Engineer |
+| ADR-k010.11 | UltraBERT Data Consumption | 🎯 Draft | P03 | 2025-12-14 | Tech Lead |
+
+> **ADR-k010.11 (UltraBERT Data Consumption)**: Documents that P03 does NOT load any NLP models.
+> All NLP outputs (NER, sentiment, emotions, 768-dim embeddings) are pre-computed by P02 via
+> UltraBERT single-pass and stored in `st_hipp_events` and `st_vec`. P03 reads these directly.
 
 - **Part 2.1: Pipeline Master Registry** - Update P03 status to 🎯 Planning
 
 **Acceptance Criteria**:
 
-- [ ] All 10 ADRs listed in Part 7.1 ADR Index (k010 through k010.9)
+- [ ] All 12 ADRs listed in Part 7.1 ADR Index (k010 through k010.11)
 - [ ] P03 status updated to 🎯 Planning
 - [ ] Cross-references from ADRs to P03 validated
 - [ ] K0 Architecture Master version bumped
@@ -659,7 +733,7 @@ CREATE TABLE consolidation_locks (
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0040_consolidation_locks.sql`
+- `k0/contracts/sql/migrations/0028_consolidation_locks.sql`
 - `k0/modules/consolidation/lock_manager.py`
 
 ---
@@ -842,11 +916,29 @@ Verify 0024 migration matches dossier requirements.
 
 - [ ] All required columns exist
 - [ ] Missing columns documented
-- [ ] Migration 0040 created for additions
+- [ ] Migration 0029 created for additions
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0040_p03_hipp_events_additions.sql`
+- `k0/contracts/sql/migrations/0029_p03_hipp_events_additions.sql`
+
+---
+
+### Milestone 0 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 0 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M0**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 2.1 | Pipeline Registry | P03 row added with status 📝 Design | ☐ |
+| 7.1 | ADR Index | All 12 ADRs (k010-k010.11) registered as 🎯 Draft | ☐ |
+| 7.2 | Open Design Questions | P03 blockers added | ☐ |
+| 6.1 | Implementation Roadmap | P03 phase added | ☐ |
+| Header | Version | Bumped to next MINOR version | ☐ |
+
+**Commit Message Format**: `docs(k0): M0 complete - P03 registered in K0 Architecture Master`
 
 ---
 
@@ -952,11 +1044,11 @@ CREATE INDEX idx_epi_archival ON st_epi(archival_status);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0041_st_epi.sql`
+- `k0/contracts/sql/migrations/0030_st_epi.sql`
 
 ---
 
-#### Issue 1.1.2: Create Migration 0042 - st_sem (Semantic Pattern Layer)
+#### Issue 1.1.2: Create Migration 0031 - st_sem (Semantic Pattern Layer)
 
 **Type**: Migration
 **Priority**: Critical
@@ -1045,11 +1137,11 @@ CREATE INDEX idx_sem_canonical ON st_sem(is_canonical) WHERE is_canonical = 1;
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0042_st_sem.sql`
+- `k0/contracts/sql/migrations/0031_st_sem.sql`
 
 ---
 
-#### Issue 1.1.3: Create Migration 0043 - st_procedural (Routines Layer)
+#### Issue 1.1.3: Create Migration 0032 - st_procedural (Routines Layer)
 
 **Type**: Migration
 **Priority**: High
@@ -1130,11 +1222,11 @@ CREATE INDEX idx_proc_canonical ON st_procedural(is_canonical) WHERE is_canonica
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0043_st_procedural.sql`
+- `k0/contracts/sql/migrations/0032_st_procedural.sql`
 
 ---
 
-#### Issue 1.1.4: Create Migration 0044 - st_social (Social Relationships Layer)
+#### Issue 1.1.4: Create Migration 0033 - st_social (Social Relationships Layer)
 
 **Type**: Migration
 **Priority**: High
@@ -1219,11 +1311,11 @@ CREATE INDEX idx_social_strength ON st_social(relationship_strength DESC);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0044_st_social.sql`
+- `k0/contracts/sql/migrations/0033_st_social.sql`
 
 ---
 
-#### Issue 1.1.5: Create Migration 0045 - st_prospective (Intentions Layer)
+#### Issue 1.1.5: Create Migration 0034 - st_prospective (Intentions Layer)
 
 **Type**: Migration
 **Priority**: High
@@ -1303,11 +1395,11 @@ CREATE INDEX idx_prosp_priority ON st_prospective(priority DESC);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0045_st_prospective.sql`
+- `k0/contracts/sql/migrations/0034_st_prospective.sql`
 
 ---
 
-#### Issue 1.1.6: Create Migration 0046 - st_kg_dom (Knowledge Graph Nodes)
+#### Issue 1.1.6: Create Migration 0035 - st_kg_dom (Knowledge Graph Nodes)
 
 **Type**: Migration
 **Priority**: Critical
@@ -1387,11 +1479,11 @@ CREATE INDEX idx_kg_dom_observation ON st_kg_dom(observation_count DESC);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0046_st_kg_dom.sql`
+- `k0/contracts/sql/migrations/0035_st_kg_dom.sql`
 
 ---
 
-#### Issue 1.1.7: Create Migration 0047 - st_kg_edges (Knowledge Graph Edges)
+#### Issue 1.1.7: Create Migration 0036 - st_kg_edges (Knowledge Graph Edges)
 
 **Type**: Migration
 **Priority**: Critical
@@ -1477,11 +1569,11 @@ CREATE INDEX idx_kg_edges_valid ON st_kg_edges(valid_from, valid_to);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0047_st_kg_edges.sql`
+- `k0/contracts/sql/migrations/0036_st_kg_edges.sql`
 
 ---
 
-#### Issue 1.1.8: Create Migration 0048 - st_vec (Vector Embeddings)
+#### Issue 1.1.8: Create Migration 0037 - st_vec (Vector Embeddings)
 
 **Type**: Migration
 **Priority**: High
@@ -1558,11 +1650,11 @@ CREATE INDEX idx_eq_embedding ON st_embedding_queue(embedding_id);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0048_st_vec.sql`
+- `k0/contracts/sql/migrations/0037_st_vec.sql`
 
 ---
 
-#### Issue 1.1.9: Create Migration 0049 - st_fts (Full-Text Search)
+#### Issue 1.1.9: Create Migration 0038 - st_fts (Full-Text Search)
 
 **Type**: Migration
 **Priority**: Medium
@@ -1599,11 +1691,11 @@ INSERT INTO st_fts(st_fts, rank) VALUES('rank', 'bm25(10.0, 5.0, 1.0)');
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0049_st_fts.sql`
+- `k0/contracts/sql/migrations/0038_st_fts.sql`
 
 ---
 
-#### Issue 1.1.10: Create Migration 0050 - pipeline_offsets
+#### Issue 1.1.10: Create Migration 0039 - pipeline_offsets
 
 **Type**: Migration
 **Priority**: Critical
@@ -1676,7 +1768,7 @@ CREATE INDEX idx_checkpoint_cycle ON pipeline_checkpoints(cycle_id);
 
 **Files to Create**:
 
-- `k0/contracts/sql/migrations/0050_pipeline_offsets.sql`
+- `k0/contracts/sql/migrations/0039_pipeline_offsets.sql`
 
 ---
 
@@ -2190,21 +2282,24 @@ Create module contract for R4.1 Entity Extraction & Normalization.
 
 **Key Specifications**:
 
-- Input: Events with entities_json
+- Input: Events with entities_json (pre-computed by P02 UltraBERT)
 - Output: Normalized entities with canonical node_ids
 - Algorithm:
-  1. Parse entities_json, apply spaCy NER for missing extractions
+  1. Parse entities_json from st_hipp_events (NO NER model call)
   2. For each entity, query st_kg_dom for existing nodes
   3. Exact match → return canonical_node_id
   4. Fuzzy match (Levenshtein >0.85) → add alias, return canonical
   5. No match → create new node
+- UltraBERT provides 21 entity types:
+  - General (9): PERSON, ORG, LOC, GPE, DATE, TIME, MONEY, PERCENT, QUANTITY
+  - Family (12): KINSHIP, FAMILY_EVENT, PET, MEAL, ACTIVITY, PLACE, CELEBRATION, etc.
 - Output: 50-150 entities per 1000 events
 - Latency: <2 minutes
 
 **Acceptance Criteria**:
 
 - [ ] Contract YAML created
-- [ ] spaCy model specified (en_core_web_sm)
+- [ ] Document P02 entities_json format
 - [ ] Fuzzy matching algorithm
 - [ ] Pre-filtering for scalability
 
@@ -2883,6 +2978,25 @@ Update P03 status in Pipeline Registry after Milestone 1 completion.
 
 ---
 
+### Milestone 1 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 1 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M1**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 2.1 | Pipeline Registry | P03 status → 🎯 Planning | ☐ |
+| 4.1 | Event Topics Registry | All P03 events registered | ☐ |
+| 5.1 | Contract Registry | All 28+ module contracts added | ☐ |
+| 5.2 | Syscall Matrix | All 28 capabilities registered | ☐ |
+| 5.3 | Storage Contracts | 10 new tables documented | ☐ |
+| Header | Version | Bumped to next MINOR version | ☐ |
+
+**Commit Message Format**: `docs(k0): M1 complete - P03 contracts registered in K0 Architecture Master`
+
+---
+
 ## Milestone 2: Core Consolidation (R0-R1)
 
 **Goal**: Implement trigger detection, batch selection, and hippocampal replay.
@@ -3348,6 +3462,23 @@ Register all R0 and R1 modules in K0 Architecture Master Part 3.1.
 
 ---
 
+### Milestone 2 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 2 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M2**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 2.1 | Pipeline Registry | P03 status → ⚠️ Implementation | ☐ |
+| 3.1 | Module Registry | R0/R1 modules added (lock_manager, trigger, importance, etc.) | ☐ |
+| 5.2 | Syscall Matrix | R0/R1 syscalls validated | ☐ |
+| Header | Version | Bumped to next PATCH version | ☐ |
+
+**Commit Message Format**: `docs(k0): M2 complete - R0/R1 modules registered`
+
+---
+
 ## Milestone 3: Pattern Extraction (R2)
 
 **Goal**: Implement episodic clustering, pattern extraction, and CA1 bridge.
@@ -3358,7 +3489,7 @@ Register all R0 and R1 modules in K0 Architecture Master Part 3.1.
 
 **Description**: Implement semantic clustering of events into episodes.
 
-#### Issue 3.1.1: Implement Embedding Generator
+#### Issue 3.1.1: Implement Embedding Reader
 
 **Type**: Implementation
 **Priority**: Critical
@@ -3366,40 +3497,67 @@ Register all R0 and R1 modules in K0 Architecture Master Part 3.1.
 **Labels**: `implementation`, `p03`, `r2`
 
 **Description**:
-Generate semantic embeddings for clustering.
+Read pre-computed embeddings from st_vec (written by P02 M16).
 
 **Implementation Requirements**:
 
 ```python
-# k0/modules/consolidation/embedding_generator.py
+# k0/modules/consolidation/embedding_reader.py
+import struct
+from typing import List
+import numpy as np
 
-class EmbeddingGenerator:
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2'):
-        self.model = SentenceTransformer(model_name)
+class EmbeddingReader:
+    """
+    Read 768-dim UltraBERT embeddings from st_vec.
 
-    def generate_event_embedding(self, event: dict) -> np.ndarray:
+    NOTE: P03 does NOT call any embedding model.
+    P02 M22 extracts embeddings from UltraBERT cache and M16 writes to st_vec.
+    P03 reads these pre-computed embeddings for clustering.
+    """
+
+    def __init__(self, db_connection):
+        self.db = db_connection
+
+    def read_embedding(self, event_id: str) -> np.ndarray | None:
         """
-        Generate 384-dim embedding for event.
-        Composite text: text + activity + location + participants
+        Read 768-dim embedding from st_vec BLOB.
+        Returns None if embedding not found or not READY.
         """
+        cursor = self.db.execute("""
+            SELECT vector FROM st_vec
+            WHERE event_id = ? AND status IN ('READY', 'INDEXED')
+        """, (event_id,))
+        row = cursor.fetchone()
+        if row and row['vector']:
+            return np.array(struct.unpack('<768f', row['vector']))
+        return None
 
-    def batch_generate(self, events: List[dict]) -> np.ndarray:
-        """Generate embeddings for batch (vectorized)."""
+    def batch_read(self, event_ids: List[str]) -> dict[str, np.ndarray]:
+        """Batch read embeddings for multiple events."""
+        placeholders = ','.join('?' * len(event_ids))
+        cursor = self.db.execute(f"""
+            SELECT event_id, vector FROM st_vec
+            WHERE event_id IN ({placeholders}) AND status IN ('READY', 'INDEXED')
+        """, event_ids)
+        return {
+            row['event_id']: np.array(struct.unpack('<768f', row['vector']))
+            for row in cursor
+        }
 ```
 
 **Acceptance Criteria**:
 
-- [ ] sentence-transformers integration
-- [ ] Composite text construction
-- [ ] Batch processing
-- [ ] 384-dimensional output
-- [ ] Model caching (singleton)
+- [ ] st_vec BLOB reading with struct.unpack
+- [ ] 768-dimensional output (UltraBERT dimension)
+- [ ] Batch reading for performance
+- [ ] Handle missing embeddings gracefully
 - [ ] Unit tests
 
 **Files to Create**:
 
-- `k0/modules/consolidation/embedding_generator.py`
-- `tests/k0/modules/consolidation/test_embedding_generator.py`
+- `k0/modules/consolidation/embedding_reader.py`
+- `tests/k0/modules/consolidation/test_embedding_reader.py`
 
 ---
 
@@ -4017,7 +4175,7 @@ Register all R2 pattern extraction modules in K0 Architecture Master Part 3.1.
 
 | Module | Type | Status | Layer | Pipelines | Lifecycle |
 |--------|------|--------|-------|-----------|-----------|
-| `consolidation.embedding_generator` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.embedding_reader` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.episodic_clusterer` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.pattern_extractor` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.bridge_scorer` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
@@ -4030,7 +4188,7 @@ Register all R2 pattern extraction modules in K0 Architecture Master Part 3.1.
 
 | Syscall | Target | Operation | Module | Band |
 |---------|--------|-----------|--------|------|
-| `st_hipp_events.read_batch` | Storage | READ | embedding_generator | GREEN |
+| `st_vec.read_embeddings` | Storage | READ | embedding_reader | GREEN |
 | `st_epi.create_episode` | Storage | WRITE | episode_writer | GREEN |
 | `st_epi.update_backlinks` | Storage | WRITE | episode_writer | GREEN |
 | `st_sem.check_exists` | Storage | READ | semantic_promoter | GREEN |
@@ -4058,6 +4216,25 @@ Register all R2 pattern extraction modules in K0 Architecture Master Part 3.1.
 **Files to Update**:
 
 - `k0/pipelines/k0_architecture_master.md` (Part 3.1, 4.1, 5.2)
+
+---
+
+### Milestone 3 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 3 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M3**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 3.1 | Module Master Registry | Add 8 R2 modules (embedding_reader → semantic_promoter) | ☐ |
+| 4.1 | Event Topics Registry | Add 4 consolidation event topics | ☐ |
+| 5.2 | Syscall Matrix | Add 7 R2 syscalls (st_vec, st_epi, st_sem, st_bridge) | ☐ |
+| 5.3 | Storage Tables | Verify bridge_candidates table entry | ☐ |
+| 7.1 | ADR Index | Update k010.3-p03 (episodic) to ✅ Accepted | ☐ |
+| 7.1 | ADR Index | Update k010.4-p03 (patterns) to ✅ Accepted | ☐ |
+
+**Commit Message Format**: `docs(k0): M3 complete - 8 R2 modules, 4 events, 7 syscalls registered`
 
 ---
 
@@ -4630,6 +4807,26 @@ Register all R3 synaptic homeostasis modules in K0 Architecture Master Part 3.1.
 
 ---
 
+### Milestone 4 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 4 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M4**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 3.1 | Module Master Registry | Add 6 R3 modules (simhash_calc → tombstone_manager) | ☐ |
+| 4.1 | Event Topics Registry | Add 4 R3 event topics (dedup, decay, archive, tombstone) | ☐ |
+| 5.2 | Syscall Matrix | Add 8 R3 syscalls (mark YELLOW for GDPR ops) | ☐ |
+| 5.3 | Storage Tables | Add tombstones, archive tables | ☐ |
+| 7.1 | ADR Index | Update k010.5-p03 (simhash) to ✅ Accepted | ☐ |
+| 7.1 | ADR Index | Update k010.6-p03 (retention) to ✅ Accepted | ☐ |
+| 7.1 | ADR Index | Update k010.7-p03 (GDPR) to ✅ Accepted | ☐ |
+
+**Commit Message Format**: `docs(k0): M4 complete - 6 R3 modules, GDPR syscalls, retention ADRs accepted`
+
+---
+
 ## Milestone 5: Knowledge Graph (R4)
 
 **Goal**: Implement entity extraction, relationship discovery, and KG construction.
@@ -4640,7 +4837,7 @@ Register all R3 synaptic homeostasis modules in K0 Architecture Master Part 3.1.
 
 **Description**: Extract and normalize entities from events.
 
-#### Issue 5.1.1: Implement Entity Extractor
+#### Issue 5.1.1: Implement Entity Reader
 
 **Type**: Implementation
 **Priority**: Critical
@@ -4648,53 +4845,83 @@ Register all R3 synaptic homeostasis modules in K0 Architecture Master Part 3.1.
 **Labels**: `implementation`, `p03`, `r4`, `nlp`
 
 **Description**:
-Extract named entities using spaCy.
+Read pre-extracted entities from st_hipp_events.entities_json (computed by P02 UltraBERT).
 
 **Implementation Requirements**:
 
 ```python
-# k0/modules/consolidation/entity_extractor.py
+# k0/modules/consolidation/entity_reader.py
+import json
+from typing import List
+from dataclasses import dataclass
 
-class EntityExtractor:
-    def __init__(self, model_name: str = 'en_core_web_sm'):
-        self.nlp = spacy.load(model_name)
+@dataclass
+class Entity:
+    text: str
+    label: str  # PERSON, ORG, GPE, DATE, TIME, KINSHIP, FAMILY_EVENT, etc.
+    confidence: float = 0.8
+    source: str = "ultrabert"  # Always UltraBERT in our stack
 
-    def extract_entities(self, text: str) -> List[Entity]:
+class EntityReader:
+    """
+    Read pre-extracted entities from st_hipp_events.entities_json.
+
+    NOTE: P03 does NOT call any NER model.
+    P02 M02 extracts entities via UltraBERT single-pass and stores in entities_json.
+    UltraBERT provides 21 entity types: 9 general + 12 family-specific.
+    """
+
+    def read_entities(self, event_row: dict) -> List[Entity]:
         """
-        Extract entities using spaCy NER.
+        Parse entities_json from st_hipp_events.
 
-        Returns entities with:
-        - text: "John Smith"
-        - label: "PERSON" | "ORG" | "GPE" | "DATE" | "TIME"
-        - start_char, end_char
-        - confidence
+        entities_json format: ["person_mom", "person_dad", "org_olive_garden"]
+        OR detailed format: [{"text": "Mom", "label": "KINSHIP", "confidence": 0.95}, ...]
         """
+        entities_json = event_row.get('entities_json')
+        if not entities_json:
+            return []
 
-    def extract_from_event(self, event: dict) -> List[Entity]:
-        """
-        Extract from all text fields:
-        - text
-        - activity_name
-        - location_name
-        - participants
-        """
+        entities_data = json.loads(entities_json)
+        entities = []
 
-    def batch_extract(self, events: List[dict]) -> Dict[str, List[Entity]]:
-        """Batch extraction using nlp.pipe()"""
+        for item in entities_data:
+            if isinstance(item, dict):
+                entities.append(Entity(
+                    text=item.get('text', ''),
+                    label=item.get('label', 'UNKNOWN'),
+                    confidence=item.get('confidence', 0.8),
+                    source='ultrabert'
+                ))
+            else:
+                # Simple string format: "person_mom" -> parse prefix
+                parts = str(item).split('_', 1)
+                label = parts[0].upper() if parts else 'UNKNOWN'
+                text = parts[1] if len(parts) > 1 else item
+                entities.append(Entity(text=text, label=label))
+
+        return entities
+
+    def batch_read(self, event_rows: List[dict]) -> dict[str, List[Entity]]:
+        """Batch read entities for multiple events."""
+        return {
+            row['event_id']: self.read_entities(row)
+            for row in event_rows
+        }
 ```
 
 **Acceptance Criteria**:
 
-- [ ] spaCy integration
-- [ ] All text fields processed
+- [ ] Parse entities_json from st_hipp_events
+- [ ] Handle both simple and detailed entity formats
 - [ ] Batch processing for performance
 - [ ] Entity type classification
 - [ ] Unit tests
 
 **Files to Create**:
 
-- `k0/modules/consolidation/entity_extractor.py`
-- `tests/k0/modules/consolidation/test_entity_extractor.py`
+- `k0/modules/consolidation/entity_reader.py`
+- `tests/k0/modules/consolidation/test_entity_reader.py`
 
 ---
 
@@ -5104,7 +5331,7 @@ Register all R4 knowledge graph modules in K0 Architecture Master Part 3.1.
 
 | Module | Type | Status | Layer | Pipelines | Lifecycle |
 |--------|------|--------|-------|-----------|-----------|
-| `consolidation.entity_extractor` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.entity_reader` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.entity_normalizer` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.relationship_discoverer` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
 | `consolidation.graph_writer` | Service | ⚠️ Impl | K0/Consolidation | P03 | Per-Cycle |
@@ -5116,7 +5343,8 @@ Register all R4 knowledge graph modules in K0 Architecture Master Part 3.1.
 
 | Syscall | Target | Operation | Module | Band |
 |---------|--------|-----------|--------|------|
-| `st_kg_nodes.create` | Storage | WRITE | entity_extractor | GREEN |
+| `st_hipp_events.read_entities` | Storage | READ | entity_reader | GREEN |
+| `st_kg_nodes.create` | Storage | WRITE | entity_normalizer | GREEN |
 | `st_kg_nodes.update` | Storage | WRITE | entity_normalizer | GREEN |
 | `st_kg_edges.create` | Storage | WRITE | relationship_discoverer | GREEN |
 | `st_kg_edges.update_weight` | Storage | WRITE | edge_strengthener | GREEN |
@@ -5127,7 +5355,7 @@ Register all R4 knowledge graph modules in K0 Architecture Master Part 3.1.
 
 | Topic | Publisher | Subscribers | Schema | Band |
 |-------|-----------|-------------|--------|------|
-| `consolidation.entities.extracted.v1` | entity_extractor | relationship_discoverer | EntitiesExtracted | GREEN |
+| `consolidation.entities.read.v1` | entity_reader | entity_normalizer | EntitiesRead | GREEN |
 | `consolidation.relationships.discovered.v1` | relationship_discoverer | graph_writer | RelationshipsDiscovered | GREEN |
 | `consolidation.graph.updated.v1` | graph_writer | community_detector | GraphUpdated | GREEN |
 | `consolidation.communities.detected.v1` | community_detector | orchestrator | CommunitiesDetected | GREEN |
@@ -5143,6 +5371,860 @@ Register all R4 knowledge graph modules in K0 Architecture Master Part 3.1.
 **Files to Update**:
 
 - `k0/pipelines/k0_architecture_master.md` (Part 3.1, 4.1, 5.2)
+
+---
+
+### Milestone 5 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 5 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M5**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 3.1 | Module Master Registry | Add 7 R4 modules (entity_reader → causal_inference) | ☐ |
+| 4.1 | Event Topics Registry | Add 4 R4 KG event topics | ☐ |
+| 5.2 | Syscall Matrix | Add 7 R4 KG syscalls (st_kg_*) | ☐ |
+| 5.3 | Storage Tables | Add st_kg_nodes, st_kg_edges, st_kg_community | ☐ |
+| 7.1 | ADR Index | Update k010.8-p03 (KG construction) to ✅ Accepted | ☐ |
+| 7.1 | ADR Index | Update k010.9-p03 (causal inference) to ✅ Accepted | ☐ |
+
+**Commit Message Format**: `docs(k0): M5 complete - 7 R4 KG modules, graph storage tables registered`
+
+---
+
+## Milestone 5A: Dream-Like Exploration (R5)
+
+**Goal**: Implement creative insight generation, counterfactual thinking, forward simulation, and procedural rehearsal.
+**Duration**: 5-6 days
+**Gate**: GATE 3 (Implementation)
+**Conditional**: R5 is optional when consolidation budget is exceeded. Implement with feature flag for v1.
+
+> **Brain Analog**: REM Sleep Consolidation - Hippocampus-neocortex dialogue enables creative associations, emotional regulation, and procedural skill enhancement.
+
+### Epic 5A.1: Counterfactual Thinking (R5.1)
+
+**Description**: Generate "what if" scenarios by perturbing past events and exploring alternative outcomes.
+
+#### Issue 5A.1.1: Implement Causal Perturbation Network (CPN)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: ML Engineer
+**Labels**: `implementation`, `p03`, `r5`, `ml`
+
+**Description**:
+Implement counterfactual thinking engine based on Causal Perturbation Network algorithm.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/counterfactual_thinker.py
+
+class CounterfactualThinker:
+    def __init__(
+        self,
+        emotional_threshold: float = 0.6,
+        regret_threshold: float = -0.5,
+        max_counterfactuals_per_event: int = 3
+    ):
+        self.emotional_threshold = emotional_threshold
+        self.regret_threshold = regret_threshold
+
+    async def select_high_emotion_events(
+        self,
+        events: List[dict],
+        limit: int = 10
+    ) -> List[dict]:
+        """
+        Select events with |sentiment_score| > threshold.
+        Prioritize negative outcomes (high regret potential).
+        Rank by: emotional_impact = |sentiment| × salience × recency
+        """
+
+    async def extract_causal_chain(
+        self,
+        event: dict,
+        kg_edges: List[dict]
+    ) -> CausalDAG:
+        """
+        Build DAG of causal predecessors from st_kg_edges.
+        Identify modifiable nodes (actor-controlled) vs external factors.
+        """
+
+    def generate_counterfactuals(
+        self,
+        event: dict,
+        causal_dag: CausalDAG
+    ) -> List[Counterfactual]:
+        """
+        Generate counterfactual scenarios:
+        - Upward: "If I had X, outcome would be better"
+        - Downward: "If I had also Y, outcome would be worse"
+        - Semifactual: "Even if X, outcome unchanged" (tests necessity)
+        """
+
+    async def simulate_counterfactual_outcome(
+        self,
+        counterfactual: Counterfactual,
+        causal_dag: CausalDAG
+    ) -> float:
+        """
+        Use Bayesian network with CPT to predict outcome probability.
+        Perform do-calculus intervention (Pearl 2009).
+        """
+
+    def extract_learning_signal(
+        self,
+        original_event: dict,
+        counterfactual: Counterfactual,
+        predicted_outcome: float
+    ) -> LearningSignal:
+        """
+        Generate actionable insights:
+        - Preventable regret (>0.4 improvement)
+        - Uncontrollable factors
+        - If-then mitigation strategy
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] High-emotion event selection
+- [ ] Causal chain extraction from KG
+- [ ] Counterfactual generation (upward/downward/semifactual)
+- [ ] Bayesian outcome prediction
+- [ ] Learning signal extraction
+- [ ] 10-20 counterfactuals per cycle
+- [ ] Performance: <2 minutes
+- [ ] Unit tests with fixture events
+
+**Files to Create**:
+
+- `k0/modules/consolidation/counterfactual_thinker.py`
+- `tests/k0/modules/consolidation/test_counterfactual_thinker.py`
+
+**Dependencies**:
+
+- `pgmpy` or similar Bayesian network library
+- st_epi for high-emotion events
+- st_kg_edges for causal graph
+
+---
+
+### Epic 5A.2: Forward Simulation (R5.2)
+
+**Description**: Generate plausible future scenarios using Monte Carlo Tree Search.
+
+#### Issue 5A.2.1: Implement Temporal Projection Network (TPN-MCTS)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: ML Engineer
+**Labels**: `implementation`, `p03`, `r5`, `ml`, `planning`
+
+**Description**:
+Implement forward simulation engine using MCTS for scenario generation.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/forward_simulator.py
+
+class ForwardSimulator:
+    def __init__(
+        self,
+        exploration_constant: float = 1.414,  # sqrt(2)
+        max_rollout_depth: int = 30,  # days horizon
+        n_simulations: int = 100
+    ):
+        self.c = exploration_constant
+        self.max_depth = max_rollout_depth
+        self.n_simulations = n_simulations
+
+    async def extract_goals_and_context(
+        self,
+        tenant_id: str,
+        space_id: str
+    ) -> Tuple[List[Goal], Context]:
+        """
+        Query st_prospective for active goals.
+        Query st_procedural for upcoming routines.
+        Extract contextual constraints.
+        """
+
+    def build_state_space(
+        self,
+        current_state: State,
+        action_repertoire: List[Action],
+        transition_model: Dict
+    ) -> StateSpace:
+        """
+        Build MDP for forward simulation:
+        - States (S): Actor's situation
+        - Actions (A): From st_procedural habits
+        - Transitions (T): From st_epi history
+        - Rewards (R): Goal alignment + sentiment
+        """
+
+    def mcts_search(
+        self,
+        state_space: StateSpace,
+        goal: Goal
+    ) -> List[Scenario]:
+        """
+        Monte Carlo Tree Search with UCT.
+        Selection → Expansion → Simulation → Backpropagation
+        """
+
+    def diversify_scenarios_dpp(
+        self,
+        scenarios: List[Scenario],
+        n_diverse: int = 10
+    ) -> List[Scenario]:
+        """
+        Use Determinantal Point Process for scenario diversity.
+        Ensure qualitative variety: optimistic, pessimistic, creative paths.
+        """
+
+    def score_plausibility(
+        self,
+        scenario: Scenario,
+        historical_patterns: Dict
+    ) -> float:
+        """
+        Validate scenario realism:
+        - Historical frequency
+        - Actor consistency (cosine to routine embeddings)
+        - Social norm compliance
+        """
+
+    def assess_risk_opportunity(
+        self,
+        scenario: Scenario
+    ) -> RiskOpportunityAssessment:
+        """
+        Analyze scenario outcomes:
+        - Success probability
+        - Expected sentiment
+        - Risk exposure
+        - Hidden opportunities
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] Goal extraction from st_prospective
+- [ ] State space construction
+- [ ] MCTS implementation with UCT
+- [ ] DPP diversity sampling
+- [ ] Plausibility scoring
+- [ ] Risk/opportunity assessment
+- [ ] 5-10 scenarios per cycle
+- [ ] Performance: <2 minutes
+- [ ] Unit tests
+
+**Files to Create**:
+
+- `k0/modules/consolidation/forward_simulator.py`
+- `tests/k0/modules/consolidation/test_forward_simulator.py`
+
+**Dependencies**:
+
+- `dppy` for Determinantal Point Process
+- Custom MCTS implementation or pytorch-based
+- st_prospective for goals
+- st_procedural for action repertoire
+- st_epi for transition statistics
+
+---
+
+### Epic 5A.3: Episodic Simulation (R5.3)
+
+**Description**: Reconstruct incomplete memories using schema-driven inference.
+
+#### Issue 5A.3.1: Implement Schematic Pattern Completion (SPC-UQ)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: ML Engineer
+**Labels**: `implementation`, `p03`, `r5`, `ml`
+
+**Description**:
+Implement memory reconstruction with uncertainty quantification.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/episodic_simulator.py
+
+class EpisodicSimulator:
+    def __init__(
+        self,
+        ambiguity_threshold: float = 0.5,
+        max_reconstructions: int = 50
+    ):
+        self.ambiguity_threshold = ambiguity_threshold
+        self.max_reconstructions = max_reconstructions
+
+    async def identify_incomplete_memories(
+        self,
+        tenant_id: str,
+        space_id: str
+    ) -> List[dict]:
+        """
+        Query st_epi for episodes with:
+        - ambiguity_score > threshold
+        - Missing attributes (location, participants, sentiment)
+        Prioritize recent memories (last 30 days).
+        """
+
+    async def retrieve_schemas(
+        self,
+        episode: dict
+    ) -> List[SemanticSchema]:
+        """
+        Query st_sem for patterns matching activity_type and context.
+        Extract schema prototypes and feature distributions.
+        """
+
+    def bayesian_reconstruction(
+        self,
+        episode: dict,
+        schema: SemanticSchema
+    ) -> ReconstructedMemory:
+        """
+        Fill gaps using Bayesian inference:
+        - Prior: P(attr | schema)
+        - Likelihood: P(context | attr)
+        - Posterior: P(attr | schema, context)
+
+        Sample most probable value with confidence.
+        """
+
+    def constraint_satisfaction_temporal(
+        self,
+        episodes: List[dict]
+    ) -> List[dict]:
+        """
+        Resolve timeline ambiguities using CSP.
+        Detect contradictions for Active Learning.
+        """
+
+    def counterfactual_consistency_check(
+        self,
+        reconstruction: ReconstructedMemory,
+        kg_constraints: List[dict]
+    ) -> bool:
+        """
+        Validate reconstruction against KG constraints.
+        Reject if violating logical constraints.
+        """
+
+    def version_and_store(
+        self,
+        original: dict,
+        reconstructed: ReconstructedMemory
+    ) -> str:
+        """
+        Create new version with supersedes chain.
+        Track reconstruction_metadata for transparency.
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] Incomplete memory detection
+- [ ] Schema retrieval
+- [ ] Bayesian reconstruction with confidence
+- [ ] Temporal constraint satisfaction
+- [ ] Consistency validation
+- [ ] Versioning for reconstructions
+- [ ] Performance: <1.5 minutes
+- [ ] Unit tests
+
+**Files to Create**:
+
+- `k0/modules/consolidation/episodic_simulator.py`
+- `tests/k0/modules/consolidation/test_episodic_simulator.py`
+
+**Dependencies**:
+
+- CSP library (python-constraint)
+- st_epi for incomplete memories
+- st_sem for schemas
+- st_kg_edges for validation
+
+---
+
+### Epic 5A.4: Insight Generation (R5.4)
+
+**Description**: Discover latent patterns and creative connections via graph traversal.
+
+#### Issue 5A.4.1: Implement Bisociative Graph Traversal (BGT-SM)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: ML Engineer
+**Labels**: `implementation`, `p03`, `r5`, `ml`, `creativity`
+
+**Description**:
+Implement insight discovery using random walks and surprise maximization.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/insight_generator.py
+
+class InsightGenerator:
+    def __init__(
+        self,
+        restart_probability: float = 0.15,
+        walk_steps: int = 1000,
+        pmi_threshold: float = 3.0,
+        serendipity_threshold: float = 0.6
+    ):
+        self.c = restart_probability
+        self.walk_steps = walk_steps
+        self.pmi_threshold = pmi_threshold
+        self.serendipity_threshold = serendipity_threshold
+
+    def build_semantic_distance_map(
+        self,
+        nodes: List[dict],
+        embeddings: Dict[str, np.ndarray]
+    ) -> Dict[Tuple[str, str], float]:
+        """
+        Combine graph geodesic + embedding cosine distance.
+        semantic_distance = α × graph_dist + (1-α) × embed_dist
+        """
+
+    def random_walk_with_restart(
+        self,
+        graph: nx.DiGraph,
+        seed_node: str
+    ) -> Dict[str, float]:
+        """
+        RWR from seed concept.
+        Favor low observation_count edges (unexplored).
+        Return visit frequencies.
+        """
+
+    def compute_surprise(
+        self,
+        connection: Tuple[str, str],
+        cooccurrence_stats: Dict
+    ) -> float:
+        """
+        Pointwise Mutual Information:
+        PMI = log(P_observed / P_expected)
+        High PMI = surprising connection.
+        """
+
+    def bisociative_recombination(
+        self,
+        connection: Tuple[str, str],
+        frame_assignments: Dict[str, str]
+    ) -> Optional[Insight]:
+        """
+        Generate insight when entities from different frames connect.
+        Validate using causal graph path.
+        Rate novelty = semantic_distance × PMI / (obs_count + 1)
+        """
+
+    def find_analogies(
+        self,
+        graph: nx.DiGraph
+    ) -> List[Analogy]:
+        """
+        Structure mapping: find isomorphic subgraphs.
+        Generate transferrable insights.
+        """
+
+    def score_serendipity(
+        self,
+        insight: Insight,
+        goals: List[Goal]
+    ) -> float:
+        """
+        serendipity = novelty × relevance × actionability
+        Filter insights below threshold.
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] Semantic distance mapping
+- [ ] Random walk implementation
+- [ ] PMI-based surprise scoring
+- [ ] Bisociative frame recombination
+- [ ] Analogy detection via structure mapping
+- [ ] Serendipity scoring
+- [ ] 10-30 insights per cycle
+- [ ] Performance: <2 minutes
+- [ ] Unit tests
+
+**Files to Create**:
+
+- `k0/modules/consolidation/insight_generator.py`
+- `tests/k0/modules/consolidation/test_insight_generator.py`
+
+**Dependencies**:
+
+- `networkx` or `igraph` for graph operations
+- st_kg_dom and st_kg_edges
+- st_vec for embedding distances
+
+---
+
+### Epic 5A.5: Motor Skill Rehearsal (R5.5)
+
+**Description**: Optimize procedural sequences using reinforcement learning.
+
+#### Issue 5A.5.1: Implement Temporal Difference Learning for Habits (TDL-HCO)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: ML Engineer
+**Labels**: `implementation`, `p03`, `r5`, `ml`, `rl`
+
+**Description**:
+Implement habit chain optimization using TD learning.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/motor_rehearser.py
+
+class MotorRehearser:
+    def __init__(
+        self,
+        learning_rate: float = 0.1,
+        discount_factor: float = 0.9,
+        consistency_threshold: float = 0.8
+    ):
+        self.alpha = learning_rate
+        self.gamma = discount_factor
+        self.consistency_threshold = consistency_threshold
+
+    async def select_routines_for_rehearsal(
+        self,
+        tenant_id: str,
+        actor_id: str
+    ) -> List[dict]:
+        """
+        Query st_procedural for:
+        - consistency_score < threshold (not automatized)
+        - Recent performance degradation (streak declining)
+        """
+
+    def build_mdp(
+        self,
+        routine: dict,
+        execution_history: List[dict]
+    ) -> MDP:
+        """
+        Model habit as MDP:
+        - States: Steps in sequence
+        - Actions: Possible next steps
+        - Transitions: From st_epi history
+        - Rewards: Completion +10, pleasant +2, unpleasant -1
+        """
+
+    def td_learning(
+        self,
+        mdp: MDP,
+        episodes: List[List[State]]
+    ) -> Dict[State, float]:
+        """
+        Temporal Difference learning for value estimation.
+        V(s) ← V(s) + α × (R + γ × V(s') - V(s))
+        """
+
+    def detect_bottlenecks(
+        self,
+        value_function: Dict[State, float]
+    ) -> List[Bottleneck]:
+        """
+        Identify steps with value gradient ΔV < -2.
+        These are inefficient/unpleasant steps.
+        """
+
+    async def explore_alternatives(
+        self,
+        bottleneck: Bottleneck,
+        actor_id: str
+    ) -> List[Alternative]:
+        """
+        Query similar routines from other actors.
+        Query historical deviations from st_epi.
+        Simulate alternatives and predict value.
+        """
+
+    def chunk_actions(
+        self,
+        routine: dict
+    ) -> dict:
+        """
+        Identify repeated subsequences.
+        Create composite "chunk" actions.
+        Reduces cognitive load.
+        """
+
+    def rehearse_accelerated(
+        self,
+        optimized_routine: dict,
+        rehearsal_count: int = 5
+    ) -> RehearsalResult:
+        """
+        Replay at 10x speed.
+        Update confidence and transition probabilities.
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] Routine selection for rehearsal
+- [ ] MDP construction
+- [ ] TD learning implementation
+- [ ] Bottleneck detection
+- [ ] Alternative exploration
+- [ ] Action chunking
+- [ ] Accelerated rehearsal
+- [ ] 3-8 routines per cycle
+- [ ] Performance: <30 seconds
+- [ ] Unit tests
+
+**Files to Create**:
+
+- `k0/modules/consolidation/motor_rehearser.py`
+- `tests/k0/modules/consolidation/test_motor_rehearser.py`
+
+**Dependencies**:
+
+- PyTorch with TD(λ) or custom implementation
+- st_procedural for routines
+- st_epi for execution history
+- st_prospective for optimization recommendations
+
+---
+
+### Epic 5A.6: Dream Phase Orchestration
+
+**Description**: Coordinate R5 sub-phases with budget management.
+
+#### Issue 5A.6.1: Implement Dream Simulator (M22)
+
+**Type**: Implementation
+**Priority**: Medium (v2 feature)
+**Assignee**: Backend Engineer
+**Labels**: `implementation`, `p03`, `r5`
+
+**Description**:
+Implement M22 DreamSimulator to orchestrate all R5 sub-phases.
+
+**Implementation Requirements**:
+
+```python
+# k0/modules/consolidation/dream_simulator.py
+
+class DreamSimulator:
+    def __init__(
+        self,
+        enabled: bool = False,  # Feature flag for v1
+        budget_minutes: float = 8.0,
+        sub_phase_budgets: Dict[str, float] = None
+    ):
+        self.enabled = enabled
+        self.budget_minutes = budget_minutes
+        self.sub_phase_budgets = sub_phase_budgets or {
+            'counterfactual': 2.0,
+            'forward_sim': 2.0,
+            'episodic_sim': 1.5,
+            'insight_gen': 2.0,
+            'motor_rehearsal': 0.5
+        }
+
+    async def should_run(
+        self,
+        cycle_elapsed_minutes: float,
+        cycle_budget_minutes: float = 90.0
+    ) -> bool:
+        """
+        Run R5 only if:
+        1. Feature flag enabled
+        2. Remaining budget ≥ 8 minutes
+        3. R4 completed successfully
+        """
+
+    async def run(
+        self,
+        consolidation_context: ConsolidationContext
+    ) -> DreamResult:
+        """
+        Orchestrate R5 sub-phases:
+        1. R5.1 Counterfactual Thinking
+        2. R5.2 Forward Simulation
+        3. R5.3 Episodic Simulation
+        4. R5.4 Insight Generation
+        5. R5.5 Motor Skill Rehearsal
+
+        Skip remaining if budget exceeded.
+        """
+
+    async def store_dream_outputs(
+        self,
+        result: DreamResult
+    ) -> int:
+        """
+        Write to st_prospective and st_sem:
+        - Counterfactual scenarios
+        - Forward simulation scenarios
+        - Creative insights
+        - Optimization recommendations
+
+        Returns count of records written.
+        """
+```
+
+**Acceptance Criteria**:
+
+- [ ] Feature flag implementation
+- [ ] Budget checking
+- [ ] Sub-phase orchestration
+- [ ] Graceful degradation (skip if budget exceeded)
+- [ ] Output storage to st_prospective and st_sem
+- [ ] Metrics emission
+- [ ] Unit tests
+- [ ] Integration test with full cycle
+
+**Files to Create**:
+
+- `k0/modules/consolidation/dream_simulator.py`
+- `tests/k0/modules/consolidation/test_dream_simulator.py`
+
+---
+
+### Epic 5A.7: K0 Architecture Master - R5 Module Registration
+
+**Description**: Register all Milestone 5A (R5) dream modules in K0 Architecture Master.
+
+#### Issue 5A.7.1: Update K0 Module Registry - R5 Components
+
+**Type**: Documentation
+**Priority**: Medium
+**Assignee**: Backend Engineer
+**Labels**: `k0-governance`, `documentation`, `p03`
+
+**Description**:
+Register all R5 dream modules in K0 Architecture Master Part 3.1.
+
+**K0 Registration Requirements**:
+
+1. **Part 3.1 - Module Registry** - Add entries for:
+
+| Module | Type | Status | Layer | Pipelines | Lifecycle |
+|--------|------|--------|-------|-----------|-----------|
+| `consolidation.counterfactual_thinker` | Service | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.forward_simulator` | Service | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.episodic_simulator` | Service | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.insight_generator` | Service | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.motor_rehearser` | Service | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+| `consolidation.dream_simulator` (M22) | Orchestrator | 📝 Design | K0/Consolidation | P03 | Per-Cycle |
+
+2. **Part 5.2 - Syscall Matrix** - Add syscall entries:
+
+| Syscall | Target | Operation | Module | Band |
+|---------|--------|-----------|--------|------|
+| `st_epi.read_high_emotion` | Storage | READ | counterfactual_thinker | GREEN |
+| `st_kg_edges.read_causal` | Storage | READ | counterfactual_thinker | GREEN |
+| `st_prospective.read_goals` | Storage | READ | forward_simulator | GREEN |
+| `st_procedural.read_routines` | Storage | READ | motor_rehearser | GREEN |
+| `st_prospective.write_scenario` | Storage | WRITE | forward_simulator | GREEN |
+| `st_prospective.write_counterfactual` | Storage | WRITE | counterfactual_thinker | GREEN |
+| `st_sem.write_insight` | Storage | WRITE | insight_generator | GREEN |
+| `st_prospective.write_optimization` | Storage | WRITE | motor_rehearser | GREEN |
+
+3. **Part 4.1 - Event Topics Registry** - Add event topics:
+
+| Topic | Publisher | Subscribers | Schema | Band |
+|-------|-----------|-------------|--------|------|
+| `consolidation.counterfactual.generated.v1` | counterfactual_thinker | orchestrator | CounterfactualGenerated | GREEN |
+| `consolidation.scenario.simulated.v1` | forward_simulator | orchestrator | ScenarioSimulated | GREEN |
+| `consolidation.insight.discovered.v1` | insight_generator | orchestrator | InsightDiscovered | GREEN |
+| `consolidation.routine.optimized.v1` | motor_rehearser | orchestrator | RoutineOptimized | GREEN |
+| `consolidation.dream.completed.v1` | dream_simulator | orchestrator | DreamCompleted | GREEN |
+
+4. **Part 7.1 - ADR Index** - Add ADR entry:
+
+| ADR | Title | Status | Affects | Date | Owner |
+|-----|-------|--------|---------|------|-------|
+| ADR-k010.10 | Dream Phase Algorithms | 📝 Draft | P03/R5 | 2025-12-14 | ML Engineer |
+
+**Acceptance Criteria**:
+
+- [ ] All R5 modules added to Part 3.1 Module Registry
+- [ ] R5 syscalls added to Part 5.2 Syscall Matrix
+- [ ] Event topics added to Part 4.1 Event Topics Registry
+- [ ] ADR-k010.10 added to Part 7.1 ADR Index
+- [ ] Feature flag documented
+- [ ] Status set to 📝 Design (v2 feature)
+
+**Files to Update**:
+
+- `k0/pipelines/k0_architecture_master.md` (Part 3.1, 4.1, 5.2, 7.1)
+
+---
+
+#### Issue 5A.7.2: Create ADR k010.10 - Dream Phase Algorithms
+
+**Type**: ADR
+**Priority**: Medium
+**Assignee**: ML Engineer
+**Labels**: `architecture`, `adr`, `p03`, `r5`
+
+**Description**:
+Document all 5 novel algorithms introduced in R5:
+
+1. **Causal Perturbation Network (CPN)** - Emotion-weighted counterfactual generation
+2. **Temporal Projection Network with MCTS (TPN-MCTS)** - Personalized scenario generation
+3. **Schematic Pattern Completion with UQ (SPC-UQ)** - Confidence-tracked memory reconstruction
+4. **Bisociative Graph Traversal with Surprise Maximization (BGT-SM)** - Insight discovery
+5. **Temporal Difference Learning for Habit Chain Optimization (TDL-HCO)** - Procedural optimization
+
+**Acceptance Criteria**:
+
+- [ ] All 5 algorithms documented
+- [ ] Research citations included
+- [ ] Pseudocode for each algorithm
+- [ ] Complexity analysis
+- [ ] Novel contributions explained
+- [ ] Feature flag rationale
+
+**Files to Create**:
+
+- `docs/architecture/decisions-K0/k010.10_dream_phase_algorithms.md`
+
+---
+
+### Milestone 5A Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 5A complete, verify these K0 updates:
+
+**K0 Closure Checklist for M5A**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 3.1 | Module Master Registry | Add 5 R5 modules (counterfactual_thinker → motor_rehearser) | ☐ |
+| 3.1 | Module Master Registry | Status = 📝 Design (v2 feature flagged) | ☐ |
+| 4.1 | Event Topics Registry | Add 5 R5 dream event topics | ☐ |
+| 5.2 | Syscall Matrix | Add R5 dream syscalls (all GREEN band) | ☐ |
+| 7.1 | ADR Index | Create k010.10-p03 (dream algorithms) as 📝 Draft | ☐ |
+| 7.1 | ADR Index | Create k010.10-dream-phase-algorithms.md file | ☐ |
+
+**Special Note**: R5 modules are v2 features. Mark as 📝 Design in Part 3.1 to indicate implementation deferred.
+
+**Commit Message Format**: `docs(k0): M5A complete - 5 R5 dream modules registered (v2 flagged), k010.10 ADR created`
 
 ---
 
@@ -5764,6 +6846,24 @@ Register all R6 and R7 state writer modules in K0 Architecture Master Part 3.1.
 
 ---
 
+### Milestone 6 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 6 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M6**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 3.1 | Module Master Registry | Add R6 modules (dedup_writer, decay_writer, status_writer) | ☐ |
+| 3.1 | Module Master Registry | Add R7 modules (epi_writer, sem_writer, kg_writer, vec_writer) | ☐ |
+| 4.1 | Event Topics Registry | Add 6 R6-R7 writer event topics | ☐ |
+| 5.2 | Syscall Matrix | Add 10 batch write syscalls | ☐ |
+| 4.1 | Event Topics | Document cross-pipeline event (P08 vec queued) | ☐ |
+
+**Commit Message Format**: `docs(k0): M6 complete - R6-R7 writers, 10 batch syscalls, P08 cross-link documented`
+
+---
+
 ## Milestone 7: Event Emission & Orchestration (R8)
 
 **Goal**: Implement event emission, offset tracking, and pipeline orchestration.
@@ -6052,7 +7152,7 @@ class ConsolidationOrchestrator:
         ca1_bridge: CA1Bridge,
         duplicate_detector: DuplicateDetector,
         novelty_scorer: NoveltyScorer,
-        entity_extractor: EntityExtractor,
+        entity_reader: EntityReader,
         kg_builder: KGBuilder,
         writers: WriterRegistry,
         event_emitter: ConsolidationEventEmitter,
@@ -6259,6 +7359,27 @@ Update Part 2.1 Pipeline Registry - P03 status to ⚠️ Implementation:
 - [ ] Part 5.2 Syscall Matrix - all syscalls registered
 - [ ] Implementation checklist items verified
 - [ ] Status transitions documented
+
+---
+
+### Milestone 7 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 7 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M7**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 2.1 | Pipeline Registry | Update P03 status: 🎯 Planning → ⚠️ Implementation | ☐ |
+| 3.1 | Module Master Registry | Add R8 modules (event_emitter, offset_tracker, orchestrator, metrics_collector) | ☐ |
+| 4.1 | Event Topics Registry | Add 4 final event topics (cycle.completed, cycle.failed, memory.consolidated, metrics.recorded) | ☐ |
+| 5.2 | Syscall Matrix | Add R8 syscalls (offset tracking, bus emit) | ☐ |
+| 5.3 | Storage Tables | st_consolidation_cycles registered | ☐ |
+| 7.1 | ADR Index | Update k010.11-p03 (UltraBERT consumption) to ✅ Accepted | ☐ |
+
+**This is the final implementation milestone. Verify ALL 37 modules registered before proceeding to M8.**
+
+**Commit Message Format**: `docs(k0): M7 complete - P03 status → Implementation, all 37 modules registered`
 
 ---
 
@@ -6475,11 +7596,11 @@ Unit tests for CA1Bridge decision making.
 **Description**:
 Unit tests for KG extraction and construction.
 
-**Test Cases for EntityExtractor**:
+**Test Cases for EntityReader** (reads from P02 entities_json):
 
-1. `test_spacy_ner_extraction` - PERSON, ORG, GPE detected
-2. `test_all_text_fields_processed` - text, activity, location, participants
-3. `test_batch_processing` - nlp.pipe() performance
+1. `test_parse_entities_json` - Parse entities from st_hipp_events.entities_json
+2. `test_all_entity_types` - PERSON, ORG, GPE, KINSHIP, FAMILY_EVENT types handled
+3. `test_batch_read` - Batch reading for multiple events
 
 **Test Cases for EntityNormalizer**:
 
@@ -6502,12 +7623,12 @@ Unit tests for KG extraction and construction.
 **Acceptance Criteria**:
 
 - [ ] All test cases implemented
-- [ ] NLP model mocking for unit tests
-- [ ] Integration test with real spaCy
+- [ ] No NLP model mocking needed (reading from DB)
+- [ ] Integration test with real st_hipp_events data
 
 **Files to Create**:
 
-- `tests/k0/modules/consolidation/test_entity_extractor.py`
+- `tests/k0/modules/consolidation/test_entity_reader.py`
 - `tests/k0/modules/consolidation/test_entity_normalizer.py`
 - `tests/k0/modules/consolidation/test_cooccurrence_detector.py`
 - `tests/k0/modules/consolidation/test_causal_inference.py`
@@ -6807,6 +7928,32 @@ async def test_10000_event_batch_stress(db_session):
 
 ---
 
+### Milestone 8 Completion: K0 Architecture Master Closure
+
+> **⚠️ MANDATORY**: Before marking Milestone 8 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M8**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 8.1 | Coverage Requirements | Document P03 test coverage target (≥90%) | ☐ |
+| 8.2 | Quality Gates | P03 passes all quality gates | ☐ |
+| 8.3 | Module Test Status | All 37 modules have test coverage | ☐ |
+| 3.1 | Module Registry | All module statuses verified as ⚠️ Implementation | ☐ |
+
+**Testing Verification**:
+
+| Test Category | Count | Coverage |
+|---------------|-------|----------|
+| Unit Tests | Per module | ≥90% |
+| Integration Tests | Per epic | Cross-module flows |
+| Performance Tests | 2 benchmarks | SLOs documented |
+| Contract Tests | Per interface | Schema compliance |
+
+**Commit Message Format**: `docs(k0): M8 complete - test coverage verified, quality gates passed`
+
+---
+
 ## Milestone 9: Deployment & Observability
 
 **Goal**: Production deployment readiness.
@@ -6843,8 +7990,9 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download spaCy model
-RUN python -m spacy download en_core_web_sm
+# NOTE: No NLP models required!
+# P03 reads pre-computed UltraBERT outputs from st_hipp_events and st_vec
+# P02 already computed: entities_json, kg_triples_json, sentiment, emotions, embeddings
 
 # Copy application code
 COPY k0/modules/consolidation /app/consolidation
@@ -6858,7 +8006,7 @@ CMD ["python", "-m", "consolidation.worker"]
 
 - [ ] Dockerfile created
 - [ ] Multi-stage build for size optimization
-- [ ] spaCy model included
+- [ ] No NLP models needed (lightweight image)
 - [ ] Health check endpoint
 - [ ] Resource limits documented
 
@@ -7242,23 +8390,56 @@ After all tests pass and deployment is verified, update P03 status to Production
 
 ---
 
+### Milestone 9 Completion: K0 Architecture Master Closure (FINAL)
+
+> **⚠️ MANDATORY**: Before marking Milestone 9 complete, verify these K0 updates:
+
+**K0 Closure Checklist for M9 (FINAL)**:
+
+| Part | Section | Update Required | Status |
+|------|---------|-----------------|--------|
+| 2.1 | Pipeline Registry | P03 status: ⚠️ Implementation → ✅ Production | ☐ |
+| 3.1 | Module Master Registry | All 37 consolidation.* modules → ✅ Production | ☐ |
+| 5.1 | Global Contract Registry | All P03 contracts marked ✅ Validated | ☐ |
+| 7.1 | ADR Index | All 12 P03 ADRs → 🏁 Implemented | ☐ |
+| 7.1 | ADR Index | ADR status column updated | ☐ |
+| 8.2 | Quality Gates | P03 production readiness documented | ☐ |
+
+**Final Verification - Complete K0 Audit**:
+
+| Category | Expected | Actual | Status |
+|----------|----------|--------|--------|
+| Modules | 37 | | ☐ |
+| Syscalls | 28+ | | ☐ |
+| Event Topics | 20+ | | ☐ |
+| ADRs | 12 | | ☐ |
+| Contracts | 15+ | | ☐ |
+| Storage Tables | 8+ | | ☐ |
+
+**Commit Message Format**: `docs(k0): M9 complete - P03 → Production, all 12 ADRs implemented, K0 audit passed`
+
+**P03 IS NOT COMPLETE UNTIL THIS CHECKLIST IS 100% VERIFIED.**
+
+---
+
 ## Summary
 
 ### Total Issue Count by Milestone
 
-| Milestone | Epic Count | Issue Count | K0 Updates |
-|-----------|------------|-------------|------------|
-| M0: Pre-Implementation | 3 | 16 | 2 (Initial Registration) |
-| M1: Contracts & Infrastructure | 6 | 34 | 1 (Contract Registry) |
-| M2: Core Consolidation (R0-R1) | 3 | 8 | 1 (R0/R1 Modules) |
-| M3: Pattern Extraction (R2) | 5 | 12 | 1 (R2 Modules) |
-| M4: Memory Management (R3) | 6 | 10 | 1 (R3 Modules) |
-| M5: Knowledge Graph (R4) | 4 | 9 | 1 (R4 Modules) |
-| M6: State Writers (R6-R7) | 3 | 11 | 1 (R6/R7 Modules) |
-| M7: Event Emission (R8) | 5 | 7 | 1 (R8 Modules + Status) |
-| M8: Testing & Validation | 3 | 14 | 0 |
-| M9: Deployment & Observability | 4 | 8 | 1 (Production Status) |
-| **TOTAL** | **42** | **129** | **10** |
+| Milestone | Epic Count | Issue Count | K0 Updates | K0 Closure |
+|-----------|------------|-------------|------------|------------|
+| M0: Pre-Implementation | 3 | 16 | 2 (Initial Registration) | ☐ 4 items |
+| M1: Contracts & Infrastructure | 6 | 34 | 1 (Contract Registry) | ☐ 5 items |
+| M2: Core Consolidation (R0-R1) | 3 | 8 | 1 (R0/R1 Modules) | ☐ 5 items |
+| M3: Pattern Extraction (R2) | 5 | 12 | 1 (R2 Modules) | ☐ 6 items |
+| M4: Memory Management (R3) | 6 | 10 | 1 (R3 Modules) | ☐ 7 items |
+| M5: Knowledge Graph (R4) | 4 | 9 | 1 (R4 Modules) | ☐ 6 items |
+| M5A: Dream Exploration (R5) | 7 | 9 | 2 (R5 Modules + ADR) | ☐ 6 items |
+| M6: State Writers (R6-R7) | 3 | 11 | 1 (R6/R7 Modules) | ☐ 5 items |
+| M7: Event Emission (R8) | 5 | 7 | 1 (R8 Modules + Status) | ☐ 6 items |
+| M8: Testing & Validation | 3 | 14 | 0 | ☐ 4 items |
+| M9: Deployment & Observability | 4 | 8 | 1 (Production Status) | ☐ 6 items (FINAL) |
+| **TOTAL** | **49** | **138** | **12** | **60 items** |
 
 ### K0 Architecture Master Update Summary
 
@@ -7272,6 +8453,7 @@ After all tests pass and deployment is verified, update P03 status to Production
 | M3 | Issue 3.5.1 | Part 3.1, 4.1, 5.2 | R2 Module Registration |
 | M4 | Issue 4.6.1 | Part 3.1, 4.1, 5.2 | R3 Module Registration |
 | M5 | Issue 5.4.1 | Part 3.1, 4.1, 5.2 | R4 Module Registration |
+| M5A | Issue 5A.7.1 | Part 3.1, 4.1, 5.2, 7.1 | R5 Module + ADR Registration |
 | M6 | Issue 6.3.1 | Part 3.1, 4.1, 5.2 | R6/R7 Module Registration |
 | M7 | Issue 7.5.1 | Part 2.1, 3.1, 4.1, 5.2 | R8 Registration + Status Update |
 | M9 | Issue 9.4.1 | Part 2.1, 3.1, 7.1 | Production Status Update |
@@ -7279,10 +8461,12 @@ After all tests pass and deployment is verified, update P03 status to Production
 ### Critical Path
 
 ```
-M0 (Pre-Impl) → M1 (Contracts) → M2 (R0-R1) → M3 (R2) → [M4 || M5] → M6 → M7 → M8 → M9
-                                                           ↓
-                                                      (Parallel)
+M0 (Pre-Impl) → M1 (Contracts) → M2 (R0-R1) → M3 (R2) → [M4 || M5] → M5A (optional) → M6 → M7 → M8 → M9
+                                                           ↓                              ↑
+                                                      (Parallel)────────────────────────────
 ```
+
+**Note**: M5A (Dream Exploration) is **optional** and runs only if consolidation budget allows. Implemented with feature flag, disabled in v1.
 
 ### Estimated Timeline
 
@@ -7293,21 +8477,25 @@ M0 (Pre-Impl) → M1 (Contracts) → M2 (R0-R1) → M3 (R2) → [M4 || M5] → M
 | M2: Core Consolidation | 5 days | Week 3-4 |
 | M3: Pattern Extraction | 6 days | Week 4-5 |
 | M4+M5: Memory + KG (Parallel) | 6 days | Week 5-6 |
+| M5A: Dream Exploration (v2) | 5 days | Week 6-7 (parallel track) |
 | M6: State Writers | 5 days | Week 6-7 |
 | M7: Event Emission | 4 days | Week 7-8 |
 | M8: Testing | 6 days | Week 8-9 |
 | M9: Deployment | 4 days | Week 9-10 |
-| **Total** | **48 days** | **~10 weeks** |
+| **Total (v1 without R5)** | **48 days** | **~10 weeks** |
+| **Total (v2 with R5)** | **53 days** | **~11 weeks** |
 
 ### Risk Register
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| Budget overrun (90 min) | High | Medium | R3/R4 parallel, skip R5 |
-| spaCy performance | Medium | Low | Batch processing, model caching |
+| Budget overrun (90 min) | High | Medium | R5 feature flag (skip if budget exceeded) |
 | P08 backpressure | Medium | Medium | Queue depth limits, circuit breaker |
 | Lock contention | Low | Low | Stale lock cleanup, timeout |
-| Embedding model size | Medium | Low | Lazy loading, shared instance |
+| st_vec missing embeddings | Low | Low | Graceful fallback, skip event in cluster |
+
+> **Note**: NLP model performance risks eliminated — P03 reads pre-computed UltraBERT outputs
+> from P02 (entities_json, embeddings, sentiment). No model loading or inference in P03.
 
 ---
 
@@ -7360,7 +8548,7 @@ k0/
 │       ├── importance_scorer.py
 │       ├── priority_weighter.py
 │       ├── replay_sequencer.py
-│       ├── embedding_generator.py
+│       ├── embedding_reader.py
 │       ├── distance_calculator.py
 │       ├── episodic_clusterer.py
 │       ├── common_element_extractor.py
@@ -7379,13 +8567,19 @@ k0/
 │       ├── decay_calculator.py
 │       ├── archiver.py
 │       ├── tombstone_manager.py
-│       ├── entity_extractor.py
+│       ├── entity_reader.py
 │       ├── entity_normalizer.py
 │       ├── cooccurrence_detector.py
 │       ├── temporal_relationship_detector.py
 │       ├── graph_node_manager.py
 │       ├── graph_edge_manager.py
 │       ├── causal_inference.py
+│       ├── counterfactual_thinker.py
+│       ├── forward_simulator.py
+│       ├── episodic_simulator.py
+│       ├── insight_generator.py
+│       ├── motor_rehearser.py
+│       ├── dream_simulator.py
 │       ├── event_emitter.py
 │       ├── offset_manager.py
 │       ├── metrics_collector.py
@@ -7419,16 +8613,16 @@ k0/
 │           └── cronjob.yaml
 └── storage/
     └── migrations/
-        ├── 0030_create_st_epi.py
-        ├── 0031_create_st_sem.py
-        ├── 0032_create_st_procedural.py
-        ├── 0033_create_st_social.py
-        ├── 0034_create_st_prospective.py
-        ├── 0035_create_st_kg_dom.py
-        ├── 0036_create_st_kg_edges.py
-        ├── 0037_create_st_vec.py
-        ├── 0038_create_pipeline_offsets.py
-        └── 0039_create_consolidation_lock.py
+        ├── 0030_st_epi.sql
+        ├── 0031_st_sem.sql
+        ├── 0032_st_procedural.sql
+        ├── 0033_st_social.sql
+        ├── 0034_st_prospective.sql
+        ├── 0035_st_kg_dom.sql
+        ├── 0036_st_kg_edges.sql
+        ├── 0037_st_vec.sql
+        ├── 0038_st_fts.sql
+        └── 0039_pipeline_offsets.sql
 
 tests/
 ├── k0/
@@ -7445,7 +8639,7 @@ tests/
 │           ├── test_importance_scorer.py
 │           ├── test_priority_weighter.py
 │           ├── test_replay_sequencer.py
-│           ├── test_embedding_generator.py
+│           ├── test_embedding_reader.py
 │           ├── test_distance_calculator.py
 │           ├── test_episodic_clusterer.py
 │           ├── test_common_element_extractor.py
@@ -7464,13 +8658,19 @@ tests/
 │           ├── test_decay_calculator.py
 │           ├── test_archiver.py
 │           ├── test_tombstone_manager.py
-│           ├── test_entity_extractor.py
+│           ├── test_entity_reader.py
 │           ├── test_entity_normalizer.py
 │           ├── test_cooccurrence_detector.py
 │           ├── test_temporal_relationship_detector.py
 │           ├── test_graph_node_manager.py
 │           ├── test_graph_edge_manager.py
 │           ├── test_causal_inference.py
+│           ├── test_counterfactual_thinker.py
+│           ├── test_forward_simulator.py
+│           ├── test_episodic_simulator.py
+│           ├── test_insight_generator.py
+│           ├── test_motor_rehearser.py
+│           ├── test_dream_simulator.py
 │           ├── test_event_emitter.py
 │           ├── test_offset_manager.py
 │           ├── test_metrics_collector.py
@@ -7501,15 +8701,18 @@ tests/
 docs/
 ├── architecture/
 │   └── decisions-K0/
-│       ├── 0025-p03-consolidation-architecture.md
-│       ├── 0026-sleep-cycle-state-machine.md
-│       ├── 0027-episodic-clustering-algorithm.md
-│       ├── 0028-ca1-bridge-decision-protocol.md
-│       ├── 0029-simhash-deduplication.md
-│       ├── 0030-kg-causal-inference.md
-│       ├── 0031-p08-embedding-coordination.md
-│       ├── 0032-p03-trigger-priority.md
-│       └── 0033-consolidation-lock-management.md
+│       ├── k010-p03-consolidation-architecture.md
+│       ├── k010.1-sleep-cycle-state-machine.md
+│       ├── k010.2-importance-scoring-formula.md
+│       ├── k010.3-episodic-clustering-algorithm.md
+│       ├── k010.4-ca1-bridge-decision-protocol.md
+│       ├── k010.5-simhash-deduplication.md
+│       ├── k010.6-entity-normalization-strategy.md
+│       ├── k010.7-8-layer-memory-write-coordination.md
+│       ├── k010.8-p08-embedding-coordination.md
+│       ├── k010.9-capability-based-security.md
+│       ├── k010.10-dream-phase-algorithms.md
+│       └── k010.11-ultrabert-data-consumption.md
 ├── plans/
 │   └── P03_implementation_plan_v2.md (this file)
 └── runbooks/
@@ -7522,15 +8725,24 @@ docs/
 # pyproject.toml additions
 
 [project.dependencies]
-sentence-transformers = ">=2.2.0"
-spacy = ">=3.5.0"
-scikit-learn = ">=1.2.0"  # DBSCAN
+# NOTE: spaCy and sentence-transformers REMOVED — P03 consumes UltraBERT outputs from P02
+# P02 already computed: entities_json, kg_triples_json, sentiment, emotions, 768-dim embeddings
+# P03 reads from st_hipp_events and st_vec — ZERO new model calls required
+scikit-learn = ">=1.2.0"  # DBSCAN clustering
 numpy = ">=1.24.0"
 prometheus-client = ">=0.16.0"
 mmh3 = ">=3.0.0"  # MurmurHash3 for SimHash
-python-Levenshtein = ">=0.20.0"
+python-Levenshtein = ">=0.20.0"  # Fuzzy string matching for entity resolution
 croniter = ">=1.3.0"  # Cron expression parsing
+pgmpy = ">=0.1.23"  # Bayesian networks for R5 counterfactuals
+dppy = ">=0.3.2"  # Determinantal Point Process for R5 scenario diversity
+python-constraint = ">=1.4.0"  # CSP for R5 episodic simulation
+networkx = ">=3.1"  # Graph operations for R5 insight generation
 ```
+
+> **Architecture Decision (ADR-k010.11)**: P03 does NOT load any NLP models. All NLP outputs
+> (NER, sentiment, emotions, embeddings) are pre-computed by P02 via UltraBERT single-pass
+> and stored in `st_hipp_events` and `st_vec`. P03 reads these outputs directly from the database.
 
 ---
 
@@ -7541,7 +8753,7 @@ croniter = ">=1.3.0"  # Cron expression parsing
 | Q1 | M24 circular dependency | Split Coordinator/Executor - tracked in Issue 0.2.1 |
 | Q2 | Recency half-life | 7 days default - configurable in ImportanceScorer |
 | Q3 | Replay sequence gap | 200ms theta gaps in ReplaySequencer |
-| Q4 | Budget 182min vs 90min | R5 skip + R3/R4 parallel - validated in Issue 0.2.2 |
+| Q4 | Budget 182min vs 90min | R5 feature flag (skip if budget exceeded) + R3/R4 parallel |
 | Q5 | Race condition batch select | Lock acquisition in Issue 2.1.1 |
 | Q6 | DBSCAN eps | 0.3 default - tuned via validation tests |
 | Q7 | Pattern type classification | Heuristic in temporal_pattern_detector.py |
@@ -7561,274 +8773,11 @@ croniter = ">=1.3.0"  # Cron expression parsing
 | Q21 | Trigger priority | Manual > Threshold > Idle > Scheduled |
 | Q22 | Lock timeout | 30 seconds default, 2 hour stale cleanup |
 | Q23 | Checkpoint interval | Every 100 events for crash recovery |
+| Q24 | R5 Dream phase enablement | Feature flag (default: disabled in v1, enabled in v2) |
+| Q25 | R5 sub-phase budgets | Counterfactual: 2min, Forward: 2min, Episodic: 1.5min, Insight: 2min, Motor: 0.5min |
 
 ---
 
 *Document Version: 2.0.0*
 *Last Updated: 2025-01-XX*
 *Status: Ready for Implementation*
-
-
-
-I'll read both the P03 dossier and implementation plan in full to provide a comprehensive analysis.
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#1-1), lines 1 to 300
-
-Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#1-1), lines 1 to 300
-
-Let me continue reading both documents to get the complete picture:
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#300-300), lines 300 to 800
-
-Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#300-300), lines 300 to 800
-
-Let me continue reading to get the complete picture, especially the phases and P08 coordination sections:
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#800-800), lines 800 to 1400
-
-Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#800-800), lines 800 to 2000
-
-Let me continue reading to get the P08 coordination and embedding details:
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#1400-1400), lines 1400 to 2000
-
-Searched for regex `P08|embedding|st_vec|PENDING|without embeddings|embedding.*required` (`**/d:\familyos\docs\pipelines\P03_consolidation_dossier.md`), no results
-
-Searched for regex `P08|embedding|st_vec|PENDING|without.*embedding|embedding.*required`, 20 results
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#2000-2000), lines 2000 to 2700
-
-Now let me read the section that discusses the embedding requirements and P08 coordination more specifically:
-
-Read [](file:///d%3A/familyos/docs/pipelines/P03_consolidation_dossier.md#3200-3200), lines 3200 to 4000
-
-Read [](file:///d%3A/familyos/docs/plans/P03_implementation_plan_v2.md#6500-6500), lines 6500 to 7570
-
-Now I have a comprehensive understanding of both documents. Let me create a detailed analysis.
-
-Created 4 todos
-
-Based on my comprehensive analysis of both the P03 Consolidation Dossier (~16,000 lines) and Implementation Plan v2 (~7,500 lines), here's my detailed assessment:
-
----
-
-## Executive Summary
-
-The P03 documentation is **impressively comprehensive** - among the most detailed I've seen. However, there are some **gaps and areas needing clarification** to make it production-robust.
-
----
-
-## Critical Question: Are Embeddings Required for P03 to Work?
-
-### **Answer: NO - Embeddings are NOT a hard blocker for P03 core functionality**
-
-Here's why:
-
-| P03 Function | Embedding Required? | Fallback Available |
-|--------------|--------------------|--------------------|
-| **Deduplication (R3.1)** | ❌ NO | Uses SimHash/MinHash from P02 - already computed |
-| **Novelty Scoring (R3.2)** | ❌ NO | Uses SimHash Hamming distance + metadata |
-| **Pattern Extraction (R2.2)** | ⚠️ OPTIONAL | Uses text invariants, not embeddings |
-| **Episodic Clustering (R2.1)** | ⚠️ PARTIALLY | Can use SimHash LSH bucketing without embeddings |
-| **CA1 Bridge (R2.3)** | ✅ YES (for similarity) | Needs embedding similarity for merge/evolve/create |
-| **KG Construction (R4)** | ❌ NO | Uses entity extraction from P02 + co-occurrence |
-| **Memory Layer Writers (R7)** | ❌ NO | Direct writes to st_* tables |
-
-### Key Insight from Dossier:
-
-From P03_consolidation_dossier.md:
-> "❌ **Does NOT generate embeddings directly**
-> - P02 enqueues embedding jobs to `st_embedding_queue`
-> - **P08 (Embedding Lifecycle) handles vector generation**
-> - P03 coordinates with P08 for `st_vec` population"
-
-And from the st_vec schema:
-> "**Note**: P03 writes placeholder, P08 generates actual embeddings"
-> "**Durability: REGENERATABLE** (Rule 6) - Treat as cached compute, not ground truth"
-
-### P03 ↔ P08 Coordination Model:
-
-```
-P03 (R7.7) → writes placeholder to st_vec (status='PENDING')
-          → writes job to st_embedding_queue
-          → emits cognitive.embedding.queued.v1
-
-P08 (async) → picks up job from queue
-            → generates embedding
-            → updates st_vec (status='READY', vector_data=BLOB)
-```
-
-**Conclusion**: P03 can run **WITHOUT P08 being operational** - it will just leave `st_vec` entries in PENDING status. Query operations that need embeddings would fail gracefully or use fallback similarity methods.
-
----
-
-## What's Missing & Needs Improvement
-
-### 1. **Critical Blockers Not Fully Resolved**
-
-| Blocker | Status | Gap |
-|---------|--------|-----|
-| P02 Production Ready | ⚠️ UNCLEAR | No verification criteria defined |
-| Migration 0024 Applied | ⚠️ UNCLEAR | Need to verify st_hipp_events exists |
-| Budget Mismatch (182 → 90 min) | ⚠️ ONLY PROPOSED | R5 optional + R3/R4 parallel only in Issue 0.2.2, not final ADR |
-| Consolidation Lock Table | ⚠️ DESIGNED | Migration 0040 specified but unclear if exists |
-| P08 Backpressure | ⚠️ DESIGNED | backpressure.py specified but no integration test |
-
-**Missing**: Verification scripts to check blockers are resolved before starting M1.
-
-### 2. **Missing ADR Details**
-
-The plan references 10 ADRs (k010 through k010.9) but from the ADR decisions folder search, these don't appear to exist yet:
-
-| ADR | Status | Notes |
-|-----|--------|-------|
-| k010 - P03 Architecture | ❌ NOT CREATED | Parent ADR missing |
-| k010.1 - Sleep Cycle | ❌ NOT CREATED | |
-| k010.2 - Importance Scoring | ❌ NOT CREATED | |
-| k010.3 - Episodic Clustering | ❌ NOT CREATED | Critical algorithm |
-| k010.4 - CA1 Bridge | ❌ NOT CREATED | Needs embedding strategy |
-| k010.5 - SimHash Dedup | ❌ NOT CREATED | |
-| k010.6 - Entity Normalization | ❌ NOT CREATED | |
-| k010.7 - 8-Layer Write Coordination | ❌ NOT CREATED | |
-| k010.8 - P08 Coordination | ❌ NOT CREATED | Critical for embedding handoff |
-| k010.9 - Capability Security | ❌ NOT CREATED | |
-
-### 3. **Schema/Migration Gaps**
-
-The plan references migrations 0040-0050 but:
-
-- **0040_consolidation_locks.sql** - Lock table design complete, file not created
-- **0041-0050** - Memory layer tables designed but actual SQL migrations missing
-- **st_embedding_queue** - Mentioned but no explicit migration for P08 coordination table
-- **FTS5 table (st_fts)** - Migration 0049 mentioned but unclear if P08 owns this
-
-### 4. **R5 (Dream Phase) Gap**
-
-The plan says "Make R5 optional - saves 30 min" to meet budget, but:
-
-- R5 modules are NOT stubbed or documented
-- No configuration flag to enable/disable R5
-- Future enablement path not defined
-
-**Recommendation**: Add explicit skip logic with feature flag.
-
-### 5. **Fallback Strategy for Embeddings Missing**
-
-The CA1 bridge (R2.3) requires embeddings for similarity, but:
-
-- No fallback if embeddings are PENDING
-- No timeout/retry for embedding completion
-- Query behavior with PENDING embeddings not specified
-
-**From Issue 0.1.9**:
-> "- [ ] Query Port behavior with PENDING embeddings"
-
-This is listed as acceptance criteria but no solution provided.
-
-### 6. **Performance Validation Gap**
-
-The revised 90-minute budget assumes:
-
-| Phase | Budget | Risk |
-|-------|--------|------|
-| R3 + R4 parallel | 20 min combined | ⚠️ No proof they CAN run parallel |
-| R2 reduced | 35 → 25 min | ⚠️ No benchmark to validate |
-| R1 reduced | 35 → 25 min | ⚠️ Just assumed |
-
-**Missing**: Actual benchmarks proving the revised budget is achievable.
-
-### 7. **Multi-Tenant Isolation Not Fully Defined**
-
-- Lock is per `(tenant_id, space_id)` - good
-- But batch selection query doesn't show tenant isolation
-- No explicit tenant_id filter in R0.4 batch selection code
-
-### 8. **Error Handling Gaps**
-
-| Scenario | Coverage |
-|----------|----------|
-| Lock acquisition fails | ✅ Documented |
-| DB transaction fails | ⚠️ Generic "retry" |
-| Embedding queue full | ✅ Backpressure documented |
-| spaCy model load fails | ❌ NOT covered |
-| Memory layer write fails | ⚠️ "Retry with backoff" - no DLQ |
-| Cycle exceeds 90 min | ❌ No circuit breaker |
-
-### 9. **Testing Coverage Gaps**
-
-The plan has excellent test coverage for happy paths but:
-
-- **No chaos engineering tests** (kill mid-cycle, DB connection drop)
-- **No multi-tenant contention tests**
-- **No embedding queue starvation tests**
-- **No boundary condition tests** (0 events, 100k events)
-
-### 10. **K0 Architecture Master Not Updated**
-
-The plan references updating k0_architecture_master.md but this hasn't been done:
-
-- P03 not in Pipeline Registry (Part 2.1)
-- No ADRs in ADR Index (Part 7.1)
-- No P03 events in Event Topics (Part 4.1)
-- No consolidation modules in Module Registry (Part 3.1)
-
----
-
-## Recommendations to Make Plan Robust
-
-### Immediate Actions (Before Starting M1)
-
-1. **Create verification script** for all blockers:
-   ```bash
-   k0ctl p03 verify-prerequisites --check-p02 --check-migrations --check-schema
-   ```
-
-2. **Add R5 feature flag**:
-   ```yaml
-   # p03_consolidation.v1.yaml
-   phases:
-     r5_dream:
-       enabled: false  # Disabled for v1, enable in v2
-   ```
-
-3. **Define embedding fallback for CA1**:
-   ```python
-   # When embedding PENDING, use text-based Jaccard similarity
-   if embedding_status == 'PENDING':
-       similarity = jaccard_similarity(text_a, text_b)
-   else:
-       similarity = cosine_similarity(vec_a, vec_b)
-   ```
-
-### Medium-Term Actions (During M0)
-
-4. **Create all 10 ADRs** before any implementation
-5. **Run performance benchmark** on sample 1000 events to validate 90-min budget
-6. **Add explicit tenant_id** to all batch selection queries
-7. **Create DLQ strategy** for failed memory writes
-
-### Documentation Improvements
-
-8. **Add sequence diagram** for P03 → P08 embedding flow
-9. **Add decision tree** for "what happens if P08 is down?"
-10. **Add rollback procedures** for partial cycle failures
-
----
-
-## Summary Scorecard
-
-| Dimension | Score | Notes |
-|-----------|-------|-------|
-| **Completeness** | 8/10 | Excellent detail, minor gaps |
-| **Architectural Clarity** | 9/10 | Very clear phases, modules |
-| **Performance Planning** | 6/10 | Budget math questionable |
-| **Error Handling** | 6/10 | Happy path focus |
-| **Testing Strategy** | 7/10 | Good unit, weak chaos |
-| **Embedding Independence** | 9/10 | Correctly decoupled from P08 |
-| **Production Readiness** | 5/10 | ADRs missing, K0 not updated |
-
-**Overall Assessment**: The plan is **80% production-ready** but needs the above gaps addressed before implementation starts.
-
----
-
-Shall I create specific missing artifacts (ADR templates, verification scripts, or fallback code patterns)?

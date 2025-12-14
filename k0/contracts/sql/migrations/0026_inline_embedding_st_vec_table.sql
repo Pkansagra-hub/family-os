@@ -42,7 +42,7 @@ PRAGMA foreign_keys=ON;
 --   - P08 M24 (embedding.faiss_indexer:v1): Updates status to INDEXED after FAISS add
 --   - P08 M25 (embedding.backfill:v1): Backfills legacy PENDING embeddings from st_embedding_queue
 --   - P03 CA1 Bridge: Reads for semantic similarity scoring (no PENDING fallback needed)
--- Columns: 10 (Identity, Linkage, Vector Data, Model Info, Status, Timestamps)
+-- Columns: 11 (Identity, Linkage, Vector Data, Model Info, Status, Tracing, Timestamps)
 -- Indexes: 4 (Event lookup, Tenant/Space queries, Model version, FAISS status)
 -- ========================================================================================
 
@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS st_vec (
   -- INDEXED: Also added to FAISS index by P08 M24
   -- FAILED: Generation/indexing failed
   status TEXT NOT NULL DEFAULT 'READY' CHECK(status IN ('READY', 'INDEXED', 'FAILED')),
+
+  -- Tracing
+  cognitive_trace_id TEXT,           -- Trace ID for observability (optional)
 
   -- Timestamps
   created_at INTEGER NOT NULL,       -- Unix timestamp (set by P02 M23)
@@ -125,8 +128,9 @@ CREATE INDEX idx_vec_status_created ON st_vec(status, created_at) WHERE status =
 --
 -- [ ] Column count:
 --     PRAGMA table_info(st_vec);
---     Expected: 10 columns (embedding_id, event_id, tenant_id, space_id, vector,
---                           vector_dim, model_id, status, created_at, updated_at)
+--     Expected: 11 columns (embedding_id, event_id, tenant_id, space_id, vector,
+--                           vector_dim, model_id, status, cognitive_trace_id,
+--                           created_at, updated_at)
 --
 -- [ ] Indexes created:
 --     SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='st_vec';

@@ -1,10 +1,10 @@
 # P08 Embedding Management - Architecture Exploration (Revised)
 
-**Status**: Architecture Revised - Aligned with ADR-K003
+**Status**: ✅ Production - Kernel Lifespan Scheduler
 **Created**: 2025-11-25
 **Updated**: 2025-12-13
 **Purpose**: Define P08's new role as embedding management pipeline (not primary generator)
-**Architecture**: YAML Pipeline (Kernel Boundary Compliant)
+**Architecture**: Kernel Background Task (Scheduled Batch Mode)
 **ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md)
 
 ---
@@ -39,11 +39,11 @@ P02 → queues job → P08 → MiniLM compute (384-dim) → store → index
       ASYNC DELAY: seconds before embedding available
 ```
 
-**NEW (P02 Inline + P08 Management)**:
+**NEW (P02 Inline + P08 Kernel Scheduler)**:
 
 ```
-P02 → M22 extract from cache (0ms) → M23 write → READY immediately
-      P08 → async FAISS indexing, backfill, cleanup
+P02 → M22 extract from cache (0ms) → M16 atomic 3-table write → READY immediately
+      P08 Kernel Scheduler → polls st_vec → adds to FAISS → INDEXED
       NO DELAY: embedding available at P02 commit
 ```
 
@@ -65,7 +65,7 @@ P03 consolidation needs embeddings for CA1 semantic bridge similarity:
 
 | Responsibility | Description | Trigger |
 |---------------|-------------|---------|
-| **FAISS Indexing** | Add embeddings to search index | `p02.embedding.stored.v1` |
+| **FAISS Indexing** | Add embeddings to search index | Kernel scheduler polls st_vec (300s interval, catch-up on boot) |
 | **Backfill** | Process legacy records without embeddings | Scheduled/manual |
 | **Model Upgrades** | Recompute when model version changes | Manual trigger |
 | **Cleanup** | Remove orphaned embeddings | Event deletion |
@@ -159,75 +159,15 @@ async def execute(envelope: dict, enriched: dict, context: ModuleContext) -> dic
     }
 ```
 
-#### M23: builders.embedding_write:v1
+#### M23: builders.embedding_write:v1 ❌ DEPRECATED
 
-**Purpose**: Write embedding directly to st_vec table.
+**Purpose**: ~~Write embedding directly to st_vec table.~~ **MERGED INTO M16**
 
-**Location**: `k0/modules/builders/embedding_write.py`
+**Location**: `k0/modules/builders/embedding_write.py` (deprecated)
 
-**Performance**: <5ms P95 (single row INSERT)
+**Status**: ❌ Deprecated - Functionality merged into M16 (core.hipp_events_writer:v1.2) for atomic 3-table transaction.
 
-```python
-"""
-M23: builders.embedding_write
-
-Writes 768-dim embedding directly to st_vec table.
-Replaces async P08 queue pattern with synchronous inline write.
-
-Performance: <5ms P95 (single row INSERT)
-"""
-
-import time
-
-async def execute(envelope: dict, enriched: dict, context: ModuleContext) -> dict:
-    """Write embedding directly to storage."""
-    embedding_data = enriched.get("extract_from_cache", {})
-    embedding = embedding_data.get("embedding")
-
-    if not embedding:
-        # No embedding available - mark as PENDING for backfill
-        return {
-            "written": False,
-            "reason": "no_embedding",
-            "embedding_status": "PENDING",
-        }
-
-    header = envelope.get("header", {})
-
-    record = {
-        "embedding_id": embedding_data.get("embedding_id"),
-        "event_id": header.get("event_id"),
-        "tenant_id": header.get("tenant_id"),
-        "space_id": header.get("space_id"),
-        "vector": embedding,
-        "vector_dim": 768,
-        "model_id": embedding_data.get("model_id", "ultrabert_v2.1.0"),
-        "created_at": int(time.time()),
-        "updated_at": int(time.time()),
-    }
-
-    await context.syscalls.vec_write(record)
-
-    # Emit event for P08 FAISS indexing
-    await context.syscalls.bus_emit(
-        topic="p02.embedding.stored.v1",
-        payload={
-            "embedding_id": record["embedding_id"],
-            "event_id": record["event_id"],
-            "tenant_id": record["tenant_id"],
-            "space_id": record["space_id"],
-            "vector_dim": 768,
-            "model_id": record["model_id"],
-        }
-    )
-
-    return {
-        "written": True,
-        "embedding_id": record["embedding_id"],
-        "vector_dim": 768,
-        "embedding_status": "READY",
-    }
-```
+**Migration**: M16 now writes st_hipp_events + st_vec + st_pipeline_processed in single atomic transaction.
 
 ### Updated P02 DAG
 
@@ -475,11 +415,11 @@ CREATE TABLE st_vec (
 ### Updated: st_hipp_events.embedding_status
 
 | Status | Set By | Meaning |
-|--------|--------|---------|
+|--------|--------|--------|
 | PENDING | Legacy/fallback | Needs backfill (rare after ADR-K003) |
-| READY | P02 M23 | Embedding stored in st_vec |
-| INDEXED | P08 | Also in FAISS search index |
-| FAILED | P02/P08 | Generation failed |
+| READY | P02 M16 (atomic) | Embedding stored in st_vec |
+| INDEXED | P08 Kernel Scheduler | Also in FAISS search index (faiss_id set) |
+| FAILED | P02/P08 | Generation/indexing failed |
 
 ### Deprecated: st_embedding_queue
 
@@ -502,32 +442,32 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 ## Implementation Timeline
 
-### Phase 1: P02 Inline (Days 1-2)
+### Phase 1: P02 Inline ✅ COMPLETE
 
-| Task | Deliverable |
-|------|-------------|
-| Create M22 | `k0/modules/embedding/extract_from_cache.py` |
-| Create M23 | `k0/modules/builders/embedding_write.py` |
-| Update P02 DAG | `k0/contracts/pipelines/p02_write.v1.yaml` |
-| Create st_vec table | Migration |
-| Unit tests | `tests/k0/modules/test_embedding_*.py` |
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| Create M22 | `k0/modules/embedding/extract_from_cache.py` | ✅ |
+| Merge M23 into M16 | `k0/modules/core/hipp_events_writer.py` | ✅ |
+| Update P02 DAG | `k0/contracts/pipelines/p02_write.v1.yaml` | ✅ |
+| Create st_vec table | Migration | ✅ |
+| Unit tests | `tests/k0/modules/test_embedding_*.py` | ✅ |
 
-### Phase 2: P08 Refactor (Days 2-3)
+### Phase 2: P08 Kernel Scheduler ✅ COMPLETE
 
-| Task | Deliverable |
-|------|-------------|
-| Update P08 contract | `k0/contracts/pipelines/p08_embedding_management.v1.yaml` |
-| Create FAISS indexing modules | `k0/modules/embedding/faiss_*.py` |
-| Create backfill modules | `k0/modules/embedding/query_pending.py`, etc. |
-| Integration tests | `tests/integration/p08/` |
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| Kernel lifespan task | `k0/kernel/app.py:_p08_faiss_indexer_loop()` | ✅ |
+| FaissIndexManager | `k0/runtime/faiss_manager.py` (IndexIDMap wrapper) | ✅ |
+| Catch-up on boot | Polls READY vectors immediately on startup | ✅ |
+| 300s interval loop | Scheduled batch indexing | ✅ |
 
-### Phase 3: Migration (Days 3-4)
+### Phase 3: Migration ✅ COMPLETE
 
-| Task | Deliverable |
-|------|-------------|
-| Backfill legacy PENDING | Run backfill job |
-| Rebuild FAISS (768-dim) | Index migration |
-| Update env vars | `K0_FAISS_DIMENSION=768` |
+| Task | Deliverable | Status |
+|------|-------------|--------|
+| FAISS 768-dim | IndexFlatL2 wrapped in IndexIDMap | ✅ |
+| Status transitions | READY → INDEXED with faiss_id | ✅ |
+| Update env vars | `K0_FAISS_DIMENSION=768` default | ✅ |
 
 ---
 
@@ -535,11 +475,12 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 | Question | Answer |
 |----------|--------|
-| Should P08 still exist? | **Yes** - repurposed for management |
-| What triggers FAISS indexing? | `p02.embedding.stored.v1` from P02 M23 |
-| What about legacy records? | P08 backfill flow handles them |
-| FAISS dimension change? | Rebuild index with 768-dim on migration |
+| Should P08 still exist? | **Yes** - runs as kernel lifespan scheduler |
+| What triggers FAISS indexing? | Kernel scheduler polls st_vec for READY vectors (300s interval, catch-up on boot) |
+| What about legacy records? | P08 backfill flow handles them (future) |
+| FAISS dimension change? | ✅ Done - 768-dim with IndexIDMap wrapper |
 | Is MiniLM still needed? | **No** - UltraBERT is primary model |
+| Why merge M23 into M16? | Atomic 3-table transaction (st_hipp_events + st_vec + st_pipeline_processed) |
 
 ---
 
@@ -547,6 +488,8 @@ The job queue is no longer needed for primary flow. May be kept for backfill coo
 
 - **ADR-K003**: `docs/architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md`
 - **UltraBERT Adapter**: `k0/runtime/ultrabert_adapter.py`
+- **FaissIndexManager**: `k0/runtime/faiss_manager.py`
+- **Kernel Scheduler**: `k0/kernel/app.py:_p08_faiss_indexer_loop()`
 - **P02 Pipeline**: `k0/contracts/pipelines/p02_write.v1.yaml`
 - **P08 Dossier v2**: `docs/pipelines/P08_embedding_dossier_v2.md`
 - **P03 Dossier**: `docs/pipelines/P03_consolidation_dossier.md`

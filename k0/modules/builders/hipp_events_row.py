@@ -12,7 +12,7 @@ to 60-70 column st_hipp_events table structure.
 **ADR**: docs/architecture/decisions-K0/modules/k009.1-hipp-events-builder.md
 **Schema**: docs/pipelines/P02_data_schema.md (lines 45-185)
 
-**Inputs** (from 13 enrichment modules):
+**Inputs** (from 14 enrichment modules):
 - M01 (DG Pattern Separation): simhash_hex, minhash32
 - M02 (CA1 Semantic Projection): entities_json, kg_triples_json, embedding_id
 - M03 (Policy Stamp): effective_band, obligations, policy_version
@@ -26,6 +26,7 @@ to 60-70 column st_hipp_events table structure.
 - M11 (Retention Lookup): retention_policy_id, retention_bucket
 - M12 (Geo Metadata): geohash_6, location_name, geo_precision
 - M15 (Spatial Minimal): truncated geohash (privacy-preserving)
+- M22 (Embedding Extract): embedding, embedding_id, vector_dim, model_id, source (ADR-K003)
 
 **Output**: Dictionary with 60-70 columns ready for st_hipp_events INSERT
 
@@ -346,11 +347,18 @@ def map_hippocampus_group(dg_output: Dict[str, Any], ca1_output: Dict[str, Any])
     }
 
 
-def map_embeddings_kg_group(ca1_output: Dict[str, Any]) -> Dict[str, Any]:
+def map_embeddings_kg_group(
+    ca1_output: Dict[str, Any], embedding_output: Dict[str, Any]
+) -> Dict[str, Any]:
     """
-    Embeddings & Knowledge Graph columns (4 columns)
+    Embeddings & Knowledge Graph columns (6 columns)
 
-    From: M02 semantic_project
+    From: M02 semantic_project (entities, kg_triples)
+          M22 extract_from_cache (embedding, embedding_id, status)
+
+    ADR-K003: Inline embedding via M22 (UltraBERT cache extraction)
+    - embedding_status = READY if M22 returned embedding
+    - embedding_status = PENDING if M22 failed (no text, model unavailable, etc.)
     """
     # entities_json and kg_triples_json are already JSON strings from semantic_project
     entities_json = ca1_output.get("entities_json")
@@ -362,9 +370,14 @@ def map_embeddings_kg_group(ca1_output: Dict[str, Any]) -> Dict[str, Any]:
     if kg_triples_json is None:
         kg_triples_json = "[]"
 
+    # M22 embedding data (ADR-K003)
+    embedding_id = embedding_output.get("embedding_id") or ca1_output.get("embedding_id")
+    embedding_exists = embedding_output.get("embedding") is not None
+    embedding_status = "READY" if embedding_exists else "PENDING"
+
     return {
-        "embedding_id": ca1_output.get("embedding_id"),
-        "embedding_status": "PENDING",  # P08 will update to IN_PROGRESS/READY
+        "embedding_id": embedding_id,
+        "embedding_status": embedding_status,
         "entities_json": entities_json,
         "kg_triples_json": kg_triples_json,
     }
@@ -475,6 +488,7 @@ def validate_required_fields(row: Dict[str, Any]) -> None:
         "simhash_hex",
         "minhash32",
         "embedding_id",
+        "embedding_status",
         "salience_score",
     ]
 
@@ -621,6 +635,16 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         "embedding_id": ca1_enrichment.get("embedding_id") or envelope.get("embedding_id"),
         "entities_json": ca1_enrichment.get("entities_json") or envelope.get("entities_json"),
         "kg_triples_json": ca1_enrichment.get("kg_triples_json") or envelope.get("kg_triples_json"),
+    }
+
+    # M22 embedding extraction (ADR-K003)
+    # Pipeline runner merges M22 output directly into envelope (not nested under enrichments)
+    embedding_output = {
+        "embedding": envelope.get("embedding"),
+        "embedding_id": envelope.get("embedding_id"),
+        "model_id": envelope.get("model_id", "ultrabert_v2.1.0"),
+        "vector_dim": envelope.get("vector_dim", 768),
+        "source": envelope.get("source", "unknown"),
     }
 
     policy_output = envelope.get("policy_stamp", {})
@@ -828,8 +852,8 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
         _metrics.column_group_counts.get("hippocampus", 0) + 1
     )
 
-    # Group 10: Embeddings & KG (4 columns)
-    row.update(map_embeddings_kg_group(ca1_output))
+    # Group 10: Embeddings & KG (6 columns) - ADR-K003: now includes M22 embedding data
+    row.update(map_embeddings_kg_group(ca1_output, embedding_output))
     _metrics.column_group_counts["embeddings_kg"] = (
         _metrics.column_group_counts.get("embeddings_kg", 0) + 1
     )

@@ -1,10 +1,10 @@
 # K0 Cognitive Architecture - Master Reference
 
 **Status**: Living Document (Pre-Implementation → Production Handbook)
-**Version**: 0.1.0 (Semantic versioning)
-**Last Updated**: 2025-11-17
+**Version**: 0.2.0 (P08 scheduled mode, M16 atomic 3-table)
+**Last Updated**: 2025-12-13
 **Owner**: Architecture Team
-**Repository**: family-os (branch: k0-Strengthning)
+**Repository**: family-os (branch: p03-implementation)
 
 ---
 
@@ -532,9 +532,9 @@ This document grows in fidelity as the system matures:
 
 | ID | Name | Status | Design Phase | README Location | Modules Used | Priority | Version | Last Updated |
 |----|------|--------|--------------|-----------------|--------------|----------|---------|--------------|
-| P02 | Write / Hippocampus | ⚠️ Implementation | ✅ Spec Complete | `docs/pipelines/P02_write_dossier.md` | 19 modules (M01-M02, M04-M17, M22-M23) | P0 | 0.2.0 | 2025-01-19 |
-| P03 | Memory Consolidation | 🎯 Planning | ✅ Spec Complete | `docs/pipelines/P03_consolidation_dossier.md` | 8 modules (M02, M03, M06, M18-M22) | P1 | 0.1.0 | 2025-01-19 |
-| P08 | Embedding Management | 🎯 Planning | ✅ Spec Complete | `docs/pipelines/P08_embedding_dossier_v2.md` | 4 modules (M24-M27) | P1 | 2.0.0 | 2025-01-19 |
+| P02 | Write / Hippocampus | ✅ Production | ✅ Spec Complete | `docs/pipelines/P02_write_dossier.md` | 18 modules (M01-M02, M04-M17, M22) | P0 | 0.4.0 (v1.2 contract) | 2025-12-13 |
+| P03 | Memory Consolidation | 🎯 Planning | ✅ Spec Complete | `docs/pipelines/P03_consolidation_dossier.md` | 37 modules (consolidation.*) | P1 | 0.2.0 | 2025-12-14 |
+| P08 | Embedding Management (Scheduled) | ✅ Production | ✅ Spec Complete | `docs/pipelines/P08_embedding_dossier_v2.md` | 4 modules (M24-M27) | P1 | 2.1.0 (scheduled batch, kernel lifespan) | 2025-12-13 |
 | | | | | | | | | |
 
 **Legend**:
@@ -1197,11 +1197,11 @@ If any fail, revisit scope or write ADR explaining exception.
 | M13 | HippEventsRowBuilder | Memory Consolidation Builder | ✅ Implemented | `k0/modules/builders/hipp_events_row.py` | P02 | Contract: ✅, ADR: k009.1, Tests: ✅ (35/35), P95: 0.0195ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
 | M14 | EmbeddingQueueWriter | Vector Encoding Scheduler | ✅ Implemented | `k0/modules/builders/embedding_queue_write.py` | P02 | Contract: ✅, ADR: k009.2, Syscalls: `embedding_enqueue`, Tests: ✅ (28/28), P95: 0.0029ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
 | M15 | SpatialMinimizer | Band-Based Geo Truncator | ✅ Implemented | `k0/modules/context/spatial_minimal.py` | P02 | Contract: ✅, ADR: k007.5, Tests: ✅ (34/34), P95: <3ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
-| M16 | HippEventsWriter | Atomic Storage Writer | ✅ Implemented | `k0/modules/core/hipp_events_writer.py` | P02 | Contract: ✅, ADR: k010.1, Syscalls: `hipp_events_upsert`, `pipeline_processed_upsert`, Tests: ✅ (35/35), P95: <1ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
+| M16 | HippEventsWriter | Atomic 3-Table Writer | ✅ Implemented | `k0/modules/core/hipp_events_writer.py` | P02 | Contract: ✅ v1.2, ADR: k010.1+K003, Syscalls: `hipp_events_upsert`, `vec_write`, `pipeline_processed_upsert` (atomic transaction), Tests: ✅ (38/38), P95: <30ms. Merged M23 functionality. | 🚀 Production-Ready | 1.2.0 | 2025-12-13 |
 | M17 | EventEmitter | Event Emission via Outbox | ✅ Implemented | `k0/modules/core/event_emitter.py` | P02 | Contract: ✅, ADR: k010.2, Syscalls: `outbox_emit_batch`, Tests: ✅ (32/32), P95: <10ms | 🚀 Production-Ready | 1.0.0 | 2025-11-17 |
 | M22 | EmbeddingCacheExtract | Vector Cache Extraction | ✅ Implemented | `k0/modules/embedding/extract_from_cache.py` | P02 | Contract: ✅ `embedding.extract_from_cache.v1.yaml`, ADR: K003, Tests: ✅ (21/21), P95: <1ms (cache hit) | ⚠️ Implementation | 0.1.0 | 2025-12-13 |
-| M23 | EmbeddingVecWriter | Direct Vector Storage Writer | 🎯 Planning | `k0/modules/builders/embedding_write.py` | P02 | Contract: ✅ `builders.embedding_write.v1.yaml`, ADR: K003, Syscalls: `st_vec.write`, Tests: 📝, P95: <5ms | 🧪 Experimental | 0.1.0 | 2025-12-13 |
-| M24 | FAISIndexer | FAISS Index Management | 🎯 Planning | `k0/modules/embedding/faiss_indexer.py` | P08 | Contract: ✅ `embedding.faiss_indexer.v1.yaml`, ADR: K003, Syscalls: `faiss_add`, Tests: 📝, P95: <50ms batch | 🧪 Experimental | 0.1.0 | 2025-12-13 |
+| M23 | EmbeddingVecWriter | ~~Direct Vector Storage Writer~~ | ❌ Deprecated | `k0/modules/builders/embedding_write.py` | ~~P02~~ | **DEPRECATED**: Merged into M16 (ADR-K003 v1.2). Syscalls: ~~`st_vec.write`~~ | ❌ Deprecated | 0.1.0 | 2025-12-13 |
+| M24 | FAISSIndexer | FAISS Index Management | ✅ Implemented | `k0/modules/embedding/faiss_indexer.py` | P08 | Contract: ✅ `embedding.faiss_indexer.v2.yaml`, ADR: K003, Syscalls: `vec_query`, `vec_update_status`, `faiss_add`. Runs via kernel lifespan scheduler (300s interval, catch-up on boot). Uses FaissIndexManager singleton with IndexIDMap wrapper. Tests: ✅, P95: <10ms/vector | 🚀 Production-Ready | 2.0.0 | 2025-12-13 |
 | M25 | EmbeddingBackfill | Orphan Embedding Recovery | 🎯 Planning | `k0/modules/embedding/backfill.py` | P08 | Contract: ✅ `embedding.backfill.v1.yaml`, ADR: K003, Tests: 📝, P95: <100ms/batch | 🧪 Experimental | 0.1.0 | 2025-12-13 |
 | M26 | EmbeddingRecompute | Model Upgrade Re-vectorizer | 🎯 Planning | `k0/modules/embedding/recompute.py` | P08 | Contract: ✅ `embedding.recompute.v1.yaml`, ADR: K003, Tests: 📝, P95: batch-dependent | 🧪 Experimental | 0.1.0 | 2025-12-13 |
 | M27 | EmbeddingCleanup | Expired Vector Garbage Collector | 🎯 Planning | `k0/modules/embedding/cleanup.py` | P08 | Contract: ✅ `embedding.cleanup.v1.yaml`, ADR: K003, Syscalls: `st_vec.delete`, Tests: 📝, P95: <50ms/batch | 🧪 Experimental | 0.1.0 | 2025-12-13 |
@@ -1514,7 +1514,7 @@ def validate_protocol():
 | `cognitive.memory.write.committed.v1` | `contracts/schemas/write_committed.json` | P01 | P02, P03, P06 | AMBER | 7 | v1 | ✅ Active |
 | `p02.write.complete.v1` | `contracts/schemas/p02_complete.json` | P02 (M17) | P03, P06 | AMBER | 7 | v1 | ✅ Active |
 | `memory.formed.v1` | `contracts/schemas/memory_formed.json` | P02 (M17) | P03, P09 | AMBER | 7 | v1 | ✅ Active |
-| `embedding.queued.v1` | `contracts/schemas/embedding_queued.json` | P02 (M17) | P08 | GREEN | 3 | v1 | ✅ Active |
+| `embedding.queued.v1` | `contracts/schemas/embedding_queued.json` | P02 (M17) | ~~P08~~ | GREEN | 3 | v1 | ❌ Deprecated (P08 now polls st_vec) |
 | `salience.computed.v1` | `contracts/schemas/salience_computed.json` | P02 (M17) | P03, P04 | AMBER | 7 | v1 | ✅ Active |
 | `social.enriched.v1` | `contracts/schemas/social_enriched.json` | P02 (M17) | P03, P04 | AMBER | 7 | v1 | ✅ Active |
 | `privacy.masked.v1` | `contracts/schemas/privacy_masked.json` | P02 (M17) | P03, Audit | RED | 30 | v1 | ✅ Active |
@@ -1524,8 +1524,8 @@ def validate_protocol():
 | `embedding.enqueue.v1` | `contracts/schemas/embedding_enqueue.json` | P02 (M17) | P08 | GREEN | 3 | v1 | ❌ Deprecated |
 | `hippocampus.pattern_separated.v1` | `contracts/schemas/hippocampus_pattern_separated.json` | P02 (M17) | P03 | AMBER | 7 | v1 | ✅ Active |
 | `write.complete.v1` | `contracts/schemas/write_complete.json` | P02 (M17) | Observability | GREEN | 3 | v1 | ✅ Active |
-| `cognitive.vector.stored.v1` | `k0/contracts/schemas/cognitive_vector_stored.json` | P02 (M23) | P08 | GREEN | 3 | v1 | ✅ Active |
-| `cognitive.vector.indexed.v1` | `k0/contracts/schemas/cognitive_vector_indexed.json` | P08 (M24) | P03, Observability | GREEN | 3 | v1 | ✅ Active |
+| `cognitive.vector.stored.v1` | `k0/contracts/schemas/cognitive_vector_stored.json` | P02 (M16) | P08 | GREEN | 3 | v1 | ✅ Active |
+| `cognitive.vector.indexed.v1` | `k0/contracts/schemas/cognitive_vector_indexed.json` | P08 Kernel Scheduler | P03, Observability | GREEN | 3 | v1 | ✅ Active |
 | `cognitive.embedding.backfilled.v1` | `k0/contracts/schemas/cognitive_embedding_backfilled.json` | P08 (M25) | Observability | GREEN | 3 | v1 | ✅ Active |
 | `cognitive.embedding.recomputed.v1` | `k0/contracts/schemas/cognitive_embedding_recomputed.json` | P08 (M26) | Observability | GREEN | 3 | v1 | ✅ Active |
 | `cognitive.embedding.cleaned.v1` | `k0/contracts/schemas/cognitive_embedding_cleaned.json` | P08 (M27) | Observability | GREEN | 3 | v1 | ✅ Active |
@@ -1658,8 +1658,8 @@ graph LR
     P01[P01: Recall] -->|read.completed| P15[P15: Rollup]
     P02[P02: Write] -->|write.committed| P03[P03: Consolidation]
     P03 -->|consolidated| P15
-    P02 -->|write.committed| P08[P08: Embedding]
-    P08 -->|embedded| P13[P13: Reindex]
+    P02 -->|st_vec READY| P08[P08: Embedding Scheduler]
+    P08 -->|INDEXED| P13[P13: Reindex]
 
     style P02 fill:#e6f7ff
     style P03 fill:#f6ffed
@@ -1667,7 +1667,7 @@ graph LR
 ```
 
 **Use when**: Complex multi-stage processing
-**Examples**: Write → Consolidate → Embed → Reindex
+**Examples**: Write → st_vec READY → P08 scheduler polls → FAISS INDEXED
 
 ### Pattern 4: Fan-Out (Broadcast)
 
@@ -1741,13 +1741,13 @@ graph TD
 
     P02 -->|p02.write.complete.v1| P03
     P02 -->|memory.formed.v1| P03
-    P02 -->|embedding.queued.v1| P08
+    P02 -->|st_vec READY| P08
     P02 -->|salience.computed.v1| P04
     P02 -->|social.enriched.v1| P04
     P02 -->|p02.write.complete.v1| P06
 
     P03 -->|consolidated| P15[P15: Context Rollup]
-    P08 -->|embedded| P09
+    P08 -->|INDEXED| P09
     P09 -->|search.completed| P01
 
     P01 -->|recall.completed| P04
@@ -2097,7 +2097,8 @@ When adding a new pipeline/module that uses events:
 | `context.spatial_minimal:v1` | Module Contract | `k0/contracts/modules/context.spatial_minimal.v1.yaml` | M15, P02 | v1 | ✅ Active | 2025-11-16 |
 | `core.hipp_events_writer:v1` | Module Contract | `k0/contracts/modules/core.hipp_events_writer.v1.yaml` | M16, P02 | v1 | ✅ Active | 2025-11-16 |
 | `core.event_emitter:v1` | Module Contract | `k0/contracts/modules/core.event_emitter.v1.yaml` | M17, P02 | v1 | ✅ Active | 2025-11-16 |
-| `P02_WRITE:v1` | Pipeline Contract | `k0/contracts/pipelines/p02_write.v1.yaml` | P02 | v1 | ✅ Active | 2025-11-16 |
+| `P02_WRITE:v1.1` | Pipeline Contract | `k0/contracts/pipelines/p02_write.v1.yaml` | P02 | v1.1 | ✅ Active | 2025-12-13 |
+| `P02_WRITE:v1` | Pipeline Contract (deprecated) | `k0/contracts/pipelines/p02_write.v1.yaml` | P02 | v1 | 🗄️ Superseded (v1.1) | 2025-11-16 |
 | `embedding.extract_from_cache:v1` | Module Contract | `k0/contracts/modules/embedding.extract_from_cache.v1.yaml` | M22, P02 | v1 | 🔄 Evolving | 2025-01-19 |
 | `builders.embedding_write:v1` | Module Contract | `k0/contracts/modules/builders.embedding_write.v1.yaml` | M23, P02 | v1 | 🔄 Evolving | 2025-01-19 |
 | `embedding.faiss_indexer:v1` | Module Contract | `k0/contracts/modules/embedding.faiss_indexer.v1.yaml` | M24, P08 | v1 | 🔄 Evolving | 2025-01-19 |
@@ -2156,10 +2157,10 @@ When adding a new pipeline/module that uses events:
 | `st_pipeline_processed.write` | INSERT OR REPLACE | st_pipeline_processed | P02 (M16) | Track pipeline idempotency offsets | ✅ Yes | `k0/kernel/syscalls.py:pipeline_processed_upsert` | ✅ Implemented |
 | `st_outbox.write` | INSERT | st_outbox | P02 (M17) | Emit events via transactional outbox | ✅ Yes | `k0/kernel/syscalls.py:outbox_emit_batch` | ✅ Implemented |
 | `st_embedding_queue.write` | INSERT OR IGNORE | st_embedding_queue | P02 (M14) | Enqueue vector embedding jobs | ⚠️ Selective | `k0/kernel/syscalls.py:embedding_enqueue` | ❌ Deprecated |
-| `st_vec.write` | INSERT | st_vec | P02 (M23) | Write 768-dim UltraBERT embeddings directly | ✅ Yes | `k0/kernel/syscalls.py:vec_write` | ✅ Implemented |
+| `st_vec.write` | INSERT | st_vec | P02 (M16) | Write 768-dim UltraBERT embeddings directly (atomic with st_hipp_events) | ✅ Yes | `k0/kernel/syscalls.py:vec_write` | ✅ Implemented |
 | `st_vec.read` | SELECT | st_vec | P03, P08 | Read embeddings for similarity search | ❌ No | `k0/kernel/syscalls.py:vec_read` | 🔄 Planning |
 | `st_vec.delete` | DELETE | st_vec | P08 (M27) | Remove expired embeddings | ✅ Yes | `k0/kernel/syscalls.py:vec_delete` | 🔄 Planning |
-| `faiss.write` | INDEX (add/add_batch/remove_batch) | FAISS | P08 (M24, M27) | Add/remove vectors in FAISS index | ✅ Yes | `k0/kernel/syscalls.py` (faiss methods) | ✅ Implemented |
+| `faiss.write` | INDEX (add/add_batch/remove_batch) | FAISS | P08 (M24, M27), Kernel Scheduler | Add/remove vectors in FAISS index. Uses FaissIndexManager with IndexIDMap wrapper for custom IDs. | ✅ Yes | `k0/runtime/faiss_manager.py:FaissIndexManager.add()` | ✅ Implemented |
 | `faiss.read` | QUERY (search) | FAISS | P03 | ANN similarity search | ❌ No | `k0/kernel/syscalls.py:faiss_search` | ✅ Implemented |
 
 **Milestone 5 Completion Status** (as of 2025-11-17):
@@ -2228,7 +2229,7 @@ When adding a new pipeline/module that uses events:
 | st_hipp_events | P02 (Write) | P03, P04, Retention Workers | Enriched hippocampus events with DG fingerprints | 90 days | `k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql` | ✅ Active |
 | st_embedding_queue | P02 (Write) | P08 (Vector Generation) | ❌ **DEPRECATED** - Job queue for async embedding (superseded by ADR-K003 inline) | Session (after READY) | `k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql` | ❌ Deprecated (Use st_vec) |
 | st_relationships | P02, Migration 0024 | P02, Analytics | Family graph cache (SPOUSE_OF, PARENT_OF, CHILD_OF, CARETAKER_OF, SIBLING_OF) | Manual/TTL refresh | `k0/contracts/sql/migrations/0024_p02_episodic_write_tables.sql` | ✅ Active |
-| st_vec | P02 (M23) | P03, P08 | 768-dim UltraBERT embeddings with FAISS index reference | 90 days (same as events) | `k0/contracts/sql/migrations/0025_inline_embedding_tables.sql` | 🔄 Planning |
+| st_vec | P02 (M16) | P03, P08, Kernel Scheduler | 768-dim UltraBERT embeddings with FAISS index reference. Status enum: READY→INDEXED→FAILED. faiss_id column for FAISS IDMap lookup. | 90 days (same as events) | `k0/contracts/sql/migrations/0025_inline_embedding_tables.sql` | ✅ Production |
 
 **Retention Policies**:
 
@@ -2326,13 +2327,15 @@ For each table, document in detail:
 | Status | Set By | Meaning | Storage Location |
 |--------|--------|---------|------------------|
 | `PENDING` | P02 fallback / Legacy | Needs backfill (pre-ADR-K003 or inline failed) | No st_vec row yet |
-| `READY` | P02 M23 (inline) | Embedding stored in st_vec, immediately available | st_vec (status=READY) |
-| `INDEXED` | P08 M24 (FAISS) | Also indexed in FAISS for similarity search | st_vec (status=INDEXED) |
+| `READY` | P02 M16 (inline atomic) | Embedding stored in st_vec, immediately available | st_vec (status=READY) |
+| `INDEXED` | P08 Kernel Scheduler | Also indexed in FAISS for similarity search | st_vec (status=INDEXED, faiss_id set) |
 | `FAILED` | P02/P08 | Embedding generation/indexing failed permanently | st_vec (status=FAILED) or no row |
 
 **ADR-K003 Architecture Change** (Effective: 2025-12-13):
+
 - **Before**: P02 sets `PENDING` → P08 async generates embedding → updates to `READY`
-- **After**: P02 M22 extracts from UltraBERT cache → M23 writes st_vec → sets `READY` immediately
+- **After**: P02 M22 extracts from UltraBERT cache → M16 writes st_vec atomically with st_hipp_events → sets `READY` immediately
+- **P08 Scheduler**: Kernel lifespan task polls st_vec for READY vectors, adds to FAISS, updates status to INDEXED (300s interval, catch-up on boot)
 - **Migration Path**: P08 v2 backfills legacy `PENDING` events via M25 (embedding.backfill:v1)
 | Metadata | 4 | hippocampus_api_version, space_resolver_version, schema_uri, updated_at |
 
@@ -2364,6 +2367,7 @@ For each table, document in detail:
 **Status**: ❌ Deprecated (Superseded 2025-12-13 by ADR-K003)
 
 **Deprecation Notice**:
+
 - **ADR-K003** moves primary embedding generation from async P08 to inline P02
 - **Superseded By**: st_vec table (migration 0026) for inline embeddings
 - **Current Use**: P08 v2 backfill operations only (M25: embedding.backfill:v1)
@@ -3495,6 +3499,19 @@ Phase X: [Phase Name]
 | k010.1 | Atomic UnitOfWork Writer - P02 Three-Table Transaction Commit | ✅ Accepted | M16, P02 | 2025-11-16 | 2025-11-16 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k010.1-atomic-uow-writer.md` |
 | k011.1 | Outbox Event Emitter - P02 Downstream Event Propagation via st_outbox | ✅ Accepted | M17, P02 | 2025-11-16 | 2025-11-16 | K0 Architecture Team | `docs/architecture/decisions-K0/modules/k011.1-outbox-emitter.md` |
 | K003 | Inline Embedding via UltraBERT Cache Extraction | ✅ Accepted | M22, M23, M24-M27, P02, P08 | 2025-01-19 | 2025-01-19 | K0 Architecture Team | `docs/architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md` |
+| **P03 Consolidation ADRs (Planned)** | | | | | | | |
+| k010 | P03 Consolidation Architecture - Sleep-Cycle Memory Consolidation | 🎯 Draft | P03, consolidation.* | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010-p03-consolidation-architecture.md` |
+| k010.1-p03 | Sleep Cycle State Machine - NREM/REM Phase Transitions | 🎯 Draft | P03 | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.1-sleep-cycle-state-machine.md` |
+| k010.2-p03 | Importance Scoring Formula - Recency × Affect × Social | 🎯 Draft | P03, consolidation.importance | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.2-importance-scoring-formula.md` |
+| k010.3-p03 | Episodic Clustering Algorithm - DBSCAN on 768-dim Embeddings | 🎯 Draft | P03, consolidation.clusterer | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.3-episodic-clustering-algorithm.md` |
+| k010.4-p03 | CA1 Bridge Decision Protocol - Episodic→Semantic Promotion | 🎯 Draft | P03, consolidation.ca1_bridge | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.4-ca1-bridge-decision-protocol.md` |
+| k010.5-p03 | SimHash Deduplication - Near-Duplicate Detection Strategy | 🎯 Draft | P03, consolidation.dedup | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.5-simhash-deduplication.md` |
+| k010.6-p03 | Entity Normalization Strategy - KG Node Resolution | 🎯 Draft | P03, consolidation.entity | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.6-entity-normalization-strategy.md` |
+| k010.7-p03 | 8-Layer Memory Write Coordination - Atomic Multi-Table Updates | 🎯 Draft | P03, consolidation.writers | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.7-8-layer-memory-write-coordination.md` |
+| k010.8-p03 | P08 Embedding Coordination - Backpressure and Queue Management | 🎯 Draft | P03, P08 | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.8-p08-embedding-coordination.md` |
+| k010.9-p03 | Capability-Based Security - P03 Storage Access Controls | 🎯 Draft | P03, Part 5.2 | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.9-capability-based-security.md` |
+| k010.10-p03 | Dream Phase Algorithms - Counterfactual and Forward Simulation | 🎯 Draft | P03/R5 | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.10-dream-phase-algorithms.md` |
+| k010.11-p03 | UltraBERT Data Consumption - P02 Pre-Computed NLP Outputs | 🎯 Draft | P03, P02 | 2025-12-14 | TBD | TBD | `docs/architecture/decisions-K0/pipelines/k010.11-ultrabert-data-consumption.md` |
 
 **ADR Status**:
 

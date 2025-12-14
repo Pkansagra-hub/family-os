@@ -441,3 +441,17 @@ if K0_EMBEDDING_INLINE not in {"1", "true", "True"}:
   - Clarified P08 pipeline naming as `p08_embedding_management`
   - Added module registration/discovery implementation details
   - Aligned with k0_architecture_master.md Part 7.1 ADR Index
+- 2025-12-13: **v1.2 - Transaction Atomicity Fix** (@K0-Architecture-Team)
+  - **CRITICAL**: M23 (`builders.embedding_write`) deprecated and merged into M16
+  - **Reason**: FK ordering violation - M23 wrote `st_vec` before `st_hipp_events` existed
+  - **Fix**: M16 (`hipp_events_writer`) now writes both tables atomically in single UoW:
+    1. `st_hipp_events` (parent row) via `hipp_events_upsert`
+    2. `st_vec` (child row with FK) via `vec_write`
+    3. `st_pipeline_processed` (idempotency) via `pipeline_processed_upsert`
+  - **P02 DAG**: Stage 61 removed, stage 70 depends on stage_22 directly
+  - **P08 Pipeline**: Converted to scheduled batch mode (every 5 minutes)
+    - No longer event-driven, queries `st_vec WHERE status='READY'`
+    - New syscalls: `vec_query`, `vec_update_status`, `hipp_events_query`, `hipp_events_update_embedding_status`, `ultrabert_embed`
+  - **M24 (`faiss_indexer`)**: Rewritten to v2.0.0, uses syscalls exclusively (no raw SQLite)
+  - **Scheduler**: New script `k0/scripts/run_p08_indexer.py` for cron/daemon mode
+  - See implementation plan: `docs/plans/P02_P08_pipeline_fix_implementation_plan.md`

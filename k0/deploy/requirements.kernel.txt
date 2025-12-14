@@ -60,4 +60,9 @@ httpx>=0.27.0                      # Async HTTP client
 asyncpg>=0.29.0                    # Async PostgreSQL driver
 psycopg[binary]>=3.1.0             # Sync PostgreSQL driver (migration scripts)
 
+# Vector similarity search (FAISS)
+# P08 FAISS indexing for similarity search
+# Note: Use faiss-gpu in GPU containers (installed via Dockerfile)
+faiss-cpu>=1.8.0                   # CPU fallback for development
+
 # Note: UltraBERT wheel installed separately - container size ~600MB (was 4GB)

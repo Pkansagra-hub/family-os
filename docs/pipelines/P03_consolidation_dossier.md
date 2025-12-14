@@ -2,8 +2,10 @@
 
 **Design Status**: 📋 Design Complete (V1 Ready for Implementation)
 **Implementation Status**: ⏳ Not Started
-**Last Updated**: 2025-11-21
-**Dependencies**: P02 (Write/Ingest) ✅ Complete
+**Last Updated**: 2025-12-13
+**Dependencies**: P02 (Write/Ingest) ✅ Complete, P08 (FAISS Indexing) ✅ Production
+
+> **Architecture Update (2025-12-13)**: P02 now writes episodic embeddings inline via M16 atomic 3-table transaction (st_hipp_events + st_vec + st_pipeline_processed). P08 runs as kernel lifespan scheduler polling st_vec for FAISS indexing. `st_embedding_queue` is **DEPRECATED**. P03 only writes st_vec for **consolidated semantic patterns** extracted from episodic clusters.
 
 ---
 
@@ -16,8 +18,10 @@ P03 runs **AFTER P02 has written to st_hipp_events staging table**:
 1. **P02 (Write/Ingest)** — Fast Path (~50-100ms):
    - Subscribes to `cognitive.memory.write.committed.v1` from WAL
    - Enriches with hippocampus DG fingerprints, affect, space resolution
-   - Writes to `st_hipp_events` (staging table)
+   - **M22**: Extracts 768-dim embedding from UltraBERT cache (0ms, already computed by M02)
+   - **M16**: Atomic 3-table transaction writes to `st_hipp_events` + `st_vec` + `st_pipeline_processed`
    - Leaves consolidation columns NULL: `novelty_score`, `near_duplicates_json`, `is_near_duplicate`, `episode_cluster_id`, `cluster_confidence`
+   - **Episodic embeddings written inline** with status=READY (no placeholder pattern)
    - Status: ✅ **COMPLETE**
 
 2. **P03 (Consolidation/Forgetting)** — Sleep-Cycle Processing (~90min cycles, batch mode):
@@ -39,9 +43,10 @@ P03 runs **AFTER P02 has written to st_hipp_events staging table**:
      - `st_prospective` (future intentions/reminders)
      - `st_kg_dom` (knowledge graph nodes)
      - `st_kg_edges` (knowledge graph relationships)
-     - `st_vec` (semantic embeddings — P03 writes placeholders, P08 populates vectors)
+     - `st_vec` (semantic embeddings — P02 writes episodic embeddings inline; P03 writes **semantic pattern embeddings** for consolidated memories)
    - Writes to infrastructure tables:
      - `st_archives`, `deletion_audit`, `st_*_tombstones`, `st_consolidation_logs`, `st_event_canon_map`, `st_event_cluster_history`, `st_kg_snapshots`
+   - P08 kernel scheduler polls st_vec for FAISS indexing (READY → INDEXED)
    - Coordinates with P08 for `st_fts` (FTS5 full-text search index over consolidated memories)
    - Implementation Status: ⏳ **NOT STARTED**
 
@@ -54,6 +59,98 @@ P03 runs **AFTER P02 has written to st_hipp_events staging table**:
 
 **Key Architectural Principle**:
 > P03 = "From `st_hipp_events` staging → 5 consolidation processes → 8 permanent memory layers."
+
+---
+
+## P02 Data Consumption (UltraBERT Pre-Computed Outputs)
+
+> **CRITICAL**: P03 does NOT load any NLP models. All NLP outputs are pre-computed by P02 via UltraBERT
+> single-pass (~30ms) and stored in `st_hipp_events` and `st_vec`. P03 reads these directly from the database.
+
+### What P02 Already Provides (ZERO Model Calls in P03)
+
+| P02 Column | UltraBERT Capability | P03 Use Case | Format |
+|------------|---------------------|--------------|--------|
+| `entities_json` | `ner_family` + `ner_general` | R4.1 Entity Extraction | `["person_mom", "org_olive_garden"]` |
+| `kg_triples_json` | `relations` | R4.2 Relationship Discovery | `[["actor", "had_meal_at", "restaurant"]]` |
+| `sentiment_score` | `sentiment` | R5.1 Emotional Valence | `0.9` (0-1 scale) |
+| `sentiment_label` | `sentiment` | R5.1 Counterfactual Selection | `"positive"` |
+| `dominant_emotions_json` | `emotions` | R5.1, R5.4 Emotional Salience | `["joy","love","togetherness"]` |
+| `affect_valence` | derived | R2 Cluster Weighting | `0.85` |
+| `affect_arousal` | derived | R2 Cluster Weighting | `0.6` |
+| `affect_band` | `safety_familyos` | Privacy Classification | `"GREEN"` |
+| `salience_score` | composite | R1 Replay Priority | `0.75` |
+| `simhash_hex` | DG fingerprint | R3 Near-Duplicate Detection | 64-bit hex |
+| `minhash32` | DG fingerprint | R3 LSH Bucketing | JSON array |
+
+### st_vec Embeddings (768-dim UltraBERT)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `vector` | BLOB | 768-dim float32 (3072 bytes) |
+| `vector_dim` | INTEGER | Always 768 |
+| `model_id` | TEXT | `ultrabert_v2.1.0` |
+| `status` | TEXT | `READY` → `INDEXED` |
+| `faiss_id` | INTEGER | FAISS index position |
+
+**Reading Embeddings in P03**:
+```python
+import struct
+import numpy as np
+
+def read_embedding(db, event_id: str) -> np.ndarray | None:
+    cursor = db.execute(\"\"\"
+        SELECT vector FROM st_vec
+        WHERE event_id = ? AND status IN ('READY', 'INDEXED')
+    \"\"\", (event_id,))
+    row = cursor.fetchone()
+    if row and row['vector']:
+        return np.array(struct.unpack('<768f', row['vector']))
+    return None
+```
+
+### P03 Consolidation Columns (Written by P03)
+
+These 6 columns are LEFT NULL by P02 and populated by P03 during consolidation:
+
+| Column | P03 Phase | Description |
+|--------|-----------|-------------|
+| `novelty_score` | R3.2 | 0.0 (duplicate) to 1.0 (novel) |
+| `near_duplicates_json` | R3.1 | `["event-abc", "event-def"]` |
+| `is_near_duplicate` | R3.1 | 0 (canonical) or 1 (duplicate) |
+| `episode_cluster_id` | R2.3 | `"cluster-2025-12-14-001"` |
+| `cluster_confidence` | R2.3 | 0.0 to 1.0 |
+| `clustering_version` | R2.3 | `"dbscan_v1.0"` |
+
+### Data Flow Summary
+
+```
+P02 (Real-time ~50ms)                    P03 (Sleep cycle ~90min)
+─────────────────────                    ────────────────────────
+
+UltraBERT Single Pass (30ms)             READ from st_hipp_events:
+├─ entities_json                         • entities_json (no NER call)
+├─ kg_triples_json                       • kg_triples_json (no model call)
+├─ sentiment/emotions                    • sentiment/emotions (no call)
+├─ 768-dim embedding                     • simhash/minhash (no call)
+└─ safety/intent/etc.
+                                         READ from st_vec:
+WRITE to st_hipp_events (90 cols)        • 768-dim embedding (no model call)
+├─ 84 cols populated
+└─ 6 cols NULL for P03                   UPDATE st_hipp_events:
+                                         • novelty_score
+WRITE to st_vec (768-dim)                • near_duplicates_json
+├─ status = 'READY'                      • is_near_duplicate
+└─ faiss_id = NULL                       • episode_cluster_id
+                                         • cluster_confidence
+                                         • clustering_version
+
+                                         WRITE to 8 Memory Layers:
+                                         • st_epi, st_sem, st_procedural
+                                         • st_social, st_prospective
+                                         • st_kg_dom, st_kg_edges
+                                         • st_vec (semantic patterns only)
+```
 
 ---
 
@@ -152,11 +249,13 @@ P03 runs **AFTER P02 has written to st_hipp_events staging table**:
 - P02 already enriched with `affect.analyze:v1` and `space.resolve_visibility:v1`
 - P03 USES existing affect/space metadata from staging
 
-❌ **Does NOT generate embeddings directly**
+❌ **Does NOT generate episodic embeddings**
 
-- P02 enqueues embedding jobs to `st_embedding_queue`
-- P08 (Embedding Lifecycle) handles vector generation
-- P03 coordinates with P08 for `st_vec` population
+- P02 M22 extracts 768-dim embeddings inline from UltraBERT cache (computed by M02 semantic_project)
+- P02 M16 writes embeddings to st_vec atomically with st_hipp_events (status=READY)
+- P08 kernel scheduler polls st_vec and adds to FAISS index (READY → INDEXED)
+- **P03 DOES write st_vec for consolidated semantic patterns** (e.g., extracted facts, detected habits)
+- `st_embedding_queue` is **DEPRECATED** — no longer used
 
 ❌ **Does NOT handle real-time queries**
 
@@ -233,23 +332,27 @@ required_capabilities:
   - st_pipeline_processed.write  # Idempotency tracking
 ```
 
-### P08 Coordination Capabilities
+### ~~P08 Coordination Capabilities~~ (DEPRECATED)
 
-```yaml
-  # Embedding Queue: Coordinate with P08 for vector generation
-  - st_embedding_queue.write     # Queue semantic embedding requests
-  - st_embedding_queue.read      # Check queue depth for backpressure
-```
+> **DEPRECATED (2025-12-13)**: `st_embedding_queue` is no longer used. P02 M16 writes episodic embeddings inline to st_vec. P08 kernel scheduler polls st_vec directly (no queue). P03 writes semantic pattern embeddings directly to st_vec with status=READY.
 
-**Total Capabilities Required**: 28 capabilities (11 read, 17 write)
+~~```yaml~~
+~~  # Embedding Queue: Coordinate with P08 for vector generation~~
+~~  - st_embedding_queue.write     # Queue semantic embedding requests~~
+~~  - st_embedding_queue.read      # Check queue depth for backpressure~~
+~~```~~
+
+**Total Capabilities Required**: 26 capabilities (11 read, 15 write) — *reduced from 28 after deprecating st_embedding_queue*
 
 **Security Enforcement**:
+
 - Every storage operation in P03 modules must call `syscalls.<operation>()`
 - Syscalls adapter checks `required_capabilities` before allowing access
 - Missing capability → `PermissionError` with audit log entry
 - This prevents privilege escalation and enables least-privilege architecture
 
 **Example Usage in Modules**:
+
 ```python
 # Module: consolidation.dedup.v1
 async def run(message, context, **config):
@@ -271,14 +374,26 @@ async def run(message, context, **config):
 
 **P02 → P03 Handoff**:
 
-- P02 responsibility ENDS at: Insert to `st_hipp_events` with NULL consolidation columns
+- P02 responsibility ENDS at: Atomic 3-table transaction (st_hipp_events + st_vec + st_pipeline_processed) with NULL consolidation columns
+- P02 writes **episodic embeddings** inline to st_vec with status=READY (768-dim UltraBERT)
 - P03 responsibility STARTS at: Read from `st_hipp_events`, update consolidation columns, write to 8 layers
 
-**P03 → P08 Coordination**:
+**P03 → P08 Coordination** (Updated 2025-12-13):
 
-- P03 identifies which memories need semantic embeddings
-- P03 writes to `st_vec` placeholder (status: PENDING)
-- P08 generates actual embeddings and updates `st_vec` (status: COMPLETE)
+- **Episodic embeddings**: Handled by P02 inline — P03 does NOT write placeholders for these
+- **Semantic pattern embeddings**: P03 writes directly to st_vec with status=READY (for consolidated semantic memories)
+- P08 kernel scheduler polls st_vec (every 300s, catch-up on boot) and indexes READY vectors into FAISS
+- P08 updates st_vec status from READY → INDEXED after FAISS indexing
+- `st_embedding_queue` is **DEPRECATED** — not used by P02, P03, or P08
+
+**Embedding Responsibility Matrix**:
+
+| Source | Who Writes st_vec | Who Indexes FAISS | Notes |
+|--------|-------------------|-------------------|-------|
+| Episodic memories (st_hipp_events) | P02 M16 (inline, atomic) | P08 scheduler | UltraBERT 768-dim |
+| Semantic patterns (st_sem) | P03 R7.7 | P08 scheduler | From pattern extraction |
+| KG node embeddings (st_kg_dom) | P03 R7.7 | P08 scheduler | Entity embeddings |
+| Prospective intentions (st_prospective) | P03 R7.7 | P08 scheduler | Intent embeddings |
 
 **P03 → P15 Integration**:
 
@@ -1431,10 +1546,15 @@ CREATE INDEX idx_kg_snapshot_date ON st_kg_snapshots(tenant_id, snapshot_date);
 CREATE INDEX idx_kg_snapshot_storage ON st_kg_snapshots(storage_key);
 ```
 
-**8. st_vec** (Vector Embeddings - Coordinated with P08):
+**8. st_vec** (Vector Embeddings - P02 Episodic + P03 Semantic):
 
 ```sql
--- Note: P03 writes placeholder, P08 generates actual embeddings
+-- Architecture Update (2025-12-13):
+-- - P02 M16 writes episodic embeddings INLINE (status=READY) via atomic 3-table transaction
+-- - P03 R7.7 writes semantic pattern embeddings (status=READY)
+-- - P08 kernel scheduler polls and indexes into FAISS (READY → INDEXED)
+-- - st_embedding_queue is DEPRECATED
+
 -- Durability: REGENERATABLE (Rule 6) - Treat as cached compute, not ground truth
 -- LLM-Invariant (Rule 17) - Can rebuild entirely if model changes
 CREATE TABLE st_vec (
@@ -1442,25 +1562,26 @@ CREATE TABLE st_vec (
     version INTEGER NOT NULL DEFAULT 1,
 
     -- Source References (LLM-invariant - Rule 17)
-    event_id TEXT,  -- FK to st_hipp_events (raw)
-    episode_id TEXT,  -- FK to st_epi (consolidated)
-    semantic_id TEXT,  -- FK to st_sem (pattern)
+    event_id TEXT NOT NULL,  -- FK to st_hipp_events (required, written by P02 M16)
+    episode_id TEXT,  -- FK to st_epi (consolidated, written by P03)
+    semantic_id TEXT,  -- FK to st_sem (pattern, written by P03)
     source_type TEXT NOT NULL,  -- event/episode/semantic/kg_node
 
     embedding_type TEXT NOT NULL,  -- text/semantic/episode/multimodal
 
-    -- Vector Data (Model-specific)
-    vector_data BLOB,  -- Actual embedding vector (populated by P08)
-    vector_dimension INTEGER,  -- 384/768/1536/etc. (for validation)
+    -- Vector Data (Written inline by P02/P03, NOT by P08)
+    vector BLOB NOT NULL,  -- 768-dim UltraBERT embedding (written at insert time)
+    vector_dim INTEGER NOT NULL DEFAULT 768,  -- UltraBERT dimension
 
     -- Model Metadata (Rule 17 - model can change without breaking storage)
-    model_id TEXT NOT NULL,
-    model_version TEXT NOT NULL,
-    model_family TEXT,  -- openai/sentence-transformers/custom
+    model_id TEXT NOT NULL DEFAULT 'ultrabert_v2.1.0',
+    model_version TEXT,
+    model_family TEXT DEFAULT 'ultrabert',  -- ultrabert/sentence-transformers/custom
     tokenizer_version TEXT,
 
-    -- Status
-    status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING/READY/FAILED/STALE
+    -- Status (P02/P03 write READY, P08 updates to INDEXED)
+    status TEXT NOT NULL DEFAULT 'READY',  -- READY/INDEXED/FAILED/STALE
+    faiss_id INTEGER,  -- Set by P08 kernel scheduler after FAISS indexing
     regeneration_priority INTEGER,  -- For model upgrades
 
     -- Confidence (Rule 4)
@@ -5467,95 +5588,88 @@ Content-Type: application/json
 
 ---
 
-#### R7.7 Vector Embeddings Layer (st_vec) — Coordination with P08
+#### R7.7 Vector Embeddings Layer (st_vec) — P03 Semantic Pattern Embeddings
 
-**Role**: Create placeholder embedding records that will be populated by P08 (Embedding Lifecycle pipeline). P03 writes metadata and queues embedding generation jobs; P08 generates actual vectors.
+> **Architecture Update (2025-12-13)**: P02 now handles episodic embeddings inline via M16 atomic 3-table transaction. P03 only writes st_vec for **consolidated semantic patterns** (extracted facts, detected habits, KG node embeddings, prospective intentions). `st_embedding_queue` is **DEPRECATED**.
+
+**Role**: Write semantic pattern embeddings for consolidated memories. P03 writes complete embedding records (status=READY) for semantic layers. P08 kernel scheduler polls st_vec and indexes into FAISS.
+
+**What P03 Writes to st_vec**:
+
+| Source Layer | What Gets Embedded | When |
+|-------------|-------------------|------|
+| st_sem | Extracted semantic patterns/facts | After R3 pattern extraction |
+| st_kg_dom | Entity/concept descriptions | After R4 KG construction |
+| st_prospective | Future intention text | After R5 prospective extraction |
+| st_procedural | Habit/routine descriptions | After R5 habit detection |
+
+**What P03 Does NOT Write**:
+
+| Source | Who Handles | Notes |
+|--------|-------------|-------|
+| st_hipp_events / st_epi | **P02 M16** (inline) | Episodic embeddings written atomically at ingest time |
 
 **Implementation Strategy**:
 
-1. **Placeholder Embedding Creation**: For each consolidated memory requiring embedding:
-   - Episodic memories (from st_epi): Embed episode text for semantic search
-   - Semantic patterns (from st_sem): Embed pattern descriptions for similarity matching
-   - KG nodes (from st_kg_dom): Embed entity descriptions for entity linking
-   - Prospective intentions (from st_prospective): Embed intention text for proactive matching
+1. **Semantic Pattern Embedding Creation**: For consolidated memories requiring embedding:
+   - Semantic patterns (st_sem): Embed pattern descriptions for similarity matching
+   - KG nodes (st_kg_dom): Embed entity descriptions for entity linking
+   - Prospective intentions (st_prospective): Embed intention text for proactive matching
+   - Procedural habits (st_procedural): Embed habit descriptions for routine matching
 
-2. **Embedding Record Construction**: Build st_vec placeholder:
+2. **Embedding Record Construction**: Build complete st_vec record (NOT placeholder):
 
    ```python
+   # P03 generates embeddings inline using UltraBERT (same as P02)
+   embedding = await ultrabert_adapter.encode(memory.text_content)
+
    embedding_record = {
        'embedding_id': f"EMB_{uuid4()}",
+       'event_id': memory.source_event_id,  # FK to st_hipp_events
        'tenant_id': memory.tenant_id,
        'space_id': memory.space_id,
-       'source_layer': memory.layer,  # 'st_epi'/'st_sem'/'st_kg_dom'/'st_prospective'
-       'source_id': memory.id,  # FK to source table (episode_id, semantic_id, node_id, prospective_id)
-       'embedding_type': 'text',  # text/image/audio (P03 only does text)
-       'text_to_embed': memory.text_content,  # The text that P08 will embed
-       'vector_dimensions': 768,  # Target dimension (e.g., sentence-transformers/all-mpnet-base-v2)
-       'embedding_model': 'mpnet-base-v2',  # Model identifier for P08
-       'embedding_status': 'PENDING',  # PENDING → READY (after P08 processing) or FAILED
-       'vector_data': None,  # NULL initially, populated by P08 as BLOB
+       'vector': struct.pack('768f', *embedding),  # 768-dim UltraBERT
+       'vector_dim': 768,
+       'model_id': 'ultrabert_v2.1.0',
+       'status': 'READY',  # Written complete, not placeholder
+       'faiss_id': None,  # Set by P08 kernel scheduler
        'created_at': now_iso8601(),
        'updated_at': now_iso8601()
    }
    ```
 
-3. **Embedding Queue Job Creation**: Enqueue embedding work for P08:
-   - For each embedding_record created:
-     - Create job in `st_embedding_queue` table:
+3. **Direct st_vec Write**: Write embedding via syscalls (no queue):
+   - Call `await context.syscalls.vec_write(**embedding_record)`
+   - P08 kernel scheduler will poll and add to FAISS index
 
-       ```python
-       queue_job = {
-           'job_id': f"EMB_JOB_{uuid4()}",
-           'embedding_id': embedding_record.embedding_id,  # FK to st_vec
-           'text_to_embed': embedding_record.text_to_embed,
-           'embedding_model': embedding_record.embedding_model,
-           'priority': compute_embedding_priority(memory),  # Based on salience, recency
-           'status': 'PENDING',  # PENDING/PROCESSING/COMPLETE/FAILED
-           'retries': 0,
-           'created_at': now_iso8601()
-       }
-       ```
+4. ~~**Embedding Queue Job Creation**~~: **DEPRECATED** — st_embedding_queue no longer used
 
-   - P08 polls `st_embedding_queue` for PENDING jobs, generates embeddings, updates st_vec.vector_data
+5. **P08 Coordination Protocol** (Updated):
+   - **P03 Responsibility**: Write complete st_vec records (status=READY) for semantic patterns
+   - **P08 Responsibility**: Kernel scheduler polls st_vec (300s interval), indexes READY → INDEXED
+   - **No Event Required**: P08 scheduler discovers new vectors via polling
+   - P08 emits `p08.embedding.indexed.v1` after FAISS indexing (optional)
 
-4. **Batch Outbox Staging**: Stage st_vec placeholder writes:
-   - For each embedding_record:
-     - Create OutboxEntry: `driver='st_vec', op_kind='INSERT', payload=json_bytes`
-     - Call `uow.stage_outbox(entry)` within R6's transaction
-   - OutboxWorker dispatches to SQLiteDriver (st_vec table)
-
-5. **P08 Coordination Protocol**:
-   - **P03 Responsibility**: Write st_vec placeholders (embedding_status='PENDING'), enqueue st_embedding_queue jobs
-   - **P08 Responsibility**: Poll st_embedding_queue, generate vectors, UPDATE st_vec (set vector_data, embedding_status='READY')
-   - **Event Flow**:
-     - P03 emits `cognitive.embedding.queued.v1` event after staging st_vec records
-     - P08 subscribes to this event for immediate processing (avoids polling delay)
-     - P08 emits `cognitive.embedding.completed.v1` event after updating st_vec
-
-6. **Embedding Prioritization**: Prioritize high-value embeddings:
-   - High-salience episodes (salience_score >0.7): priority=HIGH
-   - Recent semantics (last_observed_at within 7 days): priority=MEDIUM
-   - Archived memories: priority=LOW (deferred embedding)
-   - Reduces P08 load by ~30% (low-priority embeddings batched for off-peak processing)
+6. **Embedding Prioritization**: Not needed — P03 writes complete embeddings, P08 indexes all READY vectors
 
 **Dependencies**:
 
-- st_epi, st_sem, st_kg_dom, st_prospective access for text extraction
-- st_embedding_queue table for job queueing
-- K0 UnitOfWork for outbox staging
-- K0 Bus for P08 event emission
+- st_sem, st_kg_dom, st_prospective, st_procedural access for text extraction
+- UltraBERT adapter for inline embedding generation
+- K0 UnitOfWork for transactional writes
+- ~~st_embedding_queue~~ **DEPRECATED**
 
 **Observability**:
 
-- Metric: `p03_r7_vec_placeholders_created_total` (counter by source_layer)
-- Metric: `p03_r7_embedding_queue_depth` (gauge, pending jobs in st_embedding_queue)
-- Metric: `p03_r7_embedding_priority_distribution` (counter by priority)
-- Log: `r7_vec_staged` event with placeholder count, priority breakdown
+- Metric: `p03_r7_semantic_embeddings_written_total` (counter by source_layer)
+- Metric: `p03_r7_embedding_latency_ms` (histogram, UltraBERT encode time)
+- Log: `r7_vec_written` event with embedding count, source layer breakdown
 
 **Error Handling**:
 
 - **Text Extraction Failure**: If text_to_embed empty → Skip embedding creation, log warning
-- **Queue Overflow**: If st_embedding_queue exceeds 10,000 pending jobs → Drop LOW priority jobs, alert P08
+- **UltraBERT Failure**: If encoding fails → Log error, mark source record for retry
+- ~~**Queue Overflow**~~: **DEPRECATED** — no queue to overflow
 
 ---
 
@@ -8754,51 +8868,48 @@ Semantic Pattern (st_sem):
 3. **Location distance** (10% weight): Haversine distance if GPS available
 4. **Participant distance** (10% weight): Jaccard distance on participant sets
 
-**Semantic Embedding Generation**:
+**Semantic Embedding Reading** (P02 Pre-Computed):
 
 ```python
 from typing import List, Tuple
 import numpy as np
+import struct
 
-async def generate_event_embedding(event: dict) -> np.ndarray:
+async def read_event_embedding(event_id: str, conn) -> np.ndarray:
     """
-    Generate 384-dimensional embedding for event using sentence-transformers.
+    Read 768-dimensional UltraBERT embedding from st_vec.
 
-    Model: all-MiniLM-L6-v2 (fast, high-quality embeddings)
+    NOTE: Embeddings are PRE-COMPUTED by P02 M02 via UltraBERT single-pass (~30ms).
+    P03 only READS from st_vec - no model loading, no inference.
+
+    Model: UltraBERT v2.1.0 (768-dim)
     """
-    from sentence_transformers import SentenceTransformer
-
-    # Lazy-load model (cached globally)
-    model = get_embedding_model()
-
-    # Construct composite text from event fields
-    text_parts = []
-    if event.get('text'):
-        text_parts.append(event['text'])
-    if event.get('activity_type'):
-        text_parts.append(f"Activity: {event['activity_type']}")
-    if event.get('location_name'):
-        text_parts.append(f"Location: {event['location_name']}")
-    if event.get('participants_json'):
-        participants = ', '.join(event['participants_json'])
-        text_parts.append(f"People: {participants}")
-
-    composite_text = ' | '.join(text_parts)
-
-    # Generate embedding
-    embedding = model.encode(composite_text, convert_to_numpy=True)
-
-    return embedding
+    row = await conn.fetchone(
+        "SELECT vector FROM st_vec WHERE event_id = ? AND status = 'READY'",
+        (event_id,)
+    )
+    if row and row['vector']:
+        # BLOB is 768 floats × 4 bytes = 3072 bytes
+        return np.array(struct.unpack('<768f', row['vector']))
+    return None
 
 
-def get_embedding_model():
+async def read_batch_embeddings(event_ids: List[str], conn) -> dict[str, np.ndarray]:
     """
-    Singleton pattern for embedding model (expensive to load).
+    Batch-read embeddings for multiple events.
     """
-    if not hasattr(get_embedding_model, 'model'):
-        from sentence_transformers import SentenceTransformer
-        get_embedding_model.model = SentenceTransformer('all-MiniLM-L6-v2')
-    return get_embedding_model.model
+    placeholders = ','.join('?' * len(event_ids))
+    rows = await conn.fetchall(
+        f"SELECT event_id, vector FROM st_vec WHERE event_id IN ({placeholders}) AND status = 'READY'",
+        event_ids
+    )
+    return {
+        row['event_id']: np.array(struct.unpack('<768f', row['vector']))
+        for row in rows if row['vector']
+    }
+
+
+# NOTE: No model loading - P02 already computed embeddings via UltraBERT
 ```
 
 **Composite Distance Function**:
@@ -9808,17 +9919,22 @@ Relationships (st_kg_edges):
 
 **Purpose**: Identify and merge duplicate entities across episodes, maintaining canonical entity identities. Solves the challenge that "Sarah", "sarah johnson", and "Sarah J." refer to the same person.
 
-**Entity Extraction**:
+**Entity Reading** (P02 Pre-Computed via UltraBERT):
 
 ```python
 from typing import List, Dict, Any
-import spacy
+import json
 
-def extract_entities_from_episode(episode: dict) -> List[Dict[str, Any]]:
+def read_entities_from_event(event: dict) -> List[Dict[str, Any]]:
     """
-    Extract named entities from episode text using spaCy NER.
+    Read pre-extracted entities from st_hipp_events.entities_json.
 
-    Entity Types:
+    NOTE: Entities are PRE-EXTRACTED by P02 M02 via UltraBERT single-pass (~30ms).
+    P03 only READS from entities_json - no spaCy, no model loading, no inference.
+
+    Model: UltraBERT v2.1.0 NER capabilities (general + family-specific)
+
+    Entity Types (from UltraBERT):
     - PERSON: People (e.g., "Sarah", "Dr. Johnson")
     - ORG: Organizations (e.g., "Apple", "Stanford University")
     - GPE: Geo-political entities (e.g., "San Francisco", "California")
@@ -9826,62 +9942,59 @@ def extract_entities_from_episode(episode: dict) -> List[Dict[str, Any]]:
     - EVENT: Named events (e.g., "World Cup", "Christmas")
     - PRODUCT: Products (e.g., "iPhone", "Tesla Model 3")
     - DATE: Dates (e.g., "Tuesday", "2025-11-05")
+    - FAMILY_MEMBER: Family-specific (e.g., "mom", "daughter Emma")
 
     Args:
-        episode: Episode dictionary from st_epi
+        event: Event dictionary from st_hipp_events (includes entities_json)
 
     Returns:
         List of extracted entities with attributes
     """
-    # Load spaCy model (cached globally)
-    nlp = get_spacy_model()
+    entities_json = event.get('entities_json')
+    if not entities_json:
+        return []
 
-    # Extract text fields
-    text = episode.get('episode_text', '')
-    location_name = episode.get('location_name', '')
-    participants = episode.get('participants_json', [])
-    activity_type = episode.get('activity_type', '')
+    # Parse P02's pre-extracted entities
+    raw_entities = json.loads(entities_json) if isinstance(entities_json, str) else entities_json
 
     entities = []
+    for entity in raw_entities:
+        entities.append({
+            'entity_name': entity.get('text', entity.get('entity_name', '')),
+            'entity_type': map_ultrabert_label(entity.get('label', entity.get('entity_type', 'Concept'))),
+            'confidence': entity.get('confidence', 0.9),  # UltraBERT confidence
+            'source': 'ultrabert',
+            'context': entity.get('context', '')
+        })
 
-    # 1. Extract from text using NER
-    if text:
-        doc = nlp(text)
-        for ent in doc.ents:
-            entities.append({
-                'entity_name': ent.text,
-                'entity_type': map_spacy_label(ent.label_),
-                'confidence': 0.8,  # spaCy confidence
-                'source': 'ner',
-                'context': ent.sent.text  # Surrounding sentence
-            })
-
-    # 2. Extract from structured fields
-    # Location from GPS/address
+    # Also read structured fields (location, participants)
+    location_name = event.get('location_name')
     if location_name:
         entities.append({
             'entity_name': location_name,
             'entity_type': 'Place',
-            'confidence': 1.0,  # Structured data = high confidence
+            'confidence': 1.0,
             'source': 'structured',
             'attributes': {
-                'latitude': episode.get('latitude'),
-                'longitude': episode.get('longitude'),
-                'address': episode.get('address')
+                'latitude': event.get('latitude'),
+                'longitude': event.get('longitude'),
+                'address': event.get('address')
             }
         })
 
-    # Participants from participants_json
-    for participant in participants:
-        entities.append({
-            'entity_name': participant,
-            'entity_type': 'Person',
-            'confidence': 1.0,
-            'source': 'structured',
-            'attributes': {}
-        })
+    participants_json = event.get('participants_json')
+    if participants_json:
+        participants = json.loads(participants_json) if isinstance(participants_json, str) else participants_json
+        for participant in participants:
+            entities.append({
+                'entity_name': participant,
+                'entity_type': 'Person',
+                'confidence': 1.0,
+                'source': 'structured',
+                'attributes': {}
+            })
 
-    # Activity type as entity
+    activity_type = event.get('activity_type')
     if activity_type:
         entities.append({
             'entity_name': activity_type,
@@ -9897,12 +10010,13 @@ def extract_entities_from_episode(episode: dict) -> List[Dict[str, Any]]:
     return entities
 
 
-def map_spacy_label(spacy_label: str) -> str:
+def map_ultrabert_label(ultrabert_label: str) -> str:
     """
-    Map spaCy NER labels to our entity taxonomy.
+    Map UltraBERT NER labels to our entity taxonomy.
     """
     mapping = {
         'PERSON': 'Person',
+        'FAMILY_MEMBER': 'Person',
         'ORG': 'Organization',
         'GPE': 'Place',
         'LOC': 'Place',
@@ -9915,17 +10029,10 @@ def map_spacy_label(spacy_label: str) -> str:
         'WORK_OF_ART': 'Work',
         'FAC': 'Facility'
     }
-    return mapping.get(spacy_label, 'Concept')
+    return mapping.get(ultrabert_label, 'Concept')
 
 
-def get_spacy_model():
-    """
-    Singleton pattern for spaCy model (expensive to load).
-    """
-    if not hasattr(get_spacy_model, 'nlp'):
-        import spacy
-        get_spacy_model.nlp = spacy.load('en_core_web_sm')
-    return get_spacy_model.nlp
+# NOTE: No spaCy model loading - P02 already extracted entities via UltraBERT
 
 
 def deduplicate_entities_within_episode(entities: List[dict]) -> List[dict]:
@@ -10371,72 +10478,38 @@ def infer_relationship_type(type1: str, type2: str) -> str:
     return 'related_to'
 
 
-def extract_relationships_from_text(text: str, entities: List[dict]) -> List[dict]:
+def read_relationships_from_event(event: dict) -> List[dict]:
     """
-    Extract explicit relationships from text using dependency parsing.
+    Read pre-extracted relationships from st_hipp_events.kg_triples_json.
 
-    Example:
-    "Sarah works at Apple" → (Sarah, works_at, Apple)
-    "I had coffee with Sarah" → (actor, meets_with, Sarah)
+    NOTE: Relationships are PRE-EXTRACTED by P02 M02 via UltraBERT single-pass.
+    P03 only READS from kg_triples_json - no spaCy, no dependency parsing.
+
+    Example triples from P02:
+    [{"subject": "Sarah", "predicate": "works_at", "object": "Apple"}, ...]
     """
-    nlp = get_spacy_model()
-    doc = nlp(text)
+    kg_triples_json = event.get('kg_triples_json')
+    if not kg_triples_json:
+        return []
+
+    import json
+    triples = json.loads(kg_triples_json) if isinstance(kg_triples_json, str) else kg_triples_json
 
     relationships = []
-    entity_names = {e['entity_name'].lower() for e in entities}
-
-    # Find subject-verb-object triples
-    for token in doc:
-        if token.pos_ == 'VERB':
-            # Find subject
-            subjects = [child for child in token.children if child.dep_ in ['nsubj', 'nsubjpass']]
-            # Find object
-            objects = [child for child in token.children if child.dep_ in ['dobj', 'pobj']]
-
-            for subj in subjects:
-                for obj in objects:
-                    subj_text = subj.text.lower()
-                    obj_text = obj.text.lower()
-
-                    # Check if both are entities
-                    if subj_text in entity_names and obj_text in entity_names:
-                        rel_type = map_verb_to_relationship(token.lemma_)
-
-                        relationships.append({
-                            'from_entity': subj.text,
-                            'to_entity': obj.text,
-                            'relationship_type': rel_type,
-                            'confidence': 0.85,  # Dependency parse = high confidence
-                            'source': 'dependency_parse',
-                            'verb': token.lemma_
-                        })
+    for triple in triples:
+        relationships.append({
+            'from_entity': triple.get('subject', ''),
+            'to_entity': triple.get('object', ''),
+            'relationship_type': triple.get('predicate', 'related_to'),
+            'confidence': triple.get('confidence', 0.85),
+            'source': 'ultrabert',
+            'verb': triple.get('predicate', '')
+        })
 
     return relationships
 
 
-def map_verb_to_relationship(verb: str) -> str:
-    """
-    Map verb lemmas to relationship types.
-    """
-    verb_mapping = {
-        'work': 'works_at',
-        'live': 'lives_at',
-        'meet': 'meets_with',
-        'know': 'knows',
-        'manage': 'manages',
-        'organize': 'organizes',
-        'discuss': 'discusses',
-        'visit': 'visited',
-        'attend': 'attends',
-        'perform': 'performs',
-        'create': 'creates',
-        'own': 'owns',
-        'lead': 'leads',
-        'teach': 'teaches',
-        'learn': 'learns'
-    }
-
-    return verb_mapping.get(verb, 'related_to')
+# NOTE: No spaCy dependency parsing - P02 extracts triples via UltraBERT
 ```
 
 **Write Relationships to st_kg_edges**:
@@ -13348,15 +13421,15 @@ class P02ToP03Contract:
 
 ### P03 → P08 (Embedding Lifecycle)
 
-**Purpose**: P03 notifies P08 when new memories are created (episodic, semantic, KG nodes), triggering embedding generation for vector search.
+**Purpose**: P03 notifies P08 when new memories are created (episodic, semantic, KG nodes), triggering FAISS indexing for vector search.
 
 **Data Flow**:
 
 1. P03 writes new memory to `st_epi`, `st_sem`, or `st_kg_dom`
 2. P03 emits `p03.consolidation.complete.v1` or `p03.pattern.extracted.v1`
 3. P08 consumes event, identifies new memories
-4. P08 generates embeddings (via sentence-transformers or OpenAI)
-5. P08 writes embeddings to `st_vec` (vector store)
+4. P08 reads embeddings from `st_vec` (already computed by P02 via UltraBERT)
+5. P08 builds/updates FAISS index for vector similarity search
 
 **Integration Contract**:
 
@@ -15185,20 +15258,26 @@ After comprehensive review of the P03 consolidation dossier (15,101 lines), the 
 
 ---
 
-**Q3: P08 Coordination Protocol Gaps**
+**Q3: P08 Coordination Protocol Gaps** ✅ RESOLVED (2025-12-13)
 
-**Issue**: R7.7 states P03 "creates placeholder embedding records" and "P08 generates actual vectors", but missing:
+> **Resolution**: Architecture updated. P02 M16 now writes episodic embeddings inline (atomic 3-table transaction). P03 writes semantic pattern embeddings directly with status=READY. P08 runs as kernel lifespan scheduler polling st_vec every 300s. `st_embedding_queue` is **DEPRECATED**.
 
-- What happens if P08 is down/unavailable? Do placeholders accumulate indefinitely?
-- How does P03 handle embedding generation failures? (e.g., model OOM, text too long)
-- Priority semantics: Document says "High-salience episodes (salience_score >0.7): priority=HIGH", but no queue starvation prevention mechanism described
-- Event-driven vs polling: Document mentions both "P08 polls st_embedding_queue" AND "P03 emits cognitive.embedding.queued.v1 event for immediate processing" - which takes precedence?
+~~**Issue**: R7.7 states P03 "creates placeholder embedding records" and "P08 generates actual vectors", but missing:~~
 
-**Confusion**: If 1000 events → 1000 embedding placeholders per cycle, and P08 can only process 100/minute, backlog grows 900 events/cycle. How is backlog managed? Does P03 throttle consolidation when embedding queue depth exceeds threshold?
+~~- What happens if P08 is down/unavailable? Do placeholders accumulate indefinitely?~~
+~~- How does P03 handle embedding generation failures? (e.g., model OOM, text too long)~~
+~~- Priority semantics: Document says "High-salience episodes (salience_score >0.7): priority=HIGH", but no queue starvation prevention mechanism described~~
+~~- Event-driven vs polling: Document mentions both "P08 polls st_embedding_queue" AND "P03 emits cognitive.embedding.queued.v1 event for immediate processing" - which takes precedence?~~
 
-**Impact**: Unconstrained embedding queue could cause memory exhaustion. Search/retrieval features broken until embeddings generated.
+**New Architecture**:
 
-**Recommendation**: Add backpressure mechanism. If `st_embedding_queue` depth >10k, P03 should pause R7.7 writes and emit alert.
+- **P02 M16**: Writes episodic embeddings inline to st_vec (status=READY) via atomic 3-table transaction
+- **P03 R7.7**: Writes semantic pattern embeddings directly to st_vec (status=READY) using UltraBERT
+- **P08 Scheduler**: Kernel lifespan background task polls st_vec every 300s, indexes READY → INDEXED in FAISS
+- **No Queue**: `st_embedding_queue` deprecated, no backlog management needed
+- **FAISS Catch-up**: P08 runs catch-up on kernel boot to index any missed vectors
+
+**Impact**: Previous concerns about queue overflow/backpressure no longer apply.
 
 ---
 
@@ -15523,46 +15602,45 @@ But no handling for multi-modal distributions (e.g., weekly during winter, none 
 
 ### Integration & Coordination Questions
 
-**Q14: P02→P03→P08 Event Flow Synchronization**
+**Q14: P02→P03→P08 Event Flow Synchronization** ✅ RESOLVED (2025-12-13)
 
-**Issue**: Document describes event flow:
+> **Resolution**: Architecture updated. Episodic embeddings are now written **inline** by P02 M16 (status=READY at ingest time). No placeholder pattern. No race condition for episodic queries.
 
-1. P02 writes event to st_hipp_events (consolidation_status=NULL)
+~~**Issue**: Document describes event flow:~~
+
+~~1. P02 writes event to st_hipp_events (consolidation_status=NULL)~~
+~~2. P02 emits `p02.write.complete.v1` event~~
+~~3. P03 triggered (event-based trigger or idle detection)~~
+~~4. P03 consolidates events, writes to memory layers~~
+~~5. P03 writes embedding placeholders to st_vec~~
+~~6. P03 emits `p03.consolidation.complete.v1` event~~
+~~7. P08 polls st_embedding_queue or subscribes to `cognitive.embedding.queued.v1`~~
+~~8. P08 generates embeddings, updates st_vec~~
+
+**Updated Event Flow (2025-12-13)**:
+
+1. **P02 M16**: Atomic 3-table transaction writes st_hipp_events + st_vec (status=READY) + st_pipeline_processed
 2. P02 emits `p02.write.complete.v1` event
-3. P03 triggered (event-based trigger or idle detection)
-4. P03 consolidates events, writes to memory layers
-5. P03 writes embedding placeholders to st_vec
-6. P03 emits `p03.consolidation.complete.v1` event
-7. P08 polls st_embedding_queue or subscribes to `cognitive.embedding.queued.v1`
-8. P08 generates embeddings, updates st_vec
+3. **P08 Kernel Scheduler**: Polls st_vec every 300s (catch-up on boot), indexes READY → INDEXED in FAISS
+4. P03 triggered (idle detection or scheduled)
+5. P03 consolidates events, writes to memory layers (st_epi, st_sem, etc.)
+6. **P03 R7.7**: Writes semantic pattern embeddings to st_vec (status=READY) using UltraBERT
+7. P03 emits `p03.consolidation.complete.v1` event
+8. P08 scheduler picks up new semantic embeddings on next poll cycle
 
-**Confusion**: What if user queries memory layer before step 8 completes?
+**Race Condition Resolution**:
 
-Example timeline:
+| Query Type | Data Available | Embedding Available | Notes |
+|-----------|----------------|---------------------|-------|
+| Episodic (st_hipp_events) | Immediately (P02) | Immediately (P02 M16) | No race condition |
+| Semantic (st_sem) | After P03 | After P03 R7.7 | Same transaction |
+| FAISS search | After P08 poll | After P08 poll | 0-300s delay acceptable |
 
-- T0: P02 writes event
-- T1: P03 consolidates (90-minute cycle)
-- T2: P03 emits completion event (T0 + 90 min)
-- T3: User queries st_epi (T0 + 95 min)
-- T4: P08 finishes embeddings (T0 + 2 hours)
+**Query Port Handling**:
 
-At T3, user gets episode without embedding (st_vec.vector_data=NULL). Semantic search broken.
-
-Document states "P08 provides lazy/regeneratable embeddings", but no guidance on:
-
-- How does Query Port handle NULL embeddings? (skip in search? return with warning?)
-- Does P03 emit completion event before or after embeddings ready?
-- Can consolidation be considered "complete" if embeddings pending?
-
-**Impact**: Race condition between consolidation completion and embedding generation causes inconsistent search results.
-
-**Recommendation**: Add `embedding_status` to memory layers:
-
-- PENDING: Embedding queued but not generated
-- READY: Embedding available
-- FAILED: Embedding generation failed
-
-Query Port should filter by `embedding_status='READY'` for semantic search, or return degraded results with warning.
+- `status=READY`: Embedding in st_vec, can do embedding-based queries
+- `status=INDEXED`: Also in FAISS, fastest similarity search
+- `status=PENDING` or `NULL`: Fallback to FTS5 text search (rare after ADR-K003)
 
 ---
 
@@ -15688,7 +15766,7 @@ Synthetic events likely process faster than realistic events, leading to false c
 **Recommendation**: Generate realistic test events:
 
 1. Use Faker library for text generation (realistic word distributions)
-2. Use spaCy to generate realistic entities_json
+2. Generate realistic entities_json matching P02 UltraBERT output format
 3. Vary event complexity (simple: 100 words, 3 entities; complex: 1000 words, 30 entities)
 4. Benchmark on representative sample from production (sanitized)
 

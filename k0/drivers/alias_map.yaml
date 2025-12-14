@@ -12,3 +12,4 @@ aliases:
   traffic-gen: sqlite
   # Event bus drivers (outbox → external systems)
   outbox_sse: sse_outbox_driver  # Publishes outbox events to SSE subscribers (telemetry, monitoring)
+  internal_bus: internal_bus_driver  # Publishes outbox events to internal bus (inter-pipeline communication)

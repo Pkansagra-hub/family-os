@@ -39,8 +39,10 @@ COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
 
 # Install PyTorch nightly with CUDA 12.8 (supports Blackwell sm_100/sm_120) + kernel deps + UltraBERT
 # See: https://pytorch.org/get-started/locally/ - nightly cu128 has Blackwell support
+# Note: faiss-gpu installed separately for GPU-accelerated vector search (P08 pipeline)
 RUN pip3 install --no-cache-dir --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128 && \
     pip3 install --no-cache-dir -r requirements.kernel.txt && \
+    pip3 install --no-cache-dir faiss-gpu>=1.8.0 && \
     pip3 install --no-cache-dir wheels/familyos_ultrabert-2.1.0-py3-none-any.whl && \
     python3 -m spacy download en_core_web_sm
 

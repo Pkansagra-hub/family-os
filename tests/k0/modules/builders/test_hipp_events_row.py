@@ -435,7 +435,7 @@ async def test_hippocampus_group_assembly(complete_module_outputs):
 
 @pytest.mark.asyncio
 async def test_embeddings_kg_group_assembly(complete_module_outputs):
-    """Test embeddings & KG column group (4 columns)"""
+    """Test embeddings & KG column group (6 columns) - ADR-K003"""
     # Extract CA1 fields from flat envelope - keep as JSON strings (not parsed)
     ca1_output = {
         "embedding_id": complete_module_outputs.get("embedding_id"),
@@ -443,10 +443,21 @@ async def test_embeddings_kg_group_assembly(complete_module_outputs):
         "kg_triples_json": complete_module_outputs.get("kg_triples_json", "[]"),
     }
 
-    result = map_embeddings_kg_group(ca1_output)
+    # M22 embedding output (simulating PENDING case - no embedding generated)
+    embedding_output = {
+        "embedding": None,  # No embedding (PENDING)
+        "embedding_id": "emb_uuid_123",
+        "model_id": "ultrabert_v2.1.0",
+        "vector_dim": 768,
+        "source": "no_text",
+    }
+
+    result = map_embeddings_kg_group(ca1_output, embedding_output)
 
     assert result["embedding_id"] == "emb_uuid_123"
-    assert result["embedding_status"] == "PENDING"
+    assert result["embedding_status"] == "PENDING"  # No embedding → PENDING
+    assert result["embedding_model_id"] == "ultrabert_v2.1.0"
+    assert result["embedding_vector_dim"] == 768
     entities = json.loads(result["entities_json"])
     assert entities == ["Olive_Garden", "person_mom", "person_sharvi"]
     kg_triples = json.loads(result["kg_triples_json"])

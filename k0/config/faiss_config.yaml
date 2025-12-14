@@ -1,0 +1,170 @@
+# FAISS Configuration
+# Milestone 3 - P08 v2 Embedding Management
+# ADR: K003 - Inline Embedding via UltraBERT
+
+# ==============================================================================
+# FAISS Index Configuration
+# ==============================================================================
+
+faiss:
+  # Index identifier (used as filename)
+  index_id: "ultrabert_v2.1.0_ivf256_pq64"
+
+  # Index storage directory
+  index_path: "data/faiss_indexes"
+
+  # Vector dimension (UltraBERT embeddings)
+  vector_dim: 768
+
+  # Index type: IVF+PQ (Inverted File with Product Quantization)
+  index_type: "IndexIVFPQ"
+
+  # IVF configuration
+  ivf:
+    # Number of Voronoi cells (clusters)
+    nlist: 256
+
+    # Number of cells to probe during search
+    # Higher = better recall, slower search
+    nprobe: 16
+
+  # Product Quantization configuration
+  pq:
+    # Number of PQ subquantizers (768 / 12 = 64)
+    m: 64
+
+    # Bits per PQ code (8 bits = 256 centroids per subquantizer)
+    nbits: 8
+
+  # Distance metric
+  distance_metric: "L2"  # Euclidean distance
+
+  # Training configuration
+  training:
+    # Minimum vectors required for training
+    min_training_vectors: 30000
+
+    # Auto-train on startup if untrained and sufficient vectors available
+    auto_train: true
+
+    # Auto-save after training
+    auto_save: true
+
+  # Performance settings
+  performance:
+    # Target latency for single vector add (ms)
+    add_latency_target_ms: 5
+
+    # Target latency for k=10 search (ms)
+    search_latency_target_ms: 50
+
+    # Batch size for optimal performance
+    optimal_batch_size: 100
+
+  # Memory limits
+  memory:
+    # Maximum index size in memory (GB)
+    # 768-dim × 1M vectors × 4 bytes = 3GB uncompressed
+    # With PQ compression 8:1 = 384MB
+    max_index_size_gb: 2
+
+    # Enable memory mapping for large indexes
+    use_mmap: false
+
+# ==============================================================================
+# ID Mapping Configuration
+# ==============================================================================
+
+id_mapping:
+  # Strategy: Use st_vec.faiss_id column (Option A)
+  strategy: "st_vec_column"
+
+  # Auto-increment starting point
+  start_id: 0
+
+  # Rebuild mapping on startup from st_vec table
+  rebuild_on_startup: true
+
+  # Cache mapping in memory for fast lookups
+  cache_in_memory: true
+
+# ==============================================================================
+# Persistence Configuration
+# ==============================================================================
+
+persistence:
+  # Auto-save index periodically
+  auto_save_enabled: true
+
+  # Auto-save interval (seconds)
+  auto_save_interval: 300  # 5 minutes
+
+  # Save on shutdown
+  save_on_shutdown: true
+
+  # Backup index before rebuild
+  backup_before_rebuild: true
+
+  # Number of backup versions to keep
+  backup_versions_to_keep: 3
+
+# ==============================================================================
+# Rebuild/Retraining Configuration
+# ==============================================================================
+
+rebuild:
+  # Trigger rebuild when index fragmentation exceeds threshold
+  fragmentation_threshold: 0.3  # 30%
+
+  # Trigger rebuild when removed vectors exceed threshold
+  removed_vectors_threshold: 10000
+
+  # Rebuild during low-traffic hours
+  schedule_during_low_traffic: true
+
+  # Low-traffic hours (UTC)
+  low_traffic_hours:
+    start: "02:00"
+    end: "06:00"
+
+# ==============================================================================
+# Monitoring & Observability
+# ==============================================================================
+
+monitoring:
+  # Enable performance metrics
+  metrics_enabled: true
+
+  # Log FAISS operations
+  log_operations: true
+
+  # Log level for FAISS operations
+  log_level: "INFO"
+
+  # Emit metrics to Prometheus
+  prometheus_enabled: true
+
+  # Metrics to track
+  tracked_metrics:
+    - "faiss_add_latency"
+    - "faiss_search_latency"
+    - "faiss_index_size"
+    - "faiss_total_vectors"
+    - "faiss_fragmentation"
+
+# ==============================================================================
+# Development & Testing
+# ==============================================================================
+
+dev:
+  # Use smaller index for testing (nlist=16 instead of 256)
+  use_small_index: false
+
+  # Skip training for empty index (testing only)
+  skip_training: false
+
+  # Mock FAISS for unit tests
+  mock_faiss: false
+
+  # Test data directory
+  test_data_dir: "tests/fixtures/faiss"

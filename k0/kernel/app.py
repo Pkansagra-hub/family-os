@@ -57,7 +57,7 @@ from ..storage import (
 )
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
-from ..uow.connection_pool import configure_pool, shutdown_pool
+from ..uow.connection_pool import configure_pool, get_pool, shutdown_pool
 from .admission import AdmissionRecord, consume_admission_records
 from .config import KernelSettings
 from .dependencies import build_request_dependencies
@@ -292,11 +292,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
 
-    # Inject bus dispatcher into SQLite driver for outbox-to-bus bridging
+    # Inject bus dispatcher into SQLite driver for WAL/outbox operations
     from ..drivers.sqlite import set_bus_dispatcher
 
     set_bus_dispatcher(bus_dispatcher)
-    logger.info("Injected bus dispatcher into SQLite driver for P02 pipeline integration")
 
     # Register BusDispatcher sinks (Gap 1: Wire BusDispatcher Sinks)
     # M1 R1.2: Migrated from register_sink() to tap() / subscribe()
@@ -499,6 +498,179 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Outbox worker loop cancelled during backoff")
                     break
 
+    async def _p08_faiss_indexer_loop() -> None:
+        """Background task to run P08 FAISS indexing on schedule (ADR-K003 v1.2).
+
+        Queries st_vec WHERE status='READY' and batch-indexes into FAISS.
+        Runs every 5 minutes (configurable via P08 contract).
+        """
+        import struct
+        import time
+
+        # Wait for kernel to fully boot before starting scheduler
+        await asyncio.sleep(10)
+
+        # Get P08 schedule config from pipeline spec
+        pipelines = getattr(app.state, "pipelines", {})
+        p08_runner = pipelines.get("P08_EMBEDDING_MANAGEMENT")
+
+        if p08_runner is None:
+            logger.warning("P08 scheduler: Pipeline not loaded, scheduler disabled")
+            return
+
+        # Extract schedule config from spec
+        spec = p08_runner._spec
+        schedule_config = getattr(spec, "schedule", None)
+        if schedule_config is None:
+            # Use defaults if no schedule config
+            interval_seconds = 300
+            batch_size = 100
+            catch_up_enabled = True
+        else:
+            interval_seconds = schedule_config.get("interval_seconds", 300)
+            batch_size = schedule_config.get("batch_size", 100)
+            catch_up_enabled = schedule_config.get("catch_up_enabled", True)
+
+        logger.info(
+            "P08 FAISS indexer scheduler started",
+            extra={
+                "interval_seconds": interval_seconds,
+                "batch_size": batch_size,
+                "catch_up_enabled": catch_up_enabled,
+            },
+        )
+
+        logger.info("P08 scheduler: Defining _index_ready_vectors function...")
+
+        try:
+            # Import FAISS manager
+            from k0.runtime.faiss_manager import FaissIndexManager
+
+            logger.info("P08 scheduler: FAISS manager imported OK")
+        except Exception as e:
+            logger.exception(f"P08 scheduler: Failed to import FAISS manager: {e}")
+            return
+
+        logger.info("P08 scheduler: FAISS manager imported, defining function...")
+
+        async def _index_ready_vectors() -> int:
+            """Query READY vectors and add to FAISS index."""
+            indexed_count = 0
+            conn = None
+            try:
+                logger.info("P08 scheduler: _index_ready_vectors called, getting pool...")
+                # Direct database access for scheduler (not going through pipeline)
+                pool = get_pool()
+                logger.info(f"P08 scheduler: Got pool {pool}, acquiring connection...")
+                conn = pool.acquire(timeout=5.0)
+                logger.info("P08 scheduler: Connection acquired, querying READY vectors...")
+                try:
+                    # Query READY vectors
+                    cursor = conn.execute(
+                        """
+                        SELECT embedding_id, event_id, tenant_id, space_id, vector, vector_dim
+                        FROM st_vec
+                        WHERE status = 'READY'
+                        ORDER BY created_at ASC
+                        LIMIT ?
+                        """,
+                        (batch_size,),
+                    )
+                    rows = cursor.fetchall()
+                    logger.info(f"P08 scheduler: Found {len(rows)} READY vectors")
+
+                    if not rows:
+                        return 0
+
+                    faiss_mgr = FaissIndexManager.get_instance()
+                    logger.info(f"P08 scheduler: Got FAISS manager instance: {faiss_mgr}")
+
+                    for row in rows:
+                        embedding_id, event_id, tenant_id, space_id, vector_bytes, vector_dim = row
+                        logger.info(
+                            f"P08 scheduler: Processing embedding {embedding_id}, vector_dim={vector_dim}"
+                        )
+                        try:
+                            # Unpack vector from bytes
+                            vector = list(struct.unpack(f"{vector_dim}f", vector_bytes))
+                            logger.info(
+                                f"P08 scheduler: Unpacked vector of length {len(vector)}, adding to FAISS..."
+                            )
+
+                            # Add to FAISS (async method)
+                            result = await faiss_mgr.add(embedding_id, vector)
+                            logger.info(f"P08 scheduler: FAISS add result: {result}")
+                            faiss_id = result["faiss_id"]
+
+                            # Update status to INDEXED
+                            now = int(time.time())
+                            conn.execute(
+                                """
+                                UPDATE st_vec
+                                SET status = 'INDEXED', faiss_id = ?, indexed_at = ?, updated_at = ?
+                                WHERE embedding_id = ?
+                                """,
+                                (faiss_id, now, now, embedding_id),
+                            )
+                            conn.commit()
+                            indexed_count += 1
+                        except Exception as e:
+                            logger.warning(
+                                f"P08 scheduler: Failed to index embedding {embedding_id}: {e}"
+                            )
+                            # Mark as FAILED
+                            conn.execute(
+                                "UPDATE st_vec SET status = 'FAILED', updated_at = ? WHERE embedding_id = ?",
+                                (int(time.time()), embedding_id),
+                            )
+                            conn.commit()
+                finally:
+                    if conn is not None:
+                        pool.release(conn)
+
+                return indexed_count
+            except Exception as e:
+                logger.exception(f"P08 scheduler: Error during indexing batch: {e}")
+                return indexed_count
+
+        # Initial catch-up run if enabled
+        if catch_up_enabled:
+            try:
+                logger.info("P08 scheduler: Running initial catch-up indexing...")
+                total_indexed = 0
+                while True:
+                    indexed = await _index_ready_vectors()
+                    if indexed == 0:
+                        break
+                    total_indexed += indexed
+                    logger.info(
+                        f"P08 scheduler: Catch-up indexed {indexed} vectors (total: {total_indexed})"
+                    )
+                if total_indexed > 0:
+                    logger.info(
+                        f"P08 scheduler: Catch-up complete, indexed {total_indexed} vectors"
+                    )
+                else:
+                    logger.info("P08 scheduler: Catch-up complete, no READY vectors found")
+            except Exception:
+                logger.exception("P08 scheduler: Catch-up indexing failed")
+
+        # Main scheduler loop
+        while True:
+            try:
+                await asyncio.sleep(interval_seconds)
+                indexed = await _index_ready_vectors()
+                if indexed > 0:
+                    logger.info(
+                        f"P08 scheduler: Indexed {indexed} vectors",
+                        extra={"indexed_count": indexed, "batch_size": batch_size},
+                    )
+            except asyncio.CancelledError:
+                logger.info("P08 FAISS indexer scheduler cancelled")
+                break
+            except Exception:
+                logger.exception("P08 scheduler: Error in indexing loop, continuing...")
+
     async def _init_model_registry() -> "ModelRegistry":
         """Initialize the centralized model registry at kernel startup.
 
@@ -628,10 +800,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # - VADER, GoEmotions, clinical_safety, sentence_transformer
         # - TransformerNER, ZeroShotClassifier, etc.
         try:
-            from ..runtime.ultrabert_adapter import (
-                get_ultrabert_client,
-                is_ultrabert_available,
-            )
+            from ..runtime.ultrabert_adapter import get_ultrabert_client, is_ultrabert_available
 
             logger.info("Initializing UltraBERT unified model...")
             ultrabert_client = get_ultrabert_client()
@@ -663,6 +832,33 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 "registry_stats": model_registry.get_stats(),
             },
         )
+
+        # Phase 1.6: Initialize FAISS Index Manager for P08 embedding indexing
+        try:
+            from pathlib import Path
+
+            from ..runtime.faiss_manager import FaissIndexManager
+
+            logger.info("Initializing FAISS Index Manager...")
+            faiss_mgr = FaissIndexManager.get_instance()
+            faiss_index_path = Path("/data/k0_faiss_indexes")
+            faiss_index_path.mkdir(parents=True, exist_ok=True)
+
+            await faiss_mgr.initialize(index_path=faiss_index_path, train_if_needed=False)
+
+            app.state.faiss_manager = faiss_mgr
+            logger.info(
+                "FAISS Index Manager initialized",
+                extra={
+                    "index_path": str(faiss_index_path),
+                    "is_trained": faiss_mgr._is_trained,
+                    "total_vectors": faiss_mgr.ntotal(),
+                    "index_type": "FlatL2" if faiss_mgr._is_trained else "IVF256+PQ64 (untrained)",
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize FAISS Index Manager: {e}", exc_info=True)
+            app.state.faiss_manager = None
 
         # Phase 2: Boot YAML-based declarative pipelines via runtime system
         from pathlib import Path
@@ -746,6 +942,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                         config=spec.config,
                         logger=logger.getChild(spec.pipeline_id),
                         preloaded_models=preloaded_models,  # Pass preloaded models to pipeline
+                        bus_dispatcher=bus_dispatcher,  # For internal pipeline communication
                     )
 
                     # Call on_startup
@@ -796,6 +993,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
         outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+        p08_indexer_task = asyncio.create_task(_p08_faiss_indexer_loop())
 
         try:
             yield
@@ -834,6 +1032,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             logger.info("Shutting down background tasks")
             sse_metrics_task.cancel()
             outbox_worker_task.cancel()
+            p08_indexer_task.cancel()
 
             # Wait for tasks to complete cancellation
             try:
@@ -843,6 +1042,11 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
             try:
                 await outbox_worker_task
+            except asyncio.CancelledError:
+                pass
+
+            try:
+                await p08_indexer_task
             except asyncio.CancelledError:
                 pass
 
