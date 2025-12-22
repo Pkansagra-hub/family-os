@@ -210,6 +210,9 @@ class BusDispatcher:
 
         batch.sort(key=attrgetter("offset"))
 
+        # Record activity for idle detection (Phase 2 - M7)
+        self._record_activity()
+
         async with self._lock:
             for message in batch:
                 self._ensure_monotonic(message.offset)
@@ -217,6 +220,17 @@ class BusDispatcher:
                 if self._sinks or self._topic_subscriptions or self._taps:
                     await self._dispatch_single(message)
                 self._last_offset = message.offset
+
+    def _record_activity(self) -> None:
+        """Record activity for idle detection triggers."""
+        try:
+            from k0.scheduler.activity import get_activity_tracker
+
+            tracker = get_activity_tracker()
+            if tracker.is_running:
+                tracker.record_activity()
+        except ImportError:
+            pass  # ActivityTracker not available
 
     def _ensure_monotonic(self, offset: int) -> None:
         if self._last_offset is not None and offset < self._last_offset:

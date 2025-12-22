@@ -2350,6 +2350,113 @@ class Syscalls:
                 )
                 raise
 
+    # =========================================================================
+    # Issue 3.1.0: Generic Query Count (for PipelineScheduler threshold triggers)
+    # =========================================================================
+
+    async def query_count(
+        self,
+        table: str,
+        where: str = "1=1",
+        params: tuple = (),
+    ) -> int:
+        """
+        Query row count from a table with optional WHERE clause.
+
+        Used by PipelineScheduler for threshold triggers to check if
+        row count exceeds configured threshold.
+
+        Args:
+            table: Table name (must be in allowed tables)
+            where: WHERE clause (default: all rows)
+            params: Query parameters for WHERE clause
+
+        Returns:
+            Row count matching condition
+
+        Raises:
+            PermissionError: If pipeline lacks read capability for table
+            ValueError: If table not in allowed list
+
+        Example:
+            >>> count = await syscalls.query_count(
+            ...     table="st_vec",
+            ...     where="status = ?",
+            ...     params=("READY",)
+            ... )
+            >>> print(f"{count} vectors pending indexing")
+
+        Security:
+            - Requires {table}.read capability
+            - Only allows approved tables (no arbitrary table access)
+            - SQL injection protected via parameterized queries
+        """
+        # Validate table access
+        required_cap = f"{table}.read"
+        self._require_cap(required_cap)
+
+        # Allowed tables for threshold queries (Issue 3.1.0)
+        allowed_tables = {
+            "st_vec",
+            "st_hipp_events",
+            "st_wal",
+            "st_epi",
+            "st_sem",
+            "st_outbox",
+            "st_pipeline_processed",
+        }
+        if table not in allowed_tables:
+            raise ValueError(
+                f"Table not allowed for count queries: {table}. "
+                f"Allowed: {sorted(allowed_tables)}"
+            )
+
+        start_time = time.perf_counter()
+
+        async with self._uow_factory() as uow:
+            conn = uow._connection
+            if conn is None:
+                raise RuntimeError("UnitOfWork connection not initialized")
+
+            try:
+                loop = asyncio.get_running_loop()
+                sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: conn.execute(sql, params).fetchone(),
+                )
+
+                count = result[0] if result else 0
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+                logger.debug(
+                    f"query_count: {table} WHERE {where} = {count}",
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "table": table,
+                        "where": where,
+                        "count": count,
+                        "latency_ms": elapsed_ms,
+                        "operation": "query_count",
+                    },
+                )
+
+                return count
+
+            except Exception as e:
+                logger.error(
+                    f"query_count failed for {table}: {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": self._pipeline_id,
+                        "table": table,
+                        "where": where,
+                        "error": str(e),
+                    },
+                )
+                raise
+
     async def ultrabert_embed(
         self,
         text: str,

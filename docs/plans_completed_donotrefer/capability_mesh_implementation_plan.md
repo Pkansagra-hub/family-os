@@ -34,12 +34,22 @@ This plan implements the 3-layer Capability Mesh Architecture:
 
 **Phase 1 Total Duration**: 14 days
 
-### Phase 2 (Future Enhancement)
+### Phase 2 (P03 Prerequisite - CRON & IDLE Triggers)
 
-| Milestone | Name | Duration | Dependencies |
-|-----------|------|----------|--------------|
-| **M6** | CRON Trigger Engine | 2 days | M3 |
-| **M7** | IDLE Trigger Engine | 2 days | M3 |
+> **⚠️ CRITICAL**: P03 Consolidation Pipeline requires CRON and IDLE triggers for production use.
+> **Phase 2 COMPLETED**: Both CRON and IDLE triggers are now fully implemented.
+>
+> - ✅ **M6**: CronTriggerEngine with croniter integration (5 issues complete)
+> - ✅ **M7**: IdleTriggerEngine with ActivityTracker infrastructure (9 issues complete)
+>
+> P03 can now use full trigger specification including CRON schedules and idle-based activation.
+
+| Milestone | Name | Duration | Dependencies | Status |
+|-----------|------|----------|--------------|--------|
+| **M6** | CRON Trigger Engine | 3 days | M3 | ✅ COMPLETE |
+| **M7** | IDLE Trigger Engine | 3 days | M3 | ✅ COMPLETE |
+
+**Phase 2 Total Duration**: 6 days (completed)
 
 ---
 
@@ -4144,166 +4154,1148 @@ They require additional infrastructure and dependencies.
 
 ## Milestone 6: CRON Trigger Engine (M6)
 
-**Objective**: Add cron-based scheduling for pipelines.
+**Objective**: Add cron-based scheduling for pipelines (required for P03 scheduled consolidation).
 
 **Dependencies**: M3 (PipelineScheduler core)
 
+**Duration**: 3 days
+
+**Blocks**: P03 scheduled consolidation (2AM-5AM window)
+
 **Prerequisites**:
 
-- Cron expression parser library (e.g., `croniter`)
+- Cron expression parser library (`croniter>=2.0.0`)
 - Timezone handling infrastructure
 
-### Epic 6.1: CronTriggerEngine
+### Epic 6.1: CronTriggerEngine Implementation
 
 #### Issue 6.1.1: Add Cron Parser Dependency
 
+**Type**: Infrastructure
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `infrastructure`, `scheduler`, `phase2`
+
 **File**: `pyproject.toml`
+
+**Description**: Add `croniter` library for cron expression parsing.
 
 **Changes**:
 
 ```toml
+[project.dependencies]
+# ... existing dependencies ...
+
 [project.optional-dependencies]
 scheduler = [
     "croniter>=2.0.0",
 ]
 ```
 
----
+**Acceptance Criteria**:
 
-#### Issue 6.1.2: Implement CronTriggerEngine
-
-**File**: `k0/scheduler/triggers.py`
-
-**Description**: Add cron-based trigger engine.
-
-**Implementation Sketch**:
-
-```python
-class CronTriggerEngine(TriggerEngine):
-    """Trigger based on cron expression."""
-
-    def __init__(
-        self,
-        spec: TriggerSpec,
-        pipeline_id: str,
-    ):
-        super().__init__(spec, pipeline_id)
-        self._cron: croniter | None = None
-        self._task: asyncio.Task | None = None
-
-    async def start(self, callback: Callable[[TriggerEvent], None]) -> None:
-        from croniter import croniter
-
-        self._callback = callback
-        self._cron = croniter(self._spec.cron_expression)
-        self._running = True
-        self._task = asyncio.create_task(self._run_loop())
-
-    async def _run_loop(self) -> None:
-        while self._running:
-            next_fire = self._cron.get_next(float)
-            delay = next_fire - time.time()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            if self._running:
-                self._fire_trigger()
-```
+- [ ] `croniter` added to optional dependencies
+- [ ] Can import `from croniter import croniter`
+- [ ] Version constraint allows security updates
 
 **Testing**:
 
-- `test_cron_trigger_parses_expression`
-- `test_cron_trigger_fires_at_scheduled_time`
-- `test_cron_trigger_handles_timezone`
+- Manual verification: `pip install -e ".[scheduler]"`
+
+---
+
+#### Issue 6.1.2: Implement CronTriggerEngine Class
+
+**Type**: Implementation
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `implementation`, `scheduler`, `phase2`
+
+**File**: `k0/scheduler/triggers.py`
+
+**Description**: Implement cron-based trigger engine that fires at scheduled times.
+
+**Implementation**:
+
+```python
+class CronTriggerEngine(TriggerEngine):
+    """
+    Trigger based on cron expression.
+
+    Supports standard 5-field cron expressions:
+    - minute (0-59)
+    - hour (0-23)
+    - day of month (1-31)
+    - month (1-12)
+    - day of week (0-6, Sunday=0)
+
+    Example spec:
+        - id: consolidation_nightly
+          type: cron
+          cron_expression: "0 2 * * *"  # 2 AM daily
+
+    P03 Use Case:
+        - Consolidation window: "0 2-5 * * *" (2AM-5AM hourly)
+    """
+
+    def __init__(
+        self,
+        spec: "TriggerSpec",
+        pipeline_id: str,
+        timezone: str = "UTC",
+    ):
+        super().__init__(spec, pipeline_id)
+        self._timezone = timezone
+        self._cron: "croniter" | None = None
+        self._task: asyncio.Task | None = None
+        self._callback: TriggerCallback | None = None
+
+    async def start(self, callback: TriggerCallback) -> None:
+        """Start cron trigger engine."""
+        if self._running:
+            logger.warning(
+                "CronTriggerEngine %s already running",
+                self.spec.id,
+            )
+            return
+
+        try:
+            from croniter import croniter
+        except ImportError as e:
+            raise RuntimeError(
+                "croniter not installed. Install with: pip install croniter"
+            ) from e
+
+        if not self.spec.cron_expression:
+            raise ValueError(f"Cron trigger {self.spec.id} missing cron_expression")
+
+        self._callback = callback
+        self._cron = croniter(self.spec.cron_expression)
+        self._running = True
+        self._task = asyncio.create_task(self._run_loop())
+
+        logger.info(
+            "CronTriggerEngine %s started with expression: %s",
+            self.spec.id,
+            self.spec.cron_expression,
+            extra={
+                "trigger_id": self.spec.id,
+                "pipeline_id": self.pipeline_id,
+                "cron_expression": self.spec.cron_expression,
+            },
+        )
+
+    async def stop(self) -> None:
+        """Stop cron trigger engine."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+        logger.info(
+            "CronTriggerEngine %s stopped (fired %d times)",
+            self.spec.id,
+            self._fire_count,
+            extra={"trigger_id": self.spec.id, "fire_count": self._fire_count},
+        )
+
+    async def _run_loop(self) -> None:
+        """Main loop - sleep until next cron time, then fire."""
+        while self._running:
+            try:
+                # Get next scheduled time
+                next_fire = self._cron.get_next(float)
+                now = time.time()
+                delay = next_fire - now
+
+                if delay > 0:
+                    logger.debug(
+                        "CronTrigger %s sleeping for %.1f seconds until next fire",
+                        self.spec.id,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+
+                if self._running and self._callback:
+                    event = self._create_event({
+                        "scheduled_time": next_fire,
+                        "trigger_type": "cron",
+                        "cron_expression": self.spec.cron_expression,
+                    })
+                    self._record_fire(event)
+                    self._callback(event)
+
+                    logger.info(
+                        "CronTrigger %s fired (count=%d)",
+                        self.spec.id,
+                        self._fire_count,
+                        extra={
+                            "trigger_id": self.spec.id,
+                            "pipeline_id": self.pipeline_id,
+                            "fire_count": self._fire_count,
+                            "scheduled_time": next_fire,
+                        },
+                    )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(
+                    "CronTrigger %s error: %s",
+                    self.spec.id,
+                    str(e),
+                    exc_info=True,
+                )
+                # Sleep before retry to prevent tight error loop
+                await asyncio.sleep(60)
+
+    def get_next_fire_time(self) -> float | None:
+        """Return next scheduled fire time (for debugging/observability)."""
+        if self._cron:
+            return self._cron.get_next(float, start_time=time.time())
+        return None
+```
+
+**Acceptance Criteria**:
+
+- [ ] CronTriggerEngine parses cron expressions
+- [ ] Engine fires at scheduled times
+- [ ] Handles timezone correctly (default UTC)
+- [ ] Logs next fire time for observability
+- [ ] Graceful error handling (doesn't crash on invalid expression)
+
+**Files to Create/Modify**:
+
+- Modify: `k0/scheduler/triggers.py`
+
+---
+
+#### Issue 6.1.3: Update create_trigger_engine Factory
+
+**Type**: Implementation
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `implementation`, `scheduler`, `phase2`
+
+**File**: `k0/scheduler/triggers.py`
+
+**Description**: Update factory function to handle CRON trigger type.
+
+**Changes**:
+
+```python
+def create_trigger_engine(
+    spec: "TriggerSpec",
+    pipeline_id: str,
+    syscalls: "Syscalls | None" = None,
+    activity_tracker: "ActivityTracker | None" = None,  # NEW: for IDLE triggers
+) -> TriggerEngine:
+    """
+    Factory function to create appropriate trigger engine.
+
+    Phase 1 triggers: INTERVAL, THRESHOLD, MANUAL
+    Phase 2 triggers: CRON, IDLE
+    """
+    from k0.runtime.schemas import TriggerType
+
+    if spec.type == TriggerType.INTERVAL:
+        return IntervalTriggerEngine(spec, pipeline_id)
+
+    elif spec.type == TriggerType.THRESHOLD:
+        if syscalls is None:
+            raise ValueError(f"Threshold trigger {spec.id} requires syscalls")
+        return ThresholdTriggerEngine(spec, pipeline_id, syscalls)
+
+    elif spec.type == TriggerType.MANUAL:
+        return ManualTriggerEngine(spec, pipeline_id)
+
+    elif spec.type == TriggerType.CRON:
+        # Phase 2: CRON trigger
+        return CronTriggerEngine(spec, pipeline_id)
+
+    elif spec.type == TriggerType.IDLE:
+        # Phase 2: IDLE trigger
+        if activity_tracker is None:
+            raise ValueError(f"Idle trigger {spec.id} requires activity_tracker")
+        return IdleTriggerEngine(spec, pipeline_id, activity_tracker)
+
+    else:
+        raise ValueError(f"Unsupported trigger type: {spec.type}")
+```
+
+**Acceptance Criteria**:
+
+- [ ] Factory creates CronTriggerEngine for CRON type
+- [ ] Remove NotImplementedError for CRON
+- [ ] Backward compatible with existing Phase 1 triggers
+
+**Files to Modify**:
+
+- `k0/scheduler/triggers.py`
+
+---
+
+#### Issue 6.1.4: Add CronTriggerEngine Tests
+
+**Type**: Testing
+**Priority**: Critical
+**Assignee**: QA Engineer
+**Labels**: `testing`, `scheduler`, `phase2`
+
+**File**: `tests/k0/scheduler/test_triggers_cron.py`
+
+**Description**: Comprehensive tests for CronTriggerEngine.
+
+**Test Cases**:
+
+```python
+class TestCronTriggerEngine:
+    """Tests for CronTriggerEngine."""
+
+    def test_cron_trigger_parses_valid_expression(self):
+        """Valid cron expression is parsed without error."""
+
+    def test_cron_trigger_rejects_invalid_expression(self):
+        """Invalid cron expression raises ValueError."""
+
+    async def test_cron_trigger_fires_at_scheduled_time(self):
+        """Trigger fires at the scheduled cron time."""
+        # Use freezegun or similar to control time
+
+    async def test_cron_trigger_fires_multiple_times(self):
+        """Trigger fires repeatedly according to schedule."""
+
+    async def test_cron_trigger_stop_cancels_task(self):
+        """Stopping trigger cancels the background task."""
+
+    def test_cron_trigger_get_next_fire_time(self):
+        """get_next_fire_time returns correct timestamp."""
+
+    async def test_cron_trigger_handles_error_gracefully(self):
+        """Engine continues after transient errors."""
+
+    def test_cron_trigger_context_includes_expression(self):
+        """TriggerEvent context includes cron_expression."""
+
+    async def test_cron_trigger_records_fire_count(self):
+        """Fire count is incremented on each trigger."""
+
+    def test_cron_trigger_requires_croniter(self):
+        """ImportError raised if croniter not installed."""
+```
+
+**Acceptance Criteria**:
+
+- [ ] All test cases pass
+- [ ] >90% code coverage for CronTriggerEngine
+- [ ] Time-sensitive tests use mocking (freezegun or time.monotonic patch)
+
+**Files to Create**:
+
+- `tests/k0/scheduler/test_triggers_cron.py`
+
+---
+
+#### Issue 6.1.5: Document CRON Trigger Usage
+
+**Type**: Documentation
+**Priority**: High
+**Assignee**: Tech Lead
+**Labels**: `documentation`, `scheduler`, `phase2`
+
+**Files**:
+
+- `k0/fabric/pipeline-fabric-integration-guide.md`
+- `k0/scheduler/README.md`
+
+**Description**: Update documentation to include CRON trigger usage.
+
+**Documentation Updates**:
+
+1. **pipeline-fabric-integration-guide.md Section 3.3**: Update TriggerType enum status
+   - Change CRON from "Not yet implemented" to "Phase 2 (Implemented)"
+
+2. **pipeline-fabric-integration-guide.md Section 7.4**: Add CronTriggerEngine row
+
+3. **Create scheduler README**: Document all trigger types with examples
+
+**Example YAML for P03**:
+
+```yaml
+# P03 consolidation triggers
+triggers:
+  # Nightly consolidation at 2 AM
+  - id: consolidation_nightly
+    type: cron
+    cron_expression: "0 2 * * *"
+
+  # Hourly during sleep window (2-5 AM)
+  - id: consolidation_sleep_window
+    type: cron
+    cron_expression: "0 2-5 * * *"
+```
+
+**Acceptance Criteria**:
+
+- [ ] CRON trigger documented in integration guide
+- [ ] Example YAML for P03 use case
+- [ ] Scheduler README created
 
 ---
 
 ## Milestone 7: IDLE Trigger Engine (M7)
 
-**Objective**: Add idle-detection triggers for background processing.
+**Objective**: Add idle-detection triggers for background processing (required for P03 idle consolidation).
 
 **Dependencies**: M3 (PipelineScheduler core)
 
+**Duration**: 4 days
+
+**Blocks**: P03 idle-based consolidation (5min idle + 100 pending items)
+
 **Prerequisites**:
 
-- Activity tracking infrastructure (last_activity timestamps)
-- Idle detection callback registration
+- Activity tracking infrastructure (ActivityTracker class)
+- BusDispatcher integration for activity recording
+- Pending item count via syscalls.query_count()
 
-### Epic 7.1: IdleTriggerEngine
+### Epic 7.1: ActivityTracker Infrastructure
 
-#### Issue 7.1.1: Add Activity Tracker
+#### Issue 7.1.1: Implement ActivityTracker Class
+
+**Type**: Implementation
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `infrastructure`, `scheduler`, `phase2`
 
 **File**: `k0/scheduler/activity.py`
 
-**Description**: Track system activity for idle detection.
+**Description**: Track system activity for idle detection. This is kernel infrastructure that records when the system is "active" (processing requests, dispatching events, etc.).
 
-**Implementation Sketch**:
+**Implementation**:
 
 ```python
-class ActivityTracker:
-    """Tracks system activity for idle detection."""
+"""
+Activity tracking for idle detection triggers.
 
-    def __init__(self):
-        self._last_activity = time.time()
-        self._listeners: list[Callable[[float], None]] = []
+The ActivityTracker is a kernel-level component that records system activity.
+It integrates with BusDispatcher to automatically record activity on each
+event dispatch.
+
+P03 Use Case:
+    - Fire consolidation when system idle for 5 minutes
+    - AND at least 100 pending items in embedding queue
+"""
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Protocol
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class IdleListener:
+    """Registered idle listener with callback and threshold."""
+
+    callback: Callable[[], None]
+    threshold_seconds: float
+    id: str
+    fired: bool = False  # Reset when activity occurs
+
+
+class ActivityTracker:
+    """
+    Tracks system activity for idle detection.
+
+    Thread-safe. Called from BusDispatcher on every event dispatch
+    and from API handlers on user requests.
+
+    Metrics:
+        - activity_tracker_records_total: Count of activity records
+        - activity_tracker_idle_seconds: Current idle duration gauge
+        - activity_tracker_listeners_total: Number of registered listeners
+    """
+
+    def __init__(self, check_interval: float = 1.0):
+        """
+        Initialize activity tracker.
+
+        Args:
+            check_interval: How often to check idle conditions (seconds)
+        """
+        self._last_activity = time.monotonic()
+        self._listeners: dict[str, IdleListener] = {}
+        self._lock = asyncio.Lock()
+        self._check_interval = check_interval
+        self._running = False
+        self._task: asyncio.Task | None = None
 
     def record_activity(self) -> None:
-        """Record activity (called on bus dispatch, API request, etc.)."""
-        self._last_activity = time.time()
+        """
+        Record activity (called on bus dispatch, API request, etc.).
+
+        This resets the idle timer and marks all listeners as unfired
+        so they can fire again after the next idle period.
+
+        Thread-safe via atomic timestamp update.
+        """
+        self._last_activity = time.monotonic()
+
+        # Reset fired flags so listeners can fire again
+        for listener in self._listeners.values():
+            listener.fired = False
+
+        logger.debug(
+            "Activity recorded, idle timer reset",
+            extra={"listener_count": len(self._listeners)},
+        )
 
     def idle_seconds(self) -> float:
         """Return seconds since last activity."""
-        return time.time() - self._last_activity
+        return time.monotonic() - self._last_activity
 
-    def register_idle_listener(
+    async def register_idle_listener(
         self,
-        callback: Callable[[float], None],
+        listener_id: str,
+        callback: Callable[[], None],
         threshold_seconds: float,
     ) -> None:
-        """Register callback to fire when idle exceeds threshold."""
-        ...
+        """
+        Register callback to fire when idle exceeds threshold.
+
+        Args:
+            listener_id: Unique identifier for this listener
+            callback: Sync callback to invoke when idle threshold met
+            threshold_seconds: Minimum idle duration before firing
+
+        Note:
+            Callback is invoked from async context but should be sync.
+            If callback needs async, wrap in asyncio.create_task().
+        """
+        async with self._lock:
+            self._listeners[listener_id] = IdleListener(
+                callback=callback,
+                threshold_seconds=threshold_seconds,
+                id=listener_id,
+            )
+            logger.info(
+                "Registered idle listener %s (threshold=%.1fs)",
+                listener_id,
+                threshold_seconds,
+                extra={
+                    "listener_id": listener_id,
+                    "threshold_seconds": threshold_seconds,
+                },
+            )
+
+    async def unregister_idle_listener(self, listener_id: str) -> bool:
+        """
+        Unregister an idle listener.
+
+        Returns:
+            True if listener was found and removed, False otherwise.
+        """
+        async with self._lock:
+            if listener_id in self._listeners:
+                del self._listeners[listener_id]
+                logger.info("Unregistered idle listener %s", listener_id)
+                return True
+            return False
+
+    async def start(self) -> None:
+        """Start the idle check loop."""
+        if self._running:
+            logger.warning("ActivityTracker already running")
+            return
+
+        self._running = True
+        self._task = asyncio.create_task(self._check_loop())
+        logger.info("ActivityTracker started (check_interval=%.1fs)", self._check_interval)
+
+    async def stop(self) -> None:
+        """Stop the idle check loop."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        logger.info("ActivityTracker stopped")
+
+    async def _check_loop(self) -> None:
+        """Main loop - periodically check idle conditions."""
+        while self._running:
+            try:
+                await asyncio.sleep(self._check_interval)
+
+                idle = self.idle_seconds()
+
+                async with self._lock:
+                    for listener in self._listeners.values():
+                        if not listener.fired and idle >= listener.threshold_seconds:
+                            logger.info(
+                                "Idle threshold met for %s (idle=%.1fs, threshold=%.1fs)",
+                                listener.id,
+                                idle,
+                                listener.threshold_seconds,
+                            )
+                            try:
+                                listener.callback()
+                                listener.fired = True
+                            except Exception as e:
+                                logger.error(
+                                    "Idle listener %s callback error: %s",
+                                    listener.id,
+                                    str(e),
+                                    exc_info=True,
+                                )
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("ActivityTracker check loop error: %s", str(e), exc_info=True)
+
+
+# Singleton for kernel-wide activity tracking
+_activity_tracker: ActivityTracker | None = None
+
+
+def get_activity_tracker() -> ActivityTracker:
+    """Get the global ActivityTracker instance."""
+    global _activity_tracker
+    if _activity_tracker is None:
+        _activity_tracker = ActivityTracker()
+    return _activity_tracker
+
+
+def set_activity_tracker(tracker: ActivityTracker) -> None:
+    """Set the global ActivityTracker instance (for testing)."""
+    global _activity_tracker
+    _activity_tracker = tracker
 ```
+
+**Acceptance Criteria**:
+
+- [ ] ActivityTracker records activity timestamps
+- [ ] `idle_seconds()` returns correct duration
+- [ ] Idle listeners fire when threshold exceeded
+- [ ] Listeners reset on new activity
+- [ ] Thread-safe for concurrent access
+
+**Files to Create**:
+
+- `k0/scheduler/activity.py`
 
 ---
 
-#### Issue 7.1.2: Implement IdleTriggerEngine
+#### Issue 7.1.2: Wire ActivityTracker to BusDispatcher
+
+**Type**: Integration
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `integration`, `scheduler`, `phase2`
+
+**File**: `k0/bus/dispatcher.py`
+
+**Description**: Integrate ActivityTracker with BusDispatcher so that every event dispatch records activity. This ensures the idle timer resets on any kernel activity.
+
+**Changes**:
+
+```python
+# In BusDispatcher.__init__():
+from k0.scheduler.activity import get_activity_tracker
+
+class BusDispatcher:
+    def __init__(self, ...):
+        ...
+        self._activity_tracker = get_activity_tracker()
+
+    async def dispatch(self, event: BusEvent) -> None:
+        # Record activity on every dispatch
+        self._activity_tracker.record_activity()
+
+        # ... existing dispatch logic ...
+```
+
+**Acceptance Criteria**:
+
+- [ ] Every `dispatch()` call records activity
+- [ ] Idle timer resets on kernel events
+- [ ] No performance regression (record_activity is O(1))
+
+**Files to Modify**:
+
+- `k0/bus/dispatcher.py`
+
+---
+
+#### Issue 7.1.3: Add ActivityTracker to Kernel Boot
+
+**Type**: Integration
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `integration`, `scheduler`, `phase2`
+
+**File**: `k0/kernel/app.py`
+
+**Description**: Start ActivityTracker during kernel boot, stop during shutdown.
+
+**Changes**:
+
+```python
+# In K0App or boot sequence:
+from k0.scheduler.activity import get_activity_tracker
+
+async def boot() -> None:
+    ...
+    # Start activity tracker for idle detection
+    activity_tracker = get_activity_tracker()
+    await activity_tracker.start()
+    ...
+
+async def shutdown() -> None:
+    ...
+    activity_tracker = get_activity_tracker()
+    await activity_tracker.stop()
+    ...
+```
+
+**Acceptance Criteria**:
+
+- [ ] ActivityTracker starts on boot
+- [ ] ActivityTracker stops on shutdown
+- [ ] Graceful handling if already started/stopped
+
+**Files to Modify**:
+
+- `k0/kernel/app.py`
+
+---
+
+### Epic 7.2: IdleTriggerEngine Implementation
+
+#### Issue 7.2.1: Implement IdleTriggerEngine Class
+
+**Type**: Implementation
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `implementation`, `scheduler`, `phase2`
 
 **File**: `k0/scheduler/triggers.py`
 
-**Description**: Add idle-based trigger engine.
+**Description**: Implement idle-based trigger engine that fires when system is idle and optional pending work conditions are met.
 
-**Implementation Sketch**:
+**Implementation**:
 
 ```python
 class IdleTriggerEngine(TriggerEngine):
-    """Trigger when system is idle for specified duration."""
+    """
+    Trigger when system is idle for specified duration.
+
+    Optionally waits for minimum pending work count before firing.
+    Uses ActivityTracker for idle detection.
+
+    Example spec:
+        - id: consolidation_idle
+          type: idle
+          idle_seconds: 300  # 5 minutes
+          min_pending: 100   # Optional: require 100+ pending items
+
+    P03 Use Case:
+        - Fire when idle 5 minutes AND 100+ pending embeddings
+    """
 
     def __init__(
         self,
-        spec: TriggerSpec,
+        spec: "TriggerSpec",
         pipeline_id: str,
-        activity_tracker: ActivityTracker,
+        activity_tracker: "ActivityTracker",
+        syscalls: "Syscalls | None" = None,
     ):
         super().__init__(spec, pipeline_id)
         self._tracker = activity_tracker
+        self._syscalls = syscalls
+        self._callback: TriggerCallback | None = None
+        self._listener_id: str | None = None
 
-    async def start(self, callback: Callable[[TriggerEvent], None]) -> None:
+    async def start(self, callback: TriggerCallback) -> None:
+        """Start idle trigger engine."""
+        if self._running:
+            logger.warning("IdleTriggerEngine %s already running", self.spec.id)
+            return
+
+        if not self.spec.idle_seconds:
+            raise ValueError(f"Idle trigger {self.spec.id} missing idle_seconds")
+
         self._callback = callback
-        self._tracker.register_idle_listener(
-            self._on_idle,
-            self._spec.idle_seconds,
+        self._running = True
+        self._listener_id = f"trigger_{self.spec.id}"
+
+        # Register with activity tracker
+        await self._tracker.register_idle_listener(
+            listener_id=self._listener_id,
+            callback=self._on_idle,
+            threshold_seconds=self.spec.idle_seconds,
         )
 
-    def _on_idle(self, idle_duration: float) -> None:
-        if self._spec.min_pending and not self._has_pending_work():
+        logger.info(
+            "IdleTriggerEngine %s started (idle_seconds=%.1f, min_pending=%s)",
+            self.spec.id,
+            self.spec.idle_seconds,
+            self.spec.min_pending or "none",
+            extra={
+                "trigger_id": self.spec.id,
+                "pipeline_id": self.pipeline_id,
+                "idle_seconds": self.spec.idle_seconds,
+                "min_pending": self.spec.min_pending,
+            },
+        )
+
+    async def stop(self) -> None:
+        """Stop idle trigger engine."""
+        self._running = False
+
+        if self._listener_id:
+            await self._tracker.unregister_idle_listener(self._listener_id)
+            self._listener_id = None
+
+        logger.info(
+            "IdleTriggerEngine %s stopped (fired %d times)",
+            self.spec.id,
+            self._fire_count,
+            extra={"trigger_id": self.spec.id, "fire_count": self._fire_count},
+        )
+
+    def _on_idle(self) -> None:
+        """Callback when idle threshold met."""
+        if not self._running or not self._callback:
             return
-        self._fire_trigger()
+
+        # Check min_pending condition if specified
+        if self.spec.min_pending:
+            pending = self._get_pending_count()
+            if pending < self.spec.min_pending:
+                logger.debug(
+                    "IdleTrigger %s skipped: pending=%d < min_pending=%d",
+                    self.spec.id,
+                    pending,
+                    self.spec.min_pending,
+                )
+                return
+
+        # Fire the trigger
+        event = self._create_event({
+            "idle_seconds": self._tracker.idle_seconds(),
+            "trigger_type": "idle",
+            "pending_count": self._get_pending_count() if self.spec.min_pending else None,
+        })
+        self._record_fire(event)
+        self._callback(event)
+
+        logger.info(
+            "IdleTrigger %s fired (count=%d, idle=%.1fs)",
+            self.spec.id,
+            self._fire_count,
+            self._tracker.idle_seconds(),
+            extra={
+                "trigger_id": self.spec.id,
+                "pipeline_id": self.pipeline_id,
+                "fire_count": self._fire_count,
+                "idle_seconds": self._tracker.idle_seconds(),
+            },
+        )
+
+    def _get_pending_count(self) -> int:
+        """Get pending item count via syscalls."""
+        if not self._syscalls:
+            return 0
+
+        try:
+            # Use query_count syscall to get pending items
+            result = self._syscalls.query_count(
+                table=self.spec.count_table or "st_embedding_queue",
+                filter_fn=self.spec.count_filter or "status='pending'",
+            )
+            return result
+        except Exception as e:
+            logger.error(
+                "IdleTrigger %s failed to get pending count: %s",
+                self.spec.id,
+                str(e),
+            )
+            return 0
 ```
 
-**Testing**:
+**Acceptance Criteria**:
 
-- `test_idle_trigger_fires_after_idle_period`
-- `test_idle_trigger_respects_min_pending`
-- `test_activity_tracker_records_activity`
+- [ ] IdleTriggerEngine registers with ActivityTracker
+- [ ] Fires when idle threshold exceeded
+- [ ] Respects min_pending condition if specified
+- [ ] Uses syscalls.query_count for pending count
+- [ ] Proper cleanup on stop
+
+**Files to Modify**:
+
+- `k0/scheduler/triggers.py`
+
+---
+
+#### Issue 7.2.2: Update create_trigger_engine Factory for IDLE
+
+**Type**: Implementation
+**Priority**: Critical
+**Assignee**: Backend Engineer
+**Labels**: `implementation`, `scheduler`, `phase2`
+
+**File**: `k0/scheduler/triggers.py`
+
+**Description**: Update factory to handle IDLE trigger type with ActivityTracker injection.
+
+**Changes**:
+
+```python
+def create_trigger_engine(
+    spec: "TriggerSpec",
+    pipeline_id: str,
+    syscalls: "Syscalls | None" = None,
+    activity_tracker: "ActivityTracker | None" = None,
+) -> TriggerEngine:
+    ...
+    elif spec.type == TriggerType.IDLE:
+        if activity_tracker is None:
+            raise ValueError(f"Idle trigger {spec.id} requires activity_tracker")
+        return IdleTriggerEngine(
+            spec,
+            pipeline_id,
+            activity_tracker,
+            syscalls=syscalls,  # For min_pending check
+        )
+    ...
+```
+
+**Note**: This is the same change as Issue 6.1.3 - implement both CRON and IDLE factory updates together.
+
+**Files to Modify**:
+
+- `k0/scheduler/triggers.py`
+
+---
+
+### Epic 7.3: IdleTriggerEngine Testing
+
+#### Issue 7.3.1: Add ActivityTracker Tests
+
+**Type**: Testing
+**Priority**: Critical
+**Assignee**: QA Engineer
+**Labels**: `testing`, `scheduler`, `phase2`
+
+**File**: `tests/k0/scheduler/test_activity.py`
+
+**Description**: Comprehensive tests for ActivityTracker.
+
+**Test Cases**:
+
+```python
+class TestActivityTracker:
+    """Tests for ActivityTracker."""
+
+    def test_activity_tracker_initial_idle_zero(self):
+        """Initial idle_seconds is near zero."""
+
+    def test_activity_tracker_records_activity(self):
+        """record_activity resets idle timer."""
+
+    async def test_activity_tracker_fires_listener(self):
+        """Listener fires when idle threshold exceeded."""
+
+    async def test_activity_tracker_listener_reset_on_activity(self):
+        """Listener can fire again after activity resets."""
+
+    async def test_activity_tracker_multiple_listeners(self):
+        """Multiple listeners with different thresholds."""
+
+    async def test_activity_tracker_unregister_listener(self):
+        """Unregistered listener does not fire."""
+
+    async def test_activity_tracker_start_stop(self):
+        """Start and stop work correctly."""
+
+    async def test_activity_tracker_listener_error_handling(self):
+        """Listener errors don't crash the tracker."""
+
+    def test_activity_tracker_thread_safety(self):
+        """Concurrent record_activity calls are safe."""
+
+    def test_get_activity_tracker_singleton(self):
+        """get_activity_tracker returns singleton."""
+```
+
+**Acceptance Criteria**:
+
+- [ ] All test cases pass
+- [ ] >90% code coverage for ActivityTracker
+- [ ] Thread-safety tests use concurrent execution
+
+**Files to Create**:
+
+- `tests/k0/scheduler/test_activity.py`
+
+---
+
+#### Issue 7.3.2: Add IdleTriggerEngine Tests
+
+**Type**: Testing
+**Priority**: Critical
+**Assignee**: QA Engineer
+**Labels**: `testing`, `scheduler`, `phase2`
+
+**File**: `tests/k0/scheduler/test_triggers_idle.py`
+
+**Description**: Comprehensive tests for IdleTriggerEngine.
+
+**Test Cases**:
+
+```python
+class TestIdleTriggerEngine:
+    """Tests for IdleTriggerEngine."""
+
+    async def test_idle_trigger_fires_after_idle_period(self):
+        """Trigger fires when idle threshold exceeded."""
+
+    async def test_idle_trigger_respects_min_pending(self):
+        """Trigger skipped if pending count below min_pending."""
+
+    async def test_idle_trigger_fires_with_min_pending(self):
+        """Trigger fires when pending count >= min_pending."""
+
+    async def test_idle_trigger_resets_on_activity(self):
+        """Trigger can fire again after activity."""
+
+    async def test_idle_trigger_requires_activity_tracker(self):
+        """Factory raises if activity_tracker missing."""
+
+    async def test_idle_trigger_requires_idle_seconds(self):
+        """Start raises if idle_seconds not specified."""
+
+    async def test_idle_trigger_stop_unregisters_listener(self):
+        """Stop unregisters from ActivityTracker."""
+
+    async def test_idle_trigger_context_includes_idle_seconds(self):
+        """TriggerEvent context includes idle_seconds."""
+
+    async def test_idle_trigger_uses_syscalls_for_pending(self):
+        """Pending count retrieved via syscalls.query_count."""
+
+    async def test_idle_trigger_handles_syscall_error(self):
+        """Graceful handling if syscalls.query_count fails."""
+```
+
+**Acceptance Criteria**:
+
+- [ ] All test cases pass
+- [ ] >90% code coverage for IdleTriggerEngine
+- [ ] Integration with ActivityTracker validated
+
+**Files to Create**:
+
+- `tests/k0/scheduler/test_triggers_idle.py`
+
+---
+
+#### Issue 7.3.3: Add BusDispatcher Integration Test
+
+**Type**: Testing
+**Priority**: High
+**Assignee**: QA Engineer
+**Labels**: `testing`, `integration`, `phase2`
+
+**File**: `tests/k0/bus/test_dispatcher_activity.py`
+
+**Description**: Test that BusDispatcher correctly records activity.
+
+**Test Cases**:
+
+```python
+class TestBusDispatcherActivity:
+    """Tests for BusDispatcher activity recording."""
+
+    async def test_dispatch_records_activity(self):
+        """Event dispatch resets idle timer."""
+
+    async def test_multiple_dispatches_record_activity(self):
+        """Each dispatch records activity."""
+
+    async def test_idle_trigger_fires_after_no_dispatch(self):
+        """Idle trigger fires when no events dispatched."""
+
+    async def test_idle_trigger_reset_by_dispatch(self):
+        """Idle trigger resets when event dispatched."""
+```
+
+**Acceptance Criteria**:
+
+- [ ] All test cases pass
+- [ ] BusDispatcher + ActivityTracker integration validated
+
+**Files to Create**:
+
+- `tests/k0/bus/test_dispatcher_activity.py`
+
+---
+
+#### Issue 7.3.4: Document IDLE Trigger Usage
+
+**Type**: Documentation
+**Priority**: High
+**Assignee**: Tech Lead
+**Labels**: `documentation`, `scheduler`, `phase2`
+
+**Files**:
+
+- `k0/fabric/pipeline-fabric-integration-guide.md`
+- `k0/scheduler/README.md`
+
+**Description**: Update documentation to include IDLE trigger usage.
+
+**Documentation Updates**:
+
+1. **pipeline-fabric-integration-guide.md Section 3.3**: Update TriggerType enum status
+   - Change IDLE from "Not yet implemented" to "Phase 2 (Implemented)"
+
+2. **pipeline-fabric-integration-guide.md Section 7.4**: Add IdleTriggerEngine row
+
+3. **Update scheduler README**: Document IDLE trigger with ActivityTracker
+
+**Example YAML for P03**:
+
+```yaml
+# P03 idle-based consolidation trigger
+triggers:
+  # Fire when idle 5 minutes AND 100+ pending embeddings
+  - id: consolidation_idle
+    type: idle
+    idle_seconds: 300  # 5 minutes
+    min_pending: 100
+    count_table: st_vec.embedding_status
+    count_filter: "status = 'pending'"
+```
+
+**Acceptance Criteria**:
+
+- [ ] IDLE trigger documented in integration guide
+- [ ] Example YAML for P03 use case
+- [ ] ActivityTracker integration documented
 
 ---
 
@@ -4326,12 +5318,16 @@ class IdleTriggerEngine(TriggerEngine):
 | 3.1.0 | Add query_count() syscall | ThresholdTriggerEngine requires generic count |
 | 4.0.1 | Create P03 pipeline contract | P03 contract doesn't exist in codebase |
 
-### Phase 2 Issues (Future)
+### Phase 2 Issues (P03 Prerequisites)
 
-| Milestone | Epics | Issues |
-|-----------|-------|--------|
-| M6: CRON Trigger Engine | 1 | 2 |
-| M7: IDLE Trigger Engine | 1 | 2 |
+| Milestone | Epics | Issues | Duration | Blocks |
+|-----------|-------|--------|----------|--------|
+| M6: CRON Trigger Engine | 1 | 5 | 3 days | P03 scheduled consolidation |
+| M7: IDLE Trigger Engine | 3 | 9 | 4 days | P03 idle consolidation |
+
+**Total Phase 2**: 2 milestones, 4 epics, 14 issues, ~7 days
+
+**Critical Path**: M3 → M6 + M7 (parallel) → P03 production
 
 ### Phase 3 Issues (Future Enhancement)
 
@@ -4392,18 +5388,37 @@ Per ADR-K004 Future Considerations, these are deferred until prerequisites are m
 | `tests/k0/fabric/test_fabric_policy.py` | Context policy enforcement |
 | `tests/k0/fabric/test_audit.py` | Fabric audit logging |
 | `tests/k0/fabric/test_loader.py` | Capability loading |
-| `tests/k0/scheduler/test_triggers.py` | Trigger engines |
+| `tests/k0/scheduler/test_triggers.py` | Trigger engines (Phase 1) |
+| `tests/k0/scheduler/test_triggers_cron.py` | CronTriggerEngine (Phase 2) |
+| `tests/k0/scheduler/test_triggers_idle.py` | IdleTriggerEngine (Phase 2) |
+| `tests/k0/scheduler/test_activity.py` | ActivityTracker (Phase 2) |
 | `tests/k0/scheduler/test_scheduler.py` | PipelineScheduler |
 | `tests/k0/scheduler/test_concurrency.py` | SingleFlightGate |
 | `tests/k0/scheduler/test_hot_reload.py` | Hot reload |
 | `tests/k0/scheduler/test_audit.py` | Scheduler audit logging |
 | `tests/k0/kernel/test_app_boot.py` | Boot integration |
 | `tests/k0/kernel/test_app_scheduler.py` | Scheduler integration |
+| `tests/k0/bus/test_dispatcher_activity.py` | BusDispatcher activity integration (Phase 2) |
 | `tests/integration/test_p03_fabric.py` | P03 fabric integration |
 | `tests/integration/test_p08_scheduler_migration.py` | P08 migration |
 | `tests/contracts/test_capability_schema.py` | Schema validation |
 | `tests/contracts/test_capability_contracts.py` | YAML contracts |
 | `tests/contracts/test_p08_triggers.py` | P08 trigger config |
+
+### Key Files Created (Phase 2)
+
+| File | Purpose |
+|------|---------|
+| `k0/scheduler/activity.py` | ActivityTracker for idle detection |
+
+### Key Files Modified (Phase 2)
+
+| File | Changes |
+|------|---------|
+| `k0/scheduler/triggers.py` | Add CronTriggerEngine, IdleTriggerEngine |
+| `k0/bus/dispatcher.py` | Wire ActivityTracker for activity recording |
+| `k0/kernel/app.py` | Start/stop ActivityTracker on boot/shutdown |
+| `pyproject.toml` | Add croniter optional dependency |
 
 ---
 
@@ -4414,3 +5429,4 @@ Per ADR-K004 Future Considerations, these are deferred until prerequisites are m
 | 2025-12-14 | 1.0 | AI | Initial plan creation |
 | 2025-12-14 | 1.1 | AI | Added Phase 1/2 split for triggers (CRON/IDLE deferred) |
 | 2025-12-14 | 1.2 | AI | Added concurrency controls (Epic 3.3), audit logging (Issue 2.1.6), Phase 3 roadmap |
+| 2025-01-26 | 1.3 | AI | Expanded Phase 2 (M6/M7) from sketches to full implementation issues. Phase 2 now P03 prerequisite with detailed issues: M6 (5 issues - CRON trigger), M7 (9 issues - IDLE trigger + ActivityTracker). Added BusDispatcher integration, kernel boot integration, and comprehensive testing requirements. |

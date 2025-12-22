@@ -160,9 +160,9 @@ class TriggerSpec(BaseModel):
     )
 
     min_pending: int | None = Field(
-        default=1,
+        default=None,
         ge=1,
-        description="Minimum pending items for idle trigger",
+        description="Minimum pending items for idle trigger (None = no minimum)",
     )
 
     # Common fields

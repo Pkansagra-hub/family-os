@@ -13,7 +13,7 @@ starlette>=0.32.0
 # Core Dependencies
 neo4j>=5.20.0                      # Knowledge graph driver (Bolt protocol)
 numpy>=1.26.0                      # Basic array operations (minimal)
-
+croniter>=2.0.0                     # Cron schedule parsing
 # =============================================================================
 # UltraBERT Unified Model (replaces ALL ML dependencies below)
 # =============================================================================

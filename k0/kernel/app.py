@@ -57,7 +57,7 @@ from ..storage import (
 )
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
-from ..uow.connection_pool import configure_pool, get_pool, shutdown_pool
+from ..uow.connection_pool import configure_pool, shutdown_pool
 from .admission import AdmissionRecord, consume_admission_records
 from .config import KernelSettings
 from .dependencies import build_request_dependencies
@@ -498,178 +498,32 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.info("Outbox worker loop cancelled during backoff")
                     break
 
-    async def _p08_faiss_indexer_loop() -> None:
-        """Background task to run P08 FAISS indexing on schedule (ADR-K003 v1.2).
-
-        Queries st_vec WHERE status='READY' and batch-indexes into FAISS.
-        Runs every 5 minutes (configurable via P08 contract).
-        """
-        import struct
-        import time
-
-        # Wait for kernel to fully boot before starting scheduler
-        await asyncio.sleep(10)
-
-        # Get P08 schedule config from pipeline spec
-        pipelines = getattr(app.state, "pipelines", {})
-        p08_runner = pipelines.get("P08_EMBEDDING_MANAGEMENT")
-
-        if p08_runner is None:
-            logger.warning("P08 scheduler: Pipeline not loaded, scheduler disabled")
-            return
-
-        # Extract schedule config from spec
-        spec = p08_runner._spec
-        schedule_config = getattr(spec, "schedule", None)
-        if schedule_config is None:
-            # Use defaults if no schedule config
-            interval_seconds = 300
-            batch_size = 100
-            catch_up_enabled = True
-        else:
-            interval_seconds = schedule_config.get("interval_seconds", 300)
-            batch_size = schedule_config.get("batch_size", 100)
-            catch_up_enabled = schedule_config.get("catch_up_enabled", True)
-
-        logger.info(
-            "P08 FAISS indexer scheduler started",
-            extra={
-                "interval_seconds": interval_seconds,
-                "batch_size": batch_size,
-                "catch_up_enabled": catch_up_enabled,
-            },
-        )
-
-        logger.info("P08 scheduler: Defining _index_ready_vectors function...")
-
-        try:
-            # Import FAISS manager
-            from k0.runtime.faiss_manager import FaissIndexManager
-
-            logger.info("P08 scheduler: FAISS manager imported OK")
-        except Exception as e:
-            logger.exception(f"P08 scheduler: Failed to import FAISS manager: {e}")
-            return
-
-        logger.info("P08 scheduler: FAISS manager imported, defining function...")
-
-        async def _index_ready_vectors() -> int:
-            """Query READY vectors and add to FAISS index."""
-            indexed_count = 0
-            conn = None
-            try:
-                logger.info("P08 scheduler: _index_ready_vectors called, getting pool...")
-                # Direct database access for scheduler (not going through pipeline)
-                pool = get_pool()
-                logger.info(f"P08 scheduler: Got pool {pool}, acquiring connection...")
-                conn = pool.acquire(timeout=5.0)
-                logger.info("P08 scheduler: Connection acquired, querying READY vectors...")
-                try:
-                    # Query READY vectors
-                    cursor = conn.execute(
-                        """
-                        SELECT embedding_id, event_id, tenant_id, space_id, vector, vector_dim
-                        FROM st_vec
-                        WHERE status = 'READY'
-                        ORDER BY created_at ASC
-                        LIMIT ?
-                        """,
-                        (batch_size,),
-                    )
-                    rows = cursor.fetchall()
-                    logger.info(f"P08 scheduler: Found {len(rows)} READY vectors")
-
-                    if not rows:
-                        return 0
-
-                    faiss_mgr = FaissIndexManager.get_instance()
-                    logger.info(f"P08 scheduler: Got FAISS manager instance: {faiss_mgr}")
-
-                    for row in rows:
-                        embedding_id, event_id, tenant_id, space_id, vector_bytes, vector_dim = row
-                        logger.info(
-                            f"P08 scheduler: Processing embedding {embedding_id}, vector_dim={vector_dim}"
-                        )
-                        try:
-                            # Unpack vector from bytes
-                            vector = list(struct.unpack(f"{vector_dim}f", vector_bytes))
-                            logger.info(
-                                f"P08 scheduler: Unpacked vector of length {len(vector)}, adding to FAISS..."
-                            )
-
-                            # Add to FAISS (async method)
-                            result = await faiss_mgr.add(embedding_id, vector)
-                            logger.info(f"P08 scheduler: FAISS add result: {result}")
-                            faiss_id = result["faiss_id"]
-
-                            # Update status to INDEXED
-                            now = int(time.time())
-                            conn.execute(
-                                """
-                                UPDATE st_vec
-                                SET status = 'INDEXED', faiss_id = ?, indexed_at = ?, updated_at = ?
-                                WHERE embedding_id = ?
-                                """,
-                                (faiss_id, now, now, embedding_id),
-                            )
-                            conn.commit()
-                            indexed_count += 1
-                        except Exception as e:
-                            logger.warning(
-                                f"P08 scheduler: Failed to index embedding {embedding_id}: {e}"
-                            )
-                            # Mark as FAILED
-                            conn.execute(
-                                "UPDATE st_vec SET status = 'FAILED', updated_at = ? WHERE embedding_id = ?",
-                                (int(time.time()), embedding_id),
-                            )
-                            conn.commit()
-                finally:
-                    if conn is not None:
-                        pool.release(conn)
-
-                return indexed_count
-            except Exception as e:
-                logger.exception(f"P08 scheduler: Error during indexing batch: {e}")
-                return indexed_count
-
-        # Initial catch-up run if enabled
-        if catch_up_enabled:
-            try:
-                logger.info("P08 scheduler: Running initial catch-up indexing...")
-                total_indexed = 0
-                while True:
-                    indexed = await _index_ready_vectors()
-                    if indexed == 0:
-                        break
-                    total_indexed += indexed
-                    logger.info(
-                        f"P08 scheduler: Catch-up indexed {indexed} vectors (total: {total_indexed})"
-                    )
-                if total_indexed > 0:
-                    logger.info(
-                        f"P08 scheduler: Catch-up complete, indexed {total_indexed} vectors"
-                    )
-                else:
-                    logger.info("P08 scheduler: Catch-up complete, no READY vectors found")
-            except Exception:
-                logger.exception("P08 scheduler: Catch-up indexing failed")
-
-        # Main scheduler loop
-        while True:
-            try:
-                await asyncio.sleep(interval_seconds)
-                indexed = await _index_ready_vectors()
-                if indexed > 0:
-                    logger.info(
-                        f"P08 scheduler: Indexed {indexed} vectors",
-                        extra={"indexed_count": indexed, "batch_size": batch_size},
-                    )
-            except asyncio.CancelledError:
-                logger.info("P08 FAISS indexer scheduler cancelled")
-                break
-            except Exception:
-                logger.exception("P08 scheduler: Error in indexing loop, continuing...")
+    # =========================================================================
+    # DEPRECATED (M5 P08 Migration - ADR-K004)
+    # =========================================================================
+    # The _p08_faiss_indexer_loop() function has been removed.
+    # P08 now uses declarative triggers via PipelineScheduler (Issue 5.2.1).
+    #
+    # Previously at lines 501-673:
+    #   - Hardcoded 5-minute interval loop
+    #   - Direct database access bypassing syscalls
+    #   - Manual FAISS indexing logic
+    #
+    # Replacement (k0/contracts/pipelines/p08_embedding_management.v2.yaml):
+    #   triggers:
+    #     - id: faiss_indexer_interval
+    #       type: interval
+    #       interval_seconds: 300
+    #     - id: faiss_indexer_threshold
+    #       type: threshold
+    #       table: st_vec
+    #       condition: "status = 'READY'"
+    #       threshold_count: 50
+    #     - id: faiss_indexer_manual
+    #       type: manual
+    #
+    # P08 now executes via PipelineScheduler.register_pipeline() in lifespan().
+    # =========================================================================
 
     async def _init_model_registry() -> "ModelRegistry":
         """Initialize the centralized model registry at kernel startup.
@@ -864,7 +718,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         from pathlib import Path
 
         from ..pipelines.protocol import PipelineContext
-        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec
+        from ..runtime import ModuleRegistry, PipelineRunner, PipelineSpec, set_module_registry
 
         try:
             logger.info("Loading declarative pipelines from YAML specifications...")
@@ -876,6 +730,19 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             logger.info(
                 f"Loaded {len(registry)} module contracts",
                 extra={"module_count": len(registry), "modules": registry.list_modules()},
+            )
+
+            # Issue 2.2.3: Set global registry and register capabilities
+            set_module_registry(registry)
+            from ..fabric.loader import discover_and_register_capabilities
+
+            cap_count = discover_and_register_capabilities(registry)
+            logger.info(
+                f"Registered {cap_count} capability providers",
+                extra={
+                    "provider_count": cap_count,
+                    "capability_stats": registry.get_capability_stats(),
+                },
             )
 
             # Load pipeline specifications from YAML
@@ -985,6 +852,138 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                 f"Booted {len(pipelines)} pipelines: {list(pipelines.keys())}",
                 extra={"count": len(pipelines), "pipeline_ids": list(pipelines.keys())},
             )
+
+            # Issue 3.2.1: Initialize PipelineScheduler for trigger-based activation
+            from ..scheduler import PipelineScheduler, set_pipeline_scheduler
+
+            # Create syscalls for scheduler (needs query_count for threshold triggers)
+            scheduler_caps = {"st_vec.read", "st_hipp_events.read"}  # Threshold query tables
+            scheduler_syscalls = Syscalls("scheduler", scheduler_caps, _unit_of_work_factory)
+
+            # Create scheduler with pipeline execution callback
+            async def execute_pipeline_async(scheduled: Any, event: Any) -> None:
+                """Execute pipeline when trigger fires (async implementation)."""
+                import json
+                import uuid
+
+                from ..bus.core import BusMessage
+
+                pipeline_id = scheduled.pipeline_id
+                runner = pipelines.get(pipeline_id)
+                if runner:
+                    logger.info(
+                        f"Trigger-based execution of {pipeline_id}",
+                        extra={
+                            "pipeline_id": pipeline_id,
+                            "trigger_id": event.trigger_id,
+                            "execution_count": scheduled.execution_count,
+                        },
+                    )
+                    # Create synthetic BusMessage for trigger-based execution
+                    # Use the pipeline's entry_topic (e.g., scheduled.p08.trigger.v1)
+                    from datetime import datetime, timezone
+
+                    # Convert fired_at: can be float (unix ts), datetime, or None
+                    fired_at_iso = None
+                    if event.fired_at:
+                        if isinstance(event.fired_at, (int, float)):
+                            fired_at_iso = datetime.fromtimestamp(
+                                event.fired_at, tz=timezone.utc
+                            ).isoformat()
+                        elif hasattr(event.fired_at, "isoformat"):
+                            fired_at_iso = event.fired_at.isoformat()
+                        else:
+                            fired_at_iso = str(event.fired_at)
+                    trigger_payload = {
+                        "trigger_id": event.trigger_id,
+                        "trigger_type": (
+                            event.context.get("trigger_type", "unknown")
+                            if event.context
+                            else "unknown"
+                        ),
+                        "execution_count": scheduled.execution_count,
+                        "fired_at": fired_at_iso,
+                        "batch_size": (
+                            event.context.get("batch_size", 100) if event.context else 100
+                        ),
+                    }
+                    trigger_message = BusMessage(
+                        topic=(
+                            runner.declared_topics[0]
+                            if runner.declared_topics
+                            else f"scheduled.{pipeline_id.lower()}.trigger.v1"
+                        ),
+                        payload=json.dumps(trigger_payload).encode("utf-8"),
+                        offset=scheduled.execution_count,
+                        trace_id=str(uuid.uuid4()),
+                        space_id="system",
+                        metadata={"trigger_id": event.trigger_id, "port": "scheduler"},
+                    )
+                    try:
+                        await runner.handle(trigger_message)
+                        logger.info(
+                            f"Pipeline {pipeline_id} completed (trigger: {event.trigger_id})",
+                            extra={
+                                "pipeline_id": pipeline_id,
+                                "trigger_id": event.trigger_id,
+                                "execution_count": scheduled.execution_count,
+                            },
+                        )
+                    except Exception as e:
+                        logger.exception(
+                            f"Pipeline {pipeline_id} failed (trigger: {event.trigger_id}): {e}",
+                            extra={
+                                "pipeline_id": pipeline_id,
+                                "trigger_id": event.trigger_id,
+                                "error": str(e),
+                            },
+                        )
+                else:
+                    logger.warning(
+                        f"No runner found for triggered pipeline {pipeline_id}",
+                        extra={"pipeline_id": pipeline_id},
+                    )
+
+            def execute_pipeline(scheduled: Any, event: Any) -> None:
+                """Execute pipeline when trigger fires (sync wrapper)."""
+                # Schedule the async execution on the event loop
+                asyncio.create_task(execute_pipeline_async(scheduled, event))
+
+            scheduler = PipelineScheduler(scheduler_syscalls, execute_pipeline)
+
+            # Register pipelines that have triggers defined
+            trigger_count = 0
+            for spec_path in sorted(pipeline_specs):
+                try:
+                    spec = PipelineSpec.load(spec_path)
+                    if spec.triggers:
+                        scheduler.register_pipeline(spec)
+                        trigger_count += len(spec.triggers)
+                        logger.info(
+                            f"Registered {spec.pipeline_id} with {len(spec.triggers)} triggers",
+                            extra={
+                                "pipeline_id": spec.pipeline_id,
+                                "trigger_count": len(spec.triggers),
+                                "trigger_ids": [t.id for t in spec.triggers],
+                            },
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to register triggers for {spec_path.name}: {e}",
+                        extra={"spec_path": str(spec_path), "error": str(e)},
+                    )
+
+            # Set global scheduler instance
+            set_pipeline_scheduler(scheduler)
+            app.state.scheduler = scheduler
+
+            logger.info(
+                f"PipelineScheduler initialized with {len(scheduler.pipelines)} pipelines, {trigger_count} triggers",
+                extra={
+                    "pipeline_count": len(scheduler.pipelines),
+                    "trigger_count": trigger_count,
+                },
+            )
         except Exception:
             logger.exception("Failed to boot pipelines during startup")
             # Don't prevent kernel from starting if no pipelines exist
@@ -993,11 +992,37 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         # Start background tasks
         sse_metrics_task = asyncio.create_task(_report_sse_metrics_periodically())
         outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
-        p08_indexer_task = asyncio.create_task(_p08_faiss_indexer_loop())
+        # DEPRECATED (M5): p08_indexer_task removed - P08 now uses PipelineScheduler
+        # Previously: p08_indexer_task = asyncio.create_task(_p08_faiss_indexer_loop())
+
+        # Issue 7.1.3: Start ActivityTracker for idle detection (Phase 2 - M7)
+        from ..scheduler.activity import get_activity_tracker
+
+        activity_tracker = get_activity_tracker()
+        await activity_tracker.start()
+        logger.info("ActivityTracker started for idle detection")
+
+        # Issue 3.2.1: Start the scheduler for trigger-based pipeline activation
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler:
+            await scheduler.start()
+            logger.info("PipelineScheduler started")
 
         try:
             yield
         finally:
+            # Issue 3.2.1: Stop the scheduler first
+            scheduler = getattr(app.state, "scheduler", None)
+            if scheduler:
+                logger.info("Stopping PipelineScheduler...")
+                await scheduler.stop()
+                logger.info("PipelineScheduler stopped")
+
+            # Issue 7.1.3: Stop ActivityTracker
+            logger.info("Stopping ActivityTracker...")
+            await activity_tracker.stop()
+            logger.info("ActivityTracker stopped")
+
             # M2 R2.3: Graceful shutdown - call on_shutdown for all pipelines
             logger.info("Shutting down pipelines...")
             pipelines = getattr(app.state, "pipelines", {})
@@ -1032,7 +1057,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             logger.info("Shutting down background tasks")
             sse_metrics_task.cancel()
             outbox_worker_task.cancel()
-            p08_indexer_task.cancel()
+            # DEPRECATED (M5): p08_indexer_task removed - P08 stopped via scheduler.stop()
 
             # Wait for tasks to complete cancellation
             try:
@@ -1045,10 +1070,7 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             except asyncio.CancelledError:
                 pass
 
-            try:
-                await p08_indexer_task
-            except asyncio.CancelledError:
-                pass
+            # DEPRECATED (M5): p08_indexer_task await removed
 
             shutdown_pool()
 

@@ -1,9 +1,9 @@
 # P03 Consolidation Pipeline - Production Implementation Plan
 
 **Status**: Planning Phase
-**Version**: 2.0.0
+**Version**: 2.1.0
 **Created**: 2025-01-21
-**Updated**: 2025-11-25
+**Updated**: 2025-12-14
 **Owner**: Development Team
 **Related Dossier**: [P03_consolidation_dossier.md](../pipelines/P03_consolidation_dossier.md)
 **Upstream Pipeline**: P02 (Episodic Memory Formation)
@@ -139,6 +139,184 @@ This plan implements P03 (Memory Consolidation Pipeline) using the declarative Y
 
 ---
 
+## Pipeline-Fabric Integration Alignment
+
+> **CRITICAL**: P03 is a **trigger-driven batch pipeline**, not an event-driven pipeline.
+> This section ensures alignment with the [Pipeline-Fabric Integration Guide](../../k0/fabric/pipeline-fabric-integration-guide.md).
+
+### P03 Pipeline Protocol Requirements
+
+P03 implements `PipelineProtocol` with the following class-level attributes:
+
+```python
+class P03Consolidation:
+    """Memory consolidation pipeline - trigger-driven batch processing."""
+
+    # Protocol requirements (class-level)
+    pipeline_id: str = "P03_CONSOLIDATION"
+    contract_version: int = 1
+    declared_topics: Sequence[str] = []  # Trigger-driven, NO bus subscription
+    concurrency: int = 1                  # Sequential batch processing
+    max_queue: int = 64                   # Low - trigger-driven, not queue-heavy
+    required_caps: Sequence[str] = [
+        "st_hipp_events.read",
+        "st_hipp_events.write",
+        "st_epi.write",
+        "st_sem.write",
+        "st_procedural.write",
+        "st_social.write",
+        "st_prospective.write",
+        "st_kg_dom.write",
+        "st_kg_edges.write",
+        "st_vec.write",
+        "st_outbox.write",
+        "st_pipeline_processed.write",
+        "consolidation_locks.write",
+        # ... (28 total capabilities)
+    ]
+
+    # Trigger-driven method (NOT handle())
+    async def execute(self, trigger_event: TriggerEvent) -> None:
+        """Called when trigger fires - consolidation cycle."""
+        cycle_id = generate_cycle_id()
+        # ... batch processing logic
+
+    # Lifecycle methods
+    async def on_startup(self, ctx: PipelineContext) -> None:
+        self._syscalls = ctx.syscalls
+        self._fabric = ctx.fabric
+        self._logger = ctx.logger
+
+    async def on_shutdown(self) -> None:
+        self._logger.info("P03 shutdown complete")
+```
+
+### Trigger-Driven vs Event-Driven
+
+| Aspect | Event-Driven (P02) | Trigger-Driven (P03) |
+|--------|-------------------|---------------------|
+| **Activation** | Bus topic subscription | Scheduler triggers (IDLE, CRON, THRESHOLD) |
+| **Method** | `handle(msg: BusMessage)` | `execute(trigger_event: TriggerEvent)` |
+| **declared_topics** | Topic list | `[]` (empty) |
+| **Latency Target** | P95 < 100ms | 90-minute batch cycle |
+| **Concurrency** | 10-50 (IO-bound) | 1 (sequential batch) |
+
+> **Note**: P03's 90-minute batch cycle is intentional. The Integration Guide's 100ms P95 guideline applies to event-driven pipelines, not batch consolidation.
+
+### Concurrency Control: Dual-Lock Strategy
+
+P03 uses two layers of concurrency control:
+
+1. **SingleFlightGate** (Scheduler-level): Ensures at most one P03 execution at a time across the kernel
+2. **ConsolidationLockManager** (Tenant-level): Ensures at most one consolidation per tenant/space
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Trigger Fires                          │
+│                           │                                 │
+│                           ▼                                 │
+│               ┌──────────────────────┐                     │
+│               │   SingleFlightGate   │ ◄── Pipeline-level  │
+│               │   (one P03 at a time)│                     │
+│               └──────────┬───────────┘                     │
+│                          │                                  │
+│                          ▼                                  │
+│               ┌──────────────────────┐                     │
+│               │ ConsolidationLockMgr │ ◄── Tenant-level    │
+│               │ (one per tenant/space)│                    │
+│               └──────────┬───────────┘                     │
+│                          │                                  │
+│                          ▼                                  │
+│               ┌──────────────────────┐                     │
+│               │   execute(trigger)   │ ◄── Batch processing│
+│               └──────────────────────┘                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Fabric Integration
+
+P03 uses `CapabilityFabric` for module invocations:
+
+```yaml
+# p03_consolidation.v1.yaml
+fabric_actions:
+  - score_importance
+  - cluster_episodes
+  - extract_patterns
+  - compute_novelty
+  - normalize_entities
+```
+
+```python
+# In execute()
+if self._fabric and self._fabric.has_capability("score_importance"):
+    scores = self._fabric.invoke(
+        "score_importance",
+        events=batch_events,
+        timeout_ms=5000,
+    )
+```
+
+### Event Emission via Outbox
+
+P03 emits events using the transactional outbox pattern:
+
+```python
+# R8.1 - Use outbox_emit_batch() for transactional safety
+await self._syscalls.outbox_emit_batch([
+    {
+        "topic": "p03.consolidation.complete.v1",
+        "payload": json.dumps(cycle_summary),
+        "trace_id": trigger_event.trace_id,
+    },
+    {
+        "topic": "p03.pattern.detected.v1",
+        "payload": json.dumps(pattern_results),
+        "trace_id": trigger_event.trace_id,
+    },
+])
+```
+
+### P08 Coordination (No Deprecated Tables)
+
+> **IMPORTANT**: `st_embedding_queue` is DEPRECATED. Use `st_vec.embedding_status` instead.
+
+P03 creates vector placeholders in `st_vec` with `embedding_status='PENDING'`:
+
+```python
+# R7.7 - Vector placeholder creation (NO st_embedding_queue)
+await self._syscalls.vec_write(
+    embedding_id=generate_id(),
+    source_layer="st_epi",
+    source_id=episode_id,
+    text_to_embed=episode_text,
+    embedding_status="PENDING",  # P08 will populate
+)
+# Emit event for P08 to pick up
+await self._syscalls.outbox_emit_batch([{
+    "topic": "cognitive.embedding.requested.v1",
+    "payload": json.dumps({"embedding_id": embedding_id}),
+}])
+```
+
+### Hot Reload Support
+
+P03's trigger configuration supports atomic hot reload via `PipelineScheduler.hot_reload()`:
+
+```python
+# Hot reload test case (M8)
+async def test_p03_hot_reload():
+    new_spec = load_updated_spec("p03_consolidation.v2.yaml")
+    result = await scheduler.hot_reload(
+        new_specs={"P03": new_spec},
+        affected_pipelines={"P03"},
+    )
+    assert result.success
+    assert result.updated == 1
+```
+
+---
+
 ## Timeline Overview
 
 | Milestone | Duration | Focus |
@@ -177,7 +355,7 @@ P03 requires **28 capabilities** (11 read, 17 write) across:
 - **8 Core Memory Layers**: st_epi, st_sem, st_procedural, st_social, st_prospective, st_kg_dom, st_kg_edges, st_vec
 - **9 Infrastructure Tables**: st_hipp_events, st_archives, st_consolidation_logs, st_event_canon_map, st_event_cluster_history, st_kg_snapshots, deletion_audit, st_outbox, st_pipeline_processed
 - **7 Tombstone Tables**: st_*_tombstones for soft delete
-- **2 P08 Coordination**: st_embedding_queue (read + write)
+- **2 P08 Coordination**: st_vec (embedding_status tracking) - **NOTE: st_embedding_queue is DEPRECATED**
 
 See P03 dossier "Required Capabilities" section for complete list.
 
@@ -356,12 +534,45 @@ Document the 4 trigger mechanisms and sleep cycle state machine:
 - Manual trigger (CLI/API)
 - State machine: IDLE → NREM1 → NREM2 → REM → COMPLETE
 
+**Complete Trigger Specifications (Per Pipeline-Fabric Integration Guide)**:
+
+```yaml
+# p03_consolidation.v1.yaml triggers section
+triggers:
+  # IDLE trigger - fires after 5 minutes of inactivity with pending events
+  - id: consolidation_idle
+    type: idle
+    idle_seconds: 300
+    min_pending: 100
+    table: st_hipp_events
+    condition: "consolidation_status IS NULL"
+
+  # CRON trigger - nightly consolidation during sleep window
+  - id: consolidation_nightly
+    type: cron
+    cron_expression: "0 2 * * *"  # 2 AM daily
+
+  # THRESHOLD trigger - batch size reached
+  - id: consolidation_threshold
+    type: threshold
+    table: st_hipp_events
+    condition: "consolidation_status IS NULL"
+    threshold_count: 1000
+    check_interval_seconds: 60
+
+  # MANUAL trigger - operator-initiated
+  - id: consolidation_manual
+    type: manual
+```
+
 **Acceptance Criteria**:
 
 - [ ] State machine diagram with all transitions
 - [ ] Trigger priority ordering documented
 - [ ] Lock acquisition protocol defined
 - [ ] Multi-tenant scheduling policy
+- [ ] **IDLE trigger includes table/condition for min_pending**
+- [ ] **CRON expression follows 5-field format**
 
 **Files to Create**:
 
@@ -701,6 +912,21 @@ Without locks, if scheduled trigger (2AM) + threshold trigger (1000 events) fire
 - Race condition on st_hipp_events updates
 - Duplicate memory layer writes
 - Database deadlocks
+
+**Dual-Lock Strategy (Per Pipeline-Fabric Integration Guide)**:
+
+P03 uses two layers of concurrency control:
+
+1. **SingleFlightGate** (Scheduler-level, from `k0/scheduler/concurrency.py`):
+   - Built into PipelineScheduler
+   - Ensures at most one P03 `execute()` call at a time
+   - Uses OverlapPolicy.QUEUE for threshold/manual triggers
+   - Automatic - no P03 code needed
+
+2. **ConsolidationLockManager** (Tenant-level, custom):
+   - Prevents concurrent consolidation for same tenant/space
+   - Needed because one P03 execution may process multiple tenants
+   - Uses consolidation_locks table with row-level locking
 
 **Requirements**:
 
@@ -1583,6 +1809,9 @@ CREATE INDEX idx_kg_edges_valid ON st_kg_edges(valid_from, valid_to);
 **Description**:
 Create vector embeddings table for R7.7.
 
+> **IMPORTANT**: Per Pipeline-Fabric Integration Guide §1.9, `st_embedding_queue` is **DEPRECATED**.
+> P08 coordination uses `st_vec.embedding_status` column instead of a separate queue table.
+
 **Schema Requirements**:
 
 ```sql
@@ -1602,11 +1831,14 @@ CREATE TABLE st_vec (
 
     -- Vector Data
     vector_dimensions INTEGER DEFAULT 768,
-    embedding_model TEXT DEFAULT 'mpnet-base-v2',
+    embedding_model TEXT DEFAULT 'ultrabert-768',  -- UltraBERT, not mpnet
     vector_data BLOB, -- NULL until P08 populates
 
-    -- Status
-    embedding_status TEXT DEFAULT 'PENDING', -- PENDING, READY, FAILED
+    -- Status (used for P08 coordination - replaces deprecated st_embedding_queue)
+    embedding_status TEXT DEFAULT 'PENDING', -- PENDING, PROCESSING, READY, FAILED
+    priority TEXT DEFAULT 'MEDIUM',          -- HIGH, MEDIUM, LOW (for P08 prioritization)
+    retries INTEGER DEFAULT 0,
+    error_message TEXT,
 
     -- Timestamps
     created_at TEXT NOT NULL,
@@ -1618,33 +1850,23 @@ CREATE INDEX idx_vec_tenant ON st_vec(tenant_id, space_id);
 CREATE INDEX idx_vec_source ON st_vec(source_layer, source_id);
 CREATE INDEX idx_vec_status ON st_vec(embedding_status);
 CREATE INDEX idx_vec_model ON st_vec(embedding_model);
-
--- Embedding Queue Table (for P08 coordination)
-CREATE TABLE st_embedding_queue (
-    job_id TEXT PRIMARY KEY,
-    embedding_id TEXT NOT NULL,
-    text_to_embed TEXT NOT NULL,
-    embedding_model TEXT NOT NULL,
-    priority TEXT DEFAULT 'MEDIUM', -- HIGH, MEDIUM, LOW
-    status TEXT DEFAULT 'PENDING', -- PENDING, PROCESSING, COMPLETE, FAILED
-    retries INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    completed_at TEXT,
-    error_message TEXT,
-
-    FOREIGN KEY (embedding_id) REFERENCES st_vec(embedding_id)
-);
-
-CREATE INDEX idx_eq_status ON st_embedding_queue(status, priority);
-CREATE INDEX idx_eq_embedding ON st_embedding_queue(embedding_id);
+-- P08 queue query optimization
+CREATE INDEX idx_vec_pending ON st_vec(embedding_status, priority) WHERE embedding_status = 'PENDING';
 ```
+
+> **P08 Coordination Pattern**:
+>
+> - P03 creates row with `embedding_status='PENDING'`
+> - P03 emits `cognitive.embedding.requested.v1` event via outbox
+> - P08 queries `st_vec WHERE embedding_status='PENDING' ORDER BY priority, created_at`
+> - P08 updates status to PROCESSING, then READY (with vector_data) or FAILED
 
 **Acceptance Criteria**:
 
 - [ ] Migration file created
 - [ ] st_vec table with BLOB for vector
-- [ ] st_embedding_queue for P08 jobs
+- [ ] **NO st_embedding_queue table (DEPRECATED)**
+- [ ] embedding_status used for P08 queue coordination
 - [ ] Status workflow documented
 - [ ] Rollback script included
 
@@ -2674,20 +2896,54 @@ Create module contract for R7.6 Knowledge Graph Writer.
 **Description**:
 Create module contract for R7.7 Vector Placeholder Writer.
 
+> **IMPORTANT**: Per Pipeline-Fabric Integration Guide §1.9, `st_embedding_queue` is **DEPRECATED**.
+> Use `st_vec.embedding_status` for P08 coordination instead.
+
 **Key Specifications**:
 
 - Input: Episodes + semantics from R7.1/R7.2
-- Output: st_vec placeholders + st_embedding_queue jobs
-- Status: embedding_status='PENDING'
-- P08 coordination: Emit cognitive.embedding.queued.v1 event
-- Backpressure: Check queue depth before writes
+- Output: st_vec placeholders with `embedding_status='PENDING'`
+- **NO st_embedding_queue** - use st_vec.embedding_status column
+- P08 coordination: Emit `cognitive.embedding.requested.v1` event via outbox
+- Backpressure: Query `COUNT(*) FROM st_vec WHERE embedding_status='PENDING'` before writes
+
+**Implementation Pattern**:
+
+```python
+# R7.7 - Create vector placeholder (NO deprecated queue table)
+async def create_vec_placeholder(self, source_layer: str, source_id: str, text: str):
+    # Check backpressure
+    pending_count = await self._syscalls.query_count(
+        table="st_vec",
+        where="embedding_status = 'PENDING'",
+    )
+    if pending_count > 10000:
+        raise BackpressureError("Embedding queue depth exceeded")
+
+    # Create placeholder in st_vec
+    embedding_id = generate_id()
+    await self._syscalls.vec_write(
+        embedding_id=embedding_id,
+        source_layer=source_layer,
+        source_id=source_id,
+        text_to_embed=text,
+        embedding_status="PENDING",
+        priority="MEDIUM",
+    )
+
+    # Emit event for P08 via outbox
+    await self._syscalls.outbox_emit_batch([{
+        "topic": "cognitive.embedding.requested.v1",
+        "payload": json.dumps({"embedding_id": embedding_id}),
+    }])
+```
 
 **Acceptance Criteria**:
 
 - [ ] Contract YAML created
-- [ ] Placeholder structure
-- [ ] Queue job structure
-- [ ] Backpressure integration
+- [ ] Placeholder uses st_vec.embedding_status (NOT deprecated st_embedding_queue)
+- [ ] Outbox event emission for P08 notification
+- [ ] Backpressure check with configurable threshold
 
 **Files to Create**:
 
@@ -2698,6 +2954,9 @@ Create module contract for R7.7 Vector Placeholder Writer.
 ### Epic 1.5: Event Emission Contracts (R8)
 
 **Description**: Create contracts for event emission and offset tracking.
+
+> **IMPORTANT**: Per Pipeline-Fabric Integration Guide §8.3, all event emission must use
+> the transactional outbox pattern via `syscalls.outbox_emit_batch()`.
 
 #### Issue 1.5.1: Create Contract - consolidation.event_emit.v1.yaml
 
@@ -2712,19 +2971,56 @@ Create module contract for R8.1 Event Emission.
 **Key Specifications**:
 
 - Input: Consolidation results from R6, R7
-- Output: K0 Bus events
+- Output: K0 Bus events via **transactional outbox pattern**
+- **Must use `syscalls.outbox_emit_batch()`** - NOT direct bus dispatch
 - Events emitted:
   - p03.consolidation.complete.v1 (cycle summary)
   - p03.pattern.detected.v1 (per pattern)
   - p03.kg.updated.v1 (KG changes)
   - p03.event.archived.v1 (archival notifications)
 
+**Implementation Pattern (Per Integration Guide §8.3)**:
+
+```python
+# R8.1 - Transactional event emission via outbox
+async def emit_consolidation_events(self, cycle_result: CycleResult):
+    events = []
+
+    # Cycle completion event
+    events.append({
+        "topic": "p03.consolidation.complete.v1",
+        "payload": json.dumps({
+            "cycle_id": cycle_result.cycle_id,
+            "events_processed": cycle_result.events_processed,
+            "memories_created": cycle_result.memories_created,
+            "duration_seconds": cycle_result.duration_seconds,
+        }),
+        "trace_id": cycle_result.trace_id,
+    })
+
+    # Pattern detection events
+    for pattern in cycle_result.patterns:
+        events.append({
+            "topic": "p03.pattern.detected.v1",
+            "payload": json.dumps({
+                "pattern_id": pattern.id,
+                "pattern_type": pattern.type,
+                "confidence": pattern.confidence,
+            }),
+            "trace_id": cycle_result.trace_id,
+        })
+
+    # Emit all via outbox (transactional with storage writes)
+    await self._syscalls.outbox_emit_batch(events)
+```
+
 **Acceptance Criteria**:
 
 - [ ] Contract YAML created
-- [ ] Event payload schemas
-- [ ] Error handling (event emission failures)
-- [ ] Correlation ID propagation
+- [ ] Event payload schemas defined
+- [ ] **Uses outbox_emit_batch syscall** (NOT direct bus dispatch)
+- [ ] Error handling for event emission failures
+- [ ] Correlation ID (trace_id) propagation
 
 **Files to Create**:
 
@@ -7803,29 +8099,98 @@ Test P03 → P08 handoff for embeddings.
 @pytest.mark.integration
 async def test_p08_coordination(db_session, sample_events_1000, mock_embedding_service):
     """
-    Test P08 embedding queue integration.
+    Test P08 embedding coordination via st_vec.embedding_status.
 
     Setup:
     1. Run full P03 cycle
 
     Verify:
-    2. st_vec placeholders created with status='PENDING'
-    3. st_embedding_queue jobs created
-    4. cognitive.embedding.queued.v1 events emitted
-    5. Mock P08 can pick up jobs
+    2. st_vec placeholders created with embedding_status='PENDING'
+    3. NO st_embedding_queue table used (DEPRECATED)
+    4. cognitive.embedding.requested.v1 events emitted via outbox
+    5. Mock P08 can query st_vec WHERE embedding_status='PENDING'
     """
 ```
 
+> **NOTE**: Per Pipeline-Fabric Integration Guide §1.9, `st_embedding_queue` is deprecated.
+> P08 coordination uses `st_vec.embedding_status` column and outbox events.
+
 **Acceptance Criteria**:
 
-- [ ] Placeholders created
-- [ ] Queue jobs created
-- [ ] Events emitted
-- [ ] P08 can consume jobs
+- [ ] st_vec placeholders created with embedding_status='PENDING'
+- [ ] **NO st_embedding_queue usage** (deprecated table)
+- [ ] Events emitted via outbox_emit_batch
+- [ ] P08 can query st_vec for pending embeddings
 
 **Files to Create**:
 
 - `tests/integration/p03/test_p08_coordination.py`
+
+---
+
+#### Issue 8.2.5: Integration Test - Hot Reload Configuration
+
+**Type**: Testing
+**Priority**: Medium
+**Assignee**: QA Engineer
+**Labels**: `testing`, `p03`, `integration`, `hot-reload`
+
+**Description**:
+Test hot-reloading of pipeline configuration per Integration Guide §5.1.
+
+> **Reference**: Pipeline-Fabric Integration Guide §5.1 - Hot Reload Configuration
+
+**Test Scenario**:
+
+```python
+@pytest.mark.integration
+async def test_hot_reload_configuration(db_session, sample_events_100):
+    """
+    Test pipeline hot-reload picks up config changes.
+
+    Setup:
+    1. Start P03 with batch_size=50
+    2. Process 25 events (partial batch)
+
+    Execute:
+    3. Update config: batch_size=25 via config store
+    4. Trigger SIGHUP or watch notify
+
+    Verify:
+    5. Pipeline picks up new batch_size=25
+    6. Next batch uses updated config
+    7. No cycle interruption
+    8. Config change logged with trace_id
+    """
+```
+
+**Hot Reload Verification**:
+
+```python
+async def verify_hot_reload(pipeline_runtime):
+    # Check fabric observed config change
+    assert pipeline_runtime.config.batch_size == 25
+
+    # Verify reload logged
+    assert any(
+        log.msg == "hot_reload_applied"
+        for log in pipeline_runtime.logs
+    )
+
+    # Verify no cycle restart
+    assert pipeline_runtime.cycle_count == 1
+```
+
+**Acceptance Criteria**:
+
+- [ ] Config changes detected within reload interval
+- [ ] Pipeline uses new config without restart
+- [ ] No processing interruption
+- [ ] Reload event logged with trace context
+
+**Files to Create**:
+
+- `tests/integration/p03/test_hot_reload.py`
 
 ---
 

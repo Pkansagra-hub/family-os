@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://familyos.dev/schemas/capability.schema.json",
+  "title": "Capability Definition Schema",
+  "description": "Schema for capability YAML definition files. Validates capability definitions and their providers per ADR-K004.",
+  "type": "object",
+  "required": ["version", "capabilities"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^v[0-9]+$",
+      "description": "Schema version (e.g., v1)"
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Map of capability names to definitions",
+      "additionalProperties": {
+        "$ref": "#/definitions/capability"
+      },
+      "minProperties": 1
+    }
+  },
+  "definitions": {
+    "capability": {
+      "type": "object",
+      "description": "Definition of a capability with its providers",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable capability description",
+          "minLength": 1
+        },
+        "providers": {
+          "type": "array",
+          "description": "Ordered list of providers for this capability",
+          "items": {
+            "$ref": "#/definitions/provider"
+          },
+          "minItems": 0,
+          "default": []
+        },
+        "default_timeout_ms": {
+          "type": "integer",
+          "description": "Default timeout for capability requests",
+          "minimum": 1,
+          "maximum": 60000,
+          "default": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "provider": {
+      "type": "object",
+      "description": "Configuration for a capability provider",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["module", "pipeline"],
+          "description": "Provider type (module or pipeline)"
+        },
+        "module_id": {
+          "type": "string",
+          "description": "Module ID (for module providers). Format: module.function or module.function:version",
+          "pattern": "^[a-z_]+\\.[a-z_]+(:[a-z0-9]+)?$"
+        },
+        "pipeline_id": {
+          "type": "string",
+          "description": "Pipeline ID (for pipeline providers). Format: P##_NAME",
+          "pattern": "^P[0-9]{2}_[A-Z_]+$"
+        },
+        "request_topic": {
+          "type": "string",
+          "description": "Request topic (for pipeline providers)",
+          "pattern": "^[a-z0-9_.]+$"
+        },
+        "response_topic": {
+          "type": "string",
+          "description": "Response topic (for pipeline providers)",
+          "pattern": "^[a-z0-9_.]+$"
+        },
+        "priority": {
+          "type": "integer",
+          "description": "Provider priority (lower = higher priority)",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 1
+        },
+        "condition": {
+          "type": "string",
+          "description": "Condition for using this provider (e.g., 'always', 'fallback')",
+          "default": "always"
+        },
+        "latency_budget_ms": {
+          "type": "integer",
+          "description": "Latency budget for this provider",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "description": "Timeout for provider response",
+          "minimum": 1,
+          "maximum": 60000
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": { "const": "module" }
+            }
+          },
+          "then": {
+            "required": ["module_id"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": { "const": "pipeline" }
+            }
+          },
+          "then": {
+            "required": ["pipeline_id", "request_topic", "response_topic"]
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

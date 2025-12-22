@@ -638,13 +638,16 @@ async def run(message: Any, context: Any, **config: Any) -> Dict[str, Any]:
     }
 
     # M22 embedding extraction (ADR-K003)
-    # Pipeline runner merges M22 output directly into envelope (not nested under enrichments)
+    # M22 wraps output under "extract_from_cache" key for namespace isolation
+    # Pipeline runner merges M22 output into envelope as {"extract_from_cache": {...}}
+    extract_from_cache = envelope.get("extract_from_cache", {})
     embedding_output = {
-        "embedding": envelope.get("embedding"),
-        "embedding_id": envelope.get("embedding_id"),
-        "model_id": envelope.get("model_id", "ultrabert_v2.1.0"),
-        "vector_dim": envelope.get("vector_dim", 768),
-        "source": envelope.get("source", "unknown"),
+        "embedding": extract_from_cache.get("embedding") or envelope.get("embedding"),
+        "embedding_id": extract_from_cache.get("embedding_id") or envelope.get("embedding_id"),
+        "model_id": extract_from_cache.get("model_id")
+        or envelope.get("model_id", "ultrabert_v2.1.0"),
+        "vector_dim": extract_from_cache.get("vector_dim") or envelope.get("vector_dim", 768),
+        "source": extract_from_cache.get("source") or envelope.get("source", "unknown"),
     }
 
     policy_output = envelope.get("policy_stamp", {})

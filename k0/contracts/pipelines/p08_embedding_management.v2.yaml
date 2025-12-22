@@ -36,12 +36,41 @@ description: |
 entry_topic: scheduled.p08.trigger.v1
 exit_topic: cognitive.vector.indexed.v1
 
-# Trigger configuration (replaces event-driven model)
-trigger_mode: scheduled
-schedule:
-  interval_seconds: 300  # Every 5 minutes
-  batch_size: 100        # Process 100 vectors per batch
-  catch_up_enabled: true # Process all pending on startup
+# ============================================================================
+# DECLARATIVE TRIGGERS (ADR-K004 Capability Mesh)
+# ============================================================================
+# Migrated from hardcoded _p08_faiss_indexer_loop to declarative triggers.
+# Replaces the legacy trigger_mode/schedule configuration.
+#
+# DEPRECATED (M5 Migration):
+#   trigger_mode: scheduled
+#   schedule:
+#     interval_seconds: 300
+#     batch_size: 100
+#     catch_up_enabled: true
+# ============================================================================
+
+triggers:
+  # Primary interval trigger: every 30 seconds for testing (production: 300s)
+  - id: faiss_indexer_interval
+    type: interval
+    interval_seconds: 30
+    batch_size: 100
+    catch_up_enabled: true
+
+  # Threshold trigger: when 5+ embeddings pending for READY status (testing)
+  # Production: threshold_count: 50
+  - id: faiss_indexer_threshold
+    type: threshold
+    table: st_vec
+    condition: "status = 'READY'"
+    threshold_count: 5
+    check_interval_seconds: 10
+    batch_size: 50
+
+  # Manual trigger: for admin-initiated indexing via CLI or API
+  - id: faiss_indexer_manual
+    type: manual
 
 concurrency: 1
 max_queue_depth: 1000  # Retained for compatibility

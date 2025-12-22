@@ -30,6 +30,9 @@ dev = [
     "pytest-xdist>=3.0.0",
     "pytest-watch>=4.2.0",
 ]
+scheduler = [
+    "croniter>=2.0.0",
+]
 
 [tool.pytest.ini_options]
 python_files = "test_*.py"
