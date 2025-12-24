@@ -59,7 +59,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
 
 ### Part II: Implementation
 
-4. [Phase Specifications (R0-R8)](#4-phase-specifications-r0-r8)
+1. [Phase Specifications (R0-R8)](#4-phase-specifications-r0-r8)
    - 4.0 [Phase Overview Diagram](#40-phase-overview-diagram)
    - 4.1 [R0 — Trigger Detection & Sleep Onset](#41-r0--trigger-detection--sleep-onset)
    - 4.2 [R1 — Hippocampal Replay (NREM1)](#42-r1--hippocampal-replay-nrem1)
@@ -72,7 +72,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 4.9 [R8 — Event Emission & Completion](#49-r8--event-emission--completion)
    - 4.10 [K0 Kernel Enhancements Required](#410-k0-kernel-enhancements-required)
 
-5. [P06 Active Learning Integration](#5-p06-active-learning-integration)
+2. [P06 Active Learning Integration](#5-p06-active-learning-integration)
    - 5.1 [Overview: P03 as the "Observer Brain"](#51-overview-p03-as-the-observer-brain)
    - 5.2 [Gap Detection During Reconciliation](#52-gap-detection-during-reconciliation)
    - 5.3 [Entropy Scanning (Proactive Gap Detection)](#53-entropy-scanning-proactive-gap-detection)
@@ -80,7 +80,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 5.5 [Contradiction Resolution Protocol](#55-contradiction-resolution-protocol)
    - 5.6 [Attention Budget Integration](#56-attention-budget-integration)
 
-6. [Storage Schema Design](#6-storage-schema-design)
+3. [Storage Schema Design](#6-storage-schema-design)
    - 6.1 [Schema Design Principles](#61-schema-design-principles)
    - 6.2 [st_hipp_events (Staging / Hippocampus)](#62-st_hipp_events-staging--hippocampus)
    - 6.3 [st_epi (Episodic Memory)](#63-st_epi-episodic-memory)
@@ -98,7 +98,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 6.15 [st_outbox (Durable Writes)](#615-st_outbox-durable-writes)
    - 6.16 [st_retention_policy (Lifecycle Management)](#616-st_retention_policy-lifecycle-management)
 
-7. [Module Registry](#7-module-registry)
+4. [Module Registry](#7-module-registry)
    - 7.1 [P03 Module Architecture](#71-p03-module-architecture)
    - 7.2 [P03-Specific Modules (M18-M25)](#72-p03-specific-modules-m18-m25)
    - 7.3 [Reused Modules from P02](#73-reused-modules-from-p02)
@@ -106,7 +106,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
 
 ### Part III: Operations & Integration
 
-8. [Observability & Metrics](#8-observability--metrics)
+1. [Observability & Metrics](#8-observability--metrics)
    - 8.1 [Metrics Overview](#81-metrics-overview)
    - 8.2 [Metric Definitions](#82-metric-definitions)
    - 8.3 [Distributed Tracing](#83-distributed-tracing)
@@ -114,7 +114,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 8.5 [Dashboards](#85-dashboards)
    - 8.6 [Alerting Rules](#86-alerting-rules)
 
-9. [Integration Contracts](#9-integration-contracts)
+2. [Integration Contracts](#9-integration-contracts)
    - 9.1 [Contract Overview](#91-contract-overview)
    - 9.2 [P02 → P03 Contract](#92-p02--p03-contract)
    - 9.3 [P03 → P06 Contract (Active Learning)](#93-p03--p06-contract-active-learning)
@@ -123,7 +123,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
    - 9.6 [P03 Output Events](#96-p03-output-events)
    - 9.7 [Contract Validation](#97-contract-validation)
 
-10. [Testing Strategy](#10-testing-strategy)
+3. [Testing Strategy](#10-testing-strategy)
     - 10.1 [Test Architecture Overview](#101-test-architecture-overview)
     - 10.2 [Unit Tests](#102-unit-tests)
     - 10.3 [Integration Tests](#103-integration-tests)
@@ -132,7 +132,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
     - 10.6 [Golden Dataset Tests](#106-golden-dataset-tests)
     - 10.7 [Test Fixtures](#107-test-fixtures)
 
-11. [Migration & Evolution](#11-migration--evolution)
+4. [Migration & Evolution](#11-migration--evolution)
     - 11.1 [Migration Overview](#111-migration-overview)
     - 11.2 [v1 → v2 Migration](#112-v1--v2-migration)
     - 11.3 [Future Phases](#113-future-phases)
@@ -142,13 +142,13 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
 
 ### Part IV: Reference
 
-12. [Policy Decisions & Feature Flags](#12-policy-decisions--feature-flags)
+1. [Policy Decisions & Feature Flags](#12-policy-decisions--feature-flags)
     - 12.1 [Resolved Design Decisions](#121-resolved-design-decisions)
     - 12.2 [Resolved Implementation TODOs](#122-resolved-implementation-todos)
     - 12.3 [Resolved Active Learning Integration TODOs](#123-resolved-active-learning-integration-todos)
     - 12.4 [Feature Flag Master List](#124-feature-flag-master-list)
 
-13. [Error Handling & Dead Letter Queue](#13-error-handling--dead-letter-queue)
+2. [Error Handling & Dead Letter Queue](#13-error-handling--dead-letter-queue)
     - 13.1 [K0 Integration Overview](#131-k0-integration-overview)
     - 13.2 [Error Classification](#132-error-classification)
     - 13.3 [K0 DLQ Integration](#133-k0-dlq-integration)
@@ -160,7 +160,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
     - 13.9 [Edge Case Handling Matrix](#139-edge-case-handling-matrix)
     - 13.10 [Recovery Procedures](#1310-recovery-procedures)
 
-14. [Security & Privacy](#14-security--privacy)
+3. [Security & Privacy](#14-security--privacy)
     - 14.1 [K0 Policy Engine Integration](#141-k0-policy-engine-integration)
     - 14.2 [Privacy Band Enforcement](#142-privacy-band-enforcement)
     - 14.3 [K0 ACL Enforcer Integration](#143-k0-acl-enforcer-integration)
@@ -170,7 +170,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
     - 14.7 [Data Minimization & GDPR](#147-data-minimization--gdpr)
     - 14.8 [Encryption (K0 Crypto Layer)](#148-encryption-k0-crypto-layer)
 
-15. [Performance Tuning](#15-performance-tuning)
+4. [Performance Tuning](#15-performance-tuning)
     - 15.1 [K0 QoS Integration Overview](#151-k0-qos-integration-overview)
     - 15.2 [K0 Scheduler Integration](#152-k0-scheduler-integration)
     - 15.3 [Performance Baselines](#153-performance-baselines)
@@ -180,7 +180,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
     - 15.7 [Database Optimization (K0-Aware)](#157-database-optimization-k0-aware)
     - 15.8 [K0 Metrics Export](#158-k0-metrics-export)
 
-16. [Configuration Reference](#16-configuration-reference)
+5. [Configuration Reference](#16-configuration-reference)
     - 16.1 [K0 Configuration Integration Overview](#161-k0-configuration-integration-overview)
     - 16.2 [K0 Kernel Configuration Integration](#162-k0-kernel-configuration-integration)
     - 16.3 [K0 Pipeline Scheduler Configuration](#163-k0-pipeline-scheduler-configuration)
@@ -190,7 +190,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
     - 16.7 [K0 CLI Commands (k0ctl)](#167-k0-cli-commands-k0ctl)
     - 16.8 [Environment Variable Overrides](#168-environment-variable-overrides)
 
-17. [Ops Readiness](#17-ops-readiness)
+6. [Ops Readiness](#17-ops-readiness)
     - 17.1 [Service Level Objectives (SLOs)](#171-service-level-objectives-slos)
     - 17.2 [Dashboard Specifications](#172-dashboard-specifications)
     - 17.3 [Alerting Rules](#173-alerting-rules)
@@ -1281,6 +1281,7 @@ class PhaseTransition:
 **MVP Recommendation**: For initial release, set `P03_FF_R5_MODE=disabled` and enable TDL-HCO only. Full R5 implementation deferred to Phase 2 when GPU inference is available.
 
 **Reproducibility Concerns**:
+
 - BGT-SM random walks: Seed with `cycle_ulid` for deterministic behavior in tests
 - TPN-MCTS: Use fixed seed for rollout sampling in CI
 - CPN: Perturbation order deterministic when sorted by entity_id
@@ -1388,7 +1389,8 @@ class PhaseTransition:
 ### 4.10 K0 Kernel Enhancements Required
 
 > **Status**: 📋 K0 Enhancement Requests
-> **Reference**: [k0_source_of_truth_v2.mmd](../../architecture_diagrams/k0/k0_source_of_truth_v2.mmd)
+> **Reference**: [k0_source_of_truth_postgresql.mmd](../../architecture_diagrams/k0/k0_source_of_truth_postgresql.mmd)
+> **Migration Note** (2025-01): K0 now uses PostgreSQL 16+ via asyncpg. Diagram reference updated.
 
 P03's concurrency requirements exceed what K0 currently provides. This section documents **kernel-level enhancements** needed to support P03 consolidation in multi-instance deployments.
 
@@ -1519,29 +1521,36 @@ class PartitionAssignment:
 
 **ADR Required**: `k0XX-pipeline-execution-context.md`
 
-#### 4.10.6 Interim P03 Implementation (Pre-K0 Enhancement)
+#### 4.10.6 P03 Implementation with PostgreSQL (K0 Native Features)
 
-Until K0 enhancements are available, P03 will use these workarounds:
+> **Updated 2025-12-24**: K0 migrated from SQLite to PostgreSQL 16+ (see `k0/docs/k0_postgresql_migration_plan.md`). Many proposed K0 enhancements are now available natively.
 
-| K0 Gap | P03 Workaround | Limitation |
-|--------|---------------|------------|
-| Advisory locks | SQLite table-based CAS | Single-node only, no cross-node coordination |
-| Partitioned execution | Single global trigger | All spaces processed by one node |
-| Optimistic concurrency | Custom SQL in R7 | Duplicated pattern, not reusable |
-| Node identity | Environment variable | No dynamic cluster awareness |
+With PostgreSQL as the K0 storage backend, P03 leverages native database features:
 
-**Migration Path**: When K0 enhancements are released, P03 will migrate from workarounds to kernel primitives via feature flags.
+| K0 Need | PostgreSQL Solution | Status |
+|---------|---------------------|--------|
+| Advisory locks | `pg_advisory_lock()` / `pg_try_advisory_lock()` | ✅ Native PostgreSQL |
+| Partitioned execution | `FOR UPDATE SKIP LOCKED` + K0 Scheduler | 🔄 Scheduler enhancement still needed |
+| Optimistic concurrency | `RETURNING` clause + row versioning in UoW | ✅ Native via asyncpg |
+| Node identity | `pg_stat_activity.application_name` + env var | ✅ Enhanced with PostgreSQL |
+
+**PostgreSQL Implementation References**:
+
+- Connection pool: `k0/db/pool.py` (asyncpg.Pool with pgbouncer support)
+- Configuration: `k0/config/postgres.py` (PostgresSettings)
+- Driver: `k0/drivers/postgres.py` (PostgresDriver with ACID transactions)
+- UoW: `k0/uow/unit_of_work.py` (async PostgreSQL transactions)
 
 #### 4.10.7 ADR Tracking
 
 | ADR ID | Title | Status | Priority |
 |--------|-------|--------|----------|
-| k0XX | Advisory Lock Service | 📋 Proposed | P1 (Multi-node) |
+| k0XX | Advisory Lock Service | ✅ SUPERSEDED — PostgreSQL native `pg_advisory_lock()` | N/A |
 | k0XX | Partitioned Pipeline Execution | 📋 Proposed | P1 (Multi-node) |
-| k0XX | Optimistic Concurrency in UoW | 📋 Proposed | P2 (Code quality) |
+| k0XX | Optimistic Concurrency in UoW | ✅ SUPERSEDED — PostgreSQL `RETURNING` + asyncpg | N/A |
 | k0XX | Pipeline Execution Context | 📋 Proposed | P2 (Cluster awareness) |
 
-> **Note**: These enhancements benefit all pipelines requiring distributed coordination (P03, P07 CRDT Sync, P08 Embedding).
+> **Note (2025-12-24)**: With K0 PostgreSQL migration complete, advisory locks and optimistic concurrency are now available natively. Partitioned pipeline execution and cluster awareness remain proposed enhancements.
 
 ---
 
@@ -7177,6 +7186,7 @@ dream_phase:
 **Status**: ✅ COMPLETE — See [Appendix F: Threshold Configuration Table](#appendix-f-threshold-configuration-table)
 
 All similarity thresholds are now defined in a single configuration table with:
+
 - Canonical threshold names
 - Default values
 - Feature flag overrides
@@ -7275,6 +7285,7 @@ DEFAULT_WEIGHTS = GapPriorityWeights(
 ```
 
 **Feature Flags**:
+
 - `P03_GAP_WEIGHT_ENTROPY`: Override entropy weight (default: 0.5)
 - `P03_GAP_WEIGHT_RECENCY`: Override recency weight (default: 0.3)
 - `P03_GAP_WEIGHT_IMPACT`: Override impact weight (default: 0.2)
@@ -8559,6 +8570,7 @@ k0ctl benchmark report --input p03_benchmark.json --output docs/test_results/p03
 ---
 
 ### 15.4 K0 Scheduler Integration (continued)
+
         batch_size: int,
         band: str = "GREEN"
     ) -> Optional[SchedulerToken]:
@@ -8591,8 +8603,8 @@ k0ctl benchmark report --input p03_benchmark.json --output docs/test_results/p03
         """Release scheduler token after batch completion."""
         await self.scheduler._release(token)
 
-
 # P03 Scheduler profiles by operation type
+
 P03_SCHEDULER_PROFILES = {
     'BATCH_CONSOLIDATION': SchedulerProfile(
         pipeline_id='p03_consolidation',
@@ -8613,6 +8625,7 @@ P03_SCHEDULER_PROFILES = {
         estimated_cost=200.0,        # Higher cost (creative)
     ),
 }
+
 ```
 
 ### 15.3 K0 QoSContext Integration
@@ -9014,67 +9027,88 @@ P03_CACHE_PRIORITIES = {
 
 ### 15.7 Database Optimization (K0-Aware)
 
-#### 15.7.1 Index Usage with K0 Storage Layer
+> **Updated 2025-12-24**: K0 now uses PostgreSQL 16+ via asyncpg. SQLite PRAGMAs and `INDEXED BY` hints no longer apply.
+
+#### 15.7.1 Index Usage with K0 PostgreSQL Storage
 
 ```sql
--- Force index usage for consolidation queries
--- K0 Reference: k0/storage/wal.py uses same WAL pattern
+-- PostgreSQL uses query planner automatically; no INDEXED BY hints needed.
+-- Ensure proper indexes exist and statistics are current.
+-- K0 Reference: k0/drivers/postgres.py, k0/db/pool.py
 
-SELECT * FROM st_hipp_events INDEXED BY idx_hipp_consolidation
+SELECT * FROM st_hipp_events
 WHERE consolidation_status IS NULL
-  AND tenant_id = ?
-  AND space_id = ?
+  AND tenant_id = $1
+  AND space_id = $2
 ORDER BY importance_score DESC
 LIMIT 1000;
 
--- Analyze after bulk updates (K0 migrations do this automatically)
+-- Ensure statistics are current (K0 migrations run ANALYZE automatically)
 -- K0 Reference: k0/automation/migrate.py: apply_migrations()
 ANALYZE st_hipp_events;
 ANALYZE st_sem;
 ANALYZE st_epi;
+
+-- For query plan debugging (PostgreSQL-specific):
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT * FROM st_hipp_events
+WHERE consolidation_status IS NULL
+  AND tenant_id = $1 AND space_id = $2
+ORDER BY importance_score DESC LIMIT 1000;
 ```
 
-#### 15.7.2 SQLite Configuration (K0 Kernel Config)
+#### 15.7.2 PostgreSQL Configuration (K0 Kernel Config)
 
 ```python
-# Integration with k0/kernel/config.py
+# Integration with k0/config/postgres.py
+# K0 Reference: k0/config/postgres.py: PostgresSettings
+# K0 Reference: k0/db/pool.py: AsyncPgPool
 
-from k0.kernel.config import DatabaseSettings
+from k0.config.postgres import PostgresSettings, get_postgres_settings
 
 
 class P03DatabaseConfig:
     """
-    Database configuration aligned with K0 Kernel Settings.
+    Database configuration aligned with K0 PostgreSQL Settings.
 
     K0 References:
-    - k0/kernel/config.py: DatabaseSettings
-    - k0/storage/wal.py: WriteAheadLog uses same WAL mode
+    - k0/config/postgres.py: PostgresSettings (host, port, pool sizes, SSL)
+    - k0/db/pool.py: AsyncPgPool (asyncpg connection pool with pgbouncer support)
+    - k0/drivers/postgres.py: PostgresDriver (ACID transactions)
     """
 
     @classmethod
-    def from_k0_settings(cls, db_settings: DatabaseSettings) -> dict:
-        """Build P03 SQLite config from K0 DatabaseSettings."""
+    def from_k0_settings(cls, pg_settings: PostgresSettings) -> dict:
+        """Build P03 PostgreSQL config from K0 PostgresSettings."""
         return {
-            'journal_mode': 'WAL',              # Matches K0 WriteAheadLog
-            'synchronous': db_settings.synchronous or 'NORMAL',
-            'cache_size': db_settings.cache_size_kb or -64000,
-            'mmap_size': db_settings.mmap_size_bytes or 268435456,
-            'page_size': 4096,                  # K0 standard
-            'busy_timeout': db_settings.busy_timeout_ms or 5000,
-            'wal_autocheckpoint': 1000,         # Checkpoint every 1000 pages
+            'min_pool_size': pg_settings.min_pool_size,        # Default: 5
+            'max_pool_size': pg_settings.max_pool_size,        # Default: 25
+            'command_timeout': pg_settings.command_timeout,    # Default: 60.0s
+            'statement_cache_size': pg_settings.statement_cache_size,  # 0 for pgbouncer
+            'vector_dimensions': pg_settings.vector_dimensions,  # 768 for UltraBERT
         }
 
 
-# P03-optimized SQLite pragmas
-P03_SQLITE_PRAGMAS = {
-    'journal_mode': 'WAL',           # Write-ahead logging (K0 standard)
-    'synchronous': 'NORMAL',         # Balance durability/speed
-    'cache_size': -64000,            # 64MB cache
-    'mmap_size': 268435456,          # 256MB mmap
-    'page_size': 4096,               # Standard page size
-    'temp_store': 'MEMORY',          # In-memory temp tables
-    'locking_mode': 'NORMAL',        # Allow concurrent readers
+# P03-optimized PostgreSQL session settings (SET at connection time)
+P03_POSTGRES_SESSION_SETTINGS = {
+    'statement_timeout': '300s',          # 5 min max for consolidation queries
+    'lock_timeout': '30s',                # 30s max wait for row locks
+    'idle_in_transaction_session_timeout': '60s',  # Prevent stuck transactions
+    'work_mem': '256MB',                  # Per-operation memory for sorts/hashes
+    'maintenance_work_mem': '512MB',      # For ANALYZE operations
 }
+
+# K0 PostgresSettings defaults (from k0/config/postgres.py)
+# Environment prefix: K0_POSTGRES_
+# - K0_POSTGRES_HOST (default: localhost)
+# - K0_POSTGRES_PORT (default: 5432)
+# - K0_POSTGRES_DATABASE (default: k0_kernel)
+# - K0_POSTGRES_USER (default: k0user)
+# - K0_POSTGRES_PASSWORD (from secrets)
+# - K0_POSTGRES_MIN_POOL_SIZE (default: 5)
+# - K0_POSTGRES_MAX_POOL_SIZE (default: 25)
+# - K0_POSTGRES_SSL_MODE (default: prefer)
+# - K0_POSTGRES_STATEMENT_CACHE_SIZE (default: 0 for pgbouncer)
 ```
 
 ### 15.8 K0 Metrics Export
@@ -9632,13 +9666,21 @@ qos:
     sse: 5
 
 database:
-  # K0 DatabaseSettings
-  path: "./k0_runtime.sqlite3"
-  synchronous: "NORMAL"
-  cache_size_kb: 65536
-  mmap_size_bytes: 268435456
-  busy_timeout_ms: 5000
-  wal_autocheckpoint: 1000
+  # K0 PostgresSettings (k0/config/postgres.py)
+  # Environment prefix: K0_POSTGRES_
+  use_postgresql: true                   # Feature flag (default: true after migration)
+  postgres:
+    host: "${K0_POSTGRES_HOST:-localhost}"
+    port: ${K0_POSTGRES_PORT:-5432}
+    database: "${K0_POSTGRES_DATABASE:-k0_kernel}"
+    user: "${K0_POSTGRES_USER:-k0user}"
+    password: "${K0_POSTGRES_PASSWORD}"  # From secrets/env
+    min_pool_size: 5
+    max_pool_size: 25
+    ssl_mode: "prefer"                   # disable, allow, prefer, require, verify-ca, verify-full
+    statement_cache_size: 0              # 0 for pgbouncer transaction mode
+    command_timeout: 60.0                # Query timeout in seconds
+    vector_dimensions: 768               # UltraBERT embedding dimensions
 
 retention:
   # K0 RetentionSettings
@@ -9772,10 +9814,15 @@ p03:
       embedding_cache_size: 10000
       stream_batch_size: 100
 
+    # PostgreSQL settings (via k0/config/postgres.py PostgresSettings)
     database:
-      cache_size_mb: 64
-      wal_checkpoint_threshold: 1000
-      analyze_interval: 100              # ANALYZE after N batches
+      min_pool_size: 5                   # asyncpg pool minimum
+      max_pool_size: 25                  # asyncpg pool maximum
+      statement_cache_size: 0            # Required for pgbouncer
+      command_timeout: 60.0              # Query timeout in seconds
+      # Session-level tuning (applied per connection)
+      work_mem: "64MB"                   # Per-query memory for sorts
+      maintenance_work_mem: "128MB"      # For VACUUM/CREATE INDEX
 
     faiss:
       nprobe: 32                         # FAISS IVF search parameter
@@ -9997,6 +10044,7 @@ error_budget:
 **Dashboard ID**: `p03-deep-dive`
 
 **Panels**:
+
 - Similarity Score Distribution (histogram by decision_type)
 - Confidence Score Distribution (histogram by layer)
 - Cluster Size Distribution (R2 DBSCAN metrics)
@@ -10090,12 +10138,14 @@ groups:
 **Symptom**: `P03CycleFailureHigh` alert firing
 
 **Triage Steps**:
+
 1. Check `p03_errors_total` by `error_type` to identify failure category
 2. Check `p03_phase_duration_seconds` to identify slow phase
 3. Check K0 storage health: `k0ctl storage status`
 4. Check K0 bus health: `k0ctl bus status`
 
 **Common Causes**:
+
 | Cause | Indicator | Resolution |
 |-------|-----------|------------|
 | Database overload | High R7 latency | Scale DB, reduce batch size |
@@ -10104,6 +10154,7 @@ groups:
 | Bus unavailable | R8 failures | Restart bus, check kafka health |
 
 **Immediate Actions**:
+
 ```bash
 # Disable scheduled consolidation
 k0ctl config set p03.schedule.enabled=false
@@ -10126,12 +10177,14 @@ k0ctl pipeline p03 trigger --batch-size=100 --dry-run
 **Severity**: CRITICAL — Potential data integrity issue
 
 **Triage Steps**:
+
 1. **IMMEDIATELY** pause P03: `k0ctl pipeline p03 pause`
 2. Check `st_outbox` for failed writes: `k0ctl storage query st_outbox --status=failed`
 3. Identify affected records and tables
 4. Check database transaction logs
 
 **Common Causes**:
+
 | Cause | Indicator | Resolution |
 |-------|-----------|------------|
 | Constraint violation | SQL error in logs | Check schema, data integrity |
@@ -10140,6 +10193,7 @@ k0ctl pipeline p03 trigger --batch-size=100 --dry-run
 | Transaction timeout | Slow queries | Optimize queries, batch smaller |
 
 **Recovery Procedure**:
+
 ```bash
 # 1. Check outbox status
 k0ctl storage outbox status
@@ -10164,6 +10218,7 @@ k0ctl pipeline p03 resume
 **Symptom**: `P03DLQOverflow` alert firing (DLQ depth > 1000)
 
 **Triage Steps**:
+
 1. Check DLQ composition: `k0ctl dlq list --pipeline=p03 --limit=100`
 2. Identify dominant error types
 3. Check if single bad batch is causing cascade
@@ -10178,6 +10233,7 @@ k0ctl pipeline p03 resume
 | FATAL | Any | System issue — escalate immediately |
 
 **Commands**:
+
 ```bash
 # Analyze DLQ
 k0ctl dlq analyze --pipeline=p03
@@ -10198,11 +10254,13 @@ k0ctl dlq export --pipeline=p03 --error-type=LOGIC --format=json > dlq_logic.jso
 **Meaning**: P08 coordination has failed repeatedly; P03 is no longer attempting P08 calls.
 
 **Triage Steps**:
+
 1. Check P08 pipeline health: `k0ctl pipeline p08 status`
 2. Check circuit breaker metrics: `k0ctl metrics query p03_circuit_breaker_*`
 3. Identify root cause of P08 failures
 
 **Recovery**:
+
 ```bash
 # Check circuit breaker state
 k0ctl circuit-breaker status p03_p08_coordination
@@ -10221,11 +10279,13 @@ k0ctl circuit-breaker watch p03_p08_coordination
 **Symptom**: `P03PendingEventBacklog` alert firing (pending > 10,000)
 
 **Triage Steps**:
+
 1. Check consolidation schedule: `k0ctl pipeline p03 schedule status`
 2. Check if consolidation is running: `k0ctl pipeline p03 status`
 3. Check arrival rate vs processing rate
 
 **Resolution**:
+
 ```bash
 # Increase batch size temporarily
 k0ctl config set p03.batch.size=2000 --temporary
@@ -10244,6 +10304,7 @@ k0ctl pipeline p03 scale --workers=8
 **Symptom**: P95 cycle duration > 300 seconds
 
 **Triage Steps**:
+
 1. Check phase breakdown: `k0ctl metrics query p03_phase_duration_seconds`
 2. Identify slowest phase
 3. Check resource utilization during cycles
@@ -10282,18 +10343,21 @@ k0ctl pipeline p03 scale --workers=8
 ### 17.6 On-Call Checklist
 
 **Shift Start**:
+
 - [ ] Review `p03-ops-overview` dashboard
 - [ ] Check `p03_pending_events` gauge
 - [ ] Verify last successful cycle timestamp
 - [ ] Check DLQ depth
 
 **During Incident**:
+
 - [ ] Identify alert → Find corresponding runbook
 - [ ] Execute triage steps
 - [ ] Document actions in incident channel
 - [ ] Escalate if not resolved in SLA time
 
 **Shift End**:
+
 - [ ] Update handoff notes with any ongoing issues
 - [ ] Document any temporary config changes
 - [ ] Verify no silent failures (check error logs)
@@ -10355,6 +10419,7 @@ k0ctl pipeline p03 scale --workers=8
 **Purpose**: Determines if a new experience is a repetition of a known pattern or something genuinely new.
 
 **FamilyOS Grounding**:
+
 - **Module**: Reconciliation Engine (Section 1.4)
 - **Phase**: R4 (Truth Reconciliation)
 - **K0 Integration**: Invokes P08 via `CapabilityFabric.invoke("embedding.search")`
@@ -10489,6 +10554,7 @@ k0ctl pipeline p03 scale --workers=8
 **Complexity**: O(n * d) where n = number of candidates, d = embedding dimension (768)
 
 **K0 QoS Integration**:
+
 - Consumes `top_k_budget` from `QoSContext` for FAISS search
 - Reports `p03_similarity_score` histogram to `MetricsExporter`
 
@@ -10499,6 +10565,7 @@ k0ctl pipeline p03 scale --workers=8
 **Purpose**: Mathematically models "trust" in a memory. Repeated observations increase confidence; inconsistency lowers it.
 
 **FamilyOS Grounding**:
+
 - **Module**: Confidence Engine (within Reconciliation Engine)
 - **Phase**: R4 (applied after each reconciliation decision)
 - **Tables**: `st_sem.confidence_score`, `st_kg_edges.weight`, `st_epi.significance_score`
@@ -10688,6 +10755,7 @@ k0ctl pipeline p03 scale --workers=8
 **Purpose**: Ensures data integrity when multiple consolidation workers try to update the same memory record simultaneously.
 
 **FamilyOS Grounding**:
+
 - **Module**: K0 UnitOfWork (`k0/uow/unit_of_work.py`)
 - **Phase**: All phases that write to truth tables
 - **Tables**: All `st_*` truth tables have a `version` column
@@ -10864,6 +10932,7 @@ k0ctl pipeline p03 scale --workers=8
 ```
 
 **K0 Integration**:
+
 - Transaction management via `k0/uow/unit_of_work.py`
 - Conflict errors logged to `k0/storage/dlq.py`
 - Metrics via `k0/obs/metrics.py`: `p03_version_conflicts_total`
@@ -10881,6 +10950,7 @@ k0ctl pipeline p03 scale --workers=8
 **Purpose**: Implements "Emotional Tagging." Prioritizes processing of high-emotion or high-novelty events over mundane background noise.
 
 **FamilyOS Grounding**:
+
 - **Module**: M23 Hippocampal Replay
 - **Phase**: R1 (Harvest/Filter)
 - **Tables**: Reads `st_hipp_events`, outputs to batch selection
@@ -11049,6 +11119,7 @@ k0ctl pipeline p03 scale --workers=8
 ```
 
 **SQL Query for Batch Selection**:
+
 ```sql
 SELECT * FROM st_hipp_events
 WHERE consolidation_status IS NULL
@@ -11636,6 +11707,7 @@ LIMIT :batch_size;
 **Purpose**: Fast deduplication. Detects if "Wake up" logged at 7:01 AM is the same event as "Wake up" logged at 7:02 AM.
 
 **FamilyOS Grounding**:
+
 - **Module**: M19 Deduplication
 - **Phase**: R3 (Forgetting/Pruning)
 - **Tables**: Stored in `st_hipp_events.simhash_hex`
@@ -11733,6 +11805,7 @@ class SimHasher:
 **Purpose**: Implements "biological forgetting." Unused memories fade and are eventually archived.
 
 **FamilyOS Grounding**:
+
 - **Module**: M20 Decay Engine
 - **Phase**: R3 (applied to all truth tables)
 - **Tables**: Updates `decay_factor` in st_sem, st_epi, st_kg_edges
@@ -11842,6 +11915,7 @@ class ExponentialDecayEngine:
 **Purpose**: Determines if an event is unique enough to keep. Low novelty events are aggressively pruned.
 
 **FamilyOS Grounding**:
+
 - **Module**: M19 Deduplication
 - **Phase**: R3 (pre-filter before processing)
 - **Tables**: Updates `st_hipp_events.novelty_score`
@@ -11940,6 +12014,7 @@ class NoveltyScorer:
 **Purpose**: Identifies "Uncle Bob" (Person) or "Denton" (Location) from raw text.
 
 **FamilyOS Grounding**:
+
 - **Module**: P02 (extraction), consumed by P03 R4
 - **Phase**: R4 (Knowledge Graph building)
 - **Tables**: Creates entities in `st_kg_dom`
@@ -12062,6 +12137,7 @@ class UltraBERTEntityExtractor:
 **Purpose**: Distinguishes between correlation and causation in user routines. If Event A consistently precedes Event B, infer A causes B.
 
 **FamilyOS Grounding**:
+
 - **Module**: M21 Knowledge Graph Builder
 - **Phase**: R4 (edge creation with directionality)
 - **Tables**: Creates directed edges in `st_kg_edges` with `CAUSES` relation
@@ -12198,6 +12274,7 @@ class GrangerCausalityInference:
 **Purpose**: Generate "what if" scenarios by perturbing past events. Learns from near-misses.
 
 **FamilyOS Grounding**:
+
 - **Module**: M22 Dream/Exploration
 - **Phase**: R5 (Counterfactual Thinking)
 - **Tables**: Reads st_epi, st_kg_edges; Writes st_prospective
@@ -12338,6 +12415,7 @@ class CausalPerturbationNetwork:
 **Purpose**: Predict future scenarios using Monte Carlo Tree Search over personal action space.
 
 **FamilyOS Grounding**:
+
 - **Module**: M22 Dream/Exploration
 - **Phase**: R5 (Forward Simulation)
 - **Tables**: Reads st_prospective (goals), st_procedural; Writes st_prospective
@@ -12476,6 +12554,7 @@ class TemporalProjectionMCTS:
 **Purpose**: Discover surprising connections between remote concepts using random walks and information theory.
 
 **FamilyOS Grounding**:
+
 - **Module**: M22 Dream/Exploration
 - **Phase**: R5 (Insight Generation)
 - **Tables**: Reads st_kg_dom, st_kg_edges, st_vec; Writes st_sem
@@ -12637,6 +12716,7 @@ class BisociativeGraphTraversal:
 **Purpose**: Optimize procedural routines using Temporal Difference Learning.
 
 **FamilyOS Grounding**:
+
 - **Module**: M22 Dream/Exploration
 - **Phase**: R5 (Motor Rehearsal)
 - **Tables**: Reads/writes st_procedural; Writes st_prospective (optimizations)
@@ -12782,6 +12862,7 @@ class TemporalDifferenceLearning:
 **Purpose**: Measure uncertainty in candidate distributions to prioritize questions.
 
 **FamilyOS Grounding**:
+
 - **Module**: P06 Active Learning (fed by P03)
 - **Phase**: Gap Detection (R4/R7)
 - **Tables**: Reads gap records from st_learning_queue
@@ -12864,6 +12945,7 @@ class ShannonEntropyCalculator:
 **Purpose**: Model confidence as probability distribution, not point estimate.
 
 **FamilyOS Grounding**:
+
 - **Module**: P06 Active Learning
 - **Phase**: Question response integration
 - **Tables**: Updates confidence in st_sem, st_kg_dom
@@ -12951,6 +13033,7 @@ class BetaConfidenceModel:
 **Purpose**: Prevent question fatigue by limiting questions per time window.
 
 **FamilyOS Grounding**:
+
 - **Module**: P06 Active Learning
 - **Phase**: Question emission control
 - **Tables**: Tracks in st_learning_queue
@@ -13051,6 +13134,7 @@ class TokenBucketRateLimiter:
 **Purpose**: Reconstruct incomplete memories using schema-based Bayesian inference with uncertainty quantification.
 
 **FamilyOS Grounding**:
+
 - **Module**: M22 Dream/Exploration
 - **Phase**: R5 (Episodic Simulation)
 - **Tables**: Reads st_epi, st_sem; Writes st_epi (versioned)
@@ -13201,6 +13285,7 @@ class SchematicPatternCompletion:
 **Purpose**: Space out retry attempts to avoid overwhelming failed services.
 
 **FamilyOS Grounding**:
+
 - **Module**: K0 RetryScheduler, OutboxProcessor
 - **Phase**: Error recovery (all phases)
 - **Tables**: Updates st_outbox.next_attempt_ts
@@ -13301,6 +13386,7 @@ class ExponentialBackoffScheduler:
 **Purpose**: Fairly allocate processing time across tenants/spaces based on priority weights.
 
 **FamilyOS Grounding**:
+
 - **Module**: K0 QoSScheduler, K1 Backpressure
 - **Phase**: All (scheduling)
 - **Tables**: N/A (runtime only)
@@ -13406,6 +13492,7 @@ class WeightedFairQueueScheduler:
 ---
 
 ## Changelog
+
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 2.0.0 | 2025-12-20 | K0 Team | Initial v2 draft with bidirectional reconciliation model |
@@ -13469,27 +13556,32 @@ class WeightedFairQueueScheduler:
 *Core idea: These are the primary K0 components P03 will directly use.*
 
 **BusDispatcher** (`k0/bus/core.py`):
+
 - Subscribe to entry topics via `dispatcher.subscribe(topic, handler)`
 - Topic-based routing with O(k) dispatch
 - BusMessage: `{topic, payload, offset, trace_id, space_id, metadata}`
 
 **CapabilityFabric** (`k0/fabric/fabric.py`):
+
 - Request/reply by capability name (not module name)
 - `fabric.invoke("score_salience", **kwargs)` routes to registered provider
 - Resolution strategies: PRIORITY, FIRST, ROUND_ROBIN
 - Timeout enforcement via ThreadPoolExecutor
 
 **PipelineRunner** (`k0/runtime/pipeline_runner.py`):
+
 - Generic DAG executor for YAML-declared pipelines
 - Topological execution with parallel stage groups
 - Enriched envelope propagation across stages
 
 **ModuleRegistry** (`k0/runtime/module_registry.py`):
+
 - Lookup modules by `module_id:version` (e.g., `hippocampus.pattern_separate:v1`)
 - Capability index for fabric-based lookup
 - Lazy loading of module implementations
 
 **PipelineScheduler** (`k0/scheduler/`):
+
 - Declarative triggers: INTERVAL, THRESHOLD, MANUAL, CRON (future), IDLE (future)
 - Register pipelines with trigger conditions
 - Fire pipeline execution on trigger events
@@ -13501,6 +13593,7 @@ class WeightedFairQueueScheduler:
 *Core idea: P02 demonstrates the canonical pattern for YAML-based pipelines.*
 
 **P02 Pipeline Contract** (`k0/contracts/pipelines/p02_write.v1.yaml`):
+
 ```yaml
 pipeline_id: P02_WRITE
 version: v1
@@ -13518,6 +13611,7 @@ dag:
 ```
 
 **P02 Module Example** (`k0/modules/hippocampus/pattern_separate.py`):
+
 ```python
 async def run(message: Any, context: Any, **config) -> dict[str, Any]:
     # Extract envelope from config or message.payload
@@ -13539,6 +13633,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 *Core idea: P03 needs two pipeline variants: a triggered consolidation and a continuous incremental pipeline.*
 
 **P03_CONSOLIDATE (Batch Mode)**:
+
 - Trigger: INTERVAL (every 90 min) + THRESHOLD (st_hipp_events pending >= 500) + MANUAL
 - Entry: `p03.consolidation.trigger.v1` (synthetic event from scheduler)
 - Exit: `p03.consolidation.complete.v1`
@@ -13546,6 +13641,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 - Required caps: 15+ storage capabilities (read/write across all memory tables)
 
 **P03_INCREMENTAL (Future, Optional)**:
+
 - Trigger: Event-driven (each `p02.write.complete.v1`)
 - Lightweight: Only importance scoring, no full reconciliation
 - Defers heavy work to batch consolidation
@@ -13583,10 +13679,12 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 *Core idea: Well-defined topic contracts for inter-pipeline communication.*
 
 **Entry Topics** (P03 subscribes):
+
 - `p03.consolidation.trigger.v1` - Scheduler-initiated batch cycle
 - `p02.write.complete.v1` - (Optional) Incremental scoring trigger
 
 **Exit Topics** (P03 emits):
+
 - `p03.consolidation.complete.v1` - Batch cycle completion
 - `p03.phase.complete.v1` - Per-phase progress (R0 through R8)
 - `p03.episode.formed.v1` - New episode created
@@ -13636,6 +13734,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 **Level 0**: stage_00_select_batch (sequential, must complete first)
 
 **Level 1 (parallel)**:
+
 - stage_10_importance_score
 - stage_11_hebbian_update
 
@@ -13644,17 +13743,20 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 **Level 3**: stage_21_episode_builder
 
 **Level 4 (parallel)**:
+
 - stage_30_simhash_dedup
 - stage_31_decay_scorer
 - stage_40_entity_extractor
 
 **Level 5 (parallel)**:
+
 - stage_32_prune_decider (depends on 30,31)
 - stage_41_relationship_builder (depends on 40)
 
 **Level 6**: stage_42_causal_inference
 
 **Level 7 (parallel R5)**:
+
 - stage_50_counterfactual
 - stage_51_forward_sim
 - stage_52_insight_gen
@@ -13672,6 +13774,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 *Core idea: Each stage needs a module contract YAML and implementation file.*
 
 **Contract Pattern** (`k0/contracts/modules/consolidation.<module>.v1.yaml`):
+
 ```yaml
 module_id: consolidation.<module_name>
 version: v1
@@ -13685,6 +13788,7 @@ failure_modes: [...]
 ```
 
 **Implementation Pattern** (`k0/modules/consolidation/<module>.py`):
+
 ```python
 async def run(message: Any, context: Any, **config) -> dict[str, Any]:
     envelope = config.get("envelope") or parse_payload(message)
@@ -14074,6 +14178,9 @@ class Syscalls:
 
 *Core idea: Use version columns to prevent lost updates.*
 
+> **PostgreSQL Migration Note** (2025-01): Updated to use PostgreSQL `$N` parameter
+> placeholders (asyncpg style) and native `RETURNING` clause for atomic read-back.
+
 ```python
 # In status_updater module
 async def update_event_status(
@@ -14081,25 +14188,31 @@ async def update_event_status(
     event_id: str,
     new_status: str,
     expected_version: int
-) -> bool:
+) -> tuple[bool, int | None]:
     """
     Update event status with optimistic locking.
 
-    Returns True if update succeeded, False if version mismatch.
+    Returns (True, new_version) if update succeeded,
+            (False, None) if version mismatch.
+
+    Uses PostgreSQL RETURNING clause for atomic version read-back.
     """
     result = await context.syscalls.execute(
-        \"\"\"
+        """
         UPDATE st_hipp_events
-        SET consolidation_status = ?,
+        SET consolidation_status = $1,
             version = version + 1,
-            updated_at = ?
-        WHERE event_id = ?
-        AND version = ?
-        \"\"\",
+            updated_at = $2
+        WHERE event_id = $3
+        AND version = $4
+        RETURNING version
+        """,
         [new_status, int(time.time()), event_id, expected_version]
     )
 
-    return result.rows_affected == 1
+    if result.rows:
+        return True, result.rows[0]["version"]
+    return False, None
 ```
 
 ---
@@ -14743,7 +14856,7 @@ async def test_contract_matches_implementation(contract_file):
 | Canonical Key | Type | Default | Description |
 |---------------|------|---------|-------------|
 | `p03.schedule.enabled` | bool | true | Enable scheduled consolidation |
-| `p03.schedule.cron` | string | "0 3 * * *" | Cron schedule |
+| `p03.schedule.cron` | string | "0 3 ** *" | Cron schedule |
 | `p03.schedule.interval_seconds` | int | 5400 | Interval trigger (90 min) |
 | `p03.batch.size` | int | 1000 | Events per cycle |
 | `p03.batch.max_events_per_cycle` | int | 10000 | Hard cap |
@@ -14823,6 +14936,7 @@ async def test_contract_matches_implementation(contract_file):
 | k010.11-p03 | UltraBERT Data Consumption - P02 Pre-Computed NLP Outputs | 🎯 Draft | 3.3 | `docs/architecture/decisions-K0/pipelines/k010.11-ultrabert-data-consumption.md` |
 
 **ADR Status Legend** (per k0_architecture_master.md):
+
 - 📝 Draft: Initial writing, gathering feedback
 - 👀 Review: Under formal review
 - 🎯 Planning: Contracts defined, ready for implementation
@@ -14932,6 +15046,7 @@ def validate_threshold_config(config: P03ThresholdConfig) -> List[str]:
 ### F.7 Testing Requirements
 
 Each threshold must have:
+
 - [ ] Unit test verifying boundary conditions
 - [ ] Integration test with golden dataset
 - [ ] Performance test verifying no regression when threshold changes
@@ -15246,10 +15361,15 @@ class R8Output:
 
 ### G.4 Error Recovery Matrix
 
+> **PostgreSQL Migration Note** (2025-01): Updated error types for asyncpg.
+> `DB_LOCKED` replaced with `LOCK_TIMEOUT` (PostgreSQL `55P03` / asyncpg `LockNotAvailableError`).
+> See `k0/drivers/postgres.py` for error handling patterns.
+
 | Phase | Error Type | Recovery Strategy | Max Retries | Backoff |
 |-------|------------|-------------------|-------------|---------|
 | R0 | DB_TIMEOUT | Retry with backoff | 3 | Exponential |
-| R0 | DB_LOCKED | Wait and retry | 5 | Linear |
+| R0 | LOCK_TIMEOUT | Wait and retry (pg_advisory_lock timeout) | 5 | Linear |
+| R0 | POOL_EXHAUSTED | Queue, wait for connection | 3 | Exponential |
 | R1 | P08_UNAVAILABLE | Use cached embeddings | 1 | N/A |
 | R1 | EMBEDDING_TIMEOUT | Skip event, log | 0 | N/A |
 | R2 | CLUSTER_TIMEOUT | Reduce batch, retry | 2 | N/A |
@@ -15257,7 +15377,9 @@ class R8Output:
 | R4 | NER_TIMEOUT | Skip entities, continue | 0 | N/A |
 | R5 | MCTS_TIMEOUT | Skip R5, continue | 0 | N/A |
 | R6 | VERSION_CONFLICT | Re-read, re-stage | 3 | Immediate |
+| R6 | UNIQUE_VIOLATION | Check existing, skip/merge | 1 | Immediate |
 | R7 | TRANSACTION_FAIL | Full cycle retry | 3 | Exponential |
+| R7 | SERIALIZATION_FAIL | Retry with fresh read | 3 | Immediate |
 | R8 | BUS_UNAVAILABLE | Queue locally, retry | 10 | Exponential |
 
 ---

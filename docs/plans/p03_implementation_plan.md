@@ -679,7 +679,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 
 5. **Consequences**:
    - At-least-once event delivery guaranteed
-   - Transactions never span tables (SQLite limitation)
+   - PostgreSQL supports cross-table transactions within UoW
    - Ordering preserved within layer, not across
 
 **Cross-References**:
@@ -1105,14 +1105,14 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    - K0 lacks distributed locking primitive
    - P03 needs single-writer semantics per tenant/space
    - Other pipelines (P07 CRDT, P08 Embedding) need similar capability
-   - SQLite table-based locks work single-node only
+   - **PostgreSQL Migration (2025-01)**: Native advisory locks now available
 
 2. **Decision**:
    - Create `k0/sync/advisory_lock.py` with `AdvisoryLockService` class
-   - SQLite-based implementation using `st_advisory_locks` table
-   - Lock key pattern: `{pipeline_id}:{tenant_id}:{space_id}`
-   - TTL-based expiry with heartbeat extension
-   - Single-node architecture (consistent with K0 design)
+   - **PostgreSQL-based implementation using `pg_advisory_lock()` / `pg_try_advisory_lock()`**
+   - Lock key pattern: `{pipeline_id}:{tenant_id}:{space_id}` → hashed to bigint
+   - Session-scoped or transaction-scoped locks (configurable)
+   - Multi-node safe (PostgreSQL handles coordination)
 
 3. **API Design**:
 
@@ -1134,14 +1134,16 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    ```
 
 4. **Backend**:
-   - SQLite-based using `st_advisory_locks` table
-   - Atomic CAS pattern via INSERT/UPDATE with conflict handling
-   - Background cleanup task for stale locks
+   - **PostgreSQL native using `pg_advisory_lock()` functions**
+   - Session locks: `pg_advisory_lock(key)` / `pg_advisory_unlock(key)`
+   - Transaction locks: `pg_advisory_xact_lock(key)` (auto-release on commit/rollback)
+   - Try variants: `pg_try_advisory_lock(key)` returns boolean immediately
 
 5. **Consequences**:
    - P03, P07, P08 can use same locking primitive
-   - Single-node only (consistent with K0 architecture)
-   - Stale lock cleanup via background task
+   - **Multi-node safe** (PostgreSQL coordinates across connections)
+   - No cleanup needed for transaction-scoped locks (auto-release)
+   - Session locks require explicit release or connection close
 
 **Cross-References**:
 - Dossier Section 4.10.2: Advisory Lock Service
@@ -1405,9 +1407,9 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 2. **Factory Function**:
 
    ```python
-   def create_lock_service() -> AdvisoryLockService:
-       """Create SQLite-based advisory lock service."""
-       return SqliteAdvisoryLockService()
+   def create_lock_service(pool: asyncpg.Pool) -> AdvisoryLockService:
+       """Create PostgreSQL-based advisory lock service."""
+       return PostgresAdvisoryLockService(pool)
    ```
 
 **Acceptance Criteria**:
@@ -1417,88 +1419,92 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 - [ ] Factory function implemented
 - [ ] Type hints complete
 
-#### Issue 0.4.2: Create SQLite Lock Backend
+#### Issue 0.4.2: Create PostgreSQL Lock Backend
 
-**File**: `k0/sync/backends/sqlite_lock.py`
+**File**: `k0/sync/backends/postgres_lock.py`
+
+> **PostgreSQL Migration Note** (2025-01): Uses native `pg_advisory_lock()` functions.
+> No migration needed - PostgreSQL advisory locks are built-in.
 
 **What to Implement**:
 
-1. **Migration for st_advisory_locks**:
-
-   ```sql
-   -- Migration: 0043_advisory_locks.sql
-   CREATE TABLE st_advisory_locks (
-       lock_key TEXT PRIMARY KEY,
-       holder_id TEXT NOT NULL,
-       acquired_at INTEGER NOT NULL,
-       expires_at INTEGER NOT NULL,
-       heartbeat_at INTEGER NOT NULL,
-       metadata_json TEXT
-   );
-
-   CREATE INDEX idx_advisory_locks_expires ON st_advisory_locks(expires_at);
-   ```
-
-2. **SQLite Implementation**:
+1. **Lock Key Hashing** (string → bigint for pg_advisory_lock):
 
    ```python
-   class SqliteAdvisoryLockService:
-       def __init__(self, connection_pool: ConnectionPool | None = None):
-           self._pool = connection_pool
+   import hashlib
+
+   def _hash_lock_key(lock_key: str) -> int:
+       """Convert string lock key to bigint for pg_advisory_lock."""
+       # Use first 8 bytes of SHA256 as signed 64-bit int
+       h = hashlib.sha256(lock_key.encode()).digest()[:8]
+       return int.from_bytes(h, byteorder='big', signed=True)
+   ```
+
+2. **PostgreSQL Implementation**:
+
+   ```python
+   class PostgresAdvisoryLockService:
+       def __init__(self, pool: asyncpg.Pool):
+           self._pool = pool
 
        async def acquire(
            self, lock_key: str, holder_id: str, ttl_seconds: int = 300
        ) -> LockResult:
-           now = int(time.time())
-           expires_at = now + ttl_seconds
+           lock_id = _hash_lock_key(lock_key)
 
-           async with self._connection() as conn:
-               # Try insert first (no existing lock)
+           async with self._pool.acquire() as conn:
+               # Try to acquire lock (non-blocking)
+               acquired = await conn.fetchval(
+                   "SELECT pg_try_advisory_lock($1)",
+                   lock_id
+               )
+
+               if acquired:
+                   return LockResult(acquired=True, lock_id=lock_key, holder_id=holder_id)
+               return LockResult(acquired=False, lock_id=lock_key, holder_id=None)
+
+       async def acquire_blocking(
+           self, lock_key: str, holder_id: str, timeout_ms: int = 30000
+       ) -> LockResult:
+           lock_id = _hash_lock_key(lock_key)
+
+           async with self._pool.acquire() as conn:
+               # Set statement timeout for blocking acquire
+               await conn.execute(f"SET statement_timeout = {timeout_ms}")
                try:
-                   conn.execute(
-                       "INSERT INTO st_advisory_locks VALUES (?, ?, ?, ?, ?, NULL)",
-                       (lock_key, holder_id, now, expires_at, now)
-                   )
-                   return LockResult(acquired=True, lock_id=lock_key, ...)
-               except sqlite3.IntegrityError:
-                   pass
+                   await conn.execute("SELECT pg_advisory_lock($1)", lock_id)
+                   return LockResult(acquired=True, lock_id=lock_key, holder_id=holder_id)
+               except asyncpg.QueryCanceledError:
+                   return LockResult(acquired=False, lock_id=lock_key, error="timeout")
 
-               # Check if existing lock is expired
-               row = conn.execute(
-                   "SELECT holder_id, expires_at FROM st_advisory_locks WHERE lock_key = ?",
-                   (lock_key,)
-               ).fetchone()
-
-               if row and row[1] < now:  # Expired
-                   conn.execute(
-                       "UPDATE st_advisory_locks SET holder_id=?, acquired_at=?, expires_at=?, heartbeat_at=? WHERE lock_key=?",
-                       (holder_id, now, expires_at, now, lock_key)
-                   )
-                   return LockResult(acquired=True, ...)
-
-               return LockResult(acquired=False, holder_id=row[0], ...)
+       async def release(self, lock_key: str, holder_id: str) -> bool:
+           lock_id = _hash_lock_key(lock_key)
+           async with self._pool.acquire() as conn:
+               return await conn.fetchval(
+                   "SELECT pg_advisory_unlock($1)",
+                   lock_id
+               )
    ```
 
-3. **Stale Lock Cleanup**:
+3. **Transaction-Scoped Locks** (auto-release on commit/rollback):
 
    ```python
-   async def cleanup_stale_locks(self, grace_period_seconds: int = 300) -> int:
-       """Remove locks expired beyond grace period. Returns count removed."""
-       cutoff = int(time.time()) - grace_period_seconds
-       async with self._connection() as conn:
-           cursor = conn.execute(
-               "DELETE FROM st_advisory_locks WHERE expires_at < ?",
-               (cutoff,)
-           )
-           return cursor.rowcount
+   async def acquire_xact(self, lock_key: str) -> bool:
+       """Acquire transaction-scoped lock (auto-releases on commit/rollback)."""
+       lock_id = _hash_lock_key(lock_key)
+       # Must be called within a transaction context
+       return await self._conn.fetchval(
+           "SELECT pg_try_advisory_xact_lock($1)",
+           lock_id
+       )
    ```
 
 **Acceptance Criteria**:
 
-- [ ] Migration 0043 created
-- [ ] SqliteAdvisoryLockService implements all Protocol methods
-- [ ] CAS pattern for lock acquisition
-- [ ] Stale lock cleanup implemented
+- [ ] PostgresAdvisoryLockService implements all Protocol methods
+- [ ] Lock key hashing to bigint implemented
+- [ ] Both blocking and non-blocking acquire supported
+- [ ] Transaction-scoped locks for R7 writes
 - [ ] Unit tests for all lock scenarios
 
 #### Issue 0.4.3: Create Lock Service Tests
@@ -1525,7 +1531,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 **Acceptance Criteria**:
 
 - [ ] All test scenarios implemented
-- [ ] Tests for SQLite backend
+- [ ] Tests for PostgreSQL backend
 - [ ] Concurrency tests with asyncio
 - [ ] 100% coverage on lock service
 
@@ -1973,6 +1979,8 @@ def build_versioned_update(
     """
     Build UPDATE SQL with version check.
 
+    > **PostgreSQL Migration Note** (2025-01): Uses $N placeholder style.
+
     Example:
         sql, params = build_versioned_update(
             table="st_epi",
@@ -1980,15 +1988,23 @@ def build_versioned_update(
             where_columns={"episode_id": "ep_123", "version": 5}
         )
         # Returns:
-        # UPDATE st_epi SET episode_summary=?, updated_at=?, version=version+1
-        # WHERE episode_id=? AND version=?
+        # UPDATE st_epi SET episode_summary=$1, updated_at=$2, version=version+1
+        # WHERE episode_id=$3 AND version=$4
+        # RETURNING version
     """
-    set_parts = [f"{col}=?" for col in set_columns.keys()]
+    param_idx = 1
+    set_parts = []
+    for col in set_columns.keys():
+        set_parts.append(f"{col}=${param_idx}")
+        param_idx += 1
     set_parts.append(f"{version_column}={version_column}+1")
 
-    where_parts = [f"{col}=?" for col in where_columns.keys()]
+    where_parts = []
+    for col in where_columns.keys():
+        where_parts.append(f"{col}=${param_idx}")
+        param_idx += 1
 
-    sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {' AND '.join(where_parts)}"
+    sql = f"UPDATE {table} SET {', '.join(set_parts)} WHERE {' AND '.join(where_parts)} RETURNING {version_column}"
     params = tuple(set_columns.values()) + tuple(where_columns.values())
 
     return sql, params
@@ -2073,7 +2089,7 @@ async def execute_versioned_update_with_retry(
 
 - [ ] All test scenarios implemented
 - [ ] Concurrent update simulation
-- [ ] Integration with real SQLite
+- [ ] Integration with PostgreSQL (asyncpg)
 - [ ] 100% coverage on new code
 
 ---
@@ -5095,48 +5111,48 @@ embedding_cache:
     max_prewarm: 10000
 ```
 
-#### Issue 1.8.4: Define SQLite PRAGMA Configuration
+#### Issue 1.8.4: Define PostgreSQL Session Configuration
 
-**File**: `k0/config/consolidation/sqlite_pragmas.yaml`
+**File**: `k0/config/consolidation/postgres_session.yaml`
 
-**SQLite Optimization** (per Section 15.6):
+> **PostgreSQL Migration Note** (2025-01): Replaces SQLite PRAGMA settings.
+> PostgreSQL uses GUC (Grand Unified Configuration) via SET commands.
+
+**PostgreSQL Optimization** (per Section 15.6):
 
 ```yaml
-sqlite_pragmas:
-  # Journal mode for crash safety with performance
-  journal_mode: WAL
+postgres_session:
+  # Work memory for complex sorts/joins (per operation)
+  work_mem: "64MB"
 
-  # Synchronous mode (NORMAL = good balance)
-  synchronous: NORMAL
+  # Maintenance operations (VACUUM, CREATE INDEX)
+  maintenance_work_mem: "128MB"
 
-  # Cache size in pages (negative = KB)
-  cache_size: -64000  # 64MB cache
+  # Statement timeout for long-running queries
+  statement_timeout: "60s"
 
-  # Memory-mapped I/O size
-  mmap_size: 268435456  # 256MB
+  # Lock timeout for advisory locks
+  lock_timeout: "30s"
 
-  # Temp store in memory
-  temp_store: MEMORY
+  # Idle transaction timeout
+  idle_in_transaction_session_timeout: "5min"
 
-  # Page size (must match existing DB)
-  page_size: 4096
+  # Random page cost (adjust for SSD)
+  random_page_cost: 1.1
 
-  # Busy timeout for locks
-  busy_timeout: 30000  # 30 seconds
-
-  # Foreign keys (required for cascades)
-  foreign_keys: ON
-
-  # Auto-vacuum mode
-  auto_vacuum: INCREMENTAL
+  # Effective cache size hint to planner
+  effective_cache_size: "1GB"
 ```
 
-**Apply on Connection**:
+**Apply on Connection** (via asyncpg pool init):
 
 ```python
-async def configure_connection(conn: aiosqlite.Connection):
-    for pragma, value in PRAGMAS.items():
-        await conn.execute(f"PRAGMA {pragma} = {value}")
+async def configure_connection(conn: asyncpg.Connection):
+    """Apply session-level PostgreSQL settings."""
+    await conn.execute("SET work_mem = '64MB'")
+    await conn.execute("SET statement_timeout = '60s'")
+    await conn.execute("SET lock_timeout = '30s'")
+    await conn.execute("SET idle_in_transaction_session_timeout = '5min'")
 ```
 
 #### Issue 1.8.5: Define Memory Pressure Handlers
@@ -5754,7 +5770,7 @@ memory_pressure_response:
 
 **Fixtures Needed**:
 
-- `mock_db`: In-memory SQLite with `st_consolidation_locks` schema
+- `mock_db`: Test PostgreSQL database with `st_consolidation_locks` schema
 - `lock_manager`: ConsolidationLockManager instance
 - `test_tenant_id`, `test_space_id`: Standard test identifiers
 
@@ -8016,10 +8032,10 @@ memory_pressure_response:
      AND (r.valid_to IS NULL OR r.valid_to >= $query_time)
    RETURN a, r, b
 
-   // SQLite st_kg_edges equivalent
+   // PostgreSQL st_kg_edges equivalent
    SELECT * FROM st_kg_edges
-   WHERE valid_from <= ?
-     AND (valid_to IS NULL OR valid_to >= ?)
+   WHERE valid_from <= $1
+     AND (valid_to IS NULL OR valid_to >= $2)
    ```
 
 5. **Neo4jKGDriver Integration**
@@ -8475,12 +8491,13 @@ memory_pressure_response:
            {"event_id": d.event_id, "hamming_distance": d.distance}
            for d in duplicates
        ])
+       # PostgreSQL $N placeholder style
        await db.execute("""
            UPDATE st_hipp_events
-           SET near_duplicates_json = ?,
-               novelty_score = ?,
-               is_near_duplicate = ?
-           WHERE event_id = ?
+           SET near_duplicates_json = $1,
+               novelty_score = $2,
+               is_near_duplicate = $3
+           WHERE event_id = $4
        """, [near_dups, novelty, len(duplicates) > 0, event_id])
    ```
 
@@ -8523,13 +8540,14 @@ memory_pressure_response:
    async def assign_clusters(
        assignments: List[ClusterAssignment]
    ):
+       # PostgreSQL $N placeholder style with executemany
        for batch in chunk(assignments, 100):
            await db.executemany("""
                UPDATE st_hipp_events
-               SET episode_cluster_id = ?,
-                   cluster_confidence = ?,
-                   clustering_version = ?
-               WHERE event_id = ?
+               SET episode_cluster_id = $1,
+                   cluster_confidence = $2,
+                   clustering_version = $3
+               WHERE event_id = $4
            """, [(a.cluster_id, a.confidence, a.version, a.event_id)
                  for a in batch])
    ```
@@ -8834,14 +8852,15 @@ memory_pressure_response:
        source_event_id: str,
        txn: Transaction
    ):
+       # PostgreSQL $N placeholder style, jsonb_insert for array append
        await txn.execute("""
            UPDATE st_sem SET
                observation_count = observation_count + 1,
-               confidence_score = MIN(0.99, confidence_score + (1 - confidence_score) * 0.1),
-               last_observed_at = ?,
+               confidence_score = LEAST(0.99, confidence_score + (1 - confidence_score) * 0.1),
+               last_observed_at = $1,
                decay_factor = 1.0,
-               source_episodes_json = json_insert(source_episodes_json, '$[#]', ?)
-           WHERE pattern_id = ?
+               source_episodes_json = source_episodes_json || to_jsonb($2::text)
+           WHERE pattern_id = $3
        """, [now(), source_event_id, pattern_id])
    ```
 
@@ -8937,14 +8956,14 @@ memory_pressure_response:
        interaction_sentiment: float,
        txn: Transaction
    ):
-       # Hebbian learning: strength approaches 1.0 with interactions
+       # PostgreSQL $N placeholder style, Hebbian learning
        await txn.execute("""
            UPDATE st_social SET
                interaction_count = interaction_count + 1,
                relationship_strength = relationship_strength + 0.1 * (1 - relationship_strength),
-               avg_sentiment = (avg_sentiment * interaction_count + ?) / (interaction_count + 1),
-               last_interaction_at = ?
-           WHERE actor_a_id = ? AND actor_b_id = ? AND is_canonical = TRUE
+               avg_sentiment = (avg_sentiment * interaction_count + $1) / (interaction_count + 1),
+               last_interaction_at = $2
+           WHERE actor_a_id = $3 AND actor_b_id = $4 AND is_canonical = TRUE
        """, [interaction_sentiment, now(), actor_a, actor_b])
    ```
 
@@ -9037,13 +9056,13 @@ memory_pressure_response:
        new_aliases: List[str],
        txn: Transaction
    ):
-       # Append new aliases to existing
+       # PostgreSQL jsonb_set for JSON updates, $N placeholder style
        await txn.execute("""
            UPDATE st_kg_dom SET
-               aliases_json = json_patch(aliases_json, ?),
+               aliases_json = aliases_json || $1::jsonb,
                observation_count = observation_count + 1,
-               last_observed_at = ?
-           WHERE entity_id = ?
+               last_observed_at = $2
+           WHERE entity_id = $3
        """, [json.dumps({"names": new_aliases}), now(), entity_id])
    ```
 
@@ -9058,7 +9077,7 @@ memory_pressure_response:
    - Enables historical queries
 
 6. **Integration with Neo4jKGDriver**
-   - SQLite st_kg_dom is source of truth
+   - **PostgreSQL st_kg_dom is source of truth**
    - Neo4j updated via outbox pattern
    - Sync on write, not on read
 
@@ -9088,13 +9107,14 @@ memory_pressure_response:
        learning_rate: float = 0.1,
        txn: Transaction
    ):
+       # PostgreSQL $N placeholder style
        await txn.execute("""
            UPDATE st_kg_edges SET
-               edge_weight = edge_weight + ? * (? - edge_weight),
-               co_occurrence_count = ?,
+               edge_weight = edge_weight + $1 * ($2 - edge_weight),
+               co_occurrence_count = $3,
                observation_count = observation_count + 1,
-               last_observed_at = ?
-           WHERE edge_id = ?
+               last_observed_at = $4
+           WHERE edge_id = $5
        """, [learning_rate, co_occurrence, co_occurrence, now(), edge_id])
    ```
 
@@ -9141,12 +9161,13 @@ memory_pressure_response:
        reason: str,
        txn: Transaction
    ):
+       # PostgreSQL $N placeholder style
        # Mark for re-indexing by P08
        await txn.execute("""
            UPDATE st_vec SET
                status = 'STALE',
-               updated_at = ?
-           WHERE embedding_id = ?
+               updated_at = $1
+           WHERE embedding_id = $2
        """, [now(), embedding_id])
    ```
 
@@ -11501,7 +11522,7 @@ memory_pressure_response:
    - Track regression vs baseline
 
 4. **Environment Requirements**:
-   - Isolated test database (SQLite or Postgres)
+   - Isolated test database (PostgreSQL)
    - Disabled DEBUG logging
    - Disabled P03_FF_OBSERVABILITY_VERBOSE
 
@@ -11813,52 +11834,48 @@ memory_pressure_response:
 
 ---
 
-#### Issue 8.2.7: SQLite PRAGMA Optimization Test
+#### Issue 8.2.7: PostgreSQL Connection Pool Performance Test
+
+> **PostgreSQL Migration Note** (2025-01): Replaces SQLite PRAGMA tests.
+> Tests asyncpg pool configuration and session settings.
 
 **What to Cover**:
 
-1. **PRAGMA Settings** (per Dossier Section 15.6):
+1. **Pool Settings** (per k0/config/postgres.py PostgresSettings):
 
    ```python
    @pytest.mark.performance
-   async def test_sqlite_pragma_optimization(self, db_session):
-       """Verify PRAGMA settings improve performance."""
-       # Expected PRAGMA settings
-       expected_pragmas = {
-           'journal_mode': 'WAL',
-           'cache_size': '10000',
-           'mmap_size': '268435456',  # 256MB
-           'synchronous': 'NORMAL',
-           'temp_store': 'MEMORY',
-       }
+   async def test_postgres_pool_configuration(self, db_pool):
+       """Verify PostgreSQL pool settings are optimal."""
+       # Verify pool size
+       assert db_pool.get_min_size() >= 5
+       assert db_pool.get_max_size() <= 25
 
-       for pragma, expected_value in expected_pragmas.items():
-           result = await db_session.execute(f"PRAGMA {pragma}")
-           actual = result.scalar()
-           assert str(actual).upper() == str(expected_value).upper(), (
-               f"PRAGMA {pragma}={actual}, expected {expected_value}"
-           )
+       # Verify session settings on acquired connection
+       async with db_pool.acquire() as conn:
+           result = await conn.fetchval("SHOW work_mem")
+           assert result == "64MB", f"work_mem={result}, expected 64MB"
 
-   async def test_wal_vs_delete_journal_performance(self, pipeline, p03_fixtures):
-       """Verify WAL mode provides write performance improvement."""
+           result = await conn.fetchval("SHOW statement_timeout")
+           assert result == "60s", f"statement_timeout={result}, expected 60s"
+
+   async def test_connection_reuse_performance(self, db_pool, p03_fixtures):
+       """Verify connection pooling provides performance benefit."""
        events = p03_fixtures.create_random_events(n=1000)
 
-       # Measure with WAL (default)
-       await pipeline.storage.execute("PRAGMA journal_mode=WAL")
-       start_wal = time.perf_counter()
-       await pipeline.storage.insert_hipp_events(events)
-       elapsed_wal = time.perf_counter() - start_wal
+       # Measure with pooled connections
+       start_pooled = time.perf_counter()
+       async with db_pool.acquire() as conn:
+           for event in events:
+               await conn.execute(
+                   "INSERT INTO st_hipp_events (event_id, data) VALUES ($1, $2)",
+                   event.id, event.data
+               )
+       elapsed_pooled = time.perf_counter() - start_pooled
 
-       # Clear and measure with DELETE mode
-       await pipeline.storage.clear_all()
-       await pipeline.storage.execute("PRAGMA journal_mode=DELETE")
-       start_delete = time.perf_counter()
-       await pipeline.storage.insert_hipp_events(events)
-       elapsed_delete = time.perf_counter() - start_delete
-
-       # WAL should be faster for concurrent writes
-       assert elapsed_wal < elapsed_delete * 0.8, (
-           f"WAL mode not faster: {elapsed_wal:.2f}s vs {elapsed_delete:.2f}s"
+       # Connection pooling should be efficient
+       assert elapsed_pooled < 5.0, (
+           f"Pooled insert too slow: {elapsed_pooled:.2f}s for 1000 events"
        )
    ```
 
@@ -12293,8 +12310,9 @@ memory_pressure_response:
 
        async def test_required_indexes_exist(self, db_session):
            """Verify required indexes are present."""
+           # PostgreSQL pg_indexes catalog query
            result = await db_session.execute(
-               "SELECT name FROM sqlite_master WHERE type='index'"
+               "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
            )
            indexes = {row[0] for row in result.fetchall()}
 
@@ -12657,9 +12675,14 @@ memory_pressure_response:
 
 1. **Environment Variables** (per Dossier Section 16):
 
+   > **PostgreSQL Migration Note** (2025-01): Database path replaced with PostgreSQL settings.
+   > Connection settings inherited from K0 kernel (`K0_POSTGRES_*` prefix).
+
    | Variable | Default | Description |
    |----------|---------|-------------|
-   | `P03_DB_PATH` | `/data/p03.db` | SQLite database path |
+   | `K0_POSTGRES_HOST` | `localhost` | PostgreSQL host (via k0/config/postgres.py) |
+   | `K0_POSTGRES_PORT` | `5432` | PostgreSQL port |
+   | `K0_POSTGRES_DB` | `k0_kernel` | Database name |
    | `P03_CYCLE_INTERVAL_MINUTES` | `90` | Sleep cycle interval |
    | `P03_BATCH_SIZE` | `1000` | Events per batch |
    | `P03_LOG_LEVEL` | `INFO` | Logging level |
@@ -13195,10 +13218,14 @@ memory_pressure_response:
    kubectl logs -l app=p03-consolidation | grep "r7_write_error"
 
    # 2. Check database disk space
-   df -h /data/p03.db
+   df -h /var/lib/postgresql/data
 
-   # 3. Check for table locks
-   sqlite3 /data/p03.db "SELECT * FROM sqlite_master WHERE type='table';"
+   # 3. Check for blocking queries and locks
+   psql -h $K0_POSTGRES_HOST -U $K0_POSTGRES_USER -d $K0_POSTGRES_DB -c "
+     SELECT pid, usename, state, query, wait_event_type, wait_event
+     FROM pg_stat_activity
+     WHERE state != 'idle' AND datname = current_database();
+   "
 
    # 4. Check outbox status
    python -c "from k0.outbox import check_outbox; check_outbox()"
@@ -13325,8 +13352,14 @@ memory_pressure_response:
    # 1. Identify slowest phase
    SELECT phase, AVG(duration_seconds) FROM p03_phase_metrics GROUP BY phase ORDER BY AVG DESC;
 
-   # 2. Check for slow queries
-   sqlite3 /data/p03.db ".timer on" < slow_query_check.sql
+   # 2. Check for slow queries (requires pg_stat_statements extension)
+   psql -h $K0_POSTGRES_HOST -U $K0_POSTGRES_USER -d $K0_POSTGRES_DB -c "
+     SELECT query, calls, mean_exec_time, total_exec_time
+     FROM pg_stat_statements
+     WHERE query LIKE '%st_%'
+     ORDER BY mean_exec_time DESC
+     LIMIT 10;
+   "
 
    # 3. Check embedding query latency (P08)
    histogram_quantile(0.95, p08_query_duration_seconds_bucket)
@@ -14010,7 +14043,7 @@ memory_pressure_response:
 - Migration: st_consolidation_audit, st_dlq P03 entries, v1→v2 backfill
 - ADR: k010.11 UltraBERT Data Consumption
 - Issue 8.1.6: Error Recovery Integration Tests
-- Issues 8.2.5-8.2.7: QoS, Embedding, SQLite performance tests
+- Issues 8.2.5-8.2.7: QoS, Embedding, PostgreSQL performance tests
 - Issues 6.3.9-6.3.10: Optimistic Locking, Confidence Merging
 - Runbooks: RB-P03-001 through RB-P03-011 with specific IDs
 
