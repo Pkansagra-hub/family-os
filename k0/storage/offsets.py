@@ -1,15 +1,15 @@
-"""Subscriber offset storage."""
+"""Subscriber offset storage - Async PostgreSQL."""
 
 from __future__ import annotations
 
-import asyncio
-import sqlite3
-import threading
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Iterator
+from typing import TYPE_CHECKING, AsyncIterator
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(slots=True)
@@ -22,51 +22,51 @@ class Offset:
     updated_ts: str
 
 
-@contextmanager
-def _resolve_connection(
-    connection: sqlite3.Connection | None,
-) -> Iterator[sqlite3.Connection]:
+@asynccontextmanager
+async def _resolve_connection(
+    connection: asyncpg.Connection | None,
+) -> AsyncIterator[asyncpg.Connection]:
+    """Resolve connection from provided or pool."""
     if connection is not None:
         yield connection
         return
 
-    with connection_scope() as pooled_connection:
+    async with connection_scope() as pooled_connection:
         yield pooled_connection
-        pooled_connection.commit()
 
 
 class OffsetStore:
-    """Persistence surface for subscriber offsets."""
+    """Persistence surface for subscriber offsets - PostgreSQL."""
 
-    def __init__(self) -> None:
-        # Gap 32: RLock protects concurrent offset read/write operations
-        self._lock = threading.RLock()
+    async def upsert(
+        self,
+        record: Offset,
+        *,
+        connection: asyncpg.Connection | None = None,
+    ) -> None:
+        """Upsert a subscriber offset.
 
-    async def upsert(self, record: Offset, *, connection: sqlite3.Connection | None = None) -> None:
-        """Async wrapper for upserting offsets."""
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._upsert_sync, record, connection)
-
-    def _upsert_sync(self, record: Offset, connection: sqlite3.Connection | None = None) -> None:
-        # Gap 32: Serialize concurrent offset updates with RLock
-        with self._lock:
-            with _resolve_connection(connection) as conn:
-                conn.execute(
-                    (
-                        "INSERT INTO st_offsets (subscriber_id, topic, space_id, tenant_id, offset, updated_ts) "
-                        "VALUES (?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(subscriber_id, topic, space_id, tenant_id) DO UPDATE SET "
-                        "offset=excluded.offset, updated_ts=excluded.updated_ts"
-                    ),
-                    (
-                        record.subscriber_id,
-                        record.topic,
-                        record.space_id,
-                        record.tenant_id,
-                        record.offset,
-                        record.updated_ts,
-                    ),
-                )
+        Args:
+            record: Offset record to persist
+            connection: Optional existing connection
+        """
+        async with _resolve_connection(connection) as conn:
+            await conn.execute(
+                """
+                INSERT INTO st_offsets (
+                    subscriber_id, topic, space_id, tenant_id, "offset", updated_ts
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (subscriber_id, topic, space_id, tenant_id) DO UPDATE SET
+                    "offset" = EXCLUDED."offset",
+                    updated_ts = EXCLUDED.updated_ts
+                """,
+                record.subscriber_id,
+                record.topic,
+                record.space_id,
+                record.tenant_id,
+                record.offset,
+                record.updated_ts,
+            )
 
     async def fetch(
         self,
@@ -75,39 +75,41 @@ class OffsetStore:
         space_id: str,
         tenant_id: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> Offset | None:
-        """Async wrapper for fetching offsets."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            None, self._fetch_sync, subscriber_id, topic, space_id, tenant_id, connection
-        )
+        """Fetch a subscriber offset.
 
-    def _fetch_sync(
-        self,
-        subscriber_id: str,
-        topic: str,
-        space_id: str,
-        tenant_id: str,
-        connection: sqlite3.Connection | None = None,
-    ) -> Offset | None:
-        # Gap 32: Serialize concurrent offset reads with RLock
-        with self._lock:
-            with _resolve_connection(connection) as conn:
-                row = conn.execute(
-                    (
-                        "SELECT subscriber_id, topic, space_id, tenant_id, offset, updated_ts "
-                        "FROM st_offsets WHERE subscriber_id=? AND topic=? AND space_id=? AND tenant_id=?"
-                    ),
-                    (subscriber_id, topic, space_id, tenant_id),
-                ).fetchone()
-                if row is None:
-                    return None
-                return Offset(
-                    subscriber_id=row["subscriber_id"],
-                    topic=row["topic"],
-                    space_id=row["space_id"],
-                    tenant_id=row["tenant_id"],
-                    offset=row["offset"],
-                    updated_ts=row["updated_ts"],
-                )
+        Args:
+            subscriber_id: Subscriber identifier
+            topic: Topic name
+            space_id: Space identifier
+            tenant_id: Tenant identifier
+            connection: Optional existing connection
+
+        Returns:
+            Offset if found, None otherwise
+        """
+        async with _resolve_connection(connection) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT subscriber_id, topic, space_id, tenant_id, "offset", updated_ts
+                FROM st_offsets
+                WHERE subscriber_id = $1 AND topic = $2 AND space_id = $3 AND tenant_id = $4
+                """,
+                subscriber_id,
+                topic,
+                space_id,
+                tenant_id,
+            )
+
+        if row is None:
+            return None
+
+        return Offset(
+            subscriber_id=row["subscriber_id"],
+            topic=row["topic"],
+            space_id=row["space_id"],
+            tenant_id=row["tenant_id"],
+            offset=row["offset"],
+            updated_ts=str(row["updated_ts"]) if row["updated_ts"] else "",
+        )

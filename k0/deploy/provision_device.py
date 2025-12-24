@@ -4,7 +4,7 @@ Device Provisioning Script for K0 Kernel
 
 This script provisions devices in the K0 kernel by:
 1. Validating device credentials
-2. Registering device in SQLite database
+2. Registering device in PostgreSQL database
 3. Setting up role-based access control
 4. Verifying provisioning with test command
 
@@ -17,55 +17,44 @@ Usage:
         --band GREEN \
         --public-key "MCowBQYDK2VwAyEA..." \
         [--kernel-url http://localhost:8080] \
-        [--db-path /path/to/k0_kernel.db]
+        [--db-url postgresql://user:pass@host:5432/k0_kernel]
 """
 
 import argparse
+import asyncio
 import json
-import sqlite3
+import os
 import sys
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
+from typing import Optional
+
+import asyncpg
 
 
 class K0DeviceProvisioner:
     """Provisions devices in K0 kernel."""
 
-    def __init__(self, db_path=None):
+    def __init__(self, db_url: Optional[str] = None):
         """
         Initialize provisioner.
 
         Args:
-            db_path: Path to K0 SQLite database
+            db_url: PostgreSQL connection URL
         """
-        if db_path is None:
-            # Auto-detect database location
-            db_path = self._find_database()
-
-        self.db_path = Path(db_path)
-        if not self.db_path.exists():
-            raise FileNotFoundError(f"Database not found: {self.db_path}")
+        if db_url is None:
+            db_url = os.getenv(
+                "K0_DATABASE_URL", "postgresql://k0_user:k0_password@localhost:5432/k0_kernel"
+            )
+        self.db_url = db_url
 
     @staticmethod
-    def _find_database():
-        """Find K0 database in docker volume or local path."""
-        # Try common locations
-        candidates = [
-            Path("d:/familyos/k0_runtime.sqlite3"),
-            Path("/data/k0_kernel.db"),
-            Path("./k0_runtime.sqlite3"),
-        ]
-
-        for path in candidates:
-            if path.exists():
-                return path
-
-        raise FileNotFoundError(
-            "Could not find K0 database. Specify with --db-path or "
-            "ensure docker-compose is running"
+    def _get_default_db_url() -> str:
+        """Get default database URL from environment."""
+        return os.getenv(
+            "K0_DATABASE_URL", "postgresql://k0_user:k0_password@localhost:5432/k0_kernel"
         )
 
-    def provision_device(self, device_id, tenant_id, space_id, roles, band, public_key):
+    async def provision_device(self, device_id, tenant_id, space_id, roles, band, public_key):
         """
         Provision device in K0 kernel.
 
@@ -90,11 +79,11 @@ class K0DeviceProvisioner:
 
         # Check if device already exists
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            conn = await asyncpg.connect(self.db_url)
 
-            cursor.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,))
-            existing = cursor.fetchone()
+            existing = await conn.fetchrow(
+                "SELECT device_id FROM devices WHERE device_id = $1", device_id
+            )
 
             if existing:
                 print(f"⚠️  Device already provisioned: {device_id}")
@@ -102,38 +91,35 @@ class K0DeviceProvisioner:
                 response = input().strip().lower()
 
                 if response != "y":
-                    conn.close()
+                    await conn.close()
                     return {"status": "SKIPPED", "device_id": device_id}
 
                 # Delete existing device
-                cursor.execute("DELETE FROM devices WHERE device_id = ?", (device_id,))
-                conn.commit()
+                await conn.execute("DELETE FROM devices WHERE device_id = $1", device_id)
                 print("   ✅ Deleted existing device")
 
             # Insert new device
-            cursor.execute(
+            await conn.execute(
                 """
                 INSERT INTO devices (
                     tenant_id, space_id, device_id, public_key, roles, band, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
-                (
-                    tenant_id,
-                    space_id,
-                    device_id,
-                    public_key,
-                    roles,
-                    band,
-                    "ACTIVE",
-                    datetime.utcnow().isoformat(),
-                ),
+                tenant_id,
+                space_id,
+                device_id,
+                public_key,
+                roles,
+                band,
+                "ACTIVE",
+                datetime.now(timezone.utc).isoformat(),
             )
-            conn.commit()
 
             # Verify provisioning
-            cursor.execute("SELECT * FROM devices WHERE device_id = ?", (device_id,))
-            device_record = cursor.fetchone()
-            conn.close()
+            device_record = await conn.fetchrow(
+                "SELECT * FROM devices WHERE device_id = $1", device_id
+            )
+            await conn.close()
 
             if not device_record:
                 raise RuntimeError("Device provisioning failed: not found after insert")
@@ -146,13 +132,13 @@ class K0DeviceProvisioner:
                 "roles": roles,
                 "band": band,
                 "public_key_prefix": public_key[:20] + "...",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
 
-        except sqlite3.Error as e:
+        except asyncpg.PostgresError as e:
             return {"status": "FAILED", "error": f"Database error: {str(e)}"}
 
-    def list_devices(self, tenant_id=None):
+    async def list_devices(self, tenant_id=None):
         """
         List provisioned devices.
 
@@ -163,35 +149,32 @@ class K0DeviceProvisioner:
             List of device records
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            conn = await asyncpg.connect(self.db_url)
 
             if tenant_id:
-                cursor.execute(
+                devices = await conn.fetch(
                     """
                     SELECT device_id, tenant_id, space_id, roles, band, status, created_at
-                    FROM devices WHERE tenant_id = ? ORDER BY created_at DESC
+                    FROM devices WHERE tenant_id = $1 ORDER BY created_at DESC
                     """,
-                    (tenant_id,),
+                    tenant_id,
                 )
             else:
-                cursor.execute(
+                devices = await conn.fetch(
                     """
                     SELECT device_id, tenant_id, space_id, roles, band, status, created_at
                     FROM devices ORDER BY created_at DESC
                     """
                 )
 
-            devices = cursor.fetchall()
-            conn.close()
-
+            await conn.close()
             return devices
 
-        except sqlite3.Error as e:
+        except asyncpg.PostgresError as e:
             print(f"❌ Error listing devices: {str(e)}")
             return []
 
-    def delete_device(self, device_id):
+    async def delete_device(self, device_id):
         """
         Delete provisioned device.
 
@@ -202,26 +185,26 @@ class K0DeviceProvisioner:
             Dictionary with deletion result
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            conn = await asyncpg.connect(self.db_url)
 
             # Check if exists
-            cursor.execute("SELECT device_id FROM devices WHERE device_id = ?", (device_id,))
-            if not cursor.fetchone():
-                conn.close()
+            existing = await conn.fetchrow(
+                "SELECT device_id FROM devices WHERE device_id = $1", device_id
+            )
+            if not existing:
+                await conn.close()
                 return {"status": "FAILED", "error": f"Device not found: {device_id}"}
 
             # Delete device
-            cursor.execute("DELETE FROM devices WHERE device_id = ?", (device_id,))
-            conn.commit()
-            conn.close()
+            await conn.execute("DELETE FROM devices WHERE device_id = $1", device_id)
+            await conn.close()
 
             return {"status": "SUCCESS", "device_id": device_id}
 
-        except sqlite3.Error as e:
+        except asyncpg.PostgresError as e:
             return {"status": "FAILED", "error": f"Database error: {str(e)}"}
 
-    def verify_provisioning(self, device_id):
+    async def verify_provisioning(self, device_id):
         """
         Verify device is properly provisioned.
 
@@ -232,38 +215,36 @@ class K0DeviceProvisioner:
             Dictionary with verification result
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
+            conn = await asyncpg.connect(self.db_url)
 
-            cursor.execute(
+            device = await conn.fetchrow(
                 """
                 SELECT device_id, tenant_id, space_id, roles, band, status, created_at
-                FROM devices WHERE device_id = ?
+                FROM devices WHERE device_id = $1
                 """,
-                (device_id,),
+                device_id,
             )
-            device = cursor.fetchone()
-            conn.close()
+            await conn.close()
 
             if not device:
                 return {"status": "FAILED", "error": f"Device not found: {device_id}"}
 
             return {
                 "status": "SUCCESS",
-                "device_id": device[0],
-                "tenant_id": device[1],
-                "space_id": device[2],
-                "roles": device[3],
-                "band": device[4],
-                "status": device[5],
-                "created_at": device[6],
+                "device_id": device["device_id"],
+                "tenant_id": device["tenant_id"],
+                "space_id": device["space_id"],
+                "roles": device["roles"],
+                "band": device["band"],
+                "status": device["status"],
+                "created_at": device["created_at"],
             }
 
-        except sqlite3.Error as e:
+        except asyncpg.PostgresError as e:
             return {"status": "FAILED", "error": f"Database error: {str(e)}"}
 
 
-def main():
+async def async_main():
     parser = argparse.ArgumentParser(
         description="Provision devices in K0 kernel",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -282,23 +263,23 @@ def main():
     provision_cmd.add_argument("--band", required=True, help="Privacy band (GREEN, AMBER, RED)")
     provision_cmd.add_argument("--public-key", required=True, help="Ed25519 public key")
     provision_cmd.add_argument(
-        "--db-path", help="Path to K0 SQLite database (auto-detected if omitted)"
+        "--db-url", help="PostgreSQL connection URL (or set K0_DATABASE_URL env var)"
     )
 
     # List command
     list_cmd = subparsers.add_parser("list", help="List provisioned devices")
     list_cmd.add_argument("--tenant-id", help="Filter by tenant ID")
-    list_cmd.add_argument("--db-path", help="Path to K0 SQLite database")
+    list_cmd.add_argument("--db-url", help="PostgreSQL connection URL")
 
     # Verify command
     verify_cmd = subparsers.add_parser("verify", help="Verify device provisioning")
     verify_cmd.add_argument("--device-id", required=True, help="Device ID to verify")
-    verify_cmd.add_argument("--db-path", help="Path to K0 SQLite database")
+    verify_cmd.add_argument("--db-url", help="PostgreSQL connection URL")
 
     # Delete command
     delete_cmd = subparsers.add_parser("delete", help="Delete provisioned device")
     delete_cmd.add_argument("--device-id", required=True, help="Device ID to delete")
-    delete_cmd.add_argument("--db-path", help="Path to K0 SQLite database")
+    delete_cmd.add_argument("--db-url", help="PostgreSQL connection URL")
 
     args = parser.parse_args()
 
@@ -311,10 +292,11 @@ def main():
             return 1
 
     try:
-        provisioner = K0DeviceProvisioner(db_path=args.db_path)
+        db_url = getattr(args, "db_url", None)
+        provisioner = K0DeviceProvisioner(db_url=db_url)
 
         if args.command == "provision":
-            result = provisioner.provision_device(
+            result = await provisioner.provision_device(
                 device_id=args.device_id,
                 tenant_id=args.tenant_id,
                 space_id=args.space_id,
@@ -340,7 +322,7 @@ def main():
                 return 1
 
         elif args.command == "list":
-            devices = provisioner.list_devices(tenant_id=args.tenant_id)
+            devices = await provisioner.list_devices(tenant_id=args.tenant_id)
 
             if not devices:
                 print("No devices found")
@@ -353,16 +335,16 @@ def main():
             print("=" * 100)
 
             for device in devices:
-                device_id, tenant_id, space_id, roles, band, status, _ = device
                 print(
-                    f"{device_id:<30} {tenant_id:<15} {space_id:<15} {roles:<20} {band:<8} {status:<10}"
+                    f"{device['device_id']:<30} {device['tenant_id']:<15} {device['space_id']:<15} "
+                    f"{device['roles']:<20} {device['band']:<8} {device['status']:<10}"
                 )
 
             print("=" * 100)
             return 0
 
         elif args.command == "verify":
-            result = provisioner.verify_provisioning(device_id=args.device_id)
+            result = await provisioner.verify_provisioning(device_id=args.device_id)
 
             if result["status"] == "SUCCESS":
                 print("\n✅ Device provisioning verified!")
@@ -380,7 +362,7 @@ def main():
                 print("Cancelled")
                 return 0
 
-            result = provisioner.delete_device(device_id=args.device_id)
+            result = await provisioner.delete_device(device_id=args.device_id)
 
             if result["status"] == "SUCCESS":
                 print(f"✅ Device deleted: {result['device_id']}")
@@ -389,12 +371,16 @@ def main():
                 print(f"❌ Deletion failed: {result['error']}")
                 return 1
 
-    except FileNotFoundError as e:
-        print(f"❌ Error: {str(e)}")
-        return 1
     except Exception as e:
         print(f"❌ Unexpected error: {str(e)}")
         return 1
+
+    return 0
+
+
+def main():
+    """Sync entry point for CLI."""
+    return asyncio.run(async_main())
 
 
 if __name__ == "__main__":

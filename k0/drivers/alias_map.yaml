@@ -1,15 +1,15 @@
 # Default driver alias bindings. Update alongside qos/config changes.
 aliases:
-  st_epi: sqlite
-  st_sem: sqlite
-  st_ws: sqlite
+  st_epi: postgres
+  st_sem: postgres
+  st_ws: postgres
   st_fts: fts5
   st_vector: faiss
   st_emb: embedding_queue
   st_kg_dom: neo4j_driver  # Neo4j native graph database (ADR-0081)
   st_blob: blob_localfs
   # Traffic generator test drivers (burn-in/load testing)
-  traffic-gen: sqlite
+  traffic-gen: postgres
   # Event bus drivers (outbox → external systems)
   outbox_sse: sse_outbox_driver  # Publishes outbox events to SSE subscribers (telemetry, monitoring)
   internal_bus: internal_bus_driver  # Publishes outbox events to internal bus (inter-pipeline communication)

@@ -1,19 +1,18 @@
-"""Storage cohort adapters for WAL, receipts, offsets, outbox, and replay."""
+"""Storage cohort adapters for WAL, receipts, offsets, outbox, and replay.
+
+This module provides storage adapters for envelope persistence.
+"""
 
 from __future__ import annotations
 
 from .dlq import DeadLetterQueue
-from .offsets import OffsetStore
 from .obligations import ObligationRecord, ObligationStore
+from .offsets import OffsetStore
 from .outbox import OutboxStore
 from .provisioning import ProvisionedDevice, ProvisioningLedger
 from .receipts import ReceiptStore
 from .replayer import Replayer, ReplayError
-from .shard_promotion import (
-    ShardPromotionCoordinator,
-    ShardPromotionError,
-    ShardPromotionResult,
-)
+from .shard_promotion import ShardPromotionCoordinator, ShardPromotionError, ShardPromotionResult
 from .snapshots import SnapshotError, SnapshotManifest, SnapshotScheduler
 from .wal import WriteAheadLog
 

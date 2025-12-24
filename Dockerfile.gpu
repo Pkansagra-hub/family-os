@@ -12,6 +12,7 @@ LABEL org.opencontainers.image.vendor="FamilyOS"
 
 # Install Python 3.10 and system dependencies (Ubuntu 22.04 ships with Python 3.10)
 # gcc + libc6-dev + python3-dev required for PyTorch Triton JIT compilation on GPU
+# libpq-dev required for asyncpg PostgreSQL driver
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     python3 \
@@ -19,7 +20,8 @@ RUN apt-get update && \
     python3-venv \
     python3-dev \
     curl \
-    sqlite3 \
+    libpq-dev \
+    postgresql-client \
     tzdata \
     gcc \
     libc6-dev \
@@ -65,10 +67,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
     CMD curl -f http://localhost:8080/healthz || exit 1
 
-# Environment defaults - enable CUDA
+# Environment defaults - PostgreSQL mode
 ENV K0_LOG_LEVEL=INFO \
-    K0_DB_PATH=/data/k0_kernel.db \
-    K0_DB_WAL_MODE=true \
+    K0_USE_POSTGRESQL=true \
     PYTHONUNBUFFERED=1 \
     CUDA_VISIBLE_DEVICES=0 \
     ONNX_PROVIDERS=CUDAExecutionProvider

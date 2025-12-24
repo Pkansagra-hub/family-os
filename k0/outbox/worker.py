@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from importlib import import_module
-from typing import Callable, Dict, Optional, Protocol, cast
+from typing import Awaitable, Callable, Dict, Optional, Protocol, Union, cast
 
 from k0.drivers.alias_map import AliasMap
 from k0.storage.dlq import DeadLetter, DeadLetterQueue
@@ -23,16 +24,25 @@ class OutboxDriver(Protocol):
     def apply(self, entry: OutboxEntry) -> None: ...
 
 
-def load_driver_from_alias_map(alias_map: AliasMap) -> Callable[[str], OutboxDriver]:
-    """Return a driver loader that resolves aliases via *alias_map*."""
+def load_driver_from_alias_map(
+    alias_map: AliasMap,
+) -> Callable[[str], Awaitable[OutboxDriver]]:
+    """Return an async driver loader that resolves aliases via *alias_map*.
 
-    def _loader(alias: str) -> OutboxDriver:
+    Handles both sync and async build_driver() factories.
+    """
+
+    async def _loader(alias: str) -> OutboxDriver:
         driver_key = alias_map.resolve(alias)
         module = import_module(f"k0.drivers.{driver_key}")
         driver: object | None = None
         builder = getattr(module, "build_driver", None)
         if callable(builder):
-            driver = builder()
+            # Handle both sync and async build_driver factories
+            if asyncio.iscoroutinefunction(builder):
+                driver = await builder()
+            else:
+                driver = builder()
         else:
             driver_cls = getattr(module, "Driver", None)
             if driver_cls is not None:
@@ -64,7 +74,7 @@ class OutboxWorker:
         outbox_store: OutboxStore,
         dead_letter_queue: DeadLetterQueue,
         retry_scheduler: RetryScheduler,
-        driver_loader: Callable[[str], OutboxDriver],
+        driver_loader: Callable[[str], Union[OutboxDriver, Awaitable[OutboxDriver]]],
         metrics_emitter: MetricsEmitter | None = None,
         clock: Callable[[], datetime] | None = None,
         batch_size: int = 128,
@@ -85,13 +95,19 @@ class OutboxWorker:
         self._max_retry_attempts = max_retry_attempts
 
     def process_driver(self, alias: str, *, limit: Optional[int] = None) -> None:
-        """Drain pending outbox entries for the given driver alias."""
+        """Drain pending outbox entries for the given driver alias (sync, for tests)."""
+        import asyncio
 
-        driver = self._get_driver(alias)
+        asyncio.run(self.process_driver_async(alias, limit=limit))
+
+    async def process_driver_async(self, alias: str, *, limit: Optional[int] = None) -> None:
+        """Drain pending outbox entries for the given driver alias (async-native)."""
+
+        driver = await self._get_driver(alias)
         batch_limit = limit or self._batch_size
 
-        # Use new backoff-aware dequeue method
-        entries = self._outbox_store.dequeue_ready_batch(alias, limit=batch_limit)
+        # Async-native dequeue - no event loop bridging needed
+        entries = await self._outbox_store.dequeue_ready_batch(alias, limit=batch_limit)
         if not entries:
             return
 
@@ -99,29 +115,44 @@ class OutboxWorker:
             if entry.id is None:
                 continue
             try:
-                driver.apply(entry)
+                # Handle both sync and async apply methods
+                result = driver.apply(entry)
+                if asyncio.iscoroutine(result):
+                    await result
             except Exception as error:  # noqa: BLE001
-                self._handle_failure(alias, entry, error)
+                await self._handle_failure_async(alias, entry, error)
             else:
-                self._outbox_store.mark_applied(entry.id)
+                await self._outbox_store.mark_applied(entry.id)
                 self._emit_metric("outbox_apply_total", 1.0, outcome="success", driver=alias)
 
-    def _get_driver(self, alias: str) -> OutboxDriver:
+    async def _get_driver(self, alias: str) -> OutboxDriver:
         driver = self._drivers.get(alias)
         if driver is not None:
             return driver
-        driver = self._driver_loader(alias)
+        result = self._driver_loader(alias)
+        # Handle both sync and async driver loaders
+        if asyncio.iscoroutine(result):
+            driver = await result
+        else:
+            driver = result
         self._drivers[alias] = driver
         return driver
 
     def _handle_failure(self, alias: str, entry: OutboxEntry, error: Exception) -> None:
+        """Sync wrapper for tests - calls async version via asyncio.run."""
+        import asyncio
+
+        asyncio.run(self._handle_failure_async(alias, entry, error))
+
+    async def _handle_failure_async(self, alias: str, entry: OutboxEntry, error: Exception) -> None:
+        """Handle failure async-natively."""
         message = str(error)
         if len(message) > 512:
             message = message[:512]
         decision = self._retry_scheduler.decide(entry)
 
         if decision.action == "retry":
-            self._outbox_store.record_failure(
+            await self._outbox_store.record_failure(
                 entry,
                 retries=decision.retries,
                 requeue_seq=decision.requeue_seq,
@@ -189,7 +220,7 @@ class OutboxWorker:
         # if DLQ replay fails.
         # Old code (BUG): self._outbox_store.mark_applied(entry.id)
         # However, we DO need to update the status to DEAD to prevent re-processing
-        self._outbox_store.record_failure(
+        await self._outbox_store.record_failure(
             entry,
             retries=decision.retries,
             requeue_seq=entry.requeue_seq,

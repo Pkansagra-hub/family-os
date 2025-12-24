@@ -1,13 +1,15 @@
-"""Persistence adapter for policy obligation log (ADR-0089)."""
+"""Persistence adapter for policy obligation log (ADR-0089) - Async PostgreSQL."""
 
 from __future__ import annotations
 
-import sqlite3
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Iterable, Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterable
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(slots=True)
@@ -23,126 +25,167 @@ class ObligationRecord:
     id: int | None = None
 
 
-@contextmanager
-def _resolve_connection(
-    connection: sqlite3.Connection | None,
-) -> Iterator[sqlite3.Connection]:
+@asynccontextmanager
+async def _resolve_connection(
+    connection: asyncpg.Connection | None,
+) -> AsyncIterator[asyncpg.Connection]:
+    """Resolve connection from provided or pool."""
     if connection is not None:
         yield connection
         return
 
-    with connection_scope() as pooled_connection:
+    async with connection_scope() as pooled_connection:
         yield pooled_connection
-        pooled_connection.commit()
 
 
 class ObligationStore:
-    """Storage helper for persisting and fetching obligation log entries."""
+    """Storage helper for persisting and fetching obligation log entries - PostgreSQL."""
 
-    def save(
+    async def save(
         self,
         record: ObligationRecord,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> int:
-        with _resolve_connection(connection) as conn:
-            cursor = conn.execute(
-                (
-                    "INSERT INTO st_obligation_log (wal_pos, obligation, details_json, commit_ts, tenant_id, space_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?)"
-                ),
-                (
-                    record.wal_pos,
-                    record.obligation,
-                    record.details_json,
-                    record.commit_ts,
-                    record.tenant_id,
-                    record.space_id,
-                ),
-            )
-            inserted_id = cursor.lastrowid
-            return int(inserted_id) if inserted_id is not None else -1
+        """Save an obligation record.
 
-    def bulk_save(
+        Args:
+            record: ObligationRecord to persist
+            connection: Optional existing connection
+
+        Returns:
+            The assigned obligation id
+        """
+        async with _resolve_connection(connection) as conn:
+            inserted_id = await conn.fetchval(
+                """
+                INSERT INTO st_obligation_log (
+                    wal_pos, obligation, details_json, commit_ts, tenant_id, space_id
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id
+                """,
+                record.wal_pos,
+                record.obligation,
+                record.details_json,
+                record.commit_ts,
+                record.tenant_id,
+                record.space_id,
+            )
+        return int(inserted_id) if inserted_id is not None else -1
+
+    async def bulk_save(
         self,
         records: Iterable[ObligationRecord],
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> None:
-        with _resolve_connection(connection) as conn:
-            tuples = [
-                (
-                    record.wal_pos,
-                    record.obligation,
-                    record.details_json,
-                    record.commit_ts,
-                    record.tenant_id,
-                    record.space_id,
-                )
-                for record in records
-            ]
-            if tuples:
-                conn.executemany(
-                    (
-                        "INSERT INTO st_obligation_log (wal_pos, obligation, details_json, commit_ts, tenant_id, space_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?)"
-                    ),
-                    tuples,
-                )
+        """Bulk save multiple obligation records.
 
-    def fetch_by_wal_pos(
+        Args:
+            records: Iterable of ObligationRecord to persist
+            connection: Optional existing connection
+        """
+        tuples = [
+            (
+                record.wal_pos,
+                record.obligation,
+                record.details_json,
+                record.commit_ts,
+                record.tenant_id,
+                record.space_id,
+            )
+            for record in records
+        ]
+        if not tuples:
+            return
+
+        async with _resolve_connection(connection) as conn:
+            await conn.executemany(
+                """
+                INSERT INTO st_obligation_log (
+                    wal_pos, obligation, details_json, commit_ts, tenant_id, space_id
+                ) VALUES ($1, $2, $3, $4, $5, $6)
+                """,
+                tuples,
+            )
+
+    async def fetch_by_wal_pos(
         self,
         wal_pos: int,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> list[ObligationRecord]:
-        with _resolve_connection(connection) as conn:
-            rows = conn.execute(
-                (
-                    "SELECT id, wal_pos, obligation, details_json, commit_ts, tenant_id, space_id "
-                    "FROM st_obligation_log WHERE wal_pos = ? ORDER BY id ASC"
-                ),
-                (wal_pos,),
-            ).fetchall()
-            return [
-                ObligationRecord(
-                    id=row["id"],
-                    wal_pos=row["wal_pos"],
-                    obligation=row["obligation"],
-                    details_json=row["details_json"],
-                    commit_ts=row["commit_ts"],
-                    tenant_id=row["tenant_id"],
-                    space_id=row["space_id"],
-                )
-                for row in rows
-            ]
+        """Fetch obligation records by WAL position.
 
-    def fetch_recent(
+        Args:
+            wal_pos: The WAL position to query
+            connection: Optional existing connection
+
+        Returns:
+            List of ObligationRecord objects
+        """
+        async with _resolve_connection(connection) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, wal_pos, obligation, details_json, commit_ts, tenant_id, space_id
+                FROM st_obligation_log
+                WHERE wal_pos = $1
+                ORDER BY id ASC
+                """,
+                wal_pos,
+            )
+
+        return [
+            ObligationRecord(
+                id=row["id"],
+                wal_pos=row["wal_pos"],
+                obligation=row["obligation"],
+                details_json=row["details_json"],
+                commit_ts=str(row["commit_ts"]) if row["commit_ts"] else "",
+                tenant_id=row["tenant_id"],
+                space_id=row["space_id"],
+            )
+            for row in rows
+        ]
+
+    async def fetch_recent(
         self,
         *,
         limit: int,
-        connection: sqlite3.Connection | None = None,
+        connection: asyncpg.Connection | None = None,
     ) -> list[ObligationRecord]:
-        with _resolve_connection(connection) as conn:
-            rows = conn.execute(
-                (
-                    "SELECT id, wal_pos, obligation, details_json, commit_ts, tenant_id, space_id "
-                    "FROM st_obligation_log ORDER BY id DESC LIMIT ?"
-                ),
-                (limit,),
-            ).fetchall()
-            return [
-                ObligationRecord(
-                    id=row["id"],
-                    wal_pos=row["wal_pos"],
-                    obligation=row["obligation"],
-                    details_json=row["details_json"],
-                    commit_ts=row["commit_ts"],
-                    tenant_id=row["tenant_id"],
-                    space_id=row["space_id"],
-                )
-                for row in rows
-            ]
+        """Fetch most recent obligation records.
+
+        Args:
+            limit: Maximum number of records to return
+            connection: Optional existing connection
+
+        Returns:
+            List of ObligationRecord objects ordered by id DESC
+        """
+        async with _resolve_connection(connection) as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, wal_pos, obligation, details_json, commit_ts, tenant_id, space_id
+                FROM st_obligation_log
+                ORDER BY id DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+
+        return [
+            ObligationRecord(
+                id=row["id"],
+                wal_pos=row["wal_pos"],
+                obligation=row["obligation"],
+                details_json=row["details_json"],
+                commit_ts=str(row["commit_ts"]) if row["commit_ts"] else "",
+                tenant_id=row["tenant_id"],
+                space_id=row["space_id"],
+            )
+            for row in rows
+        ]
 
 
 __all__ = ["ObligationRecord", "ObligationStore"]

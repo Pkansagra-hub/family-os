@@ -51,21 +51,20 @@ exit_topic: cognitive.vector.indexed.v1
 # ============================================================================
 
 triggers:
-  # Primary interval trigger: every 30 seconds for testing (production: 300s)
+  # Primary interval trigger: every 5 minutes (300s)
   - id: faiss_indexer_interval
     type: interval
-    interval_seconds: 30
+    interval_seconds: 300
     batch_size: 100
     catch_up_enabled: true
 
-  # Threshold trigger: when 5+ embeddings pending for READY status (testing)
-  # Production: threshold_count: 50
+  # Threshold trigger: when 50+ embeddings pending for READY status
   - id: faiss_indexer_threshold
     type: threshold
     table: st_vec
     condition: "status = 'READY'"
-    threshold_count: 5
-    check_interval_seconds: 10
+    threshold_count: 50
+    check_interval_seconds: 60
     batch_size: 50
 
   # Manual trigger: for admin-initiated indexing via CLI or API

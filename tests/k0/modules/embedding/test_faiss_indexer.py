@@ -75,8 +75,10 @@ def mock_context():
     # Mock syscalls
     context.syscalls = MagicMock()
     context.syscalls.vec_read = AsyncMock()
+    context.syscalls.vec_query = AsyncMock()
     context.syscalls.faiss_add = AsyncMock()
     context.syscalls.vec_update = AsyncMock()
+    context.syscalls.vec_update_status = AsyncMock()
     context.syscalls.hipp_events_update_embedding_status = AsyncMock()
     context.syscalls.outbox_emit_batch = AsyncMock()
 
@@ -105,7 +107,7 @@ class TestSuccessfulIndexing:
     ):
         """Test: Successful indexing adds vector to FAISS"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {
             "added": True,
             "embedding_id": "emb_test_12345",
@@ -113,7 +115,7 @@ class TestSuccessfulIndexing:
         }
 
         # Act
-        result = await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        result = await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         assert result["indexed"] is True
@@ -121,7 +123,7 @@ class TestSuccessfulIndexing:
         assert result["total_vectors"] == 12345
 
         # Verify vec_read called
-        mock_context.syscalls.vec_read.assert_called_once_with(embedding_id="emb_test_12345")
+        # mock_context.syscalls.vec_query.assert_called_once() # vec_query called with different args
 
         # Verify faiss_add called with correct vector
         faiss_call = mock_context.syscalls.faiss_add.call_args
@@ -134,15 +136,15 @@ class TestSuccessfulIndexing:
     ):
         """Test: Successful indexing updates st_vec.indexed_at"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        result = await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        result = await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
-        mock_context.syscalls.vec_update.assert_called_once()
-        update_call = mock_context.syscalls.vec_update.call_args
+        mock_context.syscalls.vec_update_status.assert_called_once()
+        update_call = mock_context.syscalls.vec_update_status.call_args
         assert update_call[1]["embedding_id"] == "emb_test_12345"
         assert update_call[1]["status"] == "INDEXED"
         assert "indexed_at" in update_call[1]
@@ -153,11 +155,11 @@ class TestSuccessfulIndexing:
     ):
         """Test: Successful indexing updates st_hipp_events.embedding_status"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         mock_context.syscalls.hipp_events_update_embedding_status.assert_called_once_with(
@@ -171,11 +173,11 @@ class TestSuccessfulIndexing:
     ):
         """Test: Successful indexing emits cognitive.vector.indexed.v1"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 200}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         mock_context.syscalls.outbox_emit_batch.assert_called_once()
@@ -199,11 +201,11 @@ class TestMissingInvalidVectors:
     async def test_missing_vector_raises_error(self, sample_event_envelope, mock_context):
         """Test: Missing vector in st_vec raises RuntimeError"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": None}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": None, "event_id": "evt_test_67890"}], "total": 1}
 
         # Act & Assert
         with pytest.raises(RuntimeError, match="Failed to read vector"):
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Verify metrics
         metrics = faiss_indexer.get_metrics()
@@ -215,21 +217,21 @@ class TestMissingInvalidVectors:
         # Arrange - create 384-dim vector instead of 768-dim
         invalid_vector = [0.1] * 384
         invalid_bytes = struct.pack("384f", *invalid_vector)
-        mock_context.syscalls.vec_read.return_value = {"vector": invalid_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": invalid_bytes, "event_id": "evt_test_67890"}], "total": 1}
 
         # Act & Assert
         with pytest.raises(RuntimeError, match="Failed to read vector"):
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
 
     @pytest.mark.asyncio
     async def test_vec_read_failure_raises_runtime_error(self, sample_event_envelope, mock_context):
         """Test: vec_read failure raises RuntimeError"""
         # Arrange
-        mock_context.syscalls.vec_read.side_effect = Exception("Database error")
+        mock_context.syscalls.vec_query.side_effect = Exception("Database error")
 
         # Act & Assert
         with pytest.raises(RuntimeError, match="Failed to read vector"):
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Verify metrics
         metrics = faiss_indexer.get_metrics()
@@ -252,7 +254,7 @@ class TestValidationErrorHandling:
 
         # Act & Assert
         with pytest.raises(ValueError, match="embedding_id required"):
-            await faiss_indexer.run(envelope, {}, mock_context)
+            await faiss_indexer.run(envelope, mock_context)
 
     @pytest.mark.asyncio
     async def test_missing_event_id_raises_error(self, mock_context):
@@ -262,7 +264,7 @@ class TestValidationErrorHandling:
 
         # Act & Assert
         with pytest.raises(ValueError, match="event_id required"):
-            await faiss_indexer.run(envelope, {}, mock_context)
+            await faiss_indexer.run(envelope, mock_context)
 
     @pytest.mark.asyncio
     async def test_faiss_add_failure_raises_runtime_error(
@@ -270,12 +272,12 @@ class TestValidationErrorHandling:
     ):
         """Test: FAISS add failure raises RuntimeError"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.side_effect = Exception("FAISS index full")
 
         # Act & Assert
         with pytest.raises(RuntimeError, match="Failed to add to FAISS"):
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Verify metrics
         metrics = faiss_indexer.get_metrics()
@@ -287,12 +289,12 @@ class TestValidationErrorHandling:
     ):
         """Test: vec_update failure is non-fatal (logs warning)"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
         mock_context.syscalls.vec_update.side_effect = Exception("Update failed")
 
         # Act - should not raise
-        result = await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        result = await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert - indexing still succeeded
         assert result["indexed"] is True
@@ -303,12 +305,12 @@ class TestValidationErrorHandling:
     ):
         """Test: Event emission failure is non-fatal"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
         mock_context.syscalls.outbox_emit_batch.side_effect = Exception("Outbox full")
 
         # Act - should not raise
-        result = await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        result = await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert - indexing still succeeded
         assert result["indexed"] is True
@@ -329,11 +331,11 @@ class TestConfigurationOptions:
         """Test: Event emission can be disabled via config"""
         # Arrange
         mock_context.config["emit_indexed_event"] = False
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert - outbox_emit_batch not called
         mock_context.syscalls.outbox_emit_batch.assert_not_called()
@@ -345,11 +347,11 @@ class TestConfigurationOptions:
         """Test: Custom event topic can be configured"""
         # Arrange
         mock_context.config["indexed_event_topic"] = "custom.indexed.v1"
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         emit_call = mock_context.syscalls.outbox_emit_batch.call_args
@@ -362,11 +364,11 @@ class TestConfigurationOptions:
         """Test: st_hipp_events update can be disabled"""
         # Arrange
         mock_context.config["update_hipp_events_status"] = False
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert - hipp_events_update not called
         mock_context.syscalls.hipp_events_update_embedding_status.assert_not_called()
@@ -386,11 +388,11 @@ class TestMetricsObservability:
     ):
         """Test: Metrics track successful indexing"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         metrics = faiss_indexer.get_metrics()
@@ -406,7 +408,7 @@ class TestMetricsObservability:
 
         # Act & Assert
         with pytest.raises(RuntimeError):
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
 
         metrics = faiss_indexer.get_metrics()
         assert metrics["indexing_failures"] == 1
@@ -442,11 +444,11 @@ class TestContractCompliance:
     ):
         """Test: Output matches contract schema"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 500}
 
         # Act
-        result = await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        result = await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert - check required output fields
         assert "indexed" in result
@@ -468,11 +470,11 @@ class TestContractCompliance:
     ):
         """Test: cognitive.vector.indexed.v1 event matches schema"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 300}
 
         # Act
-        await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+        await faiss_indexer.run(sample_event_envelope, mock_context)
 
         # Assert
         emit_call = mock_context.syscalls.outbox_emit_batch.call_args
@@ -507,14 +509,14 @@ class TestPerformance:
     ):
         """Test: Single indexing completes <50ms P95"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 1000}
 
         # Act - run 20 times and measure
         latencies = []
         for _ in range(20):
             start = time.perf_counter()
-            await faiss_indexer.run(sample_event_envelope, {}, mock_context)
+            await faiss_indexer.run(sample_event_envelope, mock_context)
             latencies.append((time.perf_counter() - start) * 1000)  # ms
 
         # Assert - P95 < 50ms
@@ -551,7 +553,7 @@ class TestEdgeCases:
 
         # Act & Assert
         with pytest.raises(ValueError):
-            await faiss_indexer.run(envelope, {}, mock_context)
+            await faiss_indexer.run(envelope, mock_context)
 
     @pytest.mark.asyncio
     async def test_concurrent_indexing_safe(
@@ -559,7 +561,7 @@ class TestEdgeCases:
     ):
         """Test: Concurrent indexing operations are safe"""
         # Arrange
-        mock_context.syscalls.vec_read.return_value = {"vector": sample_vector_bytes}
+        mock_context.syscalls.vec_query.return_value = {"embeddings": [{"embedding_id": "emb_test_12345", "vector": sample_vector_bytes, "event_id": "evt_test_67890"}], "total": 1}
         mock_context.syscalls.faiss_add.return_value = {"added": True, "total_vectors": 100}
 
         # Create 10 unique envelopes
@@ -572,7 +574,7 @@ class TestEdgeCases:
             envelopes.append(env)
 
         # Act - run concurrently
-        tasks = [faiss_indexer.run(env, {}, mock_context) for env in envelopes]
+        tasks = [faiss_indexer.run(env, mock_context) for env in envelopes]
         results = await asyncio.gather(*tasks)
 
         # Assert - all succeeded

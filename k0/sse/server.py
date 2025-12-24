@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import secrets
-import sqlite3
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import TYPE_CHECKING, Any, Mapping, cast
 
 import yaml
 from fastapi import HTTPException, status
@@ -18,6 +17,9 @@ from k0.obs import ObservabilityEmitter
 from k0.qos import QoSContext
 from k0.storage.offsets import Offset, OffsetStore
 from k0.storage.wal import WalEntry, WriteAheadLog
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(slots=True)
@@ -58,7 +60,7 @@ class SSEServer:
     observability: ObservabilityEmitter
     acl_path: Path
     qos: QoSContext
-    database_connection: sqlite3.Connection | None = None
+    database_connection: "asyncpg.Connection | None" = None
     max_batch: int = 128
 
     # Gap 25: Configurable SSE backpressure thresholds

@@ -1,15 +1,78 @@
 version: "3.8"
 
 services:
+  # =============================================================================
+  # PostgreSQL Database (Milestone 1.1.1)
+  # =============================================================================
+  postgres:
+    build: ./postgres
+    container_name: k0-postgres
+    environment:
+      POSTGRES_DB: k0_kernel
+      POSTGRES_USER: k0user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U k0user -d k0_kernel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - k0-local
+
+  # =============================================================================
+  # pgbouncer Connection Pooler (Milestone 1.1.2)
+  # =============================================================================
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    container_name: k0-pgbouncer
+    environment:
+      - DATABASES_HOST=postgres
+      - DATABASES_PORT=5432
+      - DATABASES_USER=k0user
+      - DATABASES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+      - DATABASES_DBNAME=k0_kernel
+      - PGBOUNCER_POOL_MODE=transaction
+      - PGBOUNCER_MAX_CLIENT_CONN=200
+      - PGBOUNCER_DEFAULT_POOL_SIZE=25
+      - PGBOUNCER_LISTEN_PORT=6432
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - k0-local
+
+  # =============================================================================
+  # K0 Kernel Application
+  # =============================================================================
   k0-kernel:
     image: k0-kernel-local:latest
     container_name: k0-kernel
     user: "0:0" # Run as root to fix Windows volume permission issues
     env_file:
       - ./env/k0.env
+    environment:
+      # PostgreSQL connection via pgbouncer (Milestone 1.1)
+      K0_POSTGRES_HOST: pgbouncer
+      K0_POSTGRES_PORT: "6432"
+      K0_POSTGRES_DB: k0_kernel
+      K0_POSTGRES_USER: k0user
+      K0_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      K0_USE_POSTGRESQL: "true"
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     volumes:
       - ../:/app/k0 # Mount source code for hot reloading
-      - k0-data:/data # Docker volume for SQLite database
       - ./secrets:/secrets:ro
       # PEP Schema (core policy enforcement schema)
       - type: bind
@@ -88,7 +151,7 @@ services:
   #     - k0-local
 
 volumes:
-  k0-data: # Docker-managed volume for SQLite database
+  postgres-data: # Docker-managed volume for PostgreSQL data
   neo4j-data:
   neo4j-logs:
 

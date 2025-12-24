@@ -16,6 +16,8 @@ import pytest
 
 from k0.modules.builders import embedding_write
 
+pytest.skip("M23 embedding_write is deprecated and replaced by M16", allow_module_level=True)
+
 
 @pytest.fixture(autouse=True)
 def reset_module_metrics():

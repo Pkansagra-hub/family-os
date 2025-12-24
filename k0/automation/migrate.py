@@ -1,8 +1,12 @@
-"""SQLite migration runner for the K0 kernel storage schema.
+"""Alembic-based migration runner for the K0 kernel storage schema.
 
-This module provides forward and rollback migration support with dry-run validation
-and Prometheus telemetry. Migrations are applied in alphabetical order; rollbacks
-are applied in reverse order.
+This module provides a wrapper around Alembic for forward and rollback migration
+support with dry-run validation and Prometheus telemetry.
+
+Alembic Configuration:
+  - Config file: k0/db/alembic.ini
+  - Migrations: k0/db/alembic/versions/
+  - Environment: k0/db/alembic/env.py (async PostgreSQL)
 
 Telemetry (requires prometheus_client to be installed):
   - k0_migration_duration_seconds: Duration of migration application (histogram)
@@ -10,37 +14,39 @@ Telemetry (requires prometheus_client to be installed):
   - k0_migration_status: Last migration status (gauge: 1=success, 0=pending, -1=error)
 
 Example:
-  # Apply forward migrations
-  results = apply_migrations(Path("mydb.db"))
+  # Apply all pending migrations
+  results = apply_migrations()
 
-  # Dry-run rollback to version 0001
-  results = rollback_migration(
-      Path("mydb.db"),
-      target_version="0001",
-      dry_run=True,
-  )
+  # Apply migrations up to specific revision
+  results = apply_migrations(target_revision="abc123")
 
-  # Execute rollback to version 0001
-  results = rollback_migration(
-      Path("mydb.db"),
-      target_version="0001",
-      dry_run=False,
-  )
+  # Dry-run to see pending migrations
+  results = apply_migrations(dry_run=True)
+
+  # Rollback one revision
+  results = rollback_migration(steps=1)
+
+  # Rollback to specific revision
+  results = rollback_migration(target_revision="abc123")
 """
 
 from __future__ import annotations
 
-import hashlib
+import io
 import logging
-import re
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
+
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 LOGGER = logging.getLogger(__name__)
 
-_DEFAULT_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "contracts" / "sql" / "migrations"
+# Path to alembic.ini (relative to this file's location in k0/automation/)
+_ALEMBIC_INI_PATH = Path(__file__).resolve().parents[1] / "db" / "alembic.ini"
 
 # Prometheus telemetry (optional, graceful degradation if not installed)
 try:
@@ -70,480 +76,365 @@ class MigrationError(RuntimeError):
 
 @dataclass(slots=True)
 class MigrationResult:
-    """Represents the outcome of evaluating a migration file.
+    """Represents the outcome of a migration operation.
 
     Attributes
     ----------
-    version : str
-        Version identifier (e.g., "0001_baseline")
+    revision : str
+        Alembic revision identifier (e.g., "abc123def456")
     action : str
         One of {"applied", "rolled_back", "skipped", "pending"}
-    checksum : str
-        SHA256 hash of the migration script
-    path : Path
-        Filesystem path to the migration file
+    description : str
+        Human-readable description of the migration
     duration_seconds : float | None
         Time taken to apply/rollback migration, or None if skipped
-    rollback_script : str | None
-        Auto-generated rollback script, or None if forward migration
     """
 
-    version: str
+    revision: str
     action: str  # one of {"applied", "rolled_back", "skipped", "pending"}
-    checksum: str
-    path: Path
+    description: str
     duration_seconds: float | None = None
-    rollback_script: str | None = None
 
 
-def apply_migrations(
-    database_path: Path | str,
-    *,
-    migrations_path: Path | str | None = None,
-    dry_run: bool = False,
-    logger: logging.Logger | None = None,
-) -> list[MigrationResult]:
-    """Apply SQLite migrations to the provided database.
-
-    Migrations are applied in alphabetical order. Each migration is wrapped in a
-    transaction and recorded in the schema_migrations catalog.
+def _get_alembic_config(
+    alembic_ini_path: Optional[Path] = None,
+    capture_output: bool = False,
+) -> Config:
+    """Create Alembic Config object.
 
     Parameters
     ----------
-    database_path:
-        Filesystem path to the SQLite database file.
-    migrations_path:
-        Directory containing ``*.sql`` migration files. Defaults to the
-        repository's ``k0/contracts/sql/migrations`` directory.
+    alembic_ini_path:
+        Path to alembic.ini file. Defaults to k0/db/alembic.ini.
+    capture_output:
+        If True, capture stdout for dry-run operations.
+
+    Returns
+    -------
+    Config
+        Configured Alembic Config object.
+    """
+    ini_path = alembic_ini_path or _ALEMBIC_INI_PATH
+
+    if not ini_path.exists():
+        raise MigrationError(f"Alembic config not found: {ini_path}")
+
+    config = Config(str(ini_path))
+
+    if capture_output:
+        config.output_buffer = io.StringIO()
+
+    return config
+
+
+def _get_script_directory(config: Config) -> ScriptDirectory:
+    """Get Alembic ScriptDirectory for inspecting migrations."""
+    return ScriptDirectory.from_config(config)
+
+
+def get_current_revision(
+    alembic_ini_path: Optional[Path] = None,
+) -> Optional[str]:
+    """Get current database revision.
+
+    Parameters
+    ----------
+    alembic_ini_path:
+        Path to alembic.ini file.
+
+    Returns
+    -------
+    str | None
+        Current revision identifier, or None if no migrations applied.
+    """
+    config = _get_alembic_config(alembic_ini_path, capture_output=True)
+
+    try:
+        command.current(config)
+        output = config.output_buffer.getvalue()  # type: ignore
+        # Parse revision from output (format: "abc123 (head)")
+        if output.strip():
+            return output.strip().split()[0]
+        return None
+    except Exception as exc:
+        raise MigrationError(f"Failed to get current revision: {exc}") from exc
+
+
+def get_pending_revisions(
+    alembic_ini_path: Optional[Path] = None,
+) -> list[tuple[str, str]]:
+    """Get list of pending migrations.
+
+    Parameters
+    ----------
+    alembic_ini_path:
+        Path to alembic.ini file.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        List of (revision, description) tuples for pending migrations.
+    """
+    config = _get_alembic_config(alembic_ini_path)
+    script = _get_script_directory(config)
+
+    current = get_current_revision(alembic_ini_path)
+    head = script.get_current_head()
+
+    if current == head:
+        return []
+
+    pending = []
+    for revision in script.iterate_revisions(head, current):
+        if revision.revision != current:
+            pending.append((revision.revision, revision.doc or "No description"))
+
+    return list(reversed(pending))
+
+
+def apply_migrations(
+    *,
+    target_revision: str = "head",
+    alembic_ini_path: Optional[Path] = None,
+    dry_run: bool = False,
+    logger: Optional[logging.Logger] = None,
+) -> list[MigrationResult]:
+    """Apply Alembic migrations to the database.
+
+    Parameters
+    ----------
+    target_revision:
+        Target revision to migrate to. Default "head" applies all pending.
+        Can be a specific revision identifier.
+    alembic_ini_path:
+        Path to alembic.ini file. Defaults to k0/db/alembic.ini.
     dry_run:
-        When true, migrations are not executed but their pending status is
-        reported. The schema_migrations catalog is left untouched.
+        When true, migrations are not executed but pending status is reported.
     logger:
-        Optional logger instance to emit progress messages.
+        Optional logger instance for progress messages.
 
     Returns
     -------
     list[MigrationResult]
-        Ordered list describing whether each migration was applied, skipped, or
-        remains pending when running in dry-run mode. Includes duration_seconds
-        for applied migrations (for telemetry).
+        List of migration results describing applied/pending migrations.
 
     Raises
     ------
     MigrationError
-        If migration directory doesn't exist, no migrations found, or a migration
-        fails to apply (due to schema errors or checksum mismatch).
+        If migration fails or configuration is invalid.
     """
-
     log = logger or LOGGER
-    db_path = Path(database_path)
-    migrations_dir = Path(migrations_path) if migrations_path else _DEFAULT_MIGRATIONS_DIR
-
-    if not migrations_dir.exists():
-        raise MigrationError(f"Migration directory does not exist: {migrations_dir}")
-    if not migrations_dir.is_dir():
-        raise MigrationError(f"Migration path is not a directory: {migrations_dir}")
-
-    migration_files = sorted(p for p in migrations_dir.glob("*.sql") if p.is_file())
-    if not migration_files:
-        raise MigrationError(f"No migration files found in {migrations_dir}")
-
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    config = _get_alembic_config(alembic_ini_path)
 
     results: list[MigrationResult] = []
 
-    connection = sqlite3.connect(str(db_path))
-    try:
-        connection.execute("PRAGMA journal_mode=WAL;")
-        connection.execute("PRAGMA busy_timeout=5000;")
-        _ensure_catalog(connection)
-        applied = _load_applied(connection)
+    # Get pending migrations
+    pending = get_pending_revisions(alembic_ini_path)
 
-        for migration_path in migration_files:
-            version = migration_path.stem
-            script = migration_path.read_text(encoding="utf-8")
-            checksum = hashlib.sha256(script.encode("utf-8")).hexdigest()
+    if not pending:
+        log.info("No pending migrations; database is up to date")
+        return results
 
-            if version in applied:
-                recorded_checksum = applied[version]
-                if recorded_checksum != checksum:
-                    raise MigrationError(
-                        (
-                            "Checksum mismatch for migration "
-                            f"'{version}'. Expected {recorded_checksum}, found {checksum}"
-                        )
-                    )
-                results.append(
-                    MigrationResult(
-                        version=version,
-                        action="skipped",
-                        checksum=checksum,
-                        path=migration_path,
-                    )
-                )
-                continue
-
-            if dry_run:
-                log.info("[dry-run] would apply migration %s", version)
-                results.append(
-                    MigrationResult(
-                        version=version,
-                        action="pending",
-                        checksum=checksum,
-                        path=migration_path,
-                    )
-                )
-                continue
-
-            log.info("Applying migration %s", version)
-            start_time = datetime.now(timezone.utc)
-            try:
-                connection.execute("BEGIN")
-                connection.executescript(script)
-                connection.execute(
-                    "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES (?, ?, ?)",
-                    (
-                        version,
-                        checksum,
-                        _utc_timestamp(),
-                    ),
-                )
-                connection.commit()
-            except Exception as exc:  # pragma: no cover - defensive rollback
-                connection.rollback()
-                if _TELEMETRY_ENABLED:
-                    _migration_status_gauge.set(-1)
-                raise MigrationError(f"Failed to apply migration {version}") from exc
-
-            duration_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
-            if _TELEMETRY_ENABLED:
-                _migration_duration_histogram.observe(duration_seconds)
-                _migration_status_gauge.set(1)
-
+    if dry_run:
+        log.info("[dry-run] %d migration(s) pending", len(pending))
+        for revision, description in pending:
+            log.info("[dry-run] would apply: %s - %s", revision, description)
             results.append(
                 MigrationResult(
-                    version=version,
+                    revision=revision,
+                    action="pending",
+                    description=description,
+                )
+            )
+        return results
+
+    # Apply migrations
+    log.info("Applying %d migration(s) to target: %s", len(pending), target_revision)
+    start_time = datetime.now(timezone.utc)
+
+    try:
+        command.upgrade(config, target_revision)
+
+        duration_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
+
+        if _TELEMETRY_ENABLED:
+            _migration_duration_histogram.observe(duration_seconds)
+            _migration_status_gauge.set(1)
+
+        # Report applied migrations
+        for revision, description in pending:
+            results.append(
+                MigrationResult(
+                    revision=revision,
                     action="applied",
-                    checksum=checksum,
-                    path=migration_path,
-                    duration_seconds=duration_seconds,
+                    description=description,
+                    duration_seconds=duration_seconds / len(pending),  # Approximate per-migration
                 )
             )
 
-        connection.execute("PRAGMA wal_checkpoint(FULL);")
-    finally:
-        connection.close()
+        log.info(
+            "Successfully applied %d migration(s) in %.2fs",
+            len(pending),
+            duration_seconds,
+        )
+
+    except Exception as exc:
+        if _TELEMETRY_ENABLED:
+            _migration_status_gauge.set(-1)
+        raise MigrationError(f"Migration failed: {exc}") from exc
 
     return results
 
 
 def rollback_migration(
-    database_path: Path | str,
     *,
-    target_version: str,
-    migrations_path: Path | str | None = None,
+    steps: int = 1,
+    target_revision: Optional[str] = None,
+    alembic_ini_path: Optional[Path] = None,
     dry_run: bool = False,
-    logger: logging.Logger | None = None,
+    logger: Optional[logging.Logger] = None,
 ) -> list[MigrationResult]:
-    """Rollback applied migrations to the specified target version.
-
-    Migrations are rolled back in reverse alphabetical order (newest first).
-    This function is intended for emergency recovery; manual rollback scripts
-    are recommended for complex migrations.
-
-    For each migration to be rolled back, a DOWN script is auto-generated by
-    reversing the DDL statements from the UP script (best-effort).
+    """Rollback applied migrations.
 
     Parameters
     ----------
-    database_path:
-        Filesystem path to the SQLite database file.
-    target_version:
-        Version to roll back to (inclusive; this version will remain applied).
-        If target_version is "0001", migrations 0001 and earlier are kept;
-        all newer migrations are rolled back.
-    migrations_path:
-        Directory containing ``*.sql`` migration files. Defaults to the
-        repository's ``k0/contracts/sql/migrations`` directory.
+    steps:
+        Number of migrations to roll back (default: 1).
+        Ignored if target_revision is specified.
+    target_revision:
+        Specific revision to roll back to. If provided, steps is ignored.
+        Use "base" to roll back all migrations.
+    alembic_ini_path:
+        Path to alembic.ini file. Defaults to k0/db/alembic.ini.
     dry_run:
-        When true, rollback plan is generated and validated but not executed.
-        The schema_migrations catalog is left untouched.
+        When true, rollback is not executed but plan is reported.
     logger:
-        Optional logger instance to emit progress messages.
+        Optional logger instance for progress messages.
 
     Returns
     -------
     list[MigrationResult]
-        Ordered list describing rollback status for each migration.
-        Each result includes the auto-generated rollback_script if available.
+        List of migration results describing rolled back migrations.
 
     Raises
     ------
     MigrationError
-        If target_version does not exist in applied migrations, or if
-        rollback fails due to schema errors or cascade constraints.
+        If rollback fails or target revision is invalid.
     """
-
     log = logger or LOGGER
-    db_path = Path(database_path)
-    migrations_dir = Path(migrations_path) if migrations_path else _DEFAULT_MIGRATIONS_DIR
-
-    if not migrations_dir.exists():
-        raise MigrationError(f"Migration directory does not exist: {migrations_dir}")
-    if not migrations_dir.is_dir():
-        raise MigrationError(f"Migration path is not a directory: {migrations_dir}")
-
-    migration_files = sorted(p for p in migrations_dir.glob("*.sql") if p.is_file())
-    if not migration_files:
-        raise MigrationError(f"No migration files found in {migrations_dir}")
-
-    if not db_path.exists():
-        raise MigrationError(f"Database does not exist: {db_path}")
+    config = _get_alembic_config(alembic_ini_path)
+    script = _get_script_directory(config)
 
     results: list[MigrationResult] = []
-    connection = sqlite3.connect(str(db_path))
 
-    try:
-        connection.execute("PRAGMA journal_mode=WAL;")
-        connection.execute("PRAGMA busy_timeout=5000;")
-        _ensure_catalog(connection)
-        applied = _load_applied(connection)
+    current = get_current_revision(alembic_ini_path)
+    if current is None:
+        log.info("No migrations applied; nothing to roll back")
+        return results
 
-        # Validate target_version exists
-        if target_version not in applied:
-            raise MigrationError(
-                f"Target version '{target_version}' not found in applied migrations"
-            )
+    # Determine target
+    if target_revision:
+        target = target_revision
+    else:
+        target = f"-{steps}"
 
-        # Determine migrations to roll back (in reverse order)
-        migration_files_sorted = sorted(migration_files, key=lambda p: p.stem)
-        migrations_to_rollback = [
-            p for p in migration_files_sorted if p.stem > target_version and p.stem in applied
-        ]
-        migrations_to_rollback.reverse()  # Newest first
+    # Get revisions that will be rolled back
+    revisions_to_rollback: list[tuple[str, str]] = []
+    if target_revision:
+        for revision in script.iterate_revisions(current, target_revision):
+            if revision.revision != target_revision:
+                revisions_to_rollback.append((revision.revision, revision.doc or "No description"))
+    else:
+        # Get the last N revisions
+        count = 0
+        for revision in script.iterate_revisions(current, "base"):
+            if count >= steps:
+                break
+            revisions_to_rollback.append((revision.revision, revision.doc or "No description"))
+            count += 1
 
-        if not migrations_to_rollback:
-            log.info("No migrations to roll back; already at target version %s", target_version)
-            return results
+    if not revisions_to_rollback:
+        log.info("No migrations to roll back")
+        return results
 
-        log.info(
-            "Rolling back %d migration(s) from %s to %s",
-            len(migrations_to_rollback),
-            migration_files_sorted[-1].stem,
-            target_version,
-        )
-
-        for migration_path in migrations_to_rollback:
-            version = migration_path.stem
-            up_script = migration_path.read_text(encoding="utf-8")
-            down_script = generate_rollback_script(up_script)
-            checksum = hashlib.sha256(up_script.encode("utf-8")).hexdigest()
-
-            if dry_run:
-                log.info(
-                    "[dry-run] would rollback migration %s\n%s",
-                    version,
-                    down_script,
-                )
-                results.append(
-                    MigrationResult(
-                        version=version,
-                        action="pending",
-                        checksum=checksum,
-                        path=migration_path,
-                        rollback_script=down_script,
-                    )
-                )
-                continue
-
-            log.info("Rolling back migration %s", version)
-            start_time = datetime.now(timezone.utc)
-            try:
-                connection.execute("BEGIN")
-                connection.executescript(down_script)
-                connection.execute(
-                    "DELETE FROM schema_migrations WHERE version = ?",
-                    (version,),
-                )
-                connection.commit()
-            except Exception as exc:  # pragma: no cover - defensive rollback
-                connection.rollback()
-                if _TELEMETRY_ENABLED:
-                    _migration_status_gauge.set(-1)
-                raise MigrationError(f"Failed to rollback migration {version}") from exc
-
-            duration_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
-            if _TELEMETRY_ENABLED:
-                _migration_rollback_counter.inc()
-                _migration_duration_histogram.observe(duration_seconds)
-                _migration_status_gauge.set(1)
-
+    if dry_run:
+        log.info("[dry-run] %d migration(s) would be rolled back", len(revisions_to_rollback))
+        for revision, description in revisions_to_rollback:
+            log.info("[dry-run] would rollback: %s - %s", revision, description)
             results.append(
                 MigrationResult(
-                    version=version,
+                    revision=revision,
+                    action="pending",
+                    description=description,
+                )
+            )
+        return results
+
+    # Execute rollback
+    log.info("Rolling back %d migration(s)", len(revisions_to_rollback))
+    start_time = datetime.now(timezone.utc)
+
+    try:
+        command.downgrade(config, target)
+
+        duration_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
+
+        if _TELEMETRY_ENABLED:
+            _migration_rollback_counter.inc(len(revisions_to_rollback))
+            _migration_duration_histogram.observe(duration_seconds)
+            _migration_status_gauge.set(1)
+
+        # Report rolled back migrations
+        for revision, description in revisions_to_rollback:
+            results.append(
+                MigrationResult(
+                    revision=revision,
                     action="rolled_back",
-                    checksum=checksum,
-                    path=migration_path,
-                    duration_seconds=duration_seconds,
-                    rollback_script=down_script,
+                    description=description,
+                    duration_seconds=duration_seconds / len(revisions_to_rollback),
                 )
             )
 
-        connection.execute("PRAGMA wal_checkpoint(FULL);")
-    finally:
-        connection.close()
+        log.info(
+            "Successfully rolled back %d migration(s) in %.2fs",
+            len(revisions_to_rollback),
+            duration_seconds,
+        )
+
+    except Exception as exc:
+        if _TELEMETRY_ENABLED:
+            _migration_status_gauge.set(-1)
+        raise MigrationError(f"Rollback failed: {exc}") from exc
 
     return results
 
 
-def generate_rollback_script(up_script: str) -> str:
-    """Auto-generate a DOWN migration script from an UP script (best-effort).
-
-    This function attempts to reverse DDL statements by:
-    - Converting CREATE TABLE to DROP TABLE
-    - Converting CREATE INDEX to DROP INDEX
-    - Converting ALTER TABLE ADD to ALTER TABLE DROP (limited support)
-    - Removing DML statements (INSERT, UPDATE, DELETE)
-    - Removing comments and pragmas
-
-    For complex migrations, this generates a best-effort script that may
-    require manual refinement. Inspect generated scripts carefully.
+def get_migration_history(
+    alembic_ini_path: Optional[Path] = None,
+) -> list[tuple[str, str, bool]]:
+    """Get full migration history.
 
     Parameters
     ----------
-    up_script : str
-        The complete UP migration script (as read from disk).
+    alembic_ini_path:
+        Path to alembic.ini file.
 
     Returns
     -------
-    str
-        Auto-generated DOWN migration script with reversed DDL statements.
-        Statements are reversed in reverse order (newest first).
-
-    Notes
-    -----
-    - This is best-effort; complex migrations may require manual DOWN scripts
-    - The function preserves transaction structure (BEGIN/COMMIT)
-    - Pragmas and comments are removed
-    - Foreign keys are disabled during rollback to avoid cascade issues
+    list[tuple[str, str, bool]]
+        List of (revision, description, is_applied) tuples.
     """
+    config = _get_alembic_config(alembic_ini_path)
+    script = _get_script_directory(config)
 
-    lines = up_script.split("\n")
-    down_statements: list[str] = []
-    up_statements: list[str] = []
+    current = get_current_revision(alembic_ini_path)
 
-    current_statement = ""
-    for line in lines:
-        stripped = line.strip()
+    history = []
+    for revision in script.iterate_revisions(script.get_current_head(), "base"):
+        is_applied = current is not None and revision.revision <= current
+        history.append((revision.revision, revision.doc or "No description", is_applied))
 
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith("--"):
-            continue
-
-        # Skip pragma statements
-        if stripped.upper().startswith("PRAGMA"):
-            continue
-
-        current_statement += " " + line
-
-        # Statement ends with semicolon
-        if stripped.endswith(";"):
-            statement = current_statement.strip()
-            up_statements.append(statement)
-            current_statement = ""
-
-    # Reverse statements and generate DOWN equivalents
-    for statement in reversed(up_statements):
-        stmt_upper = statement.upper()
-
-        if stmt_upper.startswith("CREATE TABLE"):
-            # CREATE TABLE foo (...) -> DROP TABLE IF EXISTS foo
-            table_name = _extract_name_after_keyword(statement, "TABLE")
-            if table_name:
-                down_statements.append(f"DROP TABLE IF EXISTS {table_name};")
-
-        elif stmt_upper.startswith("CREATE INDEX") or stmt_upper.startswith("CREATE UNIQUE INDEX"):
-            # CREATE [UNIQUE] INDEX idx_foo ON table(...) -> DROP INDEX IF EXISTS idx_foo
-            index_name = _extract_name_after_keyword(statement, "INDEX")
-            if index_name:
-                down_statements.append(f"DROP INDEX IF EXISTS {index_name};")
-
-        elif stmt_upper.startswith("CREATE TRIGGER"):
-            # CREATE TRIGGER trg_foo -> DROP TRIGGER IF EXISTS trg_foo
-            trigger_name = _extract_name_after_keyword(statement, "TRIGGER")
-            if trigger_name:
-                down_statements.append(f"DROP TRIGGER IF EXISTS {trigger_name};")
-
-        elif stmt_upper.startswith("ALTER TABLE"):
-            # ALTER TABLE foo ADD COLUMN bar ... -> ALTER TABLE foo DROP COLUMN bar
-            # This is best-effort; complex ALTER statements may not parse correctly
-            if "ADD COLUMN" in stmt_upper:
-                col_name = _extract_column_name_from_alter(statement)
-                table_name = _extract_name_after_keyword(statement, "TABLE")
-                if table_name and col_name:
-                    down_statements.append(f"ALTER TABLE {table_name} DROP COLUMN {col_name};")
-
-    # Build final DOWN script
-    down_script_lines = [
-        "-- Auto-generated DOWN migration (best-effort)",
-        "-- Review and adjust as needed for complex operations",
-        "",
-        "BEGIN;",
-        "",
-        "PRAGMA foreign_keys=OFF;",
-        "",
-    ]
-
-    down_script_lines.extend(down_statements)
-
-    down_script_lines.extend(
-        [
-            "",
-            "PRAGMA foreign_keys=ON;",
-            "",
-            "COMMIT;",
-        ]
-    )
-
-    return "\n".join(down_script_lines)
-
-
-def _extract_name_after_keyword(statement: str, keyword: str) -> str | None:
-    """Extract identifier name after keyword (e.g., 'TABLE foo' -> 'foo')."""
-    pattern = keyword + r"\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)"
-    match_obj = re.search(pattern, statement, re.IGNORECASE)
-    return match_obj.group(1) if match_obj else None
-
-
-def _extract_column_name_from_alter(statement: str) -> str | None:
-    """Extract column name from ALTER TABLE ADD COLUMN statement."""
-    pattern = r"ADD\s+COLUMN\s+(\w+)"
-    match_obj = re.search(pattern, statement, re.IGNORECASE)
-    return match_obj.group(1) if match_obj else None
-
-
-def _ensure_catalog(connection: sqlite3.Connection) -> None:
-    """Create schema_migrations table if it doesn't exist."""
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            checksum TEXT NOT NULL,
-            applied_at TEXT NOT NULL
-        )
-        """
-    )
-
-
-def _load_applied(connection: sqlite3.Connection) -> dict[str, str]:
-    """Load all applied migrations from schema_migrations catalog."""
-    cursor = connection.execute("SELECT version, checksum FROM schema_migrations")
-    return {row[0]: row[1] for row in cursor.fetchall()}
-
-
-def _utc_timestamp() -> str:
-    """Return current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return list(reversed(history))
 
 
 __all__ = [
@@ -551,5 +442,7 @@ __all__ = [
     "MigrationResult",
     "apply_migrations",
     "rollback_migration",
-    "generate_rollback_script",
+    "get_current_revision",
+    "get_pending_revisions",
+    "get_migration_history",
 ]

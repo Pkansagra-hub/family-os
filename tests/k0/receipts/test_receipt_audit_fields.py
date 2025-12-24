@@ -92,12 +92,12 @@ def receipt_issuer(
 class TestReceiptDocumentV1Fields:
     """Test V1 ReceiptDocument dataclass with envelope_sha256 and obligations_applied."""
 
-    def test_receipt_document_with_envelope_sha256(self, receipt_issuer: ReceiptIssuer):
+    async def test_receipt_document_with_envelope_sha256(self, receipt_issuer: ReceiptIssuer):
         """Verify envelope_sha256 required in V1 ReceiptDocument."""
         receipt_id = str(uuid.uuid4())
         envelope_sha256 = "abc123" * 10  # 60-char hex string (SHA-256)
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=receipt_id,
             idem_key="test-idem-key",
             wal_pos=1,
@@ -115,7 +115,7 @@ class TestReceiptDocumentV1Fields:
         assert receipt_doc.envelope_sha256 == envelope_sha256
         assert isinstance(receipt_doc, ReceiptDocument)
 
-    def test_receipt_document_with_obligations_applied(self, receipt_issuer: ReceiptIssuer):
+    async def test_receipt_document_with_obligations_applied(self, receipt_issuer: ReceiptIssuer):
         """Verify obligations_applied recorded in V1 ReceiptDocument."""
         obligations_applied = [
             "kernel.redact.field.email",
@@ -123,7 +123,7 @@ class TestReceiptDocumentV1Fields:
             "kernel.redact.field.ssn",
         ]
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -141,10 +141,10 @@ class TestReceiptDocumentV1Fields:
         assert receipt_doc.obligations_applied == tuple(obligations_applied)
         assert len(receipt_doc.obligations_applied) == 3
 
-    def test_receipt_document_payload_sha256_optional(self, receipt_issuer: ReceiptIssuer):
+    async def test_receipt_document_payload_sha256_optional(self, receipt_issuer: ReceiptIssuer):
         """Verify payload_sha256 is optional (legacy field) in V1."""
         # V1: Can create receipt WITHOUT payload_sha256
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -162,7 +162,7 @@ class TestReceiptDocumentV1Fields:
         assert receipt_doc.payload_sha256 is None  # Optional in V1
 
         # V1: Can still provide payload_sha256 for backward compat
-        receipt_doc_with_legacy = receipt_issuer.issue(
+        receipt_doc_with_legacy = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key-2",
             wal_pos=2,
@@ -183,13 +183,13 @@ class TestReceiptDocumentV1Fields:
 class TestReceiptSignaturePayloadV1:
     """Test V1 signature payload includes envelope_sha256 and obligations_applied."""
 
-    def test_signature_payload_includes_envelope_sha256(
+    async def test_signature_payload_includes_envelope_sha256(
         self, receipt_issuer: ReceiptIssuer, receipt_signer: ReceiptSigner
     ):
         """Verify signature payload includes envelope_sha256 (not payload_sha256)."""
         envelope_sha256 = "abc123" * 10
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -210,11 +210,13 @@ class TestReceiptSignaturePayloadV1:
         # Receipt includes envelope_sha256
         assert receipt_doc.envelope_sha256 == envelope_sha256
 
-    def test_signature_payload_includes_obligations_applied(self, receipt_issuer: ReceiptIssuer):
+    async def test_signature_payload_includes_obligations_applied(
+        self, receipt_issuer: ReceiptIssuer
+    ):
         """Verify signature payload includes obligations_applied if provided."""
         obligations_applied = ["kernel.mask.location.RED", "kernel.redact.field.email"]
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -235,13 +237,13 @@ class TestReceiptSignaturePayloadV1:
 class TestObservabilityEventV1:
     """Test observability events include V1 audit fields."""
 
-    def test_observability_event_includes_envelope_sha256(
+    async def test_observability_event_includes_envelope_sha256(
         self, receipt_issuer: ReceiptIssuer, observability_emitter: Mock
     ):
         """Verify observability event includes envelope_sha256."""
         envelope_sha256 = "abc123" * 10
 
-        receipt_issuer.issue(
+        await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -262,13 +264,13 @@ class TestObservabilityEventV1:
         assert event["envelope_sha256"] == envelope_sha256
         assert event["event"] == "receipt_issued"
 
-    def test_observability_event_includes_obligations_applied(
+    async def test_observability_event_includes_obligations_applied(
         self, receipt_issuer: ReceiptIssuer, observability_emitter: Mock
     ):
         """Verify observability event includes obligations_applied."""
         obligations_applied = ["kernel.mask.location.AMBER"]
 
-        receipt_issuer.issue(
+        await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -292,12 +294,14 @@ class TestObservabilityEventV1:
 class TestBackwardCompatibility:
     """Test V1 receipts backward compatible with V0 consumers."""
 
-    def test_can_provide_both_envelope_and_payload_sha256(self, receipt_issuer: ReceiptIssuer):
+    async def test_can_provide_both_envelope_and_payload_sha256(
+        self, receipt_issuer: ReceiptIssuer
+    ):
         """Verify V1 accepts both envelope_sha256 (new) and payload_sha256 (legacy)."""
         envelope_sha256 = "abc123" * 10
         payload_sha256 = "body-hash-legacy"
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -315,9 +319,9 @@ class TestBackwardCompatibility:
         assert receipt_doc.envelope_sha256 == envelope_sha256
         assert receipt_doc.payload_sha256 == payload_sha256  # Both present
 
-    def test_empty_obligations_applied_allowed(self, receipt_issuer: ReceiptIssuer):
+    async def test_empty_obligations_applied_allowed(self, receipt_issuer: ReceiptIssuer):
         """Verify empty obligations_applied allowed (no obligations case)."""
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,
@@ -339,7 +343,9 @@ class TestBackwardCompatibility:
 class TestObligationDetailsWithObligationsApplied:
     """Test obligations (generic) vs obligations_applied (specific actions)."""
 
-    def test_obligations_generic_obligations_applied_specific(self, receipt_issuer: ReceiptIssuer):
+    async def test_obligations_generic_obligations_applied_specific(
+        self, receipt_issuer: ReceiptIssuer
+    ):
         """Verify obligations (names) vs obligations_applied (actions) distinction."""
         # obligations: Generic policy obligation names
         obligations = [
@@ -353,7 +359,7 @@ class TestObligationDetailsWithObligationsApplied:
             "kernel.mask.location.AMBER",  # Band-specific action
         ]
 
-        receipt_doc = receipt_issuer.issue(
+        receipt_doc = await receipt_issuer.issue(
             receipt_id=str(uuid.uuid4()),
             idem_key="test-idem-key",
             wal_pos=1,

@@ -22,15 +22,18 @@ ADR Reference: ADR-K003 (Inline Embedding via UltraBERT), ADR-K004 (FAISS Integr
 
 import argparse
 import asyncio
+import os
 import shutil
-import sqlite3
 import struct
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import asyncpg
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -41,32 +44,36 @@ class FaissIndexRebuilder:
 
     def __init__(
         self,
-        db_path: str,
+        db_url: str,
         index_path: Path,
         backup_path: Path | None = None,
         index_id: str = "ultrabert_v2.1.0_ivf256_pq64",
         dimension: int = 768,
         dry_run: bool = False,
     ):
-        self.db_path = db_path
+        self.db_url = db_url or os.getenv(
+            "K0_DATABASE_URL",
+            "postgresql://k0_user:k0_password@localhost:5432/k0_kernel",
+        )
         self.index_path = index_path
         self.backup_path = backup_path or index_path.parent / "backups"
         self.index_id = index_id
         self.dimension = dimension
         self.dry_run = dry_run
-        self.conn: sqlite3.Connection | None = None
+        self.conn: "asyncpg.Connection | None" = None
 
-    def connect(self) -> None:
+    async def connect(self) -> None:
         """Connect to K0 runtime database."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-        print(f"✅ Connected to database: {self.db_path}")
+        import asyncpg
 
-    def close(self) -> None:
+        self.conn = await asyncpg.connect(self.db_url)
+        print(f"Connected to database: {self.db_url.split('@')[-1]}")
+
+    async def close(self) -> None:
         """Close database connection."""
         if self.conn:
-            self.conn.close()
-            print("✅ Database connection closed")
+            await self.conn.close()
+            print("Database connection closed")
 
     def backup_existing_index(self) -> bool:
         """Backup existing FAISS index before rebuild."""
@@ -95,7 +102,7 @@ class FaissIndexRebuilder:
             print(f"❌ Failed to backup index: {e}")
             return False
 
-    def count_vectors(self) -> dict[str, Any]:
+    async def count_vectors(self) -> dict[str, Any]:
         """Count vectors in st_vec table."""
         if not self.conn:
             raise RuntimeError("Database not connected")
@@ -109,8 +116,7 @@ class FaissIndexRebuilder:
             WHERE vector IS NOT NULL
         """
 
-        cursor = self.conn.execute(query)
-        row = cursor.fetchone()
+        row = await self.conn.fetchrow(query)
 
         return {
             "total_count": row["total_count"],
@@ -118,7 +124,9 @@ class FaissIndexRebuilder:
             "unindexed_count": row["unindexed_count"],
         }
 
-    def fetch_vectors_batch(self, batch_size: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
+    async def fetch_vectors_batch(
+        self, batch_size: int = 1000, offset: int = 0
+    ) -> list[dict[str, Any]]:
         """Fetch batch of vectors from st_vec."""
         if not self.conn:
             raise RuntimeError("Database not connected")
@@ -128,11 +136,10 @@ class FaissIndexRebuilder:
             FROM st_vec
             WHERE vector IS NOT NULL
             ORDER BY embedding_id
-            LIMIT ? OFFSET ?
+            LIMIT $1 OFFSET $2
         """
 
-        cursor = self.conn.execute(query, (batch_size, offset))
-        rows = cursor.fetchall()
+        rows = await self.conn.fetch(query, batch_size, offset)
 
         # Unpack binary vectors
         vectors = []
@@ -145,10 +152,10 @@ class FaissIndexRebuilder:
                     vectors.append({"embedding_id": row["embedding_id"], "vector": vector})
                 else:
                     print(
-                        f"⚠️ Skipping {row['embedding_id']}: invalid dimension {len(vector_bytes) // 4}"
+                        f"Skipping {row['embedding_id']}: invalid dimension {len(vector_bytes) // 4}"
                     )
             except Exception as e:
-                print(f"⚠️ Failed to unpack {row['embedding_id']}: {e}")
+                print(f"Failed to unpack {row['embedding_id']}: {e}")
 
         return vectors
 

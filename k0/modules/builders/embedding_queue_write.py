@@ -110,7 +110,9 @@ def assemble_embedding_queue_record(
 
     header = envelope.get("header", {})
 
-    now = int(time.time())
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
 
     return {
         "job_id": None,  # Auto-increment in database

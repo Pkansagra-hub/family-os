@@ -10,12 +10,16 @@ References:
             k0/contracts/jsonschema/archive_manifest.schema.json
 """
 
-import sqlite3
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 
 @dataclass(frozen=True)
@@ -60,11 +64,11 @@ class RetentionEnforcer:
         enforcer = RetentionEnforcer()
 
         # Apply all enabled policies (nightly job)
-        stats = enforcer.apply_policies()
+        stats = await enforcer.apply_policies()
         # Returns: {"archived": 150, "deleted": 20, "errors": 0}
 
         # Get expired resources for specific policy
-        expired = enforcer.get_expired_resources(policy_id="policy_001")
+        expired = await enforcer.get_expired_resources(policy_id="policy_001")
     """
 
     def __init__(
@@ -78,16 +82,16 @@ class RetentionEnforcer:
         Parameters
         ----------
         archive_callback : callable, optional
-            Function to archive data to blob storage.
-            Signature: (resource_type, resource_id, data) -> archive_location
+            Async function to archive data to blob storage.
+            Signature: async (resource_type, resource_id, data) -> archive_location
         """
         self._archive_callback = archive_callback
 
-    def apply_policies(
+    async def apply_policies(
         self,
         *,
         dry_run: bool = False,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> dict:
         """
         Apply all enabled retention policies.
@@ -98,7 +102,7 @@ class RetentionEnforcer:
         ----------
         dry_run : bool
             If True, only return stats without making changes
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection (uses connection pool if not provided)
 
         Returns
@@ -108,22 +112,22 @@ class RetentionEnforcer:
         """
         stats = {"archived": 0, "deleted": 0, "errors": 0}
 
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+        async def _run_with_conn(conn: "asyncpg.Connection") -> dict:
+            nonlocal stats
             try:
                 # Get all enabled policies
-                policies = self._load_policies(conn, enabled_only=True)
+                policies = await self._load_policies(conn, enabled_only=True)
 
                 for policy in policies:
                     try:
-                        expired = self._get_expired_resources_for_policy(conn, policy)
+                        expired = await self._get_expired_resources_for_policy(conn, policy)
 
                         if not dry_run:
                             if policy.archive_enabled and self._archive_callback:
                                 # Archive to blob storage
                                 for resource in expired:
                                     try:
-                                        self._archive_resource(conn, policy, resource)
+                                        await self._archive_resource(conn, policy, resource)
                                         stats["archived"] += 1
                                     except Exception as e:
                                         print(f"Archive error for {resource['id']}: {e}")
@@ -133,7 +137,7 @@ class RetentionEnforcer:
                                 for resource in expired:
                                     try:
                                         id_column = resource.get("id_column", "id")
-                                        self._delete_resource(
+                                        await self._delete_resource(
                                             conn, policy.resource_type, resource["id"], id_column
                                         )
                                         stats["deleted"] += 1
@@ -141,26 +145,29 @@ class RetentionEnforcer:
                                         print(f"Delete error for {resource['id']}: {e}")
                                         stats["errors"] += 1
 
-                        if connection is None:
-                            conn.commit()
-
                     except Exception as e:
                         print(f"Policy error for {policy.policy_id}: {e}")
                         stats["errors"] += 1
 
                 return stats
 
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
-                    # Retention tables don't exist (Migration 0004 not applied)
+            except Exception as e:
+                if "does not exist" in str(e):
+                    # Retention tables don't exist (migrations not applied)
                     return stats
                 raise RetentionEnforcerError(f"Failed to apply policies: {e}") from e
 
-    def get_expired_resources(
+        if connection is not None:
+            return await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                return await _run_with_conn(conn)
+
+    async def get_expired_resources(
         self,
         policy_id: str,
         *,
-        connection: Optional[sqlite3.Connection] = None,
+        connection: Optional["asyncpg.Connection"] = None,
     ) -> List[dict]:
         """
         Get resources that have exceeded retention period for a policy.
@@ -169,7 +176,7 @@ class RetentionEnforcer:
         ----------
         policy_id : str
             Policy ID to check
-        connection : sqlite3.Connection, optional
+        connection : asyncpg.Connection, optional
             Database connection
 
         Returns
@@ -177,14 +184,14 @@ class RetentionEnforcer:
         List[dict]
             List of expired resources with fields: id, created_at, age_days
         """
-        resolve = connection if connection else connection_scope()
-        with resolve as conn:
+
+        async def _run_with_conn(conn: "asyncpg.Connection") -> List[dict]:
             try:
                 # Load policy
-                policy_row = conn.execute(
-                    "SELECT * FROM st_retention_policy WHERE policy_id = ?",
-                    (policy_id,),
-                ).fetchone()
+                policy_row = await conn.fetchrow(
+                    "SELECT * FROM st_retention_policy WHERE policy_id = $1",
+                    policy_id,
+                )
 
                 if not policy_row:
                     return []
@@ -201,22 +208,28 @@ class RetentionEnforcer:
                     updated_at=policy_row["updated_at"],
                 )
 
-                return self._get_expired_resources_for_policy(conn, policy)
+                return await self._get_expired_resources_for_policy(conn, policy)
 
-            except sqlite3.OperationalError as e:
-                if "no such table" in str(e):
+            except Exception as e:
+                if "does not exist" in str(e):
                     return []
                 raise RetentionEnforcerError(f"Failed to get expired resources: {e}") from e
 
-    def _load_policies(
-        self, conn: sqlite3.Connection, enabled_only: bool = False
+        if connection is not None:
+            return await _run_with_conn(connection)
+        else:
+            async with connection_scope() as conn:
+                return await _run_with_conn(conn)
+
+    async def _load_policies(
+        self, conn: "asyncpg.Connection", enabled_only: bool = False
     ) -> List[RetentionPolicy]:
         """Load retention policies from st_retention_policy."""
         query = "SELECT * FROM st_retention_policy"
         if enabled_only:
-            query += " WHERE enabled = 1"
+            query += " WHERE enabled = true"
 
-        rows = conn.execute(query).fetchall()
+        rows = await conn.fetch(query)
         return [
             RetentionPolicy(
                 policy_id=row["policy_id"],
@@ -232,8 +245,8 @@ class RetentionEnforcer:
             for row in rows
         ]
 
-    def _get_expired_resources_for_policy(
-        self, conn: sqlite3.Connection, policy: RetentionPolicy
+    async def _get_expired_resources_for_policy(
+        self, conn: "asyncpg.Connection", policy: RetentionPolicy
     ) -> List[dict]:
         """Get resources that exceed retention period for a policy."""
         cutoff_date = (
@@ -242,35 +255,38 @@ class RetentionEnforcer:
 
         # Build dynamic query based on resource type
         # Assumes all memory tables have: id column (first column), created_at, tenant_id fields
-        query = f"SELECT * FROM {policy.resource_type} WHERE created_at < ?"
-        params = [cutoff_date]
+        query = f"SELECT * FROM {policy.resource_type} WHERE created_at < $1"
+        params: list = [cutoff_date]
+        param_idx = 2
 
         if policy.tenant_id_filter:
-            query += " AND tenant_id = ?"
+            query += f" AND tenant_id = ${param_idx}"
             params.append(policy.tenant_id_filter)
+            param_idx += 1
 
         if policy.privacy_band_filter:
-            query += " AND privacy_band = ?"
+            query += f" AND privacy_band = ${param_idx}"
             params.append(policy.privacy_band_filter)
 
         try:
-            rows = conn.execute(query, params).fetchall()
+            rows = await conn.fetch(query, *params)
             result = []
             for row in rows:
                 # Get the primary key column name dynamically
-                # SQLite row.keys() gives column names
-                id_col = row.keys()[0] if row.keys() else "id"
+                # asyncpg Record.keys() gives column names
+                row_keys = list(row.keys())
+                id_col = row_keys[0] if row_keys else "id"
                 resource_id = row[id_col]
 
                 result.append(
                     {
                         "id": resource_id,
                         "id_column": id_col,  # Store column name for deletion
-                        "created_at": row["created_at"] if "created_at" in row.keys() else None,
+                        "created_at": row["created_at"] if "created_at" in row_keys else None,
                         "age_days": (
                             datetime.now(timezone.utc)
                             - datetime.fromisoformat(
-                                row["created_at"] if "created_at" in row.keys() else cutoff_date
+                                row["created_at"] if "created_at" in row_keys else cutoff_date
                             )
                         ).days,
                     }
@@ -280,8 +296,8 @@ class RetentionEnforcer:
             print(f"Error getting expired resources: {e}")
             return []
 
-    def _archive_resource(
-        self, conn: sqlite3.Connection, policy: RetentionPolicy, resource: dict
+    async def _archive_resource(
+        self, conn: "asyncpg.Connection", policy: RetentionPolicy, resource: dict
     ) -> None:
         """Archive resource to blob storage and record in st_archive_manifest."""
         if not self._archive_callback:
@@ -291,36 +307,46 @@ class RetentionEnforcer:
         id_column = resource.get("id_column", "id")
 
         # Fetch full resource data
-        row = conn.execute(
-            f"SELECT * FROM {policy.resource_type} WHERE {id_column} = ?",
-            (resource["id"],),
-        ).fetchone()
+        row = await conn.fetchrow(
+            f"SELECT * FROM {policy.resource_type} WHERE {id_column} = $1",
+            resource["id"],
+        )
 
         # Archive to blob storage (callback handles compression, upload, etc)
-        archive_location = self._archive_callback(policy.resource_type, resource["id"], dict(row))
+        archive_location = await self._archive_callback(
+            policy.resource_type, resource["id"], dict(row)
+        )
 
         # Record in manifest
         archived_at = datetime.now(timezone.utc).isoformat()
         manifest_id = f"archive_{resource['id']}"  # Simple ID generation
 
-        conn.execute(
+        await conn.execute(
             """
             INSERT INTO st_archive_manifest (
                 manifest_id, resource_type, resource_id,
                 archive_location, archived_at
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES ($1, $2, $3, $4, $5)
             """,
-            (manifest_id, policy.resource_type, resource["id"], archive_location, archived_at),
+            manifest_id,
+            policy.resource_type,
+            resource["id"],
+            archive_location,
+            archived_at,
         )
 
         # Delete from source table
-        self._delete_resource(conn, policy.resource_type, resource["id"], id_column)
+        await self._delete_resource(conn, policy.resource_type, resource["id"], id_column)
 
-    def _delete_resource(
-        self, conn: sqlite3.Connection, resource_type: str, resource_id: str, id_column: str = "id"
+    async def _delete_resource(
+        self,
+        conn: "asyncpg.Connection",
+        resource_type: str,
+        resource_id: str,
+        id_column: str = "id",
     ) -> None:
         """Hard delete resource from table."""
-        conn.execute(
-            f"DELETE FROM {resource_type} WHERE {id_column} = ?",
-            (resource_id,),
+        await conn.execute(
+            f"DELETE FROM {resource_type} WHERE {id_column} = $1",
+            resource_id,
         )

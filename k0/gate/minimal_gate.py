@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
-import string
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    import asyncpg
+
+import string
 
 from k0.idem import derive_hmac_idem_key, derive_idem_key
 from k0.obs import MetricsExporter, ObservabilityEmitter
@@ -104,12 +107,12 @@ class MinimalGate:
         self._schema_cache: dict[str, Any] = {}
         self._cache_max_size = 1000
 
-    def validate(
+    async def validate(
         self,
         envelope: dict[str, object],
         body: bytes | None = None,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> GateOutcome:
         """Validate the provided envelope.
 
@@ -224,7 +227,9 @@ class MinimalGate:
                 # Invalid timestamp format - continue without clock skew check
                 pass
 
-        record = self._cached_provisioning_lookup(tenant, space, device, connection=connection)
+        record = await self._cached_provisioning_lookup(
+            tenant, space, device, connection=connection
+        )
         if record is None:
             # Gap 47: Track gate rejections by reason
             if self._metrics is not None:
@@ -250,7 +255,9 @@ class MinimalGate:
             )
             return GateOutcome(False, SPACE_MISMATCH)
 
-        schema_check = self._validate_schema(schema_uri, schema_version, connection=connection)
+        schema_check = await self._validate_schema(
+            schema_uri, schema_version, connection=connection
+        )
         if schema_check is not None:
             return schema_check
 
@@ -273,7 +280,7 @@ class MinimalGate:
             return GateOutcome(False, SIGNATURE_MISSING)
 
         # Query all verification-eligible keys (ACTIVE + ROTATING states)
-        keys = self._provisioning.get_keys(
+        keys = await self._provisioning.get_keys(
             device,
             states=["ACTIVE", "ROTATING"],
             connection=connection,
@@ -327,7 +334,7 @@ class MinimalGate:
                 return GateOutcome(False, ENVELOPE_SHA256_MISMATCH)
 
         # V1 STEP 2: Check if envelope_sha256 exists in WAL (replay detection)
-        if self._check_envelope_replay(envelope_sha256, connection=connection):
+        if await self._check_envelope_replay(envelope_sha256, connection=connection):
             self._emit_replay_attempt(
                 tenant=tenant,
                 space=space,
@@ -356,7 +363,7 @@ class MinimalGate:
         # Dual-mode support: Use HMAC if device has secret, fallback to BLAKE3
         try:
             # Try to get device HMAC secret for V1 idempotency
-            device_secret = self._get_device_secret(device, connection=connection)
+            device_secret = await self._get_device_secret(device, connection=connection)
 
             if device_secret is not None:
                 # V1 HMAC-based idempotency (60-second time bucket)
@@ -781,15 +788,17 @@ class MinimalGate:
         except (TypeError, ValueError):
             return None
 
-    def _validate_schema(
+    async def _validate_schema(
         self,
         schema_uri: str,
         schema_version: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> GateOutcome | None:
         try:
-            record = self._cached_schema_get(schema_uri, schema_version, connection=connection)
+            record = await self._cached_schema_get(
+                schema_uri, schema_version, connection=connection
+            )
         except KeyError:
             self._emit_schema_failure(
                 reason=SCHEMA_NOT_ACTIVE,
@@ -869,11 +878,11 @@ class MinimalGate:
             raise ValueError("Invalid hex digest")
         return normalized
 
-    def _check_envelope_replay(
+    async def _check_envelope_replay(
         self,
         envelope_sha256: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> bool:
         """Check if envelope_sha256 already exists in WAL (replay detection).
 
@@ -884,25 +893,26 @@ class MinimalGate:
 
         Args:
             envelope_sha256: SHA-256 hex digest of canonical envelope
-            connection: Optional SQLite connection (if None, detection skipped)
+            connection: Optional asyncpg connection (if None, detection skipped)
 
         Returns:
             True if envelope_sha256 exists in WAL (replay detected)
             False if not found (new envelope) or connection unavailable
         """
+        import asyncpg as asyncpg_module
+
         # If no connection provided, skip replay detection
         if connection is None:
             return False
 
         try:
-            cursor = connection.execute(
-                "SELECT 1 FROM st_wal WHERE envelope_sha256 = ? LIMIT 1",
-                (envelope_sha256,),
+            row = await connection.fetchrow(
+                "SELECT 1 FROM st_wal WHERE envelope_sha256 = $1 LIMIT 1",
+                envelope_sha256,
             )
-            row = cursor.fetchone()
             return row is not None
-        except sqlite3.OperationalError as exc:
-            # Table/column might not exist (pre-migration state)
+        except asyncpg_module.UndefinedTableError as exc:
+            # Table might not exist (pre-migration state)
             # Safely degrade: assume no replay (let DB UNIQUE constraint catch it)
             logger.debug(
                 "Envelope replay check skipped (schema not updated)",
@@ -917,11 +927,11 @@ class MinimalGate:
             # Fail-safe: return False to avoid blocking legitimate requests
             return False
 
-    def _get_device_secret(
+    async def _get_device_secret(
         self,
         device_id: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> bytes | None:
         """Retrieve HMAC secret for device from st_devices (V1 idempotency).
 
@@ -933,36 +943,37 @@ class MinimalGate:
 
         Args:
             device_id: Device identifier (e.g., "dad-phone")
-            connection: Optional SQLite connection (if None, returns None)
+            connection: Optional asyncpg connection (if None, returns None)
 
         Returns:
             32-byte HMAC secret if found and device is provisioned
             None if connection unavailable, device not found, or secret not set
         """
+        import asyncpg as asyncpg_module
+
         # If no connection provided, can't look up device secret
         if connection is None:
             return None
 
         try:
-            cursor = connection.execute(
-                "SELECT hmac_secret FROM st_devices WHERE device_id = ? LIMIT 1",
-                (device_id,),
+            row = await connection.fetchrow(
+                "SELECT hmac_secret FROM st_devices WHERE device_id = $1 LIMIT 1",
+                device_id,
             )
-            row = cursor.fetchone()
             if row is None:
                 # Device not found
                 logger.debug(f"Device not found for secret lookup: {device_id}")
                 return None
 
-            hmac_secret = row[0]
+            hmac_secret = row["hmac_secret"]
             if hmac_secret is None:
                 # Device found but secret not set (pre-provisioning or legacy device)
                 logger.debug(f"Device found but hmac_secret not set: {device_id}")
                 return None
 
             return hmac_secret
-        except sqlite3.OperationalError as exc:
-            # Table/column might not exist (pre-migration state)
+        except asyncpg_module.UndefinedTableError as exc:
+            # Table might not exist (pre-migration state)
             # Safely degrade: return None (HMAC-based idem unavailable)
             logger.debug(
                 "Device secret lookup skipped (schema not updated)",
@@ -1018,35 +1029,35 @@ class MinimalGate:
                     extra={"envelope_sha256": envelope_sha256},
                 )
 
-    def _cached_provisioning_lookup(
+    async def _cached_provisioning_lookup(
         self,
         tenant: str,
         space: str,
         device: str,
-        connection: sqlite3.Connection | None,
+        connection: "asyncpg.Connection | None",
     ) -> Any | None:
         key = f"{tenant}:{space}:{device}"
         if key in self._provisioning_cache:
             return self._provisioning_cache[key]
 
-        result = self._provisioning.lookup(tenant, space, device, connection=connection)
+        result = await self._provisioning.lookup(tenant, space, device, connection=connection)
 
         if len(self._provisioning_cache) >= self._cache_max_size:
             self._provisioning_cache.clear()
         self._provisioning_cache[key] = result
         return result
 
-    def _cached_schema_get(
+    async def _cached_schema_get(
         self,
         schema_uri: str,
         schema_version: str,
-        connection: sqlite3.Connection | None,
+        connection: "asyncpg.Connection | None",
     ) -> Any:
         key = f"{schema_uri}:{schema_version}"
         if key in self._schema_cache:
             return self._schema_cache[key]
 
-        result = self._registry.get(schema_uri, schema_version, connection=connection)
+        result = await self._registry.get(schema_uri, schema_version, connection=connection)
 
         if len(self._schema_cache) >= self._cache_max_size:
             self._schema_cache.clear()

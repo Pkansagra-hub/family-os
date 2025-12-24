@@ -132,16 +132,16 @@ class TestRetentionEnforcer:
         enforcer = RetentionEnforcer()
         assert enforcer._archive_callback is None
 
-    def test_apply_policies_no_expired(self, in_memory_db):
+    async def test_apply_policies_no_expired(self, in_memory_db):
         """Test apply_policies when no resources are expired."""
         enforcer = RetentionEnforcer()
 
         # Mock get_expired_resources to return empty
         with patch.object(enforcer, "get_expired_resources", return_value=[]):
-            result = enforcer.apply_policies(connection=in_memory_db)
+            result = await enforcer.apply_policies(connection=in_memory_db)
             assert result == {"archived": 0, "deleted": 0, "errors": 0}
 
-    def test_apply_policies_with_expired_archive(self, in_memory_db, sample_policy):
+    async def test_apply_policies_with_expired_archive(self, in_memory_db, sample_policy):
         """Test apply_policies archives expired resources."""
         enforcer = RetentionEnforcer(archive_callback=MagicMock(return_value="s3://bucket/path"))
 
@@ -166,10 +166,10 @@ class TestRetentionEnforcer:
             patch.object(enforcer, "_load_policies", return_value=[sample_policy]),
             patch.object(enforcer, "_get_expired_resources_for_policy", return_value=expired),
         ):
-            result = enforcer.apply_policies(connection=in_memory_db)
+            result = await enforcer.apply_policies(connection=in_memory_db)
             assert result["archived"] == 1
 
-    def test_apply_policies_with_expired_delete(self, in_memory_db):
+    async def test_apply_policies_with_expired_delete(self, in_memory_db):
         """Test apply_policies deletes expired resources when archive disabled."""
         enforcer = RetentionEnforcer()
 
@@ -198,27 +198,27 @@ class TestRetentionEnforcer:
             patch.object(enforcer, "_load_policies", return_value=[policy_no_archive]),
             patch.object(enforcer, "_get_expired_resources_for_policy", return_value=expired),
         ):
-            result = enforcer.apply_policies(connection=in_memory_db)
+            result = await enforcer.apply_policies(connection=in_memory_db)
             assert result["deleted"] == 1
 
-    def test_get_expired_resources(self, in_memory_db):
+    async def test_get_expired_resources(self, in_memory_db):
         """Test get_expired_resources returns expired items."""
         enforcer = RetentionEnforcer()
 
-        expired = enforcer.get_expired_resources("policy1", connection=in_memory_db)
+        expired = await enforcer.get_expired_resources("policy1", connection=in_memory_db)
         assert len(expired) >= 0  # May be empty if no matching resources
 
-    def test_load_policies(self, in_memory_db):
+    async def test_load_policies(self, in_memory_db):
         """Test _load_policies loads from database."""
         enforcer = RetentionEnforcer()
-        policies = enforcer._load_policies(in_memory_db)
+        policies = await enforcer._load_policies(in_memory_db)
 
         assert len(policies) == 2
         assert policies[0].policy_id == "policy1"
         assert policies[0].retention_days == 30
         assert policies[1].policy_id == "policy2"
 
-    def test_get_expired_resources_for_policy(self, in_memory_db, sample_policy):
+    async def test_get_expired_resources_for_policy(self, in_memory_db, sample_policy):
         """Test _get_expired_resources_for_policy queries database."""
         enforcer = RetentionEnforcer()
 
@@ -245,11 +245,11 @@ class TestRetentionEnforcer:
         )
         in_memory_db.commit()
 
-        expired = enforcer._get_expired_resources_for_policy(in_memory_db, sample_policy)
+        expired = await enforcer._get_expired_resources_for_policy(in_memory_db, sample_policy)
         assert len(expired) == 1
         assert expired[0]["id"] == "res1"
 
-    def test_archive_resource(self, in_memory_db, sample_policy):
+    async def test_archive_resource(self, in_memory_db, sample_policy):
         """Test _archive_resource creates manifest and deletes resource."""
         enforcer = RetentionEnforcer(archive_callback=MagicMock(return_value="s3://bucket/path"))
 
@@ -268,7 +268,7 @@ class TestRetentionEnforcer:
 
         resource = {"id": "res1", "id_column": "id"}
 
-        enforcer._archive_resource(in_memory_db, sample_policy, resource)
+        await enforcer._archive_resource(in_memory_db, sample_policy, resource)
 
         # Check manifest was created
         cursor.execute("SELECT * FROM st_archive_manifest")
@@ -280,7 +280,7 @@ class TestRetentionEnforcer:
         resources = cursor.fetchall()
         assert len(resources) == 0
 
-    def test_delete_resource(self, in_memory_db):
+    async def test_delete_resource(self, in_memory_db):
         """Test _delete_resource removes resource."""
         enforcer = RetentionEnforcer()
 
@@ -297,7 +297,7 @@ class TestRetentionEnforcer:
         cursor.execute("INSERT INTO st_epi VALUES ('res1', 'test data')")
         in_memory_db.commit()
 
-        enforcer._delete_resource(in_memory_db, "st_epi", "res1")
+        await enforcer._delete_resource(in_memory_db, "st_epi", "res1")
 
         # Check resource was deleted
         cursor.execute("SELECT * FROM st_epi WHERE id = 'res1'")

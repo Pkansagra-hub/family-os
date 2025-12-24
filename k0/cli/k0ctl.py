@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from typing import Any, Callable, MutableMapping, Sequence, cast
 import yaml
 
 from ..automation.migrate import MigrationError, MigrationResult, apply_migrations
+from ..db.connection import configure_pool, connection_scope, shutdown_pool
 from ..gate.schema_registry import SchemaRecord, SchemaRegistry
 from ..kernel.config import KernelSettings
 from ..kernel.main import run as run_kernel
@@ -21,7 +23,6 @@ from ..storage.dlq import DeadLetter, DeadLetterQueue
 from ..storage.outbox import OutboxEntry, OutboxStore
 from ..storage.provisioning import DeviceKey, ProvisionedDevice, ProvisioningLedger
 from ..storage.replayer import Replayer, ReplayError
-from ..uow.connection_pool import configure_pool, connection_scope, shutdown_pool
 
 logger = logging.getLogger(__name__)
 
@@ -559,6 +560,85 @@ def build_parser() -> argparse.ArgumentParser:
         help="Identifier of the dead-letter entry to quarantine",
     )
 
+    # -------------------------------------------------------------------------
+    # db subcommand: PostgreSQL migrations via Alembic (Milestone 1.1.2)
+    # -------------------------------------------------------------------------
+    db_parser = subparsers.add_parser(
+        "db",
+        help="PostgreSQL database migration commands (Alembic)",
+    )
+    db_subparsers = db_parser.add_subparsers(dest="db_command")
+
+    db_upgrade_parser = db_subparsers.add_parser(
+        "upgrade",
+        help="Apply pending PostgreSQL migrations",
+    )
+    db_upgrade_parser.add_argument(
+        "revision",
+        nargs="?",
+        default="head",
+        help="Target revision (default: head)",
+    )
+    db_upgrade_parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Print SQL without executing",
+    )
+
+    db_downgrade_parser = db_subparsers.add_parser(
+        "downgrade",
+        help="Revert PostgreSQL migrations",
+    )
+    db_downgrade_parser.add_argument(
+        "revision",
+        nargs="?",
+        default="-1",
+        help="Target revision (default: -1, previous)",
+    )
+
+    db_current_parser = db_subparsers.add_parser(
+        "current",
+        help="Show current PostgreSQL migration revision",
+    )
+    db_current_parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Show verbose output",
+    )
+
+    db_history_parser = db_subparsers.add_parser(
+        "history",
+        help="Show PostgreSQL migration history",
+    )
+    db_history_parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Show verbose output",
+    )
+
+    db_revision_parser = db_subparsers.add_parser(
+        "revision",
+        help="Create a new PostgreSQL migration",
+    )
+    db_revision_parser.add_argument(
+        "-m",
+        "--message",
+        dest="message",
+        required=True,
+        help="Migration description",
+    )
+    db_revision_parser.add_argument(
+        "--autogenerate",
+        dest="autogenerate",
+        action="store_true",
+        help="Autogenerate migration from model changes",
+    )
+
     return parser
 
 
@@ -697,6 +777,14 @@ def main(
             return 1
         database_path = args.database or _get_database_path(settings)
         return _handle_dlq_command(database_path, args)
+
+    if args.command == "db":
+        if getattr(args, "db_command", None) is None:
+            logger.error(
+                "`db` requires a sub-command (upgrade, downgrade, current, history, revision)"
+            )
+            return 1
+        return _handle_db_command(args)
 
     logger.error("`%s` command is not implemented yet", args.command)
     return 2
@@ -918,31 +1006,33 @@ def _handle_key_command(
                 )
                 return 2
 
-            with connection_scope() as conn:
-                # Transition all ACTIVE keys to ROTATING with grace window
-                active_keys = [k for k in keys if k.key_state == "ACTIVE"]
-                for old_key in active_keys:
-                    rotated = replace(
-                        old_key,
-                        key_state="ROTATING",
-                        rotated_ts=activated_ts.isoformat(timespec="seconds"),
-                        grace_expires_ts=grace_expires_ts.isoformat(timespec="seconds"),
-                    )
-                    ledger.add_key(rotated, connection=conn)
-                    logger.info(
-                        "Transitioned key version %s to ROTATING (grace expires: %s)",
-                        old_key.key_version,
-                        grace_expires_ts.isoformat(timespec="seconds"),
-                    )
+            async def _activate_key():
+                async with connection_scope() as conn:
+                    # Transition all ACTIVE keys to ROTATING with grace window
+                    active_keys = [k for k in keys if k.key_state == "ACTIVE"]
+                    for old_key in active_keys:
+                        rotated = replace(
+                            old_key,
+                            key_state="ROTATING",
+                            rotated_ts=activated_ts.isoformat(timespec="seconds"),
+                            grace_expires_ts=grace_expires_ts.isoformat(timespec="seconds"),
+                        )
+                        await ledger.add_key(rotated, connection=conn)
+                        logger.info(
+                            "Transitioned key version %s to ROTATING (grace expires: %s)",
+                            old_key.key_version,
+                            grace_expires_ts.isoformat(timespec="seconds"),
+                        )
 
-                # Activate the new key
-                activated = replace(
-                    target_key,
-                    key_state="ACTIVE",
-                    activated_ts=activated_ts.isoformat(timespec="seconds"),
-                )
-                ledger.add_key(activated, connection=conn)
-                conn.commit()
+                    # Activate the new key
+                    activated = replace(
+                        target_key,
+                        key_state="ACTIVE",
+                        activated_ts=activated_ts.isoformat(timespec="seconds"),
+                    )
+                    await ledger.add_key(activated, connection=conn)
+
+            asyncio.run(_activate_key())
 
             logger.info(
                 "Activated key version %s for device %s",
@@ -1011,36 +1101,39 @@ def _handle_key_command(
 
             now_ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-            # Query all ROTATING keys
-            with connection_scope() as conn:
-                rows = conn.execute(
-                    "SELECT device_id, key_version, grace_expires_ts FROM st_device_keys "
-                    "WHERE key_state='ROTATING' AND grace_expires_ts IS NOT NULL AND grace_expires_ts < ?",
-                    (now_ts,),
-                ).fetchall()
+            async def _expire_grace():
+                async with connection_scope() as conn:
+                    rows = await conn.fetch(
+                        "SELECT device_id, key_version, grace_expires_ts FROM st_device_keys "
+                        "WHERE key_state='ROTATING' AND grace_expires_ts IS NOT NULL AND grace_expires_ts < $1",
+                        now_ts,
+                    )
+                    return rows
 
-                if not rows:
-                    logger.info("No expired ROTATING keys found")
-                    return 0
+            rows = asyncio.run(_expire_grace())
 
-                expired_count = len(rows)
-                logger.info("Found %d expired ROTATING key(s)", expired_count)
+            if not rows:
+                logger.info("No expired ROTATING keys found")
+                return 0
 
-                if args.dry_run:
-                    for row in rows:
-                        logger.info(
-                            "  [DRY-RUN] Would expire: device=%s key_version=%s grace_expired=%s",
-                            row["device_id"],
-                            row["key_version"],
-                            row["grace_expires_ts"],
-                        )
-                    return 0
+            expired_count = len(rows)
+            logger.info("Found %d expired ROTATING key(s)", expired_count)
 
-                # Transition expired keys to REVOKED
+            if args.dry_run:
                 for row in rows:
-                    keys = ledger.get_keys(row["device_id"])
-                    target_key = next(
-                        (k for k in keys if k.key_version == row["key_version"]), None
+                    logger.info(
+                        "  [DRY-RUN] Would expire: device=%s key_version=%s grace_expired=%s",
+                        row["device_id"],
+                        row["key_version"],
+                        row["grace_expires_ts"],
+                    )
+                return 0
+
+            # Transition expired keys to REVOKED
+            for row in rows:
+                keys = ledger.get_keys(row["device_id"])
+                target_key = next(
+                    (k for k in keys if k.key_version == row["key_version"]), None
                     )
                     if target_key:
                         revoked = replace(
@@ -1377,29 +1470,32 @@ def _handle_dlq_command(
             if new_seq < 0:
                 logger.error("requeue_seq must be greater than or equal to zero")
                 return 2
-            with connection_scope() as connection:
-                outbox_store.enqueue(
-                    OutboxEntry(
-                        id=None,
-                        wal_pos=letter.wal_pos,
-                        tenant_id=letter.tenant_id,
-                        space_id=letter.space_id,
-                        driver=letter.driver,
-                        op_kind=letter.op_kind,
-                        payload=letter.payload,
-                        fingerprint=letter.fingerprint,
+
+            async def _requeue_letter():
+                async with connection_scope() as connection:
+                    await outbox_store.enqueue(
+                        OutboxEntry(
+                            id=None,
+                            wal_pos=letter.wal_pos,
+                            tenant_id=letter.tenant_id,
+                            space_id=letter.space_id,
+                            driver=letter.driver,
+                            op_kind=letter.op_kind,
+                            payload=letter.payload,
+                            fingerprint=letter.fingerprint,
+                            requeue_seq=new_seq,
+                            retries=0,
+                            last_error=letter.reason,
+                        ),
+                        connection=connection,
+                    )
+                    await queue.mark_requeued(
+                        letter.id,
                         requeue_seq=new_seq,
-                        retries=0,
-                        last_error=letter.reason,
-                    ),
-                    connection=connection,
-                )
-                queue.mark_requeued(
-                    letter.id,
-                    requeue_seq=new_seq,
-                    connection=connection,
-                )
-                connection.commit()
+                        connection=connection,
+                    )
+
+            asyncio.run(_requeue_letter())
             logger.info(
                 "Requeued dead-letter entry %s for driver %s with requeue_seq=%s",
                 letter.id,
@@ -1444,24 +1540,39 @@ def _log_dead_letter(letter: DeadLetter) -> None:
     )
 
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+def _handle_db_command(args: argparse.Namespace) -> int:
+    """Handle PostgreSQL database migration commands via Alembic.
 
+    Delegates to k0.cli.db_migrate for actual Alembic operations.
+    Part of Milestone 1.1.2 - Issue 1.1.2.4.
+    """
+    from k0.cli.db_migrate import (
+        cmd_current,
+        cmd_downgrade,
+        cmd_history,
+        cmd_revision,
+        cmd_upgrade,
+    )
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    command = args.db_command
 
+    if command == "upgrade":
+        return cmd_upgrade(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    if command == "downgrade":
+        return cmd_downgrade(args)
 
+    if command == "current":
+        return cmd_current(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    if command == "history":
+        return cmd_history(args)
 
+    if command == "revision":
+        return cmd_revision(args)
 
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    logger.error("`db %s` command is not implemented yet", command)
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

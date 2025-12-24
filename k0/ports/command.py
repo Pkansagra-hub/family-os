@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from k0.db.connection import connection_scope
 from k0.gate import MinimalGate
 from k0.idem import IdempotencyLedger, LedgerEntry
 from k0.kernel.admission import record_admission_decision
@@ -48,7 +49,6 @@ from k0.storage.provisioning import ProvisionedDevice, ProvisioningLedger
 from k0.storage.receipts import Receipt
 from k0.storage.wal import WalEntry
 from k0.uow import UnitOfWork
-from k0.uow.connection_pool import connection_scope
 
 router = APIRouter(prefix="/k0", tags=["command"])
 logger = logging.getLogger(__name__)
@@ -277,8 +277,8 @@ async def submit_command(
         receipt_issuer = _get_state_component(request, "receipt_issuer", ReceiptIssuer)
         unit_of_work_factory = _get_unit_of_work_factory(request)
 
-        with connection_scope() as gate_connection:
-            outcome = minimal_gate.validate(
+        async with connection_scope() as gate_connection:
+            outcome = await minimal_gate.validate(
                 dict(envelope_dict),
                 body=body_bytes,
                 connection=gate_connection,
@@ -319,7 +319,7 @@ async def submit_command(
                 )
                 concurrent_gauge.inc()
 
-            duplicate = idem_ledger.lookup(idem_key, connection=gate_connection)
+            duplicate = await idem_ledger.lookup(idem_key, connection=gate_connection)
             if duplicate is not None:
                 # Decrement concurrent checks on early exit
                 if concurrent_gauge is not None:
@@ -334,7 +334,7 @@ async def submit_command(
                     },
                 )
 
-            device_record = provisioning.lookup(
+            device_record = await provisioning.lookup(
                 envelope_dict["tenant_id"],
                 envelope_dict["space_id"],
                 envelope_dict["device_id"],
@@ -646,7 +646,7 @@ async def submit_command(
             # ADR-K002: Check idempotency INSIDE transaction to prevent TOCTOU race
             # This ensures atomic CHECK+USE within single SQLite BEGIN IMMEDIATE...COMMIT
             # Gap 41: Track check-commit window and detect races
-            duplicate = idem_ledger.lookup(idem_key, connection=uow.connection)
+            duplicate = await idem_ledger.lookup(idem_key, connection=uow.connection)
 
             # Calculate time window between early check and commit
             check_commit_window = perf_counter() - early_check_start
@@ -706,7 +706,7 @@ async def submit_command(
             if obligation_store is not None and obligation_records:
                 for record in obligation_records:
                     record.wal_pos = wal_pos
-                obligation_store.bulk_save(obligation_records, connection=uow.connection)
+                await obligation_store.bulk_save(obligation_records, connection=uow.connection)
 
             outbox_payload: dict[str, Any] = {
                 "wal_pos": wal_pos,
@@ -766,7 +766,7 @@ async def submit_command(
             policy_stamp = envelope_dict.get("policy_stamp", {})
             obligations_applied_list = policy_stamp.get("obligations", [])
 
-            receipt_doc = receipt_issuer.issue(
+            receipt_doc = await receipt_issuer.issue(
                 receipt_id=str(receipt_id),
                 idem_key=idem_key,
                 wal_pos=wal_pos,
@@ -799,7 +799,7 @@ async def submit_command(
                 state="COMMITTED",
                 expiry_ts=None,
             )
-            idem_ledger.upsert(ledger_entry, connection=uow.connection)
+            await idem_ledger.upsert(ledger_entry, connection=uow.connection)
 
         # Gap 41: Decrement concurrent checks gauge after successful commit
         if concurrent_gauge is not None:

@@ -1,4 +1,4 @@
-"""FTS (Full Text Search) storage operations using SQLite FTS5."""
+"""FTS (Full Text Search) storage operations - Async PostgreSQL with tsvector."""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import json
 import logging
 from typing import Any
 
-from k0.uow.connection_pool import connection_scope
+from k0.db.connection import connection_scope
 
 LOGGER = logging.getLogger(__name__)
 
 
 class FtsStore:
-    """Storage operations for FTS virtual table."""
+    """Storage operations for FTS using PostgreSQL tsvector/GIN."""
 
     def __init__(self) -> None:
         pass
 
-    def index_wal_entry(
+    async def index_wal_entry(
         self,
         *,
         wal_pos: int,
@@ -63,37 +63,47 @@ class FtsStore:
             # No searchable content, skip indexing
             return
 
-        with connection_scope() as connection:
-            connection.execute(
+        async with connection_scope() as connection:
+            await connection.execute(
                 """
-				INSERT OR REPLACE INTO st_fts (
-					wal_pos, tenant_id, space_id, topic, content,
-					envelope_json, body, payload_sha256, schema_uri,
-					schema_version, device_id, commit_ts
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				""",
-                (
-                    wal_pos,
-                    tenant_id,
-                    space_id,
-                    topic,
-                    content,
-                    envelope_json,
-                    body,
-                    payload_sha256,
-                    schema_uri,
-                    schema_version,
-                    device_id,
-                    commit_ts,
-                ),
+                INSERT INTO st_fts (
+                    wal_pos, tenant_id, space_id, topic, content,
+                    envelope_json, body, payload_sha256, schema_uri,
+                    schema_version, device_id, commit_ts
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (wal_pos) DO UPDATE SET
+                    tenant_id = EXCLUDED.tenant_id,
+                    space_id = EXCLUDED.space_id,
+                    topic = EXCLUDED.topic,
+                    content = EXCLUDED.content,
+                    envelope_json = EXCLUDED.envelope_json,
+                    body = EXCLUDED.body,
+                    payload_sha256 = EXCLUDED.payload_sha256,
+                    schema_uri = EXCLUDED.schema_uri,
+                    schema_version = EXCLUDED.schema_version,
+                    device_id = EXCLUDED.device_id,
+                    commit_ts = EXCLUDED.commit_ts
+                """,
+                wal_pos,
+                tenant_id,
+                space_id,
+                topic,
+                content,
+                envelope_json,
+                body,
+                payload_sha256,
+                schema_uri,
+                schema_version,
+                device_id,
+                commit_ts,
             )
 
-    def remove_wal_entry(self, *, wal_pos: int) -> None:
+    async def remove_wal_entry(self, *, wal_pos: int) -> None:
         """Remove a WAL entry from the FTS index."""
-        with connection_scope() as connection:
-            connection.execute("DELETE FROM st_fts WHERE wal_pos = ?", (wal_pos,))
+        async with connection_scope() as connection:
+            await connection.execute("DELETE FROM st_fts WHERE wal_pos = $1", wal_pos)
 
-    def search(
+    async def search(
         self,
         *,
         query: str,
@@ -102,31 +112,41 @@ class FtsStore:
         topic: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        """Search the FTS index and return matching entries."""
-        with connection_scope() as connection:
-            params = []
+        """Search the FTS index and return matching entries.
+
+        Uses PostgreSQL ts_rank for scoring instead of SQLite bm25.
+        """
+        async with connection_scope() as connection:
+            # Build dynamic query with PostgreSQL full-text search
+            params: list[Any] = [query, space_id]
+            param_idx = 3
+
             query_parts = [
-                "SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body, payload_sha256, schema_uri, schema_version, device_id, commit_ts, bm25(st_fts) as score",
-                "FROM st_fts",
-                "WHERE st_fts MATCH ?",
-                "AND space_id = ?",
+                """
+                SELECT wal_pos, tenant_id, space_id, topic, envelope_json, body,
+                       payload_sha256, schema_uri, schema_version, device_id, commit_ts,
+                       ts_rank(to_tsvector('english', content), plainto_tsquery('english', $1)) as score
+                FROM st_fts
+                WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
+                AND space_id = $2
+                """
             ]
 
             if tenant_id:
-                query_parts.append("AND tenant_id = ?")
+                query_parts.append(f"AND tenant_id = ${param_idx}")
                 params.append(tenant_id)
+                param_idx += 1
 
             if topic:
-                query_parts.append("AND topic = ?")
+                query_parts.append(f"AND topic = ${param_idx}")
                 params.append(topic)
+                param_idx += 1
 
-            query_parts.append("ORDER BY bm25(st_fts)")
-            query_parts.append("LIMIT ?")
+            query_parts.append(f"ORDER BY score DESC LIMIT ${param_idx}")
+            params.append(limit)
 
             statement = " ".join(query_parts)
-            params.extend([query, space_id, limit])
-
-            rows = connection.execute(statement, params).fetchall()
+            rows = await connection.fetch(statement, *params)
 
             results = []
             for row in rows:
@@ -159,13 +179,12 @@ class FtsStore:
 
             return results
 
-    def get_stats(self) -> dict[str, Any]:
+    async def get_stats(self) -> dict[str, Any]:
         """Get FTS table statistics."""
-        with connection_scope() as connection:
-            cursor = connection.execute("SELECT count(*) as total_docs FROM st_fts")
-            total_docs = cursor.fetchone()[0]
+        async with connection_scope() as connection:
+            total_docs = await connection.fetchval("SELECT count(*) FROM st_fts")
 
             return {
-                "total_documents": total_docs,
-                "table_type": "fts5",
+                "total_documents": total_docs or 0,
+                "table_type": "postgresql_tsvector",
             }

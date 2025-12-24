@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -20,7 +19,6 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from prometheus_client import PlatformCollector, ProcessCollector
 from starlette.responses import Response
 
-from ..automation.migrate import MigrationError, apply_migrations
 from ..bus import (
     BusDispatcher,
     BusMessage,
@@ -29,6 +27,8 @@ from ..bus import (
     timestamp_middleware,
     tracing_middleware,
 )
+from ..config.postgres import PostgresSettings
+from ..db.pool import configure_pool, shutdown_pool
 from ..drivers import AliasMap
 from ..gate import MinimalGate
 from ..gate.schema_registry import SchemaRegistry
@@ -57,7 +57,6 @@ from ..storage import (
 )
 from ..storage.replayer import Replayer, ReplayError
 from ..uow import UnitOfWork
-from ..uow.connection_pool import configure_pool, shutdown_pool
 from .admission import AdmissionRecord, consume_admission_records
 from .config import KernelSettings
 from .dependencies import build_request_dependencies
@@ -292,8 +291,11 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.state.driver_worker_pool = driver_worker_pool
     app.state.bus_dispatcher = bus_dispatcher
 
-    # Inject bus dispatcher into SQLite driver for WAL/outbox operations
-    from ..drivers.sqlite import set_bus_dispatcher
+    # Inject bus dispatcher into appropriate driver for WAL/outbox operations
+    if settings.database.backend == "postgresql":
+        from ..drivers.postgres import set_bus_dispatcher
+    else:
+        from ..drivers.archived.sqlite import set_bus_dispatcher
 
     set_bus_dispatcher(bus_dispatcher)
 
@@ -382,19 +384,44 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
     app.include_router(observe.router)
     app.include_router(drivers.router)
 
-    database_path = Path(getattr(settings.database, "path")).resolve()
-    configure_pool(database_path)
+    # PostgreSQL settings for async pool initialization (done in lifespan)
+    postgres_settings = PostgresSettings()
+    app.state.postgres_settings = postgres_settings
 
-    def _bootstrap_runtime() -> None:
+    async def _bootstrap_runtime_async() -> None:
+        """Async bootstrap: migrations and WAL replay."""
         readiness = getattr(app.state, "readiness", None)
+
+        # Apply migrations using Alembic
+        # Run in a thread pool to avoid event loop conflicts with Alembic's async migrations
         try:
-            apply_migrations(database_path, logger=logger)
+            from concurrent.futures import ThreadPoolExecutor
+            from pathlib import Path
+
+            from alembic import command
+            from alembic.config import Config
+
+            def run_migrations_sync() -> None:
+                """Run Alembic migrations in a separate thread with its own event loop."""
+                alembic_cfg = Config()
+                alembic_cfg.set_main_option(
+                    "script_location", str(Path(__file__).parent.parent / "db" / "alembic")
+                )
+                alembic_cfg.set_main_option("sqlalchemy.url", postgres_settings.dsn)
+                command.upgrade(alembic_cfg, "head")
+
+            # Run migrations in a thread pool to get a fresh event loop
+            loop = asyncio.get_running_loop()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                await loop.run_in_executor(pool, run_migrations_sync)
+
             if readiness is not None:
                 readiness.mark_migrations_complete()
-        except MigrationError:
+            logger.info("PostgreSQL migrations applied successfully")
+        except Exception as e:
             logger.exception(
                 "Database migration failed during startup",
-                extra={"database_path": str(database_path)},
+                extra={"error": str(e)},
             )
             raise
 
@@ -404,21 +431,12 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             observability=getattr(app.state, "observability_emitter", None),
         )
         try:
-            replayer.run(from_position=0)
+            await replayer.run(from_position=0)
         except ReplayError:
             logger.exception("WAL replay failed during startup")
             raise
         if readiness is not None:
             readiness.mark_wal_replay_complete()
-
-    # Gap 21: Only shutdown pool on bootstrap exception
-    # If bootstrap succeeds, pool stays open for runtime
-    try:
-        _bootstrap_runtime()
-    except Exception:
-        # Bootstrap failed - cleanup pool before re-raising
-        shutdown_pool()
-        raise
 
     async def _report_sse_metrics_periodically() -> None:
         """Background task to periodically report SSE connection metrics."""
@@ -457,11 +475,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                     logger.debug("No driver aliases registered, skipping outbox processing")
                     continue
 
-                # Process each registered driver
-                loop = asyncio.get_running_loop()
+                # Process each registered driver - async-native, no thread pool
                 for alias in driver_aliases:
                     try:
-                        await loop.run_in_executor(None, worker_pool.process_driver, alias)
+                        await worker_pool.process_driver_async(alias)
                         logger.debug(f"Processed outbox for driver: {alias}")
                     except RuntimeError as e:  # noqa: BLE001
                         # Gracefully skip drivers that aren't implemented yet
@@ -473,17 +490,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
                             logger.debug(f"Skipping unimplemented driver: {alias} ({error_msg})")
                         else:
                             logger.exception(f"Failed to process outbox for driver: {alias}")
-                    except sqlite3.OperationalError as e:  # noqa: BLE001
-                        # Gracefully handle database connection issues (e.g., Docker volume mount issues)
-                        # These are typically transient or configuration issues
-                        if "unable to open database file" in str(e):
-                            logger.debug(
-                                f"Skipping driver {alias} due to database connection issue (likely Docker volume mount): {e}"
-                            )
-                        else:
-                            logger.exception(
-                                f"Database error processing outbox for driver: {alias}"
-                            )
                     except Exception:  # noqa: BLE001
                         logger.exception(f"Failed to process outbox for driver: {alias}")
 
@@ -537,7 +543,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         Returns:
             ModelRegistry: Initialized model registry
         """
-        from pathlib import Path
 
         from ..runtime.model_registry import init_model_registry
 
@@ -580,7 +585,6 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
         Returns:
             FeatureFlags: Initialized feature flags
         """
-        from pathlib import Path
 
         from ..config.feature_flags import init_feature_flags
 
@@ -633,8 +637,31 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Phase -1: Initialize PostgreSQL connection pool (MUST be first)
+        logger.info("Initializing PostgreSQL connection pool...")
+        try:
+            await configure_pool(
+                postgres_settings,
+                metrics_exporter=metrics_exporter,
+            )
+            logger.info("PostgreSQL pool initialized successfully")
+        except Exception as e:
+            logger.exception(f"Failed to initialize PostgreSQL pool: {e}")
+            raise
+
+        # Phase -0.5: Run async bootstrap (migrations + WAL replay)
+        try:
+            await _bootstrap_runtime_async()
+        except Exception:
+            # Bootstrap failed - cleanup pool before re-raising
+            await shutdown_pool()
+            raise
+
         # Ensure bus dispatcher has the running loop
-        from ..drivers.sqlite import set_bus_dispatcher
+        if settings.database.backend == "postgresql":
+            from ..drivers.postgres import set_bus_dispatcher
+        else:
+            from ..drivers.archived.sqlite import set_bus_dispatcher
 
         set_bus_dispatcher(bus_dispatcher)
 
@@ -735,13 +762,15 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
             # Issue 2.2.3: Set global registry and register capabilities
             set_module_registry(registry)
             from ..fabric.loader import discover_and_register_capabilities
+            from ..fabric.registry import get_capability_registry
 
             cap_count = discover_and_register_capabilities(registry)
+            capability_registry = get_capability_registry()
             logger.info(
                 f"Registered {cap_count} capability providers",
                 extra={
                     "provider_count": cap_count,
-                    "capability_stats": registry.get_capability_stats(),
+                    "capability_stats": capability_registry.get_stats(),
                 },
             )
 
@@ -1072,7 +1101,10 @@ def create_app(settings: KernelSettings | None = None) -> FastAPI:
 
             # DEPRECATED (M5): p08_indexer_task await removed
 
-            shutdown_pool()
+            # Close PostgreSQL connection pool
+            logger.info("Closing PostgreSQL connection pool...")
+            await shutdown_pool()
+            logger.info("PostgreSQL pool closed")
 
     app.router.lifespan_context = _lifespan
 
@@ -1513,6 +1545,7 @@ def _compose_error(
     hint: Any | None = None,
     budgets: Any | None = None,
 ) -> dict[str, Any]:
+    """Compose error response payload."""
     error: dict[str, Any] = {
         "code": code,
         "reason": reason,

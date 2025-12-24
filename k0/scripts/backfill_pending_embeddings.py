@@ -19,11 +19,14 @@ ADR Reference: ADR-K003 (Inline Embedding via UltraBERT)
 
 import argparse
 import asyncio
-import sqlite3
+import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import asyncpg
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -34,32 +37,36 @@ class BackfillExecutor:
 
     def __init__(
         self,
-        db_path: str,
+        db_url: str,
         batch_size: int = 100,
         dry_run: bool = False,
         tenant_id: str | None = None,
         space_id: str | None = None,
     ):
-        self.db_path = db_path
+        self.db_url = db_url or os.getenv(
+            "K0_DATABASE_URL",
+            "postgresql://k0_user:k0_password@localhost:5432/k0_kernel",
+        )
         self.batch_size = batch_size
         self.dry_run = dry_run
         self.tenant_id = tenant_id
         self.space_id = space_id
-        self.conn: sqlite3.Connection | None = None
+        self.conn: "asyncpg.Connection | None" = None
 
-    def connect(self) -> None:
+    async def connect(self) -> None:
         """Connect to K0 runtime database."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
-        print(f"✅ Connected to database: {self.db_path}")
+        import asyncpg
 
-    def close(self) -> None:
+        self.conn = await asyncpg.connect(self.db_url)
+        print(f"Connected to database: {self.db_url.split('@')[-1]}")
+
+    async def close(self) -> None:
         """Close database connection."""
         if self.conn:
-            self.conn.close()
-            print("✅ Database connection closed")
+            await self.conn.close()
+            print("Database connection closed")
 
-    def count_pending_records(self) -> dict[str, Any]:
+    async def count_pending_records(self) -> dict[str, Any]:
         """Count PENDING embedding records by tenant/space."""
         if not self.conn:
             raise RuntimeError("Database not connected")
@@ -73,18 +80,20 @@ class BackfillExecutor:
             WHERE embedding_status = 'PENDING'
         """
 
-        params = []
+        params: list = []
+        param_idx = 1
         if self.tenant_id:
-            query += " AND tenant_id = ?"
+            query += f" AND tenant_id = ${param_idx}"
             params.append(self.tenant_id)
+            param_idx += 1
         if self.space_id:
-            query += " AND space_id = ?"
+            query += f" AND space_id = ${param_idx}"
             params.append(self.space_id)
+            param_idx += 1
 
         query += " GROUP BY tenant_id, space_id ORDER BY pending_count DESC"
 
-        cursor = self.conn.execute(query, params)
-        results = cursor.fetchall()
+        results = await self.conn.fetch(query, *params)
 
         summary = {
             "total_pending": sum(row["pending_count"] for row in results),
@@ -121,7 +130,7 @@ class BackfillExecutor:
                 "batch_size": self.batch_size,
                 "batch_num": batch_num,
                 "total_batches": total_batches,
-                "requested_at": datetime.utcnow().isoformat(),
+                "requested_at": datetime.now(timezone.utc).isoformat(),
             },
             "metadata": {
                 "correlation_id": f"backfill_{tenant_id}_{space_id}_{batch_num}",

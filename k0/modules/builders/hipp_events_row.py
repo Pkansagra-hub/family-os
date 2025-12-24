@@ -129,12 +129,20 @@ def map_integrity_group(envelope: Dict[str, Any]) -> Dict[str, Any]:
 
     From: envelope (flat P02 dossier structure - audit trail)
     """
+    import time
+
+    # Ensure ingested_at is epoch integer for PostgreSQL BIGINT column
+    ingested_raw = envelope.get("ingested_at")
+    ingested_at = _ensure_epoch_int(ingested_raw)
+    if ingested_at is None:
+        ingested_at = int(time.time())
+
     return {
         "envelope_sha256": envelope.get("envelope_sha256"),
         "sig_alg": envelope.get("sig_alg", "NONE"),
         "sig_kid": envelope.get("sig_kid", "unsigned"),
         "idem_key": envelope.get("idem_key"),
-        "ingested_at": envelope.get("ingested_at") or int(time.time()),
+        "ingested_at": ingested_at,
         "clock_skew_ms": envelope.get("clock_skew_ms", 0),
     }
 
@@ -219,15 +227,50 @@ def map_actor_device_group(
     }
 
 
+def _ensure_epoch_int(ts_value: "int | datetime | None") -> int | None:
+    """Ensure timestamp is an epoch integer for PostgreSQL BIGINT columns.
+
+    Handles:
+    - int: Return as-is
+    - datetime: Convert to Unix epoch
+    - None: Return None
+    """
+    from datetime import datetime
+
+    if ts_value is None:
+        return None
+    if isinstance(ts_value, int):
+        return ts_value
+    if isinstance(ts_value, datetime):
+        return int(ts_value.timestamp())
+    # Try to convert string ISO format
+    if isinstance(ts_value, str):
+        try:
+            return int(datetime.fromisoformat(ts_value.replace("Z", "+00:00")).timestamp())
+        except ValueError:
+            return None
+    return None
+
+
 def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
     """
     Temporal columns (11 columns)
 
     From: M08 temporal_profile
+
+    Note: All timestamp columns use BIGINT (epoch seconds) to match SQLite schema.
     """
+    import time
+
+    now = int(time.time())
+
+    # Ensure timestamps are epoch integers for PostgreSQL BIGINT columns
+    event_time_raw = temporal_output.get("event_time_utc")
+    write_time_raw = temporal_output.get("write_time_utc")
+
     return {
-        "event_time_utc": temporal_output.get("event_time_utc"),
-        "write_time_utc": temporal_output.get("write_time_utc"),
+        "event_time_utc": _ensure_epoch_int(event_time_raw),
+        "write_time_utc": _ensure_epoch_int(write_time_raw),
         "write_lag_ms": temporal_output.get("write_lag_ms"),
         "local_date": temporal_output.get("local_date"),
         "local_time": temporal_output.get("local_time"),
@@ -236,8 +279,8 @@ def map_temporal_group(temporal_output: Dict[str, Any]) -> Dict[str, Any]:
         "time_of_day_bucket": temporal_output.get("time_of_day_bucket"),
         "circadian_slot": temporal_output.get("circadian_slot"),
         "is_backdated": temporal_output.get("is_backdated"),
-        "created_at": int(time.time()),
-        "updated_at": int(time.time()),
+        "created_at": now,
+        "updated_at": now,
     }
 
 
@@ -908,4 +951,18 @@ def get_metrics() -> Dict[str, Any]:
 def reset_metrics() -> None:
     """Reset metrics (for testing)"""
     global _metrics
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
+    _metrics = BuilderMetrics()
     _metrics = BuilderMetrics()

@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Iterator
+from datetime import datetime
+from typing import TYPE_CHECKING, AsyncIterator
 
+from k0.db.connection import connection_scope
 from k0.obs import MetricsExporter, ObservabilityEmitter
-from k0.uow.connection_pool import connection_scope
+
+if TYPE_CHECKING:
+    import asyncpg
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _format_timestamp(value: str | datetime | None) -> str | None:
+    """Convert datetime to string for TEXT columns in PostgreSQL."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
 
 
 @dataclass(slots=True)
@@ -23,17 +35,16 @@ class LedgerEntry:
     expiry_ts: str | None = None
 
 
-@contextmanager
-def _resolve_connection(
-    connection: sqlite3.Connection | None,
-) -> Iterator[sqlite3.Connection]:
+@asynccontextmanager
+async def _resolve_connection(
+    connection: "asyncpg.Connection | None",
+) -> AsyncIterator["asyncpg.Connection"]:
     if connection is not None:
         yield connection
         return
 
-    with connection_scope() as pooled_connection:
+    async with connection_scope() as pooled_connection:
         yield pooled_connection
-        pooled_connection.commit()
 
 
 class IdempotencyLedger:
@@ -53,24 +64,22 @@ class IdempotencyLedger:
 
         self._metrics = metrics
 
-    def attach_observability_emitter(
-        self, emitter: ObservabilityEmitter | None
-    ) -> None:
+    def attach_observability_emitter(self, emitter: ObservabilityEmitter | None) -> None:
         """Attach or replace the observability emitter used for ledger events."""
 
         self._observability = emitter
 
-    def lookup(
+    async def lookup(
         self,
         idem_key: str,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> LedgerEntry | None:
-        with _resolve_connection(connection) as conn:
-            row = conn.execute(
-                "SELECT idem_key, receipt_id, first_seen_ts, state, expiry_ts FROM idem_ledger WHERE idem_key = ?",
-                (idem_key,),
-            ).fetchone()
+        async with _resolve_connection(connection) as conn:
+            row = await conn.fetchrow(
+                "SELECT idem_key, receipt_id, first_seen_ts, state, expiry_ts FROM idem_ledger WHERE idem_key = $1",
+                idem_key,
+            )
             if row is None:
                 self._emit_lookup_telemetry(idem_key, None, outcome="miss")
                 return None
@@ -84,27 +93,25 @@ class IdempotencyLedger:
             self._emit_lookup_telemetry(idem_key, entry, outcome="hit")
             return entry
 
-    def upsert(
+    async def upsert(
         self,
         entry: LedgerEntry,
         *,
-        connection: sqlite3.Connection | None = None,
+        connection: "asyncpg.Connection | None" = None,
     ) -> None:
-        with _resolve_connection(connection) as conn:
-            conn.execute(
+        async with _resolve_connection(connection) as conn:
+            await conn.execute(
                 (
                     "INSERT INTO idem_ledger (idem_key, receipt_id, first_seen_ts, state, expiry_ts) "
-                    "VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(idem_key) DO UPDATE SET receipt_id=excluded.receipt_id, "
-                    "first_seen_ts=excluded.first_seen_ts, state=excluded.state, expiry_ts=excluded.expiry_ts"
+                    "VALUES ($1, $2, $3, $4, $5) "
+                    "ON CONFLICT(idem_key) DO UPDATE SET receipt_id=EXCLUDED.receipt_id, "
+                    "first_seen_ts=EXCLUDED.first_seen_ts, state=EXCLUDED.state, expiry_ts=EXCLUDED.expiry_ts"
                 ),
-                (
-                    entry.idem_key,
-                    entry.receipt_id,
-                    entry.first_seen_ts,
-                    entry.state,
-                    entry.expiry_ts,
-                ),
+                entry.idem_key,
+                entry.receipt_id,
+                _format_timestamp(entry.first_seen_ts),
+                entry.state,
+                _format_timestamp(entry.expiry_ts),
             )
         self._emit_upsert_telemetry(entry)
 

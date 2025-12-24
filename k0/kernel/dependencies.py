@@ -8,15 +8,16 @@ adapters that can also be swapped in tests for instrumentation.
 
 from __future__ import annotations
 
-import sqlite3
-from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Coroutine, Dict
 
 from ..obs.tracing import TracerFactory
 from ..qos import QoSContext, Scheduler, SchedulerProfile
 from .config import KernelSettings
+
+if TYPE_CHECKING:
+    import asyncpg
 
 DEPENDENCY_NOT_CONFIGURED_MSG = (
     "Kernel dependency overrides have not been configured. Ensure "
@@ -24,10 +25,10 @@ DEPENDENCY_NOT_CONFIGURED_MSG = (
 )
 
 
-def database_session() -> Iterator[sqlite3.Connection]:
-    """Return a SQLite connection bound to the kernel datastore."""
-
+async def database_session() -> AsyncIterator["asyncpg.Connection"]:
+    """Return an asyncpg connection bound to the kernel datastore."""
     raise RuntimeError(DEPENDENCY_NOT_CONFIGURED_MSG)
+    yield  # type: ignore[misc]  # pragma: no cover - makes this an async generator
 
 
 @dataclass(slots=True)
@@ -63,11 +64,8 @@ def qos_context_dependency() -> QoSContext:
     raise RuntimeError(DEPENDENCY_NOT_CONFIGURED_MSG)
 
 
-ConnectionFactory = Callable[[], sqlite3.Connection]
+ConnectionFactory = Callable[[], Coroutine[Any, Any, "asyncpg.Connection"]]
 SchedulerFactory = Callable[[KernelSettings], Scheduler]
-
-
-_recently_closed_connections: deque[sqlite3.Connection] = deque(maxlen=16)
 
 
 @dataclass(slots=True)
@@ -89,18 +87,12 @@ class RequestDependencyProvider:
         if self.tracer_factory is None:
             telemetry_settings = getattr(self.settings, "telemetry", None)
             otlp_endpoint = (
-                getattr(telemetry_settings, "otlp_endpoint", None)
-                if telemetry_settings
-                else None
+                getattr(telemetry_settings, "otlp_endpoint", None) if telemetry_settings else None
             )
             otlp_headers_raw = (
-                getattr(telemetry_settings, "otlp_headers", {})
-                if telemetry_settings
-                else {}
+                getattr(telemetry_settings, "otlp_headers", {}) if telemetry_settings else {}
             )
-            otlp_headers = {
-                str(key): str(value) for key, value in dict(otlp_headers_raw).items()
-            }
+            otlp_headers = {str(key): str(value) for key, value in dict(otlp_headers_raw).items()}
             sample_ratio = (
                 float(getattr(telemetry_settings, "trace_sample_ratio", 1.0))
                 if telemetry_settings
@@ -126,27 +118,19 @@ class RequestDependencyProvider:
             settings_path=self.settings.config_file,
         )
 
-    def _default_connection_factory(self) -> sqlite3.Connection:
-        database_settings = getattr(self.settings, "database")
-        db_path = getattr(database_settings, "path")
-        if db_path.parent and not db_path.parent.exists():
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(
-            db_path,
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            check_same_thread=False,
-        )
-        conn.row_factory = sqlite3.Row
-        return conn
+    async def _default_connection_factory(self) -> "asyncpg.Connection":
+        """Create a new asyncpg connection using the global pool."""
+        from ..db.pool import get_pool
 
-    def _database_session(self) -> Iterator[sqlite3.Connection]:
-        assert self.connection_factory is not None  # nosec - post-init guarantee
-        connection = self.connection_factory()
-        try:
-            yield connection
-        finally:
-            connection.close()
-            _recently_closed_connections.append(connection)
+        pool = get_pool()
+        return await pool._pool.acquire()
+
+    async def _database_session(self) -> AsyncIterator["asyncpg.Connection"]:
+        """Async generator that yields a pooled connection."""
+        from ..db.connection import connection_scope
+
+        async with connection_scope() as conn:
+            yield conn
 
     def _policy_context(self) -> PolicyContext:
         assert self._policy_template is not None  # nosec - post-init guarantee

@@ -19,7 +19,6 @@ Related:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Callable
@@ -161,7 +160,7 @@ class Syscalls:
 
         Performance:
             - Target: <50ms P95 (single UPSERT)
-            - Uses UPSERT (INSERT OR REPLACE) for idempotency
+            - Uses ON CONFLICT DO UPDATE for idempotency
             - Indexed on event_id (primary key)
 
         Related:
@@ -232,7 +231,7 @@ class Syscalls:
 
         Performance:
             - Target: <15ms P95 (single INSERT with 6 B-tree indexes)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -270,26 +269,23 @@ class Syscalls:
 
             # Use all columns from row (database will handle NULLs with DEFAULT constraints)
             columns = list(row.keys())
-            placeholders = ", ".join(["?"] * len(columns))
+            placeholders = ", ".join([f"${i+1}" for i in range(len(columns))])
             column_names = ", ".join(columns)
-            values = tuple(row[k] for k in columns)
+            values = [row[k] for k in columns]
 
             try:
-                # Use INSERT OR IGNORE for idempotency (faster than INSERT OR REPLACE)
+                # Use INSERT with ON CONFLICT for idempotency (PostgreSQL upsert)
                 # event_id is PRIMARY KEY, so duplicates will be silently skipped
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        f"""
-                        INSERT OR IGNORE INTO st_hipp_events ({column_names})
-                        VALUES ({placeholders})
-                        """,
-                        values,
-                    ),
+                result = await conn.execute(
+                    f"""
+                    INSERT INTO st_hipp_events ({column_names})
+                    VALUES ({placeholders})
+                    ON CONFLICT (event_id) DO NOTHING
+                    """,
+                    *values,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -367,7 +363,7 @@ class Syscalls:
 
         Performance:
             - Target: <10ms P95 (single INSERT with composite index)
-            - Uses INSERT OR REPLACE for upsert semantics
+            - Uses INSERT ... ON CONFLICT DO UPDATE for upsert semantics
             - Connection pooling via UnitOfWork
 
         Related:
@@ -406,25 +402,21 @@ class Syscalls:
             processed_at = processed_at or int(time.time())
 
             try:
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR REPLACE INTO st_pipeline_processed (
-                            pipeline_id, space_id, wal_pos, processed_at
-                        ) VALUES (?, ?, ?, ?)
-                        """,
-                        (
-                            pipeline_id,
-                            space_id,
-                            wal_pos,
-                            processed_at,
-                        ),
-                    ),
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_pipeline_processed (
+                        pipeline_id, space_id, wal_pos, processed_at
+                    ) VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (pipeline_id, space_id, wal_pos) DO UPDATE SET
+                        processed_at = EXCLUDED.processed_at
+                    """,
+                    pipeline_id,
+                    space_id,
+                    wal_pos,
+                    processed_at,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -696,19 +688,19 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             # Query st_relationships for actor's relationships
+            # Column names: person_id (actor), related_person_id (related) - both TEXT
             query = """
                 SELECT related_person_id, relationship_type
                 FROM st_relationships
-                WHERE person_id = ?
+                WHERE person_id = $1
             """
 
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: conn.execute(query, (actor_id,)).fetchall(),
-            )
+            rows = await conn.fetch(query, actor_id)
 
             # Convert rows to list of tuples
-            relationships = [(row[0], row[1]) for row in result]
+            relationships = [
+                (str(row["related_person_id"]), row["relationship_type"]) for row in rows
+            ]
 
             # Audit: Log completion
             elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -798,7 +790,7 @@ class Syscalls:
 
         Performance:
             - Target: <5ms P95 (single INSERT with B-tree index)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -837,42 +829,36 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            created_at = int(time.time())
-
             try:
-                # Use INSERT OR IGNORE for idempotency
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR IGNORE INTO st_embedding_queue (
-                            embedding_id, event_id, wal_pos,
-                            tenant_id, space_id, vector_kind,
-                            model_id, priority, status,
-                            attempt_count, max_attempts,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            embedding_id,
-                            event_id,
-                            wal_pos,
-                            tenant_id,
-                            space_id,
-                            vector_kind,
-                            model_id,
-                            priority,
-                            "PENDING",  # Initial status
-                            0,  # Initial attempt_count
-                            5,  # max_attempts (default retry limit)
-                            created_at,
-                            created_at,  # updated_at = created_at initially
-                        ),
-                    ),
+                # Use INSERT with ON CONFLICT for idempotency
+                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_embedding_queue (
+                        embedding_id, event_id, wal_pos,
+                        tenant_id, space_id, vector_kind,
+                        model_id, priority, status,
+                        attempt_count, max_attempts,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ON CONFLICT (embedding_id) DO NOTHING
+                    """,
+                    embedding_id,
+                    event_id,
+                    wal_pos,
+                    tenant_id,
+                    space_id,
+                    vector_kind,
+                    model_id,
+                    priority,
+                    "PENDING",  # Initial status
+                    0,  # Initial attempt_count
+                    5,  # max_attempts (default retry limit)
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # UnitOfWork context manager will auto-commit on successful exit
 
@@ -1051,12 +1037,12 @@ class Syscalls:
         # Begin transaction
         async with self._uow_factory() as uow:
             try:
-                # Prepare INSERT statements
+                # Prepare INSERT statement (PostgreSQL syntax)
                 insert_sql = """
                     INSERT INTO st_outbox (
                         wal_pos, tenant_id, space_id, driver, op_kind,
                         payload, fingerprint, requeue_seq, retries
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """
 
                 # Build parameter tuples
@@ -1086,9 +1072,9 @@ class Syscalls:
                         )
                     )
 
-                # Execute batch insert
-                loop = asyncio.get_running_loop()
-                await loop.run_in_executor(None, uow.connection.executemany, insert_sql, records)
+                # Execute batch insert using asyncpg executemany
+                conn = uow._connection
+                await conn.executemany(insert_sql, records)
 
                 # Transaction will be committed automatically by __aexit__
 
@@ -1202,7 +1188,7 @@ class Syscalls:
 
         Performance:
             - Target: <5ms P95 (single INSERT with 3KB blob + 4 indexes)
-            - Uses INSERT OR IGNORE for idempotency
+            - Uses INSERT ... ON CONFLICT DO NOTHING for idempotency
             - Connection pooling via UnitOfWork
 
         Related:
@@ -1254,38 +1240,31 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            created_at = int(time.time())
-            updated_at = created_at
-
             try:
-                # Use INSERT OR IGNORE for idempotency
-                loop = asyncio.get_running_loop()
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(
-                        """
-                        INSERT OR IGNORE INTO st_vec (
-                            embedding_id, event_id, tenant_id, space_id,
-                            vector, vector_dim, model_id, status,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            embedding_id,
-                            event_id,
-                            tenant_id,
-                            space_id,
-                            vector,
-                            vector_dim,
-                            model_id,
-                            status,
-                            created_at,
-                            updated_at,
-                        ),
-                    ),
+                # Use INSERT with ON CONFLICT for idempotency
+                # Use EXTRACT(EPOCH ...) for BIGINT timestamp columns
+                result = await conn.execute(
+                    """
+                    INSERT INTO st_vec (
+                        embedding_id, event_id, tenant_id, space_id,
+                        vector, vector_dim, model_id, status,
+                        created_at, updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT,
+                              EXTRACT(EPOCH FROM NOW())::BIGINT)
+                    ON CONFLICT (embedding_id) DO NOTHING
+                    """,
+                    embedding_id,
+                    event_id,
+                    tenant_id,
+                    space_id,
+                    vector,
+                    vector_dim,
+                    model_id,
+                    status,
                 )
 
-                inserted = cursor.rowcount > 0
+                inserted = result != "INSERT 0"
 
                 # Audit: Log performance
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -1382,16 +1361,20 @@ class Syscalls:
         # Build query with optional filters
         conditions = []
         params: list[Any] = []
+        param_idx = 1
 
         if status:
-            conditions.append("status = ?")
+            conditions.append(f"status = ${param_idx}")
             params.append(status)
+            param_idx += 1
         if tenant_id:
-            conditions.append("tenant_id = ?")
+            conditions.append(f"tenant_id = ${param_idx}")
             params.append(tenant_id)
+            param_idx += 1
         if space_id:
-            conditions.append("space_id = ?")
+            conditions.append(f"space_id = ${param_idx}")
             params.append(space_id)
+            param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
@@ -1416,42 +1399,35 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             try:
-                loop = asyncio.get_running_loop()
-
                 # Get total count
                 count_sql = f"SELECT COUNT(*) FROM st_vec WHERE {where_clause}"
-                total_result = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(count_sql, params).fetchone(),
-                )
+                total_result = await conn.fetchrow(count_sql, *params)
                 total = total_result[0] if total_result else 0
 
                 # Get paginated results
+                limit_param = f"${param_idx}"
+                offset_param = f"${param_idx + 1}"
                 query_sql = f"""
                     SELECT embedding_id, event_id, tenant_id, space_id,
                            vector, vector_dim, model_id, status, created_at
                     FROM st_vec
                     WHERE {where_clause}
                     ORDER BY created_at ASC
-                    LIMIT ? OFFSET ?
+                    LIMIT {limit_param} OFFSET {offset_param}
                 """
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(query_sql, params + [limit, offset]),
-                )
-                rows = cursor.fetchall()
+                rows = await conn.fetch(query_sql, *params, limit, offset)
 
                 embeddings = [
                     {
-                        "embedding_id": row[0],
-                        "event_id": row[1],
-                        "tenant_id": row[2],
-                        "space_id": row[3],
-                        "vector": row[4],  # bytes (3072 for 768 floats)
-                        "vector_dim": row[5],
-                        "model_id": row[6],
-                        "status": row[7],
-                        "created_at": row[8],
+                        "embedding_id": row["embedding_id"],
+                        "event_id": row["event_id"],
+                        "tenant_id": row["tenant_id"],
+                        "space_id": row["space_id"],
+                        "vector": row["vector"],  # bytes (3072 for 768 floats)
+                        "vector_dim": row["vector_dim"],
+                        "model_id": row["model_id"],
+                        "status": row["status"],
+                        "created_at": row["created_at"],
                     }
                     for row in rows
                 ]
@@ -1563,29 +1539,22 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            updated_at = int(time.time())
-
             try:
-                loop = asyncio.get_running_loop()
-
                 if indexed_at:
-                    cursor = await loop.run_in_executor(
-                        None,
-                        lambda: conn.execute(
-                            "UPDATE st_vec SET status = ?, indexed_at = ?, updated_at = ? WHERE embedding_id = ?",
-                            (status, indexed_at, updated_at, embedding_id),
-                        ),
+                    result = await conn.execute(
+                        "UPDATE st_vec SET status = $1, indexed_at = $2, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE embedding_id = $3",
+                        status,
+                        indexed_at,
+                        embedding_id,
                     )
                 else:
-                    cursor = await loop.run_in_executor(
-                        None,
-                        lambda: conn.execute(
-                            "UPDATE st_vec SET status = ?, updated_at = ? WHERE embedding_id = ?",
-                            (status, updated_at, embedding_id),
-                        ),
+                    result = await conn.execute(
+                        "UPDATE st_vec SET status = $1, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE embedding_id = $2",
+                        status,
+                        embedding_id,
                     )
 
-                updated = cursor.rowcount > 0
+                updated = result != "UPDATE 0"
 
                 # Audit: Log update performance
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -2116,16 +2085,20 @@ class Syscalls:
         # Build query with optional filters
         conditions: list[str] = []
         params: list[Any] = []
+        param_idx = 1
 
         if tenant_id:
-            conditions.append("tenant_id = ?")
+            conditions.append(f"tenant_id = ${param_idx}")
             params.append(tenant_id)
+            param_idx += 1
         if space_id:
-            conditions.append("space_id = ?")
+            conditions.append(f"space_id = ${param_idx}")
             params.append(space_id)
+            param_idx += 1
         if embedding_status:
-            conditions.append("embedding_status = ?")
+            conditions.append(f"embedding_status = ${param_idx}")
             params.append(embedding_status)
+            param_idx += 1
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
@@ -2150,40 +2123,33 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             try:
-                loop = asyncio.get_running_loop()
-
                 # Get total count
                 count_sql = f"SELECT COUNT(*) FROM st_hipp_events WHERE {where_clause}"
-                total_result = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(count_sql, params).fetchone(),
-                )
+                total_result = await conn.fetchrow(count_sql, *params)
                 total = total_result[0] if total_result else 0
 
                 # Get paginated results
+                limit_param = f"${param_idx}"
+                offset_param = f"${param_idx + 1}"
                 query_sql = f"""
                     SELECT event_id, tenant_id, space_id, text, embedding_status,
                            embedding_id, created_at
                     FROM st_hipp_events
                     WHERE {where_clause}
                     ORDER BY created_at ASC
-                    LIMIT ? OFFSET ?
+                    LIMIT {limit_param} OFFSET {offset_param}
                 """
-                cursor = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(query_sql, params + [limit, offset]),
-                )
-                rows = cursor.fetchall()
+                rows = await conn.fetch(query_sql, *params, limit, offset)
 
                 events = [
                     {
-                        "event_id": row[0],
-                        "tenant_id": row[1],
-                        "space_id": row[2],
-                        "event_text": row[3],
-                        "embedding_status": row[4],
-                        "embedding_id": row[5],
-                        "created_at": row[6],
+                        "event_id": row["event_id"],
+                        "tenant_id": row["tenant_id"],
+                        "space_id": row["space_id"],
+                        "event_text": row["text"],
+                        "embedding_status": row["embedding_status"],
+                        "embedding_id": row["embedding_id"],
+                        "created_at": row["created_at"],
                     }
                     for row in rows
                 ]
@@ -2294,29 +2260,22 @@ class Syscalls:
             if conn is None:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
-            updated_at = int(time.time())
-
             try:
-                loop = asyncio.get_running_loop()
-
                 if embedding_id:
-                    cursor = await loop.run_in_executor(
-                        None,
-                        lambda: conn.execute(
-                            "UPDATE st_hipp_events SET embedding_status = ?, embedding_id = ?, updated_at = ? WHERE event_id = ?",
-                            (embedding_status, embedding_id, updated_at, event_id),
-                        ),
+                    result = await conn.execute(
+                        "UPDATE st_hipp_events SET embedding_status = $1, embedding_id = $2, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE event_id = $3",
+                        embedding_status,
+                        embedding_id,
+                        event_id,
                     )
                 else:
-                    cursor = await loop.run_in_executor(
-                        None,
-                        lambda: conn.execute(
-                            "UPDATE st_hipp_events SET embedding_status = ?, updated_at = ? WHERE event_id = ?",
-                            (embedding_status, updated_at, event_id),
-                        ),
+                    result = await conn.execute(
+                        "UPDATE st_hipp_events SET embedding_status = $1, updated_at = EXTRACT(EPOCH FROM NOW())::BIGINT WHERE event_id = $2",
+                        embedding_status,
+                        event_id,
                     )
 
-                updated = cursor.rowcount > 0
+                updated = result != "UPDATE 0"
 
                 # Audit: Log update performance
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -2358,7 +2317,7 @@ class Syscalls:
         self,
         table: str,
         where: str = "1=1",
-        params: tuple = (),
+        params: list[Any] | tuple[Any, ...] = (),
     ) -> int:
         """
         Query row count from a table with optional WHERE clause.
@@ -2368,7 +2327,7 @@ class Syscalls:
 
         Args:
             table: Table name (must be in allowed tables)
-            where: WHERE clause (default: all rows)
+            where: WHERE clause with $N placeholders (default: all rows)
             params: Query parameters for WHERE clause
 
         Returns:
@@ -2381,8 +2340,8 @@ class Syscalls:
         Example:
             >>> count = await syscalls.query_count(
             ...     table="st_vec",
-            ...     where="status = ?",
-            ...     params=("READY",)
+            ...     where="status = $1",
+            ...     params=["READY"]
             ... )
             >>> print(f"{count} vectors pending indexing")
 
@@ -2419,15 +2378,12 @@ class Syscalls:
                 raise RuntimeError("UnitOfWork connection not initialized")
 
             try:
-                loop = asyncio.get_running_loop()
                 sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+                params_list = list(params) if isinstance(params, tuple) else params
 
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: conn.execute(sql, params).fetchone(),
-                )
+                row = await conn.fetchrow(sql, *params_list)
 
-                count = result[0] if result else 0
+                count = row[0] if row else 0
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
 
                 logger.debug(

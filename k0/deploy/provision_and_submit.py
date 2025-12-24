@@ -34,68 +34,104 @@ DEVICE_ID = "device-test-1"
 SCHEMA_URI = "schema://memory.delta"
 SCHEMA_VERSION = "1.0"
 
+# PostgreSQL connection settings (matches docker-compose.yml)
+PG_HOST = "localhost"
+PG_PORT = "5432"
+PG_DB = "k0_kernel"
+PG_USER = "k0user"
+PG_PASSWORD = "changeme"
 
-def execute_sql_in_docker(sql_statements):
-    """Execute SQL statements inside the docker container."""
+
+def execute_sql_in_postgres(sql_statements: list[str]) -> str:
+    """Execute SQL statements in PostgreSQL via docker exec psql."""
     # Join statements with semicolons
     full_sql = "; ".join(sql_statements)
 
-    cmd = ["docker", "exec", "-i", "k0-kernel", "sqlite3", "/data/k0_kernel.db"]
+    # Use psql in the postgres container
+    cmd = [
+        "docker",
+        "exec",
+        "-i",
+        "k0-postgres",
+        "psql",
+        "-U",
+        PG_USER,
+        "-d",
+        PG_DB,
+        "-c",
+        full_sql,
+    ]
 
     try:
-        process = subprocess.run(
-            cmd, input=full_sql.encode("utf-8"), capture_output=True, check=True
-        )
+        process = subprocess.run(cmd, capture_output=True, check=True)
         return process.stdout.decode("utf-8")
     except subprocess.CalledProcessError as e:
-        raise Exception(f"Docker SQL execution failed: {e.stderr.decode('utf-8')}")
+        raise Exception(f"PostgreSQL execution failed: {e.stderr.decode('utf-8')}")
 
 
 def provision_device(signing_key: SigningKey):
-    """Provision device and register its public key in K0 via Docker."""
+    """Provision device and register its public key in K0 via PostgreSQL."""
     print("\n" + "=" * 60)
-    print("Step 1: Provisioning Device (via Docker)")
+    print("Step 1: Provisioning Device (via PostgreSQL)")
     print("=" * 60)
 
     verify_key_b64 = encode_base64url(signing_key.verify_key.encode())
     now = datetime.now(timezone.utc).isoformat()
+
+    # Generate HMAC secret (32 bytes for HMAC-SHA256)
+    import secrets
+
+    hmac_secret = secrets.token_bytes(32)
+    hmac_secret_hex = hmac_secret.hex()
 
     print("\nDevice Configuration:")
     print(f"  Device ID: {DEVICE_ID}")
     print(f"  Tenant ID: {TENANT_ID}")
     print(f"  Space ID: {SPACE_ID}")
     print(f"  Verify Key: {verify_key_b64[:32]}...")
-    print("  Target: Docker container 'k0-kernel'")
+    print("  Target: Docker container 'k0-postgres'")
 
     try:
-        sql_statements = []
-
         # CRITICAL: Delete existing device keys and device to force cache invalidation
-        sql_statements.append(f"DELETE FROM st_device_keys WHERE device_id = '{DEVICE_ID}'")
-        sql_statements.append(f"DELETE FROM st_devices WHERE device_id = '{DEVICE_ID}'")
+        print("\nDeleting existing device records...")
+        execute_sql_in_postgres(
+            [
+                f"DELETE FROM st_device_keys WHERE device_id = '{DEVICE_ID}'",
+                f"DELETE FROM st_devices WHERE device_id = '{DEVICE_ID}'",
+            ]
+        )
 
         # Insert fresh device
-        sql_statements.append(
-            f"INSERT INTO st_devices (device_id, tenant_id, space_id, mls_group_id, provisioned_ts) VALUES ('{DEVICE_ID}', '{TENANT_ID}', '{SPACE_ID}', 'mls-group-1', '{now}')"
+        print("Inserting device...")
+        execute_sql_in_postgres(
+            [
+                f"INSERT INTO st_devices (device_id, tenant_id, space_id, mls_group_id, provisioned_ts, hmac_secret) "
+                f"VALUES ('{DEVICE_ID}', '{TENANT_ID}', '{SPACE_ID}', 'mls-group-1', '{now}', '\\x{hmac_secret_hex}')"
+            ]
         )
 
         # Insert fresh device key
-        sql_statements.append(
-            f"INSERT INTO st_device_keys (device_id, key_version, verify_key, key_state, registered_ts, activated_ts) VALUES ('{DEVICE_ID}', '1', '{verify_key_b64}', 'ACTIVE', '{now}', '{now}')"
+        print("Inserting device key...")
+        execute_sql_in_postgres(
+            [
+                f"INSERT INTO st_device_keys (device_id, key_version, verify_key, key_state, registered_ts, activated_ts) "
+                f"VALUES ('{DEVICE_ID}', '1', '{verify_key_b64}', 'ACTIVE', '{now}', '{now}')"
+            ]
         )
 
-        # Schema registration
+        # Schema registration (INSERT ... ON CONFLICT for PostgreSQL)
         import hashlib
 
         schema_sha = hashlib.sha256(f"{SCHEMA_URI}@{SCHEMA_VERSION}".encode("utf-8")).hexdigest()
 
-        # Use INSERT OR IGNORE for schema
-        sql_statements.append(
-            f"INSERT OR IGNORE INTO schema_registry (schema_uri, version, sha256, status) VALUES ('{SCHEMA_URI}', '{SCHEMA_VERSION}', '{schema_sha}', 'ACTIVE')"
+        print("Registering schema...")
+        execute_sql_in_postgres(
+            [
+                f"INSERT INTO schema_registry (schema_uri, version, sha256, status) "
+                f"VALUES ('{SCHEMA_URI}', '{SCHEMA_VERSION}', '{schema_sha}', 'ACTIVE') "
+                f"ON CONFLICT (schema_uri, version) DO NOTHING"
+            ]
         )
-
-        print("\nExecuting SQL in Docker container...")
-        execute_sql_in_docker(sql_statements)
 
         print("\n✓ Device provisioned")
         print("✓ Device key registered")
