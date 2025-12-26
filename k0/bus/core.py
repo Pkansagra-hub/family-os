@@ -13,6 +13,9 @@ from typing import Any, Awaitable, Callable, Iterable, List
 
 from k0.qos import Scheduler, SchedulerToken
 
+# Stream enforcement constants (ADR-055)
+BUS_MESSAGE_ID_KEY = "message_id"  # Required metadata key for non-WAL streams
+
 BusSink = Callable[["BusMessage"], Awaitable[None]]
 BandResolver = Callable[["BusMessage"], str]
 
@@ -33,7 +36,7 @@ class BusMessage:
         trace_id: Cognitive trace ID for observability (optional)
         space_id: Space ID for per-space ordering enforcement (optional)
         metadata: Additional context for routing/filtering (optional)
-                  For stream="feedback", must include "message_id" key
+                  For stream="feedback", must include BUS_MESSAGE_ID_KEY ("message_id")
     """
 
     topic: str
@@ -82,7 +85,7 @@ def _default_clock() -> datetime:
 
 class BusDispatcher:
     """Fan out WAL commits to SSE and driver outbox facades.
-    
+
     Supports multiple independent streams with different semantics:
     - stream="wal" (default): WAL-backed messages, strict monotonic offsets
     - stream="feedback": Non-WAL feedback signals, id-based idempotency
@@ -103,12 +106,12 @@ class BusDispatcher:
     ) -> None:
         if token_cost <= 0:
             raise ValueError("token_cost must be positive")
-        
+
         # Validate stream
         stream_value = stream.strip().lower()
         if stream_value not in ("wal", "feedback"):
             raise ValueError(f"Invalid stream '{stream}': must be 'wal' or 'feedback'")
-        
+
         self._scheduler = scheduler
         self._sinks: List[BusSink] = list(sinks or [])
         self._stream = stream_value
@@ -131,11 +134,11 @@ class BusDispatcher:
         self._clock = clock or _default_clock
         self._lock = asyncio.Lock()
         self._last_offset: int | None = None
-        
+
         # Stream-specific enforcement configuration (ADR-055)
-        self._enforce_monotonic = (stream_value == "wal")
-        self._require_offset = (stream_value == "wal")
-        self._require_message_id = (stream_value != "wal")
+        self._enforce_monotonic = stream_value == "wal"
+        self._require_offset = stream_value == "wal"
+        self._require_message_id = stream_value != "wal"
 
     def subscribe(self, topic: str, handler: BusSink) -> None:
         """
@@ -222,7 +225,7 @@ class BusDispatcher:
 
     async def dispatch(self, messages: Iterable[BusMessage]) -> None:
         """Dispatch *messages* in stream-appropriate order using scheduler tokens.
-        
+
         For stream="wal": Messages sorted by offset, monotonic enforcement enabled.
         For stream="feedback": Messages dispatched in provided order, no offset sorting.
         """
@@ -242,15 +245,15 @@ class BusDispatcher:
             for message in batch:
                 # Stream-specific validation (ADR-055)
                 self._validate_message(message)
-                
+
                 # Enforce monotonic offsets only for WAL stream
                 if self._enforce_monotonic and message.offset is not None:
                     self._ensure_monotonic(message.offset)
-                
+
                 # Dispatch if any handlers registered (legacy sinks, subscriptions, or taps)
                 if self._sinks or self._topic_subscriptions or self._taps:
                     await self._dispatch_single(message)
-                
+
                 # Track last offset only for WAL stream
                 if self._stream == "wal" and message.offset is not None:
                     self._last_offset = message.offset
@@ -268,21 +271,19 @@ class BusDispatcher:
 
     def _validate_message(self, message: BusMessage) -> None:
         """Validate message conforms to stream requirements (ADR-055).
-        
+
         Raises:
             ValueError: If message violates stream requirements.
         """
         # WAL stream requires offset
         if self._require_offset and message.offset is None:
-            raise ValueError(
-                f"stream='{self._stream}' requires message.offset, got None"
-            )
-        
+            raise ValueError(f"stream='{self._stream}' requires message.offset, got None")
+
         # Non-WAL streams require message_id in metadata
         if self._require_message_id:
-            if not message.metadata or "message_id" not in message.metadata:
+            if not message.metadata or BUS_MESSAGE_ID_KEY not in message.metadata:
                 raise ValueError(
-                    f"stream='{self._stream}' requires metadata['message_id'], "
+                    f"stream='{self._stream}' requires metadata['{BUS_MESSAGE_ID_KEY}'], "
                     f"got metadata={message.metadata}"
                 )
 

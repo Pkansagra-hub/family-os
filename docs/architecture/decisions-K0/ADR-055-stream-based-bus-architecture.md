@@ -1,8 +1,8 @@
 # ADR-055: Stream-Based Bus Architecture
 
-**Status**: Accepted  
-**Date**: 2025-12-26  
-**Decision Makers**: K0 Architecture Team  
+**Status**: Accepted
+**Date**: 2025-12-26
+**Decision Makers**: K0 Architecture Team
 **Supersedes**: N/A
 
 ## Context
@@ -171,7 +171,7 @@ class UniversalBus:
     def __init__(self, wal_dispatcher: BusDispatcher, feedback_dispatcher: BusDispatcher):
         self._wal = wal_dispatcher
         self._feedback = feedback_dispatcher
-    
+
     async def dispatch(self, messages: Iterable[BusMessage]) -> None:
         wal_messages = [m for m in messages if not m.topic.startswith("feedback.")]
         feedback_messages = [m for m in messages if m.topic.startswith("feedback.")]
@@ -187,21 +187,21 @@ This removes the chance a developer forgets to pass `stream=` parameter.
 
 ### Positive
 
-✅ **Correctness**: WAL stream semantics unchanged, impossible to violate monotonicity  
-✅ **Performance**: QoS isolation prevents feedback floods from blocking critical operations  
-✅ **Extensibility**: New streams (telemetry, audit) can be added without code duplication  
-✅ **Idempotency**: Feedback uses `feedback_id`, not synthetic offsets  
-✅ **Restart-safe**: No in-memory offset state for feedback stream  
+✅ **Correctness**: WAL stream semantics unchanged, impossible to violate monotonicity
+✅ **Performance**: QoS isolation prevents feedback floods from blocking critical operations
+✅ **Extensibility**: New streams (telemetry, audit) can be added without code duplication
+✅ **Idempotency**: Feedback uses `feedback_id`, not synthetic offsets
+✅ **Restart-safe**: No in-memory offset state for feedback stream
 
 ### Negative
 
-⚠️ **Complexity**: Medium-sized change (bus core + enforcement + worker + tests)  
-⚠️ **Migration**: Existing code uses default `stream="wal"`, must be explicit for feedback  
+⚠️ **Complexity**: Medium-sized change (bus core + enforcement + worker + tests)
+⚠️ **Migration**: Existing code uses default `stream="wal"`, must be explicit for feedback
 
 ### Neutral
 
-ℹ️ **Backpressure**: Add `feedback_queue_depth` metric, decide later on 429 throttling  
-ℹ️ **Testing**: Requires concurrent WAL + feedback dispatch tests to prove isolation  
+ℹ️ **Backpressure**: Add `feedback_queue_depth` metric, decide later on 429 throttling
+ℹ️ **Testing**: Requires concurrent WAL + feedback dispatch tests to prove isolation
 
 ## Implementation Plan
 

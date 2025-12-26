@@ -14,7 +14,7 @@ from typing import List
 
 import pytest
 
-from k0.bus import BusDispatcher, BusMessage, UniversalBus
+from k0.bus import BUS_MESSAGE_ID_KEY, BusDispatcher, BusMessage, UniversalBus
 from k0.qos import Scheduler, SchedulerProfile
 
 
@@ -126,7 +126,9 @@ class TestFeedbackStreamEnforcement:
             metadata={},  # Missing message_id
         )
 
-        with pytest.raises(ValueError, match="stream='feedback' requires metadata\\['message_id'\\]"):
+        with pytest.raises(
+            ValueError, match=f"stream='feedback' requires metadata\['{BUS_MESSAGE_ID_KEY}'\]"
+        ):
             await feedback_dispatcher.dispatch([msg])
 
     async def test_feedback_stream_accepts_valid_messages(self, feedback_dispatcher):
@@ -144,20 +146,20 @@ class TestFeedbackStreamEnforcement:
                 topic="feedback.p02.reformulation.v1",
                 payload=b'{"signal": "reformulation"}',
                 offset=None,  # Ignored for feedback stream
-                metadata={"message_id": "fb-001", "signal_type": "reformulation"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-001", "signal_type": "reformulation"},
             ),
             BusMessage(
                 topic="feedback.p08.abandonment.v1",
                 payload=b'{"signal": "abandonment"}',
                 offset=None,
-                metadata={"message_id": "fb-002", "signal_type": "abandonment"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-002", "signal_type": "abandonment"},
             ),
         ]
 
         await feedback_dispatcher.dispatch(messages)
         assert len(received) == 2
-        assert received[0]["metadata"]["message_id"] == "fb-001"
-        assert received[1]["metadata"]["message_id"] == "fb-002"
+        assert received[0]["metadata"][BUS_MESSAGE_ID_KEY] == "fb-001"
+        assert received[1]["metadata"][BUS_MESSAGE_ID_KEY] == "fb-002"
 
     async def test_feedback_stream_ignores_offset(self, feedback_dispatcher):
         """Feedback stream does not enforce monotonic offsets."""
@@ -175,13 +177,13 @@ class TestFeedbackStreamEnforcement:
                 topic="feedback.p02.correction.v1",
                 payload=b"msg1",
                 offset=100,  # Will be ignored
-                metadata={"message_id": "fb-100"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-100"},
             ),
             BusMessage(
                 topic="feedback.p02.correction.v1",
                 payload=b"msg2",
                 offset=50,  # Lower offset (no error for feedback stream)
-                metadata={"message_id": "fb-101"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-101"},
             ),
         ]
 
@@ -219,13 +221,13 @@ class TestStreamIsolation:
                 topic="feedback.p02.reformulation.v1",
                 payload=b"fb1",
                 offset=None,
-                metadata={"message_id": "fb-001"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-001"},
             ),
             BusMessage(
                 topic="feedback.p08.abandonment.v1",
                 payload=b"fb2",
                 offset=None,
-                metadata={"message_id": "fb-002"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-002"},
             ),
         ]
 
@@ -246,7 +248,7 @@ class TestStreamIsolation:
             topic="feedback.p02.hedging.v1",
             payload=b"feedback",
             offset=None,
-            metadata={"message_id": "fb-999"},
+            metadata={BUS_MESSAGE_ID_KEY: "fb-999"},
         )
         await feedback_dispatcher.dispatch([feedback_msg])
 
@@ -294,14 +296,14 @@ class TestUniversalBusRouting:
                 topic="feedback.p02.reformulation.v1",
                 payload=b"fb1",
                 offset=None,
-                metadata={"message_id": "fb-001"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-001"},
             ),
             BusMessage(topic="cognitive.planning.sketch.v1", payload=b"wal2", offset=101),
             BusMessage(
                 topic="feedback.p08.abandonment.v1",
                 payload=b"fb2",
                 offset=None,
-                metadata={"message_id": "fb-002"},
+                metadata={BUS_MESSAGE_ID_KEY: "fb-002"},
             ),
         ]
 
@@ -322,7 +324,9 @@ class TestQoSIsolation:
         """Feedback flood exhausts feedback port but WAL port remains available."""
         # Create dispatchers with explicit port limits
         wal_dispatcher = BusDispatcher(scheduler=scheduler, stream="wal", port="bus_wal")
-        feedback_dispatcher = BusDispatcher(scheduler=scheduler, stream="feedback", port="bus_feedback")
+        feedback_dispatcher = BusDispatcher(
+            scheduler=scheduler, stream="feedback", port="bus_feedback"
+        )
 
         wal_received = []
         feedback_received = []
@@ -340,14 +344,14 @@ class TestQoSIsolation:
 
         # Dispatch small batches to avoid exhausting scheduler
         wal_messages = [
-            BusMessage(topic=f"cognitive.write.v1", payload=b"w", offset=i) for i in range(10)
+            BusMessage(topic="cognitive.write.v1", payload=b"w", offset=i) for i in range(10)
         ]
         feedback_messages = [
             BusMessage(
-                topic=f"feedback.p02.signal.v1",
+                topic="feedback.p02.signal.v1",
                 payload=b"f",
                 offset=None,
-                metadata={"message_id": f"fb-{i}"},
+                metadata={BUS_MESSAGE_ID_KEY: f"fb-{i}"},
             )
             for i in range(10)
         ]

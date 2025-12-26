@@ -18,17 +18,17 @@ logger = logging.getLogger(__name__)
 
 class FeedbackWorker:
     """Background worker that publishes feedback signals from st_feedback_signals to bus.
-    
+
     Uses stream="feedback" to avoid WAL pollution and semantic collision with WAL-backed events.
     Implements correct idempotency via feedback_id (not offset-based).
-    
+
     Architecture (ADR-055):
     - Reads pending feedback from st_feedback_signals (status='pending')
     - Publishes to bus using stream="feedback" with message_id in metadata
     - Marks as processed (status='published') on success
     - Marks as failed (status='error') on dispatch errors
     - No WAL involvement: feedback signals don't need durability guarantees
-    
+
     Backpressure:
     - Emits feedback_queue_depth metric (count of pending feedback)
     - Optional: Can implement 429 throttling at /k0/obs.emit if depth exceeds threshold
@@ -44,7 +44,7 @@ class FeedbackWorker:
         poll_interval: float = 0.5,
     ) -> None:
         """Initialize feedback worker.
-        
+
         Args:
             pool: Async database pool for claiming feedback signals
             bus_dispatcher: BusDispatcher configured with stream="feedback"
@@ -143,7 +143,7 @@ class FeedbackWorker:
 
     async def _claim_batch(self) -> list[dict]:
         """Claim batch of pending feedback using FOR UPDATE SKIP LOCKED.
-        
+
         Returns:
             List of claimed feedback rows with fields:
             - feedback_id, signal_type, source_pipeline, payload,
@@ -152,7 +152,7 @@ class FeedbackWorker:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT 
+                SELECT
                     feedback_id,
                     signal_type,
                     source_pipeline,
@@ -173,7 +173,7 @@ class FeedbackWorker:
 
     async def _dispatch_batch(self, batch: list[dict]) -> None:
         """Dispatch feedback batch to bus and mark processed/failed."""
-        from k0.bus import BusMessage
+        from k0.bus import BUS_MESSAGE_ID_KEY, BusMessage
 
         messages = []
         for row in batch:
@@ -187,7 +187,7 @@ class FeedbackWorker:
                     trace_id=row["trace_id"],
                     space_id=row["space_id"],
                     metadata={
-                        "message_id": row["feedback_id"],  # Required for stream="feedback"
+                        BUS_MESSAGE_ID_KEY: row["feedback_id"],  # Required for stream="feedback"
                         "signal_type": row["signal_type"],
                         "source_pipeline": row["source_pipeline"],
                         "provenance": row["provenance_data"],
@@ -243,7 +243,7 @@ async def feedback_worker_lifespan(
     metrics_exporter: MetricsExporter | None = None,
 ):
     """Context manager for feedback worker lifecycle management.
-    
+
     Example:
         async with feedback_worker_lifespan(pool, feedback_bus, metrics) as worker:
             # Worker runs in background
