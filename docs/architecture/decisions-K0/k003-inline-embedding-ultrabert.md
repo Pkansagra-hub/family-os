@@ -276,7 +276,7 @@ P08 is **repurposed** as an embedding lifecycle management pipeline:
 | **Model Upgrades** | `cognitive.embedding.recompute.requested.v1` | Recompute when model version changes |
 | **Cleanup** | `cognitive.embedding.cleanup.requested.v1` | Remove orphaned embeddings |
 
-See [P08 Dossier v2](../../pipelines/P08_embedding_dossier_v2.md) for full specification.
+See [P08 Dossier v2](../pipelines/P08_embedding_dossier_v2.md) for full specification.
 
 ```yaml
 # k0/contracts/pipelines/p08_embedding_management.v1.yaml

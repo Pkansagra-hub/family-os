@@ -3,7 +3,7 @@
 **Status**: ✅ Production - Kernel Lifespan Scheduler
 **Last Updated**: 2025-12-13
 **Architecture**: Kernel Background Task (Scheduled Batch Mode)
-**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md)
+**ADR Reference**: [ADR-K003: Inline Embedding Generation via UltraBERT](../architecture/decisions-K0/k003-inline-embedding-ultrabert.md)
 
 ---
 

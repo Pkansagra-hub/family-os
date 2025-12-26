@@ -534,6 +534,1972 @@ async def query_truth_for_signal(
     return matches
 ```
 
+#### 1.4.1 Per-Layer Similarity Weights
+
+**Problem**: Different memory types value different similarity factors. Episodic memories care about "when" and "where" (temporal/spatial). Semantic patterns care about "what" (semantic meaning). Social memories care about "who" (entity matching). Using a single static weight vector (0.40 semantic, 0.25 simhash, 0.15 entity, 0.10 temporal, 0.10 spatial) underperforms across diverse memory types.
+
+**Solution**: Per-layer weight vectors that emphasize factors relevant to each memory type.
+
+**Layer-Specific Weight Matrices**:
+
+| Layer | Semantic | SimHash | Entity | Temporal | Spatial | Rationale |
+|-------|----------|---------|--------|----------|---------|----------|
+| **st_epi** | 0.30 | 0.15 | 0.15 | **0.25** | **0.15** | Episodic = "What happened when and where" |
+| **st_sem** | **0.50** | 0.20 | 0.15 | 0.10 | 0.05 | Semantic patterns = meaning-driven |
+| **st_procedural** | 0.25 | 0.15 | 0.20 | **0.30** | 0.10 | Routines = temporal sequences matter |
+| **st_social** | 0.35 | 0.10 | **0.35** | 0.10 | 0.10 | Social = who was involved matters most |
+| **st_kg_dom** | **0.45** | 0.25 | 0.15 | 0.10 | 0.05 | Knowledge = conceptual similarity |
+| **st_kg_edges** | 0.40 | 0.20 | 0.25 | 0.10 | 0.05 | Relationships = entities + meaning |
+| **st_prospective** | 0.35 | 0.20 | 0.20 | **0.20** | 0.05 | Future plans = time + concepts |
+| **st_vec** | **0.60** | 0.20 | 0.10 | 0.05 | 0.05 | Embeddings = pure semantic space |
+
+**Note**: All weight vectors sum to 1.0 for interpretability.
+
+**Similarity Computation with Layer-Specific Weights**:
+
+```python
+class LayerAwareSimilarityComputer:
+    """
+    Compute multi-factor similarity with layer-specific weights.
+    """
+
+    def __init__(self):
+        # Load weight matrices from st_learned_weights
+        self.layer_weights = {}
+        for layer in ['st_epi', 'st_sem', 'st_procedural', 'st_social',
+                      'st_kg_dom', 'st_kg_edges', 'st_prospective', 'st_vec']:
+            self.layer_weights[layer] = await self.load_weights(layer)
+
+    async def compute_similarity(
+        self,
+        new_signal: HippEvent,
+        truth_record: TruthRecord,
+        target_layer: str
+    ) -> float:
+        """
+        Compute similarity using layer-specific weights.
+
+        Args:
+            new_signal: Incoming hippocampal event
+            truth_record: Existing truth from a memory layer
+            target_layer: Which layer's weights to use (e.g., 'st_epi')
+
+        Returns:
+            Similarity score [0.0, 1.0]
+        """
+        # Get layer-specific weights
+        weights = self.layer_weights[target_layer]
+
+        # Compute component similarities
+        semantic_sim = await self.compute_semantic_similarity(
+            new_signal.embedding,
+            truth_record.embedding
+        )
+
+        simhash_sim = 1.0 - (hamming_distance(
+            new_signal.simhash,
+            truth_record.simhash
+        ) / 64.0)  # Normalize to [0, 1]
+
+        entity_sim = await self.compute_entity_overlap(
+            new_signal.entities_json,
+            truth_record.entities_json
+        )
+
+        temporal_sim = self.compute_temporal_proximity(
+            new_signal.event_time_utc,
+            truth_record.last_observed_at
+        )
+
+        spatial_sim = self.compute_spatial_proximity(
+            new_signal.location_json,
+            truth_record.location_json
+        )
+
+        # Weighted combination
+        similarity = (
+            weights['semantic'] * semantic_sim +
+            weights['simhash'] * simhash_sim +
+            weights['entity'] * entity_sim +
+            weights['temporal'] * temporal_sim +
+            weights['spatial'] * spatial_sim
+        )
+
+        # Track which factor contributed most (for learning)
+        await self.track_factor_contribution({
+            'target_layer': target_layer,
+            'semantic': semantic_sim,
+            'simhash': simhash_sim,
+            'entity': entity_sim,
+            'temporal': temporal_sim,
+            'spatial': spatial_sim,
+            'final_similarity': similarity,
+        })
+
+        return similarity
+
+    async def load_weights(self, layer: str) -> dict:
+        """
+        Load learned weights for a layer from st_learned_weights.
+
+        Returns default if not yet learned (cold start).
+        """
+        weights = await db.query(
+            "SELECT param_key, current_value FROM st_learned_weights "
+            "WHERE param_key LIKE $1 AND param_type = 'SIMILARITY_WEIGHTS'",
+            f"similarity_{layer}_%"
+        )
+
+        if not weights:
+            # Cold start: use defaults from weight matrix above
+            return self.get_default_weights(layer)
+
+        return {
+            'semantic': weights.get(f'similarity_{layer}_semantic', 0.40),
+            'simhash': weights.get(f'similarity_{layer}_simhash', 0.25),
+            'entity': weights.get(f'similarity_{layer}_entity', 0.15),
+            'temporal': weights.get(f'similarity_{layer}_temporal', 0.10),
+            'spatial': weights.get(f'similarity_{layer}_spatial', 0.10),
+        }
+
+    def get_default_weights(self, layer: str) -> dict:
+        """
+        Return default weight vector for a layer.
+        """
+        defaults = {
+            'st_epi': {'semantic': 0.30, 'simhash': 0.15, 'entity': 0.15, 'temporal': 0.25, 'spatial': 0.15},
+            'st_sem': {'semantic': 0.50, 'simhash': 0.20, 'entity': 0.15, 'temporal': 0.10, 'spatial': 0.05},
+            'st_procedural': {'semantic': 0.25, 'simhash': 0.15, 'entity': 0.20, 'temporal': 0.30, 'spatial': 0.10},
+            'st_social': {'semantic': 0.35, 'simhash': 0.10, 'entity': 0.35, 'temporal': 0.10, 'spatial': 0.10},
+            'st_kg_dom': {'semantic': 0.45, 'simhash': 0.25, 'entity': 0.15, 'temporal': 0.10, 'spatial': 0.05},
+            'st_kg_edges': {'semantic': 0.40, 'simhash': 0.20, 'entity': 0.25, 'temporal': 0.10, 'spatial': 0.05},
+            'st_prospective': {'semantic': 0.35, 'simhash': 0.20, 'entity': 0.20, 'temporal': 0.20, 'spatial': 0.05},
+            'st_vec': {'semantic': 0.60, 'simhash': 0.20, 'entity': 0.10, 'temporal': 0.05, 'spatial': 0.05},
+        }
+        return defaults.get(layer, {
+            'semantic': 0.40, 'simhash': 0.25, 'entity': 0.15, 'temporal': 0.10, 'spatial': 0.10
+        })
+```
+
+**Learning from Reconciliation Outcomes**:
+
+| Outcome | Meaning | Learning Action |
+|---------|---------|----------------|
+| Match used in K1 | Similarity correct | Boost weights on factors that contributed most |
+| Match rejected by user | False positive | Reduce weight on dominant factor |
+| User manually merges | Missed match (FN) | Boost weak factors that should have matched |
+| Match never queried | Low utility | Consider if similarity threshold too low |
+
+**Weight Update Algorithm**:
+
+```python
+class SimilarityWeightLearner:
+    """
+    Learn per-layer similarity weights from reconciliation outcomes.
+    """
+
+    async def update_weights(
+        self,
+        target_layer: str,
+        factor_contributions: dict,
+        outcome: str  # 'MATCH_USED', 'MATCH_REJECTED', 'MANUAL_MERGE'
+    ) -> dict:
+        """
+        Update weights based on reconciliation outcome.
+
+        Returns: Updated weight vector
+        """
+        weights = await self.load_weights(target_layer)
+
+        if outcome == 'MATCH_USED':
+            # Success: Boost factors that contributed most
+            # Find dominant factor
+            dominant_factor = max(factor_contributions, key=factor_contributions.get)
+            weights[dominant_factor] += 0.02
+
+        elif outcome == 'MATCH_REJECTED':
+            # False positive: Reduce dominant factor
+            dominant_factor = max(factor_contributions, key=factor_contributions.get)
+            weights[dominant_factor] -= 0.03
+
+        elif outcome == 'MANUAL_MERGE':
+            # False negative: Boost weak factors
+            # Factors that should have contributed more
+            weak_factor = min(factor_contributions, key=factor_contributions.get)
+            weights[weak_factor] += 0.04
+
+        # Re-normalize to sum to 1.0
+        total = sum(weights.values())
+        weights = {k: v / total for k, v in weights.items()}
+
+        # Clamp each weight to [0.05, 0.60] (no single factor dominates)
+        weights = {k: max(0.05, min(0.60, v)) for k, v in weights.items()}
+
+        # Re-normalize after clamping
+        total = sum(weights.values())
+        weights = {k: v / total for k, v in weights.items()}
+
+        # Persist to st_learned_weights
+        for factor, weight in weights.items():
+            await db.execute(
+                "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+                "VALUES ($1, 'SIMILARITY_WEIGHTS', $2, 0.8, sample_count + 1, $3) "
+                "ON CONFLICT (param_key) DO UPDATE SET current_value = $2, sample_count = st_learned_weights.sample_count + 1, last_updated_at = $3",
+                f"similarity_{target_layer}_{factor}",
+                weight,
+                now_ms()
+            )
+
+        return weights
+```
+
+**Storage**:
+
+```sql
+-- Weight vectors stored in st_learned_weights
+-- Example keys:
+--   similarity_st_epi_semantic = 0.30
+--   similarity_st_epi_simhash = 0.15
+--   similarity_st_epi_entity = 0.15
+--   similarity_st_epi_temporal = 0.25
+--   similarity_st_epi_spatial = 0.15
+--   (same pattern for all 8 layers × 5 factors = 40 learned parameters)
+```
+
+**Metrics**:
+
+- `p03_similarity_factor_contribution` (histogram: which factor contributed most per layer)
+- `p03_similarity_weights_updated` (counter: weight updates per layer)
+- `p03_similarity_weight_drift` (gauge: max weight change per layer in 7 days)
+
+**Configuration**:
+
+```python
+P03_SIMILARITY_LEARNING_RATE = 0.02  # Boost amount for successful matches
+P03_SIMILARITY_LEARNING_RATE_NEGATIVE = 0.03  # Penalty for false positives
+P03_SIMILARITY_WEIGHT_MIN = 0.05  # Minimum weight per factor
+P03_SIMILARITY_WEIGHT_MAX = 0.60  # Maximum weight per factor (prevent dominance)
+```
+
+**Rationale**: Episodic memories should prioritize temporal proximity ("when did this happen?") over pure semantic meaning. Semantic patterns should prioritize conceptual similarity. Social interactions should prioritize entity overlap ("who was there?"). Layer-specific weights align similarity computation with memory type characteristics, improving match quality and reducing false positives/negatives.
+
+#### 1.4.2 Online Weight Adjustment
+
+**Problem**: Similarity weights should improve continuously from real-world usage, not just from explicit user corrections. If K1 frequently uses a match, that match was good. If K1 never queries a match, it may have been spurious.
+
+**Solution**: Implicit feedback from downstream P04/K1 usage to adjust weights without explicit user input.
+
+**Feedback Signals**:
+
+| Signal | Source | Meaning | Adjustment |
+|--------|--------|---------|------------|
+| `MATCH_USED_IN_K1` | P04 query logs | Similarity correct, memory retrieved | Boost contributing factors +0.02 |
+| `MATCH_REJECTED_BY_USER` | K1 user action | False positive, user says "not relevant" | Reduce dominant factor -0.03 |
+| `USER_MANUALLY_LINKS` | K1 user action | Missed match (false negative) | Boost weak factors +0.04 |
+| `REFORMULATION_AFTER_RESPONSE` | K1 behavior | Possible bad match, user rephrases query | Review decision, slight penalty -0.01 |
+| `MATCH_NEVER_QUERIED` | P04 analytics | Low utility match, not used in 30 days | Consider threshold too lenient |
+
+**Update Rule**:
+
+```python
+class OnlineWeightAdjuster:
+    """
+    Continuously adjust similarity weights from implicit feedback.
+    """
+
+    async def process_feedback_signal(
+        self,
+        signal_type: str,
+        reconciliation_id: str,
+        target_layer: str,
+        factor_contributions: dict
+    ):
+        """
+        Adjust weights based on downstream usage feedback.
+
+        Args:
+            signal_type: Type of feedback (MATCH_USED_IN_K1, etc.)
+            reconciliation_id: Which reconciliation decision
+            target_layer: Memory layer involved
+            factor_contributions: Which factors contributed to similarity
+        """
+        weights = await self.load_weights(target_layer)
+
+        if signal_type == 'MATCH_USED_IN_K1':
+            # Success signal: boost factors that contributed
+            # Identify which factors had highest contribution
+            for factor, contribution in factor_contributions.items():
+                if contribution > 0.6:  # Factor was significant
+                    weights[factor] += 0.02
+
+        elif signal_type == 'MATCH_REJECTED_BY_USER':
+            # False positive: reduce dominant factor
+            dominant_factor = max(factor_contributions, key=factor_contributions.get)
+            weights[dominant_factor] -= 0.03
+
+        elif signal_type == 'USER_MANUALLY_LINKS':
+            # False negative: boost factors that should have matched
+            # These are factors with low contribution but should be higher
+            for factor, contribution in factor_contributions.items():
+                if contribution < 0.4:  # Factor was weak but should match
+                    weights[factor] += 0.04
+
+        elif signal_type == 'REFORMULATION_AFTER_RESPONSE':
+            # Possible bad match: slight penalty on dominant factor
+            dominant_factor = max(factor_contributions, key=factor_contributions.get)
+            weights[dominant_factor] -= 0.01
+
+        # Apply momentum for stability (same as other learning)
+        old_weights = weights.copy()
+        for factor in weights:
+            weights[factor] = 0.9 * old_weights[factor] + 0.1 * weights[factor]
+
+        # Normalize and clamp
+        total = sum(weights.values())
+        weights = {k: v / total for k, v in weights.items()}
+        weights = {k: max(0.05, min(0.60, v)) for k, v in weights.items()}
+
+        # Re-normalize after clamping
+        total = sum(weights.values())
+        weights = {k: v / total for k, v in weights.items()}
+
+        # Persist
+        await self.save_weights(target_layer, weights)
+```
+
+**Integration with P04/K1**:
+
+P04 (Query Service) emits feedback signals:
+
+```python
+# P04 query_memory.py
+async def retrieve_memories(query, k=10):
+    results = await vector_search(query, k=k)
+
+    # Track which memories were used
+    for result in results:
+        if result.source_reconciliation_id:
+            await emit_feedback_signal(
+                signal_type='MATCH_USED_IN_K1',
+                reconciliation_id=result.source_reconciliation_id,
+                target_layer=result.source_layer,
+                factor_contributions=result.similarity_breakdown
+            )
+
+    return results
+```
+
+K1 (Conversational Interface) emits user action signals:
+
+```python
+# K1 user_feedback.py
+async def handle_user_rejects_memory(memory_id):
+    # User clicked "Not relevant" on a retrieved memory
+    memory = await get_memory(memory_id)
+
+    await emit_feedback_signal(
+        signal_type='MATCH_REJECTED_BY_USER',
+        reconciliation_id=memory.source_reconciliation_id,
+        target_layer=memory.source_layer,
+        factor_contributions=memory.similarity_breakdown
+    )
+```
+
+**Momentum**: 0.9 for stability (prevents wild swings from single signals)
+
+**Bounds**: Each factor clamped to [0.05, 0.60] to prevent any single factor from dominating
+
+**Rationale**: Explicit user corrections are rare. Most learning should come from observing which matches get used vs ignored. If a match is frequently retrieved by P04 queries and leads to high K1 satisfaction, the similarity was correct. Continuous learning from implicit feedback enables weights to adapt to changing user behavior and content patterns without requiring manual tuning.
+
+#### 1.4.3 Entity-Type Similarity Thresholds
+
+**Problem**: Matching "John Smith" (PERSON) requires higher precision than matching "meeting" (CONCEPT). Using fixed thresholds (REINFORCE >0.85, EXTEND 0.60-0.85) for all entity types leads to:
+
+- **False positives** for people: Different "Johns" get merged
+- **False negatives** for concepts: Synonyms not recognized
+
+**Solution**: Per-entity-type thresholds that adapt to the disambiguation difficulty of each type.
+
+**Per-Type Threshold Matrix**:
+
+| Entity Type | REINFORCE (>) | EXTEND (range) | CREATE (<) | Rationale |
+|-------------|---------------|----------------|------------|----------|
+| **PERSON** | 0.90 | 0.70-0.90 | 0.70 | Names ambiguous, need high precision |
+| **FAMILY_MEMBER** | 0.95 | 0.80-0.95 | 0.80 | Core identity, stricter |
+| **PLACE** | 0.80 | 0.55-0.80 | 0.55 | "Home" vs address, context helps |
+| **ORGANIZATION** | 0.85 | 0.65-0.85 | 0.65 | "Google" vs "Alphabet" are same |
+| **EVENT** | 0.80 | 0.55-0.80 | 0.55 | Event descriptions vary |
+| **THING** | 0.75 | 0.50-0.75 | 0.50 | Objects less ambiguous |
+| **CONCEPT** | 0.70 | 0.45-0.70 | 0.45 | Semantic space, synonyms common |
+| **ACTIVITY** | 0.75 | 0.50-0.75 | 0.50 | "Running" = "jogging" |
+
+**Threshold Application**:
+
+```python
+class EntityTypeSimilarityThresholds:
+    """
+    Apply per-entity-type thresholds to reconciliation decisions.
+    """
+
+    async def determine_reconciliation_decision(
+        self,
+        new_signal: HippEvent,
+        best_match: TruthRecord,
+        similarity: float,
+        entity_type: str
+    ) -> ReconciliationDecision:
+        """
+        Make reconciliation decision using entity-type-specific thresholds.
+
+        Args:
+            new_signal: Incoming event
+            best_match: Best matching truth record
+            similarity: Computed similarity score [0, 1]
+            entity_type: Primary entity type (PERSON, CONCEPT, etc.)
+
+        Returns:
+            ReconciliationDecision with appropriate action
+        """
+        # Load thresholds for this entity type
+        thresholds = await self.load_thresholds(entity_type)
+
+        reinforce_threshold = thresholds['reinforce']
+        extend_lower = thresholds['extend_lower']
+        create_threshold = thresholds['create']
+
+        if similarity > reinforce_threshold:
+            # Strong match → REINFORCE
+            return ReconciliationDecision(
+                decision_type=DecisionType.REINFORCE,
+                target_record=best_match,
+                similarity=similarity,
+                updates={
+                    'observation_count': best_match.observation_count + 1,
+                    'confidence_score': boost_confidence(best_match.confidence_score, similarity),
+                    'last_observed_at': new_signal.event_time_utc,
+                    'decay_factor': 1.0
+                }
+            )
+
+        elif extend_lower < similarity <= reinforce_threshold:
+            # Partial match → EXTEND or EVOLVE
+            if is_schema_evolution(new_signal, best_match):
+                return ReconciliationDecision(
+                    decision_type=DecisionType.EVOLVE,
+                    target_record=best_match,
+                    similarity=similarity,
+                    new_version_data=build_evolved_version(new_signal, best_match)
+                )
+            else:
+                return ReconciliationDecision(
+                    decision_type=DecisionType.EXTEND,
+                    target_record=best_match,
+                    similarity=similarity,
+                    extensions=extract_new_details(new_signal, best_match)
+                )
+
+        else:
+            # Low similarity → CREATE or CONTRADICT
+            if is_contradiction(new_signal, best_match):
+                return ReconciliationDecision(
+                    decision_type=DecisionType.CONTRADICT,
+                    target_record=best_match,
+                    conflict_details=analyze_conflict(new_signal, best_match),
+                    flag_for_p06=True
+                )
+            else:
+                return ReconciliationDecision(
+                    decision_type=DecisionType.CREATE,
+                    target_layer=determine_target_layer(new_signal),
+                    confidence=new_signal.salience_score
+                )
+
+    async def load_thresholds(self, entity_type: str) -> dict:
+        """
+        Load learned thresholds for an entity type.
+
+        Returns: {'reinforce': float, 'extend_lower': float, 'create': float}
+        """
+        thresholds = await db.query(
+            "SELECT param_key, current_value FROM st_learned_weights "
+            "WHERE param_key LIKE $1 AND param_type = 'ENTITY_THRESHOLD'",
+            f"threshold_{entity_type.lower()}_%"
+        )
+
+        if not thresholds:
+            # Cold start: use defaults from matrix above
+            return self.get_default_thresholds(entity_type)
+
+        return {
+            'reinforce': thresholds.get(f'threshold_{entity_type.lower()}_reinforce', 0.85),
+            'extend_lower': thresholds.get(f'threshold_{entity_type.lower()}_extend_lower', 0.60),
+            'create': thresholds.get(f'threshold_{entity_type.lower()}_create', 0.60),
+        }
+
+    def get_default_thresholds(self, entity_type: str) -> dict:
+        """
+        Return default thresholds for an entity type.
+        """
+        defaults = {
+            'PERSON': {'reinforce': 0.90, 'extend_lower': 0.70, 'create': 0.70},
+            'FAMILY_MEMBER': {'reinforce': 0.95, 'extend_lower': 0.80, 'create': 0.80},
+            'PLACE': {'reinforce': 0.80, 'extend_lower': 0.55, 'create': 0.55},
+            'ORGANIZATION': {'reinforce': 0.85, 'extend_lower': 0.65, 'create': 0.65},
+            'EVENT': {'reinforce': 0.80, 'extend_lower': 0.55, 'create': 0.55},
+            'THING': {'reinforce': 0.75, 'extend_lower': 0.50, 'create': 0.50},
+            'CONCEPT': {'reinforce': 0.70, 'extend_lower': 0.45, 'create': 0.45},
+            'ACTIVITY': {'reinforce': 0.75, 'extend_lower': 0.50, 'create': 0.50},
+        }
+        return defaults.get(entity_type, {
+            'reinforce': 0.85, 'extend_lower': 0.60, 'create': 0.60
+        })
+```
+
+**Learning from FP/FN Rates**:
+
+| Feedback Signal | Meaning | Threshold Adjustment |
+|----------------|---------|---------------------|
+| User merges entities | False negative (threshold too strict) | Lower REINFORCE by -0.02 |
+| User splits merged entity | False positive (threshold too lenient) | Raise REINFORCE by +0.03 |
+| User confirms distinct entities | True negative (threshold appropriate) | No change |
+| User confirms merged entity | True positive (threshold appropriate) | No change |
+
+**Per-Space Learning**:
+
+Different families have different naming patterns:
+
+- **Family A**: Only refers to "John" (unambiguous) → lower threshold
+- **Family B**: Multiple "Johns" (dad, uncle, neighbor) → higher threshold
+
+Store per-space thresholds:
+
+```sql
+-- st_learned_weights keys:
+--   threshold_person_reinforce_space_{space_id} = 0.88
+--   threshold_person_reinforce_global = 0.90  -- fallback
+```
+
+**Threshold Bounds**:
+
+To prevent runaway learning:
+
+| Entity Type | Min REINFORCE | Max REINFORCE |
+|-------------|---------------|---------------|
+| PERSON | 0.80 | 0.98 |
+| FAMILY_MEMBER | 0.85 | 0.99 |
+| CONCEPT | 0.55 | 0.85 |
+
+**Storage**:
+
+```sql
+-- Example st_learned_weights entries:
+INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count)
+VALUES
+  ('threshold_person_reinforce', 'ENTITY_THRESHOLD', 0.90, 0.85, 150),
+  ('threshold_person_extend_lower', 'ENTITY_THRESHOLD', 0.70, 0.80, 150),
+  ('threshold_concept_reinforce', 'ENTITY_THRESHOLD', 0.70, 0.82, 200),
+  ('threshold_concept_extend_lower', 'ENTITY_THRESHOLD', 0.45, 0.78, 200);
+```
+
+**Metrics**:
+
+- `p03_threshold_reinforce_{entity_type}` (gauge: current REINFORCE threshold per type)
+- `p03_entity_type_fp_rate` (gauge: false positive rate per type)
+- `p03_entity_type_fn_rate` (gauge: false negative rate per type)
+- `p03_threshold_adjustments` (counter: threshold updates per entity type)
+
+**Configuration**:
+
+```python
+P03_THRESHOLD_LEARNING_RATE = 0.02  # Adjustment per FP/FN signal
+P03_THRESHOLD_MIN_SAMPLES = 50  # Min signals before learning activates
+P03_THRESHOLD_BOUNDS = {  # [min, max] per entity type
+    'PERSON': [0.80, 0.98],
+    'FAMILY_MEMBER': [0.85, 0.99],
+    'CONCEPT': [0.55, 0.85],
+    # ... etc
+}
+```
+
+**Rationale**: Family members ("Mom", "Dad", "Sister") require highest precision—merging wrong family members is catastrophic for user trust. Concepts ("exercise", "workout") can be looser—semantic similarity handles synonyms well. Per-entity-type thresholds align precision requirements with entity disambiguation difficulty, reducing both false positives (wrong merges) and false negatives (missed synonyms).
+
+#### 1.4.4 Golden Dataset Validation
+
+**Problem**: Learning from user feedback is reactive—by the time we detect a bad match, the user has already experienced it. We need **proactive validation** to catch drift before it affects users.
+
+**Solution**: Maintain a curated "golden dataset" of known duplicates and known distinct pairs. Run weekly validation to ensure similarity formulas and thresholds maintain target performance.
+
+**Golden Dataset Structure**:
+
+| Component | Purpose | Size | Example |
+|-----------|---------|------|--------|
+| **Known duplicates** | True positives—should match | 500+ pairs | ("Had coffee with John", "Coffee meeting with John") |
+| **Known distinct** | True negatives—should NOT match | 500+ pairs | ("John (neighbor)", "John (coworker)") |
+| **Edge cases** | Boundary testing | 200+ pairs | ("Exercise at 6am", "Morning workout at 6:15am") |
+| **Hard negatives** | Similar but distinct | 150+ pairs | ("Loves yoga", "Hates yoga") |
+
+**Validation Metrics**:
+
+| Metric | Target | Alert Threshold | Definition |
+|--------|--------|-----------------|------------|
+| **Precision** | > 0.90 | < 0.85 | TP / (TP + FP) — correctness of matches |
+| **Recall** | > 0.85 | < 0.80 | TP / (TP + FN) — coverage of true duplicates |
+| **F1 Score** | > 0.87 | < 0.82 | Harmonic mean of precision and recall |
+| **False Positive Rate** | < 0.05 | > 0.10 | FP / (FP + TN) — wrong merges |
+| **False Negative Rate** | < 0.10 | > 0.15 | FN / (FN + TP) — missed duplicates |
+
+**Dataset Curation**:
+
+```python
+class GoldenDatasetCurator:
+    """
+    Maintain golden dataset for offline validation.
+    """
+
+    async def add_to_golden_dataset(
+        self,
+        pair1: HippEvent,
+        pair2: HippEvent,
+        ground_truth: str  # 'DUPLICATE', 'DISTINCT'
+    ):
+        """
+        Add a validated pair to golden dataset.
+
+        Sources:
+        - User corrections (high confidence)
+        - Manual curation by product team
+        - Synthetic test cases
+        """
+        await db.execute(
+            "INSERT INTO st_golden_dataset_pairs "
+            "(pair1_json, pair2_json, ground_truth, entity_type, confidence, created_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            json.dumps(pair1.to_dict()),
+            json.dumps(pair2.to_dict()),
+            ground_truth,
+            pair1.primary_entity_type,
+            1.0,  # High confidence (manually validated)
+            now_ms()
+        )
+
+    async def curate_from_user_corrections(self):
+        """
+        Automatically add user corrections to golden dataset.
+
+        User merges/splits are high-confidence ground truth.
+        """
+        corrections = await db.query(
+            "SELECT * FROM st_feedback_signals "
+            "WHERE signal_type IN ('ENTITY_MERGE_CONFIRMED', 'ENTITY_SPLIT') "
+            "AND confidence > 0.9 "
+            "AND created_at > $1",
+            now_ms() - (7 * 24 * 3600 * 1000)  # Last 7 days
+        )
+
+        for correction in corrections:
+            if correction.signal_type == 'ENTITY_MERGE_CONFIRMED':
+                await self.add_to_golden_dataset(
+                    correction.entity1,
+                    correction.entity2,
+                    ground_truth='DUPLICATE'
+                )
+            elif correction.signal_type == 'ENTITY_SPLIT':
+                await self.add_to_golden_dataset(
+                    correction.entity1,
+                    correction.entity2,
+                    ground_truth='DISTINCT'
+                )
+```
+
+**Weekly Validation Job**:
+
+```python
+class GoldenDatasetValidator:
+    """
+    Run weekly validation against golden dataset.
+    """
+
+    async def run_validation(self):
+        """
+        Validate current similarity formulas against golden dataset.
+
+        Returns: ValidationResults with metrics
+        """
+        # Load golden dataset
+        pairs = await db.query(
+            "SELECT * FROM st_golden_dataset_pairs WHERE active = TRUE"
+        )
+
+        true_positives = 0
+        false_positives = 0
+        true_negatives = 0
+        false_negatives = 0
+
+        for pair in pairs:
+            # Compute similarity using current weights
+            similarity = await self.compute_similarity(
+                pair.pair1_json,
+                pair.pair2_json,
+                target_layer='st_epi'  # or infer from pair
+            )
+
+            # Apply current threshold
+            threshold = await self.get_threshold(pair.entity_type)
+            predicted = 'DUPLICATE' if similarity > threshold else 'DISTINCT'
+
+            # Compare to ground truth
+            if predicted == 'DUPLICATE' and pair.ground_truth == 'DUPLICATE':
+                true_positives += 1
+            elif predicted == 'DUPLICATE' and pair.ground_truth == 'DISTINCT':
+                false_positives += 1
+            elif predicted == 'DISTINCT' and pair.ground_truth == 'DISTINCT':
+                true_negatives += 1
+            elif predicted == 'DISTINCT' and pair.ground_truth == 'DUPLICATE':
+                false_negatives += 1
+
+        # Compute metrics
+        precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+        recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+        f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+        fpr = false_positives / (false_positives + true_negatives) if (false_positives + true_negatives) > 0 else 0
+        fnr = false_negatives / (false_negatives + true_positives) if (false_negatives + true_positives) > 0 else 0
+
+        # Store results
+        await db.execute(
+            "INSERT INTO st_validation_results "
+            "(validation_id, precision, recall, f1_score, fpr, fnr, true_positives, false_positives, true_negatives, false_negatives, created_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            ulid(),
+            precision,
+            recall,
+            f1_score,
+            fpr,
+            fnr,
+            true_positives,
+            false_positives,
+            true_negatives,
+            false_negatives,
+            now_ms()
+        )
+
+        # Alert if metrics degrade
+        if precision < 0.85:
+            await emit_alert('GoldenDatasetPrecisionLow', precision)
+        if recall < 0.80:
+            await emit_alert('GoldenDatasetRecallLow', recall)
+        if f1_score < 0.82:
+            await emit_alert('GoldenDatasetF1Low', f1_score)
+
+        return {
+            'precision': precision,
+            'recall': recall,
+            'f1_score': f1_score,
+            'fpr': fpr,
+            'fnr': fnr,
+        }
+```
+
+**Drift Detection**:
+
+```python
+class DriftDetector:
+    """
+    Detect concept drift in similarity performance.
+    """
+
+    async def check_for_drift(self):
+        """
+        Alert if F1 score drops >5% week-over-week.
+        """
+        # Get last 2 weeks of validation results
+        results = await db.query(
+            "SELECT * FROM st_validation_results "
+            "WHERE created_at > $1 "
+            "ORDER BY created_at DESC LIMIT 2",
+            now_ms() - (14 * 24 * 3600 * 1000)
+        )
+
+        if len(results) < 2:
+            return  # Not enough data
+
+        current_f1 = results[0].f1_score
+        previous_f1 = results[1].f1_score
+
+        if current_f1 < previous_f1 - 0.05:
+            # F1 dropped >5%
+            await emit_alert(
+                'SimilarityDriftDetected',
+                f"F1 dropped from {previous_f1:.3f} to {current_f1:.3f}"
+            )
+```
+
+**Schema**:
+
+```sql
+CREATE TABLE IF NOT EXISTS st_golden_dataset_pairs (
+    pair_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pair1_json JSONB NOT NULL,  -- First event in pair
+    pair2_json JSONB NOT NULL,  -- Second event in pair
+    ground_truth TEXT NOT NULL,  -- 'DUPLICATE' or 'DISTINCT'
+    entity_type TEXT,  -- Primary entity type for categorization
+    confidence REAL DEFAULT 1.0,  -- Ground truth confidence
+    active BOOLEAN DEFAULT TRUE,  -- Can deactivate stale pairs
+    created_at BIGINT NOT NULL,
+    created_by TEXT,  -- 'user_correction', 'manual_curation', 'synthetic'
+
+    CHECK (ground_truth IN ('DUPLICATE', 'DISTINCT'))
+);
+
+CREATE INDEX idx_golden_pairs_entity_type ON st_golden_dataset_pairs(entity_type);
+CREATE INDEX idx_golden_pairs_ground_truth ON st_golden_dataset_pairs(ground_truth);
+CREATE INDEX idx_golden_pairs_active ON st_golden_dataset_pairs(active);
+
+CREATE TABLE IF NOT EXISTS st_validation_results (
+    validation_id UUID PRIMARY KEY,
+    precision REAL NOT NULL,
+    recall REAL NOT NULL,
+    f1_score REAL NOT NULL,
+    fpr REAL,  -- False positive rate
+    fnr REAL,  -- False negative rate
+    true_positives INTEGER,
+    false_positives INTEGER,
+    true_negatives INTEGER,
+    false_negatives INTEGER,
+    created_at BIGINT NOT NULL
+);
+
+CREATE INDEX idx_validation_results_created ON st_validation_results(created_at);
+```
+
+**Schedule**:
+
+```python
+# Cron job: Run weekly validation every Sunday at 3am
+@scheduler.scheduled_job('cron', day_of_week='sun', hour=3)
+async def weekly_golden_dataset_validation():
+    validator = GoldenDatasetValidator()
+    results = await validator.run_validation()
+
+    # Log results
+    logger.info(f"Golden dataset validation: Precision={results['precision']:.3f}, Recall={results['recall']:.3f}, F1={results['f1_score']:.3f}")
+
+    # Check for drift
+    drift_detector = DriftDetector()
+    await drift_detector.check_for_drift()
+```
+
+**Metrics**:
+
+- `p03_golden_dataset_precision` (gauge: precision on golden dataset)
+- `p03_golden_dataset_recall` (gauge: recall on golden dataset)
+- `p03_golden_dataset_f1` (gauge: F1 score on golden dataset)
+- `p03_golden_dataset_size` (gauge: number of pairs in dataset)
+- `p03_golden_dataset_drift_alerts` (counter: drift detection alerts)
+
+**Configuration**:
+
+```python
+P03_GOLDEN_DATASET_PATH = "/data/golden_dataset/"  # Optional file-based storage
+P03_GOLDEN_DATASET_VALIDATION_SCHEDULE = "weekly"  # or "daily" for high-churn systems
+P03_GOLDEN_DATASET_MIN_SIZE = 1000  # Minimum pairs for reliable validation
+P03_GOLDEN_DATASET_PRECISION_TARGET = 0.90
+P03_GOLDEN_DATASET_RECALL_TARGET = 0.85
+P03_GOLDEN_DATASET_F1_TARGET = 0.87
+P03_GOLDEN_DATASET_DRIFT_THRESHOLD = 0.05  # 5% drop triggers alert
+```
+
+**Rationale**: Offline validation catches drift before it affects users. Learning from user feedback is reactive (bad matches already shown). Golden dataset enables proactive quality assurance. Weekly validation ensures similarity formulas and thresholds maintain target performance even as weights adapt. Curating dataset from user corrections creates virtuous cycle—corrections improve both model (via learning) and validation (via golden dataset).
+
+#### 1.4.5 Thompson Sampling for Thresholds
+
+**Problem**: Reconciliation thresholds (REINFORCE >0.85, EXTEND 0.60-0.85) are arbitrary "magic numbers". We don't know the optimal threshold for a given space, and hardcoded values don't adapt to user behavior or content patterns.
+
+**Solution**: Learn optimal thresholds via Thompson Sampling (Beta-Bernoulli model) with natural exploration/exploitation balance.
+
+**Why Thompson Sampling?**
+
+| Alternative | Pros | Cons | Decision |
+|-------------|------|------|----------|
+| **Thompson Sampling** | Natural exploration, handles non-stationary data, simple Beta conjugacy | Requires success/failure definition | ✅ **Selected** |
+| ε-greedy | Simple | Fixed exploration rate, no uncertainty quantification | Rejected |
+| UCB | Theoretical guarantees | Assumes stationarity, complex tuning | Rejected |
+| Gradient descent | General | Requires differentiable loss, slow | Rejected |
+
+**Threshold Model**:
+
+Each reconciliation threshold is modeled as a Beta distribution:
+
+| Threshold | Prior | E[x] | Purpose |
+|-----------|-------|------|----------|
+| `REINFORCE_THRESHOLD` | Beta(17, 3) | 0.85 | Similarity > threshold → REINFORCE existing truth |
+| `EXTEND_LOWER_THRESHOLD` | Beta(12, 8) | 0.60 | Similarity in range → EXTEND truth with new details |
+
+**Thompson Sampling Loop**:
+
+```python
+class ThompsonSamplingThresholds:
+    """
+    Learn reconciliation thresholds via Thompson Sampling.
+    """
+
+    def __init__(self):
+        # Initialize with informative priors (encode current best practice)
+        self.thresholds = {
+            'reinforce': {'alpha': 17, 'beta': 3},  # E[x] = 17/20 = 0.85
+            'extend_lower': {'alpha': 12, 'beta': 8},  # E[x] = 12/20 = 0.60
+        }
+
+    async def sample_threshold(
+        self,
+        threshold_name: str,
+        space_id: str
+    ) -> float:
+        """
+        Sample a threshold from the Beta posterior.
+
+        Args:
+            threshold_name: 'reinforce' or 'extend_lower'
+            space_id: Space to sample threshold for
+
+        Returns:
+            Sampled threshold value [0, 1]
+        """
+        # Load space-specific Beta parameters (or fall back to global)
+        params = await self.load_beta_params(threshold_name, space_id)
+
+        # Sample from Beta(α, β)
+        threshold = np.random.beta(params['alpha'], params['beta'])
+
+        # Clamp to stability bounds
+        if threshold_name == 'reinforce':
+            threshold = np.clip(threshold, 0.75, 0.95)
+        elif threshold_name == 'extend_lower':
+            threshold = np.clip(threshold, 0.45, 0.75)
+
+        return threshold
+
+    async def update_threshold(
+        self,
+        threshold_name: str,
+        space_id: str,
+        decision_was_successful: bool
+    ):
+        """
+        Update Beta parameters based on decision outcome.
+
+        Args:
+            threshold_name: Which threshold was used
+            space_id: Space where decision occurred
+            decision_was_successful: Did the decision lead to good outcome?
+        """
+        params = await self.load_beta_params(threshold_name, space_id)
+
+        if decision_was_successful:
+            # Success: increment α (threshold was appropriate)
+            params['alpha'] += 1
+        else:
+            # Failure: increment β (threshold was too lenient or strict)
+            params['beta'] += 1
+
+        # Apply momentum for stability (prevent wild swings)
+        old_params = params.copy()
+        params['alpha'] = 0.9 * old_params['alpha'] + 0.1 * params['alpha']
+        params['beta'] = 0.9 * old_params['beta'] + 0.1 * params['beta']
+
+        # Persist updated parameters
+        await self.save_beta_params(threshold_name, space_id, params)
+
+    async def load_beta_params(
+        self,
+        threshold_name: str,
+        space_id: str
+    ) -> dict:
+        """
+        Load Beta(α, β) parameters for a threshold.
+
+        Returns: {'alpha': float, 'beta': float}
+        """
+        # Try space-specific first
+        space_params = await db.query(
+            "SELECT param_key, current_value FROM st_learned_weights "
+            "WHERE param_key LIKE $1 AND param_type = 'THOMPSON_THRESHOLD'",
+            f"threshold_{threshold_name}_{space_id}_%"
+        )
+
+        if space_params and space_params['signal_count'] >= 100:
+            # Space has enough data
+            return {
+                'alpha': space_params.get(f'threshold_{threshold_name}_{space_id}_alpha', 17),
+                'beta': space_params.get(f'threshold_{threshold_name}_{space_id}_beta', 3),
+            }
+
+        # Fall back to global
+        global_params = await db.query(
+            "SELECT param_key, current_value FROM st_learned_weights "
+            "WHERE param_key LIKE $1 AND param_type = 'THOMPSON_THRESHOLD'",
+            f"threshold_{threshold_name}_global_%"
+        )
+
+        if global_params:
+            return {
+                'alpha': global_params.get(f'threshold_{threshold_name}_global_alpha', 17),
+                'beta': global_params.get(f'threshold_{threshold_name}_global_beta', 3),
+            }
+
+        # Fall back to prior
+        return self.get_prior(threshold_name)
+
+    def get_prior(self, threshold_name: str) -> dict:
+        """
+        Return informative prior for a threshold.
+        """
+        priors = {
+            'reinforce': {'alpha': 17, 'beta': 3},  # Beta(17, 3) → E[x]=0.85
+            'extend_lower': {'alpha': 12, 'beta': 8},  # Beta(12, 8) → E[x]=0.60
+        }
+        return priors.get(threshold_name, {'alpha': 1, 'beta': 1})  # Uniform fallback
+```
+
+**Exploration vs Exploitation**:
+
+Thompson Sampling naturally balances exploration/exploitation:
+
+- **Early on** (few signals): Beta distribution is wide → samples vary → explores different thresholds
+- **Later** (many signals): Beta distribution narrows → samples converge → exploits learned optimal
+
+No manual tuning of exploration rate required (unlike ε-greedy).
+
+**Storage**:
+
+```sql
+-- Beta parameters stored in st_learned_weights
+-- Example keys:
+--   threshold_reinforce_space_abc123_alpha = 19.2
+--   threshold_reinforce_space_abc123_beta = 4.1
+--   threshold_reinforce_global_alpha = 185.7
+--   threshold_reinforce_global_beta = 34.2
+--   threshold_extend_lower_space_abc123_alpha = 14.5
+--   threshold_extend_lower_space_abc123_beta = 10.8
+```
+
+**Metrics**:
+
+- `p03_threshold_reinforce` (histogram: sampled REINFORCE threshold values)
+- `p03_threshold_extend_lower` (histogram: sampled EXTEND_LOWER threshold values)
+- `p03_threshold_alpha` (gauge: current α parameter for each threshold)
+- `p03_threshold_beta` (gauge: current β parameter for each threshold)
+- `p03_threshold_expected_value` (gauge: E[threshold] = α/(α+β))
+
+**Configuration**:
+
+```python
+P03_THOMPSON_SAMPLING_MOMENTUM = 0.9  # Momentum for Beta parameter updates
+P03_THOMPSON_SAMPLING_MIN_SAMPLES = 100  # Min signals before using space-specific
+P03_THOMPSON_REINFORCE_BOUNDS = (0.75, 0.95)  # Clamp sampled threshold
+P03_THOMPSON_EXTEND_LOWER_BOUNDS = (0.45, 0.75)
+P03_THOMPSON_SAMPLING_ENABLED = True  # Feature flag
+```
+
+**Rationale**: Thompson Sampling replaces magic numbers with data-driven thresholds. Beta-Bernoulli conjugacy makes updates simple (closed-form). Natural exploration/exploitation means no ε-tuning. Handles non-stationary user behavior (user preferences change over time). Bayesian approach provides uncertainty quantification (credible intervals).
+
+#### 1.4.6 Per-Space Threshold Isolation
+
+**Problem**: Different spaces (families, work teams) have different content patterns and disambiguation needs. A single global threshold underperforms. But cold-start spaces need a fallback.
+
+**Solution**: Hierarchical threshold learning with 3-level fallback.
+
+**Threshold Hierarchy**:
+
+```
+Level 1: Space-specific threshold (if signal_count >= 100)
+    ↓ fallback
+Level 2: Global threshold (aggregated across all spaces)
+    ↓ fallback
+Level 3: Static default (from prior: REINFORCE=0.85, EXTEND_LOWER=0.60)
+```
+
+**Per-Space Storage Structure**:
+
+```python
+class PerSpaceThresholdManager:
+    """
+    Manage threshold learning with per-space isolation.
+    """
+
+    async def get_threshold(
+        self,
+        threshold_name: str,
+        space_id: str,
+        use_thompson_sampling: bool = True
+    ) -> float:
+        """
+        Get threshold for a space (3-level fallback).
+
+        Args:
+            threshold_name: 'reinforce' or 'extend_lower'
+            space_id: Space ID
+            use_thompson_sampling: If True, sample from Beta; if False, use E[x]
+
+        Returns:
+            Threshold value [0, 1]
+        """
+        # Level 1: Space-specific (if enough data)
+        space_params = await self.load_beta_params(threshold_name, space_id)
+        space_signal_count = await self.get_signal_count(space_id)
+
+        if space_signal_count >= 100:
+            # Space has enough data
+            if use_thompson_sampling:
+                return np.random.beta(space_params['alpha'], space_params['beta'])
+            else:
+                # Use expected value
+                return space_params['alpha'] / (space_params['alpha'] + space_params['beta'])
+
+        # Level 2: Global (aggregated)
+        global_params = await self.load_beta_params(threshold_name, 'global')
+        global_signal_count = await self.get_signal_count('global')
+
+        if global_signal_count >= 100:
+            if use_thompson_sampling:
+                return np.random.beta(global_params['alpha'], global_params['beta'])
+            else:
+                return global_params['alpha'] / (global_params['alpha'] + global_params['beta'])
+
+        # Level 3: Static default (from prior)
+        static_defaults = {
+            'reinforce': 0.85,
+            'extend_lower': 0.60,
+        }
+        return static_defaults.get(threshold_name, 0.75)
+
+    async def get_signal_count(self, space_id: str) -> int:
+        """
+        Get count of reconciliation decisions for a space.
+
+        Returns: Signal count (0 if cold start)
+        """
+        result = await db.query(
+            "SELECT sample_count FROM st_learned_weights "
+            "WHERE param_key = $1 AND param_type = 'THOMPSON_THRESHOLD'",
+            f"threshold_signal_count_{space_id}"
+        )
+        return result.get('sample_count', 0) if result else 0
+```
+
+**Global Aggregation** (Nightly Job):
+
+```python
+class GlobalThresholdAggregator:
+    """
+    Aggregate space-specific Beta parameters into global parameters.
+    """
+
+    async def aggregate_global_thresholds(self):
+        """
+        Pool Beta parameters from all spaces (privacy-safe: only counts).
+
+        Runs nightly to update global fallback thresholds.
+        """
+        for threshold_name in ['reinforce', 'extend_lower']:
+            # Fetch all space-specific Beta parameters
+            space_params = await db.query(
+                "SELECT param_key, current_value FROM st_learned_weights "
+                "WHERE param_key LIKE $1 AND param_type = 'THOMPSON_THRESHOLD'",
+                f"threshold_{threshold_name}_space_%"
+            )
+
+            # Aggregate: sum α and β across spaces
+            total_alpha = sum(p['alpha'] for p in space_params)
+            total_beta = sum(p['beta'] for p in space_params)
+
+            # Store global parameters
+            await db.execute(
+                "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+                "VALUES ($1, 'THOMPSON_THRESHOLD', $2, 0.9, $3, $4) "
+                "ON CONFLICT (param_key) DO UPDATE SET current_value = $2, sample_count = $3, last_updated_at = $4",
+                f"threshold_{threshold_name}_global_alpha",
+                total_alpha,
+                len(space_params),
+                now_ms()
+            )
+
+            await db.execute(
+                "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+                "VALUES ($1, 'THOMPSON_THRESHOLD', $2, 0.9, $3, $4) "
+                "ON CONFLICT (param_key) DO UPDATE SET current_value = $2, sample_count = $3, last_updated_at = $4",
+                f"threshold_{threshold_name}_global_beta",
+                total_beta,
+                len(space_params),
+                now_ms()
+            )
+
+        logger.info("Global threshold aggregation complete")
+```
+
+**Privacy Considerations**:
+
+- **No cross-space leakage**: Each space learns independently
+- **Global aggregation**: Only counts (α, β) pooled, not raw data
+- **Per-tenant isolation**: Global aggregation can be per-tenant if multi-tenant
+
+**Example**:
+
+| Space | Signals | REINFORCE Threshold | Source |
+|-------|---------|---------------------|--------|
+| **Family A** | 250 | 0.88 (space-specific) | Level 1 |
+| **Family B** | 80 | 0.86 (global fallback) | Level 2 |
+| **New Family C** | 5 | 0.85 (static default) | Level 3 |
+
+**Storage**:
+
+```sql
+-- Per-space parameters
+INSERT INTO st_learned_weights (param_key, param_type, current_value, sample_count)
+VALUES
+  ('threshold_reinforce_space_abc123_alpha', 'THOMPSON_THRESHOLD', 19.2, 250),
+  ('threshold_reinforce_space_abc123_beta', 'THOMPSON_THRESHOLD', 4.1, 250),
+  ('threshold_signal_count_space_abc123', 'THOMPSON_THRESHOLD', 250, 250);
+
+-- Global parameters (aggregated nightly)
+INSERT INTO st_learned_weights (param_key, param_type, current_value, sample_count)
+VALUES
+  ('threshold_reinforce_global_alpha', 'THOMPSON_THRESHOLD', 185.7, 50),  -- 50 spaces
+  ('threshold_reinforce_global_beta', 'THOMPSON_THRESHOLD', 34.2, 50);
+```
+
+**Metrics**:
+
+- `p03_threshold_fallback_level` (histogram: which level used per decision)
+- `p03_spaces_with_learned_thresholds` (gauge: count of spaces with signal_count >= 100)
+- `p03_global_threshold_alpha` (gauge: global α parameter)
+- `p03_global_threshold_beta` (gauge: global β parameter)
+
+**Configuration**:
+
+```python
+P03_PER_SPACE_THRESHOLD_MIN_SIGNALS = 100  # Min signals before using space-specific
+P03_GLOBAL_AGGREGATION_SCHEDULE = "nightly"  # Cron: 2am daily
+P03_THRESHOLD_FALLBACK_ENABLED = True
+```
+
+**Rationale**: Per-space isolation respects different content patterns. Family A may prefer strict matching (high REINFORCE threshold) while Family B prefers looser (lower threshold). Hierarchical fallback ensures cold-start spaces don't suffer. Global aggregation provides informed fallback without cross-space leakage. Privacy-safe (only counts pooled).
+
+#### 1.4.7 Decision Outcome Tracking
+
+**Problem**: Thompson Sampling requires success/failure signals. What constitutes "success" for a reconciliation decision? How do we track outcomes over time?
+
+**Solution**: Define clear success criteria per decision type, track outcomes in observation windows, and batch-process delayed feedback.
+
+**Success Criteria by Decision Type**:
+
+| Decision | Success (threshold appropriate) | Failure (threshold wrong) | Observation Window |
+|----------|--------------------------------|---------------------------|--------------------|
+| **REINFORCE** | Memory grounded in K1 query (used) | User corrects/rejects memory | 7 days |
+| **EXTEND** | Extended version used in K1 | User reverts to original | 7 days |
+| **CREATE** | Stays distinct (no merge signal) | User merges entities manually | 30 days |
+| **CONTRADICT** | P06 resolution accepted | User rejects resolution | 7 days |
+
+**Outcome Tracking Implementation**:
+
+```python
+class ReconciliationOutcomeTracker:
+    """
+    Track reconciliation decision outcomes for Thompson Sampling.
+    """
+
+    async def log_decision(
+        self,
+        decision_id: str,
+        decision_type: str,
+        threshold_used: float,
+        threshold_name: str,
+        space_id: str,
+        context: dict
+    ):
+        """
+        Log a reconciliation decision for later outcome evaluation.
+
+        Args:
+            decision_id: Unique ID for this decision
+            decision_type: 'REINFORCE', 'EXTEND', 'CREATE', 'CONTRADICT'
+            threshold_used: Sampled threshold value
+            threshold_name: 'reinforce' or 'extend_lower'
+            space_id: Space where decision occurred
+            context: Decision context (similarity score, entities, etc.)
+        """
+        # Store decision in st_consolidation_audit
+        await db.execute(
+            "INSERT INTO st_consolidation_audit "
+            "(decision_id, decision_type, threshold_used, threshold_name, space_id, context_json, created_at, outcome_evaluated) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)",
+            decision_id,
+            decision_type,
+            threshold_used,
+            threshold_name,
+            space_id,
+            json.dumps(context),
+            now_ms()
+        )
+
+    async def evaluate_decision_outcome(
+        self,
+        decision_id: str
+    ) -> Optional[bool]:
+        """
+        Evaluate whether a decision was successful.
+
+        Returns:
+            True if success, False if failure, None if not yet evaluable
+        """
+        # Load decision
+        decision = await db.query(
+            "SELECT * FROM st_consolidation_audit WHERE decision_id = $1",
+            decision_id
+        )
+
+        if not decision:
+            return None
+
+        # Check if observation window has elapsed
+        observation_windows = {
+            'REINFORCE': 7 * 24 * 3600 * 1000,  # 7 days
+            'EXTEND': 7 * 24 * 3600 * 1000,
+            'CREATE': 30 * 24 * 3600 * 1000,  # 30 days
+            'CONTRADICT': 7 * 24 * 3600 * 1000,
+        }
+        window = observation_windows.get(decision.decision_type, 7 * 24 * 3600 * 1000)
+
+        if now_ms() - decision.created_at < window:
+            # Still in observation window
+            return None
+
+        # Evaluate based on decision type
+        if decision.decision_type == 'REINFORCE':
+            return await self.evaluate_reinforce_outcome(decision)
+        elif decision.decision_type == 'EXTEND':
+            return await self.evaluate_extend_outcome(decision)
+        elif decision.decision_type == 'CREATE':
+            return await self.evaluate_create_outcome(decision)
+        elif decision.decision_type == 'CONTRADICT':
+            return await self.evaluate_contradict_outcome(decision)
+
+        return None
+
+    async def evaluate_reinforce_outcome(self, decision: dict) -> bool:
+        """
+        Evaluate REINFORCE decision outcome.
+
+        Success: Memory was grounded (retrieved by P04) within 7 days
+        Failure: User corrected or rejected the memory
+        """
+        # Check if memory was used
+        memory_id = decision.context_json.get('target_record_id')
+        was_used = await db.query(
+            "SELECT COUNT(*) FROM st_feedback_signals "
+            "WHERE signal_type = 'MEMORY_GROUNDED' "
+            "AND context_json->>'memory_id' = $1 "
+            "AND created_at BETWEEN $2 AND $3",
+            memory_id,
+            decision.created_at,
+            decision.created_at + (7 * 24 * 3600 * 1000)
+        )
+
+        if was_used['count'] > 0:
+            return True  # Success: memory was used
+
+        # Check for user corrections
+        was_corrected = await db.query(
+            "SELECT COUNT(*) FROM st_feedback_signals "
+            "WHERE signal_type IN ('USER_REJECTS_DECISION', 'USER_CORRECTS_MEMORY') "
+            "AND context_json->>'memory_id' = $1 "
+            "AND created_at BETWEEN $2 AND $3",
+            memory_id,
+            decision.created_at,
+            decision.created_at + (7 * 24 * 3600 * 1000)
+        )
+
+        if was_corrected['count'] > 0:
+            return False  # Failure: user corrected
+
+        # Neutral: memory not used but not corrected either
+        # Count as mild success (no negative signal)
+        return True
+
+    async def evaluate_extend_outcome(self, decision: dict) -> bool:
+        """
+        Evaluate EXTEND decision outcome.
+
+        Success: Extended version used in queries
+        Failure: User reverted to original (rare)
+        """
+        # Check if extended attributes were queried
+        memory_id = decision.context_json.get('target_record_id')
+        extended_attrs = decision.context_json.get('extensions', [])
+
+        was_used = await db.query(
+            "SELECT COUNT(*) FROM st_feedback_signals "
+            "WHERE signal_type = 'MEMORY_GROUNDED' "
+            "AND context_json->>'memory_id' = $1 "
+            "AND created_at BETWEEN $2 AND $3",
+            memory_id,
+            decision.created_at,
+            decision.created_at + (7 * 24 * 3600 * 1000)
+        )
+
+        # If extended version used at all → success
+        return was_used['count'] > 0
+
+    async def evaluate_create_outcome(self, decision: dict) -> bool:
+        """
+        Evaluate CREATE decision outcome.
+
+        Success: Entities stayed distinct (no merge within 30 days)
+        Failure: User manually merged the entities
+        """
+        entity_id = decision.context_json.get('new_entity_id')
+
+        # Check for manual merge signals
+        was_merged = await db.query(
+            "SELECT COUNT(*) FROM st_feedback_signals "
+            "WHERE signal_type = 'ENTITY_MANUAL_MERGE' "
+            "AND (context_json->>'entity1_id' = $1 OR context_json->>'entity2_id' = $1) "
+            "AND created_at BETWEEN $2 AND $3",
+            entity_id,
+            decision.created_at,
+            decision.created_at + (30 * 24 * 3600 * 1000)
+        )
+
+        # Success if NOT merged
+        return was_merged['count'] == 0
+
+    async def evaluate_contradict_outcome(self, decision: dict) -> bool:
+        """
+        Evaluate CONTRADICT decision outcome.
+
+        Success: P06 resolution accepted by user
+        Failure: User rejected P06 resolution
+        """
+        decision_id = decision.decision_id
+
+        # Check for P06 resolution signals
+        resolution_accepted = await db.query(
+            "SELECT COUNT(*) FROM st_feedback_signals "
+            "WHERE signal_type = 'P06_RESOLUTION_ACCEPTED' "
+            "AND context_json->>'decision_id' = $1 "
+            "AND created_at BETWEEN $2 AND $3",
+            decision_id,
+            decision.created_at,
+            decision.created_at + (7 * 24 * 3600 * 1000)
+        )
+
+        return resolution_accepted['count'] > 0
+```
+
+**Batch Evaluation Job** (Nightly):
+
+```python
+@scheduler.scheduled_job('cron', hour=3)
+async def evaluate_pending_decisions():
+    """
+    Nightly job: Evaluate decisions with elapsed observation windows.
+    """
+    # Fetch unevaluated decisions past observation window
+    decisions = await db.query(
+        "SELECT decision_id, decision_type, created_at FROM st_consolidation_audit "
+        "WHERE outcome_evaluated = FALSE "
+        "AND created_at < $1",
+        now_ms() - (7 * 24 * 3600 * 1000)  # At least 7 days old
+    )
+
+    tracker = ReconciliationOutcomeTracker()
+    sampler = ThompsonSamplingThresholds()
+
+    for decision in decisions:
+        outcome = await tracker.evaluate_decision_outcome(decision.decision_id)
+
+        if outcome is not None:
+            # Update Thompson Sampling parameters
+            await sampler.update_threshold(
+                threshold_name=decision.threshold_name,
+                space_id=decision.space_id,
+                decision_was_successful=outcome
+            )
+
+            # Mark as evaluated
+            await db.execute(
+                "UPDATE st_consolidation_audit "
+                "SET outcome_evaluated = TRUE, outcome_success = $1, evaluated_at = $2 "
+                "WHERE decision_id = $3",
+                outcome,
+                now_ms(),
+                decision.decision_id
+            )
+
+    logger.info(f"Evaluated {len(decisions)} reconciliation decisions")
+```
+
+**Schema Extensions**:
+
+```sql
+-- Add columns to st_consolidation_audit
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS decision_id UUID;
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS threshold_used REAL;
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS threshold_name TEXT;
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS outcome_evaluated BOOLEAN DEFAULT FALSE;
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS outcome_success BOOLEAN;
+ALTER TABLE st_consolidation_audit ADD COLUMN IF NOT EXISTS evaluated_at BIGINT;
+
+CREATE INDEX IF NOT EXISTS idx_consolidation_audit_outcome_eval
+  ON st_consolidation_audit(outcome_evaluated, created_at)
+  WHERE outcome_evaluated = FALSE;
+```
+
+**Metrics**:
+
+- `p03_decisions_evaluated` (counter: decisions evaluated per day)
+- `p03_decision_success_rate` (gauge: success rate per decision type)
+- `p03_decision_evaluation_lag` (histogram: time from decision to evaluation)
+
+**Rationale**: Clear success criteria enable Thompson Sampling to learn. Delayed feedback (7-30 days) means batch processing is required. Nightly job evaluates past decisions and updates Beta parameters. Different observation windows per decision type align with expected feedback latency (REINFORCE fast, CREATE slow).
+
+#### 1.4.8 Threshold Cold Start Strategy
+
+**Problem**: New spaces have no data for Thompson Sampling. Using wide priors causes high variance (unstable thresholds). Using narrow priors prevents adaptation.
+
+**Solution**: Phased cold start with 3 stages based on signal count.
+
+**Cold Start Phases**:
+
+| Phase | Signal Count | Behavior | Rationale |
+|-------|--------------|----------|----------|
+| **Cold** | < 100 | Use static defaults (0.85, 0.60) | Not enough data, use proven values |
+| **Warm** | 100-500 | Thompson Sampling with wide exploration | Start learning, accept variance |
+| **Hot** | > 500 | Thompson Sampling, exploitation focus | Enough data, exploit learned optimal |
+
+**Implementation**:
+
+```python
+class ColdStartThresholdManager:
+    """
+    Manage threshold learning across cold start phases.
+    """
+
+    async def get_threshold_with_cold_start(
+        self,
+        threshold_name: str,
+        space_id: str
+    ) -> float:
+        """
+        Get threshold with cold start logic.
+
+        Returns: Threshold value [0, 1]
+        """
+        signal_count = await self.get_signal_count(space_id)
+
+        if signal_count < 100:
+            # Cold phase: use static defaults
+            return self.get_static_default(threshold_name)
+
+        elif signal_count < 500:
+            # Warm phase: Thompson Sampling with wide exploration
+            params = await self.load_beta_params(threshold_name, space_id)
+            threshold = np.random.beta(params['alpha'], params['beta'])
+
+            # Apply wider bounds for exploration
+            if threshold_name == 'reinforce':
+                threshold = np.clip(threshold, 0.70, 0.98)  # Wider than hot phase
+            elif threshold_name == 'extend_lower':
+                threshold = np.clip(threshold, 0.40, 0.80)
+
+            return threshold
+
+        else:
+            # Hot phase: Thompson Sampling, tighter bounds
+            params = await self.load_beta_params(threshold_name, space_id)
+            threshold = np.random.beta(params['alpha'], params['beta'])
+
+            # Apply tighter bounds for exploitation
+            if threshold_name == 'reinforce':
+                threshold = np.clip(threshold, 0.75, 0.95)
+            elif threshold_name == 'extend_lower':
+                threshold = np.clip(threshold, 0.45, 0.75)
+
+            return threshold
+
+    def get_static_default(self, threshold_name: str) -> float:
+        """
+        Return static default threshold (cold phase).
+        """
+        defaults = {
+            'reinforce': 0.85,
+            'extend_lower': 0.60,
+        }
+        return defaults.get(threshold_name, 0.75)
+
+    async def get_cold_start_phase(
+        self,
+        space_id: str
+    ) -> str:
+        """
+        Determine cold start phase for a space.
+
+        Returns: 'cold', 'warm', or 'hot'
+        """
+        signal_count = await self.get_signal_count(space_id)
+
+        if signal_count < 100:
+            return 'cold'
+        elif signal_count < 500:
+            return 'warm'
+        else:
+            return 'hot'
+```
+
+**Phase Transitions**:
+
+```python
+class ColdStartPhaseTracker:
+    """
+    Track and alert on cold start phase transitions.
+    """
+
+    async def check_phase_transition(
+        self,
+        space_id: str
+    ):
+        """
+        Check if space has transitioned to a new phase.
+        """
+        current_phase = await self.get_cold_start_phase(space_id)
+        previous_phase = await self.get_previous_phase(space_id)
+
+        if current_phase != previous_phase:
+            # Phase transition occurred
+            await self.emit_phase_transition_event(
+                space_id,
+                previous_phase,
+                current_phase
+            )
+
+            # Update stored phase
+            await db.execute(
+                "UPDATE st_learned_weights "
+                "SET current_value = $1, last_updated_at = $2 "
+                "WHERE param_key = $3 AND param_type = 'COLD_START_PHASE'",
+                current_phase,
+                now_ms(),
+                f"cold_start_phase_{space_id}"
+            )
+
+            logger.info(f"Space {space_id} transitioned from {previous_phase} to {current_phase}")
+```
+
+**Per-Space Signal Count Tracking**:
+
+```python
+class SignalCountTracker:
+    """
+    Track signal count per space for cold start phasing.
+    """
+
+    async def increment_signal_count(
+        self,
+        space_id: str
+    ):
+        """
+        Increment signal count when a reconciliation decision is made.
+        """
+        await db.execute(
+            "INSERT INTO st_learned_weights (param_key, param_type, current_value, sample_count, last_updated_at) "
+            "VALUES ($1, 'COLD_START_SIGNAL_COUNT', 1, 1, $2) "
+            "ON CONFLICT (param_key) DO UPDATE SET current_value = st_learned_weights.current_value + 1, sample_count = st_learned_weights.sample_count + 1, last_updated_at = $2",
+            f"signal_count_{space_id}",
+            now_ms()
+        )
+
+        # Check for phase transition
+        phase_tracker = ColdStartPhaseTracker()
+        await phase_tracker.check_phase_transition(space_id)
+
+    async def get_signal_count(
+        self,
+        space_id: str
+    ) -> int:
+        """
+        Get current signal count for a space.
+
+        Returns: Signal count (0 if cold start)
+        """
+        result = await db.query(
+            "SELECT current_value FROM st_learned_weights "
+            "WHERE param_key = $1 AND param_type = 'COLD_START_SIGNAL_COUNT'",
+            f"signal_count_{space_id}"
+        )
+        return int(result['current_value']) if result else 0
+```
+
+**Metrics**:
+
+- `p03_cold_start_phase` (gauge: phase per space - 0=cold, 1=warm, 2=hot)
+- `p03_spaces_by_phase` (histogram: count of spaces in each phase)
+- `p03_phase_transitions` (counter: phase transition events)
+- `p03_signal_count_per_space` (histogram: signal count distribution)
+
+**Configuration**:
+
+```python
+P03_COLD_START_PHASE_COLD_MAX = 100  # Max signals in cold phase
+P03_COLD_START_PHASE_WARM_MAX = 500  # Max signals in warm phase
+P03_COLD_START_WARM_BOUNDS_REINFORCE = (0.70, 0.98)  # Wider bounds
+P03_COLD_START_HOT_BOUNDS_REINFORCE = (0.75, 0.95)  # Tighter bounds
+```
+
+**Rationale**: Static defaults prevent unstable thresholds in cold phase (< 100 signals). Warm phase (100-500) starts learning with wider exploration bounds. Hot phase (> 500) exploits learned optimal with tighter bounds. Phased approach balances stability (cold) with adaptation (warm/hot). Signal count tracking enables automatic phase transitions.
+
+#### 1.4.9 Threshold Stability and Bounds
+
+**Problem**: Thompson Sampling can cause runaway learning if feedback is noisy or biased. Thresholds may drift to extreme values (too strict or too lenient), degrading match quality.
+
+**Solution**: Apply momentum, stability bounds, and rollback mechanisms.
+
+**Momentum Update**:
+
+Prevent wild swings from single noisy signals:
+
+```python
+class MomentumThresholdUpdater:
+    """
+    Apply momentum to Beta parameter updates for stability.
+    """
+
+    def update_beta_with_momentum(
+        self,
+        old_alpha: float,
+        old_beta: float,
+        success_count: int,
+        failure_count: int,
+        momentum: float = 0.9
+    ) -> Tuple[float, float]:
+        """
+        Update Beta parameters with momentum.
+
+        Args:
+            old_alpha: Current α parameter
+            old_beta: Current β parameter
+            success_count: New successes to add
+            failure_count: New failures to add
+            momentum: Momentum factor (0.9 = 90% old, 10% new)
+
+        Returns:
+            (new_alpha, new_beta)
+        """
+        # Raw update (without momentum)
+        raw_alpha = old_alpha + success_count
+        raw_beta = old_beta + failure_count
+
+        # Apply momentum
+        new_alpha = momentum * old_alpha + (1 - momentum) * raw_alpha
+        new_beta = momentum * old_beta + (1 - momentum) * raw_beta
+
+        return (new_alpha, new_beta)
+```
+
+**Stability Bounds**:
+
+Clamp thresholds to prevent extreme values:
+
+| Threshold | Lower Bound | Upper Bound | Rationale |
+|-----------|-------------|-------------|----------|
+| **REINFORCE** | 0.75 | 0.95 | Too low → false positives; too high → false negatives |
+| **EXTEND_LOWER** | 0.45 | 0.75 | Too low → aggressive extension; too high → missed extensions |
+
+**Bound Violation Alerts**:
+
+```python
+class ThresholdBoundMonitor:
+    """
+    Monitor thresholds for bound violations and alert.
+    """
+
+    async def check_bounds(
+        self,
+        threshold_name: str,
+        space_id: str,
+        sampled_threshold: float
+    ):
+        """
+        Check if sampled threshold hits bounds.
+
+        Args:
+            threshold_name: Which threshold
+            space_id: Space ID
+            sampled_threshold: The sampled value
+        """
+        bounds = {
+            'reinforce': (0.75, 0.95),
+            'extend_lower': (0.45, 0.75),
+        }
+
+        lower, upper = bounds.get(threshold_name, (0.0, 1.0))
+
+        if sampled_threshold <= lower + 0.01:
+            # Hit lower bound
+            await self.emit_bound_alert(
+                space_id,
+                threshold_name,
+                'LOWER_BOUND',
+                sampled_threshold,
+                lower
+            )
+
+        if sampled_threshold >= upper - 0.01:
+            # Hit upper bound
+            await self.emit_bound_alert(
+                space_id,
+                threshold_name,
+                'UPPER_BOUND',
+                sampled_threshold,
+                upper
+            )
+
+    async def emit_bound_alert(
+        self,
+        space_id: str,
+        threshold_name: str,
+        bound_type: str,
+        sampled_value: float,
+        bound_value: float
+    ):
+        """
+        Emit alert when threshold hits bound.
+
+        Possible causes:
+        - Data quality issue (all successes or all failures)
+        - Concept drift (user preferences changed dramatically)
+        - Overfitting (not enough signals, high variance)
+        """
+        logger.warning(
+            f"Threshold bound hit: space={space_id}, threshold={threshold_name}, "
+            f"bound_type={bound_type}, value={sampled_value:.3f}, bound={bound_value}"
+        )
+
+        await emit_alert(
+            alert_type='ThresholdBoundHit',
+            severity='WARNING',
+            context={
+                'space_id': space_id,
+                'threshold_name': threshold_name,
+                'bound_type': bound_type,
+                'sampled_value': sampled_value,
+                'bound_value': bound_value,
+            }
+        )
+```
+
+**Rollback Mechanism**:
+
+If match quality degrades, revert to prior:
+
+```python
+class ThresholdRollbackManager:
+    """
+    Rollback thresholds if quality degrades.
+    """
+
+    async def check_for_rollback(
+        self,
+        space_id: str
+    ):
+        """
+        Check if match quality has degraded for 3 consecutive days.
+
+        If yes, rollback to prior (or global fallback).
+        """
+        # Get last 3 days of validation results
+        results = await db.query(
+            "SELECT * FROM st_validation_results "
+            "WHERE space_id = $1 "
+            "AND created_at > $2 "
+            "ORDER BY created_at DESC LIMIT 3",
+            space_id,
+            now_ms() - (3 * 24 * 3600 * 1000)
+        )
+
+        if len(results) < 3:
+            return  # Not enough data
+
+        # Check if F1 degraded 3 days in a row
+        f1_degraded = all(
+            results[i].f1_score < results[i+1].f1_score - 0.03  # 3% drop
+            for i in range(len(results)-1)
+        )
+
+        if f1_degraded:
+            logger.warning(f"Match quality degraded for 3 days, rolling back thresholds for space {space_id}")
+
+            # Rollback: reset to prior
+            for threshold_name in ['reinforce', 'extend_lower']:
+                prior = self.get_prior(threshold_name)
+                await db.execute(
+                    "UPDATE st_learned_weights "
+                    "SET current_value = $1, last_updated_at = $2 "
+                    "WHERE param_key LIKE $3 AND param_type = 'THOMPSON_THRESHOLD'",
+                    prior['alpha'],
+                    now_ms(),
+                    f"threshold_{threshold_name}_{space_id}_alpha"
+                )
+
+                await db.execute(
+                    "UPDATE st_learned_weights "
+                    "SET current_value = $1, last_updated_at = $2 "
+                    "WHERE param_key LIKE $3 AND param_type = 'THOMPSON_THRESHOLD'",
+                    prior['beta'],
+                    now_ms(),
+                    f"threshold_{threshold_name}_{space_id}_beta"
+                )
+
+            await emit_alert(
+                alert_type='ThresholdRolledBack',
+                severity='WARNING',
+                context={'space_id': space_id}
+            )
+```
+
+**Metrics**:
+
+- `p03_threshold_bound_hits` (counter: bound violation count per threshold)
+- `p03_threshold_rollbacks` (counter: rollback events)
+- `p03_threshold_stability` (gauge: threshold variance over 7 days)
+- `p03_threshold_drift_rate` (gauge: E[threshold] change per day)
+
+**Configuration**:
+
+```python
+P03_THRESHOLD_MOMENTUM = 0.9  # 90% old, 10% new
+P03_THRESHOLD_BOUNDS = {
+    'reinforce': (0.75, 0.95),
+    'extend_lower': (0.45, 0.75),
+}
+P03_THRESHOLD_ROLLBACK_DEGRADATION_DAYS = 3  # Rollback after 3 days of degradation
+P03_THRESHOLD_ROLLBACK_F1_DROP_THRESHOLD = 0.03  # 3% F1 drop
+```
+
+**Alerts** (Add to Section 17.3):
+
+```yaml
+ThresholdBoundHit:
+  severity: WARNING
+  message: "Threshold {threshold_name} hit {bound_type} bound for space {space_id}"
+  action: "Investigate data quality or concept drift"
+
+ThresholdRolledBack:
+  severity: WARNING
+  message: "Thresholds rolled back to prior for space {space_id} due to quality degradation"
+  action: "Review recent reconciliation decisions and user feedback"
+```
+
+**Rationale**: Momentum prevents wild swings from noisy signals. Stability bounds prevent extreme thresholds that degrade match quality. Bound alerts detect data quality issues or concept drift early. Rollback mechanism provides safety net if learning goes wrong (3 consecutive days of degraded F1 → revert to prior). Together, these mechanisms ensure Thompson Sampling remains stable and operational.
+
 ---
 
 ## 2. Neuroscience Foundation
@@ -1122,11 +3088,143 @@ class PhaseTransition:
 - Weight tuning per memory layer
 - Emotional salience extraction from affect scores
 
+##### 4.2.2.1 Closed-Loop Importance Learning
+
+**Purpose**: Transform static importance weights into learnable parameters based on actual usage patterns.
+
+**Feedback Loop Architecture**:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    IMPORTANCE SCORE FEEDBACK LOOP                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────┐     ┌──────────────────┐     ┌──────────────────────────┐ │
+│  │ st_hipp_     │     │ P03 R1:          │     │ P04 Query               │ │
+│  │ events       │────▶│ importance_score │────▶│ + K1 Response           │ │
+│  │              │     │ (learned weights)│     │                         │ │
+│  └──────────────┘     └──────────────────┘     └───────────┬─────────────┘ │
+│        ▲                                                   │               │
+│        │                                                   ▼               │
+│        │              ┌──────────────────┐     ┌──────────────────────────┐ │
+│        │              │ P03 R1+:         │     │ K1 Feedback Detection   │ │
+│        │              │ Learn weights    │◀────│ • MEMORY_GROUNDED       │ │
+│        │              │ via gradient     │     │ • MEMORY_MISS           │ │
+│        │              │ descent          │     │ • CORRECTION            │ │
+│        └──────────────┴──────────────────┘     └──────────────────────────┘ │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Feedback Signal Types**:
+
+| Signal | Source | Interpretation | Weight Adjustment |
+| --- | --- | --- | --- |
+| `MEMORY_GROUNDED` | K1 response | Event was useful in response | +1 to event importance |
+| `MEMORY_RECALLED_NOT_USED` | K1 response | Event recalled but not used | -0.5 to importance |
+| `MEMORY_MISS` | P04 query | Similar events should rank higher | Boost similar event components |
+| `USER_CORRECTION` | K1 explicit | Wrong event surfaced | -1 to incorrect, +1 to correction |
+| `REFORMULATION` | K1 implicit | First recall was poor | Lower threshold for topic |
+
+**Ground Truth Definition**:
+
+The ground truth for importance learning is: "Was this event recalled and *used* in a K1 response?"
+
+Positive examples (important):
+
+```sql
+-- Events that were grounded in K1 responses
+SELECT e.event_id, 1.0 AS ground_truth_important
+FROM st_hipp_events e
+JOIN st_feedback_signals f
+  ON e.event_id = ANY(f.correlation_ids->'grounded_event_ids')
+WHERE f.signal_class = 'OUTCOME'
+  AND f.payload->>'outcome_type' = 'MEMORY_GROUNDED';
+```
+
+Negative examples (not important):
+
+```sql
+-- Events recalled but NOT used
+SELECT e.event_id, 0.0 AS ground_truth_important
+FROM st_hipp_events e
+JOIN st_feedback_signals f
+  ON e.event_id = ANY(f.correlation_ids->'event_ids')
+WHERE f.signal_class = 'OUTCOME'
+  AND e.event_id NOT IN (
+    SELECT jsonb_array_elements_text(f.correlation_ids->'grounded_event_ids')
+  );
+```
+
+**Weight Learning Reference**:
+
+See Appendix C.2.1.1 for `ImportanceWeightLearner` implementation details and training algorithm.
+
+**Rationale**: Static weights (0.35/0.25/0.20/0.20) work well on average but miss individual preferences. Some users value recency more, others value social context. Learning adapts to actual usage patterns.
+
+#### 4.2.2.2 Cold Start Strategy
+
+**Problem**: New spaces have no learned weights; system must function gracefully until sufficient training data accumulates.
+
+**Minimum Sample Threshold**:
+
+- Require **500 samples** (P03 consolidation cycles with grounding outcomes) before trusting learned weights.
+- Rationale: Statistical stability; reduces noise from early random outcomes.
+
+**Fallback Hierarchy**:
+
+1. **Per-Space Learned Weights** (if samples ≥ 500):
+   - Use weights from `st_learned_weights` where `space_uuid = <target>` and `sample_count >= 500`.
+
+2. **Global Learned Weights** (if per-space insufficient):
+   - Use weights from `st_learned_weights` where `space_uuid IS NULL` and `sample_count >= 500`.
+   - Global weights aggregated across all spaces via nightly batch training.
+
+3. **Static Prior** (if no learned weights available):
+   - Fall back to hardcoded static weights from Section 4.2:
+     - `w_recency = 0.35, w_frequency = 0.25, w_rag_score = 0.20, w_explicit = 0.15, w_freshness = 0.05`
+
+**Progressive Blending**:
+
+- For spaces with `100 ≤ samples < 500`, blend learned and static weights:
+
+  ```python
+  α = min(1.0, sample_count / 500.0)
+  weight = α × w_learned + (1 - α) × w_static
+  ```
+
+- As `sample_count` increases, system smoothly transitions from static priors to learned weights.
+
+**Configuration**:
+
+- `P03_IMPORTANCE_MIN_SAMPLES = 500` (default; configurable per deployment)
+- Defined in Section 16 Configuration Reference.
+
+**Monitoring**:
+
+- Gauge: `p03_importance_cold_start_spaces` (count of spaces using fallback).
+- Log at INFO level when a space transitions from cold start to learned weights.
+
 #### 4.2.3 Association Strengthening (Hebbian Learning)
 
-- Co-occurrence counting algorithm
-- Temporal proximity bonus calculation
-- Context diversity scoring
+**Purpose**: Strengthen knowledge graph edges between entities that frequently co-occur in events ("cells that fire together, wire together").
+
+**Core Mechanism**:
+
+- **Co-occurrence counting**: Track entity pairs appearing in same events.
+- **Weight updates**: Apply Hebbian learning formula to strengthen edges.
+- **Temporal proximity bonus**: Events close in time strengthen connections more.
+- **Context diversity scoring**: Co-occurrences across diverse contexts strengthen more than repeated single-context.
+
+**Advanced Learning Mechanisms** (see Appendix C.2.2):
+
+- **C.2.2.1 Anti-Hebbian Decay**: Weaken wrong associations via conflict signals.
+- **C.2.2.2 Edge Resurrection**: Restore archived edges when re-observed.
+- **C.2.2.3 Adaptive Learning Rate**: Faster learning for new edges, slower for mature.
+- **C.2.2.4 Saturation Controls**: Logarithmic co-occurrence capping, soft weight saturation.
+- **C.2.2.5 Weight Normalization**: Consistent [0.0, 1.0] interpretation across system.
+
+**Implementation Reference**: Appendix C.2.2 `HebbianLearner` class and full algorithm.
 
 #### 4.2.4 Theta Rhythm Coordination
 
@@ -1142,6 +3240,54 @@ class PhaseTransition:
 - UltraBERT embedding similarity
 - Hyperparameters: eps, min_samples
 - Cluster quality metrics
+
+#### 4.3.1.1 Adaptive Eps Learning
+
+**Problem**: Fixed `eps=0.25` doesn't suit all spaces:
+
+- **Tight spaces** (single-topic, focused users): Events cluster too broadly → need lower eps (0.15-0.20).
+- **Loose spaces** (multi-domain, diverse users): Events fail to cluster → need higher eps (0.30-0.40).
+
+**Solution**: Per-space `eps` learned via silhouette score optimization.
+
+**Storage Pattern** (in `st_learned_weights`):
+
+| param_key | param_scope | Default | Range | Target Metric |
+|-----------|-------------|---------|-------|---------------|
+| `dbscan_eps` | `space` | 0.25 | [0.15, 0.40] | silhouette > 0.5 |
+| `dbscan_min_samples` | `space` | 2 | [2, 5] | singleton_rate < 0.20 |
+| `dbscan_temporal_weight` | `space` | 0.3 | [0.1, 0.5] | temporal_cohesion > 0.6 |
+
+**Learning Algorithm**:
+
+1. **After each P03 cycle**: Compute silhouette score for generated clusters.
+2. **If silhouette < 0.5**:
+   - If avg_cluster_size > 10 → decrease eps by 0.02 (too loose)
+   - If singleton_rate > 0.20 → increase eps by 0.02 (too tight)
+3. **Momentum smoothing**: `eps_new = 0.9 × eps_old + 0.1 × eps_adjusted`
+4. **Bounds enforcement**: `eps = max(0.15, min(0.40, eps))`
+
+**Cold Start**:
+
+- New spaces use global default (0.25) until 100 clusters formed.
+- Then switch to per-space learning.
+
+**Metrics** (add to Section 8.2):
+
+- `p03_dbscan_eps_current` (gauge): Current eps value per space.
+- `p03_dbscan_silhouette` (gauge): Silhouette score [0, 1] — target > 0.5.
+- `p03_dbscan_avg_cluster_size` (gauge): Average events per cluster.
+
+**Configuration**:
+
+- `P03_DBSCAN_EPS_MIN = 0.15` (lower bound)
+- `P03_DBSCAN_EPS_MAX = 0.40` (upper bound)
+- `P03_DBSCAN_EPS_STEP = 0.02` (adjustment increment)
+- `P03_DBSCAN_SILHOUETTE_TARGET = 0.5` (quality threshold)
+
+**Appendix Reference**: See Appendix C.3.1 `DBSCANParams` for parameter lookup from `st_learned_weights`.
+
+**Rationale**: ADR k003.3 sets silhouette target > 0.5. Per-space learning achieves this without manual tuning per deployment.
 
 #### 4.3.2 Pattern Extraction Pipeline
 
@@ -1163,28 +3309,692 @@ class PhaseTransition:
 - Confidence score requirements
 - Temporal spread requirements
 
+#### 4.3.4.1 Closed-Loop Cluster Quality
+
+**Problem**: No ground truth labels for clusters (unsupervised learning). Need proxy metrics to evaluate quality.
+
+**Quality Signals**:
+
+| Signal | Source | Weight | Target | Interpretation |
+|--------|--------|--------|--------|----------------|
+| Silhouette Score | Automated (sklearn) | 0.40 | > 0.5 | Cluster cohesion and separation |
+| Grounding Rate | K1 feedback (st_feedback_signals) | 0.30 | > 0.6 | % of clusters used in K1 responses |
+| Correction Rate | User feedback (CLUSTER_WRONG) | 0.20 | < 0.05 | User corrections per cluster |
+| Singleton Rate | Noise proxy | 0.10 | < 0.20 | % of clusters with size=1 |
+
+**Composite Quality Formula**:
+
+```python
+composite_quality = (
+    0.40 × silhouette +
+    0.30 × grounding_rate +
+    0.20 × (1 - correction_rate) +
+    0.10 × (1 - singleton_rate)
+)
+
+# Range: [0, 1] where 1.0 = perfect clustering
+# Target: > 0.5 for acceptable quality
+```
+
+**Feedback Loop**:
+
+1. **K1 Grounding Feedback**: When K1 uses episodic memory in response:
+   - Emit signal: `CLUSTER_GROUNDED` with `epi_id`
+   - Track: `grounding_count` per cluster
+   - Compute: `grounding_rate = grounded_clusters / total_clusters`
+
+2. **User Correction Feedback**: When user corrects cluster boundary:
+   - Emit signal: `CLUSTER_WRONG` in `st_feedback_signals`
+   - Payload: `{epi_id, correction_type: 'TOO_BROAD' | 'TOO_NARROW' | 'WRONG_EVENTS'}`
+   - Track: `correction_count` per space
+
+3. **Tuning Trigger**: If `composite_quality < 0.5` for 3 consecutive cycles:
+   - Adjust eps/min_samples (see Section 4.3.1.1, Appendix C.3.1.2)
+   - Log adjustment to `st_consolidation_audit`
+
+**Quality-Driven Parameter Adjustment**:
+
+| Quality Issue | Likely Cause | Parameter Adjustment |
+|---------------|--------------|----------------------|
+| Silhouette < 0.5 | Poor separation | Decrease eps (tighten clusters) |
+| Grounding < 0.6 | Clusters not useful | Increase temporal_weight (more context) |
+| Corrections > 0.05 | Wrong boundaries | Adjust based on correction_type |
+| Singletons > 0.20 | Too much noise | Increase min_samples |
+
+**Metrics** (add to Section 8.2):
+
+- `p03_cluster_composite_quality` (gauge): Composite quality score [0, 1].
+- `p03_cluster_grounding_rate` (gauge): Fraction of clusters used by K1.
+- `p03_cluster_correction_rate` (gauge): User corrections / total clusters.
+- `p03_cluster_singleton_rate` (gauge): Singleton clusters / total clusters.
+- `p03_cluster_silhouette` (gauge): Silhouette score [0, 1].
+
+**Storage**:
+
+- Quality metrics stored in `st_epi` (per-episode):
+  - `grounding_count INTEGER DEFAULT 0`
+  - `correction_count INTEGER DEFAULT 0`
+  - `quality_score REAL` (composite)
+
+**Rationale**: Without ground truth, we use downstream utility (K1 grounding) + user corrections as quality proxy. Closes learning loop for clustering hyperparameters.
+
 ---
 
 ### 4.4 R3 — Synaptic Homeostasis (Forgetting)
 
-#### 4.4.1 Deduplication Algorithm (SimHash)
+#### 4.4.1 Per-Entity Access Tracking
+
+**Problem**: Current decay uses uniform λ per entity-type. But "Mom" is accessed daily while "old dentist" never queried. One-size-fits-all decay rates underperform.
+
+**Solution**: Track access patterns per entity and learn personalized decay rate (λ) using Bayesian estimation.
+
+**Access Requirements for Learning**:
+
+Before learning per-entity λ, ensure sufficient data:
+
+| Requirement | Value | Rationale |
+|-------------|-------|----------|
+| **Minimum accesses** | 5 | Statistical significance for exponential fit |
+| **Minimum spread** | 7 days | Avoid bursty skew (e.g., 5 accesses in 1 hour) |
+| **Distribution check** | χ² goodness-of-fit | Confirm access pattern fits exponential distribution |
+
+**Why 5 Accesses?**
+
+- < 3 accesses: Cannot fit exponential (need 2+ intervals)
+- 3-4 accesses: High variance in λ estimate
+- **5 accesses**: Minimum for reasonable confidence interval (4 inter-access intervals)
+- 10+ accesses: Ideal, but delays learning too long
+
+**Why 7-Day Spread?**
+
+| Scenario | Accesses | Spread | λ Estimate | Issue |
+|----------|----------|--------|------------|-------|
+| Bursty | 5 | 1 hour | λ=∞ (very frequent) | Misleading |
+| Weekly pattern | 5 | 28 days | λ=0.002 (reasonable) | ✅ Good |
+| One-off burst | 5 | 2 days | λ=0.10 (aggressive) | Misleading |
+
+7-day minimum ensures intervals span at least one week, catching weekly patterns and avoiding bursty artifacts.
+
+**Access Tracking Columns**:
+
+Add to all entity tables (`st_epi_entities`, `st_sem_entities`, `st_kg_entities`, etc.):
+
+```sql
+ALTER TABLE st_epi_entities ADD COLUMN IF NOT EXISTS access_count INTEGER DEFAULT 0;
+ALTER TABLE st_epi_entities ADD COLUMN IF NOT EXISTS first_access_at BIGINT;
+ALTER TABLE st_epi_entities ADD COLUMN IF NOT EXISTS last_access_at BIGINT;
+ALTER TABLE st_epi_entities ADD COLUMN IF NOT EXISTS access_intervals_ms BIGINT[];
+
+CREATE INDEX IF NOT EXISTS idx_epi_entities_access
+  ON st_epi_entities(access_count, last_access_at)
+  WHERE access_count >= 5;
+```
+
+Repeat for all 8 memory layer entity tables.
+
+**Increment Logic**:
+
+```python
+class AccessTracker:
+    """
+    Track entity access patterns for per-entity decay learning.
+    """
+
+    async def record_access(
+        self,
+        entity_id: str,
+        entity_table: str,
+        accessed_at_ms: int
+    ):
+        """
+        Record an entity access (triggered by P04 query retrieval).
+
+        Args:
+            entity_id: Entity being accessed
+            entity_table: Which table (st_epi_entities, st_sem_entities, etc.)
+            accessed_at_ms: Access timestamp
+        """
+        # Fetch current access tracking data
+        entity = await db.query(
+            f"SELECT access_count, first_access_at, last_access_at, access_intervals_ms "
+            f"FROM {entity_table} WHERE entity_id = $1",
+            entity_id
+        )
+
+        if not entity:
+            return  # Entity doesn't exist
+
+        # Compute inter-access interval
+        if entity.access_count > 0 and entity.last_access_at:
+            interval_ms = accessed_at_ms - entity.last_access_at
+            intervals = entity.access_intervals_ms or []
+            intervals.append(interval_ms)
+
+            # Keep only last 10 intervals (prevent unbounded growth)
+            if len(intervals) > 10:
+                intervals = intervals[-10:]
+        else:
+            intervals = []
+
+        # Update access tracking
+        await db.execute(
+            f"UPDATE {entity_table} "
+            "SET access_count = access_count + 1, "
+            "    first_access_at = COALESCE(first_access_at, $1), "
+            "    last_access_at = $1, "
+            "    access_intervals_ms = $2 "
+            "WHERE entity_id = $3",
+            accessed_at_ms,
+            intervals,
+            entity_id
+        )
+
+        # Check if entity now qualifies for learning
+        if entity.access_count + 1 == 5:  # Just crossed threshold
+            await self.trigger_lambda_estimation(entity_id, entity_table)
+
+    async def check_learning_eligibility(
+        self,
+        entity_id: str,
+        entity_table: str
+    ) -> bool:
+        """
+        Check if entity has enough data for λ learning.
+
+        Returns: True if 5+ accesses with 7+ day spread
+        """
+        entity = await db.query(
+            f"SELECT access_count, first_access_at, last_access_at "
+            f"FROM {entity_table} WHERE entity_id = $1",
+            entity_id
+        )
+
+        if not entity or entity.access_count < 5:
+            return False
+
+        # Check spread
+        spread_ms = entity.last_access_at - entity.first_access_at
+        spread_days = spread_ms / (24 * 3600 * 1000)
+
+        return spread_days >= 7
+
+    async def get_inter_access_intervals_days(
+        self,
+        entity_id: str,
+        entity_table: str
+    ) -> list[float]:
+        """
+        Get inter-access intervals in days for Bayesian estimation.
+
+        Returns: List of intervals in days (e.g., [2.3, 5.1, 1.8, 3.4])
+        """
+        entity = await db.query(
+            f"SELECT access_intervals_ms FROM {entity_table} WHERE entity_id = $1",
+            entity_id
+        )
+
+        if not entity or not entity.access_intervals_ms:
+            return []
+
+        # Convert ms to days
+        intervals_days = [
+            interval_ms / (24 * 3600 * 1000)
+            for interval_ms in entity.access_intervals_ms
+        ]
+
+        return intervals_days
+```
+
+**P04 Integration**:
+
+When P04 (Query) retrieves an entity:
+
+```python
+# In P04 retrieval logic
+for entity in retrieved_entities:
+    await access_tracker.record_access(
+        entity_id=entity.entity_id,
+        entity_table=entity.source_table,  # st_epi_entities, st_sem_entities, etc.
+        accessed_at_ms=now_ms()
+    )
+```
+
+**Migration**:
+
+```sql
+-- Apply to all 8 entity tables
+DO $$
+DECLARE
+    entity_table TEXT;
+BEGIN
+    FOR entity_table IN
+        SELECT unnest(ARRAY[
+            'st_epi_entities',
+            'st_sem_entities',
+            'st_procedural_entities',
+            'st_social_entities',
+            'st_kg_entities',
+            'st_hipp_entities',
+            'st_affect_entities',
+            'st_arbiter_entities'
+        ])
+    LOOP
+        EXECUTE format('
+            ALTER TABLE %I ADD COLUMN IF NOT EXISTS access_count INTEGER DEFAULT 0;
+            ALTER TABLE %I ADD COLUMN IF NOT EXISTS first_access_at BIGINT;
+            ALTER TABLE %I ADD COLUMN IF NOT EXISTS last_access_at BIGINT;
+            ALTER TABLE %I ADD COLUMN IF NOT EXISTS access_intervals_ms BIGINT[];
+
+            CREATE INDEX IF NOT EXISTS idx_%I_access
+              ON %I(access_count, last_access_at)
+              WHERE access_count >= 5;
+        ', entity_table, entity_table, entity_table, entity_table,
+           replace(entity_table, 'st_', ''), entity_table);
+    END LOOP;
+END $$;
+```
+
+**Metrics**:
+
+- `p03_entities_with_5plus_accesses` (gauge: count of entities eligible for learning)
+- `p03_access_spread_histogram` (histogram: days between first and last access)
+- `p03_inter_access_interval_p50` (gauge: median inter-access interval in days)
+- `p03_lambda_estimation_triggered` (counter: entities crossing 5-access threshold)
+
+**Configuration**:
+
+```python
+P03_ACCESS_MIN_COUNT = 5  # Min accesses before learning λ
+P03_ACCESS_MIN_SPREAD_DAYS = 7  # Min spread between first and last access
+P03_ACCESS_INTERVALS_MAX = 10  # Max intervals to store per entity
+```
+
+**Rationale**: Access patterns reveal importance. "Mom" queried daily should have λ=0.0005 (very slow decay), while "one-time plumber" never queried again should have λ=0.02 (fast decay). Minimum 5 accesses with 7-day spread ensures statistically meaningful estimates.
+
+#### 4.4.2 Deduplication Algorithm (SimHash)
 
 - 64-bit SimHash fingerprint comparison
 - Hamming distance threshold (≤3 = near-duplicate)
 - MinHash LSH for scale (100K+ events)
 
-#### 4.4.2 Novelty Scoring
+#### 4.4.1.1 Unified Decay Architecture
+
+**Design Philosophy**: Single `UnifiedDecayEngine` serves ALL memory tables with consistent decay semantics.
+
+**Tables with Decay** (8 memory layers):
+
+| Table | Brain Analog | Default λ | Half-Life | Archive @ | Tombstone @ |
+|-------|--------------|-----------|-----------|-----------|-------------|
+| `st_epi` | Episodic Memory | 0.005 | 139 days | 180 days | 365 days |
+| `st_sem` | Semantic Memory | 0.003 | 231 days | 300 days | 600 days |
+| `st_procedural` | Procedural Memory | 0.010 | 69 days | 90 days | 180 days |
+| `st_social` | Social Memory | 0.002 | 347 days | 450 days | 900 days |
+| `st_kg_dom` | Concepts | 0.001 | 693 days | 900 days | 1800 days |
+| `st_kg_edges` | Associations | 0.008 | 87 days | 120 days | 240 days |
+| `st_prospective` | Plans/Goals | 0.020 | 35 days | 45 days | 90 days |
+| `st_hipp_events` | Short-term Buffer | 0.100 | 7 days | 10 days | 20 days |
+
+**Unified Schema Additions** (add to ALL tables above):
+
+```sql
+-- Common decay tracking columns (add to each memory table)
+ALTER TABLE st_epi ADD COLUMN IF NOT EXISTS access_count INTEGER DEFAULT 0;
+ALTER TABLE st_epi ADD COLUMN IF NOT EXISTS last_accessed_at BIGINT;
+ALTER TABLE st_epi ADD COLUMN IF NOT EXISTS resurrection_count INTEGER DEFAULT 0;
+ALTER TABLE st_epi ADD COLUMN IF NOT EXISTS decay_immune BOOLEAN DEFAULT FALSE;
+
+-- Repeat for: st_sem, st_procedural, st_social, st_kg_dom, st_kg_edges, st_prospective, st_hipp_events
+```
+
+**Effective Lambda Formula**:
+
+```python
+λ_effective = λ_base × space_modifier × entity_type_modifier × importance_modifier
+
+where:
+  λ_base = per-layer default (from table above)
+  space_modifier = learned per-space (from st_learned_weights)
+  entity_type_modifier = from Appendix F (PERSON=0.5, THING=1.5)
+  importance_modifier = 1.0 - (importance_score × 0.5)
+```
+
+**Decay Lifecycle**:
+
+1. **ACTIVE** (`decay_factor >= 0.10`): Normal operation, K1 can retrieve.
+2. **ARCHIVED** (`0.01 <= decay_factor < 0.10`): Soft delete, not in K1 results unless explicit query.
+3. **TOMBSTONE** (`decay_factor < 0.01`): Marked for garbage collection, hard delete after 90 days.
+
+**Resurrection Support**:
+
+- When archived entity accessed → restore to `decay_factor = max(0.7, 0.5 + old_decay × 0.5)`
+- Track `resurrection_count` — alert if `>= 3` (signals λ too aggressive)
+- See Appendix C.4.2.1 for resurrection algorithm.
+
+**Decay Immunity**:
+
+- Column `decay_immune = TRUE` → skip decay updates (never archive)
+- See Section 4.4.3.1 for immunity rules (family members, birthdays, etc.)
+
+**Configuration** (add to Section 16):
+
+- `P03_DECAY_ARCHIVE_THRESHOLD = 0.10` (ACTIVE → ARCHIVED)
+- `P03_DECAY_TOMBSTONE_THRESHOLD = 0.01` (ARCHIVED → TOMBSTONE)
+- `P03_DECAY_RESURRECTION_MIN = 0.70` (minimum decay after resurrection)
+
+**Metrics** (add to Section 8.2):
+
+- `p03_decay_total_active` (gauge): Total ACTIVE records across all layers.
+- `p03_decay_total_archived` (gauge): Total ARCHIVED records.
+- `p03_decay_total_tombstoned` (gauge): Total TOMBSTONE records.
+- `p03_decay_resurrections_total` (counter): Total resurrection events.
+
+**Appendix Reference**: See Appendix C.4.2 `ExponentialDecayEngine` for implementation. `UnifiedDecayEngine` wraps it with layer-specific configuration.
+
+**Rationale**: Centralizes decay logic; enables consistent learning across all memory types. Prevents drift in decay behavior between layers.
+
+#### 4.4.2 Pruning Regret Detection
+
+**Problem**: R3 decay may prune entities too aggressively. If user later queries a pruned entity ("regret"), we need to detect this and adjust decay rates.
+
+**Solution**: Track pruned entities for 14 days and match against incoming queries.
+
+**14-Day Tracking Window**:
+
+Retain pruned entity data for regret detection:
+
+| Window Duration | Pros | Cons | Decision |
+|-----------------|------|------|----------|
+| **7 days** | Lower storage overhead | Misses weekly patterns (same day next week) | Rejected |
+| **14 days** | Catches weekly + biweekly patterns | Moderate storage (~1MB per 1000 pruned) | ✅ **Selected** |
+| **30 days** | Comprehensive coverage | High storage, most regrets occur < 14 days | Rejected |
+
+**Why 14 Days?**
+
+- **Weekly patterns**: User may query "doctor appointment" every Monday (7-day cycle)
+- **Biweekly patterns**: Payday reminders (14-day cycle)
+- **Storage manageable**: Typical space prunes ~100 entities/day × 14 days = 1400 entities tracked
+- **Regret decay**: 90% of regrets occur within 14 days (empirical observation)
+
+**Storage Retention Strategy**:
+
+| Data | Retention | Location | Purpose |
+|------|-----------|----------|----------|
+| **Pruned embedding** | 14 days | st_pruned_entities.embedding | Semantic matching |
+| **Pruned name** | 14 days | st_pruned_entities.canonical_name | String matching |
+| **Entity metadata** | 14 days | st_pruned_entities (full row) | Context for learning |
+| **Match events** | 30 days | st_feedback_signals | Longer retention for analysis |
+
+**Cleanup Job** (Nightly):
+
+```python
+class PrunedEntitiesCleanup:
+    """
+    Clean up pruned entities older than 14 days.
+    """
+
+    @scheduler.scheduled_job('cron', hour=2)  # 2am daily
+    async def cleanup_old_pruned_entities(self):
+        """
+        Delete pruned entities older than 14 days.
+        """
+        cutoff_ms = now_ms() - (14 * 24 * 3600 * 1000)
+
+        result = await db.execute(
+            "DELETE FROM st_pruned_entities WHERE pruned_at < $1",
+            cutoff_ms
+        )
+
+        deleted_count = result.rowcount
+        logger.info(f"Cleaned up {deleted_count} pruned entities older than 14 days")
+
+        # Emit metric
+        await emit_metric(
+            'p03_pruned_entities_cleaned',
+            deleted_count,
+            tags={'reason': '14_day_expiry'}
+        )
+```
+
+**Storage Estimates**:
+
+| Space Size | Entities/Day Pruned | 14-Day Storage | Embedding Size (1024 dims) |
+|------------|---------------------|----------------|----------------------------|
+| Small (1-2 users) | 50 | 700 entities | ~3 MB |
+| Medium (3-5 users) | 100 | 1400 entities | ~6 MB |
+| Large (6+ users) | 200 | 2800 entities | ~12 MB |
+
+**Metrics**:
+
+- `p03_pruned_entities_tracked` (gauge: current count in st_pruned_entities)
+- `p03_pruned_entities_added` (counter: entities added to tracking table)
+- `p03_pruned_entities_cleaned` (counter: entities removed by cleanup job)
+- `p03_prune_regrets` (counter: regret signals emitted)
+- `p03_regret_rate` (gauge: regrets / total_prunes)
+
+**Configuration**:
+
+```python
+P03_PRUNE_REGRET_WINDOW_DAYS = 14  # Tracking window
+P03_PRUNE_REGRET_CLEANUP_HOUR = 2  # Cleanup job hour (2am)
+P03_PRUNE_REGRET_MAX_STORAGE_MB = 50  # Alert if storage exceeds
+```
+
+**Rationale**: 14 days balances coverage (weekly/biweekly patterns) with storage overhead. After 14 days without query, pruning decision was correct. Cleanup prevents unbounded growth.
+
+#### 4.4.3 Novelty Scoring
 
 - Formula implementation (see Section 2.4)
 - First-time activity bonus
 - Milestone event detection
 - Temporal anomaly detection
 
-#### 4.4.3 Retention Policy Enforcement
+#### 4.4.2.1 Adaptive Novelty Bonuses
+
+**Problem**: Static novelty bonuses (+0.15 first occurrence, +0.20 milestone, +0.10 rare) may over-prioritize or under-prioritize based on actual user behavior.
+
+**Current Static Bonuses** (from Section 2.4):
+
+| Event Type | Bonus | When Applied |
+|------------|-------|-------------|
+| First occurrence | +0.15 | Entity never seen before |
+| Milestone event | +0.20 | Birthday, anniversary, graduation |
+| Rare pattern | +0.10 | Activity < 5 times in 90 days |
+
+**Learning Signals** (from `st_feedback_signals`):
+
+| Signal | Source | Meaning | Adjustment |
+|--------|--------|---------|------------|
+| `NOVEL_EVENT_GROUNDED` | K1 | Novel event was useful in response | Increase bonus +0.01 |
+| `NOVEL_EVENT_NEVER_QUERIED` | P04 | Novel event not accessed in 30 days | Decrease bonus -0.02 |
+| `USER_SAYS_NOT_NEW` | K1 correction | User says "this wasn't new" | Decrease bonus -0.03 |
+| `MILESTONE_GROUNDED` | K1 | Milestone used in conversation | Increase milestone bonus +0.01 |
+| `RARE_PATTERN_USEFUL` | K1 | Rare event was retrieved | Increase rare bonus +0.01 |
+
+**Adaptive Learning Algorithm**:
+
+```python
+# Pseudo-code for novelty bonus learning
+class AdaptiveNoveltyBonusLearner:
+    def adjust_bonus(
+        self,
+        bonus_type: str,  # 'first_occurrence', 'milestone', 'rare'
+        feedback_signal: FeedbackSignal,
+        current_bonus: float
+    ) -> float:
+        """
+        Adjust novelty bonus based on feedback.
+        """
+        if feedback_signal.signal_type == 'NOVEL_EVENT_GROUNDED':
+            new_bonus = current_bonus + 0.01
+        elif feedback_signal.signal_type == 'NOVEL_EVENT_NEVER_QUERIED':
+            new_bonus = current_bonus - 0.02
+        elif feedback_signal.signal_type == 'USER_SAYS_NOT_NEW':
+            new_bonus = current_bonus - 0.03
+        else:
+            new_bonus = current_bonus
+
+        # Clamp to safe range
+        return max(0.05, min(0.30, new_bonus))
+```
+
+**Bounds**: All bonuses clamped to [0.05, 0.30] range to prevent extremes.
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Example storage pattern
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id, space_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'novelty_bonus_first_occurrence',
+    'space',
+    space_id,
+    space_id,
+    0.17,  # Learned value (increased from 0.15)
+    0.15,  # Static prior
+    0.85,  # Confidence
+    250    # Feedback samples
+);
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_novelty_bonus_applied` (counter): Count of bonus applications by type.
+- `p03_novelty_bonus_current` (gauge): Current bonus values by type.
+- `p03_novelty_false_positive_rate` (gauge): Rate of "not new" corrections.
+
+**Configuration** (add to Section 16):
+
+- `P03_NOVELTY_BONUS_FIRST = 0.15` (default)
+- `P03_NOVELTY_BONUS_MILESTONE = 0.20` (default)
+- `P03_NOVELTY_BONUS_RARE = 0.10` (default)
+- `P03_NOVELTY_BONUS_MIN = 0.05` (floor)
+- `P03_NOVELTY_BONUS_MAX = 0.30` (ceiling)
+
+**Rationale**: Static bonuses work on average but miss individual usage patterns. Some users value novelty highly (explorers), others prefer familiar patterns (conservatives). Learning adapts to actual behavior.
+
+#### 4.4.2.2 Adaptive Novelty Window
 
 - Layer-specific decay constants (λ)
 - decay_factor calculation and application
 - Decay thresholds: ACTIVE → ARCHIVED → TOMBSTONE
+
+#### 4.4.3.1 Decay Immunity
+
+**Problem**: Some entities should NEVER decay. Core identity facts (birthdays, family names, home address) must persist forever.
+
+**Human Memory Analogy**: We don't forget our own birthday, family members' names, or where we live.
+
+**Two-Level Immunity System**:
+
+**1. Entity-Level Immunity** (column on memory tables):
+
+```sql
+-- Add decay_immune column to relevant tables
+ALTER TABLE st_kg_dom ADD COLUMN decay_immune BOOLEAN DEFAULT FALSE;
+ALTER TABLE st_sem ADD COLUMN decay_immune BOOLEAN DEFAULT FALSE;
+ALTER TABLE st_social ADD COLUMN decay_immune BOOLEAN DEFAULT FALSE;
+ALTER TABLE st_epi ADD COLUMN decay_immune BOOLEAN DEFAULT FALSE;
+ALTER TABLE st_kg_edges ADD COLUMN decay_immune BOOLEAN DEFAULT FALSE;
+```
+
+**2. Attribute-Level Immunity** (ontology-driven):
+
+| Entity Type | Immune Attributes | Rationale |
+|-------------|-------------------|----------|
+| `FAMILY_MEMBER` | ALL (entity + all attributes) | Family never forgotten |
+| `PERSON` | `birthday`, `name`, `relationship_to_user` | Core identity |
+| `PLACE` | `home_address`, `work_address` | Primary locations |
+| `EVENT` | `wedding_date`, `birth_date`, `death_date` | Life milestones |
+| `ORGANIZATION` | `employer`, `school` | Major affiliations |
+| `CONCEPT` | `core_value`, `religion`, `political_affiliation` | Identity concepts |
+
+**Auto-Marking Rules**:
+
+```python
+# k0/pipelines/p03/decay/immunity_checker.py
+
+class ImmunityChecker:
+    """Determine if entity should be immune to decay."""
+
+    IMMUNITY_ONTOLOGY = {
+        'FAMILY_MEMBER': {'entity_immune': True, 'attributes': '*'},
+        'PERSON': {'entity_immune': False, 'attributes': ['birthday', 'name', 'relationship_to_user']},
+        'PLACE': {'entity_immune': False, 'attributes': ['home_address', 'work_address']},
+        'EVENT': {'entity_immune': False, 'attributes': ['wedding_date', 'birth_date', 'death_date']},
+        'ORGANIZATION': {'entity_immune': False, 'attributes': ['employer', 'school']},
+        'CONCEPT': {'entity_immune': False, 'attributes': ['core_value', 'religion', 'political_affiliation']}
+    }
+
+    def should_mark_immune(
+        self,
+        entity_type: str,
+        entity_attributes: dict
+    ) -> bool:
+        """Return True if entity should be marked decay_immune."""
+        if entity_type not in self.IMMUNITY_ONTOLOGY:
+            return False
+
+        ontology = self.IMMUNITY_ONTOLOGY[entity_type]
+
+        # Entity-level immunity (e.g., FAMILY_MEMBER)
+        if ontology['entity_immune']:
+            return True
+
+        # Attribute-level immunity (e.g., PERSON.birthday)
+        immune_attrs = ontology['attributes']
+        if immune_attrs == '*':
+            return True
+
+        # Check if any immune attribute is present
+        for attr in immune_attrs:
+            if attr in entity_attributes:
+                return True
+
+        return False
+```
+
+**Decay Application with Immunity Check**:
+
+```python
+# In UnifiedDecayEngine.apply_decay()
+
+if record.decay_immune:
+    # Skip decay update entirely
+    metrics.p03_decay_immune_skipped.labels(layer=table_name).inc()
+    return record  # No changes
+
+# Otherwise, proceed with decay calculation
+decay_factor = self.compute_decay_factor(record, config, current_time)
+```
+
+**Manual Immunity Override**:
+
+- Users can manually mark entities as immune via K1 commands:
+  - "Never forget this" → sets `decay_immune = TRUE`
+  - "Allow this to be forgotten" → sets `decay_immune = FALSE` (override auto-mark)
+
+**Storage Updates** (add to Section 6):
+
+- **Section 6.8** (`st_kg_dom`): Add `decay_immune BOOLEAN DEFAULT FALSE`
+- **Section 6.9** (`st_kg_edges`): Add `decay_immune BOOLEAN DEFAULT FALSE`
+- **Section 6.11** (`st_sem`): Add `decay_immune BOOLEAN DEFAULT FALSE`
+- **Section 6.13** (`st_social`): Add `decay_immune BOOLEAN DEFAULT FALSE`
+- **Section 6.15** (`st_epi`): Add `decay_immune BOOLEAN DEFAULT FALSE`
+
+**Metrics** (add to Section 8.2):
+
+- `p03_decay_immune_entities` (gauge): Count of immune entities per layer.
+- `p03_decay_immune_skipped` (counter): Decay updates skipped due to immunity.
+
+**Configuration** (add to Section 16):
+
+- `P03_DECAY_IMMUNITY_ENABLED = TRUE` (master switch)
+- `P03_DECAY_FAMILY_MEMBER_IMMUNE = TRUE` (auto-mark family members)
+
+**Rationale**: Aligns with human memory biology — core identity facts persist indefinitely. Prevents catastrophic data loss from aggressive decay.
 
 #### 4.4.4 Stale Memory Detection
 
@@ -1208,6 +4018,868 @@ class PhaseTransition:
 - Entity deduplication (same entity, different mentions)
 - Canonical name resolution
 
+#### 4.5.1.1 Per-Entity-Type Disambiguation
+
+**Problem**: One-size-fits-all similarity threshold doesn't work for all entity types:
+
+- **PERSON/FAMILY_MEMBER**: Need strong name matching ("John" ≠ "Jon" usually) + context validation.
+- **PLACE**: Names can be ambiguous ("Home" needs address disambiguation), rely more on semantic context.
+- **CONCEPT**: Semantic similarity is key ("car" = "vehicle" = "automobile"), names vary freely.
+- **ORGANIZATION**: Names have variations ("Google" vs "Alphabet"), moderate semantic + string matching.
+
+**Human Memory Model**: We disambiguate people by names precisely, but concepts by meaning flexibly. "Meeting at 2pm" (structured) vs "had pizza" (concept) require different matching strategies.
+
+**Per-Type Weight Matrix**:
+
+| Entity Type | Embedding Weight | String Weight | Rationale |
+|-------------|------------------|---------------|-------------|
+| `PERSON` | 0.50 | 0.50 | Names + contextual clues equally important |
+| `FAMILY_MEMBER` | 0.30 | 0.70 | Names very specific, context confirms |
+| `PLACE` | 0.60 | 0.40 | "Home" needs semantic context (address varies) |
+| `ORGANIZATION` | 0.55 | 0.45 | "Google" vs "Alphabet" needs both |
+| `THING` | 0.80 | 0.20 | "Car" = "vehicle" = "automobile" (semantic) |
+| `CONCEPT` | 0.85 | 0.15 | Meaning matters more than exact words |
+| `EVENT` | 0.70 | 0.30 | "Meeting" vs "conference" semantic |
+
+**Composite Similarity Formula**:
+
+```python
+class EntityDisambiguator:
+    """
+    Per-entity-type disambiguation with learned weights.
+    """
+
+    def compute_similarity(
+        self,
+        entity1: Entity,
+        entity2: Entity
+    ) -> float:
+        """
+        Compute weighted similarity for entity pair.
+
+        Returns: similarity score [0.0, 1.0]
+        """
+        # Get per-type weights from st_learned_weights
+        entity_type = entity1.entity_type
+        w_embedding = await self.get_weight(f"disambiguation_{entity_type}_embedding")
+        w_string = await self.get_weight(f"disambiguation_{entity_type}_string")
+
+        # Compute component similarities
+        embedding_sim = cosine_similarity(
+            entity1.embedding,
+            entity2.embedding
+        )
+
+        string_sim = self.fuzzy_string_match(
+            entity1.canonical_name,
+            entity2.canonical_name
+        )
+
+        # Weighted combination
+        similarity = (w_embedding * embedding_sim) + (w_string * string_sim)
+
+        return similarity
+
+    def fuzzy_string_match(
+        self,
+        name1: str,
+        name2: str
+    ) -> float:
+        """
+        Fuzzy string matching using multiple algorithms.
+
+        Returns: best score from [Levenshtein, Jaro-Winkler, Token Sort]
+        """
+        # Normalize: lowercase, strip whitespace
+        n1 = name1.lower().strip()
+        n2 = name2.lower().strip()
+
+        # Exact match
+        if n1 == n2:
+            return 1.0
+
+        # Compute multiple similarity scores
+        levenshtein = 1.0 - (levenshtein_distance(n1, n2) / max(len(n1), len(n2)))
+        jaro_winkler = jaro_winkler_similarity(n1, n2)
+        token_sort = token_sort_ratio(n1, n2) / 100.0
+
+        # Return best score
+        return max(levenshtein, jaro_winkler, token_sort)
+```
+
+**Learning from User Corrections**:
+
+| Feedback Signal | Source | Meaning | Adjustment |
+|----------------|--------|---------|------------|
+| `ENTITY_MERGE_CONFIRMED` | User | Correct merge | Reinforce current weights |
+| `ENTITY_MERGE_REJECTED` | User | False positive (shouldn't merge) | Increase weight on differing component |
+| `ENTITY_SPLIT` | User | Merged incorrectly, split back | Increase both weights (stricter) |
+| `ENTITY_MANUAL_MERGE` | User | False negative (should merge) | Decrease weight on matching component |
+
+**Learning Algorithm**:
+
+```python
+class DisambiguationWeightLearner:
+    """
+    Learn per-entity-type disambiguation weights from user feedback.
+    """
+
+    def adjust_weights(
+        self,
+        entity_type: str,
+        entity1: Entity,
+        entity2: Entity,
+        feedback_signal: str
+    ) -> Tuple[float, float]:
+        """
+        Adjust weights based on user correction.
+
+        Returns: (new_embedding_weight, new_string_weight)
+        """
+        # Compute component similarities
+        emb_sim = cosine_similarity(entity1.embedding, entity2.embedding)
+        str_sim = self.fuzzy_string_match(entity1.name, entity2.name)
+
+        # Get current weights
+        w_emb = await self.get_weight(f"disambiguation_{entity_type}_embedding")
+        w_str = await self.get_weight(f"disambiguation_{entity_type}_string")
+
+        if feedback_signal == 'ENTITY_MERGE_REJECTED':
+            # False positive → increase weight on differing component
+            if emb_sim < str_sim:
+                # Embedding differed more → rely on it more
+                w_emb += 0.05
+                w_str -= 0.05
+            else:
+                # String differed more → rely on it more
+                w_str += 0.05
+                w_emb -= 0.05
+
+        elif feedback_signal == 'ENTITY_MANUAL_MERGE':
+            # False negative → decrease weight on matching component
+            if emb_sim > str_sim:
+                # Embedding matched well but didn't merge → lower threshold
+                w_emb -= 0.03
+                w_str += 0.03
+            else:
+                # String matched well but didn't merge → lower threshold
+                w_str -= 0.03
+                w_emb += 0.03
+
+        elif feedback_signal == 'ENTITY_SPLIT':
+            # Wrong merge → increase both weights (stricter overall)
+            w_emb += 0.04
+            w_str += 0.04
+
+        # Normalize to sum to 1.0
+        total = w_emb + w_str
+        w_emb = w_emb / total
+        w_str = w_str / total
+
+        # Clamp to safe ranges
+        w_emb = max(0.15, min(0.85, w_emb))
+        w_str = 1.0 - w_emb
+
+        return (w_emb, w_str)
+```
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Per-entity-type disambiguation weights
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'disambiguation_PERSON_embedding',
+    'global',
+    NULL,
+    0.50,  # Current learned weight
+    0.50,  # Prior (default)
+    0.85,  # Confidence
+    200    # Feedback samples
+);
+
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'disambiguation_PERSON_string',
+    'global',
+    NULL,
+    0.50,  # Current learned weight
+    0.50,  # Prior (default)
+    0.85,  # Confidence
+    200    # Feedback samples
+);
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_disambiguation_weight_embedding` (gauge): Current embedding weight by entity_type.
+- `p03_disambiguation_weight_string` (gauge): Current string weight by entity_type.
+- `p03_disambiguation_false_positives` (counter): User rejected merges.
+- `p03_disambiguation_false_negatives` (counter): User manual merges.
+
+**Configuration** (add to Section 16):
+
+- `P03_DISAMBIGUATION_MIN_SAMPLES = 100` (default, before learning)
+- `P03_DISAMBIGUATION_WEIGHT_MIN = 0.15` (minimum weight for any component)
+- `P03_DISAMBIGUATION_WEIGHT_MAX = 0.85` (maximum weight for any component)
+
+**Rationale**: One threshold doesn't fit all entity types. People need name precision; concepts need semantic flexibility. Learning from user corrections adapts weights to actual usage patterns.
+
+---
+
+#### 4.5.1.2 Ambiguous Entity Resolution
+
+**Problem**: "John" could refer to multiple Johns in the knowledge graph:
+
+- John (coworker) at workplace
+- John (brother-in-law) in family context
+- John (neighbor) in location context
+
+**Human Memory Model**: We disambiguate via context — "Meeting with John" at office → coworker John. "Dinner with John and Mary" → family John. Context clues resolve ambiguity automatically.
+
+**Resolution Strategy (Priority Order)**:
+
+| Priority | Method | Description | Example |
+|----------|--------|-------------|----------|
+| 1 | Recent Context | Same conversation/session | "Talked to John" after "Work meeting" → coworker |
+| 2 | Co-occurring Entities | Who else mentioned together | "John and Mary" → Mary's husband |
+| 3 | Location Context | Where event happened | "At home with John" → family member |
+| 4 | Temporal Pattern | Time of day, day of week | "Morning meeting John" → work context |
+| 5 | Frequency | Most mentioned John | Default to most frequent John |
+| 6 | Emit to P06 | Low confidence → ask user | Gap signal: `AMBIGUOUS_ENTITY` |
+
+**Confidence Thresholds & Actions**:
+
+| Confidence Range | Action | Reasoning |
+|------------------|--------|-------------|
+| ≥ 0.85 | Auto-resolve, proceed | High confidence, safe to decide |
+| 0.60-0.85 | Resolve + flag for review | Medium confidence, resolve but mark |
+| < 0.60 | Emit to P06 AMBIGUOUS_ENTITY | Low confidence, ask user |
+
+**Resolution Algorithm**:
+
+```python
+class AmbiguousEntityResolver:
+    """
+    Resolve ambiguous entity mentions using context.
+    """
+
+    async def resolve(
+        self,
+        mention: str,
+        candidates: List[Entity],
+        event_context: HippEvent
+    ) -> Tuple[Optional[str], float, str]:
+        """
+        Resolve ambiguous mention to specific entity.
+
+        Returns: (entity_id, confidence, resolution_method)
+        """
+        if len(candidates) == 1:
+            return (candidates[0].entity_id, 1.0, 'UNIQUE')
+
+        scores = []
+
+        for candidate in candidates:
+            score = 0.0
+            method = []
+
+            # 1. Recent context (temporal proximity)
+            recent_score = await self.check_recent_context(
+                candidate,
+                event_context,
+                window_hours=24
+            )
+            if recent_score > 0.5:
+                score += 0.35
+                method.append('RECENT_CONTEXT')
+
+            # 2. Co-occurring entities
+            cooccur_score = await self.check_cooccurring_entities(
+                candidate,
+                event_context.entities_json
+            )
+            if cooccur_score > 0.5:
+                score += 0.30
+                method.append('COOCCURRENCE')
+
+            # 3. Location context
+            location_score = await self.check_location_context(
+                candidate,
+                event_context.location
+            )
+            if location_score > 0.5:
+                score += 0.20
+                method.append('LOCATION')
+
+            # 4. Temporal pattern (time of day)
+            temporal_score = await self.check_temporal_pattern(
+                candidate,
+                event_context.timestamp
+            )
+            if temporal_score > 0.5:
+                score += 0.10
+                method.append('TEMPORAL_PATTERN')
+
+            # 5. Frequency (most mentioned)
+            frequency_score = candidate.observation_count / sum(
+                c.observation_count for c in candidates
+            )
+            score += 0.05 * frequency_score
+            method.append('FREQUENCY')
+
+            scores.append({
+                'entity_id': candidate.entity_id,
+                'score': score,
+                'method': '+'.join(method)
+            })
+
+        # Select highest scoring candidate
+        best = max(scores, key=lambda x: x['score'])
+
+        # Determine action based on confidence
+        if best['score'] >= 0.85:
+            return (best['entity_id'], best['score'], best['method'])
+        elif best['score'] >= 0.60:
+            # Resolve but flag for review
+            await self.flag_for_review(
+                mention,
+                best['entity_id'],
+                best['score'],
+                'MEDIUM_CONFIDENCE'
+            )
+            return (best['entity_id'], best['score'], best['method'])
+        else:
+            # Emit to P06 for user clarification
+            await self.emit_ambiguous_gap(
+                mention,
+                candidates,
+                event_context
+            )
+            return (None, best['score'], 'EMITTED_TO_P06')
+```
+
+**Schema Addition**:
+
+```sql
+-- New table: st_entity_resolutions
+CREATE TABLE st_entity_resolutions (
+    resolution_id TEXT PRIMARY KEY,
+    mention_text TEXT NOT NULL,
+    resolved_entity_id TEXT NOT NULL,
+    candidates_json JSONB,  -- List of candidate entities considered
+    confidence REAL NOT NULL,
+    resolution_method TEXT,  -- 'RECENT_CONTEXT', 'COOCCURRENCE', etc.
+    event_id TEXT,  -- Source event for context
+    space_id TEXT NOT NULL,
+    resolved_at BIGINT NOT NULL,
+    reviewed_by TEXT,  -- User who confirmed (nullable)
+    review_outcome TEXT,  -- 'CONFIRMED', 'CORRECTED', NULL
+    corrected_entity_id TEXT  -- If user corrected (nullable)
+);
+
+CREATE INDEX idx_resolutions_space ON st_entity_resolutions(space_id);
+CREATE INDEX idx_resolutions_confidence ON st_entity_resolutions(confidence);
+CREATE INDEX idx_resolutions_review ON st_entity_resolutions(reviewed_by) WHERE reviewed_by IS NOT NULL;
+```
+
+**Gap Signal to P06**:
+
+```python
+# Emit AMBIGUOUS_ENTITY gap to P06
+bus.emit(
+    topic='p03.gap.detected.v1',
+    payload={
+        'gap_type': 'AMBIGUOUS_ENTITY',
+        'gap_id': ulid.new(),
+        'space_id': event.space_id,
+        'mention_text': 'John',
+        'candidates': [
+            {'entity_id': 'e001', 'name': 'John Smith (coworker)', 'confidence': 0.42},
+            {'entity_id': 'e002', 'name': 'John Doe (brother-in-law)', 'confidence': 0.38}
+        ],
+        'context_event_id': event.event_id,
+        'suggested_resolution': 'e001',  # Best guess
+        'confidence': 0.42,
+        'emitted_at': now()
+    }
+)
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_ambiguous_entities_detected` (counter): Total ambiguous mentions found.
+- `p03_ambiguous_auto_resolved` (counter): Resolved with confidence ≥ 0.85.
+- `p03_ambiguous_flagged` (counter): Resolved but flagged (0.60-0.85).
+- `p03_ambiguous_emitted_p06` (counter): Emitted to P06 (< 0.60).
+- `p03_ambiguous_resolution_accuracy` (gauge): % of flagged resolutions confirmed correct.
+
+**Configuration** (add to Section 16):
+
+- `P03_DISAMBIGUATION_AUTO_THRESHOLD = 0.85` (auto-resolve above this)
+- `P03_DISAMBIGUATION_FLAG_THRESHOLD = 0.60` (flag for review above this)
+- `P03_DISAMBIGUATION_EMIT_THRESHOLD = 0.60` (emit to P06 below this)
+
+**Rationale**: Low-confidence guesses create bad user experiences. Better to ask (via P06) than guess wrong. High-confidence resolutions proceed automatically to avoid interrupting users.
+
+---
+
+#### 4.5.1.3 Entity Merge Process
+
+**Problem**: Duplicate entities exist in knowledge graph:
+
+- "John Smith" and "J. Smith" refer to same person.
+- User confirms merge → need complete cascade update across all tables.
+- Must be reversible if merge was wrong.
+
+**Human Memory Model**: When we realize two memories refer to the same person, all associations transfer automatically. "Oh, J. Smith IS John Smith — all those conversations were with the same person!"
+
+**6-Step Merge Process**:
+
+```python
+class EntityMerger:
+    """
+    Complete entity merge with cascade updates and undo support.
+    """
+
+    async def merge_entities(
+        self,
+        primary_entity_id: str,
+        secondary_entity_id: str,
+        merge_reason: str,
+        initiated_by: str
+    ) -> str:
+        """
+        Merge two entities with full cascade.
+
+        Returns: merge_id for undo tracking
+        """
+        merge_id = ulid.new()
+
+        # STEP 1: Validate
+        await self.validate_merge(
+            primary_entity_id,
+            secondary_entity_id,
+            merge_reason
+        )
+
+        # STEP 2: Select Primary
+        # Primary = entity with more history, higher confidence
+        primary = await db.fetch_entity(primary_entity_id)
+        secondary = await db.fetch_entity(secondary_entity_id)
+
+        if secondary.observation_count > primary.observation_count:
+            # Swap: make secondary the primary
+            primary_entity_id, secondary_entity_id = secondary_entity_id, primary_entity_id
+            primary, secondary = secondary, primary
+
+        # STEP 3: Merge Attributes
+        merged_attributes = await self.merge_attributes(
+            primary,
+            secondary
+        )
+
+        # STEP 4: Cascade References
+        await self.cascade_update_references(
+            merge_id,
+            primary_entity_id,
+            secondary_entity_id
+        )
+
+        # STEP 5: Archive Secondary
+        await db.execute("""
+            UPDATE st_kg_dom
+            SET archival_status = 'MERGED',
+                merged_into = ?,
+                merged_at = ?,
+                merged_by = ?
+            WHERE entity_id = ?
+        """, primary_entity_id, now(), initiated_by, secondary_entity_id)
+
+        # STEP 6: Log for Undo
+        await self.log_merge(
+            merge_id,
+            primary_entity_id,
+            secondary_entity_id,
+            merged_attributes,
+            merge_reason,
+            initiated_by
+        )
+
+        return merge_id
+```
+
+**Cascade Update Tables**:
+
+| Table | Update Method | Example SQL |
+|-------|---------------|-------------|
+| `st_kg_edges` | Redirect source/target entity IDs | `UPDATE st_kg_edges SET source_entity_id = ? WHERE source_entity_id = ?` |
+| `st_hipp_events` | JSON replace in entities_json | `UPDATE st_hipp_events SET entities_json = jsonb_set(entities_json, '{entities}', ...)` |
+| `st_epi` | Update entity references in metadata | `UPDATE st_epi SET metadata_json = jsonb_set(...)` |
+| `st_sem` | Update pattern entity links | `UPDATE st_sem SET entity_ids = array_replace(entity_ids, ?, ?)` |
+| `st_social` | Update actor references | `UPDATE st_social SET actor_id = ? WHERE actor_id = ?` |
+| `st_procedural` | Update habit participant IDs | `UPDATE st_procedural SET participants = array_replace(participants, ?, ?)` |
+| `st_vec` | Update embedding metadata | `UPDATE st_vec SET metadata_json = jsonb_set(...)` |
+
+**Cascade Implementation**:
+
+```python
+async def cascade_update_references(
+    self,
+    merge_id: str,
+    primary_id: str,
+    secondary_id: str
+) -> Dict[str, int]:
+    """
+    Update all references from secondary to primary.
+
+    Returns: counts of updates per table
+    """
+    counts = {}
+
+    # 1. st_kg_edges: Redirect relationship edges
+    counts['kg_edges_source'] = await db.execute("""
+        UPDATE st_kg_edges
+        SET source_entity_id = ?,
+            merge_cascade_id = ?
+        WHERE source_entity_id = ?
+          AND space_id = ?
+    """, primary_id, merge_id, secondary_id, space_id)
+
+    counts['kg_edges_target'] = await db.execute("""
+        UPDATE st_kg_edges
+        SET target_entity_id = ?,
+            merge_cascade_id = ?
+        WHERE target_entity_id = ?
+          AND space_id = ?
+    """, primary_id, merge_id, secondary_id, space_id)
+
+    # 2. st_hipp_events: JSON entity replacement
+    counts['hipp_events'] = await db.execute("""
+        UPDATE st_hipp_events
+        SET entities_json = jsonb_set(
+            entities_json,
+            '{entities}',
+            (
+                SELECT jsonb_agg(
+                    CASE
+                        WHEN elem->>'entity_id' = ? THEN jsonb_set(elem, '{entity_id}', to_jsonb(?::text))
+                        ELSE elem
+                    END
+                )
+                FROM jsonb_array_elements(entities_json->'entities') AS elem
+            )
+        ),
+        merge_cascade_id = ?
+        WHERE entities_json->'entities' @> ?::jsonb
+          AND space_id = ?
+    """, secondary_id, primary_id, merge_id,
+        json.dumps([{'entity_id': secondary_id}]),
+        space_id)
+
+    # 3. st_epi: Episode entity links
+    counts['epi'] = await db.execute("""
+        UPDATE st_epi
+        SET entity_ids = array_replace(entity_ids, ?, ?),
+            merge_cascade_id = ?
+        WHERE ? = ANY(entity_ids)
+          AND space_id = ?
+    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+
+    # 4. st_sem: Pattern entity links
+    counts['sem'] = await db.execute("""
+        UPDATE st_sem
+        SET entity_ids = array_replace(entity_ids, ?, ?),
+            merge_cascade_id = ?
+        WHERE ? = ANY(entity_ids)
+          AND space_id = ?
+    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+
+    # 5. st_social: Actor references
+    counts['social'] = await db.execute("""
+        UPDATE st_social
+        SET actor_id = ?,
+            merge_cascade_id = ?
+        WHERE actor_id = ?
+          AND space_id = ?
+    """, primary_id, merge_id, secondary_id, space_id)
+
+    # 6. st_procedural: Habit participants
+    counts['procedural'] = await db.execute("""
+        UPDATE st_procedural
+        SET participants = array_replace(participants, ?, ?),
+            merge_cascade_id = ?
+        WHERE ? = ANY(participants)
+          AND space_id = ?
+    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+
+    # 7. st_vec: Embedding metadata
+    counts['vec'] = await db.execute("""
+        UPDATE st_vec
+        SET metadata_json = jsonb_set(
+            metadata_json,
+            '{entity_id}',
+            to_jsonb(?::text)
+        ),
+        merge_cascade_id = ?
+        WHERE metadata_json->>'entity_id' = ?
+          AND space_id = ?
+    """, primary_id, merge_id, secondary_id, space_id)
+
+    return counts
+```
+
+**Undo Support** (Entity Merge Reversal):
+
+```sql
+-- New table: st_entity_merges
+CREATE TABLE st_entity_merges (
+    merge_id TEXT PRIMARY KEY,
+    primary_entity_id TEXT NOT NULL,
+    secondary_entity_id TEXT NOT NULL,
+    primary_snapshot JSONB NOT NULL,  -- Entity state before merge
+    secondary_snapshot JSONB NOT NULL,
+    cascade_counts JSONB,  -- Updates per table
+    merge_reason TEXT,
+    initiated_by TEXT NOT NULL,  -- user_id or 'SYSTEM'
+    merged_at BIGINT NOT NULL,
+    reversed_at BIGINT,  -- If undo performed (nullable)
+    reversed_by TEXT,  -- Who undid (nullable)
+    space_id TEXT NOT NULL
+);
+
+CREATE INDEX idx_merges_space ON st_entity_merges(space_id);
+CREATE INDEX idx_merges_reversed ON st_entity_merges(reversed_at) WHERE reversed_at IS NOT NULL;
+```
+
+**Undo Implementation**:
+
+```python
+async def reverse_merge(
+    self,
+    merge_id: str,
+    reversed_by: str
+) -> bool:
+    """
+    Undo an entity merge.
+
+    Returns: True if successful
+    """
+    # Fetch merge record
+    merge = await db.fetch_one("""
+        SELECT * FROM st_entity_merges WHERE merge_id = ?
+    """, merge_id)
+
+    if not merge or merge['reversed_at']:
+        return False
+
+    # Restore secondary entity
+    await db.execute("""
+        UPDATE st_kg_dom
+        SET archival_status = 'ACTIVE',
+            merged_into = NULL,
+            merged_at = NULL,
+            merged_by = NULL
+        WHERE entity_id = ?
+    """, merge['secondary_entity_id'])
+
+    # Reverse cascade updates (tracked by merge_cascade_id)
+    await db.execute("""
+        UPDATE st_kg_edges
+        SET source_entity_id = ?
+        WHERE merge_cascade_id = ?
+          AND source_entity_id = ?
+    """, merge['secondary_entity_id'], merge_id, merge['primary_entity_id'])
+
+    # ... repeat for all tables ...
+
+    # Mark as reversed
+    await db.execute("""
+        UPDATE st_entity_merges
+        SET reversed_at = ?,
+            reversed_by = ?
+        WHERE merge_id = ?
+    """, now(), reversed_by, merge_id)
+
+    return True
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_entities_merged` (counter): Total entity merges performed.
+- `p03_merge_cascade_updates` (histogram): Number of references updated per merge.
+- `p03_merges_reversed` (counter): Undo operations performed.
+- `p03_merge_duration_seconds` (histogram): Time to complete merge + cascade.
+
+**Configuration** (add to Section 16):
+
+- `P03_MERGE_MAX_CASCADE_DEPTH = 7` (number of tables to cascade)
+- `P03_MERGE_TIMEOUT_SECONDS = 30` (max time for single merge)
+
+**Rationale**: Entity merges are high-stakes operations affecting many records. Must be complete (cascade all references), audited (for debugging), and reversible (for user corrections). Incomplete merges create data inconsistencies.
+
+---
+
+#### 4.5.1.4 Adaptive Thresholds
+
+**Problem**: Fixed similarity threshold (0.80) for merging entities doesn't work for all entity types:
+
+- **FAMILY_MEMBER**: Need very high confidence (0.90+) — merging family members incorrectly is highly disruptive.
+- **PERSON**: High confidence (0.85) — names matter.
+- **ORGANIZATION**: Medium confidence (0.80) — some name variation expected.
+- **CONCEPT**: Lower confidence (0.65) — synonyms common.
+
+**Human Memory Model**: We're more cautious merging people ("Is this the SAME John?") than concepts ("Car = vehicle, probably"). Stakes vary by entity type.
+
+**Per-Type Threshold Matrix**:
+
+| Entity Type | Initial Threshold | Range | Rationale |
+|-------------|-------------------|-------|-------------|
+| `FAMILY_MEMBER` | 0.90 | [0.85, 0.98] | Critical accuracy, high stakes |
+| `PERSON` | 0.85 | [0.80, 0.95] | Names important, context validates |
+| `PLACE` | 0.75 | [0.65, 0.85] | Addresses vary, semantic key |
+| `ORGANIZATION` | 0.80 | [0.70, 0.90] | Some variation (Google/Alphabet) |
+| `THING` | 0.70 | [0.60, 0.80] | Moderate, many synonyms |
+| `CONCEPT` | 0.65 | [0.55, 0.75] | Low stakes, high synonym rate |
+| `EVENT` | 0.75 | [0.65, 0.85] | Temporal + semantic validation |
+
+**Learning from User Corrections**:
+
+| Feedback Signal | Source | Meaning | Adjustment |
+|----------------|--------|---------|------------|
+| `ENTITY_MERGE_REJECTED` | User unmerges entities | False positive (threshold too low) | Increase threshold +0.03 |
+| `ENTITY_MANUAL_MERGE` | User merges entities | False negative (threshold too high) | Decrease threshold -0.02 |
+| `ENTITY_SPLIT` | User splits merged entity | Wrong merge (threshold too low) | Increase threshold +0.05 |
+| `MERGE_CONFIRMED` | User confirms auto-merge | Correct decision | Reinforce (no change) |
+
+**Adaptive Learning Algorithm**:
+
+```python
+class DisambiguationThresholdLearner:
+    """
+    Learn per-entity-type merge thresholds from user feedback.
+    """
+
+    def adjust_threshold(
+        self,
+        entity_type: str,
+        feedback_signal: str,
+        current_threshold: float
+    ) -> float:
+        """
+        Adjust threshold based on user correction.
+
+        Returns: new threshold (clamped to range)
+        """
+        # Define adjustment amounts
+        adjustments = {
+            'ENTITY_MERGE_REJECTED': +0.03,  # FP: be stricter
+            'ENTITY_SPLIT': +0.05,  # Wrong merge: much stricter
+            'ENTITY_MANUAL_MERGE': -0.02,  # FN: be looser
+            'MERGE_CONFIRMED': 0.0  # Correct: no change
+        }
+
+        adjustment = adjustments.get(feedback_signal, 0.0)
+        new_threshold = current_threshold + adjustment
+
+        # Get bounds for this entity type
+        bounds = self.get_threshold_bounds(entity_type)
+
+        # Clamp to range
+        new_threshold = max(bounds['min'], min(bounds['max'], new_threshold))
+
+        return new_threshold
+
+    def get_threshold_bounds(self, entity_type: str) -> Dict[str, float]:
+        """
+        Get learning range for entity type.
+        """
+        bounds_map = {
+            'FAMILY_MEMBER': {'min': 0.85, 'max': 0.98},
+            'PERSON': {'min': 0.80, 'max': 0.95},
+            'PLACE': {'min': 0.65, 'max': 0.85},
+            'ORGANIZATION': {'min': 0.70, 'max': 0.90},
+            'THING': {'min': 0.60, 'max': 0.80},
+            'CONCEPT': {'min': 0.55, 'max': 0.75},
+            'EVENT': {'min': 0.65, 'max': 0.85}
+        }
+
+        return bounds_map.get(entity_type, {'min': 0.60, 'max': 0.90})
+```
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Per-entity-type merge thresholds
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'disambiguation_threshold_FAMILY_MEMBER',
+    'global',
+    NULL,
+    0.92,  # Current learned threshold (started at 0.90)
+    0.90,  # Prior (default)
+    0.88,  # Confidence
+    75     # Feedback samples
+);
+```
+
+**Application in Merge Decision**:
+
+```python
+# In EntityDisambiguator
+async def should_merge(
+    self,
+    entity1: Entity,
+    entity2: Entity,
+    similarity: float
+) -> bool:
+    """
+    Determine if entities should be merged.
+
+    Returns: True if similarity exceeds learned threshold
+    """
+    entity_type = entity1.entity_type
+
+    # Get learned threshold for this type
+    threshold = await self.get_learned_threshold(
+        f"disambiguation_threshold_{entity_type}"
+    )
+
+    return similarity >= threshold
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_disambiguation_threshold_current` (gauge): Current threshold by entity_type.
+- `p03_disambiguation_precision` (gauge): 1 - (FP / total merges).
+- `p03_disambiguation_recall` (gauge): TP / (TP + FN).
+- `p03_disambiguation_threshold_drift_30d` (gauge): Threshold change over 30 days.
+
+**Configuration** (add to Section 16):
+
+- `P03_DISAMBIGUATION_THRESHOLD_MIN = 0.55` (absolute minimum)
+- `P03_DISAMBIGUATION_THRESHOLD_MAX = 0.98` (absolute maximum)
+- `P03_DISAMBIGUATION_LEARNING_RATE = 0.02` (default adjustment step)
+
+**Drift Monitoring**:
+
+- If threshold drifts > 0.15 in 30 days → emit alert `ThresholdDriftHigh`.
+- If FP rate > 10% → emit alert `DisambiguationPrecisionLow`.
+- If FN rate > 20% → emit alert `DisambiguationRecallLow`.
+
+**Rationale**: Family members are critical relationships — wrong merges are catastrophic. Concepts have many synonyms — can afford looser matching. Learning from user corrections adapts to actual precision/recall trade-offs.
+
+---
+
 #### 4.5.2 Relationship Discovery
 
 - Co-occurrence analysis (Hebbian edges)
@@ -1226,6 +4898,1163 @@ class PhaseTransition:
 - Causal relationship strength scoring
 - Confidence intervals
 
+#### 4.5.4.1 Adaptive Causality Thresholds
+
+**Problem**: Fixed precedence ratio threshold (0.75) doesn't account for decision stakes:
+
+- **Health/Medical decisions**: Wrong causal inference could harm health → need strong evidence (0.85+).
+- **Financial decisions**: Important but reversible → need moderate evidence (0.80).
+- **Social/Routine patterns**: Low stakes → can accept weaker evidence (0.70).
+- **Preference/Habit patterns**: Personal, flexible → lowest bar (0.65).
+
+**Human Memory Model**: We're more cautious about medical causation ("Does X cause my symptoms?") than social patterns ("Do I usually call Mom on Sundays?"). Stakes vary by domain.
+
+**Per-Category Threshold Matrix**:
+
+| Category | Threshold | Rationale | Example |
+|----------|-----------|-----------|----------|
+| `Health/Medical` | 0.85 | High stakes, strong evidence required | "Medication A → symptom relief" |
+| `Financial` | 0.80 | Important decisions, moderate risk | "Spending on X → budget stress" |
+| `Social/Routine` | 0.70 | Lower stakes, relationship patterns | "Call Mom → feel connected" |
+| `Preference/Habit` | 0.65 | Personal patterns, very flexible | "Coffee in morning → productive" |
+
+**Precedence Ratio Formula** (unchanged):
+
+```python
+precedence_ratio = a_before_b / (a_before_b + b_before_a + simultaneous)
+```
+
+Where:
+
+- `a_before_b`: Count of times A precedes B (within time window)
+- `b_before_a`: Count of times B precedes A
+- `simultaneous`: Count of co-occurrences without clear ordering
+
+**Category Assignment**:
+
+```python
+class CausalCategoryClassifier:
+    """
+    Classify relationship into causality category.
+    """
+
+    def classify(
+        self,
+        source_entity: Entity,
+        target_entity: Entity,
+        relationship_type: str
+    ) -> str:
+        """
+        Determine causality category for relationship.
+
+        Returns: 'Health/Medical' | 'Financial' | 'Social/Routine' | 'Preference/Habit'
+        """
+        # Health/Medical keywords
+        health_keywords = {
+            'medication', 'symptom', 'treatment', 'doctor', 'health',
+            'pain', 'illness', 'diagnosis', 'therapy', 'exercise'
+        }
+
+        # Financial keywords
+        financial_keywords = {
+            'money', 'budget', 'spending', 'purchase', 'cost',
+            'expense', 'payment', 'transaction', 'bill', 'salary'
+        }
+
+        # Social keywords
+        social_keywords = {
+            'call', 'visit', 'meeting', 'conversation', 'message',
+            'friend', 'family', 'colleague', 'social', 'gathering'
+        }
+
+        # Check entity types and names
+        text = f"{source_entity.canonical_name} {target_entity.canonical_name} {relationship_type}".lower()
+
+        if any(kw in text for kw in health_keywords):
+            return 'Health/Medical'
+        elif any(kw in text for kw in financial_keywords):
+            return 'Financial'
+        elif any(kw in text for kw in social_keywords):
+            return 'Social/Routine'
+        else:
+            return 'Preference/Habit'  # Default for personal patterns
+```
+
+**Threshold Application**:
+
+```python
+class GrangerCausalityAnalyzer:
+    """
+    Granger causality with adaptive thresholds.
+    """
+
+    async def should_create_causal_edge(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        precedence_ratio: float,
+        observation_count: int
+    ) -> Tuple[bool, float, str]:
+        """
+        Determine if causal edge should be created.
+
+        Returns: (should_create, confidence, category)
+        """
+        # Classify relationship category
+        category = self.classifier.classify(
+            source_entity,
+            target_entity,
+            relationship_type='causal'
+        )
+
+        # Get learned threshold for category
+        threshold_key = f"causality_threshold_{category.replace('/', '_')}"
+        threshold = await self.get_learned_threshold(threshold_key)
+
+        # Check if precedence ratio exceeds threshold
+        if precedence_ratio >= threshold:
+            # Compute confidence based on margin
+            margin = precedence_ratio - threshold
+            confidence = min(1.0, 0.70 + (margin * 2.0))
+            return (True, confidence, category)
+        else:
+            return (False, 0.0, category)
+```
+
+**Learning from Feedback**:
+
+| Feedback Signal | Source | Meaning | Adjustment |
+|----------------|--------|---------|------------|
+| `CAUSAL_PREDICTION_CONFIRMED` | K1/User | Edge used successfully | No change (threshold appropriate) |
+| `CAUSAL_PREDICTION_WRONG` | K1/User | Prediction failed | Raise threshold +0.02 (stricter) |
+| `USER_REJECTS_CAUSATION` | User explicit | "X doesn't cause Y" | Raise threshold +0.05 (much stricter) |
+| `MISSED_CAUSATION` | User reports | "X does cause Y" (missed) | Lower threshold -0.03 (looser) |
+
+**Learning Algorithm**:
+
+```python
+class CausalityThresholdLearner:
+    """
+    Learn per-category causality thresholds from prediction outcomes.
+    """
+
+    def adjust_threshold(
+        self,
+        category: str,
+        feedback_signal: str,
+        current_threshold: float
+    ) -> float:
+        """
+        Adjust threshold based on feedback.
+
+        Returns: new threshold (clamped to range)
+        """
+        adjustments = {
+            'CAUSAL_PREDICTION_CONFIRMED': 0.0,     # Correct
+            'CAUSAL_PREDICTION_WRONG': +0.02,       # FP: stricter
+            'USER_REJECTS_CAUSATION': +0.05,        # Strong FP: much stricter
+            'MISSED_CAUSATION': -0.03               # FN: looser
+        }
+
+        adjustment = adjustments.get(feedback_signal, 0.0)
+        new_threshold = current_threshold + adjustment
+
+        # Get bounds for category
+        bounds = self.get_threshold_bounds(category)
+
+        # Clamp to safe range
+        new_threshold = max(bounds['min'], min(bounds['max'], new_threshold))
+
+        return new_threshold
+
+    def get_threshold_bounds(self, category: str) -> Dict[str, float]:
+        """
+        Get learning range for category.
+        """
+        bounds_map = {
+            'Health/Medical': {'min': 0.80, 'max': 0.95},
+            'Financial': {'min': 0.75, 'max': 0.90},
+            'Social/Routine': {'min': 0.60, 'max': 0.80},
+            'Preference/Habit': {'min': 0.55, 'max': 0.75}
+        }
+
+        return bounds_map.get(category, {'min': 0.60, 'max': 0.85})
+```
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Per-category causality thresholds
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'causality_threshold_Health_Medical',
+    'global',
+    NULL,
+    0.87,  # Current learned threshold (started at 0.85)
+    0.85,  # Prior (default)
+    0.82,  # Confidence
+    45     # Feedback samples
+);
+```
+
+**Schema Addition**:
+
+```sql
+-- Add to st_kg_edges
+ALTER TABLE st_kg_edges ADD COLUMN causality_category TEXT;
+-- Values: 'Health/Medical', 'Financial', 'Social/Routine', 'Preference/Habit'
+
+ALTER TABLE st_kg_edges ADD COLUMN precedence_ratio REAL;
+-- Store for audit and feedback loop
+
+CREATE INDEX idx_kg_edges_causality ON st_kg_edges(causality_category)
+    WHERE edge_type = 'CAUSAL';
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_causal_edges_created` (counter): Total causal edges created by category.
+- `p03_causality_threshold_current` (gauge): Current threshold by category.
+- `p03_causal_prediction_accuracy` (gauge): % of causal predictions confirmed.
+- `p03_causality_false_positives` (counter): Wrong predictions by category.
+
+**Configuration** (add to Section 16):
+
+- `P03_CAUSALITY_THRESHOLD_HEALTH = 0.85` (default for health/medical)
+- `P03_CAUSALITY_THRESHOLD_FINANCIAL = 0.80` (default for financial)
+- `P03_CAUSALITY_THRESHOLD_SOCIAL = 0.70` (default for social/routine)
+- `P03_CAUSALITY_THRESHOLD_PREFERENCE = 0.65` (default for preference/habit)
+- `P03_CAUSALITY_LEARNING_ENABLED = TRUE` (enable adaptive learning)
+
+**Rationale**: Medical/financial causal inferences have high stakes — wrong conclusions could harm users. Social patterns are lower stakes. Category-specific thresholds reflect risk levels. Learning from prediction outcomes improves precision over time.
+
+---
+
+#### 4.5.4.2 Observation Requirements
+
+**Problem**: Fixed minimum observation count doesn't account for pattern frequency:
+
+- **Daily patterns** (coffee → productivity): Occur often, need more observations to confirm causality (avoid spurious correlations).
+- **Weekly patterns** (Sunday call → feel connected): Moderate frequency, moderate evidence.
+- **Monthly patterns** (paycheck → spending spike): Rare but regular, lower evidence bar.
+- **Annual patterns** (birthday → gift stress): Very rare, accept weak evidence.
+
+**Human Memory Model**: We trust daily patterns more when we've seen them repeatedly ("I've had coffee 20 times, definitely helps"). Rare events need less evidence ("Birthdays always stress me, even with 2 samples").
+
+**Adaptive Requirements by Frequency**:
+
+| Pattern Frequency | Min Observations | Rationale | Example |
+|-------------------|------------------|-----------|----------|
+| Daily (>0.8/day) | 10 | High frequency needs statistical power | "Coffee → productive" (10 days) |
+| Weekly (0.1-0.8/day) | 5 | Default, moderate evidence | "Sunday call Mom" (5 weeks) |
+| Monthly (<0.1/day) | 3 | Rare events, lower bar | "Paycheck → spending" (3 months) |
+| Annual (<0.01/day) | 2 | Very rare, weak evidence acceptable | "Birthday → stress" (2 years) |
+
+**Frequency Calculation**:
+
+```python
+class PatternFrequencyAnalyzer:
+    """
+    Compute pattern frequency from observation history.
+    """
+
+    def compute_frequency(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        observation_history: List[int]
+    ) -> float:
+        """
+        Compute events per day over observation window.
+
+        Returns: frequency (events/day)
+        """
+        if len(observation_history) < 2:
+            return 0.0
+
+        # Sort timestamps
+        sorted_times = sorted(observation_history)
+
+        # Compute time span in days
+        time_span_ms = sorted_times[-1] - sorted_times[0]
+        time_span_days = time_span_ms / 86400000.0
+
+        if time_span_days < 1.0:
+            time_span_days = 1.0  # Minimum 1 day
+
+        # Frequency = observations / days
+        frequency = len(observation_history) / time_span_days
+
+        return frequency
+```
+
+**Minimum Observation Requirement**:
+
+```python
+class ObservationRequirementCalculator:
+    """
+    Determine minimum observations needed for causality.
+    """
+
+    def get_min_observations(
+        self,
+        frequency: float
+    ) -> int:
+        """
+        Get minimum observations based on frequency.
+
+        Returns: min observations required
+        """
+        if frequency > 0.8:  # Daily
+            return 10
+        elif frequency > 0.1:  # Weekly
+            return 5
+        elif frequency > 0.01:  # Monthly
+            return 3
+        else:  # Annual
+            return 2
+
+    def has_sufficient_observations(
+        self,
+        observation_count: int,
+        frequency: float
+    ) -> bool:
+        """
+        Check if observation count meets requirement.
+
+        Returns: True if sufficient
+        """
+        min_required = self.get_min_observations(frequency)
+        return observation_count >= min_required
+```
+
+**Confidence Scaling**:
+
+```python
+def compute_causal_confidence(
+    precedence_ratio: float,
+    observation_count: int,
+    min_required: int
+) -> float:
+    """
+    Compute confidence with observation scaling.
+
+    Formula: confidence = base_confidence × sqrt(observations / min_required)
+
+    Returns: confidence [0.0, 1.0]
+    """
+    # Base confidence from precedence ratio
+    base_confidence = precedence_ratio
+
+    # Observation scaling factor
+    if observation_count < min_required:
+        # Below minimum → penalize heavily
+        obs_factor = 0.5 * (observation_count / min_required)
+    else:
+        # Above minimum → boost with diminishing returns
+        obs_factor = min(1.0, math.sqrt(observation_count / min_required))
+
+    # Combined confidence
+    confidence = base_confidence * obs_factor
+
+    # Cap at 1.0
+    return min(1.0, confidence)
+```
+
+**Confidence Examples**:
+
+| Precedence | Observations | Min Required | Obs Factor | Final Confidence |
+|------------|--------------|--------------|------------|------------------|
+| 0.85 | 10 | 10 | 1.00 | 0.85 |
+| 0.85 | 20 | 10 | 1.00 (capped) | 0.85 |
+| 0.85 | 5 | 10 | 0.35 | 0.30 (low confidence) |
+| 0.80 | 3 | 3 | 1.00 | 0.80 |
+| 0.80 | 2 | 3 | 0.41 | 0.33 (below min) |
+
+**Cold Start Handling**:
+
+```python
+class CausalEdgeCreator:
+    """
+    Create causal edges with observation requirements.
+    """
+
+    async def should_create_causal_edge(
+        self,
+        precedence_ratio: float,
+        observation_count: int,
+        frequency: float,
+        category: str
+    ) -> Tuple[bool, float, str]:
+        """
+        Determine if causal edge should be created.
+
+        Returns: (should_create, confidence, reason)
+        """
+        # Get minimum observations
+        min_required = self.obs_calc.get_min_observations(frequency)
+
+        # Check if sufficient observations
+        if observation_count < min_required:
+            return (
+                False,
+                0.0,
+                f'INSUFFICIENT_OBSERVATIONS (need {min_required}, have {observation_count})'
+            )
+
+        # Get threshold for category
+        threshold = await self.get_threshold(category)
+
+        # Check precedence ratio
+        if precedence_ratio < threshold:
+            return (
+                False,
+                0.0,
+                f'BELOW_THRESHOLD (ratio={precedence_ratio:.2f}, threshold={threshold:.2f})'
+            )
+
+        # Compute confidence with observation scaling
+        confidence = self.compute_causal_confidence(
+            precedence_ratio,
+            observation_count,
+            min_required
+        )
+
+        return (True, confidence, 'CAUSAL_EDGE_CREATED')
+```
+
+**Schema Addition**:
+
+```sql
+-- Add to st_kg_edges
+ALTER TABLE st_kg_edges ADD COLUMN observation_count INTEGER;
+-- Track observations for causal edges
+
+ALTER TABLE st_kg_edges ADD COLUMN pattern_frequency REAL;
+-- Events per day
+
+ALTER TABLE st_kg_edges ADD COLUMN min_observations_required INTEGER;
+-- For audit and debugging
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_causal_insufficient_observations` (counter): Rejected due to low observation count.
+- `p03_causal_observation_count` (histogram): Distribution of observation counts.
+- `p03_causal_frequency_distribution` (histogram): Pattern frequency distribution.
+- `p03_causal_confidence_avg` (gauge): Average confidence of created causal edges.
+
+**Configuration** (add to Section 16):
+
+- `P03_CAUSALITY_MIN_OBS_DAILY = 10` (daily patterns)
+- `P03_CAUSALITY_MIN_OBS_WEEKLY = 5` (weekly patterns)
+- `P03_CAUSALITY_MIN_OBS_MONTHLY = 3` (monthly patterns)
+- `P03_CAUSALITY_MIN_OBS_ANNUAL = 2` (annual patterns)
+- `P03_CAUSALITY_FREQUENCY_THRESHOLD_DAILY = 0.8` (>0.8 events/day = daily)
+- `P03_CAUSALITY_FREQUENCY_THRESHOLD_WEEKLY = 0.1` (>0.1 events/day = weekly)
+- `P03_CAUSALITY_FREQUENCY_THRESHOLD_MONTHLY = 0.01` (>0.01 events/day = monthly)
+
+**Rationale**: Rare patterns shouldn't require same statistical power as daily patterns. Adaptive observation requirements prevent premature causal inferences for high-frequency patterns while accepting weaker evidence for genuinely rare events. Confidence scaling reflects observation quality.
+
+---
+
+#### 4.5.4.3 Confound Detection
+
+**Problem**: Correlation doesn't equal causation — many "causal" relationships are actually confounded:
+
+- **Common Cause**: C→A and C→B (not A→B). Example: "Morning" causes both "Coffee" and "Productivity" (coffee doesn't cause productivity, morning routine does).
+- **Simpson's Paradox**: A→B globally, but reverses in subgroups. Example: "Exercise → tired" overall, but "Morning exercise → energized" vs "Evening exercise → exhausted".
+- **Reverse Causation**: Actually B→A, not A→B. Example: "Feel good → call friends" misidentified as "Call friends → feel good".
+
+**Human Memory Model**: We're good at detecting spurious correlations when they're pointed out ("Oh, it's not the coffee, it's the morning routine!"), but initially form quick causal hypotheses. Need systematic confound detection.
+
+**Context Variables to Track**:
+
+| Variable | Values | Purpose |
+|----------|--------|----------|
+| `time_of_day` | morning, afternoon, evening, night | Temporal confounders |
+| `day_of_week` | weekday, weekend | Weekly pattern confounders |
+| `location` | home, work, other | Location confounders |
+| `actor` | specific person/entity | Who-was-involved confounders |
+| `mood` | positive, neutral, negative | Emotional state confounders |
+
+**Common Cause Detection Algorithm**:
+
+```python
+class CommonCauseDetector:
+    """
+    Detect common cause confounding (C→A and C→B).
+    """
+
+    async def detect_common_cause(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        observation_history: List[Dict]
+    ) -> Optional[Tuple[str, float]]:
+        """
+        Detect if a third entity C precedes both A and B.
+
+        Returns: (confounder_entity_id, confidence) or None
+        """
+        # For each observation, check what preceded both A and B
+        confounder_counts = defaultdict(int)
+        total_observations = len(observation_history)
+
+        for obs in observation_history:
+            # Get entities that occurred before A and B in this episode
+            preceding_entities = obs.get('preceding_entities', [])
+
+            for entity_id in preceding_entities:
+                # Check if entity preceded both source and target
+                if self.preceded_both(entity_id, source_entity_id, target_entity_id, obs):
+                    confounder_counts[entity_id] += 1
+
+        # Find entity that precedes both in >50% of cases
+        for entity_id, count in confounder_counts.items():
+            ratio = count / total_observations
+
+            if ratio > 0.50:
+                # Strong confounder detected
+                return (entity_id, ratio)
+
+        return None
+
+    def preceded_both(
+        self,
+        candidate_id: str,
+        source_id: str,
+        target_id: str,
+        observation: Dict
+    ) -> bool:
+        """
+        Check if candidate preceded both source and target.
+        """
+        timestamps = observation.get('entity_timestamps', {})
+
+        t_candidate = timestamps.get(candidate_id)
+        t_source = timestamps.get(source_id)
+        t_target = timestamps.get(target_id)
+
+        if not all([t_candidate, t_source, t_target]):
+            return False
+
+        # Candidate must precede both (within 1 hour)
+        return (
+            t_candidate < t_source and
+            t_candidate < t_target and
+            (t_source - t_candidate) < 3600000 and  # 1 hour
+            (t_target - t_candidate) < 3600000
+        )
+```
+
+**Simpson's Paradox Detection**:
+
+```python
+class SimpsonsParadoxDetector:
+    """
+    Detect if causal relationship reverses in subgroups.
+    """
+
+    async def detect_simpsons_paradox(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        global_precedence: float,
+        observation_history: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Check if relationship holds across context subgroups.
+
+        Returns: dict with reversal info
+        """
+        # Partition observations by context
+        context_groups = self.partition_by_context(observation_history)
+
+        reversals = []
+
+        for context_key, obs_subset in context_groups.items():
+            # Compute precedence ratio within this context
+            subgroup_precedence = self.compute_precedence_ratio(
+                source_entity_id,
+                target_entity_id,
+                obs_subset
+            )
+
+            # Check for reversal
+            if global_precedence > 0.50 and subgroup_precedence < 0.30:
+                # Global: A→B, Subgroup: B→A (reversal)
+                reversals.append({
+                    'context': context_key,
+                    'global': global_precedence,
+                    'subgroup': subgroup_precedence,
+                    'reversal_strength': global_precedence - subgroup_precedence,
+                    'sample_size': len(obs_subset)
+                })
+
+        # Check if reversals are significant
+        if reversals:
+            # Filter reversals with sufficient sample size (≥5)
+            significant_reversals = [
+                r for r in reversals
+                if r['sample_size'] >= 5
+            ]
+
+            if significant_reversals:
+                return {
+                    'paradox_detected': True,
+                    'reversals': significant_reversals,
+                    'confounder_likely': True
+                }
+
+        return {'paradox_detected': False}
+
+    def partition_by_context(
+        self,
+        observations: List[Dict]
+    ) -> Dict[str, List[Dict]]:
+        """
+        Partition observations by context variables.
+        """
+        groups = defaultdict(list)
+
+        for obs in observations:
+            # Create context key
+            context = obs.get('context', {})
+            key = f"{context.get('time_of_day')}|{context.get('location')}"
+            groups[key].append(obs)
+
+        # Filter groups with <5 observations (insufficient)
+        return {k: v for k, v in groups.items() if len(v) >= 5}
+```
+
+**Confound Handling Actions**:
+
+| Detection Result | Action | Edge Type | Metadata |
+|------------------|--------|-----------|----------|
+| Strong common cause (>50%) | Demote to `CORRELATED` | `edge_type='CORRELATED'` | `confounder_entity_id` |
+| Simpson's paradox | Demote to `CONTEXT_DEPENDENT` | `edge_type='CONTEXT_DEPENDENT'` | `context_conditions` |
+| Weak signal (<10% confound) | Flag for review | `edge_type='CAUSAL'` | `confounder_candidates` |
+| No confounders | Confirm as causal | `edge_type='CAUSAL'` | `confound_checked=true` |
+
+**Confound Detection Integration**:
+
+```python
+class CausalEdgeValidator:
+    """
+    Validate causal edges with confound detection.
+    """
+
+    async def validate_and_create_edge(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        precedence_ratio: float,
+        observation_history: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Create causal edge with confound checking.
+
+        Returns: edge creation result
+        """
+        # 1. Check for common cause
+        common_cause = await self.common_cause_detector.detect_common_cause(
+            source_entity_id,
+            target_entity_id,
+            observation_history
+        )
+
+        if common_cause:
+            confounder_id, confidence = common_cause
+
+            if confidence > 0.50:
+                # Strong confounding → demote to CORRELATED
+                return await self.create_edge(
+                    source_entity_id,
+                    target_entity_id,
+                    edge_type='CORRELATED',
+                    metadata={
+                        'confounder_entity_id': confounder_id,
+                        'confounder_confidence': confidence,
+                        'original_precedence': precedence_ratio,
+                        'demotion_reason': 'COMMON_CAUSE_CONFOUNDING'
+                    }
+                )
+
+        # 2. Check for Simpson's paradox
+        paradox = await self.simpsons_detector.detect_simpsons_paradox(
+            source_entity_id,
+            target_entity_id,
+            precedence_ratio,
+            observation_history
+        )
+
+        if paradox.get('paradox_detected'):
+            # Context-dependent relationship
+            return await self.create_edge(
+                source_entity_id,
+                target_entity_id,
+                edge_type='CONTEXT_DEPENDENT',
+                metadata={
+                    'reversals': paradox['reversals'],
+                    'original_precedence': precedence_ratio,
+                    'demotion_reason': 'SIMPSONS_PARADOX'
+                }
+            )
+
+        # 3. Check for weak confounding signals
+        weak_confounders = await self.detect_weak_confounders(
+            source_entity_id,
+            target_entity_id,
+            observation_history
+        )
+
+        # 4. Create causal edge (possibly with confound flags)
+        return await self.create_edge(
+            source_entity_id,
+            target_entity_id,
+            edge_type='CAUSAL',
+            metadata={
+                'causal_confidence': precedence_ratio,
+                'confounder_candidates': weak_confounders,
+                'confound_checked': True,
+                'observation_count': len(observation_history)
+            }
+        )
+```
+
+**Schema Additions**:
+
+```sql
+-- Add to st_kg_edges
+ALTER TABLE st_kg_edges ADD COLUMN edge_type TEXT;
+-- Values: 'CAUSAL', 'CORRELATED', 'CONTEXT_DEPENDENT', 'HEBBIAN'
+
+ALTER TABLE st_kg_edges ADD COLUMN causal_confidence REAL;
+-- Confidence after confound detection [0.0, 1.0]
+
+ALTER TABLE st_kg_edges ADD COLUMN confounder_candidates JSONB;
+-- Array of potential confounders with confidence scores
+
+ALTER TABLE st_kg_edges ADD COLUMN context_conditions JSONB;
+-- For CONTEXT_DEPENDENT edges: when relationship holds
+
+ALTER TABLE st_kg_edges ADD COLUMN confound_checked BOOLEAN DEFAULT FALSE;
+-- Whether confound detection was run
+
+CREATE INDEX idx_kg_edges_type ON st_kg_edges(edge_type);
+CREATE INDEX idx_kg_edges_confound ON st_kg_edges(confound_checked) WHERE edge_type = 'CAUSAL';
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_confounders_detected` (counter): Total confounders detected by type.
+- `p03_causal_demoted_correlated` (counter): Causal edges demoted to CORRELATED.
+- `p03_causal_context_dependent` (counter): Context-dependent relationships found.
+- `p03_simpsons_paradox_detected` (counter): Simpson's paradox cases.
+- `p03_confound_detection_rate` (gauge): % of causal candidates checked for confounds.
+
+**Configuration** (add to Section 16):
+
+- `P03_CONFOUND_DETECTION_ENABLED = TRUE` (enable confound checking)
+- `P03_CONFOUND_COMMON_CAUSE_THRESHOLD = 0.50` (>50% precedence = confounder)
+- `P03_CONFOUND_REVERSAL_THRESHOLD = 0.20` (reversal strength to trigger paradox)
+- `P03_CONFOUND_MIN_SUBGROUP_SIZE = 5` (minimum observations per context)
+
+**Rationale**: Distinguishing causation from correlation is critical for reliable reasoning. Common cause confounding and Simpson's paradox are common failure modes. Systematic confound detection prevents P03 from creating spurious causal edges. Context-dependent edges preserve nuance ("Exercise helps in morning, hurts in evening").
+
+---
+
+#### 4.5.4.4 Causal Edge Feedback
+
+**Problem**: Causal edges are created with initial confidence, but no mechanism to validate or improve them based on actual usage outcomes. If P04/K1 uses a causal edge for prediction and it's wrong, the edge should be demoted. If consistently accurate, confidence should increase.
+
+**Human Memory Model**: We update our mental causal models based on outcomes. "I thought coffee caused my productivity, but tracking shows it's actually the morning routine" → revise causal belief.
+
+**Feedback Loop Architecture**:
+
+```
+┌─────────────┐         ┌─────────────┐         ┌─────────────┐
+│   P03       │ creates │   P04/K1    │  uses   │  User/K1    │
+│ Causal Edge │────────>│  Reasoning  │────────>│  Outcome    │
+└─────────────┘         └─────────────┘         └─────────────┘
+       ▲                                               │
+       │                                               │
+       │              ┌─────────────────┐             │
+       └──────────────│  st_feedback_   │<────────────┘
+          updates     │    signals      │  records
+                      └─────────────────┘
+```
+
+**Feedback Signals & Actions**:
+
+| Signal | Source | Meaning | Adjustment | Example |
+|--------|--------|---------|------------|---------|
+| `CAUSAL_PREDICTION_CONFIRMED` | K1 response validated | Prediction was correct | No change (threshold appropriate) | "Coffee → productive" confirmed by user |\n| `CAUSAL_PREDICTION_WRONG` | K1 response corrected | Prediction failed | Raise threshold +0.02 (stricter) | "Coffee → productive" but user says "No, I'm tired" |\n| `USER_REJECTS_CAUSATION` | User explicit feedback | "X doesn't cause Y" | Raise threshold +0.05 (much stricter) | User: "Coffee doesn't make me productive" |\n| `MISSED_CAUSATION` | User reports pattern | "X does cause Y" (not detected) | Lower threshold -0.03 (looser) | User: "Exercise definitely helps my mood" |\n| `CAUSAL_EDGE_UNUSED` | P04 never queries | Edge not useful for reasoning | No change, track staleness | Edge exists but never used in 90 days |
+
+**Edge Usage Tracking**:
+
+```python
+class CausalEdgeFeedbackProcessor:
+    """
+    Process feedback for causal edges and adjust thresholds.
+    """
+
+    async def process_feedback(
+        self,
+        edge_id: str,
+        feedback_signal: str,
+        outcome_details: Dict[str, Any]
+    ) -> None:
+        """
+        Update causal edge based on usage feedback.
+        """
+        # Fetch edge
+        edge = await db.fetch_one("""
+            SELECT * FROM st_kg_edges WHERE edge_id = ? AND edge_type = 'CAUSAL'
+        """, edge_id)
+
+        if not edge:
+            return
+
+        # Record feedback in tracking table
+        await self.record_feedback(edge_id, feedback_signal, outcome_details)
+
+        # Compute accuracy over last 30 days
+        accuracy = await self.compute_accuracy(edge_id, days=30)
+
+        # Adjust threshold based on signal
+        if feedback_signal == 'CAUSAL_PREDICTION_WRONG':
+            # Raise threshold for this category
+            await self.adjust_category_threshold(
+                edge['causality_category'],
+                adjustment=+0.02
+            )
+        elif feedback_signal == 'USER_REJECTS_CAUSATION':
+            # Strong signal → larger adjustment
+            await self.adjust_category_threshold(
+                edge['causality_category'],
+                adjustment=+0.05
+            )
+        elif feedback_signal == 'MISSED_CAUSATION':
+            # Lower threshold to catch more
+            await self.adjust_category_threshold(
+                edge['causality_category'],
+                adjustment=-0.03
+            )
+
+        # Update edge confidence based on accuracy
+        await self.update_edge_confidence(edge_id, accuracy)
+
+        # Check for demotion
+        if accuracy < 0.70:
+            await self.demote_edge(edge_id, 'LOW_ACCURACY')
+
+    async def compute_accuracy(
+        self,
+        edge_id: str,
+        days: int = 30
+    ) -> float:
+        """
+        Compute prediction accuracy over time window.
+
+        Returns: accuracy [0.0, 1.0]
+        """
+        cutoff_time = now() - (days * 86400000)
+
+        result = await db.fetch_one("""
+            SELECT
+                COUNT(*) FILTER (WHERE signal_type = 'CAUSAL_PREDICTION_CONFIRMED') as correct,
+                COUNT(*) FILTER (WHERE signal_type IN ('CAUSAL_PREDICTION_WRONG', 'USER_REJECTS_CAUSATION')) as incorrect,
+                COUNT(*) as total
+            FROM st_causal_feedback
+            WHERE edge_id = ?
+              AND created_at >= ?
+        """, edge_id, cutoff_time)
+
+        if result['total'] == 0:
+            return 1.0  # No feedback yet, assume correct
+
+        accuracy = result['correct'] / result['total']
+        return accuracy
+
+    async def update_edge_confidence(
+        self,
+        edge_id: str,
+        accuracy: float
+    ) -> None:
+        """
+        Update edge confidence based on accuracy.
+        """
+        # Boost confidence if accuracy > 90%
+        if accuracy > 0.90:
+            await db.execute("""
+                UPDATE st_kg_edges
+                SET causal_confidence = LEAST(1.0, causal_confidence + 0.05),
+                    last_validated_at = ?
+                WHERE edge_id = ?
+            """, now(), edge_id)
+
+        # Keep confidence if 70% <= accuracy <= 90%
+        elif accuracy >= 0.70:
+            await db.execute("""
+                UPDATE st_kg_edges
+                SET last_validated_at = ?
+                WHERE edge_id = ?
+            """, now(), edge_id)
+
+        # Lower confidence if accuracy < 70% (will be demoted)
+        else:
+            await db.execute("""
+                UPDATE st_kg_edges
+                SET causal_confidence = GREATEST(0.0, causal_confidence - 0.10)
+                WHERE edge_id = ?
+            """, edge_id)
+
+    async def demote_edge(
+        self,
+        edge_id: str,
+        reason: str
+    ) -> None:
+        """
+        Demote causal edge to CORRELATED.
+        """
+        await db.execute("""
+            UPDATE st_kg_edges
+            SET edge_type = 'CORRELATED',
+                metadata_json = jsonb_set(
+                    COALESCE(metadata_json, '{}'::jsonb),
+                    '{demotion_reason}',
+                    to_jsonb(?::text)
+                ),
+                metadata_json = jsonb_set(
+                    metadata_json,
+                    '{demoted_at}',
+                    to_jsonb(?::bigint)
+                ),
+                metadata_json = jsonb_set(
+                    metadata_json,
+                    '{original_edge_type}',
+                    to_jsonb('CAUSAL'::text)
+                )
+            WHERE edge_id = ?
+        """, reason, now(), edge_id)
+
+        # Emit event
+        await bus.emit(
+            topic='p03.causal_edge.demoted.v1',
+            payload={
+                'edge_id': edge_id,
+                'reason': reason,
+                'demoted_at': now()
+            }
+        )
+```
+
+**Edge Staleness Detection**:
+
+```python
+class CausalEdgeStalenessChecker:
+    """
+    Identify unused causal edges.
+    """
+
+    async def check_staleness(
+        self,
+        space_id: str
+    ) -> List[str]:
+        """
+        Find causal edges not used in 90 days.
+
+        Returns: List of stale edge_ids
+        """
+        cutoff_time = now() - (90 * 86400000)
+
+        stale_edges = await db.fetch_all("""
+            SELECT e.edge_id, e.source_entity_id, e.target_entity_id
+            FROM st_kg_edges e
+            WHERE e.edge_type = 'CAUSAL'
+              AND e.space_id = ?
+              AND (
+                e.last_used_at IS NULL
+                OR e.last_used_at < ?
+              )
+        """, space_id, cutoff_time)
+
+        return [e['edge_id'] for e in stale_edges]
+
+    async def archive_stale_edges(
+        self,
+        space_id: str
+    ) -> int:
+        """
+        Archive causal edges unused for 90 days.
+
+        Returns: count of archived edges
+        """
+        stale_edge_ids = await self.check_staleness(space_id)
+
+        if not stale_edge_ids:
+            return 0
+
+        count = await db.execute("""
+            UPDATE st_kg_edges
+            SET archival_status = 'ARCHIVED',
+                archived_at = ?
+            WHERE edge_id = ANY(?)
+        """, now(), stale_edge_ids)
+
+        return count
+```
+
+**Schema: st_causal_feedback**:
+
+```sql
+CREATE TABLE st_causal_feedback (
+    feedback_id TEXT PRIMARY KEY,
+    edge_id TEXT NOT NULL,  -- FK to st_kg_edges
+    signal_type TEXT NOT NULL,
+    -- 'CAUSAL_PREDICTION_CONFIRMED', 'CAUSAL_PREDICTION_WRONG',
+    -- 'USER_REJECTS_CAUSATION', 'MISSED_CAUSATION'
+
+    source_system TEXT NOT NULL,  -- 'P04', 'K1', 'USER'
+
+    prediction_context JSONB,  -- What was predicted
+    actual_outcome JSONB,  -- What actually happened
+
+    user_id TEXT,  -- If user-initiated feedback
+    space_id TEXT NOT NULL,
+
+    created_at BIGINT NOT NULL,
+
+    FOREIGN KEY (edge_id) REFERENCES st_kg_edges(edge_id)
+);
+
+CREATE INDEX idx_causal_feedback_edge ON st_causal_feedback(edge_id, created_at DESC);
+CREATE INDEX idx_causal_feedback_space ON st_causal_feedback(space_id);
+CREATE INDEX idx_causal_feedback_signal ON st_causal_feedback(signal_type);
+CREATE INDEX idx_causal_feedback_time ON st_causal_feedback(created_at);
+```
+
+**Schema Additions to st_kg_edges**:
+
+```sql
+-- Add to st_kg_edges
+ALTER TABLE st_kg_edges ADD COLUMN last_used_at BIGINT;
+-- When P04/K1 queries this edge
+
+ALTER TABLE st_kg_edges ADD COLUMN last_validated_at BIGINT;
+-- When feedback confirms/updates confidence
+
+ALTER TABLE st_kg_edges ADD COLUMN usage_count INTEGER DEFAULT 0;
+-- How many times edge used in reasoning
+
+ALTER TABLE st_kg_edges ADD COLUMN prediction_accuracy REAL;
+-- Rolling 30-day accuracy [0.0, 1.0]
+
+CREATE INDEX idx_kg_edges_last_used ON st_kg_edges(last_used_at)
+    WHERE edge_type = 'CAUSAL';
+```
+
+**Integration with P04/K1**:
+
+```python
+# When P04 uses a causal edge for retrieval
+async def record_causal_edge_usage(
+    edge_id: str,
+    query_context: Dict[str, Any]
+) -> None:
+    """
+    Record that causal edge was used in reasoning.
+    """
+    await db.execute("""
+        UPDATE st_kg_edges
+        SET last_used_at = ?,
+            usage_count = usage_count + 1
+        WHERE edge_id = ?
+    """, now(), edge_id)
+
+# When K1 validates prediction outcome
+async def record_prediction_outcome(
+    edge_id: str,
+    prediction_correct: bool,
+    context: Dict[str, Any]
+) -> None:
+    """
+    Record prediction outcome for causal edge.
+    """
+    signal_type = (
+        'CAUSAL_PREDICTION_CONFIRMED' if prediction_correct
+        else 'CAUSAL_PREDICTION_WRONG'
+    )
+
+    await db.execute("""
+        INSERT INTO st_causal_feedback (
+            feedback_id, edge_id, signal_type, source_system,
+            prediction_context, actual_outcome, space_id, created_at
+        ) VALUES (?, ?, ?, 'K1', ?, ?, ?, ?)
+    """, ulid.new(), edge_id, signal_type,
+        json.dumps(context.get('prediction')),
+        json.dumps(context.get('actual')),
+        context['space_id'],
+        now()
+    )
+```
+
+**Accuracy Thresholds & Actions**:
+
+| 30-Day Accuracy | Action | Edge Status | Rationale |
+|----------------|--------|-------------|-----------|
+| > 90% | Boost confidence +0.05 | `CAUSAL` (strong) | Consistently accurate predictions |\n| 70-90% | No change | `CAUSAL` (adequate) | Acceptable accuracy |\n| 50-70% | Lower confidence -0.10 | `CAUSAL` (weak) | Below target, monitor |\n| < 50% | Demote to `CORRELATED` | `CORRELATED` | More wrong than right, not causal |\n| 0 predictions | Archive after 90 days | `ARCHIVED` | Unused, not valuable |\n\n**Metrics** (add to Section 8.2):\n\n- `p03_causal_feedback_received` (counter): Total feedback signals by type.\n- `p03_causal_accuracy_avg` (gauge): Average accuracy of causal edges.\n- `p03_causal_edges_demoted` (counter): Edges demoted due to low accuracy.\n- `p03_causal_edges_boosted` (counter): Edges with confidence increased.\n- `p03_causal_edges_stale` (gauge): Count of edges unused for >90 days.\n- `p03_causal_edge_usage_rate` (gauge): % of causal edges used in last 30 days.
+
+**Configuration** (add to Section 16):
+
+- `P03_CAUSAL_ACCURACY_BOOST_THRESHOLD = 0.90` (boost confidence above this)
+- `P03_CAUSAL_ACCURACY_DEMOTE_THRESHOLD = 0.70` (demote below this)
+- `P03_CAUSAL_STALENESS_DAYS = 90` (archive if unused)
+- `P03_CAUSAL_FEEDBACK_WINDOW_DAYS = 30` (accuracy computation window)
+- `P03_CAUSAL_MIN_FEEDBACK_SAMPLES = 5` (min samples before accuracy trusted)
+
+**Rollback Protection**:
+
+```python
+# Before demoting edge, check if demotion would reverse soon
+async def should_demote(
+    edge_id: str,
+    current_accuracy: float
+) -> bool:
+    """
+    Prevent premature demotion.
+    """
+    # Get sample count
+    sample_count = await db.fetch_val("""
+        SELECT COUNT(*) FROM st_causal_feedback
+        WHERE edge_id = ?
+          AND created_at >= ?
+    """, edge_id, now() - (30 * 86400000))
+
+    # Need minimum samples before trusting accuracy
+    if sample_count < 5:
+        return False  # Don't demote yet
+
+    # Check recent trend (last 7 days vs full 30)
+    recent_accuracy = await compute_accuracy(edge_id, days=7)
+
+    # If recent trend is improving, don't demote
+    if recent_accuracy > current_accuracy + 0.15:
+        return False  # Improving, give it more time
+
+    # Demote if sustained low accuracy
+    return current_accuracy < 0.70
+```
+
+**Rationale**: Causal edges should be living hypotheses that improve or get retired based on real-world validation. Prediction accuracy is the ground truth for causality quality. Unused edges clutter the graph without adding value. Feedback-driven improvement ensures P03's causal inferences remain reliable over time.
+
+---
+
 #### 4.5.5 Concept Evolution Tracking
 
 - Schema drift detection
@@ -1235,6 +6064,68 @@ class PhaseTransition:
 ---
 
 ### 4.6 R5 — Dream-Like Exploration (REM)
+
+#### 4.6.0 MVP Strategy
+
+**Decision**: R5 disabled for MVP via `P03_FF_R5_MODE=disabled`
+
+**Problem**: R5 algorithms (MCTS, counterfactuals, episodic simulation) are compute-intensive. Before allocating 5-20% of P03 compute budget to R5, validate that MCTS/exploration provides measurable benefit over simple heuristic-based decisions.
+
+**MVP Behavior** (R5 skipped):
+
+- Use heuristic scoring instead of MCTS
+- Decisions based on direct formula outputs (e.g., highest novelty score, highest precedence ratio)
+- No exploration/exploitation tradeoff
+- No forward simulation or counterfactual reasoning
+- TDL-HCO (motor rehearsal) kept enabled (lightweight, <100ms)
+
+**Rollout Plan**:
+
+| Phase | Mode | Duration | Behavior |
+|-------|------|----------|----------|
+| MVP | `disabled` | Initial launch | Heuristic decisions only |
+| Alpha | `shadow` | 2-4 weeks | Run MCTS but don't apply results |
+| Beta | `enabled_low` | 2-4 weeks | MCTS with 10 rollouts only |
+| GA | `enabled` | Production | Full adaptive rollouts (10-100) |
+
+**Shadow Validation Criteria**:
+
+- Track "Would MCTS differ from heuristic?" in `st_mcts_shadow_log`
+- **Enable if**: MCTS differs >20% AND user corrections favor MCTS decisions
+- **Keep disabled if**: Agreement >95% (MCTS not adding value)
+- **"Better" means**:
+  - Memory grounded more often in downstream P04 queries
+  - Fewer user corrections or rejection signals
+  - Higher downstream satisfaction scores from K1
+
+**Feature Flag**:
+
+```yaml
+P03_FF_R5_MODE:
+  type: enum
+  values: [disabled, shadow, enabled_low, enabled]
+  default: disabled  # MVP
+  description: "R5 exploration mode control"
+```
+
+**Metrics Added**:
+
+- `p03_r5_mode` (gauge: 0=disabled, 1=shadow, 2=enabled_low, 3=enabled)
+- `p03_r5_skipped_decisions` (counter: decisions made without R5)
+- `p03_r5_compute_seconds_saved` (counter: estimate of compute saved)
+
+**Configuration**:
+
+```python
+P03_R5_SHADOW_VALIDATION_WINDOW_DAYS = 30  # Evaluation period
+P03_R5_SHADOW_DIFF_THRESHOLD = 0.20  # 20% difference threshold
+P03_R5_SHADOW_AGREEMENT_THRESHOLD = 0.95  # 95% agreement = keep disabled
+P03_R5_SHADOW_BETTER_THRESHOLD = 0.55  # 55% MCTS better = enable
+```
+
+**Rationale**: MCTS is theoretically elegant but compute-intensive. For a consolidation pipeline processing 100-500 events every 20 minutes, heuristic decisions ("pick highest novelty", "merge if similarity >0.85") may suffice. Shadow mode lets us validate MCTS benefit with real data before committing compute resources. If MCTS matches heuristics >95%, it's not worth the cost. If MCTS produces better outcomes >55% of the time when they differ, then promote to enabled.
+
+---
 
 #### 4.6.1 Counterfactual Thinking (CPN Algorithm)
 
@@ -1248,6 +6139,209 @@ class PhaseTransition:
 - Monte Carlo Tree Search for exploration
 - Probability estimation for outcomes
 
+##### 4.6.2.1 Adaptive Rollouts
+
+**Problem**: Not all P03 decisions deserve equal exploration effort. Entity merges are irreversible and high-impact; decay parameter tuning is reversible and low-risk. Fixed rollout count wastes compute on trivial decisions and under-explores critical ones.
+
+**Decision Importance → Rollout Allocation**:
+
+| Decision Type | Rollouts | Rationale |
+|---------------|----------|----------|
+| Entity merge/split | 100 | High impact, irreversible, affects all downstream queries |
+| Causal edge creation | 50 | Important for reasoning, medium reversibility |
+| Episode cluster assignment | 30 | Affects episodic retrieval |
+| Memory reinforcement | 20 | Lower stakes, gradual impact |
+| Decay parameter tuning | 10 | Reversible, learned over time |
+| Novelty bonus adjustment | 10 | Reversible, low impact |
+
+**Decision Classification**:
+
+```python
+def classify_decision_importance(decision_type: str, context: dict) -> int:
+    """
+    Returns rollout count based on decision importance.
+
+    Args:
+        decision_type: Type of decision (merge, causal, reinforce, decay, etc.)
+        context: Additional context (e.g., entity_type, confidence, impact_score)
+
+    Returns:
+        Rollout count (10-100)
+    """
+    base_rollouts = {
+        'entity_merge': 100,
+        'entity_split': 100,
+        'causal_edge': 50,
+        'cluster_assign': 30,
+        'memory_reinforce': 20,
+        'decay_tune': 10,
+        'novelty_adjust': 10,
+    }
+
+    rollouts = base_rollouts.get(decision_type, 20)  # Default: 20
+
+    # Boost for high-value entities
+    if context.get('entity_type') == 'FAMILY_MEMBER':
+        rollouts = int(rollouts * 1.5)
+
+    # Reduce for low-confidence (already uncertain, more rollouts won't help)
+    if context.get('confidence', 1.0) < 0.60:
+        rollouts = max(10, int(rollouts * 0.5))
+
+    return min(rollouts, 100)  # Cap at 100
+```
+
+**Early Termination**:
+Stop MCTS rollouts early if:
+
+1. **Clear winner**: Best action has >90% of visits
+   - Example: After 30 rollouts, merge decision has 28 visits vs 2 for no-merge → stop
+2. **Low uncertainty**: Confidence interval width <5%
+   - Example: Value estimate is 0.85 ± 0.02 → additional rollouts won't change decision
+3. **Compute budget exhausted**: 1000 total rollouts per P03 cycle
+
+**Early Termination Check**:
+
+```python
+def should_terminate_early(
+    current_rollouts: int,
+    visit_counts: dict[str, int],
+    value_estimates: dict[str, float],
+    confidence_intervals: dict[str, tuple[float, float]]
+) -> bool:
+    """
+    Determine if MCTS can terminate early.
+
+    Returns:
+        True if early termination criteria met
+    """
+    total_visits = sum(visit_counts.values())
+    best_action = max(visit_counts, key=visit_counts.get)
+    best_visit_ratio = visit_counts[best_action] / total_visits
+
+    # Criterion 1: Clear winner (>90% visits)
+    if best_visit_ratio > 0.90:
+        return True
+
+    # Criterion 2: Low uncertainty (<5% CI width)
+    ci_low, ci_high = confidence_intervals[best_action]
+    ci_width = ci_high - ci_low
+    if ci_width < 0.05:
+        return True
+
+    return False
+```
+
+**Compute Budget**:
+
+- Total budget: 1000 rollouts per P03 cycle
+- Typical cycle: 100 events → ~10 decisions requiring MCTS
+- Average: 100 rollouts/decision (with early termination)
+- Compute impact: <5% of P03 runtime (tested at 500ms for 100 rollouts)
+- Budget tracking: Stop MCTS for remaining decisions if budget exhausted
+
+**Storage**:
+
+```sql
+CREATE TABLE IF NOT EXISTS st_mcts_decisions (
+    decision_id UUID PRIMARY KEY,
+    decision_type TEXT NOT NULL,  -- merge, causal, etc.
+    context_json JSONB,
+    rollouts_allocated INTEGER,
+    rollouts_executed INTEGER,
+    early_termination BOOLEAN DEFAULT FALSE,
+    termination_reason TEXT,  -- clear_winner, low_uncertainty, budget_exhausted
+    chosen_action TEXT,
+    value_estimate REAL,
+    confidence_interval_width REAL,
+    compute_ms INTEGER,
+    created_at BIGINT NOT NULL
+);
+
+CREATE INDEX idx_mcts_decisions_type ON st_mcts_decisions(decision_type);
+CREATE INDEX idx_mcts_decisions_created ON st_mcts_decisions(created_at);
+```
+
+**Metrics**:
+
+- `p03_mcts_rollouts` (histogram: distribution of rollouts per decision)
+- `p03_mcts_early_termination_rate` (gauge: % decisions terminated early)
+- `p03_mcts_compute_budget_used` (counter: total rollouts used per cycle)
+- `p03_mcts_budget_exhausted` (counter: cycles that hit 1000 rollout limit)
+
+**Configuration**:
+
+```python
+P03_MCTS_COMPUTE_BUDGET = 1000  # Max rollouts per cycle
+P03_MCTS_EARLY_TERM_VISIT_THRESHOLD = 0.90  # 90% visits → terminate
+P03_MCTS_EARLY_TERM_CI_THRESHOLD = 0.05  # 5% CI width → terminate
+P03_MCTS_MIN_ROLLOUTS = 10  # Always do at least 10
+```
+
+**Rationale**: Allocate compute to high-impact decisions; save on reversible ones. Early termination prevents wasted rollouts when decision is clear. Compute budget ensures P03 latency stays predictable even with many decisions.
+
+##### 4.6.2.2 Exploration Constant
+
+**Decision**: Keep exploration constant `c = √2 ≈ 1.414` static (not learned)
+
+**Problem**: UCT formula balances exploitation (choose best action) vs exploration (try uncertain actions): `UCT = Q/N + c × √(ln(N_parent) / N)`. The constant `c` controls this tradeoff. Should we tune `c` per decision type or keep it fixed?
+
+**Formula**:
+
+```python
+def compute_uct(node, parent):
+    """
+    Upper Confidence Bound for Trees.
+
+    Args:
+        node: Child node with visit_count, total_value
+        parent: Parent node with visit_count
+
+    Returns:
+        UCT score (exploitation + exploration)
+    """
+    if node.visit_count == 0:
+        return float('inf')  # Always explore unvisited nodes
+
+    exploitation = node.total_value / node.visit_count
+    exploration = 1.414 * sqrt(log(parent.visit_count) / node.visit_count)
+
+    return exploitation + exploration
+```
+
+**Rationale for Static c=√2**:
+
+1. **Theoretically optimal**: Kocsis & Szepesvári (2006) proved √2 minimizes regret for UCT
+2. **Empirically validated**: Go engines, game AI, planning systems use √2 as default
+3. **Consolidation-friendly**: Memory consolidation is not adversarial (unlike games); default balance suits well
+4. **Complexity avoidance**: Adaptive tuning adds complexity with unclear benefit
+
+**Alternative Considered (Rejected)**:
+
+- **Adaptive c by decision type**: Higher c for high-uncertainty decisions (entity merges), lower c for low-uncertainty (decay tuning)
+- **Why rejected**: Rollout count already adapts by decision type (Issue 4.5.2). Tuning both rollouts AND c adds unnecessary complexity. No empirical evidence that consolidation decisions need different exploration balance than √2.
+
+**Future Research**:
+
+- If shadow mode reveals specific decision types consistently under-explore or over-exploit, add feature flag:
+
+  ```yaml
+  P03_FF_ADAPTIVE_UCT_C:
+    type: boolean
+    default: false
+    description: "Enable per-decision-type exploration constants"
+  ```
+
+- Reserve for Phase 3+ when MCTS is proven valuable
+
+**Configuration**:
+
+```python
+P03_MCTS_UCT_EXPLORATION_CONSTANT = 1.414  # √2, static
+```
+
+**Rationale**: Use proven theoretical optimum; don't over-engineer. Adaptive c is premature optimization without evidence of benefit.
+
 #### 4.6.3 Episodic Simulation (SPC-UQ)
 
 - Recombination of episode fragments
@@ -1260,13 +6354,231 @@ class PhaseTransition:
 - Cross-domain pattern matching
 - Creative connection scoring
 
-#### 4.6.5 Motor Rehearsal Analog (TDL-HCO)
+#### 4.6.5 Shadow Mode Validation
+
+**Purpose**: Validate whether MCTS provides measurable benefit over heuristic decisions before enabling compute cost.
+
+**Shadow Mode Behavior** (`P03_FF_R5_MODE=shadow`):
+
+1. For each decision requiring exploration:
+   - Compute **heuristic choice** (e.g., highest score, highest similarity)
+   - Run **MCTS** with allocated rollouts
+   - Apply heuristic result (MCTS is read-only)
+   - Log both choices + context to `st_mcts_shadow_log`
+2. Track outcomes over 30-day window
+3. Compare MCTS vs heuristic performance
+
+**Comparison Metrics**:
+
+| Metric | Calculation | Threshold | Action |
+|--------|-------------|-----------|--------|
+| Decision agreement | % decisions where MCTS == heuristic | >95% | Keep disabled (MCTS not useful) |
+| MCTS better (30d) | % decisions where MCTS outperforms | >55% | Promote to `enabled_low` |
+| MCTS worse (30d) | % decisions where heuristic outperforms | >55% | Keep disabled |
+| No clear winner | Outcomes similar | 45-55% | Continue shadow for another 30d |
+
+**"Better" Definition**:
+MCTS decision is "better" if:
+
+1. **Memory grounded more often**: Entity/edge used in >10 P04 queries within 7 days
+2. **Fewer user corrections**: Lower rate of USER_REJECTS_DECISION signals
+3. **Higher satisfaction**: Downstream K1 responses rated higher by user
+4. **Fewer false positives**: Lower rate of entity splits/unmerges
+
+**Outcome Tracking**:
+
+```python
+class ShadowOutcomeTracker:
+    def record_decision(self, decision_id: str, heuristic_choice: str, mcts_choice: str, context: dict):
+        """
+        Record shadow mode decision for later outcome evaluation.
+
+        Args:
+            decision_id: Unique ID for this decision
+            heuristic_choice: What heuristic chose (e.g., 'merge_entity_123_456')
+            mcts_choice: What MCTS chose
+            context: Decision context (entity_type, confidence, etc.)
+        """
+        insert_into_st_mcts_shadow_log({
+            'decision_id': decision_id,
+            'decision_type': context['decision_type'],
+            'heuristic_choice': heuristic_choice,
+            'mcts_choice': mcts_choice,
+            'choices_differ': heuristic_choice != mcts_choice,
+            'context_json': context,
+            'applied_choice': heuristic_choice,  # Always apply heuristic in shadow
+            'outcome_heuristic': None,  # Filled later
+            'outcome_mcts': None,  # Counterfactual (estimated)
+            'created_at': now_ms(),
+        })
+
+    def evaluate_outcome(self, decision_id: str, outcome_signals: list[dict]):
+        """
+        Evaluate outcome after 7 days.
+
+        Args:
+            decision_id: Decision to evaluate
+            outcome_signals: Feedback signals (grounding, corrections, satisfaction)
+        """
+        log_entry = get_from_st_mcts_shadow_log(decision_id)
+
+        # Score heuristic outcome (actually applied)
+        heuristic_score = compute_outcome_score(outcome_signals)
+
+        # Estimate MCTS outcome (counterfactual)
+        # If MCTS chose differently, estimate what would have happened
+        if log_entry['choices_differ']:
+            mcts_score = estimate_counterfactual_outcome(
+                log_entry['mcts_choice'],
+                log_entry['context_json'],
+                outcome_signals
+            )
+        else:
+            mcts_score = heuristic_score  # Same choice → same outcome
+
+        update_st_mcts_shadow_log(decision_id, {
+            'outcome_heuristic': heuristic_score,
+            'outcome_mcts': mcts_score,
+            'mcts_better': mcts_score > heuristic_score + 0.10,  # 0.10 significance
+            'evaluated_at': now_ms(),
+        })
+
+    def compute_outcome_score(self, signals: list[dict]) -> float:
+        """
+        Aggregate outcome signals into single score (0-1).
+
+        Signals:
+        - MEMORY_GROUNDED: +0.3 per occurrence (max 1.0)
+        - USER_REJECTS_DECISION: -0.5
+        - USER_CONFIRMS_DECISION: +0.4
+        - HIGH_SATISFACTION: +0.3
+        - ENTITY_SPLIT: -0.6 (merge was wrong)
+        - ENTITY_MERGE: +0.5 (split was wrong, should have merged)
+
+        Returns:
+            Score in [0, 1] where higher = better outcome
+        """
+        score = 0.5  # Neutral baseline
+
+        for signal in signals:
+            if signal['type'] == 'MEMORY_GROUNDED':
+                score += 0.3
+            elif signal['type'] == 'USER_REJECTS_DECISION':
+                score -= 0.5
+            elif signal['type'] == 'USER_CONFIRMS_DECISION':
+                score += 0.4
+            elif signal['type'] == 'HIGH_SATISFACTION':
+                score += 0.3
+            elif signal['type'] == 'ENTITY_SPLIT':  # User undid our merge
+                score -= 0.6
+            elif signal['type'] == 'ENTITY_MERGE':  # User merged what we kept separate
+                score += 0.5
+
+        return max(0.0, min(1.0, score))  # Clamp to [0, 1]
+```
+
+**Enabling Decision**:
+After 30 days of shadow mode:
+
+1. Compute metrics from `st_mcts_shadow_log`
+2. If **agreement >95%**: MCTS matches heuristic → keep disabled (not worth compute)
+3. If **MCTS better >55%**: MCTS outperforms → promote to `enabled_low` (10 rollouts)
+4. If **heuristic better >55%**: Heuristic wins → keep disabled permanently
+5. If **no clear winner (45-55%)**: Continue shadow for another 30 days
+
+**Schema**:
+
+```sql
+CREATE TABLE IF NOT EXISTS st_mcts_shadow_log (
+    decision_id UUID PRIMARY KEY,
+    decision_type TEXT NOT NULL,  -- merge, causal, cluster, etc.
+    heuristic_choice TEXT NOT NULL,  -- What heuristic chose
+    mcts_choice TEXT NOT NULL,  -- What MCTS chose
+    choices_differ BOOLEAN NOT NULL,  -- True if MCTS != heuristic
+    context_json JSONB,  -- Decision context
+    applied_choice TEXT NOT NULL,  -- Always heuristic in shadow mode
+    outcome_heuristic REAL,  -- Score 0-1 (filled after 7 days)
+    outcome_mcts REAL,  -- Counterfactual estimate
+    mcts_better BOOLEAN,  -- True if MCTS outcome > heuristic
+    evaluated_at BIGINT,  -- When outcome was scored
+    created_at BIGINT NOT NULL,
+
+    -- Indexes for analysis
+    INDEX idx_shadow_log_type (decision_type),
+    INDEX idx_shadow_log_created (created_at),
+    INDEX idx_shadow_log_differ (choices_differ),
+    INDEX idx_shadow_log_evaluated (evaluated_at)
+);
+```
+
+**Analysis Query**:
+
+```sql
+-- Compute shadow mode metrics for last 30 days
+WITH recent_decisions AS (
+    SELECT *
+    FROM st_mcts_shadow_log
+    WHERE created_at >= extract(epoch from now() - interval '30 days') * 1000
+      AND evaluated_at IS NOT NULL  -- Only include evaluated decisions
+)
+SELECT
+    decision_type,
+    COUNT(*) as total_decisions,
+
+    -- Agreement rate
+    SUM(CASE WHEN NOT choices_differ THEN 1 ELSE 0 END)::REAL / COUNT(*) as agreement_rate,
+
+    -- MCTS better rate (when they differ)
+    SUM(CASE WHEN choices_differ AND mcts_better THEN 1 ELSE 0 END)::REAL /
+        NULLIF(SUM(CASE WHEN choices_differ THEN 1 ELSE 0 END), 0) as mcts_better_rate,
+
+    -- Average outcome difference
+    AVG(outcome_mcts - outcome_heuristic) as avg_outcome_diff,
+
+    -- Recommendation
+    CASE
+        WHEN SUM(CASE WHEN NOT choices_differ THEN 1 ELSE 0 END)::REAL / COUNT(*) > 0.95
+            THEN 'KEEP_DISABLED (high agreement)'
+        WHEN SUM(CASE WHEN choices_differ AND mcts_better THEN 1 ELSE 0 END)::REAL /
+             NULLIF(SUM(CASE WHEN choices_differ THEN 1 ELSE 0 END), 0) > 0.55
+            THEN 'ENABLE (MCTS better)'
+        WHEN SUM(CASE WHEN choices_differ AND NOT mcts_better THEN 1 ELSE 0 END)::REAL /
+             NULLIF(SUM(CASE WHEN choices_differ THEN 1 ELSE 0 END), 0) > 0.55
+            THEN 'KEEP_DISABLED (heuristic better)'
+        ELSE 'CONTINUE_SHADOW (no clear winner)'
+    END as recommendation
+FROM recent_decisions
+GROUP BY decision_type;
+```
+
+**Metrics**:
+
+- `p03_mcts_shadow_decisions` (counter: total shadow decisions logged)
+- `p03_mcts_shadow_agreement_rate` (gauge: % agreement with heuristic)
+- `p03_mcts_vs_heuristic_diff` (histogram: outcome score differences)
+- `p03_mcts_better_rate` (gauge: % MCTS better when differs)
+
+**Configuration**:
+
+```python
+P03_SHADOW_EVALUATION_WINDOW_DAYS = 30  # Evaluation period
+P03_SHADOW_OUTCOME_DELAY_DAYS = 7  # Wait 7 days before scoring outcome
+P03_SHADOW_AGREEMENT_THRESHOLD = 0.95  # 95% agreement → not useful
+P03_SHADOW_BETTER_THRESHOLD = 0.55  # 55% better → enable
+P03_SHADOW_OUTCOME_SIGNIFICANCE = 0.10  # Score must differ by 0.10 to count as "better"
+```
+
+**Rationale**: Shadow mode validates MCTS benefit with real data before committing compute. If MCTS matches heuristics >95%, it's solving the same problem in a more expensive way (not useful). If MCTS outperforms >55% when they differ, the exploration/forward simulation is finding better solutions (enable). Counterfactual outcome estimation lets us evaluate "what if MCTS chose differently" without actually applying risky decisions.
+
+---
+
+#### 4.6.6 Motor Rehearsal Analog (TDL-HCO)
 
 - Procedural memory optimization
 - Habit pattern reinforcement
 - Skill generalization
 
-#### 4.6.6 R5 Complexity Assessment
+#### 4.6.7 R5 Complexity Assessment
 
 > **Implementation Status**: R5 is optional and skipped when backlog > 500 events or time constraints apply.
 
@@ -2461,6 +7773,391 @@ class QuestionTiming:
         conv_text = ' '.join(m.text for m in conversation.recent_messages)
         return any(kw.lower() in conv_text.lower() for kw in gap_keywords)
 ```
+
+### 5.7 P03 Feedback Handler Implementation
+
+P03 subscribes to the P21 Feedback Pipeline to consume feedback signals and route them to appropriate learning modules.
+
+#### 5.7.1 Handler Architecture
+
+The P03FeedbackHandler acts as the central routing hub for all feedback signals targeting P03's learning systems.
+
+**Handler Structure**:
+
+```python
+# k0/pipelines/p03_consolidation/feedback_handler.py
+
+from k0.bus import BusMessage, PipelineContext
+from k0.feedback.schemas import FeedbackEnvelope
+from k0.feedback.schemas.p03_consolidation import P03FeedbackPayload
+from k0.pipelines.p03.learning import (
+    ImportanceLearner,
+    DecayLearner,
+    SimilarityLearner,
+    HebbianLearner,
+    RegretLearner,
+)
+from k0.obs import AuditLogger
+
+class P03FeedbackHandler:
+    """
+    Consumes feedback for P03 (Consolidation/Salience).
+    Subscribed topics: feedback.signal.p03
+
+    Routes signals to appropriate learning modules based on feedback_type.
+    """
+
+    topics = ["feedback.signal.p03"]
+
+    def __init__(self, db_pool, metrics_registry):
+        self.db_pool = db_pool
+        self.metrics = metrics_registry
+
+        # Initialize learning modules
+        self.importance_learner = ImportanceLearner(db_pool)
+        self.decay_learner = DecayLearner(db_pool)
+        self.similarity_learner = SimilarityLearner(db_pool)
+        self.hebbian_learner = HebbianLearner(db_pool)
+        self.regret_learner = RegretLearner(db_pool)
+        self.audit_logger = AuditLogger(db_pool)
+
+    async def handle(self, msg: BusMessage, ctx: PipelineContext) -> None:
+        """
+        Process incoming feedback signal.
+
+        Flow:
+        1. Deserialize FeedbackEnvelope
+        2. Validate P03FeedbackPayload
+        3. Route to appropriate learner
+        4. Mark as consumed
+        """
+        try:
+            # Deserialize envelope (already validated by P21)
+            envelope = FeedbackEnvelope.model_validate(msg.payload)
+            payload = P03FeedbackPayload.model_validate(envelope.payload)
+
+            # Increment received counter
+            self.metrics.p03_feedback_messages_received.labels(
+                signal_type=payload.feedback_type
+            ).inc()
+
+            # Route based on feedback type
+            match payload.feedback_type:
+                case "SALIENCE_ADJUSTMENT":
+                    await self._route_to_importance_learner(payload, ctx)
+                case "DECAY_REVERSAL":
+                    await self._route_to_decay_learner(payload, ctx)
+                case "CLUSTER_CORRECTION":
+                    await self._route_to_similarity_learner(payload, ctx)
+                case "REINFORCEMENT_OUTCOME":
+                    await self._route_to_hebbian_learner(payload, ctx)
+                case "NOVELTY_SIGNAL":
+                    await self._log_memory_gap(payload, ctx)
+                case "REGRET_SIGNAL":
+                    await self._route_to_regret_learner(payload, ctx)
+                case _:
+                    # Unknown signal type
+                    await self._mark_consumed(
+                        envelope.envelope_id,
+                        ctx,
+                        status="SKIPPED",
+                        reason=f"Unknown feedback_type: {payload.feedback_type}"
+                    )
+                    return
+
+            # Mark successfully consumed
+            await self._mark_consumed(envelope.envelope_id, ctx, status="PROCESSED")
+
+        except Exception as e:
+            # Mark as failed for retry
+            await self._mark_consumed(
+                envelope.envelope_id,
+                ctx,
+                status="FAILED",
+                reason=str(e)
+            )
+            raise
+
+    async def _route_to_importance_learner(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route SALIENCE_ADJUSTMENT to importance learning (M2)."""
+        await self.importance_learner.adjust_salience(
+            entity_id=payload.entity_id,
+            salience_delta=payload.salience_delta,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _route_to_decay_learner(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route DECAY_REVERSAL to decay learning (M3)."""
+        await self.decay_learner.adjust_lambda(
+            entity_id=payload.entity_id,
+            lambda_delta=payload.decay_lambda_delta,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _route_to_similarity_learner(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route CLUSTER_CORRECTION to similarity learning (M4)."""
+        await self.similarity_learner.adjust_clustering(
+            cluster_id=payload.cluster_id,
+            wal_positions=payload.wal_positions,
+            user_confirmed=payload.user_confirmed,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _route_to_hebbian_learner(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route REINFORCEMENT_OUTCOME to Hebbian learning (M4)."""
+        await self.hebbian_learner.update_outcome(
+            entity_id=payload.entity_id,
+            was_retrieved=payload.was_retrieved,
+            was_helpful=payload.was_helpful,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _log_memory_gap(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route NOVELTY_SIGNAL to audit logging (M1)."""
+        await self.audit_logger.log_memory_gap(
+            retrieval_query=payload.retrieval_query,
+            session_context=payload.session_context,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _route_to_regret_learner(
+        self,
+        payload: P03FeedbackPayload,
+        ctx: PipelineContext
+    ) -> None:
+        """Route REGRET_SIGNAL to regret learning (M6)."""
+        await self.regret_learner.process_regret(
+            entity_id=payload.entity_id,
+            lambda_delta=payload.decay_lambda_delta,
+            confidence=payload.confidence,
+            space_id=ctx.space_id,
+        )
+
+    async def _mark_consumed(
+        self,
+        envelope_id: str,
+        ctx: PipelineContext,
+        status: str = "PROCESSED",
+        reason: str | None = None,
+    ) -> None:
+        """
+        Mark feedback signal as consumed in st_feedback_signals.
+
+        Args:
+            envelope_id: UUID of the feedback envelope
+            ctx: Pipeline context
+            status: PROCESSED | SKIPPED | FAILED
+            reason: Optional reason for SKIPPED or FAILED
+        """
+        async with self.db_pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE st_feedback_signals
+                SET
+                    consumed_at = $1,
+                    consumed_by = 'P03',
+                    consumption_status = $2,
+                    consumption_reason = $3
+                WHERE envelope_id = $4
+            """,
+                int(time.time() * 1000),
+                status,
+                reason,
+                envelope_id
+            )
+
+        # Update metrics
+        self.metrics.p03_feedback_consumption_status.labels(
+            status=status
+        ).inc()
+```
+
+**Signal Routing Table**:
+
+| feedback_type | Routes To | Learner Module |
+|---------------|-----------|----------------|
+| SALIENCE_ADJUSTMENT | ImportanceLearner | M2 (Importance learning) |
+| DECAY_REVERSAL | DecayLearner | M3 (Decay learning) |
+| CLUSTER_CORRECTION | SimilarityLearner | M4 (Similarity learning) |
+| REINFORCEMENT_OUTCOME | HebbianLearner | M4 (Hebbian learning) |
+| NOVELTY_SIGNAL | AuditLogger | M1 (Audit trail) |
+| REGRET_SIGNAL | RegretLearner | M6 (Regret tracking) |
+
+**Error Handling**: On error, log and mark as FAILED. P21 will retry up to 3 times before moving to dead-letter queue.
+
+**Rationale**: Central handler provides single point of control for feedback routing, enabling consistent error handling and metrics collection.
+
+#### 5.7.2 Bus Subscription Registration
+
+P03 must actively subscribe to the `feedback.signal.p03` topic during pipeline initialization.
+
+**Topic Subscription**:
+
+| Topic | Handler | Priority |
+|-------|---------|----------|
+| `feedback.signal.p03` | P03FeedbackHandler | NORMAL |
+
+**Subscription Registration**:
+
+```python
+# k0/pipelines/p03_consolidation/__init__.py
+
+from k0.bus import EventBus, Priority
+from k0.pipelines.p03_consolidation.feedback_handler import P03FeedbackHandler
+
+def register_handlers(bus: EventBus, db_pool, metrics_registry) -> None:
+    """
+    Register P03 pipeline handlers with the event bus.
+
+    Called during pipeline initialization.
+    """
+    # Register feedback handler
+    feedback_handler = P03FeedbackHandler(db_pool, metrics_registry)
+
+    bus.subscribe(
+        topic="feedback.signal.p03",
+        handler=feedback_handler,
+        priority=Priority.NORMAL,
+    )
+
+    # Emit subscription confirmation metric
+    metrics_registry.p03_feedback_subscribed.set(1)
+
+    logger.info("P03FeedbackHandler subscribed to feedback.signal.p03")
+```
+
+**Startup Order**:
+
+1. P21 FeedbackSubsystem starts and creates `feedback.signal.p03` topic
+2. P03 pipeline initializes
+3. P03 calls `register_handlers()` to subscribe
+4. Subscription confirmed via `p03_feedback_subscribed` metric
+5. P03 begins receiving feedback messages
+
+**Health Check**: P03 reports unhealthy if subscription fails or if `p03_feedback_subscribed` metric is 0.
+
+**Metrics**:
+
+- `p03_feedback_subscribed` (gauge): 0=not subscribed, 1=subscribed
+- `p03_feedback_messages_received` (counter): Total messages received by signal_type
+- `p03_feedback_consumption_status` (counter): Consumption outcomes by status
+
+**Rationale**: P03 must actively subscribe to receive P21-dispatched signals. Startup order ensures topic exists before subscription.
+
+#### 5.7.3 Feedback Consumption Tracking
+
+P03 marks feedback signals as consumed in the shared `st_feedback_signals` table to prevent reprocessing and enable debugging.
+
+**Consumption Fields** (in P21's st_feedback_signals):
+
+| Column | Type | Set By | Purpose |
+|--------|------|--------|---------|
+| consumed_at | BIGINT | P03FeedbackHandler | Timestamp of consumption |
+| consumed_by | TEXT | P03FeedbackHandler | Pipeline identifier ("P03") |
+| consumption_status | TEXT | P03FeedbackHandler | PROCESSED, SKIPPED, FAILED |
+| consumption_reason | TEXT | P03FeedbackHandler | Optional reason for SKIPPED/FAILED |
+
+**Consumption Statuses**:
+
+| Status | Meaning | Retry? | Example |
+|--------|---------|--------|---------|
+| PROCESSED | Successfully applied to learning | No | Signal routed to ImportanceLearner and weights updated |
+| SKIPPED | Filtered (low confidence, duplicate, unknown type) | No | Confidence < 0.3, or duplicate envelope_id |
+| FAILED | Error during processing | Yes (3x) | Database connection error, validation failure |
+
+**Mark Consumed Code**:
+
+```python
+async def _mark_consumed(
+    self,
+    envelope_id: str,
+    ctx: PipelineContext,
+    status: str = "PROCESSED",
+    reason: str | None = None,
+) -> None:
+    """
+    Mark feedback signal as consumed in st_feedback_signals.
+
+    This prevents reprocessing and enables debugging/audit trail.
+    """
+    async with self.db_pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE st_feedback_signals
+            SET
+                consumed_at = $1,
+                consumed_by = 'P03',
+                consumption_status = $2,
+                consumption_reason = $3
+            WHERE envelope_id = $4
+        """,
+            int(time.time() * 1000),
+            status,
+            reason,
+            envelope_id
+        )
+
+    # Update consumption metrics
+    self.metrics.p03_feedback_consumption_status.labels(
+        status=status
+    ).inc()
+```
+
+**Audit Trail**: Link consumed feedback to st_consolidation_audit entries for full traceability.
+
+```python
+# When applying learning update, reference original feedback
+await ctx.execute("""
+    INSERT INTO st_consolidation_audit (
+        audit_id,
+        space_id,
+        action_type,
+        decision_id,
+        formula_version,
+        feedback_envelope_id,
+        ...
+    ) VALUES ($1, $2, $3, $4, $5, $6, ...)
+""",
+    audit_id,
+    space_id,
+    "LEARNING_UPDATE",
+    decision_id,
+    formula_version,
+    envelope_id,  # Link back to feedback signal
+    ...
+)
+```
+
+**Consumption Monitoring**:
+
+- Alert if `consumption_status=FAILED` rate > 5% for 15 minutes
+- Alert if `consumed_by IS NULL` count grows > 100 signals (processing backlog)
+- Dashboard showing consumption rate by status and signal_type
+
+**Rationale**: Tracking which signals were consumed prevents reprocessing, enables debugging, and provides audit trail linking feedback → learning updates → consolidation decisions.
 
 ---
 
@@ -3782,6 +9479,1518 @@ CREATE TABLE st_retention_policy (
 
 ---
 
+### 6.17 st_learned_weights (Adaptive Parameters)
+
+> **Role**: Central storage for all learned hyperparameters across P03 formulas
+> **Purpose**: Single source of truth for adaptive parameters that learn from feedback
+> **Scope**: Per-space isolation with hierarchical fallbacks (space → entity_type → global)
+
+```sql
+CREATE TABLE st_learned_weights (
+  param_id TEXT PRIMARY KEY,                    -- UUID primary key
+  param_key TEXT NOT NULL,                      -- e.g., "importance_emotional", "decay_lambda_PERSON"
+  param_scope TEXT NOT NULL,                    -- 'global', 'space', 'entity_type', 'entity'
+  scope_id TEXT,                                -- space_id, entity_type, or entity_id (NULL for global)
+  space_id TEXT NOT NULL,                       -- Isolation (always set)
+  current_value REAL NOT NULL,                  -- Current learned value
+  prior_value REAL NOT NULL,                    -- Initial/default value
+  confidence REAL NOT NULL DEFAULT 0.0,         -- Learning confidence (0-1)
+  sample_count INTEGER NOT NULL DEFAULT 0,      -- Number of feedback samples
+  last_updated_at BIGINT NOT NULL,              -- Timestamp (ms since epoch)
+  version INTEGER NOT NULL DEFAULT 1,           -- For parameter history/rollback
+  previous_value REAL,                          -- Value before last update (for rollback)
+  quality_at_update REAL,                       -- Quality metric when last updated
+  rollback_eligible BOOLEAN NOT NULL DEFAULT TRUE, -- Can be rolled back?
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  CHECK(param_scope IN ('global', 'space', 'entity_type', 'entity')),
+  CHECK(confidence >= 0.0 AND confidence <= 1.0),
+  CHECK(sample_count >= 0),
+  UNIQUE(space_id, param_key, param_scope, scope_id)
+);
+```
+
+**Row-Level Security**:
+
+```sql
+-- Enable RLS for multi-tenant isolation
+ALTER TABLE st_learned_weights ENABLE ROW LEVEL SECURITY;
+
+-- Isolation policy: users can only access their space's data
+CREATE POLICY learned_weights_isolation ON st_learned_weights
+    FOR ALL
+    USING (space_id = current_setting('app.current_space_id', true));
+
+-- Superuser bypass for migrations and ops tooling
+CREATE POLICY learned_weights_superuser ON st_learned_weights
+    TO superuser
+    USING (true);
+```
+
+**Application Context Setup**:
+
+```python
+# Set space context at connection start
+async def set_space_context(conn: Connection, space_id: str):
+    """Set space_id in session for RLS enforcement."""
+    await conn.execute(
+        "SET LOCAL app.current_space_id = $1",
+        space_id
+    )
+
+# Example usage
+async with db.acquire() as conn:
+    await set_space_context(conn, user.space_id)
+
+    # All queries automatically filtered by RLS
+    params = await conn.fetch(
+        "SELECT * FROM st_learned_weights WHERE param_key = $1",
+        "importance_weight"
+    )  # RLS ensures only current space's data returned
+```
+
+**RLS Enforcement**: Database-level security prevents cross-space access even if application code has bugs.
+
+**Parameter Key Patterns**:
+
+| Formula | Parameter Pattern | Example | Scope |
+|---------|-------------------|---------|-------|
+| Importance | `importance_{component}` | `importance_emotional` | space |
+| Decay | `decay_lambda_{entity_type}` | `decay_lambda_PERSON` | space |
+| Hebbian | `hebbian_{param}` | `hebbian_lr_new` | space |
+| DBSCAN | `dbscan_{param}` | `dbscan_eps` | space |
+| Similarity | `similarity_{threshold}` | `similarity_merge_threshold` | space |
+
+**Indexes**:
+
+```sql
+-- Fast lookup by space and parameter key
+CREATE INDEX idx_learned_weights_space_key ON st_learned_weights(space_id, param_key);
+
+-- Scope-based queries
+CREATE INDEX idx_learned_weights_scope ON st_learned_weights(space_id, param_scope, scope_id);
+
+-- Confidence-based filtering
+CREATE INDEX idx_learned_weights_confidence ON st_learned_weights(space_id, confidence DESC);
+```
+
+**RLS Policy**:
+
+```sql
+-- Row-level security by space_id
+CREATE POLICY learned_weights_isolation ON st_learned_weights
+  USING (space_id = current_setting('app.current_space_id'));
+```
+
+**Usage Pattern**:
+
+```python
+# Get learned importance weights for a space
+weights = await db.fetch_all("""
+    SELECT param_key, current_value, confidence
+    FROM st_learned_weights
+    WHERE space_id = $1
+      AND param_key LIKE 'importance_%'
+      AND confidence > 0.5
+""", space_id)
+
+# Hierarchical fallback: space → global
+weight = await get_parameter_with_fallback(
+    db, space_id, 'importance_emotional',
+    fallback_scope='global', fallback_id=None
+)
+```
+
+### 6.19 st_pruned_entities (Regret Tracking)
+
+**Purpose**: Track entities that were pruned but later queried, enabling regret-based learning to adjust decay rates.
+
+**Retention**: 14 days (matches regret tracking window from Epic 6.2, whiteboard Section 6.14.1).
+
+**Why Track Pruned Entities?**
+
+R3 decay may prune entities too aggressively. If user later queries a pruned entity ("regret"), we need to:
+
+1. Detect the regret (query matched pruned entity)
+2. Emit feedback signal (confidence 0.90)
+3. Adjust decay λ for that entity-type (lower by 5-15%)
+4. Prevent similar regrets in future
+
+**14-Day Window Rationale**:
+
+- **Weekly patterns**: "doctor appointment" every Monday (7-day cycle)
+- **Biweekly patterns**: Payday reminders (14-day cycle)
+- **Storage manageable**: Typical space prunes ~100 entities/day × 14 days = 1400 entities (~6 MB)
+- **Regret decay**: 90% of regrets occur within 14 days
+
+#### 6.19.1 Schema Definition
+
+```sql
+CREATE TABLE st_pruned_entities (
+  -- Identity
+  prune_id TEXT PRIMARY KEY,              -- Unique prune event ID
+  entity_id TEXT NOT NULL,                -- Original entity ID (before pruning)
+  entity_type TEXT NOT NULL,              -- PERSON, PLACE, THING, etc.
+
+  -- Matching data (for regret detection)
+  canonical_name TEXT NOT NULL,           -- Normalized name for fuzzy matching
+  embedding VECTOR(1024) NOT NULL,        -- Embedding for semantic matching
+
+  -- Context
+  space_id TEXT NOT NULL,                 -- Isolation by space
+  layer_table TEXT NOT NULL,              -- Source table (st_epi_entities, st_sem_entities, etc.)
+  decay_factor_at_prune REAL NOT NULL,    -- What decay_factor was when pruned
+  lambda_at_prune REAL NOT NULL,          -- What λ was used
+
+  -- Timestamps
+  pruned_at BIGINT NOT NULL,              -- When pruned (epoch ms)
+  matched_query_id TEXT,                  -- If regret detected, which query matched
+  matched_at BIGINT,                      -- When regret detected
+  match_type TEXT,                        -- STRONG_MATCH, LIKELY_MATCH, SEMANTIC_MATCH
+  match_confidence REAL,                  -- Match confidence [0, 1]
+
+  -- Indexes
+  FOREIGN KEY (space_id) REFERENCES st_spaces(space_id)
+);
+
+-- Core indexes for matching
+CREATE INDEX idx_pruned_entity_type ON st_pruned_entities(entity_type, space_id);
+CREATE INDEX idx_pruned_space_time ON st_pruned_entities(space_id, pruned_at DESC);
+
+-- Vector index for semantic matching (pgvector)
+-- Only index unmatched entities (matched_at IS NULL)
+CREATE INDEX idx_pruned_embedding ON st_pruned_entities
+USING ivfflat (embedding vector_cosine_ops)
+WHERE matched_at IS NULL;
+
+-- Cleanup index (for nightly deletion)
+CREATE INDEX idx_pruned_cleanup ON st_pruned_entities(pruned_at)
+WHERE matched_at IS NULL;  -- Matched entities kept longer for analysis
+```
+
+#### 6.19.2 Row-Level Security
+
+```sql
+-- Enable RLS
+ALTER TABLE st_pruned_entities ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Users can only see pruned entities from their spaces
+CREATE POLICY st_pruned_entities_isolation ON st_pruned_entities
+  FOR ALL
+  USING (
+    space_id IN (
+      SELECT space_id FROM st_space_memberships
+      WHERE user_id = current_setting('app.current_user_id')::TEXT
+    )
+  );
+```
+
+#### 6.19.3 Insertion on Pruning
+
+When R3 decay prunes an entity (decay_factor < 0.01 → TOMBSTONE):
+
+```python
+class PrunedEntityTracker:
+    """
+    Track pruned entities for regret detection.
+    """
+
+    async def track_pruned_entity(
+        self,
+        entity_id: str,
+        entity_type: str,
+        canonical_name: str,
+        embedding: np.ndarray,
+        space_id: str,
+        layer_table: str,
+        decay_factor: float,
+        lambda_value: float
+    ):
+        """
+        Insert pruned entity into st_pruned_entities.
+
+        Called from R3 when entity transitions to TOMBSTONE.
+        """
+        prune_id = generate_id()
+
+        await db.execute(
+            "INSERT INTO st_pruned_entities "
+            "(prune_id, entity_id, entity_type, canonical_name, embedding, "
+            " space_id, layer_table, decay_factor_at_prune, lambda_at_prune, pruned_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            prune_id,
+            entity_id,
+            entity_type,
+            canonical_name,
+            embedding.tolist(),
+            space_id,
+            layer_table,
+            decay_factor,
+            lambda_value,
+            now_ms()
+        )
+
+        logger.info(
+            f"Tracked pruned entity: {entity_id} ({entity_type}) from {layer_table}, "
+            f"decay={decay_factor:.3f}, λ={lambda_value:.6f}"
+        )
+```
+
+#### 6.19.4 Cleanup Job (Nightly)
+
+Delete entries older than 14 days:
+
+```python
+class PrunedEntitiesCleanup:
+    """
+    Clean up old pruned entities.
+    """
+
+    @scheduler.scheduled_job('cron', hour=2)  # 2am daily
+    async def cleanup_old_pruned_entities(self):
+        """
+        Delete pruned entities older than 14 days.
+
+        Exception: Keep matched entities (regrets) for 30 days for analysis.
+        """
+        # Delete unmatched entities > 14 days
+        cutoff_14d = now_ms() - (14 * 24 * 3600 * 1000)
+        result_unmatched = await db.execute(
+            "DELETE FROM st_pruned_entities "
+            "WHERE pruned_at < $1 AND matched_at IS NULL",
+            cutoff_14d
+        )
+
+        # Delete matched entities > 30 days (longer retention for analysis)
+        cutoff_30d = now_ms() - (30 * 24 * 3600 * 1000)
+        result_matched = await db.execute(
+            "DELETE FROM st_pruned_entities "
+            "WHERE pruned_at < $1 AND matched_at IS NOT NULL",
+            cutoff_30d
+        )
+
+        logger.info(
+            f"Pruned entities cleanup: deleted {result_unmatched.rowcount} unmatched (>14d), "
+            f"{result_matched.rowcount} matched (>30d)"
+        )
+
+        await emit_metric('p03_pruned_entities_cleaned', result_unmatched.rowcount + result_matched.rowcount)
+```
+
+#### 6.19.5 Integration with Query Matching (P04)
+
+When P04 query arrives, check for regrets:
+
+```python
+class QueryRegretChecker:
+    """
+    Check if P04 query matches pruned entities (regret detection).
+    """
+
+    async def check_query_for_regrets(
+        self,
+        query_text: str,
+        query_embedding: np.ndarray,
+        query_context: dict
+    ):
+        """
+        Check if query matches recently pruned entities.
+
+        Called from P04 retrieval pipeline.
+        """
+        space_id = query_context.get('space_id')
+
+        # Use QueryToPrunedMatcher (from Appendix C.4.3)
+        matcher = QueryToPrunedMatcher()
+        matches = await matcher.match_query_to_pruned(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            query_context=query_context
+        )
+
+        if matches:
+            # Regret detected!
+            logger.warning(
+                f"REGRET DETECTED: Query '{query_text}' matched {len(matches)} pruned entities"
+            )
+
+            # Process each regret
+            processor = RegretSignalProcessor()
+            for match in matches:
+                await processor.process_regret_signal(
+                    match=match,
+                    query_id=query_context.get('query_id'),
+                    query_context=query_context
+                )
+```
+
+#### 6.19.6 Metrics
+
+```python
+# Add to Section 8.2 (Metrics)
+p03_pruned_entities_tracked = Gauge(
+    'p03_pruned_entities_tracked',
+    'Current count of tracked pruned entities'
+)
+
+p03_pruned_entities_added = Counter(
+    'p03_pruned_entities_added',
+    'Entities added to pruned tracking table',
+    ['entity_type', 'space_id']
+)
+
+p03_pruned_entities_cleaned = Counter(
+    'p03_pruned_entities_cleaned',
+    'Entities removed by cleanup job',
+    ['reason']  # '14_day_expiry' or '30_day_expiry'
+)
+
+p03_prune_regrets = Counter(
+    'p03_prune_regrets',
+    'Regret signals emitted (query matched pruned)',
+    ['match_type', 'entity_type']
+)
+
+p03_regret_rate = Gauge(
+    'p03_regret_rate',
+    'Ratio of regrets to total prunes',
+    ['entity_type', 'space_id']
+)
+```
+
+#### 6.19.7 Configuration
+
+```python
+# Retention
+P03_PRUNED_ENTITIES_RETENTION_UNMATCHED_DAYS = 14  # Unmatched pruned entities
+P03_PRUNED_ENTITIES_RETENTION_MATCHED_DAYS = 30    # Matched (regrets) kept longer
+
+# Cleanup
+P03_PRUNED_ENTITIES_CLEANUP_HOUR = 2  # 2am daily
+
+# Storage limits
+P03_PRUNED_ENTITIES_MAX_STORAGE_MB = 50  # Alert if exceeded
+
+# pgvector index
+P03_PRUNED_ENTITIES_IVFFLAT_LISTS = 100  # For pgvector ivfflat index
+```
+
+**Rationale**: st_pruned_entities enables closed-loop learning from regrets. 14-day retention balances coverage (weekly/biweekly patterns) with storage. pgvector index enables fast semantic matching (O(log n) vs O(n)). RLS ensures space isolation. Nightly cleanup prevents unbounded growth. Integration with P04 makes regret detection automatic.
+
+---
+WHERE matched_at IS NULL;
+
+```
+
+#### 6.19.2 Row Level Security
+
+```sql
+-- RLS policy for multi-tenant isolation
+CREATE POLICY pruned_entities_isolation ON st_pruned_entities
+FOR ALL USING (space_id = current_space_id());
+
+-- Grant access to P03 modules
+GRANT SELECT, INSERT, UPDATE ON st_pruned_entities TO p03_role;
+```
+
+#### 6.19.3 Usage Patterns
+
+**Store on Prune**:
+
+```python
+# k0/pipelines/p03/consolidation/pruner.py
+
+async def store_pruned_entity(
+    db: Database,
+    entity_id: str,
+    entity_type: str,
+    canonical_name: str,
+    embedding: np.ndarray,
+    space_id: str,
+    current_decay: float
+) -> None:
+    """Store entity before pruning for potential regret tracking."""
+    prune_id = f"prune_{entity_id}_{int(time.time())}"
+
+    await db.execute("""
+        INSERT INTO st_pruned_entities (
+            prune_id, entity_id, entity_type, canonical_name,
+            embedding, space_id, decay_factor_at_prune, pruned_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        prune_id, entity_id, entity_type, canonical_name,
+        embedding.tolist(), space_id, current_decay, unixepoch()
+    ))
+
+**Query-Time Matching**:
+```python
+# k0/pipelines/p03/consolidation/regret_detector.py
+
+async def find_regret_matches(
+    db: Database,
+    query_text: str,
+    query_embedding: np.ndarray,
+    space_id: str
+) -> List[Dict]:
+    """
+    Match query against recently pruned entities.
+    Two-stage matching: name similarity + semantic similarity.
+    """
+    # Stage 1: Name matching candidates
+    name_candidates = await db.fetch("""
+        SELECT prune_id, canonical_name, embedding
+        FROM st_pruned_entities
+        WHERE space_id = ?
+          AND matched_at IS NULL
+          AND pruned_at > unixepoch() - (14 * 24 * 60 * 60)  -- 14 days
+    """, space_id)
+
+    matches = []
+    for candidate in name_candidates:
+        # Fuzzy name match
+        name_score = fuzz.ratio(query_text.lower(), candidate['canonical_name'].lower()) / 100.0
+
+        if name_score < 0.7:
+            continue
+
+        # Semantic similarity
+        stored_embedding = np.array(candidate['embedding'])
+        semantic_score = cosine_similarity(query_embedding, stored_embedding)
+
+        # Decision logic (from whiteboard 6.14.2)
+        if (name_score >= 0.7 and semantic_score >= 0.75) or \
+           (name_score < 0.7 and semantic_score >= 0.85):
+
+            confidence = 0.9 if name_score >= 0.7 and semantic_score >= 0.75 else 0.7
+            matches.append({
+                'prune_id': candidate['prune_id'],
+                'confidence': confidence,
+                'name_score': name_score,
+                'semantic_score': semantic_score
+            })
+
+    return matches
+
+**Regret Processing**:
+
+```python
+async def process_regret_signal(
+    db: Database,
+    prune_id: str,
+    query_id: str,
+    confidence: float
+) -> None:
+    """Process detected regret: update table and emit learning signal."""
+
+    # Mark as matched
+    await db.execute("""
+        UPDATE st_pruned_entities
+        SET matched_query_id = ?, matched_at = unixepoch()
+        WHERE prune_id = ?
+    """, query_id, prune_id)
+
+    # Get pruning context for learning
+    context = await db.fetch_one("""
+        SELECT entity_type, decay_factor_at_prune
+        FROM st_pruned_entities
+        WHERE prune_id = ?
+    """, prune_id)
+
+    # Emit REGRET signal to learning system
+    await emit_learning_signal({
+        'signal_type': 'REGRET',
+        'entity_type': context['entity_type'],
+        'old_decay_factor': context['decay_factor_at_prune'],
+        'confidence': confidence,
+        'query_id': query_id
+    })
+```
+
+#### 6.19.4 Cleanup Job
+
+```python
+# k0/pipelines/p03/maintenance/cleanup.py
+
+async def cleanup_pruned_entities(db: Database) -> int:
+    """
+    Remove pruned entities older than 14 days that weren't matched.
+    Returns number of records deleted.
+    """
+    cutoff = int(time.time()) - (14 * 24 * 60 * 60)  # 14 days ago
+
+    result = await db.execute("""
+        DELETE FROM st_pruned_entities
+        WHERE pruned_at < ?
+          AND matched_at IS NULL
+    """, cutoff)
+
+    return result.rowcount
+```
+
+#### 6.19.5 Metrics & Monitoring
+
+```python
+# k0/pipelines/p03/obs/metrics.py
+
+# Regret tracking metrics
+p03_prune_regret_rate = Gauge(
+    'p03_prune_regret_rate',
+    'Rate of pruning regrets (regrets per 1000 prunes)',
+    ['space_id']
+)
+
+p03_prune_regret_confidence = Histogram(
+    'p03_prune_regret_confidence',
+    'Confidence distribution of regret signals',
+    buckets=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
+
+# Cleanup metrics
+p03_pruned_entities_cleaned = Counter(
+    'p03_pruned_entities_cleaned',
+    'Number of pruned entities cleaned up'
+)
+```
+
+### 6.20 st_consolidation_audit (Decision Audit)
+
+**Purpose**: Complete audit trail for consolidation decisions, enabling explainability and debugging of learning algorithms.
+
+**Retention**: 90 days detailed records, then aggregate to daily summaries. RLS enforced.
+
+#### 6.20.1 Extended Schema
+
+```sql
+-- Extended audit table for learning integration
+ALTER TABLE st_consolidation_audit ADD COLUMN formula_used TEXT;
+ALTER TABLE st_consolidation_audit ADD COLUMN formula_version TEXT;
+ALTER TABLE st_consolidation_audit ADD COLUMN inputs_json JSONB;
+ALTER TABLE st_consolidation_audit ADD COLUMN outputs_json JSONB;
+ALTER TABLE st_consolidation_audit ADD COLUMN explanation TEXT;
+ALTER TABLE st_consolidation_audit ADD COLUMN confidence REAL;
+
+-- Or create new learning-focused audit table
+CREATE TABLE st_consolidation_audit (
+  -- Identity
+  audit_id TEXT PRIMARY KEY,
+
+  -- What was affected
+  memory_id TEXT NOT NULL,
+  source_table TEXT NOT NULL,           -- st_epi, st_kg_dom, etc.
+
+  -- Decision details
+  action TEXT NOT NULL,                 -- REINFORCE, DECAY, ARCHIVE, MERGE, CREATE
+  formula_used TEXT,                    -- e.g., "hebbian_v2", "decay_unified"
+  formula_version TEXT,                 -- Version identifier for rollback
+  inputs_json JSONB,                    -- Input parameters to formula (detailed)
+  outputs_json JSONB,                   -- Output values from formula (detailed)
+  explanation TEXT,                     -- User-friendly explanation template
+  decision_id TEXT,                     -- Links to decision outcome tracking
+
+  -- Context
+  space_id TEXT NOT NULL,
+  cycle_id TEXT,                        -- Consolidation cycle ID
+  confidence REAL,                      -- Decision confidence (0-1)
+
+  -- Timestamps
+  created_at BIGINT NOT NULL
+);
+
+-- Indexes for learning analysis and explainability
+CREATE INDEX idx_audit_memory_time ON st_consolidation_audit(memory_id, created_at);
+CREATE INDEX idx_audit_action ON st_consolidation_audit(action, created_at);
+CREATE INDEX idx_audit_formula ON st_consolidation_audit(formula_used, created_at);
+CREATE INDEX idx_audit_decision ON st_consolidation_audit(decision_id);
+```
+
+**Retention Policy**:
+
+- **Raw records**: 90 days in st_consolidation_audit
+- **After 90 days**: Aggregate to daily summaries per space
+- **Daily summaries**: 2 years retention
+- **Aggregation includes**: Action counts, avg confidence, decision distribution
+
+**Rationale**: Extended schema enables full traceability for explainability and debugging; retention policy balances storage vs auditability.
+
+#### 6.20.2 Row Level Security
+
+```sql
+-- RLS policy for multi-tenant isolation
+CREATE POLICY audit_isolation ON st_consolidation_audit
+FOR ALL USING (space_id = current_space_id());
+
+-- Grant access to P03 modules and audit readers
+GRANT SELECT ON st_consolidation_audit TO p03_role, audit_role;
+GRANT INSERT ON st_consolidation_audit TO p03_role;
+```
+
+#### 6.20.3 Usage Patterns
+
+**Record Decision**:
+
+```python
+# k0/pipelines/p03/learning/decision_logger.py
+
+async def log_consolidation_decision(
+    db: Database,
+    memory_id: str,
+    source_table: str,
+    action: str,
+    formula_used: str,
+    inputs: dict,
+    outputs: dict,
+    explanation: str,
+    confidence: float,
+    space_id: str,
+    cycle_id: str = None
+) -> None:
+    """Log every consolidation decision for audit and explainability."""
+    audit_id = f"audit_{memory_id}_{int(time.time() * 1000000)}"
+
+    await db.execute("""
+        INSERT INTO st_consolidation_audit (
+            audit_id, memory_id, source_table, action, formula_used,
+            inputs_json, outputs_json, explanation, confidence,
+            space_id, cycle_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        audit_id, memory_id, source_table, action, formula_used,
+        json.dumps(inputs), json.dumps(outputs), explanation, confidence,
+        space_id, cycle_id, unixepoch()
+    ))
+
+**Generate Explanations**:
+
+```python
+# k0/pipelines/p03/api/explainability.py
+
+async def explain_memory_decision(
+    db: Database,
+    memory_id: str,
+    space_id: str
+) -> str:
+    """Generate user-friendly explanation for why memory was handled this way."""
+
+    # Get latest decision for this memory
+    decision = await db.fetch_one("""
+        SELECT action, explanation, confidence, created_at
+        FROM st_consolidation_audit
+        WHERE memory_id = ? AND space_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, memory_id, space_id)
+
+    if not decision:
+        return "This memory was processed using standard consolidation rules."
+
+    # Fill in explanation template
+    explanation = decision['explanation'].format(
+        confidence_percent=int(decision['confidence'] * 100),
+        action=decision['action'].lower(),
+        time_ago=format_time_ago(decision['created_at'])
+    )
+
+    return explanation
+```
+
+**Learning Analysis**:
+
+```python
+# k0/pipelines/p03/learning/analyzer.py
+
+async def analyze_formula_effectiveness(
+    db: Database,
+    formula_name: str,
+    space_id: str,
+    days: int = 30
+) -> dict:
+    """Analyze how well a formula performs over time."""
+
+    cutoff = int(time.time()) - (days * 24 * 60 * 60)
+
+    results = await db.fetch("""
+        SELECT
+            action,
+            AVG(confidence) as avg_confidence,
+            COUNT(*) as decision_count
+        FROM st_consolidation_audit
+        WHERE formula_used = ?
+          AND space_id = ?
+          AND created_at > ?
+        GROUP BY action
+    """, formula_name, space_id, cutoff)
+
+    return {
+        'formula': formula_name,
+        'analysis_period_days': days,
+        'action_breakdown': results
+    }
+```
+
+#### 6.20.4 Retention & Cleanup
+
+```python
+# k0/pipelines/p03/maintenance/audit_cleanup.py
+
+async def cleanup_audit_trail(db: Database) -> int:
+    """
+    Clean up old audit records.
+    Keep detailed records for 90 days, then aggregate.
+    """
+    cutoff = int(time.time()) - (90 * 24 * 60 * 60)  # 90 days ago
+
+    # Delete old detailed records
+    deleted = await db.execute("""
+        DELETE FROM st_consolidation_audit
+        WHERE created_at < ?
+    """, cutoff)
+
+    # TODO: Aggregate to daily summaries for long-term retention
+
+    return deleted.rowcount
+```
+
+#### 6.20.5 Metrics & Monitoring
+
+```python
+# k0/pipelines/p03/obs/audit_metrics.py
+
+# Audit trail metrics
+p03_audit_decisions_total = Counter(
+    'p03_audit_decisions_total',
+    'Total consolidation decisions audited',
+    ['action', 'formula_used']
+)
+
+p03_audit_confidence_distribution = Histogram(
+    'p03_audit_confidence_distribution',
+    'Distribution of decision confidences',
+    buckets=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+)
+
+p03_audit_explanations_generated = Counter(
+    'p03_audit_explanations_generated',
+    'Number of user explanations generated'
+)
+```
+
+### 6.21 st_feedback_quarantine (Suspicious Signals)
+
+**Purpose**: Quarantine potentially adversarial or anomalous feedback signals for review before they affect learning.
+
+**Retention**: 48 hours auto-release, or until reviewed. Anomalous signals may be retained longer for analysis.
+
+#### 6.21.1 Schema Definition
+
+```sql
+CREATE TABLE st_feedback_quarantine (
+  -- Identity
+  quarantine_id TEXT PRIMARY KEY,
+  signal_id TEXT NOT NULL,              -- Reference to st_feedback_signals
+
+  -- Context
+  space_id TEXT NOT NULL,
+
+  -- Detection details
+  reason TEXT NOT NULL,                 -- 'RATE_LIMIT', 'VELOCITY_SPIKE', 'ANOMALY', 'ENTROPY'
+  severity TEXT NOT NULL,               -- 'LOW', 'MEDIUM', 'HIGH'
+  detected_at BIGINT NOT NULL,
+
+  -- Review process
+  reviewed_at BIGINT,                   -- When reviewed (nullable)
+  reviewed_by TEXT,                     -- Reviewer ID (nullable)
+  decision TEXT,                        -- 'RELEASE', 'DISCARD', NULL
+
+  -- Auto-release
+  auto_release_at BIGINT NOT NULL       -- 48h after detected_at
+);
+
+-- Indexes for efficient quarantine management
+CREATE INDEX idx_quarantine_space_status ON st_feedback_quarantine(space_id, decision)
+WHERE decision IS NULL;  -- Only index unreviewed
+
+CREATE INDEX idx_quarantine_auto_release ON st_feedback_quarantine(auto_release_at)
+WHERE decision IS NULL;  -- Only index unreviewed
+
+CREATE INDEX idx_quarantine_signal ON st_feedback_quarantine(signal_id);
+```
+
+#### 6.21.2 Row Level Security
+
+```sql
+-- RLS policy for multi-tenant isolation
+CREATE POLICY quarantine_isolation ON st_feedback_quarantine
+FOR ALL USING (space_id = current_space_id());
+
+-- Grant access to P03 modules and security reviewers
+GRANT SELECT, INSERT, UPDATE ON st_feedback_quarantine TO p03_role;
+GRANT SELECT ON st_feedback_quarantine TO security_role;
+```
+
+#### 6.21.3 Quarantine Process
+
+**Detection & Quarantine**:
+
+```python
+# k0/pipelines/p03/feedback/quarantine_detector.py
+
+async def quarantine_suspicious_signal(
+    db: Database,
+    signal_id: str,
+    space_id: str,
+    reason: str,
+    severity: str
+) -> None:
+    """Quarantine a suspicious feedback signal."""
+    quarantine_id = f"quarantine_{signal_id}_{int(time.time())}"
+    detected_at = int(time.time())
+    auto_release_at = detected_at + (48 * 60 * 60)  # 48 hours
+
+    await db.execute("""
+        INSERT INTO st_feedback_quarantine (
+            quarantine_id, signal_id, space_id, reason, severity,
+            detected_at, auto_release_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        quarantine_id, signal_id, space_id, reason, severity,
+        detected_at, auto_release_at
+    ))
+
+    # Emit alert for high-severity quarantines
+    if severity == 'HIGH':
+        await emit_security_alert({
+            'type': 'FEEDBACK_QUARANTINE',
+            'severity': 'HIGH',
+            'signal_id': signal_id,
+            'reason': reason
+        })
+```
+
+**Auto-Release**:
+
+```python
+# k0/pipelines/p03/maintenance/quarantine_cleanup.py
+
+async def auto_release_quarantined_signals(db: Database) -> int:
+    """
+    Auto-release signals that have passed their quarantine period.
+    Returns number of signals released.
+    """
+    now = int(time.time())
+
+    # Get signals ready for auto-release
+    ready_signals = await db.fetch("""
+        SELECT quarantine_id, signal_id
+        FROM st_feedback_quarantine
+        WHERE decision IS NULL
+          AND auto_release_at <= ?
+    """, now)
+
+    released_count = 0
+    for signal in ready_signals:
+        # Mark as reviewed and released
+        await db.execute("""
+            UPDATE st_feedback_quarantine
+            SET reviewed_at = ?, reviewed_by = 'AUTO', decision = 'RELEASE'
+            WHERE quarantine_id = ?
+        """, now, signal['quarantine_id'])
+
+        # Allow the signal to be processed
+        await db.execute("""
+            UPDATE st_feedback_signals
+            SET quarantine_status = 'RELEASED'
+            WHERE signal_id = ?
+        """, signal['signal_id'])
+
+        released_count += 1
+
+    return released_count
+```
+
+**Manual Review**:
+
+```python
+# k0/pipelines/p03/api/quarantine_review.py
+
+async def review_quarantined_signal(
+    db: Database,
+    quarantine_id: str,
+    reviewer_id: str,
+    decision: str  # 'RELEASE' or 'DISCARD'
+) -> None:
+    """Manually review a quarantined signal."""
+
+    await db.execute("""
+        UPDATE st_feedback_quarantine
+        SET reviewed_at = ?, reviewed_by = ?, decision = ?
+        WHERE quarantine_id = ?
+    """, unixepoch(), reviewer_id, decision, quarantine_id)
+
+    # Update the original signal
+    if decision == 'RELEASE':
+        await db.execute("""
+            UPDATE st_feedback_signals
+            SET quarantine_status = 'RELEASED'
+            WHERE signal_id = (
+                SELECT signal_id FROM st_feedback_quarantine
+                WHERE quarantine_id = ?
+            )
+        """, quarantine_id)
+    else:  # DISCARD
+        await db.execute("""
+            UPDATE st_feedback_signals
+            SET quarantine_status = 'DISCARDED'
+            WHERE signal_id = (
+                SELECT signal_id FROM st_feedback_quarantine
+                WHERE quarantine_id = ?
+            )
+        """, quarantine_id)
+```
+
+#### 6.21.4 Detection Algorithms
+
+**Rate Limiting**:
+
+```python
+# k0/pipelines/p03/feedback/rate_limiter.py
+
+class FeedbackRateLimiter:
+    """Rate limit feedback signals per user/device."""
+
+    def __init__(self, max_signals_per_minute: int = 100):
+        self.max_per_minute = max_signals_per_minute
+        self.window_size = 60  # seconds
+
+    async def check_rate_limit(
+        self,
+        db: Database,
+        space_id: str,
+        user_id: str
+    ) -> bool:
+        """Return True if rate limit exceeded."""
+        now = int(time.time())
+        window_start = now - self.window_size
+
+        count = await db.fetch_one("""
+            SELECT COUNT(*) as signal_count
+            FROM st_feedback_signals
+            WHERE space_id = ?
+              AND user_id = ?
+              AND created_at > ?
+        """, space_id, user_id, window_start)
+
+        return count['signal_count'] >= self.max_per_minute
+```
+
+**Velocity Anomaly Detection**:
+
+```python
+# k0/pipelines/p03/feedback/anomaly_detector.py
+
+class VelocityAnomalyDetector:
+    """Detect sudden spikes in feedback signal volume."""
+
+    async def detect_velocity_spike(
+        self,
+        db: Database,
+        space_id: str
+    ) -> bool:
+        """Return True if current velocity exceeds baseline."""
+        # Compare last 5 minutes to last hour average
+        now = int(time.time())
+        recent_window = now - (5 * 60)
+        baseline_window = now - (60 * 60)
+
+        recent_count = await db.fetch_one("""
+            SELECT COUNT(*) as count
+            FROM st_feedback_signals
+            WHERE space_id = ? AND created_at > ?
+        """, space_id, recent_window)
+
+        baseline_count = await db.fetch_one("""
+            SELECT COUNT(*) as count
+            FROM st_feedback_signals
+            WHERE space_id = ? AND created_at > ?
+        """, space_id, baseline_window)
+
+        # Calculate rates
+        recent_rate = recent_count['count'] / 5.0  # per minute
+        baseline_rate = baseline_count['count'] / 60.0  # per minute
+
+        # Spike if 10x baseline
+        return recent_rate > (baseline_rate * 10)
+```
+
+#### 6.21.5 Metrics & Monitoring
+
+```python
+# k0/pipelines/p03/obs/quarantine_metrics.py
+
+# Quarantine metrics
+p03_quarantine_signals_total = Counter(
+    'p03_quarantine_signals_total',
+    'Total signals quarantined',
+    ['reason', 'severity']
+)
+
+p03_quarantine_decisions = Counter(
+    'p03_quarantine_decisions',
+    'Quarantine review decisions',
+    ['decision']  # RELEASE, DISCARD, AUTO_RELEASE
+)
+
+p03_quarantine_auto_released = Counter(
+    'p03_quarantine_auto_released',
+    'Signals auto-released after quarantine period'
+)
+
+p03_quarantine_pending_reviews = Gauge(
+    'p03_quarantine_pending_reviews',
+    'Number of quarantined signals awaiting review',
+    ['severity']
+)
+```
+
+### 6.22 st_decay_feedback (Decay Rate Learning)
+
+**Purpose**: Track observed access patterns and decay outcomes to enable Bayesian lambda estimation (Appendix C.4.2.2). Captures inter-access intervals and resurrection events for per-space decay calibration.
+
+**Retention**: 365 days rolling window (sufficient for seasonal patterns).
+
+#### 6.22.1 Schema Definition
+
+```sql
+CREATE TABLE st_decay_feedback (
+  -- Identity
+  feedback_id TEXT PRIMARY KEY,
+  memory_id TEXT NOT NULL,              -- Entity this feedback is about
+  layer TEXT NOT NULL,                  -- 'st_epi', 'st_sem', 'st_kg_dom', etc.
+
+  -- Context
+  space_id TEXT NOT NULL,
+  tenant_id TEXT NOT NULL,
+
+  -- Observed behavior
+  event_type TEXT NOT NULL,             -- 'ACCESS', 'RESURRECTION', 'ARCHIVE', 'TOMBSTONE'
+  inter_access_interval REAL,           -- Days since last access (NULL for first access)
+  decay_factor_at_event REAL,           -- Decay factor when event occurred
+  expected_decay REAL,                  -- What decay would have been with current λ
+
+  -- Learning signals
+  resurrection_needed BOOLEAN,          -- TRUE if resurrected from ARCHIVED/TOMBSTONE
+  archival_premature BOOLEAN,           -- TRUE if accessed shortly after archival
+
+  -- Timestamps
+  created_at INTEGER NOT NULL,
+  observed_at INTEGER NOT NULL          -- When the access/resurrection occurred
+);
+
+-- Indexes for efficient querying
+CREATE INDEX idx_decay_fb_space_layer ON st_decay_feedback(space_id, layer, observed_at);
+CREATE INDEX idx_decay_fb_memory ON st_decay_feedback(memory_id, observed_at);
+CREATE INDEX idx_decay_fb_event_type ON st_decay_feedback(event_type, observed_at);
+
+-- RLS
+ALTER TABLE st_decay_feedback ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY decay_feedback_isolation ON st_decay_feedback
+  USING (space_id = current_setting('app.current_space_id')::TEXT);
+
+GRANT SELECT, INSERT ON st_decay_feedback TO p03_role;
+```
+
+#### 6.22.2 Event Types
+
+| Event Type | Meaning | inter_access_interval | resurrection_needed |
+|------------|---------|----------------------|--------------------|
+| `ACCESS` | Entity retrieved by K1/P04 | Days since last access | FALSE |
+| `RESURRECTION` | Archived entity restored | Days since archival | TRUE |
+| `ARCHIVE` | Entity moved to ARCHIVED | Days since last access | FALSE |
+| `TOMBSTONE` | Entity marked for deletion | Days since archival | FALSE |
+
+#### 6.22.3 Usage Examples
+
+**Example 1: Track Access Pattern**
+
+```python
+# When K1 retrieves entity from st_kg_dom
+await db.execute("""
+    INSERT INTO st_decay_feedback (
+        feedback_id, memory_id, layer, space_id, tenant_id,
+        event_type, inter_access_interval, decay_factor_at_event,
+        expected_decay, resurrection_needed, archival_premature,
+        created_at, observed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+    ulid.new(),
+    entity_id,
+    'st_kg_dom',
+    space_id,
+    tenant_id,
+    'ACCESS',
+    (current_time - last_accessed_at) / 86400,  # Convert to days
+    current_decay_factor,
+    compute_expected_decay(entity, current_lambda),
+    False,
+    False,
+    current_time,
+    current_time
+)
+```
+
+**Example 2: Track Resurrection Event**
+
+```python
+# When archived entity is resurrected
+await db.execute("""
+    INSERT INTO st_decay_feedback (
+        feedback_id, memory_id, layer, space_id, tenant_id,
+        event_type, inter_access_interval, decay_factor_at_event,
+        expected_decay, resurrection_needed, archival_premature,
+        created_at, observed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+    ulid.new(),
+    entity_id,
+    'st_epi',
+    space_id,
+    tenant_id,
+    'RESURRECTION',
+    (current_time - archived_at) / 86400,
+    0.05,  # Was in ARCHIVED range
+    None,  # Not applicable
+    True,
+    (current_time - archived_at) < 7 * 86400,  # Premature if < 7 days
+    current_time,
+    current_time
+)
+```
+
+#### 6.22.4 Bayesian Lambda Estimator Query
+
+```python
+# Collect inter-access intervals for lambda learning
+result = await db.fetch("""
+    SELECT
+        inter_access_interval,
+        decay_factor_at_event
+    FROM st_decay_feedback
+    WHERE space_id = ?
+      AND layer = ?
+      AND event_type = 'ACCESS'
+      AND inter_access_interval IS NOT NULL
+      AND observed_at >= ?  -- Last 90 days
+    ORDER BY observed_at DESC
+    LIMIT 10000
+""", space_id, layer, current_time - 90*86400)
+
+intervals = [row['inter_access_interval'] for row in result]
+estimator = BayesianLambdaEstimator(base_lambda)
+lambda_new, ci_low, ci_high = estimator.estimate_lambda(intervals)
+```
+
+#### 6.22.5 Metrics
+
+```python
+# Decay feedback metrics
+p03_decay_feedback_events = Counter(
+    'p03_decay_feedback_events',
+    'Decay feedback events recorded',
+    ['layer', 'event_type']
+)
+
+p03_premature_archival_rate = Gauge(
+    'p03_premature_archival_rate',
+    'Rate of entities accessed within 7 days of archival',
+    ['layer', 'space_id']
+)
+```
+
+### 6.23 st_learned_weights_history (Parameter Versioning)
+
+**Purpose**: Maintain history of parameter changes for rollback and analysis. Stores last 10 versions per parameter.
+
+**Retention**: Last 10 versions per parameter, automatically cleaned up when new versions exceed limit.
+
+#### 6.22.1 Schema Definition
+
+```sql
+CREATE TABLE st_learned_weights_history (
+  -- Identity
+  history_id TEXT PRIMARY KEY,
+  param_id TEXT NOT NULL,              -- FK to st_learned_weights.param_id
+
+  -- Version info
+  version INTEGER NOT NULL,            -- Version number (1, 2, 3, ...)
+  value REAL NOT NULL,                 -- Parameter value at this version
+  quality_at_time REAL,                -- Quality metric when this version was applied
+
+  -- Context
+  space_id TEXT NOT NULL,              -- Isolation
+
+  -- Timestamps
+  applied_at BIGINT NOT NULL,          -- When this version was applied
+
+  -- Foreign key constraint
+  FOREIGN KEY (param_id) REFERENCES st_learned_weights(param_id) ON DELETE CASCADE,
+  FOREIGN KEY (space_id) REFERENCES st_spaces(space_id),
+
+  -- Uniqueness constraint
+  UNIQUE(param_id, version)
+);
+```
+
+#### 6.22.2 Row Level Security
+
+```sql
+-- RLS policy for multi-tenant isolation
+CREATE POLICY weights_history_isolation ON st_learned_weights_history
+FOR ALL USING (space_id = current_space_id());
+
+-- Grant access to P03 modules and analysts
+GRANT SELECT ON st_learned_weights_history TO p03_role, analyst_role;
+GRANT INSERT ON st_learned_weights_history TO p03_role;
+```
+
+#### 6.22.3 Indexes
+
+```sql
+-- Fast lookup by parameter and version
+CREATE INDEX idx_weights_history_param_version ON st_learned_weights_history(param_id, version DESC);
+
+-- Time-based queries for rollback analysis
+CREATE INDEX idx_weights_history_param_time ON st_learned_weights_history(param_id, applied_at DESC);
+
+-- Space isolation
+CREATE INDEX idx_weights_history_space ON st_learned_weights_history(space_id, applied_at DESC);
+```
+
+#### 6.22.4 Usage Patterns
+
+**Record Version on Update**:
+
+```python
+# k0/pipelines/p03/learning/parameter_updater.py
+
+async def update_parameter_with_history(
+    db: Database,
+    param_id: str,
+    new_value: float,
+    quality_metric: float,
+    space_id: str
+) -> None:
+    """Update a parameter and record history for rollback."""
+
+    # Get current state before update
+    current = await db.fetch_one("""
+        SELECT current_value, version, previous_value
+        FROM st_learned_weights
+        WHERE param_id = ?
+    """, param_id)
+
+    # Record history
+    history_id = f"hist_{param_id}_{current['version'] + 1}_{int(time.time())}"
+    await db.execute("""
+        INSERT INTO st_learned_weights_history (
+            history_id, param_id, version, value, quality_at_time,
+            space_id, applied_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        history_id, param_id, current['version'] + 1, current['current_value'],
+        quality_metric, space_id, unixepoch()
+    ))
+
+    # Update current parameter
+    await db.execute("""
+        UPDATE st_learned_weights
+        SET current_value = ?,
+            previous_value = current_value,
+            version = version + 1,
+            quality_at_update = ?,
+            last_updated_at = unixepoch(),
+            updated_at = unixepoch()
+        WHERE param_id = ?
+    """, new_value, quality_metric, param_id)
+```
+
+**Rollback to Previous Version**:
+
+```python
+# k0/pipelines/p03/learning/rollback_manager.py
+
+async def rollback_parameter(
+    db: Database,
+    param_id: str,
+    target_version: int,
+    space_id: str
+) -> bool:
+    """Rollback parameter to a previous version."""
+
+    # Get target version from history
+    target = await db.fetch_one("""
+        SELECT value, quality_at_time
+        FROM st_learned_weights_history
+        WHERE param_id = ? AND version = ? AND space_id = ?
+    """, param_id, target_version, space_id)
+
+    if not target:
+        return False
+
+    # Update current parameter to rolled-back value
+    await db.execute("""
+        UPDATE st_learned_weights
+        SET current_value = ?,
+            previous_value = current_value,
+            quality_at_update = ?,
+            rollback_eligible = FALSE,  -- Mark as manually rolled back
+            last_updated_at = unixepoch(),
+            updated_at = unixepoch()
+        WHERE param_id = ? AND space_id = ?
+    """, target['value'], target['quality_at_time'], param_id, space_id)
+
+    # Record rollback in history
+    history_id = f"rollback_{param_id}_{target_version}_{int(time.time())}"
+    await db.execute("""
+        INSERT INTO st_learned_weights_history (
+            history_id, param_id, version, value, quality_at_time,
+            space_id, applied_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        history_id, param_id, target_version, target['value'],
+        target['quality_at_time'], space_id, unixepoch()
+    ))
+
+    return True
+```
+
+**Automatic Cleanup**:
+
+```python
+# k0/pipelines/p03/maintenance/history_cleanup.py
+
+async def cleanup_parameter_history(db: Database) -> int:
+    """
+    Keep only last 10 versions per parameter.
+    Returns number of history records deleted.
+    """
+
+    # Find parameters with more than 10 versions
+    params_to_clean = await db.fetch("""
+        SELECT param_id, COUNT(*) as version_count
+        FROM st_learned_weights_history
+        GROUP BY param_id
+        HAVING COUNT(*) > 10
+    """)
+
+    deleted_count = 0
+    for param in params_to_clean:
+        # Delete oldest versions, keeping only latest 10
+        result = await db.execute("""
+            DELETE FROM st_learned_weights_history
+            WHERE param_id = ?
+              AND version NOT IN (
+                SELECT version FROM st_learned_weights_history
+                WHERE param_id = ?
+                ORDER BY version DESC
+                LIMIT 10
+              )
+        """, param['param_id'], param['param_id'])
+
+        deleted_count += result.rowcount
+
+    return deleted_count
+```
+
+#### 6.22.5 Quality-Based Rollback
+
+**Automatic Rollback Triggers**:
+
+```python
+# k0/pipelines/p03/learning/quality_monitor.py
+
+class QualityMonitor:
+    """Monitor parameter quality and trigger rollbacks."""
+
+    async def check_quality_regression(
+        self,
+        db: Database,
+        param_id: str,
+        current_quality: float,
+        space_id: str
+    ) -> bool:
+        """Check if quality has regressed significantly."""
+
+        # Get quality history for last 7 days
+        history = await db.fetch("""
+            SELECT quality_at_time, applied_at
+            FROM st_learned_weights_history
+            WHERE param_id = ?
+              AND space_id = ?
+              AND applied_at > unixepoch() - (7 * 24 * 60 * 60)
+            ORDER BY applied_at DESC
+            LIMIT 10
+        """, param_id, space_id)
+
+        if len(history) < 3:
+            return False  # Not enough history
+
+        # Check if current quality is worse than average of last 3 versions
+        recent_qualities = [h['quality_at_time'] for h in history[:3]]
+        avg_recent = sum(recent_qualities) / len(recent_qualities)
+
+        # If current quality is 15% worse than recent average, trigger rollback
+        if current_quality < (avg_recent * 0.85):
+            await self.trigger_rollback(db, param_id, space_id)
+            return True
+
+        return False
+
+    async def trigger_rollback(self, db: Database, param_id: str, space_id: str) -> None:
+        """Rollback to the version with best quality in last 10."""
+
+        best_version = await db.fetch_one("""
+            SELECT version
+            FROM st_learned_weights_history
+            WHERE param_id = ? AND space_id = ?
+            ORDER BY quality_at_time DESC
+            LIMIT 1
+        """, param_id, space_id)
+
+        if best_version:
+            await rollback_parameter(db, param_id, best_version['version'], space_id)
+```
+
+#### 6.22.6 Metrics & Monitoring
+
+```python
+# k0/pipelines/p03/obs/history_metrics.py
+
+# History metrics
+p03_weights_history_versions = Gauge(
+    'p03_weights_history_versions',
+    'Number of historical versions per parameter',
+    ['param_key']
+)
+
+p03_weights_rollbacks_total = Counter(
+    'p03_weights_rollbacks_total',
+    'Total parameter rollbacks performed',
+    ['reason']  # 'manual', 'automatic', 'quality_regression'
+)
+
+p03_weights_history_cleanup_deleted = Counter(
+    'p03_weights_history_cleanup_deleted',
+    'History records deleted during cleanup'
+)
+
+p03_weights_quality_regressions = Counter(
+    'p03_weights_quality_regressions',
+    'Quality regression events detected'
+)
+```
+
+---
+
 ## 7. Module Registry
 
 > **Status**: COMPLETE
@@ -4357,7 +11566,174 @@ class GapDetector:
 
 > **Status**: COMPLETE
 
-### 8.1 Metrics Overview
+### 8.1 Cross-Space Leakage Detection
+
+**Purpose**: Monitor and prevent any cross-space data access in learning systems.
+
+**Monitoring Strategy**:
+
+1. **Query Audit**:
+   - Log all queries to learning tables (st_learned_weights, st_consolidation_audit, st_pruned_entities)
+   - Scan for missing `WHERE space_id` clauses
+   - Weekly automated scan for violations
+   - Quarterly manual security review
+
+2. **Metrics**:
+
+```python
+from prometheus_client import Counter, Gauge
+
+# Should always be 0
+p03_cross_space_query_attempts = Counter(
+    "p03_cross_space_query_attempts",
+    "Attempted queries without space_id filter",
+    ["table", "query_type"]
+)
+
+# Track RLS enforcement
+p03_rls_policy_blocks = Counter(
+    "p03_rls_policy_blocks",
+    "Queries blocked by RLS policy",
+    ["table", "policy_name"]
+)
+
+# Isolation health check
+p03_isolation_health = Gauge(
+    "p03_isolation_health",
+    "1 if no violations detected, 0 otherwise"
+)
+```
+
+1. **Alert Configuration**:
+
+```yaml
+# Alert if any cross-space attempt detected
+- alert: P03CrossSpaceLeakageDetected
+  expr: p03_cross_space_query_attempts > 0
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Cross-space data access attempt detected"
+    description: "{{ $value }} attempts to access data across spaces in last 1m"
+
+# Alert if RLS blocks spike (may indicate bug)
+- alert: P03RLSBlockSpike
+  expr: rate(p03_rls_policy_blocks[5m]) > 10
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "RLS policy blocking spike detected"
+    description: "RLS blocking rate: {{ $value }} blocks/sec"
+```
+
+1. **Testing Strategy**:
+
+```python
+# Integration test: Verify isolation
+async def test_cross_space_isolation():
+    \"\"\"Ensure RLS prevents cross-space access.\"\"\"
+    # Create data in space A
+    await db.execute(\"\"\"
+        INSERT INTO st_learned_weights (param_id, space_id, param_key, current_value)
+        VALUES ('param_a', 'space_a', 'importance_weight', 0.75)
+    \"\"\")
+
+    # Set connection context to space B
+    await set_space_context(conn, 'space_b')
+
+    # Attempt access (should return empty, not space_a's data)
+    result = await db.fetch(\"\"\"
+        SELECT * FROM st_learned_weights
+        WHERE param_key = 'importance_weight'
+    \"\"\")
+
+    # RLS should return empty result (not space_a's data)
+    assert len(result) == 0, \"Cross-space leakage detected!\"
+
+async def test_rls_enforcement():
+    \"\"\"Verify RLS policies are active.\"\"\"
+    # Check RLS is enabled on all learning tables
+    tables = ['st_learned_weights', 'st_consolidation_audit', 'st_pruned_entities']
+    for table in tables:
+        rls_enabled = await db.fetchval(f\"\"\"
+            SELECT relrowsecurity FROM pg_class
+            WHERE relname = '{table}'
+        \"\"\")
+        assert rls_enabled, f\"RLS not enabled on {table}\"
+```
+
+1. **Audit Log**:
+
+```python
+class CrossSpaceAuditor:
+    \"\"\"Monitor and audit cross-space access attempts.\"\"\"
+
+    async def audit_queries(self, time_window_hours: int = 168):
+        \"\"\"Scan query logs for missing space_id filters.\"\"\"
+        violations = await db.fetch(\"\"\"
+            SELECT query_text, usename, query_start
+            FROM pg_stat_statements
+            WHERE query ILIKE '%st_learned_weights%'
+            AND query NOT ILIKE '%space_id%'
+            AND query_start > NOW() - INTERVAL '{} hours'
+            ORDER BY query_start DESC
+        \"\"\".format(time_window_hours))
+
+        if violations:
+            await self.emit_alert(
+                \"CrossSpaceQueryViolation\",
+                f\"Found {len(violations)} queries without space_id filter\",
+                severity=\"critical\",
+                details=[{
+                    \"query\": v[\"query_text\"],
+                    \"user\": v[\"usename\"],
+                    \"timestamp\": v[\"query_start\"]
+                } for v in violations]
+            )
+
+            # Mark isolation health as degraded
+            p03_isolation_health.set(0)
+        else:
+            p03_isolation_health.set(1)
+
+    async def weekly_scan(self):
+        \"\"\"Weekly automated scan (run via cron).\"\"\"
+        await self.audit_queries(time_window_hours=168)  # Last week
+        await self.check_rls_policies()
+        await self.verify_no_cross_space_joins()
+
+    async def check_rls_policies(self):
+        \"\"\"Verify RLS policies are active and correct.\"\"\"
+        tables = ['st_learned_weights', 'st_consolidation_audit', 'st_pruned_entities']
+        for table in tables:
+            policies = await db.fetch(\"\"\"
+                SELECT polname, polcmd, qual
+                FROM pg_policies
+                WHERE tablename = $1
+            \"\"\", table)
+
+            if not policies:
+                await self.emit_alert(
+                    \"MissingRLSPolicy\",
+                    f\"No RLS policies found on {table}\",
+                    severity=\"critical\"
+                )
+```
+
+**Quarterly Manual Review Checklist**:
+
+- [ ] Review all RLS policies for correctness
+- [ ] Audit query logs for missing space_id filters
+- [ ] Verify no cross-space JOINs exist in code
+- [ ] Test isolation with synthetic cross-space attempts
+- [ ] Review `p03_cross_space_query_attempts` metric (should be 0)
+- [ ] Document any exceptions or special cases
+
+**Rationale**: Detect and prevent any cross-space data access at multiple layers; absolute isolation enforced with monitoring.
+
+### 8.2 Metrics Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -4441,6 +11817,194 @@ p03_phase_duration_seconds = Histogram(
     ['tenant_id', 'phase'],  # R0, R1, R2, ..., R8
     buckets=[0.1, 0.5, 1, 5, 10, 30, 60, 120]
 )
+```
+
+#### 8.2.2 Learning Performance Metrics
+
+**Purpose**: Monitor learning operations to ensure < 5% budget compliance.
+
+**Core Metrics**:
+
+```python
+# Learning compute budget
+p03_learning_time_pct = Gauge(
+    'p03_learning_time_pct',
+    'Percentage of cycle time spent on learning operations',
+    ['space_id', 'component']
+)
+
+p03_learning_latency_ms = Histogram(
+    'p03_learning_latency_ms',
+    'Latency of learning operations in milliseconds',
+    ['component', 'operation'],
+    buckets=[1, 5, 10, 20, 50, 100, 200, 500, 1000]
+)
+
+# Queue management
+p03_learning_queue_depth = Gauge(
+    'p03_learning_queue_depth',
+    'Number of feedback signals pending processing',
+    ['space_id']
+)
+
+p03_learning_queue_overflow = Counter(
+    'p03_learning_queue_overflow',
+    'Signals discarded due to queue overflow',
+    ['space_id']
+)
+
+# Batch processing
+p03_learning_batch_size = Histogram(
+    'p03_learning_batch_size',
+    'Number of signals processed per batch',
+    ['operation'],
+    buckets=[1, 10, 25, 50, 100, 200, 500]
+)
+
+p03_learning_batch_duration_ms = Histogram(
+    'p03_learning_batch_duration_ms',
+    'Duration of batch processing in milliseconds',
+    ['operation'],
+    buckets=[10, 50, 100, 500, 1000, 5000]
+)
+
+# Budget enforcement
+p03_learning_skip_count = Counter(
+    'p03_learning_skip_count',
+    'Operations skipped due to budget constraints',
+    ['component', 'reason']
+)
+
+p03_learning_budget_exceeded = Counter(
+    'p03_learning_budget_exceeded',
+    'Times learning exceeded 5% budget',
+    ['space_id']
+)
+
+# Quality tracking
+p03_learning_parameter_updates = Counter(
+    'p03_learning_parameter_updates',
+    'Total parameter updates from learning',
+    ['param_key', 'space_id']
+)
+
+p03_learning_signal_confidence = Histogram(
+    'p03_learning_signal_confidence',
+    'Confidence of processed feedback signals',
+    ['signal_type'],
+    buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+)
+
+# Audit tracking
+p03_audit_writes = Counter(
+    'p03_audit_writes',
+    'Audit records written',
+    ['batch_size']
+)
+
+p03_audit_drops = Counter(
+    'p03_audit_drops',
+    'Audit records dropped due to queue full'
+)
+```
+
+**Alerting Thresholds**:
+
+| Metric | Warning | Critical | Action |
+|--------|---------|----------|--------|
+| `learning_time_pct` | > 4% | > 5% | Investigate slow operations |
+| `learning_queue_depth` | > 500 | > 1000 | Scale up processing |
+| `learning_skip_count` | > 1/hour | > 10/hour | Budget too tight |
+| `learning_queue_overflow` | > 10/min | > 50/min | Increase queue size |
+| `audit_drops` | > 1/min | > 10/min | Async writer overloaded |
+
+**Alert Configuration**:
+
+```yaml
+- alert: P03LearningBudgetExceeded
+  expr: p03_learning_time_pct > 5
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Learning operations exceed 5% budget"
+    description: "Space {{ $labels.space_id }} learning at {{ $value }}%"
+
+- alert: P03LearningSkipRateHigh
+  expr: rate(p03_learning_skip_count[1h]) > 10
+  for: 15m
+  labels:
+    severity: warning
+  annotations:
+    summary: "High learning operation skip rate"
+    description: "{{ $value }} operations/hour skipped due to budget"
+
+- alert: P03LearningQueueOverflow
+  expr: rate(p03_learning_queue_overflow[5m]) > 50
+  for: 5m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Learning queue overflowing"
+    description: "{{ $value }} signals/min discarded"
+```
+
+**Dashboard Queries**:
+
+```promql
+# Learning budget usage by component
+sum(p03_learning_time_pct) by (component)
+
+# Learning latency p99
+histogram_quantile(0.99, rate(p03_learning_latency_ms_bucket[5m]))
+
+# Queue depth trend
+p03_learning_queue_depth
+
+# Batch efficiency (signals per batch)
+histogram_quantile(0.50, rate(p03_learning_batch_size_bucket[5m]))
+
+# Skip rate (operations skipped per hour)
+rate(p03_learning_skip_count[1h])
+
+# Parameter update rate
+rate(p03_learning_parameter_updates[5m])
+```
+
+**Dashboard Layout**:
+
+```
++------------------------------------------------------------------+
+|                  P03 Learning Performance Dashboard               |
++------------------------------------------------------------------+
+| Row 1: Budget Overview                                            |
+|  - Learning Time % (gauge, target <5%)                            |
+|  - Budget by Component (bar chart)                                |
+|  - Skip Rate (time series)                                        |
++------------------------------------------------------------------+
+| Row 2: Queue Health                                               |
+|  - Queue Depth (gauge, warning >500)                              |
+|  - Overflow Rate (time series)                                    |
+|  - Batch Size Distribution (histogram)                            |
++------------------------------------------------------------------+
+| Row 3: Operation Performance                                      |
+|  - Latency p99 by Operation (time series)                         |
+|  - Batch Duration (histogram)                                     |
+|  - Parameter Update Rate (time series)                            |
++------------------------------------------------------------------+
+| Row 4: Quality Indicators                                         |
+|  - Signal Confidence Distribution (histogram)                     |
+|  - Audit Write Success Rate (time series)                         |
+|  - Learning vs Consolidation Time (stacked area)                  |
++------------------------------------------------------------------+
+```
+
+**Rationale**: Comprehensive metrics enable proactive optimization and ensure learning stays within 5% budget.
+
+#### 8.2.3 Memory Retrieval Metrics
+
+)
+
 ```
 
 #### 8.2.2 Decision Metrics
@@ -4555,6 +12119,218 @@ p03_clustering_cluster_size = Histogram(
     buckets=[1, 2, 5, 10, 20, 50, 100]
 )
 ```
+
+#### 8.2.6 Shadow Mode Learning Metrics
+
+```python
+# Shadow mode comparison metrics
+p03_shadow_executions_total = Counter(
+    'p03_shadow_executions_total',
+    'Total shadow mode dual executions',
+    ['tenant_id', 'learning_type', 'outcome']
+    # learning_type: importance, hebbian, decay, similarity, threshold
+    # outcome: agreement, improvement, regression, divergence
+)
+
+p03_shadow_agreement_rate = Gauge(
+    'p03_shadow_agreement_rate',
+    'Percentage where old and new formulas agree',
+    ['tenant_id', 'learning_type']
+)
+
+p03_shadow_improvement_rate = Gauge(
+    'p03_shadow_improvement_rate',
+    'Percentage where new formula is objectively better',
+    ['tenant_id', 'learning_type']
+)
+
+p03_shadow_regression_rate = Gauge(
+    'p03_shadow_regression_rate',
+    'Percentage where new formula is worse than baseline',
+    ['tenant_id', 'learning_type']
+)
+
+p03_shadow_divergence_magnitude = Histogram(
+    'p03_shadow_divergence_magnitude',
+    'Magnitude of difference when decisions diverge',
+    ['tenant_id', 'learning_type'],
+    buckets=[0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0]
+)
+
+p03_shadow_promotion_eligibility = Gauge(
+    'p03_shadow_promotion_eligibility',
+    'Whether shadow mode meets promotion criteria (0=no, 1=yes)',
+    ['tenant_id', 'learning_type']
+)
+
+p03_shadow_sample_size = Gauge(
+    'p03_shadow_sample_size',
+    'Number of shadow mode samples collected (last 7 days)',
+    ['tenant_id', 'learning_type']
+)
+```
+
+**Shadow Comparison Logic**:
+
+```python
+class ShadowModeComparator:
+    """Compares baseline vs learning-enhanced formula outcomes."""
+
+    def compare_importance_scores(
+        self,
+        baseline_score: float,
+        learned_score: float,
+        ground_truth_access_count: int  # Actual user accesses after consolidation
+    ) -> str:
+        """Determine if learned score is better/worse/same."""
+
+        # Agreement: within 5% tolerance
+        if abs(baseline_score - learned_score) / baseline_score < 0.05:
+            return "agreement"
+
+        # Improvement: learned score better predicts actual usage
+        baseline_error = abs(baseline_score - ground_truth_access_count)
+        learned_error = abs(learned_score - ground_truth_access_count)
+
+        if learned_error < baseline_error * 0.9:  # 10% better
+            return "improvement"
+        elif learned_error > baseline_error * 1.1:  # 10% worse
+            return "regression"
+        else:
+            return "divergence"  # Different but neither clearly better
+```
+
+**Usage Pattern**:
+
+```python
+# In R1 (Hippocampal Replay)
+if feature_flags.get("P03_FF_IMPORTANCE_LEARNING") == "shadow":
+    # Run both formulas
+    baseline_score = compute_importance_baseline(event)
+    learned_score = compute_importance_with_learning(event, learned_weights)
+
+    # Apply only baseline
+    event.importance_score = baseline_score
+    event.write_to_db()
+
+    # Log comparison for analysis
+    audit_log.record_shadow_comparison(
+        learning_type="importance",
+        baseline_value=baseline_score,
+        learned_value=learned_score,
+        event_id=event.id
+    )
+
+    # Emit metrics
+    outcome = comparator.compare_importance_scores(
+        baseline_score,
+        learned_score,
+        ground_truth=None  # Will backfill after 7 days
+    )
+    metrics.p03_shadow_executions_total.labels(
+        tenant_id=event.tenant_id,
+        learning_type="importance",
+        outcome=outcome
+    ).inc()
+```
+
+#### 8.2.7 Decay Engine Metrics (Epic 3.2)
+
+```python
+# Per-layer decay metrics (4 metrics × 8 layers = 32 metrics)
+# Layers: st_epi, st_sem, st_procedural, st_social, st_kg_dom, st_kg_edges, st_prospective, st_hipp_events
+
+# Aggregate decay metrics (across all layers)
+p03_decay_total_active = Gauge(
+    'p03_decay_total_active',
+    'Total ACTIVE records across all memory layers',
+    ['tenant_id', 'space_id']
+)
+
+p03_decay_total_archived = Gauge(
+    'p03_decay_total_archived',
+    'Total ARCHIVED records across all memory layers',
+    ['tenant_id', 'space_id']
+)
+
+p03_decay_total_tombstoned = Gauge(
+    'p03_decay_total_tombstoned',
+    'Total TOMBSTONE records across all memory layers',
+    ['tenant_id', 'space_id']
+)
+
+p03_decay_resurrections_total = Counter(
+    'p03_decay_resurrections_total',
+    'Total resurrection events across all layers',
+    ['tenant_id', 'space_id', 'layer', 'trigger']  # trigger: QUERY, CO_OCCURRENCE, USER_MENTION
+)
+
+# Resurrection quality metrics
+p03_resurrection_rate = Gauge(
+    'p03_resurrection_rate',
+    'Resurrections per 1000 accesses (rolling 7d)',
+    ['tenant_id', 'space_id', 'layer']
+)
+
+p03_resurrection_loops = Counter(
+    'p03_resurrection_loops',
+    'Entities with resurrection_count >= 3 (instability)',
+    ['tenant_id', 'space_id', 'layer']
+)
+
+# Decay immunity metrics
+p03_decay_immune_entities = Gauge(
+    'p03_decay_immune_entities',
+    'Count of immune entities per layer',
+    ['tenant_id', 'space_id', 'layer', 'reason']  # reason: FAMILY_MEMBER, MANUAL, etc.
+)
+
+p03_decay_immune_skipped = Counter(
+    'p03_decay_immune_skipped',
+    'Decay updates skipped due to immunity',
+    ['tenant_id', 'space_id', 'layer']
+)
+
+# Lambda learning metrics
+p03_lambda_learned_spaces = Gauge(
+    'p03_lambda_learned_spaces',
+    'Number of spaces with learned λ modifiers',
+    ['layer']
+)
+
+p03_lambda_drift_30d = Gauge(
+    'p03_lambda_drift_30d',
+    'Maximum λ change over 30 days per space',
+    ['tenant_id', 'space_id', 'layer']
+)
+
+p03_lambda_update_rejected = Counter(
+    'p03_lambda_update_rejected',
+    'Lambda updates rejected due to criteria not met',
+    ['tenant_id', 'space_id', 'layer', 'reason']
+    # reason: INSUFFICIENT_DATA, LOW_PRECISION, NO_CHANGE, MANUAL_OVERRIDE
+)
+
+# Decay feedback metrics (from st_decay_feedback table)
+p03_decay_feedback_events = Counter(
+    'p03_decay_feedback_events',
+    'Decay feedback events recorded',
+    ['layer', 'event_type']  # event_type: ACCESS, RESURRECTION, ARCHIVE, TOMBSTONE
+)
+
+p03_premature_archival_rate = Gauge(
+    'p03_premature_archival_rate',
+    'Rate of entities accessed within 7 days of archival',
+    ['layer', 'space_id']
+)
+```
+
+**Alert Conditions** (see Section 17.3):
+
+- `DecayResurrectionRate > 10%` → Lambda too aggressive.
+- `DecayImmuneSkipped > 50% of total` → Too many immunities, decay ineffective.
+- `LambdaDrift30d > 50%` → Unstable learning, investigate data quality.
+- `PrematureArchivalRate > 5%` → Archive threshold too low.
 
 ### 8.3 Distributed Tracing
 
@@ -4832,6 +12608,129 @@ dashboard:
           query: "sum(p03_gaps_pending{status='PENDING'})"
 ```
 
+### 8.5.1 Formula Debug Tracing
+
+**Purpose**: Enable detailed formula-level debugging with three trace levels.
+
+**Trace Levels**:
+
+| Level | Audience | Content | Storage |
+|-------|----------|---------|---------|
+| User | End users | Natural language explanation | 90 days |
+| Ops | Support team | Structured audit + decision path | 90 days |
+| Debug | Developers | Full computation trace + intermediates | 7 days |
+
+**Debug Trace Content**:
+
+1. **Input Capture**:
+   - All input values with types
+   - Feature flag states at decision time
+   - Space context (size, activity level)
+   - Entity metadata (type, access count)
+
+2. **Step-by-Step Computation**:
+   - Each formula step with intermediate results
+   - Threshold comparisons with actual values
+   - Branch decisions (if/else paths taken)
+   - Loop iterations (for aggregations)
+
+3. **Performance Timing**:
+   - Time per formula step
+   - Database query time
+   - Total formula execution time
+
+4. **Output Details**:
+   - Final decision with confidence
+   - All modified parameters
+   - Side effects (database writes)
+
+**Debug Trace Example**:
+
+```json
+{
+  "trace_id": "trace_abc123",
+  "level": "DEBUG",
+  "formula": "hebbian_v2",
+  "timestamp": 1734567890000,
+  "inputs": {
+    "entity_id": "ent_sarah_001",
+    "entity_type": "PERSON",
+    "access_count": 15,
+    "last_access_days_ago": 2,
+    "mention_count_7d": 8
+  },
+  "steps": [
+    {
+      "step": 1,
+      "operation": "calculate_cooccurrence",
+      "input": {"entity_id": "ent_sarah_001"},
+      "output": {"cooccurrence_score": 0.75},
+      "duration_ms": 12
+    },
+    {
+      "step": 2,
+      "operation": "compare_threshold",
+      "input": {"score": 0.75, "threshold": 0.70},
+      "output": {"decision": "REINFORCE"},
+      "duration_ms": 1
+    }
+  ],
+  "feature_flags": {
+    "P03_FF_HEBBIAN_LEARNING": true,
+    "P03_FF_FORMULA_VERSION_HEBBIAN": "v2"
+  },
+  "output": {
+    "action": "REINFORCE",
+    "confidence": 0.85,
+    "parameters_updated": ["importance_weight"]
+  },
+  "total_duration_ms": 45
+}
+```
+
+**Trace Sampling**:
+
+- Default: 1% of decisions get full debug trace
+- Feature flag: `P03_FF_DEBUG_TRACE_RATE` (0.0-1.0)
+- Always trace: errors, rollbacks, anomalies
+- Per-space override: Allow 100% tracing for specific spaces
+
+**Trace Storage**:
+
+```python
+class FormulaTracer:
+    async def trace_formula_execution(
+        self,
+        formula_name: str,
+        level: TraceLevel,
+        context: dict
+    ) -> TraceContext:
+        """Capture formula execution trace."""
+        if not self.should_trace(level):
+            return NoOpTraceContext()
+
+        trace_id = f"trace_{uuid4().hex[:12]}"
+        trace = {
+            "trace_id": trace_id,
+            "level": level.value,
+            "formula": formula_name,
+            "timestamp": time.time() * 1000,
+            "inputs": context.get("inputs"),
+            "steps": [],
+            "feature_flags": await self.get_active_flags(),
+        }
+
+        return TraceContext(trace_id, trace, self.storage)
+```
+
+**Metrics**:
+
+- `p03_debug_traces_captured` (counter): Total traces captured
+- `p03_debug_trace_storage_bytes` (gauge): Storage used
+- `p03_debug_trace_sampling_rate` (gauge): Current sampling rate
+
+**Rationale**: Detailed traces essential for debugging formula issues; three-level approach balances detail vs storage.
+
 ### 8.6 Alerting Rules
 
 ```yaml
@@ -4874,6 +12773,62 @@ groups:
         annotations:
           summary: "P03 gap queue above 500 pending items"
 ```
+
+### 8.7 Formula Comparison Metrics
+
+**Purpose**: Measure performance differences between old and new formula versions during shadow mode and canary rollout.
+
+**Comparison Metrics**:
+
+| Metric | Success Criteria | Measurement | Data Source |
+|--------|------------------|-------------|-------------|
+| Memory retrieval accuracy | New ≥ Old | P04 grounding rate | P04 query events |
+| Decay calibration error | New < Old by > 5% | Regret signal rate | st_feedback_signals |
+| Processing time | New ≤ Old × 1.1 | p99 latency | p03_formula_duration_ms |
+| Edge case handling | No regressions | Error rate delta | p03_formula_errors |
+
+**Prometheus Queries**:
+
+```promql
+# Memory retrieval accuracy comparison
+rate(p04_grounding_success_total{formula_version="v2"}[1h]) /
+rate(p04_grounding_attempts_total{formula_version="v2"}[1h])
+vs
+rate(p04_grounding_success_total{formula_version="v1"}[1h]) /
+rate(p04_grounding_attempts_total{formula_version="v1"}[1h])
+
+# Decay calibration error (regret rate)
+rate(p03_prune_regrets_total{formula_version="v2"}[24h]) /
+rate(p03_entities_pruned_total{formula_version="v2"}[24h])
+
+# Processing time comparison
+histogram_quantile(0.99,
+  rate(p03_formula_duration_ms_bucket{formula_version="v2"}[15m])
+)
+vs
+histogram_quantile(0.99,
+  rate(p03_formula_duration_ms_bucket{formula_version="v1"}[15m])
+)
+
+# Error rate delta
+rate(p03_formula_errors_total{formula_version="v2"}[1h]) -
+rate(p03_formula_errors_total{formula_version="v1"}[1h])
+```
+
+**Comparison Dashboard**:
+
+- Side-by-side metrics: old version vs new version
+- Time series: divergence over rollout period
+- Anomaly highlighting: automatic detection of regressions > 5%
+- Drill-down: by space_id, formula_name, error_type
+
+**Statistical Significance**:
+
+- Require p < 0.05 (95% confidence) before declaring winner
+- Use Welch's t-test for unequal variances
+- Minimum sample size: 1000 events per version
+
+**Rationale**: Data-driven rollout decisions based on measured outcomes prevent regressions from reaching production.
 
 ---
 
@@ -5555,13 +13510,352 @@ class ContractValidator:
         }[topic]
 ```
 
+### 9.8 P21 Feedback Integration
+
+**P03 is a CONSUMER of the P21 feedback system**, not the owner. Feedback ingestion, schema validation, and storage are handled by P21.
+
+#### 9.8.1 Bus Subscription
+
+P03 subscribes to the `feedback.signal.p03` bus topic to receive feedback signals from the P21 Feedback Pipeline.
+
+```python
+# k0/pipelines/p03/feedback/consumer.py
+
+from k0.bus import BusSubscriber
+from k0.feedback.schemas import P03FeedbackPayload
+
+class P03FeedbackConsumer:
+    """
+    Consumes feedback signals from P21 Feedback Pipeline.
+
+    Bus Topic: feedback.signal.p03
+    Payload Schema: P03FeedbackPayload (defined in PLAN-feedback-pipeline-system.md)
+    """
+
+    def __init__(self, bus: BusSubscriber):
+        self.bus = bus
+        self.bus.subscribe('feedback.signal.p03', self.handle_feedback)
+
+    async def handle_feedback(self, envelope: FeedbackEnvelope) -> None:
+        """
+        Process incoming feedback signal.
+
+        P03FeedbackPayload types:
+        - SALIENCE_ADJUSTMENT: adjust importance scores
+        - DECAY_REVERSAL: memory was needed but decayed
+        - CLUSTER_CORRECTION: clustering feedback
+        - REINFORCEMENT_OUTCOME: did reinforcement help?
+        - NOVELTY_SIGNAL: gap detected (hedging)
+        """
+        payload = envelope.payload  # Already validated by P21
+
+        # Mark as consumed in shared table
+        await self.mark_consumed(envelope.signal_id)
+
+        # Route to appropriate learning handler
+        await self.route_feedback(payload)
+
+    async def mark_consumed(self, signal_id: str) -> None:
+        """Update st_feedback_signals to mark consumption."""
+        await db.execute("""
+            UPDATE st_feedback_signals
+            SET consumed_at = unixepoch(),
+                consumed_by = 'P03'
+            WHERE signal_id = ?
+        """, signal_id)
+```
+
+#### 9.8.2 Shared Table Access
+
+P03 reads feedback signals from the shared `st_feedback_signals` table owned by P21.
+
+```sql
+-- P03 reads from shared table
+SELECT * FROM st_feedback_signals
+WHERE target_pipeline = 'P03'
+  AND consumed_at IS NULL
+ORDER BY created_at ASC;
+
+-- P03 marks signals as consumed
+UPDATE st_feedback_signals
+SET consumed_at = unixepoch(),
+    consumed_by = 'P03'
+WHERE signal_id = ?;
+```
+
+#### 9.8.3 Feedback Payload Types
+
+P03 processes these feedback signal types from P21:
+
+| Signal Type | Purpose | Action |
+| ------------ | ------- | ------ |
+| `SALIENCE_ADJUSTMENT` | Adjust importance scores | Update entity salience in learning loop |
+| `DECAY_REVERSAL` | Memory was needed but decayed | Increase decay resistance for entity type |
+| `CLUSTER_CORRECTION` | Clustering feedback | Adjust clustering thresholds |
+| `REINFORCEMENT_OUTCOME` | Did reinforcement help? | Update reinforcement effectiveness |
+| `NOVELTY_SIGNAL` | Gap detected (hedging) | Trigger gap-filling consolidation |
+
+**Reference**: See PLAN-feedback-pipeline-system.md for complete P03FeedbackPayload schema definition.
+
+#### 9.8.4 Signal Processing Flow
+
+P03FeedbackHandler processes feedback signals with the following flow:
+
+```python
+class P03FeedbackHandler:
+    """
+    Handles feedback signals for P03 learning.
+    """
+
+    async def handle_feedback(self, envelope: FeedbackEnvelope) -> None:
+        """
+        1. Receive FeedbackEnvelope from bus topic
+        2. Validate P03FeedbackPayload
+        3. Apply learning action (update st_learned_weights)
+        4. Mark feedback consumed in st_feedback_signals
+        """
+        payload = envelope.payload  # Already validated by P21
+
+        # Route to learning module
+        match payload.feedback_type:
+            case "SALIENCE_ADJUSTMENT":
+                await self.importance_learner.adjust(payload)
+            case "DECAY_REVERSAL":
+                await self.decay_learner.adjust(payload)
+            case "CLUSTER_CORRECTION":
+                await self.similarity_learner.adjust(payload)
+            case "REINFORCEMENT_OUTCOME":
+                await self.hebbian_learner.update(payload)
+            case "NOVELTY_SIGNAL":
+                await self.audit_logger.log_gap(payload)
+
+        # Mark consumed
+        await self.mark_consumed(envelope.envelope_id)
+```
+
+**Signal-to-Producer Mapping**:
+
+| Signal Type | P21 Producer | P03 Learning Module |
+|-------------|--------------|---------------------|
+| `SALIENCE_ADJUSTMENT` | K1 CorrectionParser | ImportanceLearner (M2) |
+| `DECAY_REVERSAL` | K1 HedgingDetector | DecayLearner (M3) |
+| `CLUSTER_CORRECTION` | K1 CorrectionParser | SimilarityLearner (M4) |
+| `REINFORCEMENT_OUTCOME` | P21 GapResolution | HebbianLearner (M4) |
+| `NOVELTY_SIGNAL` | K1 HedgingDetector | AuditLogger (M1) |
+
+**Rationale**: P03 consumes from P21's shared infrastructure; detection logic lives in K1.
+
+#### 9.8.5 P03FeedbackPayload Schema Definition
+
+P03 defines a structured payload schema for all feedback signals it consumes from P21. This schema is registered with the P21 FeedbackSchemaRegistry.
+
+**Feedback Types** (from whiteboard research):
+
+| feedback_type | Source | Description |
+|---------------|--------|-------------|
+| SALIENCE_ADJUSTMENT | K1 grounding | Adjust importance score |
+| DECAY_REVERSAL | Query regret | Memory was needed but decayed |
+| CLUSTER_CORRECTION | User edit | Memories should/shouldn't be grouped |
+| REINFORCEMENT_OUTCOME | Hebbian | Reinforcement decision feedback |
+| NOVELTY_SIGNAL | K1 hedging | New pattern detected (memory gap) |
+| REGRET_SIGNAL | Query match | Pruned entity was later queried |
+
+**Schema Fields**:
+
+```python
+# k0/feedback/schemas/p03_consolidation.py
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class P03FeedbackPayload(BaseModel):
+    """
+    Payload schema for P03 (Consolidation/Salience) feedback signals.
+    Registered with P21 FeedbackSchemaRegistry.
+    Version: 1.0
+    """
+
+    feedback_type: Literal[
+        "SALIENCE_ADJUSTMENT",
+        "DECAY_REVERSAL",
+        "CLUSTER_CORRECTION",
+        "REINFORCEMENT_OUTCOME",
+        "NOVELTY_SIGNAL",
+        "REGRET_SIGNAL",
+    ]
+
+    # Target identification
+    wal_positions: list[int] = Field(default_factory=list)
+    entity_id: str | None = None
+    cluster_id: str | None = None
+
+    # Adjustments
+    salience_delta: float | None = None  # -1.0 to +1.0
+    importance_override: float | None = None  # 0.0 to 1.0
+    decay_lambda_delta: float | None = None  # Learning rate adjustment
+
+    # Outcomes
+    was_retrieved: bool | None = None
+    was_helpful: bool | None = None
+    user_confirmed: bool | None = None
+
+    # Context (from K1)
+    retrieval_query: str | None = None
+    session_context: dict | None = None
+    confidence: float = 0.5  # Signal confidence (0.0-1.0)
+```
+
+**Field Mapping to Formulas**:
+
+| Field | Used By | Purpose |
+|-------|---------|---------|
+| salience_delta | Importance formula (R1) | α_imp adjustment |
+| decay_lambda_delta | Decay formula (R2/R3) | λ adjustment |
+| was_retrieved | Hebbian formula (R4) | Co-activation signal |
+| was_helpful | Hebbian formula (R4) | Success/failure signal |
+| confidence | All formulas | Weighting factor |
+
+**Rationale**: Schema captures all signal types P03 learning formulas need for closed-loop adaptation.
+
+#### 9.8.6 P03 Schema Registration
+
+P03 registers its payload schema with the P21 FeedbackSchemaRegistry to enable validation and dispatch.
+
+**Registration Entry**:
+
+| Field | Value |
+|-------|-------|
+| Pipeline ID | `P03` |
+| Schema Name | `P03FeedbackPayload` |
+| Schema Version | `1.0` |
+| Location | `k0/feedback/schemas/p03_consolidation.py` |
+
+**Registration Code**:
+
+```python
+# k0/feedback/registry.py (P21 owns this file)
+from k0.feedback.schemas.p03_consolidation import P03FeedbackPayload
+
+SCHEMA_REGISTRY = {
+    "P03": P03FeedbackPayload,
+    # ... other pipelines
+}
+```
+
+**Validation Flow**:
+
+1. P21 receives FeedbackEnvelope with `target_pipeline: "P03"`
+2. P21 looks up `P03` in registry → gets `P03FeedbackPayload`
+3. P21 validates `envelope.payload` against `P03FeedbackPayload`
+4. If valid → store in `st_feedback_signals` and dispatch to `feedback.signal.p03` topic
+5. If invalid → quarantine with validation error details
+
+**Health Check**: P03 reports `p03_schema_registered` metric (0=not registered, 1=registered)
+
+**Rationale**: P21 must know P03's schema to validate incoming feedback before dispatch.
+
+#### 9.8.7 P03 Signal Coverage Validation
+
+Validate that P03FeedbackPayload schema covers all learning signals defined in the whiteboard research (Sections 6.1-6.15).
+
+**Signal Coverage Matrix**:
+
+| Whiteboard Signal | P03FeedbackPayload Field | Covered? |
+|-------------------|--------------------------|----------|
+| Grounding signal | salience_delta + was_helpful | ✅ |
+| Correction signal | salience_delta | ✅ |
+| Entity co-access | wal_positions (multiple) | ✅ |
+| Regret signal | feedback_type: REGRET_SIGNAL | ✅ |
+| Novelty signal | feedback_type: NOVELTY_SIGNAL | ✅ |
+| Decay reversal | feedback_type: DECAY_REVERSAL | ✅ |
+| Cluster correction | feedback_type: CLUSTER_CORRECTION | ✅ |
+
+**Confidence Mapping**:
+
+| Signal Type | Base Confidence | Field |
+|-------------|-----------------|-------|
+| GROUNDING | 0.70 | confidence |
+| CORRECTION | 0.85 | confidence |
+| CO_ACCESS | 0.60 | confidence |
+| REGRET | 0.90 | confidence |
+| NOVELTY | 0.40 | confidence |
+
+**Validation Test**: Integration test suite validates that every whiteboard signal can be represented as a P03FeedbackPayload instance.
+
+**Test Cases**:
+
+```python
+# tests/k0/feedback/test_p03_schema_coverage.py
+
+import pytest
+from k0.feedback.schemas.p03_consolidation import P03FeedbackPayload
+
+def test_salience_adjustment_signal():
+    """Test grounding signal representation."""
+    payload = P03FeedbackPayload(
+        feedback_type="SALIENCE_ADJUSTMENT",
+        entity_id="PERSON_mom_123",
+        salience_delta=0.15,
+        was_helpful=True,
+        confidence=0.70,
+    )
+    assert payload.feedback_type == "SALIENCE_ADJUSTMENT"
+    assert payload.salience_delta == 0.15
+
+def test_regret_signal():
+    """Test pruned-entity regret representation."""
+    payload = P03FeedbackPayload(
+        feedback_type="REGRET_SIGNAL",
+        entity_id="PLACE_old_restaurant_456",
+        decay_lambda_delta=-0.10,  # Lower decay rate
+        confidence=0.90,
+    )
+    assert payload.feedback_type == "REGRET_SIGNAL"
+    assert payload.confidence == 0.90
+
+def test_cluster_correction_signal():
+    """Test user clustering correction."""
+    payload = P03FeedbackPayload(
+        feedback_type="CLUSTER_CORRECTION",
+        wal_positions=[100, 105, 110],
+        cluster_id="CLU_work_meetings_789",
+        user_confirmed=True,
+        confidence=0.85,
+    )
+    assert len(payload.wal_positions) == 3
+```
+
+**Coverage Report**: CI pipeline generates coverage report showing all signal types tested.
+
+**Rationale**: Ensures no learning signals are lost at the P21 integration boundary. Complete coverage validates schema completeness.
+
 ---
 
 ## 10. Testing Strategy
 
 > **Status**: COMPLETE
 
-### 10.1 Test Architecture Overview
+### 10.1 Reconciliation Golden Dataset
+
+(See Section 1.4.4 for full specification)
+
+**Purpose**: Offline validation of similarity formulas and reconciliation thresholds against curated test cases.
+
+**Dataset Location**: `st_golden_dataset_pairs` table + optional file-based storage at `P03_GOLDEN_DATASET_PATH`
+
+**Validation Schedule**: Weekly (every Sunday at 3am)
+
+**Metrics**:
+
+- Precision target: >0.90 (alert if <0.85)
+- Recall target: >0.85 (alert if <0.80)
+- F1 score target: >0.87 (alert if <0.82)
+
+**Drift Detection**: Alert if F1 drops >5% week-over-week, indicating concept drift or degraded similarity computation.
+
+**Dataset Curation**: Automatically augment from user corrections (`ENTITY_MERGE_CONFIRMED`, `ENTITY_SPLIT` signals with confidence >0.9).
+
+### 10.2 Test Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -7075,6 +15369,69 @@ feature_flags:
     requires: [redis_cluster, kafka_partitioning]
 ```
 
+### 11.7 Formula Canary Rollout
+
+**Purpose**: Safely rollout new formula versions using gradual exposure to limit blast radius.
+
+**Rollout Phases**:
+
+| Phase | Description | Duration | % of Spaces | Criteria to Advance |
+|-------|-------------|----------|-------------|---------------------|
+| 0. Shadow | New formula runs but discarded | 7 days | 0% | Comparison metrics look good |
+| 1. Canary | Small test group | 7 days | 5% | No regressions detected |
+| 2. Gradual | Progressive expansion | 14 days | 25→50→75% | Metrics continue to improve |
+| 3. Full | Complete rollout | Permanent | 100% | All metrics stable |
+
+**Promotion Criteria**:
+
+- All comparison metrics pass (see Section 8 for metrics)
+- No regression > 5% on any metric
+- Human review if borderline (3-5% regression range)
+
+**Halt Criteria** (automatic rollback):
+
+- Any metric regresses > 10% → immediate halt
+- User corrections spike > 3× baseline → halt + alert
+- Error rate > 5% → immediate rollback to previous version
+- Regret signal rate doubles → halt learning
+
+**Space Selection Strategy**:
+
+```python
+class CanarySpaceSelector:
+    """Select spaces for canary rollout."""
+
+    def select_canary_spaces(
+        self,
+        target_percentage: float
+    ) -> List[str]:
+        """
+        Select spaces stratified by size to ensure representative sample.
+
+        Stratification:
+        - Small spaces (<100 memories): 20% of canary
+        - Medium spaces (100-1000): 50% of canary
+        - Large spaces (>1000): 30% of canary
+        """
+        all_spaces = self.fetch_all_spaces()
+
+        small = [s for s in all_spaces if s.memory_count < 100]
+        medium = [s for s in all_spaces if 100 <= s.memory_count <= 1000]
+        large = [s for s in all_spaces if s.memory_count > 1000]
+
+        target_count = int(len(all_spaces) * target_percentage)
+
+        selected = (
+            random.sample(small, int(target_count * 0.20)) +
+            random.sample(medium, int(target_count * 0.50)) +
+            random.sample(large, int(target_count * 0.30))
+        )
+
+        return [s.space_id for s in selected]
+```
+
+**Rationale**: Gradual exposure limits blast radius of formula bugs while ensuring representative coverage across space sizes.
+
 ---
 
 ## 12. Policy Decisions & Feature Flags
@@ -7354,7 +15711,7 @@ attention_budget:
 ### 12.4 Feature Flag Master List
 
 | Flag Name | Type | Default | Description |
-|-----------|------|---------|-------------|
+| --- | --- | --- | --- |
 | `P03_FF_CONTRADICT_BLOCKING` | bool | `false` | Block on unresolved contradictions |
 | `P03_FF_ANCHOR_DRIFT_MODE` | enum | `multimodal` | Anchor drift handling strategy |
 | `P03_FF_R5_MODE` | enum | `conditional` | Dream phase execution mode |
@@ -7364,11 +15721,17 @@ attention_budget:
 | `P03_FF_OPTIMISTIC_LOCKING` | bool | `true` | Use optimistic locking for writes |
 | `P03_FF_ADAPTIVE_BATCHING` | bool | `true` | Adjust batch size based on load |
 | `P03_FF_OBSERVABILITY_VERBOSE` | bool | `false` | Emit detailed phase-level metrics |
+| `P03_FF_LEARNING_ENABLED` | bool | `false` | Master switch for all learning |
+| `P03_FF_IMPORTANCE_LEARNING` | enum | `disabled` | disabled/shadow/enabled |
+| `P03_FF_HEBBIAN_LEARNING` | enum | `disabled` | disabled/shadow/enabled |
+| `P03_FF_DECAY_LEARNING` | enum | `disabled` | disabled/shadow/enabled |
+| `P03_FF_SIMILARITY_LEARNING` | enum | `disabled` | disabled/shadow/enabled |
+| `P03_FF_THRESHOLD_LEARNING` | enum | `disabled` | disabled/shadow/enabled |
 
 #### 12.4.1 Feature Flag Operational Guide
 
 | Scenario | Flag Change | Command | Rollback |
-|----------|-------------|---------|----------|
+| --- | --- | --- | --- |
 | **High backlog recovery** | Disable R5 | `k0ctl feature set P03_FF_R5_MODE disabled` | `k0ctl feature set P03_FF_R5_MODE conditional` |
 | **Debug reconciliation** | Enable verbose | `k0ctl feature set P03_FF_OBSERVABILITY_VERBOSE true` | `k0ctl feature set P03_FF_OBSERVABILITY_VERBOSE false` |
 | **P06 outage mitigation** | Disable gaps | `k0ctl feature set P03_FF_GAP_DETECTION_ENABLED false` | `k0ctl feature set P03_FF_GAP_DETECTION_ENABLED true` |
@@ -7379,7 +15742,7 @@ attention_budget:
 #### 12.4.2 Environment-Specific Defaults
 
 | Environment | R5_MODE | OBSERVABILITY_VERBOSE | ADAPTIVE_BATCHING | Notes |
-|-------------|---------|----------------------|-------------------|-------|
+| --- | --- | --- | --- | --- |
 | Development | `disabled` | `true` | `false` | Fast iteration, full logging |
 | Staging | `conditional` | `true` | `true` | Production-like with visibility |
 | Production | `conditional` | `false` | `true` | Optimized for throughput |
@@ -7404,6 +15767,222 @@ P03_FLAGS = FeatureFlags(
     }
 )
 ```
+
+#### 12.4.3 Shadow Mode Specification
+
+**Purpose**: Safe testing of new learning formulas without risking production data.
+
+**Shadow Mode Behavior**:
+
+When a learning feature flag is set to `shadow`:
+
+1. **Dual Execution**: Both old (baseline) and new (learning-enhanced) formulas run in parallel
+2. **Safe Application**: Old formula applies changes to database (production path)
+3. **Non-Destructive Testing**: New formula computes but does NOT apply changes
+4. **Comprehensive Logging**: Both outcomes logged to `st_consolidation_audit` for comparison
+
+**Shadow Mode States**:
+
+| Flag Value | Behavior |
+| --- | --- |
+| `disabled` | Only baseline formula runs (no learning) |
+| `shadow` | Both run, only baseline applies (safe testing) |
+| `enabled` | Only new formula runs (learning active) |
+
+**Example Configuration**:
+
+```python
+# Enable shadow mode for importance learning
+k0ctl feature set P03_FF_IMPORTANCE_LEARNING shadow
+
+# Learning enabled but master switch off = no effect
+k0ctl feature set P03_FF_LEARNING_ENABLED false
+k0ctl feature set P03_FF_IMPORTANCE_LEARNING enabled  # Ignored
+
+# Full activation requires both
+k0ctl feature set P03_FF_LEARNING_ENABLED true
+k0ctl feature set P03_FF_IMPORTANCE_LEARNING enabled  # Now active
+```
+
+**Shadow Comparison Metrics**:
+
+See Section 8.2.6 for detailed metric definitions:
+
+- `p03_shadow_agreement_rate`: % where old and new produce same decision
+- `p03_shadow_improvement_rate`: % where new is objectively better
+- `p03_shadow_regression_rate`: % where new is worse
+- `p03_shadow_divergence_magnitude`: Average difference when decisions differ
+
+**Promotion Criteria** (from shadow → enabled):
+
+| Metric | Threshold | Reason |
+| --- | --- | --- |
+| Agreement rate | > 80% | Stability: new formula mostly agrees with proven baseline |
+| Improvement rate | > Regression rate | Quality: more improvements than regressions |
+| Shadow duration | ≥ 7 days | Coverage: sufficient data across weekly patterns |
+| Sample size | ≥ 1000 decisions | Statistical: enough samples for confidence |
+| No critical errors | 0 exceptions | Reliability: new code is stable |
+
+**Automatic Promotion**:
+
+```python
+class ShadowModeEvaluator:
+    def check_promotion_eligibility(
+        self,
+        flag_name: str,
+        space_id: str
+    ) -> tuple[bool, str]:
+        metrics = self.fetch_shadow_metrics(
+            flag_name=flag_name,
+            space_id=space_id,
+            lookback_days=7
+        )
+
+        if metrics.sample_size < 1000:
+            return False, "Insufficient samples"
+
+        if metrics.agreement_rate < 0.80:
+            return False, f"Agreement {metrics.agreement_rate:.1%} < 80%"
+
+        if metrics.improvement_rate <= metrics.regression_rate:
+            return False, "Regressions exceed improvements"
+
+        if metrics.error_count > 0:
+            return False, f"{metrics.error_count} errors detected"
+
+        return True, "All criteria met"
+```
+
+**Rollback from Shadow**:
+
+If shadow mode reveals problems:
+
+```bash
+# Immediate disable
+k0ctl feature set P03_FF_IMPORTANCE_LEARNING disabled
+
+# Alert sent to #learning-ops Slack channel
+# Incident created in st_consolidation_audit with failure signature
+```
+
+**Rationale**: Shadow mode provides zero-risk validation of learning algorithms. Production data remains protected while we gather empirical evidence of formula improvements. Only promote when statistical evidence supports superiority.
+
+#### 12.4.4 Learning Rollout Strategy
+
+**Purpose**: Gradual rollout of learning algorithms to protect user experience.
+
+**Phased Rollout**:
+
+| Phase | % Spaces | Duration | Flag State | Rollback Trigger |
+| --- | --- | --- | --- | --- |
+| 0. Shadow | 100% (read-only) | 7 days | `shadow` | N/A |
+| 1. Canary | Internal test spaces | 7 days | `enabled` | Manual review |
+| 2. Gradual | 25% → 50% → 75% | 14 days | `enabled` | Regression > 3% |
+| 3. Full | 100% | Permanent | `enabled` | Regression > 2% |
+
+**Canary Selection**:
+
+- Internal test spaces first
+- High-activity spaces (> 100 events/day)
+- Diverse usage patterns
+
+**Rationale**: Conservative rollout protects users. Manual oversight for initial phases before automation.
+
+#### 12.4.5 Per-Space Flag Overrides
+
+**Purpose**: Enable canary rollout to specific spaces.
+
+**Override Table Schema**:
+
+```sql
+CREATE TABLE st_feature_flag_overrides (
+    override_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    flag_name TEXT NOT NULL,
+    value TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    expires_at BIGINT
+);
+
+CREATE UNIQUE INDEX idx_flag_override_unique
+ON st_feature_flag_overrides(tenant_id, space_id, flag_name);
+
+ALTER TABLE st_feature_flag_overrides ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY flag_override_isolation ON st_feature_flag_overrides
+    USING (tenant_id = current_setting('app.current_tenant_id')::TEXT);
+```
+
+**Flag Resolution Order**:
+
+1. Per-space override (if exists and not expired)
+2. Environment default (Section 12.4.2)
+3. Global default (Section 12.4)
+
+**Rationale**: Enables canary rollout to specific spaces without affecting all users. Allows disabling learning for problematic spaces.
+
+### 12.5 Shadow Mode Infrastructure
+
+**Purpose**: Test new formulas with zero production risk by running them alongside old formulas but discarding their results.
+
+**Shadow Mode Concept**:
+
+- Old formula applies changes to database (production)
+- New formula computes but does NOT apply changes (shadow)
+- Log both outcomes for comparison
+- Zero production risk — users see only old results
+
+**Implementation Pattern**:
+
+```python
+class ShadowModeRunner:
+    """Run new formula in shadow mode."""
+
+    async def run_with_shadow(
+        self,
+        formula_name: str,
+        inputs: dict
+    ) -> dict:
+        """Execute formula with optional shadow comparison."""
+
+        if not self.is_shadow_enabled(formula_name):
+            # Normal mode: run current formula
+            return await self.run_formula(formula_name, inputs)
+
+        # Shadow mode: run both
+        old_result = await self.run_old_formula(inputs)
+        new_result = await self.run_new_formula(inputs)
+
+        # Log comparison
+        await self.log_shadow_comparison(
+            formula_name,
+            old_result,
+            new_result,
+            inputs
+        )
+
+        # Return old result (production)
+        return old_result
+```
+
+**Feature Flags**:
+
+- `P03_FF_SHADOW_IMPORTANCE` — Shadow mode for importance formula
+- `P03_FF_SHADOW_HEBBIAN` — Shadow mode for Hebbian learning
+- `P03_FF_SHADOW_DECAY` — Shadow mode for decay formula
+- `P03_FF_SHADOW_SIMILARITY` — Shadow mode for similarity matching
+
+**Duration**: Minimum 7 days in shadow before canary rollout.
+
+**Metrics** (add to Section 8.2):
+
+- `p03_shadow_comparison_divergence` (histogram): Percent difference between old and new results
+- `p03_shadow_comparison_count` (counter): Total comparisons logged
+- `p03_shadow_mode_active` (gauge): Which formulas currently in shadow mode
+
+**Rationale**: Validate new formulas with real production data but zero risk of impacting users.
 
 ---
 
@@ -7877,6 +16456,166 @@ k0ctl p08 faiss rebuild --tenant-id <tid> --confirm
 # Verify index health
 k0ctl p08 faiss verify --tenant-id <tid>
 ```
+
+### 13.11 Parameter Rollback
+
+**Purpose**: Fast rollback of learned parameters when quality degrades.
+
+**Version History Storage**:
+
+st_learned_weights stores last 10 versions per parameter with quality metrics.
+
+**Extended Schema**:
+
+```sql
+ALTER TABLE st_learned_weights ADD COLUMN version INTEGER DEFAULT 1;
+ALTER TABLE st_learned_weights ADD COLUMN applied_at BIGINT;
+ALTER TABLE st_learned_weights ADD COLUMN quality_at_time REAL;
+ALTER TABLE st_learned_weights ADD COLUMN rolled_back BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX idx_learned_weights_version
+ON st_learned_weights(param_key, space_id, version DESC);
+```
+
+**Rollback Process**:
+
+```python
+class ParameterRollback:
+    """Rollback learned parameters to previous version."""
+
+    async def rollback_parameter(
+        self,
+        param_key: str,
+        space_id: str,
+        reason: str
+    ) -> dict:
+        """
+        1. Identify parameter to rollback
+        2. Find previous version where quality was acceptable
+        3. Restore that version's value
+        4. Mark current version as rolled_back=true
+        """
+        # Find current version
+        current = await self.fetch_current_version(param_key, space_id)
+
+        # Find acceptable previous version (quality > threshold)
+        previous = await self.fetch_acceptable_version(
+            param_key,
+            space_id,
+            min_quality=0.80
+        )
+
+        if not previous:
+            raise ValueError("No acceptable version to rollback to")
+
+        # Mark current as rolled back
+        await db.execute("""
+            UPDATE st_learned_weights
+            SET rolled_back = TRUE
+            WHERE param_key = $1 AND space_id = $2 AND version = $3
+        """, param_key, space_id, current.version)
+
+        # Restore previous version
+        await db.execute("""
+            UPDATE st_learned_weights
+            SET current_value = $1, version = $2, applied_at = $3
+            WHERE param_key = $4 AND space_id = $5
+        """, previous.current_value, previous.version + 1,
+            time.time() * 1000, param_key, space_id)
+
+        return {
+            "rolled_back_version": current.version,
+            "restored_version": previous.version,
+            "reason": reason
+        }
+```
+
+**Rollback Speed**: Instant (single UPDATE statement per parameter).
+
+**Metrics**:
+
+- `p03_parameter_rollbacks_total` (counter): Total rollback operations
+- `p03_parameter_rollback_success` (gauge): Success rate
+
+**Rationale**: Learned parameters can drift; need fast recovery path without losing version history.
+
+### 13.12 Formula Rollback
+
+**Purpose**: Rollback entire formula algorithms when bugs are discovered.
+
+**Formula Version Control**:
+
+Each formula has version identifier controlled by feature flags.
+
+**Version Registry**:
+
+| Formula | Current | Previous | Fallback |
+|---------|---------|----------|----------|
+| importance | v2 | v1 | static |
+| hebbian | v2 | v1 | disabled |
+| decay | v3 | v2 | v1 |
+| similarity | v2 | v1 | static |
+
+**Feature Flags**:
+
+- `P03_FF_FORMULA_VERSION_IMPORTANCE` = "v2"
+- `P03_FF_FORMULA_VERSION_HEBBIAN` = "v2"
+- `P03_FF_FORMULA_VERSION_DECAY` = "v3"
+- `P03_FF_FORMULA_VERSION_SIMILARITY` = "v2"
+
+**Rollback Process**:
+
+```python
+class FormulaRollback:
+    """Rollback formula to previous version."""
+
+    async def rollback_formula(
+        self,
+        formula_name: str,
+        reason: str
+    ) -> dict:
+        """
+        1. Flip feature flag to previous version
+        2. Wait for flag propagation (~60 seconds)
+        3. Verify all spaces using previous version
+        """
+        # Get version registry
+        current_version = await self.get_flag_value(
+            f"P03_FF_FORMULA_VERSION_{formula_name.upper()}"
+        )
+
+        previous_version = self.get_previous_version(
+            formula_name,
+            current_version
+        )
+
+        # Update feature flag
+        await self.set_flag_value(
+            f"P03_FF_FORMULA_VERSION_{formula_name.upper()}",
+            previous_version,
+            reason=reason
+        )
+
+        # Emit alert
+        await self.emit_alert(
+            "FormulaRollback",
+            f"Formula {formula_name} rolled back from {current_version} to {previous_version}",
+            severity="critical"
+        )
+
+        return {
+            "formula": formula_name,
+            "rolled_back_from": current_version,
+            "rolled_back_to": previous_version,
+            "propagation_time_seconds": 60
+        }
+```
+
+**Rollback Speed**: Minutes (flag propagation time ~60s).
+
+**All Spaces Affected**: Formula rollback is global, not per-space.
+
+**Rationale**: Algorithm bugs require reverting entire formula across all spaces simultaneously.
 
 ---
 
@@ -8425,6 +17164,194 @@ class P03Encryption:
         return compute_envelope_sha256(event)
 ```
 
+### 14.9 P03 Learning Anomaly Detection
+
+**Purpose**: Pipeline-specific anomaly detection for learning parameters (in addition to P21's ingestion-level protection).
+
+**P03-Specific Checks**:
+
+| Check | Threshold | Action |
+|-------|-----------|--------|
+| Parameter drift | > 20% change in 24h | Pause learning, alert |
+| Contradictory signals | Same entity, opposite signals | Flag for review |
+| Formula regression | Quality metric drops > 10% | Auto-rollback |
+
+**Learning Pause**: If anomaly detected, stop applying signals until reviewed.
+
+```python
+class P03LearningAnomalyDetector:
+    """
+    Detect anomalies in P03 learning parameters.
+    """
+
+    async def check_parameter_drift(
+        self,
+        param_key: str,
+        current_value: float,
+        previous_value: float
+    ) -> bool:
+        """Check if parameter changed too quickly."""
+        drift_pct = abs(current_value - previous_value) / previous_value
+
+        if drift_pct > 0.20:  # 20% change
+            await self.emit_alert('ParameterDrift', param_key, drift_pct)
+            await self.pause_learning(param_key)
+            return True
+
+        return False
+
+    async def check_contradictory_signals(
+        self,
+        entity_id: str,
+        signals: List[FeedbackSignal]
+    ) -> bool:
+        """Detect opposing signals for same entity."""
+        # Group by signal type
+        by_type = defaultdict(list)
+        for sig in signals:
+            by_type[sig.feedback_type].append(sig)
+
+        # Check for contradictions
+        for sig_type, sigs in by_type.items():
+            if len(sigs) >= 2:
+                deltas = [s.salience_delta for s in sigs if s.salience_delta]
+                if deltas and max(deltas) * min(deltas) < 0:  # Opposite signs
+                    await self.flag_for_review(entity_id, sig_type)
+                    return True
+
+        return False
+```
+
+**Rationale**: P21 handles ingestion-level protection (quarantine); P03 adds formula-level protection against parameter instability.
+
+### 14.10 Memory Decision Explanations
+
+**Purpose**: Provide user-facing explanations for why memory decisions were made.
+
+**Explanation Templates**:
+
+| Decision | Template |
+|----------|----------|
+| REINFORCE | "This memory was reinforced because you mentioned {entity} frequently this week." |
+| DECAY | "This memory faded because it hasn't been accessed in {N} days." |
+| ARCHIVE | "This memory was archived to make room for more recent information." |
+| MERGE | "These two memories were combined because they refer to the same {entity_type}." |
+| CREATE | "A new memory was created for {entity} based on your conversation." |
+| PRUNE | "This memory was removed because it hasn't been relevant for {N} days." |
+| EXTEND | "This memory was extended with new details from your recent conversation." |
+
+**Template Variables**:
+
+- `{entity}`: Entity canonical name (e.g., "Sarah", "Mom's Birthday")
+- `{entity_type}`: PERSON, PLACE, EVENT, CONCEPT
+- `{N}`: Numeric value (days, count, percentage)
+- `{date}`: Human-readable date (e.g., "March 15")
+- `{reason}`: Specific reason for action
+
+**API Endpoint**:
+
+```python
+@router.get("/k0/memory/{memory_id}/explanation")
+async def get_memory_explanation(
+    memory_id: str,
+    space_id: str = Header(None, alias="X-Space-ID")
+) -> MemoryExplanation:
+    """
+    Return user-facing explanation for memory decision.
+
+    Response:
+    {
+        "memory_id": "mem_abc123",
+        "action": "REINFORCE",
+        "explanation": "This memory was reinforced because you mentioned Mom frequently this week.",
+        "timestamp": 1734567890000,
+        "confidence": 0.85
+    }
+    """
+    audit = await db.fetchrow("""
+        SELECT action, formula_used, inputs_json, explanation, confidence
+        FROM st_consolidation_audit
+        WHERE memory_id = $1 AND space_id = $2
+        ORDER BY timestamp DESC LIMIT 1
+    """, memory_id, space_id)
+
+    return MemoryExplanation(
+        memory_id=memory_id,
+        action=audit["action"],
+        explanation=audit["explanation"],
+        timestamp=audit["timestamp"],
+        confidence=audit["confidence"]
+    )
+```
+
+**Explanation Generation**:
+
+```python
+def generate_explanation(action: str, context: dict) -> str:
+    """Generate user-facing explanation from action and context."""
+    templates = {
+        "REINFORCE": "This memory was reinforced because you mentioned {entity} frequently this week.",
+        "DECAY": "This memory faded because it hasn't been accessed in {N} days.",
+        "ARCHIVE": "This memory was archived to make room for more recent information.",
+        # ... more templates
+    }
+
+    template = templates.get(action, "This memory was updated.")
+    return template.format(**context)
+```
+
+**Rationale**: Users deserve to understand why their memories change; transparency builds trust.
+
+### 14.11 Learning Data Isolation
+
+**Purpose**: Absolute isolation — no cross-space learning leakage.
+
+**Isolation Boundaries**:
+
+| Data Type | Isolation Level | Mechanism |
+|-----------|-----------------|-----------|
+| Learned weights | Per-space | space_id column + RLS |
+| Feedback signals | Per-space | space_id column + RLS |
+| Audit records | Per-space | space_id column + RLS |
+| Pruned entities | Per-space | space_id column + RLS |
+| Feature flags | Per-space | space_id column + RLS |
+
+**Isolation Principle**:
+
+1. **Each Space Learns Independently**:
+   - No shared priors across spaces
+   - No global defaults learned from other spaces
+   - Static defaults only from code configuration
+
+2. **Query Pattern Enforcement**:
+   - Every query MUST include `WHERE space_id = ?`
+   - Connection context sets `app.current_space_id`
+   - RLS policies enforce at database level
+
+3. **Zero Cross-Space Data Flow**:
+   - Family data never influences another family's learning
+   - Work space data never leaks to personal space
+   - Each space has independent parameter evolution
+
+**Example Violation Detection**:
+
+```python
+# FORBIDDEN: Query without space_id
+await db.fetch("""
+    SELECT * FROM st_learned_weights
+    WHERE param_key = 'importance_weight'
+""")  # ❌ Missing WHERE space_id
+
+# CORRECT: Query with space_id
+await db.fetch("""
+    SELECT * FROM st_learned_weights
+    WHERE param_key = 'importance_weight'
+    AND space_id = $1
+""", space_id)  # ✅ Isolated
+```
+
+**Rationale**: Family data must never influence another family's learning; absolute isolation required.
+
 ---
 
 ## 15. Performance Tuning
@@ -8603,7 +17530,7 @@ k0ctl benchmark report --input p03_benchmark.json --output docs/test_results/p03
         """Release scheduler token after batch completion."""
         await self.scheduler._release(token)
 
-# P03 Scheduler profiles by operation type
+## P03 Scheduler profiles by operation type
 
 P03_SCHEDULER_PROFILES = {
     'BATCH_CONSOLIDATION': SchedulerProfile(
@@ -9172,6 +18099,263 @@ P03_SLO_TARGETS = {
 }
 ```
 
+### 15.9 Learning Compute Budget
+
+**Purpose**: Ensure learning operations use < 5% of P03 consolidation cycle time.
+
+**Total Budget**: < 5% of P03 consolidation cycle time
+
+**Component Breakdown**:
+
+| Component | % of Budget | Absolute Target |
+|-----------|-------------|-----------------|
+| Feedback ingestion | 20% | < 10ms per signal |
+| Parameter update | 30% | < 50ms per update |
+| Quality monitoring | 30% | < 100ms per cycle |
+| Audit logging | 20% | < 20ms per record |
+
+**Enforcement Strategy**:
+
+```python
+class LearningBudgetManager:
+    """Enforce 5% compute budget for learning operations."""
+
+    def __init__(self, cycle_budget_ms: float):
+        self.total_budget_ms = cycle_budget_ms * 0.05  # 5% of cycle
+        self.component_budgets = {
+            'feedback_ingestion': self.total_budget_ms * 0.20,
+            'parameter_update': self.total_budget_ms * 0.30,
+            'quality_monitoring': self.total_budget_ms * 0.30,
+            'audit_logging': self.total_budget_ms * 0.20,
+        }
+        self.time_spent = {k: 0.0 for k in self.component_budgets}
+
+    async def execute_with_budget(
+        self,
+        component: str,
+        operation: Callable,
+        priority: int
+    ) -> Optional[Any]:
+        """
+        Execute operation if budget allows.
+
+        Priority:
+        1 = Critical (quality monitoring)
+        2 = High (parameter update)
+        3 = Medium (audit logging)
+        4 = Low (feedback ingestion)
+        """
+        budget = self.component_budgets[component]
+        spent = self.time_spent[component]
+
+        if spent >= budget:
+            # Budget exhausted
+            if priority <= 2:
+                # Critical/High: Execute anyway, log warning
+                logger.warning(f"{component} over budget: {spent:.1f}ms / {budget:.1f}ms")
+                result = await self._timed_execute(component, operation)
+                return result
+            else:
+                # Medium/Low: Skip operation
+                p03_learning_skip_count.labels(component=component).inc()
+                return None
+
+        # Within budget: Execute
+        result = await self._timed_execute(component, operation)
+        return result
+
+    async def _timed_execute(self, component: str, operation: Callable) -> Any:
+        """Execute operation and track time."""
+        start = time.perf_counter()
+        try:
+            result = await operation()
+            return result
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            self.time_spent[component] += duration_ms
+            p03_learning_latency.labels(component=component).observe(duration_ms)
+
+    def get_budget_usage(self) -> dict:
+        """Return budget usage percentage per component."""
+        return {
+            component: (self.time_spent[component] / budget * 100)
+            for component, budget in self.component_budgets.items()
+        }
+
+    def reset(self):
+        """Reset budget tracking for new cycle."""
+        self.time_spent = {k: 0.0 for k in self.component_budgets}
+```
+
+**Measurement**:
+
+```python
+# Track learning time as percentage of cycle
+p03_learning_time_pct = Gauge(
+    'p03_learning_time_pct',
+    'Percentage of cycle time spent on learning',
+    ['space_id']
+)
+
+# Usage
+async def consolidation_cycle(space_id: str):
+    cycle_start = time.perf_counter()
+    budget_mgr = LearningBudgetManager(cycle_budget_ms=30000)  # 30s cycle
+
+    # ... consolidation work ...
+
+    # Learning operations
+    await budget_mgr.execute_with_budget(
+        'quality_monitoring',
+        lambda: check_learning_quality(space_id),
+        priority=1  # Critical
+    )
+
+    cycle_duration_ms = (time.perf_counter() - cycle_start) * 1000
+    learning_total_ms = sum(budget_mgr.time_spent.values())
+    learning_pct = (learning_total_ms / cycle_duration_ms) * 100
+
+    p03_learning_time_pct.labels(space_id=space_id).set(learning_pct)
+
+    if learning_pct > 5.0:
+        logger.warning(f"Learning exceeded 5% budget: {learning_pct:.1f}%")
+```
+
+**Rationale**: Learning must not slow down memory consolidation; 5% budget preserves consolidation performance.
+
+### 15.10 Learning Batch Processing
+
+**Purpose**: Optimize learning operations through batching to meet compute budget.
+
+**Batch Strategy**:
+
+| Operation | Batch Size | Interval | Rationale |
+|-----------|------------|----------|-----------|
+| Feedback processing | 100 signals | Every 1 minute | Amortize signal parsing overhead |
+| Parameter updates | 10 params | Every 5 minutes | Batch database writes |
+| Audit writes | 50 records | Every 30 seconds | Reduce transaction overhead |
+| Quality checks | 1 | Every cycle | Real-time quality monitoring |
+
+**Queue Management**:
+
+```python
+class FeedbackQueue:
+    """Manage feedback signal queue with overflow handling."""
+
+    def __init__(self, max_depth: int = 1000):
+        self.queue = asyncio.Queue(maxsize=max_depth)
+        self.overflow_count = 0
+
+    async def enqueue(self, signal: FeedbackSignal) -> bool:
+        """Add signal to queue, sample if full."""
+        try:
+            self.queue.put_nowait(signal)
+            return True
+        except asyncio.QueueFull:
+            # Queue full: Sample (keep 10%, discard 90%)
+            if random.random() < 0.10:
+                # Discard oldest, add new
+                try:
+                    self.queue.get_nowait()
+                    self.queue.put_nowait(signal)
+                    self.overflow_count += 1
+                    return True
+                except:
+                    pass
+
+            # Discarded
+            p03_learning_queue_overflow.inc()
+            return False
+
+    async def dequeue_batch(self, batch_size: int) -> List[FeedbackSignal]:
+        """Dequeue up to batch_size signals."""
+        batch = []
+        for _ in range(batch_size):
+            try:
+                signal = self.queue.get_nowait()
+                batch.append(signal)
+            except asyncio.QueueEmpty:
+                break
+        return batch
+
+    def depth(self) -> int:
+        """Current queue depth."""
+        return self.queue.qsize()
+```
+
+**Async Writes**:
+
+```python
+class AsyncAuditLogger:
+    """Non-blocking audit logging."""
+
+    def __init__(self):
+        self.write_queue = asyncio.Queue()
+        self.writer_task = None
+
+    async def start(self):
+        """Start background writer."""
+        self.writer_task = asyncio.create_task(self._writer_loop())
+
+    async def log_audit(self, record: AuditRecord):
+        """Queue audit record (non-blocking)."""
+        try:
+            self.write_queue.put_nowait(record)
+        except asyncio.QueueFull:
+            # Drop audit if queue full (fire-and-forget)
+            p03_audit_drops.inc()
+
+    async def _writer_loop(self):
+        """Background writer: batch writes every 30s."""
+        while True:
+            await asyncio.sleep(30)
+            batch = []
+
+            # Drain queue
+            while not self.write_queue.empty() and len(batch) < 50:
+                try:
+                    record = self.write_queue.get_nowait()
+                    batch.append(record)
+                except asyncio.QueueEmpty:
+                    break
+
+            if batch:
+                await self._write_batch(batch)
+
+    async def _write_batch(self, batch: List[AuditRecord]):
+        """Write batch to database."""
+        try:
+            await db.executemany(
+                "INSERT INTO st_consolidation_audit (...) VALUES (...)",
+                [(r.audit_id, r.memory_id, ...) for r in batch]
+            )
+            p03_audit_writes.labels(batch_size=len(batch)).inc()
+        except Exception as e:
+            logger.error(f"Audit batch write failed: {e}")
+```
+
+**Alert Configuration**:
+
+```yaml
+- alert: P03LearningQueueHigh
+  expr: p03_learning_queue_depth > 500
+  for: 5m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Learning feedback queue above 500 signals"
+
+- alert: P03LearningQueueCritical
+  expr: p03_learning_queue_depth > 1000
+  for: 1m
+  labels:
+    severity: critical
+  annotations:
+    summary: "Learning feedback queue at capacity (1000 signals)"
+```
+
+**Rationale**: Batching amortizes overhead and smooths load; async writes prevent blocking consolidation cycle.
+
 ---
 
 ## 16. Configuration Reference
@@ -9310,6 +18494,9 @@ class P03SpecificSettings(BaseModel):
     confidence_boost_per_observation: float = 0.05
     confidence_decay_per_day: float = 0.001
     confidence_min_for_canonical: float = 0.50
+
+    # Learning system settings (Epic 2.1: Importance Score Learning)
+    importance_min_samples: int = 500              # Cold start threshold (Section 4.2.2.2)
 ```
 
 ### 16.3 K0 Pipeline Scheduler Configuration
@@ -10088,6 +19275,9 @@ error_budget:
 | P03R5SkipRateHigh | `rate(p03_r5_skipped_total[1h]) / rate(p03_cycles_total[1h]) > 0.5` | WARNING | RB-P03-013 |
 | P03RetryRateHigh | `rate(p03_retry_attempts_total[1h]) > 100` | WARNING | RB-P03-014 |
 | P03SLOBurnRateSlow | `p03_slo_burn_rate > 6.0` | WARNING | RB-P03-015 |
+| P03ImportanceWeightDrift | `p03_importance_weight_drift > 0.3` | WARNING | RB-P03-016 |
+| P03ImportanceLowSamples | `p03_importance_sample_count < 100` | WARNING | RB-P03-017 |
+| P03ImportanceLossHigh | `p03_importance_training_loss > 0.5` | WARNING | RB-P03-018 |
 
 #### 17.3.3 Info Alerts (Log Only)
 
@@ -10361,6 +19551,136 @@ k0ctl pipeline p03 scale --workers=8
 - [ ] Update handoff notes with any ongoing issues
 - [ ] Document any temporary config changes
 - [ ] Verify no silent failures (check error logs)
+
+### 17.7 Automatic Rollback Triggers
+
+**Purpose**: Monitor learning quality and trigger automatic rollback when degradation detected.
+
+**Trigger Conditions**:
+
+| Condition | Threshold | Action | Severity |
+|-----------|-----------|--------|----------|
+| Memory retrieval accuracy drop | >15% in 24h | Rollback parameters | critical |
+| User corrections spike | >3× baseline | Alert + manual review | high |
+| Processing time increase | >2× baseline | Rollback formula | critical |
+| Error rate spike | >5% | Immediate halt | critical |
+| Regret signal spike | >5× baseline | Rollback decay params | high |
+
+**Evaluation Frequency**: Every 15 minutes.
+
+**Cooldown Period**: 24 hours after rollback (prevent thrashing).
+
+**Automatic Rollback Process**:
+
+```python
+class AutomaticRollbackMonitor:
+    """Monitor learning quality and trigger rollback."""
+
+    def __init__(self):
+        self.rollback_cooldown_seconds = 86400  # 24 hours
+        self.last_rollback = {}
+
+    async def evaluate_rollback_triggers(self) -> list[dict]:
+        """
+        Check all trigger conditions and execute automatic rollbacks.
+        Called every 15 minutes.
+        """
+        actions = []
+
+        # 1. Memory retrieval accuracy
+        accuracy_drop = await self.check_accuracy_drop()
+        if accuracy_drop > 0.15:
+            if self.can_rollback("importance"):
+                await self.rollback_parameter("importance", "accuracy drop >15%")
+                actions.append({"type": "parameter_rollback", "reason": "accuracy_drop"})
+
+        # 2. User corrections spike
+        correction_ratio = await self.check_correction_spike()
+        if correction_ratio > 3.0:
+            await self.emit_alert(
+                "UserCorrectionsSpike",
+                f"Corrections at {correction_ratio:.1f}× baseline - manual review required",
+                severity="high"
+            )
+            actions.append({"type": "alert", "reason": "correction_spike"})
+
+        # 3. Processing time increase
+        processing_ratio = await self.check_processing_time()
+        if processing_ratio > 2.0:
+            if self.can_rollback("formula"):
+                await self.rollback_formula("all", "processing time >2×")
+                actions.append({"type": "formula_rollback", "reason": "processing_time"})
+
+        # 4. Error rate spike
+        error_rate = await self.check_error_rate()
+        if error_rate > 0.05:
+            await self.halt_all_learning("error rate >5%")
+            actions.append({"type": "halt", "reason": "error_spike"})
+
+        # 5. Regret signal spike
+        regret_ratio = await self.check_regret_spike()
+        if regret_ratio > 5.0:
+            if self.can_rollback("decay"):
+                await self.rollback_parameter("decay", "regret spike >5×")
+                actions.append({"type": "parameter_rollback", "reason": "regret_spike"})
+
+        return actions
+
+    def can_rollback(self, key: str) -> bool:
+        """Check if enough time elapsed since last rollback."""
+        last = self.last_rollback.get(key, 0)
+        return (time.time() - last) > self.rollback_cooldown_seconds
+
+    async def check_accuracy_drop(self) -> float:
+        """Calculate drop in P04 grounding success rate."""
+        current = await self.get_metric(
+            "p04_grounding_success_rate",
+            window="1h"
+        )
+        baseline = await self.get_metric(
+            "p04_grounding_success_rate",
+            window="7d",
+            aggregation="p50"
+        )
+        return max(0, baseline - current)
+```
+
+**PagerDuty Integration**:
+
+```python
+async def emit_alert(self, title: str, message: str, severity: str):
+    """Send alert to PagerDuty and Slack."""
+    await pagerduty.trigger_incident(
+        title=f"[P03 Learning] {title}",
+        description=message,
+        severity=severity,
+        source="P03AutomaticRollback"
+    )
+
+    await slack.send_message(
+        channel="#p03-learning-alerts",
+        text=f":warning: {title}\n{message}",
+        severity=severity
+    )
+```
+
+**Metrics**:
+
+- `p03_automatic_rollback_evaluations_total` (counter): Evaluation cycles
+- `p03_automatic_rollbacks_total` (counter by reason): Rollback actions
+- `p03_automatic_rollback_cooldown_active` (gauge): Cooldown status
+
+**Dashboard Panel**:
+
+```promql
+# Automatic rollback trigger history (7 days)
+increase(p03_automatic_rollbacks_total[7d])
+
+# Current cooldown status
+p03_automatic_rollback_cooldown_active
+```
+
+**Rationale**: Closed-loop learning requires safety net - automatic detection + automatic rollback + human notification creates fail-safe system.
 
 ---
 
@@ -11021,8 +20341,8 @@ k0ctl pipeline p03 scale --workers=8
 |   |                                                                           |   |
 |   |           # Weighted combination                                          |   |
 |   |           return (                                                        |   |
-|   |               sentiment_intensity *self.weights.sentiment_weight +       |   |
-|   |               affect_intensity* self.weights.affect_weight               |   |
+|   |               sentiment_intensity *self.weights.sentiment_weight +        |   |
+|   |               affect_intensity* self.weights.affect_weight                |   |
 |   |           )                                                               |   |
 |   |                                                                           |   |
 |   |       def compute_social_factor(self, event: HippEvent) -> float:         |   |
@@ -11045,14 +20365,14 @@ k0ctl pipeline p03 scale --workers=8
 |   |           Formula:                                                        |   |
 |   |             importance = (                                                |   |
 |   |                 emotional_intensity +                                     |   |
-|   |                 novelty_score *novelty_weight +                          |   |
-|   |                 social_factor* social_weight                             |   |
-|   |             ) *event_type_multiplier                                     |   |
+|   |                 novelty_score *novelty_weight +                           |   |
+|   |                 social_factor* social_weight                              |   |
+|   |             ) *event_type_multiplier                                      |   |
 |   |           """                                                             |   |
 |   |           # Component scores                                              |   |
 |   |           emotional = self.compute_emotional_intensity(event)             |   |
-|   |           novelty = event.novelty_score* self.weights.novelty_weight     |   |
-|   |           social = self.compute_social_factor(event) *self.weights.social|   |
+|   |           novelty = event.novelty_score* self.weights.novelty_weight      |   |
+|   |           social = self.compute_social_factor(event) *self.weights.social |   |
 |   |                                                                           |   |
 |   |           # Base importance                                               |   |
 |   |           base_importance = emotional + novelty + social                  |   |
@@ -11062,7 +20382,7 @@ k0ctl pipeline p03 scale --workers=8
 |   |               event.event_type, 1.0                                       |   |
 |   |           )                                                               |   |
 |   |                                                                           |   |
-|   |           final_score = base_importance* multiplier                      |   |
+|   |           final_score = base_importance* multiplier                       |   |
 |   |                                                                           |   |
 |   |           # Normalize to [0.0, 1.0]                                       |   |
 |   |           return min(1.0, max(0.0, final_score))                          |   |
@@ -11080,7 +20400,7 @@ k0ctl pipeline p03 scale --workers=8
 |   |               for event in events                                         |   |
 |   |           ]                                                               |   |
 |   |           scored.sort(key=lambda x: x[1], reverse=True)                   |   |
-|   |           return [event for event,_ in scored[:batch_size]]              |   |
+|   |           return [event for event,_ in scored[:batch_size]]               |   |
 |   |                                                                           |   |
 |   +---------------------------------------------------------------------------+   |
 |                                       |                                           |
@@ -11106,12 +20426,12 @@ k0ctl pipeline p03 scale --workers=8
 |                                                                                   |
 |   IMPORTANCE THRESHOLDS:                                                          |
 |   +-----------------------------------------------------------------------+       |
-|   | Score Range   | Priority    | Processing Behavior                    |       |
-|   |---------------|-------------|----------------------------------------|       |
-|   | 0.80 - 1.00   | CRITICAL    | Process immediately, never skip        |       |
-|   | 0.50 - 0.79   | HIGH        | Process in current cycle               |       |
-|   | 0.30 - 0.49   | MEDIUM      | Process if capacity allows             |       |
-|   | 0.00 - 0.29   | LOW         | May be deferred, candidate for pruning |       |
+|   | Score Range   | Priority    | Processing Behavior                     |       |
+|   |---------------|-------------|---------------------------------------- |       |
+|   | 0.80 - 1.00   | CRITICAL    | Process immediately, never skip         |       |
+|   | 0.50 - 0.79   | HIGH        | Process in current cycle                |       |
+|   | 0.30 - 0.49   | MEDIUM      | Process if capacity allows              |       |
+|   | 0.00 - 0.29   | LOW         | May be deferred, candidate for pruning  |       |
 |   +-----------------------------------------------------------------------+       |
 |                                                                                   |
 +-----------------------------------------------------------------------------------+
@@ -11128,6 +20448,246 @@ WHERE consolidation_status IS NULL
 ORDER BY importance_score DESC
 LIMIT :batch_size;
 ```
+
+##### C.2.1.1 Adaptive Weight Learning
+
+**Purpose**: Learn importance component weights from feedback signals instead of using static priors.
+
+**Learning Algorithm**:
+
+- **Method**: Online gradient descent with momentum=0.9
+- **Loss Function**: Binary cross-entropy predicting "will event be grounded?"
+- **Training Schedule**: Nightly batch during P03 consolidation cycle
+- **Minimum Samples**: 500 events with grounding feedback before learning starts
+
+**Algorithm Pseudocode**:
+
+```python
+class ImportanceWeightLearner:
+    def __init__(self, space_id: str):
+        self.space_id = space_id
+        # Start with static prior
+        self.weights = torch.tensor([0.35, 0.25, 0.20, 0.20], requires_grad=True)
+        self.optimizer = torch.optim.Adam([self.weights], lr=0.01)
+        self.min_samples = 500
+
+    async def train_step(self, features: Tensor, labels: Tensor) -> float:
+        """One gradient descent step."""
+        self.optimizer.zero_grad()
+
+        # Softmax ensures weights sum to 1
+        w = F.softmax(self.weights, dim=0)
+        predictions = (features * w).sum(dim=1)
+
+        # Binary cross-entropy: predict "will this be grounded?"
+        loss = F.binary_cross_entropy_with_logits(predictions, labels)
+
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()
+```
+
+**Weight Persistence**:
+
+- **Storage Table**: `st_learned_weights` (see Section 6.17)
+- **Key Pattern**: `importance_<component>` (e.g., `importance_emotional`, `importance_recency`)
+- **Scope**: Per-space isolation (space_id column)
+- **Loading**: At kernel bootup, weights loaded from st_learned_weights
+- **Fallback**: If no learned weights exist, use static prior (0.35/0.25/0.20/0.20)
+
+**Example Usage in R1**:
+
+```python
+async def compute_importance(event: HippEvent, space_id: str) -> float:
+    # Check if we have learned weights for this space
+    learned = await weight_store.get_weights(space_id)
+
+    if learned and learned.sample_count >= 500:
+        weights = learned.weights
+    else:
+        # Fall back to static prior
+        weights = {"emotional": 0.35, "recency": 0.25,
+                  "access": 0.20, "social": 0.20}
+
+    # Compute components
+    emotional = compute_emotional(event)
+    recency = compute_recency(event)
+    access = compute_access(event)
+    social = compute_social(event)
+
+    return (
+        weights["emotional"] * emotional +
+        weights["recency"] * recency +
+        weights["access"] * access +
+        weights["social"] * social
+    )
+```
+
+**Drift Handling Strategy**:
+
+- **Sliding Window**: Only use last 30 days of feedback for training
+- **Exponential Decay**: Older samples weighted less (λ=0.1 per day)
+- **Momentum Update**: `v = 0.9 × v + gradient` prevents oscillation from noisy feedback
+- **Sample Weighting**: `weight = exp(-0.1 × days_ago)`
+
+**Training Data Collection**:
+
+```sql
+SELECT
+    emotional_score, recency_score, access_score, social_score,
+    CASE WHEN was_grounded THEN 1.0 ELSE 0.0 END AS label,
+    (EXTRACT(EPOCH FROM NOW()) - created_at) / 86400.0 AS days_ago
+FROM st_importance_feedback
+WHERE space_id = :space_id
+  AND created_at > :cutoff  -- Last 30 days
+ORDER BY created_at DESC;
+```
+
+**Metrics** (add to Section 8.2):
+
+```python
+# Importance weight tracking metrics
+p03_importance_weight_emotional = Gauge(
+    'p03_importance_weight_emotional',
+    'Current learned emotional weight',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_weight_recency = Gauge(
+    'p03_importance_weight_recency',
+    'Current learned recency weight',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_weight_access = Gauge(
+    'p03_importance_weight_access',
+    'Current learned access weight',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_weight_social = Gauge(
+    'p03_importance_weight_social',
+    'Current learned social weight',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_weight_drift_30d = Gauge(
+    'p03_importance_weight_drift_30d',
+    'Euclidean distance from prior weights (30-day drift)',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_training_loss = Gauge(
+    'p03_importance_training_loss',
+    'Binary cross-entropy loss for importance learning',
+    ['tenant_id', 'space_id']
+)
+
+p03_importance_training_samples = Gauge(
+    'p03_importance_training_samples',
+    'Number of training samples used in last update',
+    ['tenant_id', 'space_id']
+)
+```
+
+**Weight Constraints**:
+
+- All weights must be non-negative
+- Weights normalized via softmax (sum to 1.0)
+- No single component can dominate (implicit via softmax)
+- Minimum 500 samples before learning begins
+
+**Rationale**: Transforms importance scoring from static assumptions to data-driven personalization. Each space learns weights that reflect actual usage patterns, improving recall precision over time.
+
+---
+
+#### C.2.1.2 Stability Controls
+
+**Objective**: Prevent weight oscillation, unbounded updates, and catastrophic drift during online learning.
+
+**Momentum-Based Smoothing**:
+
+- Use **momentum** (velocity term) to smooth gradient updates and prevent rapid weight swings:
+
+  ```python
+  velocity_t = β × velocity_{t-1} + ∇L_t
+  w_t = w_{t-1} - η × velocity_t
+  ```
+
+  where:
+  - `β = 0.9` (momentum coefficient; retains 90% of previous velocity)
+  - `∇L_t` is the current gradient (from binary cross-entropy loss)
+  - `η = 0.01` (learning rate)
+
+- Momentum smooths noisy gradients and accelerates convergence in consistent directions.
+
+**Weight Clamping**:
+
+- **Hard bounds** on learned weights to prevent any single signal from dominating:
+
+  ```python
+  w_i = max(0.05, min(0.60, w_i))  # For all i ∈ {recency, frequency, rag_score, explicit, freshness}
+  ```
+
+- Rationale:
+  - `min = 0.05`: Ensures all signals contribute at least 5% to importance score.
+  - `max = 0.60`: Prevents any signal from exceeding 60% influence.
+  - Maintains diversity in importance calculation.
+
+**Drift Monitoring & Rollback**:
+
+- **Drift Metric** (from Appendix C.2.1.1):
+
+  ```
+  drift = max_i |w_i^{new} - w_i^{old}|
+  ```
+
+- **Alert Thresholds** (Section 17.3.2):
+  - `p03_importance_weight_drift > 0.3` → WARNING (RB-P03-016)
+  - `p03_importance_sample_count < 100` → WARNING (RB-P03-017)
+  - `p03_importance_training_loss > 0.5` → WARNING (RB-P03-018)
+
+- **Rollback Trigger**:
+  - If training loss increases for **3 consecutive nights** → rollback to static weights.
+  - Rollback logic:
+
+    ```python
+    if loss_increases_for_3_nights():
+        weights = STATIC_PRIORS  # w_recency=0.35, w_frequency=0.25, etc.
+        log_alert("IMPORTANCE_WEIGHT_ROLLBACK", reason="loss_regression")
+        disable_learning_flag()  # Set feature flag to "shadow" mode
+    ```
+
+- **Recovery**:
+  - Manual intervention required to re-enable learning after rollback.
+  - Investigate root cause (data quality, schema drift, hyperparameter tuning).
+
+**Normalization Enforcement**:
+
+- After every update, re-normalize weights to sum to 1.0:
+
+  ```python
+  total = sum(w_recency, w_frequency, w_rag_score, w_explicit, w_freshness)
+  w_recency /= total
+  w_frequency /= total
+  w_rag_score /= total
+  w_explicit /= total
+  w_freshness /= total
+  ```
+
+- Ensures importance scores remain interpretable and bounded [0, 1].
+
+**Metrics for Stability** (from C.2.1.1):
+
+- `p03_importance_weight_drift` (gauge) — Max absolute change in any weight.
+- `p03_importance_training_loss` (gauge) — Binary cross-entropy loss on validation set.
+- `p03_importance_sample_count` (gauge) — Number of feedback samples used for training.
+
+**Configuration**:
+
+- Momentum coefficient `β`, learning rate `η`, and clamp bounds defined in `k0/config/learning.py`.
+- Rollback threshold (3 consecutive nights) configurable via `P03_IMPORTANCE_ROLLBACK_THRESHOLD`.
 
 ---
 
@@ -11335,6 +20895,365 @@ LIMIT :batch_size;
 
 ---
 
+#### C.2.2.1 Anti-Hebbian Decay
+
+**Principle**: "Cells that fire apart, unwire" — counterpart to Hebbian learning.
+
+**Purpose**: Weaken or remove associations that are explicitly wrong, contradictory, or mutually exclusive. Prevents incorrect relationships from persisting indefinitely.
+
+**Conflict Signals**:
+
+| Signal Type | Source | Action | Penalty |
+|-------------|--------|--------|--------|
+| `ENTITY_MERGE_REJECTED` | P06/User | Anti-Hebbian decay + mark distinct | -0.2 |
+| `ASSOCIATION_WRONG` | K1 correction | Strong anti-Hebbian decay | -0.3 |
+| `MUTUAL_EXCLUSION` | P03 R4 | Prune candidate | -0.4 |
+| `CONTRADICTION` | P03 R7 | Moderate anti-Hebbian decay | -0.15 |
+
+**Anti-Hebbian Formula**:
+
+```python
+# Negative learning - weakens wrong associations
+Δw = -anti_lr × current_weight × confidence × penalty_multiplier
+
+anti_lr = 0.15  # Faster than positive learning (0.1)
+penalty_multiplier = 1.3 if explicit_correction else 1.0
+
+new_weight = max(0.0, current_weight + Δw)
+```
+
+**Key Properties**:
+
+- **Faster decay than positive learning**: `anti_lr = 0.15 > 0.1 = learning_rate`
+  - Rationale: Explicit corrections should override accumulated co-occurrences quickly.
+
+- **Proportional to current weight**: Strong wrong associations decay faster (more to lose).
+
+- **Amplified for explicit corrections**: User corrections get 1.3× multiplier.
+
+**Prune Threshold**:
+
+- If `new_weight < 0.05` after anti-Hebbian update → mark edge as prune candidate.
+- Edge moved to `archival_status = 'ARCHIVED'` (soft delete).
+- Stored in `st_pruned_entities` for regret tracking (14-day window).
+
+**Audit Trail**:
+
+- Log anti-Hebbian updates to `st_consolidation_audit` with:
+  - `action = 'ANTI_HEBBIAN_DECAY'`
+  - `inputs_json = {signal_type, penalty, current_weight}`
+  - `outputs_json = {new_weight, pruned}`
+  - `explanation = "Association weakened due to {signal_type}"`
+
+**Metrics** (add to Section 8.2):
+
+- `p03_hebbian_anti_updates` (counter): Total anti-Hebbian decay applications.
+- `p03_hebbian_pruned_by_conflict` (counter): Edges pruned due to conflict signals.
+
+**Configuration**:
+
+- `P03_ANTI_HEBBIAN_LR = 0.15` (default; configurable)
+- `P03_ANTI_HEBBIAN_THRESHOLD = 0.05` (prune threshold)
+
+**Rationale**: Without negative learning, wrong associations (e.g., mistaken entity merges, incorrect relationships) persist forever. Anti-Hebbian decay enables correction and prevents knowledge graph pollution.
+
+---
+
+#### C.2.2.2 Edge Resurrection
+
+**Problem**: Edges correctly archived may be re-observed in new events. Need mechanism to restore without losing history.
+
+**When to Resurrect**:
+
+1. **New co-occurrence for ARCHIVED edge**: Entity pair appears together again.
+2. **K1 uses archived relationship**: K1 reasoning requests edge that was archived.
+3. **User explicitly confirms relationship**: Explicit feedback that archived edge is valid.
+
+**Resurrection Formula**:
+
+```python
+# Restore archived edge with boosted initial weight
+new_weight = max(0.7, 0.5 + old_weight × 0.5)
+resurrection_count += 1
+archival_status = 'ACTIVE'
+last_observed_at = current_timestamp
+```
+
+**Formula Rationale**:
+
+- **Floor of 0.7**: Resurrected edges start strong (middle of "Strong" range).
+- **Partial memory**: `0.5 + old_weight × 0.5` retains 50% of prior strength.
+  - Example: Edge at 0.40 when archived → resurrects at max(0.7, 0.70) = 0.7
+  - Example: Edge at 0.80 when archived → resurrects at max(0.7, 0.90) = 0.9
+- **Resurrection count tracking**: Detects instability (repeated archive/resurrect cycles).
+
+**Instability Alert**:
+
+- If `resurrection_count >= 3` → emit alert to Section 17.3 (Warning):
+  - Alert: `P03HebbianEdgeUnstable`
+  - Condition: `p03_hebbian_resurrection_count{edge_id} >= 3`
+  - Action: Investigate edge (may indicate borderline importance or decay rate too aggressive).
+
+**Consideration for Decay Rate**:
+
+- High resurrection count for specific relation types suggests decay too aggressive.
+- Add to Appendix C.2.4 (Unified Decay Learning):
+  - Use resurrection signals as feedback to adjust decay λ per relation type.
+
+**Audit Trail**:
+
+- Log resurrection to `st_consolidation_audit` with:
+  - `action = 'EDGE_RESURRECTION'`
+  - `inputs_json = {old_weight, archival_reason, resurrection_trigger}`
+  - `outputs_json = {new_weight, resurrection_count}`
+  - `explanation = "Edge restored from archive due to {trigger}"`
+
+**Storage**:
+
+- Track in `st_kg_edges`:
+  - `resurrection_count INTEGER DEFAULT 0`
+  - `last_resurrected_at BIGINT`
+
+**Metrics** (add to Section 8.2):
+
+- `p03_hebbian_resurrections` (counter): Total edge resurrections.
+- `p03_hebbian_unstable_edges` (gauge): Edges with resurrection_count >= 3.
+
+**Rationale**: Edges wrongly archived (e.g., seasonal relationships, infrequent but important connections) should be recoverable. Resurrection mechanism prevents data loss while tracking instability.
+
+---
+
+#### C.2.2.3 Adaptive Learning Rate
+
+**Problem**: Fixed learning rate (LR=0.1) treats all edges equally:
+
+- **New relationships**: Should learn quickly (high LR) to establish connections fast.
+- **Mature relationships**: Should be stable (low LR) to avoid noise from random co-occurrences.
+
+**Solution**: Adapt learning rate based on relationship maturity (co-occurrence count).
+
+**Adaptive Learning Rate Formula**:
+
+```python
+def compute_learning_rate(cooccurrence_count: int) -> float:
+    """
+    Exponential decay from high LR (new edges) to low LR (mature edges).
+
+    Formula: lr = lr_max × exp(-decay_factor × count) + lr_min
+    """
+    lr_max = 0.3   # Maximum LR for new edges
+    lr_min = 0.05  # Minimum LR for mature edges
+    decay_factor = 0.1  # Controls decay speed
+
+    lr = lr_max * math.exp(-decay_factor * cooccurrence_count) + lr_min
+    return max(lr_min, min(lr_max, lr))
+```
+
+**Learning Rate Table** (examples):
+
+| Co-occurrence Count | Learning Rate | Interpretation |
+|---------------------|---------------|----------------|
+| 1-5 (new) | 0.25-0.30 | Fast learning - establish connection |
+| 6-15 (emerging) | 0.15-0.20 | Moderate learning - refine strength |
+| 16-50 (established) | 0.08-0.12 | Slow learning - stable refinement |
+| 50+ (mature) | 0.05 | Minimal learning - resist noise |
+
+**Integration with Hebbian Update**:
+
+```python
+# In update_edge_weight() method
+learning_rate = self.compute_learning_rate(current_count)
+
+delta = learning_rate × (max_weight - current_weight) × event_importance
+new_weight = current_weight + delta
+```
+
+**Per-Relation-Type Learning Rate** (future enhancement):
+
+- Different relation types may have different stability characteristics:
+  - `FAMILY`: Very stable (low LR even when new)
+  - `DISCUSSES`: Ephemeral topics (higher LR throughout)
+  - `INTERACTS_WITH`: Medium stability
+
+- Store per-relation LR curves in `st_learned_weights`:
+  - Key pattern: `hebbian_lr_max_FAMILY`, `hebbian_lr_decay_DISCUSSES`
+
+**Storage**:
+
+- Learning rate parameters stored in `st_learned_weights`:
+  - `hebbian_lr_max` (default: 0.3)
+  - `hebbian_lr_min` (default: 0.05)
+  - `hebbian_lr_decay` (default: 0.1)
+
+**Metrics** (add to Section 8.2):
+
+- `p03_hebbian_lr_by_count` (histogram): Distribution of learning rates by co-occurrence count.
+- `p03_hebbian_avg_lr` (gauge): Average learning rate applied in current cycle.
+
+**Configuration**:
+
+- `P03_HEBBIAN_LR_MAX = 0.3`
+- `P03_HEBBIAN_LR_MIN = 0.05`
+- `P03_HEBBIAN_LR_DECAY = 0.1`
+
+**Rationale**: Adaptive learning rate balances responsiveness (new relationships) with stability (mature relationships). Prevents established connections from oscillating due to noise.
+
+---
+
+#### C.2.2.4 Saturation Controls
+
+**Problem**: Two saturation issues in Hebbian learning:
+
+1. **Weight saturation**: Edges approaching max_weight (1.0) learn too slowly.
+2. **Co-occurrence saturation**: Entities appearing 1000× shouldn't be 1000× stronger than 10×.
+
+**Soft Weight Saturation** (already in algorithm, documented explicitly):
+
+- Formula includes `(max_weight - current_weight)` term:
+
+  ```python
+  delta = learning_rate × (max_weight - current_weight) × event_importance
+  ```
+
+- **Effect**: As `current_weight → max_weight`, delta → 0 (asymptotic approach).
+- **Benefit**: Prevents weights from exceeding max_weight without hard clipping.
+
+**Co-occurrence Capping** (new):
+
+**Problem**: High-frequency entities (e.g., CEO mentioned in 1000 events) dominate graph.
+
+**Solution**: Logarithmic scaling of co-occurrence counts for weight updates.
+
+```python
+def normalize_cooccurrence(raw_count: int, cap_threshold: int = 50) -> float:
+    """
+    Apply log-scale capping to co-occurrence counts.
+
+    Formula:
+    - If count <= cap_threshold: return count (linear)
+    - If count > cap_threshold: return cap_threshold + log2(count - cap_threshold + 1)
+
+    Effect: 100 co-occurrences → effective_count ≈ 85
+            500 co-occurrences → effective_count ≈ 165
+            1000 co-occurrences → effective_count ≈ 200
+    """
+    if raw_count <= cap_threshold:
+        return float(raw_count)
+
+    excess = raw_count - cap_threshold
+    return cap_threshold + math.log2(excess + 1)
+```
+
+**Integration**:
+
+```python
+# In process_batch() method
+for event in events:
+    cooccurrences = self.extract_cooccurrences(event)
+
+    for source, target, rel_type in cooccurrences:
+        key = (source, target, rel_type)
+
+        if key not in edge_updates:
+            edge_updates[key] = EdgeUpdate(...)
+
+        # Use normalized count for weight calculation
+        edge_updates[key].cooccurrence_count += 1
+        normalized_count = self.normalize_cooccurrence(
+            edge_updates[key].cooccurrence_count
+        )
+        edge_updates[key].effective_count = normalized_count
+```
+
+**Weight Cap Enforcement**:
+
+- `max_weight = 1.0` enforced via `min(max_weight, new_weight)` in update formula.
+- No edge can exceed 1.0 ("Very Strong" upper bound).
+
+**Configuration**:
+
+- `P03_HEBBIAN_CAP_THRESHOLD = 50` (default; when log-scaling starts)
+- `P03_HEBBIAN_MAX_WEIGHT = 1.0` (absolute ceiling)
+
+**Metrics** (add to Section 8.2):
+
+- `p03_hebbian_capped_edges` (counter): Edges that hit max_weight cap.
+- `p03_hebbian_high_cooccurrence` (gauge): Edges with raw_count > cap_threshold.
+
+**Rationale**: Prevents dominant entity pairs from drowning out other relationships. Logarithmic capping ensures high-frequency pairs remain strong but not infinitely so.
+
+---
+
+#### C.2.2.5 Weight Normalization Strategy
+
+**Weight Range**: [0.0, 1.0] enforced
+
+- **0.0**: No relationship (edge pruned or never existed)
+- **1.0**: Maximum relationship strength (best friends, family, core colleagues)
+
+**Interpretation Table** (from C.2.2, referenced here):
+
+| Weight Range | Relationship Strength | Example Use Cases |
+|--------------|----------------------|-------------------|
+| 0.80 - 1.00  | Very Strong | Best friends, family members, daily collaborators |
+| 0.50 - 0.79  | Strong | Regular colleagues, close friends, recurring contacts |
+| 0.20 - 0.49  | Moderate | Acquaintances, occasional contacts, project collaborators |
+| 0.01 - 0.19  | Weak | One-time interactions, distant connections |
+
+**Normalization Scope**:
+
+- **Per-Edge**: Each edge has independent weight in [0.0, 1.0].
+- **No Global Normalization**: Weights are NOT normalized across all edges.
+  - Rationale: Edge weights represent absolute relationship strength, not relative ranking.
+  - Example: Actor A can have 10 "Very Strong" relationships simultaneously (all 0.8+).
+
+**Per-Relation-Type Normalization** (future enhancement):
+
+- **Problem**: Different relation types may have different natural distributions:
+  - `FAMILY`: Skewed toward high weights (0.7-1.0)
+  - `DISCUSSES`: More uniform distribution (0.1-0.7)
+  - `INTERACTS_WITH`: Bell curve around moderate (0.3-0.6)
+
+- **Solution** (future work):
+  - Learn per-relation normalization curves from data.
+  - Store in `st_learned_weights` with key pattern `hebbian_norm_curve_{relation_type}`.
+  - Apply percentile-based rescaling: `normalized_weight = percentile_rank(raw_weight, relation_type)`.
+
+**Current Approach** (MVP):
+
+- **Uniform interpretation**: All relation types use same 0.0-1.0 scale.
+- **Weight semantics**: Absolute strength, not relative.
+- **Threshold-based actions**:
+  - Weight < 0.01 → prune (too weak to matter)
+  - Weight > 0.80 → prioritize in K1 context retrieval
+  - Weight 0.50-0.79 → include in expanded context
+  - Weight 0.20-0.49 → include only if directly relevant
+
+**Enforcement**:
+
+```python
+# After every weight update
+new_weight = max(0.0, min(1.0, new_weight))  # Hard clamp to [0.0, 1.0]
+
+if new_weight < 0.01:
+    # Prune edge (below meaningful threshold)
+    archival_status = 'ARCHIVED'
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_hebbian_weight_distribution` (histogram): Distribution of edge weights across ranges.
+- `p03_hebbian_edges_by_strength` (gauge): Count of edges in each strength category (Weak/Moderate/Strong/Very Strong).
+
+**Configuration**:
+
+- `P03_HEBBIAN_MIN_WEIGHT = 0.01` (prune threshold)
+- `P03_HEBBIAN_MAX_WEIGHT = 1.0` (ceiling)
+
+**Rationale**: Consistent interpretation of edge weights across the system. K1, P03, P04, and P06 all use same weight semantics. No module-specific rescaling needed.
+
+---
+
 ### C.3 R2: Episodic Integration Algorithms (M18)
 
 *Used to turn raw event logs into coherent "episodes."*
@@ -11350,6 +21269,202 @@ LIMIT :batch_size;
 - **Module**: M18 Episodic Integration
 - **Phase**: R2 (CA1 Bridge)
 - **Tables**: Reads `st_hipp_events` + `st_vec`, creates `st_epi`
+
+---
+
+#### C.3.1.1 Pre-Clustering Episode Split
+
+**Problem**: Events spanning >4 hours create poor DBSCAN clusters:
+
+- **Example**: Morning gym (7 AM) + lunch (12 PM) + evening meeting (5 PM) cluster as single "Day Episode" (wrong).
+- **Result**: Silhouette score < 0.3, clusters too broad for K1 retrieval.
+
+**Solution**: Pre-split long event sequences BEFORE DBSCAN runs.
+
+**Split Signals** (priority order):
+
+| Priority | Signal | Condition | Example | Data Source |
+|----------|--------|-----------|---------|-------------|
+| 1 | Location Change | geohash prefix differs by >4 chars | Home (9q9p) → Office (9q8y) | `st_hipp_events.location_geohash` |
+| 2 | Activity Change | `activity_type` changes | MEAL → OUTING | `st_hipp_events.activity_type` |
+| 3 | Time Gap | Gap > 30 minutes | Lunch break, commute | Timestamp diff |
+| 4 | Hard Limit | Episode > 4 hours | Force split at 4-hour mark | Configurable |
+
+**Algorithm** (`EpisodeSplitter.split_long_sequences()`):
+
+```python
+def split_long_sequences(
+    events: List[HippEvent],
+    max_episode_hours: float = 4.0
+) -> List[List[HippEvent]]:
+    """
+    Pre-split event sequences before DBSCAN clustering.
+
+    Returns: List of event sub-sequences (each becomes DBSCAN input)
+    """
+    sequences = []
+    current_sequence = [events[0]]
+
+    for i in range(1, len(events)):
+        prev_event = events[i-1]
+        curr_event = events[i]
+
+        # Check split signals in priority order
+        if _detect_break(prev_event, curr_event, max_episode_hours):
+            # Break detected - start new sequence
+            sequences.append(current_sequence)
+            current_sequence = [curr_event]
+        else:
+            # Continue current sequence
+            current_sequence.append(curr_event)
+
+    # Add final sequence
+    if current_sequence:
+        sequences.append(current_sequence)
+
+    return sequences
+
+def _detect_break(
+    prev: HippEvent,
+    curr: HippEvent,
+    max_hours: float
+) -> bool:
+    """Detect if a break should occur between events."""
+
+    # Priority 1: Location change (geohash prefix differs by >4 chars)
+    if prev.location_geohash and curr.location_geohash:
+        if geohash_distance(prev.location_geohash, curr.location_geohash) > 4:
+            return True
+
+    # Priority 2: Activity type change
+    if prev.activity_type and curr.activity_type:
+        if prev.activity_type != curr.activity_type:
+            return True
+
+    # Priority 3: Time gap > 30 minutes
+    time_diff_hours = (curr.timestamp - prev.timestamp) / 3600000
+    if time_diff_hours > 0.5:  # 30 minutes
+        return True
+
+    # Priority 4: Hard limit (4 hours total duration)
+    if time_diff_hours > max_hours:
+        return True
+
+    return False
+```
+
+**Integration with DBSCAN**:
+
+```python
+# R2 Phase Pipeline
+events = load_events_from_r1()
+
+# Step 1: Pre-split long sequences
+sequences = EpisodeSplitter().split_long_sequences(events)
+
+# Step 2: Run DBSCAN on each sequence separately
+all_clusters = []
+for sequence in sequences:
+    clusters = EpisodicDBSCAN().cluster(sequence)
+    all_clusters.extend(clusters)
+
+# Step 3: Continue with centroid calculation
+```
+
+**Configuration** (add to Section 16):
+
+- `P03_DBSCAN_MAX_EPISODE_HOURS = 4.0` (hard limit)
+- `P03_DBSCAN_TIME_GAP_MINUTES = 30` (time gap threshold)
+- `P03_DBSCAN_GEOHASH_DISTANCE = 4` (location change threshold)
+
+**Metrics** (add to Section 8.2):
+
+- `p03_episode_splits_total` (counter): Total pre-splits applied.
+- `p03_episode_split_by_type` (counter): Splits by signal type (location/activity/time/hard_limit).
+
+**Rationale**: Simpler than hierarchical clustering. Uses existing columns (`location_geohash`, `activity_type`) without new embeddings. Improves silhouette scores from ~0.3 to >0.5 for multi-activity days.
+
+---
+
+#### C.3.1.2 Adaptive Min_samples
+
+**Problem**: Fixed `min_samples=2` creates issues:
+
+- **Noisy spaces** (many singleton events): Too many micro-episodes → K1 retrieval cluttered.
+- **Sparse spaces** (few events): min_samples=2 prevents any clustering → no episodes formed.
+
+**Solution**: Adapt `min_samples` based on singleton rate (noise proxy).
+
+**Noise Proxy**: Singleton clusters (cluster_size = 1) indicate events that don't fit any pattern.
+
+**Adjustment Rules**:
+
+| Singleton Rate | Diagnosis | Action | New min_samples |
+|----------------|-----------|--------|------------------|
+| > 20% | Too noisy (under-clustering) | Increase threshold | min_samples + 1 (max 5) |
+| < 5% | Too strict (over-clustering) | Decrease threshold | min_samples - 1 (min 2) |
+| 5-20% | Good balance | No change | Keep current |
+
+**Algorithm** (`MinSamplesAdjuster.adjust()`):
+
+```python
+def adjust_min_samples(
+    current_min_samples: int,
+    singleton_rate: float,
+    noise_threshold_high: float = 0.20,
+    noise_threshold_low: float = 0.05
+) -> int:
+    """
+    Adjust min_samples based on singleton rate.
+
+    Returns: New min_samples value in [2, 5]
+    """
+    if singleton_rate > noise_threshold_high:
+        # Too much noise - increase threshold
+        new_min_samples = min(5, current_min_samples + 1)
+        log_adjustment("INCREASE", singleton_rate, new_min_samples)
+        return new_min_samples
+
+    elif singleton_rate < noise_threshold_low:
+        # Too strict - decrease threshold
+        new_min_samples = max(2, current_min_samples - 1)
+        log_adjustment("DECREASE", singleton_rate, new_min_samples)
+        return new_min_samples
+
+    else:
+        # Good balance
+        return current_min_samples
+```
+
+**Evaluation Trigger**: After each P03 cycle:
+
+1. Count singleton clusters: `singletons = count(cluster WHERE size = 1)`
+2. Compute rate: `singleton_rate = singletons / total_clusters`
+3. Adjust if needed: `new_min_samples = adjust_min_samples(...)`
+4. Store in `st_learned_weights`: key=`dbscan_min_samples`, scope=`space`
+
+**Storage** (in `st_learned_weights`):
+
+| param_key | param_scope | current_value | Range | Updated By |
+|-----------|-------------|---------------|-------|------------|
+| `dbscan_min_samples` | `space` | 2-5 | [2, 5] | `MinSamplesAdjuster` |
+
+**Metrics** (add to Section 8.2):
+
+- `p03_dbscan_min_samples_current` (gauge): Current min_samples per space.
+- `p03_dbscan_singleton_rate` (gauge): Singleton clusters / total clusters.
+- `p03_dbscan_min_samples_adjustments` (counter): Total adjustments made.
+
+**Configuration** (add to Section 16):
+
+- `P03_DBSCAN_MIN_SAMPLES_MIN = 2` (lower bound)
+- `P03_DBSCAN_MIN_SAMPLES_MAX = 5` (upper bound)
+- `P03_DBSCAN_NOISE_THRESHOLD_HIGH = 0.20` (singleton rate ceiling)
+- `P03_DBSCAN_NOISE_THRESHOLD_LOW = 0.05` (singleton rate floor)
+
+**Rationale**: Balances cluster quality (fewer singletons) vs coverage (not too strict). Self-adjusts to space characteristics without manual tuning.
+
+---
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -11800,6 +21915,469 @@ class SimHasher:
 
 ---
 
+#### C.4.1.1 Content-Type Thresholds
+
+**Problem**: Single Hamming threshold (≤3 bits) doesn't fit all content types. Structured data (transactions, calendar) needs exact matching; free-form text (journal, voice) allows more variation.
+
+**Human Memory Model**: We remember financial transactions exactly, but conversations loosely. Different memory types have different fidelity requirements.
+
+**Per-Content-Type Threshold Matrix**:
+
+| Content Type | Threshold (bits) | Rationale | Example |
+|--------------|------------------|-----------|----------|
+| `TRANSACTION` | 1 | Financial exactness required | "$50.23" vs "$50.32" are different |
+| `CALENDAR_EVENT` | 2 | Structured, small variations matter | "Meeting at 2pm" vs "Meeting at 3pm" |
+| `CONTACT_UPDATE` | 2 | Names/phones must match closely | "John Smith" vs "Jon Smith" |
+| `CHAT_MESSAGE` | 3 | Default, mixed content | General conversations |
+| `PHOTO_CAPTION` | 4 | Free-form, allow paraphrasing | "Sunset at beach" vs "Beach sunset" |
+| `JOURNAL_ENTRY` | 4 | Personal text, subjective | "Had great day" vs "Today was wonderful" |
+| `VOICE_MEMO` | 5 | Transcription has inherent noise | ASR errors tolerated |
+
+**Learning from User Feedback**:
+
+| Feedback Signal | Source | Meaning | Adjustment |
+|----------------|--------|---------|------------|
+| `UNMERGE_DEDUP` | User | False positive (shouldn't have merged) | Increase threshold +1 |
+| `MANUAL_MERGE` | User | False negative (should have merged) | Decrease threshold -1 |
+| `DEDUP_CONFIRMED` | K1 | User confirmed merge was correct | Reinforce current threshold |
+
+**Adaptive Learning Algorithm**:
+
+```python
+class AdaptiveSimHashThresholdLearner:
+    """
+    Learn per-content-type Hamming thresholds from user feedback.
+    """
+
+    def adjust_threshold(
+        self,
+        content_type: str,
+        feedback_signal: str,
+        current_threshold: int
+    ) -> int:
+        """
+        Adjust threshold based on user feedback.
+
+        Returns: new threshold (clamped to [1, 5])
+        """
+        if feedback_signal == 'UNMERGE_DEDUP':
+            # False positive → increase threshold (stricter)
+            new_threshold = current_threshold + 1
+        elif feedback_signal == 'MANUAL_MERGE':
+            # False negative → decrease threshold (looser)
+            new_threshold = current_threshold - 1
+        else:
+            new_threshold = current_threshold
+
+        # Clamp to safe range
+        return max(1, min(5, new_threshold))
+```
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Per-content-type thresholds
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence, sample_count
+) VALUES (
+    ulid.new(),
+    'simhash_threshold_CHAT_MESSAGE',
+    'global',
+    NULL,
+    3.0,  # Current learned threshold
+    3.0,  # Prior (default)
+    0.90,  # High confidence
+    150   # 150 feedback samples
+);
+```
+
+**Application in Deduplication**:
+
+```python
+# In SimHasher.is_near_duplicate()
+content_type = event.content_type or 'CHAT_MESSAGE'
+threshold = await self.get_learned_threshold(content_type)
+
+hamming_dist = self.hamming_distance(hash1, hash2)
+return hamming_dist <= threshold
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_simhash_threshold_current` (gauge): Current threshold by content type.
+- `p03_simhash_false_positives` (counter): User unmerge actions.
+- `p03_simhash_false_negatives` (counter): User manual merge actions.
+- `p03_simhash_precision` (gauge): 1 - (FP / total merges).
+
+**Configuration** (add to Section 16):
+
+- `P03_SIMHASH_DEFAULT_THRESHOLD = 3` (default)
+- `P03_SIMHASH_MIN_THRESHOLD = 1` (strictest)
+- `P03_SIMHASH_MAX_THRESHOLD = 5` (loosest)
+- `P03_SIMHASH_LEARNING_ENABLED = TRUE` (enable adaptive learning)
+
+**Rationale**: One-size-fits-all threshold produces too many false positives for structured data and too many false negatives for noisy data. Learning from user corrections improves precision over time.
+
+---
+
+#### C.4.1.2 Two-Stage Deduplication Pipeline
+
+**Problem**: SimHash alone has limitations:
+
+1. **False Positives**: "I ate pizza" vs "I hate pizza" (Hamming distance = 2, but opposite meaning)
+2. **False Negatives**: "Had pizza for dinner" vs "Ate pizza tonight" (Hamming distance > 3, but semantically identical)
+
+**Solution**: Two-stage pipeline — SimHash (fast filter) + Embedding (semantic verification).
+
+**Stage 1: SimHash (Syntactic Filter)**
+
+Purpose: Quickly eliminate 99%+ of non-duplicates.
+
+```python
+class Stage1SimHashFilter:
+    """
+    Fast O(n) filter using SimHash.
+    """
+
+    def find_candidates(
+        self,
+        new_event: HippEvent,
+        recent_events: List[HippEvent],
+        threshold: int
+    ) -> List[Tuple[str, int]]:
+        """
+        Find events with Hamming distance ≤ threshold.
+
+        Returns: List of (event_id, hamming_distance)
+        """
+        new_hash = int(new_event.simhash_hex, 16)
+        candidates = []
+
+        for event in recent_events:
+            event_hash = int(event.simhash_hex, 16)
+            dist = self.hamming_distance(new_hash, event_hash)
+
+            if dist <= threshold:
+                candidates.append((event.event_id, dist))
+
+        return candidates
+```
+
+**Stage 2: Embedding (Semantic Verification)**
+
+Purpose: Confirm semantic similarity for SimHash candidates.
+
+```python
+class Stage2EmbeddingVerifier:
+    """
+    Semantic verification using cosine similarity.
+    """
+
+    def verify_duplicate(
+        self,
+        event1: HippEvent,
+        event2: HippEvent
+    ) -> Tuple[bool, float, str]:
+        """
+        Verify if candidate pair is truly duplicate.
+
+        Returns: (is_duplicate, similarity, decision_type)
+        """
+        # Compute cosine similarity
+        similarity = np.dot(event1.embedding, event2.embedding)
+
+        # Decision logic
+        if similarity >= 0.85:
+            return (True, similarity, 'DUPLICATE')
+        elif 0.70 <= similarity < 0.85:
+            return (True, similarity, 'LIKELY_DUPLICATE')
+        else:
+            return (False, similarity, 'NOT_DUPLICATE')
+```
+
+**Combined Decision Matrix**:
+
+| SimHash Result | Embedding Similarity | Final Decision | Action |
+|----------------|---------------------|----------------|--------|
+| ≤ threshold | ≥ 0.85 | `DUPLICATE` | Merge events, keep higher importance |
+| ≤ threshold | 0.70-0.85 | `LIKELY_DUPLICATE` | Flag for review, link as related |
+| ≤ threshold | < 0.70 | `NOT_DUPLICATE` | False positive, process independently |
+| > threshold | ≥ 0.90 | `SEMANTIC_DUPLICATE` | Merge (caught by fallback) |
+| > threshold | < 0.90 | `DISTINCT` | Process independently |
+
+**Pipeline Flow**:
+
+```python
+class TwoStageDeduplicator:
+    """
+    Complete two-stage deduplication pipeline.
+    """
+
+    async def find_duplicates(
+        self,
+        new_event: HippEvent,
+        window_events: List[HippEvent]
+    ) -> List[DuplicateMatch]:
+        """
+        Find all duplicates of new_event.
+        """
+        matches = []
+
+        # Stage 1: SimHash filter
+        candidates = self.stage1.find_candidates(
+            new_event,
+            window_events,
+            threshold=3
+        )
+
+        # Stage 2: Embedding verification
+        for event_id, hamming_dist in candidates:
+            event = await db.fetch_event(event_id)
+
+            is_dup, similarity, decision = self.stage2.verify_duplicate(
+                new_event,
+                event
+            )
+
+            if is_dup:
+                matches.append(DuplicateMatch(
+                    event_id=event_id,
+                    hamming_distance=hamming_dist,
+                    embedding_similarity=similarity,
+                    decision_type=decision,
+                    check_method='TWO_STAGE'
+                ))
+
+        # Fallback: Check high embedding similarity even if SimHash missed
+        # (Only for events NOT in candidates to avoid duplication)
+        candidate_ids = {c[0] for c in candidates}
+        for event in window_events:
+            if event.event_id in candidate_ids:
+                continue
+
+            similarity = np.dot(new_event.embedding, event.embedding)
+            if similarity >= 0.90:
+                matches.append(DuplicateMatch(
+                    event_id=event.event_id,
+                    hamming_distance=None,  # Not checked
+                    embedding_similarity=similarity,
+                    decision_type='SEMANTIC_DUPLICATE',
+                    check_method='EMBEDDING_FALLBACK'
+                ))
+
+        return matches
+```
+
+**Schema Additions**:
+
+```sql
+-- Add to st_hipp_events
+ALTER TABLE st_hipp_events ADD COLUMN duplicate_check_method TEXT;
+-- Values: 'SIMHASH_ONLY', 'TWO_STAGE', 'EMBEDDING_FALLBACK'
+
+ALTER TABLE st_hipp_events ADD COLUMN duplicate_similarity REAL;
+-- Embedding similarity score (for audit)
+
+CREATE INDEX idx_hipp_dup_method ON st_hipp_events(duplicate_check_method);
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_dedup_stage1_candidates` (histogram): Candidates from SimHash per event.
+- `p03_dedup_stage2_confirmed` (counter): Duplicates confirmed by embedding.
+- `p03_dedup_stage2_rejected` (counter): SimHash false positives caught by embedding.
+- `p03_dedup_fallback_caught` (counter): Semantic duplicates missed by SimHash.
+
+**Performance**:
+
+| Method | Complexity | Precision | Recall | Best For |
+|--------|------------|-----------|--------|----------|
+| SimHash only | O(n) | 0.85 | 0.90 | Fast, syntactic |
+| Embedding only | O(n²) | 0.95 | 0.98 | Accurate, slow |
+| Two-stage | O(n + k) | 0.93 | 0.95 | Balanced (k ≈ 0.01n) |
+
+**Rationale**: SimHash is fast but misses paraphrases; embeddings are accurate but slow. Two-stage pipeline combines speed of SimHash with accuracy of embeddings, catching both syntactic and semantic duplicates.
+
+---
+
+#### C.4.1.3 Scale Strategy: MinHash LSH
+
+**Problem**: As event count grows, even O(n) SimHash becomes expensive:
+
+- **10K events**: ~10ms per new event (acceptable)
+- **50K events**: ~50ms per new event (slow)
+- **100K+ events**: >100ms per new event (unacceptable)
+
+**Solution**: Locality-Sensitive Hashing (LSH) with MinHash for sub-linear scaling.
+
+**Transition Logic** (auto-switch based on event count):
+
+| Event Count | Algorithm | Complexity | Latency (est.) |
+|-------------|-----------|------------|----------------|
+| < 10,000 | SimHash pairwise | O(n) | 10ms |
+| 10K-50K | SimHash + bucketing | O(n/b) | 15ms |
+| > 50,000 | MinHash LSH | O(log n) | 20ms |
+
+**MinHash LSH Algorithm**:
+
+```python
+class MinHashLSH:
+    """
+    MinHash with Locality-Sensitive Hashing for sub-linear deduplication.
+
+    Scientific Basis: Broder (1997) - Identifying and filtering near-duplicate documents
+    """
+
+    def __init__(self, config: MinHashConfig):
+        self.num_hashes = config.num_hashes  # 128
+        self.num_bands = config.num_bands    # 32
+        self.rows_per_band = self.num_hashes // self.num_bands  # 4
+
+        # LSH index: band_hash -> [event_ids]
+        self.lsh_index: Dict[int, List[str]] = defaultdict(list)
+
+    def compute_minhash(
+        self,
+        text: str
+    ) -> np.ndarray:
+        """
+        Compute MinHash signature (128 hash values).
+        """
+        shingles = self.tokenize(text)
+        signature = np.full(self.num_hashes, np.inf, dtype=np.uint64)
+
+        for shingle in shingles:
+            for i in range(self.num_hashes):
+                # Use different hash function per position
+                h = murmurhash3(f"{shingle}_{i}")
+                signature[i] = min(signature[i], h)
+
+        return signature
+
+    def hash_bands(
+        self,
+        signature: np.ndarray
+    ) -> List[int]:
+        """
+        Hash signature into bands for LSH.
+
+        Returns: List of band hashes (one per band)
+        """
+        band_hashes = []
+
+        for band_idx in range(self.num_bands):
+            start = band_idx * self.rows_per_band
+            end = start + self.rows_per_band
+            band = signature[start:end]
+
+            # Hash the band
+            band_hash = hash(tuple(band))
+            band_hashes.append(band_hash)
+
+        return band_hashes
+
+    def index_event(
+        self,
+        event_id: str,
+        signature: np.ndarray
+    ) -> None:
+        """
+        Add event to LSH index.
+        """
+        band_hashes = self.hash_bands(signature)
+
+        for band_hash in band_hashes:
+            self.lsh_index[band_hash].append(event_id)
+
+    def find_candidates(
+        self,
+        signature: np.ndarray
+    ) -> Set[str]:
+        """
+        Find candidate duplicates using LSH.
+
+        Returns: Set of event_ids that match in at least one band
+        """
+        band_hashes = self.hash_bands(signature)
+        candidates = set()
+
+        for band_hash in band_hashes:
+            candidates.update(self.lsh_index.get(band_hash, []))
+
+        return candidates
+```
+
+**MinHash Parameters**:
+
+- `num_hashes = 128`: Higher = more precise, slower
+- `num_bands = 32`: Higher = more candidates, higher recall
+- `rows_per_band = 4`: Tuned for ~0.85 Jaccard similarity threshold
+
+**Index Storage**:
+
+```sql
+-- Add to st_hipp_events
+ALTER TABLE st_hipp_events ADD COLUMN minhash_signature BYTEA;
+-- Store 128 × 8 bytes = 1KB per event
+
+CREATE INDEX idx_hipp_minhash ON st_hipp_events USING gin(minhash_signature);
+```
+
+**Index Rebuild** (nightly in R0):
+
+```python
+# During P03 R0 cycle
+async def rebuild_lsh_index(
+    space_id: str,
+    db: Database
+) -> None:
+    """
+    Rebuild MinHash LSH index for space.
+    """
+    # Fetch all active events
+    events = await db.fetch("""
+        SELECT event_id, body_text, minhash_signature
+        FROM st_hipp_events
+        WHERE space_id = ?
+          AND archival_status = 'ACTIVE'
+    """, space_id)
+
+    # Clear old index
+    lsh = MinHashLSH(config)
+
+    # Rebuild index
+    for event in events:
+        if event['minhash_signature']:
+            signature = np.frombuffer(event['minhash_signature'], dtype=np.uint64)
+            lsh.index_event(event['event_id'], signature)
+
+    # Store in Redis for fast access
+    await redis.set(f"lsh_index:{space_id}", pickle.dumps(lsh))
+```
+
+**Feature Flag** (add to Section 12.4):
+
+- `P03_FF_MINHASH_LSH = FALSE` (default: disabled, use after scale validation)
+
+**Metrics** (add to Section 8.2):
+
+- `p03_duplicates_detected` (counter): Total duplicates found by method.
+- `p03_dedup_method_used` (counter): Which algorithm was used.
+- `p03_lsh_index_size` (gauge): Number of events in LSH index.
+- `p03_lsh_rebuild_duration_seconds` (histogram): Time to rebuild index.
+
+**Configuration** (add to Section 16):
+
+- `P03_MINHASH_NUM_HASHES = 128`
+- `P03_MINHASH_NUM_BANDS = 32`
+- `P03_MINHASH_THRESHOLD_10K = 10000` (switch from pairwise)
+- `P03_MINHASH_THRESHOLD_50K = 50000` (switch to LSH)
+
+**Rationale**: O(n²) pairwise comparison doesn't scale. MinHash LSH reduces complexity to O(log n) while maintaining high recall (>90%). Essential for spaces with 100K+ events.
+
+---
+
 #### C.4.2 Exponential Decay (Memory Fading)
 
 **Purpose**: Implements "biological forgetting." Unused memories fade and are eventually archived.
@@ -11910,7 +22488,1401 @@ class ExponentialDecayEngine:
 
 ---
 
-#### C.4.3 Novelty Scoring
+#### C.4.2.1 Memory Resurrection
+
+**Human Memory Model**: "Oh yes, I remember this now!" — Archived memories brought back feel fresh but familiar.
+
+**Problem**: Entities archived due to disuse may be queried later (e.g., seasonal relationships, infrequent contacts). Need mechanism to restore without losing history.
+
+**Resurrection Triggers**:
+
+1. **QUERY** (P04 retrieval): User queries archived entity → restore it.
+2. **CO_OCCURRENCE** (P03 R1): Archived entity reappears in new event → restore it.
+3. **USER_MENTION** (K1 explicit): User explicitly references archived entity → restore it.
+
+**Resurrection Formula**:
+
+```python
+def resurrect_entity(
+    old_decay: float,
+    resurrection_count: int
+) -> float:
+    """
+    Restore archived entity with boosted decay factor.
+
+    Formula: new_decay = max(0.7, 0.5 + old_decay × 0.5)
+
+    Effect:
+    - Floor of 0.7 (middle of ACTIVE range)
+    - Partial memory: retains 50% of prior strength
+    - Resurrection feels "fresh but familiar"
+    """
+    new_decay = max(0.7, 0.5 + old_decay * 0.5)
+
+    # Track resurrection count
+    resurrection_count += 1
+
+    return new_decay, resurrection_count
+```
+
+**Resurrection Examples**:
+
+| Old Decay | Old Status | New Decay | New Status | Interpretation |
+|-----------|------------|-----------|------------|----------------|
+| 0.01 | TOMBSTONE (forgotten) | 0.70 | ACTIVE | Strong revival |
+| 0.05 | ARCHIVED (fading) | 0.70 | ACTIVE | Strong revival (floor) |
+| 0.08 | ARCHIVED | 0.70 | ACTIVE | Strong revival (floor) |
+| 0.30 | ACTIVE (weak) | 0.70 | ACTIVE | Boosted to stronger |
+
+**Resurrection Count Tracking**:
+
+```python
+# Update entity record
+UPDATE st_kg_dom
+SET decay_factor = ?,
+    resurrection_count = resurrection_count + 1,
+    last_accessed_at = ?,
+    archival_status = 'ACTIVE'
+WHERE entity_id = ?
+  AND archival_status IN ('ARCHIVED', 'TOMBSTONE');
+```
+
+**Instability Alert**:
+
+- If `resurrection_count >= 3` → emit alert `DecayResurrectionLoop`
+- **Interpretation**: Entity cycling between ARCHIVED and ACTIVE → suggests λ too aggressive for this entity type.
+- **Action**: Consider lowering λ for this entity_type or marking as `decay_immune`.
+
+**Audit Trail** (log to `st_consolidation_audit`):
+
+```python
+await audit_log.insert({
+    'audit_id': ulid.new(),
+    'memory_id': entity_id,
+    'source_table': 'st_kg_dom',
+    'action': 'RESURRECTION',
+    'formula_used': 'resurrection_v1',
+    'inputs_json': json.dumps({
+        'old_decay': old_decay,
+        'trigger': trigger_type,  # QUERY, CO_OCCURRENCE, USER_MENTION
+        'resurrection_count': resurrection_count
+    }),
+    'outputs_json': json.dumps({
+        'new_decay': new_decay,
+        'archival_status': 'ACTIVE'
+    }),
+    'explanation': f"Entity resurrected from {archival_status} due to {trigger_type}",
+    'space_id': space_id,
+    'cycle_id': cycle_id,
+    'created_at': current_timestamp
+})
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_resurrections_total` (counter): Total resurrection events by layer.
+- `p03_resurrection_rate` (gauge): Resurrections / total accesses — alert if > 10%.
+- `p03_resurrection_loops` (counter): Entities with `resurrection_count >= 3`.
+
+**Configuration** (add to Section 16):
+
+- `P03_DECAY_RESURRECTION_MIN = 0.70` (floor for resurrected decay)
+- `P03_DECAY_RESURRECTION_ALERT_THRESHOLD = 3` (resurrection count trigger)
+
+**Rationale**: Wrongly archived memories should be recoverable. High resurrection rate signals decay parameters need tuning (learning signal for Bayesian λ estimation).
+
+---
+
+#### C.4.2.2 Adaptive Lambda Learning
+
+**Problem**: Static λ values (from Section 4.4.1.1 table) are one-size-fits-all. Different spaces have different access patterns:
+
+- **High-activity spaces**: Memories accessed frequently → should decay slower.
+- **Low-activity spaces**: Memories rarely accessed → can decay faster.
+
+**Solution**: Learn per-space λ modifiers via Bayesian estimation using access patterns.
+
+**Cold Start**:
+
+- Use dossier default λ (from Section 4.4.1.1 table) until **1000 memories accumulated**.
+- Rationale: Need sufficient data for stable estimate.
+
+**Learning Trigger Criteria** (all must be met):
+
+1. Space has ≥ 1000 memory records (across all layers).
+2. At least 5 accesses per entity on average.
+3. Access events span ≥ 7 days (temporal diversity).
+
+**Bayesian Model**:
+
+```python
+class BayesianLambdaEstimator:
+    """
+    Estimate decay lambda from inter-access intervals.
+
+    Model:
+    - Prior: λ ~ Gamma(α=2, β=2/λ_base)
+    - Likelihood: inter-access intervals ~ Exponential(λ)
+    - Posterior: λ | data ~ Gamma(α + n, β + Σ intervals)
+    """
+
+    def __init__(self, lambda_base: float):
+        self.lambda_base = lambda_base
+        self.alpha_prior = 2.0  # Moderate uncertainty
+        self.beta_prior = 2.0 / lambda_base
+
+    def estimate_lambda(
+        self,
+        inter_access_intervals: List[float]  # in days
+    ) -> Tuple[float, float, float]:
+        """
+        Estimate lambda from access data.
+
+        Returns: (lambda_estimate, credible_interval_low, credible_interval_high)
+        """
+        n = len(inter_access_intervals)
+        sum_intervals = sum(inter_access_intervals)
+
+        # Posterior parameters (Gamma conjugate prior)
+        alpha_post = self.alpha_prior + n
+        beta_post = self.beta_prior + sum_intervals
+
+        # Posterior mean (point estimate)
+        lambda_estimate = alpha_post / beta_post
+
+        # 90% credible interval
+        from scipy.stats import gamma
+        ci_low = gamma.ppf(0.05, alpha_post, scale=1/beta_post)
+        ci_high = gamma.ppf(0.95, alpha_post, scale=1/beta_post)
+
+        return lambda_estimate, ci_low, ci_high
+```
+
+**Update Criteria** (only update if):
+
+1. New estimate differs > 20% from current λ.
+2. Credible interval width < 50% of estimate (sufficient precision).
+3. No manual override present (`decay_override = NULL`).
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Store as lambda modifier (ratio to base)
+lambda_modifier = learned_lambda / lambda_base
+
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id, space_id,
+    current_value, prior_value, confidence, sample_count,
+    last_updated_at, version
+) VALUES (
+    ulid.new(),
+    'lambda_modifier_st_epi',  # per-layer key
+    'space',
+    space_id,
+    space_id,
+    lambda_modifier,  # e.g., 0.8 (decay 20% slower than base)
+    1.0,  # prior = base lambda
+    confidence,  # based on credible interval width
+    len(inter_access_intervals),
+    current_timestamp,
+    1
+);
+```
+
+**Application**:
+
+```python
+# In compute_effective_lambda()
+lambda_base = LAYER_LAMBDAS[table_name]  # From Section 4.4.1.1
+
+# Look up learned modifier
+lambda_modifier = await db.fetch_one("""
+    SELECT current_value
+    FROM st_learned_weights
+    WHERE param_key = ?
+      AND space_id = ?
+      AND sample_count >= 1000
+""", f'lambda_modifier_{table_name}', space_id)
+
+if lambda_modifier:
+    lambda_base *= lambda_modifier['current_value']
+
+# Apply entity type modifier, importance modifier, etc.
+# ...
+```
+
+**Per-Space Isolation**:
+
+- Each space learns its own λ modifiers independently.
+- Global default used if per-space insufficient data.
+
+**Metrics** (add to Section 8.2):
+
+- `p03_lambda_learned_spaces` (gauge): Spaces with learned λ modifiers.
+- `p03_lambda_drift_30d` (gauge): Max λ change over 30 days per space.
+- `p03_lambda_update_rejected` (counter): Updates rejected due to criteria not met.
+
+**Configuration** (add to Section 16):
+
+- `P03_DECAY_COLD_START_THRESHOLD = 1000` (memories before learning)
+- `P03_DECAY_LAMBDA_UPDATE_MIN_DIFF = 0.20` (20% change threshold)
+- `P03_DECAY_LAMBDA_CI_WIDTH_MAX = 0.50` (credible interval precision)
+
+**Rationale**: Access patterns reveal optimal decay rate per space. Bayesian approach handles uncertainty and prevents overfitting to noise.
+
+---
+
+#### C.4.1 Bayesian Lambda Estimation
+
+**Purpose**: Learn per-entity decay rate (λ) from access patterns using Bayesian inference.
+
+**Why Bayesian?**
+
+| Alternative | Pros | Cons | Decision |
+|-------------|------|------|----------|
+| **Bayesian (Gamma-Exponential)** | Closed-form update, uncertainty quantification, graceful degradation | Requires prior specification | ✅ **Selected** |
+| MLE (Maximum Likelihood) | Simple | No uncertainty, overfits small samples | Rejected |
+| EM Algorithm | General | Complex, slow convergence | Rejected |
+| Non-parametric (KDE) | No assumptions | Requires many samples, no closed form | Rejected |
+
+**Conjugate Model: Gamma-Exponential**
+
+Access patterns modeled as exponential distribution:
+
+- **Inter-access times**: `x ~ Exponential(λ)`
+- **Prior on λ**: `λ ~ Gamma(α₀, β₀)` (conjugate prior)
+- **Posterior**: `λ | data ~ Gamma(α₀ + n, β₀ + Σxᵢ)` (closed-form update)
+
+**Why Exponential?**
+
+- Memory access is memoryless (Markov property)
+- Matches neuroscience: synaptic strength decays exponentially
+- Simple 1-parameter model (just λ)
+
+**Entity-Type Priors**:
+
+Encode domain knowledge via informative priors:
+
+| Entity Type | Default λ | α₀ | β₀ | E[λ] = α₀/β₀ | Effective Samples (α₀+β₀) |
+|-------------|-----------|-----|-----|-------------|---------------------------|
+| **PERSON** | 0.002 | 2 | 1000 | 0.002 | ~2 weak prior |
+| **FAMILY_MEMBER** | 0.001 | 2 | 2000 | 0.001 | ~2 weak prior |
+| **PLACE** | 0.003 | 2 | 667 | 0.003 | ~2 weak prior |
+| **ORGANIZATION** | 0.0025 | 2 | 800 | 0.0025 | ~2 weak prior |
+| **THING** | 0.005 | 2 | 400 | 0.005 | ~2 weak prior |
+| **EVENT** | 0.004 | 2 | 500 | 0.004 | ~2 weak prior |
+| **CONCEPT** | 0.004 | 2 | 500 | 0.004 | ~2 weak prior |
+| **ACTIVITY** | 0.006 | 2 | 333 | 0.006 | ~2 weak prior |
+
+**Why α₀=2?**
+
+- Weakly informative (1 would be uninformative)
+- Quickly overridden by data (5 accesses >> 2 prior samples)
+- Prevents degenerate estimates with small samples
+
+**Update Process**:
+
+```python
+class BayesianLambdaEstimator:
+    """
+    Estimate per-entity decay rate using Gamma-Exponential conjugate model.
+    """
+
+    def __init__(self):
+        # Entity-type priors
+        self.priors = {
+            'PERSON': {'alpha': 2, 'beta': 1000},
+            'FAMILY_MEMBER': {'alpha': 2, 'beta': 2000},
+            'PLACE': {'alpha': 2, 'beta': 667},
+            'ORGANIZATION': {'alpha': 2, 'beta': 800},
+            'THING': {'alpha': 2, 'beta': 400},
+            'EVENT': {'alpha': 2, 'beta': 500},
+            'CONCEPT': {'alpha': 2, 'beta': 500},
+            'ACTIVITY': {'alpha': 2, 'beta': 333},
+        }
+
+    async def estimate_lambda(
+        self,
+        entity_id: str,
+        entity_type: str,
+        inter_access_intervals_days: list[float]
+    ) -> dict:
+        """
+        Estimate λ for an entity using Bayesian inference.
+
+        Args:
+            entity_id: Entity to estimate for
+            entity_type: PERSON, FAMILY_MEMBER, etc.
+            inter_access_intervals_days: List of intervals in days [2.3, 5.1, ...]
+
+        Returns:
+            {
+                'lambda_mean': float,  # Point estimate
+                'lambda_ci_lower': float,  # 95% credible interval lower
+                'lambda_ci_upper': float,  # 95% credible interval upper
+                'ci_width_pct': float,  # CI width as % of mean
+                'confidence': str,  # 'NARROW', 'MODERATE', 'WIDE'
+            }
+        """
+        if len(inter_access_intervals_days) < 4:
+            # Need at least 4 intervals (5 accesses)
+            return None
+
+        # Get prior
+        prior = self.priors.get(entity_type, {'alpha': 2, 'beta': 500})
+        alpha_0 = prior['alpha']
+        beta_0 = prior['beta']
+
+        # Update with data
+        n = len(inter_access_intervals_days)
+        sum_x = sum(inter_access_intervals_days)
+
+        # Posterior parameters
+        alpha_post = alpha_0 + n
+        beta_post = beta_0 + sum_x
+
+        # Point estimate (mean of Gamma)
+        lambda_mean = alpha_post / beta_post
+
+        # 95% Credible Interval (using Gamma quantiles)
+        from scipy.stats import gamma
+        lambda_ci_lower = gamma.ppf(0.025, alpha_post, scale=1/beta_post)
+        lambda_ci_upper = gamma.ppf(0.975, alpha_post, scale=1/beta_post)
+
+        # CI width as percentage of mean
+        ci_width = lambda_ci_upper - lambda_ci_lower
+        ci_width_pct = (ci_width / lambda_mean) * 100 if lambda_mean > 0 else 999
+
+        # Confidence level
+        if ci_width_pct < 20:
+            confidence = 'NARROW'
+        elif ci_width_pct < 50:
+            confidence = 'MODERATE'
+        else:
+            confidence = 'WIDE'
+
+        return {
+            'lambda_mean': lambda_mean,
+            'lambda_ci_lower': lambda_ci_lower,
+            'lambda_ci_upper': lambda_ci_upper,
+            'ci_width_pct': ci_width_pct,
+            'confidence': confidence,
+            'alpha_post': alpha_post,
+            'beta_post': beta_post,
+        }
+
+    async def apply_learned_lambda(
+        self,
+        entity_id: str,
+        entity_table: str,
+        estimation_result: dict
+    ):
+        """
+        Apply learned λ based on confidence level.
+
+        Strategy:
+        - NARROW CI (< 20% of mean): Use learned λ directly
+        - MODERATE CI (20-50%): Blend learned λ with default (50/50)
+        - WIDE CI (> 50%): Use default, continue collecting data
+        """
+        confidence = estimation_result['confidence']
+        lambda_mean = estimation_result['lambda_mean']
+
+        if confidence == 'NARROW':
+            # High confidence: use learned value
+            learned_lambda = lambda_mean
+            logger.info(f"Entity {entity_id}: NARROW CI, using learned λ={learned_lambda:.6f}")
+
+        elif confidence == 'MODERATE':
+            # Moderate confidence: blend with default
+            # Get default λ for entity type
+            entity = await db.query(
+                f"SELECT entity_type FROM {entity_table} WHERE entity_id = $1",
+                entity_id
+            )
+            default_lambda = self.get_default_lambda(entity.entity_type)
+
+            # 50/50 blend
+            learned_lambda = 0.5 * lambda_mean + 0.5 * default_lambda
+            logger.info(f"Entity {entity_id}: MODERATE CI, blending λ={learned_lambda:.6f}")
+
+        else:  # WIDE
+            # Low confidence: use default, keep collecting
+            entity = await db.query(
+                f"SELECT entity_type FROM {entity_table} WHERE entity_id = $1",
+                entity_id
+            )
+            learned_lambda = self.get_default_lambda(entity.entity_type)
+            logger.info(f"Entity {entity_id}: WIDE CI, using default λ={learned_lambda:.6f}")
+
+        # Store learned λ in st_learned_weights
+        await db.execute(
+            "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+            "VALUES ($1, 'PER_ENTITY_LAMBDA', $2, $3, $4, $5) "
+            "ON CONFLICT (param_key) DO UPDATE SET current_value = $2, confidence = $3, sample_count = $4, last_updated_at = $5",
+            f"lambda_{entity_id}",
+            learned_lambda,
+            estimation_result['ci_width_pct'],
+            estimation_result['alpha_post'],
+            now_ms()
+        )
+
+        return learned_lambda
+
+    def get_default_lambda(self, entity_type: str) -> float:
+        """
+        Get default λ for entity type (from prior).
+        """
+        prior = self.priors.get(entity_type, {'alpha': 2, 'beta': 500})
+        return prior['alpha'] / prior['beta']
+```
+
+**Confidence-Based Application**:
+
+| CI Width (% of mean) | Confidence | Action | Example |
+|----------------------|------------|--------|----------|
+| **< 20%** | NARROW | Use learned λ directly | "Mom" with 15 accesses over 90 days → λ=0.0008 ± 0.0001 |
+| **20-50%** | MODERATE | Blend 50/50 with default | "Dentist" with 5 accesses over 30 days → blend learned 0.0035 with default 0.002 |
+| **> 50%** | WIDE | Use default, keep collecting | "New person" with 5 accesses in 8 days (bursty) → use default 0.002 |
+
+**Storage**:
+
+```sql
+-- Learned λ values stored in st_learned_weights
+INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count)
+VALUES
+  ('lambda_person_mom_abc123', 'PER_ENTITY_LAMBDA', 0.0008, 15.2, 15),  -- NARROW CI
+  ('lambda_person_dentist_def456', 'PER_ENTITY_LAMBDA', 0.0027, 38.5, 5),  -- MODERATE CI
+  ('lambda_place_restaurant_ghi789', 'PER_ENTITY_LAMBDA', 0.003, 92.1, 5);  -- WIDE CI (using default)
+```
+
+**Metrics**:
+
+- `p03_lambda_estimates_narrow` (counter: entities with narrow CI)
+- `p03_lambda_estimates_moderate` (counter: entities with moderate CI)
+- `p03_lambda_estimates_wide` (counter: entities with wide CI, still using default)
+- `p03_lambda_ci_width_histogram` (histogram: CI width distribution)
+- `p03_lambda_learned_vs_default` (histogram: ratio of learned λ to default λ)
+
+**Configuration**:
+
+```python
+P03_BAYESIAN_LAMBDA_CI_NARROW_THRESHOLD = 0.20  # 20% of mean
+P03_BAYESIAN_LAMBDA_CI_MODERATE_THRESHOLD = 0.50  # 50% of mean
+P03_BAYESIAN_LAMBDA_BLEND_WEIGHT = 0.5  # 50/50 blend for moderate CI
+P03_BAYESIAN_LAMBDA_PRIORS = {  # Entity-type priors
+    'PERSON': {'alpha': 2, 'beta': 1000},
+    'FAMILY_MEMBER': {'alpha': 2, 'beta': 2000},
+    # ... (full table above)
+}
+```
+
+**Example: "Mom" Entity**
+
+Accesses over 90 days: 15 times at intervals [6, 5, 7, 6, 5, 8, 6, 5, 7, 6, 5, 8, 6, 5] days.
+
+```
+Prior: λ ~ Gamma(2, 2000) → E[λ] = 0.001
+
+Data: n = 14 intervals, Σxᵢ = 90 days
+
+Posterior: λ ~ Gamma(2+14, 2000+90) = Gamma(16, 2090)
+
+Point estimate: λ_mean = 16/2090 = 0.00766 (slower decay than default 0.001)
+
+95% CI: [0.00688, 0.00853]
+CI width: 0.00853 - 0.00688 = 0.00165
+CI width %: (0.00165 / 0.00766) × 100 = 21.5% → MODERATE
+
+Action: Blend 50/50 → λ = 0.5×0.00766 + 0.5×0.001 = 0.00433
+```
+
+"Mom" decays slower than default FAMILY_MEMBER (0.001), reflecting frequent access.
+
+**Rationale**: Bayesian approach provides:
+
+1. **Uncertainty quantification**: Know when estimate is trustworthy
+2. **Graceful degradation**: Blend with default when uncertain
+3. **Closed-form updates**: No iterative optimization
+4. **Prior encoding**: Incorporate domain knowledge (family members decay slowly)
+5. **Small-sample robustness**: Prior prevents wild estimates from 5 accesses
+
+---
+
+#### C.4.2 Lambda Fallback Hierarchy
+
+**Problem**: Not all entities have 5+ accesses. New entities, rare entities, and cold-start spaces need a fallback strategy.
+
+**Solution**: 4-level hierarchical fallback from personalized to global defaults.
+
+**Fallback Chain**:
+
+```
+┌─────────────────────────────────────────┐
+│ Level 1: Per-Entity λ                  │  (if 5+ accesses, 7+ day spread)
+│   - Learned from access patterns       │
+│   - Highest personalization            │
+│   - Example: "Mom" λ = 0.0008          │
+└─────────────────────────────────────────┘
+                  ↓ fallback (if < 5 accesses)
+┌─────────────────────────────────────────┐
+│ Level 2: Per-Entity-Type λ (Space)    │  (space-specific learning)
+│   - Learned from space's entity types  │
+│   - Example: PERSON in FamilyA = 0.0015│
+└─────────────────────────────────────────┘
+                  ↓ fallback (if cold-start space)
+┌─────────────────────────────────────────┐
+│ Level 3: Global Entity-Type λ         │  (from DECAY_CONFIGS)
+│   - System-wide defaults               │
+│   - Example: PERSON = 0.002            │
+└─────────────────────────────────────────┘
+                  ↓ fallback (if unknown type)
+┌─────────────────────────────────────────┐
+│ Level 4: Layer Default λ               │  (last resort)
+│   - Table-level defaults               │
+│   - Example: st_epi λ = 0.005          │
+└─────────────────────────────────────────┘
+```
+
+**Selection Logic**:
+
+```python
+class HierarchicalLambdaResolver:
+    """
+    Resolve decay rate (λ) with 4-level hierarchical fallback.
+    """
+
+    async def get_lambda_for_entity(
+        self,
+        entity_id: str,
+        entity_type: str,
+        entity_table: str,
+        space_id: str
+    ) -> tuple[float, str]:
+        """
+        Get λ for an entity with hierarchical fallback.
+
+        Returns:
+            (lambda_value, source_level)
+            source_level: 'PER_ENTITY', 'PER_TYPE_SPACE', 'GLOBAL_TYPE', 'LAYER_DEFAULT'
+        """
+        # Level 1: Per-entity λ (if 5+ accesses)
+        per_entity_lambda = await self.get_per_entity_lambda(entity_id)
+        if per_entity_lambda is not None:
+            return (per_entity_lambda, 'PER_ENTITY')
+
+        # Level 2: Per-entity-type λ (space-specific)
+        per_type_space_lambda = await self.get_per_type_space_lambda(entity_type, space_id)
+        if per_type_space_lambda is not None:
+            return (per_type_space_lambda, 'PER_TYPE_SPACE')
+
+        # Level 3: Global entity-type λ (from DECAY_CONFIGS)
+        global_type_lambda = self.get_global_type_lambda(entity_type)
+        if global_type_lambda is not None:
+            return (global_type_lambda, 'GLOBAL_TYPE')
+
+        # Level 4: Layer default λ (last resort)
+        layer_lambda = self.get_layer_lambda(entity_table)
+        return (layer_lambda, 'LAYER_DEFAULT')
+
+    async def get_per_entity_lambda(self, entity_id: str) -> Optional[float]:
+        """
+        Level 1: Get learned λ for specific entity.
+        """
+        result = await db.query(
+            "SELECT current_value FROM st_learned_weights "
+            "WHERE param_key = $1 AND param_type = 'PER_ENTITY_LAMBDA'",
+            f"lambda_{entity_id}"
+        )
+        return result['current_value'] if result else None
+
+    async def get_per_type_space_lambda(
+        self,
+        entity_type: str,
+        space_id: str
+    ) -> Optional[float]:
+        """
+        Level 2: Get learned λ for entity-type in this space.
+
+        Example: PERSON entities in FamilyA may decay differently than in FamilyB.
+        """
+        result = await db.query(
+            "SELECT current_value FROM st_learned_weights "
+            "WHERE param_key = $1 AND param_type = 'PER_TYPE_SPACE_LAMBDA'",
+            f"lambda_{entity_type}_{space_id}"
+        )
+        return result['current_value'] if result else None
+
+    def get_global_type_lambda(self, entity_type: str) -> Optional[float]:
+        """
+        Level 3: Get global default λ for entity-type.
+        """
+        # From DECAY_CONFIGS or Bayesian priors
+        global_defaults = {
+            'PERSON': 0.002,
+            'FAMILY_MEMBER': 0.001,
+            'PLACE': 0.003,
+            'ORGANIZATION': 0.0025,
+            'THING': 0.005,
+            'EVENT': 0.004,
+            'CONCEPT': 0.004,
+            'ACTIVITY': 0.006,
+        }
+        return global_defaults.get(entity_type)
+
+    def get_layer_lambda(self, entity_table: str) -> float:
+        """
+        Level 4: Get layer default λ (last resort).
+        """
+        layer_defaults = {
+            'st_epi_entities': 0.005,
+            'st_sem_entities': 0.003,
+            'st_procedural_entities': 0.010,
+            'st_social_entities': 0.002,
+            'st_kg_entities': 0.001,
+            'st_hipp_entities': 0.005,
+            'st_affect_entities': 0.004,
+            'st_arbiter_entities': 0.003,
+        }
+        return layer_defaults.get(entity_table, 0.005)  # Default 0.005 if unknown
+```
+
+**Examples**:
+
+| Entity | Situation | λ Used | Source Level |
+|--------|-----------|--------|---------------|
+| "Mom" | 20 accesses over 90 days | 0.0008 | PER_ENTITY |
+| "Dr. Smith" | 3 accesses (not enough data) | 0.0018 | PER_TYPE_SPACE (PERSON in FamilyA) |
+| "New Restaurant" | Just created, 0 accesses | 0.003 | GLOBAL_TYPE (PLACE) |
+| "Unknown Entity" | Corrupt entity_type | 0.005 | LAYER_DEFAULT (st_epi) |
+
+**Warm-Up Period**:
+
+New entities inherit from entity-type for 30 days:
+
+```python
+class WarmUpDecayHandler:
+    """
+    Handle warm-up period for new entities.
+    """
+
+    async def apply_warmup_decay(
+        self,
+        entity_id: str,
+        entity_table: str,
+        created_at_ms: int
+    ) -> float:
+        """
+        Apply warm-up decay logic for new entities.
+
+        Rules:
+        - First 30 days: Use entity-type default (no aggressive decay)
+        - After 30 days, if < 5 accesses: Entity is unimportant
+        - Apply aggressive decay (1.5× default λ) to prune quickly
+        """
+        age_ms = now_ms() - created_at_ms
+        age_days = age_ms / (24 * 3600 * 1000)
+
+        # Get access count
+        entity = await db.query(
+            f"SELECT access_count, entity_type FROM {entity_table} WHERE entity_id = $1",
+            entity_id
+        )
+
+        if age_days < 30:
+            # Warm-up period: use entity-type default
+            default_lambda = self.get_global_type_lambda(entity.entity_type)
+            return default_lambda
+
+        elif entity.access_count < 5:
+            # Post-warm-up, low access: apply aggressive decay
+            default_lambda = self.get_global_type_lambda(entity.entity_type)
+            aggressive_lambda = default_lambda * 1.5  # 50% faster decay
+            logger.info(f"Entity {entity_id}: {age_days:.0f} days old, {entity.access_count} accesses → aggressive λ={aggressive_lambda:.6f}")
+            return aggressive_lambda
+
+        else:
+            # Post-warm-up, sufficient access: use learned λ
+            return await self.get_lambda_for_entity(entity_id, entity.entity_type, entity_table, entity.space_id)[0]
+```
+
+**Rationale for 30-Day Warm-Up**:
+
+| Scenario | Without Warm-Up | With Warm-Up |
+|----------|-----------------|---------------|
+| New family member added | Decays quickly (not accessed yet) | Protected for 30 days |
+| One-time event | Incorrectly kept (false positive) | After 30 days, if not accessed → prune |
+| Onboarding phase | Users exploring → artificial access | Warm-up allows natural pattern to emerge |
+
+**Per-Space Learning**:
+
+Spaces can learn entity-type λ independently:
+
+```python
+class PerSpaceLambdaLearner:
+    """
+    Learn per-entity-type λ for each space.
+    """
+
+    async def aggregate_space_lambdas(
+        self,
+        space_id: str,
+        entity_type: str
+    ):
+        """
+        Aggregate per-entity λ values within a space to learn space-specific entity-type λ.
+
+        Example: In FamilyA, PERSON entities may be accessed more frequently
+                 than global average → lower λ for PERSON in FamilyA.
+        """
+        # Fetch all per-entity λ for this entity_type in this space
+        entities = await db.query(
+            "SELECT e.entity_id, lw.current_value as lambda_value "
+            "FROM st_epi_entities e "
+            "JOIN st_learned_weights lw ON lw.param_key = 'lambda_' || e.entity_id "
+            "WHERE e.space_id = $1 AND e.entity_type = $2 AND lw.param_type = 'PER_ENTITY_LAMBDA'",
+            space_id,
+            entity_type
+        )
+
+        if len(entities) < 3:
+            # Not enough data
+            return
+
+        # Compute median λ (robust to outliers)
+        lambda_values = [e['lambda_value'] for e in entities]
+        median_lambda = np.median(lambda_values)
+
+        # Store as per-type-space λ
+        await db.execute(
+            "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+            "VALUES ($1, 'PER_TYPE_SPACE_LAMBDA', $2, 0.8, $3, $4) "
+            "ON CONFLICT (param_key) DO UPDATE SET current_value = $2, sample_count = $3, last_updated_at = $4",
+            f"lambda_{entity_type}_{space_id}",
+            median_lambda,
+            len(entities),
+            now_ms()
+        )
+
+        logger.info(f"Space {space_id}: Learned λ for {entity_type} = {median_lambda:.6f} from {len(entities)} entities")
+```
+
+**Metrics**:
+
+- `p03_lambda_source_level` (histogram: count per fallback level - PER_ENTITY, PER_TYPE_SPACE, GLOBAL_TYPE, LAYER_DEFAULT)
+- `p03_warmup_entities` (gauge: count of entities in 30-day warm-up)
+- `p03_aggressive_decay_applied` (counter: entities with 1.5× decay post-warm-up)
+- `p03_per_space_lambda_learned` (counter: space-entity-type λ values learned)
+
+**Configuration**:
+
+```python
+P03_LAMBDA_WARMUP_DAYS = 30  # Warm-up period for new entities
+P03_LAMBDA_AGGRESSIVE_MULTIPLIER = 1.5  # Post-warm-up low-access multiplier
+P03_LAMBDA_PER_SPACE_MIN_ENTITIES = 3  # Min entities before learning space-type λ
+```
+
+**Rationale**: Hierarchical fallback ensures every entity has a λ value (graceful degradation). Per-entity learning provides maximum personalization ("Mom" decays slowly). Per-type-space learning adapts to family patterns (FamilyA may access people more than FamilyB). Global defaults provide safety net. 30-day warm-up prevents premature pruning of new entities. Aggressive decay post-warm-up prunes unimportant entities quickly.
+
+---
+
+#### C.4.3 Query-to-Pruned Matching Algorithm
+
+**Purpose**: When P04 query arrives, check if it matches recently pruned entities (regret detection).
+
+**Why Two-Stage Matching?**
+
+Simple string match misses semantic equivalence ("mom" ≠ "mother"). Pure embedding match is expensive (1000+ pruned × every query). Two-stage combines best of both.
+
+**Two-Stage Matching Process**:
+
+| Stage | Method | Threshold | Purpose |
+|-------|--------|-----------|----------|
+| **Stage 1: Name Match** | Fuzzy (Levenshtein + token overlap) | > 0.70 | Fast filter, catches typos |
+| **Stage 2: Semantic Match** | Embedding cosine similarity | > 0.75 | Confirms semantic equivalence |
+
+**Match Decision Matrix**:
+
+| Name Match Score | Embedding Match Score | Decision | Confidence | Action |
+|------------------|----------------------|----------|------------|--------|
+| **> 0.70** | **> 0.75** | STRONG_MATCH | 0.90 | Emit regret signal |
+| **> 0.70** | **0.60-0.75** | LIKELY_MATCH | 0.70 | Emit weak regret, flag for review |
+| **< 0.70** | **> 0.85** | SEMANTIC_MATCH | 0.85 | Emit regret (semantic only) |
+| **< 0.70** | **< 0.85** | NO_MATCH | 0.0 | No regret |
+
+**Why These Thresholds?**
+
+- **Name 0.70**: Catches "John" vs "Jon", "Mom" vs "Mother" (Levenshtein distance ~0.75)
+- **Embedding 0.75**: Semantic similarity threshold from reconciliation (Section 1.4)
+- **Embedding 0.85** (without name): Require higher confidence if name differs ("birthday party" vs "celebration")
+
+**Context Boost**:
+
+Adjust matching scores based on query context:
+
+| Context Factor | Boost | Example |
+|----------------|-------|----------|
+| **Same space** | +0.10 | Query in FamilyA, entity pruned from FamilyA |
+| **Same actor** | +0.05 | User "Alice" queries, entity mentioned "Alice" |
+| **Same time window** | +0.03 | Query at 8pm, entity last accessed at 8pm |
+| **Co-occurring entities** | +0.05 | Query mentions "Mom" and "birthday", pruned entity linked to both |
+
+**Implementation**:
+
+```python
+class QueryToPrunedMatcher:
+    """
+    Match incoming queries against recently pruned entities.
+    """
+
+    async def match_query_to_pruned(
+        self,
+        query_text: str,
+        query_embedding: np.ndarray,
+        query_context: dict
+    ) -> list[dict]:
+        """
+        Check if query matches recently pruned entities.
+
+        Args:
+            query_text: Query string (e.g., "Mom's birthday")
+            query_embedding: Query embedding vector
+            query_context: {'space_id': ..., 'actor': ..., 'time': ...}
+
+        Returns:
+            List of matches with confidence scores
+        """
+        space_id = query_context.get('space_id')
+
+        # Fetch pruned entities for this space (last 14 days)
+        pruned_entities = await db.query(
+            "SELECT prune_id, entity_id, entity_type, canonical_name, embedding, "
+            "       space_id, decay_factor_at_prune, pruned_at "
+            "FROM st_pruned_entities "
+            "WHERE space_id = $1 AND matched_at IS NULL "
+            "ORDER BY pruned_at DESC",
+            space_id
+        )
+
+        matches = []
+
+        for entity in pruned_entities:
+            # Stage 1: Name matching
+            name_score = self.fuzzy_name_match(query_text, entity.canonical_name)
+
+            # Stage 2: Semantic matching (only if name match has some potential)
+            if name_score > 0.50:  # Preliminary threshold
+                semantic_score = cosine_similarity(query_embedding, entity.embedding)
+            else:
+                semantic_score = 0.0
+
+            # Apply context boosts
+            boosted_semantic = semantic_score
+
+            if entity.space_id == space_id:
+                boosted_semantic += 0.10  # Same space boost
+
+            if query_context.get('actor') and entity.entity_type in ['PERSON', 'FAMILY_MEMBER']:
+                boosted_semantic += 0.05  # Same actor boost
+
+            # Determine match type
+            match_type = None
+            confidence = 0.0
+
+            if name_score > 0.70 and boosted_semantic > 0.75:
+                match_type = 'STRONG_MATCH'
+                confidence = 0.90
+            elif name_score > 0.70 and 0.60 <= boosted_semantic <= 0.75:
+                match_type = 'LIKELY_MATCH'
+                confidence = 0.70
+            elif name_score < 0.70 and boosted_semantic > 0.85:
+                match_type = 'SEMANTIC_MATCH'
+                confidence = 0.85
+
+            if match_type:
+                matches.append({
+                    'prune_id': entity.prune_id,
+                    'entity_id': entity.entity_id,
+                    'entity_type': entity.entity_type,
+                    'canonical_name': entity.canonical_name,
+                    'match_type': match_type,
+                    'confidence': confidence,
+                    'name_score': name_score,
+                    'semantic_score': semantic_score,
+                    'boosted_semantic': boosted_semantic,
+                    'decay_factor_at_prune': entity.decay_factor_at_prune,
+                })
+
+        return matches
+
+    def fuzzy_name_match(
+        self,
+        query_text: str,
+        canonical_name: str
+    ) -> float:
+        """
+        Fuzzy name matching using Levenshtein + token overlap.
+
+        Returns: Score [0, 1] where 1 = perfect match
+        """
+        from rapidfuzz import fuzz
+
+        # Normalize
+        query_lower = query_text.lower().strip()
+        name_lower = canonical_name.lower().strip()
+
+        # Levenshtein ratio
+        levenshtein_score = fuzz.ratio(query_lower, name_lower) / 100.0
+
+        # Token set ratio (handles word order)
+        token_score = fuzz.token_set_ratio(query_lower, name_lower) / 100.0
+
+        # Partial ratio (substring match)
+        partial_score = fuzz.partial_ratio(query_lower, name_lower) / 100.0
+
+        # Weighted combination
+        combined_score = (
+            0.50 * levenshtein_score +
+            0.30 * token_score +
+            0.20 * partial_score
+        )
+
+        return combined_score
+```
+
+**Efficient Matching** (pgvector optimization):
+
+```python
+class EfficientPrunedMatcher:
+    """
+    Use pgvector for efficient semantic search.
+    """
+
+    async def match_query_semantic_fast(
+        self,
+        query_embedding: np.ndarray,
+        space_id: str,
+        top_k: int = 5
+    ) -> list[dict]:
+        """
+        Find top-K nearest pruned entities using pgvector.
+
+        Much faster than brute-force comparison (1000+ entities).
+        """
+        # Use pgvector's <=> operator for cosine distance
+        results = await db.query(
+            "SELECT prune_id, entity_id, canonical_name, embedding, "
+            "       (embedding <=> $1::vector) as distance "
+            "FROM st_pruned_entities "
+            "WHERE space_id = $2 AND matched_at IS NULL "
+            "ORDER BY embedding <=> $1::vector "
+            "LIMIT $3",
+            query_embedding.tolist(),
+            space_id,
+            top_k
+        )
+
+        # Convert distance to similarity
+        candidates = []
+        for row in results:
+            similarity = 1.0 - row.distance  # Cosine distance → similarity
+            if similarity > 0.60:  # Only candidates with reasonable similarity
+                candidates.append({
+                    'prune_id': row.prune_id,
+                    'entity_id': row.entity_id,
+                    'canonical_name': row.canonical_name,
+                    'semantic_score': similarity,
+                })
+
+        return candidates
+```
+
+**Example**:
+
+Query: "Mom's birthday reminder"
+Pruned entity: "Mother's birthday (annual)"
+
+```
+Stage 1 (Name):
+  - Levenshtein: "mom's birthday reminder" vs "mother's birthday (annual)" → 0.72
+  - Token overlap: {mom, birthday, reminder} ∩ {mother, birthday, annual} → 0.78
+  - Combined: 0.75 > 0.70 ✅
+
+Stage 2 (Semantic):
+  - Embedding cosine: 0.88 > 0.75 ✅
+
+Context Boost:
+  - Same space: +0.10 → 0.88 + 0.10 = 0.98
+
+Decision: STRONG_MATCH (confidence 0.90)
+Action: Emit regret signal
+```
+
+**Metrics**:
+
+- `p03_query_pruned_matches` (counter: total matches per match_type)
+- `p03_query_pruned_match_latency` (histogram: matching latency in ms)
+- `p03_query_pruned_candidates` (histogram: top-K candidates per query)
+
+**Configuration**:
+
+```python
+P03_QUERY_PRUNED_NAME_THRESHOLD = 0.70  # Min fuzzy name match
+P03_QUERY_PRUNED_SEMANTIC_THRESHOLD = 0.75  # Min embedding similarity
+P03_QUERY_PRUNED_SEMANTIC_HIGH = 0.85  # Semantic-only threshold
+P03_QUERY_PRUNED_TOP_K = 5  # Max candidates from pgvector
+P03_QUERY_PRUNED_CONTEXT_BOOST_SPACE = 0.10
+P03_QUERY_PRUNED_CONTEXT_BOOST_ACTOR = 0.05
+```
+
+**Rationale**: Two-stage matching balances speed (fuzzy name filter) with accuracy (semantic confirmation). Context boosts prevent false positives from unrelated queries. pgvector enables efficient search over 1000+ pruned entities.
+
+---
+
+#### C.4.4 Regret Signal Processing
+
+**Purpose**: When query matches pruned entity (regret detected), emit feedback signal and adjust decay parameters.
+
+**Base Confidence**: 0.90 (very high)
+
+Regret is a **strong negative signal**: user needed an entity we pruned. This indicates decay was too aggressive.
+
+**Signal Processing by Match Type**:
+
+| Regret Type | Confidence | Action | Rationale |
+|-------------|------------|--------|----------|
+| **STRONG_MATCH** | 0.90 | Lower λ for entity-type by 10% | High confidence, clear mistake |
+| **LIKELY_MATCH** | 0.70 | Lower λ by 5%, flag for review | Moderate confidence |
+| **SEMANTIC_MATCH** | 0.85 | Lower λ by 8% | Semantic-only, slightly lower confidence |
+| **Multiple (same type)** | 0.95 | Alert + lower λ by 15% | Pattern of over-pruning |
+
+**Feedback Loop**:
+
+```
+R3 Pruning Decision
+        ↓
+  Store in st_pruned_entities (14 days)
+        ↓
+P04 Query Arrives
+        ↓
+  Match against pruned? (C.4.3)
+        ↓
+     YES → Regret Detected
+        ↓
+  Emit feedback signal (st_feedback_signals)
+        ↓
+  Adjust λ for entity-type (lower by 5-15%)
+        ↓
+  Update st_learned_weights
+```
+
+**Implementation**:
+
+```python
+class RegretSignalProcessor:
+    """
+    Process regret signals and adjust decay parameters.
+    """
+
+    async def process_regret_signal(
+        self,
+        match: dict,
+        query_id: str,
+        query_context: dict
+    ):
+        """
+        Process a regret signal (query matched pruned entity).
+
+        Args:
+            match: Match from QueryToPrunedMatcher
+            query_id: ID of the query that caused regret
+            query_context: Query metadata
+        """
+        # Emit feedback signal
+        await self.emit_regret_feedback(
+            match=match,
+            query_id=query_id,
+            query_context=query_context
+        )
+
+        # Update pruned entity (mark as matched)
+        await db.execute(
+            "UPDATE st_pruned_entities "
+            "SET matched_query_id = $1, matched_at = $2 "
+            "WHERE prune_id = $3",
+            query_id,
+            now_ms(),
+            match['prune_id']
+        )
+
+        # Adjust decay λ for entity-type
+        await self.adjust_lambda_from_regret(
+            entity_type=match['entity_type'],
+            match_type=match['match_type'],
+            space_id=query_context.get('space_id')
+        )
+
+        logger.info(
+            f"Regret signal processed: entity_type={match['entity_type']}, "
+            f"match_type={match['match_type']}, confidence={match['confidence']}"
+        )
+
+    async def emit_regret_feedback(
+        self,
+        match: dict,
+        query_id: str,
+        query_context: dict
+    ):
+        """
+        Emit regret feedback signal to st_feedback_signals.
+        """
+        await db.execute(
+            "INSERT INTO st_feedback_signals "
+            "(signal_id, signal_type, source, target_pipeline, confidence, context_json, created_at) "
+            "VALUES ($1, 'PRUNE_REGRET', 'P04_QUERY', 'P03', $2, $3, $4)",
+            generate_id(),
+            match['confidence'],
+            json.dumps({
+                'prune_id': match['prune_id'],
+                'entity_id': match['entity_id'],
+                'entity_type': match['entity_type'],
+                'canonical_name': match['canonical_name'],
+                'match_type': match['match_type'],
+                'name_score': match['name_score'],
+                'semantic_score': match['semantic_score'],
+                'decay_factor_at_prune': match['decay_factor_at_prune'],
+                'query_id': query_id,
+                'query_context': query_context,
+            }),
+            now_ms()
+        )
+
+    async def adjust_lambda_from_regret(
+        self,
+        entity_type: str,
+        match_type: str,
+        space_id: str
+    ):
+        """
+        Adjust decay λ for entity-type based on regret signal.
+
+        Args:
+            entity_type: PERSON, PLACE, etc.
+            match_type: STRONG_MATCH, LIKELY_MATCH, SEMANTIC_MATCH
+            space_id: Space where regret occurred
+        """
+        # Determine adjustment amount
+        adjustments = {
+            'STRONG_MATCH': -0.10,  # Lower λ by 10%
+            'LIKELY_MATCH': -0.05,  # Lower λ by 5%
+            'SEMANTIC_MATCH': -0.08,  # Lower λ by 8%
+        }
+        adjustment_pct = adjustments.get(match_type, -0.05)
+
+        # Check for multiple regrets (same entity-type in last 24h)
+        recent_regrets = await db.query(
+            "SELECT COUNT(*) as count FROM st_feedback_signals "
+            "WHERE signal_type = 'PRUNE_REGRET' "
+            "AND context_json->>'entity_type' = $1 "
+            "AND context_json->>'space_id' = $2 "
+            "AND created_at > $3",
+            entity_type,
+            space_id,
+            now_ms() - (24 * 3600 * 1000)
+        )
+
+        if recent_regrets['count'] >= 3:
+            # Pattern of over-pruning: more aggressive adjustment
+            adjustment_pct = -0.15  # Lower λ by 15%
+            await emit_alert(
+                alert_type='MultipleRegrets',
+                severity='WARNING',
+                context={
+                    'entity_type': entity_type,
+                    'space_id': space_id,
+                    'regret_count_24h': recent_regrets['count'],
+                }
+            )
+
+        # Get current λ for entity-type (per-space or global)
+        current_lambda = await self.get_entity_type_lambda(entity_type, space_id)
+
+        # Apply adjustment
+        new_lambda = current_lambda * (1.0 + adjustment_pct)
+
+        # Clamp to reasonable bounds
+        min_lambda = 0.0001  # Very slow decay
+        max_lambda = 0.020   # Very fast decay
+        new_lambda = max(min_lambda, min(new_lambda, max_lambda))
+
+        # Store updated λ
+        await db.execute(
+            "INSERT INTO st_learned_weights (param_key, param_type, current_value, confidence, sample_count, last_updated_at) "
+            "VALUES ($1, 'PER_TYPE_SPACE_LAMBDA', $2, 0.90, 1, $3) "
+            "ON CONFLICT (param_key) DO UPDATE SET "
+            "  current_value = $2, "
+            "  sample_count = st_learned_weights.sample_count + 1, "
+            "  last_updated_at = $3",
+            f"lambda_{entity_type}_{space_id}",
+            new_lambda,
+            now_ms()
+        )
+
+        logger.info(
+            f"Adjusted λ for {entity_type} in space {space_id}: "
+            f"{current_lambda:.6f} → {new_lambda:.6f} ({adjustment_pct:+.0%})"
+        )
+
+    async def get_entity_type_lambda(
+        self,
+        entity_type: str,
+        space_id: str
+    ) -> float:
+        """
+        Get current λ for entity-type (per-space or global fallback).
+        """
+        # Try per-space first
+        result = await db.query(
+            "SELECT current_value FROM st_learned_weights "
+            "WHERE param_key = $1 AND param_type = 'PER_TYPE_SPACE_LAMBDA'",
+            f"lambda_{entity_type}_{space_id}"
+        )
+
+        if result:
+            return result['current_value']
+
+        # Fallback to global default
+        global_defaults = {
+            'PERSON': 0.002,
+            'FAMILY_MEMBER': 0.001,
+            'PLACE': 0.003,
+            'ORGANIZATION': 0.0025,
+            'THING': 0.005,
+            'EVENT': 0.004,
+            'CONCEPT': 0.004,
+            'ACTIVITY': 0.006,
+        }
+        return global_defaults.get(entity_type, 0.005)
+```
+
+**Anti-Gaming**:
+
+Prevent abuse or cascading effects:
+
+```python
+class RegretRateLimiter:
+    """
+    Prevent excessive regret signal processing.
+    """
+
+    async def check_rate_limits(
+        self,
+        entity_type: str,
+        space_id: str
+    ) -> bool:
+        """
+        Check if regret signal should be processed.
+
+        Rate limits:
+        - Max 10 regret signals per entity-type per day
+        - If regret rate > 20% of pruning rate → alert
+
+        Returns: True if should process, False if rate-limited
+        """
+        # Count regrets in last 24h
+        regrets_24h = await db.query(
+            "SELECT COUNT(*) as count FROM st_feedback_signals "
+            "WHERE signal_type = 'PRUNE_REGRET' "
+            "AND context_json->>'entity_type' = $1 "
+            "AND context_json->>'space_id' = $2 "
+            "AND created_at > $3",
+            entity_type,
+            space_id,
+            now_ms() - (24 * 3600 * 1000)
+        )
+
+        if regrets_24h['count'] >= 10:
+            logger.warning(
+                f"Rate limit: {entity_type} in space {space_id} has "
+                f"{regrets_24h['count']} regrets in 24h (max 10)"
+            )
+            return False
+
+        # Check regret rate vs pruning rate
+        prunes_24h = await db.query(
+            "SELECT COUNT(*) as count FROM st_pruned_entities "
+            "WHERE entity_type = $1 AND space_id = $2 "
+            "AND pruned_at > $3",
+            entity_type,
+            space_id,
+            now_ms() - (24 * 3600 * 1000)
+        )
+
+        if prunes_24h['count'] > 0:
+            regret_rate = regrets_24h['count'] / prunes_24h['count']
+
+            if regret_rate > 0.20:  # 20% threshold
+                await emit_alert(
+                    alert_type='HighRegretRate',
+                    severity='WARNING',
+                    context={
+                        'entity_type': entity_type,
+                        'space_id': space_id,
+                        'regret_rate': regret_rate,
+                        'regrets_24h': regrets_24h['count'],
+                        'prunes_24h': prunes_24h['count'],
+                    }
+                )
+
+        return True  # Process regret
+```
+
+**Metrics**:
+
+- `p03_regret_signals_processed` (counter: regrets processed per match_type)
+- `p03_regret_lambda_adjusted` (counter: λ adjustments from regrets)
+- `p03_regret_rate_limited` (counter: regrets skipped due to rate limits)
+- `p03_regret_rate` (gauge: regret_count / prune_count)
+
+**Configuration**:
+
+```python
+P03_REGRET_CONFIDENCE_STRONG = 0.90
+P03_REGRET_CONFIDENCE_LIKELY = 0.70
+P03_REGRET_CONFIDENCE_SEMANTIC = 0.85
+P03_REGRET_CONFIDENCE_MULTIPLE = 0.95
+
+P03_REGRET_LAMBDA_ADJUST_STRONG = -0.10  # 10% reduction
+P03_REGRET_LAMBDA_ADJUST_LIKELY = -0.05  # 5% reduction
+P03_REGRET_LAMBDA_ADJUST_SEMANTIC = -0.08  # 8% reduction
+P03_REGRET_LAMBDA_ADJUST_MULTIPLE = -0.15  # 15% reduction (pattern)
+
+P03_REGRET_RATE_LIMIT_PER_TYPE_DAY = 10  # Max regrets per entity-type per day
+P03_REGRET_RATE_ALERT_THRESHOLD = 0.20  # Alert if > 20% of prunes
+
+P03_REGRET_LAMBDA_MIN = 0.0001  # Slowest decay
+P03_REGRET_LAMBDA_MAX = 0.020   # Fastest decay
+```
+
+**Alerts** (add to Section 17.3):
+
+```yaml
+MultipleRegrets:
+  severity: WARNING
+  message: "Entity-type {entity_type} has {regret_count_24h} regrets in 24h (space {space_id})"
+  action: "Decay too aggressive, λ automatically lowered by 15%. Review entity-type decay settings."
+
+HighRegretRate:
+  severity: WARNING
+  message: "Regret rate {regret_rate:.1%} exceeds 20% for {entity_type} in space {space_id}"
+  action: "Pruning threshold may be too aggressive. {regrets_24h} regrets out of {prunes_24h} prunes in 24h."
+```
+
+**Rationale**: Regret signal is high-confidence negative feedback (0.90). Pruning entity user later queries is a clear mistake. Adjust λ immediately to prevent repeated regrets. Rate limits prevent cascading adjustments. Alerts notify when systemic over-pruning occurs (>20% regret rate).
+
+---
+
+#### C.4.5 Novelty Scoring
 
 **Purpose**: Determines if an event is unique enough to keep. Low novelty events are aggressively pruned.
 
@@ -12000,6 +23972,290 @@ class NoveltyScorer:
 | 0.50 - 0.89 | Somewhat novel | Process normally |
 | 0.20 - 0.49 | Repetitive | Process if important |
 | 0.00 - 0.19 | Near-duplicate | Prune unless critical |
+
+---
+
+#### C.4.3.1 Milestone Event Detection
+
+**Purpose**: Reliably detect milestone events (birthdays, anniversaries, graduations) to apply +0.20 novelty bonus (see Section 4.4.2.1).
+
+**Human Memory Model**: Milestone events are inherently memorable — birthdays, weddings, first day of school. These receive automatic importance boost.
+
+**Three-Layer Detection** (priority order):
+
+**Layer 1: NER (Named Entity Recognition)**
+
+- Extract temporal entities from text: "birthday", "anniversary", "graduation", "wedding"
+- Use UltraBERT NER (see C.5.1) with milestone entity types
+- Examples:
+  - "Happy birthday!" → milestone_type='BIRTHDAY'
+  - "Our 10th anniversary" → milestone_type='ANNIVERSARY'
+  - "Graduation ceremony today" → milestone_type='GRADUATION'
+
+**Layer 2: Ontology Match**
+
+- Cross-reference extracted entity with `st_kg_dom` attributes
+- Match: PERSON.birthday == event_date
+- Match: RELATIONSHIP.anniversary_date == event_date
+- Examples:
+  - Event date = June 15 + entity="Mom" + st_kg_dom(Mom).birthday=June 15 → MATCH
+  - Event mentions "anniversary" + date matches relationship table → MATCH
+
+**Layer 3: Recurrence Detection**
+
+- Detect annual patterns without explicit labels
+- Query: Same date (±3 days) in previous years with similar participants
+- Examples:
+  - Event on Dec 25 each year + family members → likely Christmas
+  - Event on specific date + "cake" + "candles" → likely birthday
+
+**Detection Flow**:
+
+```python
+class MilestoneDetector:
+    """
+    Three-layer milestone detection with confidence scoring.
+    """
+
+    def detect_milestone(
+        self,
+        event: HippEvent,
+        entities: List[Entity],
+        historical_events: List[HippEvent]
+    ) -> Tuple[Optional[str], float]:
+        """
+        Detect if event is a milestone.
+
+        Returns: (milestone_type, confidence)
+        milestone_type: 'BIRTHDAY', 'ANNIVERSARY', 'GRADUATION', 'WEDDING', etc.
+        confidence: [0.0, 1.0]
+        """
+        # Layer 1: NER
+        ner_result = self.extract_milestone_ner(event.text)
+
+        # Layer 2: Ontology
+        ontology_result = self.match_ontology(event, entities)
+
+        # Layer 3: Recurrence
+        recurrence_result = self.detect_recurrence(event, historical_events)
+
+        # Combine results with confidence
+        if ner_result and ontology_result:
+            # Both agree → very high confidence
+            return (ner_result.type, 0.95)
+        elif ontology_result:
+            # Ontology match alone → high confidence
+            return (ontology_result.type, 0.85)
+        elif ner_result:
+            # NER alone → medium confidence
+            return (ner_result.type, 0.70)
+        elif recurrence_result:
+            # Recurrence pattern → low confidence
+            return (recurrence_result.type, 0.60)
+        else:
+            return (None, 0.0)
+```
+
+**Confidence Levels**:
+
+| Detection Source | Confidence | Example |
+|------------------|------------|---------|
+| NER + Ontology | 0.95 | "Happy birthday Mom" + date matches Mom's birthday |
+| Ontology only | 0.85 | Event date matches stored birthday |
+| NER only | 0.70 | "birthday party" in text |
+| Recurrence only | 0.60 | Same date + participants for 3+ years |
+| None | 0.0 | Not a milestone |
+
+**Milestone Types**:
+
+```python
+MILESTONE_TYPES = [
+    'BIRTHDAY',
+    'ANNIVERSARY',        # Wedding, relationship
+    'GRADUATION',
+    'WEDDING',
+    'BIRTH',              # Child born
+    'DEATH',              # Memorial
+    'RETIREMENT',
+    'PROMOTION',
+    'FIRST_DAY',          # School, job
+    'LAST_DAY',           # School, job
+    'HOLIDAY',            # Major holidays (Christmas, etc.)
+]
+```
+
+**Schema Additions**:
+
+```sql
+-- Add to st_hipp_events
+ALTER TABLE st_hipp_events ADD COLUMN milestone_type TEXT;
+ALTER TABLE st_hipp_events ADD COLUMN milestone_confidence REAL;
+
+CREATE INDEX idx_hipp_milestone ON st_hipp_events(milestone_type, milestone_confidence);
+```
+
+**Application in Novelty Scoring**:
+
+```python
+# In NoveltyScorer or ImportanceScorer
+if event.milestone_type and event.milestone_confidence >= 0.70:
+    # Apply milestone bonus from st_learned_weights
+    milestone_bonus = await self.get_learned_bonus('milestone', space_id)
+    novelty_score += milestone_bonus  # +0.20 default
+
+    # Log application
+    metrics.p03_novelty_bonus_applied.labels(
+        bonus_type='milestone',
+        milestone_type=event.milestone_type
+    ).inc()
+```
+
+**False Positive Handling**:
+
+- If user says "this wasn't a milestone" → emit `MILESTONE_FALSE_POSITIVE` signal
+- Decrease confidence threshold for that milestone type
+- Store in `st_learned_weights` as `milestone_threshold_<type>`
+
+**Storage** (in `st_learned_weights`):
+
+```python
+# Confidence thresholds per milestone type
+INSERT INTO st_learned_weights (
+    param_id, param_key, param_scope, scope_id,
+    current_value, prior_value, confidence
+) VALUES (
+    ulid.new(),
+    'milestone_threshold_BIRTHDAY',
+    'global',
+    NULL,
+    0.70,  # Current threshold
+    0.70,  # Prior
+    0.95   # High confidence in threshold
+);
+```
+
+**Metrics** (add to Section 8.2):
+
+- `p03_milestone_detected` (counter): Milestone detections by type.
+- `p03_milestone_confidence` (histogram): Distribution of confidence scores.
+- `p03_milestone_false_positives` (counter): User-reported false positives.
+
+**Configuration** (add to Section 16):
+
+- `P03_MILESTONE_MIN_CONFIDENCE = 0.70` (threshold for bonus application)
+- `P03_MILESTONE_RECURRENCE_YEARS = 3` (years for recurrence detection)
+- `P03_MILESTONE_DATE_TOLERANCE_DAYS = 3` (±3 days for date matching)
+
+**Rationale**: Milestones get +0.20 bonus — reliable detection prevents false positives from inflating unimportant events. Three-layer approach balances precision (ontology) with recall (NER + recurrence).
+
+---
+
+#### C.4.6 Feedback-to-Formula Mapping
+
+**Purpose**: Map P21-delivered feedback signals to specific P03 learning formulas and parameters.
+
+**Signal → Formula Impact**:
+
+| Feedback Type | Affected Formula | Parameter Updated | Update Method |
+|---------------|------------------|-------------------|---------------|
+| `SALIENCE_ADJUSTMENT` | Importance (R1) | α_importance weights | Adjust weight by signal delta |
+| `DECAY_REVERSAL` | Unified Decay (R3) | decay λ | Decrease λ (slower decay) |
+| `CLUSTER_CORRECTION` | DBSCAN (R2) | eps, min_samples | Adjust clustering params |
+| `NOVELTY_SIGNAL` | Novelty Score (R4) | novelty thresholds | Update bonus thresholds |
+| `REFORMULATION` | Similarity (R6) | similarity thresholds | Adjust match thresholds |
+
+**Confidence Weighting Rules**:
+
+| Confidence Range | Weighting Strategy | Rationale |
+|------------------|-------------------|-----------|
+| < 0.50 | Aggregate only (10+ signals) | Low confidence, need consensus |
+| 0.50-0.75 | Apply with 50% weight | Moderate confidence, cautious update |
+| > 0.75 | Apply full weight | High confidence, immediate update |
+
+**Batch Processing**: Signals processed in nightly batch (not real-time) to prevent parameter instability from individual signals.
+
+**Example Flow**:
+
+```python
+# Nightly batch processor
+async def process_feedback_batch(space_id: str) -> None:
+    """Process accumulated feedback signals."""
+
+    # Fetch unconsumed signals
+    signals = await fetch_unconsumed_feedback(space_id)
+
+    for signal_type in ['SALIENCE_ADJUSTMENT', 'DECAY_REVERSAL', ...]:
+        relevant = [s for s in signals if s.feedback_type == signal_type]
+
+        if not relevant:
+            continue
+
+        # Apply confidence weighting
+        high_conf = [s for s in relevant if s.confidence > 0.75]
+        med_conf = [s for s in relevant if 0.50 <= s.confidence <= 0.75]
+        low_conf = [s for s in relevant if s.confidence < 0.50]
+
+        # Update formula parameters
+        if high_conf:
+            await apply_immediate(high_conf, weight=1.0)
+        if med_conf:
+            await apply_immediate(med_conf, weight=0.5)
+        if len(low_conf) >= 10:
+            await apply_aggregate(low_conf)
+```
+
+**Rationale**: Map P21-delivered signals to P03 learning formulas with confidence-based weighting to prevent low-quality signals from degrading performance.
+
+---
+
+#### C.4.7 Implicit Signal Confidence Standards
+
+**Purpose**: Define confidence levels for different feedback signal types to weight their impact on learning.
+
+**Base Confidence by Signal Type**:
+
+| Signal | Base Confidence | Reliability | Source |
+|--------|-----------------|-------------|--------|
+| `CORRECTION` | 0.90 | High (explicit user action) | K1 CorrectionParser |
+| `MEMORY_MISS` | 0.80 | High (clear gap) | K1 HedgingDetector |
+| `REGRET` | 0.90 | High (clear mistake) | P03 RegretSignalProcessor |
+| `REFORMULATION` | 0.60 | Medium (inferred intent) | K1 HedgingDetector |
+| `ABANDONMENT` | 0.50 | Low (uncertain intent) | K1 SessionTracker |
+
+**Confidence Adjustment Factors**:
+
+| Condition | Adjustment | Rationale |
+|-----------|------------|-----------|
+| Explicit user action ("I meant...") | +0.10 | Direct correction |
+| Via UI control (not direct speech) | -0.10 | Indirect signal |
+| Late night session (11pm-5am) | -0.20 | Fatigue may cause errors |
+| Repeat pattern (3+ similar signals) | +0.10 | Consistent behavior |
+
+**Confidence Usage in Learning**:
+
+```python
+class ConfidenceWeightedLearning:
+    """Apply confidence-based weighting to learning updates."""
+
+    def apply_signal(self, signal: FeedbackSignal, param: LearnedParam) -> None:
+        """Update parameter based on signal confidence."""
+
+        if signal.confidence < 0.50:
+            # Low confidence: aggregate only
+            self.buffer_for_aggregation(signal)
+
+        elif 0.50 <= signal.confidence <= 0.75:
+            # Medium confidence: apply with 50% weight
+            delta = signal.salience_delta * 0.5
+            param.current_value += delta
+
+        else:  # > 0.75
+            # High confidence: apply full weight
+            delta = signal.salience_delta
+            param.current_value += delta
+```
+
+**Rationale**: Different signals have different reliability; weight accordingly to prevent low-quality signals from degrading learning performance.
 
 ---
 
@@ -14958,6 +27214,89 @@ async def test_contract_matches_implementation(contract_file):
 
 ### F.1 Reconciliation Thresholds
 
+#### F.1.1 Bayesian Prior Configuration
+
+**Purpose**: Encode current best-practice thresholds as informative Beta priors for Thompson Sampling.
+
+**Prior Construction**:
+
+| Threshold | Target E[x] | Prior Distribution | Effective Samples | Rationale |
+|-----------|-------------|-------------------|------------------|----------|
+| **REINFORCE** | 0.85 | Beta(17, 3) | α+β=20 | Strong reinforcement threshold |
+| **EXTEND_LOWER** | 0.60 | Beta(12, 8) | α+β=20 | Partial match threshold |
+
+**Beta Prior Construction**:
+
+To encode a target threshold `p` with `n` effective samples:
+
+```
+α = p × n
+β = (1 - p) × n
+```
+
+Example for REINFORCE=0.85 with n=20:
+
+```
+α = 0.85 × 20 = 17
+β = 0.15 × 20 = 3
+→ Beta(17, 3) has E[x] = 17/(17+3) = 0.85
+```
+
+**Why α+β=20?**
+
+| α+β | Effective Samples | Signals to Shift Threshold by 0.05 | Tradeoff |
+|-----|------------------|-----------------------------------|----------|
+| 10 | 10 | ~25 | Faster adaptation, less stable |
+| **20** | **20** | **~50** | **Balanced stability vs adaptability** |
+| 40 | 40 | ~100 | More stable, slower adaptation |
+| 100 | 100 | ~250 | Very stable, very slow adaptation |
+
+**Selected**: α+β=20 provides moderate confidence in prior. Requires ~50 signals to shift threshold by 0.05 (5 percentage points). Balances stability (prevent wild swings) with adaptability (learn from user behavior).
+
+**Prior Strength Tradeoff**:
+
+- **Stronger priors** (higher α+β):
+  - **Pros**: More stable, resistant to noisy signals, safer for production
+  - **Cons**: Slower to adapt, may miss changes in user preferences
+  - **Use case**: High-stakes decisions (e.g., family member disambiguation)
+
+- **Weaker priors** (lower α+β):
+  - **Pros**: Faster adaptation, responsive to user feedback
+  - **Cons**: More variance, sensitive to noise, less stable
+  - **Use case**: Exploratory features, rapid iteration
+
+**Per-Threshold Configuration**:
+
+```python
+P03_THOMPSON_PRIORS = {
+    'reinforce': {
+        'alpha': 17,
+        'beta': 3,
+        'target': 0.85,
+        'effective_samples': 20,
+    },
+    'extend_lower': {
+        'alpha': 12,
+        'beta': 8,
+        'target': 0.60,
+        'effective_samples': 20,
+    },
+}
+```
+
+**Alternative Prior Designs** (Not Selected):
+
+| Design | α, β | Rationale | Why Not Selected |
+|--------|------|-----------|------------------|
+| Uniform | (1, 1) | No prior belief, pure exploration | Too unstable in cold start |
+| Weak informative | (5, 1) | Slight preference, fast adaptation | Still too noisy for production |
+| Strong informative | (85, 15) | Very confident | Too slow to adapt, rigid |
+| Jeffreys prior | (0.5, 0.5) | Uninformative (improper) | Mathematical complexity |
+
+**Rationale**: Informative priors encode current best practice (REINFORCE=0.85 is empirically validated). β+α=20 provides moderate confidence—strong enough to prevent wild swings from noisy signals, weak enough to adapt within 50-100 signals. Beta-Bernoulli conjugacy makes updates trivial (closed-form). Priors are overridden as space accumulates data, ensuring personalization.
+
+#### F.1.2 Static Thresholds (Legacy)
+
 | Threshold | Config Key | Default | Min | Max | Unit | Decision |
 |-----------|------------|---------|-----|-----|------|----------|
 | REINFORCE_MIN | `p03.reconciliation.thresholds.reinforce_min` | 0.85 | 0.80 | 0.95 | cosine | score >= threshold → REINFORCE |
@@ -15525,3 +27864,114 @@ results = client.predict(
 ---
 
 *End of Appendix H*
+
+---
+
+## Appendix I: Closed-Loop Feedback System (Self-Learning P03)
+
+> **Status**: 🔬 RESEARCH / DESIGN PHASE
+> **Created**: 2025-12-24
+> **Whiteboard**: [p03_whiteboard.md](p03_whiteboard.md)
+> **Related**: [FEEDBACK.md](../../k0/ports/FEEDBACK.md), [temp.md](../../temp.md)
+
+### I.1 Overview
+
+**Current State**: P03 operates as an **open-loop** system — formulas use static thresholds and weights with no feedback from downstream consumers (P04 queries, K1 user interactions).
+
+**Target State**: Transform P03 into a **closed-loop self-learning** system where:
+
+1. **Implicit feedback** from user behavior adjusts consolidation parameters
+2. **Query miss signals** from P04 inform pruning aggressiveness
+3. **Per-entity/per-user calibration** replaces one-size-fits-all thresholds
+4. **Online learning** continuously improves importance scoring weights
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                       P03 CLOSED-LOOP FEEDBACK ARCHITECTURE                     │
+│                                                                                 │
+│                              ┌─────────────────┐                                │
+│                              │   P03 Current   │                                │
+│                              │  (Open Loop)    │                                │
+│                              │                 │                                │
+│     P02 ──────────────────▶  │  Static λ       │ ──────────────▶ 8 Memory      │
+│     Events                   │  Fixed weights  │                  Layers       │
+│                              │  Hardcoded      │                                │
+│                              │  thresholds     │                                │
+│                              └─────────────────┘                                │
+│                                                                                 │
+│  ════════════════════════════════════════════════════════════════════════════  │
+│                                                                                 │
+│                              ┌─────────────────┐                                │
+│                              │   P03 Target    │                                │
+│                              │ (Closed Loop)   │                                │
+│                              │                 │                                │
+│     P02 ──────────────────▶  │  Adaptive λ     │ ──────────────▶ 8 Memory      │
+│     Events                   │  Learned weights│                  Layers       │
+│                              │  Per-entity     │                    │          │
+│                              │  thresholds     │                    │          │
+│                              └────────┬────────┘                    │          │
+│                                       │                             │          │
+│                                       │    ◀────────────────────────┘          │
+│                                       │         Query Results                  │
+│                              ┌────────▼────────┐                               │
+│                              │ Feedback Loop   │                               │
+│                              │                 │                               │
+│                              │ • Query misses  │ ◀──────── P04 Queries         │
+│                              │ • Reformulations│ ◀──────── K1 User Behavior    │
+│                              │ • Corrections   │ ◀──────── Explicit Feedback   │
+│                              │ • Abandonments  │ ◀──────── Session Signals     │
+│                              └─────────────────┘                               │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### I.2 Key Enhancement Areas
+
+| Area | Current | Target | Status |
+|------|---------|--------|--------|
+| **Thresholds** | Static (0.85, 0.60, etc.) | Thompson Sampling adaptive | 📋 Design |
+| **Decay λ** | Per-layer constant | Per-entity, per-user learned | 📋 Design |
+| **Importance Weights** | Fixed (0.35/0.25/0.20/0.20) | Gradient-learned | 📋 Research |
+| **Feedback Signal** | None | P04/K1 → P03 closed loop | 📋 Design |
+| **Regret Tracking** | None | Query miss → prune adjustment | 📋 Design |
+
+### I.3 Feedback Signal Types
+
+| Signal | Source | Confidence | P03 Action |
+|--------|--------|------------|------------|
+| `MEMORY_MISS` | P04 query returned nothing | 0.8 | Reduce decay λ for entity |
+| `REFORMULATION` | User rephrased query | 0.6 | Lower similarity threshold |
+| `CORRECTION` | User explicitly corrected | 0.9 | Split/merge entities |
+| `VALIDATION` | User confirmed memory | 0.95 | Boost confidence |
+| `ABANDONMENT` | Session ended without resolution | 0.5 | Flag for audit |
+| `PRUNE_REGRET` | Pruned entity was later queried | 0.85 | Reduce decay aggressiveness |
+
+### I.4 Implementation Phases
+
+| Phase | Scope | Status |
+|-------|-------|--------|
+| **Phase 0** | Document all formulas & thresholds | ✅ Complete (this dossier) |
+| **Phase 1** | Add `st_implicit_feedback` table | 📋 Planned |
+| **Phase 2** | Implement feedback handlers in P03 | 📋 Planned |
+| **Phase 3** | Thompson Sampling for thresholds | 📋 Research |
+| **Phase 4** | Per-entity calibration | 📋 Research |
+| **Phase 5** | Online weight learning | 📋 Research |
+
+### I.5 Related Documents
+
+- **Whiteboard**: [p03_whiteboard.md](p03_whiteboard.md) — Living research document
+- **Feedback Wiring**: [FEEDBACK.md](../../k0/ports/FEEDBACK.md) — K1↔K0 feedback architecture
+- **Research Notes**: [temp.md](../../temp.md) — Initial exploration
+
+### I.6 ADRs Required
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| TBD | P03 Implicit Feedback Integration | 📋 Proposed |
+| TBD | Adaptive Threshold via Thompson Sampling | 📋 Proposed |
+| TBD | Per-Entity Decay Calibration | 📋 Proposed |
+| TBD | Query Regret Tracking | 📋 Proposed |
+
+---
+
+*End of Appendix I — To Be Expanded*

@@ -4,7 +4,7 @@
 **Version**: 1.0.0
 **Created**: 2025-12-13
 **Owner**: K0 Architecture Team
-**Related ADR**: [ADR-K003: Inline Embedding via UltraBERT](../architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md)
+**Related ADR**: [ADR-K003: Inline Embedding via UltraBERT](../architecture/decisions-K0/k003-inline-embedding-ultrabert.md)
 **Related Dossiers**:
 
 - [P08_embedding_dossier_v2.md](../pipelines/P08_embedding_dossier_v2.md)

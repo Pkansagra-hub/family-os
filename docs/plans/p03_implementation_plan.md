@@ -144,6 +144,7 @@ It defines milestones, epics, and issues but leaves detailed specifications to b
 > **K0 Architecture Discovery** (Based on actual K0 codebase):
 >
 > K0 uses a **YAML-first declarative pipeline architecture**:
+>
 > - **Pipeline Contracts**: `k0/contracts/pipelines/*.yaml` define pipeline DAGs
 > - **Module Contracts**: `k0/contracts/modules/*.yaml` define module interfaces
 > - **Module Implementations**: `k0/modules/<domain>/<module>.py` contain async `run()` functions
@@ -284,6 +285,7 @@ dag:
 | `consolidation.finalization.v1.yaml` | `consolidation.finalization:v1` | R8 events |
 
 Each contract follows `hippocampus.pattern_separate.v1.yaml` template with:
+
 - `module_id`, `version`
 - `input_event_types`, `output_event_types`
 - `latency_budget_ms` (from dossier phase budgets)
@@ -1146,6 +1148,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    - Session locks require explicit release or connection close
 
 **Cross-References**:
+
 - Dossier Section 4.10.2: Advisory Lock Service
 - Issue 0.4.1: Implementation
 
@@ -1208,6 +1211,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    - Requires partition discovery mechanism
 
 **Cross-References**:
+
 - Dossier Section 4.10.3: Partitioned Pipeline Execution
 - Issue 0.5.1: Implementation
 
@@ -1277,6 +1281,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    - Version column required in truth tables
 
 **Cross-References**:
+
 - Dossier Section 4.10.4: Optimistic Concurrency
 - Issue 0.6.1: Implementation
 
@@ -1340,6 +1345,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
    - Requires node registry for multi-node
 
 **Cross-References**:
+
 - Dossier Section 4.10.5: Pipeline Execution Context
 - Issue 0.7.1: Implementation
 
@@ -5242,10 +5248,12 @@ memory_pressure_response:
 **Goal**: Implement trigger, lock, batch selection, hippocampal replay
 **Gate**: GATE 3 (Implementation)
 **Prerequisites**:
+
 - M0 complete (including K0 kernel enhancements)
 - M1 complete (migrations, contracts)
 
 > **K0 Enhancement Dependency**: M2 uses the following K0 enhancements implemented in M0:
+>
 > - `AdvisoryLockService` (Epic 0.4): Used by R0 lock acquisition
 > - `PartitionConfig` (Epic 0.5): Used for per-space consolidation
 > - `PipelineContext.node_info` (Epic 0.7): Used for lock holder identification
@@ -8305,10 +8313,11 @@ memory_pressure_response:
 - [ ] **Version Header**: Document version bumped to reflect M5 completion
 
 **K0 File**: `k0/pipelines/k0_architecture_master.md`
-   - Test version chain queries in Cypher
-   - Test observation count persistence
 
-6. **Performance Tests**
+- Test version chain queries in Cypher
+- Test observation count persistence
+
+1. **Performance Tests**
    - Entity normalization: < 10ms for 100 entities
    - Co-occurrence analysis: < 50ms for 1000 entity pairs
    - Neo4j write batch: < 100ms for 50 updates
@@ -8403,10 +8412,12 @@ memory_pressure_response:
 **Goal**: Implement staging updates and 8-layer truth writes
 **Gate**: GATE 3 (Implementation)
 **Prerequisites**:
+
 - M0 complete (including K0 kernel enhancements)
 - M1-M5 complete
 
 > **K0 Enhancement Dependency**: M6 uses the following K0 enhancements implemented in M0:
+>
 > - `UnitOfWork.execute_with_version_check()` (Epic 0.6): Used for optimistic concurrency in R7 truth writes
 > - `VersionedWriteResult` (Epic 0.6): Used for conflict detection and retry logic
 > - `AdvisoryLockService` (Epic 0.4): Lock heartbeat during long R7 write operations

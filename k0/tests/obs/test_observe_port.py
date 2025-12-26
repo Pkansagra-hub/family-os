@@ -79,14 +79,62 @@ def _() -> None:
     finally:
         observe.logger = original_logger
 
-    records = [
-        json.loads(line) for line in stream.getvalue().splitlines() if line.strip()
-    ]
-    forwarded = next(
-        record for record in records if record.get("message") == "agent.forwarded"
-    )
+    records = [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
+    forwarded = next(record for record in records if record.get("message") == "agent.forwarded")
     context = forwarded.get("context", {})
 
     assert context.get("forwarded_message") == "Bridge log event"
     assert forwarded.get("cognitive_trace_id") == "forwarded-trace"
     assert context.get("forwarded") is True
+
+
+@test("obs.emit accepts feedback envelopes")
+def _() -> None:
+    app = create_app(KernelSettings.default())
+
+    payload = {
+        "kind": "feedback",
+        "body": {
+            "feedback_id": "550e8400-e29b-41d4-a716-446655440000",
+            "pipeline_id": "P02",
+            "signal_class": "CORRECTION",
+            "signal_subtype": "user_correction",
+            "tenant_id": "tenant-tests",
+            "space_id": "space-tests",
+            "correlation": {"session_id": "sess-1", "event_ids": ["evt-1"]},
+            "payload": {"extraction_quality": "good"},
+        },
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/k0/obs.emit",
+            json=payload,
+            headers={"X-Cognitive-Trace-Id": "trace-feedback-001"},
+        )
+        assert response.status_code == 204
+
+
+@test("obs.emit rejects feedback envelopes missing tenant/space")
+def _() -> None:
+    app = create_app(KernelSettings.default())
+
+    payload = {
+        "kind": "feedback",
+        "body": {
+            "feedback_id": "550e8400-e29b-41d4-a716-446655440001",
+            "pipeline_id": "P02",
+            "signal_class": "CORRECTION",
+            "signal_subtype": "user_correction",
+            "correlation": {"session_id": "sess-1", "event_ids": ["evt-1"]},
+            "payload": {"extraction_quality": "good"},
+        },
+    }
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/k0/obs.emit",
+            json=payload,
+            headers={"X-Cognitive-Trace-Id": "trace-feedback-002"},
+        )
+        assert response.status_code == 400

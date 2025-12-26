@@ -36,14 +36,24 @@ _metrics = {
 }
 
 
-async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) -> dict[str, Any]:
+async def run(
+    message: Any, context: Any, envelope: dict[str, Any] | None = None, **config: Any
+) -> dict[str, Any]:
     """
     Backfill PENDING embeddings for legacy events.
 
+    Supports two trigger modes:
+    1. Scheduled Batch: Query st_hipp_events WHERE embedding_status='PENDING'
+    2. Event-triggered: Process specific tenant/space from envelope
+
     Args:
-        envelope: Event envelope with cognitive.backfill.requested.v1 data
-        enriched: Enrichment data from previous modules
-        context: Execution context with syscalls and config
+        message: BusMessage (optional, used in event-triggered mode)
+        context: PipelineContext with syscalls, logger, config
+        envelope: Event envelope (optional, for event-triggered mode)
+        **config: Stage configuration:
+            - batch_size: int (default: 100) - Max events per batch
+            - emit_completion_event: bool (default: False)
+            - model_id: str (default: ultrabert_v2.1.0)
 
     Returns:
         Dictionary with:
@@ -56,16 +66,17 @@ async def run(envelope: dict[str, Any], enriched: dict[str, Any], context: Any) 
         ValueError: If required fields missing
         RuntimeError: If backfill fails
     """
-    # Extract configuration
-    config = getattr(context, "config", {})
-    batch_size = config.get("batch_size", 100)
-    emit_backfilled_event = config.get("emit_backfilled_event", True)
+    # Extract configuration from **config (stage config) or context.config
+    batch_size = config.get("batch_size", getattr(context, "config", {}).get("batch_size", 100))
+    emit_backfilled_event = config.get("emit_completion_event", False)
     backfilled_event_topic = config.get(
         "backfilled_event_topic", "cognitive.embedding.backfilled.v1"
     )
     model_id = config.get("model_id", "ultrabert_v2.1.0")
 
-    # Extract event payload
+    # Extract tenant/space from envelope if provided (event-triggered mode)
+    # For scheduled mode, these may be None (process all tenants)
+    envelope = envelope or {}
     payload = envelope.get("payload", {})
     tenant_id = payload.get("tenant_id")
     space_id = payload.get("space_id")

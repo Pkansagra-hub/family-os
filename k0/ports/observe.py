@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
 from contextlib import nullcontext
@@ -141,9 +143,7 @@ async def emit(payload: ObservabilityPayload, request: Request) -> Response:
                         source = body.get("source") or "k1_bridge"
                         buffer.update(
                             snapshot=snapshot,
-                            captured_at=(
-                                str(captured_at) if captured_at is not None else None
-                            ),
+                            captured_at=(str(captured_at) if captured_at is not None else None),
                             source=str(source),
                             trace_id=trace_id,
                         )
@@ -170,21 +170,158 @@ async def emit(payload: ObservabilityPayload, request: Request) -> Response:
                     _ingest_forwarded_logs(entries, trace_id)
                     if span is not None:
                         span.set_attribute("telemetry.log_entries", len(entries))
+            elif payload.kind == "feedback":
+                body = payload.body if isinstance(payload.body, dict) else {}
+                if not body:
+                    error_payload = ErrorEnvelope(
+                        code="INVALID_PAYLOAD",
+                        component=KERNEL_COMPONENT_OBSERVE,
+                        trace_id=trace_id,
+                        reason="MISSING_ENVELOPE",
+                        hint="Feedback payload body must be a non-empty feedback envelope object.",
+                    )
+                    status_code = status.HTTP_400_BAD_REQUEST
+                else:
+                    from k0.db.connection import connection_scope
+                    from k0.feedback.envelope import FeedbackEnvelope
+                    from k0.feedback.schema_registry import FeedbackSchemaRegistry
+
+                    try:
+                        envelope = FeedbackEnvelope.model_validate(body)
+                    except Exception as exc:  # noqa: BLE001 - surface validation error
+                        error_payload = ErrorEnvelope(
+                            code="INVALID_PAYLOAD",
+                            component=KERNEL_COMPONENT_OBSERVE,
+                            trace_id=trace_id,
+                            reason="INVALID_FEEDBACK_ENVELOPE",
+                            hint=str(exc),
+                        )
+                        status_code = status.HTTP_400_BAD_REQUEST
+                    else:
+                        if envelope.tenant_id is None or envelope.space_id is None:
+                            error_payload = ErrorEnvelope(
+                                code="INVALID_PAYLOAD",
+                                component=KERNEL_COMPONENT_OBSERVE,
+                                trace_id=trace_id,
+                                reason="MISSING_TENANT_SPACE",
+                                hint="Feedback envelope must include tenant_id and space_id.",
+                            )
+                            status_code = status.HTTP_400_BAD_REQUEST
+                        else:
+                            _ensure_builtin_feedback_payload_schemas(envelope.pipeline_id)
+
+                            registered_schema = FeedbackSchemaRegistry.get_schema(
+                                envelope.pipeline_id
+                            )
+                            payload_validation_status = "unvalidated"
+                            payload_validation_error: str | None = None
+
+                            if registered_schema is not None:
+                                ok, err = FeedbackSchemaRegistry.validate(
+                                    envelope.pipeline_id,
+                                    envelope.payload,
+                                    permissive_unregistered=False,
+                                )
+                                if ok:
+                                    payload_validation_status = "valid"
+                                else:
+                                    payload_validation_status = "invalid"
+                                    payload_validation_error = _truncate_error(err)
+
+                            trace_to_store = envelope.trace_id or trace_id
+                            session_to_store = envelope.session_id
+                            if session_to_store is None:
+                                session_to_store = envelope.correlation.session_id
+
+                            correlation = envelope.correlation.model_dump(mode="json")
+                            provenance = envelope.provenance or {}
+                            metadata = envelope.metadata or {}
+
+                            payload_hash = _sha256_json(envelope.payload)
+                            event_ts = envelope.event_timestamp or envelope.timestamp
+
+                            try:
+                                async with connection_scope() as conn:
+                                    await conn.execute(
+                                        """
+                                        INSERT INTO st_feedback_signals (
+                                            feedback_id,
+                                            pipeline_id,
+                                            tenant_id,
+                                            space_id,
+                                            signal_class,
+                                            signal_subtype,
+                                            source,
+                                            source_component,
+                                            session_id,
+                                            trace_id,
+                                            correlation,
+                                            provenance,
+                                            payload,
+                                            payload_hash,
+                                            metadata,
+                                            payload_validation_status,
+                                            payload_validation_error,
+                                            priority,
+                                            event_timestamp
+                                        ) VALUES (
+                                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+                                        )
+                                        ON CONFLICT (feedback_id) DO NOTHING
+                                        """,
+                                        str(envelope.feedback_id),
+                                        envelope.pipeline_id,
+                                        envelope.tenant_id,
+                                        envelope.space_id,
+                                        str(envelope.signal_class),
+                                        envelope.signal_subtype,
+                                        (
+                                            str(envelope.source)
+                                            if envelope.source is not None
+                                            else None
+                                        ),
+                                        envelope.source_component,
+                                        session_to_store,
+                                        trace_to_store,
+                                        correlation,
+                                        provenance,
+                                        envelope.payload,
+                                        payload_hash,
+                                        metadata,
+                                        payload_validation_status,
+                                        payload_validation_error,
+                                        float(envelope.priority),
+                                        event_ts,
+                                    )
+                            except Exception as exc:  # noqa: BLE001 - defensive guard
+                                logger.exception("feedback_ingest_failed")
+                                error_payload = ErrorEnvelope(
+                                    code="INGESTION_FAILED",
+                                    component=KERNEL_COMPONENT_OBSERVE,
+                                    trace_id=trace_id,
+                                    reason="DB_WRITE_FAILED",
+                                    hint=str(exc),
+                                )
+                                status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+                            else:
+                                if span is not None:
+                                    span.set_attribute("feedback.pipeline_id", envelope.pipeline_id)
+                                    span.set_attribute(
+                                        "feedback.payload_validation", payload_validation_status
+                                    )
             else:
                 error_payload = ErrorEnvelope(
                     code="UNSUPPORTED_KIND",
                     component=KERNEL_COMPONENT_OBSERVE,
                     trace_id=trace_id,
                     reason="UNSUPPORTED_KIND",
-                    hint="Supported kinds: metrics, logs.",
+                    hint="Supported kinds: metrics, logs, feedback.",
                 )
                 status_code = status.HTTP_400_BAD_REQUEST
 
             if error_payload and span is not None:
                 span.set_status(
-                    Status(
-                        status_code=StatusCode.ERROR, description=error_payload.reason
-                    )
+                    Status(status_code=StatusCode.ERROR, description=error_payload.reason)
                 )
         finally:
             if isinstance(tracer_factory, TracerFactory) and token is not None:
@@ -194,6 +331,44 @@ async def emit(payload: ObservabilityPayload, request: Request) -> Response:
         return JSONResponse(status_code=status_code, content=error_payload.as_payload())
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _sha256_json(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _truncate_error(error: str | None, max_len: int = 512) -> str | None:
+    if not error:
+        return None
+    error = str(error)
+    if len(error) <= max_len:
+        return error
+    return error[: max_len - 3] + "..."
+
+
+def _ensure_builtin_feedback_payload_schemas(pipeline_id: str) -> None:
+    """Register builtin payload schemas for implemented pipelines.
+
+    The registry is intentionally not auto-populated at import time because
+    tests and future rollouts rely on being able to reset the registry.
+    """
+
+    from k0.feedback.schema_registry import FeedbackSchemaRegistry
+
+    pid = pipeline_id.strip().upper()
+    if pid not in {"P02", "P08"}:
+        return
+
+    if FeedbackSchemaRegistry.get_schema(pid) is not None:
+        return
+
+    from k0.feedback.payloads import P02FeedbackPayload, P08FeedbackPayload
+
+    if pid == "P02":
+        FeedbackSchemaRegistry.register_pydantic(pid, P02FeedbackPayload)
+    elif pid == "P08":
+        FeedbackSchemaRegistry.register_pydantic(pid, P08FeedbackPayload)
 
 
 def _ingest_forwarded_logs(entries: list[Any], fallback_trace_id: str) -> None:
@@ -214,9 +389,7 @@ def _ingest_forwarded_logs(entries: list[Any], fallback_trace_id: str) -> None:
         if not callable(log_callable):
             log_callable = logger.info
 
-        extras = {
-            k: v for k, v in entry.items() if k not in {"message", "level", "event"}
-        }
+        extras = {k: v for k, v in entry.items() if k not in {"message", "level", "event"}}
         extras.setdefault(
             "cognitive_trace_id", entry.get("cognitive_trace_id") or fallback_trace_id
         )
