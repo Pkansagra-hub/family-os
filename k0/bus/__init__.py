@@ -15,6 +15,7 @@ from .middleware import (
     timestamp_middleware,
     tracing_middleware,
 )
+from .universal import UniversalBus
 
 __all__ = [
     "BusDispatchContext",
@@ -22,6 +23,7 @@ __all__ = [
     "BusMessage",
     "BusMiddleware",
     "BusMiddlewareHandler",
+    "UniversalBus",
     "current_dispatch_context",
     "latency_metrics_middleware",
     "timestamp_middleware",

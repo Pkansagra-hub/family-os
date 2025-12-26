@@ -16,11 +16,13 @@ from .topics import (
     feedback_signal_topic,
     registered_feedback_signal_topics_v1,
 )
+from .worker import FeedbackWorker, feedback_worker_lifespan
 
 __all__ = [
     "FeedbackCorrelation",
     "FeedbackEnvelope",
     "FeedbackSchemaRegistry",
+    "FeedbackWorker",
     "P02FeedbackPayload",
     "P08FeedbackPayload",
     "SignalClass",
@@ -32,5 +34,6 @@ __all__ = [
     "FEEDBACK_SIGNAL_P08_V1",
     "FEEDBACK_SIGNAL_TOPICS_V1",
     "feedback_signal_topic",
+    "feedback_worker_lifespan",
     "registered_feedback_signal_topics_v1",
 ]

@@ -29,15 +29,16 @@ class BusMessage:
     Attributes:
         topic: Event topic (e.g., "cognitive.memory.write.committed.v1")
         payload: Event payload (bytes, typically JSON or FlatBuffers)
-        offset: Monotonic WAL position (st_wal.pos)
+        offset: Monotonic WAL position (st_wal.pos) - required for stream="wal"
         trace_id: Cognitive trace ID for observability (optional)
         space_id: Space ID for per-space ordering enforcement (optional)
         metadata: Additional context for routing/filtering (optional)
+                  For stream="feedback", must include "message_id" key
     """
 
     topic: str
     payload: bytes
-    offset: int
+    offset: int | None = None  # Required for stream="wal", ignored for stream="feedback"
     trace_id: str | None = None
     space_id: str | None = None
     metadata: dict[str, Any] | None = None
@@ -80,7 +81,12 @@ def _default_clock() -> datetime:
 
 
 class BusDispatcher:
-    """Fan out WAL commits to SSE and driver outbox facades."""
+    """Fan out WAL commits to SSE and driver outbox facades.
+    
+    Supports multiple independent streams with different semantics:
+    - stream="wal" (default): WAL-backed messages, strict monotonic offsets
+    - stream="feedback": Non-WAL feedback signals, id-based idempotency
+    """
 
     def __init__(
         self,
@@ -93,11 +99,19 @@ class BusDispatcher:
         band_resolver: BandResolver | None = None,
         middlewares: Iterable[BusMiddleware] | None = None,
         clock: Callable[[], datetime] | None = None,
+        stream: str = "wal",  # Stream identifier: "wal" or "feedback"
     ) -> None:
         if token_cost <= 0:
             raise ValueError("token_cost must be positive")
+        
+        # Validate stream
+        stream_value = stream.strip().lower()
+        if stream_value not in ("wal", "feedback"):
+            raise ValueError(f"Invalid stream '{stream}': must be 'wal' or 'feedback'")
+        
         self._scheduler = scheduler
         self._sinks: List[BusSink] = list(sinks or [])
+        self._stream = stream_value
 
         # M1 R1.1: Topic-based subscriptions and taps (observability)
         self._topic_subscriptions: dict[str, List[BusSink]] = {}
@@ -117,6 +131,11 @@ class BusDispatcher:
         self._clock = clock or _default_clock
         self._lock = asyncio.Lock()
         self._last_offset: int | None = None
+        
+        # Stream-specific enforcement configuration (ADR-055)
+        self._enforce_monotonic = (stream_value == "wal")
+        self._require_offset = (stream_value == "wal")
+        self._require_message_id = (stream_value != "wal")
 
     def subscribe(self, topic: str, handler: BusSink) -> None:
         """
@@ -202,24 +221,39 @@ class BusDispatcher:
         return tuple(self._middlewares)
 
     async def dispatch(self, messages: Iterable[BusMessage]) -> None:
-        """Dispatch *messages* in WAL order using scheduler tokens."""
+        """Dispatch *messages* in stream-appropriate order using scheduler tokens.
+        
+        For stream="wal": Messages sorted by offset, monotonic enforcement enabled.
+        For stream="feedback": Messages dispatched in provided order, no offset sorting.
+        """
 
         batch = list(messages)
         if not batch:
             return
 
-        batch.sort(key=attrgetter("offset"))
+        # Sort by offset only for WAL stream
+        if self._stream == "wal":
+            batch.sort(key=attrgetter("offset"))
 
         # Record activity for idle detection (Phase 2 - M7)
         self._record_activity()
 
         async with self._lock:
             for message in batch:
-                self._ensure_monotonic(message.offset)
+                # Stream-specific validation (ADR-055)
+                self._validate_message(message)
+                
+                # Enforce monotonic offsets only for WAL stream
+                if self._enforce_monotonic and message.offset is not None:
+                    self._ensure_monotonic(message.offset)
+                
                 # Dispatch if any handlers registered (legacy sinks, subscriptions, or taps)
                 if self._sinks or self._topic_subscriptions or self._taps:
                     await self._dispatch_single(message)
-                self._last_offset = message.offset
+                
+                # Track last offset only for WAL stream
+                if self._stream == "wal" and message.offset is not None:
+                    self._last_offset = message.offset
 
     def _record_activity(self) -> None:
         """Record activity for idle detection triggers."""
@@ -231,6 +265,26 @@ class BusDispatcher:
                 tracker.record_activity()
         except ImportError:
             pass  # ActivityTracker not available
+
+    def _validate_message(self, message: BusMessage) -> None:
+        """Validate message conforms to stream requirements (ADR-055).
+        
+        Raises:
+            ValueError: If message violates stream requirements.
+        """
+        # WAL stream requires offset
+        if self._require_offset and message.offset is None:
+            raise ValueError(
+                f"stream='{self._stream}' requires message.offset, got None"
+            )
+        
+        # Non-WAL streams require message_id in metadata
+        if self._require_message_id:
+            if not message.metadata or "message_id" not in message.metadata:
+                raise ValueError(
+                    f"stream='{self._stream}' requires metadata['message_id'], "
+                    f"got metadata={message.metadata}"
+                )
 
     def _ensure_monotonic(self, offset: int) -> None:
         if self._last_offset is not None and offset < self._last_offset:
