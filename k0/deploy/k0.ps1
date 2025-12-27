@@ -204,11 +204,11 @@ function Ensure-Compose-Prereqs {
 function Ensure-Image {
     if ($GPU) {
         $imageName = "k0-kernel-gpu:latest"
-        $dockerFile = Join-Path $RepoRoot "Dockerfile.gpu"
+        $dockerFile = Join-Path $DeployRoot "Dockerfile.gpu"
     }
     else {
         $imageName = "k0-kernel-local:latest"
-        $dockerFile = Join-Path $RepoRoot "Dockerfile"
+        $dockerFile = Join-Path $DeployRoot "Dockerfile"
     }
     $imagePresent = (docker images --format "{{.Repository}}:{{.Tag}}" | Select-String -SimpleMatch $imageName)
     if ($Rebuild -or -not $imagePresent) {

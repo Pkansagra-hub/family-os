@@ -50,6 +50,12 @@ python_files = "test_*.py"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v --color=yes --tb=short --disable-warnings --strict-markers"
+# Standard directories to skip
+norecursedirs = [
+    ".git",
+    "__pycache__",
+    "archived",
+]
 # Use --cov=k0 or --cov=k1 to enable coverage; disable by default for clean output
 # Example: pytest --cov=k0 tests/k0/
 # Ignore archived tests and deprecated SQLite-based tests (PostgreSQL migration)

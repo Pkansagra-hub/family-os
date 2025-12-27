@@ -1,0 +1,490 @@
+---
+config:
+  layout: elk
+  theme: dark
+---
+graph TB
+    subgraph L0_INPUTS["🔽 EXTERNAL INPUTS"]
+        direction TB
+
+        subgraph P02_INPUT["From P02 (Memory Formation)"]
+            P02_EVENTS["st_hipp_events table"]:::storage
+            P02_TRIGGER["Trigger: pending_events ≥ 100"]:::trigger
+            P02_FORMAT["Format: episodic events with embeddings"]:::format
+        end
+
+        subgraph P08_INPUT["From P08 (Embeddings)"]
+            P08_VECTORS["st_vec table"]:::storage
+            P08_MODEL["UltraBERT v2.1.0"]:::model
+            P08_DIMS["768-dim vectors"]:::format
+        end
+
+        subgraph K1_FEEDBACK["From K1 (Experience Layer)"]
+            K1_SALIENCE["Salience adjustments"]:::feedback
+            K1_CORRECTIONS["Cluster corrections"]:::feedback
+            K1_IMPORTANCE["Importance feedback"]:::feedback
+            K1_REGRET["Regret signals"]:::feedback
+        end
+
+        subgraph P06_RESOLUTIONS["From P06 (Active Learning)"]
+            P06_ANSWERS["Resolved gap answers"]:::feedback
+            P06_CLARIFICATIONS["User clarifications"]:::feedback
+        end
+    end
+    subgraph L1_PHASES["🔄 CORE CONSOLIDATION PHASES"]
+        direction LR
+        subgraph R0_PHASE["R0: Trigger Detection & Batch Selection"]
+            R0_IDLE["IDLE State"]:::phase
+            R0_TRIGGER_LOGIC["Trigger Logic"]:::logic
+            R0_BATCH_SELECT["Batch Selection"]:::logic
+            R0_TRANSITION["→ R1"]:::transition
+        end
+        subgraph R1_PHASE["R1: Hippocampal Replay (NREM1)"]
+            R1_IMPORTANCE["Importance Scoring"]:::algorithm
+            R1_HEBBIAN["Hebbian Learning"]:::algorithm
+            R1_SELECTION["Event Selection"]:::logic
+        end
+        subgraph R2_PHASE["R2: Neocortical Integration (NREM2)"]
+            R2_DBSCAN["DBSCAN Clustering"]:::algorithm
+            R2_CLUSTER_QUALITY["Cluster Quality"]:::evaluation
+            R2_PATTERN_EXTRACT["Pattern Extraction"]:::logic
+        end
+        subgraph R3_PHASE["R3: Synaptic Homeostasis (NREM3)"]
+            R3_SIMHASH["SimHash Deduplication"]:::algorithm
+            R3_DECAY["Decay Calculation"]:::algorithm
+            R3_NOVELTY["Novelty Scoring"]:::algorithm
+            R3_PRUNE["Prune Decisions"]:::logic
+        end
+        subgraph R4_PHASE["R4: KG Consolidation (NREM4)"]
+            R4_ENTITY["Entity Extraction"]:::algorithm
+            R4_DISAMBIGUATION["Disambiguation"]:::algorithm
+            R4_CAUSALITY["Causal Inference"]:::algorithm
+            R4_RELATIONSHIPS["Relationship Building"]:::logic
+        end
+        subgraph R5_PHASE["R5: Dream Exploration (REM)"]
+            R5_COUNTERFACTUAL["Counterfactual Thinking"]:::algorithm
+            R5_MCTS["MCTS Simulation"]:::algorithm
+            R5_INSIGHTS["Insight Generation"]:::logic
+            R5_STATUS["Status: MVP disabled"]:::status
+        end
+        subgraph R6_PHASE["R6: Staging Updates"]
+            R6_STATUS_UPDATE["Update consolidation_status"]:::logic
+            R6_METADATA["Store decision metadata"]:::logic
+            R6_LINKING["Link to truth records"]:::logic
+        end
+        subgraph R7_PHASE["R7: Memory Layer Writes"]
+            R7_RECONCILIATION["Apply reconciliation decisions"]:::logic
+            R7_WRITE_OUTBOX["Write via st_outbox"]:::storage
+            R7_COORD_P08["Coordinate with P08"]:::integration
+            R7_AUDIT["Audit to st_consolidation_audit"]:::storage
+        end
+        subgraph R8_PHASE["R8: Event Emission & Completion"]
+            R8_BUS_EVENTS["Emit bus events"]:::event
+            R8_OFFSETS["Update st_offsets"]:::storage
+            R8_METRICS["Emit metrics"]:::observability
+            R8_TRANSITION["→ R0 (IDLE)"]:::transition
+        end
+    end
+    subgraph L2_MEMORY["🧠 8 MEMORY LAYERS (TRUTH)"]
+        direction TB
+
+        subgraph EPISODIC["Episodic Memory (Layer 1)"]
+            ST_EPI["st_epi table"]:::memory
+            EPI_HALFLIFE["Half-life: 139 days"]:::property
+            EPI_CONTENT["Episode clusters"]:::content
+        end
+
+        subgraph SEMANTIC["Semantic Patterns (Layer 2)"]
+            ST_SEM["st_sem table"]:::memory
+            SEM_HALFLIFE["Half-life: 231 days"]:::property
+            SEM_CONTENT["Patterns & preferences"]:::content
+        end
+
+        subgraph PROCEDURAL["Procedural Memory (Layer 3)"]
+            ST_PROCEDURAL["st_procedural table"]:::memory
+            PROC_HALFLIFE["Half-life: 69 days"]:::property
+            PROC_CONTENT["Habits & routines"]:::content
+        end
+
+        subgraph SOCIAL["Social Memory (Layer 4)"]
+            ST_SOCIAL["st_social table"]:::memory
+            SOCIAL_HALFLIFE["Half-life: 347 days"]:::property
+            SOCIAL_CONTENT["Social graph"]:::content
+        end
+
+        subgraph PROSPECTIVE["Prospective Memory (Layer 5)"]
+            ST_PROSPECTIVE["st_prospective table"]:::memory
+            PROSP_HALFLIFE["Half-life: 35 days"]:::property
+            PROSP_CONTENT["Intentions & goals"]:::content
+        end
+
+        subgraph KG_ENTITIES["KG Entities (Layer 6)"]
+            ST_KG_DOM["st_kg_dom table"]:::memory
+            KG_DOM_HALFLIFE["Half-life: 693 days"]:::property
+            KG_DOM_CONTENT["Canonical entities"]:::content
+        end
+
+        subgraph KG_RELATIONS["KG Relationships (Layer 7)"]
+            ST_KG_EDGES["st_kg_edges table"]:::memory
+            KG_EDGES_HALFLIFE["Half-life: 87 days"]:::property
+            KG_EDGES_CONTENT["Typed relationships"]:::content
+        end
+
+        subgraph EMBEDDINGS["Embeddings (Layer 8)"]
+            ST_VEC["st_vec table"]:::memory
+            VEC_HALFLIFE["Half-life: 7 days"]:::property
+            VEC_CONTENT["768-dim vectors"]:::content
+        end
+    end
+    subgraph L3_ALGORITHMS["⚙️ KEY ALGORITHMS & DECISION LOGIC"]
+        direction TB
+
+        subgraph IMPORTANCE_SCORING["Importance Scoring (R1)"]
+            IMP_FORMULA["Formula: 0.35×emotional + 0.25×recency + 0.20×frequency + 0.20×social"]:::formula
+            IMP_COMPONENTS["Components: salience, recency, access frequency, social"]:::components
+            IMP_LEARNING["Weight learning via feedback"]:::learning
+        end
+
+        subgraph SIMILARITY["Multi-Factor Similarity"]
+            SIM_FORMULA["Formula: 0.40×semantic + 0.25×structural + 0.15×entity + 0.10×temporal + 0.10×spatial"]:::formula
+            SIM_LAYER_WEIGHTS["Per-layer weight adjustments"]:::learning
+            SIM_COSINE["Cosine similarity (embeddings)"]:::algorithm
+        end
+
+        subgraph DECAY_LOGIC["Decay & Forgetting"]
+            DECAY_FORMULA["decay = exp(-λ × days_since_observation)"]:::formula
+            DECAY_LAMBDAS["Layer-specific λ values"]:::parameters
+            DECAY_THRESHOLDS["Archival thresholds: 0.1→ARCHIVED, 0.01→TOMBSTONE"]:::thresholds
+        end
+
+        subgraph RECONCILIATION["Reconciliation Decision Matrix"]
+            REC_REINFORCE[">0.85 aligned → REINFORCE"]:::decision
+            REC_EXTEND["0.60-0.85 aligned → EXTEND"]:::decision
+            REC_CREATE["<0.60 aligned → CREATE"]:::decision
+            REC_CONTRADICT[">0.85 conflicting → CONTRADICT"]:::decision
+            REC_EVOLVE["Semantic change → EVOLVE"]:::decision
+            REC_PRUNE["No match + decay → PRUNE"]:::decision
+        end
+
+        subgraph CAUSALITY["Causal Inference"]
+            CAUSAL_FORMULA["precedence_ratio = a_before_b / (a_before_b + b_before_a)"]:::formula
+            CAUSAL_THRESHOLDS["Category-specific thresholds"]:::thresholds
+            CAUSAL_OBSERVATIONS["Observation requirements"]:::requirements
+        end
+    end
+    subgraph L4_LEARNING["🧠 LEARNING SYSTEMS & ADAPTATION"]
+        direction TB
+
+        subgraph THOMPSON_SAMPLING["Thompson Sampling for Thresholds"]
+            THOMPSON_MODEL["Beta-Bernoulli model"]:::model
+            THOMPSON_UPDATE["Update: α+=1 (correct), β+=1 (incorrect)"]:::update
+            THOMPSON_HIERARCHY["3-level fallback hierarchy"]:::architecture
+        end
+
+        subgraph ADAPTIVE_DBSCAN["Adaptive DBSCAN"]
+            ADAPTIVE_PARAMS["Learn eps and min_samples"]:::parameters
+            ADAPTIVE_SILHOUETTE["Silhouette score optimization"]:::optimization
+            ADAPTIVE_CLOSED_LOOP["Closed-loop via user corrections"]:::feedback
+        end
+
+        subgraph BAYESIAN_ANCHORS["Bayesian Anchor Points"]
+            ANCHOR_MODEL["Beta(α, β) distributions"]:::model
+            ANCHOR_UPDATE["Update α/β with temporal decay"]:::update
+            ANCHOR_DRIFT["Drift detection (Δ>0.20)"]:::detection
+        end
+
+        subgraph PER_LAYER_WEIGHTS["Per-Layer Similarity Weights"]
+            WEIGHTS_STRUCTURE["8 layers × 5 factors = 40 weights"]:::parameters
+            WEIGHTS_LEARNING["Learn from K1 feedback"]:::learning
+            WEIGHTS_EXAMPLE["Example: st_epi weights"]:::example
+        end
+    end
+    subgraph L5_MODULES["🔧 MODULE REGISTRY (M18-M25)"]
+        direction LR
+
+        M18["M18: EpisodicClusterer"]:::module
+        M19["M19: DuplicateDetector"]:::module
+        M20["M20: RetentionEnforcer"]:::module
+        M21["M21: KGConsolidator"]:::module
+        M22["M22: DreamExplorer"]:::module
+        M23["M23: ReplayCoordinator"]:::module
+        M24["M24: TruthWriter"]:::module
+        M25["M25: GapDetector"]:::module
+    end
+    subgraph L6_OUTPUTS["🚀 DOWNSTREAM OUTPUTS"]
+        direction TB
+
+        subgraph P04_OUTPUT["To P04 (Query Pipeline)"]
+            P04_TRUTH["Consolidated truth records"]:::output
+            P04_CONTRACT["Contract: is_canonical=TRUE"]:::contract
+            P04_QUERY["Query for K1 responses"]:::integration
+        end
+
+        subgraph P06_OUTPUT["To P06 (Active Learning)"]
+            P06_GAP_QUEUE["st_learning_queue table"]:::storage
+            P06_GAP_EVENT["p03.gap.detected.v1 event"]:::event
+            P06_GAP_TYPES["Gap types: ambiguous, low-confidence, contradiction, etc."]:::types
+        end
+
+        subgraph P08_OUTPUT["To P08 (Embedding Indexing)"]
+            P08_TRIGGER["Trigger after R7 writes"]:::trigger
+            P08_EMBEDDINGS["New truth records with embedding_id"]:::data
+            P08_FAISS["Update FAISS index"]:::action
+        end
+
+        subgraph EVENT_EMISSION["Event Emission"]
+            EVENTS_ALL["p03.*.v1 events"]:::event
+            EVENTS_TYPES["complete, pattern.detected, truth.*, gap.detected"]:::types
+            EVENTS_BUS["Emitted via bus"]:::infrastructure
+        end
+    end
+    subgraph L7_STORAGE["💾 STORAGE SCHEMA"]
+        direction TB
+
+        subgraph CORE_TABLES["Core Memory Tables"]
+            CORE_HIPP["st_hipp_events (staging)"]:::storage
+            CORE_EPI["st_epi (episodic)"]:::storage
+            CORE_SEM["st_sem (semantic)"]:::storage
+            CORE_KG_DOM["st_kg_dom (entities)"]:::storage
+            CORE_KG_EDGES["st_kg_edges (relationships)"]:::storage
+            CORE_VEC["st_vec (embeddings)"]:::storage
+        end
+
+        subgraph LEARNING_TABLES["Learning & Feedback Tables"]
+            LEARNING_WEIGHTS["st_learned_weights"]:::storage
+            LEARNING_QUEUE["st_learning_queue (P06)"]:::storage
+            LEARNING_ANCHORS["st_anchors (Bayesian)"]:::storage
+            LEARNING_AUDIT["st_consolidation_audit"]:::storage
+            LEARNING_PRUNED["st_pruned_entities (regret)"]:::storage
+        end
+
+        subgraph SUPPORT_TABLES["Supporting Tables"]
+            SUPPORT_OUTBOX["st_outbox (durable writes)"]:::storage
+            SUPPORT_OFFSETS["st_offsets (checkpoints)"]:::storage
+            SUPPORT_DLQ["st_dlq (dead letter)"]:::storage
+        end
+    end
+    subgraph L8_DATAFLOW["📊 DATA FLOW PATTERNS"]
+        direction TB
+
+        subgraph MAIN_FLOW["Main Consolidation Flow"]
+            FLOW_1["st_hipp_events → R0 (Trigger)"]:::flow
+            FLOW_2["R0 → R1 (Importance)"]:::flow
+            FLOW_3["R1 → R2 (Clustering)"]:::flow
+            FLOW_4["R2 → R3 (Deduplication)"]:::flow
+            FLOW_5["R3 → R4 (KG)"]:::flow
+            FLOW_6["R4 → R5 (Dream)"]:::flow
+            FLOW_7["R5 → R6 (Staging)"]:::flow
+            FLOW_8["R6 → R7 (Writes)"]:::flow
+            FLOW_9["R7 → 8 Memory Layers"]:::flow
+            FLOW_10["R7 → R8 (Emission)"]:::flow
+        end
+
+        subgraph RECONCILIATION_FLOW["Reconciliation Flow"]
+            RECON_FLOW_1["New signal → Query truth (8 layers)"]:::flow
+            RECON_FLOW_2["Query → Compute similarity (multi-factor)"]:::flow
+            RECON_FLOW_3["Similarity → Decision (REINFORCE/EXTEND/CREATE/etc.)"]:::flow
+            RECON_FLOW_4["Decision → Apply to truth (R7 writes)"]:::flow
+        end
+
+        subgraph GAP_FLOW["Gap Detection Flow"]
+            GAP_FLOW_1["Reconciliation decision → GapDetector"]:::flow
+            GAP_FLOW_2["GapDetector → st_learning_queue"]:::flow
+            GAP_FLOW_3["st_learning_queue → p03.gap.detected.v1"]:::flow
+            GAP_FLOW_4["Event → P06 Active Learning"]:::flow
+            GAP_FLOW_5["P06 → User question → Answer"]:::flow
+            GAP_FLOW_6["Answer → P02 ingestion → Next P03 cycle"]:::flow
+        end
+
+        subgraph LEARNING_FLOW["Learning Feedback Flow"]
+            LEARN_FLOW_1["K1 feedback → P21 → P03FeedbackHandler"]:::flow
+            LEARN_FLOW_2["Handler → Route by signal type"]:::flow
+            LEARN_FLOW_3["Route → Update st_learned_weights"]:::flow
+            LEARN_FLOW_4["Updated weights → Next cycle"]:::flow
+        end
+    end
+    subgraph L9_OBSERVABILITY["📈 OBSERVABILITY & METRICS"]
+        direction TB
+
+        subgraph PERFORMANCE_METRICS["Performance Metrics"]
+            METRIC_CYCLES["p03_cycles_total"]:::metric
+            METRIC_DURATION["p03_cycle_duration_seconds"]:::metric
+            METRIC_EVENTS["p03_events_processed_total"]:::metric
+            METRIC_PENDING["p03_pending_events (gauge)"]:::metric
+        end
+
+        subgraph DECISION_METRICS["Decision Quality Metrics"]
+            METRIC_DECISIONS["p03_reconciliation_decisions"]:::metric
+            METRIC_SIMILARITY["p03_similarity_scores"]:::metric
+            METRIC_CAUSAL["p03_causal_edges_created"]:::metric
+        end
+
+        subgraph LEARNING_METRICS["Learning Metrics"]
+            METRIC_LEARNING_TIME["p03_learning_time_pct"]:::metric
+            METRIC_UPDATES["p03_learning_parameter_updates"]:::metric
+            METRIC_QUEUE_DEPTH["p03_learning_queue_depth"]:::metric
+        end
+
+        subgraph GAP_METRICS["Gap Detection Metrics"]
+            METRIC_GAPS_DETECTED["p03_gaps_detected"]:::metric
+            METRIC_GAPS_RESOLVED["p03_gaps_resolved"]:::metric
+        end
+    end
+    subgraph L10_CONFIG["⚙️ CONFIGURATION & FEATURE FLAGS"]
+        direction TB
+
+        subgraph CORE_CONFIG["Core Configuration"]
+            CONFIG_TRIGGER["Trigger mode: INTERVAL/THRESHOLD/MANUAL"]:::config
+            CONFIG_BATCH["Batch size: 1000"]:::config
+            CONFIG_TIMEOUTS["Phase timeouts (R0-R8)"]:::config
+            CONFIG_THRESHOLDS["Similarity thresholds"]:::config
+        end
+
+        subgraph FEATURE_FLAGS["Feature Flags"]
+            FLAG_R5["P03_FF_R5_MODE: disabled/shadow/enabled"]:::flag
+            FLAG_ADAPTIVE["P03_ADAPTIVE_THRESHOLDS_ENABLED: true"]:::flag
+            FLAG_REGRET["P03_REGRET_TRACKING_ENABLED: true"]:::flag
+            FLAG_GAP["P03_GAP_DETECTION_ENABLED: true"]:::flag
+        end
+
+        subgraph LEARNING_CONFIG["Learning Configuration"]
+            LEARN_COLD_START["Cold start samples: 30"]:::config
+            LEARN_WARM_START["Warm start samples: 100"]:::config
+            LEARN_MAX_GAPS["Max gaps per cycle: 50"]:::config
+        end
+    end
+    P02_EVENTS --> R0_TRIGGER_LOGIC
+    P08_VECTORS --> R2_DBSCAN
+    P08_VECTORS --> R4_ENTITY
+    K1_FEEDBACK --> IMP_LEARNING
+    K1_FEEDBACK --> WEIGHTS_LEARNING
+    P06_RESOLUTIONS --> R0_TRIGGER_LOGIC
+    R0_TRANSITION --> R1_IMPORTANCE
+    R1_SELECTION --> R2_DBSCAN
+    R2_PATTERN_EXTRACT --> R3_SIMHASH
+    R3_PRUNE --> R4_ENTITY
+    R4_RELATIONSHIPS --> R5_COUNTERFACTUAL
+    R5_INSIGHTS --> R6_STATUS_UPDATE
+    R6_LINKING --> R7_RECONCILIATION
+    R7_AUDIT --> R8_BUS_EVENTS
+    R8_TRANSITION --> R0_IDLE
+    R7_RECONCILIATION --> ST_EPI
+    R7_RECONCILIATION --> ST_SEM
+    R7_RECONCILIATION --> ST_PROCEDURAL
+    R7_RECONCILIATION --> ST_SOCIAL
+    R7_RECONCILIATION --> ST_PROSPECTIVE
+    R7_RECONCILIATION --> ST_KG_DOM
+    R7_RECONCILIATION --> ST_KG_EDGES
+    R7_RECONCILIATION --> ST_VEC
+    M18 --> R2_DBSCAN
+    M19 --> R3_SIMHASH
+    M20 --> R3_DECAY
+    M21 --> R4_RELATIONSHIPS
+    M22 --> R5_INSIGHTS
+    M23 --> R1_IMPORTANCE
+    M24 --> R7_RECONCILIATION
+    M25 --> P06_GAP_EVENT
+    IMP_FORMULA --> R1_IMPORTANCE
+    SIM_FORMULA --> R4_DISAMBIGUATION
+    DECAY_FORMULA --> R3_DECAY
+    CAUSAL_FORMULA --> R4_CAUSALITY
+    THOMPSON_UPDATE --> REC_REINFORCE
+    ADAPTIVE_SILHOUETTE --> R2_DBSCAN
+    ANCHOR_DRIFT --> P06_GAP_EVENT
+    WEIGHTS_LEARNING --> SIM_LAYER_WEIGHTS
+    ST_EPI --> P04_TRUTH
+    ST_SEM --> P04_TRUTH
+    ST_KG_DOM --> P04_TRUTH
+    P06_GAP_EVENT --> P06_OUTPUT
+    R7_COORD_P08 --> P08_TRIGGER
+    CORE_HIPP --> R0_TRIGGER_LOGIC
+    CORE_VEC --> R2_DBSCAN
+    LEARNING_WEIGHTS --> IMP_LEARNING
+    LEARNING_QUEUE --> P06_GAP_EVENT
+    SUPPORT_OUTBOX --> R7_WRITE_OUTBOX
+    SUPPORT_OFFSETS --> R8_OFFSETS
+    FLOW_1 --> FLOW_2
+    FLOW_2 --> FLOW_3
+    FLOW_3 --> FLOW_4
+    FLOW_4 --> FLOW_5
+    FLOW_5 --> FLOW_6
+    FLOW_6 --> FLOW_7
+    FLOW_7 --> FLOW_8
+    FLOW_8 --> FLOW_9
+    FLOW_9 --> FLOW_10
+
+    RECON_FLOW_1 --> RECON_FLOW_2
+    RECON_FLOW_2 --> RECON_FLOW_3
+    RECON_FLOW_3 --> RECON_FLOW_4
+
+    GAP_FLOW_1 --> GAP_FLOW_2
+    GAP_FLOW_2 --> GAP_FLOW_3
+    GAP_FLOW_3 --> GAP_FLOW_4
+    GAP_FLOW_4 --> GAP_FLOW_5
+    GAP_FLOW_5 --> GAP_FLOW_6
+
+    LEARN_FLOW_1 --> LEARN_FLOW_2
+    LEARN_FLOW_2 --> LEARN_FLOW_3
+    LEARN_FLOW_3 --> LEARN_FLOW_4
+    R8_METRICS --> METRIC_CYCLES
+    R8_METRICS --> METRIC_DURATION
+    R8_METRICS --> METRIC_EVENTS
+    R0_TRIGGER_LOGIC --> METRIC_PENDING
+    REC_REINFORCE --> METRIC_DECISIONS
+    SIM_FORMULA --> METRIC_SIMILARITY
+    CAUSAL_FORMULA --> METRIC_CAUSAL
+    IMP_LEARNING --> METRIC_LEARNING_TIME
+    THOMPSON_UPDATE --> METRIC_UPDATES
+    P06_GAP_EVENT --> METRIC_GAPS_DETECTED
+    P06_RESOLUTIONS --> METRIC_GAPS_RESOLVED
+    CONFIG_TRIGGER --> R0_TRIGGER_LOGIC
+    CONFIG_BATCH --> R0_BATCH_SELECT
+    CONFIG_TIMEOUTS --> R0_IDLE
+    CONFIG_TIMEOUTS --> R8_TRANSITION
+    CONFIG_THRESHOLDS --> REC_REINFORCE
+    FLAG_R5 --> R5_STATUS
+    FLAG_ADAPTIVE --> THOMPSON_HIERARCHY
+    FLAG_REGRET --> LEARNING_PRUNED
+    FLAG_GAP --> M25
+    LEARN_COLD_START --> THOMPSON_HIERARCHY
+    LEARN_MAX_GAPS --> P06_GAP_EVENT
+    classDef storage fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef trigger fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef format fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef model fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+    classDef feedback fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef phase fill:#bbdefb,stroke:#0d47a1,stroke-width:3px,color:#000,font-weight:bold
+    classDef logic fill:#f8bbd0,stroke:#880e4f,stroke-width:2px,color:#000
+    classDef algorithm fill:#dcedc8,stroke:#33691e,stroke-width:2px,color:#000
+    classDef evaluation fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:#000
+    classDef transition fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef detection fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef status fill:#cfd8dc,stroke:#263238,stroke-width:2px,color:#666,font-style:italic
+    classDef event fill:#b3e5fc,stroke:#01579b,stroke-width:2px,color:#000
+    classDef observability fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef integration fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000
+    classDef memory fill:#c5cae9,stroke:#283593,stroke-width:2px,color:#000
+    classDef property fill:#f8bbd0,stroke:#880e4f,stroke-width:1px,color:#666
+    classDef content fill:#dcedc8,stroke:#33691e,stroke-width:1px,color:#666
+    classDef formula fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef components fill:#dcedc8,stroke:#33691e,stroke-width:1px,color:#666
+    classDef learning fill:#b2ebf2,stroke:#00695c,stroke-width:2px,color:#000
+    classDef parameters fill:#e1bee7,stroke:#6a1b9a,stroke-width:1px,color:#666
+    classDef thresholds fill:#ffccbc,stroke:#bf360c,stroke-width:1px,color:#666
+    classDef decision fill:#ffcdd2,stroke:#b71c1c,stroke-width:2px,color:#000,font-weight:bold
+    classDef requirements fill:#dcedc8,stroke:#33691e,stroke-width:1px,color:#666
+    classDef update fill:#fff9c4,stroke:#f57f17,stroke-width:1px,color:#666
+    classDef architecture fill:#dcedc8,stroke:#33691e,stroke-width:1px,color:#666
+    classDef optimization fill:#fff9c4,stroke:#f57f17,stroke-width:1px,color:#666
+    classDef example fill:#e1bee7,stroke:#6a1b9a,stroke-width:1px,color:#666
+    classDef module fill:#ffecb3,stroke:#ff6f00,stroke-width:2px,color:#000,font-weight:bold
+    classDef output fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef contract fill:#fff9c4,stroke:#f57f17,stroke-width:1px,color:#666
+    classDef types fill:#e1bee7,stroke:#6a1b9a,stroke-width:1px,color:#666
+    classDef data fill:#dcedc8,stroke:#33691e,stroke-width:1px,color:#666
+    classDef action fill:#ffccbc,stroke:#bf360c,stroke-width:1px,color:#666
+    classDef infrastructure fill:#cfd8dc,stroke:#263238,stroke-width:1px,color:#666
+    classDef flow fill:#b3e5fc,stroke:#01579b,stroke-width:2px,color:#000
+    classDef metric fill:#f0f4c3,stroke:#827717,stroke-width:2px,color:#000
+    classDef config fill:#e1bee7,stroke:#6a1b9a,stroke-width:2px,color:#000
+    classDef flag fill:#ffccbc,stroke:#bf360c,stroke-width:2px,color:#000

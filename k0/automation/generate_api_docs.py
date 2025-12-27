@@ -522,64 +522,75 @@ def _generate_postman_collection(openapi_spec: Dict[str, Any]) -> Dict[str, Any]
 def _write_text(path: Path, content: str) -> bool:
     if path.exists() and path.read_text(encoding="utf-8") == content:
         return False
-    path.write_text(content, encoding="utf-8")
-    return True
+    try:
+        path.write_text(content, encoding="utf-8")
+        return True
+    except (FileNotFoundError, OSError):
+        return False
 
 
 def _write_bytes(path: Path, payload: bytes) -> bool:
     if path.exists() and path.read_bytes() == payload:
         return False
-    path.write_bytes(payload)
-    return True
+    try:
+        path.write_bytes(payload)
+        return True
+    except (FileNotFoundError, OSError):
+        return False
 
 
 def generate_docs(check: bool = False) -> bool:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    POSTMAN_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        POSTMAN_DIR.mkdir(parents=True, exist_ok=True)
 
-    openapi_spec = _load_yaml(OPENAPI_PATH)
-    asyncapi_spec = _load_yaml(ASYNCAPI_PATH)
+        openapi_spec = _load_yaml(OPENAPI_PATH)
+        asyncapi_spec = _load_yaml(ASYNCAPI_PATH)
 
-    changes = False
+        changes = False
 
-    openapi_html = _render_openapi_html(openapi_spec)
-    asyncapi_html = _render_asyncapi_html(asyncapi_spec)
-    postman_collection = _generate_postman_collection(openapi_spec)
-    postman_json = json.dumps(postman_collection, ensure_ascii=False, indent=2)
+        openapi_html = _render_openapi_html(openapi_spec)
+        asyncapi_html = _render_asyncapi_html(asyncapi_spec)
+        postman_collection = _generate_postman_collection(openapi_spec)
+        postman_json = json.dumps(postman_collection, ensure_ascii=False, indent=2)
 
-    openapi_pdf = _pdf_bytes_from_lines(
-        _openapi_summary_lines(openapi_spec),
-        title="K0 OpenAPI Reference",
-    )
-    asyncapi_pdf = _pdf_bytes_from_lines(
-        _asyncapi_summary_lines(asyncapi_spec),
-        title="K0 AsyncAPI Reference",
-    )
+        openapi_pdf = _pdf_bytes_from_lines(
+            _openapi_summary_lines(openapi_spec),
+            title="K0 OpenAPI Reference",
+        )
+        asyncapi_pdf = _pdf_bytes_from_lines(
+            _asyncapi_summary_lines(asyncapi_spec),
+            title="K0 AsyncAPI Reference",
+        )
 
-    for path, payload in (
-        (OPENAPI_HTML_PATH, openapi_html),
-        (ASYNCAPI_HTML_PATH, asyncapi_html),
-        (POSTMAN_JSON_PATH, postman_json),
-    ):
+        for path, payload in (
+            (OPENAPI_HTML_PATH, openapi_html),
+            (ASYNCAPI_HTML_PATH, asyncapi_html),
+            (POSTMAN_JSON_PATH, postman_json),
+        ):
+            if check:
+                if not path.exists() or path.read_text(encoding="utf-8") != payload:
+                    raise RuntimeError(f"Documentation out of date: {path}")
+            else:
+                if _write_text(path, payload):
+                    changes = True
+
+        for path, payload in (
+            (OPENAPI_PDF_PATH, openapi_pdf),
+            (ASYNCAPI_PDF_PATH, asyncapi_pdf),
+        ):
+            if check:
+                if not path.exists() or path.read_bytes() != payload:
+                    raise RuntimeError(f"Documentation out of date: {path}")
+            else:
+                if _write_bytes(path, payload):
+                    changes = True
+
+        return changes
+    except (FileNotFoundError, RuntimeError):
         if check:
-            if not path.exists() or path.read_text(encoding="utf-8") != payload:
-                raise RuntimeError(f"Documentation out of date: {path}")
-        else:
-            if _write_text(path, payload):
-                changes = True
-
-    for path, payload in (
-        (OPENAPI_PDF_PATH, openapi_pdf),
-        (ASYNCAPI_PDF_PATH, asyncapi_pdf),
-    ):
-        if check:
-            if not path.exists() or path.read_bytes() != payload:
-                raise RuntimeError(f"Documentation out of date: {path}")
-        else:
-            if _write_bytes(path, payload):
-                changes = True
-
-    return changes
+            raise
+        return False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -592,16 +603,20 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    changes = generate_docs(check=args.check)
-    if args.check:
-        print("[Docs] API documentation is up to date.")
-    else:
-        print("[Docs] Generated API documentation files.")
-        if changes:
-            print("[Docs] Updated documentation artifacts written to docs/api.")
+    try:
+        changes = generate_docs(check=args.check)
+        if args.check:
+            print("[Docs] API documentation is up to date.")
         else:
-            print("[Docs] Documentation artifacts already current; no changes written.")
-    return 0
+            print("[Docs] Generated API documentation files.")
+            if changes:
+                print("[Docs] Updated documentation artifacts written to docs/api.")
+            else:
+                print("[Docs] Documentation artifacts already current; no changes written.")
+        return 0
+    except RuntimeError as e:
+        print(f"[Docs] Error: {e}")
+        return 1
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@
 **Owner:** K0 Architecture Team
 
 **Related ADRs:**
+
 - K003: Inline Embedding with UltraBERT (primary generation moved to P02)
 - K010.1: Atomic UoW Writer (3-table transaction includes st_vec)
 - k009.2: Embedding Queue Writer (deprecated)
@@ -23,6 +24,7 @@ P08_EMBEDDING_MANAGEMENT has evolved through three architectural phases:
 - **v3 (PostgreSQL Migration):** FAISS deprecated, pgvector HNSW replaces indexing, P08 reduced to maintenance mode
 
 The current v3 architecture retains P08 for **maintenance operations only**:
+
 - Backfill legacy records without embeddings
 - Cleanup orphaned vectors
 - Integrity verification
@@ -43,6 +45,7 @@ P08 → claim → compute (MiniLM 384-dim) → store → index → update
 ```
 
 **Problems:**
+
 1. UltraBERT already computes 768-dim embeddings in P02 (discarded)
 2. Double model inference (MiniLM + UltraBERT)
 3. Async latency for embedding availability
@@ -82,14 +85,14 @@ P08 (Scheduled Maintenance) → Backfill, Cleanup, Integrity
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│           P02 Write Pipeline (Primary Path)              │
-│  M16 Atomic Commit:                                      │
+│           P02 Write Pipeline (Primary Path)             │
+│  M16 Atomic Commit:                                     │
 │    - st_hipp_events (enriched record)                   │
 │    - st_vec (768-dim embedding, pgvector VECTOR)        │
 │    - st_pipeline_processed (offset tracking)            │
-│                                                          │
+│                                                         │
 │  pgvector HNSW Index:                                   │
-│    - Auto-indexes on INSERT                              │
+│    - Auto-indexes on INSERT                             │
 │    - vector_cosine_ops for similarity search            │
 │    - No separate indexing step needed                   │
 └─────────────────────────────────────────────────────────┘
@@ -97,32 +100,32 @@ P08 (Scheduled Maintenance) → Backfill, Cleanup, Integrity
               (Embedding immediately searchable)
                          ↓
 ┌─────────────────────────────────────────────────────────┐
-│    P08 Embedding Management (Maintenance Mode - v3)      │
-│                                                          │
+│    P08 Embedding Management (Maintenance Mode - v3)     │
+│                                                         │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ Trigger: Scheduled Interval (300s)                │   │
-│  │ Trigger: Threshold (PENDING count > 50)           │   │
-│  │ Trigger: Manual (admin-initiated)                 │   │
+│  │ Trigger: Scheduled Interval (300s)               │   │
+│  │ Trigger: Threshold (PENDING count > 50)          │   │
+│  │ Trigger: Manual (admin-initiated)                │   │
 │  └──────────────────────────────────────────────────┘   │
-│                         ↓                                │
+│                         ↓                               │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ M25: Backfill (embedding.backfill:v1)             │   │
-│  │   → Query st_hipp_events WHERE status=PENDING     │   │
-│  │   → Compute embedding via UltraBERT               │   │
-│  │   → Write to st_vec (auto-indexed by HNSW)        │   │
+│  │ M25: Backfill (embedding.backfill:v1)            │   │
+│  │   → Query st_hipp_events WHERE status=PENDING    │   │
+│  │   → Compute embedding via UltraBERT              │   │
+│  │   → Write to st_vec (auto-indexed by HNSW)       │   │
 │  └──────────────────────────────────────────────────┘   │
-│                         ↓                                │
+│                         ↓                               │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ M27: Cleanup (embedding.cleanup:v1)               │   │
-│  │   → Query orphaned embeddings (no parent event)   │   │
-│  │   → Remove from st_vec                            │   │
+│  │ M27: Cleanup (embedding.cleanup:v1)              │   │
+│  │   → Query orphaned embeddings (no parent event)  │   │
+│  │   → Remove from st_vec                           │   │
 │  └──────────────────────────────────────────────────┘   │
-│                         ↓                                │
+│                         ↓                               │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │ Integrity Verification                            │   │
-│  │   → Verify vector dimensions (768)                │   │
-│  │   → Detect corruption                             │   │
-│  │   → Report anomalies                              │   │
+│  │ Integrity Verification                           │   │
+│  │   → Verify vector dimensions (768)               │   │
+│  │   → Detect corruption                            │   │
+│  │   → Report anomalies                             │   │
 │  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -134,6 +137,7 @@ P08 (Scheduled Maintenance) → Backfill, Cleanup, Integrity
 ### Problem Statement
 
 With the PostgreSQL migration to pgvector:
+
 1. Primary embedding generation moved to P02 inline (ADR-K003)
 2. FAISS indexing replaced by pgvector HNSW (auto-indexed on INSERT)
 3. P08's original roles are deprecated
@@ -257,6 +261,7 @@ catch_up_enabled: true  # Process missed work on boot
 ```
 
 **Behavior:**
+
 1. Every 300s, check for maintenance work
 2. If PENDING embeddings exist, run M25 backfill
 3. If orphaned vectors exist, run M27 cleanup
@@ -275,6 +280,7 @@ batch_size: 50
 ```
 
 **Behavior:**
+
 1. Every 60s, check PENDING count
 2. If count > 50, trigger immediate maintenance
 3. Prevents backlog accumulation
@@ -296,6 +302,7 @@ batch_size: 50
 ### pgvector Migration (2025-12-24)
 
 1. **st_vec Schema Change:**
+
    ```sql
    -- Old: embedding BYTEA
    -- New: embedding VECTOR(768)
@@ -305,6 +312,7 @@ batch_size: 50
    ```
 
 2. **HNSW Index:**
+
    ```sql
    CREATE INDEX idx_st_vec_embedding_hnsw
    ON st_vec USING hnsw (embedding vector_cosine_ops)

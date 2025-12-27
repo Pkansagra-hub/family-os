@@ -13,7 +13,8 @@ from typing import Any, Callable, MutableMapping, Sequence, cast
 import yaml
 
 from ..automation.migrate import MigrationError, MigrationResult, apply_migrations
-from ..db.connection import configure_pool, connection_scope, shutdown_pool
+from ..db.connection import connection_scope
+from ..db.pool import configure_pool, shutdown_pool
 from ..gate.schema_registry import SchemaRecord, SchemaRegistry
 from ..kernel.config import KernelSettings
 from ..kernel.main import run as run_kernel
@@ -1129,26 +1130,27 @@ def _handle_key_command(
                     )
                 return 0
 
-            # Transition expired keys to REVOKED
-            for row in rows:
-                keys = ledger.get_keys(row["device_id"])
-                target_key = next(
-                    (k for k in keys if k.key_version == row["key_version"]), None
-                    )
-                    if target_key:
-                        revoked = replace(
-                            target_key,
-                            key_state="REVOKED",
-                            revoked_ts=now_ts,
-                            revocation_reason="Grace window expired",
+            async def _revoke_expired(rows_to_revoke):
+                async with connection_scope() as conn:
+                    for row in rows_to_revoke:
+                        await conn.execute(
+                            (
+                                "UPDATE st_device_keys "
+                                "SET key_state='REVOKED', revoked_ts=$1, revocation_reason=$2 "
+                                "WHERE device_id=$3 AND key_version=$4"
+                            ),
+                            now_ts,
+                            "Grace window expired",
+                            row["device_id"],
+                            row["key_version"],
                         )
-                        ledger.add_key(revoked, connection=conn)
                         logger.info(
                             "Expired key: device=%s key_version=%s",
                             row["device_id"],
                             row["key_version"],
                         )
-                conn.commit()
+
+            asyncio.run(_revoke_expired(rows))
 
             logger.info("Expired %d ROTATING key(s)", expired_count)
             return 0
@@ -1546,13 +1548,7 @@ def _handle_db_command(args: argparse.Namespace) -> int:
     Delegates to k0.cli.db_migrate for actual Alembic operations.
     Part of Milestone 1.1.2 - Issue 1.1.2.4.
     """
-    from k0.cli.db_migrate import (
-        cmd_current,
-        cmd_downgrade,
-        cmd_history,
-        cmd_revision,
-        cmd_upgrade,
-    )
+    from k0.cli.db_migrate import cmd_current, cmd_downgrade, cmd_history, cmd_revision, cmd_upgrade
 
     command = args.db_command
 

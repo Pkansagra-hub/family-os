@@ -59,29 +59,29 @@ def p08_spec_with_triggers() -> PipelineSpec:
 
     return PipelineSpec(
         pipeline_id="P08_EMBEDDING_MANAGEMENT",
-        version="v2",
-        description="Background embedding lifecycle management - SCHEDULED MODE.",
-        entry_topic="scheduled.p08.trigger.v1",
-        exit_topic="cognitive.vector.indexed.v1",
+        version="v3",
+        description="Background embedding lifecycle management - MAINTENANCE MODE.",
+        entry_topic="scheduled.p08.maintenance.v1",
+        exit_topic="embedding.maintenance.completed.v1",
         triggers=[
             TriggerSpec(
-                id="faiss_indexer_interval",
+                id="maintenance_interval",
                 type=TriggerType.INTERVAL,
                 interval_seconds=300,
                 batch_size=100,
                 catch_up_enabled=True,
             ),
             TriggerSpec(
-                id="faiss_indexer_threshold",
+                id="maintenance_threshold",
                 type=TriggerType.THRESHOLD,
                 table="st_vec",
-                condition="status = 'READY'",
+                condition="status = 'PENDING'",
                 threshold_count=50,
                 check_interval_seconds=60,
                 batch_size=50,
             ),
             TriggerSpec(
-                id="faiss_indexer_manual",
+                id="maintenance_manual",
                 type=TriggerType.MANUAL,
             ),
         ],
@@ -142,7 +142,7 @@ class TestP08ContractTriggers:
         interval_trigger = next((t for t in contract["triggers"] if t["type"] == "interval"), None)
 
         assert interval_trigger is not None, "P08 missing interval trigger"
-        assert interval_trigger["id"] == "faiss_indexer_interval"
+        assert interval_trigger["id"] == "maintenance_interval"
         assert interval_trigger["interval_seconds"] == 300
         assert interval_trigger["batch_size"] == 100
 
@@ -159,9 +159,9 @@ class TestP08ContractTriggers:
         )
 
         assert threshold_trigger is not None, "P08 missing threshold trigger"
-        assert threshold_trigger["id"] == "faiss_indexer_threshold"
+        assert threshold_trigger["id"] == "maintenance_threshold"
         assert threshold_trigger["table"] == "st_vec"
-        assert threshold_trigger["condition"] == "status = 'READY'"
+        assert threshold_trigger["condition"] == "status = 'PENDING'"
         assert threshold_trigger["threshold_count"] == 50
 
     def test_p08_manual_trigger_valid(self) -> None:
@@ -175,7 +175,7 @@ class TestP08ContractTriggers:
         manual_trigger = next((t for t in contract["triggers"] if t["type"] == "manual"), None)
 
         assert manual_trigger is not None, "P08 missing manual trigger"
-        assert manual_trigger["id"] == "faiss_indexer_manual"
+        assert manual_trigger["id"] == "maintenance_manual"
 
     def test_p08_triggers_validate_schema(self, p08_spec_with_triggers: PipelineSpec) -> None:
         """Verify P08 triggers validate against TriggerSpec schema."""
@@ -347,7 +347,7 @@ class TestP08SchedulerMigration:
         # Fire manual trigger
         result = scheduler_with_p08.fire_manual_trigger(
             "P08_EMBEDDING_MANAGEMENT",
-            "faiss_indexer_manual",
+            "maintenance_manual",
         )
 
         # Wait for execution
@@ -368,7 +368,7 @@ class TestP08SchedulerMigration:
         # Fire a trigger
         scheduler_with_p08.fire_manual_trigger(
             "P08_EMBEDDING_MANAGEMENT",
-            "faiss_indexer_manual",
+            "maintenance_manual",
         )
 
         await asyncio.sleep(0.1)
@@ -379,8 +379,8 @@ class TestP08SchedulerMigration:
         # Should have stats for all 3 triggers
         assert len(stats) == 3
         # Manual trigger should show 1 fire
-        assert "faiss_indexer_manual" in stats
-        assert stats["faiss_indexer_manual"]["fire_count"] == 1
+        assert "maintenance_manual" in stats
+        assert stats["maintenance_manual"]["fire_count"] == 1
 
     @pytest.mark.asyncio
     async def test_p08_threshold_trigger_registered(
@@ -397,7 +397,7 @@ class TestP08SchedulerMigration:
 
         assert threshold_trigger.spec.table == "st_vec"
         assert threshold_trigger.spec.threshold_count == 50
-        assert threshold_trigger.spec.condition == "status = 'READY'"
+        assert threshold_trigger.spec.condition == "status = 'PENDING'"
 
 
 # ============================================================================

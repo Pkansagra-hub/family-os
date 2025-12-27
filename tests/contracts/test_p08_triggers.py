@@ -81,7 +81,7 @@ class TestP08ContractValidation:
         interval = next((t for t in triggers if t["type"] == "interval"), None)
 
         assert interval is not None, "Missing interval trigger"
-        assert interval["id"] == "faiss_indexer_interval"
+        assert interval["id"] == "maintenance_interval"
         assert interval["interval_seconds"] == 300
         assert interval["batch_size"] == 100
         assert interval["catch_up_enabled"] is True
@@ -92,9 +92,9 @@ class TestP08ContractValidation:
         threshold = next((t for t in triggers if t["type"] == "threshold"), None)
 
         assert threshold is not None, "Missing threshold trigger"
-        assert threshold["id"] == "faiss_indexer_threshold"
+        assert threshold["id"] == "maintenance_threshold"
         assert threshold["table"] == "st_vec"
-        assert threshold["condition"] == "status = 'READY'"
+        assert threshold["condition"] == "status = 'PENDING'"
         assert threshold["threshold_count"] == 50
         assert threshold["check_interval_seconds"] == 60
         assert threshold["batch_size"] == 50
@@ -105,7 +105,7 @@ class TestP08ContractValidation:
         manual = next((t for t in triggers if t["type"] == "manual"), None)
 
         assert manual is not None, "Missing manual trigger"
-        assert manual["id"] == "faiss_indexer_manual"
+        assert manual["id"] == "maintenance_manual"
 
     def test_p08_no_legacy_trigger_mode(self, p08_contract: dict) -> None:
         """Verify P08 doesn't have legacy trigger_mode field active."""
@@ -122,11 +122,11 @@ class TestP08ContractValidation:
         assert "required_capabilities" in p08_contract
         caps = p08_contract["required_capabilities"]
 
-        # Should have FAISS and vector storage capabilities
-        assert "faiss.read" in caps
-        assert "faiss.write" in caps
+        # Should have vector storage capabilities (FAISS deprecated, using pgvector)
         assert "st_vec.read" in caps
         assert "st_vec.write" in caps
+        assert "st_hipp_events.read" in caps
+        # Note: faiss.read/faiss.write removed after pgvector migration
 
     def test_p08_triggers_all_have_ids(self, p08_contract: dict) -> None:
         """Verify all triggers have unique IDs."""

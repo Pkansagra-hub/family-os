@@ -48,7 +48,7 @@ class UniversalBus:
 
     async def dispatch(self, messages: Iterable[BusMessage]) -> None:
         """Route messages to appropriate stream based on topic prefix.
-        
+
         Routes feedback.* topics to feedback stream, all others to WAL stream.
         Enforces stream-specific requirements:
         - WAL stream: requires message.offset (monotonic)

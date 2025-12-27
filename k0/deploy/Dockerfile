@@ -11,18 +11,25 @@ LABEL org.opencontainers.image.source="https://github.com/Pkansagra-hub/memory_k
 
 # Install system dependencies
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl \
     sqlite3 \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
+# Copy UltraBERT wheel (unified model replaces 9 separate models)
+# Download from: https://github.com/Pkansagra-hub/memory_kernel/releases/tag/v2.1.0
+COPY wheels/familyos_ultrabert-2.1.0-py3-none-any.whl ./wheels/
+
 # Copy minimal kernel requirements (no ML/NLP libraries)
 # Note: requirements.kernel.txt includes -r requirements.base.txt, so both files needed
 COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
-RUN pip install --no-cache-dir -r requirements.kernel.txt
+RUN pip install --no-cache-dir -r requirements.kernel.txt && \
+    pip install --no-cache-dir wheels/familyos_ultrabert-2.1.0-py3-none-any.whl && \
+    python -m spacy download en_core_web_sm
 
 # Copy application code
 COPY k0/ k0/

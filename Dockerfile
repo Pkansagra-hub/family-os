@@ -1,3 +1,7 @@
+## DEPRECATED
+## Prefer building with: -f k0/deploy/Dockerfile (context repo root)
+## This file remains for backwards compatibility.
+
 # K0 Memory Kernel - Production Container Image
 # FamilyOS - Privacy-first, hardware-independent, no vendor lock-in
 

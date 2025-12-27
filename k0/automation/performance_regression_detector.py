@@ -444,7 +444,7 @@ class RegressionDetector:
             else:
                 err_change = current_err  # If baseline is 0, any error is bad
 
-            is_regression = err_change > threshold
+            is_regression = err_change > threshold or (baseline_err == 0 and current_err > 0)
             regressions.append(
                 RegressionResult(
                     metric_name="error_rate",

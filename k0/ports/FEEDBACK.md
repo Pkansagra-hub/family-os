@@ -58,7 +58,7 @@
 │  │  • Receives FeedbackEnvelope                                         │ │
 │  │  • Validates via FeedbackSchemaRegistry                              │ │
 │  │  • Persists to st_feedback_signals                                   │ │
-│  │  • Publishes to BusDispatcher topic                                  │ │
+│  │  • Publishes to BusDispatcher topic (uses BUS_MESSAGE_ID_KEY)       │ │
 │  └───────────────────────────────────┬──────────────────────────────────┘ │
 │                                      │                                    │
 │                   ┌──────────────────┼──────────────────┐                 │
@@ -86,6 +86,29 @@
 
 - `event_id` = **THE entity identifier** for feedback targeting (unique per memory)
 - `cognitive_trace_id` = **observability correlation** (1 trace → N events in same request)
+
+### Bus Message Metadata Constants
+
+| Constant | Value | Purpose |
+|----------|-------|----------|
+| `BUS_MESSAGE_ID_KEY` | `"message_id"` | Metadata key for feedback stream message identification (replaces hardcoded strings) |
+
+**Usage**: Import from `k0.bus` when constructing BusMessage objects for the feedback stream:
+
+```python
+from k0.bus import BusDispatcher, BusMessage, BUS_MESSAGE_ID_KEY
+
+# Good: Use constant
+message = BusMessage(
+    topic="feedback.signal.P02",
+    stream="feedback",
+    payload={...},
+    metadata={BUS_MESSAGE_ID_KEY: feedback_id}  # ✅
+)
+
+# Bad: Hardcoded string
+metadata={"message_id": feedback_id}  # ❌
+```
 
 ---
 
@@ -765,7 +788,7 @@ FeedbackSchemaRegistry.register("P08", P08FeedbackPayload)
 ```python
 # k0/pipelines/pXX_your_pipeline/feedback_handler.py
 
-from k0.bus.dispatcher import BusDispatcher
+from k0.bus import BusDispatcher, BUS_MESSAGE_ID_KEY
 from k0.db.session import get_session
 from typing import Any
 import logging
@@ -889,6 +912,15 @@ class PXXFeedbackHandler:
 ---
 
 ## K0 Step 4: Register Bus Topic
+
+**Important**: When constructing BusMessage objects for feedback topics, always use `BUS_MESSAGE_ID_KEY` for the metadata key:
+
+```python
+from k0.bus import BUS_MESSAGE_ID_KEY
+
+# In your handler:
+metadata = {BUS_MESSAGE_ID_KEY: feedback_id}
+```
 
 ```python
 # k0/bus/topics.py
@@ -1046,6 +1078,7 @@ When adding feedback support to a new K0 pipeline (PXX):
 - [ ] Register schema in `FeedbackSchemaRegistry` (k0/ports/feedback_registry.py)
 - [ ] Add `feedback.signal.PXX` to FEEDBACK_TOPICS (k0/bus/topics.py)
 - [ ] Create `PXXFeedbackHandler` with topic subscription
+- [ ] Import `BUS_MESSAGE_ID_KEY` from `k0.bus` for metadata construction
 - [ ] Implement handlers for each signal_class you support:
   - [ ] `_handle_correction()` - user corrections
   - [ ] `_handle_validation()` - user confirmations/denials
@@ -1091,6 +1124,7 @@ All feedback is subject to:
 1. **Rate limiting**: 100 signals/minute per tenant
 2. **Duplicate suppression**: Same payload_hash within 5 seconds → ignored
 3. **Anomaly detection**: Sudden spike in negative feedback → alert
+4. **Schema validation**: BusMessage metadata must use `BUS_MESSAGE_ID_KEY` for feedback stream
 
 ---
 

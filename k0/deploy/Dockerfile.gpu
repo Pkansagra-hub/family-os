@@ -1,0 +1,78 @@
+# K0 Memory Kernel - GPU-Accelerated Container Image
+# FamilyOS - Privacy-first, hardware-independent, no vendor lock-in
+# Uses NVIDIA CUDA for UltraBERT inference acceleration
+# Supports Blackwell GPUs (sm_100, sm_120) via PyTorch nightly cu128
+
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+
+# Metadata
+LABEL org.opencontainers.image.title="K0 Memory Kernel (GPU)"
+LABEL org.opencontainers.image.description="FamilyOS Memory Kernel - GPU-accelerated with CUDA 12.8 (Blackwell support)"
+LABEL org.opencontainers.image.vendor="FamilyOS"
+
+# Install Python 3.10 and system dependencies (Ubuntu 22.04 ships with Python 3.10)
+# gcc + libc6-dev + python3-dev required for PyTorch Triton JIT compilation on GPU
+# libpq-dev required for asyncpg PostgreSQL driver
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    curl \
+    libpq-dev \
+    postgresql-client \
+    tzdata \
+    gcc \
+    libc6-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python
+
+# Set working directory
+WORKDIR /app
+
+# Copy UltraBERT wheel v2.1.0 (self-contained with bundled modeling classes)
+# Both PyTorch and ONNX backends work out of the box
+# Download from: https://github.com/Pkansagra-hub/Family_osModernBERT/releases/tag/v2.1.0
+COPY wheels/familyos_ultrabert-2.1.0-py3-none-any.whl ./wheels/
+
+# Copy minimal kernel requirements
+COPY k0/deploy/requirements.base.txt k0/deploy/requirements.kernel.txt ./
+
+# Install PyTorch nightly with CUDA 12.8 (supports Blackwell sm_100/sm_120) + kernel deps + UltraBERT
+# See: https://pytorch.org/get-started/locally/ - nightly cu128 has Blackwell support
+# Note: faiss-gpu installed separately for GPU-accelerated vector search (P08 pipeline)
+RUN pip3 install --no-cache-dir --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128 && \
+    pip3 install --no-cache-dir -r requirements.kernel.txt && \
+    pip3 install --no-cache-dir faiss-gpu>=1.8.0 && \
+    pip3 install --no-cache-dir wheels/familyos_ultrabert-2.1.0-py3-none-any.whl && \
+    python3 -m spacy download en_core_web_sm
+
+# Copy application code
+COPY k0/ k0/
+
+# Create non-root user
+RUN groupadd -r k0user -g 1000 && \
+    useradd -r -u 1000 -g k0user k0user && \
+    mkdir -p /data /secrets /config /logs && \
+    chown -R k0user:k0user /app /data /secrets /config /logs
+
+# Switch to non-root user
+USER k0user
+
+# Expose ports
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=30s \
+    CMD curl -f http://localhost:8080/healthz || exit 1
+
+# Environment defaults - PostgreSQL mode
+ENV K0_LOG_LEVEL=INFO \
+    K0_USE_POSTGRESQL=true \
+    PYTHONUNBUFFERED=1 \
+    CUDA_VISIBLE_DEVICES=0 \
+    ONNX_PROVIDERS=CUDAExecutionProvider
+
+# Run the kernel
+CMD ["python", "-m", "k0.kernel.main"]
