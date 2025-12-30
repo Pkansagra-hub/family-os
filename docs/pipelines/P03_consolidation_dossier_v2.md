@@ -21,7 +21,7 @@ P03 is the **Memory Consolidation & Forgetting Pipeline** — an offline process
 
 | Document | Location | Relationship |
 |----------|----------|--------------|
-| K0 Architecture Master | [k0_architecture_master.md](../../k0/pipelines/k0_architecture_master.md) | Source of truth for registries |
+| K0 Architecture Master | [k0_architecture_master.md](../../governance/k0/k0_architecture_master.md) | Source of truth for registries |
 | P02 Write Pipeline | [P02_write_dossier.md](P02_write_dossier.md) | Upstream - produces st_hipp_events |
 | P08 Embedding Pipeline | [P08_embedding_dossier_v2.md](P08_embedding_dossier_v2.md) | Dependency - embedding.search, FAISS |
 | P06 Active Learning | [0001-active-learning-loop.md](../architecture/ideas/0001-active-learning-loop.md) | Downstream - gap.detected events |
@@ -524,6 +524,9 @@ async def query_truth_for_signal(
         matches.extend(social_matches)
 
     # 5. Query knowledge graph (st_kg_dom + st_kg_edges)
+    # NOTE: truth_layers.st_kg is a DAO facade over the two physical tables
+    # st_kg_dom (entities) and st_kg_edges (relationships). There is no
+    # physical st_kg table.
     if signal.entities_json:
         kg_matches = await truth_layers.st_kg.query_entities(
             entity_names=[e['text'] for e in signal.entities_json],
@@ -4496,10 +4499,10 @@ class EntityMerger:
         await db.execute("""
             UPDATE st_kg_dom
             SET archival_status = 'MERGED',
-                merged_into = ?,
-                merged_at = ?,
-                merged_by = ?
-            WHERE entity_id = ?
+                merged_into = $1,
+                merged_at = $2,
+                merged_by = $3
+            WHERE entity_id = $4
         """, primary_entity_id, now(), initiated_by, secondary_entity_id)
 
         # STEP 6: Log for Undo
@@ -4519,12 +4522,12 @@ class EntityMerger:
 
 | Table | Update Method | Example SQL |
 |-------|---------------|-------------|
-| `st_kg_edges` | Redirect source/target entity IDs | `UPDATE st_kg_edges SET source_entity_id = ? WHERE source_entity_id = ?` |
+| `st_kg_edges` | Redirect source/target entity IDs | `UPDATE st_kg_edges SET source_entity_id = $1 WHERE source_entity_id = $2` |
 | `st_hipp_events` | JSON replace in entities_json | `UPDATE st_hipp_events SET entities_json = jsonb_set(entities_json, '{entities}', ...)` |
 | `st_epi` | Update entity references in metadata | `UPDATE st_epi SET metadata_json = jsonb_set(...)` |
-| `st_sem` | Update pattern entity links | `UPDATE st_sem SET entity_ids = array_replace(entity_ids, ?, ?)` |
-| `st_social` | Update actor references | `UPDATE st_social SET actor_id = ? WHERE actor_id = ?` |
-| `st_procedural` | Update habit participant IDs | `UPDATE st_procedural SET participants = array_replace(participants, ?, ?)` |
+| `st_sem` | Update pattern entity links | `UPDATE st_sem SET entity_ids = array_replace(entity_ids, $1, $2)` |
+| `st_social` | Update actor references | `UPDATE st_social SET actor_id = $1 WHERE actor_id = $2` |
+| `st_procedural` | Update habit participant IDs | `UPDATE st_procedural SET participants = array_replace(participants, $1, $2)` |
 | `st_vec` | Update embedding metadata | `UPDATE st_vec SET metadata_json = jsonb_set(...)` |
 
 **Cascade Implementation**:
@@ -4546,18 +4549,18 @@ async def cascade_update_references(
     # 1. st_kg_edges: Redirect relationship edges
     counts['kg_edges_source'] = await db.execute("""
         UPDATE st_kg_edges
-        SET source_entity_id = ?,
-            merge_cascade_id = ?
-        WHERE source_entity_id = ?
-          AND space_id = ?
+        SET source_entity_id = $1,
+            merge_cascade_id = $2
+        WHERE source_entity_id = $3
+          AND space_id = $4
     """, primary_id, merge_id, secondary_id, space_id)
 
     counts['kg_edges_target'] = await db.execute("""
         UPDATE st_kg_edges
-        SET target_entity_id = ?,
-            merge_cascade_id = ?
-        WHERE target_entity_id = ?
-          AND space_id = ?
+        SET target_entity_id = $1,
+            merge_cascade_id = $2
+        WHERE target_entity_id = $3
+          AND space_id = $4
     """, primary_id, merge_id, secondary_id, space_id)
 
     # 2. st_hipp_events: JSON entity replacement
@@ -4569,16 +4572,16 @@ async def cascade_update_references(
             (
                 SELECT jsonb_agg(
                     CASE
-                        WHEN elem->>'entity_id' = ? THEN jsonb_set(elem, '{entity_id}', to_jsonb(?::text))
+                        WHEN elem->>'entity_id' = $1 THEN jsonb_set(elem, '{entity_id}', to_jsonb($2::text))
                         ELSE elem
                     END
                 )
                 FROM jsonb_array_elements(entities_json->'entities') AS elem
             )
         ),
-        merge_cascade_id = ?
-        WHERE entities_json->'entities' @> ?::jsonb
-          AND space_id = ?
+        merge_cascade_id = $3
+        WHERE entities_json->'entities' @> $4::jsonb
+          AND space_id = $5
     """, secondary_id, primary_id, merge_id,
         json.dumps([{'entity_id': secondary_id}]),
         space_id)
@@ -4586,38 +4589,38 @@ async def cascade_update_references(
     # 3. st_epi: Episode entity links
     counts['epi'] = await db.execute("""
         UPDATE st_epi
-        SET entity_ids = array_replace(entity_ids, ?, ?),
-            merge_cascade_id = ?
-        WHERE ? = ANY(entity_ids)
-          AND space_id = ?
-    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+        SET entity_ids = array_replace(entity_ids, $1, $2),
+            merge_cascade_id = $3
+        WHERE $1 = ANY(entity_ids)
+          AND space_id = $4
+    """, secondary_id, primary_id, merge_id, space_id)
 
     # 4. st_sem: Pattern entity links
     counts['sem'] = await db.execute("""
         UPDATE st_sem
-        SET entity_ids = array_replace(entity_ids, ?, ?),
-            merge_cascade_id = ?
-        WHERE ? = ANY(entity_ids)
-          AND space_id = ?
-    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+        SET entity_ids = array_replace(entity_ids, $1, $2),
+            merge_cascade_id = $3
+        WHERE $1 = ANY(entity_ids)
+          AND space_id = $4
+    """, secondary_id, primary_id, merge_id, space_id)
 
     # 5. st_social: Actor references
     counts['social'] = await db.execute("""
         UPDATE st_social
-        SET actor_id = ?,
-            merge_cascade_id = ?
-        WHERE actor_id = ?
-          AND space_id = ?
+        SET actor_id = $1,
+            merge_cascade_id = $2
+        WHERE actor_id = $3
+          AND space_id = $4
     """, primary_id, merge_id, secondary_id, space_id)
 
     # 6. st_procedural: Habit participants
     counts['procedural'] = await db.execute("""
         UPDATE st_procedural
-        SET participants = array_replace(participants, ?, ?),
-            merge_cascade_id = ?
-        WHERE ? = ANY(participants)
-          AND space_id = ?
-    """, secondary_id, primary_id, merge_id, secondary_id, space_id)
+        SET participants = array_replace(participants, $1, $2),
+            merge_cascade_id = $3
+        WHERE $1 = ANY(participants)
+          AND space_id = $4
+    """, secondary_id, primary_id, merge_id, space_id)
 
     # 7. st_vec: Embedding metadata
     counts['vec'] = await db.execute("""
@@ -4625,12 +4628,12 @@ async def cascade_update_references(
         SET metadata_json = jsonb_set(
             metadata_json,
             '{entity_id}',
-            to_jsonb(?::text)
+                        to_jsonb($1::text)
         ),
-        merge_cascade_id = ?
-        WHERE metadata_json->>'entity_id' = ?
-          AND space_id = ?
-    """, primary_id, merge_id, secondary_id, space_id)
+                merge_cascade_id = $2
+                WHERE metadata_json->>'entity_id' = $3
+                    AND space_id = $4
+        """, primary_id, merge_id, secondary_id, space_id)
 
     return counts
 ```
@@ -4673,7 +4676,7 @@ async def reverse_merge(
     """
     # Fetch merge record
     merge = await db.fetch_one("""
-        SELECT * FROM st_entity_merges WHERE merge_id = ?
+        SELECT * FROM st_entity_merges WHERE merge_id = $1
     """, merge_id)
 
     if not merge or merge['reversed_at']:
@@ -4686,25 +4689,25 @@ async def reverse_merge(
             merged_into = NULL,
             merged_at = NULL,
             merged_by = NULL
-        WHERE entity_id = ?
+        WHERE entity_id = $1
     """, merge['secondary_entity_id'])
 
     # Reverse cascade updates (tracked by merge_cascade_id)
     await db.execute("""
         UPDATE st_kg_edges
-        SET source_entity_id = ?
-        WHERE merge_cascade_id = ?
-          AND source_entity_id = ?
-    """, merge['secondary_entity_id'], merge_id, merge['primary_entity_id'])
+                SET source_entity_id = $1
+                WHERE merge_cascade_id = $2
+                    AND source_entity_id = $3
+        """, merge['secondary_entity_id'], merge_id, merge['primary_entity_id'])
 
     # ... repeat for all tables ...
 
     # Mark as reversed
     await db.execute("""
         UPDATE st_entity_merges
-        SET reversed_at = ?,
-            reversed_by = ?
-        WHERE merge_id = ?
+        SET reversed_at = $1,
+            reversed_by = $2
+        WHERE merge_id = $3
     """, now(), reversed_by, merge_id)
 
     return True
@@ -5714,7 +5717,7 @@ class CausalEdgeFeedbackProcessor:
         """
         # Fetch edge
         edge = await db.fetch_one("""
-            SELECT * FROM st_kg_edges WHERE edge_id = ? AND edge_type = 'CAUSAL'
+            SELECT * FROM st_kg_edges WHERE edge_id = $1 AND edge_type = 'CAUSAL'
         """, edge_id)
 
         if not edge:
@@ -5771,9 +5774,9 @@ class CausalEdgeFeedbackProcessor:
                 COUNT(*) FILTER (WHERE signal_type IN ('CAUSAL_PREDICTION_WRONG', 'USER_REJECTS_CAUSATION')) as incorrect,
                 COUNT(*) as total
             FROM st_causal_feedback
-            WHERE edge_id = ?
-              AND created_at >= ?
-        """, edge_id, cutoff_time)
+                        WHERE edge_id = $1
+                            AND created_at >= $2
+                """, edge_id, cutoff_time)
 
         if result['total'] == 0:
             return 1.0  # No feedback yet, assume correct
@@ -5794,16 +5797,16 @@ class CausalEdgeFeedbackProcessor:
             await db.execute("""
                 UPDATE st_kg_edges
                 SET causal_confidence = LEAST(1.0, causal_confidence + 0.05),
-                    last_validated_at = ?
-                WHERE edge_id = ?
+                    last_validated_at = $1
+                WHERE edge_id = $2
             """, now(), edge_id)
 
         # Keep confidence if 70% <= accuracy <= 90%
         elif accuracy >= 0.70:
             await db.execute("""
                 UPDATE st_kg_edges
-                SET last_validated_at = ?
-                WHERE edge_id = ?
+                SET last_validated_at = $1
+                WHERE edge_id = $2
             """, now(), edge_id)
 
         # Lower confidence if accuracy < 70% (will be demoted)
@@ -5811,7 +5814,7 @@ class CausalEdgeFeedbackProcessor:
             await db.execute("""
                 UPDATE st_kg_edges
                 SET causal_confidence = GREATEST(0.0, causal_confidence - 0.10)
-                WHERE edge_id = ?
+                WHERE edge_id = $1
             """, edge_id)
 
     async def demote_edge(
@@ -5828,19 +5831,19 @@ class CausalEdgeFeedbackProcessor:
                 metadata_json = jsonb_set(
                     COALESCE(metadata_json, '{}'::jsonb),
                     '{demotion_reason}',
-                    to_jsonb(?::text)
+                    to_jsonb($1::text)
                 ),
                 metadata_json = jsonb_set(
                     metadata_json,
                     '{demoted_at}',
-                    to_jsonb(?::bigint)
+                    to_jsonb($2::bigint)
                 ),
                 metadata_json = jsonb_set(
                     metadata_json,
                     '{original_edge_type}',
                     to_jsonb('CAUSAL'::text)
                 )
-            WHERE edge_id = ?
+            WHERE edge_id = $3
         """, reason, now(), edge_id)
 
         # Emit event
@@ -5877,12 +5880,12 @@ class CausalEdgeStalenessChecker:
             SELECT e.edge_id, e.source_entity_id, e.target_entity_id
             FROM st_kg_edges e
             WHERE e.edge_type = 'CAUSAL'
-              AND e.space_id = ?
+                            AND e.space_id = $1
               AND (
                 e.last_used_at IS NULL
-                OR e.last_used_at < ?
+                                OR e.last_used_at < $2
               )
-        """, space_id, cutoff_time)
+                """, space_id, cutoff_time)
 
         return [e['edge_id'] for e in stale_edges]
 
@@ -5903,8 +5906,8 @@ class CausalEdgeStalenessChecker:
         count = await db.execute("""
             UPDATE st_kg_edges
             SET archival_status = 'ARCHIVED',
-                archived_at = ?
-            WHERE edge_id = ANY(?)
+                archived_at = $1
+            WHERE edge_id = ANY($2)
         """, now(), stale_edge_ids)
 
         return count
@@ -5972,9 +5975,9 @@ async def record_causal_edge_usage(
     """
     await db.execute("""
         UPDATE st_kg_edges
-        SET last_used_at = ?,
+        SET last_used_at = $1,
             usage_count = usage_count + 1
-        WHERE edge_id = ?
+        WHERE edge_id = $2
     """, now(), edge_id)
 
 # When K1 validates prediction outcome
@@ -5995,7 +5998,7 @@ async def record_prediction_outcome(
         INSERT INTO st_causal_feedback (
             feedback_id, edge_id, signal_type, source_system,
             prediction_context, actual_outcome, space_id, created_at
-        ) VALUES (?, ?, ?, 'K1', ?, ?, ?, ?)
+        ) VALUES ($1, $2, $3, 'K1', $4, $5, $6, $7)
     """, ulid.new(), edge_id, signal_type,
         json.dumps(context.get('prediction')),
         json.dumps(context.get('actual')),
@@ -6502,13 +6505,13 @@ CREATE TABLE IF NOT EXISTS st_mcts_shadow_log (
     mcts_better BOOLEAN,  -- True if MCTS outcome > heuristic
     evaluated_at BIGINT,  -- When outcome was scored
     created_at BIGINT NOT NULL,
-
-    -- Indexes for analysis
-    INDEX idx_shadow_log_type (decision_type),
-    INDEX idx_shadow_log_created (created_at),
-    INDEX idx_shadow_log_differ (choices_differ),
-    INDEX idx_shadow_log_evaluated (evaluated_at)
 );
+
+-- Postgres indexes (declared separately)
+CREATE INDEX IF NOT EXISTS idx_shadow_log_type ON st_mcts_shadow_log(decision_type);
+CREATE INDEX IF NOT EXISTS idx_shadow_log_created ON st_mcts_shadow_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_shadow_log_differ ON st_mcts_shadow_log(choices_differ);
+CREATE INDEX IF NOT EXISTS idx_shadow_log_evaluated ON st_mcts_shadow_log(evaluated_at);
 ```
 
 **Analysis Query**:
@@ -7802,12 +7805,12 @@ from k0.obs import AuditLogger
 class P03FeedbackHandler:
     """
     Consumes feedback for P03 (Consolidation/Salience).
-    Subscribed topics: feedback.signal.p03
+    Subscribed topics: feedback.signal.p03.v1
 
     Routes signals to appropriate learning modules based on feedback_type.
     """
 
-    topics = ["feedback.signal.p03"]
+    topics = ["feedback.signal.p03.v1"]
 
     def __init__(self, db_pool, metrics_registry):
         self.db_pool = db_pool
@@ -8013,13 +8016,13 @@ class P03FeedbackHandler:
 
 #### 5.7.2 Bus Subscription Registration
 
-P03 must actively subscribe to the `feedback.signal.p03` topic during pipeline initialization.
+P03 must actively subscribe to the `feedback.signal.p03.v1` topic during pipeline initialization.
 
 **Topic Subscription**:
 
-| Topic | Handler | Priority |
-|-------|---------|----------|
-| `feedback.signal.p03` | P03FeedbackHandler | NORMAL |
+| Topic                     | Handler            | Priority |
+| ------------------------- | ------------------ | -------- |
+| `feedback.signal.p03.v1`  | P03FeedbackHandler | NORMAL   |
 
 **Subscription Registration**:
 
@@ -8039,7 +8042,7 @@ def register_handlers(bus: EventBus, db_pool, metrics_registry) -> None:
     feedback_handler = P03FeedbackHandler(db_pool, metrics_registry)
 
     bus.subscribe(
-        topic="feedback.signal.p03",
+        topic="feedback.signal.p03.v1",
         handler=feedback_handler,
         priority=Priority.NORMAL,
     )
@@ -8047,12 +8050,12 @@ def register_handlers(bus: EventBus, db_pool, metrics_registry) -> None:
     # Emit subscription confirmation metric
     metrics_registry.p03_feedback_subscribed.set(1)
 
-    logger.info("P03FeedbackHandler subscribed to feedback.signal.p03")
+    logger.info("P03FeedbackHandler subscribed to feedback.signal.p03.v1")
 ```
 
 **Startup Order**:
 
-1. P21 FeedbackSubsystem starts and creates `feedback.signal.p03` topic
+1. Feedback subsystem is running and dispatching to `feedback.signal.p03.v1`
 2. P03 pipeline initializes
 3. P03 calls `register_handlers()` to subscribe
 4. Subscription confirmed via `p03_feedback_subscribed` metric
@@ -8165,6 +8168,8 @@ await ctx.execute("""
 
 > **Status**: COMPLETE
 
+**Database Dialect**: SQL syntax and data types in this dossier target **PostgreSQL** (K0 canonical persistence layer). Parameter placeholder style (e.g., `$1` vs `%s`) is driver-specific and may be adapted, but SQLite-only functions (e.g., `unixepoch()`) and SQLite-only DDL patterns must not be copied into K0/Postgres migrations.
+
 ### 6.1 Schema Design Principles
 
 #### 6.1.1 Durability Rules
@@ -8177,10 +8182,14 @@ The memory layer schemas follow strict durability rules to ensure data integrity
 │                                                                             │
 │   Rule 1: IMMUTABILITY + VERSIONING                                         │
 │   ─────────────────────────────────────────────────────────────────────────│
-│   • Never UPDATE existing rows in place                                     │
+│   • Do not UPDATE semantic content in place (prefer versioned INSERT)       │
 │   • Create new version with incremented version number                      │
 │   • Link via supersedes_id to previous version                              │
 │   • Only one version has is_canonical = TRUE                                │
+│   • Allowed in-place UPDATEs (bounded):                                     │
+│     - counters/telemetry: observation_count, last_observed_at, decay_factor │
+│     - lifecycle flags: archival_status, drift_detected, last_drift_check_at │
+│     - canonical flip: is_canonical FALSE when a new version supersedes      │
 │                                                                             │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
 │   │                         VERSION CHAIN EXAMPLE                        │   │
@@ -8480,8 +8489,8 @@ class MemoryLayerReader:
         """
         # Find the canonical version first
         canonical = await self.db.fetch_one(
-            f"SELECT * FROM {table} WHERE id = :id OR supersedes_id = :id",
-            {'id': record_id}
+            f"SELECT * FROM {table} WHERE id = $1 OR supersedes_id = $1",
+            record_id
         )
 
         if not canonical:
@@ -8493,8 +8502,8 @@ class MemoryLayerReader:
 
         while current.get('supersedes_id'):
             prev = await self.db.fetch_one(
-                f"SELECT * FROM {table} WHERE id = :id",
-                {'id': current['supersedes_id']}
+                f"SELECT * FROM {table} WHERE id = $1",
+                current['supersedes_id']
             )
             if prev:
                 chain.append(prev)
@@ -9184,7 +9193,7 @@ CREATE TABLE st_vec (
   space_id TEXT NOT NULL,
 
   -- Vector Data
-  vector BLOB NOT NULL,                  -- 768 floats × 4 bytes = 3072 bytes
+    vector BYTEA NOT NULL,                 -- 768 floats × 4 bytes = 3072 bytes
   vector_dim INTEGER NOT NULL DEFAULT 768,
 
   -- Model Metadata
@@ -9433,18 +9442,18 @@ CREATE TABLE st_pipeline_watermarks (
 
 ```sql
 CREATE TABLE st_outbox (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
   wal_pos INTEGER NOT NULL,
   tenant_id TEXT NOT NULL,
   space_id TEXT NOT NULL,
   driver TEXT NOT NULL,                  -- Target driver (e.g., 'p08_embedding')
   op_kind TEXT NOT NULL,                 -- Operation type
-  payload BLOB NOT NULL,                 -- Serialized operation
+    payload BYTEA NOT NULL,                -- Serialized operation
   fingerprint TEXT NOT NULL,             -- Idempotency key
   requeue_seq INTEGER NOT NULL DEFAULT 0,
   retries INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
-  next_attempt_ts TEXT,
+    next_attempt_ts BIGINT,
   backoff_exp INTEGER DEFAULT 1,
   status TEXT DEFAULT 'PENDING' CHECK(status IN (
     'PENDING', 'PROCESSING', 'FAILED', 'DEAD'
@@ -9912,15 +9921,17 @@ async def store_pruned_entity(
     """Store entity before pruning for potential regret tracking."""
     prune_id = f"prune_{entity_id}_{int(time.time())}"
 
+    pruned_at_ms = int(time.time() * 1000)
+
     await db.execute("""
         INSERT INTO st_pruned_entities (
             prune_id, entity_id, entity_type, canonical_name,
             embedding, space_id, decay_factor_at_prune, pruned_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    """,
         prune_id, entity_id, entity_type, canonical_name,
-        embedding.tolist(), space_id, current_decay, unixepoch()
-    ))
+        embedding.tolist(), space_id, current_decay, pruned_at_ms
+    )
 
 **Query-Time Matching**:
 ```python
@@ -9940,10 +9951,10 @@ async def find_regret_matches(
     name_candidates = await db.fetch("""
         SELECT prune_id, canonical_name, embedding
         FROM st_pruned_entities
-        WHERE space_id = ?
+                WHERE space_id = $1
           AND matched_at IS NULL
-          AND pruned_at > unixepoch() - (14 * 24 * 60 * 60)  -- 14 days
-    """, space_id)
+                    AND pruned_at > ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT - (14 * 24 * 60 * 60 * 1000))  -- 14 days
+        """, space_id)
 
     matches = []
     for candidate in name_candidates:
@@ -9983,17 +9994,19 @@ async def process_regret_signal(
     """Process detected regret: update table and emit learning signal."""
 
     # Mark as matched
+    matched_at_ms = int(time.time() * 1000)
     await db.execute("""
         UPDATE st_pruned_entities
-        SET matched_query_id = ?, matched_at = unixepoch()
-        WHERE prune_id = ?
-    """, query_id, prune_id)
+        SET matched_query_id = $1,
+            matched_at = $2
+        WHERE prune_id = $3
+    """, query_id, matched_at_ms, prune_id)
 
     # Get pruning context for learning
     context = await db.fetch_one("""
         SELECT entity_type, decay_factor_at_prune
         FROM st_pruned_entities
-        WHERE prune_id = ?
+        WHERE prune_id = $1
     """, prune_id)
 
     # Emit REGRET signal to learning system
@@ -10020,7 +10033,7 @@ async def cleanup_pruned_entities(db: Database) -> int:
 
     result = await db.execute("""
         DELETE FROM st_pruned_entities
-        WHERE pruned_at < ?
+                WHERE pruned_at < $1
           AND matched_at IS NULL
     """, cutoff)
 
@@ -10147,17 +10160,19 @@ async def log_consolidation_decision(
     """Log every consolidation decision for audit and explainability."""
     audit_id = f"audit_{memory_id}_{int(time.time() * 1000000)}"
 
+    created_at_ms = int(time.time() * 1000)
+
     await db.execute("""
         INSERT INTO st_consolidation_audit (
             audit_id, memory_id, source_table, action, formula_used,
             inputs_json, outputs_json, explanation, confidence,
             space_id, cycle_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    """,
         audit_id, memory_id, source_table, action, formula_used,
         json.dumps(inputs), json.dumps(outputs), explanation, confidence,
-        space_id, cycle_id, unixepoch()
-    ))
+        space_id, cycle_id, created_at_ms
+    )
 
 **Generate Explanations**:
 
@@ -10175,7 +10190,7 @@ async def explain_memory_decision(
     decision = await db.fetch_one("""
         SELECT action, explanation, confidence, created_at
         FROM st_consolidation_audit
-        WHERE memory_id = ? AND space_id = ?
+        WHERE memory_id = $1 AND space_id = $2
         ORDER BY created_at DESC
         LIMIT 1
     """, memory_id, space_id)
@@ -10379,27 +10394,27 @@ async def auto_release_quarantined_signals(db: Database) -> int:
     now = int(time.time())
 
     # Get signals ready for auto-release
-    ready_signals = await db.fetch("""
+        ready_signals = await db.fetch("""
         SELECT quarantine_id, signal_id
         FROM st_feedback_quarantine
         WHERE decision IS NULL
-          AND auto_release_at <= ?
-    """, now)
+            AND auto_release_at <= $1
+        """, now)
 
     released_count = 0
     for signal in ready_signals:
         # Mark as reviewed and released
         await db.execute("""
             UPDATE st_feedback_quarantine
-            SET reviewed_at = ?, reviewed_by = 'AUTO', decision = 'RELEASE'
-            WHERE quarantine_id = ?
+            SET reviewed_at = $1, reviewed_by = 'AUTO', decision = 'RELEASE'
+            WHERE quarantine_id = $2
         """, now, signal['quarantine_id'])
 
         # Allow the signal to be processed
         await db.execute("""
             UPDATE st_feedback_signals
             SET quarantine_status = 'RELEASED'
-            WHERE signal_id = ?
+            WHERE signal_id = $1
         """, signal['signal_id'])
 
         released_count += 1
@@ -10420,11 +10435,15 @@ async def review_quarantined_signal(
 ) -> None:
     """Manually review a quarantined signal."""
 
+    reviewed_at_ms = int(time.time() * 1000)
+
     await db.execute("""
         UPDATE st_feedback_quarantine
-        SET reviewed_at = ?, reviewed_by = ?, decision = ?
-        WHERE quarantine_id = ?
-    """, unixepoch(), reviewer_id, decision, quarantine_id)
+        SET reviewed_at = $1,
+            reviewed_by = $2,
+            decision = $3
+        WHERE quarantine_id = $4
+    """, reviewed_at_ms, reviewer_id, decision, quarantine_id)
 
     # Update the original signal
     if decision == 'RELEASE':
@@ -10433,7 +10452,7 @@ async def review_quarantined_signal(
             SET quarantine_status = 'RELEASED'
             WHERE signal_id = (
                 SELECT signal_id FROM st_feedback_quarantine
-                WHERE quarantine_id = ?
+                WHERE quarantine_id = $1
             )
         """, quarantine_id)
     else:  # DISCARD
@@ -10442,7 +10461,7 @@ async def review_quarantined_signal(
             SET quarantine_status = 'DISCARDED'
             WHERE signal_id = (
                 SELECT signal_id FROM st_feedback_quarantine
-                WHERE quarantine_id = ?
+                WHERE quarantine_id = $1
             )
         """, quarantine_id)
 ```
@@ -10785,32 +10804,34 @@ async def update_parameter_with_history(
     current = await db.fetch_one("""
         SELECT current_value, version, previous_value
         FROM st_learned_weights
-        WHERE param_id = ?
+        WHERE param_id = $1
     """, param_id)
 
     # Record history
     history_id = f"hist_{param_id}_{current['version'] + 1}_{int(time.time())}"
+    applied_at_ms = int(time.time() * 1000)
     await db.execute("""
         INSERT INTO st_learned_weights_history (
             history_id, param_id, version, value, quality_at_time,
             space_id, applied_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    """,
         history_id, param_id, current['version'] + 1, current['current_value'],
-        quality_metric, space_id, unixepoch()
-    ))
+        quality_metric, space_id, applied_at_ms
+    )
 
     # Update current parameter
+    now_ms = int(time.time() * 1000)
     await db.execute("""
         UPDATE st_learned_weights
-        SET current_value = ?,
+        SET current_value = $1,
             previous_value = current_value,
             version = version + 1,
-            quality_at_update = ?,
-            last_updated_at = unixepoch(),
-            updated_at = unixepoch()
-        WHERE param_id = ?
-    """, new_value, quality_metric, param_id)
+            quality_at_update = $2,
+            last_updated_at = $3,
+            updated_at = $4
+        WHERE param_id = $5
+    """, new_value, quality_metric, now_ms, now_ms, param_id)
 ```
 
 **Rollback to Previous Version**:
@@ -10830,35 +10851,37 @@ async def rollback_parameter(
     target = await db.fetch_one("""
         SELECT value, quality_at_time
         FROM st_learned_weights_history
-        WHERE param_id = ? AND version = ? AND space_id = ?
+        WHERE param_id = $1 AND version = $2 AND space_id = $3
     """, param_id, target_version, space_id)
 
     if not target:
         return False
 
     # Update current parameter to rolled-back value
+    now_ms = int(time.time() * 1000)
     await db.execute("""
         UPDATE st_learned_weights
-        SET current_value = ?,
+        SET current_value = $1,
             previous_value = current_value,
-            quality_at_update = ?,
+            quality_at_update = $2,
             rollback_eligible = FALSE,  -- Mark as manually rolled back
-            last_updated_at = unixepoch(),
-            updated_at = unixepoch()
-        WHERE param_id = ? AND space_id = ?
-    """, target['value'], target['quality_at_time'], param_id, space_id)
+            last_updated_at = $3,
+            updated_at = $4
+        WHERE param_id = $5 AND space_id = $6
+    """, target['value'], target['quality_at_time'], now_ms, now_ms, param_id, space_id)
 
     # Record rollback in history
     history_id = f"rollback_{param_id}_{target_version}_{int(time.time())}"
+    applied_at_ms = int(time.time() * 1000)
     await db.execute("""
         INSERT INTO st_learned_weights_history (
             history_id, param_id, version, value, quality_at_time,
             space_id, applied_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    """,
         history_id, param_id, target_version, target['value'],
-        target['quality_at_time'], space_id, unixepoch()
-    ))
+        target['quality_at_time'], space_id, applied_at_ms
+    )
 
     return True
 ```
@@ -10924,12 +10947,12 @@ class QualityMonitor:
         history = await db.fetch("""
             SELECT quality_at_time, applied_at
             FROM st_learned_weights_history
-            WHERE param_id = ?
-              AND space_id = ?
-              AND applied_at > unixepoch() - (7 * 24 * 60 * 60)
+                        WHERE param_id = $1
+                            AND space_id = $2
+                            AND applied_at > ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT - (7 * 24 * 60 * 60 * 1000))
             ORDER BY applied_at DESC
             LIMIT 10
-        """, param_id, space_id)
+                """, param_id, space_id)
 
         if len(history) < 3:
             return False  # Not enough history
@@ -13001,20 +13024,20 @@ contract:
     table: st_vec
     schema: vector_store
 
-  join_condition: "st_vec.id = st_hipp_events.embedding_id"
+    join_condition: "st_vec.embedding_id = st_hipp_events.embedding_id"
 
   required_columns:
-    - name: id
+        - name: embedding_id
       type: TEXT
       description: Embedding ID (matches embedding_id in st_hipp_events)
     - name: vector
-      type: BLOB
+            type: BYTEA
       description: 768-dim UltraBERT embedding
     - name: status
       type: TEXT
       enum: [READY, PENDING, FAILED]
       description: Must be READY for P03 processing
-    - name: model_version
+        - name: model_id
       type: TEXT
       description: Model version for compatibility checks
 ```
@@ -13150,6 +13173,52 @@ channel:
       topic: familyos.p06.resolutions
       partitionKey: $.gap_id
 ```
+
+#### 9.3.3 Gap Answer Correlation (Command Port → WAL → P03)
+
+P03 must be able to deterministically associate a user-provided answer with the originating `gap_id`.
+
+**Decision (canonical)**: gap correlation lives in the *answer event body* at `body.correlation.gap_id`.
+
+**Why this is kernel-safe**:
+
+- The kernel `Envelope` already permits arbitrary domain fields inside `body` (`additionalProperties: true` and `body` is unconstrained).
+- The correlation pointer is covered by existing integrity guarantees (payload hash + signature + envelope hash).
+- No new syscall, capability, or cross-pipeline dependency is introduced; this is a domain-level convention inside the payload.
+
+**Producer requirement** (K1 / UI / command client):
+
+- Any event that is intended to answer a P03 gap **MUST** include:
+    - `body.correlation.gap_id` (ULID string)
+- `body.correlation` **MUST NOT** contain PII.
+
+**Illustrative body fragment** (schema-specific fields omitted):
+
+```json
+{
+    "correlation": {
+        "gap_id": "01J2Z8Q9W3Q4Y6K7A8B9C0D1E2"
+    },
+    "answer": {
+        "kind": "ENTITY_DISAMBIGUATION",
+        "value": "CorePower Yoga (San Mateo)"
+    }
+}
+```
+
+**How P03 reads `gap_id` today**:
+
+- `st_hipp_events` does not currently persist `gap_id` (or a generic correlation column).
+- P03 should resolve `gap_id` by joining from the hippocampus event row to the WAL row and parsing the stored JSON.
+
+Implementation note (storage reality):
+
+- `st_hipp_events.wal_pos` → `st_wal.pos` (or equivalent WAL position column)
+- Extract: `body.correlation.gap_id` from WAL `envelope_json` (preferred) or `redacted_body_json` if the WAL implementation stores the body separately.
+
+**Future optimization (optional)**:
+
+- If query volume makes WAL JSON parsing a bottleneck, introduce an indexed `gap_id` column on `st_hipp_events` populated at write time. This is not required for correctness.
 
 ### 9.4 P03 → P08 Contract (Embedding Index)
 
@@ -13390,18 +13459,18 @@ contract:
 
 ### 9.6 P03 Output Events
 
-#### 9.6.1 Consolidation Complete: p03.memory.consolidated.v1
+#### 9.6.1 Consolidation Complete: p03.consolidation.complete.v1
 
 ```yaml
 channel:
-  name: p03.memory.consolidated.v1
+    name: p03.consolidation.complete.v1
   protocol: kafka
   description: Emitted when P03 completes a consolidation cycle
 
   publish:
-    operationId: onMemoryConsolidated
+        operationId: onConsolidationComplete
     message:
-      name: MemoryConsolidatedPayload
+            name: P03ConsolidationCompletePayload
       contentType: application/json
       payload:
         type: object
@@ -13506,7 +13575,7 @@ class ContractValidator:
         return {
             'p03.gap.detected.v1': GapDetectedPayload,
             'p03.embedding.created.v1': EmbeddingCreatedPayload,
-            'p03.memory.consolidated.v1': MemoryConsolidatedPayload,
+            'p03.consolidation.complete.v1': P03ConsolidationCompletePayload,
         }[topic]
 ```
 
@@ -13557,12 +13626,17 @@ class P03FeedbackConsumer:
 
     async def mark_consumed(self, signal_id: str) -> None:
         """Update st_feedback_signals to mark consumption."""
-        await db.execute("""
+        now_ms = int(time.time() * 1000)
+        await db.execute(
+            """
             UPDATE st_feedback_signals
-            SET consumed_at = unixepoch(),
+            SET consumed_at = $1,
                 consumed_by = 'P03'
-            WHERE signal_id = ?
-        """, signal_id)
+            WHERE signal_id = $2
+            """,
+            now_ms,
+            signal_id,
+        )
 ```
 
 #### 9.8.2 Shared Table Access
@@ -13578,9 +13652,9 @@ ORDER BY created_at ASC;
 
 -- P03 marks signals as consumed
 UPDATE st_feedback_signals
-SET consumed_at = unixepoch(),
+SET consumed_at = (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
     consumed_by = 'P03'
-WHERE signal_id = ?;
+WHERE signal_id = $1;
 ```
 
 #### 9.8.3 Feedback Payload Types
@@ -14387,7 +14461,7 @@ from pydantic import ValidationError
 from k0.pipelines.p03.contracts import (
     GapDetectedPayload,
     EmbeddingCreatedPayload,
-    MemoryConsolidatedPayload
+    P03ConsolidationCompletePayload
 )
 
 
@@ -15075,7 +15149,7 @@ class ObservationCountBackfill:
                 FROM st_sem
                 WHERE observation_count = 1
                 ORDER BY created_at
-                LIMIT ? OFFSET ?
+                LIMIT $1 OFFSET $2
                 """,
                 (batch_size, offset)
             )
@@ -15094,8 +15168,8 @@ class ObservationCountBackfill:
                 await self.storage.execute(
                     """
                     UPDATE st_sem
-                    SET observation_count = ?, updated_at = ?
-                    WHERE id = ?
+                    SET observation_count = $1, updated_at = $2
+                    WHERE id = $3
                     """,
                     (count, now_ms(), record['id'])
                 )
@@ -15118,9 +15192,9 @@ class ObservationCountBackfill:
             """
             SELECT COUNT(*) as cnt
             FROM st_hipp_events e
-            JOIN st_vec v ON e.embedding_id = v.id
+            JOIN st_vec v ON e.embedding_id = v.embedding_id
             WHERE cosine_similarity(v.vector,
-                  (SELECT vector FROM st_vec WHERE id = ?)) > ?
+                (SELECT vector FROM st_vec WHERE embedding_id = $1)) > $2
             AND e.consolidation_status = 'CONSOLIDATED'
             """,
             (embedding_id, similarity_threshold)
@@ -20134,7 +20208,7 @@ p03_automatic_rollback_cooldown_active
 |   |           SQL Pattern:                                                    |   |
 |   |             UPDATE {table}                                                |   |
 |   |             SET field1 = :val1, field2 = :val2, version = version + 1     |   |
-|   |             WHERE id = :id AND version = :expected_version                |   |
+|   |             WHERE id = :record_id AND version = :expected_version         |   |
 |   |                                                                           |   |
 |   |           If rows_affected == 0, another worker updated first.            |   |
 |   |           """                                                             |   |
@@ -21790,7 +21864,7 @@ def adjust_min_samples(
 |   |                                                                           |   |
 |   |   4. episode_record: st_epi row                                           |   |
 |   |      - epi_id: ULID                                                       |   |
-|   |      - embedding_centroid: BLOB (768 * 4 bytes)                           |   |
+|   |      - embedding_centroid: BYTEA (768 * 4 bytes)                          |   |
 |   |      - event_count: len(cluster.events)                                   |   |
 |   |      - start_time, end_time: timestamp range                              |   |
 |   |      - significance_score: max(event.importance_score)                    |   |
@@ -23019,28 +23093,28 @@ Action: Blend 50/50 → λ = 0.5×0.00766 + 0.5×0.001 = 0.00433
 
 ```
 ┌─────────────────────────────────────────┐
-│ Level 1: Per-Entity λ                  │  (if 5+ accesses, 7+ day spread)
-│   - Learned from access patterns       │
-│   - Highest personalization            │
-│   - Example: "Mom" λ = 0.0008          │
+│ Level 1: Per-Entity λ                   │  (if 5+ accesses, 7+ day spread)
+│   - Learned from access patterns        │
+│   - Highest personalization             │
+│   - Example: "Mom" λ = 0.0008           │
 └─────────────────────────────────────────┘
                   ↓ fallback (if < 5 accesses)
 ┌─────────────────────────────────────────┐
-│ Level 2: Per-Entity-Type λ (Space)    │  (space-specific learning)
-│   - Learned from space's entity types  │
-│   - Example: PERSON in FamilyA = 0.0015│
+│ Level 2: Per-Entity-Type λ (Space)      │  (space-specific learning)
+│   - Learned from space's entity types   │
+│   - Example: PERSON in FamilyA = 0.0015 │
 └─────────────────────────────────────────┘
                   ↓ fallback (if cold-start space)
 ┌─────────────────────────────────────────┐
-│ Level 3: Global Entity-Type λ         │  (from DECAY_CONFIGS)
-│   - System-wide defaults               │
-│   - Example: PERSON = 0.002            │
+│ Level 3: Global Entity-Type λ           │  (from DECAY_CONFIGS)
+│   - System-wide defaults                │
+│   - Example: PERSON = 0.002             │
 └─────────────────────────────────────────┘
                   ↓ fallback (if unknown type)
 ┌─────────────────────────────────────────┐
-│ Level 4: Layer Default λ               │  (last resort)
-│   - Table-level defaults               │
-│   - Example: st_epi λ = 0.005          │
+│ Level 4: Layer Default λ                │  (last resort)
+│   - Table-level defaults                │
+│   - Example: st_epi λ = 0.005           │
 └─────────────────────────────────────────┘
 ```
 
@@ -25888,10 +25962,10 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 
 *Core idea: P03 needs two pipeline variants: a triggered consolidation and a continuous incremental pipeline.*
 
-**P03_CONSOLIDATE (Batch Mode)**:
+**P03_CONSOLIDATION (Batch Mode)**:
 
 - Trigger: INTERVAL (every 90 min) + THRESHOLD (st_hipp_events pending >= 500) + MANUAL
-- Entry: `p03.consolidation.trigger.v1` (synthetic event from scheduler)
+- Entry: `p03.consolidation.triggered.v1` (synthetic event from scheduler)
 - Exit: `p03.consolidation.complete.v1`
 - Concurrency: 1 (single consolidation cycle)
 - Required caps: 15+ storage capabilities (read/write across all memory tables)
@@ -25936,7 +26010,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 
 **Entry Topics** (P03 subscribes):
 
-- `p03.consolidation.trigger.v1` - Scheduler-initiated batch cycle
+- `p03.consolidation.triggered.v1` - Scheduler-initiated batch cycle
 - `p02.write.complete.v1` - (Optional) Incremental scoring trigger
 
 **Exit Topics** (P03 emits):
@@ -26034,7 +26108,7 @@ async def run(message: Any, context: Any, **config) -> dict[str, Any]:
 ```yaml
 module_id: consolidation.<module_name>
 version: v1
-input_event_types: [p03.consolidation.trigger.v1]
+input_event_types: [p03.consolidation.triggered.v1]
 output_event_types: [p03.<module>.complete.v1]
 latency_budget_ms: <budget>
 side_effects: [read:st_*, write:st_*]
@@ -26190,7 +26264,7 @@ from k0.scheduler.triggers import create_trigger_engine, TriggerType
 interval_trigger = create_trigger_engine(
     TriggerType.INTERVAL,
     interval_seconds=5400,
-    callback=lambda: scheduler.fire_pipeline("P03_CONSOLIDATE")
+    callback=lambda: scheduler.fire_pipeline("P03_CONSOLIDATION")
 )
 
 # Threshold trigger
@@ -26199,10 +26273,10 @@ threshold_trigger = create_trigger_engine(
     table="st_hipp_events",
     condition="consolidation_status = 'PENDING'",
     threshold=500,
-    callback=lambda: scheduler.fire_pipeline("P03_CONSOLIDATE")
+    callback=lambda: scheduler.fire_pipeline("P03_CONSOLIDATION")
 )
 
-scheduler.register_pipeline("P03_CONSOLIDATE", [interval_trigger, threshold_trigger])
+scheduler.register_pipeline("P03_CONSOLIDATION", [interval_trigger, threshold_trigger])
 ```
 
 ---
@@ -26212,7 +26286,7 @@ scheduler.register_pipeline("P03_CONSOLIDATE", [interval_trigger, threshold_trig
 *Core idea: Admin endpoint for on-demand consolidation.*
 
 ```
-POST /k0/admin/pipelines/P03_CONSOLIDATE/trigger
+POST /k0/admin/pipelines/P03_CONSOLIDATION/trigger
 Authorization: Bearer <admin_token>
 Content-Type: application/json
 
@@ -26244,7 +26318,7 @@ async def on_startup(self, ctx: PipelineContext) -> None:
 
     # Subscribe to trigger topic
     ctx.bus_dispatcher.subscribe(
-        "p03.consolidation.trigger.v1",
+        "p03.consolidation.triggered.v1",
         self.handle
     )
 
@@ -26626,7 +26700,7 @@ async def handle(self, message: BusMessage) -> None:
 ```python
 # Standard log context for P03
 LOG_CONTEXT = {
-    "pipeline_id": "P03_CONSOLIDATE",
+    "pipeline_id": "P03_CONSOLIDATION",
     "module_id": "<current_module>",
     "cycle_id": "<cycle_ulid>",
     "phase": "<R0-R8>",
@@ -26798,7 +26872,7 @@ async def test_full_consolidation_cycle(p03_pipeline, test_db):
 
     # Create trigger message
     message = BusMessage(
-        topic="p03.consolidation.trigger.v1",
+        topic="p03.consolidation.triggered.v1",
         payload=b'{"trigger_type": "manual"}',
         offset=1,
         trace_id="test-trace-001"
@@ -26920,24 +26994,24 @@ async def test_contract_matches_implementation(contract_file):
 
 ### E.1 Pipeline Identifiers
 
-| Canonical ID | Version | Description | Status |
-|--------------|---------|-------------|--------|
-| `P03_CONSOLIDATE` | v1 | Batch memory consolidation pipeline | Active |
-| `P03_INCREMENTAL` | v1 | Event-driven incremental consolidation | Planned |
+| Canonical ID        | Version | Description                             | Status  |
+|---------------------|---------|-----------------------------------------|---------|
+| `P03_CONSOLIDATION` | v1      | Batch memory consolidation pipeline     | Active  |
+| `P03_INCREMENTAL`   | v1      | Event-driven incremental consolidation  | Planned |
 
 ---
 
 ### E.2 Event Topics (Bus)
 
 > **Naming Convention**: `p<pipeline_id>.<domain>.<action>.v<version>`
-> **Registry**: Events to be added to [k0_architecture_master.md Part 4.1](../../k0/pipelines/k0_architecture_master.md#41-event-topics-registry) during implementation
+> **Registry**: Events to be added to [k0_architecture_master.md Part 4.1](../../governance/k0/k0_architecture_master.md#41-event-topics-registry) during implementation
 
 #### E.2.1 P03 Entry Topics (Subscribe)
 
-| Canonical Topic | Schema | Source | QoS Band | Retention (days) | Purpose |
-|-----------------|--------|--------|----------|------------------|---------|
-| `p03.consolidation.trigger.v1` | `P03TriggerEvent` | PipelineScheduler | AMBER | 7 | Initiate consolidation cycle |
-| `p02.write.complete.v1` | `P02WriteComplete` | P02 | AMBER | 7 | (Optional) Incremental mode trigger |
+| Canonical Topic                        | Schema              | Source            | QoS Band | Retention (days) | Purpose                              |
+|----------------------------------------|---------------------|-------------------|----------|------------------|--------------------------------------|
+| `p03.consolidation.triggered.v1`       | `P03TriggerEvent`   | PipelineScheduler | AMBER    | 7                | Initiate consolidation cycle         |
+| `p02.write.complete.v1`                | `P02WriteComplete`  | P02               | AMBER    | 7                | (Optional) Incremental mode trigger  |
 
 #### E.2.2 P03 Exit Topics (Emit)
 
@@ -26962,6 +27036,8 @@ async def test_contract_matches_implementation(contract_file):
 | `p06.gap.resolved.v1` | `P06GapResolved` | P06 → P03 | AMBER | 7 | User answered question |
 | `p06.anchor.updated.v1` | `P06AnchorUpdated` | P06 → P03 | AMBER | 7 | Belief anchor refined |
 
+> **Clarification**: P06 is the learning pipeline that consumes user answers from the command port/WAL and then emits these events (P03 does not ingest raw user answers directly).
+
 > **QoS Bands**: GREEN = Best-effort, AMBER = Must deliver, RED = Critical/immediate
 
 ---
@@ -26981,7 +27057,7 @@ async def test_contract_matches_implementation(contract_file):
 | `st_prospective` | Intentions and goals | `prosp_id` | tenant_id, space_id |
 | `st_kg_dom` | Knowledge graph entities | `entity_id` | tenant_id |
 | `st_kg_edges` | Knowledge graph relationships | `edge_id` | tenant_id |
-| `st_vec` | Embedding vectors (FAISS-backed) | `vec_id` | tenant_id, space_id |
+| `st_vec` | Embedding vectors (FAISS-backed) | `embedding_id` | tenant_id, space_id |
 
 #### E.3.2 Staging Tables
 
@@ -26993,14 +27069,14 @@ async def test_contract_matches_implementation(contract_file):
 
 | Canonical Table | Description | Primary Key | Used By |
 |-----------------|-------------|-------------|---------|
-| `st_learning_queue` | Active learning gaps | `gap_id` | P03, P06 |
-| `st_anchors` | Bayesian belief anchors | `anchor_id` | P03, P06 |
-| `st_anchor_observations` | Anchor evidence history | `obs_id` | P03, P06 |
-| `st_offsets` | Consumer offset tracking | `consumer_id` | K0 Bus |
-| `st_pipeline_status` | Pipeline execution state | `pipeline_run_id` | K0 Scheduler |
-| `st_outbox` | Transactional outbox | `outbox_id` | K0 Outbox |
+| `st_learning_queue` | Active learning gaps | `id` (gap_id) | P03, P06 |
+| `st_anchors` | Bayesian belief anchors | `(entity_id, attribute, tenant_id)` | P03, P06 |
+| `st_anchor_observations` | Anchor evidence history | `id` | P03, P06 |
+| `st_offsets` | Consumer offset tracking | `(subscriber_id, topic, space_id, tenant_id)` | K0 Bus |
+| `st_pipeline_status` | Pipeline execution state | `(pipeline_id, wal_pos)` | K0 Scheduler |
+| `st_outbox` | Transactional outbox | `id` | K0 Outbox |
 | `st_retention_policy` | Per-space retention config | `policy_id` | P03, K0 |
-| `st_dlq` | Dead letter queue | `dlq_id` | K0 DLQ |
+| `st_dlq` | Dead letter queue | `id` | K0 DLQ |
 | `st_consolidation_audit` | Consolidation decision log | `audit_id` | P03, Audit |
 
 ---
@@ -27023,7 +27099,7 @@ async def test_contract_matches_implementation(contract_file):
 | `consolidation.truth_writer:v1` | M24 TruthWriter | R7 | `write_truth` | 📋 ADR Required | M34 (reserved) |
 | `consolidation.gap_detector:v1` | M25 GapDetector | R8 | `detect_gaps` | 📋 ADR Required | M35 (reserved) |
 
-> **Note**: Module IDs M18-M25 in dossier are logical identifiers. K0 registry IDs M28-M35 are reserved pending k010-series ADR acceptance. See [k0_architecture_master.md Part 3.1](../../k0/pipelines/k0_architecture_master.md#31-module-master-registry) for registry format.
+> **Note**: Module IDs M18-M25 in dossier are logical identifiers. K0 registry IDs M28-M35 are reserved pending k010-series ADR acceptance. See [k0_architecture_master.md Part 3.1](../../governance/k0/k0_architecture_master.md#31-module-master-table) for registry format.
 
 #### E.4.2 P03 DAG Stage Modules
 
@@ -27112,7 +27188,7 @@ async def test_contract_matches_implementation(contract_file):
 | Canonical Key | Type | Default | Description |
 |---------------|------|---------|-------------|
 | `p03.schedule.enabled` | bool | true | Enable scheduled consolidation |
-| `p03.schedule.cron` | string | "0 3 ** *" | Cron schedule |
+| `p03.schedule.cron` | string | `0 3 * * *` | Cron schedule |
 | `p03.schedule.interval_seconds` | int | 5400 | Interval trigger (90 min) |
 | `p03.batch.size` | int | 1000 | Events per cycle |
 | `p03.batch.max_events_per_cycle` | int | 10000 | Hard cap |
@@ -27173,7 +27249,7 @@ async def test_contract_matches_implementation(contract_file):
 
 ### E.10 ADR References
 
-> **Alignment Note**: ADR numbering follows K0 Architecture Master (`k0/pipelines/k0_architecture_master.md` Part 7.1).
+> **Alignment Note**: ADR numbering follows K0 Architecture Master (`governance/k0/k0_architecture_master.md` Part 7.1).
 > P03 ADRs use the `k010.*-p03` series. Location: `docs/architecture/decisions-K0/pipelines/`
 
 | ADR ID | Title | Status | Sections | Link |
@@ -27302,7 +27378,7 @@ P03_THOMPSON_PRIORS = {
 | REINFORCE_MIN | `p03.reconciliation.thresholds.reinforce_min` | 0.85 | 0.80 | 0.95 | cosine | score >= threshold → REINFORCE |
 | EXTEND_MIN | `p03.reconciliation.thresholds.extend_min` | 0.60 | 0.50 | 0.75 | cosine | score >= threshold → EXTEND |
 | EXTEND_MAX | `p03.reconciliation.thresholds.extend_max` | 0.85 | 0.75 | 0.90 | cosine | score < threshold → not REINFORCE |
-| CONTRADICT | `p03.reconciliation.thresholds.contradict` | 0.30 | 0.20 | 0.45 | cosine | score < threshold + conflict → CONTRADICT |
+| CONTRADICT | `p03.reconciliation.thresholds.contradict_threshold` | 0.30 | 0.20 | 0.45 | cosine | score < threshold + conflict → CONTRADICT |
 | NOVELTY_MIN | `p03.reconciliation.thresholds.novelty_min` | 0.70 | 0.60 | 0.85 | score | novelty >= threshold → CREATE |
 
 ---
@@ -27345,8 +27421,8 @@ P03_THOMPSON_PRIORS = {
 |-----------|------------|---------|-----|-----|------|----------|
 | BATCH_SIZE | `p03.batch.size` | 1000 | 100 | 5000 | events | Events per consolidation cycle |
 | BATCH_TIMEOUT | `p03.batch.timeout_seconds` | 300 | 60 | 600 | seconds | Max cycle duration |
-| BACKLOG_THRESHOLD | `p03.r5.backlog_threshold` | 5000 | 1000 | 10000 | events | Skip R5 if pending > threshold |
-| CONCURRENT_CYCLES | `p03.concurrency.max_cycles` | 2 | 1 | 4 | cycles | Max parallel cycles |
+| BACKLOG_THRESHOLD | `p03.phases.r5_dream.backlog_threshold` | 5000 | 1000 | 10000 | events | Skip R5 if pending > threshold |
+| CONCURRENT_CYCLES | `p03.concurrency.max_concurrent_cycles` | 2 | 1 | 4 | cycles | Max parallel cycles |
 
 ---
 
@@ -27577,7 +27653,7 @@ class R4Output:
 | **Retryable** | Yes |
 | **DLQ Condition** | MCTS timeout |
 | **Timeout** | 120 seconds (configurable) |
-| **Skip Condition** | `p03.r5.skip_on_backlog=true` AND pending > backlog_threshold |
+| **Skip Condition** | `p03.phases.r5_dream.skip_on_backlog=true` AND pending > `p03.phases.r5_dream.backlog_threshold` |
 
 ```python
 @dataclass
@@ -27957,13 +28033,199 @@ results = client.predict(
 | **Phase 4** | Per-entity calibration | 📋 Research |
 | **Phase 5** | Online weight learning | 📋 Research |
 
-### I.5 Related Documents
+### I.5 Current Formula Inventory
 
-- **Whiteboard**: [p03_whiteboard.md](p03_whiteboard.md) — Living research document
-- **Feedback Wiring**: [FEEDBACK.md](../../k0/ports/FEEDBACK.md) — K1↔K0 feedback architecture
-- **Research Notes**: [temp.md](../../temp.md) — Initial exploration
+This section catalogs all P03 formulas with their parameters and learning potential.
 
-### I.6 ADRs Required
+#### I.5.1 R1 — Hippocampal Replay (NREM1)
+
+**Importance Score**:
+
+```python
+importance_score = (
+    0.35 × |sentiment_score| × |affect_valence| × (1 + affect_arousal)   # Emotional
+  + 0.25 × exp(-0.05 × days_since_event)                                 # Recency
+  + 0.20 × log(1 + access_count) / log(10)                               # Access freq
+  + 0.20 × participant_count × avg_relationship_strength                 # Social
+)
+```
+
+| Parameter | Current Value | Learnable? | Notes |
+|-----------|---------------|------------|-------|
+| Emotional weight | 0.35 | ✅ Yes | Should vary by user preference |
+| Recency weight | 0.25 | ✅ Yes | Some users value history more |
+| Access weight | 0.20 | ✅ Yes | Power users vs casual |
+| Social weight | 0.20 | ✅ Yes | Introverts vs extroverts |
+| Recency λ | 0.05 | ✅ Yes | 14-day half-life assumption |
+
+**Scientific Basis**: McGaugh (2004) — Emotional tagging theory
+
+**Hebbian Weight Update**:
+
+```python
+new_weight = current_weight + learning_rate × (max_weight - current_weight) × event_importance
+```
+
+| Parameter | Current Value | Learnable? |
+|-----------|---------------|------------|
+| learning_rate | 0.1 | ⚠️ Maybe |
+| max_weight | 1.0 | ❌ No (normalization) |
+
+**Scientific Basis**: Hebb (1949) — "Cells that fire together, wire together"
+
+#### I.5.2 R2 — Neocortical Integration (NREM2)
+
+**DBSCAN Composite Distance**:
+
+```python
+composite_distance = (1 - temporal_weight) × semantic_distance + temporal_weight × temporal_distance
+
+semantic_distance = 1 - cosine_similarity(embedding_a, embedding_b)
+temporal_distance = time_diff_hours / max_temporal_gap_hours
+```
+
+| Parameter | Current Value | Learnable? | Notes |
+|-----------|---------------|------------|-------|
+| eps | 0.25 | ✅ Yes | Per-space clustering tightness |
+| min_samples | 2 | ⚠️ Maybe | Min events per episode |
+| temporal_weight | 0.3 | ✅ Yes | Semantic vs temporal balance |
+| max_temporal_gap | 4 hours | ✅ Yes | Episode boundary definition |
+
+#### I.5.3 R3 — Synaptic Homeostasis / Forgetting (SWS)
+
+**Decay Function** ⚠️ HIGH PRIORITY FOR LEARNING:
+
+```python
+decay_factor = exp(-λ × days_since_last_observed)
+```
+
+| Layer | λ (Current) | Half-life | Learnable? |
+|-------|-------------|-----------|------------|
+| st_epi | 0.005 | 139 days | ✅ Yes — per entity |
+| st_sem | 0.003 | 231 days | ✅ Yes — per pattern type |
+| st_procedural | 0.010 | 69 days | ✅ Yes — per habit |
+| st_social | 0.002 | 347 days | ✅ Yes — per relationship |
+
+**Scientific Basis**: Tononi & Cirelli (2006), Ebbinghaus forgetting curve
+
+**Problem**: Why does everyone forget at the same rate?
+
+**Novelty Score**:
+
+```python
+novelty_score = 1.0 - (duplicate_count / time_window_event_count)
+
+# Modifiers
++ 0.15  # first-time activity
++ 0.20  # milestone events
++ 0.10  # temporal anomaly
+- 0.30  # exact duplicate
+```
+
+#### I.5.4 R4 — Knowledge Graph Consolidation
+
+**Entity Disambiguation Score**:
+
+```python
+disambiguation_score = 0.7 × embedding_similarity + 0.3 × fuzzy_string_match
+```
+
+| Parameter | Current Value | Learnable? |
+|-----------|---------------|------------|
+| Embedding weight | 0.7 | ✅ Yes |
+| String weight | 0.3 | ✅ Yes |
+| Match threshold | 0.8 | ✅ Yes |
+
+**Granger Causality**:
+
+```python
+precedence_ratio = a_before_b_count / (a_before_b + b_before_a + simultaneous)
+
+# Decision rules
+If ratio ≥ 0.75 → A CAUSES B
+If ratio ≤ 0.25 → B CAUSES A
+```
+
+#### I.5.5 R5 — Dream-Like Exploration (REM)
+
+**UCT Selection (MCTS)**:
+
+```python
+UCT = Q/N + c × √(ln(N_parent) / N)
+```
+
+| Parameter | Current Value | Learnable? |
+|-----------|---------------|------------|
+| Exploration constant c | 1.414 (√2) | ❌ No (theoretical) |
+
+#### I.5.6 R7 — Memory Layer Writes (Truth Update)
+
+**Multi-Factor Similarity** ⚠️ HIGH PRIORITY:
+
+```python
+similarity = (
+    0.40 × cosine_similarity(embedding)     # Semantic
+  + 0.25 × (1 - hamming_distance / 64)      # Text structure
+  + 0.15 × jaccard_similarity(entities)      # Entity overlap
+  + 0.10 × temporal_proximity_score          # Time closeness
+  + 0.10 × spatial_proximity_score           # Location closeness
+)
+```
+
+| Parameter | Current Value | Learnable? |
+|-----------|---------------|------------|
+| Semantic weight | 0.40 | ✅ Yes |
+| SimHash weight | 0.25 | ✅ Yes |
+| Entity weight | 0.15 | ✅ Yes |
+| Temporal weight | 0.10 | ✅ Yes |
+| Spatial weight | 0.10 | ✅ Yes |
+
+**Reconciliation Thresholds** ⚠️ CRITICAL FOR ADAPTIVE LEARNING:
+
+| Similarity | Decision | Current Threshold |
+|------------|----------|-------------------|
+| High | **REINFORCE** | > 0.85 |
+| Medium | **EXTEND/EVOLVE** | 0.60 – 0.85 |
+| Low | **CREATE/CONTRADICT** | < 0.60 |
+
+**Problem**: Why 0.85? Why 0.60? These are arbitrary and should adapt.
+
+---
+
+### I.6 Static vs Learnable Analysis
+
+#### I.6.1 Parameters That SHOULD Be Learned
+
+| Parameter | Why Learnable | Learning Method |
+|-----------|---------------|-----------------|
+| Importance weights (0.35/0.25/0.20/0.20) | User preferences vary | Gradient descent |
+| Decay λ per entity | Users forget differently | Fit to re-query patterns |
+| REINFORCE threshold (0.85) | Domain-specific | Thompson Sampling |
+| EXTEND threshold (0.60) | Domain-specific | Thompson Sampling |
+| DBSCAN eps | Per-space clustering needs | Cross-validation |
+| Disambiguation weights (0.7/0.3) | Content type varies | Online learning |
+
+#### I.6.2 Parameters That Should Stay Static
+
+| Parameter | Why Static |
+|-----------|------------|
+| UCT exploration constant (√2) | Theoretical optimum |
+| L2 normalization | Mathematical requirement |
+| Shannon entropy formula | Information theory definition |
+| Bayesian update rule | Mathematical definition |
+
+#### I.6.3 Parameters Needing Research
+
+| Parameter | Research Needed |
+|-----------|-----------------|
+| SimHash threshold (3 bits) | Corpus analysis for optimal value |
+| Causality threshold (0.75) | Domain validation needed |
+| PMI threshold (3.0) | Calibration study |
+| Token bucket rates | User study |
+
+---
+
+### I.7 ADRs Required
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -27974,4 +28236,195 @@ results = client.predict(
 
 ---
 
-*End of Appendix I — To Be Expanded*
+### I.8 Related Documents
+
+- **Feedback Wiring**: [FEEDBACK.md](../../k0/ports/FEEDBACK.md) — K1↔K0 feedback architecture
+- **Research Notes**: [temp.md](../../temp.md) — Initial exploration
+
+---
+
+*End of Appendix I Section 1 — Closed-Loop Enhancement Proposals follow*
+
+---
+
+### I.9 Closed-Loop Enhancement Proposals
+
+#### I.9.1 Proposal: Adaptive Thresholds via Thompson Sampling
+
+**Problem**: REINFORCE threshold (0.85) is arbitrary.
+
+**Solution**: Use Thompson Sampling (Bayesian bandit) to learn optimal threshold per entity/space.
+
+```python
+class AdaptiveThreshold:
+    def __init__(self, prior_alpha=85, prior_beta=15):
+        self.alpha = prior_alpha  # Prior: 85% success expectation
+        self.beta = prior_beta
+
+    def sample(self) -> float:
+        """Sample threshold from Beta posterior."""
+        return np.random.beta(self.alpha, self.beta)
+
+    def update(self, success: bool):
+        """Update posterior with feedback signal."""
+        if success:
+            self.alpha += 1
+        else:
+            self.beta += 1
+
+    @property
+    def expected_value(self) -> float:
+        return self.alpha / (self.alpha + self.beta)
+```
+
+**Feedback Signal**:
+- Success = Memory was queried and used correctly
+- Failure = Memory miss or user correction
+
+**Status**: 📋 Design Phase
+
+#### I.9.2 Proposal: Per-Entity Decay Calibration
+
+**Problem**: Same λ = 0.005 for all entities. Some entities (birthdays) should never decay. Some (casual mentions) should decay fast.
+
+**Solution**: Learn λ per entity based on re-query patterns.
+
+```python
+class PersonalizedDecay:
+    def learn_decay_rate(self, entity_id: str) -> float:
+        # Query: how often is this entity re-accessed?
+        # Frequent re-access = important = slow decay
+        # Rare re-access = can decay faster
+
+        access_pattern = self.db.query(
+            "SELECT accessed_at FROM st_access_log WHERE entity_id = $1",
+            entity_id
+        )
+
+        # Fit exponential model to inter-access intervals
+        intervals = compute_intervals(access_pattern)
+        learned_lambda = fit_exponential(intervals)
+
+        return learned_lambda
+```
+
+**Status**: 📋 Design Phase
+
+#### I.9.3 Proposal: Query Regret Tracking
+
+**Problem**: R3 prunes aggressively without knowing if pruned memories were needed later.
+
+**Solution**: Track "regret" when P04 queries fail to find recently-pruned entities.
+
+```python
+class RegretTracker:
+    async def on_query_miss(self, query: str, session_id: str):
+        # Check if any recently-pruned entity would have matched
+        pruned_matches = await self.db.query(
+            """
+            SELECT * FROM st_prune_log
+            WHERE pruned_at > $1
+            AND embedding_similarity($2, embedding) > 0.7
+            """,
+            time.time() - 7*86400,
+            embed(query)
+        )
+
+        if pruned_matches:
+            # REGRET: We pruned too aggressively!
+            for match in pruned_matches:
+                await self.emit_feedback(
+                    signal_type="PRUNE_REGRET",
+                    entity_id=match.entity_id,
+                    confidence=0.85
+                )
+
+                # Reduce decay lambda for this entity type
+                await self.adjust_decay_lambda(
+                    entity_type=match.entity_type,
+                    adjustment=-0.001  # Slower decay
+                )
+```
+
+**Status**: 📋 Design Phase
+
+#### I.9.4 Proposal: Learnable Importance Weights
+
+**Problem**: Fixed weights (0.35/0.25/0.20/0.20) don't adapt to user preferences.
+
+**Solution**: Use gradient descent to learn weights from access patterns.
+
+```python
+class LearnableImportance(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weights = nn.Parameter(torch.tensor([0.35, 0.25, 0.20, 0.20]))
+
+    def forward(self, emotional, recency, access, social):
+        w = F.softmax(self.weights, dim=0)  # Ensure sum to 1
+        return w[0]*emotional + w[1]*recency + w[2]*access + w[3]*social
+
+    def train_step(self, events, future_accesses):
+        """Train on: Did high-importance events get accessed later?"""
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.01)
+
+        pred_importance = self(events.features)
+        loss = F.mse_loss(pred_importance, future_accesses)
+
+        loss.backward()
+        optimizer.step()
+```
+
+**Ground Truth**: Correlation between predicted importance and actual future access count.
+
+**Status**: 📋 Research Phase
+
+#### I.9.5 Proposal: Implicit Feedback Collection
+
+**Problem**: Users don't give explicit feedback. We need to infer from behavior.
+
+**Solution**: Detect implicit signals from P04/K1 behavior.
+
+| Behavior | Signal Type | Confidence | P03 Action |
+| -------- | ----------- | ---------- | --------- |
+| User asked, got nothing | MEMORY_MISS | 0.8 | Lower threshold for topic |
+| User rephrased query | REFORMULATION | 0.6 | Lower similarity threshold |
+| User corrected response | CORRECTION | 0.9 | Split/merge entities |
+| User confirmed memory | VALIDATION | 0.95 | Boost confidence |
+| Session < 60s after query | ABANDONMENT | 0.5 | Flag for audit |
+| LLM response was hedging | HEDGING | 0.4 | Lower confidence on source |
+
+**New Table**: `st_implicit_feedback`
+
+```sql
+CREATE TABLE st_implicit_feedback (
+    feedback_id TEXT PRIMARY KEY,
+    signal_type TEXT NOT NULL,
+    source_event_ids JSONB,
+    target_entity_id TEXT,
+    session_id TEXT,
+    confidence REAL,
+    processed BOOLEAN DEFAULT FALSE,
+    created_at INTEGER NOT NULL
+);
+```
+
+**Status**: 📋 Design Phase
+
+---
+
+### I.10 Implementation Priority Matrix
+
+| Enhancement | Impact | Effort | Risk | Priority |
+| ----------- | ------ | ------ | ---- | -------- |
+| **Feedback signal integration** | High | Medium | Low | **P0** |
+| **Query miss regret tracking** | High | Low | Low | **P0** |
+| **st_implicit_feedback table** | Medium | Low | Low | **P0** |
+| **Thompson Sampling thresholds** | Medium | Medium | Medium | **P1** |
+| **Per-entity decay calibration** | Medium | High | Medium | **P1** |
+| **Learnable importance weights** | Medium | High | High | **P2** |
+| **Online gradient learning** | Low | High | High | **P2** |
+
+---
+
+*End of Appendix I Section 2 — Detailed Learning Specifications follow*

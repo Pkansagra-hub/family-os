@@ -64,7 +64,7 @@
 │                   ┌──────────────────┼──────────────────┐                 │
 │                   ▼                  ▼                  ▼                 │
 │  ┌────────────────────┐ ┌────────────────┐ ┌────────────────────────────┐ │
-│  │ feedback.signal.P02│ │feedback.signal │ │ feedback.signal.PXX       │ │
+│  │ feedback.signal.p02│ │feedback.signal │ │ feedback.signal.<pipeline>│ │
 │  │ P02FeedbackHandler │ │.P08            │ │ (Your pipeline)           │ │
 │  │ • Memory updates   │ │P08FeedbackHndlr│ │ • Subscribe to topic      │ │
 │  │ • Salience adjust  │ │• Re-embed      │ │ • Handle signal classes   │ │
@@ -97,10 +97,11 @@
 
 ```python
 from k0.bus import BusDispatcher, BusMessage, BUS_MESSAGE_ID_KEY
+from k0.feedback.topics import feedback_signal_topic
 
 # Good: Use constant
 message = BusMessage(
-    topic="feedback.signal.P02",
+    topic=feedback_signal_topic("P02", version="v1"),
     stream="feedback",
     payload={...},
     metadata={BUS_MESSAGE_ID_KEY: feedback_id}  # ✅
@@ -800,13 +801,13 @@ class PXXFeedbackHandler:
     """
     Handle feedback signals for PXX pipeline.
 
-    Subscribe to feedback.signal.PXX topic and process signals.
+    Subscribe to feedback.signal.<pipeline>.v1 topic and process signals.
     """
 
     def __init__(self, bus: BusDispatcher):
         self.bus = bus
         # Subscribe to YOUR pipeline's feedback topic
-        bus.subscribe("feedback.signal.PXX", self.handle_feedback)
+        bus.subscribe("feedback.signal.pxx.v1", self.handle_feedback)
 
     async def handle_feedback(self, envelope: dict) -> None:
         """
@@ -927,10 +928,10 @@ metadata = {BUS_MESSAGE_ID_KEY: feedback_id}
 
 # Feedback topics - one per pipeline that accepts feedback
 FEEDBACK_TOPICS = [
-    "feedback.signal.P02",
-    "feedback.signal.P08",
+    "feedback.signal.p02.v1",
+    "feedback.signal.p08.v1",
     # Add your pipeline here:
-    # "feedback.signal.PXX",
+    # "feedback.signal.pxx.v1",
 ]
 ```
 
@@ -1077,6 +1078,7 @@ When adding feedback support to a new K0 pipeline (PXX):
 - [ ] Create `k0/pipelines/pXX/feedback.py` with Pydantic payload schema
 - [ ] Register schema in `FeedbackSchemaRegistry` (k0/ports/feedback_registry.py)
 - [ ] Add `feedback.signal.PXX` to FEEDBACK_TOPICS (k0/bus/topics.py)
+- [ ] Prefer using `k0.feedback.topics.feedback_signal_topic("PXX")` when constructing a pipeline-specific topic.
 - [ ] Create `PXXFeedbackHandler` with topic subscription
 - [ ] Import `BUS_MESSAGE_ID_KEY` from `k0.bus` for metadata construction
 - [ ] Implement handlers for each signal_class you support:

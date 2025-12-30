@@ -183,7 +183,7 @@ Before writing any code, ensure these are registered:
 | Pipeline | Modules Used | Events Consumed | Events Produced | Storage Tables | Depends On Pipelines |
 |----------|--------------|-----------------|-----------------|----------------|----------------------|
 | P02 | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | `cognitive.memory.write.committed.v1` | `p02.write.complete.v1`, `workspace.wm.updated.v1`, `core.affect.analyzed.v1`, `space.resolution.complete.v1`, `cognitive.vector.stored.v1` | st_hipp_events (W), st_vec (W), st_pipeline_processed (W), st_outbox (W), st_relationships (R) | - |
-| P03 | - | `p03.consolidation.triggered.v1`, `core.enrichment.complete.v1` | `p03.consolidation.complete.v1` | st_hipp_store (W) | P02 |
+| P03 | - | `p03.consolidation.triggered.v1`, `core.enrichment.complete.v1` | `p03.consolidation.complete.v1` | st_hipp_events (R/W), st_epi (W), st_sem (W), st_kg_dom (W), st_kg_edges (W), st_vec (R/W), st_pipeline_status (W), st_pipeline_watermarks (W), st_outbox (W) | P02 |
 | P04 | - | `workspace.broadcast.v1`, `core.salience.computed.v1` | `arbitration.action.recommended.v1` | - | P02 |
 | P06 | - | `learning.feedback.v1`, `p01.recall.complete.v1` | `learning.model.updated.v1` | - | P01, P02 |
 | P08 | M25,M27 | `scheduled.p08.maintenance.v1` | `embedding.maintenance.completed.v1`, `cognitive.embedding.backfilled.v1`, `cognitive.embedding.cleaned.v1` | st_vec (W), st_hipp_events (R) | P02 |
@@ -363,12 +363,12 @@ Before writing any code, ensure these are registered:
 # Part 4: Event Topology
 
 > ⚠️ **IMPORTANT**: All events MUST be registered here before implementation.
-> Event schemas live in `contracts/schemas/`.
+> Event schemas (when present) live in `k0/contracts/schemas/`.
 
 ### How to Use This Registry
 
 1. **Before publishing an event**: Register topic here first
-2. **Define schema**: Create JSON schema in `contracts/schemas/`
+2. **Define schema**: Create JSON schema in `k0/contracts/schemas/`
 3. **Identify consumers**: Document all consumers before publishing
 4. **Set QoS band**: Choose appropriate delivery guarantee
 5. **Version events**: Include version in topic name (`.v1`, `.v2`)
@@ -378,7 +378,7 @@ Before writing any code, ensure these are registered:
 | Column | Description | Example |
 |--------|-------------|---------|
 | **Topic** | Full event topic name with version | `cognitive.memory.write.committed.v1` |
-| **Schema Path** | Path to JSON schema definition | `contracts/schemas/cognitive/memory_write_committed.v1.json` |
+| **Schema Path** | Path to JSON schema definition | `k0/contracts/schemas/cognitive_vector_stored.json` |
 | **Producer** | Pipeline/module that emits this event | `P02 (Write)` |
 | **QoS Band** | Delivery priority level | `AMBER` |
 | **Retention** | How long event is kept | `7 days`, `Session` |
@@ -488,8 +488,8 @@ Before writing any code, ensure these are registered:
 |-------|-------------|----------|----------|-----------|---------|--------|
 | `query.recall.requested.v1` | - | P01 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
 | `p01.recall.complete.v1` | - | P01 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
-| `p03.consolidation.triggered.v1` | - | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
-| `p03.consolidation.complete.v1` | - | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.consolidation.triggered.v1` | `k0/contracts/schemas/p03_consolidation_triggered.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.consolidation.complete.v1` | `k0/contracts/schemas/p03_consolidation_complete.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
 | `scheduled.p08.maintenance.v1` | - | Scheduler | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `embedding.maintenance.completed.v1` | - | P08 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 

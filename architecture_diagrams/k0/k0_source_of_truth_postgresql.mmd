@@ -606,7 +606,7 @@ graph TB
             subgraph PIPELINE_REGISTRY["Pipeline Registry"]
                 PIPELINE_P01["P01: Ingress Discovery"]:::core
                 PIPELINE_P02["P02: Episodic Write"]:::core
-                PIPELINE_P03["P03: Salience Scoring"]:::core
+                PIPELINE_P03["P03: Consolidation / Forgetting"]:::core
                 PIPELINE_P04["P04: Attention Router"]:::core
                 PIPELINE_P08["P08: Embedding Management"]:::core
                 PIPELINE_P05_TO_P20["P05-P20: Additional Pipelines"]:::core
@@ -822,7 +822,8 @@ graph TB
                 ALIAS_CFG_FILE["alias_map.yaml"]:::driver
                 ALIAS_CFG_EPI["st_epi → PostgresDriver"]:::driver
                 ALIAS_CFG_VECTOR["st_vector → PgVectorDriver"]:::driver
-                ALIAS_CFG_KG["st_kg → Neo4jKGDriver"]:::driver
+                ALIAS_CFG_KG_DOM["st_kg_dom → PostgresDriver"]:::driver
+                ALIAS_CFG_KG_EDGES["st_kg_edges → PostgresDriver"]:::driver
             end
         end
 
@@ -868,7 +869,7 @@ graph TB
                 end
             end
 
-            subgraph NEO4J_DRV_CORE["Neo4j Driver (k0/drivers/neo4j_driver.py)"]
+            subgraph NEO4J_DRV_CORE["Neo4j Driver (k0/drivers/neo4j_driver.py) - Optional"]
                 subgraph NEO4J_CLASSES["Neo4j Classes"]
                     NEO4J_DRV_CLASS["Neo4jKGDriver"]:::driver_impl
                 end
@@ -1072,6 +1073,8 @@ graph TB
                 DB_HOUSEHOLDS["households"]:::postgres
                 DB_PEOPLE["people"]:::postgres
                 DB_RELATIONSHIPS["st_relationships"]:::postgres
+                DB_KG_DOM["st_kg_dom"]:::postgres
+                DB_KG_EDGES["st_kg_edges"]:::postgres
             end
 
             subgraph ALEMBIC_DETAIL["Alembic Migrations (k0/db/alembic/) - NEW"]
@@ -1345,7 +1348,7 @@ graph TB
     WORKER_PROCESS -->|"1 Dequeue batch"| OUTBOX_DEQUEUE
     WORKER_PROCESS -->|"2 Resolve alias"| ALIAS_RESOLVE
     ALIAS_RESOLVE -->|"3 Load driver"| PGVECTOR_APPLY
-    ALIAS_RESOLVE -->|"4 Load driver"| NEO4J_APPLY
+    ALIAS_RESOLVE -->|"4 Load driver"| POSTGRES_EXECUTE
     WORKER_PROCESS -->|"5 On failure"| RETRY_DECIDE
     RETRY_DECIDE -->|"6 Requeue DLQ"| DLQ_RECORD
 
@@ -1401,7 +1404,7 @@ graph TB
     TRIGGER_MANUAL -->|"Admin API"| PIPELINE_P08
 
     %% Flow 12: P03 Fabric Integration
-    PIPELINE_P03 -->|"Invoke score_salience"| FABRIC_INVOKE
+    PIPELINE_P03 -->|"Invoke embedding.search"| FABRIC_INVOKE
     FABRIC_INVOKE -->|"Route to module"| PIPELINE_PHASE2
 
     %% ======================================================================================

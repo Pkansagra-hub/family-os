@@ -40,7 +40,7 @@ idea:
          - Ambiguous References (e.g., "went to the bank" - river bank or financial bank?).
          - Low Confidence Links (e.g., probabilistic match < 0.7).
        - It generates a `GapRecord` stored in a `st_learning_queue`.
-       - It emits a `cognitive.learning.gap_detected` event.
+             - It emits a `p03.gap.detected.v1` event. (See P03 dossier for contract.)
 
     2. Attention Management (K0 / P05 Triggers):
        - The `gap_detected` event is NOT sent immediately to the user (to avoid interruption).
@@ -56,11 +56,12 @@ idea:
 
     4. Ingestion & Closure (K0 / P02 & P03):
        - User responds (e.g., "She's my colleague").
-       - P02 (Write) ingests the response as a standard event.
-       - P03 (Consolidation) processes the new event.
-       - P03 links "Sarah" to "Colleague" in the KG.
-       - The original `GapRecord` is marked as RESOLVED.
-       - P06 (Learning) updates the "Curiosity Strategy" (e.g., "User responds well to questions about people").
+         - Client submits the response via `POST /k0/command.submit` as a standard memory-write envelope.
+         - The answer payload SHOULD include a correlation pointer to the originating gap (e.g., `gap_id`) so P03 can close the loop deterministically.
+         - P02 (Write) commits the event to `st_hipp_events`.
+         - P03 (Consolidation) processes the new event, merges it into truth (KG + other layers), and marks the original `GapRecord` as `RESOLVED`.
+         - P06 (Learning) updates the "Curiosity Strategy" (e.g., "User responds well to questions about people").
+         - Note: feedback signals (`FeedbackEnvelope` via `/k0/obs.emit`) are used to tune algorithm/threshold weights; they are not the primary mechanism for anchor closure.
 
   components:
     - "P03 (Consolidation Pipeline)": The 'Brain' that realizes it doesn't know something.
@@ -953,12 +954,20 @@ graph TD
 
 ## 5. Data Structures & Schema
 
+**Canonical reference**: For implementation-accurate schemas and contracts, treat the P03 dossier as authoritative:
+
+* `docs/pipelines/P03_consolidation_dossier_v2.md` (Section 6.11 `st_learning_queue`, Section 6.12 `st_anchors`, Section 6.13 `st_anchor_observations`)
+
+This idea document keeps simplified excerpts for readability.
+
 ### 5.1 The Gap Record (`st_learning_queue`)
 
 ```sql
 CREATE TABLE st_learning_queue (
     id TEXT PRIMARY KEY,
-    gap_type TEXT NOT NULL, -- 'AMBIGUOUS_ENTITY', 'STRUCTURAL_HOLE', 'VALUE_CONFLICT', 'DECAYED_ANCHOR'
+    tenant_id TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    gap_type TEXT NOT NULL, -- 'AMBIGUOUS_ENTITY', 'STRUCTURAL_HOLE', 'CONTRADICTION', 'STALE_ANCHOR', ...
 
     -- Context
     entity_id TEXT,
@@ -981,7 +990,9 @@ CREATE TABLE st_learning_queue (
 
 ```sql
 CREATE TABLE st_anchors (
-    entity_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    space_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
     attribute TEXT NOT NULL, -- e.g., 'loves_scifi'
 
     -- Beta Distribution Parameters
@@ -990,6 +1001,9 @@ CREATE TABLE st_anchors (
 
     last_updated_at INTEGER,
     decay_rate REAL DEFAULT 0.05 -- Forgetting factor
+
+    -- Note: in K0 we treat tenant/space isolation as part of identity.
+    -- See dossier for the exact primary key and indexes.
 );
 ```
 
@@ -1429,6 +1443,8 @@ CREATE TABLE st_anchors (
 
   ```sql
   CREATE TABLE st_anchors (
+      tenant_id TEXT NOT NULL,
+      space_id TEXT NOT NULL,
       entity_id TEXT NOT NULL,      -- person_id
       attribute TEXT NOT NULL,      -- 'loves_spicy_food', 'prefers_morning_exercise'
 
@@ -1445,7 +1461,7 @@ CREATE TABLE st_anchors (
       decay_rate REAL DEFAULT 0.05,  -- Forgetting factor (5% per month)
       half_life_days INTEGER DEFAULT 180,
 
-      PRIMARY KEY (entity_id, attribute)
+      -- See dossier for canonical primary key and indexes.
   );
 
   CREATE INDEX idx_anchors_entity ON st_anchors(entity_id, last_updated_at DESC);
@@ -1459,6 +1475,8 @@ CREATE TABLE st_anchors (
   ```sql
   CREATE TABLE st_anchor_observations (
       id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      space_id TEXT NOT NULL,
       entity_id TEXT NOT NULL,
       attribute TEXT NOT NULL,
       observed_at INTEGER NOT NULL,
@@ -1466,7 +1484,7 @@ CREATE TABLE st_anchors (
       supports_anchor BOOLEAN NOT NULL,  -- True = evidence FOR, False = AGAINST
       confidence REAL DEFAULT 1.0,       -- Observation weight (0-1)
 
-      FOREIGN KEY (entity_id, attribute) REFERENCES st_anchors(entity_id, attribute)
+      -- See dossier for canonical foreign keys.
   );
 
   CREATE INDEX idx_observations_anchor ON st_anchor_observations(
@@ -1476,10 +1494,10 @@ CREATE TABLE st_anchors (
 
 **Week 2: Evidence Update Logic**
 
-* [ ] Implement Bayesian update in P02:
+* [ ] Implement Bayesian update during consolidation (P03) and via learning-signal processing (P06):
 
-  ```python
-  # k0/modules/learning/anchor_tracker.py
+    ```python
+    # (Illustrative pseudocode)
 
   class AnchorTracker:
       def observe_event(self, event: Event) -> None:
