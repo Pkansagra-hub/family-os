@@ -139,7 +139,7 @@ Before writing any code, ensure these are registered:
 |----|------|--------|--------------|------------|--------------|------|---------|---------|--------------|
 | P01 | Recall / Read | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P02 | Write / Ingest | ✅ Production | M01,M02,M04,M05,M06,M07,M08,M09,M10,M11,M12,M13,M15,M16,M17,M22 | No | on_startup | K003,K007.2,K009.2,K010.1 | `docs/pipelines/P02_write_dossier.md` | 1.1.0 | 2025-12-13 |
-| P03 | Consolidation / Forgetting | 🎯 Planning | - | Yes (timer) | - | - | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-24 |
+| P03 | Consolidation / Forgetting | 🎯 Planning | M18,M19,M20,M21,M22,M23,M24,M25 | Yes (timer) | - | - | `docs/pipelines/P03_consolidation_dossier_v2.md` | 0.1.0 | 2025-12-31 |
 | P04 | Arbitration / Action | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
 | P05 | Prospective / Triggers | 🎯 Planning | - | Yes (timer) | - | - | - | 0.1.0 | 2025-12-24 |
 | P06 | Learning / Neuromodulation | 🎯 Planning | - | No | - | - | - | 0.1.0 | 2025-12-24 |
@@ -407,16 +407,16 @@ Before writing any code, ensure these are registered:
 
 | Topic | Schema Path | Producer | QoS Band | Retention | Version | Status |
 |-------|-------------|----------|----------|-----------|---------|--------|
-| `cognitive.memory.write.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.memory.import.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.memory.photo.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.memory.voice.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.memory.update.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.observation.captured.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.pattern.separated.v1` | - | P02 (M01) | 🟡 AMBER | 7 days | v1 | ✅ Active |
-| `cognitive.backfill.requested.v1` | - | P08 Trigger | 🟢 GREEN | 3 days | v1 | ✅ Active |
-| `cognitive.embedding.queued.v1` | - | P02 (M14) | 🟢 GREEN | 3 days | v1 | ✅ Active |
-| `p02.vector.ready.v1` | - | P02 (M16) | 🟢 GREEN | 3 days | v1 | ✅ Active |
+| `cognitive.memory.write.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.memory.import.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.memory.photo.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.memory.voice.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.memory.update.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.observation.captured.v1` | - | API Ingress | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.pattern.separated.v1` | - | P02 (M01) | 🟡 AMBER | 7 days | v1 | 📋 Planning |
+| `cognitive.backfill.requested.v1` | - | P08 Trigger | 🟢 GREEN | 3 days | v1 | 📋 Planning |
+| `cognitive.embedding.queued.v1` | - | P02 (M14) | 🟢 GREEN | 3 days | v1 | 📋 Planning |
+| `p02.vector.ready.v1` | - | P02 (M16) | 🟢 GREEN | 3 days | v1 | 📋 Planning |
 
 ### Core Event Topics (P02 Write Pipeline)
 
@@ -488,14 +488,28 @@ Before writing any code, ensure these are registered:
 |-------|-------------|----------|----------|-----------|---------|--------|
 | `query.recall.requested.v1` | - | P01 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
 | `p01.recall.complete.v1` | - | P01 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
-| `p03.consolidation.triggered.v1` | `k0/contracts/schemas/p03_consolidation_triggered.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.consolidation.triggered.v1` | `k0/contracts/schemas/p03_consolidation_triggered.json` | Scheduler | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
 | `p03.consolidation.complete.v1` | `k0/contracts/schemas/p03_consolidation_complete.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.phase.complete.v1` | `k0/contracts/schemas/p03_phase_complete.json` | P03 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.episode.formed.v1` | `k0/contracts/schemas/p03_episode_formed.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.pattern.discovered.v1` | `k0/contracts/schemas/p03_pattern_discovered.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.truth.reinforced.v1` | `k0/contracts/schemas/p03_truth_reinforced.json` | P03 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.truth.created.v1` | `k0/contracts/schemas/p03_truth_created.json` | P03 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.truth.evolved.v1` | `k0/contracts/schemas/p03_truth_evolved.json` | P03 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p03.memory.pruned.v1` | `k0/contracts/schemas/p03_memory_pruned.json` | P03 | 🔴 RED | 30 days | v1 | 🎯 Planning |
+| `p03.gap.detected.v1` | `k0/contracts/schemas/p03_gap_detected.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.kg.updated.v1` | `k0/contracts/schemas/p03_kg_updated.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.insight.generated.v1` | `k0/contracts/schemas/p03_insight_generated.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.embedding.created.v1` | `k0/contracts/schemas/p03_embedding_created.json` | P03 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p03.causal_edge.demoted.v1` | `k0/contracts/schemas/p03_causal_edge_demoted.json` | P03 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
+| `p06.gap.resolved.v1` | `k0/contracts/schemas/p06_gap_resolved.json` | P06 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
+| `p06.anchor.updated.v1` | `k0/contracts/schemas/p06_anchor_updated.json` | P06 | 🟡 AMBER | 7 days | v1 | 🎯 Planning |
 | `scheduled.p08.maintenance.v1` | - | Scheduler | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 | `embedding.maintenance.completed.v1` | - | P08 | 🟢 GREEN | 3 days | v1 | 🎯 Planning |
 
-> **Event Summary**: 35+ event topics (25 Active, 7 Planning, 3 Deprecated)
+> **Event Summary**: 52 event topics (23 Active, 21 Planning, 10 Deprecated/Planning)
 > **Primary Pipeline**: P02 produces 17 internal events + 5 fanout events
-> **Schema Location**: Module contracts define input/output event types
+> **Schema Location**: `k0/contracts/schemas/` - Module contracts define input/output event types
 
 ### QoS Band Legend
 
@@ -660,8 +674,16 @@ graph LR
 | `embedding.recompute` | M26 | `k0/contracts/modules/embedding.recompute.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `embedding.cleanup` | M27 | `k0/contracts/modules/embedding.cleanup.v1.yaml` | v1 | 🎯 Planning | 2025-12-13 |
 | `feedback.ingest` | M28 | `k0/contracts/modules/feedback.ingest.v1.yaml` | v1 | 🎯 Planning | 2025-12-25 |
+| `consolidation.episodic_clusterer` | M29 | `k0/contracts/modules/consolidation.episodic_clusterer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.duplicate_detector` | M30 | `k0/contracts/modules/consolidation.duplicate_detector.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.retention_enforcer` | M31 | `k0/contracts/modules/consolidation.retention_enforcer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.kg_consolidator` | M32 | `k0/contracts/modules/consolidation.kg_consolidator.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.dream_explorer` | M33 | `k0/contracts/modules/consolidation.dream_explorer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.replay_coordinator` | M34 | `k0/contracts/modules/consolidation.replay_coordinator.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.truth_writer` | M35 | `k0/contracts/modules/consolidation.truth_writer.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
+| `consolidation.gap_detector` | M36 | `k0/contracts/modules/consolidation.gap_detector.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
 
-> **Module Contract Summary**: 23 contracts (15 Active, 4 Planning, 2 Experimental, 2 Deprecated)
+> **Module Contract Summary**: 31 contracts (15 Active, 12 Planning, 2 Experimental, 2 Deprecated)
 
 ## 5.2 Pipeline Contract Registry
 
@@ -670,9 +692,10 @@ graph LR
 | Contract Name | Pipeline | Path | Version | Status | Last Updated |
 |---------------|----------|------|---------|--------|--------------|
 | `p02_write` | P02 | `k0/contracts/pipelines/p02_write.v1.yaml` | v1 | ✅ Active | 2025-12-13 |
+| `p03_consolidation` | P03 | `k0/contracts/pipelines/p03_consolidation.v1.yaml` | v1 | 🎯 Planning | 2025-12-28 |
 | `p08_embedding_management` | P08 | `k0/contracts/pipelines/p08_embedding_management.v2.yaml` | v3 | ✅ Active | 2025-12-24 |
 
-> **Pipeline Contract Summary**: 2 contracts (2 Active)
+> **Pipeline Contract Summary**: 3 contracts (2 Active, 1 Planning)
 > **Note**: P08 version is v3 (Maintenance Mode after PostgreSQL/pgvector migration)
 
 ## 5.3 Event Schema Registry
@@ -689,8 +712,24 @@ graph LR
 | `feedback.signal.envelope` | `feedback.signal.p02.v1` | `k0/contracts/schemas/feedback_signal_envelope.json` | v1 | 🎯 Planning |
 | `feedback.signal.envelope` | `feedback.signal.p08.v1` | `k0/contracts/schemas/feedback_signal_envelope.json` | v1 | 🎯 Planning |
 | `feedback.signal.envelope` | `feedback.signal.all.v1` | `k0/contracts/schemas/feedback_signal_envelope.json` | v1 | 🎯 Planning |
+| `p03.consolidation.triggered` | `p03.consolidation.triggered.v1` | `k0/contracts/schemas/p03_consolidation_triggered.json` | v1 | 🎯 Planning |
+| `p03.consolidation.complete` | `p03.consolidation.complete.v1` | `k0/contracts/schemas/p03_consolidation_complete.json` | v1 | 🎯 Planning |
+| `p03.phase.complete` | `p03.phase.complete.v1` | `k0/contracts/schemas/p03_phase_complete.json` | v1 | 🎯 Planning |
+| `p03.episode.formed` | `p03.episode.formed.v1` | `k0/contracts/schemas/p03_episode_formed.json` | v1 | 🎯 Planning |
+| `p03.pattern.discovered` | `p03.pattern.discovered.v1` | `k0/contracts/schemas/p03_pattern_discovered.json` | v1 | 🎯 Planning |
+| `p03.truth.reinforced` | `p03.truth.reinforced.v1` | `k0/contracts/schemas/p03_truth_decision.json` | v1 | 🎯 Planning |
+| `p03.truth.created` | `p03.truth.created.v1` | `k0/contracts/schemas/p03_truth_decision.json` | v1 | 🎯 Planning |
+| `p03.truth.evolved` | `p03.truth.evolved.v1` | `k0/contracts/schemas/p03_truth_decision.json` | v1 | 🎯 Planning |
+| `p03.memory.pruned` | `p03.memory.pruned.v1` | `k0/contracts/schemas/p03_memory_pruned.json` | v1 | 🎯 Planning |
+| `p03.gap.detected` | `p03.gap.detected.v1` | `k0/contracts/schemas/p03_gap_detected.json` | v1 | 🎯 Planning |
+| `p03.kg.updated` | `p03.kg.updated.v1` | `k0/contracts/schemas/p03_kg_updated.json` | v1 | 🎯 Planning |
+| `p03.insight.generated` | `p03.insight.generated.v1` | `k0/contracts/schemas/p03_insight_generated.json` | v1 | 🎯 Planning |
+| `p03.embedding.created` | `p03.embedding.created.v1` | `k0/contracts/schemas/p03_embedding_created.json` | v1 | 🎯 Planning |
+| `p03.causal_edge.demoted` | `p03.causal_edge.demoted.v1` | `k0/contracts/schemas/p03_edge_demotion.json` | v1 | 🎯 Planning |
+| `p06.gap.resolved` | `p06.gap.resolved.v1` | `k0/contracts/schemas/p06_gap_resolved.json` | v1 | 🎯 Planning |
+| `p06.anchor.updated` | `p06.anchor.updated.v1` | `k0/contracts/schemas/p06_anchor_updated.json` | v1 | 🎯 Planning |
 
-> **Event Schema Summary**: 8 schemas (2 Active, 6 Planning)
+> **Event Schema Summary**: 26 schemas (2 Active, 24 Planning)
 
 ## 5.4 Contract File Index
 
@@ -877,17 +916,31 @@ graph LR
 | `st_archive_manifest` | Archiver | Recovery | Archive metadata | ~300B | Permanent | ✅ Active |
 | `st_obligation_log` | Policy Engine | Audit | Policy obligation audit log | ~300B | 90 days | ✅ Active |
 | `st_crdt_merge_log` | Sync | Debug | CRDT merge diagnostics | ~200B | 7 days | ✅ Active |
-| `st_schema_registry` | Schema Mgmt | All | Schema version registry | ~1KB | Permanent | ✅ Active |
-| `st_schema_migrations` | Alembic | Admin | Migration tracking | ~100B | Permanent | ✅ Active |
+| `schema_registry` | Schema Mgmt | All | Schema version registry | ~1KB | Permanent | ✅ Active |
+| `schema_migrations` | Alembic | Admin | Migration tracking | ~100B | Permanent | ✅ Active |
 | `st_pipeline_status` | Scheduler | Ops | Pipeline execution status | ~100B | Permanent | ✅ Active |
 | `st_pipeline_watermarks` | Scheduler | Ops | Pipeline watermark tracking | ~50B | Permanent | ✅ Active |
 | `households` | Onboarding | P02, M07 | Household domain entities (35 cols) | ~1KB | Permanent | ✅ Active |
 | `people` | Onboarding | P02, M07 | Person domain entities (33 cols) | ~1KB | Permanent | ✅ Active |
+| `st_epi` | P03 (M35) | P01, P03 | Episodic memory (consolidated episodes) | ~2KB | Permanent | 🎯 Planning |
+| `st_sem` | P03 (M35) | P01, P03 | Semantic patterns (facts/beliefs) | ~1KB | Permanent | 🎯 Planning |
+| `st_procedural` | P03 (M35) | P01, P03 | Habits and routines | ~500B | Permanent | 🎯 Planning |
+| `st_social` | P03 (M35) | P01, P03, M07 | Relationship memory | ~300B | Permanent | 🎯 Planning |
+| `st_prospective` | P03 (M33) | P01, P03 | Intentions and goals | ~400B | Permanent | 🎯 Planning |
+| `st_kg_dom` | P03 (M32) | P01, P03, P04 | Knowledge graph entities | ~500B | Permanent | 🎯 Planning |
+| `st_kg_edges` | P03 (M32) | P01, P03, P04 | Knowledge graph relationships | ~300B | Permanent | 🎯 Planning |
+| `st_learning_queue` | P03 (M36) | P06, P03 | Gap queue for active learning | ~200B | 30 days | 🎯 Planning |
+| `st_anchors` | P03 (M36), P06 | P03, P06 | Bayesian anchor beliefs | ~400B | Permanent | 🎯 Planning |
+| `st_anchor_observations` | P03, P06 | P03, P06 | Evidence log for anchors | ~200B | 90 days | 🎯 Planning |
+| `st_consolidation_audit` | P03 | Ops | P03 cycle audit trail | ~500B | 90 days | 🎯 Planning |
+| `st_learned_weights` | P06 | P03 | Learned importance weights | ~200B | Permanent | 🎯 Planning |
+| `st_golden_dataset_pairs` | P06 | P03, Ops | Ground truth pairs for training | ~500B | Permanent | 🎯 Planning |
+| `st_validation_results` | P06 | Ops | Model validation results | ~300B | 90 days | 🎯 Planning |
 
 > **Source**: `k0/db/alembic/versions/` (25 migrations)
 > **Database**: PostgreSQL 15+ with pgvector extension
 > **Primary Tables**: st_wal (ingestion), st_hipp_events (enriched), st_vec (embeddings)
-> **Total Tables**: 25 (22 active, 1 planned, 1 deprecated, 1 system)
+> **Total Tables**: 40 (24 active, 15 planned, 1 deprecated)
 
 ## 6.2 Migration Registry
 
@@ -902,8 +955,8 @@ graph LR
 | 0007 | `0007_st_device_keys.py` | st_device_keys | - | Device keys | ✅ Yes |
 | 0008 | `0008_st_outbox.py` | st_outbox | idx_outbox_* (4) | Transactional outbox | ✅ Yes |
 | 0009 | `0009_st_dlq.py` | st_dlq | idx_dlq_* (3) | Dead letter queue | ✅ Yes |
-| 0010 | `0010_schema_registry.py` | st_schema_registry | - | Schema versioning | ✅ Yes |
-| 0011 | `0011_schema_migrations.py` | st_schema_migrations | - | Migration history | ✅ Yes |
+| 0010 | `0010_schema_registry.py` | schema_registry | - | Schema versioning | ✅ Yes |
+| 0011 | `0011_schema_migrations.py` | schema_migrations | - | Migration history | ✅ Yes |
 | 0012 | `0012_st_obligation_log.py` | st_obligation_log | idx_obl_* (2) | Policy obligations | ✅ Yes |
 | 0013 | `0013_st_acl.py` | st_acl | idx_acl_* (4) | Access control | ✅ Yes |
 | 0014 | `0014_st_retention_policy.py` | st_retention_policy | - | Retention policies | ✅ Yes |
@@ -1047,18 +1100,31 @@ graph LR
 | `idx_pipeline_status_updated` | st_pipeline_status | updated_at | BTREE | Recent updates |
 | `idx_pipeline_watermarks_pipeline` | st_pipeline_watermarks | pipeline_id, watermark | BTREE | Watermark lookup |
 
-### Other Tables Indexes (8)
+### Other Tables Indexes (9)
 
 | Index Name | Table | Columns | Type | Purpose |
 |------------|-------|---------|------|---------|
 | `idx_device_keys_state` | st_device_keys | device_id, key_state | BTREE | Key state lookup |
-| `idx_devices_tenant_space` | st_devices | tenant_id, space_id | BTREE | Tenant isolation |
+| `idx_devices_hmac_secret` | st_devices | device_id | BTREE | HMAC secret lookup (partial) |
+| `idx_retention_resource` | st_retention_policy | resource_type, privacy_band | BTREE | Retention policy lookup |
 | `idx_obligation_log_wal` | st_obligation_log | wal_pos | BTREE | WAL linkage |
 | `idx_obligation_log_tenant_space` | st_obligation_log | tenant_id, space_id, commit_ts | BTREE | Audit queries |
 | `idx_archive_resource` | st_archive_manifest | resource_type, resource_id | BTREE | Archive lookup |
 | `idx_archive_delete` | st_archive_manifest | delete_after | BTREE | TTL cleanup |
 | `idx_crdt_merge_resource` | st_crdt_merge_log | resource_type, resource_id | BTREE | Merge history |
 | `idx_crdt_merge_device` | st_crdt_merge_log | winner_device_id, merged_at | BTREE | Device merge tracking |
+
+### st_feedback_signals Indexes (7)
+
+| Index Name | Columns | Type | Purpose |
+|------------|---------|------|---------|
+| `idx_feedback_pipeline_received` | pipeline_id, received_at DESC | BTREE | Pipeline timeline |
+| `idx_feedback_tenant_space` | tenant_id, space_id | BTREE | Tenant isolation |
+| `idx_feedback_session` | session_id | BTREE | Session lookup (partial) |
+| `idx_feedback_trace` | trace_id | BTREE | Trace correlation |
+| `idx_feedback_payload_hash` | payload_hash | BTREE | Deduplication |
+| `idx_feedback_status_pending` | processing_status | BTREE | Pending queue (partial) |
+| `idx_feedback_target_entity` | (correlation->>'target_entity_id') | BTREE | Target entity lookup |
 
 ### Index Summary
 
@@ -1076,13 +1142,14 @@ graph LR
 | people | 7 | 2 | 0 |
 | st_embedding_queue | 4 | 1 | 0 |
 | st_pipeline_* | 4 | 0 | 0 |
-| Other tables | 8 | 0 | 0 |
-| **TOTAL** | **67** | **11** | **2** |
+| st_feedback_signals | 7 | 2 | 0 |
+| Other tables | 9 | 1 | 0 |
+| **TOTAL** | **74** | **14** | **2** |
 
 > **Index Strategy**:
 >
 > - BTREE for equality/range queries (all indexes)
-> - Partial indexes for NULL-filtered columns (11 indexes)
+> - Partial indexes for NULL-filtered columns (14 indexes)
 > - UNIQUE indexes for idempotency (2 indexes)
 > - pgvector HNSW planned for st_vec.vector column (replaces FAISS)
 
@@ -1174,6 +1241,8 @@ graph LR
 | Component | Type | Capabilities Granted | ADR | Notes |
 |-----------|------|----------------------|-----|-------|
 | P02 (Write) | Pipeline | `st_hipp_events.write, st_vec.write, st_pipeline_processed.write, st_outbox.write, st_relationships.read` | ADR-P02-001 | `st_embedding_queue.write` deprecated (inline embedding) |
+| P03 (Consolidation) | Pipeline | `st_hipp_events.read, st_epi.write, st_sem.write, st_procedural.write, st_social.write, st_prospective.write, st_kg_dom.write, st_kg_edges.write, st_vec.read, st_learning_queue.write, st_anchors.write, st_anchor_observations.write, st_consolidation_audit.write, st_outbox.write` | K021 (Planning) | P03 has broad read access to st_hipp_events, write to 8 memory layers |
+| P06 (Learning) | Pipeline | `st_learning_queue.read, st_learning_queue.write, st_anchors.read, st_anchors.write, st_anchor_observations.write, st_learned_weights.write, st_golden_dataset_pairs.write, st_validation_results.write` | (Planning) | Active learning loop capabilities |
 | P08 (Embedding Mgmt) | Pipeline | `st_vec.read, st_vec.write, st_hipp_events.read, st_hipp_events.write, ultrabert.embed` | ADR-P08-001 | `faiss.read, faiss.write` removed (pgvector replaces) |
 | Kernel (Observe Port) | Kernel | `st_feedback_signals.write` | K020 | Persist feedback signals emitted via observe port |
 | Kernel Scheduler | Kernel | `st_vec.read, st_hipp_events.read` | ADR-K001 | Threshold queries for scheduled triggers |
@@ -1191,19 +1260,32 @@ graph LR
 4. **ADR**: Architecture Decision Record documenting the grant
 5. **Notes**: Deprecation, special conditions
 
-### All Unique Capabilities (15 Total)
+### All Unique Capabilities (27 Total)
 
 | Capability | Type | Status | Primary Consumer |
 |------------|------|--------|------------------|
-| `st_hipp_events.read` | Storage | ✅ Active | P08, M25, Scheduler |
+| `st_hipp_events.read` | Storage | ✅ Active | P03, P08, M25, Scheduler |
 | `st_hipp_events.write` | Storage | ✅ Active | P02, P08, M16, M25 |
-| `st_vec.read` | Storage | ✅ Active | P08, M24, Scheduler |
+| `st_vec.read` | Storage | ✅ Active | P03, P08, M24, Scheduler |
 | `st_vec.write` | Storage | ✅ Active | P02, P08, M16, M24, M25 |
 | `st_pipeline_processed.write` | Storage | ✅ Active | P02, M16 |
-| `st_outbox.write` | Storage | ✅ Active | P02, M17 |
+| `st_outbox.write` | Storage | ✅ Active | P02, P03, M17 |
 | `st_relationships.read` | Storage | ✅ Active | P02 |
 | `st_feedback_signals.write` | Storage | 🎯 Planned | Kernel (Observe Port) |
 | `st_feedback_signals.read` | Storage | 🎯 Planned | Ops, Recovery |
+| `st_epi.write` | Storage | 🎯 Planned | P03 |
+| `st_sem.write` | Storage | 🎯 Planned | P03 |
+| `st_procedural.write` | Storage | 🎯 Planned | P03 |
+| `st_social.write` | Storage | 🎯 Planned | P03 |
+| `st_prospective.write` | Storage | 🎯 Planned | P03 |
+| `st_kg_dom.write` | Storage | 🎯 Planned | P03 |
+| `st_kg_edges.write` | Storage | 🎯 Planned | P03 |
+| `st_learning_queue.read` | Storage | 🎯 Planned | P06 |
+| `st_learning_queue.write` | Storage | 🎯 Planned | P03, P06 |
+| `st_anchors.read` | Storage | 🎯 Planned | P06 |
+| `st_anchors.write` | Storage | 🎯 Planned | P03, P06 |
+| `st_anchor_observations.write` | Storage | 🎯 Planned | P03, P06 |
+| `st_consolidation_audit.write` | Storage | 🎯 Planned | P03 |
 | `st_embedding_queue.write` | Storage | ❌ Deprecated | - |
 | `working_memory.write` | Storage | 🎯 Planned | - |
 | `embeddings.read` | Storage | 🎯 Planned | - |
@@ -1801,12 +1883,14 @@ K{NNN}[.{sub}] - {Title}
 | K003 | Inline Embedding with UltraBERT | ✅ Accepted | P02, P08, M22, M23, M24, M25 | 2025-12-13 | 2025-12-13 | K0 Architecture Team | `docs/architecture/decisions-K0/pipelines/k003-inline-embedding-ultrabert.md` |
 | K004 | Capability Mesh Architecture | ✅ Accepted | k0/bus, k0/fabric, k0/runtime, k0/kernel | 2025-12-14 | 2025-12-14 | K0 Architecture Team | `docs/architecture/decisions-K0/k004-capability-mesh-architecture.md` |
 | K020 | Feedback Signals Subsystem (Observe → Store → Bus) | 📝 Draft | k0.ports.observe, k0.feedback, k0.bus, st_feedback_signals | 2025-12-25 | - | K0 Architecture Team | `docs/architecture/decisions-K0/k020-feedback-signals-subsystem.md` |
+| K021 | Governance Scanner Tightening | ✅ Accepted | governance/k0/scripts | 2025-12-30 | 2025-12-30 | K0 Architecture Team | `docs/architecture/decisions-K0/k021-governance-scanner-tightening.md` |
 
 ### Pipeline ADRs (`decisions-K0/pipelines/`)
 
 | ADR ID | Title | Status | Affects | Date Created | Date Decided | Author | Link |
 |--------|-------|--------|---------|--------------|--------------|--------|------|
 | P02 | Write Pipeline Architecture | ✅ Accepted | P02, M01-M17, M22 | 2025-11-10 | 2025-12-24 | K0 Team | `docs/architecture/decisions-K0/pipelines/P02-write-pipeline-architecture.md` |
+| P03 | Consolidation Pipeline Architecture | 🎯 Planning | P03, M29-M36 | 2025-12-28 | - | K0 Team | `docs/architecture/decisions-K0/pipelines/P03-consolidation-pipeline-architecture.md` |
 | P07 | Device Sync Design | ✅ Accepted | P07 | 2025-11-16 | 2025-12-01 | K0 Team | `docs/architecture/decisions-K0/pipelines/P07-device-sync-design.md` |
 | P08 | Embedding Management Architecture | ✅ Accepted | P08, M22, M24, M25, M27 | 2025-12-13 | 2025-12-24 | K0 Team | `docs/architecture/decisions-K0/pipelines/P08-embedding-management-architecture.md` |
 
@@ -1850,12 +1934,12 @@ K{NNN}[.{sub}] - {Title}
 
 ### ADR Summary
 
-| Category | Total | ✅ Accepted | 🔍 Review | 📝 Design | ❌ Deprecated |
-|----------|-------|-------------|-----------|-----------|---------------|
-| Core ADRs | 4 | 4 | 0 | 0 | 0 |
-| Pipeline ADRs | 4 | 4 | 0 | 0 | 0 |
-| Module ADRs | 31 | 31 | 0 | 0 | 0 |
-| **Total** | **39** | **39** | **0** | **0** | **0** |
+| Category | Total | ✅ Accepted | 🔍 Review | 📝 Design | 🎯 Planning | ❌ Deprecated |
+|----------|-------|-------------|-----------|-----------|-------------|---------------|
+| Core ADRs | 6 | 4 | 0 | 1 | 1 | 0 |
+| Pipeline ADRs | 5 | 3 | 0 | 0 | 2 | 0 |
+| Module ADRs | 31 | 31 | 0 | 0 | 0 | 0 |
+| **Total** | **42** | **38** | **0** | **1** | **3** | **0** |
 
 ## 11.2 Pending Decisions Queue
 
@@ -2006,15 +2090,28 @@ K{NNN}[.{sub}] - {Title}
 | `backends.sentence-transformers.model` | string | `all-mpnet-base-v2` | HuggingFace model (768 dims) | Embedding Worker | Yes |
 | `backends.sentence-transformers.device` | string | `cpu` | Device (cpu/cuda) | Embedding Worker | Yes |
 | `backends.sentence-transformers.batch_size` | int | `32` | Batch size for efficiency | Embedding Worker | Yes |
+| `backends.sentence-transformers.normalize_embeddings` | bool | `true` | Normalize to unit vectors | Embedding Worker | No |
 | `backends.openai.model` | string | `text-embedding-3-small` | OpenAI model (1536 dims) | Embedding Worker | No |
 | `backends.openai.rate_limit_rpm` | int | `3000` | Rate limit requests/minute | Embedding Worker | No |
+| `backends.openai.rate_limit_tpm` | int | `1000000` | Rate limit tokens/minute | Embedding Worker | No |
+| `backends.openai.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
+| `backends.openai.retry_max_attempts` | int | `3` | Max retry attempts on failure | Embedding Worker | No |
+| `backends.openai.retry_exponential_base` | int | `2` | Exponential backoff base | Embedding Worker | No |
 | `backends.ollama.url` | string | `http://localhost:11434` | Ollama server URL | Embedding Worker | No |
+| `backends.ollama.model` | string | `llama2` | Ollama model name | Embedding Worker | No |
+| `backends.ollama.timeout_sec` | int | `30` | Request timeout in seconds | Embedding Worker | No |
 | `backends.fake.dimension` | int | `384` | Fake embedding dimension (test) | Testing | No |
+| `backends.fake.model` | string | `fake-minilm-l6` | Fake model identifier (test) | Testing | No |
 | `worker.batch_size` | int | `10` | Outbox entries per run_once() | Embedding Worker | Yes |
 | `worker.poll_interval_sec` | float | `1.0` | Outbox poll interval | Embedding Worker | Yes |
 | `worker.max_retries` | int | `3` | Max retry attempts | Embedding Worker | Yes |
+| `worker.retry_delay_sec` | float | `5.0` | Delay between retry attempts | Embedding Worker | No |
 | `performance.target_latency_ms` | int | `100` | Single embedding P95 target | SLO | Yes |
 | `performance.batch_target_latency_ms` | int | `500` | Batch embedding P95 target | SLO | Yes |
+| `observability.log_level` | string | `INFO` | Embedding worker log level | Logging | No |
+| `observability.metrics_enabled` | bool | `true` | Enable Prometheus metrics | Telemetry | No |
+| `observability.trace_enabled` | bool | `true` | Enable distributed tracing | Telemetry | No |
+| `observability.emit_embedding_vector` | bool | `false` | Log raw embedding vectors (debug) | Debugging | No |
 
 ### 13.1.4 FAISS Configuration (`faiss_config.yaml`)
 
@@ -2030,10 +2127,36 @@ K{NNN}[.{sub}] - {Title}
 | `faiss.pq.nbits` | int | `8` | Bits per PQ code | Vector Store | Yes |
 | `faiss.distance_metric` | string | `L2` | Distance metric (Euclidean) | Vector Store | Yes |
 | `faiss.training.min_training_vectors` | int | `30000` | Min vectors for training | Vector Store | Yes |
+| `faiss.training.auto_train` | bool | `true` | Auto-train index when threshold reached | Vector Store | No |
+| `faiss.training.auto_save` | bool | `true` | Auto-save after training | Vector Store | No |
 | `faiss.performance.add_latency_target_ms` | int | `5` | Add latency target | SLO | Yes |
 | `faiss.performance.search_latency_target_ms` | int | `50` | Search latency target (k=10) | SLO | Yes |
+| `faiss.performance.optimal_batch_size` | int | `100` | Optimal batch size for add operations | Vector Store | No |
 | `faiss.memory.max_index_size_gb` | int | `2` | Maximum index size in memory | Vector Store | Yes |
+| `faiss.memory.use_mmap` | bool | `false` | Use memory-mapped I/O | Vector Store | No |
 | `id_mapping.strategy` | string | `st_vec_column` | ID mapping strategy | Vector Store | Yes |
+| `id_mapping.start_id` | int | `0` | Starting ID for vector mapping | Vector Store | No |
+| `id_mapping.cache_in_memory` | bool | `true` | Cache ID mappings in memory | Vector Store | No |
+| `id_mapping.rebuild_on_startup` | bool | `true` | Rebuild ID cache on startup | Vector Store | No |
+| `persistence.auto_save_enabled` | bool | `true` | Enable automatic saving | Vector Store | No |
+| `persistence.auto_save_interval` | int | `300` | Auto-save interval in seconds | Vector Store | No |
+| `persistence.save_on_shutdown` | bool | `true` | Save index on graceful shutdown | Vector Store | No |
+| `persistence.backup_before_rebuild` | bool | `true` | Backup index before rebuilding | Vector Store | No |
+| `persistence.backup_versions_to_keep` | int | `3` | Number of backup versions to retain | Vector Store | No |
+| `rebuild.fragmentation_threshold` | float | `0.3` | Trigger rebuild at 30% fragmentation | Vector Store | No |
+| `rebuild.removed_vectors_threshold` | int | `10000` | Trigger rebuild after N removals | Vector Store | No |
+| `rebuild.schedule_during_low_traffic` | bool | `true` | Schedule rebuilds during off-peak hours | Vector Store | No |
+| `rebuild.low_traffic_hours.start` | string | `02:00` | Low traffic window start (UTC) | Vector Store | No |
+| `rebuild.low_traffic_hours.end` | string | `06:00` | Low traffic window end (UTC) | Vector Store | No |
+| `monitoring.log_level` | string | `INFO` | FAISS operations log level | Logging | No |
+| `monitoring.log_operations` | bool | `true` | Log add/search operations | Logging | No |
+| `monitoring.metrics_enabled` | bool | `true` | Enable Prometheus metrics | Telemetry | No |
+| `monitoring.prometheus_enabled` | bool | `true` | Export to Prometheus | Telemetry | No |
+| `monitoring.tracked_metrics` | list | `[see config]` | List of metrics to track | Telemetry | No |
+| `dev.mock_faiss` | bool | `false` | Use mock FAISS for testing | Testing | No |
+| `dev.skip_training` | bool | `false` | Skip training (dev only) | Testing | No |
+| `dev.use_small_index` | bool | `false` | Use small index for testing | Testing | No |
+| `dev.test_data_dir` | string | `tests/fixtures/faiss` | Test data directory | Testing | No |
 
 ### 13.1.5 Model Registry Configuration (`models.yaml`)
 
@@ -2044,10 +2167,29 @@ K{NNN}[.{sub}] - {Title}
 | `settings.cpu_memory_limit_mb` | int | `8192` | CPU memory limit | Model Loader | Yes |
 | `settings.default_load_timeout_sec` | int | `30` | Default model load timeout | Model Loader | Yes |
 | `models.ultrabert.model_id` | string | `familyos-ultrabert-2.0.3` | UltraBERT model ID | All ML Modules | Yes |
+| `models.ultrabert.name` | string | `FamilyOS UltraBERT v2.0.3` | Human-readable model name | Model Registry | No |
 | `models.ultrabert.memory_mb` | int | `500` | UltraBERT memory footprint | Model Loader | Yes |
 | `models.ultrabert.device_preference` | string | `cuda` | Preferred device | Model Loader | Yes |
+| `models.ultrabert.fallback_to_cpu` | bool | `true` | Fall back to CPU if GPU unavailable | Model Loader | No |
+| `models.ultrabert.load_timeout_sec` | int | `60` | Load timeout in seconds | Model Loader | No |
+| `models.ultrabert.loader` | string | `k0.runtime.model_loaders.load_...` | Loader function path | Model Loader | No |
+| `models.ultrabert.tier` | string | `ultrabert` | ML tier classification | Feature Flags | No |
+| `models.ultrabert.warmup_input` | string | `null` | Warmup input for model init | Model Loader | No |
 | `models.spacy_nlp.model_id` | string | `en_core_web_sm` | spaCy model (tokenization only) | Tokenization | Yes |
+| `models.spacy_nlp.name` | string | `spaCy English Small` | Human-readable model name | Model Registry | No |
+| `models.spacy_nlp.memory_mb` | int | `100` | Memory footprint in MB | Model Loader | No |
+| `models.spacy_nlp.device_preference` | string | `cpu` | Preferred device (spaCy is CPU-only) | Model Loader | No |
+| `models.spacy_nlp.fallback_to_cpu` | bool | `true` | Fall back to CPU if GPU unavailable | Model Loader | No |
+| `models.spacy_nlp.load_timeout_sec` | int | `15` | Load timeout in seconds | Model Loader | No |
+| `models.spacy_nlp.loader` | string | `k0.runtime.model_loaders.load_...` | Loader function path | Model Loader | No |
+| `models.spacy_nlp.tier` | string | `spacy_small` | ML tier classification | Feature Flags | No |
+| `models.spacy_nlp.warmup_input` | string | `Hello world` | Warmup input for model init | Model Loader | No |
 | `preload.essential` | list | `[ultrabert, spacy_nlp]` | Models to preload at startup | Model Registry | Yes |
+| `preload.optional` | list | `[]` | Optional models to preload | Model Registry | No |
+| `tier_budgets.rule_based` | int | `100` | Memory budget for rule_based tier | Model Loader | No |
+| `tier_budgets.spacy_small` | int | `200` | Memory budget for spacy_small tier | Model Loader | No |
+| `tier_budgets.spacy_large` | int | `1000` | Memory budget for spacy_large tier | Model Loader | No |
+| `tier_budgets.transformer_small` | int | `1500` | Memory budget for transformer_small tier | Model Loader | No |
 | `tier_budgets.ultrabert` | int | `600` | Memory budget for ultrabert tier | Model Loader | Yes |
 | `tier_budgets.transformer_large` | int | `3000` | Memory budget for transformer tier | Model Loader | Yes |
 
@@ -2059,13 +2201,54 @@ K{NNN}[.{sub}] - {Title}
 | `connection.auth.username` | string | `neo4j` | Neo4j username | Neo4j Driver | Yes |
 | `connection.auth.password` | string | `${NEO4J_PASSWORD}` | Neo4j password (env var) | Neo4j Driver | Yes |
 | `connection.max_connection_pool_size` | int | `100` | Connection pool size | Neo4j Driver | Yes |
+| `connection.connection_acquisition_timeout_seconds` | int | `60` | Timeout to acquire connection from pool | Neo4j Driver | No |
+| `connection.max_connection_lifetime_seconds` | int | `3600` | Max lifetime of connection in pool | Neo4j Driver | No |
+| `connection.encrypted` | bool | `false` | Enable TLS encryption | Neo4j Driver | No |
+| `connection.trust` | string | `TRUST_SYSTEM_CA_SIGNED_CERTIFICATES` | Certificate trust mode | Neo4j Driver | No |
 | `database.name` | string | `neo4j` | Neo4j database name | Neo4j Driver | Yes |
 | `database.default_transaction_timeout_seconds` | int | `30` | Transaction timeout | Neo4j Driver | Yes |
+| `database.initial_retry_delay_seconds` | int | `1` | Initial delay before retry | Neo4j Driver | No |
+| `database.max_retry_time_seconds` | int | `30` | Maximum retry time | Neo4j Driver | No |
+| `database.retry_delay_multiplier` | float | `2.0` | Retry delay exponential multiplier | Neo4j Driver | No |
+| `database.retry_delay_jitter_factor` | float | `0.2` | Jitter factor for retry randomization | Neo4j Driver | No |
 | `query.fetch_size` | int | `1000` | Records per batch fetch | Neo4j Driver | Yes |
 | `query.max_results_default` | int | `100` | Default result limit | Neo4j Driver | Yes |
 | `query.max_results_absolute` | int | `10000` | Maximum result limit | Neo4j Driver | Yes |
 | `query.temporal_snapshot_enabled` | bool | `true` | Enable as_of queries | Neo4j Driver | Yes |
+| `query.default_query_timeout_seconds` | int | `10` | Default query timeout | Neo4j Driver | No |
 | `schema.node_labels` | list | `[Person, Location, Event, Organization, Thing]` | Knowledge graph node types | Knowledge Graph | Yes |
+| `schema.relationship_types` | list | `[40 relationship types]` | Knowledge graph relationship types | Knowledge Graph | No |
+| `schema.temporal_properties` | list | `[5 temporal properties]` | Temporal tracking properties | Knowledge Graph | No |
+| `performance.entity_lookup_p95_ms` | int | `10` | Entity lookup P95 latency target | SLO | No |
+| `performance.entity_search_p95_ms` | int | `50` | Entity search P95 latency target | SLO | No |
+| `performance.graph_traversal_p95_ms` | int | `150` | Graph traversal P95 latency target | SLO | No |
+| `performance.insert_entity_p95_ms` | int | `20` | Entity insert P95 latency target | SLO | No |
+| `performance.insert_relationship_p95_ms` | int | `20` | Relationship insert P95 latency target | SLO | No |
+| `performance.relationship_query_p95_ms` | int | `30` | Relationship query P95 latency target | SLO | No |
+| `performance.relationship_query_3hop_p95_ms` | int | `100` | 3-hop relationship query P95 target | SLO | No |
+| `performance.shortest_path_p95_ms` | int | `100` | Shortest path P95 latency target | SLO | No |
+| `performance.temporal_query_p95_ms` | int | `50` | Temporal query P95 latency target | SLO | No |
+| `performance.update_entity_p95_ms` | int | `20` | Entity update P95 latency target | SLO | No |
+| `performance.update_relationship_p95_ms` | int | `20` | Relationship update P95 latency target | SLO | No |
+| `observability.log_queries` | bool | `true` | Log all Cypher queries | Logging | No |
+| `observability.log_slow_queries_threshold_ms` | int | `100` | Slow query log threshold | Logging | No |
+| `observability.metrics_enabled` | bool | `true` | Enable Prometheus metrics | Telemetry | No |
+| `observability.metrics_prefix` | string | `k0_neo4j` | Prometheus metric name prefix | Telemetry | No |
+| `observability.trace_enabled` | bool | `true` | Enable distributed tracing | Telemetry | No |
+| `observability.cognitive_trace_id_property` | string | `cognitive_trace_id` | Property for trace ID linking | Telemetry | No |
+| `privacy.audit_enabled` | bool | `true` | Enable privacy audit logging | Privacy | No |
+| `privacy.audit_operations` | list | `[create, read, update, delete]` | Operations to audit | Privacy | No |
+| `privacy.pii_properties` | list | `[5 PII property names]` | Properties containing PII | Privacy | No |
+| `privacy.privacy_bands` | list | `[family, friends, public]` | Privacy band classifications | Privacy | No |
+| `privacy.redact_pii_enabled` | bool | `true` | Redact PII in logs | Privacy | No |
+| `docker.image` | string | `neo4j:5.20.0` | Docker image for local dev | DevOps | No |
+| `docker.container_name` | string | `familyos-neo4j` | Docker container name | DevOps | No |
+| `docker.ports` | list | `[7474:7474, 7687:7687]` | Port mappings | DevOps | No |
+| `docker.volumes` | list | `[data, logs volumes]` | Volume mounts | DevOps | No |
+| `docker.environment.NEO4J_AUTH` | string | `neo4j/test-password` | Dev authentication | DevOps | No |
+| `docker.environment.NEO4J_dbms_memory_heap_initial__size` | string | `512M` | Initial heap size | DevOps | No |
+| `docker.environment.NEO4J_dbms_memory_heap_max__size` | string | `2G` | Maximum heap size | DevOps | No |
+| `docker.environment.NEO4J_dbms_memory_pagecache_size` | string | `1G` | Page cache size | DevOps | No |
 
 ### 13.1.7 Logging Configuration (`logging.yaml`)
 
@@ -2074,7 +2257,70 @@ K{NNN}[.{sub}] - {Title}
 | `version` | int | `1` | Logging config version | Logging | Yes |
 | `formatters.structured.format` | string | `%(asctime)s %(levelname)s...` | Log format pattern | Logging | Yes |
 | `handlers.console.level` | string | `INFO` | Console handler level | Logging | Yes |
+| `handlers.console.class` | string | `logging.StreamHandler` | Handler class | Logging | No |
+| `handlers.console.formatter` | string | `structured` | Handler formatter name | Logging | No |
+| `handlers.console.stream` | string | `ext://sys.stdout` | Output stream | Logging | No |
 | `root.level` | string | `INFO` | Root logger level | Logging | Yes |
+| `root.handlers` | list | `[console]` | Root logger handlers | Logging | No |
+
+### 13.1.8 Feature Flags Configuration (`feature_flags.yaml`)
+
+> **Note**: This section documents the configuration schema for the feature flags system.
+> The actual registered flags are in 13.2.1.
+
+| Key | Type | Default | Description | Used By | Required? |
+|-----|------|---------|-------------|---------|-----------|
+| `global.enabled` | bool | `true` | Master enable for feature flag system | Feature Flags | Yes |
+| `global.default_tier` | string | `rule_based` | Default ML tier when flag not found | Feature Flags | No |
+| `global.default_rollout_percentage` | float | `100.0` | Default rollout percentage | Feature Flags | No |
+| `global.auto_fallback_enabled` | bool | `true` | Enable automatic fallback on errors | Feature Flags | No |
+| `global.metrics_enabled` | bool | `true` | Enable flag usage metrics | Feature Flags | No |
+| `metrics.collect_accuracy` | bool | `true` | Compare tier outputs for accuracy | Telemetry | No |
+| `metrics.collect_latency` | bool | `true` | Track per-tier latency | Telemetry | No |
+| `metrics.sample_rate` | float | `1.0` | Sampling rate for metrics (0.0-1.0) | Telemetry | No |
+| `metrics.export_to_telemetry` | bool | `true` | Export metrics to OTLP | Telemetry | No |
+| `modules.affect.analyze.enabled_tier` | string | `rule_based` | Enabled tier for affect analysis | M04 | No |
+| `modules.affect.analyze.fallback_tier` | string | `rule_based` | Fallback tier for affect analysis | M04 | No |
+| `modules.affect.analyze.rollout_percentage` | float | `100.0` | Rollout percentage | M04 | No |
+| `modules.affect.analyze.max_failures_before_fallback` | int | `3` | Failures before triggering fallback | M04 | No |
+| `modules.affect.analyze.metrics_enabled` | bool | `true` | Enable metrics for this module | M04 | No |
+| `modules.affect.analyze.description` | string | `Sentiment and emotion analysis` | Human-readable description | M04 | No |
+| `modules.context.ingress_classify.enabled_tier` | string | `rule_based` | Enabled tier for ingress classify | M10 | No |
+| `modules.context.ingress_classify.fallback_tier` | string | `rule_based` | Fallback tier for ingress classify | M10 | No |
+| `modules.context.ingress_classify.rollout_percentage` | float | `100.0` | Rollout percentage | M10 | No |
+| `modules.context.ingress_classify.max_failures_before_fallback` | int | `3` | Failures before triggering fallback | M10 | No |
+| `modules.context.ingress_classify.metrics_enabled` | bool | `true` | Enable metrics for this module | M10 | No |
+| `modules.context.ingress_classify.description` | string | `Activity type classification` | Human-readable description | M10 | No |
+| `modules.hippocampus.semantic_project.enabled_tier` | string | `transformer_small` | Enabled tier for semantic project | M02 | No |
+| `modules.hippocampus.semantic_project.fallback_tier` | string | `spacy_small` | Fallback tier for semantic project | M02 | No |
+| `modules.hippocampus.semantic_project.rollout_percentage` | float | `100.0` | Rollout percentage | M02 | No |
+| `modules.hippocampus.semantic_project.max_failures_before_fallback` | int | `3` | Failures before triggering fallback | M02 | No |
+| `modules.hippocampus.semantic_project.metrics_enabled` | bool | `true` | Enable metrics for this module | M02 | No |
+| `modules.hippocampus.semantic_project.description` | string | `Entity extraction and knowledge...` | Human-readable description | M02 | No |
+| `modules.salience.score.enabled_tier` | string | `rule_based` | Enabled tier for salience scoring | M06 | No |
+| `modules.salience.score.fallback_tier` | string | `rule_based` | Fallback tier for salience scoring | M06 | No |
+| `modules.salience.score.rollout_percentage` | float | `100.0` | Rollout percentage | M06 | No |
+| `modules.salience.score.max_failures_before_fallback` | int | `3` | Failures before triggering fallback | M06 | No |
+| `modules.salience.score.metrics_enabled` | bool | `true` | Enable metrics for this module | M06 | No |
+| `modules.salience.score.description` | string | `Memory salience scoring` | Human-readable description | M06 | No |
+| `modules.social.family_graph_resolve.enabled_tier` | string | `rule_based` | Enabled tier for social graph | M07 | No |
+| `modules.social.family_graph_resolve.fallback_tier` | string | `rule_based` | Fallback tier for social graph | M07 | No |
+| `modules.social.family_graph_resolve.rollout_percentage` | float | `100.0` | Rollout percentage | M07 | No |
+| `modules.social.family_graph_resolve.max_failures_before_fallback` | int | `3` | Failures before triggering fallback | M07 | No |
+| `modules.social.family_graph_resolve.metrics_enabled` | bool | `true` | Enable metrics for this module | M07 | No |
+| `modules.social.family_graph_resolve.description` | string | `Family relationship and social...` | Human-readable description | M07 | No |
+| `rollout_schedule.phase_1.target_tier` | string | `spacy_large` | Target tier for phase 1 | Rollout | No |
+| `rollout_schedule.phase_1.target_rollout` | float | `10.0` | Target rollout percentage | Rollout | No |
+| `rollout_schedule.phase_1.modules` | list | `[hippocampus.semantic_project, ...]` | Modules in this phase | Rollout | No |
+| `rollout_schedule.phase_1.notes` | string | `A/B test spaCy large vs small...` | Phase notes | Rollout | No |
+| `rollout_schedule.phase_2.target_tier` | string | `transformer_small` | Target tier for phase 2 | Rollout | No |
+| `rollout_schedule.phase_2.target_rollout` | float | `25.0` | Target rollout percentage | Rollout | No |
+| `rollout_schedule.phase_2.modules` | list | `[affect.analyze, ...]` | Modules in this phase | Rollout | No |
+| `rollout_schedule.phase_2.notes` | string | `Compare transformer vs VADER...` | Phase notes | Rollout | No |
+| `rollout_schedule.phase_3.target_tier` | string | `transformer_large` | Target tier for phase 3 | Rollout | No |
+| `rollout_schedule.phase_3.target_rollout` | float | `50.0` | Target rollout percentage | Rollout | No |
+| `rollout_schedule.phase_3.modules` | list | `[context.ingress_classify, ...]` | Modules in this phase | Rollout | No |
+| `rollout_schedule.phase_3.notes` | string | `Zero-shot activity classification...` | Phase notes | Rollout | No |
 
 ---
 
@@ -2245,6 +2491,113 @@ K{NNN}[.{sub}] - {Title}
 | `neo4j.yaml` | YAML | `k0/config/` | Neo4j knowledge graph settings | ADR-0081 |
 | `logging.yaml` | YAML | `k0/config/` | Python logging configuration | - |
 | `k0.env` | dotenv | `k0/deploy/env/` | Environment variables | - |
+
+---
+
+## 13.5 Version Registry
+
+> **Source**: Config file `version` fields, `k0/contracts/VERSION`
+
+### 13.5.1 Config File Versions
+
+| File | Current Version | Last Updated | Notes |
+|------|-----------------|--------------|-------|
+| `kernel.yaml` | `0.0.0-dev` | 2025-12-31 | Development version |
+| `models.yaml` | `2.0.0` | 2025-12-31 | UltraBERT v2.0.3 integration |
+| `feature_flags.yaml` | `1.0.0` | 2025-12-31 | ML tier flags stable |
+| `logging.yaml` | `1` | 2025-12-31 | Python logging dictConfig |
+
+### 13.5.2 Contract Artifact Versions
+
+> **Source**: `k0/contracts/VERSION` v1.1.0 - Frozen contract artifacts with checksums
+> **Coverage**: 70 total artifacts across all categories
+
+| Category | Count | Description |
+|----------|-------|-------------|
+| Root-level | 2 | OpenAPI, AsyncAPI specs |
+| Modules | 22 | Module contract definitions |
+| Pipelines | 2 | Pipeline contract definitions |
+| Capabilities | 1 | Core capability schema |
+| Policy | 1 | PEP policy schema |
+| Schemas | 5 | Event payload schemas |
+| Table Schemas | 1 | P02 table definitions |
+| Taxonomies | 1 | Activity taxonomy |
+| JSON Schema | 16 | Core JSON schemas |
+| JSON Schema Examples | 19 | Validation test fixtures |
+| **TOTAL** | **70** | **All tracked with SHA256** |
+
+**Root-Level API Specs:**
+
+| Artifact | File | Version | SHA256 (first 16) |
+|----------|------|---------|-------------------|
+| OpenAPI | `openapi.k0.yaml` | `1.0.0` | `f172d33f06fa226e` |
+| AsyncAPI | `asyncapi.events.yaml` | `1.0.0` | `f4916a1e222c5817` |
+
+**Module Contracts (22):**
+
+| Module | Version | SHA256 (first 16) |
+|--------|---------|-------------------|
+| `affect.analyze.v1` | v1 | `c5a93cda1f192b3d` |
+| `builders.embedding_queue_write.v1` | v1 | `fda0f3a98820c4c6` |
+| `builders.embedding_write.v1` | v1 | `182fa74d16474cb5` |
+| `builders.hipp_events_row.v1` | v1 | `f6b80cd28c3122c1` |
+| `context.device_profile.v1` | v1 | `316ed7a72c6f6f10` |
+| `context.geo_metadata.v1` | v1 | `25fe19d275574bc0` |
+| `context.ingress_classify.v1` | v1 | `6875394fd36dc737` |
+| `context.retention_lookup.v1` | v1 | `13ecafd07a454678` |
+| `context.spatial_minimal.v1` | v1 | `b05dfe4ebe48dcf0` |
+| `context.temporal_profile.v1` | v1 | `d2e58f18d0853e2b` |
+| `core.event_emitter.v1` | v1 | `c774d8c3c4478dde` |
+| `core.hipp_events_writer.v1` | v1 | `33636a470996f955` |
+| `embedding.backfill.v1` | v1 | `2ef8c99d1ab00fc0` |
+| `embedding.cleanup.v1` | v1 | `2bf327929d5a33b7` |
+| `embedding.extract_from_cache.v1` | v1 | `7d2b436a09e89d48` |
+| `embedding.faiss_indexer.v1` | v1 | `ff98c4f2584d3419` |
+| `embedding.recompute.v1` | v1 | `373715dc15692ea1` |
+| `hippocampus.pattern_separate.v1` | v1 | `b5079e49f7b61556` |
+| `hippocampus.semantic_project.v1` | v1 | `8149dbf1a289d648` |
+| `salience.score.v1` | v1 | `89c59c218d268825` |
+| `social.family_graph_resolve.v1` | v1 | `181840479b2c2b5f` |
+| `space.resolve_visibility.v1` | v1 | `dd62f9473aef657a` |
+
+**Pipeline Contracts (2):**
+
+| Pipeline | Version | SHA256 (first 16) |
+|----------|---------|-------------------|
+| `p02_write.v1` | v1 | `3d3ee3acb03ab7c5` |
+| `p08_embedding_management.v2` | v3 | `24cbcd38daa16d4b` |
+
+### 13.5.3 JSON Schema Artifacts (16 schemas + 19 examples)
+
+| Schema File | Purpose | SHA256 (first 16) |
+|-------------|---------|-------------------|
+| `acl.schema.json` | Access control list | `f9c9503371c84e0e` |
+| `archive_manifest.schema.json` | Archive manifest | `0f1ef874117ba82e` |
+| `capability.schema.json` | Capability tokens | `b1aedfd63900b288` |
+| `crdt_merge_log.schema.json` | CRDT merge log | `74566aded4448748` |
+| `driver.handshake.request.json` | Driver handshake req | `0d0867ac14135470` |
+| `driver.handshake.response.json` | Driver handshake resp | `0034743d370e031e` |
+| `envelope.schema.json` | Event envelope | `31bd48f212b32929` |
+| `error.schema.json` | Error response | `674fbed68d52f417` |
+| `infra.snapshot.event.json` | Snapshot event | `78607e085f426268` |
+| `offset.cursor.schema.json` | Offset cursor | `d5c5e4fdd064ad07` |
+| `pep.schema.json` | Privacy policy | `e9b4a2e2e9dd2353` |
+| `query.recall.request.json` | Recall request | `d399f14076b75ade` |
+| `query.recall.response.json` | Recall response | `55038172b41d3de4` |
+| `receipt.schema.json` | Write receipt | `b0af363f41428dca` |
+| `retention_policy.schema.json` | Retention policy | `ea7e5687a76ba27c` |
+| `sse.ack.request.json` | SSE acknowledgment | `e2c886fd2c790974` |
+
+### 13.5.4 Version Change Protocol
+
+1. **Config version bump**: Update `version` field in config file AND this registry
+2. **Contract artifact change**:
+   - Regenerate checksums: `python governance/k0/scripts/generate_checksums.py`
+   - Update `k0/contracts/VERSION` with new SHA256
+   - Bump artifact version (semver)
+   - Requires Architecture + Security + Ops approval
+3. **Schema change**: Requires migration plan if breaking
+4. **Verify integrity**: Run `python -m governance.k0.scripts.sync --report`
 
 ---
 

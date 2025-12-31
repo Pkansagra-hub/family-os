@@ -65,16 +65,9 @@ def _scan_emit_calls(code_path: Path) -> dict[str, list[str]]:
                         location = f"{py_file.name}:{i}"
                         events.setdefault(topic, []).append(location)
 
-                # Pattern 2: Topic string literals in comments, docstrings, dicts
-                # Match: "cognitive.memory.write.committed.v1" or 'cognitive.vector.stored.v1'
-                topic_pattern = r'["\']((cognitive|p02|p08|core|memory|embedding|workspace|space|scheduled|query)\.[a-z_\.]+\.v\d+)["\']'
-                for match in re.finditer(topic_pattern, line, re.IGNORECASE):
-                    topic = match.group(1).lower()
-                    location = f"{py_file.name}:{i}"
-                    if topic not in events:
-                        events[topic] = []
-                    if location not in events[topic]:
-                        events[topic].append(location)
+                # ADR-K021: Removed broad string literal pattern matching
+                # Events are now sourced from contracts and whiteboard only
+                # Emit calls above remain as secondary validation
 
         except Exception:
             continue

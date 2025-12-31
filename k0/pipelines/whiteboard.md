@@ -782,6 +782,22 @@ graph TD
 
 | Topic | Publisher | Subscribers | Payload Schema | Purpose |
 |-------|-----------|-------------|----------------|---------|
+| `p03.consolidation.triggered.v1` | PipelineScheduler | P03 | P03TriggerEvent | Initiate consolidation cycle |
+| `p03.consolidation.complete.v1` | P03 | P08, Monitoring | P03ConsolidationCompletePayload | Batch cycle completion |
+| `p03.phase.complete.v1` | P03 | Monitoring | P03PhaseCompletePayload | Per-phase progress (R0-R8) |
+| `p03.episode.formed.v1` | P03 | P08, Analytics | P03EpisodeFormedPayload | New episode created |
+| `p03.pattern.discovered.v1` | P03 | Analytics | P03PatternDiscoveredPayload | New semantic pattern |
+| `p03.truth.reinforced.v1` | P03 | Analytics | P03TruthDecisionPayload | Existing truth strengthened |
+| `p03.truth.created.v1` | P03 | P08 | P03TruthDecisionPayload | New truth created |
+| `p03.truth.evolved.v1` | P03 | Analytics | P03TruthDecisionPayload | Truth evolved with new info |
+| `p03.memory.pruned.v1` | P03 | Analytics | P03PrunePayload | Memory pruned (forgetting) |
+| `p03.gap.detected.v1` | P03 | P06 | P03GapDetectedPayload | P06 Active Learning trigger |
+| `p03.kg.updated.v1` | P03 | Analytics | P03KGUpdatePayload | Knowledge graph changes |
+| `p03.insight.generated.v1` | P03 | Analytics | P03InsightPayload | R5 creative insight |
+| `p03.embedding.created.v1` | P03 | P08 | P03EmbeddingPayload | New embedding created |
+| `p03.causal_edge.demoted.v1` | P03 | Analytics | P03EdgeDemotionPayload | Causal edge weakened |
+| `p06.gap.resolved.v1` | P06 | P03 | P06GapResolvedPayload | Gap resolved by user |
+| `p06.anchor.updated.v1` | P06 | P03 | P06AnchorUpdatePayload | Anchor belief updated |
 
 
 **Topic Subscription Pattern Example**:
@@ -1164,7 +1180,7 @@ sequenceDiagram
 |------------|-----------------------------------|------------------------------|----------------------|
 | P01        | Recall / Read                     | `query.recall.requested.v1`, `workspace.broadcast.v1` | `p01.recall.complete.v1` |
 | P02        | Write / Ingest                    | `cognitive.memory.write.committed.v1`, `cognitive.memory.update.committed.v1` | `workspace.wm.updated.v1`, `core.affect.analyzed.v1`, `space.resolution.complete.v1`, `p02.hippocampus.pattern_separated.v1`, `p02.write.complete.v1`, `core.enrichment.complete.v1` |
-| P03        | Consolidation / Forgetting        | `p03.consolidation.triggered.v1`, `core.enrichment.complete.v1` | `p03.consolidation.complete.v1` |
+| P03        | Consolidation / Forgetting        | `p03.consolidation.triggered.v1`, `p02.write.complete.v1` | `p03.consolidation.complete.v1`, `p03.phase.complete.v1`, `p03.episode.formed.v1`, `p03.pattern.discovered.v1`, `p03.truth.reinforced.v1`, `p03.truth.created.v1`, `p03.truth.evolved.v1`, `p03.memory.pruned.v1`, `p03.gap.detected.v1`, `p03.kg.updated.v1`, `p03.insight.generated.v1`, `p03.embedding.created.v1`, `p03.causal_edge.demoted.v1` |
 | P04        | Arbitration / Action              | `workspace.broadcast.v1`, `core.salience.computed.v1`, `arbitration.decision.v1` | `arbitration.action.recommended.v1` |
 | P05        | Prospective / Triggers            | `temporal.prospective.fire.v1`, `arbitration.action.recommended.v1` | `p05.reminder.triggered.v1` |
 | P06        | Learning / Neuromodulation        | `learning.feedback.v1`, `p01.recall.complete.v1` | `learning.model.updated.v1` |

@@ -35,10 +35,14 @@ class SyncReport:
     missing_in_master: list[str]
     missing_in_code: list[str]
     status_mismatches: list[str]
+    is_curated: bool = False  # Curated categories don't count missing_in_master as drift
 
     @property
     def is_synced(self) -> bool:
         """Check if code and master are in sync."""
+        if self.is_curated:
+            # Curated categories only check missing_in_code (doc errors)
+            return not self.missing_in_code and not self.status_mismatches
         return (
             not self.missing_in_master and not self.missing_in_code and not self.status_mismatches
         )
@@ -46,7 +50,15 @@ class SyncReport:
     @property
     def drift_count(self) -> int:
         """Total number of drift items."""
+        if self.is_curated:
+            # Curated categories don't count undocumented items as drift
+            return len(self.missing_in_code) + len(self.status_mismatches)
         return len(self.missing_in_master) + len(self.missing_in_code) + len(self.status_mismatches)
+
+    @property
+    def undocumented_count(self) -> int:
+        """Count of items in code but not in master (informational for curated)."""
+        return len(self.missing_in_master) if self.is_curated else 0
 
 
 def _get_repo_root() -> Path:
@@ -204,6 +216,543 @@ def check_events() -> SyncReport:
     )
 
 
+def check_tables() -> SyncReport:
+    """Check storage tables sync status."""
+    from governance.k0.scripts.storage_scanner import (
+        diff_tables_with_master,
+        scan_tables,
+    )
+
+    tables = scan_tables()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="Tables",
+            scanned_count=len(tables),
+            registered_count=0,
+            missing_in_master=[t.table_name for t in tables],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_tables_with_master(tables, master_path)
+
+    return SyncReport(
+        category="Tables",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_migrations() -> SyncReport:
+    """Check migrations sync status."""
+    from governance.k0.scripts.storage_scanner import (
+        diff_migrations_with_master,
+        scan_migrations,
+    )
+
+    migrations = scan_migrations()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="Migrations",
+            scanned_count=len(migrations),
+            registered_count=0,
+            missing_in_master=[m.migration_id for m in migrations],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_migrations_with_master(migrations, master_path)
+
+    return SyncReport(
+        category="Migrations",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_indexes() -> SyncReport:
+    """Check indexes sync status."""
+    from governance.k0.scripts.storage_scanner import (
+        diff_indexes_with_master,
+        scan_indexes,
+    )
+
+    indexes = scan_indexes()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="Indexes",
+            scanned_count=len(indexes),
+            registered_count=0,
+            missing_in_master=[i.index_name for i in indexes],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_indexes_with_master(indexes, master_path)
+
+    return SyncReport(
+        category="Indexes",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_module_contracts() -> SyncReport:
+    """Check module contracts sync status."""
+    from governance.k0.scripts.contract_scanner import (
+        diff_module_contracts_with_master,
+        scan_module_contracts,
+    )
+
+    contracts = scan_module_contracts()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="ModuleContracts",
+            scanned_count=len(contracts),
+            registered_count=0,
+            missing_in_master=[c.contract_name for c in contracts],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_module_contracts_with_master(contracts, master_path)
+
+    return SyncReport(
+        category="ModuleContracts",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_pipeline_contracts() -> SyncReport:
+    """Check pipeline contracts sync status."""
+    from governance.k0.scripts.contract_scanner import (
+        diff_pipeline_contracts_with_master,
+        scan_pipeline_contracts,
+    )
+
+    contracts = scan_pipeline_contracts()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="PipelineContracts",
+            scanned_count=len(contracts),
+            registered_count=0,
+            missing_in_master=[c.contract_name for c in contracts],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_pipeline_contracts_with_master(contracts, master_path)
+
+    return SyncReport(
+        category="PipelineContracts",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_event_schemas() -> SyncReport:
+    """Check event schemas sync status."""
+    from governance.k0.scripts.contract_scanner import (
+        diff_event_schemas_with_master,
+        scan_event_schemas,
+    )
+
+    schemas = scan_event_schemas()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="EventSchemas",
+            scanned_count=len(schemas),
+            registered_count=0,
+            missing_in_master=[s.schema_name for s in schemas],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_event_schemas_with_master(schemas, master_path)
+
+    return SyncReport(
+        category="EventSchemas",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_capabilities() -> SyncReport:
+    """Check capability checks sync status."""
+    from governance.k0.scripts.capability_scanner import (
+        diff_capability_checks_with_master,
+        scan_capability_checks,
+    )
+
+    checks = scan_capability_checks()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        unique_caps = set(
+            c.capability_name for c in checks if not c.capability_name.startswith("<")
+        )
+        return SyncReport(
+            category="Capabilities",
+            scanned_count=len(unique_caps),
+            registered_count=0,
+            missing_in_master=list(unique_caps),
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_capability_checks_with_master(checks, master_path)
+
+    return SyncReport(
+        category="Capabilities",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_fabric_providers() -> SyncReport:
+    """Check fabric providers sync status."""
+    from governance.k0.scripts.capability_scanner import (
+        diff_fabric_providers_with_master,
+        scan_fabric_providers_from_yaml,
+    )
+
+    providers = scan_fabric_providers_from_yaml()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="FabricProviders",
+            scanned_count=len(providers),
+            registered_count=0,
+            missing_in_master=[p.capability_name for p in providers],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_fabric_providers_with_master(providers, master_path)
+
+    return SyncReport(
+        category="FabricProviders",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_kernel_hooks() -> SyncReport:
+    """Check kernel hooks sync status (Part 9.2)."""
+    from governance.k0.scripts.scheduler_scanner import (
+        diff_kernel_hooks_with_master,
+        scan_kernel_hooks_from_master,
+    )
+
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="KernelHooks",
+            scanned_count=0,
+            registered_count=0,
+            missing_in_master=[],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    hooks = scan_kernel_hooks_from_master(master_path)
+    diff = diff_kernel_hooks_with_master(hooks, master_path)
+
+    return SyncReport(
+        category="KernelHooks",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff.get("missing_in_master", [])),
+        missing_in_code=list(diff.get("missing_in_code", [])),
+        status_mismatches=[],
+    )
+
+
+def check_background_workers() -> SyncReport:
+    """Check background workers sync status (Part 9.3)."""
+    from governance.k0.scripts.scheduler_scanner import (
+        diff_background_workers_with_master,
+        scan_background_workers_from_master,
+    )
+
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="BackgroundWorkers",
+            scanned_count=0,
+            registered_count=0,
+            missing_in_master=[],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    workers = scan_background_workers_from_master(master_path)
+    diff = diff_background_workers_with_master(workers, master_path)
+
+    return SyncReport(
+        category="BackgroundWorkers",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff.get("missing_in_master", [])),
+        missing_in_code=list(diff.get("missing_in_code", [])),
+        status_mismatches=[],
+    )
+
+
+def check_metrics() -> SyncReport:
+    """Check prometheus metrics sync status (Part 10.1)."""
+    from governance.k0.scripts.metrics_scanner import (
+        diff_metrics_with_master,
+        scan_prometheus_metrics_from_code,
+    )
+
+    metrics = scan_prometheus_metrics_from_code()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="Metrics",
+            scanned_count=len(metrics),
+            registered_count=0,
+            missing_in_master=[m.name for m in metrics],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_metrics_with_master(metrics, master_path)
+
+    return SyncReport(
+        category="Metrics",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_config_keys() -> SyncReport:
+    """Check config keys sync status (Part 13.1).
+
+    ConfigKeys is a CURATED category - master documents important keys only,
+    not every single config key in YAML files. Undocumented keys are shown
+    but don't count as drift.
+    """
+    from governance.k0.scripts.config_scanner import (
+        diff_config_with_master,
+        scan_config_keys_from_yaml,
+    )
+
+    configs = scan_config_keys_from_yaml()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="ConfigKeys",
+            scanned_count=len(configs),
+            registered_count=0,
+            missing_in_master=[c.key_path for c in configs],
+            missing_in_code=[],
+            status_mismatches=[],
+            is_curated=True,
+        )
+
+    diff = diff_config_with_master(configs, master_path)
+
+    return SyncReport(
+        category="ConfigKeys",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+        is_curated=diff.get("is_curated", True),
+    )
+
+
+def check_feature_flags() -> SyncReport:
+    """Check feature flags sync status (Part 13.2)."""
+    from governance.k0.scripts.config_scanner import (
+        diff_feature_flags_with_master,
+        scan_feature_flags,
+    )
+
+    flags = scan_feature_flags()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="FeatureFlags",
+            scanned_count=len(flags),
+            registered_count=0,
+            missing_in_master=[f.name for f in flags],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    diff = diff_feature_flags_with_master(flags, master_path)
+
+    return SyncReport(
+        category="FeatureFlags",
+        scanned_count=diff["scanned_count"],
+        registered_count=diff["registered_count"],
+        missing_in_master=list(diff["missing_in_master"]),
+        missing_in_code=list(diff["missing_in_code"]),
+        status_mismatches=[],
+    )
+
+
+def check_config_versions() -> SyncReport:
+    """Check config file version consistency (Part 14.1)."""
+    from governance.k0.scripts.version_scanner import (
+        diff_config_versions,
+        scan_config_versions,
+        scan_config_versions_from_master,
+    )
+
+    code_versions = scan_config_versions()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="ConfigVersions",
+            scanned_count=len(code_versions),
+            registered_count=0,
+            missing_in_master=[v.file_name for v in code_versions],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    master_versions = scan_config_versions_from_master(master_path)
+    missing_in_master, missing_in_code, version_mismatch = diff_config_versions(
+        code_versions, master_versions
+    )
+
+    # Version mismatches are reported as status_mismatches
+    mismatches = [f"{k}: code={v[0]} master={v[1]}" for k, v in version_mismatch.items()]
+
+    return SyncReport(
+        category="ConfigVersions",
+        scanned_count=len(code_versions),
+        registered_count=len(master_versions),
+        missing_in_master=list(missing_in_master),
+        missing_in_code=list(missing_in_code),
+        status_mismatches=mismatches,
+    )
+
+
+def check_contract_versions() -> SyncReport:
+    """Check contract version consistency (Part 14.2)."""
+    from governance.k0.scripts.version_scanner import (
+        diff_contract_versions,
+        scan_contract_versions,
+        scan_contract_versions_from_master,
+    )
+
+    code_versions = scan_contract_versions()
+    master_path = _get_master_path()
+
+    if not master_path.exists():
+        return SyncReport(
+            category="ContractVersions",
+            scanned_count=len(code_versions),
+            registered_count=0,
+            missing_in_master=[v.contract_id for v in code_versions],
+            missing_in_code=[],
+            status_mismatches=[],
+        )
+
+    master_versions = scan_contract_versions_from_master(master_path)
+    missing_in_master, missing_in_code, version_mismatch = diff_contract_versions(
+        code_versions, master_versions
+    )
+
+    # Version mismatches are reported as status_mismatches
+    mismatches = [f"{k}: code={v[0]} master={v[1]}" for k, v in version_mismatch.items()]
+
+    return SyncReport(
+        category="ContractVersions",
+        scanned_count=len(code_versions),
+        registered_count=len(master_versions),
+        missing_in_master=list(missing_in_master),
+        missing_in_code=list(missing_in_code),
+        status_mismatches=mismatches,
+        is_curated=True,  # Contract versions are selectively documented
+    )
+
+
+def check_artifact_checksums() -> SyncReport:
+    """Check contract artifact checksum integrity (Part 14.3)."""
+    from governance.k0.scripts.version_scanner import (
+        scan_artifact_versions,
+        verify_artifact_checksums,
+    )
+
+    artifacts = scan_artifact_versions()
+    checksums = verify_artifact_checksums()
+
+    # Group invalid checksums by artifact type for clear reporting
+    invalid: list[str] = []
+    for result in checksums:
+        if not result.is_valid:
+            # Format: "module: affect.analyze.v1 (checksum mismatch)"
+            artifact_name = result.file_path.replace("/", ".").replace("\\", ".")
+            if artifact_name.endswith(".yaml"):
+                artifact_name = artifact_name[:-5]
+            elif artifact_name.endswith(".json"):
+                artifact_name = artifact_name[:-5]
+            invalid.append(f"{result.artifact_type}: {artifact_name} ({result.error})")
+
+    return SyncReport(
+        category="ArtifactChecksums",
+        scanned_count=len(checksums),
+        registered_count=len(artifacts),
+        missing_in_master=[],
+        missing_in_code=[],
+        status_mismatches=invalid,
+    )
+
+
 def run_all_checks() -> list[SyncReport]:
     """Run all sync checks and return reports."""
     reports = []
@@ -211,24 +760,88 @@ def run_all_checks() -> list[SyncReport]:
     print("Scanning codebase...")
     print()
 
-    print("  [1/5] Scanning syscalls...", end=" ", flush=True)
+    print("  [1/21] Scanning syscalls...", end=" ", flush=True)
     reports.append(check_syscalls())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [2/5] Scanning pipelines...", end=" ", flush=True)
+    print("  [2/21] Scanning pipelines...", end=" ", flush=True)
     reports.append(check_pipelines())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [3/5] Scanning modules...", end=" ", flush=True)
+    print("  [3/21] Scanning modules...", end=" ", flush=True)
     reports.append(check_modules())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [4/5] Scanning ADRs...", end=" ", flush=True)
+    print("  [4/21] Scanning ADRs...", end=" ", flush=True)
     reports.append(check_adrs())
     print(f"found {reports[-1].scanned_count}")
 
-    print("  [5/5] Scanning events...", end=" ", flush=True)
+    print("  [5/21] Scanning events...", end=" ", flush=True)
     reports.append(check_events())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [6/21] Scanning tables...", end=" ", flush=True)
+    reports.append(check_tables())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [7/21] Scanning migrations...", end=" ", flush=True)
+    reports.append(check_migrations())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [8/21] Scanning indexes...", end=" ", flush=True)
+    reports.append(check_indexes())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [9/21] Scanning module contracts...", end=" ", flush=True)
+    reports.append(check_module_contracts())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [10/21] Scanning pipeline contracts...", end=" ", flush=True)
+    reports.append(check_pipeline_contracts())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [11/21] Scanning event schemas...", end=" ", flush=True)
+    reports.append(check_event_schemas())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [12/21] Scanning capabilities...", end=" ", flush=True)
+    reports.append(check_capabilities())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [13/21] Scanning fabric providers...", end=" ", flush=True)
+    reports.append(check_fabric_providers())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [14/21] Scanning kernel hooks...", end=" ", flush=True)
+    reports.append(check_kernel_hooks())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [15/21] Scanning background workers...", end=" ", flush=True)
+    reports.append(check_background_workers())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [16/21] Scanning metrics...", end=" ", flush=True)
+    reports.append(check_metrics())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [17/21] Scanning config keys...", end=" ", flush=True)
+    reports.append(check_config_keys())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [18/21] Scanning feature flags...", end=" ", flush=True)
+    reports.append(check_feature_flags())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [19/21] Scanning config versions...", end=" ", flush=True)
+    reports.append(check_config_versions())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [20/21] Scanning contract versions...", end=" ", flush=True)
+    reports.append(check_contract_versions())
+    print(f"found {reports[-1].scanned_count}")
+
+    print("  [21/21] Verifying artifact checksums...", end=" ", flush=True)
+    reports.append(check_artifact_checksums())
     print(f"found {reports[-1].scanned_count}")
 
     print()
@@ -241,23 +854,35 @@ def print_summary(reports: list[SyncReport]) -> None:
     print("SYNC STATUS SUMMARY")
     print("=" * 70)
     print()
+    print("Note: Registered includes Planning items (not checked for code presence)")
+    print("      * = Curated category (undocumented items don't count as drift)")
+    print()
     print(
-        f"{'Category':<15} {'Scanned':<10} {'Registered':<12} {'Missing(M)':<12} {'Missing(C)':<12} {'Status':<10}"
+        f"{'Category':<17} {'Scanned':<10} {'Registered':<12} {'Undoc':<8} {'Missing(C)':<12} {'Status':<10}"
     )
-    print("-" * 70)
+    print("-" * 80)
 
     total_drift = 0
     for r in reports:
         status = "OK" if r.is_synced else f"DRIFT({r.drift_count})"
         total_drift += r.drift_count
+
+        # For curated categories, show undocumented count separately
+        if r.is_curated:
+            undoc_display = str(r.undocumented_count)
+            cat_display = f"{r.category}*"
+        else:
+            undoc_display = str(len(r.missing_in_master))
+            cat_display = r.category
+
         print(
-            f"{r.category:<15} {r.scanned_count:<10} {r.registered_count:<12} "
-            f"{len(r.missing_in_master):<12} {len(r.missing_in_code):<12} {status:<10}"
+            f"{cat_display:<17} {r.scanned_count:<10} {r.registered_count:<12} "
+            f"{undoc_display:<8} {len(r.missing_in_code):<12} {status:<10}"
         )
 
-    print("-" * 70)
+    print("-" * 80)
     overall = "SYNCED" if total_drift == 0 else f"DRIFT DETECTED ({total_drift} items)"
-    print(f"{'OVERALL':<15} {'':<10} {'':<12} {'':<12} {'':<12} {overall}")
+    print(f"{'OVERALL':<17} {'':<10} {'':<12} {'':<8} {'':<12} {overall}")
     print()
 
 
@@ -268,15 +893,22 @@ def print_diff(reports: list[SyncReport]) -> None:
     print("DETAILED DIFF")
     print("=" * 70)
 
+    has_diff = False
     for r in reports:
-        if r.is_synced:
+        # Skip if synced and no undocumented items in curated categories
+        if r.is_synced and not (r.is_curated and r.undocumented_count > 0):
             continue
 
-        print(f"\n{r.category}:")
+        has_diff = True
+        curated_marker = " (curated)" if r.is_curated else ""
+        print(f"\n{r.category}{curated_marker}:")
         print("-" * 40)
 
         if r.missing_in_master:
-            print("  Missing in master document (exists in code):")
+            if r.is_curated:
+                print(f"  Undocumented in master ({r.undocumented_count} keys - informational):")
+            else:
+                print("  Missing in master document (exists in code):")
             for item in r.missing_in_master[:10]:
                 print(f"    + {item}")
             if len(r.missing_in_master) > 10:
@@ -293,6 +925,9 @@ def print_diff(reports: list[SyncReport]) -> None:
             print("  Status mismatches:")
             for item in r.status_mismatches[:10]:
                 print(f"    ! {item}")
+
+    if not has_diff:
+        print("\nAll categories in sync (no differences to show).")
 
 
 def update_master_timestamp() -> None:

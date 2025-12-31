@@ -188,7 +188,8 @@ def scan_modules(
     """
     Scan k0/modules/ and extract all module definitions.
 
-    Uses the master document for ID mapping when available.
+    ADR-K021: Uses contracts as primary source, master doc mapping as fallback.
+    Only scans Python files that have either a contract OR are registered in master.
 
     Args:
         modules_path: Path to k0/modules/ (defaults to repo root)
@@ -215,9 +216,20 @@ def scan_modules(
     if master_path.exists():
         id_mapping = _build_module_id_mapping(master_path)
 
+    # ADR-K021: Build set of modules with contracts (authoritative source)
+    contracted_modules: set[str] = set()
+    modules_contracts_dir = contracts_dir / "modules"
+    if modules_contracts_dir.exists():
+        for yaml_file in modules_contracts_dir.glob("*.yaml"):
+            # Parse contract to extract folder.module_name pattern
+            # Contract names: folder.module_name.v1.yaml or module_name.v1.yaml
+            stem = yaml_file.stem  # e.g., "hippocampus.consolidate.v1"
+            parts = stem.rsplit(".v", 1)[0]  # Remove version suffix
+            contracted_modules.add(parts)
+
     modules: list[ModuleInfo] = []
 
-    # Scan each module subdirectory - scan ALL Python files
+    # Scan each module subdirectory - only scan modules with contracts OR in master
     for folder in sorted(modules_path.iterdir()):
         if not folder.is_dir() or folder.name.startswith("_"):
             continue
@@ -225,7 +237,7 @@ def scan_modules(
         readme_path = folder / "README.md"
         readme_exists = readme_path.exists()
 
-        # Scan all Python files in folder
+        # Scan Python files - only include if contracted OR registered in master
         for py_file in folder.glob("*.py"):
             if py_file.name.startswith("_"):
                 continue
@@ -233,7 +245,14 @@ def scan_modules(
             module_name = py_file.stem
             key = f"{folder.name}.{module_name}"
 
-            # Try to get ID from master mapping
+            # ADR-K021: Skip modules not in contracts AND not in master mapping
+            has_contract = key in contracted_modules or module_name in contracted_modules
+            in_master = key in id_mapping
+
+            if not has_contract and not in_master:
+                continue  # Skip unregistered helper files
+
+            # Get ID from master mapping
             module_id = id_mapping.get(key, "Mxx")
 
             modules.append(
@@ -246,8 +265,7 @@ def scan_modules(
                     version="0.0.0",
                     adr_ref=None,
                     readme_exists=readme_exists,
-                    contract_exists=_find_contract(contracts_dir, folder.name, module_name)
-                    is not None,
+                    contract_exists=has_contract,
                     python_file=py_file.name,
                     line_count=_count_lines(py_file),
                     test_file=None,
